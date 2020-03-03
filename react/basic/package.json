@@ -9,6 +9,7 @@
     "react"
   ],
   "main": "src/index.js",
+  "private": true,
   "dependencies": {
     "@handsontable/react": "latest",
     "react": "16.12.0",

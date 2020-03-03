@@ -1,8 +1,9 @@
 {
   "name": "vanilla-handsontable-basic",
   "version": "1.0.0",
-  "description": "Basic vanilla example for Handsontable component",
+  "description": "Basic Vanilla example for Handsontable component",
   "main": "index.html",
+  "private": true,
   "scripts": {
     "start": "parcel index.html --open",
     "build": "parcel build index.html"

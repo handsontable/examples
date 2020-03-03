@@ -40,7 +40,7 @@ export default {
         manualColumnMove: true,
         manualColumnResize: true,
         manualRowResize: true,
-        manualRomMove: true,
+        manualRowMove: true,
         dropdownMenu: true,
         filters: true,
         columnSorting: true,

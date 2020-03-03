@@ -1,7 +1,7 @@
 {
-  "name": "react-handsontable-basic",
+  "name": "react-handsontable-pr",
   "version": "1.0.0",
-  "description": "Basic React example for Handsontable component",
+  "description": "React example for Handsontable PRs",
   "keywords": [
     "handsontable",
     "spreadsheet",
@@ -9,6 +9,7 @@
     "react"
   ],
   "main": "src/index.js",
+  "private": true,
   "dependencies": {
     "@handsontable/react": "latest",
     "handsontable": "latest",
