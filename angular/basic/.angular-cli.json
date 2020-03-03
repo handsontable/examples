@@ -8,7 +8,7 @@
       "polyfills": "polyfills.ts",
       "prefix": "app",
       "styles": ["styles.css"],
-      "scripts": [],
+      "scripts": []
     }
   ]
 }

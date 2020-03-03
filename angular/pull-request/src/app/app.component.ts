@@ -1,7 +1,7 @@
 import { Component, VERSION as AngularVersion } from '@angular/core';
 import { HotTableModule } from '@handsontable/angular';
 import Handsontable from 'handsontable';
-import '../handsontable/dist/handsontable.full.css';
+import '../../node_modules/handsontable/dist/handsontable.full.css';
 
 const data = Handsontable.helper.createSpreadsheetData(50, 25);
 
