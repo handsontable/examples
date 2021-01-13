@@ -20,9 +20,9 @@
     "@angular/platform-browser": "^9.0.0",
     "@angular/platform-browser-dynamic": "^9.0.0",
     "@angular/router": "^9.0.0",
-    "@handsontable/angular": "5.1.0",
+    "@handsontable/angular": "6.0.1",
     "core-js": "3.6.4",
-    "handsontable": "7.4.2",
+    "handsontable": "8.2.0",
     "rxjs": "6.5.4",
     "zone.js": "0.10.2"
   },
