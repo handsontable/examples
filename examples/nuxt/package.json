@@ -1,0 +1,21 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "HOST=0.0.0.0 nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "@handsontable/vue3": "16.1.1",
+    "handsontable": "16.1.1",
+    "nuxt": "^3.11.2"
+  },
+  "config": {
+    "stackblitz": {
+      "template": "node"
+    }
+  }
+}

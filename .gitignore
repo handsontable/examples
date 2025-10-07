@@ -1,7 +1,8 @@
-.DS_Store
-.grunt
-.idea
-.vscode
+# Local Netlify folder
+.netlify
+node_modules
+deno.lock
+dist
 .cache
-.package-lock.json
-npm-debug.log
+.vscode
+.DS_Store

@@ -1,0 +1,24 @@
+{
+    "name": "handsontable-pr-javascript-demo",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.html",
+    "private": true,
+    "scripts": {
+        "start": "parcel index.html --open",
+        "build": "parcel build index.html"
+    },
+    "dependencies": {
+        "handsontable": "latest"
+    },
+    "devDependencies": {
+        "parcel-bundler": "latest",
+        "typescript": "^5.9.3"
+    },
+    "keywords": [],
+    "config": {
+        "stackblitz": {
+            "template": "typescript"
+        }
+    }
+}

@@ -1,0 +1,12 @@
+[build]
+  command = "echo 'N1o build required for Edge Functions'"
+  publish = "."
+  base = "edge"
+
+[functions]
+  directory = "netlify/edge-functions"
+
+[[edge_functions]]
+  function = "stackblitz"
+  path = "/stackblitz"
+
