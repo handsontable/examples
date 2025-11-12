@@ -33,7 +33,7 @@ export default async (request: Request, _context: Context) => {
 
   try {
     const version = await getVersion(octokit, handsontableBranch, handsontableVersion, handsontableSha);
-    const files = await fetchFiles(octokit, 'handsontable', 'examples-poc', `examples/${exampleDir}`, exampleBranch ? { ref: exampleBranch } : undefined);
+    const files = await fetchFiles(octokit, 'handsontable', 'examples', `examples/${exampleDir}`, exampleBranch ? { ref: exampleBranch } : undefined);
     const packageJson = JSON.parse(files.find(file => file?.path?.endsWith('package.json'))?.text || '{}');
     //packageJson.dependencies.handsontable = version;
     packageJson.dependencies = Object.fromEntries(Object.entries(packageJson.dependencies).map(([key, value]) => {
