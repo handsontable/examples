@@ -1,5 +1,6 @@
 import { enableProdMode, VERSION as AngularVersion } from '@angular/core';
 import { bootstrapApplication } from '@angular/platform-browser';
+import '@angular/compiler';
 
 import { DataGridComponent } from './data-grid/data-grid.component';
 import { environment } from './environments/environment';
