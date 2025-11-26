@@ -1,1 +1,0 @@
-{"ast":null,"code":"export { PLUGIN_KEY, PLUGIN_PRIORITY, CopyPaste } from \"./copyPaste.mjs\";","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

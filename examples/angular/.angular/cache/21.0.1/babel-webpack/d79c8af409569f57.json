@@ -1,1 +1,0 @@
-{"ast":null,"code":"\"use strict\";\n\nexports.__esModule = true;\nvar _base = require(\"./base\");\nexports.PLUGIN_KEY = _base.PLUGIN_KEY;\nexports.BasePlugin = _base.BasePlugin;\nexports.defaultMainSettingSymbol = _base.defaultMainSettingSymbol;","map":null,"metadata":{},"sourceType":"script","externalDependencies":[]}

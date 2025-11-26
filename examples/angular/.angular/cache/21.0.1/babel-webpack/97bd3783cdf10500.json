@@ -1,1 +1,0 @@
-{"ast":null,"code":"import { baseTemplate } from \"./base.mjs\";\nimport { confirmTemplate } from \"./confirm.mjs\";\nconst TEMPLATES = new Map([['base', baseTemplate], ['confirm', confirmTemplate]]);\nexport { TEMPLATES };","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

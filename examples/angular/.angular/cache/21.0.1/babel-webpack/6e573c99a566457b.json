@@ -1,1 +1,0 @@
-{"ast":null,"code":"import bottom from \"./bottom.mjs\";\nimport left from \"./left.mjs\";\nimport noBorders from \"./noBorders.mjs\";\nimport right from \"./right.mjs\";\nimport top from \"./top.mjs\";\nexport { bottom, left, noBorders, right, top };","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

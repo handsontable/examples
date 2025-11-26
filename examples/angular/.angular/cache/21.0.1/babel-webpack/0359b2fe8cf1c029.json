@@ -1,1 +1,0 @@
-{"ast":null,"code":"export const command = {\n  name: 'editorCloseAndSaveByEnter',\n  callback(hot, event) {\n    const editorManager = hot._getEditorManager();\n    editorManager.closeEditorAndSaveChanges(event.ctrlKey || event.metaKey);\n    editorManager.moveSelectionAfterEnter(event);\n  }\n};","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

@@ -1,1 +1,0 @@
-{"ast":null,"code":"export const KEY = '---------';\n\n/**\n * @returns {object}\n */\nexport default function separatorItem() {\n  return {\n    name: KEY\n  };\n}","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

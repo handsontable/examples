@@ -1,1 +1,0 @@
-{"ast":null,"code":"/**\n * @private\n */\nclass ClipboardData {\n  constructor() {\n    this.data = {};\n  }\n  setData(type, value) {\n    this.data[type] = value;\n  }\n  getData(type) {\n    return this.data[type] || void 0;\n  }\n}\nexport { ClipboardData as default };","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

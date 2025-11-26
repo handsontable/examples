@@ -1,1 +1,0 @@
-{"ast":null,"code":"export const command = {\n  name: 'editorFastOpen',\n  callback(hot, event) {\n    const {\n      highlight\n    } = hot.getSelectedRangeActive();\n    if (highlight.isHeader()) {\n      return;\n    }\n    hot._getEditorManager().openEditor(null, event, true);\n  }\n};","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

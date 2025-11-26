@@ -1,1 +1,0 @@
-{"ast":null,"code":"/**\n * The main class name for the dialog-related modal elements.\n */\nexport const DIALOG_CLASS_NAME = 'ht-dialog';","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

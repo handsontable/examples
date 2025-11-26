@@ -1,1 +1,0 @@
-{"ast":null,"code":"export const command = {\n  name: 'moveCellSelectionLeft',\n  callback(hot) {\n    const {\n      selection\n    } = hot;\n    selection.markSource('keyboard');\n    selection.transformStart(0, -1 * hot.getDirectionFactor());\n    selection.markEndSource();\n  }\n};","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}
