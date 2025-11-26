@@ -1,0 +1,1 @@
+{"ast":null,"code":"export { parse, stringify } from \"./SheetClip.mjs\";","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

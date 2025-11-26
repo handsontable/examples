@@ -1,0 +1,1 @@
+{"ast":null,"code":"/**\n * Scroll strategy for corner header selection.\n *\n * @returns {function(): function(CellCoords): void}\n */\nexport function cornerHeaderScrollStrategy() {\n  return () => {\n    // do not scroll the viewport when the corner is clicked\n  };\n}","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

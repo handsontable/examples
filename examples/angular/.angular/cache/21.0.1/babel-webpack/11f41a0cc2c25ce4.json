@@ -1,0 +1,1 @@
+{"ast":null,"code":"import { TextEditor } from \"../textEditor/index.mjs\";\nexport const EDITOR_TYPE = 'numeric';\n\n/**\n * @private\n * @class NumericEditor\n */\nexport class NumericEditor extends TextEditor {\n  static get EDITOR_TYPE() {\n    return EDITOR_TYPE;\n  }\n}","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

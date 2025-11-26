@@ -1,0 +1,1 @@
+{"ast":null,"code":"import { focusGridScope } from \"./grid.mjs\";\n/**\n * Register all focus scopes.\n *\n * @param {Handsontable} hotInstance The Handsontable instance.\n */\nexport function registerAllFocusScopes(hotInstance) {\n  [focusGridScope].forEach(scope => scope(hotInstance));\n}","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

@@ -1,0 +1,1 @@
+{"ast":null,"code":"import { registerCondition } from \"../conditionRegisterer.mjs\";\nexport const CONDITION_NAME = 'false';\n\n/**\n * @returns {boolean}\n */\nexport function condition() {\n  return false;\n}\nregisterCondition(CONDITION_NAME, condition, {\n  name: 'False'\n});","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

@@ -1,0 +1,1 @@
+{"ast":null,"code":"export const command = {\n  name: 'editorCloseAndSave',\n  callback(hot) {\n    const editorManager = hot._getEditorManager();\n    editorManager.closeEditorAndSaveChanges();\n  }\n};","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

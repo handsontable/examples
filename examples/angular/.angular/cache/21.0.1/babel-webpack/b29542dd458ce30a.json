@@ -1,0 +1,1 @@
+{"ast":null,"code":"export const command = {\n  name: 'editorCloseWithoutSaving',\n  callback(hot) {\n    const editorManager = hot._getEditorManager();\n    editorManager.closeEditorAndRestoreOriginalValue(hot.getShortcutManager().isCtrlPressed());\n    editorManager.activeEditor.focus();\n  }\n};","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

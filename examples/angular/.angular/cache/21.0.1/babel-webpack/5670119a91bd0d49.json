@@ -1,0 +1,1 @@
+{"ast":null,"code":"import ClipboardData from \"./clipboardData.mjs\";\n/**\n * @private\n */\nclass PasteEvent {\n  constructor() {\n    this.clipboardData = new ClipboardData();\n  }\n  preventDefault() {}\n  composedPath() {\n    return [];\n  }\n}\nexport { PasteEvent as default };","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

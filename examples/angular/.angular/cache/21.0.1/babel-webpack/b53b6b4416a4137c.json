@@ -1,0 +1,1 @@
+{"ast":null,"code":"export const command = {\n  name: 'emptySelectedCells',\n  callback(hot) {\n    hot.emptySelectedCells();\n    hot._getEditorManager().prepareEditor();\n  }\n};","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

@@ -1,0 +1,1 @@
+{"ast":null,"code":"export const command = {\n  name: 'moveCellSelectionUp',\n  callback(_ref) {\n    let {\n      selection\n    } = _ref;\n    selection.markSource('keyboard');\n    selection.transformStart(-1, 0);\n    selection.markEndSource();\n  }\n};","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

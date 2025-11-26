@@ -1,0 +1,1 @@
+{"ast":null,"code":"import { TextEditor } from \"../../editors/textEditor/index.mjs\";\nimport { textRenderer } from \"../../renderers/textRenderer/index.mjs\";\nexport const CELL_TYPE = 'text';\nexport const TextCellType = {\n  CELL_TYPE,\n  editor: TextEditor,\n  renderer: textRenderer\n};","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}
