@@ -1,0 +1,7 @@
+{
+  "title": "Angular",
+  "description": "The quickest way to get started with Angular!",
+  "iconUrl": "https://raw.githubusercontent.com/codesandbox/sandbox-templates/main/angular/.codesandbox/icon.png",
+  "tags": ["angular", "javascript", "typescript", "featured", "frontend"],
+  "published": true
+}
