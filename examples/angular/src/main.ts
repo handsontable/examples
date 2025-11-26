@@ -1,8 +1,8 @@
 import { enableProdMode, VERSION as AngularVersion } from '@angular/core';
-import { bootstrapApplication } from '@angular/platform-browser';
+import { platformBrowserDynamic } from '@angular/platform-browser-dynamic';
 import '@angular/compiler';
 
-import { DataGridComponent } from './data-grid/data-grid.component';
+import { AppModule } from './app/app.module';
 import { environment } from './environments/environment';
 
 import { HotTableModule } from '@handsontable/angular-wrapper';
@@ -16,5 +16,6 @@ console.log(
   `Handsontable: v${Handsontable.version} (${Handsontable.buildDate}) Wrapper: v${HotTableModule.version} Angular: v${AngularVersion.full}`
 );
 
-bootstrapApplication(DataGridComponent)
+platformBrowserDynamic()
+  .bootstrapModule(AppModule)
   .catch((err) => console.error(err));
