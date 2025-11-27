@@ -10,3 +10,7 @@
   function = "stackblitz"
   path = "/stackblitz"
 
+
+[[edge_functions]]
+  function = "codesandbox"
+  path = "/codesandbox"
