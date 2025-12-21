@@ -12,7 +12,8 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            // Split Handsontable into core and plugins for better cacheability
+            // Split Handsontable into core, formulas (heavy), and other plugins for better cacheability
+            if (id.includes('/node_modules/handsontable/plugins/formulas')) return 'vendor-handsontable-formulas';
             if (id.includes('/node_modules/handsontable/plugins')) return 'vendor-handsontable-plugins';
             if (id.includes('/node_modules/handsontable')) return 'vendor-handsontable-core';
             if (id.includes('/node_modules/hyperformula')) return 'vendor-hyperformula';
