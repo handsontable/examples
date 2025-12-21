@@ -12,7 +12,9 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('/node_modules/handsontable')) return 'vendor-handsontable';
+            // Split Handsontable into core and plugins for better cacheability
+            if (id.includes('/node_modules/handsontable/plugins')) return 'vendor-handsontable-plugins';
+            if (id.includes('/node_modules/handsontable')) return 'vendor-handsontable-core';
             if (id.includes('/node_modules/hyperformula')) return 'vendor-hyperformula';
             if (id.includes('/node_modules/core-js')) return 'vendor-polyfills';
             if (id.match(/node_modules\/(react|react-dom|lodash|date-fns)\b/)) {
