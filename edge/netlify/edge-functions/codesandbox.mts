@@ -23,6 +23,10 @@ export default async (request: Request, _context: Context) => {
     auth: Deno.env.get('GITHUB_TOKEN') || Netlify.env.get("GITHUB_TOKEN")
   });
 
+  console.log({
+    auth: Deno.env.get('GITHUB_TOKEN') || Netlify.env.get("GITHUB_TOKEN")
+  });
+
   const { exampleDir, exampleBranch, handsontableVersion, handsontableBranch, handsontableSha } = {
     exampleDir: url.searchParams.get('example-dir'),
     exampleBranch: url.searchParams.get('example-branch'),
@@ -74,6 +78,18 @@ export default async (request: Request, _context: Context) => {
     return Response.redirect(`https://codesandbox.io/embed/${j.sandbox_id}?view=preview&hidenavigation=1`)
 
   } catch (error) {
+    
+    const  slackWebhook  = Deno.env.get('SLACK_WEBHOOK') || Netlify.env.get("SLACK_WEBHOOK")
+    if (slackWebhook) {
+      fetch(slackWebhook, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ "type": "mrkdwn", "text": `Examples Stackblizt Error: ${error.message}: Debug: ${JSON.stringify({ exampleDir, exampleBranch, handsontableVersion, handsontableBranch, handsontableSha })}` })
+      });
+    }
+
     console.log(error);
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
