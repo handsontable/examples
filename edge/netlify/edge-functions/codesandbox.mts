@@ -1,5 +1,5 @@
 import type { Context } from "https://edge.netlify.com";
-import { Octokit } from 'https://esm.sh/@octokit/rest@22';
+import { Octokit } from "npm:@octokit/rest";
 import { fetchFiles } from '../../src/github.ts';
 import { wrapHtml, objectToForm } from '../../src/index.ts';
 import { getVersion } from '../../src/version.ts';
