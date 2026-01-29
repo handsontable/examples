@@ -23,10 +23,6 @@ export default async (request: Request, _context: Context) => {
     auth: Deno.env.get('GITHUB_TOKEN') || Netlify.env.get("GITHUB_TOKEN")
   });
 
-  console.log({
-    auth: Deno.env.get('GITHUB_TOKEN') || Netlify.env.get("GITHUB_TOKEN")
-  });
-
   const { exampleDir, exampleBranch, handsontableVersion, handsontableBranch, handsontableSha } = {
     exampleDir: url.searchParams.get('example-dir'),
     exampleBranch: url.searchParams.get('example-branch'),
