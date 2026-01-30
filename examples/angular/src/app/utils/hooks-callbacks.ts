@@ -1,10 +1,10 @@
-import Handsontable from "handsontable";
-import { ODD_ROW_CLASS } from "./constants";
+import Handsontable from 'handsontable';
+import { ODD_ROW_CLASS } from './constants';
 
 const headerAlignments = new Map([
-  ["9", "htCenter"],
-  ["10", "htRight"],
-  ["12", "htCenter"],
+  ['9', 'htCenter'],
+  ['10', 'htRight'],
+  ['12', 'htCenter'],
 ]);
 
 type AddClassesToRows = (
@@ -52,7 +52,7 @@ export function alignHeaders(
     return;
   }
 
-  const alignmentClass = this.isRtl() ? "htRight" : "htLeft";
+  const alignmentClass = this.isRtl() ? 'htRight' : 'htLeft';
 
   if (TH.firstChild) {
     if (headerAlignments.has(column.toString())) {

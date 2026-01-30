@@ -1,19 +1,7 @@
-import { enableProdMode, VERSION as AngularVersion } from '@angular/core';
 import { bootstrapApplication } from '@angular/platform-browser';
-import '@angular/compiler';
+import { appConfig } from './app/app.config';
+import { DataGridComponent } from './app/data-grid.component';
 
-import { DataGridComponent } from './data-grid/data-grid.component';
-import { environment } from './environments/environment';
-
-import { HotTableModule } from '@handsontable/angular-wrapper';
-import Handsontable from 'handsontable';
-
-if (environment.production) {
-  enableProdMode();
-}
-
-console.log(
-  `Handsontable: v${Handsontable.version} (${Handsontable.buildDate}) Wrapper: v${HotTableModule.version} Angular: v${AngularVersion.full}`
+bootstrapApplication(DataGridComponent, appConfig).catch((err) =>
+  console.error(err)
 );
-
-bootstrapApplication(DataGridComponent).catch((err) => console.error(err));

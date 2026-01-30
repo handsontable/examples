@@ -1,15 +1,22 @@
-import { Component, ViewEncapsulation } from '@angular/core';
+import {
+  Component,
+  ViewEncapsulation,
+  CUSTOM_ELEMENTS_SCHEMA,
+} from '@angular/core';
 import { PredefinedMenuItemKey } from 'handsontable/plugins/contextMenu';
+import { HotTableModule } from '@handsontable/angular-wrapper';
 
 import { getData } from './utils/constants';
 import { alignHeaders, addClassesToRows } from './utils/hooks-callbacks';
 
 @Component({
-  standalone: false,
   encapsulation: ViewEncapsulation.None,
   selector: 'data-grid',
+  standalone: true,
   templateUrl: './data-grid.component.html',
-  styleUrls: ['./data-grid.scss'],
+  //styleUrls: ['./data-grid.scss'],
+  imports: [HotTableModule],
+  schemas: [CUSTOM_ELEMENTS_SCHEMA],
 })
 export class DataGridComponent {
   initialData = getData();
