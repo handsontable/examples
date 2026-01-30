@@ -82,6 +82,18 @@ export default async (request: Request, _context: Context) => {
 
   } catch (error) {
     console.log(error);
+
+    const  slackWebhook  = Deno.env.get('SLACK_WEBHOOK') || Netlify.env.get("SLACK_WEBHOOK")
+    if (slackWebhook) {
+      fetch(slackWebhook, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ "type": "mrkdwn", "text": `Examples Stackblizt Error: ${error.message}: Debug: ${JSON.stringify({ exampleDir, exampleBranch, handsontableVersion, handsontableBranch, handsontableSha })}` })
+      });
+    }
+
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: {
