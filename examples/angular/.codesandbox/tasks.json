@@ -1,45 +1,23 @@
 {
-    // These tasks will run in order when initializing your CodeSandbox project.
     "setupTasks": [
-        {
-            "name": "Install node 22",
-            "command": "npm install -g n && n 22"
-        },
-        {
-            "name": "Install Dependencies",
-            "command": "npm install --legacy-peer-deps"
-        }
+      {
+        "name": "Install Dependencies",
+        "command": "pnpm install"
+      }
     ],
-    // These tasks can be run from CodeSandbox. Running one will open a log in the app.
     "tasks": {
-        "start": {
-            "name": "start",
-            "command": "npm run start",
-            "runAtStart": true,
-            "preview": {
-                "port": 3000,
-                "open": true,
-                "prLink": "devtool"
-            }
-        },
-        "build": {
-            "name": "build",
-            "command": "ng build",
-            "runAtStart": false
-        },
-        "test": {
-            "name": "test",
-            "command": "ng test",
-            "runAtStart": false
-        },
-        "help": {
-            "name": "help",
-            "command": "ng help",
-            "runAtStart": false
-        },
-        "install": {
-            "name": "install dependencies",
-            "command": "npm install"
+      "dev:projects": {
+        "name": "Dev Projects",
+        "command": "pnpm dev:projects",
+        "runAtStart": true,
+        "preview": {
+          "port": 3000,
+          "prLink": "devtool"
         }
+      },
+      "test:projects": {
+        "name": "Lint Text Project",
+        "command": "pnpm test:projects"
+      }
     }
-}
+  }
