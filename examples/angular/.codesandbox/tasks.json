@@ -17,7 +17,8 @@
             "command": "npm run start",
             "runAtStart": true,
             "preview": {
-                "port": 4200
+                "port": 4200,
+                "open": true
             }
         },
         "build": {
