@@ -18,7 +18,8 @@
             "runAtStart": true,
             "preview": {
                 "port": 4200,
-                "open": true
+                "open": true,
+                "prLink": "devtool"
             }
         },
         "build": {
