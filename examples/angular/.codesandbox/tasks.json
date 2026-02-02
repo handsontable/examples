@@ -17,7 +17,7 @@
             "command": "npm run start",
             "runAtStart": true,
             "preview": {
-                "port": 4200,
+                "port": 3000,
                 "open": true,
                 "prLink": "devtool"
             }
