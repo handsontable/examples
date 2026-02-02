@@ -15,5 +15,8 @@
           "prLink": "devtool"
         }
       }
+    },
+    "devtools": {
+      "previews": [":3000"]
     }
   }
