@@ -2,22 +2,18 @@
     "setupTasks": [
       {
         "name": "Install Dependencies",
-        "command": "pnpm install"
+        "command": "npm install --legacy-peer-deps"
       }
     ],
     "tasks": {
       "dev:projects": {
         "name": "Dev Projects",
-        "command": "pnpm dev:projects",
+        "command": "npm run start",
         "runAtStart": true,
         "preview": {
           "port": 3000,
           "prLink": "devtool"
         }
-      },
-      "test:projects": {
-        "name": "Lint Text Project",
-        "command": "pnpm test:projects"
       }
     }
   }
