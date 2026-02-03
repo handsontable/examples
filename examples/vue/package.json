@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "vite",
+    "dev": "vite",
     "build": "run-p type-check \"build-only {@}\" --",
     "preview": "vite preview",
     "build-only": "vite build",
@@ -27,7 +28,7 @@
   },
   "config": {
     "codesandbox": {
-      "templateId": "cool-moser-mmjrtr"
+      "templateId": "pt_onLXn5ewGYNytd1L5V9n3"
     }
   }
 }
