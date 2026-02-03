@@ -1,0 +1,12 @@
+{
+  "name": "csb-devbox-service",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@codesandbox/sdk": "^2.4.2",
+    "express": "^4.18.2",
+    "octokit": "^5.0.5"
+  }
+}
