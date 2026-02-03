@@ -25,6 +25,9 @@
     "typescript": "5.2.2"
   },
   "config": {
+    "codesandbox": {
+      "templateId": "5fqqjc"
+    },
     "stackblitz": {
       "template": "node"
     }
