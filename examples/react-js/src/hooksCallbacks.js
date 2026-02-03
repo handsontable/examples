@@ -36,8 +36,7 @@ export const addClassesToRows = (
   }
 };
 
-export function alignHeaders(
-  this,
+export function alignHeaders(  
   column,
   TH
 ) {
@@ -45,7 +44,7 @@ export function alignHeaders(
     return;
   }
 
-  const alignmentClass = this.isRtl() ? "htRight" : "htLeft";
+  const alignmentClass = "htLeft";
 
   if (TH.firstChild) {
     if (headerAlignments.has(column.toString())) {
