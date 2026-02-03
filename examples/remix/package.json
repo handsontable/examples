@@ -39,6 +39,9 @@
     "node": ">=18.0.0"
   },
   "config": {
+    "codesandbox": {
+      "templateId": "pt_onLXn5ewGYNytd1L5V9n3"
+    },
     "stackblitz": {
       "template": "node"
     }
