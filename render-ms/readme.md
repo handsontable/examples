@@ -95,6 +95,9 @@ render-ms/
 ├── version.js        # Handsontable version resolution logic
 ├── package.json
 ├── package-lock.json
+├── Dockerfile        # Node 22 Alpine image for Render.com
+├── .dockerignore
+├── render.yaml       # Render Blueprint (optional infra-as-code)
 └── readme.md         # This documentation
 ```
 
@@ -126,13 +129,28 @@ All errors are returned as JSON with HTTP status 500. If `SLACK_WEBHOOK` is set,
 
 ## Deployment on Render.com
 
+### Option A: Docker (recommended)
+
+The repo includes a **Dockerfile** (Node 22 Alpine) and **render.yaml** Blueprint.
+
 1. Create a new **Web Service** on [Render.com](https://render.com).
-2. Connect your repository (or use the same repo that contains this folder).
-3. Set **Root Directory** to `render-ms` (or the path where this service lives).
-4. Set **Build Command** to `npm install` (or leave default).
-5. Set **Start Command** to `npm start`.
+2. Connect your repository.
+3. Set **Root Directory** to `render-ms` (if the service lives in a subfolder).
+4. Set **Environment** to **Docker**.
+5. Render will use `Dockerfile` in the root of the service (no build/start commands needed).
 6. Add environment variables: `GITHUB_TOKEN`, `CSB_API_KEY`, and optionally `SLACK_WEBHOOK`.
 7. Deploy.
+
+Or use **Blueprint**: connect the repo, add a Blueprint, and point it at `render-ms/render.yaml`. Set the env vars in the Dashboard.
+
+### Option B: Native Node
+
+1. Create a new **Web Service** on [Render.com](https://render.com).
+2. Connect your repository and set **Root Directory** to `render-ms`.
+3. **Build Command**: `npm install` (or leave default).
+4. **Start Command**: `npm start`.
+5. Add environment variables: `GITHUB_TOKEN`, `CSB_API_KEY`, and optionally `SLACK_WEBHOOK`.
+6. Deploy.
 
 ## Comparison with Edge (Netlify + Stackblitz)
 
