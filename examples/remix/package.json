@@ -6,7 +6,7 @@
     "build": "remix vite:build",
     "dev": "remix vite:dev",
     "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
-    "start": "remix-serve ./build/server/index.js",
+    "start": "remix vite:dev",
     "typecheck": "tsc"
   },
   "dependencies": {
@@ -40,7 +40,7 @@
   },
   "config": {
     "codesandbox": {
-      "templateId": "pt_onLXn5ewGYNytd1L5V9n3"
+      "templateId": "handsontable-example-remix-16-2-0-m4k8vw"
     },
     "stackblitz": {
       "template": "node"

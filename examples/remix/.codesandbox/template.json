@@ -1,0 +1,16 @@
+{
+    "title": "remix",
+    "description": "remix 3 set up using Vite",
+    "iconUrl": "https://raw.githubusercontent.com/codesandbox/sandbox-templates/main/vue-vite/.codesandbox/icon.png",
+    "tags": [
+      "featured",
+      "frontend",
+      "remix",
+      "remix3",
+      "vite",
+      "javascript",
+      "typescript"
+    ],
+    "published": true
+  }
+  
