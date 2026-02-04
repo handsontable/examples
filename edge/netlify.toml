@@ -14,3 +14,7 @@
 [[edge_functions]]
   function = "codesandbox"
   path = "/codesandbox"
+
+[[edge_functions]]
+  function = "codesandbox-vm"
+  path = "/codesandbox-vm"

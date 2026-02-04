@@ -93,11 +93,15 @@ app.get("/codesandbox-vm", async (req, res) => {
     const packageJson = JSON.parse(
       files.find((file) => file?.path?.endsWith("package.json"))?.text || "{}",
     );
-    packageJson.dependencies = Object.fromEntries(Object.entries(packageJson.dependencies).map(([key, value]) => {
-      if (key.toString().includes("handsontable") && key.toString() !== "@handsontable/pikaday") {        return [key, version];
-      }
-      return [key, value];
-    }));
+    packageJson.dependencies = Object.fromEntries(
+      Object.entries(packageJson.dependencies).map(([key, value]) => {
+        if (
+          key.toString().includes("handsontable") &&
+          key.toString() !== "@handsontable/pikaday"
+        ) return [key, version];
+        return [key, value];
+      }),
+    );
 
     const templateId = packageJson.config?.codesandbox?.templateId;
 
@@ -136,6 +140,14 @@ app.get("/codesandbox-vm", async (req, res) => {
           return client.fs.writeTextFile(key, value.content);
         }),
       );
+
+      const tasks = await client.tasks.getAll();
+
+      for (const task of tasks) {
+        if (task.name.toLowerCase().includes("install") && !task.command.includes("postinstall")) {
+          await client.commands.run(task.command);
+        }
+      }
 
       return res.redirect(
         `https://codesandbox.io/p/sandbox/${sandbox.id}?file=&preview=true`,
@@ -209,12 +221,17 @@ app.get("/codesandbox-browser", async (req, res) => {
       files.find((file) => file?.path?.endsWith("package.json"))?.text || "{}",
     );
 
-    packageJson.dependencies = Object.fromEntries(Object.entries(packageJson.dependencies).map(([key, value]) => {
-      if (key.toString().includes("handsontable") && key.toString() !== "@handsontable/pikaday") {
-        return [key, version];
-      }
-      return [key, value];
-    }));
+    packageJson.dependencies = Object.fromEntries(
+      Object.entries(packageJson.dependencies).map(([key, value]) => {
+        if (
+          key.toString().includes("handsontable") &&
+          key.toString() !== "@handsontable/pikaday"
+        ) {
+          return [key, version];
+        }
+        return [key, value];
+      }),
+    );
 
     // const filesToUpload = Object.fromEntries(
     //   files.filter((file) => {

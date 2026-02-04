@@ -181,6 +181,9 @@ Examples with SSR (Server Side Rendering):
 - [Next.js](http://localhost:3000/codesandbox-vm?example-dir=next.js&handsontable-version=latest)
 - [Astro](http://localhost:3000/codesandbox-vm?example-dir=astro&handsontable-version=latest) 
 - [Remix](http://localhost:3000/codesandbox-vm?example-dir=remix&handsontable-version=latest)
+
+http://localhost:3000/codesandbox-vm?example-dir=remix&handsontable-version=16.0.0
+
 - [Nuxt](http://localhost:3000/codesandbox-vm?example-dir=nuxt&handsontable-version=latest)
 
 </div>
