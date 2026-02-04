@@ -18,8 +18,12 @@
       }
     },
     "install": {
-      "name": "install dependencies",
-      "command": "npm install"
-    }
+        "name": "Install Dependencies",
+        "command": "npm install --legacy-peer-deps",
+        "restartOn": {
+          "files": ["package.json"],
+          "branch": false
+        }
+      }
   }
 }

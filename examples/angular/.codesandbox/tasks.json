@@ -6,6 +6,14 @@
       }
     ],
     "tasks": {
+      "install": {
+        "name": "Install Dependencies",
+        "command": "npm install --legacy-peer-deps",
+        "restartOn": {
+          "files": ["package.json"],
+          "branch": false
+        }
+      },
       "dev:projects": {
         "name": "Dev Projects",
         "command": "npm run start",
