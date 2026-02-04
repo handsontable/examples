@@ -233,21 +233,6 @@ app.get("/codesandbox-browser", async (req, res) => {
       }),
     );
 
-    // const filesToUpload = Object.fromEntries(
-    //   files.filter((file) => {
-    //     if (file.path.includes("package.json")) return false;
-    //     if (file.path.includes("package-lock.json")) return false;
-    //     if (file.path.endsWith(".ico")) return false;
-    //     return true;
-    //   }).map((file) => {
-    //     let fileName = file.path.substr(`examples/${exampleDir}`.length);
-    //     fileName = fileName.startsWith("/") ? fileName.substr(1) : fileName;
-    //     return [`${fileName}`, { content: file.text }];
-    //   }),
-    // );
-
-    // Create a sandbox from your custom template this is a browser example
-
     let defineResponse = await fetch(
       "https://codesandbox.io/api/v1/sandboxes/define?json=1",
       {
@@ -284,11 +269,10 @@ app.get("/codesandbox-browser", async (req, res) => {
 
     let defineJson = await defineResponse.json();
 
-    return res.status(200).json(defineJson);
-
     return Response.redirect(
       `https://codesandbox.io/embed/${defineJson.sandbox_id}?view=preview&hidenavigation=1`,
     );
+    
   } catch (error) {
     const slackWebhook = process.env.SLACK_WEBHOOK;
     if (slackWebhook) {

@@ -165,7 +165,19 @@ Or use **Blueprint**: connect the repo, add a Blueprint, and point it at `render
 
 ### Testing 
 
+
+Angular 
+
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=angular&handsontable-version=latest
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=angular&handsontable-version=16.0.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=angular&handsontable-version=16.1.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=angular&handsontable-version=16.2.0
+
 - [Angular](http://localhost:3000/codesandbox-vm?example-dir=angular&handsontable-version=latest) [x]
+
+http://localhost:3000/codesandbox-vm?example-dir=angular&handsontable-version=latest
+http://localhost:3000/codesandbox-vm?example-dir=angular&handsontable-version=16.1.0
+
 - [Vanilla JS](http://localhost:3000/codesandbox-browser?example-dir=javascript&handsontable-version=latest)
 - [React TS](http://localhost:3000/codesandbox-browser?example-dir=react&handsontable-version=latest)
 - [React JS](http://localhost:3000/codesandbox-browser?example-dir=react-js&handsontable-version=latest)
