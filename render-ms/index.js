@@ -267,9 +267,10 @@ app.get("/codesandbox-browser", async (req, res) => {
       },
     );
 
+
     let defineJson = await defineResponse.json();
 
-    return Response.redirect(
+    return res.redirect(
       `https://codesandbox.io/embed/${defineJson.sandbox_id}?view=preview&hidenavigation=1`,
     );
     
