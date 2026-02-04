@@ -14,8 +14,8 @@
     "nuxt": "^3.11.2"
   },
   "config": {
-    "stackblitz": {
-      "template": "node"
+    "codesandbox": {
+      "templateId": "pt_onLXn5ewGYNytd1L5V9n3"
     }
   }
 }
