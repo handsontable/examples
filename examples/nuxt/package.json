@@ -11,7 +11,7 @@
   "dependencies": {
     "@handsontable/vue3": "16.1.1",
     "handsontable": "16.1.1",
-    "nuxt": "^3.11.2"
+    "nuxt": "^3.10.0"
   },
   "config": {
     "codesandbox": {
