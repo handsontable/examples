@@ -7,9 +7,9 @@ import { registerAllModules } from "handsontable/registry";
 
 import tokensHorizon from 'handsontable/themes/static/variables/tokens/horizon';
 
-import { colorsShadcn } from "../theme/colorsShadcn";
-import { iconsShadcn } from "../theme/iconsShadcn";
-import { data, config } from "../helpers";
+import { colorsShadcn } from "@/lib/theme/colorsShadcn";
+import { iconsShadcn } from "@/lib/theme/iconsShadcn";
+import { data, config } from "@/lib/helpers";
 
 registerAllModules();
 
@@ -19,10 +19,9 @@ const shadcnDataGridTheme = registerTheme('shadcn-data-grid', {
   tokens: tokensHorizon,
 }).params({
   tokens: {
-    wrapperBorderRadius: "0.625rem",
+    wrapperBorderRadius: "var(--radius)",
   },
-});
-
+})
 
 function DataGrid({ ref }: { ref: React.RefObject<HotTableRef | null> }) {
   return (<HotTable
@@ -143,12 +142,13 @@ function DataGridWrapper() {
 
       if (filtersPlugin) {
         filtersPlugin.clearConditions();
-        if (params.q) filtersPlugin.addCondition(0, 'begins_with', [params.q]);       // Name
+
+        if (params.q) filtersPlugin.addCondition(0, 'begins_with', [params.q]); // Name
         if (params.country) filtersPlugin.addCondition(2, 'contains', [params.country]); // Country
-        if (params.status) filtersPlugin.addCondition(4, 'contains', [params.status === 'active' ? true : false]);     // Active
+        if (params.status) filtersPlugin.addCondition(4, 'contains', [params.status === 'active' ? true : false]);  // Active
+        
         filtersPlugin.filter();
         hot?.render();
-        console.log('filtersPlugin', filtersPlugin);
       }
     }
   }, [searchParams]);

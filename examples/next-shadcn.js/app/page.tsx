@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/select";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useState } from "react";
-import DataGrid from "./components/DataGrid";
+import DataGrid from "@/components/DataGrid";
 
 function buildSearchString(
   current: URLSearchParams,
