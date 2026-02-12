@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useEffect, memo } from "react";
+import { useRef, useEffect, memo, forwardRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { HotTable, HotColumn, HotTableRef } from "@handsontable/react-wrapper";
 import { registerTheme } from "handsontable/themes";
@@ -23,7 +23,7 @@ const shadcnDataGridTheme = registerTheme('shadcn-data-grid', {
   },
 })
 
-function DataGrid({ ref }: { ref: React.RefObject<HotTableRef | null> }) {
+const DataGrid = forwardRef<HotTableRef, unknown>(function DataGrid(_, ref) {
   return (<HotTable
     ref={ref}
     theme={shadcnDataGridTheme}
@@ -125,7 +125,7 @@ function DataGrid({ ref }: { ref: React.RefObject<HotTableRef | null> }) {
       width={180}
     />
   </HotTable>);
-}
+});
 
 const MemoizedDataGrid = memo(DataGrid);
 
