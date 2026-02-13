@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useState } from "react";
+import { Suspense, useCallback, useState } from "react";
 import DataGrid from "@/components/DataGrid";
 
 function buildSearchString(
@@ -29,7 +29,7 @@ function buildSearchString(
   return qs ? `?${qs}` : "";
 }
 
-export default function Home() {
+function HomeContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -94,5 +94,13 @@ export default function Home() {
         <DataGrid />
       </div>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div className="flex flex-col gap-4 p-4 min-h-[200px]" />}>
+      <HomeContent />
+    </Suspense>
   );
 }
