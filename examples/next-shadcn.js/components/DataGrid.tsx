@@ -21,7 +21,7 @@ const shadcnDataGridTheme = registerTheme('shadcn-data-grid', {
   tokens: {
     wrapperBorderRadius: "var(--radius)",
   },
-})
+}).setColorScheme("light");
 
 const DataGrid = forwardRef<HotTableRef, unknown>(function DataGrid(_, ref) {
   return (<HotTable
