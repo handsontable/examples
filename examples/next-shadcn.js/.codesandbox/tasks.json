@@ -3,7 +3,7 @@
   "setupTasks": [
     {
       "name": "Install Dependencies",
-      "command": "pnpm install"
+      "command": "rm -rf .next node_modules && pnpm install"
     }
   ],
 
@@ -11,7 +11,7 @@
   "tasks": {
     "dev": {
       "name": "Start Dev Server",
-      "command": "pnpm run dev",
+      "command": "rm -rf .next node_modules && pnpm install && pnpm run dev",
       "runAtStart": true,
       "preview": {
         "port": 3000
