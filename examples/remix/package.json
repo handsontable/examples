@@ -16,7 +16,7 @@
     "isbot": "^4.1.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "@handsontable/react": "16.1.1",
+    "@handsontable/react-wrapper": "16.1.1",
     "handsontable": "16.1.1"
   },
   "devDependencies": {
