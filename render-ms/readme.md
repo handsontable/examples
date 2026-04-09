@@ -173,29 +173,66 @@ Angular
 - https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=angular&handsontable-version=16.1.0
 - https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=angular&handsontable-version=16.2.0
 
-- [Angular](http://localhost:3000/codesandbox-vm?example-dir=angular&handsontable-version=latest) [x]
+Vanilla JS 
 
-http://localhost:3000/codesandbox-vm?example-dir=angular&handsontable-version=latest
-http://localhost:3000/codesandbox-vm?example-dir=angular&handsontable-version=16.1.0
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=javascript&handsontable-version=latest
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=javascript&handsontable-version=16.0.0
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=javascript&handsontable-version=16.1.0
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=javascript&handsontable-version=16.2.0
 
-- [Vanilla JS](http://localhost:3000/codesandbox-browser?example-dir=javascript&handsontable-version=latest)
-- [React TS](http://localhost:3000/codesandbox-browser?example-dir=react&handsontable-version=latest)
-- [React JS](http://localhost:3000/codesandbox-browser?example-dir=react-js&handsontable-version=latest)
-- [TypeScript](http://localhost:3000/codesandbox-browser?example-dir=typescript&handsontable-version=latest)
-- [Vue 3](http://localhost:3000/codesandbox-vm?example-dir=vue&handsontable-version=latest)
+React TS
 
-</div>
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=react&handsontable-version=latest
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=react&handsontable-version=16.0.0
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=react&handsontable-version=16.1.0
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=react&handsontable-version=16.2.0
 
-Examples with SSR (Server Side Rendering): 
+React JS 
 
-<div class="boxes-list gray col3">
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=react-js&handsontable-version=latest
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=react-js&handsontable-version=16.0.0
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=react-js&handsontable-version=16.1.0
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=react-js&handsontable-version=16.2.0
 
-- [Next.js](http://localhost:3000/codesandbox-vm?example-dir=next.js&handsontable-version=latest)
-- [Astro](http://localhost:3000/codesandbox-vm?example-dir=astro&handsontable-version=latest) 
-- [Remix](http://localhost:3000/codesandbox-vm?example-dir=remix&handsontable-version=latest)
+TypeScript
 
-http://localhost:3000/codesandbox-vm?example-dir=remix&handsontable-version=16.0.0
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=typescript&handsontable-version=latest
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=typescript&handsontable-version=16.0.0
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=typescript&handsontable-version=16.1.0
+- https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=typescript&handsontable-version=16.2.0
 
-- [Nuxt](http://localhost:3000/codesandbox-vm?example-dir=nuxt&handsontable-version=latest)
+Vue
 
-</div>
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=vue&handsontable-version=latest
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=vue&handsontable-version=16.0.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=vue&handsontable-version=16.1.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=vue&handsontable-version=16.2.0
+
+Next.js
+
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=next.js&handsontable-version=latest
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=next.js&handsontable-version=16.0.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=next.js&handsontable-version=16.1.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=next.js&handsontable-version=16.2.0
+
+Astro 
+
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=astro&handsontable-version=latest
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=astro&handsontable-version=16.0.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=astro&handsontable-version=16.1.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=astro&handsontable-version=16.2.0
+
+Remix
+
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=remix&handsontable-version=latest
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=remix&handsontable-version=16.0.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=remix&handsontable-version=16.1.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=remix&handsontable-version=16.2.0
+
+Nuxt
+
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=nuxt&handsontable-version=latest
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=nuxt&handsontable-version=16.0.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=nuxt&handsontable-version=16.1.0
+- https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=nuxt&handsontable-version=16.2.0
+

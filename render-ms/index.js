@@ -4,24 +4,89 @@ import { CodeSandbox } from "@codesandbox/sdk";
 import { Octokit } from "octokit";
 import { fetchFiles } from "./github.js";
 import { getVersion } from "./version.js";
+import { validateHandsontableVersionParam } from "./validate-handsontable-version.js";
+import {
+  validateQueryParamsSync,
+  validateExampleDirExistsInRepo,
+} from "./validate-query-params.js";
 
 const app = express();
 app.use(express.json());
 
+function reportErrorToSlack(error, context) {
+  const slackWebhook = process.env.SLACK_WEBHOOK;
+  if (slackWebhook) {
+    fetch(slackWebhook, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "mrkdwn",
+        text: `Codesandbox Error: ${error.message}: Debug: ${JSON.stringify(context)}`,
+      }),
+    });
+  }
+  
+}
+
+/** GitHub / API “not found” — treat like validation: 400, no Slack (e.g. missing example path or ref). */
+function isNotFoundClientError(error) {
+  const status = error?.status ?? error?.response?.status;
+  return status === 404;
+}
+
 app.get("/codesandbox-vm", async (req, res) => {
-  const {
-    exampleDir,
-    exampleBranch,
-    handsontableVersion,
-    handsontableBranch,
-    handsontableSha,
-  } = {
+  const query = {
     exampleDir: req.query["example-dir"],
     exampleBranch: req.query["example-branch"],
     handsontableVersion: req.query["handsontable-version"],
     handsontableBranch: req.query["handsontable-branch"],
     handsontableSha: req.query["handsontable-sha"],
   };
+
+  const paramsCheck = validateQueryParamsSync(query);
+  if (!paramsCheck.ok) {
+    return res.status(400).json({ error: paramsCheck.message });
+  }
+
+  const versionCheck = validateHandsontableVersionParam(query.handsontableVersion);
+  if (!versionCheck.ok) {
+    return res.status(400).json({ error: versionCheck.message });
+  }
+
+  const {
+    exampleDir,
+    exampleBranch,
+    handsontableBranch,
+    handsontableSha,
+  } = paramsCheck.normalized;
+  const handsontableVersion = versionCheck.normalized;
+
+  const octokit = new Octokit({
+    auth: process.env.GITHUB_TOKEN,
+  });
+
+  let exampleExists;
+  try {
+    exampleExists = await validateExampleDirExistsInRepo(
+      octokit,
+      exampleDir,
+      exampleBranch,
+    );
+  } catch (error) {
+    reportErrorToSlack(error, {
+      exampleDir,
+      exampleBranch,
+      handsontableVersion,
+      handsontableBranch,
+      handsontableSha,
+    });
+    return res.status(500).json({ error: error.message });
+  }
+  if (!exampleExists.ok) {
+    return res.status(400).json({ error: exampleExists.message });
+  }
 
   let tags = Object.entries({
     exampleDir,
@@ -37,23 +102,17 @@ app.get("/codesandbox-vm", async (req, res) => {
   try {
     const sdk = new CodeSandbox();
 
-    const octokit = new Octokit({
-      auth: process.env.GITHUB_TOKEN,
-    });
-
     let sandboxesByTag = await sdk.sandboxes.list({
       pageSize: 199,
       tags,
     });
 
-    if (handsontableVersion !== "latest") {
-      const existing = sandboxesByTag.sandboxes[0];
-      if (existing) {
-        return res.redirect(
-          `https://codesandbox.io/p/sandbox/${existing.id}?file=&preview=true`,
-          302,
-        );
-      }
+    const existingFirstLookup = sandboxesByTag.sandboxes[0];
+    if (existingFirstLookup) {
+      return res.redirect(
+        `https://codesandbox.io/p/sandbox/${existingFirstLookup.id}?file=&preview=true`,
+        302,
+      );
     }
 
     const version = await getVersion(
@@ -155,41 +214,26 @@ app.get("/codesandbox-vm", async (req, res) => {
       );
     }
   } catch (error) {
-    const slackWebhook = process.env.SLACK_WEBHOOK;
-    if (slackWebhook) {
-      fetch(slackWebhook, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          "type": "mrkdwn",
-          "text": `Codesandbox Error: ${error.message}: Debug: ${
-            JSON.stringify({
-              exampleDir,
-              exampleBranch,
-              handsontableVersion,
-              handsontableBranch,
-              handsontableSha,
-            })
-          }`,
-        }),
+    if (isNotFoundClientError(error)) {
+      console.log(error);
+      return res.status(400).json({
+        error:
+          "GitHub resource not found (check example-dir, example-branch, or that the path exists in handsontable/examples)",
       });
     }
-
-    console.log(error);
+    reportErrorToSlack(error, {
+      exampleDir,
+      exampleBranch,
+      handsontableVersion,
+      handsontableBranch,
+      handsontableSha,
+    });
     return res.status(500).json({ error: error.message });
   }
 });
 
 app.get("/codesandbox-browser", async (req, res) => {
-  const {
-    exampleDir,
-    exampleBranch,
-    handsontableVersion,
-    handsontableBranch,
-    handsontableSha,
-  } = {
+  const query = {
     exampleDir: req.query["example-dir"],
     exampleBranch: req.query["example-branch"],
     handsontableVersion: req.query["handsontable-version"],
@@ -197,20 +241,61 @@ app.get("/codesandbox-browser", async (req, res) => {
     handsontableSha: req.query["handsontable-sha"],
   };
 
-  try {
-    const octokit = new Octokit({
-      auth: process.env.GITHUB_TOKEN,
-    });
+  const paramsCheckBrowser = validateQueryParamsSync(query);
+  if (!paramsCheckBrowser.ok) {
+    return res.status(400).json({ error: paramsCheckBrowser.message });
+  }
 
+  const versionCheckBrowser = validateHandsontableVersionParam(
+    query.handsontableVersion,
+  );
+  if (!versionCheckBrowser.ok) {
+    return res.status(400).json({ error: versionCheckBrowser.message });
+  }
+
+  const {
+    exampleDir,
+    exampleBranch,
+    handsontableBranch,
+    handsontableSha,
+  } = paramsCheckBrowser.normalized;
+  const handsontableVersion = versionCheckBrowser.normalized;
+
+  const octokitBrowser = new Octokit({
+    auth: process.env.GITHUB_TOKEN,
+  });
+
+  let exampleExistsBrowser;
+  try {
+    exampleExistsBrowser = await validateExampleDirExistsInRepo(
+      octokitBrowser,
+      exampleDir,
+      exampleBranch,
+    );
+  } catch (error) {
+    reportErrorToSlack(error, {
+      exampleDir,
+      exampleBranch,
+      handsontableVersion,
+      handsontableBranch,
+      handsontableSha,
+    });
+    return res.status(500).json({ error: error.message });
+  }
+  if (!exampleExistsBrowser.ok) {
+    return res.status(400).json({ error: exampleExistsBrowser.message });
+  }
+
+  try {
     const version = await getVersion(
-      octokit,
+      octokitBrowser,
       handsontableBranch,
       handsontableVersion,
       handsontableSha,
     );
 
     const files = await fetchFiles(
-      octokit,
+      octokitBrowser,
       "handsontable",
       "examples",
       `examples/${exampleDir}`,
@@ -275,29 +360,21 @@ app.get("/codesandbox-browser", async (req, res) => {
     );
     
   } catch (error) {
-    const slackWebhook = process.env.SLACK_WEBHOOK;
-    if (slackWebhook) {
-      fetch(slackWebhook, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          "type": "mrkdwn",
-          "text": `Codesandbox Error: ${error.message}: Debug: ${
-            JSON.stringify({
-              exampleDir,
-              exampleBranch,
-              handsontableVersion,
-              handsontableBranch,
-              handsontableSha,
-            })
-          }`,
-        }),
+    if (isNotFoundClientError(error)) {
+      console.log(error);
+      return res.status(400).json({
+        error:
+          "GitHub resource not found (check example-dir, example-branch, or that the path exists in handsontable/examples)",
       });
     }
-
     console.log(error);
+    reportErrorToSlack(error, {
+      exampleDir,
+      exampleBranch,
+      handsontableVersion,
+      handsontableBranch,
+      handsontableSha,
+    });
     return res.status(500).json({ error: error.message });
   }
 });
