@@ -11,7 +11,7 @@ The main purpose is to create dynamic redirects to codesandbox-vm from the examp
 1. **Parameter Processing**: The service extracts query parameters to determine which example to load and which Handsontable version to use.
 2. **Sandbox Lookup**: It looks up existing codesandbox-vm sandboxes by tags (example-dir, handsontable version, etc.).
 3. **Redirect if Found**: If a matching sandbox exists, it redirects to that sandbox.
-4. **Version Resolution**: If no sandbox exists, it resolves the Handsontable version using the GitHub API and NPM registry.
+4. **Version Resolution**: If no sandbox exists, it resolves the Handsontable version from npm (and optionally GitHub/NPM for branch/sha), or uses a [pkg.pr.new](https://pkg.pr.new) build id or URL verbatim for dependency URLs.
 5. **Second Lookup**: It looks up again with the resolved version tag; redirects if found.
 6. **File Fetching**: It fetches example files from the GitHub repository.
 7. **Sandbox Creation**: It creates a new sandbox via the codesandbox-vm SDK, uploads files, and redirects to the new sandbox.
@@ -24,13 +24,34 @@ The main purpose is to create dynamic redirects to codesandbox-vm from the examp
 | `example-branch` | string | ❌ No | Git branch to fetch example from (defaults to main/master) |
 | `handsontable-branch` | string | ❌ No | Handsontable repository branch to use for version resolution |
 | `handsontable-sha` | string | ❌ No | Specific commit SHA to use for version resolution |
-| `handsontable-version` | string | ❌ No | Specific NPM version (e.g., "16.0.0") |
+| `handsontable-version` | string | ✅ Yes | Semver (npm), a [pkg.pr.new](https://pkg.pr.new) build id (digits only), or a full `https://pkg.pr.new/...` preview URL (see below) |
+
+## `handsontable-version`: semver vs pkg.pr.new
+
+Besides published npm semver strings, you can point examples at **pkg.pr.new** preview tarballs (per-PR builds). The service rewrites every Handsontable-related dependency in the example’s `package.json` (except `@handsontable/pikaday`) to the matching preview URL.
+
+**Accepted forms**
+
+1. **Semver** — e.g. `16.0.0` (same as `npm i handsontable@16.0.0` for core and wrappers).
+2. **Build id** — digits only, e.g. `12312`. Equivalent to installing each package from `https://pkg.pr.new/<package-name>@12312`.
+3. **Full preview URL** — e.g. `https://pkg.pr.new/handsontable@12312` or `https://pkg.pr.new/@handsontable/react-wrapper@12312`. The ref after the last `@` is used for all packages (here `12312`).
+
+**Equivalent local installs** (what the sandbox ends up using for each package name):
+
+```bash
+npm i https://pkg.pr.new/handsontable@12312
+npm i https://pkg.pr.new/@handsontable/react-wrapper@12312
+npm i https://pkg.pr.new/@handsontable/vue3@12312
+npm i https://pkg.pr.new/@handsontable/angular-wrapper@12312
+```
+
+Wrappers and other `@handsontable/*` dependencies listed in the example are updated the same way, each with its own package name in the URL.
 
 ## Version Resolution Priority
 
 The service resolves the Handsontable version in the following order:
 
-1. **`handsontable-version`** – Direct NPM version (highest priority)
+1. **`handsontable-version`** – Direct npm semver, pkg.pr.new id, or pkg.pr.new URL (highest priority)
 2. **`handsontable-branch`** – Finds NPM version matching the branch's commit SHA
 3. **`handsontable-sha`** – Finds NPM version matching the specific commit SHA
 4. **`latest`** – Default fallback (lowest priority)
@@ -39,27 +60,39 @@ The service resolves the Handsontable version in the following order:
 
 ### Basic Example
 ```
-https://your-service.onrender.com/codesandbox-vm-vm?example-dir=angular
+https://your-service.onrender.com/codesandbox-vm?example-dir=angular&handsontable-version=16.0.0
 ```
 
 ### With Specific Handsontable Version
 ```
-https://your-service.onrender.com/codesandbox-vm-vm?example-dir=angular&handsontable-version=16.0.0
+https://your-service.onrender.com/codesandbox-vm?example-dir=angular&handsontable-version=16.0.0
 ```
+
+### With pkg.pr.new preview build (numeric id)
+```
+https://your-service.onrender.com/codesandbox-vm?example-dir=react&handsontable-version=12312
+```
+
+### With pkg.pr.new preview URL
+```
+https://your-service.onrender.com/codesandbox-vm?example-dir=vue&handsontable-version=https%3A%2F%2Fpkg.pr.new%2Fhandsontable%4012312
+```
+(URL-encode the value in the query string when using a full URL.)
 
 ### With Specific Branch
 ```
-https://your-service.onrender.com/codesandbox-vm-vm?example-dir=react&handsontable-branch=develop
+https://your-service.onrender.com/codesandbox-vm?example-dir=react&handsontable-branch=develop
 ```
 
 ### With Custom Example Branch
 ```
-https://your-service.onrender.com/codesandbox-vm-vm?example-dir=vue&example-branch=feature-branch&handsontable-version=15.0.0
+https://your-service.onrender.com/codesandbox-vm?example-dir=vue&example-branch=feature-branch&handsontable-version=15.0.0
 ```
 
 ## API Endpoints
 
-- **GET** `/codesandbox-vm-vm` – Main endpoint for codesandbox-vm redirects
+- **GET** `/codesandbox-vm` – SDK flow: list/create sandbox, install, redirect
+- **GET** `/codesandbox-browser` – Define API flow for embed preview
 - **OPTIONS** – CORS preflight (if configured)
 
 ## Response Format
@@ -90,9 +123,12 @@ Configure CORS in your Express app or at the Render.com level if you need cross-
 
 ```
 render-ms/
-├── index.js          # Express server and /codesandbox-vm-vm handler
-├── github.js         # GitHub API integration (fetch example files)
-├── version.js        # Handsontable version resolution logic
+├── index.js                        # Express server (/codesandbox-vm, /codesandbox-browser)
+├── github.js                       # GitHub API integration (fetch example files)
+├── version.js                      # Handsontable version resolution (npm / branch / sha)
+├── validate-handsontable-version.js # semver + pkg.pr.new validation for handsontable-version
+├── pkg-pr-new.js                   # pkg.pr.new URL helpers for preview dependencies
+├── validate-query-params.js
 ├── package.json
 ├── package-lock.json
 ├── Dockerfile        # Node 22 Alpine image for Render.com
@@ -163,8 +199,12 @@ Or use **Blueprint**: connect the repo, add a Blueprint, and point it at `render
 | Caching | New project per request | Reuses sandboxes by tags when possible |
 
 
-### Testing 
+### Testing
 
+**pkg.pr.new** (replace `12312` with a real preview id):
+
+- `https://examples-5ji7.onrender.com/codesandbox-vm?example-dir=react&handsontable-version=12312`
+- `https://examples-5ji7.onrender.com/codesandbox-browser?example-dir=javascript&handsontable-version=12312`
 
 Angular 
 

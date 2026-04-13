@@ -9,6 +9,7 @@ import {
   validateQueryParamsSync,
   validateExampleDirExistsInRepo,
 } from "./validate-query-params.js";
+import { pkgPrNewDependencyUrl } from "./pkg-pr-new.js";
 
 const app = express();
 app.use(express.json());
@@ -62,6 +63,7 @@ app.get("/codesandbox-vm", async (req, res) => {
     handsontableSha,
   } = paramsCheck.normalized;
   const handsontableVersion = versionCheck.normalized;
+  const handsontablePkgPrNew = versionCheck.pkgPrNew;
 
   const octokit = new Octokit({
     auth: process.env.GITHUB_TOKEN,
@@ -157,7 +159,12 @@ app.get("/codesandbox-vm", async (req, res) => {
         if (
           key.toString().includes("handsontable") &&
           key.toString() !== "@handsontable/pikaday"
-        ) return [key, version];
+        ) {
+          const depVersion = handsontablePkgPrNew
+            ? pkgPrNewDependencyUrl(key, version)
+            : version;
+          return [key, depVersion];
+        }
         return [key, value];
       }),
     );
@@ -260,6 +267,7 @@ app.get("/codesandbox-browser", async (req, res) => {
     handsontableSha,
   } = paramsCheckBrowser.normalized;
   const handsontableVersion = versionCheckBrowser.normalized;
+  const handsontablePkgPrNewBrowser = versionCheckBrowser.pkgPrNew;
 
   const octokitBrowser = new Octokit({
     auth: process.env.GITHUB_TOKEN,
@@ -312,7 +320,10 @@ app.get("/codesandbox-browser", async (req, res) => {
           key.toString().includes("handsontable") &&
           key.toString() !== "@handsontable/pikaday"
         ) {
-          return [key, version];
+          const depVersion = handsontablePkgPrNewBrowser
+            ? pkgPrNewDependencyUrl(key, version)
+            : version;
+          return [key, depVersion];
         }
         return [key, value];
       }),
