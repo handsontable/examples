@@ -24,16 +24,18 @@ The main purpose is to create dynamic redirects to codesandbox-vm from the examp
 | `example-branch` | string | ❌ No | Git branch to fetch example from (defaults to main/master) |
 | `handsontable-branch` | string | ❌ No | Handsontable repository branch to use for version resolution |
 | `handsontable-sha` | string | ❌ No | Specific commit SHA to use for version resolution |
-| `handsontable-version` | string | ✅ Yes | Semver (npm), a [pkg.pr.new](https://pkg.pr.new) build id (digits only), or a full `https://pkg.pr.new/...` preview URL (see below) |
+| `handsontable-version` | string | ✅ Yes | Semver (npm) with **major ≤ HANDSONTABLE_MAX_MAJOR** (default 19), a [pkg.pr.new](https://pkg.pr.new) ref, or a full `https://pkg.pr.new/...` URL — see below |
 
 ## `handsontable-version`: semver vs pkg.pr.new
 
 Besides published npm semver strings, you can point examples at **pkg.pr.new** preview tarballs (per-PR builds). The service rewrites every Handsontable-related dependency in the example’s `package.json` (except `@handsontable/pikaday`) to the matching preview URL.
 
+**Semver major cap** — Normalized versions must have **major ≤ 19** by default (override with `HANDSONTABLE_MAX_MAJOR`). Examples: `20.0.0` is rejected; `19.1.0` is allowed.
+
 **Accepted forms**
 
 1. **Semver** — e.g. `16.0.0` (same as `npm i handsontable@16.0.0` for core and wrappers).
-2. **Build id** — digits only, e.g. `12312`. Equivalent to installing each package from `https://pkg.pr.new/<package-name>@12312`.
+2. **Bare digits** — If the value is digits-only: values **not greater than** the max major (default 19) are semver **`N.0.0`** (e.g. `16` → `16.0.0`). Values **greater than** that cap are a **pkg.pr.new** build id (e.g. `12339` → `https://pkg.pr.new/<package>@12339`). For a small numeric **PR** id (e.g. `12`), use a full `https://pkg.pr.new/...` URL so it is not read as semver `12.0.0`.
 3. **Full preview URL** — e.g. `https://pkg.pr.new/handsontable@12312` or `https://pkg.pr.new/@handsontable/react-wrapper@12312`. The ref after the last `@` is used for all packages (here `12312`).
 
 **Equivalent local installs** (what the sandbox ends up using for each package name):
@@ -91,7 +93,7 @@ https://your-service.onrender.com/codesandbox-vm?example-dir=vue&example-branch=
 
 ## API Endpoints
 
-- **GET** `/codesandbox-vm` – SDK flow: list/create sandbox, install, redirect
+- **GET** `/codesandbox-vm` – SDK flow: list/create sandbox, kick off dependency install in the sandbox (non-blocking by default), redirect
 - **GET** `/codesandbox-browser` – Define API flow for embed preview
 - **OPTIONS** – CORS preflight (if configured)
 
@@ -113,7 +115,11 @@ https://your-service.onrender.com/codesandbox-vm?example-dir=vue&example-branch=
 | `GITHUB_TOKEN` | GitHub API token for repository access | ✅ Yes |
 | `CSB_API_KEY` | codesandbox-vm API key for SDK (create sandboxes, list by tags) | ✅ Yes |
 | `PORT` | Port for the server (Render sets this automatically) | ❌ No (default: 3000) |
-| `SLACK_WEBHOOK` | Optional Slack webhook URL for error notifications | ❌ No |
+| `SLACK_WEBHOOK` | Optional Slack webhook URL for error notifications (install failures, missing sandbox fork, etc. are **not** sent — only unexpected server errors) | ❌ No |
+| `HANDSONTABLE_MAX_MAJOR` | Largest allowed **semver major** for `handsontable-version` (default `19`). Bare digit ids **greater** than this are treated as pkg.pr.new build ids. | ❌ No |
+| `CODESANDBOX_AWAIT_INSTALL` | If `true` or `1`, wait for template install commands to finish before redirecting (fails the HTTP request if install exits non‑zero). Default is off: installs run in the sandbox after `disconnect()`, so long `npm`/`yarn` runs do not hold the Render request open. | ❌ No |
+| `CODESANDBOX_INSTALL_RETRY_ATTEMPTS` | Only when `CODESANDBOX_AWAIT_INSTALL` is set: max attempts per install command (default `2`). | ❌ No |
+| `CODESANDBOX_INSTALL_RETRY_MS` | Only when `CODESANDBOX_AWAIT_INSTALL` is set: delay between retries in ms (default `5000`). | ❌ No |
 
 ## CORS Support
 
@@ -128,6 +134,7 @@ render-ms/
 ├── version.js                      # Handsontable version resolution (npm / branch / sha)
 ├── validate-handsontable-version.js # semver + pkg.pr.new validation for handsontable-version
 ├── pkg-pr-new.js                   # pkg.pr.new URL helpers for preview dependencies
+├── slack-notify.js                 # filters which errors are posted to Slack
 ├── validate-query-params.js
 ├── package.json
 ├── package-lock.json

@@ -9,14 +9,12 @@ export function pkgPrNewDependencyUrl(packageName, buildRef) {
 }
 
 /**
- * @param {string} value - normalized build ref (digits) or full pkg.pr.new URL
- * @returns {string | null} build ref, or null if not a pkg.pr.new input
+ * Only full https://pkg.pr.new/... URLs (bare numeric ids are handled in version validation).
+ * @param {string} value
+ * @returns {string | null} build ref after the last `@`, or null
  */
-export function parsePkgPrNewBuildRef(value) {
+export function parsePkgPrNewFromUrl(value) {
   const trimmed = String(value).trim();
-  if (/^\d+$/.test(trimmed)) {
-    return trimmed;
-  }
   try {
     const u = new URL(trimmed);
     if (u.protocol !== "https:" || u.hostname !== "pkg.pr.new") {

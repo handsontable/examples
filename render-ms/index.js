@@ -1,6 +1,6 @@
 // index.js
 import express from "express";
-import { CodeSandbox } from "@codesandbox/sdk";
+import { CodeSandbox, CommandError } from "@codesandbox/sdk";
 import { Octokit } from "octokit";
 import { fetchFiles } from "./github.js";
 import { getVersion } from "./version.js";
@@ -10,11 +10,24 @@ import {
   validateExampleDirExistsInRepo,
 } from "./validate-query-params.js";
 import { pkgPrNewDependencyUrl } from "./pkg-pr-new.js";
+import { shouldNotifySlack } from "./slack-notify.js";
 
 const app = express();
 app.use(express.json());
 
+function formatInstallErrorMessage(error) {
+  let text = error?.message ?? String(error);
+  if (error instanceof CommandError && error.output?.trim()) {
+    const tail = error.output.trimEnd().slice(-3500);
+    text += `\n\n\`\`\`${tail}\`\`\``;
+  }
+  return text;
+}
+
 function reportErrorToSlack(error, context) {
+  if (!shouldNotifySlack(error)) {
+    return;
+  }
   const slackWebhook = process.env.SLACK_WEBHOOK;
   if (slackWebhook) {
     fetch(slackWebhook, {
@@ -24,11 +37,77 @@ function reportErrorToSlack(error, context) {
       },
       body: JSON.stringify({
         type: "mrkdwn",
-        text: `Codesandbox Error: ${error.message}: Debug: ${JSON.stringify(context)}`,
+        text: `Codesandbox Error: ${formatInstallErrorMessage(error)}: Debug: ${JSON.stringify(context)}`,
       }),
     });
   }
-  
+}
+
+/**
+ * Install tasks from the template (deduped by command string).
+ * Default: start installs in the sandbox and disconnect without waiting — avoids long
+ * HTTP requests and matches how installs continue on the VM after the SDK session ends.
+ * Set CODESANDBOX_AWAIT_INSTALL=true to wait (and fail the request on npm exit ≠ 0).
+ */
+async function runCodesandboxInstallTasks(client, tasks) {
+  const installTasks = tasks.filter(
+    (task) =>
+      task.name.toLowerCase().includes("install") &&
+      !task.command.includes("postinstall"),
+  );
+  const seenCommands = new Set();
+  const uniqueCommands = [];
+  for (const task of installTasks) {
+    if (seenCommands.has(task.command)) continue;
+    seenCommands.add(task.command);
+    uniqueCommands.push(task.command);
+  }
+
+  const awaitInstall =
+    process.env.CODESANDBOX_AWAIT_INSTALL === "1" ||
+    process.env.CODESANDBOX_AWAIT_INSTALL === "true";
+
+  if (!awaitInstall) {
+    for (const command of uniqueCommands) {
+      await client.commands.runBackground(command);
+    }
+    await client.disconnect();
+    return;
+  }
+
+  const maxAttempts = Math.max(
+    1,
+    Number.parseInt(process.env.CODESANDBOX_INSTALL_RETRY_ATTEMPTS ?? "2", 10) || 2,
+  );
+  const retryMs = Math.max(
+    0,
+    Number.parseInt(process.env.CODESANDBOX_INSTALL_RETRY_MS ?? "5000", 10) || 5000,
+  );
+
+  for (const command of uniqueCommands) {
+    let lastError;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await client.commands.run(command);
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        const retryable =
+          error instanceof CommandError &&
+          attempt < maxAttempts &&
+          (error.exitCode === 1 || error.exitCode === undefined);
+        if (retryable) {
+          await new Promise((r) => setTimeout(r, retryMs));
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (lastError) throw lastError;
+  }
+
+  await client.disconnect();
 }
 
 /** GitHub / API “not found” — treat like validation: 400, no Slack (e.g. missing example path or ref). */
@@ -84,7 +163,7 @@ app.get("/codesandbox-vm", async (req, res) => {
       handsontableBranch,
       handsontableSha,
     });
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: formatInstallErrorMessage(error) });
   }
   if (!exampleExists.ok) {
     return res.status(400).json({ error: exampleExists.message });
@@ -208,12 +287,7 @@ app.get("/codesandbox-vm", async (req, res) => {
       );
 
       const tasks = await client.tasks.getAll();
-
-      for (const task of tasks) {
-        if (task.name.toLowerCase().includes("install") && !task.command.includes("postinstall")) {
-          await client.commands.run(task.command);
-        }
-      }
+      await runCodesandboxInstallTasks(client, tasks);
 
       return res.redirect(
         `https://codesandbox.io/p/sandbox/${sandbox.id}?file=&preview=true`,
@@ -235,7 +309,7 @@ app.get("/codesandbox-vm", async (req, res) => {
       handsontableBranch,
       handsontableSha,
     });
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: formatInstallErrorMessage(error) });
   }
 });
 
@@ -288,7 +362,7 @@ app.get("/codesandbox-browser", async (req, res) => {
       handsontableBranch,
       handsontableSha,
     });
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: formatInstallErrorMessage(error) });
   }
   if (!exampleExistsBrowser.ok) {
     return res.status(400).json({ error: exampleExistsBrowser.message });
@@ -386,7 +460,7 @@ app.get("/codesandbox-browser", async (req, res) => {
       handsontableBranch,
       handsontableSha,
     });
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: formatInstallErrorMessage(error) });
   }
 });
 
