@@ -31,24 +31,26 @@ export class TicketsService {
         const param = `val${i}`;
         const col = `ticket.${filter.prop}`;
 
+        const val = filter.value[0];
+
         switch (filter.condition) {
           case 'eq':
-            qb.andWhere(`LOWER(${col}::text) = LOWER(:${param})`, { [param]: filter.value[0] });
+            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) = LOWER(:${param})`, { [param]: val });
             break;
           case 'neq':
-            qb.andWhere(`LOWER(${col}::text) != LOWER(:${param})`, { [param]: filter.value[0] });
+            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) != LOWER(:${param})`, { [param]: val });
             break;
           case 'contains':
-            qb.andWhere(`LOWER(${col}::text) LIKE LOWER(:${param})`, { [param]: `%${filter.value[0]}%` });
+            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) LIKE LOWER(:${param})`, { [param]: `%${val}%` });
             break;
           case 'not_contains':
-            qb.andWhere(`LOWER(${col}::text) NOT LIKE LOWER(:${param})`, { [param]: `%${filter.value[0]}%` });
+            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) NOT LIKE LOWER(:${param})`, { [param]: `%${val}%` });
             break;
           case 'begins_with':
-            qb.andWhere(`LOWER(${col}::text) LIKE LOWER(:${param})`, { [param]: `${filter.value[0]}%` });
+            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) LIKE LOWER(:${param})`, { [param]: `${val}%` });
             break;
           case 'ends_with':
-            qb.andWhere(`LOWER(${col}::text) LIKE LOWER(:${param})`, { [param]: `%${filter.value[0]}` });
+            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) LIKE LOWER(:${param})`, { [param]: `%${val}` });
             break;
           case 'empty':
             qb.andWhere(`(${col} IS NULL OR ${col}::text = '')`);

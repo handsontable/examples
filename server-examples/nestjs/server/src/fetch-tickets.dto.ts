@@ -1,4 +1,4 @@
-import { Transform, Type } from 'class-transformer';
+import { plainToInstance, Transform, Type } from 'class-transformer';
 import { IsArray, IsIn, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 
 const ALLOWED_COLUMNS = ['id', 'subject', 'status', 'priority', 'assignee', 'createdAt'] as const;
@@ -43,6 +43,9 @@ export class FetchTicketsDto {
   @IsOptional()
   @ValidateNested({ each: true })
   @Type(() => FilterConditionDto)
-  @Transform(({ value }) => (Array.isArray(value) ? value : value ? [value] : []))
+  @Transform(({ value }) => {
+    const arr = Array.isArray(value) ? value : value ? [value] : [];
+    return arr.map((item) => plainToInstance(FilterConditionDto, item));
+  })
   filters?: FilterConditionDto[];
 }
