@@ -174,11 +174,14 @@ public class ProductService {
                     if (rawValue == null || column == null || !ALLOWED_COLUMNS.contains(column)) {
                         continue;
                     }
-                    String value = rawValue.toString();
+                    String value = rawValue.toString().toLowerCase()
+                        .replace("\\", "\\\\")
+                        .replace("%", "\\%")
+                        .replace("_", "\\_");
                     predicates.add(builder.like(
                         builder.lower(root.get(column).as(String.class)),
-                        "%" + value.toLowerCase() + "%"
-                    ));
+                        "%" + value + "%",
+                        '\\'));
                 }
                 return builder.and(predicates.toArray(new Predicate[0]));
             };
