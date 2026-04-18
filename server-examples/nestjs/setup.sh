@@ -17,7 +17,13 @@ SERVER_PID=""
 cleanup() {
   echo ""
   info "Shutting down…"
-  [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null || true
+  if [[ -n "$SERVER_PID" ]]; then
+    # Kill child processes of the subshell (ts-node and npm), then the subshell itself.
+    pkill -P "$SERVER_PID" 2>/dev/null || true
+    kill "$SERVER_PID" 2>/dev/null || true
+  fi
+  # Belt-and-suspenders: catch any ts-node process that escaped the group kill.
+  pkill -f "ts-node src/main.ts" 2>/dev/null || true
   docker compose -f "$SCRIPT_DIR/docker-compose.yml" stop 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM

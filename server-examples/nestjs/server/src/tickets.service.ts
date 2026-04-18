@@ -32,6 +32,10 @@ export class TicketsService {
         const col = `ticket.${filter.prop}`;
 
         const val = filter.value[0];
+        // Escape LIKE metacharacters so user input is treated literally.
+        const esc = (s: string) => s.replace(/!/g, '!!').replace(/%/g, '!%').replace(/_/g, '!_');
+        const like = `LIKE LOWER(:${param}) ESCAPE '!'`;
+        const notLike = `NOT LIKE LOWER(:${param}) ESCAPE '!'`;
 
         switch (filter.condition) {
           case 'eq':
@@ -41,16 +45,16 @@ export class TicketsService {
             if (val !== undefined) qb.andWhere(`LOWER(${col}::text) != LOWER(:${param})`, { [param]: val });
             break;
           case 'contains':
-            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) LIKE LOWER(:${param})`, { [param]: `%${val}%` });
+            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) ${like}`, { [param]: `%${esc(val)}%` });
             break;
           case 'not_contains':
-            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) NOT LIKE LOWER(:${param})`, { [param]: `%${val}%` });
+            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) ${notLike}`, { [param]: `%${esc(val)}%` });
             break;
           case 'begins_with':
-            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) LIKE LOWER(:${param})`, { [param]: `${val}%` });
+            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) ${like}`, { [param]: `${esc(val)}%` });
             break;
           case 'ends_with':
-            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) LIKE LOWER(:${param})`, { [param]: `%${val}` });
+            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) ${like}`, { [param]: `%${esc(val)}` });
             break;
           case 'empty':
             qb.andWhere(`(${col} IS NULL OR ${col}::text = '')`);
