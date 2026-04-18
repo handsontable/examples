@@ -1,0 +1,16 @@
+{
+  "name": "handsontable-server-side-example",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "handsontable": "*"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
