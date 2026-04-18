@@ -6,9 +6,9 @@ setup: start
 start:
 	@bash setup.sh
 
-## Stop backend Docker containers (keeps database volume)
+## Stop backend Docker containers (named volume keeps database data)
 stop:
-	cd backend && docker compose down
+	cd backend && docker compose stop
 
 ## Stream Docker Compose logs
 logs:

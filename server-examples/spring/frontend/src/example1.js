@@ -79,6 +79,7 @@ const hot = new Handsontable(container, {
         filters: filters ? JSON.stringify(filters) : undefined,
       });
       const res = await fetch(url, { signal });
+      if (!res.ok) throw new Error(`Failed to fetch products: ${res.status}`);
       const json = await res.json();
       // The Spring Boot controller returns { rows, totalRows }.
       return { rows: json.rows, totalRows: json.totalRows };
@@ -90,11 +91,12 @@ const hot = new Handsontable(container, {
      * matches the CreateRowsPayload DTO in ProductController.
      */
     onRowsCreate: async (payload) => {
-      await fetch('/api/products/create-rows', {
+      const res = await fetch('/api/products/create-rows', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      if (!res.ok) throw new Error(`Failed to create rows: ${res.status}`);
     },
     /**
      * Sends changed cell values to the server.
@@ -103,21 +105,23 @@ const hot = new Handsontable(container, {
      * of column name to new value -- matching UpdateRowPayload on the server.
      */
     onRowsUpdate: async (rows) => {
-      await fetch('/api/products/update-rows', {
+      const res = await fetch('/api/products/update-rows', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(rows),
       });
+      if (!res.ok) throw new Error(`Failed to update rows: ${res.status}`);
     },
     /**
      * Sends an array of row IDs to delete on the server.
      */
     onRowsRemove: async (rowIds) => {
-      await fetch('/api/products/remove-rows', {
+      const res = await fetch('/api/products/remove-rows', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(rowIds),
       });
+      if (!res.ok) throw new Error(`Failed to remove rows: ${res.status}`);
     },
   },
   licenseKey: 'non-commercial-and-evaluation',
