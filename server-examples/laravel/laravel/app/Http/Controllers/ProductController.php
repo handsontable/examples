@@ -8,6 +8,8 @@ use Illuminate\Http\Request;
 
 class ProductController extends Controller
 {
+    private const ALLOWED_COLUMNS = ['name', 'sku', 'category', 'price', 'stock'];
+
     // GET /api/products
     // Query string sent by Handsontable via buildUrl():
     //   page, pageSize, sort[prop], sort[order],
@@ -29,8 +31,7 @@ class ProductController extends Controller
                 $value     = $filter['value']     ?? null;
                 $value2    = $filter['value2']    ?? null;
 
-                $allowedColumns = ['name', 'sku', 'category', 'price', 'stock'];
-                if (!$prop || !$condition || !in_array($prop, $allowedColumns, true)) {
+                if (!$prop || !$condition || !in_array($prop, self::ALLOWED_COLUMNS, true)) {
                     continue;
                 }
 
@@ -89,11 +90,10 @@ class ProductController extends Controller
 
         // --- Sorting ---------------------------------------------------------
         if (is_array($sort) && isset($sort['prop'], $sort['order'])) {
-            $allowedColumns = ['name', 'sku', 'category', 'price', 'stock'];
             $direction = in_array(strtolower($sort['order']), ['asc', 'desc'])
                 ? strtolower($sort['order'])
                 : 'asc';
-            if (in_array($sort['prop'], $allowedColumns, true)) {
+            if (in_array($sort['prop'], self::ALLOWED_COLUMNS, true)) {
                 $query->orderBy($sort['prop'], $direction);
             }
         }
