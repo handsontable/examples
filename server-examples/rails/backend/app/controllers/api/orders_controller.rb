@@ -82,13 +82,19 @@ module Api
                 when "gte"          then scope.where("#{prop} >= ?", value)
                 when "lt"           then scope.where("#{prop} < ?", value)
                 when "lte"          then scope.where("#{prop} <= ?", value)
-                when "empty"        then scope.where("#{prop} IS NULL OR #{prop} = ''")
-                when "not_empty"    then scope.where.not("#{prop} IS NULL OR #{prop} = ''")
+                when "empty"
+                  string_col?(prop) ? scope.where("#{prop} IS NULL OR #{prop} = ''") : scope.where(prop => nil)
+                when "not_empty"
+                  string_col?(prop) ? scope.where.not("#{prop} IS NULL OR #{prop} = ''") : scope.where.not(prop => nil)
                 else scope
                 end
       end
 
       scope
+    end
+
+    def string_col?(prop)
+      Order.column_for_attribute(prop)&.type&.in?(%i[string text])
     end
   end
 end
