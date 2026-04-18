@@ -115,7 +115,7 @@ public class ProductService {
                 }
                 if (changes.containsKey("stock")) {
                     Object val = changes.get("stock");
-                    product.setStock(val == null ? null : Integer.parseInt(val.toString()));
+                    product.setStock(val == null ? null : ((Number) val).intValue());
                 }
                 repository.save(product);
             });
