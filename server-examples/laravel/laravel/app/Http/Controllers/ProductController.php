@@ -36,16 +36,20 @@ class ProductController extends Controller
 
                 switch ($condition) {
                     case 'contains':
-                        $query->whereRaw("LOWER({$prop}) LIKE ?", ['%' . strtolower($value) . '%']);
+                        $safe = $this->escapeLike(strtolower((string)$value));
+                        $query->whereRaw("LOWER({$prop}) LIKE ?", ['%' . $safe . '%']);
                         break;
                     case 'not_contains':
-                        $query->whereRaw("LOWER({$prop}) NOT LIKE ?", ['%' . strtolower($value) . '%']);
+                        $safe = $this->escapeLike(strtolower((string)$value));
+                        $query->whereRaw("LOWER({$prop}) NOT LIKE ?", ['%' . $safe . '%']);
                         break;
                     case 'begins_with':
-                        $query->whereRaw("LOWER({$prop}) LIKE ?", [strtolower($value) . '%']);
+                        $safe = $this->escapeLike(strtolower((string)$value));
+                        $query->whereRaw("LOWER({$prop}) LIKE ?", [$safe . '%']);
                         break;
                     case 'ends_with':
-                        $query->whereRaw("LOWER({$prop}) LIKE ?", ['%' . strtolower($value)]);
+                        $safe = $this->escapeLike(strtolower((string)$value));
+                        $query->whereRaw("LOWER({$prop}) LIKE ?", ['%' . $safe]);
                         break;
                     case 'eq':    $query->where($prop, '=', $value);  break;
                     case 'neq':   $query->where($prop, '!=', $value); break;
@@ -150,5 +154,12 @@ class ProductController extends Controller
         Product::whereIn('id', $ids)->delete();
 
         return response()->json(null, 204);
+    }
+
+    // Escape LIKE metacharacters so literal % and _ in user input don't act as
+    // wildcards. MySQL's default escape char is \, so we prefix \, %, and _ with \.
+    private function escapeLike(string $value): string
+    {
+        return addcslashes($value, '\\%_');
     }
 }

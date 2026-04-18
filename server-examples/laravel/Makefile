@@ -13,8 +13,8 @@ start: ## Start Docker services and the frontend dev server (after initial setup
 	$(DC) up -d
 	cd frontend && npm run dev
 
-stop: ## Stop Docker services
-	$(DC) down
+stop: ## Stop Docker services (preserves data; use 'clean' to also wipe the DB)
+	$(DC) stop
 
 logs: ## Stream backend container logs
 	$(DC) logs -f app

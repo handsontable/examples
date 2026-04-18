@@ -1,6 +1,8 @@
 services:
   db:
     image: mysql:8.0
+    volumes:
+      - db_data:/var/lib/mysql
     environment:
       MYSQL_DATABASE: laravel
       MYSQL_USER: laravel
@@ -30,3 +32,6 @@ services:
       DB_DATABASE: laravel
       DB_USERNAME: laravel
       DB_PASSWORD: secret
+
+volumes:
+  db_data:
