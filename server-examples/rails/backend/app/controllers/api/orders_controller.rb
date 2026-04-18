@@ -71,7 +71,7 @@ module Api
 
         next unless SORTABLE_COLUMNS.include?(prop)
 
-        safe = sanitize_sql_like(value.to_s)
+        safe = Order.sanitize_sql_like(value.to_s)
         scope = case condition
                 when "contains"     then scope.where("#{prop} ILIKE ?", "%#{safe}%")
                 when "not_contains" then scope.where.not("#{prop} ILIKE ?", "%#{safe}%")
