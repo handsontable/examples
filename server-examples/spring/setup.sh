@@ -12,6 +12,7 @@ echo ""
 
 # Check prerequisites
 command -v docker >/dev/null 2>&1 || { echo "ERROR: docker is required but not installed."; exit 1; }
+command -v curl   >/dev/null 2>&1 || { echo "ERROR: curl is required but not installed."; exit 1; }
 command -v node   >/dev/null 2>&1 || { echo "ERROR: node is required but not installed."; exit 1; }
 command -v npm    >/dev/null 2>&1 || { echo "ERROR: npm is required but not installed."; exit 1; }
 

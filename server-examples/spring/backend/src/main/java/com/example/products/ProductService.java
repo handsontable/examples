@@ -170,13 +170,15 @@ public class ProductService {
                 List<Predicate> predicates = new ArrayList<>();
                 for (Map<String, Object> filter : filters) {
                     String column = (String) filter.get("column");
-                    String value = String.valueOf(filter.get("value"));
-                    if (column != null && ALLOWED_COLUMNS.contains(column)) {
-                        predicates.add(builder.like(
-                            builder.lower(root.get(column).as(String.class)),
-                            "%" + value.toLowerCase() + "%"
-                        ));
+                    Object rawValue = filter.get("value");
+                    if (rawValue == null || column == null || !ALLOWED_COLUMNS.contains(column)) {
+                        continue;
                     }
+                    String value = rawValue.toString();
+                    predicates.add(builder.like(
+                        builder.lower(root.get(column).as(String.class)),
+                        "%" + value.toLowerCase() + "%"
+                    ));
                 }
                 return builder.and(predicates.toArray(new Predicate[0]));
             };
