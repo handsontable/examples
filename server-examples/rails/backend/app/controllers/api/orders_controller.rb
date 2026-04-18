@@ -71,13 +71,14 @@ module Api
 
         next unless SORTABLE_COLUMNS.include?(prop)
 
+        safe = sanitize_sql_like(value.to_s)
         scope = case condition
-                when "contains"     then scope.where("#{prop} ILIKE ?", "%#{value}%")
-                when "not_contains" then scope.where.not("#{prop} ILIKE ?", "%#{value}%")
+                when "contains"     then scope.where("#{prop} ILIKE ?", "%#{safe}%")
+                when "not_contains" then scope.where.not("#{prop} ILIKE ?", "%#{safe}%")
                 when "eq"           then scope.where(prop => value)
                 when "neq"          then scope.where.not(prop => value)
-                when "begins_with"  then scope.where("#{prop} ILIKE ?", "#{value}%")
-                when "ends_with"    then scope.where("#{prop} ILIKE ?", "%#{value}")
+                when "begins_with"  then scope.where("#{prop} ILIKE ?", "#{safe}%")
+                when "ends_with"    then scope.where("#{prop} ILIKE ?", "%#{safe}")
                 when "gt"           then scope.where("#{prop} > ?", value)
                 when "gte"          then scope.where("#{prop} >= ?", value)
                 when "lt"           then scope.where("#{prop} < ?", value)
