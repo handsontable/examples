@@ -1,11 +1,14 @@
 import { Transform, Type } from 'class-transformer';
-import { IsArray, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+
+const ALLOWED_COLUMNS = ['id', 'subject', 'status', 'priority', 'assignee', 'createdAt'] as const;
+const ALLOWED_CONDITIONS = ['eq', 'neq', 'contains', 'not_contains', 'begins_with', 'ends_with', 'empty', 'not_empty'] as const;
 
 export class FilterConditionDto {
-  @IsString()
+  @IsIn(ALLOWED_COLUMNS)
   prop: string;
 
-  @IsString()
+  @IsIn(ALLOWED_CONDITIONS)
   condition: string;
 
   @IsArray()
@@ -14,10 +17,10 @@ export class FilterConditionDto {
 }
 
 export class SortDto {
-  @IsString()
+  @IsIn(ALLOWED_COLUMNS)
   column: string;
 
-  @IsString()
+  @IsIn(['asc', 'desc'])
   order: 'asc' | 'desc';
 }
 
