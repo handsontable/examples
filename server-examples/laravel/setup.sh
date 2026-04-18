@@ -15,6 +15,7 @@ check_cmd() {
 }
 
 check_cmd docker
+check_cmd curl
 check_cmd node
 check_cmd npm
 

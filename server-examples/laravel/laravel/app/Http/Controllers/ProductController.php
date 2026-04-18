@@ -60,13 +60,23 @@ class ProductController extends Controller
                         $query->whereNotBetween($prop, [$value, $value2]);
                         break;
                     case 'empty':
-                        $query->where(function ($q) use ($prop) {
-                            $q->whereNull($prop)->orWhere($prop, '');
+                        // Numeric columns (DECIMAL/INT) must not compare against ''
+                        // because MySQL coerces '' to 0, incorrectly matching zero values.
+                        $isString = in_array($prop, ['name', 'sku', 'category'], true);
+                        $query->where(function ($q) use ($prop, $isString) {
+                            $q->whereNull($prop);
+                            if ($isString) {
+                                $q->orWhere($prop, '');
+                            }
                         });
                         break;
                     case 'not_empty':
-                        $query->where(function ($q) use ($prop) {
-                            $q->whereNotNull($prop)->where($prop, '!=', '');
+                        $isString = in_array($prop, ['name', 'sku', 'category'], true);
+                        $query->where(function ($q) use ($prop, $isString) {
+                            $q->whereNotNull($prop);
+                            if ($isString) {
+                                $q->where($prop, '!=', '');
+                            }
                         });
                         break;
                 }
@@ -104,7 +114,7 @@ class ProductController extends Controller
         for ($i = 0; $i < $rowsAmount; $i++) {
             Product::create([
                 'name'     => '',
-                'sku'      => 'NEW-' . str_pad(Product::max('id') + 1, 3, '0', STR_PAD_LEFT),
+                'sku'      => 'NEW-' . strtoupper(bin2hex(random_bytes(3))),
                 'category' => 'Electronics',
                 'price'    => 0,
                 'stock'    => 0,
