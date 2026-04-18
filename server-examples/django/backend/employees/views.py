@@ -1,5 +1,6 @@
 import json
 
+from django.db import transaction
 from django.db.models import Q
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -13,14 +14,16 @@ from .serializers import EmployeeSerializer
 # Only allow ordering on known fields to prevent ORM injection.
 ALLOWED_ORDERING_FIELDS = {'first_name', 'last_name', 'department', 'role', 'salary'}
 
+# Numeric fields must use exact (not iexact) to avoid casting errors on DecimalField.
+NUMERIC_FIELDS = {'salary'}
+
 # Maps Handsontable Filters condition names to Django ORM lookup suffixes.
+# eq/not_eq intentionally omitted — resolved dynamically based on field type below.
 _CONDITION_LOOKUP = {
     'contains':     ('icontains', False),
     'not_contains': ('icontains', True),
     'begins_with':  ('istartswith', False),
     'ends_with':    ('iendswith', False),
-    'eq':           ('iexact', False),
-    'not_eq':       ('iexact', True),
     'gte':          ('gte', False),
     'lte':          ('lte', False),
     'gt':           ('gt', False),
@@ -72,11 +75,27 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                         args = cond.get('args') or []
                         value = args[0] if args else None
 
+                        is_numeric = prop in NUMERIC_FIELDS
+
                         if name == 'empty':
-                            col_q_parts.append(Q(**{f'{prop}__exact': ''}) | Q(**{f'{prop}__isnull': True}))
+                            # DecimalField rejects __exact='' — use isnull only for numeric fields.
+                            if is_numeric:
+                                col_q_parts.append(Q(**{f'{prop}__isnull': True}))
+                            else:
+                                col_q_parts.append(Q(**{f'{prop}__exact': ''}) | Q(**{f'{prop}__isnull': True}))
                             continue
                         if name == 'not_empty':
-                            col_q_parts.append(~Q(**{f'{prop}__exact': ''}) & ~Q(**{f'{prop}__isnull': True}))
+                            if is_numeric:
+                                col_q_parts.append(Q(**{f'{prop}__isnull': False}))
+                            else:
+                                col_q_parts.append(~Q(**{f'{prop}__exact': ''}) & ~Q(**{f'{prop}__isnull': True}))
+                            continue
+
+                        # eq/not_eq: use exact for numeric fields, iexact for text fields.
+                        if name in ('eq', 'not_eq'):
+                            lookup = f'{prop}__exact' if is_numeric else f'{prop}__iexact'
+                            cond_q = Q(**{lookup: value})
+                            col_q_parts.append(~cond_q if name == 'not_eq' else cond_q)
                             continue
 
                         if name not in _CONDITION_LOOKUP or value is None:
@@ -120,6 +139,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=201)
 
     @action(detail=False, methods=['patch'], url_path='update-rows')
+    @transaction.atomic
     def update_rows(self, request):
         updated = []
         for row in request.data:
