@@ -9,7 +9,12 @@ setup:
 	docker compose up --build -d
 	@echo ""
 	@echo "==> Waiting for Django to finish migrations and seed..."
-	@until curl -sf http://localhost:8000/api/employees/ > /dev/null 2>&1; do \
+	@attempts=0; \
+	until curl -sf http://localhost:8000/api/employees/ > /dev/null 2>&1; do \
+		attempts=$$((attempts + 1)); \
+		if [ $$attempts -ge 60 ]; then \
+			echo ""; echo "ERROR: Backend did not become ready. Check logs: docker compose logs backend"; exit 1; \
+		fi; \
 		printf '.'; sleep 2; \
 	done
 	@echo ""

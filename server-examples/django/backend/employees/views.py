@@ -131,6 +131,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     # dataProvider sends all mutations as arrays in a single request.
 
     @action(detail=False, methods=['post'], url_path='create-rows')
+    @transaction.atomic
     def create_rows(self, request):
         serializer = EmployeeSerializer(data=request.data, many=True)
         serializer.is_valid(raise_exception=True)
