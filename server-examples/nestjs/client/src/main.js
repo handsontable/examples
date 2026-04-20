@@ -77,7 +77,7 @@ const hot = new Handsontable(container, {
       const res = await fetch('http://localhost:3000/tickets', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(rows),
+        body: JSON.stringify(rows.map(({ id, changes }) => ({ id, ...changes }))),
       });
 
       if (!res.ok) throw new Error(`Update failed: ${res.status}`);
