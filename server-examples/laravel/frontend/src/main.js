@@ -1,6 +1,5 @@
 import Handsontable from 'handsontable/base';
 import { registerAllModules } from 'handsontable/registry';
-import 'handsontable/dist/handsontable.full.min.css';
 
 registerAllModules();
 
@@ -46,6 +45,8 @@ function csrfToken() {
 }
 
 const container = document.querySelector('#example1');
+
+let removeConfirmed = false;
 
 const hot = new Handsontable(container, {
   dataProvider: {
@@ -97,12 +98,40 @@ const hot = new Handsontable(container, {
     },
   },
 
-  // Return false to cancel the operation before it reaches the server.
+  // beforeRowsMutation is sync (checks for a strict `=== false` return), so
+  // we can't await an async prompt inline. Instead: cancel the original
+  // attempt, show a notification with Delete/Cancel actions, and on Delete
+  // re-issue the remove via the DataProvider API. The flag lets the second
+  // pass through without re-prompting.
   beforeRowsMutation(operation, payload) {
-    if (operation === 'remove') {
+    if (operation === 'remove' && !removeConfirmed) {
       const count = payload.rowsRemove.length;
-      // eslint-disable-next-line no-alert
-      return window.confirm(`Delete ${count} row${count !== 1 ? 's' : ''}? This cannot be undone.`);
+      const notification = hot.getPlugin('notification');
+      const id = notification.showMessage({
+        variant: 'warning',
+        title: 'Delete rows',
+        message: `Delete ${count} row${count !== 1 ? 's' : ''}? This cannot be undone.`,
+        duration: 0,
+        actions: [
+          {
+            label: 'Delete',
+            type: 'primary',
+            callback: () => {
+              notification.hide(id);
+              removeConfirmed = true;
+              hot.getPlugin('dataProvider').removeRows(payload.rowsRemove).finally(() => {
+                removeConfirmed = false;
+              });
+            },
+          },
+          {
+            label: 'Cancel',
+            type: 'secondary',
+            callback: () => notification.hide(id),
+          },
+        ],
+      });
+      return false;
     }
   },
 
@@ -114,6 +143,8 @@ const hot = new Handsontable(container, {
   emptyDataState: true,
   notification: true,
 
+  width: '100%',
+  height: 'auto',
   rowHeaders: true,
   colHeaders: ['Name', 'SKU', 'Category', 'Price', 'Stock'],
   columns: [
