@@ -1,6 +1,4 @@
 import Handsontable from 'handsontable/base';
-import 'handsontable/styles/handsontable.min.css';
-import 'handsontable/styles/ht-theme-main.min.css';
 
 import {
   registerPlugin,
@@ -82,8 +80,6 @@ function buildUrl({ page, pageSize, sort, filters }) {
 const container = document.querySelector('#example1');
 
 const hot = new Handsontable(container, {
-  themeName: 'ht-theme-main',
-
   dataProvider: {
     // rowId tells dataProvider which field uniquely identifies each row.
     // Django's auto-increment primary key is used here.
