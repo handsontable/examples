@@ -137,7 +137,8 @@ class CompositeCacheStore {
       try {
         const v = await this.redis.get(key);
         if (v !== null && v !== undefined) return v;
-        return null;
+        // Fall through to file on a Redis miss so entries that were written
+        // file-only (e.g. oversized bulk payloads) still resolve.
       } catch (err) {
         this._markDegraded(err);
       }
@@ -149,8 +150,17 @@ class CompositeCacheStore {
     }
   }
 
-  async set(key, value, ttlSeconds) {
-    if (this.redis && !this.degraded) {
+  /**
+   * @param {string} key
+   * @param {string} value
+   * @param {number} ttlSeconds
+   * @param {{ preferFile?: boolean }} [opts] Pass `preferFile: true` to bypass
+   *   Redis entirely and write only to the file backend. Useful for payloads
+   *   that exceed a sensible Redis value size (Redis handles up to 512 MB per
+   *   value, but managed providers often cap much lower).
+   */
+  async set(key, value, ttlSeconds, opts = {}) {
+    if (this.redis && !this.degraded && !opts.preferFile) {
       try {
         await this.redis.set(key, value, ttlSeconds);
         return;

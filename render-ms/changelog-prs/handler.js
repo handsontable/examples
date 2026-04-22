@@ -29,7 +29,12 @@ const RELEASE_META_TTL_SEC = 5 * 60;
 const COMPARE_META_TTL_SEC = 60 * DAY_SEC;
 const IN_RELEASE_META_TTL_SEC = 60 * DAY_SEC;
 const PAGE_HTML_TTL_SEC = 120;
-const BULK_MAX_BYTES = 4_500_000;
+// Bulk PR JSON size policy: payloads ≤ this go through the normal cache path
+// (Redis primary, file fallback). Larger payloads are written file-only,
+// bypassing Redis so a single fat PR (e.g. lockfile churn) doesn't blow past a
+// managed Redis value-size limit. No upper bound — if the payload serialized,
+// it gets persisted. Disk is cheap, re-fetching ~200 PRs from GitHub is not.
+const BULK_REDIS_MAX_BYTES = 5_000_000;
 
 const AREA_ORDER = ["library", "wrappers", "docs", "devops/other"];
 
@@ -501,18 +506,22 @@ function renderCherryPickCell(cherryPickedCommit) {
   return `<td class="cherry"><a href="${escapeHtml(cherryPickedCommit.html_url)}" target="_blank" rel="noopener" class="cherry-link" title="Commit on release">${escapeHtml(shortSha)}</a></td>`;
 }
 
+const AREA_CLS = {
+  library: "badge-area-lib",
+  wrappers: "badge-area-wrap",
+  docs: "badge-area-docs",
+  "devops/other": "badge-area-devops",
+};
+
 function renderAreaCell(labels) {
   if (labels.length === 0) {
     return '<td class="areas"><span class="badge badge-none">—</span></td>';
   }
-  const cls = {
-    library: "badge-area-lib",
-    wrappers: "badge-area-wrap",
-    docs: "badge-area-docs",
-    "devops/other": "badge-area-devops",
-  };
   const inner = labels
-    .map((l) => `<span class="badge ${cls[l]}">${escapeHtml(l)}</span>`)
+    .map(
+      (l) =>
+        `<button type="button" class="badge area-badge ${AREA_CLS[l]}" data-area-filter="${escapeHtml(l)}" title="Filter by ${escapeHtml(l)}">${escapeHtml(l)}</button>`,
+    )
     .join(" ");
   return `<td class="areas"><div class="area-badges">${inner}</div></td>`;
 }
@@ -521,8 +530,12 @@ function renderPRRow(pr, formatDate, opts) {
   const inRelease = opts.showInReleaseColumn
     ? renderCherryPickCell(pr.cherryPickedCommit)
     : "";
+  const areaAttr = pr.areaLabels.length
+    ? ` data-areas="${escapeHtml(pr.areaLabels.join(" "))}"`
+    : ` data-areas=""`;
+  const changelogAttr = pr.changelog ? ` data-has-changelog="1"` : ` data-has-changelog="0"`;
   return `
-    <tr>
+    <tr${areaAttr}${changelogAttr}>
       <td class="num"><a href="${escapeHtml(pr.html_url)}" target="_blank" rel="noopener">#${pr.number}</a></td>
       <td class="title">${escapeHtml(pr.title)}</td>
       <td class="author">${pr.author ? escapeHtml(pr.author) : "—"}</td>
@@ -538,23 +551,26 @@ function renderTableBlock(title, prs, formatDate, opts) {
   const headInRelease = opts.showInReleaseColumn ? "<th>In release</th>" : "";
   const rows = prs.map((pr) => renderPRRow(pr, formatDate, opts)).join("");
   return `
-    <h2 class="section-title">${escapeHtml(title)}</h2>
-    <p class="count">${prs.length} pull request${prs.length !== 1 ? "s" : ""}</p>
-    <table>
-      <thead>
-        <tr>
-          <th>PR</th>
-          <th>Title</th>
-          <th>Author</th>
-          <th>Merged</th>
-          ${headInRelease}
-          <th>Area</th>
-          <th>Changelog</th>
-        </tr>
-      </thead>
-      <tbody>${rows}
-      </tbody>
-    </table>`;
+    <section class="table-block" data-total="${prs.length}">
+      <h2 class="section-title">${escapeHtml(title)}</h2>
+      <p class="count"><span class="count-visible">${prs.length}</span> pull request<span class="count-plural">${prs.length !== 1 ? "s" : ""}</span></p>
+      <p class="empty-note" hidden>No PRs match the current filter.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>PR</th>
+            <th>Title</th>
+            <th>Author</th>
+            <th>Merged</th>
+            ${headInRelease}
+            <th>Area</th>
+            <th>Changelog</th>
+          </tr>
+        </thead>
+        <tbody>${rows}
+        </tbody>
+      </table>
+    </section>`;
 }
 
 function renderPage(release, prsNotInRelease, prsInRelease, compareStats) {
@@ -573,7 +589,7 @@ function renderPage(release, prsNotInRelease, prsInRelease, compareStats) {
     { showInReleaseColumn: false },
   );
   const tableRelease = renderTableBlock(
-    "Also on release (commit on tag)",
+    "Those commits are already released in previous versions, but are on develop branch",
     prsInRelease,
     formatDate,
     { showInReleaseColumn: true },
@@ -680,6 +696,74 @@ function renderPage(release, prsNotInRelease, prsInRelease, compareStats) {
     .badge-area-wrap { color: #a5d6ff; background: rgba(165, 214, 255, 0.12); text-transform: none; }
     .badge-area-docs { color: #7ee787; background: rgba(126, 231, 135, 0.12); text-transform: none; }
     .badge-area-devops { color: #8b949e; background: #21262d; text-transform: none; }
+
+    /* Filter toolbar */
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem 1.25rem;
+      margin: 0 0 1.25rem;
+      padding: 0.75rem 1rem;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+    }
+    .filters .filter-label {
+      color: #8b949e;
+      font-size: 0.8125rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-right: 0.25rem;
+    }
+    .filter-group { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+    .filter-pill, .area-badge {
+      font-family: inherit;
+      border: 1px solid transparent;
+      cursor: pointer;
+      user-select: none;
+    }
+    .filter-pill {
+      padding: 0.2rem 0.55rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: none;
+      background: #21262d;
+      color: #c9d1d9;
+    }
+    .filter-pill[data-area=""] { color: #e6edf3; }
+    .filter-pill:hover, .area-badge:hover { filter: brightness(1.15); }
+    .filter-pill.is-active, .area-badge.is-active {
+      outline: 2px solid #58a6ff;
+      outline-offset: 1px;
+    }
+    .filter-check {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: #c9d1d9;
+      font-size: 0.875rem;
+      cursor: pointer;
+      user-select: none;
+    }
+    .filter-check input { accent-color: #58a6ff; }
+    .filter-reset {
+      margin-left: auto;
+      background: transparent;
+      border: 1px solid #30363d;
+      color: #8b949e;
+      font: inherit;
+      font-size: 0.8125rem;
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .filter-reset:hover { color: #e6edf3; border-color: #58a6ff; }
+    .filter-reset[hidden] { display: none; }
+    .empty-note { color: #8b949e; font-size: 0.875rem; margin: 0.5rem 0 0.75rem; font-style: italic; }
+    tr[hidden] { display: none; }
+    .table-block[data-visible="0"] > table { opacity: 0.35; }
   </style>
 </head>
 <body>
@@ -697,10 +781,123 @@ function renderPage(release, prsNotInRelease, prsInRelease, compareStats) {
       ${compareStats ? ` · ${compareStats.totalCommits} commit${compareStats.totalCommits !== 1 ? "s" : ""}` : ""}
       ${compareStats && compareStats.commitsReturned < compareStats.totalCommits ? ` (showing ${compareStats.commitsReturned})` : ""}
     </p>
-    <p class="count">${prsNotInRelease.length + prsInRelease.length} pull request${prsNotInRelease.length + prsInRelease.length !== 1 ? "s" : ""} from commits</p>
+    <div class="filters" id="filters" role="toolbar" aria-label="Filter pull requests">
+      <span class="filter-label">Area</span>
+      <div class="filter-group" id="area-filters">
+        <button type="button" class="filter-pill is-active" data-area-filter="">All</button>
+        <button type="button" class="filter-pill badge-area-lib" data-area-filter="library">library</button>
+        <button type="button" class="filter-pill badge-area-wrap" data-area-filter="wrappers">wrappers</button>
+        <button type="button" class="filter-pill badge-area-docs" data-area-filter="docs">docs</button>
+        <button type="button" class="filter-pill badge-area-devops" data-area-filter="devops/other">devops/other</button>
+      </div>
+      <label class="filter-check">
+        <input type="checkbox" id="only-with-changelog">
+        Only PRs with a changelog
+      </label>
+      <button type="button" class="filter-reset" id="filter-reset" hidden>Clear filters</button>
+    </div>
+    <p class="count" id="total-count">
+      <span class="count-visible">${prsNotInRelease.length + prsInRelease.length}</span>
+      <span class="count-suffix">pull request${prsNotInRelease.length + prsInRelease.length !== 1 ? "s" : ""} from commits</span>
+    </p>
     ${tableMain}
     ${tableRelease}
   </div>
+  <script>
+  (function () {
+    var state = { area: "", onlyWithChangelog: false };
+    var areaButtons = document.querySelectorAll("[data-area-filter]");
+    var checkbox = document.getElementById("only-with-changelog");
+    var resetBtn = document.getElementById("filter-reset");
+    var totalCountEl = document.getElementById("total-count");
+    var totalSuffix = totalCountEl && totalCountEl.querySelector(".count-suffix");
+    var totalVisible = totalCountEl && totalCountEl.querySelector(".count-visible");
+
+    function apply() {
+      var blocks = document.querySelectorAll(".table-block");
+      var grandTotal = 0;
+      blocks.forEach(function (block) {
+        var rows = block.querySelectorAll("tbody > tr");
+        var shown = 0;
+        rows.forEach(function (row) {
+          var areas = (row.getAttribute("data-areas") || "").split(/\\s+/).filter(Boolean);
+          var hasChangelog = row.getAttribute("data-has-changelog") === "1";
+          var areaOk = !state.area || areas.indexOf(state.area) !== -1;
+          var clOk = !state.onlyWithChangelog || hasChangelog;
+          if (areaOk && clOk) { row.hidden = false; shown += 1; }
+          else { row.hidden = true; }
+        });
+        grandTotal += shown;
+        var visEl = block.querySelector(".count-visible");
+        var pluralEl = block.querySelector(".count-plural");
+        var emptyNote = block.querySelector(".empty-note");
+        if (visEl) visEl.textContent = String(shown);
+        if (pluralEl) pluralEl.textContent = shown !== 1 ? "s" : "";
+        if (emptyNote) emptyNote.hidden = shown !== 0;
+        block.setAttribute("data-visible", shown === 0 ? "0" : "1");
+      });
+      if (totalVisible) totalVisible.textContent = String(grandTotal);
+      if (totalSuffix) {
+        totalSuffix.textContent = "pull request" + (grandTotal !== 1 ? "s" : "") + " from commits";
+      }
+      // Reflect active area on both toolbar pills and in-row area badges.
+      areaButtons.forEach(function (btn) {
+        var v = btn.getAttribute("data-area-filter") || "";
+        if (btn.classList.contains("filter-pill")) {
+          btn.classList.toggle("is-active", v === state.area);
+        } else {
+          btn.classList.toggle("is-active", !!state.area && v === state.area);
+        }
+      });
+      if (resetBtn) resetBtn.hidden = !state.area && !state.onlyWithChangelog;
+      // Write state to the URL hash so it survives reloads and is shareable.
+      var params = [];
+      if (state.area) params.push("area=" + encodeURIComponent(state.area));
+      if (state.onlyWithChangelog) params.push("changelog=1");
+      var hash = params.length ? "#" + params.join("&") : "";
+      if (location.hash !== hash) {
+        history.replaceState(null, "", location.pathname + location.search + hash);
+      }
+    }
+
+    document.addEventListener("click", function (e) {
+      var target = e.target.closest("[data-area-filter]");
+      if (target) {
+        var v = target.getAttribute("data-area-filter") || "";
+        // Toolbar "All" → clear. Same-area re-click → clear. Otherwise select.
+        state.area = v === "" ? "" : state.area === v ? "" : v;
+        apply();
+        return;
+      }
+      if (e.target.id === "filter-reset") {
+        state.area = "";
+        state.onlyWithChangelog = false;
+        if (checkbox) checkbox.checked = false;
+        apply();
+      }
+    });
+    if (checkbox) {
+      checkbox.addEventListener("change", function () {
+        state.onlyWithChangelog = !!checkbox.checked;
+        apply();
+      });
+    }
+
+    // Hydrate from URL hash on load (e.g. #area=library&changelog=1).
+    var hash = (location.hash || "").replace(/^#/, "");
+    if (hash) {
+      hash.split("&").forEach(function (part) {
+        var kv = part.split("=");
+        var k = decodeURIComponent(kv[0] || "");
+        var v = decodeURIComponent(kv[1] || "");
+        if (k === "area") state.area = v;
+        if (k === "changelog" && v === "1") state.onlyWithChangelog = true;
+      });
+      if (checkbox) checkbox.checked = state.onlyWithChangelog;
+    }
+    apply();
+  })();
+  </script>
 </body>
 </html>`;
 }
@@ -717,17 +914,21 @@ async function readBulkCache(cache, tag, sig) {
 function storeBulkCacheAsync(cache, tag, sig, payload) {
   const body = safeStringify(payload);
   if (body == null) return;
-  if (body.length > BULK_MAX_BYTES) {
-    console.warn("[changelog-prs] skip bulk cache (payload too large)");
-    return;
+  const preferFile = body.length > BULK_REDIS_MAX_BYTES;
+  if (preferFile) {
+    console.log(
+      `[changelog-prs] bulk payload ${(body.length / 1e6).toFixed(2)} MB > ${(BULK_REDIS_MAX_BYTES / 1e6).toFixed(0)} MB — writing to file cache only`,
+    );
   }
   setImmediate(() => {
-    cache.set(BULK_KEY(tag, sig), body, BULK_CACHE_TTL_SEC).catch((err) => {
-      console.error(
-        "[changelog-prs] bulk cache put failed",
-        err?.message || err,
-      );
-    });
+    cache
+      .set(BULK_KEY(tag, sig), body, BULK_CACHE_TTL_SEC, { preferFile })
+      .catch((err) => {
+        console.error(
+          "[changelog-prs] bulk cache put failed",
+          err?.message || err,
+        );
+      });
   });
 }
 
