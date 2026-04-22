@@ -1,4 +1,24 @@
 // index.js
+
+// Load local secrets / config from .env (GITHUB_TOKEN, REDIS_URL, CSB_API_KEY, …).
+// Uses Node 22's built-in loader — no dotenv dependency. The file is optional:
+// in production environments (Render, Docker) real env vars are injected by the
+// platform and this call is a no-op.
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+for (const envFile of [".env.local", ".env"]) {
+  const p = path.join(__dirname, envFile);
+  if (fs.existsSync(p)) {
+    try {
+      process.loadEnvFile(p);
+    } catch (err) {
+      console.warn(`[env] failed to load ${envFile}:`, err?.message || err);
+    }
+  }
+}
+
 import express from "express";
 import { CodeSandbox, CommandError } from "@codesandbox/sdk";
 import { Octokit } from "octokit";
@@ -11,9 +31,35 @@ import {
 } from "./validate-query-params.js";
 import { pkgPrNewDependencyUrl } from "./pkg-pr-new.js";
 import { shouldNotifySlack } from "./slack-notify.js";
+import { createCacheStore } from "./changelog-prs/cache.js";
+import { registerChangelogPRsRoute } from "./changelog-prs/handler.js";
 
 const app = express();
 app.use(express.json());
+
+// /api/changelog-prs — Node/Express port of the Netlify edge function of the
+// same name. Route is registered up front via `app.all` and delegates to the
+// real handler once the cache store (Redis primary + file fallback) is ready.
+const changelogCachePromise = createCacheStore().catch((err) => {
+  console.error("[changelog-prs] failed to initialize cache store:", err);
+  return null;
+});
+
+app.all("/api/changelog-prs", async (req, res, next) => {
+  const cache = await changelogCachePromise;
+  if (!cache) {
+    return res
+      .status(503)
+      .set({ "Content-Type": "text/plain; charset=utf-8" })
+      .send("changelog-prs service is initializing, retry shortly");
+  }
+  // Attach the real handler once; subsequent requests skip this wrapper.
+  if (!app.__changelogRouteAttached) {
+    registerChangelogPRsRoute(app, { cache });
+    app.__changelogRouteAttached = true;
+  }
+  return next();
+});
 
 function formatInstallErrorMessage(error) {
   let text = error?.message ?? String(error);

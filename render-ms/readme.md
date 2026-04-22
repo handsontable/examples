@@ -95,7 +95,39 @@ https://your-service.onrender.com/codesandbox-vm?example-dir=vue&example-branch=
 
 - **GET** `/codesandbox-vm` – SDK flow: list/create sandbox, kick off dependency install in the sandbox (non-blocking by default), redirect
 - **GET** `/codesandbox-browser` – Define API flow for embed preview
+- **GET** `/api/changelog-prs` – HTML page listing merged PRs between the latest `handsontable/handsontable` release tag and `develop`. See **`/api/changelog-prs`** below.
 - **OPTIONS** – CORS preflight (if configured)
+
+## `/api/changelog-prs`
+
+Node.js/Express port of the Netlify edge function `netlify/edge-functions/changelog-prs.mts` in `handsontable.com-v2` — that file is the authoritative parity spec (URLs, TTLs, HTML/CSS, pagination, retry, area-label logic). The port replaces only the caching substrate:
+
+- **Primary cache: Redis** (via `ioredis`, configured with `REDIS_URL`).
+- **Fallback: filesystem** under `CACHE_DIR` (default `./.changelog-prs-cache`) using `writeFile` + `rename` for safe concurrent writes.
+
+On any Redis read/write failure (connection refused, timeout, auth error) the store logs once and transparently switches to the file backend for the remainder of the process lifetime. With no `REDIS_URL` set, the service runs file-only from startup.
+
+Cached layers (keys prefixed `changelog-prs:`, all JSON-serialized):
+
+| Layer            | Key shape                                         | TTL       | Notes                                                  |
+|------------------|---------------------------------------------------|-----------|--------------------------------------------------------|
+| Release meta     | `meta:releases/latest`                            | 5 min     | `/repos/.../releases/latest`                           |
+| Compare payload  | `meta:compare/<tag>/<developHeadSha>`             | 60 days   | Paginated `compare`; key includes `develop` HEAD SHA   |
+| In-release map   | `meta:in-release/<tag>/<tagTipSha>`               | 60 days   | Commits on tag → `{ sha, html_url }` by PR number      |
+| Bulk PR payload  | `bulk:v1/<tag>/<sig>`                             | 60 days   | `sig` = SHA-256 of sorted PR ids, first 14 bytes hex. Skipped when stringified payload > 4.5 MB or run had unresolved transients |
+| Rendered page    | `page:v1/<tag>/<developHeadSha>/<tagTipSha>/<sig>`| 2 min     | Final HTML; serves repeat requests without touching the bulk cache |
+
+PR bulk build runs with concurrency **6**. Transient HTTP statuses (`401`, `403`, `408`, `429`, `503`, `5xx`) trigger a single 500 ms retry pass before the payload is considered cacheable; `404` is a permanent skip; merge filter is `state === 'closed' && merged_at`.
+
+Cache writes are fire-and-forget via `setImmediate` — the HTTP response flushes first, then persists. This mirrors `context.waitUntil` in the edge version so cold paths stay rare without delaying users.
+
+### Extra environment variables
+
+| Variable     | Description                                                                               | Required |
+|--------------|-------------------------------------------------------------------------------------------|----------|
+| `GITHUB_TOKEN` | Same as for `/codesandbox-*` — used as `Authorization: Bearer …` on GitHub REST + diff calls. Anonymous works but hits 60 req/h quickly. | ❌ Recommended |
+| `REDIS_URL`  | `redis://[:password@]host:port[/db]` (also accepts `rediss://…`). If unset or the client cannot connect within ~2 s, the service uses the file cache only. | ❌ No |
+| `CACHE_DIR`  | Directory used by the file-backed cache. Created if missing. Default: `./.changelog-prs-cache`. | ❌ No |
 
 ## Response Format
 
@@ -107,6 +139,19 @@ https://your-service.onrender.com/codesandbox-vm?example-dir=vue&example-branch=
 - **Content-Type**: `application/json`
 - **Body**: `{"error": "error message"}`
 - **Status**: `500`
+
+## Local configuration (`.env`)
+
+For local development, copy `.env.example` to `.env` and fill in the values you need (at minimum `GITHUB_TOKEN` and `CSB_API_KEY`):
+
+```bash
+cp .env.example .env
+# then edit .env and paste your GitHub token
+```
+
+`index.js` loads `.env` (and optionally `.env.local`, which takes precedence) at startup via Node 22's built-in `process.loadEnvFile()` — no `dotenv` dependency. Variables that are already set in the real environment (Render, Docker, `export FOO=…`) always win over the file, so production deployments keep using the platform's injected env vars.
+
+`.env` is gitignored (`.gitignore`) and excluded from Docker images (`.dockerignore`); never commit it.
 
 ## Environment Variables
 
