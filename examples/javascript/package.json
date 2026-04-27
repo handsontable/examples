@@ -26,9 +26,6 @@
   },
   "license": "SEE LICENSE IN LICENSE.txt",
   "config": {
-    "codesandbox": {
-      "templateId": "JavaScript"
-    },
     "stackblitz": {
       "template": "javascript"
     }
