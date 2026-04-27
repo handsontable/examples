@@ -15,14 +15,17 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "@handsontable/react-wrapper": "16.1.1",
-    "handsontable": "16.1.1",
-    "parcel-bundler": "^1.12.5"
+    "handsontable": "16.1.1"
   },
   "scripts": {
-    "start": "parcel index.html",
-    "build": "parcel build index.html"
+    "start": "vite",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.4.1",
+    "vite": "^6.0.0"
   },
   "license": "SEE LICENSE IN LICENSE.txt",  
   "browserslist": {
@@ -34,6 +37,9 @@
     ]
   },
   "config": {
+    "codesandbox": {
+      "templateId": "jzcmqq"
+    },
     "stackblitz": {
       "template": "create-react-app"
     }
