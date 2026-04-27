@@ -27,7 +27,7 @@
   "license": "SEE LICENSE IN LICENSE.txt",
   "config": {
     "codesandbox": {
-      "templateId": "cranky-franklin-jzcmqq"
+      "templateId": "pt_jzcmqq"
     },
     "stackblitz": {
       "template": "javascript"
