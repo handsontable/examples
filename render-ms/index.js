@@ -30,7 +30,11 @@ import {
   validateExampleDirExistsInRepo,
 } from "./validate-query-params.js";
 import { pkgPrNewDependencyUrl } from "./pkg-pr-new.js";
-import { shouldNotifySlack } from "./slack-notify.js";
+import {
+  shouldNotifySlack,
+  isCodesandboxUnavailableError,
+  CODESANDBOX_STATUS_URL,
+} from "./slack-notify.js";
 import { createCacheStore } from "./changelog-prs/cache.js";
 import { registerChangelogPRsRoute } from "./changelog-prs/handler.js";
 
@@ -68,6 +72,14 @@ function formatInstallErrorMessage(error) {
     text += `\n\n\`\`\`${tail}\`\`\``;
   }
   return text;
+}
+
+function codesandboxUnavailableJsonBody() {
+  return {
+    error:
+      "CodeSandbox is temporarily unavailable. Check the CodeSandbox status page for incidents or maintenance.",
+    codesandboxStatusUrl: CODESANDBOX_STATUS_URL,
+  };
 }
 
 function reportErrorToSlack(error, context) {
@@ -348,6 +360,9 @@ app.get("/codesandbox-vm", async (req, res) => {
           "GitHub resource not found (check example-dir, example-branch, or that the path exists in handsontable/examples)",
       });
     }
+    if (isCodesandboxUnavailableError(error)) {
+      return res.status(503).json(codesandboxUnavailableJsonBody());
+    }
     reportErrorToSlack(error, {
       exampleDir,
       exampleBranch,
@@ -497,6 +512,9 @@ app.get("/codesandbox-browser", async (req, res) => {
         error:
           "GitHub resource not found (check example-dir, example-branch, or that the path exists in handsontable/examples)",
       });
+    }
+    if (isCodesandboxUnavailableError(error)) {
+      return res.status(503).json(codesandboxUnavailableJsonBody());
     }
     console.log(error);
     reportErrorToSlack(error, {
