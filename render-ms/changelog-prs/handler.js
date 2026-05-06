@@ -20,8 +20,8 @@ const KEY_PREFIX = "changelog-prs:";
 const META_KEY = (suffix) => `${KEY_PREFIX}meta:${suffix}`;
 const BULK_KEY = (tag, sig) =>
   `${KEY_PREFIX}bulk:v1/${encodeURIComponent(tag)}/${sig}`;
-const PAGE_KEY = (tag, developHead, tipSha, sig) =>
-  `${KEY_PREFIX}page:v1/${encodeURIComponent(tag)}/${developHead || "-"}/${tipSha || "-"}/${sig}`;
+const PAGE_KEY = (tag, compareBase, compareHead, tipSha, sig) =>
+  `${KEY_PREFIX}page:v1/${encodeURIComponent(tag)}/${encodeURIComponent(compareBase)}/${compareHead || "-"}/${tipSha || "-"}/${sig}`;
 
 const DAY_SEC = 86_400;
 const BULK_CACHE_TTL_SEC = 60 * DAY_SEC;
@@ -127,9 +127,9 @@ function safeStringify(value) {
   }
 }
 
-// --- Pagination: compare tag...develop --------------------------------------
+// --- Pagination: compare tag...compareBase ----------------------------------
 
-async function fetchCompareCommitsAllPages(tag) {
+async function fetchCompareCommitsAllPages(tag, compareBase) {
   const perPage = 100;
   const all = [];
   const seenSha = new Set();
@@ -138,7 +138,7 @@ async function fetchCompareCommitsAllPages(tag) {
   let page = 1;
 
   while (page <= maxPages) {
-    const path = `/repos/${REPO}/compare/${encodeURIComponent(tag)}...develop?per_page=${perPage}&page=${page}`;
+    const path = `/repos/${REPO}/compare/${encodeURIComponent(tag)}...${encodeURIComponent(compareBase)}?per_page=${perPage}&page=${page}`;
     const res = await githubFetch(path);
     if (!res.ok) {
       if (page === 1) {
@@ -169,16 +169,6 @@ async function fetchCompareCommitsAllPages(tag) {
   };
 }
 
-async function getDevelopHeadSha() {
-  const res = await githubFetch(
-    `/repos/${REPO}/commits?sha=develop&per_page=1`,
-  );
-  if (!res.ok) return null;
-  const list = await res.json();
-  if (!Array.isArray(list) || list.length === 0) return null;
-  return list[0].sha ?? null;
-}
-
 async function getRefTipSha(ref) {
   const res = await githubFetch(
     `/repos/${REPO}/commits/${encodeURIComponent(ref)}`,
@@ -203,9 +193,11 @@ async function loadLatestReleaseCached(cache) {
   return { ok: true, release };
 }
 
-async function fetchCompareCommitsCached(tag, developHead, cache) {
-  if (!developHead) return fetchCompareCommitsAllPages(tag);
-  const key = META_KEY(`compare/${encodeURIComponent(tag)}/${developHead}`);
+async function fetchCompareCommitsCached(tag, compareBase, compareHead, cache) {
+  if (!compareHead) return fetchCompareCommitsAllPages(tag, compareBase);
+  const key = META_KEY(
+    `compare/${encodeURIComponent(tag)}/${encodeURIComponent(compareBase)}/${compareHead}`,
+  );
   const cached = await getJson(cache, key);
   if (cached?.commits && Array.isArray(cached.commits)) {
     return {
@@ -215,7 +207,7 @@ async function fetchCompareCommitsCached(tag, developHead, cache) {
       status: 200,
     };
   }
-  const fresh = await fetchCompareCommitsAllPages(tag);
+  const fresh = await fetchCompareCommitsAllPages(tag, compareBase);
   if (fresh.ok && fresh.commits.length > 0) {
     putJsonAsync(
       cache,
@@ -225,6 +217,68 @@ async function fetchCompareCommitsCached(tag, developHead, cache) {
     );
   }
   return fresh;
+}
+
+function releaseBranchSortKey(name) {
+  const ver = name.replace(/^release\//, "");
+  const parts = ver.split(/[./]/).map((p) => {
+    const n = parseInt(p, 10);
+    return Number.isFinite(n) ? n : p;
+  });
+  return parts;
+}
+
+/** Sort newest-first for `release/x.y.z`-style names; lexicographic fallback. */
+function compareReleaseBranchesDesc(a, b) {
+  const ka = releaseBranchSortKey(a);
+  const kb = releaseBranchSortKey(b);
+  const len = Math.max(ka.length, kb.length);
+  for (let i = 0; i < len; i++) {
+    const va = ka[i];
+    const vb = kb[i];
+    if (va === undefined) return 1;
+    if (vb === undefined) return -1;
+    if (typeof va === typeof vb) {
+      if (va < vb) return 1;
+      if (va > vb) return -1;
+    } else {
+      const sa = String(va);
+      const sb = String(vb);
+      if (sa < sb) return 1;
+      if (sa > sb) return -1;
+    }
+  }
+  return 0;
+}
+
+async function fetchReleaseBranchesCached(cache) {
+  const key = META_KEY("git-refs/heads/release");
+  const cached = await getJson(cache, key);
+  if (cached?.names && Array.isArray(cached.names)) {
+    return { ok: true, names: cached.names };
+  }
+
+  const res = await githubFetch(
+    `/repos/${REPO}/git/matching-refs/heads/release`,
+  );
+  if (!res.ok) {
+    return { ok: false, status: res.status, names: [] };
+  }
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    return { ok: false, status: 502, names: [] };
+  }
+  const arr = Array.isArray(data) ? data : [];
+  const names = arr
+    .map((r) =>
+      typeof r.ref === "string" ? r.ref.replace(/^refs\/heads\//, "") : null,
+    )
+    .filter((n) => n && n.startsWith("release/"));
+  const sorted = [...new Set(names)].sort(compareReleaseBranchesDesc);
+  putJsonAsync(cache, key, { names: sorted }, RELEASE_META_TTL_SEC);
+  return { ok: true, names: sorted };
 }
 
 async function fetchPRsOnReleaseCached(tag, cache) {
@@ -573,7 +627,13 @@ function renderTableBlock(title, prs, formatDate, opts) {
     </section>`;
 }
 
-function renderPage(release, prsNotInRelease, prsInRelease, compareStats) {
+function renderPage(
+  release,
+  prsNotInRelease,
+  prsInRelease,
+  compareStats,
+  { compareBase, releaseBranchNames },
+) {
   const formatDate = (iso) =>
     iso
       ? new Date(iso).toLocaleDateString("en-GB", {
@@ -582,6 +642,10 @@ function renderPage(release, prsNotInRelease, prsInRelease, compareStats) {
           year: "numeric",
         })
       : "—";
+  const secondSectionTitle =
+    compareBase === "develop"
+      ? "Those commits are already released in previous versions, but are on develop branch"
+      : `Those commits are already released in previous versions, but are on the ${compareBase} branch`;
   const tableMain = renderTableBlock(
     "Not yet on release",
     prsNotInRelease,
@@ -589,18 +653,26 @@ function renderPage(release, prsNotInRelease, prsInRelease, compareStats) {
     { showInReleaseColumn: false },
   );
   const tableRelease = renderTableBlock(
-    "Those commits are already released in previous versions, but are on develop branch",
+    secondSectionTitle,
     prsInRelease,
     formatDate,
     { showInReleaseColumn: true },
   );
+
+  const branchOptions = [
+    `<option value="develop"${compareBase === "develop" ? " selected" : ""}>develop</option>`,
+    ...releaseBranchNames.map(
+      (name) =>
+        `<option value="${escapeHtml(name)}"${compareBase === name ? " selected" : ""}>${escapeHtml(name)}</option>`,
+    ),
+  ].join("");
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Changelog PRs · ${escapeHtml(release.tag_name)} → develop</title>
+  <title>Changelog PRs · ${escapeHtml(release.tag_name)} → ${escapeHtml(compareBase)}</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -764,20 +836,58 @@ function renderPage(release, prsNotInRelease, prsInRelease, compareStats) {
     .empty-note { color: #8b949e; font-size: 0.875rem; margin: 0.5rem 0 0.75rem; font-style: italic; }
     tr[hidden] { display: none; }
     .table-block[data-visible="0"] > table { opacity: 0.35; }
+    .compare-base-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem 1rem;
+      margin: 0 0 1.25rem;
+      padding: 0.75rem 1rem;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+    }
+    .compare-base-toolbar label {
+      color: #8b949e;
+      font-size: 0.8125rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .compare-base-toolbar select {
+      font: inherit;
+      font-size: 0.9375rem;
+      color: #e6edf3;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 0.35rem 0.6rem;
+      min-width: 14rem;
+      cursor: pointer;
+    }
+    .compare-base-toolbar select:focus {
+      outline: 2px solid #58a6ff;
+      outline-offset: 1px;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Merged PRs since last release</h1>
     <p class="sub">
-      <a href="https://github.com/${REPO}">${REPO}</a> · develop branch
+      <a href="https://github.com/${REPO}">${REPO}</a> · compare against branch
     </p>
+    <div class="compare-base-toolbar">
+      <label for="compare-base-select">Compare to</label>
+      <select id="compare-base-select" name="base" aria-label="Branch to compare against latest release tag">
+        ${branchOptions}
+      </select>
+    </div>
     <div class="release">
       <span class="tag">${escapeHtml(release.tag_name)}</span>
       <span class="date">${escapeHtml(formatDate(release.published_at))}</span>
     </div>
     <p class="sub">
-      <a href="https://github.com/${REPO}/compare/${encodeURIComponent(release.tag_name)}...develop">Compare ${escapeHtml(release.tag_name)}...develop</a>
+      <a href="https://github.com/${REPO}/compare/${encodeURIComponent(release.tag_name)}...${encodeURIComponent(compareBase)}">Compare ${escapeHtml(release.tag_name)}...${escapeHtml(compareBase)}</a>
       ${compareStats ? ` · ${compareStats.totalCommits} commit${compareStats.totalCommits !== 1 ? "s" : ""}` : ""}
       ${compareStats && compareStats.commitsReturned < compareStats.totalCommits ? ` (showing ${compareStats.commitsReturned})` : ""}
     </p>
@@ -805,6 +915,16 @@ function renderPage(release, prsNotInRelease, prsInRelease, compareStats) {
   </div>
   <script>
   (function () {
+    var compareSel = document.getElementById("compare-base-select");
+    if (compareSel) {
+      compareSel.addEventListener("change", function () {
+        var v = compareSel.value;
+        var u = new URL(window.location.href);
+        if (v === "develop") u.searchParams.delete("base");
+        else u.searchParams.set("base", v);
+        window.location.href = u.pathname + u.search + (window.location.hash || "");
+      });
+    }
     var state = { area: "", onlyWithChangelog: false };
     var areaButtons = document.querySelectorAll("[data-area-filter]");
     var checkbox = document.getElementById("only-with-changelog");
@@ -966,9 +1086,25 @@ export function registerChangelogPRsRoute(app, { cache, routePath = "/api/change
     }
 
     try {
-      const [releaseResult, developHead] = await Promise.all([
+      const rawQ = req.query.base;
+      let rawBase = "";
+      if (typeof rawQ === "string") rawBase = rawQ.trim();
+      else if (Array.isArray(rawQ) && typeof rawQ[0] === "string")
+        rawBase = rawQ[0].trim();
+      if (rawBase.length > 260) {
+        const r = renderError(
+          "Invalid compare branch",
+          "The base branch name is too long.",
+          400,
+        );
+        res.set(r.headers);
+        return res.status(r.status).send(r.body);
+      }
+      const requestedCompareBase = rawBase || "develop";
+
+      const [releaseResult, branchesResult] = await Promise.all([
         loadLatestReleaseCached(cache),
-        getDevelopHeadSha(),
+        fetchReleaseBranchesCached(cache),
       ]);
       if (!releaseResult.ok) {
         const r = renderError(
@@ -979,6 +1115,31 @@ export function registerChangelogPRsRoute(app, { cache, routePath = "/api/change
         res.set(r.headers);
         return res.status(r.status).send(r.body);
       }
+      if (!branchesResult.ok) {
+        const r = renderError(
+          "Failed to list release branches",
+          `GitHub returned HTTP ${branchesResult.status}.`,
+          branchesResult.status >= 400 ? branchesResult.status : 502,
+        );
+        res.set(r.headers);
+        return res.status(r.status).send(r.body);
+      }
+
+      const allowedBranches = new Set([
+        "develop",
+        ...branchesResult.names,
+      ]);
+      if (!allowedBranches.has(requestedCompareBase)) {
+        const r = renderError(
+          "Unknown compare branch",
+          `Use ?base=develop or ?base=release/… (must be an existing release/* branch). Requested: ${requestedCompareBase}`,
+          400,
+        );
+        res.set(r.headers);
+        return res.status(r.status).send(r.body);
+      }
+
+      const compareBase = requestedCompareBase;
       const release = releaseResult.release;
       const tag = release.tag_name;
       if (!tag) {
@@ -991,8 +1152,10 @@ export function registerChangelogPRsRoute(app, { cache, routePath = "/api/change
         return res.status(r.status).send(r.body);
       }
 
+      const compareHead = await getRefTipSha(compareBase);
+
       const [cmp, cherryPicked] = await Promise.all([
-        fetchCompareCommitsCached(tag, developHead, cache),
+        fetchCompareCommitsCached(tag, compareBase, compareHead, cache),
         fetchPRsOnReleaseCached(tag, cache),
       ]);
       if (!cmp.ok) {
@@ -1016,7 +1179,7 @@ export function registerChangelogPRsRoute(app, { cache, routePath = "/api/change
       // develop HEAD, same tag tip, same PR signature) we can serve a cached
       // HTML blob without even touching the bulk cache. TTL is short so we
       // still pick up e.g. new changelog JSON files within ~2 min.
-      const pageKey = PAGE_KEY(tag, developHead, tipSha, sig);
+      const pageKey = PAGE_KEY(tag, compareBase, compareHead, tipSha, sig);
       const cachedPage = await cache.get(pageKey).catch(() => null);
       if (cachedPage) {
         res.set(htmlHeaders);
@@ -1047,6 +1210,9 @@ export function registerChangelogPRsRoute(app, { cache, routePath = "/api/change
       const html = renderPage(release, prsNotInRelease, prsInRelease, {
         totalCommits,
         commitsReturned: commits.length,
+      }, {
+        compareBase,
+        releaseBranchNames: branchesResult.names,
       });
 
       res.set(htmlHeaders);
