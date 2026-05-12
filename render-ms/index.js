@@ -308,6 +308,13 @@ app.get("/codesandbox-vm", async (req, res) => {
 
     const templateId = packageJson.config?.codesandbox?.templateId;
 
+    if (!templateId) {
+      return res.status(400).json({
+        error:
+          "This example cannot be opened via /codesandbox-vm: add package.json config.codesandbox.templateId (CodeSandbox template id) for dynamic sandbox creation.",
+      });
+    }
+
     const filesToUpload = Object.fromEntries(
       files.filter((file) => {
         if (file.path.includes("package.json")) return false;
@@ -321,37 +328,35 @@ app.get("/codesandbox-vm", async (req, res) => {
       }),
     );
 
-    if (templateId) {
-      // Create a sandbox from your custom template
-      let sandbox = await sdk.sandboxes.create({
-        title: `Handsontable Example ${exampleDir} ${version}`,
-        public: true,
-        tags: tags,
-        id: templateId,
-        privacy: "public",
-      });
+    // Create a sandbox from your custom template
+    let sandbox = await sdk.sandboxes.create({
+      title: `Handsontable Example ${exampleDir} ${version}`,
+      public: true,
+      tags: tags,
+      id: templateId,
+      privacy: "public",
+    });
 
-      const client = await sandbox.connect();
+    const client = await sandbox.connect();
 
-      await client.fs.writeTextFile(
-        "package.json",
-        JSON.stringify(packageJson, null, 2),
-      );
+    await client.fs.writeTextFile(
+      "package.json",
+      JSON.stringify(packageJson, null, 2),
+    );
 
-      await Promise.all(
-        Object.entries(filesToUpload).map(([key, value]) => {
-          return client.fs.writeTextFile(key, value.content);
-        }),
-      );
+    await Promise.all(
+      Object.entries(filesToUpload).map(([key, value]) => {
+        return client.fs.writeTextFile(key, value.content);
+      }),
+    );
 
-      const tasks = await client.tasks.getAll();
-      await runCodesandboxInstallTasks(client, tasks);
+    const tasks = await client.tasks.getAll();
+    await runCodesandboxInstallTasks(client, tasks);
 
-      return res.redirect(
-        `https://codesandbox.io/p/sandbox/${sandbox.id}?file=&preview=true`,
-        302,
-      );
-    }
+    return res.redirect(
+      `https://codesandbox.io/p/sandbox/${sandbox.id}?file=&preview=true`,
+      302,
+    );
   } catch (error) {
     if (isNotFoundClientError(error)) {
       console.log(error);
