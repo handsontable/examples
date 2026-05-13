@@ -10,11 +10,11 @@ Install all necessary dependencies from npm with `npm install`.
 
 ## Development
 
-To start local development server use `npm run start`. You can then visit http://localhost:8080 to view the project.
+To start local development server use `npm run dev`. You can then visit http://localhost:5173 to view the project.
 
 ## Testing
 
-To run tests for this project, first launch the development server with `npm run start`. Once the server is running, execute `npm run test` to run the test specs.
+To run tests for this project, first launch the development server with `npm run dev`. Once the server is running, execute `npm run test` to run the test specs.
 
 ## Forking
 
