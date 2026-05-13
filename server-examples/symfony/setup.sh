@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot setup: builds the Laravel Docker image, runs migrations + seeder,
+# One-shot setup: builds the Symfony Docker image, runs migrations + seeder,
 # starts the backend, installs frontend deps, and launches Vite.
 set -euo pipefail
 
@@ -31,14 +31,14 @@ fi
 
 # ── backend ──────────────────────────────────────────────────────────────────
 echo ""
-echo "==> Building and starting the Laravel backend (this takes a minute the first time)..."
+echo "==> Building and starting the Symfony backend (this takes a minute the first time)..."
 $DC up -d --build
 
 echo ""
-echo "==> Waiting for backend to become ready at http://localhost:8000 ..."
-TIMEOUT=180
+echo "==> Waiting for backend to become ready at http://localhost:8001 ..."
+TIMEOUT=240
 ELAPSED=0
-until curl -sf http://localhost:8000/api/products >/dev/null 2>&1; do
+until curl -sf http://localhost:8001/api/products >/dev/null 2>&1; do
   if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
     echo ""
     echo "ERROR: Backend did not become ready within ${TIMEOUT}s."
@@ -60,10 +60,10 @@ npm install
 
 echo ""
 echo "========================================================"
-echo "  Handsontable — Server-side Laravel Example"
+echo "  Handsontable — Server-side Symfony Example"
 echo "========================================================"
 echo "  Frontend : http://localhost:5173"
-echo "  Backend  : http://localhost:8000/api/products"
+echo "  Backend  : http://localhost:8001/api/products"
 echo "  Press Ctrl+C to stop the frontend dev server."
 echo "  Run 'make stop' (or '$DC down') to stop Docker."
 echo "========================================================"

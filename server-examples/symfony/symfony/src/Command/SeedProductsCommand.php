@@ -1,17 +1,28 @@
 <?php
 
-namespace Database\Seeders;
+namespace App\Command;
 
-use App\Models\Product;
-use Illuminate\Database\Seeder;
+use App\Entity\Product;
+use Doctrine\ORM\EntityManagerInterface;
+use Symfony\Component\Console\Attribute\AsCommand;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Output\OutputInterface;
 
-class ProductSeeder extends Seeder
+#[AsCommand(name: 'app:seed-products', description: 'Seed the products table with sample data')]
+class SeedProductsCommand extends Command
 {
-    public function run(): void
+    public function __construct(private readonly EntityManagerInterface $em)
+    {
+        parent::__construct();
+    }
+
+    protected function execute(InputInterface $input, OutputInterface $output): int
     {
         // Skip if already seeded (safe to re-run on container restart)
-        if (Product::count() > 0) {
-            return;
+        if ($this->em->getRepository(Product::class)->count([]) > 0) {
+            $output->writeln('Products already seeded, skipping.');
+            return Command::SUCCESS;
         }
 
         $products = [
@@ -70,7 +81,18 @@ class ProductSeeder extends Seeder
         ];
 
         foreach ($products as $i => $data) {
-            Product::create(array_merge($data, ['sort_order' => $i + 1]));
+            $product = (new Product())
+                ->setName($data['name'])
+                ->setSku($data['sku'])
+                ->setCategory($data['category'])
+                ->setPrice($data['price'])
+                ->setStock($data['stock'])
+                ->setSortOrder($i + 1);
+            $this->em->persist($product);
         }
+
+        $this->em->flush();
+        $output->writeln(count($products) . ' products seeded successfully.');
+        return Command::SUCCESS;
     }
 }
