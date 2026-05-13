@@ -16,7 +16,7 @@ import {
   NumericCellType,
   registerCellType,
 } from 'handsontable/cellTypes';
-import { HotTable, HotColumn } from '@handsontable/react';
+import { HotTable, HotColumn } from '@handsontable/react-wrapper';
 
 import 'handsontable/styles/handsontable.min.css';
 import 'handsontable/styles/ht-theme-main.min.css';
