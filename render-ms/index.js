@@ -249,8 +249,8 @@ app.get("/codesandbox-vm", async (req, res) => {
     const existingFirstLookup = sandboxesByTag.sandboxes[0];
     if (existingFirstLookup) {
       return res.redirect(
-        `https://codesandbox.io/p/sandbox/${existingFirstLookup.id}?file=&preview=true`,
         302,
+        `https://codesandbox.io/p/sandbox/${existingFirstLookup.id}?file=&preview=true`,
       );
     }
 
@@ -275,8 +275,8 @@ app.get("/codesandbox-vm", async (req, res) => {
     const existing = sandboxesByTag.sandboxes[0];
     if (existing) {
       return res.redirect(
-        `https://codesandbox.io/p/sandbox/${existing.id}?file=&preview=true`,
         302,
+        `https://codesandbox.io/p/sandbox/${existing.id}?file=&preview=true`,
       );
     }
 
@@ -354,8 +354,8 @@ app.get("/codesandbox-vm", async (req, res) => {
     await runCodesandboxInstallTasks(client, tasks);
 
     return res.redirect(
-      `https://codesandbox.io/p/sandbox/${sandbox.id}?file=&preview=true`,
       302,
+      `https://codesandbox.io/p/sandbox/${sandbox.id}?file=&preview=true`,
     );
   } catch (error) {
     if (isNotFoundClientError(error)) {
