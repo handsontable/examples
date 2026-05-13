@@ -1,28 +1,23 @@
 {
-  "name": "ts-demo",
+  "name": "example-typescript",
   "private": true,
-  "version": "1.0.0",
-  "description": "",
+  "version": "0.0.0",
+  "type": "module",
   "scripts": {
-    "start": "parcel index.html",
-    "build": "parcel build index.html",
-    "check-types": "tsc --noEmit --skipLibCheck",
-    "test": "node -e 'console.log(\"No tests found\")'"
-  },
-  "dependencies": {
-    "handsontable": "16.1.1-next-895fbb8-20250923",
-    "parcel-bundler": "^1.12.5"
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
   },
   "devDependencies": {
-    "typescript": "4.2.3"
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12"
   },
-  "resolutions": {
-    "@babel/preset-env": "7.13.8"
+  "dependencies": {
+    "handsontable": "^17.0.1"
   },
-  "keywords": [],
   "config": {
-    "stackblitz": {
-      "template": "typescript"
+    "codesandbox": {
+      "templateId": "8y5qy5"
     }
   }
 }
