@@ -9,8 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@handsontable/react": "16.1.1",
-    "handsontable": "16.1.1",
+    "@handsontable/react-wrapper": "17.0.1",
+    "handsontable": "17.0.1",
     "@types/node": "20.6.2",
     "@types/react": "18.2.22",
     "@types/react-dom": "18.2.7",
@@ -26,7 +26,7 @@
   },
   "config": {
     "codesandbox": {
-      "templateId": "pt_B2bQ4EprL9i7KbjaddgRRT"
+      "templateId": "5l26fv"
     },
     "stackblitz": {
       "template": "node"
