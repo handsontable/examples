@@ -45,9 +45,19 @@ class ProductController extends AbstractController
         $position       = $payload['position'] ?? 'below';
         $referenceRowId = isset($payload['referenceRowId']) ? (int) $payload['referenceRowId'] : null;
 
-        $this->products->createBlankRows($rowsAmount, $position, $referenceRowId);
+        $created = $this->products->createBlankRows($rowsAmount, $position, $referenceRowId);
 
-        return $this->json(null, 201);
+        $data = array_map(fn(Product $p) => [
+            'id'         => $p->getId(),
+            'name'       => $p->getName(),
+            'sku'        => $p->getSku(),
+            'category'   => $p->getCategory(),
+            'price'      => (float) $p->getPrice(),
+            'stock'      => $p->getStock(),
+            'sort_order' => $p->getSortOrder(),
+        ], $created);
+
+        return $this->json($data, 201);
     }
 
     #[Route('', methods: ['PATCH'])]

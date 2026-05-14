@@ -40,6 +40,7 @@ function buildUrl(base, { page, pageSize, sort, filters }) {
 const container = document.querySelector('#example1');
 
 let removeConfirmed = false;
+let totalRows = 0;
 
 const hot = new Handsontable(container, {
   dataProvider: {
@@ -54,6 +55,7 @@ const hot = new Handsontable(container, {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const json = await res.json();
+      totalRows = json.total;
       return { rows: json.data, totalRows: json.total };
     },
 
@@ -66,6 +68,27 @@ const hot = new Handsontable(container, {
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      // manually added new record
+      const data = await res.json();
+      const row = data[0];
+      hot.getPlugin('notification').showMessage({
+        variant: 'success',
+        title: 'Row added',
+        message: `Created: ${row.sku} (id: ${row.id})`,
+        duration: 3000,
+      });
+
+      const pageSize = hot.getSettings().pagination?.pageSize ?? 10;
+      const rows = hot.getSourceData();
+      const index = rows.findIndex(r => r.id === payload.referenceRowId);
+      const insertAt = index >= 0 ? index + (payload.position === 'above' ? 0 : 1) : rows.length;
+      rows.splice(insertAt, 0, row);
+      hot.loadData(rows.slice(0, pageSize));
+      totalRows += 1;
+      hot.runHooks('afterDataProviderFetch', { queryParameters: {}, totalRows });
+      throw new Error('stop refetch'); // console log error
+
     },
 
     // Fires after a cell edit, paste, or autofill batch.

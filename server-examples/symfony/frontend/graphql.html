@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" type="image/png" href="/favicon.png">
-  <title>Product Inventory — Handsontable + Symfony</title>
+  <title>Product Inventory — Handsontable + Symfony (GraphQL)</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
 
@@ -59,22 +59,21 @@
       box-shadow: 0 1px 4px rgba(0,0,0,.08);
       overflow: hidden;
     }
-
   </style>
 </head>
 <body>
   <header>
     <h1>Product Inventory</h1>
-    <p>Server-side pagination, sorting, and filtering via Symfony · right-click a row for more CRUD actions</p>
+    <p>Server-side pagination, sorting, and filtering via Symfony · GraphQL API</p>
   </header>
 
   <nav>
-    <a href="/" class="active">REST API</a>
-    <a href="/graphql.html">GraphQL API</a>
+    <a href="/">REST API</a>
+    <a href="/graphql.html" class="active">GraphQL API</a>
   </nav>
 
   <div id="example1"></div>
 
-  <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/graphql.js"></script>
 </body>
 </html>

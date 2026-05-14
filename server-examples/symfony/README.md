@@ -4,11 +4,17 @@ A fully runnable implementation of server-side data management with Symfony and 
 
 ## What it does
 
-A product inventory data grid that:
+A product inventory data grid available in two variants:
 
+**REST API** (`/`)
 - Fetches paginated rows from `GET /api/products` on every page change
 - Sorts and filters rows on the server — the browser never loads the full dataset
 - Creates, updates, and deletes rows via `POST`, `PATCH`, and `DELETE` endpoints
+
+**GraphQL API** (`/graphql.html`)
+- All the same operations (fetch, sort, filter, create, update, delete) over a single `POST /graphql` endpoint
+- Uses named queries and mutations with typed input objects
+- The schema is built with `webonyx/graphql-php` — no extra bundle required
 
 ## Prerequisites
 
@@ -32,6 +38,8 @@ That single command:
 3. Runs Doctrine migrations and seeds 52 sample products
 4. Installs frontend dependencies and opens **http://localhost:5173**
 
+Switch between REST and GraphQL using the nav links at the top of the page.
+
 ## Available commands
 
 ```bash
@@ -54,13 +62,17 @@ server-side-symfony/
 │   ├── Dockerfile               # PHP 8.2 / Apache — runs composer install
 │   ├── apache.conf              # VirtualHost with FallbackResource
 │   ├── entrypoint.sh            # warmup → migrate → seed → apache2-foreground
-│   ├── composer.json            # PHP dependencies (symfony 7 + doctrine)
+│   ├── composer.json            # PHP dependencies (symfony 7 + doctrine + graphql-php)
 │   ├── .env                     # Environment defaults (overridden by Docker)
 │   ├── bin/console              # Symfony CLI entry point
 │   ├── public/index.php         # Front controller
 │   ├── src/
 │   │   ├── Kernel.php
-│   │   ├── Controller/ProductController.php   # HTTP layer — parses request, returns JSON
+│   │   ├── Controller/
+│   │   │   ├── ProductController.php    # REST — parses request, returns JSON
+│   │   │   └── GraphQLController.php    # GraphQL — single POST /graphql endpoint
+│   │   ├── GraphQL/
+│   │   │   └── ProductSchema.php        # Schema definition (types, queries, mutations)
 │   │   ├── Repository/ProductRepository.php   # All DB queries (filter/sort/paginate/CRUD)
 │   │   ├── Entity/Product.php                 # Doctrine ORM entity
 │   │   └── Command/SeedProductsCommand.php    # app:seed-products console command
@@ -79,12 +91,18 @@ server-side-symfony/
 │
 └── frontend/                    # Vite + Handsontable
     ├── package.json
-    ├── vite.config.js           # Proxies /api → http://localhost:8001
-    ├── index.html
-    └── src/main.js              # dataProvider configuration
+    ├── vite.config.js           # Proxies /api and /graphql → http://localhost:8001
+    ├── favicon.png
+    ├── index.html               # REST API page
+    ├── graphql.html             # GraphQL API page
+    └── src/
+        ├── main.js              # dataProvider — REST
+        └── graphql.js           # dataProvider — GraphQL
 ```
 
 ## How it works
+
+### REST API
 
 ```
 Browser (Vite :5173)
@@ -105,17 +123,54 @@ MySQL 8 ← → Doctrine ORM QueryBuilder
 Handsontable dataProvider → renders page 1, shows pagination bar
 ```
 
-### Frontend (`src/main.js`)
+### GraphQL API
 
-`buildUrl()` serialises the `queryParameters` object that `fetchRows` receives into bracket-notation query params that Symfony parses automatically with `$request->query->all()`:
+```
+Browser (Vite :5173)
+   │  POST /graphql  { query: "query FetchProducts(...) { ... }", variables: { ... } }
+   ▼
+Vite proxy → Symfony (Docker :8001)
+   │  GraphQLController::__invoke()
+   │    ProductSchema::build() — builds schema on each request (stateless)
+   │    GraphQL::executeQuery()
+   │      → Query.products  → ProductRepository::findPage()
+   │      → Mutation.createProducts / updateProducts / deleteProducts
+   ▼
+MySQL 8 ← → Doctrine ORM QueryBuilder
+   │
+   ▼
+{ data: { products: { data: [...], total: 52 } } }
+   │
+   ▼
+Handsontable dataProvider → renders page 1, shows pagination bar
+```
+
+### Frontend
+
+**REST (`src/main.js`)** — `buildUrl()` serialises `fetchRows` parameters into bracket-notation query params that Symfony parses automatically with `$request->query->all()`:
 
 ```
 filters[0][prop]=price&filters[0][condition]=gt&filters[0][value]=100
 ```
 
-The Vite proxy forwards every `/api` request to `http://localhost:8001`, so no CORS configuration is required.
+**GraphQL (`src/graphql.js`)** — `gql()` sends every operation as `POST /graphql` with a JSON body `{ query, variables }`. Named queries and mutations keep the JS readable:
 
-### Backend (`ProductController.php` + `ProductRepository.php`)
+```js
+const FETCH_PRODUCTS = `
+  query FetchProducts($page: Int, $pageSize: Int, $sort: SortInput, $filters: [FilterInput!]) {
+    products(page: $page, pageSize: $pageSize, sort: $sort, filters: $filters) {
+      data { id name sku category price stock sort_order }
+      total
+    }
+  }
+`;
+```
+
+The Vite proxy forwards `/api/*` and exactly `/graphql` to `http://localhost:8001`, so no CORS configuration is required.
+
+### Backend
+
+#### REST (`ProductController.php`)
 
 | HTTP method | Handsontable callback | Controller action | Repository method |
 |-------------|----------------------|-------------------|-------------------|
@@ -124,9 +179,18 @@ The Vite proxy forwards every `/api` request to `http://localhost:8001`, so no C
 | `PATCH`     | `onRowsUpdate`       | parse body | `updateRows()` |
 | `DELETE`    | `onRowsRemove`       | parse body | `deleteByIds()` |
 
-The controller handles only HTTP concerns — request parsing and JSON serialization. All database logic lives in `ProductRepository`, which extends Symfony's `ServiceEntityRepository` and is injected into the controller via constructor autowiring.
+#### GraphQL (`GraphQLController.php` + `ProductSchema.php`)
 
-`buildFilteredQuery()` in the repository validates every column name against `ALLOWED_COLUMNS` before using it in a DQL expression, preventing SQL injection through user-supplied sort/filter parameters. String comparisons use `LOWER()` for case-insensitive matching.
+| Operation | GraphQL field | Zwraca | Repository method |
+|-----------|--------------|--------|-------------------|
+| Query | `products(page, pageSize, sort, filters)` | `ProductsPage!` | `findPage()` |
+| Mutation | `createProducts(rowsAmount, position, referenceRowId)` | `[Product!]!` | `createBlankRows()` |
+| Mutation | `updateProducts(rows: [ProductUpdateInput!]!)` | `Boolean!` | `updateRows()` |
+| Mutation | `deleteProducts(ids: [Int!]!)` | `Boolean!` | `deleteByIds()` |
+
+`GraphQLController` is an invokable controller (`__invoke`) with a single `#[Route('/graphql', methods: ['POST'])]` attribute. It builds the schema, executes the query, and returns the result as JSON. Debug information (stack traces) is included automatically when `APP_ENV=dev`.
+
+`ProductSchema` defines all types (`Product`, `ProductsPage`, `SortInput`, `FilterInput`, `ProductUpdateInput`) and wires resolvers directly to `ProductRepository` methods. The same repository is reused by both the REST and GraphQL controllers — no logic is duplicated.
 
 ### Doctrine ORM (`Product.php`)
 
@@ -160,3 +224,4 @@ make stop
 | Seeding | `php artisan db:seed` | `php bin/console app:seed-products` |
 | Apache routing | `.htaccess` mod_rewrite | `FallbackResource /index.php` |
 | CSRF | `X-CSRF-TOKEN` header | Not required for stateless API routes |
+| GraphQL | — | `webonyx/graphql-php` via `GraphQLController` |

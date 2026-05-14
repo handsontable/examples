@@ -45,27 +45,32 @@ class ProductRepository extends ServiceEntityRepository
         return ['products' => $products, 'total' => $total];
     }
 
-    public function createBlankRows(int $count, string $position = 'below', ?int $referenceRowId = null): void
+    /** @return Product[] */
+    public function createBlankRows(int $count, string $position = 'below', ?int $referenceRowId = null): array
     {
-        $em = $this->getEntityManager();
+        $em      = $this->getEntityManager();
+        $created = [];
 
-        $em->wrapInTransaction(function () use ($em, $count, $position, $referenceRowId) {
+        $em->wrapInTransaction(function () use ($em, $count, $position, $referenceRowId, &$created) {
             $insertAt = $this->resolveInsertOrder($referenceRowId, $position, $count);
 
             for ($i = 0; $i < $count; $i++) {
-                $em->persist(
-                    (new Product())
-                        ->setName('')
-                        ->setSku('NEW-' . strtoupper(bin2hex(random_bytes(3))))
-                        ->setCategory('Electronics')
-                        ->setPrice(0)
-                        ->setStock(0)
-                        ->setSortOrder($insertAt + $i)
-                );
+                $product = (new Product())
+                    ->setName('')
+                    ->setSku('NEW-' . strtoupper(bin2hex(random_bytes(3))))
+                    ->setCategory('Electronics')
+                    ->setPrice(0)
+                    ->setStock(0)
+                    ->setSortOrder($insertAt + $i);
+
+                $em->persist($product);
+                $created[] = $product;
             }
 
             $em->flush();
         });
+
+        return $created;
     }
 
     // Determines the sortOrder for the new row(s) and shifts existing rows to make room.
