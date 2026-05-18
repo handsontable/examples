@@ -44,15 +44,22 @@ const DELETE_PRODUCTS = `
   }
 `;
 
-// Maps Handsontable filter condition { name, args } → { condition, value, value2 }
-function mapFilter(filter) {
-  const args = filter.condition.args ?? [];
-  return {
-    prop:      filter.prop,
-    condition: filter.condition.name,
-    value:     args[0] != null ? String(args[0]) : null,
-    value2:    args[1] != null ? String(args[1]) : null,
-  };
+// Maps Handsontable filters [{ prop, conditions: [{ name, args }] }] → [{ prop, condition, value, value2 }]
+function mapFilters(filters) {
+  const result = [];
+  filters.forEach(({ prop, conditions }) => {
+    (conditions || []).forEach(({ name, args }) => {
+      if (!name) return;
+      const a = args ?? [];
+      result.push({
+        prop,
+        condition: name,
+        value:     a[0] != null ? String(a[0]) : null,
+        value2:    a[1] != null ? String(a[1]) : null,
+      });
+    });
+  });
+  return result;
 }
 
 const container = document.querySelector('#example1');
@@ -68,7 +75,7 @@ const hot = new Handsontable(container, {
         page,
         pageSize,
         sort:    sort    ? { prop: sort.prop, order: sort.order } : null,
-        filters: filters ? filters.map(mapFilter) : null,
+        filters: filters ? mapFilters(filters) : null,
       });
       return { rows: data.products.data, totalRows: data.products.total };
     },
@@ -151,6 +158,19 @@ const hot = new Handsontable(container, {
     { data: 'stock',    type: 'numeric' },
   ],
   licenseKey: 'non-commercial-and-evaluation',
+});
+
+document.getElementById('btn-filter-empty').addEventListener('click', () => {
+  const filters = hot.getPlugin('filters');
+  filters.clearConditions();
+  filters.addCondition(2, 'eq', ['Electronics']);
+  filters.filter();
+});
+
+document.getElementById('btn-clear-filters').addEventListener('click', () => {
+  const filters = hot.getPlugin('filters');
+  filters.clearConditions();
+  filters.filter();
 });
 
 export default hot;

@@ -22,39 +22,40 @@ The example wires a Handsontable grid to a NestJS REST API backed by PostgreSQL.
 ## Quick start
 
 ```bash
-# From the server-examples/ directory:
-make setup
-
-# or equivalently:
 bash setup.sh
+# or: make setup
 ```
 
-The script runs every step automatically:
+That single command:
 
-1. Pulls and starts a PostgreSQL 16 container via Docker Compose
-2. Waits for the database health-check to pass
+1. Starts a PostgreSQL 16 container via Docker Compose
+2. Waits for PostgreSQL to be ready
 3. Installs NestJS server dependencies (`npm install`)
 4. Runs TypeORM migrations — creates the `tickets` table and seeds 12 sample rows
 5. Starts the NestJS backend on **http://localhost:3000**
 6. Installs Vite client dependencies
-7. Starts the Vite dev server on **http://localhost:5173**
+7. Opens the Vite dev server on **http://localhost:5173**
 
-Open **http://localhost:5173** in your browser. Press `Ctrl+C` to stop everything.
+Press `Ctrl+C` to stop everything.
 
-## Tear down
+## Available commands
 
 ```bash
-make teardown
+make setup    # Full first-time setup (start DB → migrate → seed → backend → frontend)
+make start    # Start DB + backend + frontend after the initial setup (skips migrations)
+make stop     # Stop the DB container (preserves data)
+make logs     # Stream database container logs
+make clean    # Remove containers, volumes, and node_modules
+make reset    # Full clean then setup (clean restart)
+make psql     # Open a psql session in the running PostgreSQL container
 ```
-
-Stops and removes the PostgreSQL container and its volume (data is lost).
 
 ## Project structure
 
 ```
-server-examples/
+nestjs/
 ├── setup.sh              # One-command bootstrap script
-├── Makefile              # make setup / make teardown
+├── Makefile              # make setup / start / stop / logs / clean / reset / psql
 ├── docker-compose.yml    # PostgreSQL 16 service
 │
 ├── server/               # NestJS backend

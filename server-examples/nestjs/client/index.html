@@ -15,16 +15,27 @@
       color: #1a1a2e;
     }
 
-    h1 {
-      font-size: 1.5rem;
+    header {
+      margin-bottom: 20px;
+    }
+
+    header h1 {
       margin: 0 0 4px;
+      font-size: 1.5rem;
+      font-weight: 700;
+    }
+
+    header p {
+      margin: 0;
+      font-size: 0.875rem;
+      color: #6b7280;
     }
 
     #status-label {
       font-size: 13px;
       color: #6c757d;
       display: block;
-      margin-bottom: 16px;
+      margin-top: 4px;
       min-height: 20px;
     }
 
@@ -37,8 +48,11 @@
   </style>
 </head>
 <body>
-  <h1>Support Tickets</h1>
-  <span id="status-label">Loading…</span>
+  <header>
+    <h1>Support Tickets</h1>
+    <p>Server-side pagination, sorting, and filtering via NestJS · right-click a row for more CRUD actions</p>
+    <span id="status-label"></span>
+  </header>
   <div id="example1"></div>
   <script type="module" src="./src/main.js"></script>
 </body>

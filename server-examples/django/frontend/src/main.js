@@ -2,29 +2,37 @@ import Handsontable from 'handsontable/base';
 
 import {
   registerPlugin,
+  AutoColumnSize,
+  ColumnSorting,
+  ContextMenu,
   DataProvider,
   DropdownMenu,
-  Filters,
-  ColumnSorting,
-  Pagination,
   EmptyDataState,
-  ContextMenu,
+  Filters,
+  HiddenRows,
+  Notification,
+  Pagination,
 } from 'handsontable/plugins';
 
 import {
   registerCellType,
+  CheckboxCellType,
   NumericCellType,
   TextCellType,
 } from 'handsontable/cellTypes';
 
+registerPlugin(AutoColumnSize);
+registerPlugin(ColumnSorting);
+registerPlugin(ContextMenu);
 registerPlugin(DataProvider);
 registerPlugin(DropdownMenu);
-registerPlugin(Filters);
-registerPlugin(ColumnSorting);
-registerPlugin(Pagination);
 registerPlugin(EmptyDataState);
-registerPlugin(ContextMenu);
+registerPlugin(Filters);
+registerPlugin(HiddenRows);
+registerPlugin(Notification);
+registerPlugin(Pagination);
 
+registerCellType(CheckboxCellType);
 registerCellType(NumericCellType);
 registerCellType(TextCellType);
 
@@ -79,6 +87,8 @@ function buildUrl({ page, pageSize, sort, filters }) {
 // ---------------------------------------------------------------------------
 const container = document.querySelector('#example1');
 
+let removeConfirmed = false;
+
 const hot = new Handsontable(container, {
   dataProvider: {
     // rowId tells dataProvider which field uniquely identifies each row.
@@ -115,9 +125,14 @@ const hot = new Handsontable(container, {
         throw new Error(`Create failed: ${res.status}`);
       }
 
-      // Return the created rows so dataProvider updates its row map with
-      // the server-assigned ids.
-      return res.json();
+      const data = await res.json();
+      hot.getPlugin('notification').showMessage({
+        variant: 'success',
+        title: 'Row added',
+        message: `Created ${data.length} row${data.length !== 1 ? 's' : ''}`,
+        duration: 3000,
+      });
+      return data;
     },
 
     // Called when the user edits cells.
@@ -152,7 +167,45 @@ const hot = new Handsontable(container, {
       if (!res.ok) {
         throw new Error(`Delete failed: ${res.status}`);
       }
+      hot.getPlugin('notification').showMessage({
+        variant: 'success',
+        title: 'Rows deleted',
+        message: `Deleted ${rowIds.length} row${rowIds.length !== 1 ? 's' : ''}`,
+        duration: 3000,
+      });
     },
+  },
+
+  beforeRowsMutation(operation, payload) {
+    if (operation === 'remove' && !removeConfirmed) {
+      const count = payload.rowsRemove.length;
+      const notification = hot.getPlugin('notification');
+      const id = notification.showMessage({
+        variant: 'warning',
+        title: 'Delete rows',
+        message: `Delete ${count} row${count !== 1 ? 's' : ''}? This cannot be undone.`,
+        duration: 0,
+        actions: [
+          {
+            label: 'Delete',
+            type: 'primary',
+            callback: () => {
+              notification.hide(id);
+              removeConfirmed = true;
+              hot.getPlugin('dataProvider').removeRows(payload.rowsRemove).finally(() => {
+                removeConfirmed = false;
+              });
+            },
+          },
+          {
+            label: 'Cancel',
+            type: 'secondary',
+            callback: () => notification.hide(id),
+          },
+        ],
+      });
+      return false;
+    }
   },
 
   // Show 10 rows per page; users can change this via the pagination UI.
@@ -167,6 +220,7 @@ const hot = new Handsontable(container, {
 
   // Show an illustration when fetchRows returns zero rows (e.g. filter matches nothing).
   emptyDataState: true,
+  notification: true,
 
   contextMenu: true,
 

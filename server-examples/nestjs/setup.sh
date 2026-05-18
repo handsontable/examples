@@ -35,7 +35,7 @@ command -v npm     >/dev/null 2>&1 || die "npm is not installed"
 
 # ── 1. Start PostgreSQL ───────────────────────────────────────────────────────
 info "Starting PostgreSQL via Docker Compose…"
-docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d db
+docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d --force-recreate db
 
 # ── 2. Wait for PostgreSQL to be healthy ──────────────────────────────────────
 info "Waiting for PostgreSQL to be ready…"

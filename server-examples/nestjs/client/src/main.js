@@ -21,17 +21,22 @@ function buildUrl(base, params) {
   query.set('page', String(params.page));
   query.set('pageSize', String(params.pageSize));
 
-  if (params.sort) {
-    query.set('sort[column]', params.sort.column);
+  if (params.sort?.prop) {
+    query.set('sort[column]', params.sort.prop);
     query.set('sort[order]', params.sort.order);
   }
 
-  if (params.filters && params.filters.length > 0) {
-    params.filters.forEach((filter, i) => {
-      query.set(`filters[${i}][prop]`, filter.prop);
-      query.set(`filters[${i}][condition]`, filter.condition);
-      filter.value.forEach((v, j) => {
-        query.set(`filters[${i}][value][${j}]`, String(v));
+  if (params.filters?.length) {
+    let idx = 0;
+    params.filters.forEach(({ prop, conditions }) => {
+      (conditions || []).forEach(({ name, args }) => {
+        if (!name) return;
+        query.set(`filters[${idx}][prop]`, prop);
+        query.set(`filters[${idx}][condition]`, name);
+        (args || []).forEach((v, j) => {
+          query.set(`filters[${idx}][value][${j}]`, String(v));
+        });
+        idx++;
       });
     });
   }
@@ -46,12 +51,14 @@ function buildUrl(base, params) {
 const container = document.querySelector('#example1');
 const statusLabel = document.querySelector('#status-label');
 
+let removeConfirmed = false;
+
 const hot = new Handsontable(container, {
   dataProvider: {
     rowId: 'id',
 
     fetchRows: async (params, { signal }) => {
-      const url = buildUrl('http://localhost:3000/tickets', params);
+      const url = buildUrl('/tickets', params);
       const res = await fetch(url, { signal });
 
       if (!res.ok) throw new Error(`Server error ${res.status}`);
@@ -59,20 +66,35 @@ const hot = new Handsontable(container, {
       return res.json();
     },
 
-    onRowsCreate: async (payload) => {
-      const res = await fetch('http://localhost:3000/tickets', {
+    onRowsCreate: async ({ rowsAmount }) => {
+      const newRows = Array.from({ length: rowsAmount }, () => ({
+        subject: 'New ticket',
+        status: 'open',
+        priority: 'medium',
+        assignee: '',
+        createdAt: new Date().toISOString().slice(0, 10),
+      }));
+
+      const res = await fetch('/tickets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(newRows),
       });
 
       if (!res.ok) throw new Error(`Create failed: ${res.status}`);
 
-      return res.json();
+      const data = await res.json();
+      hot.getPlugin('notification').showMessage({
+        variant: 'success',
+        title: 'Row added',
+        message: `Created ${data.length} row${data.length !== 1 ? 's' : ''}`,
+        duration: 3000,
+      });
+      return data;
     },
 
     onRowsUpdate: async (rows) => {
-      const res = await fetch('http://localhost:3000/tickets', {
+      const res = await fetch('/tickets', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(rows.map(({ id, changes }) => ({ id, ...changes }))),
@@ -82,14 +104,52 @@ const hot = new Handsontable(container, {
     },
 
     onRowsRemove: async (rowIds) => {
-      const res = await fetch('http://localhost:3000/tickets', {
+      const res = await fetch('/tickets', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(rowIds),
       });
 
       if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+      hot.getPlugin('notification').showMessage({
+        variant: 'success',
+        title: 'Rows deleted',
+        message: `Deleted ${rowIds.length} row${rowIds.length !== 1 ? 's' : ''}`,
+        duration: 3000,
+      });
     },
+  },
+
+  beforeRowsMutation(operation, payload) {
+    if (operation === 'remove' && !removeConfirmed) {
+      const count = payload.rowsRemove.length;
+      const notification = hot.getPlugin('notification');
+      const id = notification.showMessage({
+        variant: 'warning',
+        title: 'Delete rows',
+        message: `Delete ${count} row${count !== 1 ? 's' : ''}? This cannot be undone.`,
+        duration: 0,
+        actions: [
+          {
+            label: 'Delete',
+            type: 'primary',
+            callback: () => {
+              notification.hide(id);
+              removeConfirmed = true;
+              hot.getPlugin('dataProvider').removeRows(payload.rowsRemove).finally(() => {
+                removeConfirmed = false;
+              });
+            },
+          },
+          {
+            label: 'Cancel',
+            type: 'secondary',
+            callback: () => notification.hide(id),
+          },
+        ],
+      });
+      return false;
+    }
   },
 
   pagination: { pageSize: 5 },
@@ -97,6 +157,7 @@ const hot = new Handsontable(container, {
   columnSorting: true,
   filters: true,
   dropdownMenu: true,
+  contextMenu: true,
 
   emptyDataState: true,
   notification: true,

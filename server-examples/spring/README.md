@@ -6,7 +6,7 @@ The example demonstrates server-side **pagination**, **sorting**, **filtering**,
 
 | Layer | Technology |
 |---|---|
-| Frontend | Handsontable `dataProvider` + Vite dev server |
+| Frontend | Handsontable `dataProvider`, `ContextMenu`, `Notification` + Vite dev server |
 | Backend | Spring Boot 3.3 REST API |
 | Database | PostgreSQL 16 (via Docker) |
 | Migrations | Flyway |
@@ -29,8 +29,8 @@ No Java or Maven installation required — the Spring Boot JAR is compiled insid
 ## Quick start
 
 ```bash
-cd server-examples
-./setup.sh          # or: make
+bash setup.sh
+# or: make setup
 ```
 
 The script:
@@ -47,21 +47,22 @@ Open **http://localhost:5173** in your browser.
 
 ## Available commands
 
-| Command | Description |
-|---|---|
-| `./setup.sh` or `make` | Start everything |
-| `make stop` | Stop Docker containers (keeps database volume) |
-| `make logs` | Stream backend logs |
-| `make clean` | Stop containers and delete the database volume |
+```bash
+make setup  # Start everything: PostgreSQL + Spring Boot via Docker, then Vite frontend
+make stop   # Stop Docker containers (keeps database data)
+make logs   # Stream backend container logs
+make clean  # Stop containers and delete the database volume
+```
 
 ---
 
 ## Project structure
 
 ```
-server-examples/
+spring/
 ├── setup.sh                  # One-command startup script
 ├── Makefile                  # Make targets wrapping setup.sh
+├── README.md
 ├── backend/
 │   ├── Dockerfile            # Multi-stage Maven → JRE image
 │   ├── docker-compose.yml    # PostgreSQL 16 + Spring Boot services
@@ -73,6 +74,7 @@ server-examples/
 │       │   ├── ProductRepository.java     # Spring Data + JpaSpecificationExecutor
 │       │   ├── ProductService.java        # Pagination / sort / filter / CRUD logic
 │       │   ├── ProductController.java     # REST endpoints
+│       │   ├── DataInitializer.java       # Seeds 55 sample products on first run
 │       │   ├── CorsConfig.java            # Allow all origins for /api/**
 │       │   ├── CreateRowsPayload.java     # DTO for POST /create-rows
 │       │   └── UpdateRowPayload.java      # DTO for PATCH /update-rows
@@ -85,7 +87,7 @@ server-examples/
     ├── package.json           # Handsontable + Vite
     ├── vite.config.js         # Proxies /api/* → http://localhost:8080
     └── src/
-        └── example1.js        # Handsontable grid with dataProvider
+        └── example1.js        # dataProvider, ContextMenu, Notification and CRUD hooks
 ```
 
 ---

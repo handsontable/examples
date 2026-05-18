@@ -8,7 +8,7 @@ registerAllModules();
 //
 // Handsontable sends:
 //   sort:    { prop: 'name', order: 'asc' }  or  null
-//   filters: [{ prop: 'price', condition: { name: 'gt', args: [100] } }]  or  null
+//   filters: [{ prop: 'price', conditions: [{ name: 'gt', args: [100] }] }]  or  null
 //
 // Symfony reads:
 //   sort[prop], sort[order]
@@ -24,13 +24,18 @@ function buildUrl(base, { page, pageSize, sort, filters }) {
     params.set('sort[order]', sort.order);
   }
 
-  if (filters) {
-    filters.forEach((filter, i) => {
-      params.set(`filters[${i}][prop]`, filter.prop);
-      params.set(`filters[${i}][condition]`, filter.condition.name);
-      const args = filter.condition.args ?? [];
-      if (args[0] != null) params.set(`filters[${i}][value]`, String(args[0]));
-      if (args[1] != null) params.set(`filters[${i}][value2]`, String(args[1]));
+  if (filters?.length) {
+    let idx = 0;
+    filters.forEach(({ prop, conditions }) => {
+      (conditions || []).forEach(({ name, args }) => {
+        if (!name) return;
+        params.set(`filters[${idx}][prop]`, prop);
+        params.set(`filters[${idx}][condition]`, name);
+        const a = args ?? [];
+        if (a[0] != null) params.set(`filters[${idx}][value]`, String(a[0]));
+        if (a[1] != null) params.set(`filters[${idx}][value2]`, String(a[1]));
+        idx++;
+      });
     });
   }
 
@@ -175,6 +180,19 @@ const hot = new Handsontable(container, {
     { data: 'stock', type: 'numeric' },
   ],
   licenseKey: 'non-commercial-and-evaluation',
+});
+
+document.getElementById('btn-filter-empty').addEventListener('click', () => {
+  const filters = hot.getPlugin('filters');
+  filters.clearConditions();
+  filters.addCondition(2, 'eq', ['Electronics']);
+  filters.filter();
+});
+
+document.getElementById('btn-clear-filters').addEventListener('click', () => {
+  const filters = hot.getPlugin('filters');
+  filters.clearConditions();
+  filters.filter();
 });
 
 export default hot;

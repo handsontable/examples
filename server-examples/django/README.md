@@ -15,16 +15,13 @@ A fully working employee directory that demonstrates Handsontable's `dataProvide
 **Prerequisites:** Docker (with Compose plugin), Node.js, npm
 
 ```bash
-cd server-examples
-chmod +x setup.sh
-./setup.sh
+bash setup.sh
 ```
 
 Or with Make:
 
 ```bash
-cd server-examples
-make
+make setup
 ```
 
 The script will:
@@ -36,12 +33,22 @@ The script will:
 
 Open **http://localhost:5173** in your browser.
 
+## Available commands
+
+```bash
+make setup    # Full first-time setup (build → migrate → seed → start)
+make backend  # Start only the Docker services
+make frontend # Install deps and start Vite
+make stop     # Stop Docker services
+make clean    # Remove containers, volumes, and node_modules
+```
+
 ## Project structure
 
 ```
-server-examples/
+server-examples/django/
 ├── setup.sh              # One-run setup script
-├── Makefile              # Alternative make-based entry point
+├── Makefile              # Convenience targets
 ├── docker-compose.yml    # PostgreSQL + Django services
 ├── backend/
 │   ├── Dockerfile
@@ -59,6 +66,7 @@ server-examples/
 └── frontend/
     ├── package.json
     ├── vite.config.js    # Proxies /api/* → localhost:8000
+    ├── favicon.png
     ├── index.html
     └── src/main.js       # Handsontable + dataProvider setup
 ```

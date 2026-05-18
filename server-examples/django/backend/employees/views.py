@@ -133,10 +133,12 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], url_path='create-rows')
     @transaction.atomic
     def create_rows(self, request):
-        serializer = EmployeeSerializer(data=request.data, many=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        # Return created rows so dataProvider can update its row map with server-assigned ids.
+        rows_amount = max(1, int(request.data.get('rowsAmount', 1)))
+        employees = Employee.objects.bulk_create([
+            Employee(first_name='', last_name='', department='', role='', salary=0)
+            for _ in range(rows_amount)
+        ])
+        serializer = EmployeeSerializer(employees, many=True)
         return Response(serializer.data, status=201)
 
     @action(detail=False, methods=['patch'], url_path='update-rows')
@@ -145,7 +147,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         updated = []
         for row in request.data:
             employee = Employee.objects.get(pk=row['id'])
-            serializer = EmployeeSerializer(employee, data=row, partial=True)
+            serializer = EmployeeSerializer(employee, data=row['changes'], partial=True)
             serializer.is_valid(raise_exception=True)
             serializer.save()
             updated.append(serializer.data)

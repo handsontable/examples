@@ -59,6 +59,27 @@
       box-shadow: 0 1px 4px rgba(0,0,0,.08);
       overflow: hidden;
     }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .toolbar button {
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      border: 1px solid #d1d5db;
+      background: #fff;
+      color: #374151;
+      cursor: pointer;
+    }
+
+    .toolbar button:hover {
+      background: #f3f4f6;
+    }
   </style>
 </head>
 <body>
@@ -71,6 +92,11 @@
     <a href="/">REST API</a>
     <a href="/graphql.html" class="active">GraphQL API</a>
   </nav>
+
+  <div class="toolbar">
+    <button id="btn-filter-empty">Show Electronics</button>
+    <button id="btn-clear-filters">Clear filters</button>
+  </div>
 
   <div id="example1"></div>
 
