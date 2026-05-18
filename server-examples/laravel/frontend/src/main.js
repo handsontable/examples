@@ -79,10 +79,11 @@ const hot = new Handsontable(container, {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      const row = data[0];
       hot.getPlugin('notification').showMessage({
         variant: 'success',
         title: 'Row added',
-        message: `Created ${data.length} row${data.length !== 1 ? 's' : ''}`,
+        message: `Created: ${row.sku} (id: ${row.id})`,
         duration: 3000,
       });
     },

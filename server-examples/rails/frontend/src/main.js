@@ -114,10 +114,11 @@ const hot = new Handsontable(container, {
       }
 
       const json = await res.json();
+      const info = json.rows.map(r => `(order: ${r.order_number})`).join(', ');
       hot.getPlugin('notification').showMessage({
         variant: 'success',
         title: 'Row added',
-        message: `Created ${json.rows.length} row${json.rows.length !== 1 ? 's' : ''}`,
+        message: `Created: ${info}`,
         duration: 3000,
       });
       return json.rows;

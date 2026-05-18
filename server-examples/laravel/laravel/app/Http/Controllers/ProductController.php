@@ -118,11 +118,13 @@ class ProductController extends Controller
         $position       = $request->input('position', 'below');
         $referenceRowId = $request->input('referenceRowId');
 
-        DB::transaction(function () use ($rowsAmount, $position, $referenceRowId) {
+        $created = [];
+
+        DB::transaction(function () use ($rowsAmount, $position, $referenceRowId, &$created) {
             $insertAt = $this->resolveInsertOrder($referenceRowId, $position, $rowsAmount);
 
             for ($i = 0; $i < $rowsAmount; $i++) {
-                Product::create([
+                $created[] = Product::create([
                     'name'       => '',
                     'sku'        => 'NEW-' . strtoupper(bin2hex(random_bytes(3))),
                     'category'   => 'Electronics',
@@ -133,7 +135,7 @@ class ProductController extends Controller
             }
         });
 
-        return response()->json(null, 201);
+        return response()->json($created, 201);
     }
 
     // PATCH /api/products

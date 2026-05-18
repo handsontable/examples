@@ -76,7 +76,7 @@ public class ProductService {
      * Each new row gets a placeholder name and a UUID-derived SKU to satisfy
      * the unique SKU constraint.
      */
-    public void createRows(CreateRowsPayload payload) {
+    public List<Product> createRows(CreateRowsPayload payload) {
         List<Product> newProducts = new ArrayList<>();
         for (int i = 0; i < payload.getRowsAmount(); i++) {
             Product p = new Product();
@@ -87,7 +87,7 @@ public class ProductService {
             p.setStock(0);
             newProducts.add(p);
         }
-        repository.saveAll(newProducts);
+        return repository.saveAll(newProducts);
     }
 
     /**

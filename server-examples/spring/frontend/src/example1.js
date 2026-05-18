@@ -103,12 +103,15 @@ const hot = new Handsontable(container, {
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error(`Failed to create rows: ${res.status}`);
+      const data = await res.json();
+      const info = data.map(r => `(id: ${r.id})`).join(', ');
       hot.getPlugin('notification').showMessage({
         variant: 'success',
         title: 'Row added',
-        message: `Created ${payload.rowsAmount} row${payload.rowsAmount !== 1 ? 's' : ''}`,
+        message: `Created: ${info}`,
         duration: 3000,
       });
+      return data;
     },
     /**
      * Sends changed cell values to the server.

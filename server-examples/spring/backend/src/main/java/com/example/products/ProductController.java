@@ -55,9 +55,8 @@ public class ProductController {
      * Request body: { "position": "below", "referenceRowId": 7, "rowsAmount": 1 }
      */
     @PostMapping("/create-rows")
-    public ResponseEntity<Void> createRows(@RequestBody CreateRowsPayload payload) {
-        productService.createRows(payload);
-        return ResponseEntity.ok().build();
+    public ResponseEntity<List<Product>> createRows(@RequestBody CreateRowsPayload payload) {
+        return ResponseEntity.ok(productService.createRows(payload));
     }
 
     /**
