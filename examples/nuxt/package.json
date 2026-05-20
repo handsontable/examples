@@ -9,9 +9,9 @@
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
-    "@handsontable/vue3": "17.0",
-    "handsontable": "17.0",
-    "nuxt": "^3.10.0"
+    "@handsontable/vue3": "17.1.0",
+    "handsontable": "17.1.0",
+    "nuxt": "^3.21.6"
   },
   "config": {
     "codesandbox": {

@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "vue": "^3.4.21",
-    "@handsontable/vue3": "16.1.1-next-895fbb8-20250923",
-    "handsontable": "16.1.1-next-895fbb8-20250923"
+    "@handsontable/vue3": "17.1.0",
+    "handsontable": "17.1.0"
   },
   "devDependencies": {
     "@tsconfig/node20": "^20.1.2",
