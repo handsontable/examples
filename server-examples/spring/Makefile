@@ -18,3 +18,5 @@ logs:
 clean:
 	cd backend && docker compose down -v --remove-orphans
 	rm -rf frontend/node_modules
+	rm -rf frontend-angular/node_modules
+	rm -rf frontend-react/node_modules

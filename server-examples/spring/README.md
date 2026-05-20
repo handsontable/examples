@@ -6,7 +6,9 @@ The example demonstrates server-side **pagination**, **sorting**, **filtering**,
 
 | Layer | Technology |
 |---|---|
-| Frontend | Handsontable `dataProvider`, `ContextMenu`, `Notification` + Vite dev server |
+| Frontend (JS) | Handsontable `dataProvider`, `ContextMenu`, `Notification` + Vite dev server |
+| Frontend (Angular) | Angular 21, `@handsontable/angular-wrapper` |
+| Frontend (React) | React 19, `@handsontable/react-wrapper` |
 | Backend | Spring Boot 3.3 REST API |
 | Database | PostgreSQL 16 (via Docker) |
 | Migrations | Flyway |
@@ -37,9 +39,15 @@ The script:
 1. Builds the Spring Boot image and starts **PostgreSQL + backend** via Docker Compose
 2. Runs the Flyway migration (`V1__create_products_table.sql`)
 3. Seeds the database with 55 sample products
-4. Installs frontend dependencies and starts the **Vite dev server**
+4. Installs all frontend npm dependencies (JS, Angular, React)
+5. Builds Angular and React apps, then starts watchers for live rebuilds
+6. Starts the **Vite dev server**
 
-Open **http://localhost:5173** in your browser.
+| URL | Description |
+|---|---|
+| http://localhost:5173 | JS frontend |
+| http://localhost:5173/angular.html | Angular frontend |
+| http://localhost:5173/react.html | React frontend |
 
 > The first run downloads Maven dependencies inside Docker and may take ~60 seconds.
 
@@ -51,7 +59,7 @@ Open **http://localhost:5173** in your browser.
 make setup  # Start everything: PostgreSQL + Spring Boot via Docker, then Vite frontend
 make stop   # Stop Docker containers (keeps database data)
 make logs   # Stream backend container logs
-make clean  # Stop containers and delete the database volume
+make clean  # Stop containers, delete the database volume, and remove node_modules
 ```
 
 ---
@@ -82,12 +90,24 @@ spring/
 │           ├── application.properties     # PostgreSQL + Flyway config
 │           └── db/migration/
 │               └── V1__create_products_table.sql
-└── frontend/
-    ├── index.html             # Page shell with <div id="example1">
-    ├── package.json           # Handsontable + Vite
-    ├── vite.config.js         # Proxies /api/* → http://localhost:8080
+├── frontend/                 # JS entry point + Vite dev server (serves all 3 variants)
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.js        # Proxies /api/* → localhost:8080; serves Angular/React builds
+│   └── src/
+│       └── example1.js       # dataProvider, ContextMenu, Notification and CRUD hooks
+├── frontend-angular/         # Angular variant (ng build --watch → served via Vite)
+│   ├── angular.json
+│   ├── package.json
+│   └── src/app/
+│       ├── app.component.ts
+│       └── app.component.html
+└── frontend-react/           # React variant (vite build --watch → served via Vite)
+    ├── vite.config.ts
+    ├── package.json
     └── src/
-        └── example1.js        # dataProvider, ContextMenu, Notification and CRUD hooks
+        ├── main.tsx
+        └── App.tsx
 ```
 
 ---
@@ -109,7 +129,7 @@ spring/
 | `pageSize` | `10` | Rows per page |
 | `sortProp` | `price` | Column to sort by |
 | `sortOrder` | `desc` | `asc` or `desc` |
-| `filters` | `[{"column":"category","value":"Electronics"}]` | JSON-encoded filter array |
+| `filters` | `[{"column":"category","value":"Electronics"}]` | JSON-encoded filter array (column + first condition value) |
 
 Response shape:
 ```json
@@ -136,11 +156,13 @@ Handsontable renders page, pagination controls update
 
 Handsontable's `dataProvider.fetchRows` callback fires on every page change, sort click, or filter update. Mutations (`onRowsCreate`, `onRowsUpdate`, `onRowsRemove`) hit the corresponding endpoints and the grid refreshes automatically.
 
+The Angular and React variants are pre-built by `ng build --watch` / `vite build --watch` into `frontend-angular/dist/` and `frontend-react/dist/`. The Vite dev server serves them via custom middleware — no separate dev server needed for Angular or React.
+
 ---
 
 ## Configuration
 
-Backend environment variables (set in `docker-compose.yml`, defaulting to `localhost` for local dev):
+Backend environment variables (set in `docker-compose.yml`):
 
 | Variable | Default | Description |
 |---|---|---|

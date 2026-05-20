@@ -38,13 +38,40 @@
       box-shadow: 0 1px 4px rgba(0,0,0,.08);
       overflow: hidden;
     }
+
+    nav {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    nav a {
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      text-decoration: none;
+      background: #e5e7eb;
+      color: #374151;
+    }
+
+    nav a.active {
+      background: #1a1a2e;
+      color: #fff;
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>Order Management</h1>
+    <h1>Order Management — Handsontable + Rails</h1>
     <p>Server-side pagination, sorting, and filtering via Rails API · right-click a row for more CRUD actions</p>
   </header>
+
+  <nav>
+    <a href="/" class="active">JS</a>
+    <a href="/angular.html">Angular</a>
+    <a href="/react.html">React</a>
+  </nav>
 
   <div id="app"></div>
   <script type="module" src="./src/main.js"></script>

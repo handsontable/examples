@@ -22,6 +22,8 @@ logs: ## Stream Rails API container logs
 clean: ## Remove containers, volumes, and frontend node_modules
 	$(DC) down -v --remove-orphans
 	rm -rf frontend/node_modules
+	rm -rf frontend-angular/node_modules
+	rm -rf frontend-react/node_modules
 
 backend-only: ## Start only the Rails API (DB + API containers, no frontend)
 	$(DC) up -d db
