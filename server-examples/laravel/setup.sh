@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-shot setup: builds the Laravel Docker image, runs migrations + seeder,
-# starts the backend, installs frontend deps, and launches Vite.
+# starts the backend, installs all frontend deps, and launches Vite.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,21 +52,58 @@ done
 echo ""
 echo "==> Backend is ready!"
 
-# ── frontend ─────────────────────────────────────────────────────────────────
+# ── Angular frontend ──────────────────────────────────────────────────────────
+echo ""
+echo "==> Installing Angular frontend dependencies..."
+cd "$SCRIPT_DIR/frontend-angular"
+npm install
+
+echo ""
+echo "==> Building Angular app (first build)..."
+npm run build
+
+echo ""
+echo "==> Starting Angular build watcher in background..."
+npm run watch &
+ANGULAR_WATCH_PID=$!
+
+# ── React frontend ────────────────────────────────────────────────────────────
+echo ""
+echo "==> Installing React frontend dependencies..."
+cd "$SCRIPT_DIR/frontend-react"
+npm install
+
+echo ""
+echo "==> Building React app (first build)..."
+npm run build
+
+echo ""
+echo "==> Starting React build watcher in background..."
+npm run watch &
+REACT_WATCH_PID=$!
+
+# ── Vite frontend ─────────────────────────────────────────────────────────────
 echo ""
 echo "==> Installing frontend dependencies..."
-cd frontend
+cd "$SCRIPT_DIR/frontend"
 npm install
 
 echo ""
 echo "========================================================"
 echo "  Handsontable — Server-side Laravel Example"
 echo "========================================================"
-echo "  Frontend : http://localhost:5173"
-echo "  Backend  : http://localhost:8000/api/products"
+echo "  Frontend (REST)    : http://localhost:5173"
+echo "  Frontend (Angular) : http://localhost:5173/angular.html"
+echo "  Frontend (React)   : http://localhost:5173/react.html"
+echo "  Backend            : http://localhost:8000/api/products"
+echo ""
 echo "  Press Ctrl+C to stop the frontend dev server."
 echo "  Run 'make stop' (or '$DC down') to stop Docker."
 echo "========================================================"
 echo ""
 
 npm run dev
+
+# Cleanup watchers when Vite exits
+kill "$ANGULAR_WATCH_PID" 2>/dev/null || true
+kill "$REACT_WATCH_PID" 2>/dev/null || true

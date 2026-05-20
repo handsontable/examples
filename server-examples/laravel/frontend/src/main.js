@@ -86,6 +86,7 @@ const hot = new Handsontable(container, {
         message: `Created: ${row.sku} (id: ${row.id})`,
         duration: 3000,
       });
+      return data;
     },
 
     // Fires after a cell edit, paste, or autofill batch.
@@ -178,6 +179,19 @@ const hot = new Handsontable(container, {
     { data: 'stock', type: 'numeric' },
   ],
   licenseKey: 'non-commercial-and-evaluation',
+});
+
+document.getElementById('btn-filter-empty').addEventListener('click', () => {
+  const filters = hot.getPlugin('filters');
+  filters.clearConditions();
+  filters.addCondition(2, 'eq', ['Electronics']);
+  filters.filter();
+});
+
+document.getElementById('btn-clear-filters').addEventListener('click', () => {
+  const filters = hot.getPlugin('filters');
+  filters.clearConditions();
+  filters.filter();
 });
 
 export default hot;

@@ -9,9 +9,11 @@ help: ## Show available commands
 setup: ## Full first-time setup: start DB, run migrations, launch backend + frontend
 	@bash "$(CURDIR)/setup.sh"
 
-start: ## Start DB + backend + frontend (skips migrations — run setup first)
+start: ## Start DB + backend + Angular/React watchers + frontend (skips migrations — run setup first)
 	$(DC) -f "$(CURDIR)/docker-compose.yml" up -d db
 	cd "$(CURDIR)/server" && npm start &
+	cd "$(CURDIR)/client-angular" && npm run watch &
+	cd "$(CURDIR)/client-react" && npm run watch &
 	cd "$(CURDIR)/client" && npx vite
 
 stop: ## Stop the DB container (preserves data; use 'clean' to also remove the DB)
@@ -25,6 +27,8 @@ clean: ## Remove containers, volumes, and node_modules
 	$(DC) -f "$(CURDIR)/docker-compose.yml" down -v --remove-orphans
 	-pkill -f "ts-node src/main.ts" 2>/dev/null || true
 	rm -rf "$(CURDIR)/server/node_modules" "$(CURDIR)/client/node_modules"
+	rm -rf "$(CURDIR)/client-angular/node_modules" "$(CURDIR)/client-angular/dist"
+	rm -rf "$(CURDIR)/client-react/node_modules" "$(CURDIR)/client-react/dist"
 
 reset: clean setup ## Full teardown then setup (clean restart)
 

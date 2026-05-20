@@ -2,13 +2,13 @@
 
 A fully working implementation of the [Server-Side Data Management with NestJS](https://github.com/handsontable/handsontable/tree/develop/docs/content/recipes/data-management/server-side-nestjs) recipe.
 
-The example wires a Handsontable grid to a NestJS REST API backed by PostgreSQL. All data operations — pagination, sorting, filtering, and CRUD — are handled server-side.
+The example wires a Handsontable grid to a NestJS REST API backed by PostgreSQL. All data operations — pagination, sorting, filtering, and CRUD — are handled server-side. The grid is available in three frontend variants: vanilla JS, Angular, and React.
 
 ## Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Handsontable (Vite dev server) |
+| Frontend | Handsontable — vanilla JS, Angular, and React |
 | Backend | NestJS 10 + TypeScript |
 | ORM | TypeORM 0.3 |
 | Database | PostgreSQL 16 (Docker) |
@@ -34,7 +34,14 @@ That single command:
 4. Runs TypeORM migrations — creates the `tickets` table and seeds 12 sample rows
 5. Starts the NestJS backend on **http://localhost:3000**
 6. Installs Vite client dependencies
-7. Opens the Vite dev server on **http://localhost:5173**
+7. Installs, builds, and starts Angular + React watchers in the background
+8. Opens the Vite dev server on **http://localhost:5173**
+
+| URL | Description |
+|-----|-------------|
+| `http://localhost:5173/` | JS (vanilla JS) |
+| `http://localhost:5173/angular.html` | Angular |
+| `http://localhost:5173/react.html` | React |
 
 Press `Ctrl+C` to stop everything.
 
@@ -71,12 +78,28 @@ nestjs/
 │       └── migrations/
 │           └── 1700000000000-CreateTickets.ts  # Schema + seed data
 │
-└── client/               # Vite + Handsontable frontend
+├── client/               # Vite dev server — entry point for all variants
+│   ├── package.json
+│   ├── vite.config.js    # Proxies /tickets; serves Angular & React builds via middleware
+│   ├── index.html
+│   └── src/
+│       └── main.js       # Handsontable dataProvider configuration — vanilla JS
+│
+├── client-angular/       # Angular standalone app (ng build --watch)
+│   ├── angular.json      # outputPath.base=dist, baseHref=/angular-assets/
+│   ├── package.json
+│   └── src/app/
+│       ├── app.component.ts    # HotTableComponent + dataProvider logic
+│       └── app.component.html  # template with nav + <hot-table>
+│
+└── client-react/         # React app (vite build --watch)
+    ├── vite.config.ts    # base=/react-assets/, input=react.html
     ├── package.json
-    ├── vite.config.js
-    ├── index.html
+    ├── react.html        # HTML entry point
     └── src/
-        └── main.js       # Handsontable dataProvider configuration
+        ├── main.tsx      # createRoot bootstrap
+        ├── App.tsx       # HotTable + dataProvider logic (useRef/useMemo/useState)
+        └── styles.css
 ```
 
 ## API endpoints

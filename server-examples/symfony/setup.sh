@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-shot setup: builds the Symfony Docker image, runs migrations + seeder,
-# starts the backend, installs frontend deps, and launches Vite.
+# starts the backend, installs all frontend deps, and launches Vite.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,10 +52,40 @@ done
 echo ""
 echo "==> Backend is ready!"
 
-# ── frontend ─────────────────────────────────────────────────────────────────
+# ── Angular frontend ──────────────────────────────────────────────────────────
+echo ""
+echo "==> Installing Angular frontend dependencies..."
+cd "$SCRIPT_DIR/frontend-angular"
+npm install
+
+echo ""
+echo "==> Building Angular app (first build)..."
+npm run build
+
+echo ""
+echo "==> Starting Angular build watcher in background..."
+npm run watch &
+ANGULAR_WATCH_PID=$!
+
+# ── React frontend ────────────────────────────────────────────────────────────
+echo ""
+echo "==> Installing React frontend dependencies..."
+cd "$SCRIPT_DIR/frontend-react"
+npm install
+
+echo ""
+echo "==> Building React app (first build)..."
+npm run build
+
+echo ""
+echo "==> Starting React build watcher in background..."
+npm run watch &
+REACT_WATCH_PID=$!
+
+# ── Vite frontend ─────────────────────────────────────────────────────────────
 echo ""
 echo "==> Installing frontend dependencies..."
-cd frontend
+cd "$SCRIPT_DIR/frontend"
 npm install
 
 echo ""
@@ -64,6 +94,8 @@ echo "  Handsontable — Server-side Symfony Example"
 echo "========================================================"
 echo "  Frontend (REST)    : http://localhost:5173"
 echo "  Frontend (GraphQL) : http://localhost:5173/graphql.html"
+echo "  Frontend (Angular) : http://localhost:5173/angular.html"
+echo "  Frontend (React)   : http://localhost:5173/react.html"
 echo "  Backend  (REST)    : http://localhost:8001/api/products"
 echo "  Backend  (GraphQL) : http://localhost:8001/graphql"
 echo ""
@@ -73,3 +105,7 @@ echo "========================================================"
 echo ""
 
 npm run dev
+
+# Cleanup watchers when Vite exits
+kill "$ANGULAR_WATCH_PID" 2>/dev/null || true
+kill "$REACT_WATCH_PID" 2>/dev/null || true

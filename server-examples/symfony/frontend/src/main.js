@@ -58,10 +58,10 @@ const hot = new Handsontable(container, {
       const res = await fetch(url, { signal });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
       const json = await res.json();
       totalRows = json.total;
       return { rows: json.data, totalRows: json.total };
+
     },
 
     // Fires when the user inserts rows via the context menu.

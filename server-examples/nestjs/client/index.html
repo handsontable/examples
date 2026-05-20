@@ -39,6 +39,27 @@
       min-height: 20px;
     }
 
+    nav {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    nav a {
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      text-decoration: none;
+      background: #e5e7eb;
+      color: #374151;
+    }
+
+    nav a.active {
+      background: #1a1a2e;
+      color: #fff;
+    }
+
     #example1 {
       background: #fff;
       border-radius: 6px;
@@ -53,6 +74,13 @@
     <p>Server-side pagination, sorting, and filtering via NestJS · right-click a row for more CRUD actions</p>
     <span id="status-label"></span>
   </header>
+
+  <nav>
+    <a href="/" class="active">JS</a>
+    <a href="/angular.html">Angular</a>
+    <a href="/react.html">React</a>
+  </nav>
+
   <div id="example1"></div>
   <script type="module" src="./src/main.js"></script>
 </body>

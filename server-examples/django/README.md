@@ -8,7 +8,9 @@ A fully working employee directory that demonstrates Handsontable's `dataProvide
 |---|---|
 | Database | PostgreSQL 15 (Docker) |
 | Backend | Python 3.11, Django 4, Django REST Framework |
-| Frontend | Vite, Handsontable (`dataProvider` plugin) |
+| Frontend (JS) | Vite, Handsontable (`dataProvider` plugin) |
+| Frontend (Angular) | Angular 21, `@handsontable/angular-wrapper` |
+| Frontend (React) | React 19, `@handsontable/react-wrapper` |
 
 ## Quick start
 
@@ -28,10 +30,17 @@ The script will:
 1. Build and start PostgreSQL + Django via Docker Compose
 2. Run database migrations inside the container
 3. Seed 50 realistic employee records
-4. Install frontend npm dependencies
-5. Start the Vite dev server
+4. Install all frontend npm dependencies (JS, Angular, React)
+5. Build Angular and React apps, then start watchers for live rebuilds
+6. Start the Vite dev server
 
 Open **http://localhost:5173** in your browser.
+
+| URL | Description |
+|---|---|
+| http://localhost:5173 | JS frontend |
+| http://localhost:5173/angular.html | Angular frontend |
+| http://localhost:5173/react.html | React frontend |
 
 ## Available commands
 
@@ -63,12 +72,24 @@ server-examples/django/
 │       ├── views.py      # Sort/filter translation + batch CRUD endpoints
 │       ├── urls.py
 │       └── management/commands/seed.py
-└── frontend/
+├── frontend/             # JS entry point + Vite dev server (serves all 3 variants)
+│   ├── package.json
+│   ├── vite.config.js    # Proxies /api/* → Django; serves Angular/React builds
+│   ├── favicon.png
+│   ├── index.html
+│   └── src/main.js       # Handsontable + dataProvider setup
+├── frontend-angular/     # Angular variant (ng build --watch → served via Vite)
+│   ├── angular.json
+│   ├── package.json
+│   └── src/app/
+│       ├── app.component.ts
+│       └── app.component.html
+└── frontend-react/       # React variant (vite build --watch → served via Vite)
+    ├── vite.config.ts
     ├── package.json
-    ├── vite.config.js    # Proxies /api/* → localhost:8000
-    ├── favicon.png
-    ├── index.html
-    └── src/main.js       # Handsontable + dataProvider setup
+    └── src/
+        ├── main.tsx
+        └── App.tsx
 ```
 
 ## API endpoints

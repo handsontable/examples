@@ -14,6 +14,8 @@ die()     { echo -e "${RED}[err ]${NC}  $*" >&2; exit 1; }
 
 # ── cleanup on exit ───────────────────────────────────────────────────────────
 SERVER_PID=""
+ANGULAR_WATCH_PID=""
+REACT_WATCH_PID=""
 cleanup() {
   echo ""
   info "Shutting down…"
@@ -22,6 +24,8 @@ cleanup() {
     pkill -P "$SERVER_PID" 2>/dev/null || true
     kill "$SERVER_PID" 2>/dev/null || true
   fi
+  [[ -n "$ANGULAR_WATCH_PID" ]] && kill "$ANGULAR_WATCH_PID" 2>/dev/null || true
+  [[ -n "$REACT_WATCH_PID"   ]] && kill "$REACT_WATCH_PID"   2>/dev/null || true
   # Belt-and-suspenders: catch any ts-node process that escaped the group kill.
   pkill -f "ts-node src/main.ts" 2>/dev/null || true
   docker compose -f "$SCRIPT_DIR/docker-compose.yml" stop 2>/dev/null || true
@@ -79,14 +83,40 @@ done
 info "Installing client dependencies…"
 npm install --prefix "$SCRIPT_DIR/client" --prefer-offline --loglevel=error
 
-# ── 7. Launch Vite dev server (foreground) ───────────────────────────────────
+# ── 7. Install Angular deps, build, and start watcher ────────────────────────
+info "Installing Angular client dependencies…"
+npm install --prefix "$SCRIPT_DIR/client-angular" --prefer-offline --loglevel=error
+
+info "Building Angular app (first build)…"
+(cd "$SCRIPT_DIR/client-angular" && npm run build)
+ok "Angular build complete"
+
+info "Starting Angular build watcher in background…"
+(cd "$SCRIPT_DIR/client-angular" && npm run watch) &
+ANGULAR_WATCH_PID=$!
+
+# ── 8. Install React deps, build, and start watcher ──────────────────────────
+info "Installing React client dependencies…"
+npm install --prefix "$SCRIPT_DIR/client-react" --prefer-offline --loglevel=error
+
+info "Building React app (first build)…"
+(cd "$SCRIPT_DIR/client-react" && npm run build)
+ok "React build complete"
+
+info "Starting React build watcher in background…"
+(cd "$SCRIPT_DIR/client-react" && npm run watch) &
+REACT_WATCH_PID=$!
+
+# ── 9. Launch Vite dev server (foreground) ───────────────────────────────────
 echo ""
-echo -e "${GREEN}┌──────────────────────────────────────────┐${NC}"
-echo -e "${GREEN}│  Backend  →  http://localhost:3000        │${NC}"
-echo -e "${GREEN}│  Frontend →  http://localhost:5173        │${NC}"
-echo -e "${GREEN}│                                          │${NC}"
-echo -e "${GREEN}│  Press Ctrl+C to stop everything         │${NC}"
-echo -e "${GREEN}└──────────────────────────────────────────┘${NC}"
+echo -e "${GREEN}┌────────────────────────────────────────────────┐${NC}"
+echo -e "${GREEN}│  Backend   →  http://localhost:3000             │${NC}"
+echo -e "${GREEN}│  Frontend  →  http://localhost:5173             │${NC}"
+echo -e "${GREEN}│  Angular   →  http://localhost:5173/angular.html│${NC}"
+echo -e "${GREEN}│  React     →  http://localhost:5173/react.html  │${NC}"
+echo -e "${GREEN}│                                                 │${NC}"
+echo -e "${GREEN}│  Press Ctrl+C to stop everything                │${NC}"
+echo -e "${GREEN}└────────────────────────────────────────────────┘${NC}"
 echo ""
 
 (cd "$SCRIPT_DIR/client" && npx vite)

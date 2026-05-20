@@ -32,6 +32,27 @@
       color: #6b7280;
     }
 
+    nav {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    nav a {
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      text-decoration: none;
+      background: #e5e7eb;
+      color: #374151;
+    }
+
+    nav a.active {
+      background: #1a1a2e;
+      color: #fff;
+    }
+
     #example1 {
       background: #fff;
       border-radius: 8px;
@@ -39,13 +60,44 @@
       overflow: hidden;
     }
 
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .toolbar button {
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      border: 1px solid #d1d5db;
+      background: #fff;
+      color: #374151;
+      cursor: pointer;
+    }
+
+    .toolbar button:hover {
+      background: #f3f4f6;
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>Product Inventory</h1>
+    <h1>Product Inventory — Handsontable + Laravel</h1>
     <p>Server-side pagination, sorting, and filtering via Laravel · right-click a row for more CRUD actions</p>
   </header>
+
+  <nav>
+    <a href="/" class="active">REST API</a>
+    <a href="/angular.html">Angular</a>
+    <a href="/react.html">React</a>
+  </nav>
+
+  <div class="toolbar">
+    <button id="btn-filter-empty">Show Electronics</button>
+    <button id="btn-clear-filters">Clear filters</button>
+  </div>
 
   <div id="example1"></div>
 

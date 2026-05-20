@@ -22,6 +22,8 @@ setup:
 	@echo ""
 	@echo "==> Installing frontend dependencies..."
 	cd frontend && npm install
+	cd frontend-angular && npm install
+	cd frontend-react && npm install
 	@echo ""
 	@echo "==> Starting Vite dev server..."
 	@echo "    Open http://localhost:5173 in your browser."
@@ -41,3 +43,5 @@ stop:
 clean:
 	docker compose down -v
 	rm -rf frontend/node_modules
+	rm -rf frontend-angular/node_modules
+	rm -rf frontend-react/node_modules

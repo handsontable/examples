@@ -58,18 +58,57 @@ echo "    API root:  http://localhost:8000/api/"
 echo "    Employees: http://localhost:8000/api/employees/"
 echo ""
 
-# ── frontend ──────────────────────────────────────────────────────────────────
-echo "==> Installing frontend dependencies..."
-cd frontend
+# ── Angular frontend ──────────────────────────────────────────────────────────
+echo "==> Installing Angular frontend dependencies..."
+cd "$SCRIPT_DIR/frontend-angular"
 npm install
 
 echo ""
-echo "==> Starting Vite dev server..."
-echo "    Open http://localhost:5173 in your browser."
+echo "==> Building Angular app (first build)..."
+npm run build
+
 echo ""
-echo "    The Vite proxy forwards /api/* to Django, so CSRF works seamlessly."
+echo "==> Starting Angular build watcher in background..."
+npm run watch &
+ANGULAR_WATCH_PID=$!
+
+# ── React frontend ────────────────────────────────────────────────────────────
 echo ""
-echo "    To stop: Ctrl-C, then run 'docker compose down' from the server-examples directory."
+echo "==> Installing React frontend dependencies..."
+cd "$SCRIPT_DIR/frontend-react"
+npm install
+
+echo ""
+echo "==> Building React app (first build)..."
+npm run build
+
+echo ""
+echo "==> Starting React build watcher in background..."
+npm run watch &
+REACT_WATCH_PID=$!
+
+# ── Vite frontend ─────────────────────────────────────────────────────────────
+echo ""
+echo "==> Installing frontend dependencies..."
+cd "$SCRIPT_DIR/frontend"
+npm install
+
+echo ""
+echo "========================================================"
+echo "  Handsontable — Server-side Django Example"
+echo "========================================================"
+echo "  Frontend (JS)      : http://localhost:5173"
+echo "  Frontend (Angular) : http://localhost:5173/angular.html"
+echo "  Frontend (React)   : http://localhost:5173/react.html"
+echo "  Backend            : http://localhost:8000/api/employees/"
+echo ""
+echo "  Press Ctrl+C to stop the frontend dev server."
+echo "  Run '$COMPOSE down' to stop Docker."
+echo "========================================================"
 echo ""
 
 npm run dev
+
+# Cleanup watchers when Vite exits
+kill "$ANGULAR_WATCH_PID" 2>/dev/null || true
+kill "$REACT_WATCH_PID" 2>/dev/null || true
