@@ -133,7 +133,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], url_path='create-rows')
     @transaction.atomic
     def create_rows(self, request):
-        rows_amount = max(1, int(request.data.get('rowsAmount', 1)))
+        rows_amount = max(1, int(request.data.get('rowsAmount') or 1))
         employees = Employee.objects.bulk_create([
             Employee(first_name='', last_name='', department='', role='', salary=0)
             for _ in range(rows_amount)
