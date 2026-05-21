@@ -18,7 +18,7 @@ ALLOWED_ORDERING_FIELDS = {'first_name', 'last_name', 'department', 'role', 'sal
 NUMERIC_FIELDS = {'salary'}
 
 # Maps Handsontable Filters condition names to Django ORM lookup suffixes.
-# eq/not_eq intentionally omitted — resolved dynamically based on field type below.
+# eq/neq intentionally omitted — resolved dynamically based on field type below.
 _CONDITION_LOOKUP = {
     'contains':     ('icontains', False),
     'not_contains': ('icontains', True),
@@ -91,11 +91,11 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                                 col_q_parts.append(~Q(**{f'{prop}__exact': ''}) & ~Q(**{f'{prop}__isnull': True}))
                             continue
 
-                        # eq/not_eq: use exact for numeric fields, iexact for text fields.
-                        if name in ('eq', 'not_eq'):
+                        # eq/neq: use exact for numeric fields, iexact for text fields.
+                        if name in ('eq', 'neq'):
                             lookup = f'{prop}__exact' if is_numeric else f'{prop}__iexact'
                             cond_q = Q(**{lookup: value})
-                            col_q_parts.append(~cond_q if name == 'not_eq' else cond_q)
+                            col_q_parts.append(~cond_q if name == 'neq' else cond_q)
                             continue
 
                         if name not in _CONDITION_LOOKUP or value is None:
