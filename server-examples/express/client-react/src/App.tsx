@@ -14,9 +14,9 @@ registerAllModules();
 
 /**
  * Converts Handsontable's DataProviderQueryParameters into a query string
- * that NestJS can parse with @Query() + class-transformer.
+ * that Express.js can parse with @Query() + class-transformer.
  *
- * NestJS expects nested objects as bracket notation:
+ * Express.js expects nested objects as bracket notation:
  *   sort[column]=status&sort[order]=asc
  *   filters[0][prop]=status&filters[0][condition]=eq&filters[0][value][0]=open
  */
@@ -215,8 +215,8 @@ export default function App() {
   return (
     <>
       <header>
-        <h1>Support Tickets — Handsontable + NestJS + React</h1>
-        <p>Server-side pagination, sorting, and filtering via NestJS · right-click a row for more CRUD actions</p>
+        <h1>Support Tickets — Handsontable + Express.js + React</h1>
+        <p>Server-side pagination, sorting, and filtering via Express.js · right-click a row for more CRUD actions</p>
         <span id="status-label" ref={statusRef}></span>
       </header>
 

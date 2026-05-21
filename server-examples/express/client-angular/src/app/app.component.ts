@@ -1,5 +1,11 @@
-import { useRef, useMemo } from 'react';
-import { HotTable, HotTableRef } from '@handsontable/react-wrapper';
+import {
+  Component,
+  NgZone,
+  ViewChild,
+  ViewEncapsulation,
+  CUSTOM_ELEMENTS_SCHEMA,
+} from '@angular/core';
+import { HotTableModule, HotTableComponent } from '@handsontable/angular-wrapper';
 import { registerAllModules } from 'handsontable/registry';
 import type {
   DataProviderQueryParameters,
@@ -8,15 +14,14 @@ import type {
   RowMutationPayload,
   RowMutationRemovePayload,
 } from 'handsontable/plugins/dataProvider';
-import './styles.css';
 
 registerAllModules();
 
 /**
  * Converts Handsontable's DataProviderQueryParameters into a query string
- * that NestJS can parse with @Query() + class-transformer.
+ * that Express.js can parse with qs (bracket notation).
  *
- * NestJS expects nested objects as bracket notation:
+ * Express.js expects nested objects as bracket notation:
  *   sort[column]=status&sort[order]=asc
  *   filters[0][prop]=status&filters[0][condition]=eq&filters[0][value][0]=open
  */
@@ -49,12 +54,23 @@ function buildUrl(base: string, params: DataProviderQueryParameters): string {
   return `${base}?${query.toString()}`;
 }
 
-export default function App() {
-  const hotRef = useRef<HotTableRef>(null);
-  const removeConfirmedRef = useRef(false);
-  const statusRef = useRef<HTMLSpanElement>(null);
+@Component({
+  selector: 'app-root',
+  standalone: true,
+  encapsulation: ViewEncapsulation.None,
+  imports: [HotTableModule],
+  schemas: [CUSTOM_ELEMENTS_SCHEMA],
+  templateUrl: './app.component.html',
+})
+export class AppComponent {
+  @ViewChild(HotTableComponent) hotRef!: HotTableComponent;
 
-  const settings = useMemo(() => ({
+  private removeConfirmed = false;
+  statusText = '';
+
+  constructor(private zone: NgZone) {}
+
+  settings = {
     dataProvider: {
       rowId: 'id',
 
@@ -89,7 +105,7 @@ export default function App() {
         const data = await res.json();
         const info = data.map((r: { id: string }) => `(id: ${r.id})`).join(', ');
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (hotRef.current!.hotInstance!.getPlugin('notification') as any).showMessage({
+        (this.hotRef.hotInstance!.getPlugin('notification') as any).showMessage({
           variant: 'success',
           title: 'Row added',
           message: `Created: ${info}`,
@@ -121,7 +137,7 @@ export default function App() {
 
         if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (hotRef.current!.hotInstance!.getPlugin('notification') as any).showMessage({
+        (this.hotRef.hotInstance!.getPlugin('notification') as any).showMessage({
           variant: 'success',
           title: 'Rows deleted',
           message: `Deleted ${rowIds.length} row${rowIds.length !== 1 ? 's' : ''}`,
@@ -133,9 +149,9 @@ export default function App() {
     // beforeRowsMutation is sync — show confirmation dialog, cancel original,
     // re-issue after user confirms.
     beforeRowsMutation: (operation: 'create' | 'update' | 'remove', payload: RowMutationPayload): false | void => {
-      if (operation === 'remove' && !removeConfirmedRef.current) {
+      if (operation === 'remove' && !this.removeConfirmed) {
         const { rowsRemove } = payload as RowMutationRemovePayload;
-        const hot = hotRef.current!.hotInstance!;
+        const hot = this.hotRef.hotInstance!;
         const count = rowsRemove.length;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const notification = (hot.getPlugin('notification') as any);
@@ -150,12 +166,12 @@ export default function App() {
               type: 'primary',
               callback: () => {
                 notification.hide(id);
-                removeConfirmedRef.current = true;
+                this.removeConfirmed = true;
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 (hot.getPlugin('dataProvider') as any)
                   .removeRows(rowsRemove)
                   .finally(() => {
-                    removeConfirmedRef.current = false;
+                    this.removeConfirmed = false;
                   });
               },
             },
@@ -170,11 +186,11 @@ export default function App() {
       }
     },
 
-    // Updates the status label after every fetch (direct DOM, no re-render).
+    // Updates the status label after every fetch.
     afterDataProviderFetch: (result: { totalRows: number }) => {
-      if (statusRef.current) {
-        statusRef.current.textContent = `${result.totalRows} tickets total`;
-      }
+      this.zone.run(() => {
+        this.statusText = `${result.totalRows} tickets total`;
+      });
     },
 
     pagination: { pageSize: 5 },
@@ -210,27 +226,5 @@ export default function App() {
     width: '100%',
     autoWrapRow: true,
     licenseKey: 'non-commercial-and-evaluation',
-  }), []);
-
-  return (
-    <>
-      <header>
-        <h1>Support Tickets — Handsontable + NestJS + React</h1>
-        <p>Server-side pagination, sorting, and filtering via NestJS · right-click a row for more CRUD actions</p>
-        <span id="status-label" ref={statusRef}></span>
-      </header>
-
-      <nav>
-        <a href="/">JS</a>
-        <a href="/angular.html">Angular</a>
-        <a href="/react.html" className="active">React</a>
-      </nav>
-
-      <div id="example1">
-        {/* React wrapper spreads settings as individual props, not a 'settings' object */}
-        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-        <HotTable ref={hotRef} {...(settings as any)} />
-      </div>
-    </>
-  );
+  };
 }
