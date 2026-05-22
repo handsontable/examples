@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Product;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ProductController extends Controller
 {
@@ -65,8 +66,6 @@ class ProductController extends Controller
                         $query->whereNotBetween($prop, [$value, $value2]);
                         break;
                     case 'empty':
-                        // Numeric columns (DECIMAL/INT) must not compare against ''
-                        // because MySQL coerces '' to 0, incorrectly matching zero values.
                         $isString = in_array($prop, ['name', 'sku', 'category'], true);
                         $query->where(function ($q) use ($prop, $isString) {
                             $q->whereNull($prop);
@@ -89,13 +88,15 @@ class ProductController extends Controller
         }
 
         // --- Sorting ---------------------------------------------------------
-        if (is_array($sort) && isset($sort['prop'], $sort['order'])) {
+        if (is_array($sort) && isset($sort['prop'], $sort['order'])
+            && in_array($sort['prop'], self::ALLOWED_COLUMNS, true)) {
             $direction = in_array(strtolower($sort['order']), ['asc', 'desc'])
                 ? strtolower($sort['order'])
                 : 'asc';
-            if (in_array($sort['prop'], self::ALLOWED_COLUMNS, true)) {
-                $query->orderBy($sort['prop'], $direction);
-            }
+            $query->orderBy($sort['prop'], $direction);
+        } else {
+            // Default: preserve insertion order
+            $query->orderBy('sort_order');
         }
 
         // --- Pagination -------------------------------------------------------
@@ -110,22 +111,31 @@ class ProductController extends Controller
     }
 
     // POST /api/products
-    // Body: { position, referenceRowId, rowsAmount }
+    // Body: { position: 'above'|'below', referenceRowId, rowsAmount }
     public function store(Request $request): JsonResponse
     {
-        $rowsAmount = (int) $request->input('rowsAmount', 1);
+        $rowsAmount     = max(1, (int) $request->input('rowsAmount', 1));
+        $position       = $request->input('position', 'below');
+        $referenceRowId = $request->input('referenceRowId');
 
-        for ($i = 0; $i < $rowsAmount; $i++) {
-            Product::create([
-                'name'     => '',
-                'sku'      => 'NEW-' . strtoupper(bin2hex(random_bytes(3))),
-                'category' => 'Electronics',
-                'price'    => 0,
-                'stock'    => 0,
-            ]);
-        }
+        $created = [];
 
-        return response()->json(null, 201);
+        DB::transaction(function () use ($rowsAmount, $position, $referenceRowId, &$created) {
+            $insertAt = $this->resolveInsertOrder($referenceRowId, $position, $rowsAmount);
+
+            for ($i = 0; $i < $rowsAmount; $i++) {
+                $created[] = Product::create([
+                    'name'       => '',
+                    'sku'        => 'NEW-' . strtoupper(bin2hex(random_bytes(3))),
+                    'category'   => 'Electronics',
+                    'price'      => 0,
+                    'stock'      => 0,
+                    'sort_order' => $insertAt + $i,
+                ]);
+            }
+        });
+
+        return response()->json($created, 201);
     }
 
     // PATCH /api/products
@@ -138,7 +148,7 @@ class ProductController extends Controller
             $product = Product::find($row['id'] ?? null);
             if ($product) {
                 $changes = $row['changes'] ?? [];
-                unset($changes['id']);
+                unset($changes['id'], $changes['sort_order']);
                 $product->update($changes);
             }
         }
@@ -154,6 +164,27 @@ class ProductController extends Controller
         Product::whereIn('id', $ids)->delete();
 
         return response()->json(null, 204);
+    }
+
+    // Determines the sort_order for the new row(s) and shifts existing rows to make room.
+    private function resolveInsertOrder(?int $referenceRowId, string $position, int $rowsAmount): int
+    {
+        if ($referenceRowId !== null) {
+            $ref = Product::find($referenceRowId);
+            if ($ref) {
+                $insertAt = $position === 'above'
+                    ? $ref->sort_order
+                    : $ref->sort_order + 1;
+
+                Product::where('sort_order', '>=', $insertAt)
+                    ->increment('sort_order', $rowsAmount);
+
+                return $insertAt;
+            }
+        }
+
+        // No reference row — append after the current maximum
+        return (int) (Product::max('sort_order') ?? 0) + 1;
     }
 
     // Escape LIKE metacharacters so literal % and _ in user input don't act as

@@ -9,10 +9,11 @@ class Product extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['name', 'sku', 'category', 'price', 'stock'];
+    protected $fillable = ['name', 'sku', 'category', 'price', 'stock', 'sort_order'];
 
     protected $casts = [
-        'price' => 'float',
-        'stock' => 'integer',
+        'price'      => 'float',
+        'stock'      => 'integer',
+        'sort_order' => 'integer',
     ];
 }

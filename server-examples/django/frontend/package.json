@@ -2,13 +2,14 @@
   "name": "handsontable-server-examples-frontend",
   "private": true,
   "version": "0.0.0",
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "handsontable": "0.0.0-next-06e1efd-20260403"
+    "handsontable": "experimental"
   },
   "devDependencies": {
     "vite": "^6.0.0"

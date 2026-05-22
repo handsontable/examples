@@ -15,17 +15,49 @@
       color: #1a1a2e;
     }
 
-    h1 {
-      font-size: 1.5rem;
+    header {
+      margin-bottom: 20px;
+    }
+
+    header h1 {
       margin: 0 0 4px;
+      font-size: 1.5rem;
+      font-weight: 700;
+    }
+
+    header p {
+      margin: 0;
+      font-size: 0.875rem;
+      color: #6b7280;
     }
 
     #status-label {
       font-size: 13px;
       color: #6c757d;
       display: block;
-      margin-bottom: 16px;
+      margin-top: 4px;
       min-height: 20px;
+    }
+
+    nav {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    nav a {
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      text-decoration: none;
+      background: #e5e7eb;
+      color: #374151;
+    }
+
+    nav a.active {
+      background: #1a1a2e;
+      color: #fff;
     }
 
     #example1 {
@@ -37,8 +69,18 @@
   </style>
 </head>
 <body>
-  <h1>Support Tickets</h1>
-  <span id="status-label">Loading…</span>
+  <header>
+    <h1>Support Tickets — Handsontable + NestJS</h1>
+    <p>Server-side pagination, sorting, and filtering via NestJS · right-click a row for more CRUD actions</p>
+    <span id="status-label"></span>
+  </header>
+
+  <nav>
+    <a href="/" class="active">JS</a>
+    <a href="/angular.html">Angular</a>
+    <a href="/react.html">React</a>
+  </nav>
+
   <div id="example1"></div>
   <script type="module" src="./src/main.js"></script>
 </body>

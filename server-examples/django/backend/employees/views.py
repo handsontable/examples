@@ -18,7 +18,7 @@ ALLOWED_ORDERING_FIELDS = {'first_name', 'last_name', 'department', 'role', 'sal
 NUMERIC_FIELDS = {'salary'}
 
 # Maps Handsontable Filters condition names to Django ORM lookup suffixes.
-# eq/not_eq intentionally omitted — resolved dynamically based on field type below.
+# eq/neq intentionally omitted — resolved dynamically based on field type below.
 _CONDITION_LOOKUP = {
     'contains':     ('icontains', False),
     'not_contains': ('icontains', True),
@@ -91,11 +91,11 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                                 col_q_parts.append(~Q(**{f'{prop}__exact': ''}) & ~Q(**{f'{prop}__isnull': True}))
                             continue
 
-                        # eq/not_eq: use exact for numeric fields, iexact for text fields.
-                        if name in ('eq', 'not_eq'):
+                        # eq/neq: use exact for numeric fields, iexact for text fields.
+                        if name in ('eq', 'neq'):
                             lookup = f'{prop}__exact' if is_numeric else f'{prop}__iexact'
                             cond_q = Q(**{lookup: value})
-                            col_q_parts.append(~cond_q if name == 'not_eq' else cond_q)
+                            col_q_parts.append(~cond_q if name == 'neq' else cond_q)
                             continue
 
                         if name not in _CONDITION_LOOKUP or value is None:
@@ -133,10 +133,12 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], url_path='create-rows')
     @transaction.atomic
     def create_rows(self, request):
-        serializer = EmployeeSerializer(data=request.data, many=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        # Return created rows so dataProvider can update its row map with server-assigned ids.
+        rows_amount = max(1, int(request.data.get('rowsAmount') or 1))
+        employees = Employee.objects.bulk_create([
+            Employee(first_name='', last_name='', department='', role='', salary=0)
+            for _ in range(rows_amount)
+        ])
+        serializer = EmployeeSerializer(employees, many=True)
         return Response(serializer.data, status=201)
 
     @action(detail=False, methods=['patch'], url_path='update-rows')
@@ -145,7 +147,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         updated = []
         for row in request.data:
             employee = Employee.objects.get(pk=row['id'])
-            serializer = EmployeeSerializer(employee, data=row, partial=True)
+            serializer = EmployeeSerializer(employee, data=row['changes'], partial=True)
             serializer.is_valid(raise_exception=True)
             serializer.save()
             updated.append(serializer.data)

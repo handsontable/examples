@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "handsontable": "latest"
+    "handsontable": "experimental"
   },
   "devDependencies": {
     "vite": "^5.0.0"

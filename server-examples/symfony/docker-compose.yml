@@ -1,0 +1,35 @@
+services:
+  db:
+    image: mysql:8.0
+    volumes:
+      - db_data:/var/lib/mysql
+    environment:
+      MYSQL_DATABASE: symfony
+      MYSQL_USER: symfony
+      MYSQL_PASSWORD: secret
+      MYSQL_ROOT_PASSWORD: rootsecret
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-prootsecret"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  app:
+    build: ./symfony
+    ports:
+      - "8001:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: dev
+      APP_SECRET: handsontable_symfony_example_secret
+      DATABASE_URL: mysql://symfony:secret@db:3306/symfony?charset=utf8mb4&serverVersion=8.0
+    volumes:
+      - ./symfony/src:/var/www/html/src
+      - ./symfony/migrations:/var/www/html/migrations
+      - ./symfony/config:/var/www/html/config
+
+volumes:
+  db_data:

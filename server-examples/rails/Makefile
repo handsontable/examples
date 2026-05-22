@@ -1,32 +1,36 @@
-.DEFAULT_GOAL := setup
+.PHONY: setup start stop logs clean backend-only frontend-only help
 
-.PHONY: setup clean backend-only frontend-only
+# Detect docker compose command: v2 plugin or v1 standalone
+DC := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 
-setup: ## Build images, run migrations + seeds, start Rails API, then launch the Vite dev server
-	@echo "==> Building Docker images..."
-	docker compose build
-	@echo "==> Starting PostgreSQL..."
-	docker compose up -d db
-	@echo "==> Waiting for PostgreSQL to be ready..."
-	@until docker compose exec -T db pg_isready -U postgres -q 2>/dev/null; do \
+help: ## Show available commands
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+setup: ## Full first-time setup: build, migrate, seed, start backend + frontend
+	bash setup.sh
+
+start: ## Start Docker services and the frontend dev server (after initial setup)
+	$(DC) up -d
+	cd frontend && npm run dev
+
+stop: ## Stop Docker services (preserves data; use 'clean' to also wipe the DB)
+	$(DC) stop
+
+logs: ## Stream Rails API container logs
+	$(DC) logs -f api
+
+clean: ## Remove containers, volumes, and frontend node_modules
+	$(DC) down -v --remove-orphans
+	rm -rf frontend/node_modules
+	rm -rf frontend-angular/node_modules
+	rm -rf frontend-react/node_modules
+
+backend-only: ## Start only the Rails API (DB + API containers, no frontend)
+	$(DC) up -d db
+	@until $(DC) exec -T db pg_isready -U postgres -q 2>/dev/null; do \
 		printf '.'; sleep 1; \
 	done && echo " ready"
-	@echo "==> Creating database, running migrations, seeding..."
-	docker compose run --rm api bundle exec rails db:create db:migrate db:seed
-	@echo "==> Starting Rails API server (http://localhost:3000)..."
-	docker compose up -d api
-	@echo "==> Starting frontend dev server (http://localhost:5173) — press Ctrl+C to stop"
-	cd frontend && npm install && npm run dev
-
-backend-only: ## Start only the Rails API (DB + API containers)
-	docker compose up -d db
-	@until docker compose exec -T db pg_isready -U postgres -q 2>/dev/null; do \
-		printf '.'; sleep 1; \
-	done && echo " ready"
-	docker compose up -d api
+	$(DC) up -d api
 
 frontend-only: ## Start only the Vite dev server (assumes API is already running)
 	cd frontend && npm install && npm run dev
-
-clean: ## Stop all containers and delete volumes
-	docker compose down -v

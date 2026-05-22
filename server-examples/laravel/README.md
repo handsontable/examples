@@ -4,11 +4,22 @@ A fully runnable implementation of the [Server-side data with Laravel](https://h
 
 ## What it does
 
-A product inventory data grid that:
+A product inventory data grid available in three variants:
 
+**REST API** (`/`)
 - Fetches paginated rows from `GET /api/products` on every page change
 - Sorts and filters rows on the server — the browser never loads the full dataset
 - Creates, updates, and deletes rows via `POST`, `PATCH`, and `DELETE` endpoints
+
+**Angular** (`/angular.html`)
+- Same REST API operations wrapped in an Angular standalone component
+- Uses `@handsontable/angular-wrapper` (`HotTableComponent`) with `@ViewChild` for instance access
+- Built separately with `ng build --watch` and served through the Vite dev server via a custom middleware plugin
+
+**React** (`/react.html`)
+- Same REST API operations wrapped in a React functional component
+- Uses `@handsontable/react-wrapper` (`HotTable`) with `useRef` for instance access and `useMemo` for stable settings
+- Built separately with `vite build --watch` and served through the Vite dev server via a custom middleware plugin
 
 ## Prerequisites
 
@@ -30,7 +41,16 @@ That single command:
 1. Builds a PHP 8.2 / Apache Docker image with a fresh Laravel 11 project
 2. Starts a MySQL 8 container (health-checked before the app starts)
 3. Runs database migrations and seeds 52 sample products
-4. Installs frontend dependencies and opens **http://localhost:5173**
+4. Installs frontend dependencies (Angular and React are pre-built before Vite starts)
+5. Opens **http://localhost:5173**
+
+| URL | Description |
+|-----|-------------|
+| `http://localhost:5173/` | REST API (vanilla JS) |
+| `http://localhost:5173/angular.html` | Angular |
+| `http://localhost:5173/react.html` | React |
+
+Switch between variants using the nav links at the top of each page.
 
 ## Available commands
 
@@ -63,11 +83,27 @@ server-side-laravel/
 │   │   └── seeders/             # 52 sample products
 │   └── routes/api.php           # GET / POST / PATCH / DELETE /api/products
 │
-└── frontend/                    # Vite + Handsontable
+├── frontend/                    # Vite dev server — entry point for all variants
+│   ├── package.json
+│   ├── vite.config.js           # Proxies /api; serves Angular & React builds via middleware
+│   ├── index.html
+│   └── src/main.js              # dataProvider configuration — REST
+│
+├── frontend-angular/            # Angular standalone app (ng build --watch)
+│   ├── angular.json             # outputPath.base=dist, baseHref=/angular-assets/
+│   ├── package.json
+│   └── src/app/
+│       ├── app.component.ts     # HotTableComponent + dataProvider logic
+│       └── app.component.html   # template with nav + toolbar + <hot-table>
+│
+└── frontend-react/              # React app (vite build --watch)
+    ├── vite.config.ts           # base=/react-assets/, input=react.html
     ├── package.json
-    ├── vite.config.js           # Proxies /api → http://localhost:8000
-    ├── index.html
-    └── src/main.js              # dataProvider configuration
+    ├── react.html               # HTML entry point
+    └── src/
+        ├── main.tsx             # createRoot bootstrap
+        ├── App.tsx              # HotTable + dataProvider logic (useRef/useMemo)
+        └── styles.css
 ```
 
 ## How it works

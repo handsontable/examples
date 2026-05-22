@@ -1,0 +1,19 @@
+<header>
+  <h1>Product Inventory — Handsontable + Laravel + Angular</h1>
+  <p>Server-side pagination, sorting, and filtering via Laravel · right-click a row for more CRUD actions</p>
+</header>
+
+<nav>
+  <a href="/">REST API</a>
+  <a href="/angular.html" class="active">Angular</a>
+  <a href="/react.html">React</a>
+</nav>
+
+<div class="toolbar">
+  <button (click)="filterElectronics()">Show Electronics</button>
+  <button (click)="clearFilters()">Clear filters</button>
+</div>
+
+<div id="example1">
+  <hot-table [settings]="settings"></hot-table>
+</div>

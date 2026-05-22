@@ -1,6 +1,6 @@
 # Server-Side Handsontable with Ruby on Rails
 
-A working implementation of the [Server-side Data with Ruby on Rails](https://handsontable.com/docs/recipes/data-management/server-side-rails) recipe. Handsontable's `dataProvider` plugin connects to a Rails 7.1 API backed by PostgreSQL. All pagination, sorting, and filtering happen on the server.
+A working implementation of the [Server-side Data with Ruby on Rails](https://handsontable.com/docs/recipes/data-management/server-side-rails) recipe. Handsontable's `dataProvider` plugin connects to a Rails 7.1 API backed by PostgreSQL. All data operations — pagination, sorting, filtering, and CRUD — are handled server-side.
 
 ## What's included
 
@@ -8,7 +8,9 @@ A working implementation of the [Server-side Data with Ruby on Rails](https://ha
 |---|---|
 | Database | PostgreSQL 15 (Docker) |
 | Backend | Rails 7.1 API-only, kaminari, rack-cors |
-| Frontend | Vite + Handsontable (`dataProvider`, `Pagination`, `Filters`, `ColumnSorting`) |
+| Frontend (JS) | Vite + Handsontable (`dataProvider`, `Pagination`, `Filters`, `ColumnSorting`, `ContextMenu`, `Notification`) |
+| Frontend (Angular) | Angular 21, `@handsontable/angular-wrapper` |
+| Frontend (React) | React 19, `@handsontable/react-wrapper` |
 
 The grid loads 50 seed orders and supports:
 
@@ -22,13 +24,14 @@ The grid loads 50 seed orders and supports:
 ## Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) with the Compose plugin
-- [Node.js](https://nodejs.org/) 18+
+- Node.js 18+
+- npm
 
 ## Quick start
 
 ```bash
-cd server-examples
-make
+bash setup.sh
+# or: make setup
 ```
 
 This single command:
@@ -37,43 +40,67 @@ This single command:
 2. Starts PostgreSQL and waits for it to be healthy
 3. Creates the database, runs migrations, and seeds 50 orders
 4. Starts the Rails API on **http://localhost:3000**
-5. Installs frontend dependencies and starts the Vite dev server on **http://localhost:5173** (opens automatically)
+5. Installs all frontend npm dependencies (JS, Angular, React)
+6. Builds Angular and React apps, then starts watchers for live rebuilds
+7. Starts the Vite dev server on **http://localhost:5173** (proxies `/api` to the Rails API)
 
-## Other make targets
-
-| Command | Description |
+| URL | Description |
 |---|---|
-| `make` | Full setup (default) |
-| `make backend-only` | Start only PostgreSQL + Rails API |
-| `make frontend-only` | Start only the Vite dev server (API must already be running) |
-| `make clean` | Stop all containers and delete volumes |
+| http://localhost:5173 | JS frontend |
+| http://localhost:5173/angular.html | Angular frontend |
+| http://localhost:5173/react.html | React frontend |
+
+## Available commands
+
+```bash
+make setup         # Build images, run migrations + seeds, start Rails API and the Vite dev server
+make start         # Start Docker services and the frontend dev server (after initial setup)
+make stop          # Stop Docker services (preserves data)
+make logs          # Stream Rails API container logs
+make clean         # Remove containers, volumes, and frontend node_modules
+make backend-only  # Start only the Rails API (DB + API containers, no frontend)
+make frontend-only # Start only the Vite dev server (assumes API is already running)
+make help          # Show all available commands
+```
 
 ## Project structure
 
 ```
-server-examples/
-├── Makefile
+rails/
+├── setup.sh                              # One-command bootstrap script
+├── Makefile                              # Convenience targets
+├── README.md
 ├── docker-compose.yml
-├── backend/                          # Rails 7.1 API-only app
+├── backend/                              # Rails 7.1 API-only app
 │   ├── Dockerfile
 │   ├── Gemfile
 │   ├── app/
-│   │   ├── controllers/
-│   │   │   └── api/
-│   │   │       └── orders_controller.rb   # index, create_rows, update_rows, remove_rows
-│   │   └── models/
-│   │       └── order.rb
+│   │   ├── controllers/api/
+│   │   │   └── orders_controller.rb      # index, create_rows, update_rows, remove_rows
+│   │   └── models/order.rb
 │   ├── config/
 │   │   ├── initializers/cors.rb
 │   │   └── routes.rb
 │   └── db/
 │       ├── migrate/20240101000000_create_orders.rb
 │       └── seeds.rb
-└── frontend/
-    ├── package.json                  # handsontable + vite
-    ├── index.html
+├── frontend/                             # JS entry point + Vite dev server (serves all 3 variants)
+│   ├── package.json
+│   ├── vite.config.js                    # proxies /api → localhost:3000; serves Angular/React builds
+│   ├── index.html
+│   └── src/main.js
+├── frontend-angular/                     # Angular variant (ng build --watch → served via Vite)
+│   ├── angular.json
+│   ├── package.json
+│   └── src/app/
+│       ├── app.component.ts
+│       └── app.component.html
+└── frontend-react/                       # React variant (vite build --watch → served via Vite)
+    ├── vite.config.ts
+    ├── package.json
     └── src/
-        └── main.js                   # Handsontable dataProvider config
+        ├── main.tsx
+        └── App.tsx
 ```
 
 ## API endpoints

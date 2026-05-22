@@ -2,32 +2,42 @@ import Handsontable from 'handsontable/base';
 
 import {
   registerCellType,
+  CheckboxCellType,
   NumericCellType,
   DateCellType,
 } from 'handsontable/cellTypes';
 
 import {
   registerPlugin,
+  AutoColumnSize,
   ColumnSorting,
+  ContextMenu,
   DataProvider,
   Dialog,
   DropdownMenu,
   EmptyDataState,
   Filters,
+  HiddenRows,
+  Notification,
   Pagination,
 } from 'handsontable/plugins';
 
+registerCellType(CheckboxCellType);
 registerCellType(NumericCellType);
 registerCellType(DateCellType);
+registerPlugin(AutoColumnSize);
 registerPlugin(ColumnSorting);
+registerPlugin(ContextMenu);
 registerPlugin(DataProvider);
 registerPlugin(Dialog);
 registerPlugin(DropdownMenu);
 registerPlugin(EmptyDataState);
 registerPlugin(Filters);
+registerPlugin(HiddenRows);
+registerPlugin(Notification);
 registerPlugin(Pagination);
 
-const API_BASE = 'http://localhost:3000/api/orders';
+const API_BASE = '/api/orders';
 
 /**
  * Serializes dataProvider query params into a URL the Rails controller understands.
@@ -67,7 +77,9 @@ function buildUrl(base, { page, pageSize, sort, filters }) {
 
 const container = document.getElementById('app');
 
-new Handsontable(container, {
+let removeConfirmed = false;
+
+const hot = new Handsontable(container, {
   dataProvider: {
     rowId: 'id',
 
@@ -82,11 +94,18 @@ new Handsontable(container, {
       return { rows: json.rows, totalRows: json.total_rows };
     },
 
-    onRowsCreate: async (rows) => {
+    onRowsCreate: async ({ rowsAmount }) => {
+      const newRows = Array.from({ length: rowsAmount }, () => ({
+        order_number: `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+        customer: 'New Customer',
+        status: 'pending',
+        total: 0,
+      }));
+
       const res = await fetch(`${API_BASE}/create_rows`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rows }),
+        body: JSON.stringify({ rows: newRows }),
       });
 
       if (!res.ok) {
@@ -95,6 +114,13 @@ new Handsontable(container, {
       }
 
       const json = await res.json();
+      const info = json.rows.map(r => `(order: ${r.order_number})`).join(', ');
+      hot.getPlugin('notification').showMessage({
+        variant: 'success',
+        title: 'Row added',
+        message: `Created: ${info}`,
+        duration: 3000,
+      });
       return json.rows;
     },
 
@@ -124,11 +150,45 @@ new Handsontable(container, {
     },
   },
 
+  beforeRowsMutation(operation, payload) {
+    if (operation === 'remove' && !removeConfirmed) {
+      const count = payload.rowsRemove.length;
+      const notification = hot.getPlugin('notification');
+      const id = notification.showMessage({
+        variant: 'warning',
+        title: 'Delete rows',
+        message: `Delete ${count} row${count !== 1 ? 's' : ''}? This cannot be undone.`,
+        duration: 0,
+        actions: [
+          {
+            label: 'Delete',
+            type: 'primary',
+            callback: () => {
+              notification.hide(id);
+              removeConfirmed = true;
+              hot.getPlugin('dataProvider').removeRows(payload.rowsRemove).finally(() => {
+                removeConfirmed = false;
+              });
+            },
+          },
+          {
+            label: 'Cancel',
+            type: 'secondary',
+            callback: () => notification.hide(id),
+          },
+        ],
+      });
+      return false;
+    }
+  },
+
   pagination:    { pageSize: 10 },
   columnSorting: true,
   filters:       true,
   dropdownMenu:  ['filter_by_condition', 'filter_action_bar'],
+  contextMenu:   true,
   emptyDataState: true,
+  notification:  true,
   dialog:        true,
 
   colHeaders: ['Order #', 'Customer', 'Status', 'Total', 'Created'],

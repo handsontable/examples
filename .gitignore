@@ -7,3 +7,4 @@ dist
 .vscode
 .DS_Store
 .angular
+.claude/
