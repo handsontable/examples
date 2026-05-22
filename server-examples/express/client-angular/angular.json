@@ -81,7 +81,7 @@
         "extract-i18n": {
           "builder": "@angular-devkit/build-angular:extract-i18n",
           "options": {
-            "browserTarget": "express-angular:build"
+            "buildTarget": "express-angular:build"
           }
         }
       }

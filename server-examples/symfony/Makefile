@@ -1,4 +1,5 @@
 .PHONY: setup start stop logs clean help
+.ONESHELL:
 
 # Detect docker compose command: v2 plugin or v1 standalone
 DC := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
@@ -12,7 +13,10 @@ setup: ## Full first-time setup: build, migrate, seed, start backend + frontend
 start: ## Start Docker services, Angular/React watchers, and the frontend dev server (after initial setup)
 	$(DC) up -d
 	cd frontend-angular && npm run watch &
+	ANGULAR_PID=$$!
 	cd frontend-react && npm run watch &
+	REACT_PID=$$!
+	trap 'kill $$ANGULAR_PID $$REACT_PID 2>/dev/null || true' EXIT
 	cd frontend && npm run dev
 
 stop: ## Stop Docker services (preserves data; use 'clean' to also wipe the DB)

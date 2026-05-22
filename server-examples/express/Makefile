@@ -1,4 +1,5 @@
 .PHONY: setup start stop logs clean reset psql help
+.ONESHELL:
 
 # Detect docker compose command: v2 plugin or v1 standalone
 DC := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
@@ -12,8 +13,12 @@ setup: ## Full first-time setup: start DB, run migrations, launch backend + fron
 start: ## Start DB + backend + Angular/React watchers + frontend (skips migrations — run setup first)
 	$(DC) -f "$(CURDIR)/docker-compose.yml" up -d db
 	cd "$(CURDIR)/server" && npm start &
+	SERVER_PID=$$!
 	cd "$(CURDIR)/client-angular" && npm run watch &
+	ANGULAR_PID=$$!
 	cd "$(CURDIR)/client-react" && npm run watch &
+	REACT_PID=$$!
+	trap 'kill $$SERVER_PID $$ANGULAR_PID $$REACT_PID 2>/dev/null || true' EXIT
 	cd "$(CURDIR)/client" && npx vite
 
 stop: ## Stop the DB container (preserves data; use 'clean' to also remove the DB)
