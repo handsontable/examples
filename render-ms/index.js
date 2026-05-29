@@ -214,6 +214,7 @@ app.get("/codesandbox-vm", async (req, res) => {
       exampleBranch,
     );
   } catch (error) {
+    console.error("[codesandbox-vm] validateExampleDirExistsInRepo error:", error);
     reportErrorToSlack(error, {
       exampleDir,
       exampleBranch,
@@ -368,6 +369,7 @@ app.get("/codesandbox-vm", async (req, res) => {
     if (isCodesandboxUnavailableError(error)) {
       return res.status(503).json(codesandboxUnavailableJsonBody());
     }
+    console.error("[codesandbox-vm] unhandled error:", error);
     reportErrorToSlack(error, {
       exampleDir,
       exampleBranch,
@@ -512,7 +514,6 @@ app.get("/codesandbox-browser", async (req, res) => {
     
   } catch (error) {
     if (isNotFoundClientError(error)) {
-      console.log(error);
       return res.status(400).json({
         error:
           "GitHub resource not found (check example-dir, example-branch, or that the path exists in handsontable/examples)",
@@ -521,7 +522,7 @@ app.get("/codesandbox-browser", async (req, res) => {
     if (isCodesandboxUnavailableError(error)) {
       return res.status(503).json(codesandboxUnavailableJsonBody());
     }
-    console.log(error);
+    console.error("[codesandbox-browser] unhandled error:", error);
     reportErrorToSlack(error, {
       exampleDir,
       exampleBranch,
