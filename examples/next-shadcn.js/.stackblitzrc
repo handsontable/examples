@@ -1,4 +1,7 @@
 {
   "installDependencies": true,
-  "startCommand": "pnpm run dev"
+  "startCommand": "next dev --webpack",
+  "env": {
+    "NODE_ENV": "development"
+  }
 }
