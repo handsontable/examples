@@ -1,6 +1,6 @@
 {
   "installDependencies": true,
-  "startCommand": "next dev --webpack",
+  "startCommand": "next dev",
   "env": {
     "NODE_ENV": "development"
   }
