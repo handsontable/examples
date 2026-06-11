@@ -3,8 +3,18 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  base: './',
   server: {
-    allowedHosts: true, // CodeSandbox preview hosts (*.csb.app)
+    host: '0.0.0.0',
+    port: 5173,
+    strictPort: false,
+    allowedHosts: true,
+  },
+  preview: {
+    host: '0.0.0.0',
+    port: 5173,
+    strictPort: false,
+    allowedHosts: true,
   },
   optimizeDeps: {
     include: ['handsontable', '@handsontable/react-wrapper', 'antd'],
