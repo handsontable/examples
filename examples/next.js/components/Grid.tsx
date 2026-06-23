@@ -70,6 +70,7 @@ export default function Grid(props: GridProps) {
         <HotColumn data={1} />
         <HotColumn data={2} />
         <HotColumn data={3} />
+        <HotColumn data={4} />
         <HotColumn data={5} />
         <HotColumn data={6} type="checkbox" className="htCenter" />
         <HotColumn data={7} type="numeric" />
