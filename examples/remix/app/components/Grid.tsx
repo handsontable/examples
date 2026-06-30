@@ -7,19 +7,19 @@ import {
   Filters,
   HiddenRows,
   registerPlugin,
-} from 'handsontable/plugins';
+} from "handsontable/plugins";
 
 import {
   CheckboxCellType,
   NumericCellType,
   registerCellType,
-} from 'handsontable/cellTypes';
-import { HotTable, HotColumn } from '@handsontable/react-wrapper';
+} from "handsontable/cellTypes";
+import { HotTable, HotColumn } from "@handsontable/react-wrapper";
 
-import 'handsontable/styles/handsontable.min.css';
-import 'handsontable/styles/ht-theme-main.min.css';
+import "handsontable/styles/handsontable.min.css";
+import "handsontable/styles/ht-theme-main.min.css";
 
-import { Data } from '../../app/data';
+import { Data } from "../../app/data";
 
 registerCellType(CheckboxCellType);
 registerCellType(NumericCellType);
@@ -43,15 +43,15 @@ export default function Grid(props: GridProps) {
         data={props.data}
         colWidths={[140, 126, 192, 100, 100, 90, 90, 110, 97]}
         colHeaders={[
-          'Company name',
-          'Country',
-          'Name',
-          'Sell date',
-          'Order ID',
-          'In stock',
-          'Qty',
-          'Progress',
-          'Rating',
+          "Company name1",
+          "Country",
+          "Name",
+          "Sell date",
+          "Order ID",
+          "In stock",
+          "Qty",
+          "Progress",
+          "Rating",
         ]}
         dropdownMenu={true}
         contextMenu={true}
