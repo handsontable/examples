@@ -14,7 +14,7 @@
       "command": "pnpm run dev",
       "runAtStart": true,
       "preview": {
-        "port": 4321
+        "port": 8080
       }
     },
     "build": {

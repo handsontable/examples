@@ -4,15 +4,15 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "astro dev",
+    "dev": "astro dev --port 8080",
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro"
   },
   "dependencies": {
-    "astro": "^4.8.3",
-    "handsontable": "16.1.1"
+    "astro": "^4.16.19",
+    "handsontable": "18.0.0"
   },
   "config": {
     "codesandbox": {
