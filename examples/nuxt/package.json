@@ -3,15 +3,15 @@
   "type": "module",
   "scripts": {
     "build": "nuxt build",
-    "dev": "HOST=0.0.0.0 nuxt dev",
+    "dev": "HOST=0.0.0.0 PORT=8080 nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
-    "@handsontable/vue3": "17.1.0",
-    "handsontable": "17.1.0",
-    "nuxt": "^3.21.6"
+    "@handsontable/vue3": "18.0.0",
+    "handsontable": "18.0.0",
+    "nuxt": "^3.21.8"
   },
   "config": {
     "codesandbox": {
