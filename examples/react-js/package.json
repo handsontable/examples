@@ -12,19 +12,19 @@
   },
   "author": "Handsoncode <hello@handsontable.com>",
   "dependencies": {
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "@handsontable/react-wrapper": "17.1.0",
-    "handsontable": "17.1.0"
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "@handsontable/react-wrapper": "18.0.0",
+    "handsontable": "18.0.0"
   },
   "scripts": {
-    "dev": "vite --port 5173",
+    "dev": "vite --port 8080",
     "build": "vite build",
     "preview": "vite preview"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.4.1",
-    "vite": "^6.0.0"
+    "@vitejs/plugin-react": "^6.0.3",
+    "vite": "^8.1.1"
   },
   "license": "SEE LICENSE IN LICENSE.txt",
   "browserslist": {
@@ -41,7 +41,7 @@
   },
   "config": {
     "codesandbox": {
-      "templateId": "8z9fwl"
+      "templateId": "vmjhgx"
     },
     "stackblitz": {
       "template": "create-react-app"

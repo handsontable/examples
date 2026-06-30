@@ -3,18 +3,18 @@
   "setupTasks": [
     {
       "name": "Install Dependencies",
-      "command": "pnpm install "
+      "command": "pnpm install"
     }
   ],
 
   // These tasks can be run from CodeSandbox. Running one will open a log in the app.
   "tasks": {
-    "dev": {
-      "name": "dev",
+    "pnpm run dev": {
+      "name": "Start Dev Server",
       "command": "pnpm dev",
       "runAtStart": true,
       "preview": {
-        "port": 5173
+        "port": 8080
       }
     },
     "install": {
