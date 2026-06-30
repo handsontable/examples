@@ -14,12 +14,11 @@
   "dependencies": {
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "@handsontable/react-wrapper": "16.1.1",
-    "handsontable": "16.1.1"
+    "@handsontable/react-wrapper": "17.1.0",
+    "handsontable": "17.1.0"
   },
   "scripts": {
-    "start": "vite",
-    "dev": "vite",
+    "dev": "vite --port 5173",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -27,9 +26,13 @@
     "@vitejs/plugin-react": "^4.4.1",
     "vite": "^6.0.0"
   },
-  "license": "SEE LICENSE IN LICENSE.txt",  
+  "license": "SEE LICENSE IN LICENSE.txt",
   "browserslist": {
-    "production": [">0.2%", "not dead", "not op_mini all"],
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
     "development": [
       "last 1 chrome version",
       "last 1 firefox version",
@@ -38,7 +41,7 @@
   },
   "config": {
     "codesandbox": {
-      "templateId": "jzcmqq"
+      "templateId": "8z9fwl"
     },
     "stackblitz": {
       "template": "create-react-app"

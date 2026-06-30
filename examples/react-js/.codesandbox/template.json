@@ -1,0 +1,7 @@
+{
+  "title": "React JS",
+  "description": "React JS set up using Vite",
+  "iconUrl": "https://raw.githubusercontent.com/codesandbox/sandbox-templates/main/vue-vite/.codesandbox/icon.png",
+  "tags": ["featured", "frontend", "vite", "react", "javascript"],
+  "published": true
+}
