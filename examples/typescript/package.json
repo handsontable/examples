@@ -4,20 +4,20 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --port 8080",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
   "devDependencies": {
-    "typescript": "~6.0.2",
-    "vite": "^8.0.12"
+    "typescript": "~6.0.3",
+    "vite": "^8.1.1"
   },
   "dependencies": {
-    "handsontable": "^17.0.1"
+    "handsontable": "^18.0.0"
   },
   "config": {
     "codesandbox": {
-      "templateId": "8y5qy5"
+      "templateId": "vmjhgx"
     }
   }
 }

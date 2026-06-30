@@ -13,22 +13,21 @@
   },
   "author": "Handsoncode <hello@handsontable.com>",
   "scripts": {
-    "start": "vite",
-    "dev": "vite",
+    "dev": "vite --port 8080",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@handsontable/pikaday": "^1.0.0",
-    "handsontable": "0.0.0-next-06e1efd-20260403"
+    "handsontable": "18.0.0"
   },
   "devDependencies": {
-    "vite": "^6.0.0"
+    "vite": "^8.1.1"
   },
   "license": "SEE LICENSE IN LICENSE.txt",
   "config": {
     "codesandbox": {
-      "templateId": "jzcmqq"
+      "templateId": "vmjhgx"
     },
     "stackblitz": {
       "template": "javascript"
