@@ -12,7 +12,6 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@netlify/functions": "^4.2.7",
     "octokit": "^5.0.3"
   }
 }

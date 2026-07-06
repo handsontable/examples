@@ -41,8 +41,8 @@ import { registerChangelogPRsRoute } from "./changelog-prs/handler.js";
 const app = express();
 app.use(express.json());
 
-// /api/changelog-prs — Node/Express port of the Netlify edge function of the
-// same name. Route is registered up front via `app.all` and delegates to the
+// /api/changelog-prs — Node/Express implementation of the changelog-prs
+// endpoint. Route is registered up front via `app.all` and delegates to the
 // real handler once the cache store (Redis primary + file fallback) is ready.
 const changelogCachePromise = createCacheStore().catch((err) => {
   console.error("[changelog-prs] failed to initialize cache store:", err);

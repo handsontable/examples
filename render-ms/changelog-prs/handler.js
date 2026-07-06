@@ -1,14 +1,15 @@
-// Node.js / Express port of netlify/edge-functions/changelog-prs.mts.
+// Node.js / Express implementation of the changelog-prs endpoint.
 //
-// The .mts file in handsontable.com-v2 is the authoritative spec: URLs, TTLs,
-// HTML/CSS, pagination rules, concurrency, retry, and the "cacheable" predicate
-// mirror it 1:1. Only the caching substrate changes: instead of the Netlify
-// Cache API we use a CacheStore (Redis primary, file fallback) passed in from
-// the app so the service still works when Redis is unreachable.
+// The changelog-prs edge function in handsontable.com-v2 is the authoritative
+// spec: URLs, TTLs, HTML/CSS, pagination rules, concurrency, retry, and the
+// "cacheable" predicate mirror it 1:1. Only the caching substrate changes:
+// instead of an edge Cache API we use a CacheStore (Redis primary, file
+// fallback) passed in from the app so the service still works when Redis is
+// unreachable.
 //
 // Background writes use setImmediate fire-and-forget (no context.waitUntil in
 // plain Node). The HTTP response is returned before the write resolves so the
-// "fast repeat" behavior of the edge version is preserved.
+// "fast repeat" behavior is preserved.
 
 import { createHash } from "node:crypto";
 

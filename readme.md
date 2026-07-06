@@ -4,7 +4,6 @@ This folder contains all code examples, that Handsontable uses for a myriad of r
 
 Code examples are structured by Handsontable language or framework. E
 
-# Edge Function
+# Redirect Microservice
 
-The [Netlify Edge Function](./edge/) creates dynamic redirects to Stackblitz with specific versions of the Handsontable library based on query parameters. It fetches example code from the GitHub repository and creates a Stackblitz project with the specified Handsontable version.
-
+The [`render-ms`](./render-ms/) microservice creates dynamic redirects to CodeSandbox with specific versions of the Handsontable library based on query parameters. It fetches example code from the GitHub repository and either reuses an existing tagged sandbox or creates a new one.

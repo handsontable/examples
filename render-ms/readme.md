@@ -100,7 +100,7 @@ https://your-service.onrender.com/codesandbox-vm?example-dir=vue&example-branch=
 
 ## `/api/changelog-prs`
 
-Node.js/Express port of the Netlify edge function `netlify/edge-functions/changelog-prs.mts` in `handsontable.com-v2` — that file is the authoritative parity spec (URLs, TTLs, HTML/CSS, pagination, retry, area-label logic). The port replaces only the caching substrate:
+Node.js/Express implementation of the `changelog-prs` endpoint. The `changelog-prs` edge function in `handsontable.com-v2` is the authoritative parity spec (URLs, TTLs, HTML/CSS, pagination, retry, area-label logic). This implementation replaces only the caching substrate:
 
 - **Primary cache: Redis** (via `ioredis`, configured with `REDIS_URL`).
 - **Fallback: filesystem** under `CACHE_DIR` (default `./.changelog-prs-cache`) using `writeFile` + `rename` for safe concurrent writes.
@@ -240,12 +240,11 @@ Or use **Blueprint**: connect the repo, add a Blueprint, and point it at `render
 5. Add environment variables: `GITHUB_TOKEN`, `CSB_API_KEY`, and optionally `SLACK_WEBHOOK`.
 6. Deploy.
 
-## Comparison with Edge (Netlify + Stackblitz)
+## How it compares to a naive redirect
 
-| Aspect | Edge (Netlify) | Render-ms (Render.com) |
+| Aspect | Naive redirect | Render-ms (Render.com) |
 |--------|----------------|-------------------------|
-| Provider | Netlify | Render.com |
-| Runtime | Deno (edge function) | Node.js (Express) |
+| Runtime | — | Node.js (Express) |
 | Playground | Stackblitz | codesandbox-vm |
 | Redirect | HTML form POST to Stackblitz | codesandbox-vm SDK (list/create, then redirect) |
 | Caching | New project per request | Reuses sandboxes by tags when possible |
