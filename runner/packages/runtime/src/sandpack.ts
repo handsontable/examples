@@ -32,6 +32,35 @@ export interface SandpackRuntimeOptions {
 const HTML_ENTRY_ENVS = new Set(["parcel", "static"]);
 
 /**
+ * The classic bundler's JS "create-react-app" environment renders blank for our
+ * Vite-structured React examples; the TypeScript variant handles both JS and TSX
+ * reliably (it's what the working `react` example uses). Normalize to it.
+ */
+function normalizeEnv(env: string | null | undefined): string | undefined {
+  if (env === "create-react-app") return "create-react-app-typescript";
+  return env ?? undefined;
+}
+
+/**
+ * Strip `<base>` tags from HTML files. A `<base href=".">` (used by some Vite
+ * examples) breaks relative URL resolution inside the bundler's preview iframe,
+ * leaving a blank preview even though the code compiled.
+ */
+function sanitizeHtml(files: FilesMap): FilesMap {
+  let changed = false;
+  const out: FilesMap = {};
+  for (const [path, code] of Object.entries(files)) {
+    if (path.toLowerCase().endsWith(".html") && /<base\b[^>]*>/i.test(code)) {
+      out[path] = code.replace(/<base\b[^>]*>\s*/gi, "");
+      changed = true;
+    } else {
+      out[path] = code;
+    }
+  }
+  return changed ? out : files;
+}
+
+/**
  * The in-browser bundler only resolves top-level dependencies, but
  * handsontable's dist requires `@swc/helpers` at runtime (normally pulled in as
  * handsontable's own npm dependency). Add it explicitly so the bundler fetches
@@ -101,14 +130,14 @@ export class SandpackRuntime implements DemoRuntime {
     const pinned = this.opts.version
       ? applyHandsontableVersion(files, this.opts.version)
       : files;
-    this.files = ensureSandpackDeps(pinned);
+    this.files = sanitizeHtml(ensureSandpackDeps(pinned));
 
     const sandpackFiles: Record<string, { code: string }> = {};
     for (const [path, code] of Object.entries(this.files)) {
       sandpackFiles[path] = { code };
     }
 
-    const env = this.entry.sandpackEnvironment ?? undefined;
+    const env = normalizeEnv(this.entry.sandpackEnvironment);
     const entryPath =
       env && HTML_ENTRY_ENVS.has(env) && this.entry.htmlEntry
         ? this.entry.htmlEntry
@@ -169,7 +198,7 @@ export class SandpackRuntime implements DemoRuntime {
   }
 
   private buildSetupFrom(sandpackFiles: Record<string, { code: string }>): SandboxSetup {
-    const env = this.entry.sandpackEnvironment ?? undefined;
+    const env = normalizeEnv(this.entry.sandpackEnvironment);
     const entryPath =
       env && HTML_ENTRY_ENVS.has(env) && this.entry.htmlEntry
         ? this.entry.htmlEntry

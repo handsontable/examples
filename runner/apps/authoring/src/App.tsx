@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EditorShell, theme, logoUrl, type PreviewStatus } from "@handsontable/demo-editor-shell";
 import {
+  applyHandsontableVersion,
   validateHandsontableVersion,
   type CatalogEntry,
   type DemoRuntime,
@@ -97,6 +98,26 @@ function Authoring({ user }: { user: User | null }) {
       .catch(() => { /* keep fallback options */ });
     return () => { cancelled = true; };
   }, []);
+
+  // Reflect the selected version in the editor's package.json (re-pin
+  // handsontable + wrapper), keeping any other edits. This is what the bundler
+  // and container also install, so what you see matches what runs.
+  useEffect(() => {
+    const v = validateHandsontableVersion(version);
+    if (!v.ok) return;
+    setFiles((prev) => {
+      if (prev["/package.json"] === undefined) return prev;
+      let next: FilesMap;
+      try {
+        next = applyHandsontableVersion(prev, v.value);
+      } catch {
+        return prev;
+      }
+      if (next["/package.json"] === prev["/package.json"]) return prev; // no change
+      filesRef.current = next;
+      return next;
+    });
+  }, [version, framework, mountGen]);
 
   // Keep the URL in sync with the selected example + version (deep-linkable).
   useEffect(() => {
