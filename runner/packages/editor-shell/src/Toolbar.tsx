@@ -60,6 +60,19 @@ export function Toolbar({
             </option>
           ))}
         </select>
+        <input
+          style={{ ...s.select, width: 240 }}
+          defaultValue=""
+          placeholder="custom (e.g. 0.0.0-next-07941cf-…)"
+          aria-label="Custom Handsontable version"
+          title="Type any published version or a pkg.pr.new build, then press Enter"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              const v = (e.target as HTMLInputElement).value.trim();
+              if (v) onVersionChange(v);
+            }
+          }}
+        />
       </label>
 
       <button type="button" style={s.button} onClick={onSave}>

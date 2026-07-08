@@ -8,7 +8,7 @@ import {
 } from "@handsontable/demo-runtime";
 import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
 import { ContainerRuntime } from "@handsontable/demo-runtime/container";
-import { catalog, getEntry, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
+import { catalog, getEntry, fetchVersions, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
 import { ShareDialog, type ShareResult } from "./ShareDialog.js";
 import { MyDemos } from "./MyDemos.js";
@@ -17,14 +17,14 @@ const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefi
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
 
 export function App() {
-  // ---- Auth gate -----------------------------------------------------------
+  // The editor/playground is public. Sign-in is only needed to create a
+  // persistent client demo (Share) or to see "My demos".
   const [user, setUser] = useState<User | null | undefined>(undefined);
   useEffect(() => {
     currentUser().then(setUser);
   }, []);
 
-  if (user === undefined) return <Splash text="Signing in…" />;
-  if (user === null) return <LoginScreen />;
+  if (user === undefined) return <Splash text="Loading…" />;
   return <Authoring user={user} />;
 }
 
@@ -37,29 +37,13 @@ function Splash({ text }: { text: string }) {
   );
 }
 
-function LoginScreen() {
-  return (
-    <div style={centered}>
-      <Logo size={48} />
-      <h1 style={{ fontFamily: theme.font.ui, fontSize: 22, margin: "16px 0 4px" }}>
-        Handsontable Demos
-      </h1>
-      <p style={{ color: theme.color.textMuted, fontFamily: theme.font.ui, marginTop: 0 }}>
-        Internal tool — sign in with your Handsontable account.
-      </p>
-      <button style={{ ...primaryBtn, marginTop: 16 }} onClick={login}>
-        Sign in with Handsontable
-      </button>
-    </div>
-  );
-}
-
-function Authoring({ user }: { user: User }) {
+function Authoring({ user }: { user: User | null }) {
   const [framework, setFramework] = useState<string>("react");
   const entry = useMemo<CatalogEntry>(() => getEntry(framework), [framework]);
 
   const [files, setFiles] = useState<FilesMap>(() => ({ ...entry.files }));
   const [version, setVersion] = useState<string>(DEFAULT_VERSION);
+  const [versionOptions, setVersionOptions] = useState<string[]>(VERSION_OPTIONS);
   const [status, setStatus] = useState<PreviewStatus>("booting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -88,6 +72,20 @@ function Authoring({ user }: { user: User }) {
     setShareResult(null);
     setErrorMessage(null);
     setMountGen((g) => g + 1);
+  }, []);
+
+  // Load real published versions from the API (npm-backed); default to latest.
+  useEffect(() => {
+    let cancelled = false;
+    fetchVersions(API_BASE)
+      .then(({ latest, next, versions }) => {
+        if (cancelled) return;
+        const opts = [...new Set([latest, ...versions, next].filter((v): v is string => !!v))];
+        if (opts.length) setVersionOptions(opts);
+        if (latest) setVersion((cur) => (cur === DEFAULT_VERSION ? latest : cur));
+      })
+      .catch(() => { /* keep fallback options */ });
+    return () => { cancelled = true; };
   }, []);
 
   /** Pick a catalog example as a fresh starting template. */
@@ -177,10 +175,18 @@ function Authoring({ user }: { user: User }) {
             </option>
           ))}
         </select>
-        <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
+        {user && (
+          <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
+        )}
         <div style={{ flex: 1 }} />
-        <span style={{ color: theme.color.textMuted, fontSize: 12 }}>{user.email}</span>
-        <button style={ghostBtn} onClick={logout}>Log out</button>
+        {user ? (
+          <>
+            <span style={{ color: theme.color.textMuted, fontSize: 12 }}>{user.email}</span>
+            <button style={ghostBtn} onClick={logout}>Log out</button>
+          </>
+        ) : (
+          <button style={ghostBtn} onClick={login}>Sign in with Handsontable</button>
+        )}
       </div>
 
       <EditorShell
@@ -191,11 +197,11 @@ function Authoring({ user }: { user: User }) {
         status={status}
         errorMessage={errorMessage}
         version={version}
-        versionOptions={VERSION_OPTIONS}
+        versionOptions={versionOptions}
         onVersionChange={setVersion}
         onEdit={onEdit}
         onSave={() => setDirty(false)}
-        onShare={() => setShareOpen(true)}
+        onShare={() => (user ? setShareOpen(true) : login())}
         shareUrl={shareResult?.viewUrl ?? null}
         dirty={dirty}
       />
@@ -264,16 +270,5 @@ const ghostBtn: React.CSSProperties = {
   background: theme.color.surface,
   borderRadius: 8,
   padding: "5px 10px",
-  cursor: "pointer",
-};
-const primaryBtn: React.CSSProperties = {
-  fontFamily: theme.font.ui,
-  fontSize: 14,
-  fontWeight: 600,
-  border: `1px solid ${theme.color.accent}`,
-  background: theme.color.accent,
-  color: "#fff",
-  borderRadius: 8,
-  padding: "10px 18px",
   cursor: "pointer",
 };

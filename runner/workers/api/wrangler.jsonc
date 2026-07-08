@@ -8,12 +8,23 @@
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Keep the workers.dev URL enabled alongside the custom wildcard route.
+  "workers_dev": true,
 
   // Public, non-secret config.
   "vars": {
     "LOGIN_BROKER_URL": "https://mcp-auth-proxy-j0tb.onrender.com",
-    "EMBED_ALLOWED_ANCESTORS": "https://handsontable.com https://*.handsontable.com http://localhost:*"
+    "EMBED_ALLOWED_ANCESTORS": "https://handsontable.com https://*.handsontable.com http://localhost:*",
+    // Wildcard base host for Tier-2 container preview URLs
+    // (<port>-<sandboxId>-<token>.demos.handsontable.com).
+    "PREVIEW_HOST": "demos.handsontable.com"
   },
+
+  // Wildcard route so container preview URLs reach this Worker (ADR-0011).
+  // Keeps the workers.dev URL too.
+  "routes": [
+    { "pattern": "*.demos.handsontable.com/*", "zone_name": "handsontable.com" }
+  ],
 
   // D1 — demo metadata + short ids (account 15111272, region EEUR).
   "d1_databases": [

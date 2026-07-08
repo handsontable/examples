@@ -4,8 +4,10 @@ A short, non-technical guide for the Handsontable team.
 
 ## 1. Open the authoring app
 
-Go to **https://handsontable-demos-authoring.handsoncode.workers.dev** and click
-**Sign in with Handsontable**. Only `@handsontable.com` accounts can get in.
+Go to **https://handsontable-demos-authoring.handsoncode.workers.dev**. Browsing
+and editing are **open** — no sign-in needed to play with examples. You only
+**Sign in with Handsontable** (top-right, `@handsontable.com` only) when you want
+to **create a shareable client link** or see **My demos**.
 
 ## 2. Pick a starting point
 
@@ -17,8 +19,10 @@ You can also open one of your saved demos from **My demos** and fork it.
 
 ## 3. Choose a Handsontable version
 
-Use the **Handsontable** version picker (top-right) to render the demo at any
-supported version.
+Use the **Handsontable** version dropdown (real published versions) to render the
+demo at any version. Need a specific build (e.g. a nightly like
+`0.0.0-next-07941cf-20260708` or a `pkg.pr.new` preview)? Type it into the
+**custom version** box next to the dropdown and press Enter.
 
 ## 4. Edit the code
 

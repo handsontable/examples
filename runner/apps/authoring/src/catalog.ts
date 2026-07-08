@@ -9,6 +9,15 @@ export function getEntry(framework: string): CatalogEntry {
   return e;
 }
 
-/** Curated version options for the picker; the current value is always included. */
-export const VERSION_OPTIONS = ["18.0.0", "17.6.2", "17.0.1", "16.0.0", "15.3.0"];
+/** Fallback version options (used until /api/versions responds). */
+export const VERSION_OPTIONS = ["18.0.0", "17.1.0", "17.0.1"];
 export const DEFAULT_VERSION = "18.0.0";
+
+/** Fetch real published versions from the API (npm-backed). */
+export async function fetchVersions(
+  apiBase: string,
+): Promise<{ latest: string | null; next: string | null; versions: string[] }> {
+  const res = await fetch(`${apiBase}/api/versions`);
+  if (!res.ok) throw new Error(`versions ${res.status}`);
+  return (await res.json()) as { latest: string | null; next: string | null; versions: string[] };
+}

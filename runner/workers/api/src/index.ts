@@ -305,6 +305,36 @@ export default {
         return Response.redirect(`${url.origin}/d/${r.id}/`, 302);
       }
 
+      // GET /api/versions (public) — real published Handsontable versions.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "versions") {
+        const cached = await env.CACHE.get("versions", "json");
+        if (cached) return cors(cacheableJson(cached));
+        try {
+          const r = await fetch("https://registry.npmjs.org/handsontable");
+          const j = (await r.json()) as {
+            "dist-tags"?: Record<string, string>;
+            versions?: Record<string, unknown>;
+          };
+          const latest = j["dist-tags"]?.latest ?? null;
+          const next = j["dist-tags"]?.next ?? null;
+          const cmp = (a: string, b: string) => {
+            const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
+            for (let i = 0; i < 3; i++) { const d = (pb[i] ?? 0) - (pa[i] ?? 0); if (d) return d; }
+            return 0;
+          };
+          const versions = Object.keys(j.versions ?? {})
+            .filter((v) => /^\d+\.\d+\.\d+$/.test(v))
+            .filter((v) => { const m = Number(v.split(".")[0]); return m >= 14 && m <= 19; })
+            .sort(cmp)
+            .slice(0, 15);
+          const payload = { latest, next, versions };
+          await env.CACHE.put("versions", JSON.stringify(payload), { expirationTtl: 3600 });
+          return cors(cacheableJson(payload));
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+        }
+      }
+
       if (parts[0] === "api" && parts[1] === "health") return json({ ok: true });
 
       // Friendly root (this is the API/orchestration worker, not a site).
