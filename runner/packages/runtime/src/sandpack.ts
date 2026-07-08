@@ -31,6 +31,34 @@ export interface SandpackRuntimeOptions {
 /** Environments whose entry point is the HTML file rather than a JS/TS module. */
 const HTML_ENTRY_ENVS = new Set(["parcel", "static"]);
 
+/**
+ * The in-browser bundler only resolves top-level dependencies, but
+ * handsontable's dist requires `@swc/helpers` at runtime (normally pulled in as
+ * handsontable's own npm dependency). Add it explicitly so the bundler fetches
+ * it. Extend this map if other transitive runtime deps surface.
+ */
+function ensureSandpackDeps(files: FilesMap): FilesMap {
+  const raw = files["/package.json"];
+  if (raw === undefined) return files;
+  let pkg: { dependencies?: Record<string, string>; [k: string]: unknown };
+  try {
+    pkg = JSON.parse(raw);
+  } catch {
+    return files;
+  }
+  const deps: Record<string, string> = { ...(pkg.dependencies ?? {}) };
+  // handsontable's dist needs @swc/helpers at runtime.
+  if (deps.handsontable && !deps["@swc/helpers"]) deps["@swc/helpers"] = "^0.5.17";
+  // @handsontable/pikaday needs pikaday, which needs moment (+ jquery for the
+  // jquery build). The in-browser bundler doesn't pull nested deps, so add them.
+  if (deps["@handsontable/pikaday"]) {
+    if (!deps.pikaday) deps.pikaday = "^1.8.2";
+    if (!deps.moment) deps.moment = "^2.30.1";
+    if (!deps.jquery) deps.jquery = "^3.7.1";
+  }
+  return { ...files, "/package.json": JSON.stringify({ ...pkg, dependencies: deps }, null, 2) + "\n" };
+}
+
 export class SandpackRuntime implements DemoRuntime {
   private readonly entry: CatalogEntry;
   private readonly opts: SandpackRuntimeOptions;
@@ -73,10 +101,10 @@ export class SandpackRuntime implements DemoRuntime {
     const pinned = this.opts.version
       ? applyHandsontableVersion(files, this.opts.version)
       : files;
-    this.files = pinned;
+    this.files = ensureSandpackDeps(pinned);
 
     const sandpackFiles: Record<string, { code: string }> = {};
-    for (const [path, code] of Object.entries(pinned)) {
+    for (const [path, code] of Object.entries(this.files)) {
       sandpackFiles[path] = { code };
     }
 

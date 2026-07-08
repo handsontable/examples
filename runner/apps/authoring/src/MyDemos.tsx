@@ -36,6 +36,16 @@ export function MyDemos({ apiBase, token, onOpen, onClose }: MyDemosProps) {
       .catch((e) => setError(String(e)));
   }, [apiBase, token]);
 
+  async function remove(id: string) {
+    const res = await fetch(`${apiBase}/api/demos/${id}`, {
+      method: "DELETE",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    }).catch(() => null);
+    if (res && (res.status === 204 || res.ok)) {
+      setDemos((cur) => (cur ? cur.map((d) => (d.id === id ? { ...d, revoked: 1 } : d)) : cur));
+    }
+  }
+
   return (
     <div style={panel}>
       <div style={header}>
@@ -60,8 +70,15 @@ export function MyDemos({ apiBase, token, onOpen, onClose }: MyDemosProps) {
             </div>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            <a style={link} href={`${apiBase}/d/${d.id}`} target="_blank" rel="noreferrer">View</a>
-            <button style={link} onClick={() => onOpen(d.id)}>Fork</button>
+            {!d.revoked && (
+              <a style={link} href={`${apiBase}/d/${d.id}`} target="_blank" rel="noreferrer">View</a>
+            )}
+            <button style={link} onClick={() => onOpen(d.id)}>Edit</button>
+            {!d.revoked && (
+              <button style={{ ...link, color: "#d1242f", borderColor: "#f3c2c2" }} onClick={() => remove(d.id)}>
+                Delete
+              </button>
+            )}
           </div>
         </div>
       ))}

@@ -5,29 +5,29 @@
 
 export const theme = {
   color: {
-    accent: "#1a8f5a", // Handsontable green
-    accentHover: "#157a4c",
+    accent: "#1A42E8", // Handsontable blue
+    accentHover: "#1233bf",
     accentContrast: "#ffffff",
 
     surface: "#ffffff",
-    surfaceMuted: "#f4f6f8",
-    border: "#e2e6ea",
-    text: "#1f2933",
-    textMuted: "#647382",
+    surfaceMuted: "#f3f5fb",
+    border: "#e0e4f0",
+    text: "#101828",
+    textMuted: "#5b6472",
 
     // Editor / code surfaces (dark).
-    editorBg: "#0f1720",
-    editorGutter: "#0b121a",
-    editorText: "#e6edf3",
-    editorSelection: "#1f6feb44",
+    editorBg: "#0f1424",
+    editorGutter: "#0b1020",
+    editorText: "#e6ebf5",
+    editorSelection: "#1A42E844",
 
-    // Syntax (aligned to the accent family; tuned in the design pass).
-    synKeyword: "#7ee787",
-    synString: "#a5d6ff",
-    synNumber: "#f2cc60",
-    synComment: "#8b949e",
-    synFunction: "#d2a8ff",
-    synVariable: "#e6edf3",
+    // Syntax (blue-leaning family; the editor uses CodeMirror's own theme).
+    synKeyword: "#8ab4ff",
+    synString: "#a5c8ff",
+    synNumber: "#7fd0ff",
+    synComment: "#8b93a7",
+    synFunction: "#b6a8ff",
+    synVariable: "#e6ebf5",
 
     danger: "#d1242f",
     warning: "#bf8700",

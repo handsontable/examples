@@ -10,3 +10,4 @@ export { Toolbar } from "./Toolbar.js";
 export { PreviewPane } from "./PreviewPane.js";
 export type { PreviewStatus } from "./PreviewPane.js";
 export { s as shellStyles } from "./styles.js";
+export { default as logoUrl } from "./logo.svg";

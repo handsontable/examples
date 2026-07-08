@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EditorShell, theme, type PreviewStatus } from "@handsontable/demo-editor-shell";
+import { EditorShell, theme, logoUrl, type PreviewStatus } from "@handsontable/demo-editor-shell";
 import {
   validateHandsontableVersion,
   type CatalogEntry,
@@ -189,7 +189,7 @@ function Authoring({ user }: { user: User | null }) {
         <select value={framework} onChange={(e) => selectExample(e.target.value)} style={selectStyle}>
           {catalog.examples.map((e) => (
             <option key={e.framework} value={e.framework}>
-              {e.displayName} · Tier {e.tier}
+              {e.displayName}
             </option>
           ))}
         </select>
@@ -220,6 +220,8 @@ function Authoring({ user }: { user: User | null }) {
         onEdit={onEdit}
         onSave={() => setDirty(false)}
         onShare={() => (user ? setShareOpen(true) : login())}
+        onFork={() => (user ? setShareOpen(true) : login())}
+        authed={!!user}
         shareUrl={shareResult?.viewUrl ?? null}
         dirty={dirty}
       />
@@ -248,12 +250,7 @@ function Authoring({ user }: { user: User | null }) {
 // ---- small shared UI bits --------------------------------------------------
 
 function Logo({ size = 24 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="1" y="1" width="22" height="22" rx="4" fill={theme.color.accent} />
-      <path d="M7 6v12M17 6v12M7 12h10" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
-    </svg>
-  );
+  return <img src={logoUrl} alt="Handsontable" style={{ height: size, display: "block" }} />;
 }
 
 const centered: React.CSSProperties = {

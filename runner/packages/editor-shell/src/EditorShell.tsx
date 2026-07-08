@@ -24,6 +24,9 @@ export interface EditorShellProps {
   onEdit: (path: string, contents: string) => void;
   onSave: () => void;
   onShare: () => void;
+  onFork: () => void;
+  /** Signed in? Gates Save/Share/custom-version vs a Fork call-to-action. */
+  authed: boolean;
   sharing?: boolean;
   shareUrl?: string | null;
   dirty?: boolean;
@@ -55,6 +58,8 @@ export function EditorShell(props: EditorShellProps) {
         onVersionChange={props.onVersionChange}
         onSave={props.onSave}
         onShare={props.onShare}
+        onFork={props.onFork}
+        authed={props.authed}
         sharing={props.sharing}
         shareUrl={props.shareUrl}
         dirty={props.dirty}

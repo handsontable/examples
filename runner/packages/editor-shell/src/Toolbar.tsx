@@ -1,4 +1,5 @@
 import { s } from "./styles.js";
+import logoUrl from "./logo.svg";
 
 export interface ToolbarProps {
   frameworkLabel: string;
@@ -7,19 +8,12 @@ export interface ToolbarProps {
   onVersionChange: (v: string) => void;
   onSave: () => void;
   onShare: () => void;
+  onFork: () => void;
+  /** Signed in? Save/Share/custom-version are shown only when true. */
+  authed: boolean;
   sharing?: boolean;
   shareUrl?: string | null;
   dirty?: boolean;
-}
-
-/** Handsontable "H" mark — inline SVG, our logo only. No third-party marks. */
-function Logo() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="1" y="1" width="22" height="22" rx="4" fill="#1a8f5a" />
-      <path d="M7 6v12M17 6v12M7 12h10" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
-    </svg>
-  );
 }
 
 export function Toolbar({
@@ -29,6 +23,8 @@ export function Toolbar({
   onVersionChange,
   onSave,
   onShare,
+  onFork,
+  authed,
   sharing,
   shareUrl,
   dirty,
@@ -39,8 +35,7 @@ export function Toolbar({
   return (
     <header style={s.toolbar}>
       <div style={s.brand}>
-        <Logo />
-        <span>Handsontable Demos</span>
+        <img src={logoUrl} alt="Handsontable" style={{ height: 22, display: "block" }} />
       </div>
       <span style={s.frameworkTag}>{frameworkLabel}</span>
 
@@ -60,37 +55,51 @@ export function Toolbar({
             </option>
           ))}
         </select>
-        <input
-          style={{ ...s.select, width: 240 }}
-          defaultValue=""
-          placeholder="custom (e.g. 0.0.0-next-07941cf-…)"
-          aria-label="Custom Handsontable version"
-          title="Type any published version or a pkg.pr.new build, then press Enter"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              const v = (e.target as HTMLInputElement).value.trim();
-              if (v) onVersionChange(v);
-            }
-          }}
-        />
+        {authed && (
+          <input
+            style={{ ...s.select, width: 240 }}
+            defaultValue=""
+            placeholder="custom (e.g. 0.0.0-next-07941cf-…)"
+            aria-label="Custom Handsontable version"
+            title="Type any published version or a pkg.pr.new build, then press Enter"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const v = (e.target as HTMLInputElement).value.trim();
+                if (v) onVersionChange(v);
+              }
+            }}
+          />
+        )}
       </label>
 
-      <button type="button" style={s.button} onClick={onSave}>
-        {dirty ? "Save •" : "Save"}
-      </button>
-      <button
-        type="button"
-        style={{ ...s.button, ...s.buttonPrimary }}
-        onClick={onShare}
-        disabled={sharing}
-      >
-        {sharing ? "Sharing…" : "Share"}
-      </button>
-
-      {shareUrl && (
-        <a style={s.shareLink} href={shareUrl} target="_blank" rel="noreferrer" title={shareUrl}>
-          {shareUrl}
-        </a>
+      {authed ? (
+        <>
+          <button type="button" style={s.button} onClick={onSave}>
+            {dirty ? "Save •" : "Save"}
+          </button>
+          <button
+            type="button"
+            style={{ ...s.button, ...s.buttonPrimary }}
+            onClick={onShare}
+            disabled={sharing}
+          >
+            {sharing ? "Sharing…" : "Share"}
+          </button>
+          {shareUrl && (
+            <a style={s.shareLink} href={shareUrl} target="_blank" rel="noreferrer" title={shareUrl}>
+              {shareUrl}
+            </a>
+          )}
+        </>
+      ) : (
+        <button
+          type="button"
+          style={{ ...s.button, ...s.buttonPrimary }}
+          onClick={onFork}
+          title="Sign in to fork this example into your own shareable demo"
+        >
+          Fork this demo
+        </button>
       )}
     </header>
   );
