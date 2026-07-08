@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.dist/
+build/
+.wrangler/
+.output/
+.next/
+.nuxt/
+.astro/
+*.tsbuildinfo
+
+# secrets
+.env
+.env.local
+.dev.vars
+
+# os
+.DS_Store
