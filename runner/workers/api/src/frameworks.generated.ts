@@ -9,11 +9,11 @@ export interface FrameworkDev {
 }
 
 export const FRAMEWORK_DEV: Record<string, FrameworkDev> = {
-  "angular": { cmd: "npx --no-install ng serve --host 0.0.0.0 --port 3000 --disable-host-check", port: 3000, binding: "SANDBOX_ANGULAR", container: "angular" },
-  "next.js": { cmd: "npx --no-install next dev -p 3000 -H 0.0.0.0", port: 3000, binding: "SANDBOX_NEXT", container: "next" },
-  "next-shadcn.js": { cmd: "npx --no-install next dev -p 3000 -H 0.0.0.0", port: 3000, binding: "SANDBOX_NEXT_SHADCN", container: "next-shadcn" },
+  "angular": { cmd: "npx --no-install ng serve --host 0.0.0.0 --port 4200 --disable-host-check", port: 4200, binding: "SANDBOX_ANGULAR", container: "angular" },
+  "next.js": { cmd: "npx --no-install next dev -p 3001 -H 0.0.0.0", port: 3001, binding: "SANDBOX_NEXT", container: "next" },
+  "next-shadcn.js": { cmd: "npx --no-install next dev -p 3001 -H 0.0.0.0", port: 3001, binding: "SANDBOX_NEXT_SHADCN", container: "next-shadcn" },
   "astro": { cmd: "npx --no-install astro dev --host 0.0.0.0 --port 4321", port: 4321, binding: "SANDBOX_ASTRO", container: "astro" },
-  "nuxt": { cmd: "npx --no-install nuxt dev -H 0.0.0.0 -p 3000", port: 3000, binding: "SANDBOX_NUXT", container: "nuxt" },
+  "nuxt": { cmd: "npx --no-install nuxt dev -H 0.0.0.0 -p 3001", port: 3001, binding: "SANDBOX_NUXT", container: "nuxt" },
   "remix": { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173, binding: "SANDBOX_REMIX", container: "remix" },
 };
 

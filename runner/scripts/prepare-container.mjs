@@ -18,13 +18,15 @@ const SANDBOX_IMAGE = "docker.io/cloudflare/sandbox:0.12.3";
 
 // Container dev-server command + port, keyed by container name. Each binds to
 // 0.0.0.0 so proxyToSandbox can reach it; ports match the Dockerfile EXPOSE.
+// NOTE: port 3000 is reserved by the Cloudflare Sandbox control plane — dev
+// servers must use a different port.
 const DEV = {
   remix: { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
-  angular: { cmd: "npx --no-install ng serve --host 0.0.0.0 --port 3000 --disable-host-check", port: 3000 },
-  next: { cmd: "npx --no-install next dev -p 3000 -H 0.0.0.0", port: 3000 },
-  "next-shadcn": { cmd: "npx --no-install next dev -p 3000 -H 0.0.0.0", port: 3000 },
+  angular: { cmd: "npx --no-install ng serve --host 0.0.0.0 --port 4200 --disable-host-check", port: 4200 },
+  next: { cmd: "npx --no-install next dev -p 3001 -H 0.0.0.0", port: 3001 },
+  "next-shadcn": { cmd: "npx --no-install next dev -p 3001 -H 0.0.0.0", port: 3001 },
   astro: { cmd: "npx --no-install astro dev --host 0.0.0.0 --port 4321", port: 4321 },
-  nuxt: { cmd: "npx --no-install nuxt dev -H 0.0.0.0 -p 3000", port: 3000 },
+  nuxt: { cmd: "npx --no-install nuxt dev -H 0.0.0.0 -p 3001", port: 3001 },
 };
 
 const catalog = JSON.parse(fs.readFileSync(path.join(RUNNER_DIR, "catalog.json"), "utf8"));

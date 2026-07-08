@@ -6,4 +6,4 @@ FROM docker.io/cloudflare/sandbox:0.12.3
 
 WORKDIR /app
 
-EXPOSE 3000 4321 5173
+EXPOSE 3001 4200 4321 5173
