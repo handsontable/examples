@@ -21,6 +21,9 @@ export interface Env {
   // Public, non-secret config.
   LOGIN_BROKER_URL: string;
   EMBED_ALLOWED_ANCESTORS: string;
+  // Wildcard base host for Tier-2 container preview URLs (e.g.
+  // "demos.handsontable.com"). Empty -> use the request host (local dev).
+  PREVIEW_HOST?: string;
 
   // Index signature so we can look up a binding by generated name.
   [key: string]: unknown;

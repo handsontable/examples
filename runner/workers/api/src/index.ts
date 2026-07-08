@@ -10,7 +10,7 @@ import { getSandbox, proxyToSandbox, Sandbox } from "@cloudflare/sandbox";
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { authenticate } from "./auth.js";
-import { createDemo, getDemo, invalidateDemo, serveDemoAsset, type DemoRow } from "./share.js";
+import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, type DemoRow } from "./share.js";
 
 // One Durable Object class per framework image (Cloudflare binds one image per
 // class). Each is a thin Sandbox subclass; the image is set in wrangler.jsonc.
@@ -138,9 +138,10 @@ export default {
         await sandbox.startProcess(dev.cmd, { cwd: CONTAINER_ROOT });
         await waitForPort(sandbox, dev.port);
 
-        // Use host (incl. port) so preview URLs route back to this Worker in
-        // local dev (localhost:8787) and to the wildcard domain in production.
-        const exposed = await sandbox.exposePort(dev.port, { hostname: url.host });
+        // Preview URL host: the wildcard domain in production (PREVIEW_HOST), or
+        // the request host in local dev (localhost:8787 -> *.localhost:8787).
+        const previewHost = env.PREVIEW_HOST && env.PREVIEW_HOST.length ? env.PREVIEW_HOST : url.host;
+        const exposed = await sandbox.exposePort(dev.port, { hostname: previewHost });
         const previewUrl = (exposed as { url?: string; exposedAt?: string }).url
           ?? (exposed as { exposedAt?: string }).exposedAt;
         return json({ sessionId, previewUrl, port: dev.port });
@@ -212,6 +213,15 @@ export default {
           "SELECT id,title,description,framework,tier,ht_version,forked_from,visibility,revoked,created_at,updated_at FROM demos WHERE created_by = ? ORDER BY updated_at DESC",
         ).bind(id.email).all();
         return json({ demos: rows.results });
+      }
+
+      // GET /api/demos/:id/source  (auth) — source snapshot for forking
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts[3] === "source") {
+        const ident = await authenticate(request, env);
+        if (!ident) return json({ error: "unauthorized" }, 401);
+        const src = await getDemoSource(env, parts[2]!);
+        if (!src) return json({ error: "not found" }, 404);
+        return json(src);
       }
 
       // GET /api/demos/:id  (public) — metadata; 410 if revoked
