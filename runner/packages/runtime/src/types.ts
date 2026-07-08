@@ -13,6 +13,8 @@ export interface CatalogEntry {
   displayName: string;
   tier: Tier;
   sandpackTemplate: string | null;
+  /** Classic-bundler environment string for @codesandbox/sandpack-client (Tier 1). */
+  sandpackEnvironment: string | null;
   container: string | null;
   htWrappers: string[];
   entry: string;

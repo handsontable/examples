@@ -131,6 +131,7 @@ function importExample(framework) {
     displayName: cfg.displayName,
     tier: cfg.tier,
     sandpackTemplate: cfg.sandpackTemplate ?? null,
+    sandpackEnvironment: cfg.sandpackEnvironment ?? null,
     container: cfg.container ?? null,
     htWrappers: cfg.htWrappers,
     entry: `/${cfg.entry}`,

@@ -17,6 +17,7 @@
       "displayName": "Vanilla (Parcel)",
       "tier": 1,
       "sandpackTemplate": "vanilla-ts",
+      "sandpackEnvironment": "parcel",
       "container": null,
       "htWrappers": [],
       "entry": "/index.ts",
@@ -45,6 +46,7 @@
       "displayName": "JavaScript (Vite)",
       "tier": 1,
       "sandpackTemplate": "vanilla",
+      "sandpackEnvironment": "parcel",
       "container": null,
       "htWrappers": [],
       "entry": "/index.js",
@@ -79,6 +81,7 @@
       "displayName": "TypeScript (Vite)",
       "tier": 1,
       "sandpackTemplate": "vanilla-ts",
+      "sandpackEnvironment": "parcel",
       "container": null,
       "htWrappers": [],
       "entry": "/index.ts",
@@ -111,6 +114,7 @@
       "displayName": "React (Vite, TS)",
       "tier": 1,
       "sandpackTemplate": "react-ts",
+      "sandpackEnvironment": "create-react-app-typescript",
       "container": null,
       "htWrappers": [
         "@handsontable/react-wrapper"
@@ -152,6 +156,7 @@
       "displayName": "React (Vite, JS)",
       "tier": 1,
       "sandpackTemplate": "react",
+      "sandpackEnvironment": "create-react-app",
       "container": null,
       "htWrappers": [
         "@handsontable/react-wrapper"
@@ -188,6 +193,7 @@
       "displayName": "Ant Design + React",
       "tier": 1,
       "sandpackTemplate": "react",
+      "sandpackEnvironment": "create-react-app",
       "container": null,
       "htWrappers": [
         "@handsontable/react-wrapper"
@@ -220,6 +226,7 @@
       "displayName": "Vue 3 (Vite)",
       "tier": 1,
       "sandpackTemplate": "vue-ts",
+      "sandpackEnvironment": "vue-cli",
       "container": null,
       "htWrappers": [
         "@handsontable/vue3"
@@ -274,6 +281,7 @@
       "displayName": "Angular",
       "tier": 2,
       "sandpackTemplate": null,
+      "sandpackEnvironment": null,
       "container": "angular",
       "htWrappers": [
         "@handsontable/angular-wrapper"
@@ -319,6 +327,7 @@
       "displayName": "Next.js (App Router)",
       "tier": 2,
       "sandpackTemplate": null,
+      "sandpackEnvironment": null,
       "container": "next",
       "htWrappers": [
         "@handsontable/react-wrapper"
@@ -363,6 +372,7 @@
       "displayName": "Next.js + shadcn/ui",
       "tier": 2,
       "sandpackTemplate": null,
+      "sandpackEnvironment": null,
       "container": "next",
       "htWrappers": [
         "@handsontable/react-wrapper"
@@ -410,6 +420,7 @@
       "displayName": "Astro",
       "tier": 2,
       "sandpackTemplate": null,
+      "sandpackEnvironment": null,
       "container": "astro",
       "htWrappers": [],
       "entry": "/src/pages/index.astro",
@@ -445,6 +456,7 @@
       "displayName": "Nuxt 3",
       "tier": 2,
       "sandpackTemplate": null,
+      "sandpackEnvironment": null,
       "container": "nuxt",
       "htWrappers": [
         "@handsontable/vue3"
@@ -483,6 +495,7 @@
       "displayName": "Remix",
       "tier": 2,
       "sandpackTemplate": null,
+      "sandpackEnvironment": null,
       "container": "remix",
       "htWrappers": [
         "@handsontable/react-wrapper"

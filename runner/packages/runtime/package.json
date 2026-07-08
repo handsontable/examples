@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./sandpack": {
+      "types": "./dist/sandpack.d.ts",
+      "default": "./dist/sandpack.js"
     }
   },
   "scripts": {
@@ -16,6 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@codesandbox/sandpack-client": "^2.19.8",
     "semver": "^7.7.4"
   },
   "devDependencies": {

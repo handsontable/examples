@@ -39,8 +39,11 @@ function expandPartialNumericSemver(s: string): string | null {
   if (!/^\d+(?:\.\d+)+$/.test(s)) return null;
   const parts = s.split(".");
   if (parts.length > 3 || parts.some((p) => !/^\d+$/.test(p))) return null;
-  const [major, minor = 0, patch = 0] = parts.map((p) => Number.parseInt(p, 10));
-  if ([major, minor, patch].some((n) => !Number.isFinite(n) || n < 0)) return null;
+  const nums = parts.map((p) => Number.parseInt(p, 10));
+  const major = nums[0] ?? 0;
+  const minor = nums[1] ?? 0;
+  const patch = nums[2] ?? 0;
+  if (![major, minor, patch].every((n) => Number.isFinite(n) && n >= 0)) return null;
   return `${major}.${minor}.${patch}`;
 }
 
