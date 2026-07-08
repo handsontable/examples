@@ -22,6 +22,8 @@ export interface ContainerRuntimeOptions {
   sessionId?: string;
   /** Debounce for streamed edits (ms). */
   writeDebounceMs?: number;
+  /** Grace after the preview iframe loads, for the SPA to render (ms). */
+  renderGraceMs?: number;
 }
 
 export class ContainerRuntime implements DemoRuntime {
@@ -38,6 +40,7 @@ export class ContainerRuntime implements DemoRuntime {
   private readonly progressCbs = new Set<(log: string) => void>();
   private previewUrl = "";
   private port = 0;
+  private pointed = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(entry: CatalogEntry, opts: ContainerRuntimeOptions) {
@@ -115,12 +118,22 @@ export class ContainerRuntime implements DemoRuntime {
         );
         if (r.ok) {
           const { ready, log } = (await r.json()) as { ready: boolean; log: string };
-          if (log) this.emitProgress(log);
-          if (ready && !this.disposed) {
-            this.opts.iframe.addEventListener("load", () => this.emitReady(), { once: true });
+          if (log && !this.pointed) this.emitProgress(log);
+          if (ready && !this.disposed && !this.pointed) {
+            // Dev server is up. Point the iframe at it, but keep the loading
+            // indicator through the client-render phase (the SPA still has to
+            // boot + render the grid after the HTML loads). We can't inspect the
+            // cross-origin iframe, so: on load, wait a short grace, then ready.
+            this.pointed = true;
+            this.emitProgress("Dev server ready — rendering the demo…");
+            this.opts.iframe.addEventListener(
+              "load",
+              () => setTimeout(() => this.emitReady(), this.opts.renderGraceMs ?? 3500),
+              { once: true },
+            );
             this.opts.iframe.src = this.previewUrl;
-            // Fallback in case the load event is missed.
-            setTimeout(() => this.emitReady(), 1500);
+            // Hard fallback in case the load event never fires.
+            setTimeout(() => this.emitReady(), 20000);
             return;
           }
         }

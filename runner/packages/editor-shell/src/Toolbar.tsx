@@ -72,34 +72,28 @@ export function Toolbar({
         )}
       </label>
 
-      {authed ? (
+      {/* Actions are for signed-in internal users only. Anonymous visitors just
+          browse/edit/preview and sign in from the top bar. */}
+      {authed && (
         <>
+          {shareUrl && (
+            <a style={s.shareLink} href={shareUrl} target="_blank" rel="noreferrer" title={shareUrl}>
+              {shareUrl}
+            </a>
+          )}
           <button type="button" style={s.button} onClick={onSave}>
             {dirty ? "Save •" : "Save"}
           </button>
           <button
             type="button"
             style={{ ...s.button, ...s.buttonPrimary }}
-            onClick={onShare}
+            onClick={onFork}
             disabled={sharing}
+            title="Fork this demo into your own shareable client link"
           >
-            {sharing ? "Sharing…" : "Share"}
+            {sharing ? "Sharing…" : "Fork this demo"}
           </button>
-          {shareUrl && (
-            <a style={s.shareLink} href={shareUrl} target="_blank" rel="noreferrer" title={shareUrl}>
-              {shareUrl}
-            </a>
-          )}
         </>
-      ) : (
-        <button
-          type="button"
-          style={{ ...s.button, ...s.buttonPrimary }}
-          onClick={onFork}
-          title="Sign in to fork this example into your own shareable demo"
-        >
-          Fork this demo
-        </button>
       )}
     </header>
   );
