@@ -41,8 +41,8 @@ export class ContainerRuntime implements DemoRuntime {
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(entry: CatalogEntry, opts: ContainerRuntimeOptions) {
-    if (entry.tier !== 2) {
-      throw new Error(`ContainerRuntime is Tier 2 only; ${entry.framework} is Tier ${entry.tier}`);
+    if (entry.engine !== "container") {
+      throw new Error(`ContainerRuntime requires engine 'container'; ${entry.framework} is '${entry.engine}'`);
     }
     this.entry = entry;
     this.opts = opts;
@@ -81,6 +81,7 @@ export class ContainerRuntime implements DemoRuntime {
         framework: this.entry.framework,
         files: this.files,
         sessionId: this.opts.sessionId,
+        htVersion: this.opts.version?.ref,
       }),
     });
     if (!res.ok) {

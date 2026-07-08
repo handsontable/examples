@@ -1,0 +1,50 @@
+{
+  "name": "react-demo",
+  "version": "0.0.0",
+  "private": true,
+  "homepage": "https://handsontable.com/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/handsontable/handsontable.git"
+  },
+  "bugs": {
+    "url": "https://github.com/handsontable/handsontable/issues"
+  },
+  "author": "Handsoncode <hello@handsontable.com>",
+  "dependencies": {
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "@handsontable/react-wrapper": "18.0.0",
+    "handsontable": "18.0.0"
+  },
+  "scripts": {
+    "dev": "vite --port 8080",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.3",
+    "vite": "^8.1.1"
+  },
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "config": {
+    "codesandbox": {
+      "templateId": "vmjhgx"
+    },
+    "stackblitz": {
+      "template": "create-react-app"
+    }
+  }
+}

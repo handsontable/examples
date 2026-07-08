@@ -147,10 +147,10 @@ function Authoring({ user }: { user: User | null }) {
     setBootLog("");
     let cancelled = false;
     const runtime =
-      entry.tier === 2
+      entry.engine === "container"
         ? new ContainerRuntime(entry, { iframe: iframeEl, apiBase: API_BASE, version: v.value })
         : new SandpackRuntime(entry, { iframe: iframeEl, bundlerURL: SANDPACK_BUNDLER_URL, version: v.value });
-    if (entry.tier === 2) {
+    if (entry.engine === "container") {
       (runtime as ContainerRuntime).onProgress((log) => !cancelled && setBootLog(log));
     }
     runtime.onReady(() => !cancelled && setStatus("ready"));

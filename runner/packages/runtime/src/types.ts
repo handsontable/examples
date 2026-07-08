@@ -12,6 +12,8 @@ export interface CatalogEntry {
   framework: string;
   displayName: string;
   tier: Tier;
+  /** Which engine renders this example: in-browser bundler or a container. */
+  engine: "sandpack" | "container";
   sandpackTemplate: string | null;
   /** Classic-bundler environment string for @codesandbox/sandpack-client (Tier 1). */
   sandpackEnvironment: string | null;

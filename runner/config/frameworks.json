@@ -61,6 +61,7 @@
     "react-js": {
       "tier": 1,
       "displayName": "React (Vite, JS)",
+      "engine": "container",
       "sandpackTemplate": "react",
       "sandpackEnvironment": "create-react-app",
       "htWrappers": ["@handsontable/react-wrapper"],
@@ -75,6 +76,7 @@
     "ant-design": {
       "tier": 1,
       "displayName": "Ant Design + React",
+      "engine": "container",
       "sandpackTemplate": "react",
       "sandpackEnvironment": "create-react-app",
       "htWrappers": ["@handsontable/react-wrapper"],

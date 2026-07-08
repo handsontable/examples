@@ -130,6 +130,7 @@ function importExample(framework) {
     framework,
     displayName: cfg.displayName,
     tier: cfg.tier,
+    engine: cfg.engine ?? (cfg.tier === 2 ? "container" : "sandpack"),
     sandpackTemplate: cfg.sandpackTemplate ?? null,
     sandpackEnvironment: cfg.sandpackEnvironment ?? null,
     container: cfg.container ?? null,

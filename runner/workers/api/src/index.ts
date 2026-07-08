@@ -134,6 +134,7 @@ export default {
           framework: string;
           files: Record<string, string>;
           sessionId?: string;
+          htVersion?: string;
         };
         const dev = FRAMEWORK_DEV[body.framework];
         const cfg = BUILD_CONFIG[body.framework];
@@ -143,12 +144,28 @@ export default {
         const sandbox = liveSbx(env, sessionId);
 
         await writeFiles(sandbox, body.files);
-        // Boot asynchronously: install deps then run the dev server as one
-        // background process, tee-ing output to a log the client can poll. This
-        // returns immediately so the UI can show live progress instead of
-        // blocking on a multi-minute Angular/Next install.
-        const boot = `cd ${CONTAINER_ROOT} && { echo '::installing dependencies::'; ${cfg.installCommand} --no-audit --no-fund && echo '::starting dev server::' && ${dev.cmd} ; } > ${BOOT_LOG} 2>&1`;
-        await sandbox.startProcess(`sh -lc ${shq(boot)}`);
+        // Boot asynchronously (returns immediately; UI polls /status for live
+        // progress). Dependency resolution, fastest first:
+        //   1. restore node_modules from the per-(framework,version) R2 cache;
+        //   2. else seed from the image's baked deps + `npm install` (delta),
+        //      then upload the result to the cache for next time.
+        const cacheVer = (body.htVersion || "default").replace(/[^a-zA-Z0-9._-]/g, "-");
+        const cacheUrl = `${url.origin}/api/nmcache/${encodeURIComponent(body.framework)}/${encodeURIComponent(cacheVer)}`;
+        const script = [
+          `cd ${CONTAINER_ROOT}`,
+          `if curl -fsS ${shq(cacheUrl)} -o /tmp/nm.tgz && [ -s /tmp/nm.tgz ]; then`,
+          `  echo '::restoring cached dependencies::'; tar xzf /tmp/nm.tgz`,
+          `else`,
+          `  echo '::installing dependencies::'`,
+          `  cp -al /baked/${dev.bakedKey}/node_modules ./node_modules 2>/dev/null || true`,
+          `  ${cfg.installCommand} --no-audit --no-fund`,
+          `  echo '::caching dependencies::'`,
+          `  tar czf /tmp/nm.tgz node_modules 2>/dev/null && curl -fsS -X PUT --data-binary @/tmp/nm.tgz ${shq(cacheUrl)} >/dev/null 2>&1 || true`,
+          `fi`,
+          `echo '::starting dev server::'`,
+          dev.cmd,
+        ].join("\n");
+        await sandbox.startProcess(`sh -lc ${shq(`{ ${script} ; } > ${BOOT_LOG} 2>&1`)}`);
 
         // Preview URL host: the wildcard domain in production (PREVIEW_HOST), or
         // the request host in local dev (localhost:8787 -> *.localhost:8787).
@@ -171,6 +188,24 @@ export default {
         }
         await sandbox.writeFile(full, body.contents);
         return cors(new Response(null, { status: 204 }));
+      }
+
+      // node_modules cache per (framework, version): GET restores, PUT stores.
+      // Keeps Tier-2 boots fast across versions (containers curl these directly).
+      if (parts[0] === "api" && parts[1] === "nmcache" && parts.length === 4) {
+        const fw = parts[2]!.replace(/[^a-zA-Z0-9._-]/g, "-");
+        const ver = parts[3]!.replace(/[^a-zA-Z0-9._-]/g, "-");
+        const key = `nmcache/${fw}/${ver}.tgz`;
+        if (request.method === "GET") {
+          const obj = await env.ARTIFACTS.get(key);
+          if (!obj) return new Response("miss", { status: 404 });
+          return new Response(obj.body, { headers: { "Content-Type": "application/gzip" } });
+        }
+        if (request.method === "PUT") {
+          if (!request.body) return new Response("no body", { status: 400 });
+          await env.ARTIFACTS.put(key, request.body);
+          return new Response(null, { status: 204 });
+        }
       }
 
       // GET /api/session/:id/status?port=NNNN -> { ready, log } (boot progress)

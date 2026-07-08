@@ -99,8 +99,8 @@ export class SandpackRuntime implements DemoRuntime {
   private didReady = false;
 
   constructor(entry: CatalogEntry, opts: SandpackRuntimeOptions) {
-    if (entry.tier !== 1) {
-      throw new Error(`SandpackRuntime is Tier 1 only; ${entry.framework} is Tier ${entry.tier}`);
+    if (entry.engine !== "sandpack") {
+      throw new Error(`SandpackRuntime requires engine 'sandpack'; ${entry.framework} is '${entry.engine}'`);
     }
     this.entry = entry;
     this.opts = opts;
