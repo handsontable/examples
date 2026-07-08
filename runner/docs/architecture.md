@@ -55,8 +55,24 @@ Per-framework wrapper map (pinned in lockstep with `handsontable`):
 
 Client-facing shares are **prebuilt static, never live sessions**. On Share:
 snapshot files → run the real framework build → upload to R2 → mint a short id →
-return `https://demos.handsontable.com/d/:id`. Immutable, permanent, revocable
-(410 when revoked). No container runs for client views.
+return a permanent `/d/:id` URL. Immutable, permanent, revocable (410 when
+revoked). No container runs for client views.
+
+### Internal "My demos" + fork flow
+
+Authoring is **internal-team only** (Handsontable accounts — see Auth below).
+Every signed-in user has their own set of demos stored in D1 (`created_by` =
+their email). The create flow is a **fork**:
+
+1. Open any existing demo as a starting point — a catalog starter template *or*
+   another saved demo (`forked_from` records the source).
+2. Edit the code live in the shell; set a **title** and **description**.
+3. **Save** → `POST /api/demos` snapshots the files, builds the static artifact,
+   stores metadata in D1 + artifact in R2, and mints a **unique short URL**
+   `/d/:id` to send to the client.
+
+The fork is independent and owned by the forker; editing it never affects the
+source. "My demos" is `GET /api/demos?mine=1` filtered by `created_by`.
 
 Static build modes per Tier-2 framework:
 
@@ -83,20 +99,23 @@ forever.
 CREATE TABLE demos (
   id           TEXT PRIMARY KEY,
   title        TEXT NOT NULL,
+  description  TEXT,                              -- author-provided, shown to client
   framework    TEXT NOT NULL,
   tier         INTEGER NOT NULL,
   ht_version   TEXT NOT NULL,
   files_hash   TEXT NOT NULL,
   r2_prefix    TEXT NOT NULL,
+  forked_from  TEXT,                              -- source demo id, or "catalog:<framework>"
   visibility   TEXT NOT NULL DEFAULT 'unlisted',
   revoked      INTEGER NOT NULL DEFAULT 0,
-  created_by   TEXT NOT NULL,
+  created_by   TEXT NOT NULL,                     -- @handsontable.com email (from broker)
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL,
   revoked_at   TEXT
 );
 CREATE INDEX idx_demos_framework ON demos(framework);
-CREATE INDEX idx_demos_created_by ON demos(created_by);
+CREATE INDEX idx_demos_created_by ON demos(created_by);      -- powers "My demos"
+CREATE INDEX idx_demos_forked_from ON demos(forked_from);
 CREATE UNIQUE INDEX idx_demos_buildkey ON demos(framework, ht_version, files_hash);
 
 CREATE TABLE build_cache (
@@ -106,11 +125,52 @@ CREATE TABLE build_cache (
 );
 ```
 
-## Auth & domains
+## Auth — Handsontable accounts only (login broker)
 
-Cloudflare Access gates `apps/authoring` and all write endpoints. The viewer and
-`GET /api/demos/:id` are public. Authoring lives on an Access-gated subdomain;
-public shares at `demos.handsontable.com/d/:id`.
+Authoring and all write endpoints are **internal-team only**, gated by the shared
+Handsontable **Google login broker** (per the `publish-app` skill). This
+supersedes the original spec's Cloudflare Access.
+
+- Broker base URL (public, hardcoded — not a secret):
+  `https://mcp-auth-proxy-j0tb.onrender.com`.
+- Frontend redirects to `GET /broker/login?return_to=<app url>`; the broker
+  authenticates via Google, **rejects any non-`@handsontable.com` account**, and
+  redirects back with `#token=<JWT>`. The app stores the token in
+  `sessionStorage`, resolves identity via `GET /broker/userinfo` →
+  `{ email, sub, exp }`, and shows the signed-in email + a **Log out** control.
+- `return_to` must be on an allowed host (`*.workers.dev`, `handsontable.com`,
+  localhost) — satisfied by deploying on `handsontable-sandbox.workers.dev`.
+- **Server-side:** the `workers/api` write endpoints (`POST`/`PATCH`/`DELETE
+  /api/demos`) require `Authorization: Bearer <token>`, re-validate it against
+  `/broker/userinfo`, and set/enforce `created_by` from the verified email. No
+  service account, no app-wide credential — the per-user token is the credential.
+
+`GET /api/demos/:id`, the viewer, and the embed view are **public** (read-only).
+
+### Domains
+
+- Authoring + API + viewer/embed: `handsontable-sandbox.workers.dev` (broker
+  allowed host; no per-app Google setup).
+- A vanity `demos.handsontable.com` can front the viewer later via routing; the
+  short-link contract `/d/:id` is host-independent.
+
+## Embedding on the docs (locked to handsontable.com)
+
+Demos must be embeddable as an iframe on docs pages such as
+`https://handsontable.com/docs/angular-data-grid/recipes/themes/ant-design/`, and
+**only** from `handsontable.com` — no other site may embed them.
+
+- `GET /embed/:id` serves the read-only rendered preview (no editor chrome),
+  prebuilt-static from R2 — same cheap artifact as `/d/:id`.
+- Embedding is restricted with a response header:
+  `Content-Security-Policy: frame-ancestors https://handsontable.com https://*.handsontable.com http://localhost:*`.
+  `frame-ancestors` is the authoritative, cross-origin-capable control (it
+  supersedes `X-Frame-Options`, which can't allow a specific third-party origin).
+- Defense in depth: reject when `Sec-Fetch-Dest: iframe` is present with a
+  cross-site `Sec-Fetch-Site` and the `Origin`/`Referer` is not a
+  `handsontable.com` host.
+- The `/d/:id` share link (client-facing, opened directly) stays framable-nowhere
+  by default; `/embed/:id` is the docs-only framed variant.
 
 ## Hard constraints
 
@@ -129,11 +189,15 @@ follow-up PR.
 ## Deliverables
 
 1. ✅ Monorepo scaffold + catalog importer + migration of all 13 examples.
-2. `packages/runtime`: `SandpackRuntime` (Tier 1) for all 7 client-side frameworks.
-3. `packages/editor-shell` + `apps/authoring`: unified editor behind Access.
+2. ✅ `packages/runtime`: `SandpackRuntime` (Tier 1) for all 7 client-side frameworks.
+3. ✅ `packages/editor-shell` + `apps/authoring`: unified editor (Tier-1 live). *(auth
+   broker + fork/title/description UI wired in with the sharing API, D5.)*
 4. Tier 2: `containers/*` + `ContainerRuntime` + Sandbox SDK orchestration.
-5. `workers/api` sharing endpoints + D1/R2/KV.
-6. `apps/viewer` at `/d/:id` + opt-in "Edit live".
+5. `workers/api`: Handsontable-broker auth on writes; `POST/GET/PATCH/DELETE
+   /api/demos` (fork → title/description → snapshot → build → R2 → short id);
+   "My demos" by `created_by`; D1/R2/KV.
+6. `apps/viewer`: public `/d/:id` read-only viewer **and** `/embed/:id` locked to
+   `handsontable.com` via `frame-ancestors`; opt-in "Edit live".
 7. `pipeline/` build-and-serve snapshotter + version injection + `scripts/warm.ts`.
 8. `render-ms` compatibility shim.
 9. `docs/`: run/deploy, self-host-bundler, non-technical share guide.
