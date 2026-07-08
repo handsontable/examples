@@ -1,0 +1,48 @@
+{
+  // Sharing + Tier-2 orchestration Worker for the Handsontable demo runner.
+  // Deployed to the main Handsontable Cloudflare account (NOT the sandbox).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "handsontable-demos-api",
+  "account_id": "15111272c53ed0aaf84a908f0c9c7f8b",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Public, non-secret config.
+  "vars": {
+    "LOGIN_BROKER_URL": "https://mcp-auth-proxy-j0tb.onrender.com",
+    "EMBED_ALLOWED_ANCESTORS": "https://handsontable.com https://*.handsontable.com http://localhost:*"
+  },
+
+  // D1 — demo metadata + short ids (account 15111272, region EEUR).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "handsontable-demos",
+      "database_id": "5fc0854f-d348-487f-9531-2c44cc86d182",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // KV — edge read-cache for demo JSON.
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "6620876d996d45f9ac69b2a6b59909e6"
+    }
+  ],
+
+  // R2 — source snapshots + built static artifacts.
+  // NOTE: the bucket must be created once R2 is enabled on the account
+  //   (Dashboard -> R2 -> Enable, then `wrangler r2 bucket create handsontable-demos`).
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "handsontable-demos"
+    }
+  ]
+
+  // Tier-2 Sandbox SDK container binding (Durable Object + containers) is added
+  // in Deliverable 4.
+}

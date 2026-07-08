@@ -139,7 +139,9 @@ supersedes the original spec's Cloudflare Access.
   `sessionStorage`, resolves identity via `GET /broker/userinfo` →
   `{ email, sub, exp }`, and shows the signed-in email + a **Log out** control.
 - `return_to` must be on an allowed host (`*.workers.dev`, `handsontable.com`,
-  localhost) — satisfied by deploying on `handsontable-sandbox.workers.dev`.
+  localhost) — satisfied by deploying on the main Handsontable account's
+  `*.workers.dev` subdomain (account `15111272c53ed0aaf84a908f0c9c7f8b`, **not**
+  the sandbox). See `docs/cloudflare-resources.md`.
 - **Server-side:** the `workers/api` write endpoints (`POST`/`PATCH`/`DELETE
   /api/demos`) require `Authorization: Bearer <token>`, re-validate it against
   `/broker/userinfo`, and set/enforce `created_by` from the verified email. No
@@ -149,8 +151,8 @@ supersedes the original spec's Cloudflare Access.
 
 ### Domains
 
-- Authoring + API + viewer/embed: `handsontable-sandbox.workers.dev` (broker
-  allowed host; no per-app Google setup).
+- Authoring + API + viewer/embed deploy to the main Handsontable account's
+  `*.workers.dev` subdomain (broker allowed host; no per-app Google setup).
 - A vanity `demos.handsontable.com` can front the viewer later via routing; the
   short-link contract `/d/:id` is host-independent.
 
