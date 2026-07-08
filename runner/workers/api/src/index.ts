@@ -153,14 +153,14 @@ export default {
         const cacheUrl = `${url.origin}/api/nmcache/${encodeURIComponent(body.framework)}/${encodeURIComponent(cacheVer)}`;
         const script = [
           `cd ${CONTAINER_ROOT}`,
-          `if curl -fsS ${shq(cacheUrl)} -o /tmp/nm.tgz && [ -s /tmp/nm.tgz ]; then`,
+          `if curl -fsS ${shq(cacheUrl)} -o /tmp/nm.tgz 2>/dev/null && [ -s /tmp/nm.tgz ]; then`,
           `  echo '::restoring cached dependencies::'; tar xzf /tmp/nm.tgz`,
           `else`,
-          `  echo '::installing dependencies::'`,
+          `  echo '::installing dependencies (first run for this version)::'`,
           `  cp -al /baked/${dev.bakedKey}/node_modules ./node_modules 2>/dev/null || true`,
           `  ${cfg.installCommand} --no-audit --no-fund`,
-          `  echo '::caching dependencies::'`,
-          `  tar czf /tmp/nm.tgz node_modules 2>/dev/null && curl -fsS -X PUT --data-binary @/tmp/nm.tgz ${shq(cacheUrl)} >/dev/null 2>&1 || true`,
+          // Upload the cache in the background so it never delays the dev server.
+          `  ( tar czf /tmp/nm.tgz node_modules 2>/dev/null && curl -fsS -X PUT --data-binary @/tmp/nm.tgz ${shq(cacheUrl)} >/dev/null 2>&1 ) &`,
           `fi`,
           `echo '::starting dev server::'`,
           dev.cmd,
