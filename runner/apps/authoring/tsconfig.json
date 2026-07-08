@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "paths": {
+      "@handsontable/demo-editor-shell": ["../../packages/editor-shell/src/index.ts"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}

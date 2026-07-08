@@ -7,7 +7,24 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
+  "peerDependencies": {
+    "react": "^18 || ^19",
+    "react-dom": "^18 || ^19"
+  },
   "dependencies": {
-    "@handsontable/demo-runtime": "workspace:*"
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-html": "^6.4.9",
+    "@codemirror/lang-javascript": "^6.2.4",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-vue": "^0.1.3",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@handsontable/demo-runtime": "workspace:*",
+    "@uiw/react-codemirror": "^4.25.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   }
 }
