@@ -63,6 +63,9 @@ function Authoring({ user }: { user: User }) {
   const [status, setStatus] = useState<PreviewStatus>("booting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  // Bumped whenever the whole workspace is replaced (example switch or fork) so
+  // the runtime remounts even when the framework is unchanged.
+  const [mountGen, setMountGen] = useState(0);
 
   const [iframeEl, setIframeEl] = useState<HTMLIFrameElement | null>(null);
   const runtimeRef = useRef<DemoRuntime | null>(null);
@@ -72,17 +75,26 @@ function Authoring({ user }: { user: User }) {
   // Sharing / My demos UI state.
   const [shareOpen, setShareOpen] = useState(false);
   const [shareResult, setShareResult] = useState<ShareResult | null>(null);
-  const [forkedFrom, setForkedFrom] = useState<string | null>(null);
+  const [forkedFrom, setForkedFrom] = useState<string | null>("catalog:react");
   const [myDemosOpen, setMyDemosOpen] = useState(false);
 
-  useEffect(() => {
-    const fresh = { ...entry.files };
-    setFiles(fresh);
-    filesRef.current = fresh;
+  /** Replace the whole workspace with a fresh file set + lineage, and remount. */
+  const loadWorkspace = useCallback((fw: string, nextFiles: FilesMap, lineage: string) => {
+    filesRef.current = nextFiles; // ensure the mount effect reads the new files
+    setFramework(fw);
+    setFiles(nextFiles);
+    setForkedFrom(lineage);
     setDirty(false);
     setShareResult(null);
-    setForkedFrom(`catalog:${entry.framework}`);
-  }, [entry]);
+    setErrorMessage(null);
+    setMountGen((g) => g + 1);
+  }, []);
+
+  /** Pick a catalog example as a fresh starting template. */
+  const selectExample = useCallback(
+    (fw: string) => loadWorkspace(fw, { ...getEntry(fw).files }, `catalog:${fw}`),
+    [loadWorkspace],
+  );
 
   useEffect(() => {
     if (!iframeEl) return;
@@ -117,7 +129,8 @@ function Authoring({ user }: { user: User }) {
       runtime.dispose();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
-  }, [iframeEl, entry, version]);
+    // mountGen forces a remount when files are replaced without a framework change.
+  }, [iframeEl, entry, version, mountGen]);
 
   const onEdit = useCallback((path: string, contents: string) => {
     setFiles((prev) => ({ ...prev, [path]: contents }));
@@ -129,27 +142,35 @@ function Authoring({ user }: { user: User }) {
     }
   }, []);
 
-  /** Open a saved demo as a fork: load its files, record lineage. */
-  const openFork = useCallback(async (id: string) => {
-    const token = getToken();
-    const res = await fetch(`${API_BASE}/api/demos/${id}/source`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    }).catch(() => null);
-    setForkedFrom(id);
-    setMyDemosOpen(false);
-    if (res && res.ok) {
+  /** Open a saved demo as a fork: fetch its source FIRST, then load it wholesale.
+   *  On failure, the current workspace and lineage are left untouched. */
+  const openFork = useCallback(
+    async (id: string) => {
+      const token = getToken();
+      let res: Response | null = null;
+      try {
+        res = await fetch(`${API_BASE}/api/demos/${id}/source`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+      } catch {
+        res = null;
+      }
+      if (!res || !res.ok) {
+        setErrorMessage(`Couldn't load demo ${id} to fork.`);
+        return;
+      }
       const data = (await res.json()) as { framework: string; files: FilesMap };
-      setFramework(data.framework);
-      setFiles(data.files);
-      filesRef.current = data.files;
-    }
-  }, []);
+      setMyDemosOpen(false);
+      loadWorkspace(data.framework, data.files, id);
+    },
+    [loadWorkspace],
+  );
 
   return (
     <div style={{ height: "100%", display: "grid", gridTemplateRows: "auto 1fr" }}>
       <div style={topBar}>
         <span style={{ color: theme.color.textMuted }}>Example</span>
-        <select value={framework} onChange={(e) => setFramework(e.target.value)} style={selectStyle}>
+        <select value={framework} onChange={(e) => selectExample(e.target.value)} style={selectStyle}>
           {catalog.examples.map((e) => (
             <option key={e.framework} value={e.framework}>
               {e.displayName} · Tier {e.tier}
