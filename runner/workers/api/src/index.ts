@@ -6,12 +6,25 @@
 //
 // Sharing endpoints (POST/GET/PATCH/DELETE /api/demos) land in Deliverable 5.
 
-import { getSandbox, proxyToSandbox } from "@cloudflare/sandbox";
+import { getSandbox, proxyToSandbox, Sandbox } from "@cloudflare/sandbox";
 import type { Env } from "./env.js";
+import { FRAMEWORK_DEV } from "./frameworks.generated.js";
 
-export { Sandbox } from "@cloudflare/sandbox";
+// One Durable Object class per framework image (Cloudflare binds one image per
+// class). Each is a thin Sandbox subclass; the image is set in wrangler.jsonc.
+export class RemixSandbox extends Sandbox {}
+export class AngularSandbox extends Sandbox {}
+export class NextSandbox extends Sandbox {}
+export class NextShadcnSandbox extends Sandbox {}
+export class AstroSandbox extends Sandbox {}
+export class NuxtSandbox extends Sandbox {}
 
 const CONTAINER_ROOT = "/app";
+
+// container name -> DO binding, derived from the generated dev map.
+const CONTAINER_BINDING: Record<string, string> = Object.fromEntries(
+  Object.values(FRAMEWORK_DEV).map((d) => [d.container, d.binding]),
+);
 
 // Minimal structural view of the Sandbox stub — avoids deep instantiation of the
 // full RPC proxy type (TS2589) while typing exactly the methods we call.
@@ -25,13 +38,11 @@ type SandboxLike = {
 };
 // Cast the function itself so TS never instantiates its deep generic return.
 const getSandboxShallow = getSandbox as unknown as (ns: unknown, id: string) => SandboxLike;
-const sbx = (env: Env, id: string): SandboxLike => getSandboxShallow(env.Sandbox, id);
-
-// Per-framework dev command + port. (One framework proven end-to-end first;
-// the rest of the Tier-2 catalog is added once this is validated.)
-const FRAMEWORK_DEV: Record<string, { cmd: string; port: number }> = {
-  remix: { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
-};
+/** Resolve the sandbox for a given DO binding name. */
+const sbxByBinding = (env: Env, binding: string, id: string): SandboxLike =>
+  getSandboxShallow(env[binding], id);
+/** container prefix of a sessionId (`<container>--<uuid>`). */
+const containerOf = (sessionId: string) => sessionId.split("--")[0]!;
 
 function cors(resp: Response): Response {
   const h = new Headers(resp.headers);
@@ -89,15 +100,13 @@ export default {
         const dev = FRAMEWORK_DEV[body.framework];
         if (!dev) return json({ error: `Tier-2 not wired for framework: ${body.framework}` }, 400);
 
-        const sessionId = body.sessionId || `${body.framework}-${crypto.randomUUID().slice(0, 8)}`;
-        const sandbox = sbx(env, sessionId);
+        // sessionId encodes the container so file/delete routes pick the right image.
+        const sessionId = `${dev.container}--${crypto.randomUUID().slice(0, 8)}`;
+        const sandbox = sbxByBinding(env, dev.binding, sessionId);
 
         await writeFiles(sandbox, body.files);
-
-        // Start the real dev server (idempotent-ish: a fresh session id = fresh container).
+        // Start the real dev server (a fresh session id = a fresh container).
         await sandbox.startProcess(dev.cmd, { cwd: CONTAINER_ROOT });
-
-        // Give the dev server a moment to bind before exposing the port.
         await waitForPort(sandbox, dev.port);
 
         // Use host (incl. port) so preview URLs route back to this Worker in
@@ -112,7 +121,9 @@ export default {
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "session" && parts[3] === "file") {
         const sessionId = parts[2]!;
         const body = (await request.json()) as { path: string; contents: string };
-        const sandbox = sbx(env, sessionId);
+        const binding = CONTAINER_BINDING[containerOf(sessionId)];
+        if (!binding) return json({ error: `unknown session container: ${sessionId}` }, 400);
+        const sandbox = sbxByBinding(env, binding, sessionId);
         const full = CONTAINER_ROOT + (body.path.startsWith("/") ? body.path : `/${body.path}`);
         const dir = full.slice(0, full.lastIndexOf("/"));
         if (dir && dir !== CONTAINER_ROOT) {
@@ -125,7 +136,9 @@ export default {
       // DELETE /api/session/:id -> destroy container
       if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "session" && parts.length === 3) {
         const sessionId = parts[2]!;
-        const sandbox = sbx(env, sessionId);
+        const binding = CONTAINER_BINDING[containerOf(sessionId)];
+        if (!binding) return json({ error: `unknown session container: ${sessionId}` }, 400);
+        const sandbox = sbxByBinding(env, binding, sessionId);
         await sandbox.destroy();
         return cors(new Response(null, { status: 204 }));
       }

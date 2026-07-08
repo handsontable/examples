@@ -373,7 +373,7 @@
       "tier": 2,
       "sandpackTemplate": null,
       "sandpackEnvironment": null,
-      "container": "next",
+      "container": "next-shadcn",
       "htWrappers": [
         "@handsontable/react-wrapper"
       ],

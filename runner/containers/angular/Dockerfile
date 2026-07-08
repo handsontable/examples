@@ -6,6 +6,6 @@ FROM docker.io/cloudflare/sandbox:0.12.3
 WORKDIR /app
 
 COPY package.json ./
-RUN npm install --no-audit --no-fund --loglevel=error
+RUN npm install --legacy-peer-deps --no-audit --no-fund --loglevel=error
 
-EXPOSE 5173
+EXPOSE 3000

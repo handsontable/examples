@@ -8,4 +8,4 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --no-audit --no-fund --loglevel=error
 
-EXPOSE 5173
+EXPOSE 4321

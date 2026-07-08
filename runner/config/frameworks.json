@@ -130,7 +130,7 @@
     "next-shadcn.js": {
       "tier": 2,
       "displayName": "Next.js + shadcn/ui",
-      "container": "next",
+      "container": "next-shadcn",
       "htWrappers": ["@handsontable/react-wrapper"],
       "entry": "app/page.tsx",
       "devCommand": "next dev -p 3000 -H 0.0.0.0",
