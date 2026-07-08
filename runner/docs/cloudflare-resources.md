@@ -14,6 +14,32 @@ sandbox).
 
 All three resources are provisioned in account `15111272…`.
 
+## Production deployment
+
+- **Worker:** `handsontable-demos-api` → **https://handsontable-demos-api.handsoncode.workers.dev**
+  (account workers.dev subdomain: `handsoncode.workers.dev`).
+- Deployed via `CLOUDFLARE_ACCOUNT_ID=15111272… npx wrangler deploy` from
+  `workers/api/`. Migrations applied; D1/KV/R2 bound.
+- **7 container applications** created (Sandbox SDK): `…-remixsandbox`,
+  `-angularsandbox`, `-nextsandbox`, `-nextshadcnsandbox`, `-astrosandbox`,
+  `-nuxtsandbox`, `-buildersandbox`.
+- Verified live: `GET /api/health` → 200; unknown demo → 404; unauthenticated
+  `POST /api/demos` → 401 (broker auth enforced; no dev bypass in prod).
+
+### What works in prod now vs. pending
+
+- ✅ **Static sharing + viewer** (`POST /api/demos`, `/d/:id`, `/embed/:id`,
+  `GET /api/demos`) work on the `workers.dev` domain — no wildcard needed. The
+  build snapshotter runs in the `buildersandbox` container.
+- ⏳ **Live Tier-2 authoring sessions** (`/api/session*`) need a **wildcard custom
+  domain** for container preview URLs (ADR-0011) — `*.workers.dev` does not
+  support them. Set up e.g. `*.demos.handsontable.com` → this Worker, then live
+  Tier-2 preview works. Static shares of Tier-2 demos already work (built via the
+  builder container).
+
+> Creating a share in prod requires a Handsontable broker login (browser flow);
+> the static/build code path itself is verified locally end-to-end.
+
 ## Provisioning notes
 
 - Resources are managed with `wrangler` (authenticated as
