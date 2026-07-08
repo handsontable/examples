@@ -21,6 +21,9 @@ export class Sandbox extends SandboxBase {}
 export class BuilderSandbox extends SandboxBase {}
 
 const CONTAINER_ROOT = "/app";
+const BOOT_LOG = "/tmp/boot.log";
+/** Single-quote a string for embedding in `sh -lc '...'`. */
+const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 // Minimal structural view of the Sandbox stub — avoids deep instantiation of the
 // full RPC proxy type (TS2589) while typing exactly the methods we call.
@@ -140,13 +143,12 @@ export default {
         const sandbox = liveSbx(env, sessionId);
 
         await writeFiles(sandbox, body.files);
-        // Generic image: install this demo's deps, then start the real dev server.
-        const install = await sandbox.exec(`sh -lc "cd ${CONTAINER_ROOT} && ${cfg.installCommand} --no-audit --no-fund"`);
-        if (install.success === false) {
-          return json({ error: `install failed: ${(install.stderr ?? "").slice(-600)}` }, 500);
-        }
-        await sandbox.startProcess(dev.cmd, { cwd: CONTAINER_ROOT });
-        await waitForPort(sandbox, dev.port);
+        // Boot asynchronously: install deps then run the dev server as one
+        // background process, tee-ing output to a log the client can poll. This
+        // returns immediately so the UI can show live progress instead of
+        // blocking on a multi-minute Angular/Next install.
+        const boot = `cd ${CONTAINER_ROOT} && { echo '::installing dependencies::'; ${cfg.installCommand} --no-audit --no-fund && echo '::starting dev server::' && ${dev.cmd} ; } > ${BOOT_LOG} 2>&1`;
+        await sandbox.startProcess(`sh -lc ${shq(boot)}`);
 
         // Preview URL host: the wildcard domain in production (PREVIEW_HOST), or
         // the request host in local dev (localhost:8787 -> *.localhost:8787).
@@ -169,6 +171,23 @@ export default {
         }
         await sandbox.writeFile(full, body.contents);
         return cors(new Response(null, { status: 204 }));
+      }
+
+      // GET /api/session/:id/status?port=NNNN -> { ready, log } (boot progress)
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "session" && parts[3] === "status") {
+        const sandbox = liveSbx(env, parts[2]!);
+        const port = Number(url.searchParams.get("port")) || 0;
+        let ready = false;
+        if (port) {
+          const probe = `node -e "require('net').connect(${port},'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"`;
+          try { ready = (await sandbox.exec(probe)).success === true; } catch { ready = false; }
+        }
+        let log = "";
+        try {
+          const r = await sandbox.exec(`sh -lc "tail -c 2500 ${BOOT_LOG} 2>/dev/null || true"`);
+          log = r.stdout ?? "";
+        } catch { /* no log yet */ }
+        return json({ ready, log });
       }
 
       // DELETE /api/session/:id -> destroy container
@@ -340,17 +359,3 @@ export default {
   },
 };
 
-/** Poll the dev-server port from inside the container until it accepts connections. */
-async function waitForPort(sandbox: SandboxLike, port: number, timeoutMs = 45000) {
-  const deadline = Date.now() + timeoutMs;
-  const probe = `node -e "require('net').connect(${port},'127.0.0.1').on('connect',()=>{console.log('up');process.exit(0)}).on('error',()=>process.exit(1))"`;
-  while (Date.now() < deadline) {
-    try {
-      const res = await sandbox.exec(probe);
-      if (res.success || /up/.test(res.stdout ?? "")) return;
-    } catch {
-      /* not ready */
-    }
-    await new Promise((r) => setTimeout(r, 800));
-  }
-}

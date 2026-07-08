@@ -35,6 +35,10 @@ export class ContainerRuntime implements DemoRuntime {
   private disposed = false;
   private pending = new Map<string, string>();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly progressCbs = new Set<(log: string) => void>();
+  private previewUrl = "";
+  private port = 0;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(entry: CatalogEntry, opts: ContainerRuntimeOptions) {
     if (entry.tier !== 2) {
@@ -51,6 +55,10 @@ export class ContainerRuntime implements DemoRuntime {
   onError(cb: (e: Error) => void): void {
     this.errorCbs.add(cb);
   }
+  /** Boot-progress log lines while the container installs deps + starts the dev server. */
+  onProgress(cb: (log: string) => void): void {
+    this.progressCbs.add(cb);
+  }
   private emitReady() {
     if (this.didReady) return;
     this.didReady = true;
@@ -58,6 +66,9 @@ export class ContainerRuntime implements DemoRuntime {
   }
   private emitError(e: Error) {
     for (const cb of this.errorCbs) cb(e);
+  }
+  private emitProgress(log: string) {
+    for (const cb of this.progressCbs) cb(log);
   }
 
   async mount(files: FilesMap): Promise<{ previewUrl: string }> {
@@ -76,18 +87,47 @@ export class ContainerRuntime implements DemoRuntime {
       const msg = await res.text().catch(() => res.statusText);
       throw new Error(`session start failed (${res.status}): ${msg}`);
     }
-    const { sessionId, previewUrl } = (await res.json()) as {
+    const { sessionId, previewUrl, port } = (await res.json()) as {
       sessionId: string;
       previewUrl: string;
+      port: number;
     };
     this.sessionId = sessionId;
+    this.previewUrl = previewUrl;
+    this.port = port;
 
     if (this.disposed) return { previewUrl };
 
-    // Fire ready once the preview iframe finishes its first load.
-    this.opts.iframe.addEventListener("load", () => this.emitReady(), { once: true });
-    this.opts.iframe.src = previewUrl;
+    // The container boots asynchronously (install + dev server). Poll status for
+    // progress; only point the iframe at the preview once the dev server is up.
+    this.emitProgress("Starting container…");
+    this.poll();
     return { previewUrl };
+  }
+
+  private poll(): void {
+    if (this.disposed || !this.sessionId) return;
+    void (async () => {
+      try {
+        const r = await fetch(
+          `${this.opts.apiBase}/api/session/${this.sessionId}/status?port=${this.port}`,
+        );
+        if (r.ok) {
+          const { ready, log } = (await r.json()) as { ready: boolean; log: string };
+          if (log) this.emitProgress(log);
+          if (ready && !this.disposed) {
+            this.opts.iframe.addEventListener("load", () => this.emitReady(), { once: true });
+            this.opts.iframe.src = this.previewUrl;
+            // Fallback in case the load event is missed.
+            setTimeout(() => this.emitReady(), 1500);
+            return;
+          }
+        }
+      } catch {
+        /* transient; keep polling */
+      }
+      if (!this.disposed) this.pollTimer = setTimeout(() => this.poll(), 2500);
+    })();
   }
 
   /** Stream an edit; the container dev server HMRs it. Debounced per burst. */
@@ -119,6 +159,8 @@ export class ContainerRuntime implements DemoRuntime {
   dispose(): void {
     this.disposed = true;
     if (this.flushTimer) clearTimeout(this.flushTimer);
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.progressCbs.clear();
     const id = this.sessionId;
     this.sessionId = null;
     this.readyCbs.clear();

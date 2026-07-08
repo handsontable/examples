@@ -54,6 +54,7 @@ function Authoring({ user }: { user: User | null }) {
   const [versionOptions, setVersionOptions] = useState<string[]>(VERSION_OPTIONS);
   const [status, setStatus] = useState<PreviewStatus>("booting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [bootLog, setBootLog] = useState<string>("");
   const [dirty, setDirty] = useState(false);
   // Bumped whenever the whole workspace is replaced (example switch or fork) so
   // the runtime remounts even when the framework is unchanged.
@@ -143,11 +144,15 @@ function Authoring({ user }: { user: User | null }) {
       return;
     }
     setStatus("booting");
+    setBootLog("");
     let cancelled = false;
     const runtime =
       entry.tier === 2
         ? new ContainerRuntime(entry, { iframe: iframeEl, apiBase: API_BASE, version: v.value })
         : new SandpackRuntime(entry, { iframe: iframeEl, bundlerURL: SANDPACK_BUNDLER_URL, version: v.value });
+    if (entry.tier === 2) {
+      (runtime as ContainerRuntime).onProgress((log) => !cancelled && setBootLog(log));
+    }
     runtime.onReady(() => !cancelled && setStatus("ready"));
     runtime.onError((e) => {
       if (cancelled) return;
@@ -235,6 +240,7 @@ function Authoring({ user }: { user: User | null }) {
         iframeRef={setIframeEl}
         status={status}
         errorMessage={errorMessage}
+        bootLog={bootLog}
         version={version}
         versionOptions={versionOptions}
         onVersionChange={setVersion}

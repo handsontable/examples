@@ -64,7 +64,7 @@
       "sandpackTemplate": "react",
       "sandpackEnvironment": "create-react-app",
       "htWrappers": ["@handsontable/react-wrapper"],
-      "entry": "index.jsx",
+      "entry": "src/index.jsx",
       "htmlEntry": "index.html",
       "devCommand": null,
       "buildCommand": "vite build",

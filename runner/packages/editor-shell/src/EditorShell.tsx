@@ -15,6 +15,8 @@ export interface EditorShellProps {
   iframeRef: (el: HTMLIFrameElement | null) => void;
   status: PreviewStatus;
   errorMessage?: string | null;
+  /** Live boot log for Tier-2 container sessions (shown while booting). */
+  bootLog?: string;
 
   version: string;
   versionOptions: string[];
@@ -80,6 +82,7 @@ export function EditorShell(props: EditorShellProps) {
           iframeRef={props.iframeRef}
           status={props.status}
           errorMessage={props.errorMessage}
+          bootLog={props.bootLog}
         />
       </div>
     </div>
