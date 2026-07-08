@@ -17,6 +17,8 @@ export interface EditorShellProps {
   errorMessage?: string | null;
   /** Live boot log for Tier-2 container sessions (shown while booting). */
   bootLog?: string;
+  /** A container rebuild is in flight after an edit (shows "Applying changes…"). */
+  syncing?: boolean;
 
   version: string;
   versionOptions: string[];
@@ -83,6 +85,7 @@ export function EditorShell(props: EditorShellProps) {
           status={props.status}
           errorMessage={props.errorMessage}
           bootLog={props.bootLog}
+          syncing={props.syncing}
         />
       </div>
     </div>

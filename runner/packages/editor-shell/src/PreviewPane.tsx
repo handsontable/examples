@@ -10,6 +10,8 @@ export interface PreviewPaneProps {
   errorMessage?: string | null;
   /** Live boot log for Tier-2 container sessions (shown while booting). */
   bootLog?: string;
+  /** A container rebuild is in flight after an edit. */
+  syncing?: boolean;
 }
 
 const STATUS_TEXT: Record<PreviewStatus, string> = {
@@ -33,7 +35,7 @@ function tailLines(log: string, n = 12): string {
  *  iframe) and Tier 2 (iframe.src = container preview URL) — the shell never
  *  knows which engine is behind it. While a Tier-2 container boots, the live
  *  install/dev-server log is shown so it never looks frozen. */
-export function PreviewPane({ iframeRef, status, errorMessage, bootLog }: PreviewPaneProps) {
+export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing }: PreviewPaneProps) {
   const booting = status === "booting";
   const log = bootLog ? tailLines(bootLog) : "";
   return (
@@ -42,6 +44,30 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog }: Previe
         {STATUS_TEXT[status]}
         {status === "error" && errorMessage ? `: ${errorMessage}` : ""}
       </div>
+
+      {status === "ready" && syncing && (
+        <div
+          style={{
+            position: "absolute",
+            top: 36,
+            right: 12,
+            zIndex: 3,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            background: theme.color.accent,
+            color: "#fff",
+            fontFamily: theme.font.ui,
+            fontSize: 12,
+            padding: "4px 10px",
+            borderRadius: 999,
+            boxShadow: "0 2px 8px rgba(0,0,0,0.18)",
+          }}
+        >
+          <Spinner light />
+          Applying changes…
+        </div>
+      )}
 
       {booting && (
         <div
@@ -81,15 +107,15 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog }: Previe
   );
 }
 
-function Spinner() {
+function Spinner({ light }: { light?: boolean }) {
   return (
     <span
       aria-hidden="true"
       style={{
-        width: 14,
-        height: 14,
-        border: `2px solid ${theme.color.border}`,
-        borderTopColor: theme.color.accent,
+        width: light ? 11 : 14,
+        height: light ? 11 : 14,
+        border: `2px solid ${light ? "rgba(255,255,255,0.4)" : theme.color.border}`,
+        borderTopColor: light ? "#fff" : theme.color.accent,
         borderRadius: "50%",
         display: "inline-block",
         animation: "hot-spin 0.8s linear infinite",

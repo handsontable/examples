@@ -56,6 +56,9 @@ function Authoring({ user }: { user: User | null }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [bootLog, setBootLog] = useState<string>("");
   const [dirty, setDirty] = useState(false);
+  const [syncing, setSyncing] = useState(false); // container rebuild in flight
+  const containerModeRef = useRef(false);
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Bumped whenever the whole workspace is replaced (example switch or fork) so
   // the runtime remounts even when the framework is unchanged.
   const [mountGen, setMountGen] = useState(0);
@@ -145,6 +148,8 @@ function Authoring({ user }: { user: User | null }) {
     }
     setStatus("booting");
     setBootLog("");
+    setSyncing(false);
+    containerModeRef.current = entry.engine === "container";
     let cancelled = false;
     const runtime =
       entry.engine === "container"
@@ -181,6 +186,12 @@ function Authoring({ user }: { user: User | null }) {
       runtimeRef.current?.writeFile(path, contents);
     } catch {
       /* not mounted */
+    }
+    // Container frameworks rebuild server-side (a few seconds); show feedback.
+    if (containerModeRef.current) {
+      setSyncing(true);
+      if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = setTimeout(() => setSyncing(false), 4000);
     }
   }, []);
 
@@ -241,6 +252,7 @@ function Authoring({ user }: { user: User | null }) {
         status={status}
         errorMessage={errorMessage}
         bootLog={bootLog}
+        syncing={syncing}
         version={version}
         versionOptions={versionOptions}
         onVersionChange={setVersion}
