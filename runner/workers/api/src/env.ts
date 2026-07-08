@@ -10,6 +10,8 @@ export interface Env {
   SANDBOX_NEXT_SHADCN: DurableObjectNamespace;
   SANDBOX_ASTRO: DurableObjectNamespace;
   SANDBOX_NUXT: DurableObjectNamespace;
+  // Generic builder for the share snapshotter (no baked deps).
+  SANDBOX_BUILDER: DurableObjectNamespace;
 
   // Sharing storage.
   DB: D1Database;

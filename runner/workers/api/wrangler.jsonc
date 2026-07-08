@@ -51,7 +51,8 @@
     { "class_name": "NextSandbox", "image": "../../containers/next/Dockerfile", "instance_type": "standard", "max_instances": 2 },
     { "class_name": "NextShadcnSandbox", "image": "../../containers/next-shadcn/Dockerfile", "instance_type": "standard", "max_instances": 2 },
     { "class_name": "AstroSandbox", "image": "../../containers/astro/Dockerfile", "instance_type": "standard", "max_instances": 2 },
-    { "class_name": "NuxtSandbox", "image": "../../containers/nuxt/Dockerfile", "instance_type": "standard", "max_instances": 2 }
+    { "class_name": "NuxtSandbox", "image": "../../containers/nuxt/Dockerfile", "instance_type": "standard", "max_instances": 2 },
+    { "class_name": "BuilderSandbox", "image": "../../containers/builder/Dockerfile", "instance_type": "standard", "max_instances": 3 }
   ],
   "durable_objects": {
     "bindings": [
@@ -60,14 +61,15 @@
       { "class_name": "NextSandbox", "name": "SANDBOX_NEXT" },
       { "class_name": "NextShadcnSandbox", "name": "SANDBOX_NEXT_SHADCN" },
       { "class_name": "AstroSandbox", "name": "SANDBOX_ASTRO" },
-      { "class_name": "NuxtSandbox", "name": "SANDBOX_NUXT" }
+      { "class_name": "NuxtSandbox", "name": "SANDBOX_NUXT" },
+      { "class_name": "BuilderSandbox", "name": "SANDBOX_BUILDER" }
     ]
   },
   "migrations": [
     {
       "new_sqlite_classes": [
         "RemixSandbox", "AngularSandbox", "NextSandbox",
-        "NextShadcnSandbox", "AstroSandbox", "NuxtSandbox"
+        "NextShadcnSandbox", "AstroSandbox", "NuxtSandbox", "BuilderSandbox"
       ],
       "tag": "v1"
     }

@@ -8,7 +8,9 @@
 
 import { getSandbox, proxyToSandbox, Sandbox } from "@cloudflare/sandbox";
 import type { Env } from "./env.js";
-import { FRAMEWORK_DEV } from "./frameworks.generated.js";
+import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
+import { authenticate } from "./auth.js";
+import { createDemo, getDemo, invalidateDemo, serveDemoAsset, type DemoRow } from "./share.js";
 
 // One Durable Object class per framework image (Cloudflare binds one image per
 // class). Each is a thin Sandbox subclass; the image is set in wrangler.jsonc.
@@ -18,6 +20,7 @@ export class NextSandbox extends Sandbox {}
 export class NextShadcnSandbox extends Sandbox {}
 export class AstroSandbox extends Sandbox {}
 export class NuxtSandbox extends Sandbox {}
+export class BuilderSandbox extends Sandbox {}
 
 const CONTAINER_ROOT = "/app";
 
@@ -54,6 +57,32 @@ function cors(resp: Response): Response {
 
 const json = (data: unknown, status = 200) =>
   cors(new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } }));
+
+const nowIso = () => new Date().toISOString();
+
+/** Public demo JSON with a stale-while-revalidate cache header. */
+function cacheableJson(data: unknown): Response {
+  return new Response(JSON.stringify(data), {
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "public, max-age=60, stale-while-revalidate=300",
+    },
+  });
+}
+
+/** Strip internal columns from a demo row before returning it publicly. */
+function publicView(row: DemoRow) {
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    framework: row.framework,
+    tier: row.tier,
+    ht_version: row.ht_version,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
 
 /** Write a FilesMap ("/path" -> contents) into CONTAINER_ROOT, creating dirs. */
 async function writeFiles(sandbox: SandboxLike, files: Record<string, string>) {
@@ -141,6 +170,99 @@ export default {
         const sandbox = sbxByBinding(env, binding, sessionId);
         await sandbox.destroy();
         return cors(new Response(null, { status: 204 }));
+      }
+
+      // ---- Sharing (D5) ----------------------------------------------------
+
+      // POST /api/demos  (auth) — fork -> build -> R2 -> short id -> /d/:id
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "demos" && parts.length === 2) {
+        const id = await authenticate(request, env);
+        if (!id) return json({ error: "unauthorized" }, 401);
+        const body = (await request.json()) as {
+          framework: string;
+          files: Record<string, string>;
+          title?: string;
+          description?: string;
+          htVersion?: string;
+          forkedFrom?: string;
+        };
+        const cfg = BUILD_CONFIG[body.framework];
+        if (!cfg) return json({ error: `unknown framework: ${body.framework}` }, 400);
+        if (!body.title?.trim()) return json({ error: "title is required" }, 400);
+        if (!body.files || !body.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
+
+        const created = await createDemo(env, {
+          entry: { framework: body.framework, ...cfg },
+          files: body.files,
+          htVersion: body.htVersion ?? "latest",
+          title: body.title.trim(),
+          description: body.description ?? null,
+          createdBy: id.email,
+          forkedFrom: body.forkedFrom ?? `catalog:${body.framework}`,
+          now: nowIso(),
+        });
+        return json({ id: created.id, url: `/d/${created.id}`, embedUrl: `/embed/${created.id}` }, 201);
+      }
+
+      // GET /api/demos  (auth, ?mine=1) — list the caller's demos
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts.length === 2) {
+        const id = await authenticate(request, env);
+        if (!id) return json({ error: "unauthorized" }, 401);
+        const rows = await env.DB.prepare(
+          "SELECT id,title,description,framework,tier,ht_version,forked_from,visibility,revoked,created_at,updated_at FROM demos WHERE created_by = ? ORDER BY updated_at DESC",
+        ).bind(id.email).all();
+        return json({ demos: rows.results });
+      }
+
+      // GET /api/demos/:id  (public) — metadata; 410 if revoked
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts.length === 3) {
+        const row = await getDemo(env, parts[2]!);
+        if (!row) return json({ error: "not found" }, 404);
+        if (row.revoked) return json({ error: "revoked" }, 410);
+        return cors(cacheableJson(publicView(row)));
+      }
+
+      // PATCH /api/demos/:id  (auth, owner) — update title/description/visibility
+      if (request.method === "PATCH" && parts[0] === "api" && parts[1] === "demos" && parts.length === 3) {
+        const id = await authenticate(request, env);
+        if (!id) return json({ error: "unauthorized" }, 401);
+        const demoId = parts[2]!;
+        const row = await getDemo(env, demoId);
+        if (!row) return json({ error: "not found" }, 404);
+        if (row.created_by !== id.email) return json({ error: "forbidden" }, 403);
+        const patch = (await request.json()) as { title?: string; description?: string; visibility?: string };
+        await env.DB.prepare("UPDATE demos SET title=?, description=?, visibility=?, updated_at=? WHERE id=?")
+          .bind(patch.title ?? row.title, patch.description ?? row.description, patch.visibility ?? row.visibility, nowIso(), demoId)
+          .run();
+        await invalidateDemo(env, demoId);
+        return json({ ok: true });
+      }
+
+      // DELETE /api/demos/:id  (auth, owner) — revoke (410 thereafter)
+      if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "demos" && parts.length === 3) {
+        const id = await authenticate(request, env);
+        if (!id) return json({ error: "unauthorized" }, 401);
+        const demoId = parts[2]!;
+        const row = await getDemo(env, demoId);
+        if (!row) return json({ error: "not found" }, 404);
+        if (row.created_by !== id.email) return json({ error: "forbidden" }, 403);
+        await env.DB.prepare("UPDATE demos SET revoked=1, revoked_at=?, updated_at=? WHERE id=?")
+          .bind(nowIso(), nowIso(), demoId).run();
+        await invalidateDemo(env, demoId);
+        return cors(new Response(null, { status: 204 }));
+      }
+
+      // GET /d/:id[/*]  and  /embed/:id[/*]  — public static viewer / docs embed
+      if (request.method === "GET" && (parts[0] === "d" || parts[0] === "embed") && parts.length >= 2) {
+        const embed = parts[0] === "embed";
+        const demoId = parts[1]!;
+        const sub = parts.slice(2).join("/");
+        // Redirect /d/:id -> /d/:id/ so relative asset paths (./assets/...) resolve
+        // under the demo prefix rather than the site root.
+        if (sub === "" && !url.pathname.endsWith("/")) {
+          return Response.redirect(`${url.origin}${url.pathname}/${url.search}`, 308);
+        }
+        return await serveDemoAsset(env, demoId, sub, { embed });
       }
 
       if (parts[0] === "api" && parts[1] === "health") return json({ ok: true });
