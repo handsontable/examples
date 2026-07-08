@@ -5,6 +5,10 @@
   "name": "handsontable-demos-authoring",
   "account_id": "15111272c53ed0aaf84a908f0c9c7f8b",
   "compatibility_date": "2026-06-01",
+  "workers_dev": true,
+  // Catch-all on the base domain (API worker owns the more-specific /d, /embed,
+  // /api paths, which win by specificity).
+  "routes": [{ "pattern": "demos.handsontable.com/*", "zone_name": "handsontable.com" }],
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application"

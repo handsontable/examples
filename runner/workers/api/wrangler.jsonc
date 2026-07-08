@@ -20,10 +20,18 @@
     "PREVIEW_HOST": "demos.handsontable.com"
   },
 
-  // Wildcard route so container preview URLs reach this Worker (ADR-0011).
-  // Keeps the workers.dev URL too.
+  // Routes on demos.handsontable.com: the wildcard serves container preview URLs;
+  // the base-host path routes serve the API, shared demos, embeds, and the
+  // render-ms shim (the authoring app owns the catch-all demos.handsontable.com/*).
+  // workers.dev stays enabled too.
   "routes": [
-    { "pattern": "*.demos.handsontable.com/*", "zone_name": "handsontable.com" }
+    { "pattern": "*.demos.handsontable.com/*", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/api/*", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/d/*", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/embed/*", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/r/*", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/codesandbox-vm", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/codesandbox-browser", "zone_name": "handsontable.com" }
   ],
 
   // D1 — demo metadata + short ids (account 15111272, region EEUR).
