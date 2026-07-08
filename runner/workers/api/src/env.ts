@@ -1,16 +1,11 @@
 import type { DurableObjectNamespace, D1Database, KVNamespace, R2Bucket } from "@cloudflare/workers-types";
 
-// Tier-2 container sessions — one Durable Object binding per framework image.
+// Tier-2 container sessions. `Sandbox` is the single live-preview namespace
+// required by proxyToSandbox; `SANDBOX_BUILDER` runs the share snapshotter.
 // Namespaces are unparameterized to avoid deep instantiation of the Sandbox
 // SDK's recursive RPC type (TS2589).
 export interface Env {
-  SANDBOX_REMIX: DurableObjectNamespace;
-  SANDBOX_ANGULAR: DurableObjectNamespace;
-  SANDBOX_NEXT: DurableObjectNamespace;
-  SANDBOX_NEXT_SHADCN: DurableObjectNamespace;
-  SANDBOX_ASTRO: DurableObjectNamespace;
-  SANDBOX_NUXT: DurableObjectNamespace;
-  // Generic builder for the share snapshotter (no baked deps).
+  Sandbox: DurableObjectNamespace;
   SANDBOX_BUILDER: DurableObjectNamespace;
 
   // Sharing storage.

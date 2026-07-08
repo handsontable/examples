@@ -6,29 +6,21 @@
 //
 // Sharing endpoints (POST/GET/PATCH/DELETE /api/demos) land in Deliverable 5.
 
-import { getSandbox, proxyToSandbox, Sandbox } from "@cloudflare/sandbox";
+import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/sandbox";
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { authenticate } from "./auth.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, type DemoRow } from "./share.js";
 import { renderMs } from "./migrate.js";
 
-// One Durable Object class per framework image (Cloudflare binds one image per
-// class). Each is a thin Sandbox subclass; the image is set in wrangler.jsonc.
-export class RemixSandbox extends Sandbox {}
-export class AngularSandbox extends Sandbox {}
-export class NextSandbox extends Sandbox {}
-export class NextShadcnSandbox extends Sandbox {}
-export class AstroSandbox extends Sandbox {}
-export class NuxtSandbox extends Sandbox {}
-export class BuilderSandbox extends Sandbox {}
+// proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
+// so live-preview sessions all use ONE class backed by one generic image that
+// installs each demo's deps at session start (per-framework images can't be
+// previewed by the SDK). The builder (no preview) keeps its own class.
+export class Sandbox extends SandboxBase {}
+export class BuilderSandbox extends SandboxBase {}
 
 const CONTAINER_ROOT = "/app";
-
-// container name -> DO binding, derived from the generated dev map.
-const CONTAINER_BINDING: Record<string, string> = Object.fromEntries(
-  Object.values(FRAMEWORK_DEV).map((d) => [d.container, d.binding]),
-);
 
 // Minimal structural view of the Sandbox stub — avoids deep instantiation of the
 // full RPC proxy type (TS2589) while typing exactly the methods we call.
@@ -42,11 +34,11 @@ type SandboxLike = {
 };
 // Cast the function itself so TS never instantiates its deep generic return.
 const getSandboxShallow = getSandbox as unknown as (ns: unknown, id: string) => SandboxLike;
-/** Resolve the sandbox for a given DO binding name. */
-const sbxByBinding = (env: Env, binding: string, id: string): SandboxLike =>
-  getSandboxShallow(env[binding], id);
-/** container prefix of a sessionId (`<container>--<uuid>`). */
-const containerOf = (sessionId: string) => sessionId.split("--")[0]!;
+/** The single live-preview sandbox namespace (required by proxyToSandbox). */
+const liveSbx = (env: Env, id: string): SandboxLike => getSandboxShallow(env.Sandbox, id);
+/** Sanitize a session id to the chars proxyToSandbox allows in a preview host. */
+const sessionIdFor = (framework: string) =>
+  `${framework.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${crypto.randomUUID().slice(0, 8)}`;
 
 function cors(resp: Response): Response {
   const h = new Headers(resp.headers);
@@ -141,14 +133,18 @@ export default {
           sessionId?: string;
         };
         const dev = FRAMEWORK_DEV[body.framework];
-        if (!dev) return json({ error: `Tier-2 not wired for framework: ${body.framework}` }, 400);
+        const cfg = BUILD_CONFIG[body.framework];
+        if (!dev || !cfg) return json({ error: `Tier-2 not wired for framework: ${body.framework}` }, 400);
 
-        // sessionId encodes the container so file/delete routes pick the right image.
-        const sessionId = `${dev.container}--${crypto.randomUUID().slice(0, 8)}`;
-        const sandbox = sbxByBinding(env, dev.binding, sessionId);
+        const sessionId = body.sessionId?.trim() || sessionIdFor(body.framework);
+        const sandbox = liveSbx(env, sessionId);
 
         await writeFiles(sandbox, body.files);
-        // Start the real dev server (a fresh session id = a fresh container).
+        // Generic image: install this demo's deps, then start the real dev server.
+        const install = await sandbox.exec(`sh -lc "cd ${CONTAINER_ROOT} && ${cfg.installCommand} --no-audit --no-fund"`);
+        if (install.success === false) {
+          return json({ error: `install failed: ${(install.stderr ?? "").slice(-600)}` }, 500);
+        }
         await sandbox.startProcess(dev.cmd, { cwd: CONTAINER_ROOT });
         await waitForPort(sandbox, dev.port);
 
@@ -165,9 +161,7 @@ export default {
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "session" && parts[3] === "file") {
         const sessionId = parts[2]!;
         const body = (await request.json()) as { path: string; contents: string };
-        const binding = CONTAINER_BINDING[containerOf(sessionId)];
-        if (!binding) return json({ error: `unknown session container: ${sessionId}` }, 400);
-        const sandbox = sbxByBinding(env, binding, sessionId);
+        const sandbox = liveSbx(env, sessionId);
         const full = CONTAINER_ROOT + (body.path.startsWith("/") ? body.path : `/${body.path}`);
         const dir = full.slice(0, full.lastIndexOf("/"));
         if (dir && dir !== CONTAINER_ROOT) {
@@ -179,10 +173,7 @@ export default {
 
       // DELETE /api/session/:id -> destroy container
       if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "session" && parts.length === 3) {
-        const sessionId = parts[2]!;
-        const binding = CONTAINER_BINDING[containerOf(sessionId)];
-        if (!binding) return json({ error: `unknown session container: ${sessionId}` }, 400);
-        const sandbox = sbxByBinding(env, binding, sessionId);
+        const sandbox = liveSbx(env, parts[2]!);
         await sandbox.destroy();
         return cors(new Response(null, { status: 204 }));
       }
@@ -350,7 +341,7 @@ export default {
 };
 
 /** Poll the dev-server port from inside the container until it accepts connections. */
-async function waitForPort(sandbox: SandboxLike, port: number, timeoutMs = 25000) {
+async function waitForPort(sandbox: SandboxLike, port: number, timeoutMs = 45000) {
   const deadline = Date.now() + timeoutMs;
   const probe = `node -e "require('net').connect(${port},'127.0.0.1').on('connect',()=>{console.log('up');process.exit(0)}).on('error',()=>process.exit(1))"`;
   while (Date.now() < deadline) {
