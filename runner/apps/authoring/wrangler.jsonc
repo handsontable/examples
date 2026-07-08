@@ -1,0 +1,12 @@
+{
+  // Authoring app — static SPA (Workers Assets). Internal use, gated by the
+  // Handsontable login broker at runtime (no server-side auth needed here).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "handsontable-demos-authoring",
+  "account_id": "15111272c53ed0aaf84a908f0c9c7f8b",
+  "compatibility_date": "2026-06-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}

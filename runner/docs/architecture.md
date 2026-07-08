@@ -205,12 +205,20 @@ follow-up PR.
 3. ✅ `packages/editor-shell` + `apps/authoring`: unified editor (Tier-1 live). *(auth
    broker + fork/title/description UI wired in with the sharing API, D5.)*
 4. Tier 2: `containers/*` + `ContainerRuntime` + Sandbox SDK orchestration.
-5. `workers/api`: Handsontable-broker auth on writes; `POST/GET/PATCH/DELETE
+5. ✅ `workers/api`: Handsontable-broker auth on writes; `POST/GET/PATCH/DELETE
    /api/demos` (fork → title/description → snapshot → build → R2 → short id);
-   "My demos" by `created_by`; D1/R2/KV.
-6. `apps/viewer`: public `/d/:id` read-only viewer **and** `/embed/:id` locked to
-   `handsontable.com` via `frame-ancestors`; opt-in "Edit live".
-7. `pipeline/` build-and-serve snapshotter + version injection + `scripts/warm.ts`.
-8. `render-ms` compatibility shim.
-9. `docs/`: run/deploy, self-host-bundler, non-technical share guide.
+   "My demos" by `created_by`; D1/R2/KV. Deployed.
+6. ✅ Public `/d/:id` read-only viewer **and** `/embed/:id` locked to
+   `handsontable.com` via `frame-ancestors` (served by the Worker from R2).
+7. ✅ Build snapshotter (builder container) + version injection. `scripts/warm.ts`
+   (prebuild N versions) still to add.
+8. ✅ `render-ms` compatibility shim (`/codesandbox-vm`, `/codesandbox-browser`,
+   `/r/:framework`).
+9. ✅ `docs/`: run-and-deploy, self-host-bundler, create-and-share-a-demo,
+   cloudflare-resources, 18 ADRs.
+
+Deployed: API `handsontable-demos-api.handsoncode.workers.dev`, authoring
+`handsontable-demos-authoring.handsoncode.workers.dev`. Pending: wildcard domain
+for live Tier-2 (ADR-0011), broker redeploy for `handsoncode.workers.dev`
+logins, `scripts/warm.ts`.
 ```

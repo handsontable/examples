@@ -11,6 +11,7 @@ import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { authenticate } from "./auth.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, type DemoRow } from "./share.js";
+import { renderMs } from "./migrate.js";
 
 // One Durable Object class per framework image (Cloudflare binds one image per
 // class). Each is a thin Sandbox subclass; the image is set in wrangler.jsonc.
@@ -59,6 +60,19 @@ const json = (data: unknown, status = 200) =>
   cors(new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } }));
 
 const nowIso = () => new Date().toISOString();
+
+const ROOT_HTML = `<!doctype html><meta charset="utf-8"><title>Handsontable Demos API</title>
+<style>body{font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;max-width:640px;margin:12vh auto;padding:0 20px;color:#1f2933}
+a{color:#1a8f5a}code{background:#f4f6f8;padding:1px 5px;border-radius:4px}h1{font-size:20px}</style>
+<h1>Handsontable Demos — API &amp; orchestration</h1>
+<p>This Worker serves shared demos and Tier-2 live sessions. It has no page at the root.</p>
+<ul>
+<li><code>GET /d/:id</code> — a shared demo (prebuilt, static)</li>
+<li><code>GET /embed/:id</code> — docs-only embeddable demo</li>
+<li><code>GET /api/health</code> — health check</li>
+<li><code>GET /codesandbox-vm?example-dir=…&amp;handsontable-version=…</code> — render-ms compatibility</li>
+</ul>
+<p>Create and share demos in the authoring app (internal, Handsontable login).</p>`;
 
 /** Public demo JSON with a stale-while-revalidate cache header. */
 function cacheableJson(data: unknown): Response {
@@ -275,7 +289,28 @@ export default {
         return await serveDemoAsset(env, demoId, sub, { embed });
       }
 
+      // ---- render-ms compatibility shim (D8) -------------------------------
+      // Old public deep links -> build-or-reuse a public render -> /d/:id.
+      if (
+        request.method === "GET" &&
+        (parts[0] === "codesandbox-vm" || parts[0] === "codesandbox-browser" || parts[0] === "r")
+      ) {
+        const exampleDir = parts[0] === "r" && parts[1]
+          ? decodeURIComponent(parts[1])
+          : url.searchParams.get("example-dir");
+        if (!exampleDir) return json({ error: "example-dir required" }, 400);
+        const versionInput = url.searchParams.get("handsontable-version") ?? url.searchParams.get("v");
+        const r = await renderMs(env, exampleDir, versionInput, nowIso());
+        if ("error" in r) return json({ error: r.error }, r.status);
+        return Response.redirect(`${url.origin}/d/${r.id}/`, 302);
+      }
+
       if (parts[0] === "api" && parts[1] === "health") return json({ ok: true });
+
+      // Friendly root (this is the API/orchestration worker, not a site).
+      if (parts.length === 0) {
+        return new Response(ROOT_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      }
 
       return cors(new Response("Not found", { status: 404 }));
     } catch (err) {

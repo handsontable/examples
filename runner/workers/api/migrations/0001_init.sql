@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS demos (
 CREATE INDEX IF NOT EXISTS idx_demos_framework ON demos(framework);
 CREATE INDEX IF NOT EXISTS idx_demos_created_by ON demos(created_by);   -- powers "My demos"
 CREATE INDEX IF NOT EXISTS idx_demos_forked_from ON demos(forked_from);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_demos_buildkey ON demos(framework, ht_version, files_hash);
+-- Non-unique: many demos may reference the same build (artifact dedupe lives in
+-- build_cache, which owns the unique build_key).
+CREATE INDEX IF NOT EXISTS idx_demos_buildkey ON demos(framework, ht_version, files_hash);
 
 -- build_cache: dedupe identical immutable builds across shares.
 CREATE TABLE IF NOT EXISTS build_cache (

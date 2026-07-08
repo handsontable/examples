@@ -16,8 +16,12 @@ All three resources are provisioned in account `15111272…`.
 
 ## Production deployment
 
-- **Worker:** `handsontable-demos-api` → **https://handsontable-demos-api.handsoncode.workers.dev**
+- **API/orchestration Worker:** `handsontable-demos-api` →
+  **https://handsontable-demos-api.handsoncode.workers.dev**
   (account workers.dev subdomain: `handsoncode.workers.dev`).
+- **Authoring app (static SPA):** `handsontable-demos-authoring` →
+  **https://handsontable-demos-authoring.handsoncode.workers.dev**
+  (internal; gated by the Handsontable login broker).
 - Deployed via `CLOUDFLARE_ACCOUNT_ID=15111272… npx wrangler deploy` from
   `workers/api/`. Migrations applied; D1/KV/R2 bound.
 - **7 container applications** created (Sandbox SDK): `…-remixsandbox`,
