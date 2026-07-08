@@ -172,6 +172,16 @@ Demos must be embeddable as an iframe on docs pages such as
 - The `/d/:id` share link (client-facing, opened directly) stays framable-nowhere
   by default; `/embed/:id` is the docs-only framed variant.
 
+### Generating the embed URL is login-gated
+
+The **"Copy embed URL / Generate embeddable link"** control is shown **only to
+signed-in internal users** (broker session present) in the authoring / "My demos"
+UI — it is not exposed to anonymous visitors of a `/d/:id` page. Serving the embed
+(the docs iframe fetching `/embed/:id`) stays public but frame-locked to
+`handsontable.com`; only the *act of minting/copying* the embeddable URL is behind
+the Handsontable login. So: internal user signs in → opens/creates a demo →
+generates the embed URL → pastes it into a docs page.
+
 ## Hard constraints
 
 No Nodebox / WebContainers (Tier 2 runs the real open-source frameworks in our
