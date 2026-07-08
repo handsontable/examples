@@ -41,8 +41,20 @@
       "binding": "ARTIFACTS",
       "bucket_name": "handsontable-demos"
     }
-  ]
+  ],
 
-  // Tier-2 Sandbox SDK container binding (Durable Object + containers) is added
-  // in Deliverable 4.
+  // Tier-2 live editing — Cloudflare Sandbox SDK. One base image per framework;
+  // Remix is proven end-to-end first, the rest of the Tier-2 catalog follows.
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "../../containers/remix/Dockerfile",
+      "instance_type": "standard",
+      "max_instances": 2
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
+  },
+  "migrations": [{ "new_sqlite_classes": ["Sandbox"], "tag": "v1" }]
 }

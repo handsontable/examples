@@ -7,9 +7,11 @@ import {
   type FilesMap,
 } from "@handsontable/demo-runtime";
 import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
+import { ContainerRuntime } from "@handsontable/demo-runtime/container";
 import { catalog, getEntry, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
 
 const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefined;
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
 
 export function App() {
   const [framework, setFramework] = useState<string>("react");
@@ -42,15 +44,6 @@ export function App() {
     setErrorMessage(null);
     setShareUrl(null);
 
-    if (entry.tier === 2) {
-      // Container engine arrives in Deliverable 4. Editing still works.
-      setStatus("error");
-      setErrorMessage(
-        "Live container preview for Tier-2 frameworks arrives in Deliverable 4 — editing is enabled; preview is disabled.",
-      );
-      return;
-    }
-
     const v = validateHandsontableVersion(version);
     if (!v.ok) {
       setStatus("error");
@@ -60,11 +53,14 @@ export function App() {
 
     setStatus("booting");
     let cancelled = false;
-    const runtime = new SandpackRuntime(entry, {
-      iframe: iframeEl,
-      bundlerURL: SANDPACK_BUNDLER_URL,
-      version: v.value,
-    });
+    const runtime =
+      entry.tier === 2
+        ? new ContainerRuntime(entry, { iframe: iframeEl, apiBase: API_BASE, version: v.value })
+        : new SandpackRuntime(entry, {
+            iframe: iframeEl,
+            bundlerURL: SANDPACK_BUNDLER_URL,
+            version: v.value,
+          });
     runtime.onReady(() => !cancelled && setStatus("ready"));
     runtime.onError((e) => {
       if (cancelled) return;
