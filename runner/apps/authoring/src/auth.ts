@@ -50,7 +50,8 @@ export async function currentUser(): Promise<User | null> {
 }
 
 export function login(): void {
-  const returnTo = location.origin + location.pathname;
+  // Include the query so the deep-linked example/version survives the round-trip.
+  const returnTo = location.origin + location.pathname + location.search;
   location.href = `${BROKER}/broker/login?return_to=${encodeURIComponent(returnTo)}`;
 }
 

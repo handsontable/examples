@@ -38,11 +38,18 @@ function Splash({ text }: { text: string }) {
 }
 
 function Authoring({ user }: { user: User | null }) {
-  const [framework, setFramework] = useState<string>("react");
+  // Initial example/version come from the URL so the app is deep-linkable.
+  const [framework, setFramework] = useState<string>(() => {
+    const p = new URLSearchParams(location.search).get("example");
+    return catalog.examples.some((e) => e.framework === p) ? (p as string) : "react";
+  });
+  const hadUrlVersion = useRef<boolean>(new URLSearchParams(location.search).has("v"));
   const entry = useMemo<CatalogEntry>(() => getEntry(framework), [framework]);
 
   const [files, setFiles] = useState<FilesMap>(() => ({ ...entry.files }));
-  const [version, setVersion] = useState<string>(DEFAULT_VERSION);
+  const [version, setVersion] = useState<string>(
+    () => new URLSearchParams(location.search).get("v") || DEFAULT_VERSION,
+  );
   const [versionOptions, setVersionOptions] = useState<string[]>(VERSION_OPTIONS);
   const [status, setStatus] = useState<PreviewStatus>("booting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -74,7 +81,8 @@ function Authoring({ user }: { user: User | null }) {
     setMountGen((g) => g + 1);
   }, []);
 
-  // Load real published versions from the API (npm-backed); default to latest.
+  // Load real published versions from the API (npm-backed); default to latest
+  // unless a version was deep-linked via the URL.
   useEffect(() => {
     let cancelled = false;
     fetchVersions(API_BASE)
@@ -82,11 +90,21 @@ function Authoring({ user }: { user: User | null }) {
         if (cancelled) return;
         const opts = [...new Set([latest, ...versions, next].filter((v): v is string => !!v))];
         if (opts.length) setVersionOptions(opts);
-        if (latest) setVersion((cur) => (cur === DEFAULT_VERSION ? latest : cur));
+        if (latest && !hadUrlVersion.current) {
+          setVersion((cur) => (cur === DEFAULT_VERSION ? latest : cur));
+        }
       })
       .catch(() => { /* keep fallback options */ });
     return () => { cancelled = true; };
   }, []);
+
+  // Keep the URL in sync with the selected example + version (deep-linkable).
+  useEffect(() => {
+    const p = new URLSearchParams(location.search);
+    p.set("example", framework);
+    p.set("v", version);
+    history.replaceState(null, "", `${location.pathname}?${p.toString()}`);
+  }, [framework, version]);
 
   /** Pick a catalog example as a fresh starting template. */
   const selectExample = useCallback(
