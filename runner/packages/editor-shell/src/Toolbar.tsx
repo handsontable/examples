@@ -9,9 +9,13 @@ export interface ToolbarProps {
   onSave: () => void;
   onShare: () => void;
   onFork: () => void;
-  /** Signed in? Save/Share/custom-version are shown only when true. */
+  /** Signed in? Save/Share/custom-version/Fork are shown only when true. */
   authed: boolean;
+  /** "play" (playground -> Fork), "edit" (saved demo -> Save/Share), or
+   *  "share" (read-only public playground -> no actions, version locked). */
+  mode?: "play" | "edit" | "share";
   sharing?: boolean;
+  saving?: boolean;
   shareUrl?: string | null;
   dirty?: boolean;
 }
@@ -25,7 +29,9 @@ export function Toolbar({
   onShare,
   onFork,
   authed,
+  mode = "play",
   sharing,
+  saving,
   shareUrl,
   dirty,
 }: ToolbarProps) {
@@ -41,59 +47,70 @@ export function Toolbar({
 
       <div style={s.spacer} />
 
-      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-        <span style={{ color: "#647382" }}>Handsontable</span>
-        <select
-          style={s.select}
-          value={version}
-          onChange={(e) => onVersionChange(e.target.value)}
-          aria-label="Handsontable version"
-        >
-          {options.map((v) => (
-            <option key={v} value={v}>
-              {v}
-            </option>
-          ))}
-        </select>
-        {authed && (
-          <input
-            style={{ ...s.select, width: 240 }}
-            defaultValue=""
-            placeholder="custom (e.g. 0.0.0-next-07941cf-…)"
-            aria-label="Custom Handsontable version"
-            title="Type any published version or a pkg.pr.new build, then press Enter"
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                const v = (e.target as HTMLInputElement).value.trim();
-                if (v) onVersionChange(v);
-              }
-            }}
-          />
-        )}
-      </label>
+      {/* The version is locked on the read-only share playground. */}
+      {mode === "share" ? (
+        <span style={{ fontSize: 12, color: "#647382" }}>Handsontable {version}</span>
+      ) : (
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+          <span style={{ color: "#647382" }}>Handsontable</span>
+          <select
+            style={s.select}
+            value={version}
+            onChange={(e) => onVersionChange(e.target.value)}
+            aria-label="Handsontable version"
+          >
+            {options.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+          {authed && (
+            <input
+              style={{ ...s.select, width: 240 }}
+              defaultValue=""
+              placeholder="custom (e.g. 0.0.0-next-07941cf-…)"
+              aria-label="Custom Handsontable version"
+              title="Type any published version or a pkg.pr.new build, then press Enter"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const v = (e.target as HTMLInputElement).value.trim();
+                  if (v) onVersionChange(v);
+                }
+              }}
+            />
+          )}
+        </label>
+      )}
 
       {/* Actions are for signed-in internal users only. Anonymous visitors just
           browse/edit/preview and sign in from the top bar. */}
-      {authed && (
+      {authed && mode === "edit" && (
         <>
-          {shareUrl && (
-            <a style={s.shareLink} href={shareUrl} target="_blank" rel="noreferrer" title={shareUrl}>
-              {shareUrl}
-            </a>
-          )}
-          <button type="button" style={s.button} onClick={onSave}>
-            {dirty ? "Save •" : "Save"}
+          <button type="button" style={s.button} onClick={onSave} disabled={saving}>
+            {saving ? "Saving…" : dirty ? "Save •" : "Save"}
           </button>
           <button
             type="button"
             style={{ ...s.button, ...s.buttonPrimary }}
-            onClick={onFork}
-            disabled={sharing}
-            title="Fork this demo into your own shareable client link"
+            onClick={onShare}
+            title="Get the public client link and docs embed URL"
           >
-            {sharing ? "Sharing…" : "Fork this demo"}
+            Share
           </button>
         </>
+      )}
+
+      {authed && mode === "play" && (
+        <button
+          type="button"
+          style={{ ...s.button, ...s.buttonPrimary }}
+          onClick={onFork}
+          disabled={sharing}
+          title="Fork this demo into your own editable, shareable client demo"
+        >
+          {sharing ? "Creating…" : "Fork this demo"}
+        </button>
       )}
     </header>
   );

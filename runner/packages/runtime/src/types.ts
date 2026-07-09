@@ -51,6 +51,8 @@ export interface Catalog {
 export interface DemoRuntime {
   mount(files: FilesMap): Promise<{ previewUrl: string }>;
   writeFile(path: string, contents: string): void;
+  /** Remove a file from the running preview (file-tree delete/rename). */
+  deleteFile?(path: string): void;
   onReady(cb: () => void): void;
   onError(cb: (e: Error) => void): void;
   dispose(): void;

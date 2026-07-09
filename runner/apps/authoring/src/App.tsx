@@ -9,24 +9,46 @@ import {
 } from "@handsontable/demo-runtime";
 import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
 import { ContainerRuntime } from "@handsontable/demo-runtime/container";
+import { zipSync, strToU8 } from "fflate";
 import { catalog, getEntry, fetchVersions, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
-import { ShareDialog, type ShareResult } from "./ShareDialog.js";
 import { MyDemos } from "./MyDemos.js";
+import { ShareLinks } from "./ShareLinks.js";
 
 const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefined;
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
 
+type EditorRoute =
+  | { mode: "play" }
+  | { mode: "edit"; id: string }
+  | { mode: "share"; id: string };
+
+function parseRoute(): EditorRoute {
+  const m = location.pathname.match(/^\/(edit|share)\/([A-Za-z0-9_-]+)\/?$/);
+  if (m) return { mode: m[1] as "edit" | "share", id: m[2]! };
+  return { mode: "play" };
+}
+
 export function App() {
-  // The editor/playground is public. Sign-in is only needed to create a
-  // persistent client demo (Share) or to see "My demos".
+  const route = parseRoute();
+  // The share page is a public, read-only playground — no auth needed.
+  if (route.mode === "share") return <Authoring user={null} route={route} />;
+  return <Gate route={route} />;
+}
+
+/** Resolves the signed-in user; sends the edit page to login when anonymous. */
+function Gate({ route }: { route: { mode: "play" } | { mode: "edit"; id: string } }) {
   const [user, setUser] = useState<User | null | undefined>(undefined);
   useEffect(() => {
     currentUser().then(setUser);
   }, []);
+  useEffect(() => {
+    if (user === null && route.mode === "edit") login(); // return_to preserves /edit/:id
+  }, [user, route.mode]);
 
   if (user === undefined) return <Splash text="Loading…" />;
-  return <Authoring user={user} />;
+  if (user === null && route.mode === "edit") return <Splash text="Sign in to edit this demo…" />;
+  return <Authoring user={user} route={route} />;
 }
 
 function Splash({ text }: { text: string }) {
@@ -38,8 +60,11 @@ function Splash({ text }: { text: string }) {
   );
 }
 
-function Authoring({ user }: { user: User | null }) {
-  // Initial example/version come from the URL so the app is deep-linkable.
+function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
+  const savedId = route.mode === "edit" || route.mode === "share" ? route.id : null;
+  const isShare = route.mode === "share";
+
+  // Initial example/version come from the URL so the playground is deep-linkable.
   const [framework, setFramework] = useState<string>(() => {
     const p = new URLSearchParams(location.search).get("example");
     return catalog.examples.some((e) => e.framework === p) ? (p as string) : "react";
@@ -68,10 +93,14 @@ function Authoring({ user }: { user: User | null }) {
   const filesRef = useRef<FilesMap>(files);
   filesRef.current = files;
 
-  // Sharing / My demos UI state.
-  const [shareOpen, setShareOpen] = useState(false);
-  const [shareResult, setShareResult] = useState<ShareResult | null>(null);
-  const [forkedFrom, setForkedFrom] = useState<string | null>("catalog:react");
+  // Saved-demo state (edit + share modes).
+  const [sourceLoaded, setSourceLoaded] = useState(!savedId);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [forking, setForking] = useState(false);
+  const [shareLinksOpen, setShareLinksOpen] = useState(false);
+  const [forkedFrom, setForkedFrom] = useState<string | null>(`catalog:${framework}`);
   const [myDemosOpen, setMyDemosOpen] = useState(false);
 
   /** Replace the whole workspace with a fresh file set + lineage, and remount. */
@@ -81,13 +110,51 @@ function Authoring({ user }: { user: User | null }) {
     setFiles(nextFiles);
     setForkedFrom(lineage);
     setDirty(false);
-    setShareResult(null);
     setErrorMessage(null);
     setMountGen((g) => g + 1);
   }, []);
 
+  // Edit/share mode: load the saved demo's source + metadata into the workspace.
+  useEffect(() => {
+    if (!savedId) return;
+    let cancelled = false;
+    (async () => {
+      const token = getToken();
+      const headers: Record<string, string> = !isShare && token ? { Authorization: `Bearer ${token}` } : {};
+      try {
+        const [srcRes, metaRes] = await Promise.all([
+          fetch(`${API_BASE}/api/demos/${savedId}/source`, { headers }),
+          fetch(`${API_BASE}/api/demos/${savedId}`),
+        ]);
+        if (cancelled) return;
+        if (!srcRes.ok) {
+          setErrorMessage(
+            !isShare && srcRes.status === 401 ? "Please sign in to edit this demo." : "This demo is unavailable.",
+          );
+          setSourceLoaded(true);
+          return;
+        }
+        const src = (await srcRes.json()) as { framework: string; files: FilesMap };
+        if (metaRes.ok) {
+          const meta = (await metaRes.json()) as { title: string; description: string | null; ht_version: string };
+          setTitle(meta.title ?? "");
+          setDescription(meta.description ?? "");
+          if (meta.ht_version) {
+            hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
+            setVersion(meta.ht_version);
+          }
+        }
+        loadWorkspace(src.framework, src.files, savedId);
+        setSourceLoaded(true);
+      } catch {
+        if (!cancelled) { setErrorMessage("This demo is unavailable."); setSourceLoaded(true); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [savedId, isShare, loadWorkspace]);
+
   // Load real published versions from the API (npm-backed); default to latest
-  // unless a version was deep-linked via the URL.
+  // unless a version was deep-linked (or pinned by the demo being edited/shared).
   useEffect(() => {
     let cancelled = false;
     fetchVersions(API_BASE)
@@ -104,8 +171,7 @@ function Authoring({ user }: { user: User | null }) {
   }, []);
 
   // Reflect the selected version in the editor's package.json (re-pin
-  // handsontable + wrapper), keeping any other edits. This is what the bundler
-  // and container also install, so what you see matches what runs.
+  // handsontable + wrapper), keeping any other edits.
   useEffect(() => {
     const v = validateHandsontableVersion(version);
     if (!v.ok) return;
@@ -123,22 +189,24 @@ function Authoring({ user }: { user: User | null }) {
     });
   }, [version, framework, mountGen]);
 
-  // Keep the URL in sync with the selected example + version (deep-linkable).
+  // Keep the URL in sync with the selected example + version — playground only
+  // (edit/share have their own /edit/:id, /share/:id paths).
   useEffect(() => {
+    if (route.mode !== "play") return;
     const p = new URLSearchParams(location.search);
     p.set("example", framework);
     p.set("v", version);
     history.replaceState(null, "", `${location.pathname}?${p.toString()}`);
-  }, [framework, version]);
+  }, [framework, version, route.mode]);
 
-  /** Pick a catalog example as a fresh starting template. */
+  /** Pick a catalog example as a fresh starting template (playground). */
   const selectExample = useCallback(
     (fw: string) => loadWorkspace(fw, { ...getEntry(fw).files }, `catalog:${fw}`),
     [loadWorkspace],
   );
 
   useEffect(() => {
-    if (!iframeEl) return;
+    if (!iframeEl || !sourceLoaded) return;
     setErrorMessage(null);
     const v = validateHandsontableVersion(version);
     if (!v.ok) {
@@ -176,8 +244,8 @@ function Authoring({ user }: { user: User | null }) {
       runtime.dispose();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
-    // mountGen forces a remount when files are replaced without a framework change.
-  }, [iframeEl, entry, version, mountGen]);
+    // mountGen forces a remount when files are replaced (example switch or fork/edit load).
+  }, [iframeEl, entry, version, mountGen, sourceLoaded]);
 
   const onEdit = useCallback((path: string, contents: string) => {
     setFiles((prev) => ({ ...prev, [path]: contents }));
@@ -195,46 +263,181 @@ function Authoring({ user }: { user: User | null }) {
     }
   }, []);
 
-  /** Open a saved demo as a fork: fetch its source FIRST, then load it wholesale.
-   *  On failure, the current workspace and lineage are left untouched. */
-  const openFork = useCallback(
-    async (id: string) => {
+  // ---- File-tree CRUD (CodeSandbox-style). Edits the in-memory workspace and
+  // the live preview; only Save (edit mode, owner) persists them. ----
+  const addFile = useCallback((path: string) => {
+    if (filesRef.current[path] !== undefined) return;
+    const next = { ...filesRef.current, [path]: "" };
+    filesRef.current = next;
+    setFiles(next);
+    setDirty(true);
+    try { runtimeRef.current?.writeFile(path, ""); } catch { /* not mounted */ }
+  }, []);
+
+  const deleteFile = useCallback((path: string) => {
+    if (filesRef.current[path] === undefined) return;
+    const next = { ...filesRef.current };
+    delete next[path];
+    filesRef.current = next;
+    setFiles(next);
+    setDirty(true);
+    try { runtimeRef.current?.deleteFile?.(path); } catch { /* not mounted */ }
+  }, []);
+
+  const renameFile = useCallback((oldPath: string, newPath: string) => {
+    const content = filesRef.current[oldPath] ?? "";
+    const next = { ...filesRef.current };
+    delete next[oldPath];
+    next[newPath] = content;
+    filesRef.current = next;
+    setFiles(next);
+    setDirty(true);
+    try {
+      runtimeRef.current?.writeFile(newPath, content);
+      runtimeRef.current?.deleteFile?.(oldPath);
+    } catch { /* not mounted */ }
+  }, []);
+
+  /** Download the current (possibly-edited) workspace as a .zip. */
+  const downloadZip = useCallback(() => {
+    const entries: Record<string, Uint8Array> = {};
+    for (const [p, c] of Object.entries(filesRef.current)) entries[p.replace(/^\//, "")] = strToU8(c);
+    const bytes = zipSync(entries, { level: 6 });
+    const base = (title || entry.displayName || "handsontable-demo")
+      .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "handsontable-demo";
+    const blob = new Blob([bytes as BlobPart], { type: "application/zip" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${base}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [title, entry.displayName]);
+
+  /** Fork the current playground code into a new saved demo, then open its edit page. */
+  const onFork = useCallback(async () => {
+    if (!user) return login();
+    setForking(true);
+    setErrorMessage(null);
+    try {
       const token = getToken();
-      let res: Response | null = null;
-      try {
-        res = await fetch(`${API_BASE}/api/demos/${id}/source`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-      } catch {
-        res = null;
+      const res = await fetch(`${API_BASE}/api/demos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          framework: entry.framework,
+          files: filesRef.current,
+          title: `Fork of ${entry.displayName}`,
+          htVersion: version,
+          forkedFrom: forkedFrom ?? undefined,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || `fork failed (${res.status})`);
       }
-      if (!res || !res.ok) {
-        setErrorMessage(`Couldn't load demo ${id} to fork.`);
-        return;
+      const { id } = (await res.json()) as { id: string };
+      location.href = `/edit/${id}`; // boot into the edit page for the new demo
+    } catch (e) {
+      setErrorMessage(e instanceof Error ? e.message : String(e));
+      setForking(false);
+    }
+  }, [user, entry, version, forkedFrom]);
+
+  /** Save the saved-demo edits: title/description + code (rebuilds the snapshot). */
+  const onSave = useCallback(async () => {
+    if (!savedId || isShare) return;
+    setSaving(true);
+    setErrorMessage(null);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_BASE}/api/demos/${savedId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          title: title.trim() || "Untitled demo",
+          description: description.trim() || null,
+          files: filesRef.current,
+          htVersion: version,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || `save failed (${res.status})`);
       }
-      const data = (await res.json()) as { framework: string; files: FilesMap };
-      setMyDemosOpen(false);
-      loadWorkspace(data.framework, data.files, id);
-    },
-    [loadWorkspace],
-  );
+      setDirty(false);
+    } catch (e) {
+      setErrorMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [savedId, isShare, title, description, version]);
+
+  const clientUrl = savedId ? `${location.origin}/share/${savedId}` : "";
+  const embedUrl = savedId ? `${API_BASE}/embed/${savedId}` : "";
+
+  if (savedId && !sourceLoaded) return <Splash text="Loading demo…" />;
 
   return (
     <div style={{ height: "100%", display: "grid", gridTemplateRows: "auto 1fr" }}>
       <div style={topBar}>
-        <span style={{ color: theme.color.textMuted }}>Example</span>
-        <select value={framework} onChange={(e) => selectExample(e.target.value)} style={selectStyle}>
-          {catalog.examples.map((e) => (
-            <option key={e.framework} value={e.framework}>
-              {e.displayName}
-            </option>
-          ))}
-        </select>
-        {user && (
+        {route.mode === "share" ? (
+          <>
+            <Logo size={22} />
+            <div style={{ minWidth: 0 }}>
+              <div style={sharedTitle}>{title || "Shared demo"}</div>
+              {description && <div style={sharedDesc}>{description}</div>}
+            </div>
+          </>
+        ) : route.mode === "edit" ? (
+          <>
+            <span style={{ color: theme.color.textMuted }}>Editing</span>
+            <input
+              style={{ ...selectStyle, fontFamily: theme.font.ui, width: 220 }}
+              value={title}
+              onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
+              placeholder="Demo title"
+              aria-label="Demo title"
+            />
+            <input
+              style={{ ...selectStyle, fontFamily: theme.font.ui, width: 300 }}
+              value={description}
+              onChange={(e) => { setDescription(e.target.value); setDirty(true); }}
+              placeholder="Description (optional)"
+              aria-label="Demo description"
+            />
+          </>
+        ) : (
+          <>
+            <span style={{ color: theme.color.textMuted }}>Example</span>
+            <select value={framework} onChange={(e) => selectExample(e.target.value)} style={selectStyle}>
+              {catalog.examples.map((e) => (
+                <option key={e.framework} value={e.framework}>
+                  {e.displayName}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+        {!isShare && user && (
           <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
         )}
         <div style={{ flex: 1 }} />
-        {user ? (
+        {errorMessage && (
+          <span style={{ color: theme.color.danger, fontSize: 12, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={errorMessage}>
+            {errorMessage}
+          </span>
+        )}
+        {isShare ? (
+          <>
+            <button style={ghostBtn} onClick={downloadZip} title="Download this example (including your edits) as a .zip">
+              Download
+            </button>
+            <span style={{ color: theme.color.textMuted, fontSize: 12, fontFamily: theme.font.mono, whiteSpace: "nowrap" }}>
+              {entry.displayName} · HOT {version}
+            </span>
+          </>
+        ) : user ? (
           <>
             <span style={{ color: theme.color.textMuted, fontSize: 12 }}>{user.email}</span>
             <button style={ghostBtn} onClick={logout}>Log out</button>
@@ -257,30 +460,25 @@ function Authoring({ user }: { user: User | null }) {
         versionOptions={versionOptions}
         onVersionChange={setVersion}
         onEdit={onEdit}
-        onSave={() => setDirty(false)}
-        onShare={() => (user ? setShareOpen(true) : login())}
-        onFork={() => (user ? setShareOpen(true) : login())}
+        onAddFile={addFile}
+        onRenameFile={renameFile}
+        onDeleteFile={deleteFile}
+        onSave={onSave}
+        onShare={() => setShareLinksOpen(true)}
+        onFork={onFork}
         authed={!!user}
-        shareUrl={shareResult?.viewUrl ?? null}
+        mode={route.mode}
+        sharing={forking}
+        saving={saving}
         dirty={dirty}
       />
 
-      {shareOpen && (
-        <ShareDialog
-          apiBase={API_BASE}
-          framework={entry.framework}
-          files={files}
-          version={version}
-          forkedFrom={forkedFrom}
-          token={getToken()}
-          initialResult={shareResult}
-          onResult={setShareResult}
-          onClose={() => setShareOpen(false)}
-        />
+      {shareLinksOpen && savedId && (
+        <ShareLinks clientUrl={clientUrl} embedUrl={embedUrl} onClose={() => setShareLinksOpen(false)} />
       )}
 
       {myDemosOpen && (
-        <MyDemos apiBase={API_BASE} token={getToken()} onOpen={openFork} onClose={() => setMyDemosOpen(false)} />
+        <MyDemos apiBase={API_BASE} token={getToken()} onClose={() => setMyDemosOpen(false)} />
       )}
     </div>
   );
@@ -298,6 +496,7 @@ const centered: React.CSSProperties = {
   flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
+  gap: 12,
   background: theme.color.surface,
 };
 const topBar: React.CSSProperties = {
@@ -316,6 +515,7 @@ const selectStyle: React.CSSProperties = {
   padding: "4px 8px",
   borderRadius: 8,
   border: `1px solid ${theme.color.border}`,
+  boxSizing: "border-box",
 };
 const ghostBtn: React.CSSProperties = {
   fontFamily: theme.font.ui,
@@ -325,4 +525,12 @@ const ghostBtn: React.CSSProperties = {
   borderRadius: 8,
   padding: "5px 10px",
   cursor: "pointer",
+};
+const sharedTitle: React.CSSProperties = {
+  fontSize: 14, fontWeight: 600, color: theme.color.text,
+  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+};
+const sharedDesc: React.CSSProperties = {
+  fontSize: 12, color: theme.color.textMuted,
+  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
 };

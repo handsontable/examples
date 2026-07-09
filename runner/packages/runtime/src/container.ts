@@ -24,6 +24,8 @@ export interface ContainerRuntimeOptions {
   writeDebounceMs?: number;
   /** Grace after the preview iframe loads, for the SPA to render (ms). */
   renderGraceMs?: number;
+  /** Keepalive ping interval to keep the container warm while open (ms). */
+  keepaliveMs?: number;
 }
 
 export class ContainerRuntime implements DemoRuntime {
@@ -42,6 +44,7 @@ export class ContainerRuntime implements DemoRuntime {
   private port = 0;
   private pointed = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(entry: CatalogEntry, opts: ContainerRuntimeOptions) {
     if (entry.engine !== "container") {
@@ -134,6 +137,11 @@ export class ContainerRuntime implements DemoRuntime {
             this.opts.iframe.src = this.previewUrl;
             // Hard fallback in case the load event never fires.
             setTimeout(() => this.emitReady(), 20000);
+            // Keep the container awake while the demo is open so it never has to
+            // cold-boot again mid-session. Any request resets sleepAfter; we ping
+            // only while the tab is visible so a backgrounded/closed tab lets it
+            // scale to zero (stop billing) after the idle window.
+            this.startKeepalive();
             return;
           }
         }
@@ -151,6 +159,31 @@ export class ContainerRuntime implements DemoRuntime {
     this.pending.set(path, contents);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = setTimeout(() => void this.flush(), this.opts.writeDebounceMs ?? 250);
+  }
+
+  /** Remove a file from the running container (file-tree delete/rename). */
+  deleteFile(path: string): void {
+    if (!this.sessionId) return;
+    this.pending.delete(path);
+    const next = { ...this.files };
+    delete next[path];
+    this.files = next;
+    void fetch(
+      `${this.opts.apiBase}/api/session/${this.sessionId}/file?path=${encodeURIComponent(path)}`,
+      { method: "DELETE" },
+    ).catch(() => {});
+  }
+
+  /** Ping the session periodically (while the tab is visible) to reset the
+   *  container's sleepAfter timer, keeping the dev server warm during use. */
+  private startKeepalive(): void {
+    if (this.keepaliveTimer || this.disposed) return;
+    const intervalMs = this.opts.keepaliveMs ?? 60000;
+    this.keepaliveTimer = setInterval(() => {
+      if (this.disposed || !this.sessionId) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void fetch(`${this.opts.apiBase}/api/session/${this.sessionId}/status?port=${this.port}`).catch(() => {});
+    }, intervalMs);
   }
 
   private async flush() {
@@ -174,6 +207,7 @@ export class ContainerRuntime implements DemoRuntime {
     this.disposed = true;
     if (this.flushTimer) clearTimeout(this.flushTimer);
     if (this.pollTimer) clearTimeout(this.pollTimer);
+    if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
     this.progressCbs.clear();
     const id = this.sessionId;
     this.sessionId = null;

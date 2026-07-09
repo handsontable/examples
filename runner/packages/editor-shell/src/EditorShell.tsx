@@ -26,12 +26,20 @@ export interface EditorShellProps {
 
   /** Fired on every edit. The app updates its files map and calls runtime.writeFile. */
   onEdit: (path: string, contents: string) => void;
+  /** File-tree CRUD (CodeSandbox-style). When omitted the tree is read-only-of-structure. */
+  onAddFile?: (path: string) => void;
+  onRenameFile?: (oldPath: string, newPath: string) => void;
+  onDeleteFile?: (path: string) => void;
   onSave: () => void;
   onShare: () => void;
   onFork: () => void;
   /** Signed in? Gates Save/Share/custom-version vs a Fork call-to-action. */
   authed: boolean;
+  /** "play" (playground -> Fork), "edit" (saved demo -> Save/Share), or
+   *  "share" (read-only public playground). */
+  mode?: "play" | "edit" | "share";
   sharing?: boolean;
+  saving?: boolean;
   shareUrl?: string | null;
   dirty?: boolean;
 }
@@ -64,12 +72,22 @@ export function EditorShell(props: EditorShellProps) {
         onShare={props.onShare}
         onFork={props.onFork}
         authed={props.authed}
+        mode={props.mode}
         sharing={props.sharing}
+        saving={props.saving}
         shareUrl={props.shareUrl}
         dirty={props.dirty}
       />
       <div style={s.body}>
-        <FileTree paths={paths} active={active} onSelect={setActive} />
+        <FileTree
+          paths={paths}
+          active={active}
+          onSelect={setActive}
+          editable={!!props.onAddFile}
+          onAddFile={props.onAddFile}
+          onRenameFile={props.onRenameFile}
+          onDeleteFile={props.onDeleteFile}
+        />
         <div style={s.editorPane}>
           {active && (
             <CodeEditor

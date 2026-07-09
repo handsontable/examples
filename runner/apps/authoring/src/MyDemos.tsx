@@ -15,12 +15,11 @@ interface DemoListItem {
 export interface MyDemosProps {
   apiBase: string;
   token: string | null;
-  onOpen: (id: string) => void;
   onClose: () => void;
 }
 
 /** Side panel listing the signed-in user's demos (GET /api/demos?mine). */
-export function MyDemos({ apiBase, token, onOpen, onClose }: MyDemosProps) {
+export function MyDemos({ apiBase, token, onClose }: MyDemosProps) {
   const [demos, setDemos] = useState<DemoListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,9 +70,9 @@ export function MyDemos({ apiBase, token, onOpen, onClose }: MyDemosProps) {
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             {!d.revoked && (
-              <a style={link} href={`${apiBase}/d/${d.id}`} target="_blank" rel="noreferrer">View</a>
+              <a style={link} href={`/share/${d.id}`} target="_blank" rel="noreferrer">View</a>
             )}
-            <button style={link} onClick={() => onOpen(d.id)}>Edit</button>
+            {!d.revoked && <a style={link} href={`/edit/${d.id}`}>Edit</a>}
             {!d.revoked && (
               <button style={{ ...link, color: "#d1242f", borderColor: "#f3c2c2" }} onClick={() => remove(d.id)}>
                 Delete

@@ -197,6 +197,17 @@ export class SandpackRuntime implements DemoRuntime {
     this.client.updateSandbox({ ...this.buildSetupFrom(sandpackFiles) } as SandboxSetup);
   }
 
+  /** Remove a file and recompile (file-tree delete/rename). */
+  deleteFile(path: string): void {
+    if (!this.client) return;
+    const next = { ...this.files };
+    delete next[path];
+    this.files = next;
+    const sandpackFiles: Record<string, { code: string }> = {};
+    for (const [p, code] of Object.entries(this.files)) sandpackFiles[p] = { code };
+    this.client.updateSandbox({ ...this.buildSetupFrom(sandpackFiles) } as SandboxSetup);
+  }
+
   private buildSetupFrom(sandpackFiles: Record<string, { code: string }>): SandboxSetup {
     const env = normalizeEnv(this.entry.sandpackEnvironment);
     const entryPath =

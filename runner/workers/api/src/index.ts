@@ -10,14 +10,21 @@ import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { authenticate } from "./auth.js";
-import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, type DemoRow } from "./share.js";
+import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, updateDemo, type DemoRow } from "./share.js";
 import { renderMs } from "./migrate.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
 // so live-preview sessions all use ONE class backed by one generic image that
 // installs each demo's deps at session start (per-framework images can't be
 // previewed by the SDK). The builder (no preview) keeps its own class.
-export class Sandbox extends SandboxBase {}
+// Idle window before a live-preview container scales to zero. While a demo tab
+// is open the client keepalive + HMR WebSocket keep resetting this timer, so the
+// dev server stays warm during active use and only sleeps (stops billing) once
+// the user is truly gone. Disk is ephemeral, so a slept container cold-boots on
+// return — the point is to avoid that mid-session, not to make wake cheap.
+export class Sandbox extends SandboxBase {
+  sleepAfter = "15m";
+}
 export class BuilderSandbox extends SandboxBase {}
 
 const CONTAINER_ROOT = "/app";
@@ -190,6 +197,17 @@ export default {
         return cors(new Response(null, { status: 204 }));
       }
 
+      // DELETE /api/session/:id/file?path= -> remove a file (file-tree delete/rename)
+      if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "session" && parts[3] === "file") {
+        const sandbox = liveSbx(env, parts[2]!);
+        const p = url.searchParams.get("path") ?? "";
+        if (p) {
+          const full = CONTAINER_ROOT + (p.startsWith("/") ? p : `/${p}`);
+          try { await sandbox.exec(`sh -lc "rm -f ${shq(full)}"`); } catch { /* best effort */ }
+        }
+        return cors(new Response(null, { status: 204 }));
+      }
+
       // node_modules cache per (framework, version): GET restores, PUT stores.
       // Keeps Tier-2 boots fast across versions (containers curl these directly).
       if (parts[0] === "api" && parts[1] === "nmcache" && parts.length === 4) {
@@ -274,10 +292,10 @@ export default {
         return json({ demos: rows.results });
       }
 
-      // GET /api/demos/:id/source  (auth) — source snapshot for forking
+      // GET /api/demos/:id/source  (public) — source snapshot for the read-only
+      // share playground and for forking. A demo link is unlisted-but-public, so
+      // its code is viewable by anyone with the link (revoked demos return 404).
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts[3] === "source") {
-        const ident = await authenticate(request, env);
-        if (!ident) return json({ error: "unauthorized" }, 401);
         const src = await getDemoSource(env, parts[2]!);
         if (!src) return json({ error: "not found" }, 404);
         return json(src);
@@ -299,7 +317,27 @@ export default {
         const row = await getDemo(env, demoId);
         if (!row) return json({ error: "not found" }, 404);
         if (row.created_by !== id.email) return json({ error: "forbidden" }, 403);
-        const patch = (await request.json()) as { title?: string; description?: string; visibility?: string };
+        const patch = (await request.json()) as {
+          title?: string; description?: string; visibility?: string;
+          files?: Record<string, string>; htVersion?: string;
+        };
+        // Code change -> rebuild the snapshot in place (edit-page Save).
+        if (patch.files) {
+          if (!patch.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
+          const cfg = BUILD_CONFIG[row.framework];
+          if (!cfg) return json({ error: `unknown framework: ${row.framework}` }, 400);
+          await updateDemo(env, {
+            id: demoId,
+            entry: { framework: row.framework, ...cfg },
+            files: patch.files,
+            htVersion: patch.htVersion ?? row.ht_version,
+            title: patch.title?.trim() || row.title,
+            description: patch.description ?? row.description,
+            now: nowIso(),
+          });
+          return json({ ok: true });
+        }
+        // Metadata-only update (title / description / visibility).
         await env.DB.prepare("UPDATE demos SET title=?, description=?, visibility=?, updated_at=? WHERE id=?")
           .bind(patch.title ?? row.title, patch.description ?? row.description, patch.visibility ?? row.visibility, nowIso(), demoId)
           .run();
