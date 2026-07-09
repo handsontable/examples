@@ -32,8 +32,27 @@ function parseRoute(): EditorRoute {
 export function App() {
   const route = parseRoute();
   // The share page is a public, read-only playground — no auth needed.
-  if (route.mode === "share") return <Authoring user={null} route={route} />;
+  if (route.mode === "share") {
+    // ?mode=full → chrome-less, example-only, full-window (for iframe embedding).
+    const full = new URLSearchParams(location.search).get("mode") === "full";
+    return full ? <FullEmbed id={route.id} /> : <Authoring user={null} route={route} />;
+  }
   return <Gate route={route} />;
+}
+
+/** Chrome-less full-window view of a saved demo's built output — the whole
+ *  window is just the running example, so `/share/:id?mode=full` drops cleanly
+ *  into an <iframe> on any site. Wraps the static /d/:id/ build (cheap, instant,
+ *  no live container); the outer SPA page carries no frame restrictions. */
+function FullEmbed({ id }: { id: string }) {
+  return (
+    <iframe
+      title="Handsontable demo"
+      src={`${API_BASE}/d/${id}/`}
+      style={{ position: "fixed", inset: 0, width: "100%", height: "100%", border: "none", display: "block" }}
+      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+    />
+  );
 }
 
 /** Resolves the signed-in user; sends the edit page to login when anonymous. */
