@@ -1,11 +1,11 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import './src/styles.css';
+import './styles.css';
 import Handsontable from 'handsontable';
 import { HotTable, HotColumn } from '@handsontable/react-wrapper';
-import { data } from './src/constants';
+import { data } from './constants';
 
-import { addClassesToRows, alignHeaders } from './src/hooksCallbacks';
+import { addClassesToRows, alignHeaders } from './hooksCallbacks';
 
 import 'handsontable/styles/handsontable.min.css';
 import 'handsontable/styles/ht-theme-main.min.css';

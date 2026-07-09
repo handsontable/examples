@@ -1,0 +1,21 @@
+{
+  "name": "@handsontable/demo-runner",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Self-hosted live demo runner for Handsontable examples (replaces CodeSandbox / render-ms).",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@10.12.2",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "import": "node pipeline/import.mjs",
+    "build": "pnpm -r --filter \"./packages/**\" run build",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "pnpm -r run lint"
+  },
+  "devDependencies": {
+    "typescript": "~5.6.0"
+  }
+}

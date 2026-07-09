@@ -1,0 +1,51 @@
+{
+  "name": "handsontable-ant-design-recipe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Handsontable with Ant Design recipe",
+  "homepage": "https://handsontable.com/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/handsontable/handsontable.git"
+  },
+  "bugs": {
+    "url": "https://github.com/handsontable/handsontable/issues"
+  },
+  "author": "Handsoncode <hello@handsontable.com>",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "type": "module",
+  "scripts": {
+    "start": "vite",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@handsontable/react-wrapper": "17.0.1",
+    "antd": "^5.27.6",
+    "handsontable": "17.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "config": {
+    "codesandbox": {
+      "templateId": "8y5qy5"
+    }
+  }
+}

@@ -1,0 +1,95 @@
+{
+  // Sharing + Tier-2 orchestration Worker for the Handsontable demo runner.
+  // Deployed to the main Handsontable Cloudflare account (NOT the sandbox).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "handsontable-demos-api",
+  "account_id": "15111272c53ed0aaf84a908f0c9c7f8b",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  // Keep the workers.dev URL enabled alongside the custom wildcard route.
+  "workers_dev": true,
+
+  // Public, non-secret config.
+  "vars": {
+    "LOGIN_BROKER_URL": "https://mcp-auth-proxy-j0tb.onrender.com",
+    "EMBED_ALLOWED_ANCESTORS": "https://handsontable.com https://*.handsontable.com http://localhost:*",
+    // Wildcard base host for Tier-2 container preview URLs
+    // (<port>-<sandboxId>-<token>.demos.handsontable.com).
+    "PREVIEW_HOST": "demos.handsontable.com"
+  },
+
+  // Routes on demos.handsontable.com: the wildcard serves container preview URLs;
+  // the base-host path routes serve the API, shared demos, embeds, and the
+  // render-ms shim (the authoring app owns the catch-all demos.handsontable.com/*).
+  // workers.dev stays enabled too.
+  "routes": [
+    { "pattern": "*.demos.handsontable.com/*", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/api/*", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/d/*", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/embed/*", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/r/*", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/codesandbox-vm", "zone_name": "handsontable.com" },
+    { "pattern": "demos.handsontable.com/codesandbox-browser", "zone_name": "handsontable.com" }
+  ],
+
+  // D1 — demo metadata + short ids (account 15111272, region EEUR).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "handsontable-demos",
+      "database_id": "5fc0854f-d348-487f-9531-2c44cc86d182",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // KV — edge read-cache for demo JSON.
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "6620876d996d45f9ac69b2a6b59909e6"
+    }
+  ],
+
+  // R2 — source snapshots + built static artifacts.
+  // NOTE: the bucket must be created once R2 is enabled on the account
+  //   (Dashboard -> R2 -> Enable, then `wrangler r2 bucket create handsontable-demos`).
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "handsontable-demos"
+    }
+  ],
+
+  // Tier-2 live editing — Cloudflare Sandbox SDK. proxyToSandbox() requires a
+  // single `Sandbox` namespace, so ONE generic image serves every framework
+  // (deps installed per session). Builder runs the share snapshotter.
+  "containers": [
+    { "class_name": "Sandbox", "image": "../../containers/live/Dockerfile", "instance_type": "standard-1", "max_instances": 5 },
+    { "class_name": "BuilderSandbox", "image": "../../containers/builder/Dockerfile", "instance_type": "standard-1", "max_instances": 3 }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "class_name": "Sandbox", "name": "Sandbox" },
+      { "class_name": "BuilderSandbox", "name": "SANDBOX_BUILDER" }
+    ]
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": [
+        "RemixSandbox", "AngularSandbox", "NextSandbox",
+        "NextShadcnSandbox", "AstroSandbox", "NuxtSandbox", "BuilderSandbox"
+      ],
+      "tag": "v1"
+    },
+    {
+      "new_sqlite_classes": ["Sandbox"],
+      "deleted_classes": [
+        "RemixSandbox", "AngularSandbox", "NextSandbox",
+        "NextShadcnSandbox", "AstroSandbox", "NuxtSandbox"
+      ],
+      "tag": "v2"
+    }
+  ]
+}
