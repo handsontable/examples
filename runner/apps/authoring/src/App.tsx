@@ -471,6 +471,15 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
                 </option>
               ))}
             </select>
+            <a
+              style={githubLink}
+              href={`https://github.com/handsontable/examples/tree/master/examples/${framework}`}
+              target="_blank"
+              rel="noreferrer"
+              title="View & fork this example's source on GitHub"
+            >
+              Fork on GitHub ↗
+            </a>
           </>
         )}
         {!isShare && user && (
@@ -581,6 +590,17 @@ const ghostBtn: React.CSSProperties = {
   borderRadius: 8,
   padding: "5px 10px",
   cursor: "pointer",
+};
+const githubLink: React.CSSProperties = {
+  fontFamily: theme.font.ui,
+  fontSize: 12.5,
+  color: theme.color.text,
+  textDecoration: "none",
+  border: `1px solid ${theme.color.border}`,
+  background: theme.color.surface,
+  borderRadius: 8,
+  padding: "5px 10px",
+  whiteSpace: "nowrap",
 };
 const sharedTitle: React.CSSProperties = {
   fontSize: 14, fontWeight: 600, color: theme.color.text,
