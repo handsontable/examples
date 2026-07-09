@@ -9,6 +9,9 @@ export interface ToolbarProps {
   onSave: () => void;
   onShare: () => void;
   onFork: () => void;
+  /** Create an embeddable (docs-only) version from the current playground code. */
+  onEmbed?: () => void;
+  embedding?: boolean;
   /** Signed in? Save/Share/custom-version/Fork are shown only when true. */
   authed: boolean;
   /** "play" (playground -> Fork), "edit" (saved demo -> Save/Share), or
@@ -28,6 +31,8 @@ export function Toolbar({
   onSave,
   onShare,
   onFork,
+  onEmbed,
+  embedding,
   authed,
   mode = "play",
   sharing,
@@ -102,15 +107,28 @@ export function Toolbar({
       )}
 
       {authed && mode === "play" && (
-        <button
-          type="button"
-          style={{ ...s.button, ...s.buttonPrimary }}
-          onClick={onFork}
-          disabled={sharing}
-          title="Fork this demo into your own editable, shareable client demo"
-        >
-          {sharing ? "Creating…" : "Fork this demo"}
-        </button>
+        <>
+          {onEmbed && (
+            <button
+              type="button"
+              style={s.button}
+              onClick={onEmbed}
+              disabled={embedding}
+              title="Create an embeddable (docs-only) version and copy its embed URL"
+            >
+              {embedding ? "Preparing…" : "Embed"}
+            </button>
+          )}
+          <button
+            type="button"
+            style={{ ...s.button, ...s.buttonPrimary }}
+            onClick={onFork}
+            disabled={sharing}
+            title="Fork this demo into your own editable, shareable client demo"
+          >
+            {sharing ? "Creating…" : "Fork this demo"}
+          </button>
+        </>
       )}
     </header>
   );

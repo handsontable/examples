@@ -33,6 +33,9 @@ export interface EditorShellProps {
   onSave: () => void;
   onShare: () => void;
   onFork: () => void;
+  /** Create an embeddable (docs-only) version from the current playground code. */
+  onEmbed?: () => void;
+  embedding?: boolean;
   /** Signed in? Gates Save/Share/custom-version vs a Fork call-to-action. */
   authed: boolean;
   /** "play" (playground -> Fork), "edit" (saved demo -> Save/Share), or
@@ -71,6 +74,8 @@ export function EditorShell(props: EditorShellProps) {
         onSave={props.onSave}
         onShare={props.onShare}
         onFork={props.onFork}
+        onEmbed={props.onEmbed}
+        embedding={props.embedding}
         authed={props.authed}
         mode={props.mode}
         sharing={props.sharing}

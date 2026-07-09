@@ -99,7 +99,9 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [forking, setForking] = useState(false);
+  const [embedding, setEmbedding] = useState(false);
   const [shareLinksOpen, setShareLinksOpen] = useState(false);
+  const [linksId, setLinksId] = useState<string | null>(null);
   const [forkedFrom, setForkedFrom] = useState<string | null>(`catalog:${framework}`);
   const [myDemosOpen, setMyDemosOpen] = useState(false);
 
@@ -314,6 +316,39 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     URL.revokeObjectURL(url);
   }, [title, entry.displayName]);
 
+  /** Create an embeddable (docs-only) version from the current playground code
+   *  and show its embed URL — the logged-in path to embed a public example. */
+  const onEmbed = useCallback(async () => {
+    if (!user) return login();
+    setEmbedding(true);
+    setErrorMessage(null);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API_BASE}/api/demos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          framework: entry.framework,
+          files: filesRef.current,
+          title: `${entry.displayName} (embed)`,
+          htVersion: version,
+          forkedFrom: forkedFrom ?? undefined,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || `embed failed (${res.status})`);
+      }
+      const { id } = (await res.json()) as { id: string };
+      setLinksId(id);
+      setShareLinksOpen(true);
+    } catch (e) {
+      setErrorMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEmbedding(false);
+    }
+  }, [user, entry, version, forkedFrom]);
+
   /** Fork the current playground code into a new saved demo, then open its edit page. */
   const onFork = useCallback(async () => {
     if (!user) return login();
@@ -373,8 +408,8 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     }
   }, [savedId, isShare, title, description, version]);
 
-  const clientUrl = savedId ? `${location.origin}/share/${savedId}` : "";
-  const embedUrl = savedId ? `${API_BASE}/embed/${savedId}` : "";
+  const clientUrl = linksId ? `${location.origin}/share/${linksId}` : "";
+  const embedUrl = linksId ? `${API_BASE}/embed/${linksId}` : "";
 
   if (savedId && !sourceLoaded) return <Splash text="Loading demo…" />;
 
@@ -464,8 +499,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         onRenameFile={renameFile}
         onDeleteFile={deleteFile}
         onSave={onSave}
-        onShare={() => setShareLinksOpen(true)}
+        onShare={() => { setLinksId(savedId); setShareLinksOpen(true); }}
         onFork={onFork}
+        onEmbed={onEmbed}
+        embedding={embedding}
         authed={!!user}
         mode={route.mode}
         sharing={forking}
@@ -473,7 +510,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         dirty={dirty}
       />
 
-      {shareLinksOpen && savedId && (
+      {shareLinksOpen && linksId && (
         <ShareLinks clientUrl={clientUrl} embedUrl={embedUrl} onClose={() => setShareLinksOpen(false)} />
       )}
 
