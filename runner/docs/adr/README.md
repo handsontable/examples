@@ -6,7 +6,7 @@ once Accepted.
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [0001](0001-replace-codesandbox-and-render-ms.md) | Replace CodeSandbox + render-ms with a self-hosted runner | Accepted |
+| [0001](0001-replace-codesandbox-and-render-ms.md) | Replace CodeSandbox + render-ms with a self-hosted runner | Accepted (render-ms removed, ADR-0019) |
 | [0002](0002-two-tier-runtime-behind-one-adapter.md) | Two-tier runtime behind one `DemoRuntime` adapter | Accepted |
 | [0003](0003-no-nodebox-no-webcontainers.md) | No Nodebox / WebContainers | Accepted |
 | [0004](0004-angular-is-tier-2.md) | Angular is Tier 2 | Accepted |
@@ -22,5 +22,6 @@ once Accepted.
 | [0014](0014-storage-d1-r2-kv.md) | Storage split: D1 + R2 + KV | Accepted |
 | [0015](0015-pnpm-monorepo-layout.md) | pnpm monorepo under `runner/` | Accepted |
 | [0016](0016-codemirror-editor.md) | CodeMirror 6 as the code editor | Accepted |
-| [0017](0017-keep-render-ms-until-replaced.md) | Keep render-ms running; compat shim; remove later | Accepted |
+| [0017](0017-keep-render-ms-until-replaced.md) | Keep render-ms running; compat shim; remove later | Superseded by 0019 |
 | [0018](0018-no-ai-attribution.md) | No AI attribution in history or code | Accepted |
+| [0019](0019-docs-guide-examples-and-render-ms-removal.md) | Documentation-guide examples in the runner; remove render-ms | Accepted |

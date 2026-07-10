@@ -1,6 +1,8 @@
 # ADR-0017: Keep render-ms running; compat shim; remove later
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0019 — `render-ms` has since been removed entirely
+(directory + worker compatibility shim + routes deleted). Its version-dispatch
+logic lives in `packages/runtime/version.ts`.
 
 ## Context
 `render-ms` still serves live demos and is depended on until the new system fully

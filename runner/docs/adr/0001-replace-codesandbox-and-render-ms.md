@@ -1,6 +1,7 @@
 # ADR-0001: Replace CodeSandbox + render-ms with a self-hosted runner
 
-**Status:** Accepted
+**Status:** Accepted — `render-ms` is now removed (see ADR-0019); CodeSandbox is
+no longer a runtime dependency.
 
 ## Context
 Live framework demos were served via CodeSandbox, dispatched by the `render-ms`

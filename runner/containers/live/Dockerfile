@@ -39,4 +39,8 @@ RUN cd /baked/nuxt && npm install --no-audit --no-fund --loglevel=error
 COPY baked/remix/package.json /baked/remix/package.json
 RUN cd /baked/remix && npm install --no-audit --no-fund --loglevel=error
 
+# vue
+COPY baked/vue/package.json /baked/vue/package.json
+RUN cd /baked/vue && npm install --no-audit --no-fund --loglevel=error
+
 EXPOSE 3001 4200 4321 5173

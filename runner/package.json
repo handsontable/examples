@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Self-hosted live demo runner for Handsontable examples (replaces CodeSandbox / render-ms).",
+  "description": "Self-hosted live demo runner for Handsontable examples and documentation guides (replaces CodeSandbox).",
   "license": "UNLICENSED",
   "packageManager": "pnpm@10.12.2",
   "engines": {

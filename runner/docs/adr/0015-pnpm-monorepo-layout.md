@@ -14,4 +14,4 @@ A pnpm-workspace monorepo under `runner/`: `packages/{runtime,editor-shell}`,
 
 ## Consequences
 - Shared types/logic via workspace packages; one install graph.
-- `render-ms/` stays outside `runner/`, untouched (ADR-0017).
+- `render-ms/` (the former sibling microservice) has since been removed (ADR-0019).

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { EditorShell, theme, logoUrl, type PreviewStatus } from "@handsontable/demo-editor-shell";
 import {
   applyHandsontableVersion,
@@ -11,12 +11,48 @@ import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
 import { ContainerRuntime } from "@handsontable/demo-runtime/container";
 import { zipSync, strToU8 } from "fflate";
 import { catalog, getEntry, fetchVersions, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
+import { fetchDocsManifest, loadDocsExample, type DocsManifestItem } from "./docs-catalog.js";
+import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
 import { MyDemos } from "./MyDemos.js";
 import { ShareLinks } from "./ShareLinks.js";
 
 const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefined;
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
+
+// Framework preference (used to auto-pick a variant when an example is chosen and
+// the current one isn't available) + short labels for the framework picker.
+const FW_PREF = ["react", "typescript", "javascript", "vue", "angular"];
+const FW_LABEL: Record<string, string> = {
+  javascript: "JavaScript",
+  typescript: "TypeScript",
+  react: "React",
+  vue: "Vue",
+  angular: "Angular",
+};
+// Runner framework → Handsontable docs URL prefix (TypeScript shares the JS docs).
+const FW_DOCS: Record<string, string> = {
+  javascript: "javascript-data-grid",
+  typescript: "javascript-data-grid",
+  react: "react-data-grid",
+  vue: "vue-data-grid",
+  angular: "angular-data-grid",
+};
+
+/** Public documentation page URL for a docs example. */
+function docsPageUrl(framework: string, permalink: string): string {
+  const prefix = FW_DOCS[framework] ?? "javascript-data-grid";
+  return `https://handsontable.com/docs/${prefix}${permalink}/`;
+}
+
+/** Turn a raw runtime error into a message that explains container prerequisites. */
+function describeRuntimeError(e: unknown, engine: string): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (engine === "container" && /failed to fetch|networkerror|load failed|session start failed|fetch/i.test(msg)) {
+    return "Vue and Angular examples run on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
+  }
+  return msg;
+}
 
 type EditorRoute =
   | { mode: "play" }
@@ -84,12 +120,22 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const isShare = route.mode === "share";
 
   // Initial example/version come from the URL so the playground is deep-linkable.
+  // `?docs=<content-path>` opens a documentation-guide example (lazy-loaded);
+  // `?example=<framework>` opens one of the built-in starter templates.
+  const initialDocs = route.mode === "play"
+    ? new URLSearchParams(location.search).get("docs")
+    : null;
   const [framework, setFramework] = useState<string>(() => {
     const p = new URLSearchParams(location.search).get("example");
     return catalog.examples.some((e) => e.framework === p) ? (p as string) : "react";
   });
   const hadUrlVersion = useRef<boolean>(new URLSearchParams(location.search).has("v"));
-  const entry = useMemo<CatalogEntry>(() => getEntry(framework), [framework]);
+  // The active example entry — a starter template or a lazy-loaded docs example.
+  const [entry, setEntry] = useState<CatalogEntry>(() => getEntry(framework));
+  // Non-null when the current example is a documentation-guide example.
+  const [docsPath, setDocsPath] = useState<string | null>(initialDocs);
+  // Docs examples for the Cascader picker (fetched once).
+  const [docsItems, setDocsItems] = useState<DocsManifestItem[]>([]);
 
   const [files, setFiles] = useState<FilesMap>(() => ({ ...entry.files }));
   const [version, setVersion] = useState<string>(
@@ -112,8 +158,9 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const filesRef = useRef<FilesMap>(files);
   filesRef.current = files;
 
-  // Saved-demo state (edit + share modes).
-  const [sourceLoaded, setSourceLoaded] = useState(!savedId);
+  // Saved-demo state (edit + share modes). Also gates the first mount until a
+  // `?docs=` example has resolved, so we don't briefly boot the starter first.
+  const [sourceLoaded, setSourceLoaded] = useState(!savedId && !initialDocs);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
@@ -124,10 +171,11 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [forkedFrom, setForkedFrom] = useState<string | null>(`catalog:${framework}`);
   const [myDemosOpen, setMyDemosOpen] = useState(false);
 
-  /** Replace the whole workspace with a fresh file set + lineage, and remount. */
-  const loadWorkspace = useCallback((fw: string, nextFiles: FilesMap, lineage: string) => {
+  /** Replace the whole workspace (entry + files + lineage) and remount. */
+  const loadWorkspace = useCallback((nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
     filesRef.current = nextFiles; // ensure the mount effect reads the new files
-    setFramework(fw);
+    setEntry(nextEntry);
+    setFramework(nextEntry.framework);
     setFiles(nextFiles);
     setForkedFrom(lineage);
     setDirty(false);
@@ -165,7 +213,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
             setVersion(meta.ht_version);
           }
         }
-        loadWorkspace(src.framework, src.files, savedId);
+        loadWorkspace(getEntry(src.framework), src.files, savedId);
         setSourceLoaded(true);
       } catch {
         if (!cancelled) { setErrorMessage("This demo is unavailable."); setSourceLoaded(true); }
@@ -173,6 +221,35 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     })();
     return () => { cancelled = true; };
   }, [savedId, isShare, loadWorkspace]);
+
+  // Fetch the docs-example manifest once (drives the breadcrumb-grouped picker).
+  useEffect(() => {
+    if (route.mode === "share") return; // read-only shared view has no picker
+    let cancelled = false;
+    fetchDocsManifest()
+      .then((m) => { if (!cancelled) setDocsItems(m.examples); })
+      .catch(() => { /* picker just shows starters */ });
+    return () => { cancelled = true; };
+  }, [route.mode]);
+
+  // Play mode with `?docs=`: lazy-load the docs example and boot it.
+  useEffect(() => {
+    if (!initialDocs) return;
+    let cancelled = false;
+    loadDocsExample(initialDocs)
+      .then((e) => {
+        if (cancelled) return;
+        loadWorkspace(e, { ...e.files }, `docs:${initialDocs}`);
+        setDocsPath(initialDocs);
+        setSourceLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setErrorMessage(`Could not load docs example: ${initialDocs}`);
+        setSourceLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, [initialDocs, loadWorkspace]);
 
   // Load real published versions from the API (npm-backed); default to latest
   // unless a version was deep-linked (or pinned by the demo being edited/shared).
@@ -211,18 +288,42 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   }, [version, framework, mountGen]);
 
   // Keep the URL in sync with the selected example + version — playground only
-  // (edit/share have their own /edit/:id, /share/:id paths).
+  // (edit/share have their own /edit/:id, /share/:id paths). Docs examples use
+  // `?docs=<content-path>`; starters use `?example=<framework>`.
   useEffect(() => {
     if (route.mode !== "play") return;
     const p = new URLSearchParams(location.search);
-    p.set("example", framework);
+    if (docsPath) {
+      p.set("docs", docsPath);
+      p.delete("example");
+    } else {
+      p.set("example", framework);
+      p.delete("docs");
+    }
     p.set("v", version);
     history.replaceState(null, "", `${location.pathname}?${p.toString()}`);
-  }, [framework, version, route.mode]);
+  }, [framework, docsPath, version, route.mode]);
 
-  /** Pick a catalog example as a fresh starting template (playground). */
+  /** Pick a catalog starter template as a fresh starting template (playground). */
   const selectExample = useCallback(
-    (fw: string) => loadWorkspace(fw, { ...getEntry(fw).files }, `catalog:${fw}`),
+    (fw: string) => {
+      setDocsPath(null);
+      loadWorkspace(getEntry(fw), { ...getEntry(fw).files }, `catalog:${fw}`);
+    },
+    [loadWorkspace],
+  );
+
+  /** Open a documentation-guide example (lazy-loaded by its docs content path). */
+  const selectDocs = useCallback(
+    async (dp: string) => {
+      try {
+        const e = await loadDocsExample(dp);
+        setDocsPath(dp);
+        loadWorkspace(e, { ...e.files }, `docs:${dp}`);
+      } catch {
+        setErrorMessage(`Could not load docs example: ${dp}`);
+      }
+    },
     [loadWorkspace],
   );
 
@@ -251,13 +352,13 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     runtime.onError((e) => {
       if (cancelled) return;
       setStatus("error");
-      setErrorMessage(e.message);
+      setErrorMessage(describeRuntimeError(e, entry.engine));
     });
     runtimeRef.current = runtime;
     runtime.mount(filesRef.current).catch((e: unknown) => {
       if (!cancelled) {
         setStatus("error");
-        setErrorMessage(e instanceof Error ? e.message : String(e));
+        setErrorMessage(describeRuntimeError(e, entry.engine));
       }
     });
     return () => {
@@ -430,6 +531,15 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const clientUrl = linksId ? `${location.origin}/share/${linksId}` : "";
   const embedUrl = linksId ? `${API_BASE}/embed/${linksId}` : "";
 
+  // The framework variants available for the currently-open docs example — drive
+  // the separate framework picker shown next to the example Cascader.
+  const currentDocsMeta = docsPath ? docsItems.find((i) => i.docsPath === docsPath) : undefined;
+  const currentFrameworks = currentDocsMeta
+    ? docsItems
+        .filter((i) => i.guide === currentDocsMeta.guide && i.exampleId === currentDocsMeta.exampleId)
+        .sort((a, b) => FW_PREF.indexOf(a.framework) - FW_PREF.indexOf(b.framework))
+    : [];
+
   if (savedId && !sourceLoaded) return <Splash text="Loading demo…" />;
 
   return (
@@ -464,13 +574,71 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         ) : (
           <>
             <span style={{ color: theme.color.textMuted }}>Example</span>
-            <select value={framework} onChange={(e) => selectExample(e.target.value)} style={selectStyle}>
-              {catalog.examples.map((e) => (
-                <option key={e.framework} value={e.framework}>
-                  {e.displayName}
-                </option>
-              ))}
-            </select>
+            <DocsCascader
+              manifestItems={docsItems}
+              starters={catalog.examples.map((e) => ({ framework: e.framework, displayName: e.displayName }))}
+              currentLabel={
+                currentDocsMeta
+                  ? `${currentDocsMeta.breadcrumb.join(" ▸ ")} · ${currentDocsMeta.exampleTitle}`
+                  : entry.displayName
+              }
+              selectedKey={
+                currentDocsMeta
+                  ? `${currentDocsMeta.guide}|${currentDocsMeta.exampleId}`
+                  : `starter:${framework}`
+              }
+              onSelect={(leaf: CascaderLeaf) => {
+                if (leaf.kind === "starter") { selectExample(leaf.framework); return; }
+                const pick =
+                  leaf.frameworks.find((f) => f.framework === framework) ??
+                  FW_PREF.map((p) => leaf.frameworks.find((f) => f.framework === p)).find(Boolean) ??
+                  leaf.frameworks[0];
+                if (pick) void selectDocs(pick.docsPath);
+              }}
+            />
+            {currentFrameworks.length > 0 && (
+              <div style={{ display: "flex", gap: 4 }} role="group" aria-label="Framework">
+                {currentFrameworks.map((f) => {
+                  const active = f.docsPath === docsPath;
+                  return (
+                    <button
+                      key={f.framework}
+                      type="button"
+                      onClick={() => void selectDocs(f.docsPath)}
+                      style={{ ...fwBtn, ...(active ? fwBtnActive : null) }}
+                      title={f.displayName}
+                      aria-pressed={active}
+                    >
+                      {FW_LABEL[f.framework] ?? f.displayName}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {currentDocsMeta && (
+              <a
+                style={githubLink}
+                href={docsPageUrl(framework, currentDocsMeta.docPermalink)}
+                target="_blank"
+                rel="noreferrer"
+                title="Open the documentation page for this example"
+              >
+                See in documentation ↗
+              </a>
+            )}
+            <a
+              style={githubLink}
+              href={
+                docsPath
+                  ? `https://github.com/handsontable/handsontable/tree/develop/docs/content/${docsPath.split("/").slice(0, -1).join("/")}`
+                  : `https://github.com/handsontable/examples/tree/master/examples/${framework}`
+              }
+              target="_blank"
+              rel="noreferrer"
+              title="View this example's source on GitHub"
+            >
+              {docsPath ? "See on GitHub ↗" : "Fork on GitHub ↗"}
+            </a>
           </>
         )}
         {!isShare && user && (
@@ -581,6 +749,34 @@ const ghostBtn: React.CSSProperties = {
   borderRadius: 8,
   padding: "5px 10px",
   cursor: "pointer",
+};
+const fwBtn: React.CSSProperties = {
+  fontFamily: theme.font.ui,
+  fontSize: 12,
+  border: `1px solid ${theme.color.border}`,
+  background: theme.color.surface,
+  color: theme.color.textMuted,
+  borderRadius: 7,
+  padding: "4px 9px",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+const fwBtnActive: React.CSSProperties = {
+  background: theme.color.accent,
+  color: "#fff",
+  borderColor: theme.color.accent,
+  fontWeight: 600,
+};
+const githubLink: React.CSSProperties = {
+  fontFamily: theme.font.ui,
+  fontSize: 12.5,
+  color: theme.color.text,
+  textDecoration: "none",
+  border: `1px solid ${theme.color.border}`,
+  background: theme.color.surface,
+  borderRadius: 8,
+  padding: "5px 10px",
+  whiteSpace: "nowrap",
 };
 const sharedTitle: React.CSSProperties = {
   fontSize: 14, fontWeight: 600, color: theme.color.text,

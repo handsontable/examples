@@ -192,11 +192,23 @@ in environment variables only. No per-view compute cost.
 
 ## Relationship to `render-ms`
 
-`render-ms` keeps running until this system fully replaces it. This PR adds a
-compatibility shim mapping old `render-ms` deep links
-(`example-dir`, `handsontable-version`, `handsontable-branch`,
-`handsontable-sha`, `example-branch`) to the new viewer; `render-ms` removal is a
-follow-up PR.
+`render-ms` has been **removed** — this runner fully replaces it. Its
+`handsontable-version` dispatch logic was ported into `packages/runtime/version.ts`,
+which accepts the same version inputs (semver, npm-style partials, pkg.pr.new refs).
+
+## Documentation-guide examples
+
+Beyond the 13 starter templates, the runner serves every example in the
+Handsontable documentation guides (`handsontable/docs/content/guides/**/example*.*`).
+`pipeline/import-docs.mjs` walks the docs repo, parses each `::: example` directive,
+wraps every framework fragment into a minimal runnable project
+(`pipeline/wrap-docs-example.mjs`), and emits `apps/authoring/public/docs-examples/`
+(a `manifest.json` + one CatalogEntry JSON per example). The authoring app groups
+them in the example picker by docs-folder breadcrumb and opens one via
+`?docs=<content-path>` (e.g. `?docs=guides/columns/column-adding/react/example1.tsx`).
+JavaScript/TypeScript/React run on Tier-1 (Sandpack); Vue and Angular run on Tier-2
+(container, real dev server) because the classic in-browser bundler cannot compile
+Vue 3 `<script setup>` or modern Angular. See `docs/docs-examples.md`.
 
 ## Deliverables
 
@@ -212,10 +224,11 @@ follow-up PR.
    `handsontable.com` via `frame-ancestors` (served by the Worker from R2).
 7. ✅ Build snapshotter (builder container) + version injection. `scripts/warm.ts`
    (prebuild N versions) still to add.
-8. ✅ `render-ms` compatibility shim (`/codesandbox-vm`, `/codesandbox-browser`,
-   `/r/:framework`).
+8. ✅ `render-ms` removed (its version-dispatch logic lives in `version.ts`).
 9. ✅ `docs/`: run-and-deploy, self-host-bundler, create-and-share-a-demo,
-   cloudflare-resources, 18 ADRs.
+   cloudflare-resources, docs-examples, ADRs.
+10. ✅ Documentation-guide examples: `import-docs.mjs` + `wrap-docs-example.mjs`
+    → `docs-examples/`, opened via `?docs=`.
 
 Deployed: API `handsontable-demos-api.handsoncode.workers.dev`, authoring
 `handsontable-demos-authoring.handsoncode.workers.dev`. Pending: wildcard domain
