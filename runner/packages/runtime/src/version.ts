@@ -1,8 +1,8 @@
-// Version dispatch — ported from render-ms (validate-handsontable-version.js,
-// pkg-pr-new.js) and its package.json dependency rewrite, so the new system
-// accepts exactly the same `handsontable-version` inputs the old deep links used.
+// Version dispatch — the package.json dependency-rewrite logic that used to live
+// in the former render-ms service (validate-handsontable-version.js,
+// pkg-pr-new.js), so the runner accepts the same `handsontable-version` inputs.
 //
-// Rule (identical to render-ms): rewrite every dependency whose package name
+// Rule: rewrite every dependency whose package name
 // contains "handsontable" EXCEPT `@handsontable/pikaday` to the requested
 // version (or a pkg.pr.new URL). This pins core `handsontable` and its framework
 // wrapper in lockstep. Supported Handsontable major range: 15-19.

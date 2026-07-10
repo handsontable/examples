@@ -1,0 +1,16 @@
+{
+  "name": "handsontable-vue-docs",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "handsontable": "18.0.0",
+    "@handsontable/vue3": "18.0.0",
+    "vue": "3.x",
+    "vite": "^5.4.0",
+    "@vitejs/plugin-vue": "^5.0.0"
+  },
+  "scripts": {
+    "start": "vite",
+    "build": "vite build"
+  }
+}

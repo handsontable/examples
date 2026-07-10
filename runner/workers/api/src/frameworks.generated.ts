@@ -16,6 +16,7 @@ export const FRAMEWORK_DEV: Record<string, FrameworkDev> = {
   "astro": { cmd: "npx --no-install astro dev --host 0.0.0.0 --port 4321", port: 4321, bakedKey: "astro" },
   "nuxt": { cmd: "npx --no-install nuxt dev -H 0.0.0.0 -p 3001", port: 3001, bakedKey: "nuxt" },
   "remix": { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "remix" },
+  "vue": { cmd: "npx --no-install vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "vue" },
 };
 
 // Build config for the share snapshotter (all examples).

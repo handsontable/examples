@@ -11,7 +11,6 @@ import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { authenticate } from "./auth.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, updateDemo, type DemoRow } from "./share.js";
-import { renderMs } from "./migrate.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
 // so live-preview sessions all use ONE class backed by one generic image that
@@ -72,7 +71,6 @@ a{color:#1a8f5a}code{background:#f4f6f8;padding:1px 5px;border-radius:4px}h1{fon
 <li><code>GET /d/:id</code> — a shared demo (prebuilt, static)</li>
 <li><code>GET /embed/:id</code> — docs-only embeddable demo</li>
 <li><code>GET /api/health</code> — health check</li>
-<li><code>GET /codesandbox-vm?example-dir=…&amp;handsontable-version=…</code> — render-ms compatibility</li>
 </ul>
 <p>Create and share demos in the authoring app (internal, Handsontable login).</p>`;
 
@@ -370,22 +368,6 @@ export default {
           return Response.redirect(`${url.origin}${url.pathname}/${url.search}`, 308);
         }
         return await serveDemoAsset(env, demoId, sub, { embed });
-      }
-
-      // ---- render-ms compatibility shim (D8) -------------------------------
-      // Old public deep links -> build-or-reuse a public render -> /d/:id.
-      if (
-        request.method === "GET" &&
-        (parts[0] === "codesandbox-vm" || parts[0] === "codesandbox-browser" || parts[0] === "r")
-      ) {
-        const exampleDir = parts[0] === "r" && parts[1]
-          ? decodeURIComponent(parts[1])
-          : url.searchParams.get("example-dir");
-        if (!exampleDir) return json({ error: "example-dir required" }, 400);
-        const versionInput = url.searchParams.get("handsontable-version") ?? url.searchParams.get("v");
-        const r = await renderMs(env, exampleDir, versionInput, nowIso());
-        if ("error" in r) return json({ error: r.error }, r.status);
-        return Response.redirect(`${url.origin}/d/${r.id}/`, 302);
       }
 
       // GET /api/versions (public) — real published Handsontable versions.

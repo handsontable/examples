@@ -32,13 +32,52 @@ const DEV = {
   nuxt: { cmd: "npx --no-install nuxt dev -H 0.0.0.0 -p 3001", port: 3001 },
   "react-js": { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
   "ant-design": { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
+  // Documentation-guide Vue examples use `<script setup>` (unsupported by the
+  // in-browser bundler), so they run on the container engine via real Vite.
+  vue: { cmd: "npx --no-install vite --host 0.0.0.0 --port 5173", port: 5173 },
 };
+
+// Container frameworks that are NOT catalog starters but must still be baked
+// into the shared image (used only by the documentation-guide examples). Vue's
+// starter is Tier-1 (Sandpack), but its docs examples need a real Vite server.
+const EXTRA_CONTAINER = [
+  {
+    framework: "vue",
+    tier: 1,
+    installCommand: "npm install",
+    buildCommand: "vite build",
+    outputDir: "dist",
+    outputGlob: null,
+    files: {
+      "/package.json": JSON.stringify(
+        {
+          name: "handsontable-vue-docs",
+          version: "1.0.0",
+          private: true,
+          dependencies: {
+            handsontable: "18.0.0",
+            "@handsontable/vue3": "18.0.0",
+            vue: "3.x",
+            vite: "^5.4.0",
+            "@vitejs/plugin-vue": "^5.0.0",
+          },
+          scripts: { start: "vite", build: "vite build" },
+        },
+        null,
+        2,
+      ),
+    },
+  },
+];
 const EXPOSE_PORTS = [...new Set(Object.values(DEV).map((d) => d.port))].sort();
 
 const catalog = JSON.parse(fs.readFileSync(path.join(RUNNER_DIR, "catalog.json"), "utf8"));
 const bakedKey = (framework) => framework.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
 const containerExamples = catalog.examples.filter((e) => e.engine === "container");
+// Everything baked into the image + given a dev command: catalog container
+// examples plus the docs-only extras (e.g. Vue).
+const bakeExamples = [...containerExamples, ...EXTRA_CONTAINER];
 
 function writeBakedContexts() {
   const liveDir = path.join(RUNNER_DIR, "containers", "live");
@@ -46,7 +85,7 @@ function writeBakedContexts() {
   fs.rmSync(bakedRoot, { recursive: true, force: true });
 
   const steps = [];
-  for (const e of containerExamples) {
+  for (const e of bakeExamples) {
     if (!DEV[e.framework]) throw new Error(`no DEV command for container framework: ${e.framework}`);
     const key = bakedKey(e.framework);
     const dir = path.join(bakedRoot, key);
@@ -72,11 +111,11 @@ ${steps.join("\n\n")}
 EXPOSE ${EXPOSE_PORTS.join(" ")}
 `;
   fs.writeFileSync(path.join(liveDir, "Dockerfile"), dockerfile);
-  console.log(`[prepare-container] baked ${containerExamples.length} frameworks into containers/live/`);
+  console.log(`[prepare-container] baked ${bakeExamples.length} frameworks into containers/live/`);
 }
 
 function writeGenerated() {
-  const devRows = containerExamples.map((e) => {
+  const devRows = bakeExamples.map((e) => {
     const d = DEV[e.framework];
     return `  ${JSON.stringify(e.framework)}: { cmd: ${JSON.stringify(d.cmd)}, port: ${d.port}, bakedKey: ${JSON.stringify(bakedKey(e.framework))} },`;
   });

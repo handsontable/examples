@@ -1,14 +1,13 @@
 # Handsontable Demo Runner
 
-Self-hosted system that renders every Handsontable example live at any Handsontable
-version, lets internal team members edit code on the fly, and produces clean,
-permanent client URLs to share — replacing CodeSandbox and, eventually, the
-`render-ms` redirect microservice.
+Self-hosted system that renders every Handsontable example — including every
+documentation-guide example — live at any Handsontable version, lets internal team
+members edit code on the fly, and produces clean, permanent client URLs to share.
+Replaces CodeSandbox and the former `render-ms` redirect microservice (removed).
 
-> Status: **work in progress.** This directory is being built deliverable by
-> deliverable. See `docs/architecture.md` for the full design and
-> [`../render-ms`](../render-ms) for the service this will replace (kept running
-> until the new system fully takes over).
+> See `docs/architecture.md` for the full design and
+> [`docs/docs-examples.md`](docs/docs-examples.md) for how the documentation-guide
+> examples are imported and opened in the runner (`?docs=` URLs).
 
 ## One UX, two engines
 
@@ -26,7 +25,7 @@ sits behind it is invisible to the author:
 |------|---------|
 | `config/frameworks.json` | Single source of truth: tier, wrappers, dev/build commands, ports per example. |
 | `catalog.json` | Generated. All 13 examples normalized into starting templates. |
-| `pipeline/` | `import.mjs` (catalog generation), build-and-serve snapshotter (later). |
+| `pipeline/` | `import.mjs` (starter catalog), `import-docs.mjs` + `wrap-docs-example.mjs` (documentation-guide examples). |
 | `packages/runtime/` | `DemoRuntime` interface, `applyHandsontableVersion`, `resolveRuntime`. |
 | `packages/editor-shell/` | Framework-agnostic editor UI + branding `theme.ts`. |
 | `apps/authoring/` | Vite+React authoring app (behind Cloudflare Access). |
@@ -39,7 +38,8 @@ sits behind it is invisible to the author:
 ## Regenerate the catalog
 
 ```bash
-node pipeline/import.mjs   # reads ../examples/, writes catalog.json
+node pipeline/import.mjs        # reads ../examples/, writes catalog.json
+node pipeline/import-docs.mjs   # reads ../../handsontable/docs, writes apps/authoring/public/docs-examples/
 ```
 
 ## Constraints

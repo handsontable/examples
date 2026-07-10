@@ -2,8 +2,10 @@
 
 Self-hosted live-demo system for Handsontable. Renders every example live at any
 Handsontable version, lets the internal team edit code in the browser, and mints
-permanent shareable/embeddable links. Replaces CodeSandbox/StackBlitz and the old
-`render-ms` microservice. Lives in the `runner/` folder of `handsontable/examples`.
+permanent shareable/embeddable links. Also serves every documentation-guide
+example (opened via `?docs=` URLs — see `docs/docs-examples.md`). Replaces
+CodeSandbox/StackBlitz and the former `render-ms` microservice (removed). Lives in
+the `runner/` folder of `handsontable/examples`.
 
 Production: **https://demos.handsontable.com** (Cloudflare account `15111272c53ed0aaf84a908f0c9c7f8b`).
 
@@ -25,8 +27,9 @@ Work happens on a feature branch off `master`, opened as a PR against `handsonta
 | `apps/authoring/` | The web app (Vite + React 19). SPA served as Cloudflare Workers Assets → worker `handsontable-demos-authoring`. |
 | `packages/editor-shell/` | Framework-agnostic editor UI: toolbar, file tree, code editor, preview pane, theme. **Most UI/UX lives here.** |
 | `packages/runtime/` | The `DemoRuntime` engines: `sandpack.ts` (Tier-1, in-browser bundler) and `container.ts` (Tier-2, live Cloudflare Sandbox container). Plus `version.ts` (HOT version dispatch). |
-| `workers/api/` | Orchestration + sharing worker `handsontable-demos-api` (sessions, `/api/demos`, `/d`, `/embed`, build snapshotter, render-ms shim). |
+| `workers/api/` | Orchestration + sharing worker `handsontable-demos-api` (sessions, `/api/demos`, `/d`, `/embed`, build snapshotter). |
 | `config/frameworks.json` | Single source of truth per example (tier, engine, wrappers, entry). `pipeline/import.mjs` → `catalog.json`. |
+| `apps/authoring/public/docs-examples/` | Generated documentation-guide examples (manifest + one CatalogEntry JSON each). `pipeline/import-docs.mjs` + `wrap-docs-example.mjs`. |
 | `containers/`, `scripts/` | Live/builder Dockerfiles + baked deps; `prepare-container.mjs`, `warm.ts`. |
 | `docs/` | Architecture, ADRs, run/deploy notes. |
 
