@@ -10,8 +10,8 @@
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
-    "@handsontable/vue3": "18.0.0",
-    "handsontable": "18.0.0",
+    "@handsontable/vue3": "latest",
+    "handsontable": "latest",
     "nuxt": "^3.21.8"
   },
   "config": {

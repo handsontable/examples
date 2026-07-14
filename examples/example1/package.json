@@ -11,7 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "handsontable": "18.0.0"
+    "handsontable": "latest"
   },
   "devDependencies": {
     "typescript": "~6.0.3",
