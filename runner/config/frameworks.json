@@ -144,7 +144,7 @@
       "outputDir": "dist",
       "outputGlob": "dist/*/browser",
       "port": 3000,
-      "installCommand": "npm install --legacy-peer-deps"
+      "installCommand": "npm install"
     },
     "next.js": {
       "tier": 2,
