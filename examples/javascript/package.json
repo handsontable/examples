@@ -1,6 +1,7 @@
 {
   "name": "vanilla-demo",
   "private": true,
+  "packageManager": "pnpm@10.34.5",
   "version": "0.0.0",
   "description": "This is a general purpose demo that showcases the most popular features of Handsontable",
   "homepage": "https://handsontable.com/",
@@ -18,8 +19,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@handsontable/pikaday": "^1.0.0",
-    "handsontable": "18.0.0"
+    "@handsontable/pikaday": "latest",
+    "handsontable": "latest"
   },
   "devDependencies": {
     "vite": "^8.1.1"

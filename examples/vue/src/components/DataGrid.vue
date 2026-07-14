@@ -27,14 +27,6 @@ export default defineComponent({
       return addClassesToRows;
     },
 
-    drawCheckboxInRowHeadersProp() {
-      return drawCheckboxInRowHeaders;
-    },
-
-    changeCheckboxCellProp() {
-      return changeCheckboxCell;
-    },
-
     dataProp() {
       return data;
     },

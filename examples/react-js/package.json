@@ -2,6 +2,7 @@
   "name": "react-demo",
   "version": "0.0.0",
   "private": true,
+  "packageManager": "pnpm@10.34.5",
   "homepage": "https://handsontable.com/",
   "repository": {
     "type": "git",
@@ -14,8 +15,8 @@
   "dependencies": {
     "react": "19.2.7",
     "react-dom": "19.2.7",
-    "@handsontable/react-wrapper": "18.0.0",
-    "handsontable": "18.0.0"
+    "@handsontable/react-wrapper": "latest",
+    "handsontable": "latest"
   },
   "scripts": {
     "dev": "vite --port 8080",
@@ -42,9 +43,6 @@
   "config": {
     "codesandbox": {
       "templateId": "vmjhgx"
-    },
-    "stackblitz": {
-      "template": "create-react-app"
     }
   }
 }

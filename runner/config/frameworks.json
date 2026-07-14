@@ -4,14 +4,14 @@
   "frameworks": {
     "example1": {
       "tier": 1,
-      "displayName": "Vanilla (Parcel)",
+      "displayName": "Vanilla (Vite, TS)",
       "sandpackTemplate": "vanilla-ts",
       "sandpackEnvironment": "parcel",
       "htWrappers": [],
       "entry": "index.ts",
       "htmlEntry": "index.html",
       "devCommand": null,
-      "buildCommand": "parcel build index.html",
+      "buildCommand": "tsc && vite build",
       "outputDir": "dist",
       "port": null,
       "installCommand": "npm install"
@@ -144,7 +144,7 @@
       "outputDir": "dist",
       "outputGlob": "dist/*/browser",
       "port": 3000,
-      "installCommand": "npm install --legacy-peer-deps"
+      "installCommand": "npm install"
     },
     "next.js": {
       "tier": 2,

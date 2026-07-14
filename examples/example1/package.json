@@ -1,24 +1,27 @@
 {
-    "name": "handsontable-pr-javascript-demo",
-    "version": "1.0.0",
-    "description": "",
-    "main": "index.html",
-    "private": true,
-    "scripts": {
-        "start": "parcel index.html --open",
-        "build": "parcel build index.html"
-    },
-    "dependencies": {
-        "handsontable": "latest"
-    },
-    "devDependencies": {
-        "parcel-bundler": "latest",
-        "typescript": "^5.9.3"
-    },
-    "keywords": [],
-    "config": {
-        "stackblitz": {
-            "template": "typescript"
-        }
+  "name": "handsontable-pr-javascript-demo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.html",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 8080",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "handsontable": "latest"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3",
+    "vite": "^8.1.1"
+  },
+  "keywords": [],
+  "config": {
+    "stackblitz": {
+      "template": "typescript"
     }
+  },
+  "packageManager": "pnpm@11.13.0"
 }

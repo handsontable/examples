@@ -2,6 +2,7 @@
   "name": "vue3-ts-example",
   "version": "0.0.0",
   "private": true,
+  "packageManager": "pnpm@10.34.5",
   "type": "module",
   "scripts": {
     "start": "vite",
@@ -13,8 +14,8 @@
   },
   "dependencies": {
     "vue": "^3.5.39",
-    "@handsontable/vue3": "18.0.0",
-    "handsontable": "18.0.0"
+    "@handsontable/vue3": "latest",
+    "handsontable": "latest"
   },
   "devDependencies": {
     "@tsconfig/node20": "^20.1.9",

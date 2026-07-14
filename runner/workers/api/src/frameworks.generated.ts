@@ -31,7 +31,7 @@ export interface BuildConfig {
 }
 
 export const BUILD_CONFIG: Record<string, BuildConfig> = {
-  "example1": { tier: 1, installCommand: "npm install", buildCommand: "parcel build index.html", outputDir: "dist", outputGlob: null },
+  "example1": { tier: 1, installCommand: "npm install", buildCommand: "tsc && vite build", outputDir: "dist", outputGlob: null },
   "javascript": { tier: 1, installCommand: "npm install", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
   "typescript": { tier: 1, installCommand: "npm install", buildCommand: "tsc && vite build", outputDir: "dist", outputGlob: null },
   "react": { tier: 1, installCommand: "npm install", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
@@ -40,7 +40,7 @@ export const BUILD_CONFIG: Record<string, BuildConfig> = {
   "mui": { tier: 1, installCommand: "npm install", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
   "base-web": { tier: 1, installCommand: "npm install", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
   "vue": { tier: 1, installCommand: "npm install", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
-  "angular": { tier: 2, installCommand: "npm install --legacy-peer-deps", buildCommand: "ng build", outputDir: "dist", outputGlob: "dist/*/browser" },
+  "angular": { tier: 2, installCommand: "npm install", buildCommand: "ng build", outputDir: "dist", outputGlob: "dist/*/browser" },
   "next.js": { tier: 2, installCommand: "npm install", buildCommand: "next build", outputDir: "out", outputGlob: null },
   "next-shadcn.js": { tier: 2, installCommand: "npm install", buildCommand: "next build", outputDir: "out", outputGlob: null },
   "astro": { tier: 2, installCommand: "npm install", buildCommand: "astro build", outputDir: "dist", outputGlob: null },

@@ -25,7 +25,7 @@ RUN cd /baked/base-web && npm install --no-audit --no-fund --loglevel=error
 
 # angular
 COPY baked/angular/package.json /baked/angular/package.json
-RUN cd /baked/angular && npm install --legacy-peer-deps --no-audit --no-fund --loglevel=error
+RUN cd /baked/angular && npm install --no-audit --no-fund --loglevel=error
 
 # next.js
 COPY baked/next-js/package.json /baked/next-js/package.json

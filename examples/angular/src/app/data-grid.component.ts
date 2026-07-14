@@ -4,7 +4,7 @@ import {
   CUSTOM_ELEMENTS_SCHEMA,
 } from '@angular/core';
 import { PredefinedMenuItemKey } from 'handsontable/plugins/contextMenu';
-import { HotTableModule } from '@handsontable/angular-wrapper';
+import { HotTableComponent } from '@handsontable/angular-wrapper';
 
 import { getData } from './utils/constants';
 import { alignHeaders, addClassesToRows } from './utils/hooks-callbacks';
@@ -15,7 +15,7 @@ import { alignHeaders, addClassesToRows } from './utils/hooks-callbacks';
   standalone: true,
   templateUrl: './data-grid.component.html',
   //styleUrls: ['./data-grid.scss'],
-  imports: [HotTableModule],
+  imports: [HotTableComponent],
   schemas: [CUSTOM_ELEMENTS_SCHEMA],
 })
 export class DataGridComponent {
@@ -64,7 +64,17 @@ export class DataGridComponent {
     columns: [
       { data: 1 },
       { data: 3 },
-      { data: 4, type: 'date', allowInvalid: false },
+      {
+        data: 4,
+        type: 'date',
+        dateFormat: {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        },
+        locale: 'en-GB',
+        allowInvalid: false,
+      },
       { data: 6, type: 'checkbox', className: 'htCenter' },
       { data: 7, type: 'numeric' },
       { data: 5 },

@@ -1,5 +1,4 @@
 import Handsontable from "handsontable";
-import type { RowObject } from "handsontable/common";
 
 import { ODD_ROW_CLASS } from "./constants";
 
@@ -30,8 +29,6 @@ export const addClassesToRows: AddClassesToRows = (
   if (parentElement === null) {
     return;
   }
-
-  const rowData = cellProperties.instance.getSourceDataAtRow(row) as RowObject;
 
   // Add class to odd TRs
   if (row % 2 === 0) {

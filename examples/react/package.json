@@ -1,6 +1,7 @@
 {
   "name": "example-react-typescript",
   "private": true,
+  "packageManager": "pnpm@10.34.5",
   "version": "0.0.0",
   "type": "module",
   "scripts": {
@@ -10,8 +11,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@handsontable/react-wrapper": "^18.0.0",
-    "handsontable": "^18.0.0",
+    "@handsontable/react-wrapper": "latest",
+    "handsontable": "latest",
     "react": "^19.2.7",
     "react-dom": "^19.2.6"
   },
