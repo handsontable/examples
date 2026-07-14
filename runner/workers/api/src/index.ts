@@ -32,6 +32,29 @@ const BOOT_LOG = "/tmp/boot.log";
 /** Single-quote a string for embedding in `sh -lc '...'`. */
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
+class InvalidFilePathError extends Error {}
+
+/**
+ * Resolve the FilesMap's root-relative path convention under CONTAINER_ROOT.
+ * A single leading slash is accepted for compatibility, but never treated as
+ * a filesystem-absolute path.
+ */
+function resolveContainerPath(path: string): string {
+  if (typeof path !== "string" || path.length === 0) throw new InvalidFilePathError("file path is required");
+  const relative = path.startsWith("/") ? path.slice(1) : path;
+  const segments = relative.split("/");
+  if (
+    relative.length === 0
+    || path.startsWith("//")
+    || path.includes("\\")
+    || path.includes("\0")
+    || segments.some((segment) => segment.length === 0 || segment === "." || segment === ".." || segment === "node_modules")
+  ) {
+    throw new InvalidFilePathError(`invalid file path: ${path}`);
+  }
+  return `${CONTAINER_ROOT}/${segments.join("/")}`;
+}
+
 // Minimal structural view of the Sandbox stub — avoids deep instantiation of the
 // full RPC proxy type (TS2589) while typing exactly the methods we call.
 type SandboxLike = {
@@ -99,11 +122,14 @@ function publicView(row: DemoRow) {
   };
 }
 
-/** Write a FilesMap ("/path" -> contents) into CONTAINER_ROOT, creating dirs. */
+/** Write a validated FilesMap into CONTAINER_ROOT, creating directories. */
 async function writeFiles(sandbox: SandboxLike, files: Record<string, string>) {
   const dirs = new Set<string>();
-  for (const p of Object.keys(files)) {
-    const full = CONTAINER_ROOT + (p.startsWith("/") ? p : `/${p}`);
+  const resolvedFiles = Object.entries(files).map(([path, contents]) => ({
+    full: resolveContainerPath(path),
+    contents,
+  }));
+  for (const { full } of resolvedFiles) {
     const dir = full.slice(0, full.lastIndexOf("/"));
     if (dir && dir !== CONTAINER_ROOT) dirs.add(dir);
   }
@@ -114,8 +140,7 @@ async function writeFiles(sandbox: SandboxLike, files: Record<string, string>) {
       /* dir may exist */
     }
   }
-  for (const [p, contents] of Object.entries(files)) {
-    const full = CONTAINER_ROOT + (p.startsWith("/") ? p : `/${p}`);
+  for (const { full, contents } of resolvedFiles) {
     await sandbox.writeFile(full, contents);
   }
 }
@@ -151,9 +176,9 @@ export default {
 
         await writeFiles(sandbox, body.files);
         // Boot asynchronously (returns immediately; UI polls /status for live
-        // progress). Seed each session from the immutable baked dependencies,
-        // then reconcile them with pnpm. Keep submitted starters frozen; only
-        // custom package or lock metadata may update the lockfile.
+        // progress). Start with immutable baked dependencies, then reconcile
+        // them with pnpm. Keep submitted starters frozen; only custom package
+        // or lock metadata may update the lockfile.
         const dependencyFingerprint = await dependencyMetadataFingerprint({
           packageJson: body.files["/package.json"],
           pnpmLock: body.files["/pnpm-lock.yaml"],
@@ -174,7 +199,8 @@ export default {
           `set -e`,
           `cd ${CONTAINER_ROOT}`,
           `echo '::seeding immutable baked dependencies::'`,
-          `cp -al /baked/${dev.bakedKey}/node_modules ./node_modules 2>/dev/null || true`,
+          `rm -rf ./node_modules`,
+          `cp -al /baked/${dev.bakedKey}/node_modules ./node_modules`,
           `echo '::reconciling dependencies with pnpm::'`,
           ...installDependencies,
           `echo '::starting dev server::'`,
@@ -196,7 +222,7 @@ export default {
         const sessionId = parts[2]!;
         const body = (await request.json()) as { path: string; contents: string };
         const sandbox = liveSbx(env, sessionId);
-        const full = CONTAINER_ROOT + (body.path.startsWith("/") ? body.path : `/${body.path}`);
+        const full = resolveContainerPath(body.path);
         const dir = full.slice(0, full.lastIndexOf("/"));
         if (dir && dir !== CONTAINER_ROOT) {
           try { await sandbox.mkdir(dir, { recursive: true }); } catch { /* exists */ }
@@ -209,10 +235,8 @@ export default {
       if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "session" && parts[3] === "file") {
         const sandbox = liveSbx(env, parts[2]!);
         const p = url.searchParams.get("path") ?? "";
-        if (p) {
-          const full = CONTAINER_ROOT + (p.startsWith("/") ? p : `/${p}`);
-          try { await sandbox.exec(`sh -lc "rm -f ${shq(full)}"`); } catch { /* best effort */ }
-        }
+        const full = resolveContainerPath(p);
+        try { await sandbox.exec(`sh -lc "rm -f ${shq(full)}"`); } catch { /* best effort */ }
         return cors(new Response(null, { status: 204 }));
       }
 
@@ -401,6 +425,7 @@ export default {
 
       return cors(new Response("Not found", { status: 404 }));
     } catch (err) {
+      if (err instanceof InvalidFilePathError) return json({ error: err.message }, 400);
       return json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
   },
