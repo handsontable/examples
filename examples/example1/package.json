@@ -4,21 +4,24 @@
     "description": "",
     "main": "index.html",
     "private": true,
+    "type": "module",
     "scripts": {
-        "start": "parcel index.html --open",
-        "build": "parcel build index.html"
+        "dev": "vite --port 8080",
+        "build": "tsc && vite build",
+        "preview": "vite preview"
     },
     "dependencies": {
-        "handsontable": "latest"
+        "handsontable": "18.0.0"
     },
     "devDependencies": {
-        "parcel-bundler": "latest",
-        "typescript": "^5.9.3"
+        "typescript": "~6.0.3",
+        "vite": "^8.1.1"
     },
     "keywords": [],
     "config": {
         "stackblitz": {
             "template": "typescript"
         }
-    }
+    },
+    "packageManager": "pnpm@10.12.2"
 }
