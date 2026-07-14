@@ -2,6 +2,7 @@
   "name": "handsontable-vue-docs",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "pnpm@10.34.5",
   "dependencies": {
     "handsontable": "18.0.0",
     "@handsontable/vue3": "18.0.0",

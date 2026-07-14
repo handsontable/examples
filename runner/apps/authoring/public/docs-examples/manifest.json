@@ -1,7 +1,7 @@
 {
   "generatedFrom": "handsontable/docs content/guides/**",
   "hotVersion": "18.0.0",
-  "count": 1162,
+  "count": 1299,
   "examples": [
     {
       "docsPath": "guides/accessibility/accessibility/angular/example1.ts",
@@ -70,6 +70,156 @@
       "exampleId": "example2",
       "exampleTitle": "Accessible data grid demo",
       "docPermalink": "/accessibility",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/column-menu/angular/example1.ts",
+      "file": "guides__accessories-and-menus__column-menu__angular__example1.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Column menu"
+      ],
+      "guide": "guides/accessories-and-menus/column-menu/column-menu.md",
+      "guideTitle": "Column menu",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/column-menu",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/column-menu/javascript/example1.js",
+      "file": "guides__accessories-and-menus__column-menu__javascript__example1.js.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Column menu"
+      ],
+      "guide": "guides/accessories-and-menus/column-menu/column-menu.md",
+      "guideTitle": "Column menu",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/column-menu",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/column-menu/react/example1.tsx",
+      "file": "guides__accessories-and-menus__column-menu__react__example1.tsx.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Column menu"
+      ],
+      "guide": "guides/accessories-and-menus/column-menu/column-menu.md",
+      "guideTitle": "Column menu",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/column-menu",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/column-menu/javascript/example1.ts",
+      "file": "guides__accessories-and-menus__column-menu__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Column menu"
+      ],
+      "guide": "guides/accessories-and-menus/column-menu/column-menu.md",
+      "guideTitle": "Column menu",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/column-menu",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/column-menu/vue/example1.vue",
+      "file": "guides__accessories-and-menus__column-menu__vue__example1.vue.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Column menu"
+      ],
+      "guide": "guides/accessories-and-menus/column-menu/column-menu.md",
+      "guideTitle": "Column menu",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/column-menu",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/column-menu/angular/example2.ts",
+      "file": "guides__accessories-and-menus__column-menu__angular__example2.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Column menu"
+      ],
+      "guide": "guides/accessories-and-menus/column-menu/column-menu.md",
+      "guideTitle": "Column menu",
+      "exampleId": "example2",
+      "exampleTitle": "Plugin configuration",
+      "docPermalink": "/column-menu",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/column-menu/javascript/example2.js",
+      "file": "guides__accessories-and-menus__column-menu__javascript__example2.js.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Column menu"
+      ],
+      "guide": "guides/accessories-and-menus/column-menu/column-menu.md",
+      "guideTitle": "Column menu",
+      "exampleId": "example2",
+      "exampleTitle": "Plugin configuration",
+      "docPermalink": "/column-menu",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/column-menu/react/example2.tsx",
+      "file": "guides__accessories-and-menus__column-menu__react__example2.tsx.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Column menu"
+      ],
+      "guide": "guides/accessories-and-menus/column-menu/column-menu.md",
+      "guideTitle": "Column menu",
+      "exampleId": "example2",
+      "exampleTitle": "Plugin configuration",
+      "docPermalink": "/column-menu",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/column-menu/javascript/example2.ts",
+      "file": "guides__accessories-and-menus__column-menu__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Column menu"
+      ],
+      "guide": "guides/accessories-and-menus/column-menu/column-menu.md",
+      "guideTitle": "Column menu",
+      "exampleId": "example2",
+      "exampleTitle": "Plugin configuration",
+      "docPermalink": "/column-menu",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/column-menu/vue/example2.vue",
+      "file": "guides__accessories-and-menus__column-menu__vue__example2.vue.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Column menu"
+      ],
+      "guide": "guides/accessories-and-menus/column-menu/column-menu.md",
+      "guideTitle": "Column menu",
+      "exampleId": "example2",
+      "exampleTitle": "Plugin configuration",
+      "docPermalink": "/column-menu",
       "framework": "vue",
       "displayName": "Vue 3"
     },
@@ -1229,6 +1379,81 @@
       "displayName": "Vue 3"
     },
     {
+      "docsPath": "guides/accessories-and-menus/use-icons-in-cells/angular/example1.ts",
+      "file": "guides__accessories-and-menus__use-icons-in-cells__angular__example1.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "How to use icons in cells"
+      ],
+      "guide": "guides/accessories-and-menus/use-icons-in-cells/use-icons-in-cells.md",
+      "guideTitle": "How to use icons in cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/use-icons-in-cells",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/use-icons-in-cells/javascript/example1.js",
+      "file": "guides__accessories-and-menus__use-icons-in-cells__javascript__example1.js.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "How to use icons in cells"
+      ],
+      "guide": "guides/accessories-and-menus/use-icons-in-cells/use-icons-in-cells.md",
+      "guideTitle": "How to use icons in cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/use-icons-in-cells",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/use-icons-in-cells/react/example1.tsx",
+      "file": "guides__accessories-and-menus__use-icons-in-cells__react__example1.tsx.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "How to use icons in cells"
+      ],
+      "guide": "guides/accessories-and-menus/use-icons-in-cells/use-icons-in-cells.md",
+      "guideTitle": "How to use icons in cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/use-icons-in-cells",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/use-icons-in-cells/javascript/example1.ts",
+      "file": "guides__accessories-and-menus__use-icons-in-cells__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "How to use icons in cells"
+      ],
+      "guide": "guides/accessories-and-menus/use-icons-in-cells/use-icons-in-cells.md",
+      "guideTitle": "How to use icons in cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/use-icons-in-cells",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/accessories-and-menus/use-icons-in-cells/vue/example1.vue",
+      "file": "guides__accessories-and-menus__use-icons-in-cells__vue__example1.vue.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "How to use icons in cells"
+      ],
+      "guide": "guides/accessories-and-menus/use-icons-in-cells/use-icons-in-cells.md",
+      "guideTitle": "How to use icons in cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/use-icons-in-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
       "docsPath": "guides/accessories-and-menus/undo-redo/angular/example1.ts",
       "file": "guides__accessories-and-menus__undo-redo__angular__example1.ts.json",
       "breadcrumb": [
@@ -1454,6 +1679,81 @@
       "displayName": "Vue 3"
     },
     {
+      "docsPath": "guides/cell-features/autofill-values/angular/example3.ts",
+      "file": "guides__cell-features__autofill-values__angular__example3.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Autofill values"
+      ],
+      "guide": "guides/cell-features/autofill-values/autofill-values.md",
+      "guideTitle": "Autofill values",
+      "exampleId": "example3",
+      "exampleTitle": "Altering and tracking autofilled values",
+      "docPermalink": "/autofill-values",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/autofill-values/javascript/example3.js",
+      "file": "guides__cell-features__autofill-values__javascript__example3.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Autofill values"
+      ],
+      "guide": "guides/cell-features/autofill-values/autofill-values.md",
+      "guideTitle": "Autofill values",
+      "exampleId": "example3",
+      "exampleTitle": "Altering and tracking autofilled values",
+      "docPermalink": "/autofill-values",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/autofill-values/react/example3.tsx",
+      "file": "guides__cell-features__autofill-values__react__example3.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Autofill values"
+      ],
+      "guide": "guides/cell-features/autofill-values/autofill-values.md",
+      "guideTitle": "Autofill values",
+      "exampleId": "example3",
+      "exampleTitle": "Altering and tracking autofilled values",
+      "docPermalink": "/autofill-values",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/autofill-values/javascript/example3.ts",
+      "file": "guides__cell-features__autofill-values__javascript__example3.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Autofill values"
+      ],
+      "guide": "guides/cell-features/autofill-values/autofill-values.md",
+      "guideTitle": "Autofill values",
+      "exampleId": "example3",
+      "exampleTitle": "Altering and tracking autofilled values",
+      "docPermalink": "/autofill-values",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/autofill-values/vue/example3.vue",
+      "file": "guides__cell-features__autofill-values__vue__example3.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Autofill values"
+      ],
+      "guide": "guides/cell-features/autofill-values/autofill-values.md",
+      "guideTitle": "Autofill values",
+      "exampleId": "example3",
+      "exampleTitle": "Altering and tracking autofilled values",
+      "docPermalink": "/autofill-values",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
       "docsPath": "guides/cell-features/clipboard/angular/example1.ts",
       "file": "guides__cell-features__clipboard__angular__example1.ts.json",
       "breadcrumb": [
@@ -1674,6 +1974,156 @@
       "guideTitle": "Clipboard",
       "exampleId": "example3",
       "exampleTitle": "Trigger copy & cut programmatically",
+      "docPermalink": "/basic-clipboard",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-features/clipboard/angular/example4.ts",
+      "file": "guides__cell-features__clipboard__angular__example4.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example4",
+      "exampleTitle": "Copy cell appearance on paste",
+      "docPermalink": "/basic-clipboard",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/clipboard/javascript/example4.js",
+      "file": "guides__cell-features__clipboard__javascript__example4.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example4",
+      "exampleTitle": "Copy cell appearance on paste",
+      "docPermalink": "/basic-clipboard",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/clipboard/react/example4.tsx",
+      "file": "guides__cell-features__clipboard__react__example4.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example4",
+      "exampleTitle": "Copy cell appearance on paste",
+      "docPermalink": "/basic-clipboard",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/clipboard/javascript/example4.ts",
+      "file": "guides__cell-features__clipboard__javascript__example4.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example4",
+      "exampleTitle": "Copy cell appearance on paste",
+      "docPermalink": "/basic-clipboard",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/clipboard/vue/example4.vue",
+      "file": "guides__cell-features__clipboard__vue__example4.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example4",
+      "exampleTitle": "Copy cell appearance on paste",
+      "docPermalink": "/basic-clipboard",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-features/clipboard/angular/example5.ts",
+      "file": "guides__cell-features__clipboard__angular__example5.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example5",
+      "exampleTitle": "Copy comments on paste",
+      "docPermalink": "/basic-clipboard",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/clipboard/javascript/example5.js",
+      "file": "guides__cell-features__clipboard__javascript__example5.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example5",
+      "exampleTitle": "Copy comments on paste",
+      "docPermalink": "/basic-clipboard",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/clipboard/react/example5.tsx",
+      "file": "guides__cell-features__clipboard__react__example5.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example5",
+      "exampleTitle": "Copy comments on paste",
+      "docPermalink": "/basic-clipboard",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/clipboard/javascript/example5.ts",
+      "file": "guides__cell-features__clipboard__javascript__example5.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example5",
+      "exampleTitle": "Copy comments on paste",
+      "docPermalink": "/basic-clipboard",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/clipboard/vue/example5.vue",
+      "file": "guides__cell-features__clipboard__vue__example5.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example5",
+      "exampleTitle": "Copy comments on paste",
       "docPermalink": "/basic-clipboard",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -1979,6 +2429,156 @@
       "displayName": "Vue 3"
     },
     {
+      "docsPath": "guides/cell-features/comments/angular/example5.ts",
+      "file": "guides__cell-features__comments__angular__example5.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Comments"
+      ],
+      "guide": "guides/cell-features/comments/comments.md",
+      "guideTitle": "Comments",
+      "exampleId": "example5",
+      "exampleTitle": "Flag invalid cells with a comment",
+      "docPermalink": "/comments",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/comments/javascript/example5.js",
+      "file": "guides__cell-features__comments__javascript__example5.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Comments"
+      ],
+      "guide": "guides/cell-features/comments/comments.md",
+      "guideTitle": "Comments",
+      "exampleId": "example5",
+      "exampleTitle": "Flag invalid cells with a comment",
+      "docPermalink": "/comments",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/comments/react/example5.tsx",
+      "file": "guides__cell-features__comments__react__example5.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Comments"
+      ],
+      "guide": "guides/cell-features/comments/comments.md",
+      "guideTitle": "Comments",
+      "exampleId": "example5",
+      "exampleTitle": "Flag invalid cells with a comment",
+      "docPermalink": "/comments",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/comments/javascript/example5.ts",
+      "file": "guides__cell-features__comments__javascript__example5.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Comments"
+      ],
+      "guide": "guides/cell-features/comments/comments.md",
+      "guideTitle": "Comments",
+      "exampleId": "example5",
+      "exampleTitle": "Flag invalid cells with a comment",
+      "docPermalink": "/comments",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/comments/vue/example5.vue",
+      "file": "guides__cell-features__comments__vue__example5.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Comments"
+      ],
+      "guide": "guides/cell-features/comments/comments.md",
+      "guideTitle": "Comments",
+      "exampleId": "example5",
+      "exampleTitle": "Flag invalid cells with a comment",
+      "docPermalink": "/comments",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-features/comments/angular/example6.ts",
+      "file": "guides__cell-features__comments__angular__example6.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Comments"
+      ],
+      "guide": "guides/cell-features/comments/comments.md",
+      "guideTitle": "Comments",
+      "exampleId": "example6",
+      "exampleTitle": "Read all comments programmatically",
+      "docPermalink": "/comments",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/comments/javascript/example6.js",
+      "file": "guides__cell-features__comments__javascript__example6.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Comments"
+      ],
+      "guide": "guides/cell-features/comments/comments.md",
+      "guideTitle": "Comments",
+      "exampleId": "example6",
+      "exampleTitle": "Read all comments programmatically",
+      "docPermalink": "/comments",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/comments/react/example6.tsx",
+      "file": "guides__cell-features__comments__react__example6.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Comments"
+      ],
+      "guide": "guides/cell-features/comments/comments.md",
+      "guideTitle": "Comments",
+      "exampleId": "example6",
+      "exampleTitle": "Read all comments programmatically",
+      "docPermalink": "/comments",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/comments/javascript/example6.ts",
+      "file": "guides__cell-features__comments__javascript__example6.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Comments"
+      ],
+      "guide": "guides/cell-features/comments/comments.md",
+      "guideTitle": "Comments",
+      "exampleId": "example6",
+      "exampleTitle": "Read all comments programmatically",
+      "docPermalink": "/comments",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/comments/vue/example6.vue",
+      "file": "guides__cell-features__comments__vue__example6.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Comments"
+      ],
+      "guide": "guides/cell-features/comments/comments.md",
+      "guideTitle": "Comments",
+      "exampleId": "example6",
+      "exampleTitle": "Read all comments programmatically",
+      "docPermalink": "/comments",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
       "docsPath": "guides/cell-features/conditional-formatting/angular/example1.ts",
       "file": "guides__cell-features__conditional-formatting__angular__example1.ts.json",
       "breadcrumb": [
@@ -2054,377 +2654,152 @@
       "displayName": "Vue 3"
     },
     {
-      "docsPath": "guides/cell-features/disabled-cells/angular/example1.ts",
-      "file": "guides__cell-features__disabled-cells__angular__example1.ts.json",
+      "docsPath": "guides/cell-features/conditional-formatting/angular/example2.ts",
+      "file": "guides__cell-features__conditional-formatting__angular__example2.ts.json",
       "breadcrumb": [
         "Cell Features",
-        "Disabled cells"
+        "Conditional formatting"
       ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example1",
-      "exampleTitle": "Standard example",
-      "docPermalink": "/disabled-cells",
+      "guide": "guides/cell-features/conditional-formatting/conditional-formatting.md",
+      "guideTitle": "Conditional formatting",
+      "exampleId": "example2",
+      "exampleTitle": "Format cells with a custom renderer",
+      "docPermalink": "/conditional-formatting",
       "framework": "angular",
       "displayName": "Angular"
     },
     {
-      "docsPath": "guides/cell-features/disabled-cells/javascript/example1.js",
-      "file": "guides__cell-features__disabled-cells__javascript__example1.js.json",
+      "docsPath": "guides/cell-features/conditional-formatting/javascript/example2.js",
+      "file": "guides__cell-features__conditional-formatting__javascript__example2.js.json",
       "breadcrumb": [
         "Cell Features",
-        "Disabled cells"
+        "Conditional formatting"
       ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example1",
-      "exampleTitle": "Standard example",
-      "docPermalink": "/disabled-cells",
+      "guide": "guides/cell-features/conditional-formatting/conditional-formatting.md",
+      "guideTitle": "Conditional formatting",
+      "exampleId": "example2",
+      "exampleTitle": "Format cells with a custom renderer",
+      "docPermalink": "/conditional-formatting",
       "framework": "javascript",
       "displayName": "JavaScript"
     },
     {
-      "docsPath": "guides/cell-features/disabled-cells/react/example1.tsx",
-      "file": "guides__cell-features__disabled-cells__react__example1.tsx.json",
+      "docsPath": "guides/cell-features/conditional-formatting/react/example2.tsx",
+      "file": "guides__cell-features__conditional-formatting__react__example2.tsx.json",
       "breadcrumb": [
         "Cell Features",
-        "Disabled cells"
+        "Conditional formatting"
       ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example1",
-      "exampleTitle": "Standard example",
-      "docPermalink": "/disabled-cells",
+      "guide": "guides/cell-features/conditional-formatting/conditional-formatting.md",
+      "guideTitle": "Conditional formatting",
+      "exampleId": "example2",
+      "exampleTitle": "Format cells with a custom renderer",
+      "docPermalink": "/conditional-formatting",
       "framework": "react",
       "displayName": "React (TS)"
     },
     {
-      "docsPath": "guides/cell-features/disabled-cells/javascript/example1.ts",
-      "file": "guides__cell-features__disabled-cells__javascript__example1.ts.json",
+      "docsPath": "guides/cell-features/conditional-formatting/javascript/example2.ts",
+      "file": "guides__cell-features__conditional-formatting__javascript__example2.ts.json",
       "breadcrumb": [
         "Cell Features",
-        "Disabled cells"
+        "Conditional formatting"
       ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example1",
-      "exampleTitle": "Standard example",
-      "docPermalink": "/disabled-cells",
+      "guide": "guides/cell-features/conditional-formatting/conditional-formatting.md",
+      "guideTitle": "Conditional formatting",
+      "exampleId": "example2",
+      "exampleTitle": "Format cells with a custom renderer",
+      "docPermalink": "/conditional-formatting",
       "framework": "typescript",
       "displayName": "TypeScript"
     },
     {
-      "docsPath": "guides/cell-features/disabled-cells/vue/example1.vue",
-      "file": "guides__cell-features__disabled-cells__vue__example1.vue.json",
+      "docsPath": "guides/cell-features/conditional-formatting/vue/example2.vue",
+      "file": "guides__cell-features__conditional-formatting__vue__example2.vue.json",
       "breadcrumb": [
         "Cell Features",
-        "Disabled cells"
+        "Conditional formatting"
       ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example1",
-      "exampleTitle": "Standard example",
-      "docPermalink": "/disabled-cells",
+      "guide": "guides/cell-features/conditional-formatting/conditional-formatting.md",
+      "guideTitle": "Conditional formatting",
+      "exampleId": "example2",
+      "exampleTitle": "Format cells with a custom renderer",
+      "docPermalink": "/conditional-formatting",
       "framework": "vue",
       "displayName": "Vue 3"
     },
     {
-      "docsPath": "guides/cell-features/disabled-cells/angular/example2.ts",
-      "file": "guides__cell-features__disabled-cells__angular__example2.ts.json",
+      "docsPath": "guides/cell-features/conditional-formatting/angular/example3.ts",
+      "file": "guides__cell-features__conditional-formatting__angular__example3.ts.json",
       "breadcrumb": [
         "Cell Features",
-        "Disabled cells"
+        "Conditional formatting"
       ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example2",
-      "exampleTitle": "To disable a row",
-      "docPermalink": "/disabled-cells",
+      "guide": "guides/cell-features/conditional-formatting/conditional-formatting.md",
+      "guideTitle": "Conditional formatting",
+      "exampleId": "example3",
+      "exampleTitle": "Build a color scale",
+      "docPermalink": "/conditional-formatting",
       "framework": "angular",
       "displayName": "Angular"
     },
     {
-      "docsPath": "guides/cell-features/disabled-cells/javascript/example2.js",
-      "file": "guides__cell-features__disabled-cells__javascript__example2.js.json",
+      "docsPath": "guides/cell-features/conditional-formatting/javascript/example3.js",
+      "file": "guides__cell-features__conditional-formatting__javascript__example3.js.json",
       "breadcrumb": [
         "Cell Features",
-        "Disabled cells"
+        "Conditional formatting"
       ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example2",
-      "exampleTitle": "To disable a row",
-      "docPermalink": "/disabled-cells",
+      "guide": "guides/cell-features/conditional-formatting/conditional-formatting.md",
+      "guideTitle": "Conditional formatting",
+      "exampleId": "example3",
+      "exampleTitle": "Build a color scale",
+      "docPermalink": "/conditional-formatting",
       "framework": "javascript",
       "displayName": "JavaScript"
     },
     {
-      "docsPath": "guides/cell-features/disabled-cells/react/example2.tsx",
-      "file": "guides__cell-features__disabled-cells__react__example2.tsx.json",
+      "docsPath": "guides/cell-features/conditional-formatting/react/example3.tsx",
+      "file": "guides__cell-features__conditional-formatting__react__example3.tsx.json",
       "breadcrumb": [
         "Cell Features",
-        "Disabled cells"
+        "Conditional formatting"
       ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example2",
-      "exampleTitle": "To disable a row",
-      "docPermalink": "/disabled-cells",
+      "guide": "guides/cell-features/conditional-formatting/conditional-formatting.md",
+      "guideTitle": "Conditional formatting",
+      "exampleId": "example3",
+      "exampleTitle": "Build a color scale",
+      "docPermalink": "/conditional-formatting",
       "framework": "react",
       "displayName": "React (TS)"
     },
     {
-      "docsPath": "guides/cell-features/disabled-cells/javascript/example2.ts",
-      "file": "guides__cell-features__disabled-cells__javascript__example2.ts.json",
+      "docsPath": "guides/cell-features/conditional-formatting/javascript/example3.ts",
+      "file": "guides__cell-features__conditional-formatting__javascript__example3.ts.json",
       "breadcrumb": [
         "Cell Features",
-        "Disabled cells"
+        "Conditional formatting"
       ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example2",
-      "exampleTitle": "To disable a row",
-      "docPermalink": "/disabled-cells",
+      "guide": "guides/cell-features/conditional-formatting/conditional-formatting.md",
+      "guideTitle": "Conditional formatting",
+      "exampleId": "example3",
+      "exampleTitle": "Build a color scale",
+      "docPermalink": "/conditional-formatting",
       "framework": "typescript",
       "displayName": "TypeScript"
     },
     {
-      "docsPath": "guides/cell-features/disabled-cells/vue/example2.vue",
-      "file": "guides__cell-features__disabled-cells__vue__example2.vue.json",
+      "docsPath": "guides/cell-features/conditional-formatting/vue/example3.vue",
+      "file": "guides__cell-features__conditional-formatting__vue__example3.vue.json",
       "breadcrumb": [
         "Cell Features",
-        "Disabled cells"
+        "Conditional formatting"
       ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example2",
-      "exampleTitle": "To disable a row",
-      "docPermalink": "/disabled-cells",
-      "framework": "vue",
-      "displayName": "Vue 3"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/angular/example3.ts",
-      "file": "guides__cell-features__disabled-cells__angular__example3.ts.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
+      "guide": "guides/cell-features/conditional-formatting/conditional-formatting.md",
+      "guideTitle": "Conditional formatting",
       "exampleId": "example3",
-      "exampleTitle": "To disable a column (non-editable)",
-      "docPermalink": "/disabled-cells",
-      "framework": "angular",
-      "displayName": "Angular"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/javascript/example3.js",
-      "file": "guides__cell-features__disabled-cells__javascript__example3.js.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example3",
-      "exampleTitle": "To disable a column (non-editable)",
-      "docPermalink": "/disabled-cells",
-      "framework": "javascript",
-      "displayName": "JavaScript"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/react/example3.tsx",
-      "file": "guides__cell-features__disabled-cells__react__example3.tsx.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example3",
-      "exampleTitle": "To disable a column (non-editable)",
-      "docPermalink": "/disabled-cells",
-      "framework": "react",
-      "displayName": "React (TS)"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/javascript/example3.ts",
-      "file": "guides__cell-features__disabled-cells__javascript__example3.ts.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example3",
-      "exampleTitle": "To disable a column (non-editable)",
-      "docPermalink": "/disabled-cells",
-      "framework": "typescript",
-      "displayName": "TypeScript"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/vue/example3.vue",
-      "file": "guides__cell-features__disabled-cells__vue__example3.vue.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example3",
-      "exampleTitle": "To disable a column (non-editable)",
-      "docPermalink": "/disabled-cells",
-      "framework": "vue",
-      "displayName": "Vue 3"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/angular/example4.ts",
-      "file": "guides__cell-features__disabled-cells__angular__example4.ts.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example4",
-      "exampleTitle": "To disable a cell (2)",
-      "docPermalink": "/disabled-cells",
-      "framework": "angular",
-      "displayName": "Angular"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/javascript/example4.js",
-      "file": "guides__cell-features__disabled-cells__javascript__example4.js.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example4",
-      "exampleTitle": "To disable a cell (2)",
-      "docPermalink": "/disabled-cells",
-      "framework": "javascript",
-      "displayName": "JavaScript"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/react/example4.tsx",
-      "file": "guides__cell-features__disabled-cells__react__example4.tsx.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example4",
-      "exampleTitle": "To disable a cell (2)",
-      "docPermalink": "/disabled-cells",
-      "framework": "react",
-      "displayName": "React (TS)"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/javascript/example4.ts",
-      "file": "guides__cell-features__disabled-cells__javascript__example4.ts.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example4",
-      "exampleTitle": "To disable a cell (2)",
-      "docPermalink": "/disabled-cells",
-      "framework": "typescript",
-      "displayName": "TypeScript"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/vue/example4.vue",
-      "file": "guides__cell-features__disabled-cells__vue__example4.vue.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "example4",
-      "exampleTitle": "To disable a cell (2)",
-      "docPermalink": "/disabled-cells",
-      "framework": "vue",
-      "displayName": "Vue 3"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/angular/exampleReadOnlyGrid.ts",
-      "file": "guides__cell-features__disabled-cells__angular__exampleReadOnlyGrid.ts.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "exampleReadOnlyGrid",
-      "exampleTitle": "To disable a cell",
-      "docPermalink": "/disabled-cells",
-      "framework": "angular",
-      "displayName": "Angular"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/javascript/exampleReadOnlyGrid.js",
-      "file": "guides__cell-features__disabled-cells__javascript__exampleReadOnlyGrid.js.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "exampleReadOnlyGrid",
-      "exampleTitle": "To disable a cell",
-      "docPermalink": "/disabled-cells",
-      "framework": "javascript",
-      "displayName": "JavaScript"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/react/exampleReadOnlyGrid.tsx",
-      "file": "guides__cell-features__disabled-cells__react__exampleReadOnlyGrid.tsx.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "exampleReadOnlyGrid",
-      "exampleTitle": "To disable a cell",
-      "docPermalink": "/disabled-cells",
-      "framework": "react",
-      "displayName": "React (TS)"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/javascript/exampleReadOnlyGrid.ts",
-      "file": "guides__cell-features__disabled-cells__javascript__exampleReadOnlyGrid.ts.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "exampleReadOnlyGrid",
-      "exampleTitle": "To disable a cell",
-      "docPermalink": "/disabled-cells",
-      "framework": "typescript",
-      "displayName": "TypeScript"
-    },
-    {
-      "docsPath": "guides/cell-features/disabled-cells/vue/exampleReadOnlyGrid.vue",
-      "file": "guides__cell-features__disabled-cells__vue__exampleReadOnlyGrid.vue.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Disabled cells"
-      ],
-      "guide": "guides/cell-features/disabled-cells/disabled-cells.md",
-      "guideTitle": "Disabled cells",
-      "exampleId": "exampleReadOnlyGrid",
-      "exampleTitle": "To disable a cell",
-      "docPermalink": "/disabled-cells",
+      "exampleTitle": "Build a color scale",
+      "docPermalink": "/conditional-formatting",
       "framework": "vue",
       "displayName": "Vue 3"
     },
@@ -2804,6 +3179,606 @@
       "displayName": "Vue 3"
     },
     {
+      "docsPath": "guides/cell-features/merge-cells/angular/example3.ts",
+      "file": "guides__cell-features__merge-cells__angular__example3.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Merge cells"
+      ],
+      "guide": "guides/cell-features/merge-cells/merge-cells.md",
+      "guideTitle": "Merge cells",
+      "exampleId": "example3",
+      "exampleTitle": "React to merge and unmerge events",
+      "docPermalink": "/merge-cells",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/merge-cells/javascript/example3.js",
+      "file": "guides__cell-features__merge-cells__javascript__example3.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Merge cells"
+      ],
+      "guide": "guides/cell-features/merge-cells/merge-cells.md",
+      "guideTitle": "Merge cells",
+      "exampleId": "example3",
+      "exampleTitle": "React to merge and unmerge events",
+      "docPermalink": "/merge-cells",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/merge-cells/react/example3.tsx",
+      "file": "guides__cell-features__merge-cells__react__example3.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Merge cells"
+      ],
+      "guide": "guides/cell-features/merge-cells/merge-cells.md",
+      "guideTitle": "Merge cells",
+      "exampleId": "example3",
+      "exampleTitle": "React to merge and unmerge events",
+      "docPermalink": "/merge-cells",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/merge-cells/javascript/example3.ts",
+      "file": "guides__cell-features__merge-cells__javascript__example3.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Merge cells"
+      ],
+      "guide": "guides/cell-features/merge-cells/merge-cells.md",
+      "guideTitle": "Merge cells",
+      "exampleId": "example3",
+      "exampleTitle": "React to merge and unmerge events",
+      "docPermalink": "/merge-cells",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/merge-cells/vue/example3.vue",
+      "file": "guides__cell-features__merge-cells__vue__example3.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Merge cells"
+      ],
+      "guide": "guides/cell-features/merge-cells/merge-cells.md",
+      "guideTitle": "Merge cells",
+      "exampleId": "example3",
+      "exampleTitle": "React to merge and unmerge events",
+      "docPermalink": "/merge-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-features/merge-cells/angular/example4.ts",
+      "file": "guides__cell-features__merge-cells__angular__example4.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Merge cells"
+      ],
+      "guide": "guides/cell-features/merge-cells/merge-cells.md",
+      "guideTitle": "Merge cells",
+      "exampleId": "example4",
+      "exampleTitle": "Merge and unmerge cells programmatically",
+      "docPermalink": "/merge-cells",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/merge-cells/javascript/example4.js",
+      "file": "guides__cell-features__merge-cells__javascript__example4.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Merge cells"
+      ],
+      "guide": "guides/cell-features/merge-cells/merge-cells.md",
+      "guideTitle": "Merge cells",
+      "exampleId": "example4",
+      "exampleTitle": "Merge and unmerge cells programmatically",
+      "docPermalink": "/merge-cells",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/merge-cells/react/example4.tsx",
+      "file": "guides__cell-features__merge-cells__react__example4.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Merge cells"
+      ],
+      "guide": "guides/cell-features/merge-cells/merge-cells.md",
+      "guideTitle": "Merge cells",
+      "exampleId": "example4",
+      "exampleTitle": "Merge and unmerge cells programmatically",
+      "docPermalink": "/merge-cells",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/merge-cells/javascript/example4.ts",
+      "file": "guides__cell-features__merge-cells__javascript__example4.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Merge cells"
+      ],
+      "guide": "guides/cell-features/merge-cells/merge-cells.md",
+      "guideTitle": "Merge cells",
+      "exampleId": "example4",
+      "exampleTitle": "Merge and unmerge cells programmatically",
+      "docPermalink": "/merge-cells",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/merge-cells/vue/example4.vue",
+      "file": "guides__cell-features__merge-cells__vue__example4.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Merge cells"
+      ],
+      "guide": "guides/cell-features/merge-cells/merge-cells.md",
+      "guideTitle": "Merge cells",
+      "exampleId": "example4",
+      "exampleTitle": "Merge and unmerge cells programmatically",
+      "docPermalink": "/merge-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/angular/example1.ts",
+      "file": "guides__cell-features__read-only-cells__angular__example1.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/read-only-cells",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/example1.js",
+      "file": "guides__cell-features__read-only-cells__javascript__example1.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/read-only-cells",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/react/example1.tsx",
+      "file": "guides__cell-features__read-only-cells__react__example1.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/read-only-cells",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/example1.ts",
+      "file": "guides__cell-features__read-only-cells__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/read-only-cells",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/vue/example1.vue",
+      "file": "guides__cell-features__read-only-cells__vue__example1.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/read-only-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/angular/example2.ts",
+      "file": "guides__cell-features__read-only-cells__angular__example2.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example2",
+      "exampleTitle": "Make specific cells read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/example2.js",
+      "file": "guides__cell-features__read-only-cells__javascript__example2.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example2",
+      "exampleTitle": "Make specific cells read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/react/example2.tsx",
+      "file": "guides__cell-features__read-only-cells__react__example2.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example2",
+      "exampleTitle": "Make specific cells read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/example2.ts",
+      "file": "guides__cell-features__read-only-cells__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example2",
+      "exampleTitle": "Make specific cells read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/vue/example2.vue",
+      "file": "guides__cell-features__read-only-cells__vue__example2.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example2",
+      "exampleTitle": "Make specific cells read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/angular/example3.ts",
+      "file": "guides__cell-features__read-only-cells__angular__example3.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example3",
+      "exampleTitle": "Make a column non-editable",
+      "docPermalink": "/read-only-cells",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/example3.js",
+      "file": "guides__cell-features__read-only-cells__javascript__example3.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example3",
+      "exampleTitle": "Make a column non-editable",
+      "docPermalink": "/read-only-cells",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/react/example3.tsx",
+      "file": "guides__cell-features__read-only-cells__react__example3.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example3",
+      "exampleTitle": "Make a column non-editable",
+      "docPermalink": "/read-only-cells",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/example3.ts",
+      "file": "guides__cell-features__read-only-cells__javascript__example3.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example3",
+      "exampleTitle": "Make a column non-editable",
+      "docPermalink": "/read-only-cells",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/vue/example3.vue",
+      "file": "guides__cell-features__read-only-cells__vue__example3.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example3",
+      "exampleTitle": "Make a column non-editable",
+      "docPermalink": "/read-only-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/angular/example4.ts",
+      "file": "guides__cell-features__read-only-cells__angular__example4.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example4",
+      "exampleTitle": "Make specific cells non-editable",
+      "docPermalink": "/read-only-cells",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/example4.js",
+      "file": "guides__cell-features__read-only-cells__javascript__example4.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example4",
+      "exampleTitle": "Make specific cells non-editable",
+      "docPermalink": "/read-only-cells",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/react/example4.tsx",
+      "file": "guides__cell-features__read-only-cells__react__example4.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example4",
+      "exampleTitle": "Make specific cells non-editable",
+      "docPermalink": "/read-only-cells",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/example4.ts",
+      "file": "guides__cell-features__read-only-cells__javascript__example4.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example4",
+      "exampleTitle": "Make specific cells non-editable",
+      "docPermalink": "/read-only-cells",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/vue/example4.vue",
+      "file": "guides__cell-features__read-only-cells__vue__example4.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example4",
+      "exampleTitle": "Make specific cells non-editable",
+      "docPermalink": "/read-only-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/angular/example5.ts",
+      "file": "guides__cell-features__read-only-cells__angular__example5.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example5",
+      "exampleTitle": "Make a row read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/example5.js",
+      "file": "guides__cell-features__read-only-cells__javascript__example5.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example5",
+      "exampleTitle": "Make a row read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/react/example5.tsx",
+      "file": "guides__cell-features__read-only-cells__react__example5.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example5",
+      "exampleTitle": "Make a row read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/example5.ts",
+      "file": "guides__cell-features__read-only-cells__javascript__example5.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example5",
+      "exampleTitle": "Make a row read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/vue/example5.vue",
+      "file": "guides__cell-features__read-only-cells__vue__example5.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "example5",
+      "exampleTitle": "Make a row read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/angular/exampleReadOnlyGrid.ts",
+      "file": "guides__cell-features__read-only-cells__angular__exampleReadOnlyGrid.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "exampleReadOnlyGrid",
+      "exampleTitle": "Make the grid read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/exampleReadOnlyGrid.js",
+      "file": "guides__cell-features__read-only-cells__javascript__exampleReadOnlyGrid.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "exampleReadOnlyGrid",
+      "exampleTitle": "Make the grid read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/react/exampleReadOnlyGrid.tsx",
+      "file": "guides__cell-features__read-only-cells__react__exampleReadOnlyGrid.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "exampleReadOnlyGrid",
+      "exampleTitle": "Make the grid read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/javascript/exampleReadOnlyGrid.ts",
+      "file": "guides__cell-features__read-only-cells__javascript__exampleReadOnlyGrid.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "exampleReadOnlyGrid",
+      "exampleTitle": "Make the grid read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/read-only-cells/vue/exampleReadOnlyGrid.vue",
+      "file": "guides__cell-features__read-only-cells__vue__exampleReadOnlyGrid.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Read-only cells"
+      ],
+      "guide": "guides/cell-features/read-only-cells/read-only-cells.md",
+      "guideTitle": "Read-only cells",
+      "exampleId": "exampleReadOnlyGrid",
+      "exampleTitle": "Make the grid read-only",
+      "docPermalink": "/read-only-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
       "docsPath": "guides/cell-features/selection/angular/example1.ts",
       "file": "guides__cell-features__selection__angular__example1.ts.json",
       "breadcrumb": [
@@ -3179,6 +4154,81 @@
       "displayName": "Vue 3"
     },
     {
+      "docsPath": "guides/cell-features/selection/angular/example6.ts",
+      "file": "guides__cell-features__selection__angular__example6.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example6",
+      "exampleTitle": "Jump across horizontal edges",
+      "docPermalink": "/selection",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-features/selection/javascript/example6.js",
+      "file": "guides__cell-features__selection__javascript__example6.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example6",
+      "exampleTitle": "Jump across horizontal edges",
+      "docPermalink": "/selection",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-features/selection/react/example6.tsx",
+      "file": "guides__cell-features__selection__react__example6.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example6",
+      "exampleTitle": "Jump across horizontal edges",
+      "docPermalink": "/selection",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-features/selection/javascript/example6.ts",
+      "file": "guides__cell-features__selection__javascript__example6.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example6",
+      "exampleTitle": "Jump across horizontal edges",
+      "docPermalink": "/selection",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-features/selection/vue/example6.vue",
+      "file": "guides__cell-features__selection__vue__example6.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example6",
+      "exampleTitle": "Jump across horizontal edges",
+      "docPermalink": "/selection",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
       "docsPath": "guides/cell-features/text-alignment/angular/example1.ts",
       "file": "guides__cell-features__text-alignment__angular__example1.ts.json",
       "breadcrumb": [
@@ -3402,6 +4452,36 @@
       "docPermalink": "/cell-editor",
       "framework": "vue",
       "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-functions/cell-editor/angular/example3.ts",
+      "file": "guides__cell-functions__cell-editor__angular__example3.ts.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell editor"
+      ],
+      "guide": "guides/cell-functions/cell-editor/cell-editor.md",
+      "guideTitle": "Cell editor",
+      "exampleId": "example3",
+      "exampleTitle": "Extending an existing editor",
+      "docPermalink": "/cell-editor",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-functions/cell-editor/react/example3.tsx",
+      "file": "guides__cell-functions__cell-editor__react__example3.tsx.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell editor"
+      ],
+      "guide": "guides/cell-functions/cell-editor/cell-editor.md",
+      "guideTitle": "Cell editor",
+      "exampleId": "example3",
+      "exampleTitle": "Extending an existing editor",
+      "docPermalink": "/cell-editor",
+      "framework": "react",
+      "displayName": "React (TS)"
     },
     {
       "docsPath": "guides/cell-functions/cell-renderer/angular/example1.ts",
@@ -3689,6 +4769,81 @@
       "displayName": "Angular"
     },
     {
+      "docsPath": "guides/cell-functions/cell-renderer/javascript/example6.js",
+      "file": "guides__cell-functions__cell-renderer__javascript__example6.js.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell renderer"
+      ],
+      "guide": "guides/cell-functions/cell-renderer/cell-renderer.md",
+      "guideTitle": "Cell renderer",
+      "exampleId": "example6",
+      "exampleTitle": "Render custom HTML in header",
+      "docPermalink": "/cell-renderer",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-functions/cell-renderer/react/example6.tsx",
+      "file": "guides__cell-functions__cell-renderer__react__example6.tsx.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell renderer"
+      ],
+      "guide": "guides/cell-functions/cell-renderer/cell-renderer.md",
+      "guideTitle": "Cell renderer",
+      "exampleId": "example6",
+      "exampleTitle": "Render custom HTML in header",
+      "docPermalink": "/cell-renderer",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-functions/cell-renderer/javascript/example6.ts",
+      "file": "guides__cell-functions__cell-renderer__javascript__example6.ts.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell renderer"
+      ],
+      "guide": "guides/cell-functions/cell-renderer/cell-renderer.md",
+      "guideTitle": "Cell renderer",
+      "exampleId": "example6",
+      "exampleTitle": "Render custom HTML in header",
+      "docPermalink": "/cell-renderer",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-functions/cell-renderer/vue/example6.vue",
+      "file": "guides__cell-functions__cell-renderer__vue__example6.vue.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell renderer"
+      ],
+      "guide": "guides/cell-functions/cell-renderer/cell-renderer.md",
+      "guideTitle": "Cell renderer",
+      "exampleId": "example6",
+      "exampleTitle": "Render custom HTML in header",
+      "docPermalink": "/cell-renderer",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-functions/cell-renderer/angular/example7.ts",
+      "file": "guides__cell-functions__cell-renderer__angular__example7.ts.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell renderer"
+      ],
+      "guide": "guides/cell-functions/cell-renderer/cell-renderer.md",
+      "guideTitle": "Cell renderer",
+      "exampleId": "example7",
+      "exampleTitle": "Format symbols outside the Intl standard",
+      "docPermalink": "/cell-renderer",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
       "docsPath": "guides/cell-functions/cell-validator/angular/example1.ts",
       "file": "guides__cell-functions__cell-validator__angular__example1.ts.json",
       "breadcrumb": [
@@ -3759,6 +4914,81 @@
       "guideTitle": "Cell validator",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
+      "docPermalink": "/cell-validator",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-functions/cell-validator/angular/example2.ts",
+      "file": "guides__cell-functions__cell-validator__angular__example2.ts.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell validator"
+      ],
+      "guide": "guides/cell-functions/cell-validator/cell-validator.md",
+      "guideTitle": "Cell validator",
+      "exampleId": "example2",
+      "exampleTitle": "Validate decimal numbers with dot or comma separators",
+      "docPermalink": "/cell-validator",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-functions/cell-validator/javascript/example2.js",
+      "file": "guides__cell-functions__cell-validator__javascript__example2.js.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell validator"
+      ],
+      "guide": "guides/cell-functions/cell-validator/cell-validator.md",
+      "guideTitle": "Cell validator",
+      "exampleId": "example2",
+      "exampleTitle": "Validate decimal numbers with dot or comma separators",
+      "docPermalink": "/cell-validator",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-functions/cell-validator/react/example2.tsx",
+      "file": "guides__cell-functions__cell-validator__react__example2.tsx.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell validator"
+      ],
+      "guide": "guides/cell-functions/cell-validator/cell-validator.md",
+      "guideTitle": "Cell validator",
+      "exampleId": "example2",
+      "exampleTitle": "Validate decimal numbers with dot or comma separators",
+      "docPermalink": "/cell-validator",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-functions/cell-validator/javascript/example2.ts",
+      "file": "guides__cell-functions__cell-validator__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell validator"
+      ],
+      "guide": "guides/cell-functions/cell-validator/cell-validator.md",
+      "guideTitle": "Cell validator",
+      "exampleId": "example2",
+      "exampleTitle": "Validate decimal numbers with dot or comma separators",
+      "docPermalink": "/cell-validator",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-functions/cell-validator/vue/example2.vue",
+      "file": "guides__cell-functions__cell-validator__vue__example2.vue.json",
+      "breadcrumb": [
+        "Cell Functions",
+        "Cell validator"
+      ],
+      "guide": "guides/cell-functions/cell-validator/cell-validator.md",
+      "guideTitle": "Cell validator",
+      "exampleId": "example2",
+      "exampleTitle": "Validate decimal numbers with dot or comma separators",
       "docPermalink": "/cell-validator",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -4038,7 +5268,7 @@
       "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
       "guideTitle": "Autocomplete cell type",
       "exampleId": "example3",
-      "exampleTitle": "Autocomplete strict mode (Ajax)",
+      "exampleTitle": "Autocomplete strict mode with asynchronous data",
       "docPermalink": "/autocomplete-cell-type",
       "framework": "angular",
       "displayName": "Angular"
@@ -4053,7 +5283,7 @@
       "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
       "guideTitle": "Autocomplete cell type",
       "exampleId": "example3",
-      "exampleTitle": "Autocomplete strict mode (Ajax)",
+      "exampleTitle": "Autocomplete strict mode with asynchronous data",
       "docPermalink": "/autocomplete-cell-type",
       "framework": "javascript",
       "displayName": "JavaScript"
@@ -4068,7 +5298,7 @@
       "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
       "guideTitle": "Autocomplete cell type",
       "exampleId": "example3",
-      "exampleTitle": "Autocomplete strict mode (Ajax)",
+      "exampleTitle": "Autocomplete strict mode with asynchronous data",
       "docPermalink": "/autocomplete-cell-type",
       "framework": "react",
       "displayName": "React (TS)"
@@ -4083,7 +5313,7 @@
       "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
       "guideTitle": "Autocomplete cell type",
       "exampleId": "example3",
-      "exampleTitle": "Autocomplete strict mode (Ajax)",
+      "exampleTitle": "Autocomplete strict mode with asynchronous data",
       "docPermalink": "/autocomplete-cell-type",
       "framework": "typescript",
       "displayName": "TypeScript"
@@ -4098,7 +5328,7 @@
       "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
       "guideTitle": "Autocomplete cell type",
       "exampleId": "example3",
-      "exampleTitle": "Autocomplete strict mode (Ajax)",
+      "exampleTitle": "Autocomplete strict mode with asynchronous data",
       "docPermalink": "/autocomplete-cell-type",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -4404,6 +5634,156 @@
       "displayName": "Vue 3"
     },
     {
+      "docsPath": "guides/cell-types/autocomplete-cell-type/angular/example8.ts",
+      "file": "guides__cell-types__autocomplete-cell-type__angular__example8.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example8",
+      "exampleTitle": "The sortByRelevance option",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-types/autocomplete-cell-type/javascript/example8.js",
+      "file": "guides__cell-types__autocomplete-cell-type__javascript__example8.js.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example8",
+      "exampleTitle": "The sortByRelevance option",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-types/autocomplete-cell-type/react/example8.tsx",
+      "file": "guides__cell-types__autocomplete-cell-type__react__example8.tsx.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example8",
+      "exampleTitle": "The sortByRelevance option",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-types/autocomplete-cell-type/javascript/example8.ts",
+      "file": "guides__cell-types__autocomplete-cell-type__javascript__example8.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example8",
+      "exampleTitle": "The sortByRelevance option",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-types/autocomplete-cell-type/vue/example8.vue",
+      "file": "guides__cell-types__autocomplete-cell-type__vue__example8.vue.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example8",
+      "exampleTitle": "The sortByRelevance option",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-types/autocomplete-cell-type/angular/example9.ts",
+      "file": "guides__cell-types__autocomplete-cell-type__angular__example9.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example9",
+      "exampleTitle": "The allowHtml option",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-types/autocomplete-cell-type/javascript/example9.js",
+      "file": "guides__cell-types__autocomplete-cell-type__javascript__example9.js.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example9",
+      "exampleTitle": "The allowHtml option",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-types/autocomplete-cell-type/react/example9.tsx",
+      "file": "guides__cell-types__autocomplete-cell-type__react__example9.tsx.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example9",
+      "exampleTitle": "The allowHtml option",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-types/autocomplete-cell-type/javascript/example9.ts",
+      "file": "guides__cell-types__autocomplete-cell-type__javascript__example9.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example9",
+      "exampleTitle": "The allowHtml option",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-types/autocomplete-cell-type/vue/example9.vue",
+      "file": "guides__cell-types__autocomplete-cell-type__vue__example9.vue.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example9",
+      "exampleTitle": "The allowHtml option",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
       "docsPath": "guides/cell-types/cell-type/angular/example1.ts",
       "file": "guides__cell-types__cell-type__angular__example1.ts.json",
       "breadcrumb": [
@@ -4549,6 +5929,81 @@
       "guideTitle": "Cell type",
       "exampleId": "example2",
       "exampleTitle": "Empty cells",
+      "docPermalink": "/cell-type",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-types/cell-type/angular/example3.ts",
+      "file": "guides__cell-types__cell-type__angular__example3.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Cell type"
+      ],
+      "guide": "guides/cell-types/cell-type/cell-type.md",
+      "guideTitle": "Cell type",
+      "exampleId": "example3",
+      "exampleTitle": "Set different cell types in one column",
+      "docPermalink": "/cell-type",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-types/cell-type/javascript/example3.js",
+      "file": "guides__cell-types__cell-type__javascript__example3.js.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Cell type"
+      ],
+      "guide": "guides/cell-types/cell-type/cell-type.md",
+      "guideTitle": "Cell type",
+      "exampleId": "example3",
+      "exampleTitle": "Set different cell types in one column",
+      "docPermalink": "/cell-type",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-types/cell-type/react/example3.tsx",
+      "file": "guides__cell-types__cell-type__react__example3.tsx.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Cell type"
+      ],
+      "guide": "guides/cell-types/cell-type/cell-type.md",
+      "guideTitle": "Cell type",
+      "exampleId": "example3",
+      "exampleTitle": "Set different cell types in one column",
+      "docPermalink": "/cell-type",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-types/cell-type/javascript/example3.ts",
+      "file": "guides__cell-types__cell-type__javascript__example3.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Cell type"
+      ],
+      "guide": "guides/cell-types/cell-type/cell-type.md",
+      "guideTitle": "Cell type",
+      "exampleId": "example3",
+      "exampleTitle": "Set different cell types in one column",
+      "docPermalink": "/cell-type",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-types/cell-type/vue/example3.vue",
+      "file": "guides__cell-types__cell-type__vue__example3.vue.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Cell type"
+      ],
+      "guide": "guides/cell-types/cell-type/cell-type.md",
+      "guideTitle": "Cell type",
+      "exampleId": "example3",
+      "exampleTitle": "Set different cell types in one column",
       "docPermalink": "/cell-type",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -6054,6 +7509,156 @@
       "displayName": "Vue 3"
     },
     {
+      "docsPath": "guides/cell-types/text-cell-type/angular/example1.ts",
+      "file": "guides__cell-types__text-cell-type__angular__example1.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Text cell type"
+      ],
+      "guide": "guides/cell-types/text-cell-type/text-cell-type.md",
+      "guideTitle": "Text cell type",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/text-cell-type",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-types/text-cell-type/javascript/example1.js",
+      "file": "guides__cell-types__text-cell-type__javascript__example1.js.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Text cell type"
+      ],
+      "guide": "guides/cell-types/text-cell-type/text-cell-type.md",
+      "guideTitle": "Text cell type",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/text-cell-type",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-types/text-cell-type/react/example1.tsx",
+      "file": "guides__cell-types__text-cell-type__react__example1.tsx.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Text cell type"
+      ],
+      "guide": "guides/cell-types/text-cell-type/text-cell-type.md",
+      "guideTitle": "Text cell type",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/text-cell-type",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-types/text-cell-type/javascript/example1.ts",
+      "file": "guides__cell-types__text-cell-type__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Text cell type"
+      ],
+      "guide": "guides/cell-types/text-cell-type/text-cell-type.md",
+      "guideTitle": "Text cell type",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/text-cell-type",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-types/text-cell-type/vue/example1.vue",
+      "file": "guides__cell-types__text-cell-type__vue__example1.vue.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Text cell type"
+      ],
+      "guide": "guides/cell-types/text-cell-type/text-cell-type.md",
+      "guideTitle": "Text cell type",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/text-cell-type",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/cell-types/text-cell-type/angular/example2.ts",
+      "file": "guides__cell-types__text-cell-type__angular__example2.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Text cell type"
+      ],
+      "guide": "guides/cell-types/text-cell-type/text-cell-type.md",
+      "guideTitle": "Text cell type",
+      "exampleId": "example2",
+      "exampleTitle": "Adding a validator",
+      "docPermalink": "/text-cell-type",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/cell-types/text-cell-type/javascript/example2.js",
+      "file": "guides__cell-types__text-cell-type__javascript__example2.js.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Text cell type"
+      ],
+      "guide": "guides/cell-types/text-cell-type/text-cell-type.md",
+      "guideTitle": "Text cell type",
+      "exampleId": "example2",
+      "exampleTitle": "Adding a validator",
+      "docPermalink": "/text-cell-type",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/cell-types/text-cell-type/react/example2.tsx",
+      "file": "guides__cell-types__text-cell-type__react__example2.tsx.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Text cell type"
+      ],
+      "guide": "guides/cell-types/text-cell-type/text-cell-type.md",
+      "guideTitle": "Text cell type",
+      "exampleId": "example2",
+      "exampleTitle": "Adding a validator",
+      "docPermalink": "/text-cell-type",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/cell-types/text-cell-type/javascript/example2.ts",
+      "file": "guides__cell-types__text-cell-type__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Text cell type"
+      ],
+      "guide": "guides/cell-types/text-cell-type/text-cell-type.md",
+      "guideTitle": "Text cell type",
+      "exampleId": "example2",
+      "exampleTitle": "Adding a validator",
+      "docPermalink": "/text-cell-type",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/cell-types/text-cell-type/vue/example2.vue",
+      "file": "guides__cell-types__text-cell-type__vue__example2.vue.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Text cell type"
+      ],
+      "guide": "guides/cell-types/text-cell-type/text-cell-type.md",
+      "guideTitle": "Text cell type",
+      "exampleId": "example2",
+      "exampleTitle": "Adding a validator",
+      "docPermalink": "/text-cell-type",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
       "docsPath": "guides/cell-types/time-cell-type/angular/example1.ts",
       "file": "guides__cell-types__time-cell-type__angular__example1.ts.json",
       "breadcrumb": [
@@ -6349,6 +7954,36 @@
       "guideTitle": "Column filter",
       "exampleId": "example12",
       "exampleTitle": "Enable filtering within already filtered results (2)",
+      "docPermalink": "/column-filter",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/columns/column-filter/angular/example13.ts",
+      "file": "guides__columns__column-filter__angular__example13.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "example13",
+      "exampleTitle": "Save and restore filter settings (2)",
+      "docPermalink": "/column-filter",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/columns/column-filter/angular/example14.ts",
+      "file": "guides__columns__column-filter__angular__example14.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "example14",
+      "exampleTitle": "Get filtered data (2)",
       "docPermalink": "/column-filter",
       "framework": "angular",
       "displayName": "Angular"
@@ -6969,6 +8604,66 @@
       "displayName": "Vue 3"
     },
     {
+      "docsPath": "guides/columns/column-filter/javascript/exampleGetFilteredData.js",
+      "file": "guides__columns__column-filter__javascript__exampleGetFilteredData.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleGetFilteredData",
+      "exampleTitle": "Get filtered data",
+      "docPermalink": "/column-filter",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/columns/column-filter/react/exampleGetFilteredData.tsx",
+      "file": "guides__columns__column-filter__react__exampleGetFilteredData.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleGetFilteredData",
+      "exampleTitle": "Get filtered data",
+      "docPermalink": "/column-filter",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/columns/column-filter/javascript/exampleGetFilteredData.ts",
+      "file": "guides__columns__column-filter__javascript__exampleGetFilteredData.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleGetFilteredData",
+      "exampleTitle": "Get filtered data",
+      "docPermalink": "/column-filter",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/columns/column-filter/vue/exampleGetFilteredData.vue",
+      "file": "guides__columns__column-filter__vue__exampleGetFilteredData.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleGetFilteredData",
+      "exampleTitle": "Get filtered data",
+      "docPermalink": "/column-filter",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
       "docsPath": "guides/columns/column-filter/javascript/exampleQuickFilter.js",
       "file": "guides__columns__column-filter__javascript__exampleQuickFilter.js.json",
       "breadcrumb": [
@@ -7024,6 +8719,66 @@
       "guideTitle": "Column filter",
       "exampleId": "exampleQuickFilter",
       "exampleTitle": "External quick filter",
+      "docPermalink": "/column-filter",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/columns/column-filter/javascript/exampleSaveRestoreFilters.js",
+      "file": "guides__columns__column-filter__javascript__exampleSaveRestoreFilters.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleSaveRestoreFilters",
+      "exampleTitle": "Save and restore filter settings",
+      "docPermalink": "/column-filter",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/columns/column-filter/react/exampleSaveRestoreFilters.tsx",
+      "file": "guides__columns__column-filter__react__exampleSaveRestoreFilters.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleSaveRestoreFilters",
+      "exampleTitle": "Save and restore filter settings",
+      "docPermalink": "/column-filter",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/columns/column-filter/javascript/exampleSaveRestoreFilters.ts",
+      "file": "guides__columns__column-filter__javascript__exampleSaveRestoreFilters.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleSaveRestoreFilters",
+      "exampleTitle": "Save and restore filter settings",
+      "docPermalink": "/column-filter",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/columns/column-filter/vue/exampleSaveRestoreFilters.vue",
+      "file": "guides__columns__column-filter__vue__exampleSaveRestoreFilters.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleSaveRestoreFilters",
+      "exampleTitle": "Save and restore filter settings",
       "docPermalink": "/column-filter",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -8109,6 +9864,81 @@
       "displayName": "Vue 3"
     },
     {
+      "docsPath": "guides/columns/column-header/angular/example7.ts",
+      "file": "guides__columns__column-header__angular__example7.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column headers"
+      ],
+      "guide": "guides/columns/column-header/column-header.md",
+      "guideTitle": "Column headers",
+      "exampleId": "example7",
+      "exampleTitle": "Column header height",
+      "docPermalink": "/column-header",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/columns/column-header/javascript/example7.js",
+      "file": "guides__columns__column-header__javascript__example7.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column headers"
+      ],
+      "guide": "guides/columns/column-header/column-header.md",
+      "guideTitle": "Column headers",
+      "exampleId": "example7",
+      "exampleTitle": "Column header height",
+      "docPermalink": "/column-header",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/columns/column-header/react/example7.tsx",
+      "file": "guides__columns__column-header__react__example7.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column headers"
+      ],
+      "guide": "guides/columns/column-header/column-header.md",
+      "guideTitle": "Column headers",
+      "exampleId": "example7",
+      "exampleTitle": "Column header height",
+      "docPermalink": "/column-header",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/columns/column-header/javascript/example7.ts",
+      "file": "guides__columns__column-header__javascript__example7.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column headers"
+      ],
+      "guide": "guides/columns/column-header/column-header.md",
+      "guideTitle": "Column headers",
+      "exampleId": "example7",
+      "exampleTitle": "Column header height",
+      "docPermalink": "/column-header",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/columns/column-header/vue/example7.vue",
+      "file": "guides__columns__column-header__vue__example7.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column headers"
+      ],
+      "guide": "guides/columns/column-header/column-header.md",
+      "guideTitle": "Column headers",
+      "exampleId": "example7",
+      "exampleTitle": "Column header height",
+      "docPermalink": "/column-header",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
       "docsPath": "guides/columns/column-hiding/angular/example1.ts",
       "file": "guides__columns__column-hiding__angular__example1.ts.json",
       "breadcrumb": [
@@ -8559,156 +10389,6 @@
       "displayName": "Vue 3"
     },
     {
-      "docsPath": "guides/columns/column-menu/angular/example1.ts",
-      "file": "guides__columns__column-menu__angular__example1.ts.json",
-      "breadcrumb": [
-        "Columns",
-        "Column menu"
-      ],
-      "guide": "guides/columns/column-menu/column-menu.md",
-      "guideTitle": "Column menu",
-      "exampleId": "example1",
-      "exampleTitle": "Standard example",
-      "docPermalink": "/column-menu",
-      "framework": "angular",
-      "displayName": "Angular"
-    },
-    {
-      "docsPath": "guides/columns/column-menu/javascript/example1.js",
-      "file": "guides__columns__column-menu__javascript__example1.js.json",
-      "breadcrumb": [
-        "Columns",
-        "Column menu"
-      ],
-      "guide": "guides/columns/column-menu/column-menu.md",
-      "guideTitle": "Column menu",
-      "exampleId": "example1",
-      "exampleTitle": "Standard example",
-      "docPermalink": "/column-menu",
-      "framework": "javascript",
-      "displayName": "JavaScript"
-    },
-    {
-      "docsPath": "guides/columns/column-menu/react/example1.tsx",
-      "file": "guides__columns__column-menu__react__example1.tsx.json",
-      "breadcrumb": [
-        "Columns",
-        "Column menu"
-      ],
-      "guide": "guides/columns/column-menu/column-menu.md",
-      "guideTitle": "Column menu",
-      "exampleId": "example1",
-      "exampleTitle": "Standard example",
-      "docPermalink": "/column-menu",
-      "framework": "react",
-      "displayName": "React (TS)"
-    },
-    {
-      "docsPath": "guides/columns/column-menu/javascript/example1.ts",
-      "file": "guides__columns__column-menu__javascript__example1.ts.json",
-      "breadcrumb": [
-        "Columns",
-        "Column menu"
-      ],
-      "guide": "guides/columns/column-menu/column-menu.md",
-      "guideTitle": "Column menu",
-      "exampleId": "example1",
-      "exampleTitle": "Standard example",
-      "docPermalink": "/column-menu",
-      "framework": "typescript",
-      "displayName": "TypeScript"
-    },
-    {
-      "docsPath": "guides/columns/column-menu/vue/example1.vue",
-      "file": "guides__columns__column-menu__vue__example1.vue.json",
-      "breadcrumb": [
-        "Columns",
-        "Column menu"
-      ],
-      "guide": "guides/columns/column-menu/column-menu.md",
-      "guideTitle": "Column menu",
-      "exampleId": "example1",
-      "exampleTitle": "Standard example",
-      "docPermalink": "/column-menu",
-      "framework": "vue",
-      "displayName": "Vue 3"
-    },
-    {
-      "docsPath": "guides/columns/column-menu/angular/example2.ts",
-      "file": "guides__columns__column-menu__angular__example2.ts.json",
-      "breadcrumb": [
-        "Columns",
-        "Column menu"
-      ],
-      "guide": "guides/columns/column-menu/column-menu.md",
-      "guideTitle": "Column menu",
-      "exampleId": "example2",
-      "exampleTitle": "Plugin configuration",
-      "docPermalink": "/column-menu",
-      "framework": "angular",
-      "displayName": "Angular"
-    },
-    {
-      "docsPath": "guides/columns/column-menu/javascript/example2.js",
-      "file": "guides__columns__column-menu__javascript__example2.js.json",
-      "breadcrumb": [
-        "Columns",
-        "Column menu"
-      ],
-      "guide": "guides/columns/column-menu/column-menu.md",
-      "guideTitle": "Column menu",
-      "exampleId": "example2",
-      "exampleTitle": "Plugin configuration",
-      "docPermalink": "/column-menu",
-      "framework": "javascript",
-      "displayName": "JavaScript"
-    },
-    {
-      "docsPath": "guides/columns/column-menu/react/example2.tsx",
-      "file": "guides__columns__column-menu__react__example2.tsx.json",
-      "breadcrumb": [
-        "Columns",
-        "Column menu"
-      ],
-      "guide": "guides/columns/column-menu/column-menu.md",
-      "guideTitle": "Column menu",
-      "exampleId": "example2",
-      "exampleTitle": "Plugin configuration",
-      "docPermalink": "/column-menu",
-      "framework": "react",
-      "displayName": "React (TS)"
-    },
-    {
-      "docsPath": "guides/columns/column-menu/javascript/example2.ts",
-      "file": "guides__columns__column-menu__javascript__example2.ts.json",
-      "breadcrumb": [
-        "Columns",
-        "Column menu"
-      ],
-      "guide": "guides/columns/column-menu/column-menu.md",
-      "guideTitle": "Column menu",
-      "exampleId": "example2",
-      "exampleTitle": "Plugin configuration",
-      "docPermalink": "/column-menu",
-      "framework": "typescript",
-      "displayName": "TypeScript"
-    },
-    {
-      "docsPath": "guides/columns/column-menu/vue/example2.vue",
-      "file": "guides__columns__column-menu__vue__example2.vue.json",
-      "breadcrumb": [
-        "Columns",
-        "Column menu"
-      ],
-      "guide": "guides/columns/column-menu/column-menu.md",
-      "guideTitle": "Column menu",
-      "exampleId": "example2",
-      "exampleTitle": "Plugin configuration",
-      "docPermalink": "/column-menu",
-      "framework": "vue",
-      "displayName": "Vue 3"
-    },
-    {
       "docsPath": "guides/columns/column-moving/angular/example1.ts",
       "file": "guides__columns__column-moving__angular__example1.ts.json",
       "breadcrumb": [
@@ -8929,6 +10609,81 @@
       "guideTitle": "Column moving",
       "exampleId": "example3",
       "exampleTitle": "Move column headers (2)",
+      "docPermalink": "/column-moving",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/columns/column-moving/angular/example4.ts",
+      "file": "guides__columns__column-moving__angular__example4.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column moving"
+      ],
+      "guide": "guides/columns/column-moving/column-moving.md",
+      "guideTitle": "Column moving",
+      "exampleId": "example4",
+      "exampleTitle": "Control column moving",
+      "docPermalink": "/column-moving",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/columns/column-moving/javascript/example4.js",
+      "file": "guides__columns__column-moving__javascript__example4.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column moving"
+      ],
+      "guide": "guides/columns/column-moving/column-moving.md",
+      "guideTitle": "Column moving",
+      "exampleId": "example4",
+      "exampleTitle": "Control column moving",
+      "docPermalink": "/column-moving",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/columns/column-moving/react/example4.tsx",
+      "file": "guides__columns__column-moving__react__example4.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column moving"
+      ],
+      "guide": "guides/columns/column-moving/column-moving.md",
+      "guideTitle": "Column moving",
+      "exampleId": "example4",
+      "exampleTitle": "Control column moving",
+      "docPermalink": "/column-moving",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/columns/column-moving/javascript/example4.ts",
+      "file": "guides__columns__column-moving__javascript__example4.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column moving"
+      ],
+      "guide": "guides/columns/column-moving/column-moving.md",
+      "guideTitle": "Column moving",
+      "exampleId": "example4",
+      "exampleTitle": "Control column moving",
+      "docPermalink": "/column-moving",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/columns/column-moving/vue/example4.vue",
+      "file": "guides__columns__column-moving__vue__example4.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column moving"
+      ],
+      "guide": "guides/columns/column-moving/column-moving.md",
+      "guideTitle": "Column moving",
+      "exampleId": "example4",
+      "exampleTitle": "Control column moving",
       "docPermalink": "/column-moving",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -10130,6 +11885,81 @@
       "exampleId": "example7",
       "exampleTitle": "Set a dynamic maximum column width",
       "docPermalink": "/column-width",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/data-management/collaboration/angular/example1.ts",
+      "file": "guides__data-management__collaboration__angular__example1.ts.json",
+      "breadcrumb": [
+        "Data Management",
+        "Handling collaboration and simultaneous editing"
+      ],
+      "guide": "guides/data-management/collaboration/collaboration.md",
+      "guideTitle": "Handling collaboration and simultaneous editing",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/collaboration",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/data-management/collaboration/javascript/example1.js",
+      "file": "guides__data-management__collaboration__javascript__example1.js.json",
+      "breadcrumb": [
+        "Data Management",
+        "Handling collaboration and simultaneous editing"
+      ],
+      "guide": "guides/data-management/collaboration/collaboration.md",
+      "guideTitle": "Handling collaboration and simultaneous editing",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/collaboration",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/data-management/collaboration/react/example1.tsx",
+      "file": "guides__data-management__collaboration__react__example1.tsx.json",
+      "breadcrumb": [
+        "Data Management",
+        "Handling collaboration and simultaneous editing"
+      ],
+      "guide": "guides/data-management/collaboration/collaboration.md",
+      "guideTitle": "Handling collaboration and simultaneous editing",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/collaboration",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/data-management/collaboration/javascript/example1.ts",
+      "file": "guides__data-management__collaboration__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Data Management",
+        "Handling collaboration and simultaneous editing"
+      ],
+      "guide": "guides/data-management/collaboration/collaboration.md",
+      "guideTitle": "Handling collaboration and simultaneous editing",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/collaboration",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/data-management/collaboration/vue/example1.vue",
+      "file": "guides__data-management__collaboration__vue__example1.vue.json",
+      "breadcrumb": [
+        "Data Management",
+        "Handling collaboration and simultaneous editing"
+      ],
+      "guide": "guides/data-management/collaboration/collaboration.md",
+      "guideTitle": "Handling collaboration and simultaneous editing",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/collaboration",
       "framework": "vue",
       "displayName": "Vue 3"
     },
@@ -12944,6 +14774,81 @@
       "displayName": "Vue 3"
     },
     {
+      "docsPath": "guides/getting-started/grid-size/angular/example2.ts",
+      "file": "guides__getting-started__grid-size__angular__example2.ts.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Grid size"
+      ],
+      "guide": "guides/getting-started/grid-size/grid-size.md",
+      "guideTitle": "Grid size",
+      "exampleId": "example2",
+      "exampleTitle": "Compare size units",
+      "docPermalink": "/grid-size",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/getting-started/grid-size/javascript/example2.js",
+      "file": "guides__getting-started__grid-size__javascript__example2.js.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Grid size"
+      ],
+      "guide": "guides/getting-started/grid-size/grid-size.md",
+      "guideTitle": "Grid size",
+      "exampleId": "example2",
+      "exampleTitle": "Compare size units",
+      "docPermalink": "/grid-size",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/getting-started/grid-size/react/example2.tsx",
+      "file": "guides__getting-started__grid-size__react__example2.tsx.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Grid size"
+      ],
+      "guide": "guides/getting-started/grid-size/grid-size.md",
+      "guideTitle": "Grid size",
+      "exampleId": "example2",
+      "exampleTitle": "Compare size units",
+      "docPermalink": "/grid-size",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/getting-started/grid-size/javascript/example2.ts",
+      "file": "guides__getting-started__grid-size__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Grid size"
+      ],
+      "guide": "guides/getting-started/grid-size/grid-size.md",
+      "guideTitle": "Grid size",
+      "exampleId": "example2",
+      "exampleTitle": "Compare size units",
+      "docPermalink": "/grid-size",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/getting-started/grid-size/vue/example2.vue",
+      "file": "guides__getting-started__grid-size__vue__example2.vue.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Grid size"
+      ],
+      "guide": "guides/getting-started/grid-size/grid-size.md",
+      "guideTitle": "Grid size",
+      "exampleId": "example2",
+      "exampleTitle": "Compare size units",
+      "docPermalink": "/grid-size",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
       "docsPath": "guides/getting-started/grid-size/angular/example.ts",
       "file": "guides__getting-started__grid-size__angular__example.ts.json",
       "breadcrumb": [
@@ -13855,6 +15760,81 @@
       "exampleId": "example5",
       "exampleTitle": "Set the horizontal text alignment",
       "docPermalink": "/layout-direction",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/navigation/custom-shortcuts/angular/example1.ts",
+      "file": "guides__navigation__custom-shortcuts__angular__example1.ts.json",
+      "breadcrumb": [
+        "Navigation",
+        "Custom shortcuts"
+      ],
+      "guide": "guides/navigation/custom-shortcuts/custom-shortcuts.md",
+      "guideTitle": "Custom shortcuts",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/custom-shortcuts",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "guides/navigation/custom-shortcuts/javascript/example1.js",
+      "file": "guides__navigation__custom-shortcuts__javascript__example1.js.json",
+      "breadcrumb": [
+        "Navigation",
+        "Custom shortcuts"
+      ],
+      "guide": "guides/navigation/custom-shortcuts/custom-shortcuts.md",
+      "guideTitle": "Custom shortcuts",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/custom-shortcuts",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/navigation/custom-shortcuts/react/example1.tsx",
+      "file": "guides__navigation__custom-shortcuts__react__example1.tsx.json",
+      "breadcrumb": [
+        "Navigation",
+        "Custom shortcuts"
+      ],
+      "guide": "guides/navigation/custom-shortcuts/custom-shortcuts.md",
+      "guideTitle": "Custom shortcuts",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/custom-shortcuts",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/navigation/custom-shortcuts/javascript/example1.ts",
+      "file": "guides__navigation__custom-shortcuts__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Navigation",
+        "Custom shortcuts"
+      ],
+      "guide": "guides/navigation/custom-shortcuts/custom-shortcuts.md",
+      "guideTitle": "Custom shortcuts",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/custom-shortcuts",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/navigation/custom-shortcuts/vue/example1.vue",
+      "file": "guides__navigation__custom-shortcuts__vue__example1.vue.json",
+      "breadcrumb": [
+        "Navigation",
+        "Custom shortcuts"
+      ],
+      "guide": "guides/navigation/custom-shortcuts/custom-shortcuts.md",
+      "guideTitle": "Custom shortcuts",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/custom-shortcuts",
       "framework": "vue",
       "displayName": "Vue 3"
     },
@@ -16424,6 +18404,21 @@
       "displayName": "Angular"
     },
     {
+      "docsPath": "guides/rows/rows-sorting/angular/example11.ts",
+      "file": "guides__rows__rows-sorting__angular__example11.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Rows sorting"
+      ],
+      "guide": "guides/rows/rows-sorting/rows-sorting.md",
+      "guideTitle": "Rows sorting",
+      "exampleId": "example11",
+      "exampleTitle": "Use sorting hooks (2)",
+      "docPermalink": "/rows-sorting",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
       "docsPath": "guides/rows/rows-sorting/angular/example1.ts",
       "file": "guides__rows__rows-sorting__angular__example1.ts.json",
       "breadcrumb": [
@@ -17154,6 +19149,66 @@
       "guideTitle": "Rows sorting",
       "exampleId": "exampleSortingDemo",
       "exampleTitle": "Sorting demo",
+      "docPermalink": "/rows-sorting",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "guides/rows/rows-sorting/javascript/exampleSortingHooks.js",
+      "file": "guides__rows__rows-sorting__javascript__exampleSortingHooks.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Rows sorting"
+      ],
+      "guide": "guides/rows/rows-sorting/rows-sorting.md",
+      "guideTitle": "Rows sorting",
+      "exampleId": "exampleSortingHooks",
+      "exampleTitle": "Use sorting hooks",
+      "docPermalink": "/rows-sorting",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "guides/rows/rows-sorting/react/exampleSortingHooks.tsx",
+      "file": "guides__rows__rows-sorting__react__exampleSortingHooks.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Rows sorting"
+      ],
+      "guide": "guides/rows/rows-sorting/rows-sorting.md",
+      "guideTitle": "Rows sorting",
+      "exampleId": "exampleSortingHooks",
+      "exampleTitle": "Use sorting hooks",
+      "docPermalink": "/rows-sorting",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "guides/rows/rows-sorting/javascript/exampleSortingHooks.ts",
+      "file": "guides__rows__rows-sorting__javascript__exampleSortingHooks.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Rows sorting"
+      ],
+      "guide": "guides/rows/rows-sorting/rows-sorting.md",
+      "guideTitle": "Rows sorting",
+      "exampleId": "exampleSortingHooks",
+      "exampleTitle": "Use sorting hooks",
+      "docPermalink": "/rows-sorting",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "guides/rows/rows-sorting/vue/exampleSortingHooks.vue",
+      "file": "guides__rows__rows-sorting__vue__exampleSortingHooks.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Rows sorting"
+      ],
+      "guide": "guides/rows/rows-sorting/rows-sorting.md",
+      "guideTitle": "Rows sorting",
+      "exampleId": "exampleSortingHooks",
+      "exampleTitle": "Use sorting hooks",
       "docPermalink": "/rows-sorting",
       "framework": "vue",
       "displayName": "Vue 3"
