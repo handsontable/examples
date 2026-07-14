@@ -151,19 +151,14 @@ export default {
 
         await writeFiles(sandbox, body.files);
         // Boot asynchronously (returns immediately; UI polls /status for live
-        // progress). Dependency resolution, fastest first:
-        //   1. restore node_modules from the per-(framework,version,metadata) R2 cache;
-        //   2. else seed from the image's baked deps + a frozen pnpm install;
-        //      fall back to non-frozen only when the editor or version injection
-        //      changed package metadata relative to its source lockfile,
-        //      then upload the result to the cache for next time.
-        const cacheVer = (body.htVersion || "default").replace(/[^a-zA-Z0-9._-]/g, "-");
+        // progress). Seed each session from the immutable baked dependencies,
+        // then reconcile them with pnpm. Keep submitted starters frozen; only
+        // custom package or lock metadata may update the lockfile.
         const dependencyFingerprint = await dependencyMetadataFingerprint({
           packageJson: body.files["/package.json"],
           pnpmLock: body.files["/pnpm-lock.yaml"],
         });
         const metadataDiffersFromStarter = dependencyFingerprint !== dev.sourceDependencyFingerprint;
-        const cacheUrl = `${url.origin}/api/nmcache/${encodeURIComponent(body.framework)}/${encodeURIComponent(cacheVer)}/${dependencyFingerprint}`;
         const installDependencies = body.files["/pnpm-lock.yaml"] !== undefined
           ? [
               `if ! pnpm install --frozen-lockfile; then`,
@@ -178,15 +173,10 @@ export default {
         const script = [
           `set -e`,
           `cd ${CONTAINER_ROOT}`,
-          `if curl -fsS ${shq(cacheUrl)} -o /tmp/nm.tgz 2>/dev/null && [ -s /tmp/nm.tgz ]; then`,
-          `  echo '::restoring cached dependencies::'; tar xzf /tmp/nm.tgz`,
-          `else`,
-          `  echo '::installing dependencies (first run for this version)::'`,
-          `  cp -al /baked/${dev.bakedKey}/node_modules ./node_modules 2>/dev/null || true`,
-          ...installDependencies.map((line) => `  ${line}`),
-          // Upload the cache in the background so it never delays the dev server.
-          `  ( tar czf /tmp/nm.tgz node_modules 2>/dev/null && curl -fsS -X PUT --data-binary @/tmp/nm.tgz ${shq(cacheUrl)} >/dev/null 2>&1 ) &`,
-          `fi`,
+          `echo '::seeding immutable baked dependencies::'`,
+          `cp -al /baked/${dev.bakedKey}/node_modules ./node_modules 2>/dev/null || true`,
+          `echo '::reconciling dependencies with pnpm::'`,
+          ...installDependencies,
           `echo '::starting dev server::'`,
           dev.cmd,
         ].join("\n");
@@ -224,26 +214,6 @@ export default {
           try { await sandbox.exec(`sh -lc "rm -f ${shq(full)}"`); } catch { /* best effort */ }
         }
         return cors(new Response(null, { status: 204 }));
-      }
-
-      // node_modules cache per (framework, version, dependency metadata): GET
-      // restores, PUT stores. Keeps Tier-2 boots fast without sharing deps
-      // across package or lockfile contents.
-      if (parts[0] === "api" && parts[1] === "nmcache" && parts.length === 5) {
-        const fw = parts[2]!.replace(/[^a-zA-Z0-9._-]/g, "-");
-        const ver = parts[3]!.replace(/[^a-zA-Z0-9._-]/g, "-");
-        const metadata = parts[4]!.replace(/[^a-f0-9]/g, "-");
-        const key = `nmcache/${fw}/${ver}/${metadata}.tgz`;
-        if (request.method === "GET") {
-          const obj = await env.ARTIFACTS.get(key);
-          if (!obj) return new Response("miss", { status: 404 });
-          return new Response(obj.body, { headers: { "Content-Type": "application/gzip" } });
-        }
-        if (request.method === "PUT") {
-          if (!request.body) return new Response("no body", { status: 400 });
-          await env.ARTIFACTS.put(key, request.body);
-          return new Response(null, { status: 204 });
-        }
       }
 
       // GET /api/session/:id/status?port=NNNN -> { ready, log } (boot progress)
