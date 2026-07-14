@@ -42,9 +42,6 @@
   "config": {
     "codesandbox": {
       "templateId": "vmjhgx"
-    },
-    "stackblitz": {
-      "template": "create-react-app"
     }
   }
 }
