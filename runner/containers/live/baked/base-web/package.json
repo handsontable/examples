@@ -2,7 +2,7 @@
   "name": "handsontable-base-web-recipe",
   "version": "1.0.0",
   "private": true,
-  "packageManager": "pnpm@10.12.2",
+  "packageManager": "pnpm@10.34.5",
   "description": "Handsontable with Base Web recipe",
   "homepage": "https://handsontable.com/",
   "repository": {

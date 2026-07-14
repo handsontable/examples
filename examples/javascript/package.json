@@ -1,7 +1,7 @@
 {
   "name": "vanilla-demo",
   "private": true,
-  "packageManager": "pnpm@10.12.2",
+  "packageManager": "pnpm@10.34.5",
   "version": "0.0.0",
   "description": "This is a general purpose demo that showcases the most popular features of Handsontable",
   "homepage": "https://handsontable.com/",

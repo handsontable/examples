@@ -1,7 +1,7 @@
 {
   "name": "sandbox",
   "version": "0.0.0",
-  "packageManager": "pnpm@10.12.2",
+  "packageManager": "pnpm@10.34.5",
   "scripts": {
     "ng": "ng",
     "start": "ng serve --disable-host-check  --port 3000",
