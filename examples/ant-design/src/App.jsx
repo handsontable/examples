@@ -44,8 +44,8 @@ const antTableTheme = (() => {
     .params({
       colors: colorsAnt,
       tokens: {
-        wrapperBorderColor: ['colors.palette.200', 'colors.palette.700'],
-        wrapperBorderRadius: '8px',
+        borderColor: ['colors.palette.200', 'colors.palette.700'],
+        borderRadius: '8px',
         headerBackgroundColor: ['colors.palette.100', 'colors.palette.800'],
         headerFontWeight: '600',
         cellHorizontalBorderColor: ['colors.palette.200', 'colors.palette.700'],
@@ -121,6 +121,7 @@ function AntLikeGrid() {
       stretchH="all"
       height="auto"
       autoRowSize={false}
+      autoColumnSize={false}
       licenseKey="non-commercial-and-evaluation"
       cells={readOnlyCell}
     >

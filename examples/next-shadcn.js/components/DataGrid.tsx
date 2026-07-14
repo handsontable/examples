@@ -19,7 +19,7 @@ const shadcnDataGridTheme = registerTheme('shadcn-data-grid', {
   tokens: tokensHorizon,
 }).params({
   tokens: {
-    wrapperBorderRadius: "var(--radius)",
+    borderRadius: "var(--radius)",
   },
 }).setColorScheme("light");
 
@@ -112,16 +112,14 @@ const DataGrid = forwardRef<HotTableRef, unknown>(function DataGrid(_, ref) {
       data="lastLoginDate"
       type="date"
       className="htRight"
-      correctFormat={true}
-      dateFormat="MMM DD, YYYY"
+      dateFormat={{ year: "numeric", month: "short", day: "2-digit" }}
       width={180}
     />
     <HotColumn
       data="lastLoginTime"
       type="time"
       className="htRight"
-      correctFormat={true}
-      timeFormat="HH:mm"
+      timeFormat={{ hour: "2-digit", minute: "2-digit", hourCycle: "h23" }}
       width={180}
     />
   </HotTable>);
