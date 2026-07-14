@@ -8,7 +8,8 @@
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
-  // Keep the workers.dev URL enabled alongside the custom wildcard route.
+  // Keep the workers.dev URL enabled alongside the custom-domain routes
+  // (attached at deploy time — see the `deploy` script and the routes note below).
   "workers_dev": true,
 
   // Public, non-secret config.
@@ -20,16 +21,14 @@
     "PREVIEW_HOST": "demos.handsontable.com"
   },
 
-  // Routes on demos.handsontable.com: the wildcard serves container preview URLs;
-  // the base-host path routes serve the API, shared demos, and embeds
-  // (the authoring app owns the catch-all demos.handsontable.com/*).
-  // workers.dev stays enabled too.
-  "routes": [
-    { "pattern": "*.demos.handsontable.com/*", "zone_name": "handsontable.com" },
-    { "pattern": "demos.handsontable.com/api/*", "zone_name": "handsontable.com" },
-    { "pattern": "demos.handsontable.com/d/*", "zone_name": "handsontable.com" },
-    { "pattern": "demos.handsontable.com/embed/*", "zone_name": "handsontable.com" }
-  ],
+  // Routes on demos.handsontable.com are deliberately NOT declared here — they
+  // are passed via `--routes` in the `deploy` script (package.json). When routes
+  // are present in this file, `wrangler dev` simulates the first route's host on
+  // EVERY request (request.url and Host become demos.handsontable.com), which
+  // destroys the <port>-<sandboxId>-<token>.* preview hostnames that
+  // proxyToSandbox() routes by, breaking Tier-2 local preview entirely.
+  // With no routes here, wrangler dev passes the real Host through and
+  // *.localhost:8787 preview URLs hit the same proxy path as production.
 
   // D1 — demo metadata + short ids (account 15111272, region EEUR).
   "d1_databases": [
