@@ -2,6 +2,7 @@
   "name": "vue3-ts-example",
   "version": "0.0.0",
   "private": true,
+  "packageManager": "pnpm@10.12.2",
   "type": "module",
   "scripts": {
     "start": "vite",
