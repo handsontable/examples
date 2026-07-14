@@ -20,9 +20,9 @@ export const addClassesToRows: AddClassesToRows = (
   TD,
   row,
   column,
-  prop,
-  value,
-  cellProperties
+  _prop,
+  _value,
+  _cellProperties
 ) => {
   // Adding classes to `TR` just while rendering first visible `TD` element
   if (column !== 0) {
