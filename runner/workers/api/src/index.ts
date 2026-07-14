@@ -29,23 +29,18 @@ export class BuilderSandbox extends SandboxBase {}
 
 const CONTAINER_ROOT = "/app";
 const BOOT_LOG = "/tmp/boot.log";
-/** Single-quote a string for embedding in `sh -lc '...'`. */
+/** Single-quote a trusted command fragment for embedding in `sh -lc`. */
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-
 class InvalidFilePathError extends Error {}
 
 /**
- * Resolve the FilesMap's root-relative path convention under CONTAINER_ROOT.
- * A single leading slash is accepted for compatibility, but never treated as
- * a filesystem-absolute path.
+ * Resolve a nonempty relative POSIX path under CONTAINER_ROOT.
  */
-function resolveContainerPath(path: string): string {
+function resolveContainerPath(path: unknown): string {
   if (typeof path !== "string" || path.length === 0) throw new InvalidFilePathError("file path is required");
-  const relative = path.startsWith("/") ? path.slice(1) : path;
-  const segments = relative.split("/");
+  const segments = path.split("/");
   if (
-    relative.length === 0
-    || path.startsWith("//")
+    path.startsWith("/")
     || path.includes("\\")
     || path.includes("\0")
     || segments.some((segment) => segment.length === 0 || segment === "." || segment === ".." || segment === "node_modules")
@@ -55,11 +50,36 @@ function resolveContainerPath(path: string): string {
   return `${CONTAINER_ROOT}/${segments.join("/")}`;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/** Validate the full file map before creating any directories or files. */
+function validateFiles(files: unknown): Record<string, string> {
+  if (!isPlainRecord(files)) throw new InvalidFilePathError("files must be a plain record");
+  for (const [path, contents] of Object.entries(files)) {
+    resolveContainerPath(path);
+    if (typeof contents !== "string") throw new InvalidFilePathError(`contents must be a string: ${path}`);
+  }
+  return files as Record<string, string>;
+}
+
+function validateFileWrite(body: unknown): { path: string; contents: string } {
+  if (!isPlainRecord(body)) throw new InvalidFilePathError("file write must be a plain record");
+  const { path, contents } = body;
+  const full = resolveContainerPath(path);
+  if (typeof contents !== "string") throw new InvalidFilePathError("contents must be a string");
+  return { path: full, contents };
+}
+
 // Minimal structural view of the Sandbox stub — avoids deep instantiation of the
 // full RPC proxy type (TS2589) while typing exactly the methods we call.
 type SandboxLike = {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
   writeFile(path: string, contents: string): Promise<unknown>;
+  deleteFile(path: string): Promise<unknown>;
   exec(cmd: string): Promise<{ success?: boolean; stdout?: string; stderr?: string }>;
   startProcess(cmd: string, opts?: { cwd?: string; env?: Record<string, string> }): Promise<unknown>;
   exposePort(port: number, opts?: { hostname?: string }): Promise<{ url?: string; exposedAt?: string }>;
@@ -161,30 +181,32 @@ export default {
     try {
       // POST /api/session  { framework, files, sessionId? } -> { sessionId, previewUrl }
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "session" && parts.length === 2) {
-        const body = (await request.json()) as {
+        const body = await request.json() as {
           framework: string;
-          files: Record<string, string>;
+          files: unknown;
           sessionId?: string;
           htVersion?: string;
         };
+        if (!isPlainRecord(body)) return json({ error: "request body must be a plain record" }, 400);
         const dev = FRAMEWORK_DEV[body.framework];
         const cfg = BUILD_CONFIG[body.framework];
         if (!dev || !cfg) return json({ error: `Tier-2 not wired for framework: ${body.framework}` }, 400);
+        const files = validateFiles(body.files);
 
         const sessionId = body.sessionId?.trim() || sessionIdFor(body.framework);
         const sandbox = liveSbx(env, sessionId);
 
-        await writeFiles(sandbox, body.files);
+        await writeFiles(sandbox, files);
         // Boot asynchronously (returns immediately; UI polls /status for live
-        // progress). Start with immutable baked dependencies, then reconcile
-        // them with pnpm. Keep submitted starters frozen; only custom package
-        // or lock metadata may update the lockfile.
+        // progress). Default boot seeds immutable baked dependencies, then runs
+        // fast frozen pnpm reconciliation. Keep submitted starters frozen; only
+        // custom package or lock metadata may update the lockfile.
         const dependencyFingerprint = await dependencyMetadataFingerprint({
-          packageJson: body.files["/package.json"],
-          pnpmLock: body.files["/pnpm-lock.yaml"],
+          packageJson: files["package.json"],
+          pnpmLock: files["pnpm-lock.yaml"],
         });
         const metadataDiffersFromStarter = dependencyFingerprint !== dev.sourceDependencyFingerprint;
-        const installDependencies = body.files["/pnpm-lock.yaml"] !== undefined
+        const installDependencies = files["pnpm-lock.yaml"] !== undefined
           ? [
               `if ! pnpm install --frozen-lockfile; then`,
               metadataDiffersFromStarter
@@ -220,9 +242,9 @@ export default {
       // POST /api/session/:id/file  { path, contents } -> 204   (streams an edit; HMR picks it up)
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "session" && parts[3] === "file") {
         const sessionId = parts[2]!;
-        const body = (await request.json()) as { path: string; contents: string };
+        const body = validateFileWrite(await request.json());
         const sandbox = liveSbx(env, sessionId);
-        const full = resolveContainerPath(body.path);
+        const full = body.path;
         const dir = full.slice(0, full.lastIndexOf("/"));
         if (dir && dir !== CONTAINER_ROOT) {
           try { await sandbox.mkdir(dir, { recursive: true }); } catch { /* exists */ }
@@ -236,7 +258,7 @@ export default {
         const sandbox = liveSbx(env, parts[2]!);
         const p = url.searchParams.get("path") ?? "";
         const full = resolveContainerPath(p);
-        try { await sandbox.exec(`sh -lc "rm -f ${shq(full)}"`); } catch { /* best effort */ }
+        try { await sandbox.deleteFile(full); } catch { /* best effort */ }
         return cors(new Response(null, { status: 204 }));
       }
 
