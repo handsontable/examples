@@ -25,7 +25,7 @@ pnpm --filter @handsontable/demo-runtime build
 pnpm --filter @handsontable/demo-authoring dev        # http://localhost:5173
 
 # Full stack (Tier-2 containers + sharing): needs Docker.
-cd workers/api && printf 'DEV_AUTH_EMAIL="dev@handsontable.com"\n' > .dev.vars
+cd workers/api && printf 'DEV_AUTH_EMAIL="dev@handsontable.com"\nPREVIEW_HOST=""\n' > .dev.vars
 npx wrangler d1 execute handsontable-demos --local --file=migrations/0001_init.sql -y
 npx wrangler d1 execute handsontable-demos --local --file=migrations/0002_buildkey_nonunique.sql -y
 npx wrangler dev --port 8787                          # builds the container images
@@ -36,6 +36,12 @@ npx vite --port 5173
 ```
 
 `.dev.vars` and `.env.local` are gitignored dev-only bypasses — never used in prod.
+`PREVIEW_HOST=""` overrides the `wrangler.jsonc` default (`demos.handsontable.com`,
+a real public wildcard that routes to the *deployed* worker) so container preview
+URLs fall back to the request host — resolving as `*.localhost:8787`, which every
+browser/OS treats as `127.0.0.1` (RFC 6761) and reaches your local `wrangler dev`.
+Without it, Tier-2/container sessions boot fine but the preview iframe fails with
+`INVALID_TOKEN` — the token is only known to your local session, not to prod.
 
 ## Deploy (main Handsontable account)
 
