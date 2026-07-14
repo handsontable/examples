@@ -15,7 +15,9 @@ A single editor shell binds only to the `DemoRuntime` interface. Which engine
 sits behind it is invisible to the author:
 
 - **Tier 1 — client-side (Sandpack, in-browser bundler, free):**
-  `example1`, `javascript`, `typescript`, `react`, `react-js`, `ant-design`, `vue`.
+  `example1`, `javascript`, `typescript`, `react`, `vue`.
+- **Tier 1 via the container engine (real Vite dev server, still no SSR):**
+  `react-js`, `ant-design`, `mui`, `base-web` — these render exactly as authored.
 - **Tier 2 — SSR / meta-framework (Cloudflare Sandbox container running the real
   dev server):** `angular`, `next.js`, `next-shadcn.js`, `astro`, `nuxt`, `remix`.
 
@@ -24,7 +26,7 @@ sits behind it is invisible to the author:
 | Path | Purpose |
 |------|---------|
 | `config/frameworks.json` | Single source of truth: tier, wrappers, dev/build commands, ports per example. |
-| `catalog.json` | Generated. All 13 examples normalized into starting templates. |
+| `catalog.json` | Generated. All 15 examples normalized into starting templates. |
 | `pipeline/` | `import.mjs` (starter catalog), `import-docs.mjs` + `wrap-docs-example.mjs` (documentation-guide examples). |
 | `packages/runtime/` | `DemoRuntime` interface, `applyHandsontableVersion`, `resolveRuntime`. |
 | `packages/editor-shell/` | Framework-agnostic editor UI + branding `theme.ts`. |

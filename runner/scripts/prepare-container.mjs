@@ -32,6 +32,8 @@ const DEV = {
   nuxt: { cmd: "npx --no-install nuxt dev -H 0.0.0.0 -p 3001", port: 3001 },
   "react-js": { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
   "ant-design": { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
+  mui: { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
+  "base-web": { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
   // Documentation-guide Vue examples use `<script setup>` (unsupported by the
   // in-browser bundler), so they run on the container engine via real Vite.
   vue: { cmd: "npx --no-install vite --host 0.0.0.0 --port 5173", port: 5173 },

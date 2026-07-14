@@ -1,8 +1,8 @@
 {
-  "name": "handsontable-ant-design-recipe",
+  "name": "handsontable-mui-recipe",
   "version": "1.0.0",
   "private": true,
-  "description": "Handsontable with Ant Design recipe",
+  "description": "Handsontable with MUI recipe",
   "homepage": "https://handsontable.com/",
   "repository": {
     "type": "git",
@@ -17,18 +17,23 @@
   "scripts": {
     "start": "vite",
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc -b && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
     "@handsontable/react-wrapper": "18.0.0",
-    "antd": "^6.5.1",
+    "@mui/material": "^9.2.0",
     "handsontable": "18.0.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "typescript": "~7.0.2",
     "vite": "^8.1.4"
   },
   "browserslist": {
@@ -42,10 +47,5 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
-  },
-  "config": {
-    "codesandbox": {
-      "templateId": "8y5qy5"
-    }
   }
 }

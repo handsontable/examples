@@ -14,7 +14,7 @@
   // Public, non-secret config.
   "vars": {
     "LOGIN_BROKER_URL": "https://mcp-auth-proxy-j0tb.onrender.com",
-    "EMBED_ALLOWED_ANCESTORS": "https://handsontable.com https://*.handsontable.com http://localhost:*",
+    "EMBED_ALLOWED_ANCESTORS": "https://handsontable.com https://*.handsontable.com https://*.handsontable-docs-staging.pages.dev http://localhost:*",
     // Wildcard base host for Tier-2 container preview URLs
     // (<port>-<sandboxId>-<token>.demos.handsontable.com).
     "PREVIEW_HOST": "demos.handsontable.com"
