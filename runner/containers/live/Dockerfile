@@ -15,6 +15,14 @@ RUN cd /baked/react-js && npm install --no-audit --no-fund --loglevel=error
 COPY baked/ant-design/package.json /baked/ant-design/package.json
 RUN cd /baked/ant-design && npm install --no-audit --no-fund --loglevel=error
 
+# mui
+COPY baked/mui/package.json /baked/mui/package.json
+RUN cd /baked/mui && npm install --no-audit --no-fund --loglevel=error
+
+# base-web
+COPY baked/base-web/package.json /baked/base-web/package.json
+RUN cd /baked/base-web && npm install --no-audit --no-fund --loglevel=error
+
 # angular
 COPY baked/angular/package.json /baked/angular/package.json
 RUN cd /baked/angular && npm install --legacy-peer-deps --no-audit --no-fund --loglevel=error

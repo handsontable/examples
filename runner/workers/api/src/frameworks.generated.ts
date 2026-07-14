@@ -10,6 +10,8 @@ export interface FrameworkDev {
 export const FRAMEWORK_DEV: Record<string, FrameworkDev> = {
   "react-js": { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "react-js" },
   "ant-design": { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "ant-design" },
+  "mui": { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "mui" },
+  "base-web": { cmd: "npm run dev -- --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "base-web" },
   "angular": { cmd: "npx --no-install ng serve --host 0.0.0.0 --port 4200 --disable-host-check", port: 4200, bakedKey: "angular" },
   "next.js": { cmd: "npx --no-install next dev -p 3001 -H 0.0.0.0", port: 3001, bakedKey: "next-js" },
   "next-shadcn.js": { cmd: "npx --no-install next dev -p 3001 -H 0.0.0.0", port: 3001, bakedKey: "next-shadcn-js" },
@@ -35,6 +37,8 @@ export const BUILD_CONFIG: Record<string, BuildConfig> = {
   "react": { tier: 1, installCommand: "npm install", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
   "react-js": { tier: 1, installCommand: "npm install", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
   "ant-design": { tier: 1, installCommand: "npm install", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
+  "mui": { tier: 1, installCommand: "npm install", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
+  "base-web": { tier: 1, installCommand: "npm install", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
   "vue": { tier: 1, installCommand: "npm install", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
   "angular": { tier: 2, installCommand: "npm install --legacy-peer-deps", buildCommand: "ng build", outputDir: "dist", outputGlob: "dist/*/browser" },
   "next.js": { tier: 2, installCommand: "npm install", buildCommand: "next build", outputDir: "out", outputGlob: null },

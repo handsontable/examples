@@ -21,8 +21,12 @@ DemoRuntime
 ```
 
 - **Tier 1 — client-side (free, fastest):** `example1`, `javascript`,
-  `typescript`, `react`, `react-js`, `ant-design`, `vue`. Bundles in the browser;
-  no server; tens-of-ms edit latency; zero compute cost.
+  `typescript`, `react`, `vue`. Bundles in the browser; no server; tens-of-ms
+  edit latency; zero compute cost.
+- **Tier 1 via the container engine:** `react-js`, `ant-design`, `mui`,
+  `base-web`. Still tier 1 (no SSR), but routed through the same container
+  engine as Tier 2 so they render exactly as authored (real Vite dev server)
+  instead of through Sandpack's in-browser bundler.
 - **Tier 2 — SSR / meta-framework:** `angular`, `next.js`, `next-shadcn.js`,
   `astro`, `nuxt`, `remix`. A per-session container runs the framework's real
   `npm run dev` with HMR; edits stream over WebSocket; the preview iframe points
@@ -47,7 +51,7 @@ Per-framework wrapper map (pinned in lockstep with `handsontable`):
 | Framework(s) | Wrapper pinned |
 |---|---|
 | `example1`, `javascript`, `typescript`, `astro` | (core only) |
-| `react`, `react-js`, `ant-design`, `next.js`, `next-shadcn.js`, `remix` | `@handsontable/react-wrapper` |
+| `react`, `react-js`, `ant-design`, `mui`, `base-web`, `next.js`, `next-shadcn.js`, `remix` | `@handsontable/react-wrapper` |
 | `vue`, `nuxt` | `@handsontable/vue3` |
 | `angular` | `@handsontable/angular-wrapper` |
 
@@ -198,7 +202,7 @@ which accepts the same version inputs (semver, npm-style partials, pkg.pr.new re
 
 ## Documentation-guide examples
 
-Beyond the 13 starter templates, the runner serves every example in the
+Beyond the 15 starter templates, the runner serves every example in the
 Handsontable documentation guides (`handsontable/docs/content/guides/**/example*.*`).
 `pipeline/import-docs.mjs` walks the docs repo, parses each `::: example` directive,
 wraps every framework fragment into a minimal runnable project
@@ -212,7 +216,7 @@ Vue 3 `<script setup>` or modern Angular. See `docs/docs-examples.md`.
 
 ## Deliverables
 
-1. ✅ Monorepo scaffold + catalog importer + migration of all 13 examples.
+1. ✅ Monorepo scaffold + catalog importer + migration of all 15 examples.
 2. ✅ `packages/runtime`: `SandpackRuntime` (Tier 1) for all 7 client-side frameworks.
 3. ✅ `packages/editor-shell` + `apps/authoring`: unified editor (Tier-1 live). *(auth
    broker + fork/title/description UI wired in with the sharing API, D5.)*

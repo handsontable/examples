@@ -1,0 +1,51 @@
+{
+  "name": "handsontable-base-web-recipe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Handsontable with Base Web recipe",
+  "homepage": "https://handsontable.com/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/handsontable/handsontable.git"
+  },
+  "bugs": {
+    "url": "https://github.com/handsontable/handsontable/issues"
+  },
+  "author": "Handsoncode <hello@handsontable.com>",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "type": "module",
+  "scripts": {
+    "start": "vite",
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@handsontable/react-wrapper": "18.0.0",
+    "baseui": "^18.2.0",
+    "handsontable": "18.0.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "styletron-engine-atomic": "^1.6.2",
+    "styletron-react": "^6.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "typescript": "~7.0.2",
+    "vite": "^8.1.4"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}
