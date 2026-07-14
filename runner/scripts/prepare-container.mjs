@@ -28,17 +28,21 @@ const COREPACK_BIN = "node /usr/local/lib/node_modules/corepack/dist/corepack.js
 
 // Dev-server command + port per framework. NOTE: port 3000 is reserved by the
 // Cloudflare Sandbox control plane — dev servers must use another port.
+// NOTE: use `pnpm exec <bin> <flags>`, not `pnpm run <script> -- <flags>` — pnpm
+// (unlike npm) does not strip the `--` separator when the script resolves to a
+// real binary, so the binary receives a literal "--" as its first arg and its
+// CLI treats everything after it as positional, silently dropping --host/--port.
 const DEV = {
-  remix: { cmd: "pnpm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
+  remix: { cmd: "pnpm exec remix vite:dev --host 0.0.0.0 --port 5173", port: 5173 },
   angular: { cmd: "pnpm exec ng serve --host 0.0.0.0 --port 4200 --disable-host-check", port: 4200 },
   "next.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001 },
   "next-shadcn.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001 },
   astro: { cmd: "pnpm exec astro dev --host 0.0.0.0 --port 4321", port: 4321 },
   nuxt: { cmd: "pnpm exec nuxt dev -H 0.0.0.0 -p 3001", port: 3001 },
-  "react-js": { cmd: "pnpm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
-  "ant-design": { cmd: "pnpm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
-  mui: { cmd: "pnpm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
-  "base-web": { cmd: "pnpm run dev -- --host 0.0.0.0 --port 5173", port: 5173 },
+  "react-js": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173 },
+  "ant-design": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173 },
+  mui: { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173 },
+  "base-web": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173 },
   // Documentation-guide Vue examples use `<script setup>` (unsupported by the
   // in-browser bundler), so they run on the container engine via real Vite.
   vue: { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173 },
