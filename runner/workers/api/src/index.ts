@@ -14,7 +14,7 @@ import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, upd
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
 // so live-preview sessions all use ONE class backed by one generic image that
-// installs each demo's deps at session start (per-framework images can't be
+// resolves each demo's deps at session start (per-framework images can't be
 // previewed by the SDK). The builder (no preview) keeps its own class.
 // Idle window before a live-preview container scales to zero. While a demo tab
 // is open the client keepalive + HMR WebSocket keep resetting this timer, so the
@@ -152,7 +152,9 @@ export default {
         // Boot asynchronously (returns immediately; UI polls /status for live
         // progress). Dependency resolution, fastest first:
         //   1. restore node_modules from the per-(framework,version) R2 cache;
-        //   2. else seed from the image's baked deps + `npm install` (delta),
+        //   2. else seed from the image's baked deps + a frozen pnpm install;
+        //      fall back to non-frozen only when the editor or version injection
+        //      changed package metadata relative to its source lockfile,
         //      then upload the result to the cache for next time.
         const cacheVer = (body.htVersion || "default").replace(/[^a-zA-Z0-9._-]/g, "-");
         const cacheUrl = `${url.origin}/api/nmcache/${encodeURIComponent(body.framework)}/${encodeURIComponent(cacheVer)}`;
@@ -163,7 +165,7 @@ export default {
           `else`,
           `  echo '::installing dependencies (first run for this version)::'`,
           `  cp -al /baked/${dev.bakedKey}/node_modules ./node_modules 2>/dev/null || true`,
-          `  ${cfg.installCommand} --no-audit --no-fund`,
+          `  ${cfg.installCommand} || pnpm install --no-frozen-lockfile`,
           // Upload the cache in the background so it never delays the dev server.
           `  ( tar czf /tmp/nm.tgz node_modules 2>/dev/null && curl -fsS -X PUT --data-binary @/tmp/nm.tgz ${shq(cacheUrl)} >/dev/null 2>&1 ) &`,
           `fi`,

@@ -99,14 +99,14 @@ const RUNNER = {
     sandpackTemplate: "vanilla", sandpackEnvironment: "parcel", container: null, htWrappers: [],
     entry: "/src/main.js", htmlEntry: "/index.html",
     devCommand: null, buildCommand: "vite build", outputDir: "dist", outputGlob: null,
-    staticExport: false, spaMode: false, port: null, installCommand: "npm install",
+    staticExport: false, spaMode: false, port: null, installCommand: "pnpm install",
   },
   typescript: {
     framework: "typescript", displayName: "TypeScript", tier: 1, engine: "sandpack",
     sandpackTemplate: "vanilla-ts", sandpackEnvironment: "parcel", container: null, htWrappers: [],
     entry: "/src/main.ts", htmlEntry: "/index.html",
     devCommand: null, buildCommand: "vite build", outputDir: "dist", outputGlob: null,
-    staticExport: false, spaMode: false, port: null, installCommand: "npm install",
+    staticExport: false, spaMode: false, port: null, installCommand: "pnpm install",
   },
   react: {
     framework: "react", displayName: "React (TS)", tier: 1, engine: "sandpack",
@@ -114,7 +114,7 @@ const RUNNER = {
     container: null, htWrappers: ["@handsontable/react-wrapper"],
     entry: "/src/main.tsx", htmlEntry: "/index.html",
     devCommand: null, buildCommand: "vite build", outputDir: "dist", outputGlob: null,
-    staticExport: false, spaMode: false, port: null, installCommand: "npm install",
+    staticExport: false, spaMode: false, port: null, installCommand: "pnpm install",
   },
   "react-js": {
     framework: "react-js", displayName: "React (JS)", tier: 1, engine: "sandpack",
@@ -122,7 +122,7 @@ const RUNNER = {
     container: null, htWrappers: ["@handsontable/react-wrapper"],
     entry: "/src/main.jsx", htmlEntry: "/index.html",
     devCommand: null, buildCommand: "vite build", outputDir: "dist", outputGlob: null,
-    staticExport: false, spaMode: false, port: null, installCommand: "npm install",
+    staticExport: false, spaMode: false, port: null, installCommand: "pnpm install",
   },
   // Vue 3 docs examples use `<script setup>`, which the in-browser (classic)
   // bundler cannot compile — they run on the container engine (real Vite dev).
@@ -131,18 +131,18 @@ const RUNNER = {
     sandpackTemplate: null, sandpackEnvironment: null, container: "vue",
     htWrappers: ["@handsontable/vue3"],
     entry: "/src/main.ts", htmlEntry: "/index.html",
-    devCommand: "npx --no-install vite --host 0.0.0.0 --port 5173",
+    devCommand: "pnpm exec vite --host 0.0.0.0 --port 5173",
     buildCommand: "vite build", outputDir: "dist", outputGlob: null,
-    staticExport: false, spaMode: false, port: 5173, installCommand: "npm install",
+    staticExport: false, spaMode: false, port: 5173, installCommand: "pnpm install",
   },
   angular: {
     framework: "angular", displayName: "Angular", tier: 2, engine: "container",
     sandpackTemplate: null, sandpackEnvironment: null, container: "angular",
     htWrappers: ["@handsontable/angular-wrapper"],
     entry: "/src/main.ts", htmlEntry: "/src/index.html",
-    devCommand: "npm run start -- --host 0.0.0.0 --disable-host-check --port 3000",
+    devCommand: "pnpm run start -- --host 0.0.0.0 --disable-host-check --port 3000",
     buildCommand: "ng build", outputDir: "dist", outputGlob: "dist/*/browser",
-    staticExport: false, spaMode: false, port: 3000, installCommand: "npm install --legacy-peer-deps",
+    staticExport: false, spaMode: false, port: 3000, installCommand: "pnpm install",
   },
 };
 

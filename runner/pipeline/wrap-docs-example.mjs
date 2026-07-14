@@ -90,6 +90,7 @@ function buildJsProject(hotVersion, exampleId, userFiles, extraDeps) {
     name: 'handsontable-example',
     version: '1.0.0',
     private: true,
+    packageManager: 'pnpm@10.34.5',
     dependencies: deps,
     scripts: { start: 'vite', build: 'vite build' },
   }, null, 2);
@@ -165,6 +166,7 @@ function buildReactProject(hotVersion, exampleId, userFiles, extraDeps) {
     name: 'handsontable-react-example',
     version: '1.0.0',
     private: true,
+    packageManager: 'pnpm@10.34.5',
     dependencies: deps,
     scripts: { start: 'vite', build: 'vite build' },
   }, null, 2);
@@ -243,6 +245,7 @@ function buildVueProject(hotVersion, exampleId, userFiles, extraDeps) {
     name: 'handsontable-vue-example',
     version: '1.0.0',
     private: true,
+    packageManager: 'pnpm@10.34.5',
     dependencies: deps,
     scripts: { start: 'vite', build: 'vite build' },
   }, null, 2);
@@ -369,6 +372,7 @@ function buildAngularProject(hotVersion, exampleId, userFiles, extraDeps) {
     name: 'handsontable-angular-example',
     version: '1.0.0',
     private: true,
+    packageManager: 'pnpm@10.34.5',
     scripts: { ng: 'ng', start: 'ng serve', build: 'ng build' },
     dependencies: deps,
     devDependencies: Object.assign(

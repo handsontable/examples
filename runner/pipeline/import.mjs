@@ -42,10 +42,10 @@ const EXCLUDE_DIRS = new Set([
   ".changelog-prs-cache",
 ]);
 
-// Files never copied: lockfiles are regenerated after version injection.
+// npm and Yarn lockfiles are never copied. The catalog preserves pnpm locks so
+// default-version sessions can use deterministic frozen installs.
 const EXCLUDE_FILES = new Set([
   "package-lock.json",
-  "pnpm-lock.yaml",
   "yarn.lock",
   ".DS_Store",
 ]);
