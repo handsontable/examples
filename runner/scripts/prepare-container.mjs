@@ -14,6 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -80,6 +81,10 @@ const EXPOSE_PORTS = [...new Set(Object.values(DEV).map((d) => d.port))].sort();
 
 const catalog = JSON.parse(fs.readFileSync(path.join(RUNNER_DIR, "catalog.json"), "utf8"));
 const bakedKey = (framework) => framework.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+const dependencyMetadataFingerprint = ({ packageJson, pnpmLock }) => {
+  const part = (name, value) => value === undefined ? `${name}:missing\n` : `${name}:${value.length}:${value}\n`;
+  return createHash("sha256").update(`${part("package.json", packageJson)}${part("pnpm-lock.yaml", pnpmLock)}`).digest("hex");
+};
 
 const containerExamples = catalog.examples.filter((e) => e.engine === "container");
 // Everything baked into the image + given a dev command: catalog container
@@ -137,7 +142,12 @@ EXPOSE ${EXPOSE_PORTS.join(" ")}
 function writeGenerated() {
   const devRows = bakeExamples.map((e) => {
     const d = DEV[e.framework];
-    return `  ${JSON.stringify(e.framework)}: { cmd: ${JSON.stringify(d.cmd)}, port: ${d.port}, bakedKey: ${JSON.stringify(bakedKey(e.framework))} },`;
+    const bakedDir = path.join(RUNNER_DIR, "containers", "live", "baked", bakedKey(e.framework));
+    const sourceDependencyFingerprint = dependencyMetadataFingerprint({
+      packageJson: fs.readFileSync(path.join(bakedDir, "package.json"), "utf8"),
+      pnpmLock: fs.readFileSync(path.join(bakedDir, "pnpm-lock.yaml"), "utf8"),
+    });
+    return `  ${JSON.stringify(e.framework)}: { cmd: ${JSON.stringify(d.cmd)}, port: ${d.port}, bakedKey: ${JSON.stringify(bakedKey(e.framework))}, sourceDependencyFingerprint: ${JSON.stringify(sourceDependencyFingerprint)} },`;
   });
   const buildRows = catalog.examples.map((e) =>
     `  ${JSON.stringify(e.framework)}: { tier: ${e.tier}, installCommand: ${JSON.stringify(e.installCommand)}, buildCommand: ${JSON.stringify(e.buildCommand)}, outputDir: ${JSON.stringify(e.outputDir)}, outputGlob: ${e.outputGlob ? JSON.stringify(e.outputGlob) : "null"} },`,
@@ -150,6 +160,7 @@ export interface FrameworkDev {
   cmd: string;
   port: number;
   bakedKey: string;
+  sourceDependencyFingerprint: string;
 }
 
 export const FRAMEWORK_DEV: Record<string, FrameworkDev> = {
