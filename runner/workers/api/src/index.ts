@@ -9,12 +9,13 @@
 import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/sandbox";
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
+import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate } from "./auth.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, updateDemo, type DemoRow } from "./share.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
 // so live-preview sessions all use ONE class backed by one generic image that
-// installs each demo's deps at session start (per-framework images can't be
+// resolves each demo's deps at session start (per-framework images can't be
 // previewed by the SDK). The builder (no preview) keeps its own class.
 // Idle window before a live-preview container scales to zero. While a demo tab
 // is open the client keepalive + HMR WebSocket keep resetting this timer, so the
@@ -28,14 +29,57 @@ export class BuilderSandbox extends SandboxBase {}
 
 const CONTAINER_ROOT = "/app";
 const BOOT_LOG = "/tmp/boot.log";
-/** Single-quote a string for embedding in `sh -lc '...'`. */
+/** Single-quote a trusted command fragment for embedding in `sh -lc`. */
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+class InvalidFilePathError extends Error {}
+
+/**
+ * Resolve a nonempty relative POSIX path under CONTAINER_ROOT.
+ */
+function resolveContainerPath(path: unknown): string {
+  if (typeof path !== "string" || path.length === 0) throw new InvalidFilePathError("file path is required");
+  const segments = path.split("/");
+  if (
+    path.startsWith("/")
+    || path.includes("\\")
+    || path.includes("\0")
+    || segments.some((segment) => segment.length === 0 || segment === "." || segment === ".." || segment === "node_modules")
+  ) {
+    throw new InvalidFilePathError(`invalid file path: ${path}`);
+  }
+  return `${CONTAINER_ROOT}/${segments.join("/")}`;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/** Validate the full file map before creating any directories or files. */
+function validateFiles(files: unknown): Record<string, string> {
+  if (!isPlainRecord(files)) throw new InvalidFilePathError("files must be a plain record");
+  for (const [path, contents] of Object.entries(files)) {
+    resolveContainerPath(path);
+    if (typeof contents !== "string") throw new InvalidFilePathError(`contents must be a string: ${path}`);
+  }
+  return files as Record<string, string>;
+}
+
+function validateFileWrite(body: unknown): { path: string; contents: string } {
+  if (!isPlainRecord(body)) throw new InvalidFilePathError("file write must be a plain record");
+  const { path, contents } = body;
+  const full = resolveContainerPath(path);
+  if (typeof contents !== "string") throw new InvalidFilePathError("contents must be a string");
+  return { path: full, contents };
+}
 
 // Minimal structural view of the Sandbox stub — avoids deep instantiation of the
 // full RPC proxy type (TS2589) while typing exactly the methods we call.
 type SandboxLike = {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
   writeFile(path: string, contents: string): Promise<unknown>;
+  deleteFile(path: string): Promise<unknown>;
   exec(cmd: string): Promise<{ success?: boolean; stdout?: string; stderr?: string }>;
   startProcess(cmd: string, opts?: { cwd?: string; env?: Record<string, string> }): Promise<unknown>;
   exposePort(port: number, opts?: { hostname?: string }): Promise<{ url?: string; exposedAt?: string }>;
@@ -98,11 +142,14 @@ function publicView(row: DemoRow) {
   };
 }
 
-/** Write a FilesMap ("/path" -> contents) into CONTAINER_ROOT, creating dirs. */
+/** Write a validated FilesMap into CONTAINER_ROOT, creating directories. */
 async function writeFiles(sandbox: SandboxLike, files: Record<string, string>) {
   const dirs = new Set<string>();
-  for (const p of Object.keys(files)) {
-    const full = CONTAINER_ROOT + (p.startsWith("/") ? p : `/${p}`);
+  const resolvedFiles = Object.entries(files).map(([path, contents]) => ({
+    full: resolveContainerPath(path),
+    contents,
+  }));
+  for (const { full } of resolvedFiles) {
     const dir = full.slice(0, full.lastIndexOf("/"));
     if (dir && dir !== CONTAINER_ROOT) dirs.add(dir);
   }
@@ -113,8 +160,7 @@ async function writeFiles(sandbox: SandboxLike, files: Record<string, string>) {
       /* dir may exist */
     }
   }
-  for (const [p, contents] of Object.entries(files)) {
-    const full = CONTAINER_ROOT + (p.startsWith("/") ? p : `/${p}`);
+  for (const { full, contents } of resolvedFiles) {
     await sandbox.writeFile(full, contents);
   }
 }
@@ -135,38 +181,50 @@ export default {
     try {
       // POST /api/session  { framework, files, sessionId? } -> { sessionId, previewUrl }
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "session" && parts.length === 2) {
-        const body = (await request.json()) as {
+        const body = await request.json() as {
           framework: string;
-          files: Record<string, string>;
+          files: unknown;
           sessionId?: string;
           htVersion?: string;
         };
+        if (!isPlainRecord(body)) return json({ error: "request body must be a plain record" }, 400);
         const dev = FRAMEWORK_DEV[body.framework];
         const cfg = BUILD_CONFIG[body.framework];
         if (!dev || !cfg) return json({ error: `Tier-2 not wired for framework: ${body.framework}` }, 400);
+        const files = validateFiles(body.files);
 
         const sessionId = body.sessionId?.trim() || sessionIdFor(body.framework);
         const sandbox = liveSbx(env, sessionId);
 
-        await writeFiles(sandbox, body.files);
+        await writeFiles(sandbox, files);
         // Boot asynchronously (returns immediately; UI polls /status for live
-        // progress). Dependency resolution, fastest first:
-        //   1. restore node_modules from the per-(framework,version) R2 cache;
-        //   2. else seed from the image's baked deps + `npm install` (delta),
-        //      then upload the result to the cache for next time.
-        const cacheVer = (body.htVersion || "default").replace(/[^a-zA-Z0-9._-]/g, "-");
-        const cacheUrl = `${url.origin}/api/nmcache/${encodeURIComponent(body.framework)}/${encodeURIComponent(cacheVer)}`;
+        // progress). Default boot seeds immutable baked dependencies, then runs
+        // fast frozen pnpm reconciliation. Keep submitted starters frozen; only
+        // custom package or lock metadata may update the lockfile.
+        const dependencyFingerprint = await dependencyMetadataFingerprint({
+          packageJson: files["package.json"],
+          pnpmLock: files["pnpm-lock.yaml"],
+        });
+        const metadataDiffersFromStarter = dependencyFingerprint !== dev.sourceDependencyFingerprint;
+        const installDependencies = files["pnpm-lock.yaml"] !== undefined
+          ? [
+              `if ! pnpm install --frozen-lockfile; then`,
+              metadataDiffersFromStarter
+                ? `  echo '::frozen install failed for custom metadata; retrying non-frozen::'; pnpm install --no-frozen-lockfile`
+                : `  echo '::error::frozen install failed for generated starter metadata; refusing to modify its lockfile' >&2; exit 1`,
+              `fi`,
+            ]
+          : metadataDiffersFromStarter
+            ? [`echo '::no lockfile for custom metadata; installing non-frozen::'; pnpm install --no-frozen-lockfile`]
+            : [`echo '::error::generated starter is missing its lockfile; refusing non-frozen install' >&2; exit 1`];
         const script = [
+          `set -e`,
           `cd ${CONTAINER_ROOT}`,
-          `if curl -fsS ${shq(cacheUrl)} -o /tmp/nm.tgz 2>/dev/null && [ -s /tmp/nm.tgz ]; then`,
-          `  echo '::restoring cached dependencies::'; tar xzf /tmp/nm.tgz`,
-          `else`,
-          `  echo '::installing dependencies (first run for this version)::'`,
-          `  cp -al /baked/${dev.bakedKey}/node_modules ./node_modules 2>/dev/null || true`,
-          `  ${cfg.installCommand} --no-audit --no-fund`,
-          // Upload the cache in the background so it never delays the dev server.
-          `  ( tar czf /tmp/nm.tgz node_modules 2>/dev/null && curl -fsS -X PUT --data-binary @/tmp/nm.tgz ${shq(cacheUrl)} >/dev/null 2>&1 ) &`,
-          `fi`,
+          `echo '::seeding immutable baked dependencies::'`,
+          `rm -rf ./node_modules`,
+          `cp -al /baked/${dev.bakedKey}/node_modules ./node_modules`,
+          `echo '::reconciling dependencies with pnpm::'`,
+          ...installDependencies,
           `echo '::starting dev server::'`,
           dev.cmd,
         ].join("\n");
@@ -184,9 +242,9 @@ export default {
       // POST /api/session/:id/file  { path, contents } -> 204   (streams an edit; HMR picks it up)
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "session" && parts[3] === "file") {
         const sessionId = parts[2]!;
-        const body = (await request.json()) as { path: string; contents: string };
+        const body = validateFileWrite(await request.json());
         const sandbox = liveSbx(env, sessionId);
-        const full = CONTAINER_ROOT + (body.path.startsWith("/") ? body.path : `/${body.path}`);
+        const full = body.path;
         const dir = full.slice(0, full.lastIndexOf("/"));
         if (dir && dir !== CONTAINER_ROOT) {
           try { await sandbox.mkdir(dir, { recursive: true }); } catch { /* exists */ }
@@ -199,29 +257,9 @@ export default {
       if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "session" && parts[3] === "file") {
         const sandbox = liveSbx(env, parts[2]!);
         const p = url.searchParams.get("path") ?? "";
-        if (p) {
-          const full = CONTAINER_ROOT + (p.startsWith("/") ? p : `/${p}`);
-          try { await sandbox.exec(`sh -lc "rm -f ${shq(full)}"`); } catch { /* best effort */ }
-        }
+        const full = resolveContainerPath(p);
+        try { await sandbox.deleteFile(full); } catch { /* best effort */ }
         return cors(new Response(null, { status: 204 }));
-      }
-
-      // node_modules cache per (framework, version): GET restores, PUT stores.
-      // Keeps Tier-2 boots fast across versions (containers curl these directly).
-      if (parts[0] === "api" && parts[1] === "nmcache" && parts.length === 4) {
-        const fw = parts[2]!.replace(/[^a-zA-Z0-9._-]/g, "-");
-        const ver = parts[3]!.replace(/[^a-zA-Z0-9._-]/g, "-");
-        const key = `nmcache/${fw}/${ver}.tgz`;
-        if (request.method === "GET") {
-          const obj = await env.ARTIFACTS.get(key);
-          if (!obj) return new Response("miss", { status: 404 });
-          return new Response(obj.body, { headers: { "Content-Type": "application/gzip" } });
-        }
-        if (request.method === "PUT") {
-          if (!request.body) return new Response("no body", { status: 400 });
-          await env.ARTIFACTS.put(key, request.body);
-          return new Response(null, { status: 204 });
-        }
       }
 
       // GET /api/session/:id/status?port=NNNN -> { ready, log } (boot progress)
@@ -409,6 +447,7 @@ export default {
 
       return cors(new Response("Not found", { status: 404 }));
     } catch (err) {
+      if (err instanceof InvalidFilePathError) return json({ error: err.message }, 400);
       return json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
   },

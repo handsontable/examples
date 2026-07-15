@@ -80,11 +80,14 @@ async function warmRender(framework: string, version: string) {
 
 async function warmTier2Container(framework: string) {
   const ex = catalog.examples.find((e: { framework: string }) => e.framework === framework);
+  const files = Object.fromEntries(
+    Object.entries(ex.files).map(([path, contents]) => [path.startsWith("/") ? path.slice(1) : path, contents]),
+  );
   try {
     const res = await fetch(`${API_BASE}/api/session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ framework, files: ex.files }),
+      body: JSON.stringify({ framework, files }),
     });
     console.log(`[warm] container ${framework}: HTTP ${res.status}`);
   } catch (e) {

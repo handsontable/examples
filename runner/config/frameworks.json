@@ -14,7 +14,7 @@
       "buildCommand": "tsc && vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "javascript": {
       "tier": 1,
@@ -28,7 +28,7 @@
       "buildCommand": "vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "typescript": {
       "tier": 1,
@@ -42,7 +42,7 @@
       "buildCommand": "tsc && vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "react": {
       "tier": 1,
@@ -56,7 +56,7 @@
       "buildCommand": "tsc -b && vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "react-js": {
       "tier": 1,
@@ -71,7 +71,7 @@
       "buildCommand": "vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "ant-design": {
       "tier": 1,
@@ -86,7 +86,7 @@
       "buildCommand": "vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "mui": {
       "tier": 1,
@@ -101,7 +101,7 @@
       "buildCommand": "tsc -b && vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "base-web": {
       "tier": 1,
@@ -116,7 +116,7 @@
       "buildCommand": "tsc -b && vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "vue": {
       "tier": 1,
@@ -130,7 +130,7 @@
       "buildCommand": "vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "angular": {
       "tier": 2,
@@ -139,12 +139,12 @@
       "htWrappers": ["@handsontable/angular-wrapper"],
       "entry": "src/main.ts",
       "htmlEntry": "src/index.html",
-      "devCommand": "npm run start -- --host 0.0.0.0 --disable-host-check --port 3000",
+      "devCommand": "pnpm exec ng serve --host 0.0.0.0 --disable-host-check --port 3000",
       "buildCommand": "ng build",
       "outputDir": "dist",
       "outputGlob": "dist/*/browser",
       "port": 3000,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "next.js": {
       "tier": 2,
@@ -157,7 +157,7 @@
       "outputDir": "out",
       "staticExport": true,
       "port": 3000,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "next-shadcn.js": {
       "tier": 2,
@@ -170,7 +170,7 @@
       "outputDir": "out",
       "staticExport": true,
       "port": 3000,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "astro": {
       "tier": 2,
@@ -182,7 +182,7 @@
       "buildCommand": "astro build",
       "outputDir": "dist",
       "port": 4321,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "nuxt": {
       "tier": 2,
@@ -190,11 +190,11 @@
       "container": "nuxt",
       "htWrappers": ["@handsontable/vue3"],
       "entry": "app.vue",
-      "devCommand": "nuxt dev -H 0.0.0.0 -p 3000",
+      "devCommand": "nuxt dev --host 0.0.0.0 --port 3000",
       "buildCommand": "nuxt generate",
       "outputDir": ".output/public",
       "port": 3000,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     },
     "remix": {
       "tier": 2,
@@ -207,7 +207,7 @@
       "outputDir": "build/client",
       "spaMode": true,
       "port": 5173,
-      "installCommand": "npm install"
+      "installCommand": "pnpm install --frozen-lockfile"
     }
   }
 }

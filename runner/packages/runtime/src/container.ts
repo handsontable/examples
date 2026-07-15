@@ -11,6 +11,17 @@
 import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
 import { applyHandsontableVersion } from "./version.js";
 
+/** The live-session API accepts only relative POSIX paths. */
+function relativeFiles(files: FilesMap): FilesMap {
+  return Object.fromEntries(
+    Object.entries(files).map(([path, contents]) => [relativePath(path), contents]),
+  );
+}
+
+function relativePath(path: string): string {
+  return path.startsWith("/") ? path.slice(1) : path;
+}
+
 export interface ContainerRuntimeOptions {
   /** The shell's preview-iframe slot; its src is set to the container preview URL. */
   iframe: HTMLIFrameElement;
@@ -85,7 +96,7 @@ export class ContainerRuntime implements DemoRuntime {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         framework: this.entry.framework,
-        files: this.files,
+        files: relativeFiles(this.files),
         sessionId: this.opts.sessionId,
         htVersion: this.opts.version?.ref,
       }),
@@ -169,7 +180,7 @@ export class ContainerRuntime implements DemoRuntime {
     delete next[path];
     this.files = next;
     void fetch(
-      `${this.opts.apiBase}/api/session/${this.sessionId}/file?path=${encodeURIComponent(path)}`,
+      `${this.opts.apiBase}/api/session/${this.sessionId}/file?path=${encodeURIComponent(relativePath(path))}`,
       { method: "DELETE" },
     ).catch(() => {});
   }
@@ -195,7 +206,7 @@ export class ContainerRuntime implements DemoRuntime {
         await fetch(`${this.opts.apiBase}/api/session/${this.sessionId}/file`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path, contents }),
+          body: JSON.stringify({ path: relativePath(path), contents }),
         });
       } catch (e) {
         this.emitError(e instanceof Error ? e : new Error(String(e)));

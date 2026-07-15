@@ -49,7 +49,7 @@ function docsPageUrl(framework: string, permalink: string): string {
 function describeRuntimeError(e: unknown, engine: string): string {
   const msg = e instanceof Error ? e.message : String(e);
   if (engine === "container" && /failed to fetch|networkerror|load failed|session start failed|fetch/i.test(msg)) {
-    return "Vue and Angular examples run on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
+    return "This example runs on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
   }
   return msg;
 }

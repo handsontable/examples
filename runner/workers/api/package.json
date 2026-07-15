@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "wrangler deploy --routes '*.demos.handsontable.com/*' --routes 'demos.handsontable.com/api/*' --routes 'demos.handsontable.com/d/*' --routes 'demos.handsontable.com/embed/*'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
