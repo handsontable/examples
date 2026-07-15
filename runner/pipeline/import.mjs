@@ -36,6 +36,8 @@ const EXCLUDE_DIRS = new Set([
   ".nuxt",
   ".output",
   ".astro",
+  ".angular", // Angular CLI build cache (ng serve/build run locally in the example)
+  ".vite",
   ".codesandbox", // CodeSandbox-specific config; we are replacing CodeSandbox
   ".devcontainer",
   ".vscode",
