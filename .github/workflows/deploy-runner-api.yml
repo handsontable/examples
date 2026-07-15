@@ -1,13 +1,10 @@
 name: Deploy runner — API + Tier-2 container image
 
-# Auto-deploys the orchestration worker (handsontable-demos-api) to the main
-# Handsontable Cloudflare account on every push to master that touches the API
-# or the container images. `wrangler deploy` builds the Tier-2 Sandbox image
-# with Docker (present on ubuntu-latest runners), pushes it to the Cloudflare
-# registry, and deploys the worker. Auth: CLOUDFLARE_API_TOKEN secret.
-#
-# Note: this rebuilds the container image (~several minutes). Path filters keep
-# it from running on unrelated changes.
+# Deploys the orchestration worker (handsontable-demos-api) to the main
+# Handsontable Cloudflare account on push to master touching the API/containers.
+# Runs CI first (test job) and only deploys if it passes. `wrangler deploy`
+# builds + pushes the containers/live Tier-2 image (Vue baked) with Docker
+# (present on ubuntu-latest). Auth: CLOUDFLARE_API_TOKEN secret.
 
 on:
   push:
@@ -20,6 +17,7 @@ on:
       - "runner/packages/**"
       - "runner/pnpm-lock.yaml"
       - ".github/workflows/deploy-runner-api.yml"
+      - ".github/workflows/ci.yml"
   workflow_dispatch: {}
 
 concurrency:
@@ -27,7 +25,12 @@ concurrency:
   cancel-in-progress: false # never cancel a container build/push mid-flight
 
 jobs:
+  # Gate: run the full CI suite (typecheck, unit/smoke, e2e) before deploying.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -37,7 +40,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10.12.2
+          package_json_file: runner/package.json
 
       - uses: actions/setup-node@v4
         with:
@@ -47,6 +50,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+
+      # Apply pending D1 schema changes to the remote DB before shipping code
+      # that may depend on them. Migrations are idempotent (IF NOT EXISTS).
+      - name: Apply D1 migrations (remote)
+        working-directory: runner/workers/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx -y wrangler@4.108.0 d1 migrations apply handsontable-demos --remote
 
       # ubuntu-latest ships Docker with the daemon running; wrangler uses it to
       # build + push the containers/live image referenced in wrangler.jsonc.

@@ -103,7 +103,10 @@ secret, no Actions. One-time setup:
    - **Root directory:** `runner/apps/authoring`
    - **Build command:** `cd ../.. && pnpm install --frozen-lockfile && pnpm build && pnpm --filter @handsontable/demo-authoring build`
    - **Deploy command:** `npx wrangler deploy`
-   - **Build watch paths:** `runner/apps/authoring/*`, `runner/packages/*`
+   - **Build watch paths:** `runner/apps/authoring/**`, `runner/packages/**`,
+     `runner/config/**`, `runner/catalog.json` — the last one matters because the
+     authoring build imports `catalog.json` at compile time, so a catalog-only
+     change (e.g. after `pnpm import`) must retrigger the build.
 3. Cloudflare then builds + deploys on every push to `master` that matches the
    watch paths. `VITE_API_BASE` is read from committed `.env.production`.
 

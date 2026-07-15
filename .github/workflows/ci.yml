@@ -3,11 +3,13 @@ name: CI
 # Runs on every PR and on master: typecheck, unit + catalog-smoke tests, an
 # authoring build, and Playwright e2e (deterministic UI flow — the live-render
 # checks that need the external Sandpack bundler are gated behind E2E_LIVE).
+# Also callable (workflow_call) so the deploy workflow can gate on it.
 
 on:
   pull_request: {}
   push:
     branches: [master]
+  workflow_call: {}
   workflow_dispatch: {}
 
 concurrency:
@@ -23,9 +25,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Read the pnpm version from runner/package.json's packageManager field
+      # (avoids a conflict with the repo-root package.json).
       - uses: pnpm/action-setup@v4
         with:
-          version: 10.12.2
+          package_json_file: runner/package.json
 
       - uses: actions/setup-node@v4
         with:
