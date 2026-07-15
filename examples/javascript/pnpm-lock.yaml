@@ -9,10 +9,10 @@ importers:
   .:
     dependencies:
       '@handsontable/pikaday':
-        specifier: ^1.0.0
+        specifier: latest
         version: 1.0.0
       handsontable:
-        specifier: 18.0.0
+        specifier: latest
         version: 18.0.0
     devDependencies:
       vite:

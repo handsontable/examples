@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       handsontable:
-        specifier: ^18.0.0
+        specifier: latest
         version: 18.0.0
     devDependencies:
       typescript:
