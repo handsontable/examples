@@ -6,20 +6,14 @@ This example demonstrates how to set up Handsontable with Remix, providing a fou
 
 ## Installation
 
-Install all necessary dependencies from npm with `npm install`.
+Install all necessary dependencies with `pnpm install`.
 
 ## Development
 
 First, run the development server:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
 pnpm dev
-# or
-bun run dev
 ```
 
 You can then visit http://localhost:3000 with your browser to view the project. You can start editing the grid by modifying app/components/Grid.tsx.

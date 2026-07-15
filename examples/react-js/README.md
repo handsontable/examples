@@ -6,15 +6,15 @@ A general purpose demo showcasing some of the most popular features of Handsonta
 
 ## Installation
 
-Install all necessary dependencies from npm with `npm install`.
+Install all necessary dependencies with `pnpm install`.
 
 ## Development
 
-To start local development server use `npm run start`. You can then visit http://localhost:8080 to view the project.
+To start local development server use `pnpm start`. You can then visit http://localhost:8080 to view the project.
 
 ## Testing
 
-To run tests for this project, first launch the development server with `npm run start`. Once the server is running, execute `npm run test` to run the test specs.
+To run tests for this project, first launch the development server with `pnpm start`. Once the server is running, execute `pnpm test` to run the test specs.
 
 ## Forking
 
