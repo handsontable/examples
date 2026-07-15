@@ -1,0 +1,68 @@
+name: CI
+
+# Runs on every PR and on master: typecheck, unit + catalog-smoke tests, an
+# authoring build, and Playwright e2e (deterministic UI flow — the live-render
+# checks that need the external Sandpack bundler are gated behind E2E_LIVE).
+# Also callable (workflow_call) so the deploy workflow can gate on it.
+
+on:
+  pull_request: {}
+  push:
+    branches: [master]
+  workflow_call: {}
+  workflow_dispatch: {}
+
+# Scope the group by the top-level workflow so a standalone CI run and a CI run
+# invoked as the deploy gate (workflow_call) never share a group and cancel each
+# other. `github.workflow` is the caller's workflow when reused.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      # Read the pnpm version from runner/package.json's packageManager field
+      # (avoids a conflict with the repo-root package.json).
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit + catalog-smoke tests
+        run: pnpm test
+
+      - name: Build authoring (build smoke + e2e target)
+        run: pnpm --filter @handsontable/demo-authoring build
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: E2E (Playwright)
+        run: pnpm e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: runner/playwright-report/
+          retention-days: 7

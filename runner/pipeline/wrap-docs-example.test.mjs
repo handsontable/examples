@@ -1,0 +1,65 @@
+// Unit test for the docs-example wrapper. Run: node --test pipeline/*.test.mjs
+import test from "node:test";
+import assert from "node:assert/strict";
+import { wrapDocsExample } from "./wrap-docs-example.mjs";
+
+const cases = [
+  {
+    label: "javascript (.js)",
+    framework: "javascript",
+    userFiles: { "example1.js": "const x = 1;", "example1.html": '<div id="example1"></div>' },
+    entry: "src/main.js",
+  },
+  {
+    label: "typescript (.ts)",
+    framework: "javascript", // wrapper picks TS from the .ts fragment
+    userFiles: { "example1.ts": "const x: number = 1;", "example1.html": '<div id="example1"></div>' },
+    entry: "src/main.ts",
+  },
+  {
+    label: "react (.tsx)",
+    framework: "react",
+    userFiles: { "example1.tsx": "export default function App() { return null; }" },
+    entry: "src/main.tsx",
+    wrapper: "@handsontable/react-wrapper",
+  },
+  {
+    label: "vue (.vue)",
+    framework: "vue",
+    userFiles: { "example1.vue": "<template><div/></template>\n<script setup></script>" },
+    entry: "src/main.ts",
+    wrapper: "@handsontable/vue3",
+  },
+  {
+    label: "angular (.ts)",
+    framework: "angular",
+    userFiles: {
+      "example1.ts":
+        "/* file: app.component.ts */\nimport { Component } from '@angular/core';\n@Component({ selector: 'app-root', template: '' })\nexport class AppComponent {}\n/* end-file */",
+      "example1.html": "<app-root></app-root>",
+    },
+    entry: "src/main.ts",
+    wrapper: "@handsontable/angular-wrapper",
+  },
+];
+
+for (const c of cases) {
+  test(`wraps ${c.label} into a runnable project`, () => {
+    const files = wrapDocsExample({
+      framework: c.framework,
+      hotVersion: "18.0.0",
+      exampleId: "example1",
+      userFiles: c.userFiles,
+    });
+    assert.ok(files["package.json"], "has package.json");
+    const pkg = JSON.parse(files["package.json"]); // must be valid JSON
+    assert.ok(pkg.dependencies.handsontable, "pins handsontable");
+    if (c.wrapper) assert.ok(pkg.dependencies[c.wrapper], `pins ${c.wrapper}`);
+    assert.ok(files[c.entry] !== undefined, `emits entry ${c.entry}`);
+    // index.html present for every framework (Angular uses src/index.html).
+    assert.ok(
+      files["index.html"] !== undefined || files["src/index.html"] !== undefined,
+      "emits an index.html",
+    );
+  });
+}
