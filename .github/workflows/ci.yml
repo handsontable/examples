@@ -12,8 +12,11 @@ on:
   workflow_call: {}
   workflow_dispatch: {}
 
+# Scope the group by the top-level workflow so a standalone CI run and a CI run
+# invoked as the deploy gate (workflow_call) never share a group and cancel each
+# other. `github.workflow` is the caller's workflow when reused.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
