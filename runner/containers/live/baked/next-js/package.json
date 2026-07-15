@@ -10,15 +10,16 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@handsontable/react-wrapper": "18.0.0",
+    "@handsontable/react-wrapper": "latest",
     "@tailwindcss/postcss": "^4.3.2",
-    "handsontable": "18.0.0",
+    "handsontable": "latest",
     "next": "16.2.10",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "tailwindcss": "^4.3.2"
   },
   "devDependencies": {
+    "@eslint/compat": "^2.1.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
