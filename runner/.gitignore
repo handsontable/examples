@@ -16,3 +16,8 @@ build/
 
 # os
 .DS_Store
+
+# playwright e2e
+test-results/
+playwright-report/
+.playwright/

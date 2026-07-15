@@ -75,6 +75,21 @@ Merges to `master` deploy automatically. The two workers use different
 mechanisms because Cloudflare **Workers Builds cannot build the Tier-2 container
 image** (its build environment has no Docker), while GitHub Actions runners do.
 
+### Tests (CI)
+
+`.github/workflows/ci.yml` runs on every PR + on `master`: typecheck, unit +
+catalog-smoke tests (`pnpm test` → `node --test pipeline/*.test.mjs`, validating
+the wrapper output and that every committed `docs-examples` artifact is runnable),
+an authoring build, and Playwright **e2e** (`pnpm e2e`) covering the picker,
+cascader drill-down, framework switching, and the "See in documentation" link.
+
+- Live-render e2e (needs the external Sandpack bundler) is gated behind
+  `E2E_LIVE=1`, kept off in PR CI to stay deterministic.
+- Run e2e against production (real live render):
+  `E2E_BASE_URL=https://demos.handsontable.com E2E_LIVE=1 pnpm e2e`.
+- The API deploy workflow also does a post-deploy smoke (`GET /api/health` on
+  `demos.handsontable.com` must return 200).
+
 ### Authoring app (frontend) → Cloudflare Workers Builds (CF-side)
 
 No Docker, so this is wired entirely from the Cloudflare dashboard — no repo

@@ -11,11 +11,15 @@
   },
   "scripts": {
     "import": "node pipeline/import.mjs",
+    "import-docs": "node pipeline/import-docs.mjs",
     "build": "pnpm -r --filter \"./packages/**\" run build",
     "typecheck": "pnpm -r run typecheck",
-    "lint": "pnpm -r run lint"
+    "lint": "pnpm -r run lint",
+    "test": "node --test pipeline/*.test.mjs",
+    "e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.48.0",
     "typescript": "~5.6.0"
   }
 }

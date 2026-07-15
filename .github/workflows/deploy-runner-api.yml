@@ -55,3 +55,15 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx -y wrangler@4.108.0 deploy
+
+      - name: Smoke test — prod API health
+        working-directory: .
+        run: |
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" https://demos.handsontable.com/api/health || true)
+            echo "health attempt $i -> $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 6
+          done
+          echo "::error::prod /api/health did not return 200 after deploy"
+          exit 1
