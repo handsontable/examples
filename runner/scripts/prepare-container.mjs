@@ -38,7 +38,9 @@ const DEV = {
   "next.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001 },
   "next-shadcn.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001 },
   astro: { cmd: "pnpm exec astro dev --host 0.0.0.0 --port 4321", port: 4321 },
-  nuxt: { cmd: "pnpm exec nuxt dev -H 0.0.0.0 -p 3001", port: 3001 },
+  // NOTE: nuxt's CLI has no `-H` alias (host is `--host`/`-h`); an unknown flag
+  // makes it swallow `0.0.0.0` as the positional rootDir and serve an empty app.
+  nuxt: { cmd: "pnpm exec nuxt dev --host 0.0.0.0 --port 3001", port: 3001 },
   "react-js": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173 },
   "ant-design": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173 },
   mui: { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173 },
