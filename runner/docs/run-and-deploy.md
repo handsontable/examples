@@ -69,33 +69,49 @@ ADR-0011):
 
 Static shares (`/d/:id`) and docs embeds (`/embed/:id`) do **not** need this.
 
-## Continuous deployment (GitHub Actions)
+## Continuous deployment
 
-Merges to `master` deploy automatically via two path-gated workflows in
-`.github/workflows/`:
+Merges to `master` deploy automatically. The two workers use different
+mechanisms because Cloudflare **Workers Builds cannot build the Tier-2 container
+image** (its build environment has no Docker), while GitHub Actions runners do.
 
-- `deploy-runner-authoring.yml` — builds + deploys the static authoring app
-  (`handsontable-demos-authoring`). Fast; no Docker.
-- `deploy-runner-api.yml` — `wrangler deploy`s the orchestration worker
-  (`handsontable-demos-api`); on the Docker-capable runner this builds + pushes
-  the Tier-2 `containers/live` image (Vue baked) to the Cloudflare registry.
-  Rebuilds the image (~several minutes) only when API/container paths change.
+### Authoring app (frontend) → Cloudflare Workers Builds (CF-side)
 
-Both authenticate with a single repo secret **`CLOUDFLARE_API_TOKEN`** (the
-account id is read from each `wrangler.jsonc`). Create it once:
+No Docker, so this is wired entirely from the Cloudflare dashboard — no repo
+secret, no Actions. One-time setup:
 
-1. Cloudflare dashboard → **My Profile → API Tokens → Create Token**.
-2. Start from the **"Edit Cloudflare Workers"** template, scoped to the
-   **Handsontable Account** (`15111272c53ed0aaf84a908f0c9c7f8b`). Ensure it
-   grants **Workers Scripts: Edit** and, for the container image push,
-   **Workers/Containers registry** (Cloudflare Images / Containers) permissions.
-3. In GitHub → repo **Settings → Secrets and variables → Actions → New repository
+1. Dashboard → **Workers & Pages → `handsontable-demos-authoring` → Settings →
+   Builds → Connect** the `handsontable/examples` GitHub repo (authorize the
+   Cloudflare GitHub app on the repo).
+2. Configure the build (monorepo — pnpm workspace):
+   - **Production branch:** `master`
+   - **Root directory:** `runner/apps/authoring`
+   - **Build command:** `cd ../.. && pnpm install --frozen-lockfile && pnpm build && pnpm --filter @handsontable/demo-authoring build`
+   - **Deploy command:** `npx wrangler deploy`
+   - **Build watch paths:** `runner/apps/authoring/*`, `runner/packages/*`
+3. Cloudflare then builds + deploys on every push to `master` that matches the
+   watch paths. `VITE_API_BASE` is read from committed `.env.production`.
+
+### API worker + Tier-2 image → GitHub Actions (Docker required)
+
+`.github/workflows/deploy-runner-api.yml` runs on push to `master` touching
+`runner/workers/api/**`, `runner/containers/**`, `runner/scripts/**`, etc. On the
+Docker-capable runner, `wrangler deploy` builds + pushes the `containers/live`
+image (Vue baked) to the Cloudflare registry and deploys `handsontable-demos-api`.
+`workflow_dispatch` allows manual runs.
+
+Auth: repo secret **`CLOUDFLARE_API_TOKEN`** (account id is read from
+`wrangler.jsonc`). Create it once:
+
+1. Cloudflare dashboard → **My Profile → API Tokens → Create Token** → start from
+   **"Edit Cloudflare Workers"**, scoped to the **Handsontable Account**
+   (`15111272c53ed0aaf84a908f0c9c7f8b`); ensure **Workers Scripts: Edit** and the
+   Containers/registry push permission.
+2. GitHub → repo **Settings → Secrets and variables → Actions → New repository
    secret**: name `CLOUDFLARE_API_TOKEN`, value = the token. (Never commit it.)
 
-Trigger manually anytime via **Actions → the workflow → Run workflow**
-(`workflow_dispatch`). Note: if routes move out of `wrangler.jsonc` into the
-deploy command (ADR-0020), add the corresponding `--route`/`--var` flags to the
-API workflow's `wrangler deploy` step.
+If routes move out of `wrangler.jsonc` into the deploy command (ADR-0020), add
+the corresponding `--route` flags to the API workflow's `wrangler deploy` step.
 
 ## Login broker
 
