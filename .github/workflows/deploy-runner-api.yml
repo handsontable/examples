@@ -57,15 +57,17 @@ jobs:
         working-directory: runner/workers/api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx -y wrangler@4.108.0 d1 migrations apply handsontable-demos --remote
+        run: pnpm exec wrangler d1 migrations apply handsontable-demos --remote
 
       # ubuntu-latest ships Docker with the daemon running; wrangler uses it to
-      # build + push the containers/live image referenced in wrangler.jsonc.
-      - name: Deploy API worker (builds + pushes Tier-2 image)
+      # build + push the containers/live image. Use the package `deploy` script,
+      # which attaches the demos.handsontable.com routes via --routes (routes are
+      # intentionally NOT in wrangler.jsonc — see ADR-0020 / run-and-deploy.md).
+      - name: Deploy API worker (builds + pushes Tier-2 image, attaches routes)
         working-directory: runner/workers/api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx -y wrangler@4.108.0 deploy
+        run: pnpm run deploy
 
       - name: Smoke test — prod API health
         working-directory: .
