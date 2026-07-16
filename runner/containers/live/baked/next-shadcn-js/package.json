@@ -32,10 +32,5 @@
     "eslint-config-next": "16.2.10",
     "shadcn": "^4.13.0",
     "typescript": "~6.0.3"
-  },
-  "config": {
-    "codesandbox": {
-      "templateId": "8y5qy5"
-    }
   }
 }

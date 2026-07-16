@@ -1,7 +1,0 @@
-{
-  "title": "React + Typescript",
-  "description": "React + Typescript set up using Vite",
-  "iconUrl": "https://raw.githubusercontent.com/codesandbox/sandbox-templates/main/vue-vite/.codesandbox/icon.png",
-  "tags": ["featured", "frontend", "vite", "react", "typescript"],
-  "published": true
-}
