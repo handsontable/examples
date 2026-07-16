@@ -85,9 +85,9 @@ Static shares (`/d/:id`) and docs embeds (`/embed/:id`) do **not** need this.
 
 ## Continuous deployment
 
-Merges to `master` deploy automatically. The two workers use different
-mechanisms because Cloudflare **Workers Builds cannot build the Tier-2 container
-image** (its build environment has no Docker), while GitHub Actions runners do.
+Merges to `master` deploy automatically via two path-gated GitHub Actions
+workflows in `.github/workflows/`, both authenticating with the single repo
+secret **`CLOUDFLARE_API_TOKEN`** (account id is read from each `wrangler.jsonc`).
 
 ### Tests (CI)
 
@@ -104,25 +104,22 @@ cascader drill-down, framework switching, and the "See in documentation" link.
 - The API deploy workflow also does a post-deploy smoke (`GET /api/health` on
   `demos.handsontable.com` must return 200).
 
-### Authoring app (frontend) → Cloudflare Workers Builds (CF-side)
+### Authoring app (frontend) → GitHub Actions
 
-No Docker, so this is wired entirely from the Cloudflare dashboard — no repo
-secret, no Actions. One-time setup:
+`.github/workflows/deploy-runner-authoring.yml` runs on push to `master`
+touching `runner/apps/authoring/**`, `runner/packages/**`, `runner/config/**`,
+or `runner/catalog.json` (the authoring build imports `catalog.json` at compile
+time, so a catalog-only change — e.g. after `pnpm import` — must redeploy the
+app). It gates on the CI workflow, builds the workspace packages + the app, and
+`wrangler deploy`s `handsontable-demos-authoring` (Workers Assets, no Docker).
+`VITE_API_BASE` is read from committed `.env.production`. A post-deploy smoke
+check verifies `demos.handsontable.com` serves the freshly built bundle.
+`workflow_dispatch` allows manual runs.
 
-1. Dashboard → **Workers & Pages → `handsontable-demos-authoring` → Settings →
-   Builds → Connect** the `handsontable/examples` GitHub repo (authorize the
-   Cloudflare GitHub app on the repo).
-2. Configure the build (monorepo — pnpm workspace):
-   - **Production branch:** `master`
-   - **Root directory:** `runner/apps/authoring`
-   - **Build command:** `cd ../.. && pnpm install --frozen-lockfile && pnpm build && pnpm --filter @handsontable/demo-authoring build`
-   - **Deploy command:** `npx wrangler deploy`
-   - **Build watch paths:** `runner/apps/authoring/**`, `runner/packages/**`,
-     `runner/config/**`, `runner/catalog.json` — the last one matters because the
-     authoring build imports `catalog.json` at compile time, so a catalog-only
-     change (e.g. after `pnpm import`) must retrigger the build.
-3. Cloudflare then builds + deploys on every push to `master` that matches the
-   watch paths. `VITE_API_BASE` is read from committed `.env.production`.
+> History: this briefly moved to Cloudflare Workers Builds (dashboard Git
+> integration), but that requires one-time dashboard setup by someone with
+> Cloudflare access and silently deploys nothing until then — prod served a
+> stale frontend. GitHub Actions needs only the existing repo secret.
 
 ### API worker + Tier-2 image → GitHub Actions (Docker required)
 

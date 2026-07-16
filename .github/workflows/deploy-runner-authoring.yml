@@ -1,0 +1,81 @@
+name: Deploy runner — authoring (frontend)
+
+# Auto-deploys the static authoring app (handsontable-demos-authoring, Workers
+# Assets) to the main Handsontable Cloudflare account on every push to master
+# that touches the frontend. No Docker needed. Auth: CLOUDFLARE_API_TOKEN secret.
+#
+# Restored after the move to Cloudflare Workers Builds (b26cba8): Workers Builds
+# requires one-time dashboard Git-integration setup that was never completed, so
+# the frontend silently stopped deploying. GitHub Actions needs no CF dashboard
+# access — only the existing CLOUDFLARE_API_TOKEN secret (already used by
+# deploy-runner-api.yml).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "runner/apps/authoring/**"
+      - "runner/packages/**"
+      - "runner/config/**"
+      # The authoring build imports catalog.json at compile time, so a
+      # catalog-only change (e.g. after `pnpm import`) must redeploy the app.
+      - "runner/catalog.json"
+      - "runner/pnpm-lock.yaml"
+      - ".github/workflows/deploy-runner-authoring.yml"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-runner-authoring
+  cancel-in-progress: true
+
+jobs:
+  # Gate: run the full CI suite (typecheck, unit/smoke, e2e) before deploying.
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # Build workspace packages, then the authoring app. VITE_API_BASE comes
+      # from apps/authoring/.env.production (committed) so it targets prod.
+      - run: pnpm build
+      - run: pnpm --filter @handsontable/demo-authoring build
+
+      - name: Deploy authoring worker
+        working-directory: runner/apps/authoring
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx -y wrangler@4.108.0 deploy
+
+      - name: Smoke test — prod frontend serves current bundle
+        working-directory: .
+        run: |
+          for i in $(seq 1 6); do
+            html=$(curl -s https://demos.handsontable.com/ || true)
+            asset=$(echo "$html" | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' | head -1)
+            local_asset=$(ls runner/apps/authoring/dist/assets/index-*.js | head -1 | xargs basename)
+            echo "attempt $i -> prod: $asset, local build: /assets/$local_asset"
+            [ "$asset" = "/assets/$local_asset" ] && exit 0
+            sleep 5
+          done
+          echo "::error::prod frontend does not serve the freshly built bundle"
+          exit 1
