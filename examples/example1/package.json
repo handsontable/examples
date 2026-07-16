@@ -18,10 +18,5 @@
     "vite": "^8.1.1"
   },
   "keywords": [],
-  "config": {
-    "stackblitz": {
-      "template": "typescript"
-    }
-  },
   "packageManager": "pnpm@10.34.5"
 }

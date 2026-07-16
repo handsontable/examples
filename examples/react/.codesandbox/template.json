@@ -1,7 +1,0 @@
-{
-  "title": "Typescript",
-  "description": "Typescript set up using Vite",
-  "iconUrl": "https://raw.githubusercontent.com/codesandbox/sandbox-templates/main/vue-vite/.codesandbox/icon.png",
-  "tags": ["featured", "frontend", "vite", "typescript"],
-  "published": true
-}

@@ -25,13 +25,5 @@
   "devDependencies": {
     "vite": "^8.1.1"
   },
-  "license": "SEE LICENSE IN LICENSE.txt",
-  "config": {
-    "codesandbox": {
-      "templateId": "vmjhgx"
-    },
-    "stackblitz": {
-      "template": "javascript"
-    }
-  }
+  "license": "SEE LICENSE IN LICENSE.txt"
 }

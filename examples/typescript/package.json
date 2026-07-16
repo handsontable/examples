@@ -15,10 +15,5 @@
   },
   "dependencies": {
     "handsontable": "latest"
-  },
-  "config": {
-    "codesandbox": {
-      "templateId": "vmjhgx"
-    }
   }
 }
