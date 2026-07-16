@@ -38,13 +38,5 @@
   },
   "engines": {
     "node": ">=18.18.0"
-  },
-  "config": {
-    "codesandbox": {
-      "templateId": "m4k8vw"
-    },
-    "stackblitz": {
-      "template": "node"
-    }
   }
 }
