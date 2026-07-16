@@ -1,6 +1,6 @@
 {
   "$schema": "./frameworks.schema.json",
-  "_comment": "Single source of truth for the 15 Handsontable examples. Consumed by pipeline/import.mjs (catalog generation), packages/runtime (applyHandsontableVersion + resolveRuntime), workers/api (build orchestration), and containers/* (Tier-2 images). tier 1 = client-side (Sandpack, in-browser bundler); tier 2 = SSR/meta-framework (Cloudflare Sandbox container running the real dev server). htWrappers lists the Handsontable framework wrapper packages that must be pinned in lockstep with core `handsontable`; `@handsontable/pikaday` is intentionally NEVER bumped. Supported Handsontable major range: 15-19.",
+  "_comment": "Single source of truth for the 16 Handsontable examples. Consumed by pipeline/import.mjs (catalog generation), packages/runtime (applyHandsontableVersion + resolveRuntime), workers/api (build orchestration), and containers/* (Tier-2 images). tier 1 = client-side (Sandpack, in-browser bundler); tier 2 = SSR/meta-framework (Cloudflare Sandbox container running the real dev server). htWrappers lists the Handsontable framework wrapper packages that must be pinned in lockstep with core `handsontable`; `@handsontable/pikaday` is intentionally NEVER bumped. Supported Handsontable major range: 15-19.",
   "frameworks": {
     "example1": {
       "tier": 1,
@@ -106,6 +106,21 @@
     "base-web": {
       "tier": 1,
       "displayName": "Base Web + React",
+      "engine": "container",
+      "sandpackTemplate": "react-ts",
+      "sandpackEnvironment": "create-react-app-typescript",
+      "htWrappers": ["@handsontable/react-wrapper"],
+      "entry": "src/index.tsx",
+      "htmlEntry": "index.html",
+      "devCommand": null,
+      "buildCommand": "tsc -b && vite build",
+      "outputDir": "dist",
+      "port": null,
+      "installCommand": "pnpm install --frozen-lockfile"
+    },
+    "fluent-ui": {
+      "tier": 1,
+      "displayName": "Fluent UI + React",
       "engine": "container",
       "sandpackTemplate": "react-ts",
       "sandpackEnvironment": "create-react-app-typescript",

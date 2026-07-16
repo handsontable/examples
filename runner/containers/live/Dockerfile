@@ -26,6 +26,10 @@ RUN cd /baked/mui && pnpm install --frozen-lockfile
 COPY baked/base-web/package.json baked/base-web/pnpm-lock.yaml /baked/base-web/
 RUN cd /baked/base-web && pnpm install --frozen-lockfile
 
+# fluent-ui
+COPY baked/fluent-ui/package.json baked/fluent-ui/pnpm-lock.yaml /baked/fluent-ui/
+RUN cd /baked/fluent-ui && pnpm install --frozen-lockfile
+
 # angular
 COPY baked/angular/package.json baked/angular/pnpm-lock.yaml /baked/angular/
 RUN cd /baked/angular && pnpm install --frozen-lockfile

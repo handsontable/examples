@@ -13,13 +13,14 @@ export const FRAMEWORK_DEV: Record<string, FrameworkDev> = {
   "ant-design": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "ant-design", sourceDependencyFingerprint: "76dce642115f5ff343bd158a752bf18581dcf5a0bb8d5275f449f3825dcf103d" },
   "mui": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "mui", sourceDependencyFingerprint: "b56259f2464ae1c94c5e78da99014acde3b264bf623fde9ea29953f90082aea4" },
   "base-web": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "base-web", sourceDependencyFingerprint: "798976bd62bad06d90d848ab6a35ad5325ff218ae9eb750c99371b55a104e78c" },
+  "fluent-ui": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "fluent-ui", sourceDependencyFingerprint: "c31b0e3bdd946c237c820927b0ea48ad5a44e5c8d9e4c0cd426bcf2eeaaca462" },
   "angular": { cmd: "pnpm exec ng serve --host 0.0.0.0 --port 4200 --disable-host-check", port: 4200, bakedKey: "angular", sourceDependencyFingerprint: "bf76be0cf2f33fa52f4782a999a7d030e41c9c155a65689e6eddd85e860ba87f" },
   "next.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001, bakedKey: "next-js", sourceDependencyFingerprint: "26606865cfe16d812803c8e74f02fd97317d1294cf3e5d7921eeed7fff23cb38" },
   "next-shadcn.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001, bakedKey: "next-shadcn-js", sourceDependencyFingerprint: "2c69b3df78e8e25b65af044e1fb9ccdc2f94ad96fff9e5c3d1963ac3fe3dc998" },
   "astro": { cmd: "pnpm exec astro dev --host 0.0.0.0 --port 4321", port: 4321, bakedKey: "astro", sourceDependencyFingerprint: "b4e8ba2c9560c45e93d9dc1ebc2e17e8f73a275d605ebdc078c3c2bbf16cd023" },
   "nuxt": { cmd: "pnpm exec nuxt dev --host 0.0.0.0 --port 3001", port: 3001, bakedKey: "nuxt", sourceDependencyFingerprint: "9a5e8c0a55a8ba78c070d7db4c9b973dbd3c9d070f9ae3f59f0e3162998fb249" },
   "remix": { cmd: "pnpm exec remix vite:dev --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "remix", sourceDependencyFingerprint: "4d1f8882937fb577b4cea8bcbb42b1d076662a66794465c23c6b8495205a573d" },
-  "vue": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "vue", sourceDependencyFingerprint: "a01bd9d1f54298017da7700e798d9dc1aa915f7bf1a4f889f3c70d0cf53af0de" },
+  "vue": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "vue", sourceDependencyFingerprint: "af365d6cd0e4cc75fc19d8476d5253ddab6ea1c7b5087d30fda2a7acce9a73e0" },
 };
 
 // Build config for the share snapshotter (all examples).
@@ -40,6 +41,7 @@ export const BUILD_CONFIG: Record<string, BuildConfig> = {
   "ant-design": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
   "mui": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
   "base-web": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
+  "fluent-ui": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
   "vue": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
   "angular": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "ng build", outputDir: "dist", outputGlob: "dist/*/browser" },
   "next.js": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "next build", outputDir: "out", outputGlob: null },
