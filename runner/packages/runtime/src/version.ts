@@ -148,3 +148,29 @@ export function applyHandsontableVersion(
 
   return { ...files, [pkgPath]: JSON.stringify(next, null, 2) + "\n" };
 }
+
+/**
+ * Return a new FilesMap with the baked Handsontable CDN CSS URL pinned to `version`.
+ * Pure: does not mutate the input. pkg.pr.new builds are not available on unpkg.
+ */
+export function applyHandsontableCss(
+  files: FilesMap,
+  version: HandsontableVersionRef,
+): FilesMap {
+  if (version.pkgPrNew) return files;
+
+  const htmlPath = files["/index.html"] !== undefined
+    ? "/index.html"
+    : files["/src/index.html"] !== undefined
+      ? "/src/index.html"
+      : null;
+  if (!htmlPath) return files;
+
+  const raw = files[htmlPath];
+  if (raw === undefined) return files;
+  const next = raw.replace(
+    /(unpkg\.com\/handsontable@)[^/]+(\/dist\/handsontable\.full\.min\.css)/g,
+    (_, prefix: string, suffix: string) => `${prefix}${version.ref}${suffix}`,
+  );
+  return next === raw ? files : { ...files, [htmlPath]: next };
+}
