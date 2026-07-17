@@ -63,3 +63,23 @@ for (const c of cases) {
     );
   });
 }
+
+test("uses resolved Angular type dependency versions", () => {
+  const files = wrapDocsExample({
+    framework: "angular",
+    hotVersion: "18.0.0",
+    exampleId: "example1",
+    userFiles: {
+      "example1.ts":
+        "/* file: app.component.ts */\nimport { Component } from '@angular/core';\nimport Papa from 'papaparse';\n@Component({ selector: 'app-root', template: '' })\nexport class AppComponent { data = Papa; }\n/* end-file */",
+      "example1.html": "<app-root></app-root>",
+    },
+    extraDeps: { papaparse: "5.5.2" },
+    extraDevDeps: { "@types/papaparse": "5.3.16" },
+  });
+  const pkg = JSON.parse(files["package.json"]);
+
+  assert.equal(pkg.dependencies.papaparse, "5.5.2");
+  assert.equal(pkg.devDependencies["@types/papaparse"], "5.3.16");
+  assert.equal(Object.values(pkg.devDependencies).includes("latest"), false);
+});

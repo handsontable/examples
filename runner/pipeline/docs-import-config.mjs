@@ -3,7 +3,7 @@ import path from "node:path";
 
 const RELEASE_BRANCH_RE = /^prod-docs\/(\d+)\.(\d+)$/;
 const CONCRETE_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-const HANDSONTABLE_REGISTRY_URL = "https://registry.npmjs.org/handsontable";
+const NPM_REGISTRY_URL = "https://registry.npmjs.org";
 
 export function normalizeDocsBranch(value) {
   if (value === "develop") {
@@ -20,11 +20,40 @@ export function normalizeDocsBranch(value) {
   );
 }
 
-function assertConcreteVersion(version, source) {
+export function assertConcreteVersion(version, source) {
   if (typeof version !== "string" || !CONCRETE_VERSION_RE.test(version)) {
     throw new Error(`${source} must be a concrete semver version; got ${JSON.stringify(version)}`);
   }
   return version;
+}
+
+export async function resolveNpmPackageVersion({
+  packageName,
+  distTag = "latest",
+  fetchImpl = globalThis.fetch,
+}) {
+  const source = `npm ${packageName} dist-tags.${distTag}`;
+  if (typeof fetchImpl !== "function") {
+    throw new Error(`Could not fetch ${source}: fetch is unavailable`);
+  }
+
+  let response;
+  try {
+    response = await fetchImpl(`${NPM_REGISTRY_URL}/${encodeURIComponent(packageName)}`);
+  } catch (error) {
+    throw new Error(`Could not fetch ${source}: ${error.message}`);
+  }
+  if (!response?.ok) {
+    throw new Error(`Could not fetch ${source}: registry returned ${response?.status ?? "an error"}`);
+  }
+
+  let registry;
+  try {
+    registry = await response.json();
+  } catch (error) {
+    throw new Error(`Could not parse ${source} response: ${error.message}`);
+  }
+  return assertConcreteVersion(registry?.["dist-tags"]?.[distTag], source);
 }
 
 export async function resolveDocsHotVersion({
@@ -46,25 +75,9 @@ export async function resolveDocsHotVersion({
     return assertConcreteVersion(packageJson.version, `${packagePath} version`);
   }
 
-  if (typeof fetchImpl !== "function") {
-    throw new Error("Could not fetch npm dist-tags.next: fetch is unavailable");
-  }
-
-  let response;
-  try {
-    response = await fetchImpl(HANDSONTABLE_REGISTRY_URL);
-  } catch (error) {
-    throw new Error(`Could not fetch npm dist-tags.next: ${error.message}`);
-  }
-  if (!response?.ok) {
-    throw new Error(`Could not fetch npm dist-tags.next: registry returned ${response?.status ?? "an error"}`);
-  }
-
-  let registry;
-  try {
-    registry = await response.json();
-  } catch (error) {
-    throw new Error(`Could not parse npm dist-tags.next response: ${error.message}`);
-  }
-  return assertConcreteVersion(registry?.["dist-tags"]?.next, "npm dist-tags.next");
+  return resolveNpmPackageVersion({
+    packageName: "handsontable",
+    distTag: "next",
+    fetchImpl,
+  });
 }

@@ -324,7 +324,7 @@ function extractAngularSelector(tsCode) {
   return last ? last[1] : 'app-root';
 }
 
-function buildAngularProject(hotVersion, exampleId, userFiles, extraDeps) {
+function buildAngularProject(hotVersion, exampleId, userFiles, extraDeps, extraDevDeps) {
   const tsFile = findFile(userFiles, '.ts') || 'app.component.ts';
   const tsCode = userFiles[tsFile] || '';
   const cssFile = findFile(userFiles, '.css');
@@ -377,8 +377,8 @@ function buildAngularProject(hotVersion, exampleId, userFiles, extraDeps) {
     dependencies: deps,
     devDependencies: Object.assign(
       {},
-      extraDeps['papaparse'] ? { '@types/papaparse': 'latest' } : {},
-      extraDeps['moment'] ? { '@types/moment': 'latest' } : {},
+      extraDeps['papaparse'] ? { '@types/papaparse': extraDevDeps['@types/papaparse'] } : {},
+      extraDeps['moment'] ? { '@types/moment': extraDevDeps['@types/moment'] } : {},
     ),
   }, null, 2);
 
@@ -526,13 +526,21 @@ function buildAngularProject(hotVersion, exampleId, userFiles, extraDeps) {
  * @param {string} opts.exampleId    Mount id, e.g. "example1".
  * @param {Record<string,string>} opts.userFiles  Fragment files keyed by basename.
  * @param {Record<string,string>} [opts.extraDeps] Extra npm deps discovered from imports.
+ * @param {Record<string,string>} [opts.extraDevDeps] Extra npm development deps.
  * @returns {Record<string,string>} Full project files (keys have no leading slash).
  */
-export function wrapDocsExample({ framework, hotVersion, exampleId, userFiles, extraDeps = {} }) {
+export function wrapDocsExample({
+  framework,
+  hotVersion,
+  exampleId,
+  userFiles,
+  extraDeps = {},
+  extraDevDeps = {},
+}) {
   const v = hotVersion || 'latest';
   const id = exampleId || 'example';
   if (framework === 'react') return buildReactProject(v, id, userFiles, extraDeps);
   if (framework === 'vue') return buildVueProject(v, id, userFiles, extraDeps);
-  if (framework === 'angular') return buildAngularProject(v, id, userFiles, extraDeps);
+  if (framework === 'angular') return buildAngularProject(v, id, userFiles, extraDeps, extraDevDeps);
   return buildJsProject(v, id, userFiles, extraDeps);
 }

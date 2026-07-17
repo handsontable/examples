@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeDocsBranch,
+  resolveNpmPackageVersion,
   resolveDocsHotVersion,
 } from "./docs-import-config.mjs";
 
@@ -49,6 +50,28 @@ test("uses npm dist-tags.next for develop", async () => {
   });
 
   assert.equal(version, "19.0.0-next.1");
+});
+
+test("resolves a package's concrete latest version from npm", async () => {
+  const version = await resolveNpmPackageVersion({
+    packageName: "@scope/chart",
+    fetchImpl: async (url) => {
+      assert.equal(url, "https://registry.npmjs.org/%40scope%2Fchart");
+      return { ok: true, json: async () => ({ "dist-tags": { latest: "4.2.1" } }) };
+    },
+  });
+
+  assert.equal(version, "4.2.1");
+});
+
+test("fails when an extra package has no concrete latest version", async () => {
+  await assert.rejects(
+    resolveNpmPackageVersion({
+      packageName: "chart.js",
+      fetchImpl: async () => ({ ok: true, json: async () => ({ "dist-tags": { latest: "latest" } }) }),
+    }),
+    /chart\.js.*dist-tags\.latest/,
+  );
 });
 
 test("fails when npm does not provide dist-tags.next", async () => {
