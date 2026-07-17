@@ -427,7 +427,7 @@ export default {
           };
           const versions = Object.keys(j.versions ?? {})
             .filter((v) => /^\d+\.\d+\.\d+$/.test(v))
-            .filter((v) => { const m = Number(v.split(".")[0]); return m >= 14 && m <= 19; })
+            .filter((v) => { const m = Number(v.split(".")[0]); return m >= 15 && m <= 19; })
             .sort(cmp)
             .slice(0, 15);
           const payload = { latest, next, versions };
