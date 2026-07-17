@@ -1,8 +1,8 @@
 // pipeline/import-docs.mjs
 //
-// Imports every Handsontable *documentation guide* example into the demo runner.
+// Imports every Handsontable *documentation guide/recipe* example into the demo runner.
 //
-// It walks the handsontable docs repo (handsontable/docs/content/guides/**/*.md),
+// It walks the handsontable docs repo (handsontable/docs/content/{guides,recipes}/**/*.md),
 // parses each `::: example` directive to learn which framework source fragments
 // make up an example, wraps each fragment into a full minimal runnable project
 // (pipeline/wrap-docs-example.mjs — the same wrapper the docs "Edit on
@@ -36,10 +36,13 @@ function resolveDocsDir() {
   const candidate = raw
     ? path.resolve(process.cwd(), raw)
     : path.resolve(REPO_ROOT, "..", "handsontable", "docs");
-  if (!fs.existsSync(path.join(candidate, "content", "guides"))) {
+  const missing = ["guides", "recipes"].filter(
+    (d) => !fs.existsSync(path.join(candidate, "content", d)),
+  );
+  if (missing.length) {
     throw new Error(
-      `Handsontable docs not found at ${candidate}. Pass --docs=<path> or set HOT_DOCS_DIR ` +
-        `(expected a checkout of handsontable/handsontable with docs/content/guides).`,
+      `Handsontable docs missing content/${missing.join(", content/")} at ${candidate}. ` +
+        `Pass --docs=<path> or set HOT_DOCS_DIR (expected docs/content/guides and docs/content/recipes).`,
     );
   }
   return candidate;
@@ -47,8 +50,11 @@ function resolveDocsDir() {
 
 const DOCS_DIR = resolveDocsDir();
 const CONTENT_DIR = path.join(DOCS_DIR, "content");
-const GUIDES_DIR = path.join(CONTENT_DIR, "guides");
 const OUT_DIR = path.join(RUNNER_DIR, "apps", "authoring", "public", "docs-examples");
+const SOURCE_ROOTS = [
+  { dir: path.join(CONTENT_DIR, "guides"), prefix: [] },
+  { dir: path.join(CONTENT_DIR, "recipes"), prefix: ["Recipes"] },
+];
 
 // Handsontable version to bake into wrapped projects (the runner re-pins it at
 // runtime; this is just the default + the CDN CSS URL version).
@@ -176,9 +182,9 @@ function parseExampleBlocks(md) {
   let lastHeading = null;
 
   for (const line of lines) {
-    const open = line.match(/^:::\s*(example|example-without-tabs)\s+#(\S+)/);
+    const open = line.match(/^:::\s*(example|example-without-tabs)\s+#(\S+)(.*)$/);
     if (open) {
-      cur = { exampleId: open[2], fileRefs: [], heading: lastHeading };
+      cur = { exampleId: open[2], fileRefs: [], heading: lastHeading, codeOnly: /--code-only\b/.test(open[3]) };
       depth = 1;
       continue;
     }
@@ -227,12 +233,14 @@ function computeTitles(blocks) {
   return titles;
 }
 
-/** Framework folder → runner base framework. */
+/** Framework folder → runner base framework. Returns null for non-frontend
+ *  refs (e.g. recipe tutorial steps under a `server/` folder). */
 function detectFramework(fileRefs) {
   if (fileRefs.some((r) => /\/angular\//.test(r))) return "angular";
   if (fileRefs.some((r) => /\/react\//.test(r))) return "react";
   if (fileRefs.some((r) => /\/vue(?:3)?\//.test(r))) return "vue";
-  return "javascript";
+  if (fileRefs.some((r) => /\/javascript\//.test(r))) return "javascript";
+  return null;
 }
 
 /** Runnable variants to emit for a block, given its framework + available refs. */
@@ -329,7 +337,6 @@ function walkMd(dir, acc = []) {
 }
 
 function main() {
-  const mdFiles = walkMd(GUIDES_DIR);
   const manifest = [];
   const problems = [];
   let written = 0;
@@ -339,106 +346,110 @@ function main() {
   fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
-  for (const mdPath of mdFiles) {
-    const md = fs.readFileSync(mdPath, "utf8");
-    const blocks = parseExampleBlocks(md);
-    if (!blocks.length) continue;
+  for (const root of SOURCE_ROOTS) {
+    const mdFiles = walkMd(root.dir);
 
-    const guideRelDir = path.relative(GUIDES_DIR, path.dirname(mdPath)).split(path.sep).join("/");
-    const guideTitle = frontmatterTitle(md);
-    const crumbs = breadcrumbFor(guideRelDir, guideTitle);
-    const guideRel = path.relative(CONTENT_DIR, mdPath).split(path.sep).join("/");
-    const titles = computeTitles(blocks); // exampleId -> display title
-    // Docs page permalink (e.g. "/column-adding"); fall back to the guide folder.
-    const permalink = frontmatterField(md, "permalink") ||
-      "/" + (guideRelDir.split("/").pop() || guideRelDir);
+    for (const mdPath of mdFiles) {
+      const md = fs.readFileSync(mdPath, "utf8");
+      const blocks = parseExampleBlocks(md).filter((b) => !b.codeOnly);
+      if (!blocks.length) continue;
 
-    for (const block of blocks) {
-      const framework = detectFramework(block.fileRefs);
-      const variants = variantsFor(framework, block.fileRefs);
-      if (!variants.length) continue; // server-side (php/py) or no runnable entry
+      const guideRelDir = path.relative(root.dir, path.dirname(mdPath)).split(path.sep).join("/");
+      const guideTitle = frontmatterTitle(md);
+      const crumbs = [...root.prefix, ...breadcrumbFor(guideRelDir, guideTitle)];
+      const guideRel = path.relative(CONTENT_DIR, mdPath).split(path.sep).join("/");
+      const titles = computeTitles(blocks); // exampleId -> display title
+      // Docs page permalink (e.g. "/column-adding"); fall back to the guide folder.
+      const permalink = frontmatterField(md, "permalink") ||
+        "/" + (guideRelDir.split("/").pop() || guideRelDir);
 
-      // Gather ref contents once.
-      const refContent = {};
-      for (const ref of block.fileRefs) {
-        const c = readRef(ref);
-        if (c !== null) refContent[ref] = c;
-      }
+      for (const block of blocks) {
+        const framework = detectFramework(block.fileRefs);
+        const variants = variantsFor(framework, block.fileRefs);
+        if (!variants.length) continue; // server-side (php/py) or no runnable entry
 
-      for (const variant of variants) {
-        const scriptRef = block.fileRefs.find((r) => r.endsWith(variant.scriptExt) && refContent[r] !== undefined);
-        if (!scriptRef) continue;
-        const docsPath = scriptRef; // content-relative, includes framework folder + ext
-
-        if (seen.has(docsPath)) continue;
-        seen.add(docsPath);
-
-        // Build userFiles: the chosen script + shared companions (html/css).
-        const userFiles = {};
-        userFiles[path.basename(scriptRef)] = refContent[scriptRef];
+        // Gather ref contents once.
+        const refContent = {};
         for (const ref of block.fileRefs) {
-          if (ref === scriptRef) continue;
-          const ext = path.extname(ref).toLowerCase();
-          if (COMPANION_EXT.has(ext) && refContent[ref] !== undefined) {
-            userFiles[path.basename(ref)] = refContent[ref];
+          const c = readRef(ref);
+          if (c !== null) refContent[ref] = c;
+        }
+
+        for (const variant of variants) {
+          const scriptRef = block.fileRefs.find((r) => r.endsWith(variant.scriptExt) && refContent[r] !== undefined);
+          if (!scriptRef) continue;
+          const docsPath = scriptRef; // content-relative, includes framework folder + ext
+
+          if (seen.has(docsPath)) continue;
+          seen.add(docsPath);
+
+          // Build userFiles: the chosen script + shared companions (html/css).
+          const userFiles = {};
+          userFiles[path.basename(scriptRef)] = refContent[scriptRef];
+          for (const ref of block.fileRefs) {
+            if (ref === scriptRef) continue;
+            const ext = path.extname(ref).toLowerCase();
+            if (COMPANION_EXT.has(ext) && refContent[ref] !== undefined) {
+              userFiles[path.basename(ref)] = refContent[ref];
+            }
           }
+
+          const cfg = RUNNER[variant.runner];
+          const extraDeps = collectExtraDeps(Object.values(userFiles));
+          const wrapped = wrapDocsExample({
+            framework: WRAP_FRAMEWORK[variant.runner],
+            hotVersion: HOT_VERSION,
+            exampleId: block.exampleId,
+            userFiles,
+            extraDeps,
+          });
+
+          // Re-key to leading-slash paths for the runner FilesMap.
+          const files = {};
+          for (const [k, v] of Object.entries(wrapped)) files["/" + k] = v;
+
+          if (!files["/package.json"]) { problems.push(`${docsPath}: no package.json`); continue; }
+          if (!files[cfg.entry] && !files[cfg.htmlEntry ?? ""]) {
+            problems.push(`${docsPath}: entry ${cfg.entry} / ${cfg.htmlEntry} missing`);
+          }
+
+          const exampleTitle = titles.get(block.exampleId) || block.exampleId;
+          const displayName = `${crumbs.join(" ▸ ")} · ${exampleTitle} · ${cfg.displayName}`;
+          const entry = {
+            ...cfg,
+            displayName,
+            htCoreRange: HOT_VERSION,
+            fileCount: Object.keys(files).length,
+            assets: [],
+            skipped: [],
+            files,
+            // docs metadata
+            docsPath,
+            breadcrumb: crumbs,
+            guide: guideRel,
+            guideTitle: guideTitle || crumbs[crumbs.length - 1] || guideRelDir,
+            exampleId: block.exampleId,
+            exampleTitle,
+            docPermalink: permalink,
+            lang: cfg.displayName,
+          };
+
+          fs.writeFileSync(path.join(OUT_DIR, encodePath(docsPath)), JSON.stringify(entry) + "\n");
+          written++;
+
+          manifest.push({
+            docsPath,
+            file: encodePath(docsPath),
+            breadcrumb: crumbs,
+            guide: guideRel,
+            guideTitle: entry.guideTitle,
+            exampleId: block.exampleId,
+            exampleTitle,
+            docPermalink: permalink,
+            framework: cfg.framework,
+            displayName: cfg.displayName,
+          });
         }
-
-        const cfg = RUNNER[variant.runner];
-        const extraDeps = collectExtraDeps(Object.values(userFiles));
-        const wrapped = wrapDocsExample({
-          framework: WRAP_FRAMEWORK[variant.runner],
-          hotVersion: HOT_VERSION,
-          exampleId: block.exampleId,
-          userFiles,
-          extraDeps,
-        });
-
-        // Re-key to leading-slash paths for the runner FilesMap.
-        const files = {};
-        for (const [k, v] of Object.entries(wrapped)) files["/" + k] = v;
-
-        if (!files["/package.json"]) { problems.push(`${docsPath}: no package.json`); continue; }
-        if (!files[cfg.entry] && !files[cfg.htmlEntry ?? ""]) {
-          problems.push(`${docsPath}: entry ${cfg.entry} / ${cfg.htmlEntry} missing`);
-        }
-
-        const exampleTitle = titles.get(block.exampleId) || block.exampleId;
-        const displayName = `${crumbs.join(" ▸ ")} · ${exampleTitle} · ${cfg.displayName}`;
-        const entry = {
-          ...cfg,
-          displayName,
-          htCoreRange: HOT_VERSION,
-          fileCount: Object.keys(files).length,
-          assets: [],
-          skipped: [],
-          files,
-          // docs metadata
-          docsPath,
-          breadcrumb: crumbs,
-          guide: guideRel,
-          guideTitle: guideTitle || crumbs[crumbs.length - 1] || guideRelDir,
-          exampleId: block.exampleId,
-          exampleTitle,
-          docPermalink: permalink,
-          lang: cfg.displayName,
-        };
-
-        fs.writeFileSync(path.join(OUT_DIR, encodePath(docsPath)), JSON.stringify(entry) + "\n");
-        written++;
-
-        manifest.push({
-          docsPath,
-          file: encodePath(docsPath),
-          breadcrumb: crumbs,
-          guide: guideRel,
-          guideTitle: entry.guideTitle,
-          exampleId: block.exampleId,
-          exampleTitle,
-          docPermalink: permalink,
-          framework: cfg.framework,
-          displayName: cfg.displayName,
-        });
       }
     }
   }
@@ -454,7 +465,7 @@ function main() {
   fs.writeFileSync(
     path.join(OUT_DIR, "manifest.json"),
     JSON.stringify(
-      { generatedFrom: "handsontable/docs content/guides/**", hotVersion: HOT_VERSION, count: manifest.length, examples: manifest },
+      { generatedFrom: "handsontable/docs content/guides/** + content/recipes/**", hotVersion: HOT_VERSION, count: manifest.length, examples: manifest },
       null,
       2,
     ) + "\n",
@@ -466,7 +477,7 @@ function main() {
   const byFw = {};
   for (const e of manifest) byFw[e.framework] = (byFw[e.framework] || 0) + 1;
   console.log(`[import-docs] by framework:`, byFw);
-  console.log(`[import-docs] guide groups: ${new Set(manifest.map((e) => e.breadcrumb.join(" ▸ "))).size}`);
+  console.log(`[import-docs] doc groups: ${new Set(manifest.map((e) => e.breadcrumb.join(" ▸ "))).size}`);
   if (problems.length) {
     console.error(`[import-docs] ${problems.length} problems:\n  - ` + problems.slice(0, 30).join("\n  - "));
     if (problems.length > 30) console.error(`  … and ${problems.length - 30} more`);

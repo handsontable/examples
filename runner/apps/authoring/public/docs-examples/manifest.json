@@ -1,7 +1,7 @@
 {
-  "generatedFrom": "handsontable/docs content/guides/**",
+  "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
   "hotVersion": "18.0.0",
-  "count": 1299,
+  "count": 1451,
   "examples": [
     {
       "docsPath": "guides/accessibility/accessibility/angular/example1.ts",
@@ -16362,6 +16362,2438 @@
       "docPermalink": "/batch-operations",
       "framework": "vue",
       "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "recipes/accessibility/aria-grid/angular/example1.ts",
+      "file": "recipes__accessibility__aria-grid__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Accessibility",
+        "ARIA-friendly grid"
+      ],
+      "guide": "recipes/accessibility/aria-grid/aria-grid.md",
+      "guideTitle": "ARIA-friendly grid",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/accessibility/aria-grid",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/accessibility/aria-grid/javascript/example1.js",
+      "file": "recipes__accessibility__aria-grid__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Accessibility",
+        "ARIA-friendly grid"
+      ],
+      "guide": "recipes/accessibility/aria-grid/aria-grid.md",
+      "guideTitle": "ARIA-friendly grid",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/accessibility/aria-grid",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/accessibility/aria-grid/react/example1.tsx",
+      "file": "recipes__accessibility__aria-grid__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Accessibility",
+        "ARIA-friendly grid"
+      ],
+      "guide": "recipes/accessibility/aria-grid/aria-grid.md",
+      "guideTitle": "ARIA-friendly grid",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/accessibility/aria-grid",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/accessibility/keyboard-shortcuts/angular/example1.ts",
+      "file": "recipes__accessibility__keyboard-shortcuts__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Accessibility",
+        "Custom keyboard shortcuts"
+      ],
+      "guide": "recipes/accessibility/keyboard-shortcuts/keyboard-shortcuts.md",
+      "guideTitle": "Custom keyboard shortcuts",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/accessibility/keyboard-shortcuts",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/accessibility/keyboard-shortcuts/javascript/example1.js",
+      "file": "recipes__accessibility__keyboard-shortcuts__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Accessibility",
+        "Custom keyboard shortcuts"
+      ],
+      "guide": "recipes/accessibility/keyboard-shortcuts/keyboard-shortcuts.md",
+      "guideTitle": "Custom keyboard shortcuts",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/accessibility/keyboard-shortcuts",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/accessibility/keyboard-shortcuts/react/example1.tsx",
+      "file": "recipes__accessibility__keyboard-shortcuts__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Accessibility",
+        "Custom keyboard shortcuts"
+      ],
+      "guide": "recipes/accessibility/keyboard-shortcuts/keyboard-shortcuts.md",
+      "guideTitle": "Custom keyboard shortcuts",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/accessibility/keyboard-shortcuts",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/color-picker/angular/example1.ts",
+      "file": "recipes__cell-types__color-picker__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Color picker"
+      ],
+      "guide": "recipes/cell-types/color-picker/color-picker.md",
+      "guideTitle": "Color picker",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/color-picker",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/guide-color-picker-angular/angular/example1.ts",
+      "file": "recipes__cell-types__guide-color-picker-angular__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Color picker"
+      ],
+      "guide": "recipes/cell-types/guide-color-picker-angular/guide-color-picker.md",
+      "guideTitle": "Color picker",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/color-picker-angular",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/color-picker/javascript/example1.js",
+      "file": "recipes__cell-types__color-picker__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Color picker"
+      ],
+      "guide": "recipes/cell-types/color-picker/color-picker.md",
+      "guideTitle": "Color picker",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/color-picker",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/color-picker/react/example1.tsx",
+      "file": "recipes__cell-types__color-picker__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Color picker"
+      ],
+      "guide": "recipes/cell-types/color-picker/color-picker.md",
+      "guideTitle": "Color picker",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/color-picker",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/color-picker/javascript/example1.ts",
+      "file": "recipes__cell-types__color-picker__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Color picker"
+      ],
+      "guide": "recipes/cell-types/color-picker/color-picker.md",
+      "guideTitle": "Color picker",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/color-picker",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/colorful-picker/react/example1.tsx",
+      "file": "recipes__cell-types__colorful-picker__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Colorful Picker"
+      ],
+      "guide": "recipes/cell-types/colorful-picker/colorful-picker.md",
+      "guideTitle": "Colorful Picker",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/colorful-picker",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/guide-datepicker-angular/angular/example1.ts",
+      "file": "recipes__cell-types__guide-datepicker-angular__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Date picker"
+      ],
+      "guide": "recipes/cell-types/guide-datepicker-angular/guide-datepicker.md",
+      "guideTitle": "Date picker",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/datepicker",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/guide-feedback-angular/angular/example1.ts",
+      "file": "recipes__cell-types__guide-feedback-angular__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Feedback Editor"
+      ],
+      "guide": "recipes/cell-types/guide-feedback-angular/guide-feedback.md",
+      "guideTitle": "Feedback Editor",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/feedback-angular",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/feedback/angular/example1.ts",
+      "file": "recipes__cell-types__feedback__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Feedback"
+      ],
+      "guide": "recipes/cell-types/feedback/feedback.md",
+      "guideTitle": "Feedback",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/feedback",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/feedback/javascript/example1.js",
+      "file": "recipes__cell-types__feedback__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Feedback"
+      ],
+      "guide": "recipes/cell-types/feedback/feedback.md",
+      "guideTitle": "Feedback",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/feedback",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/feedback/react/example1.tsx",
+      "file": "recipes__cell-types__feedback__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Feedback"
+      ],
+      "guide": "recipes/cell-types/feedback/feedback.md",
+      "guideTitle": "Feedback",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/feedback",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/feedback-react/react/example1.tsx",
+      "file": "recipes__cell-types__feedback-react__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Feedback"
+      ],
+      "guide": "recipes/cell-types/feedback-react/feedback-react.md",
+      "guideTitle": "Feedback",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/feedback-react",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/feedback/javascript/example1.ts",
+      "file": "recipes__cell-types__feedback__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Feedback"
+      ],
+      "guide": "recipes/cell-types/feedback/feedback.md",
+      "guideTitle": "Feedback",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/feedback",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/flatpickr/angular/example1.ts",
+      "file": "recipes__cell-types__flatpickr__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Flatpickr"
+      ],
+      "guide": "recipes/cell-types/flatpickr/flatpickr.md",
+      "guideTitle": "Flatpickr",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/flatpickr",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/flatpickr/javascript/example1.js",
+      "file": "recipes__cell-types__flatpickr__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Flatpickr"
+      ],
+      "guide": "recipes/cell-types/flatpickr/flatpickr.md",
+      "guideTitle": "Flatpickr",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/flatpickr",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/flatpickr/react/example1.tsx",
+      "file": "recipes__cell-types__flatpickr__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Flatpickr"
+      ],
+      "guide": "recipes/cell-types/flatpickr/flatpickr.md",
+      "guideTitle": "Flatpickr",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/flatpickr",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/flatpickr/javascript/example1.ts",
+      "file": "recipes__cell-types__flatpickr__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Flatpickr"
+      ],
+      "guide": "recipes/cell-types/flatpickr/flatpickr.md",
+      "guideTitle": "Flatpickr",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/flatpickr",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/moment-date/angular/example1.ts",
+      "file": "recipes__cell-types__moment-date__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Moment.js-based date"
+      ],
+      "guide": "recipes/cell-types/moment-date/moment-date.md",
+      "guideTitle": "Moment.js-based date",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/moment-date",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/moment-date/javascript/example1.js",
+      "file": "recipes__cell-types__moment-date__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Moment.js-based date"
+      ],
+      "guide": "recipes/cell-types/moment-date/moment-date.md",
+      "guideTitle": "Moment.js-based date",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/moment-date",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/moment-date/react/example1.tsx",
+      "file": "recipes__cell-types__moment-date__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Moment.js-based date"
+      ],
+      "guide": "recipes/cell-types/moment-date/moment-date.md",
+      "guideTitle": "Moment.js-based date",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/moment-date",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/moment-date/javascript/example1.ts",
+      "file": "recipes__cell-types__moment-date__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Moment.js-based date"
+      ],
+      "guide": "recipes/cell-types/moment-date/moment-date.md",
+      "guideTitle": "Moment.js-based date",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/moment-date",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/moment-time/angular/example1.ts",
+      "file": "recipes__cell-types__moment-time__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Moment.js-based time"
+      ],
+      "guide": "recipes/cell-types/moment-time/moment-time.md",
+      "guideTitle": "Moment.js-based time",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/moment-time",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/moment-time/javascript/example1.js",
+      "file": "recipes__cell-types__moment-time__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Moment.js-based time"
+      ],
+      "guide": "recipes/cell-types/moment-time/moment-time.md",
+      "guideTitle": "Moment.js-based time",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/moment-time",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/moment-time/react/example1.tsx",
+      "file": "recipes__cell-types__moment-time__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Moment.js-based time"
+      ],
+      "guide": "recipes/cell-types/moment-time/moment-time.md",
+      "guideTitle": "Moment.js-based time",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/moment-time",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/moment-time/javascript/example1.ts",
+      "file": "recipes__cell-types__moment-time__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Moment.js-based time"
+      ],
+      "guide": "recipes/cell-types/moment-time/moment-time.md",
+      "guideTitle": "Moment.js-based time",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/moment-time",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/numbro/angular/example1.ts",
+      "file": "recipes__cell-types__numbro__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Numbro"
+      ],
+      "guide": "recipes/cell-types/numbro/numbro.md",
+      "guideTitle": "Numbro",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/numbro",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/numbro/javascript/example1.js",
+      "file": "recipes__cell-types__numbro__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Numbro"
+      ],
+      "guide": "recipes/cell-types/numbro/numbro.md",
+      "guideTitle": "Numbro",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/numbro",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/numbro/react/example1.tsx",
+      "file": "recipes__cell-types__numbro__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Numbro"
+      ],
+      "guide": "recipes/cell-types/numbro/numbro.md",
+      "guideTitle": "Numbro",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/numbro",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/numbro/javascript/example1.ts",
+      "file": "recipes__cell-types__numbro__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Numbro"
+      ],
+      "guide": "recipes/cell-types/numbro/numbro.md",
+      "guideTitle": "Numbro",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/numbro",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/pikaday/angular/example1.ts",
+      "file": "recipes__cell-types__pikaday__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Pikaday"
+      ],
+      "guide": "recipes/cell-types/pikaday/pikaday.md",
+      "guideTitle": "Pikaday",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/pikaday",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/pikaday/javascript/example1.js",
+      "file": "recipes__cell-types__pikaday__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Pikaday"
+      ],
+      "guide": "recipes/cell-types/pikaday/pikaday.md",
+      "guideTitle": "Pikaday",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/pikaday",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/pikaday/react/example1.tsx",
+      "file": "recipes__cell-types__pikaday__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Pikaday"
+      ],
+      "guide": "recipes/cell-types/pikaday/pikaday.md",
+      "guideTitle": "Pikaday",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/pikaday",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/pikaday/javascript/example1.ts",
+      "file": "recipes__cell-types__pikaday__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Pikaday"
+      ],
+      "guide": "recipes/cell-types/pikaday/pikaday.md",
+      "guideTitle": "Pikaday",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/pikaday",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/radio/angular/example1.ts",
+      "file": "recipes__cell-types__radio__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Radio buttons"
+      ],
+      "guide": "recipes/cell-types/radio/radio.md",
+      "guideTitle": "Radio buttons",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/radio",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/radio/javascript/example1.js",
+      "file": "recipes__cell-types__radio__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Radio buttons"
+      ],
+      "guide": "recipes/cell-types/radio/radio.md",
+      "guideTitle": "Radio buttons",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/radio",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/radio/react/example1.tsx",
+      "file": "recipes__cell-types__radio__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Radio buttons"
+      ],
+      "guide": "recipes/cell-types/radio/radio.md",
+      "guideTitle": "Radio buttons",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/radio",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/radio/javascript/example1.ts",
+      "file": "recipes__cell-types__radio__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Radio buttons"
+      ],
+      "guide": "recipes/cell-types/radio/radio.md",
+      "guideTitle": "Radio buttons",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/radio",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/radio/vue/example1.vue",
+      "file": "recipes__cell-types__radio__vue__example1.vue.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Radio buttons"
+      ],
+      "guide": "recipes/cell-types/radio/radio.md",
+      "guideTitle": "Radio buttons",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/radio",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "docsPath": "recipes/cell-types/guide-rating-angular/angular/example1.ts",
+      "file": "recipes__cell-types__guide-rating-angular__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Star Rating Editor"
+      ],
+      "guide": "recipes/cell-types/guide-rating-angular/guide-rating.md",
+      "guideTitle": "Star Rating Editor",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/rating-angular",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/rating/angular/example1.ts",
+      "file": "recipes__cell-types__rating__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Star Rating"
+      ],
+      "guide": "recipes/cell-types/rating/rating.md",
+      "guideTitle": "Star Rating",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/rating",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/cell-types/rating/javascript/example1.js",
+      "file": "recipes__cell-types__rating__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Star Rating"
+      ],
+      "guide": "recipes/cell-types/rating/rating.md",
+      "guideTitle": "Star Rating",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/rating",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/cell-types/rating/react/example1.tsx",
+      "file": "recipes__cell-types__rating__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Star Rating"
+      ],
+      "guide": "recipes/cell-types/rating/rating.md",
+      "guideTitle": "Star Rating",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/rating",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/react-rating/react/example1.tsx",
+      "file": "recipes__cell-types__react-rating__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Star Rating"
+      ],
+      "guide": "recipes/cell-types/react-rating/react-rating.md",
+      "guideTitle": "Star Rating",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/react-rating",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/cell-types/rating/javascript/example1.ts",
+      "file": "recipes__cell-types__rating__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Cell Types",
+        "Star Rating"
+      ],
+      "guide": "recipes/cell-types/rating/rating.md",
+      "guideTitle": "Star Rating",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/cell-types/rating",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/column-management/column-visibility/angular/example1.ts",
+      "file": "recipes__column-management__column-visibility__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Column Management",
+        "Build a dynamic column visibility toggle"
+      ],
+      "guide": "recipes/column-management/column-visibility/column-visibility.md",
+      "guideTitle": "Build a dynamic column visibility toggle",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/column-management/column-visibility",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/column-management/column-visibility/javascript/example1.js",
+      "file": "recipes__column-management__column-visibility__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Column Management",
+        "Build a dynamic column visibility toggle"
+      ],
+      "guide": "recipes/column-management/column-visibility/column-visibility.md",
+      "guideTitle": "Build a dynamic column visibility toggle",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/column-management/column-visibility",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/column-management/column-visibility/react/example1.tsx",
+      "file": "recipes__column-management__column-visibility__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Column Management",
+        "Build a dynamic column visibility toggle"
+      ],
+      "guide": "recipes/column-management/column-visibility/column-visibility.md",
+      "guideTitle": "Build a dynamic column visibility toggle",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/column-management/column-visibility",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/column-management/column-visibility/javascript/example1.ts",
+      "file": "recipes__column-management__column-visibility__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Column Management",
+        "Build a dynamic column visibility toggle"
+      ],
+      "guide": "recipes/column-management/column-visibility/column-visibility.md",
+      "guideTitle": "Build a dynamic column visibility toggle",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/column-management/column-visibility",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/column-management/freeze-columns/angular/example1.ts",
+      "file": "recipes__column-management__freeze-columns__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Column Management",
+        "Freeze and unfreeze columns at runtime"
+      ],
+      "guide": "recipes/column-management/freeze-columns/freeze-columns.md",
+      "guideTitle": "Freeze and unfreeze columns at runtime",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/column-management/freeze-columns",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/column-management/freeze-columns/javascript/example1.js",
+      "file": "recipes__column-management__freeze-columns__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Column Management",
+        "Freeze and unfreeze columns at runtime"
+      ],
+      "guide": "recipes/column-management/freeze-columns/freeze-columns.md",
+      "guideTitle": "Freeze and unfreeze columns at runtime",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/column-management/freeze-columns",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/column-management/freeze-columns/react/example1.tsx",
+      "file": "recipes__column-management__freeze-columns__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Column Management",
+        "Freeze and unfreeze columns at runtime"
+      ],
+      "guide": "recipes/column-management/freeze-columns/freeze-columns.md",
+      "guideTitle": "Freeze and unfreeze columns at runtime",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/column-management/freeze-columns",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/context-menu/add-column-object-data/angular/example1.ts",
+      "file": "recipes__context-menu__add-column-object-data__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Context Menu",
+        "Add a column to an object-based dataset"
+      ],
+      "guide": "recipes/context-menu/add-column-object-data/add-column-object-data.md",
+      "guideTitle": "Add a column to an object-based dataset",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/context-menu/add-column-object-data",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/context-menu/add-column-object-data/javascript/example1.js",
+      "file": "recipes__context-menu__add-column-object-data__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Context Menu",
+        "Add a column to an object-based dataset"
+      ],
+      "guide": "recipes/context-menu/add-column-object-data/add-column-object-data.md",
+      "guideTitle": "Add a column to an object-based dataset",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/context-menu/add-column-object-data",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/context-menu/add-column-object-data/react/example1.tsx",
+      "file": "recipes__context-menu__add-column-object-data__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Context Menu",
+        "Add a column to an object-based dataset"
+      ],
+      "guide": "recipes/context-menu/add-column-object-data/add-column-object-data.md",
+      "guideTitle": "Add a column to an object-based dataset",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/context-menu/add-column-object-data",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/context-menu/custom-context-menu/angular/example1.ts",
+      "file": "recipes__context-menu__custom-context-menu__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Context Menu",
+        "Custom context menu actions"
+      ],
+      "guide": "recipes/context-menu/custom-context-menu/custom-context-menu.md",
+      "guideTitle": "Custom context menu actions",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/context-menu/custom-context-menu",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/context-menu/custom-context-menu/javascript/example1.js",
+      "file": "recipes__context-menu__custom-context-menu__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Context Menu",
+        "Custom context menu actions"
+      ],
+      "guide": "recipes/context-menu/custom-context-menu/custom-context-menu.md",
+      "guideTitle": "Custom context menu actions",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/context-menu/custom-context-menu",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/context-menu/custom-context-menu/react/example1.tsx",
+      "file": "recipes__context-menu__custom-context-menu__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Context Menu",
+        "Custom context menu actions"
+      ],
+      "guide": "recipes/context-menu/custom-context-menu/custom-context-menu.md",
+      "guideTitle": "Custom context menu actions",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/context-menu/custom-context-menu",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/context-menu/row-operations/angular/example1.ts",
+      "file": "recipes__context-menu__row-operations__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Context Menu",
+        "Programmatic row operations"
+      ],
+      "guide": "recipes/context-menu/row-operations/row-operations.md",
+      "guideTitle": "Programmatic row operations",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/context-menu/row-operations",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/context-menu/row-operations/javascript/example1.js",
+      "file": "recipes__context-menu__row-operations__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Context Menu",
+        "Programmatic row operations"
+      ],
+      "guide": "recipes/context-menu/row-operations/row-operations.md",
+      "guideTitle": "Programmatic row operations",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/context-menu/row-operations",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/context-menu/row-operations/react/example1.tsx",
+      "file": "recipes__context-menu__row-operations__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Context Menu",
+        "Programmatic row operations"
+      ],
+      "guide": "recipes/context-menu/row-operations/row-operations.md",
+      "guideTitle": "Programmatic row operations",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/context-menu/row-operations",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/context-menu/row-operations/javascript/example1.ts",
+      "file": "recipes__context-menu__row-operations__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Context Menu",
+        "Programmatic row operations"
+      ],
+      "guide": "recipes/context-menu/row-operations/row-operations.md",
+      "guideTitle": "Programmatic row operations",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/context-menu/row-operations",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/data-management/auto-save-backend/angular/example1.ts",
+      "file": "recipes__data-management__auto-save-backend__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Auto-save changes to a backend"
+      ],
+      "guide": "recipes/data-management/auto-save-backend/auto-save-backend.md",
+      "guideTitle": "Auto-save changes to a backend",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/auto-save-backend",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/data-management/auto-save-backend/javascript/example1.js",
+      "file": "recipes__data-management__auto-save-backend__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Auto-save changes to a backend"
+      ],
+      "guide": "recipes/data-management/auto-save-backend/auto-save-backend.md",
+      "guideTitle": "Auto-save changes to a backend",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/auto-save-backend",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/data-management/auto-save-backend/react/example1.tsx",
+      "file": "recipes__data-management__auto-save-backend__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Auto-save changes to a backend"
+      ],
+      "guide": "recipes/data-management/auto-save-backend/auto-save-backend.md",
+      "guideTitle": "Auto-save changes to a backend",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/auto-save-backend",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/data-management/auto-save-backend/javascript/example1.ts",
+      "file": "recipes__data-management__auto-save-backend__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Auto-save changes to a backend"
+      ],
+      "guide": "recipes/data-management/auto-save-backend/auto-save-backend.md",
+      "guideTitle": "Auto-save changes to a backend",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/auto-save-backend",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-graphql/angular/example1.ts",
+      "file": "recipes__data-management__load-data-graphql__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a GraphQL API"
+      ],
+      "guide": "recipes/data-management/load-data-graphql/load-data-graphql.md",
+      "guideTitle": "Load data from a GraphQL API",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-graphql",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-graphql/javascript/example1.js",
+      "file": "recipes__data-management__load-data-graphql__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a GraphQL API"
+      ],
+      "guide": "recipes/data-management/load-data-graphql/load-data-graphql.md",
+      "guideTitle": "Load data from a GraphQL API",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-graphql",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-graphql/react/example1.tsx",
+      "file": "recipes__data-management__load-data-graphql__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a GraphQL API"
+      ],
+      "guide": "recipes/data-management/load-data-graphql/load-data-graphql.md",
+      "guideTitle": "Load data from a GraphQL API",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-graphql",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-graphql/javascript/example1.ts",
+      "file": "recipes__data-management__load-data-graphql__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a GraphQL API"
+      ],
+      "guide": "recipes/data-management/load-data-graphql/load-data-graphql.md",
+      "guideTitle": "Load data from a GraphQL API",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-graphql",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-graphql/angular/example2.ts",
+      "file": "recipes__data-management__load-data-graphql__angular__example2.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a GraphQL API"
+      ],
+      "guide": "recipes/data-management/load-data-graphql/load-data-graphql.md",
+      "guideTitle": "Load data from a GraphQL API",
+      "exampleId": "example2",
+      "exampleTitle": "Using updateData() to preserve sorting and other states",
+      "docPermalink": "/recipes/data-management/load-data-graphql",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-graphql/javascript/example2.js",
+      "file": "recipes__data-management__load-data-graphql__javascript__example2.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a GraphQL API"
+      ],
+      "guide": "recipes/data-management/load-data-graphql/load-data-graphql.md",
+      "guideTitle": "Load data from a GraphQL API",
+      "exampleId": "example2",
+      "exampleTitle": "Using updateData() to preserve sorting and other states",
+      "docPermalink": "/recipes/data-management/load-data-graphql",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-graphql/react/example2.tsx",
+      "file": "recipes__data-management__load-data-graphql__react__example2.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a GraphQL API"
+      ],
+      "guide": "recipes/data-management/load-data-graphql/load-data-graphql.md",
+      "guideTitle": "Load data from a GraphQL API",
+      "exampleId": "example2",
+      "exampleTitle": "Using updateData() to preserve sorting and other states",
+      "docPermalink": "/recipes/data-management/load-data-graphql",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-graphql/javascript/example2.ts",
+      "file": "recipes__data-management__load-data-graphql__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a GraphQL API"
+      ],
+      "guide": "recipes/data-management/load-data-graphql/load-data-graphql.md",
+      "guideTitle": "Load data from a GraphQL API",
+      "exampleId": "example2",
+      "exampleTitle": "Using updateData() to preserve sorting and other states",
+      "docPermalink": "/recipes/data-management/load-data-graphql",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/angular/example1.ts",
+      "file": "recipes__data-management__load-data-rest-api__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/javascript/example1.js",
+      "file": "recipes__data-management__load-data-rest-api__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/react/example1.tsx",
+      "file": "recipes__data-management__load-data-rest-api__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/javascript/example1.ts",
+      "file": "recipes__data-management__load-data-rest-api__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/angular/example2.ts",
+      "file": "recipes__data-management__load-data-rest-api__angular__example2.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example2",
+      "exampleTitle": "Using updateData() to preserve sorting and other states",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/javascript/example2.js",
+      "file": "recipes__data-management__load-data-rest-api__javascript__example2.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example2",
+      "exampleTitle": "Using updateData() to preserve sorting and other states",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/react/example2.tsx",
+      "file": "recipes__data-management__load-data-rest-api__react__example2.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example2",
+      "exampleTitle": "Using updateData() to preserve sorting and other states",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/javascript/example2.ts",
+      "file": "recipes__data-management__load-data-rest-api__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example2",
+      "exampleTitle": "Using updateData() to preserve sorting and other states",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/angular/example3.ts",
+      "file": "recipes__data-management__load-data-rest-api__angular__example3.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example3",
+      "exampleTitle": "Using dataProvider for automatic pagination and sorting",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/javascript/example3.js",
+      "file": "recipes__data-management__load-data-rest-api__javascript__example3.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example3",
+      "exampleTitle": "Using dataProvider for automatic pagination and sorting",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/react/example3.tsx",
+      "file": "recipes__data-management__load-data-rest-api__react__example3.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example3",
+      "exampleTitle": "Using dataProvider for automatic pagination and sorting",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/data-management/load-data-rest-api/javascript/example3.ts",
+      "file": "recipes__data-management__load-data-rest-api__javascript__example3.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from a REST API"
+      ],
+      "guide": "recipes/data-management/load-data-rest-api/load-data-rest-api.md",
+      "guideTitle": "Load data from a REST API",
+      "exampleId": "example3",
+      "exampleTitle": "Using dataProvider for automatic pagination and sorting",
+      "docPermalink": "/recipes/data-management/load-data-rest-api",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/data-management/sync-two-grids/angular/example1.ts",
+      "file": "recipes__data-management__sync-two-grids__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Sync two grids"
+      ],
+      "guide": "recipes/data-management/sync-two-grids/sync-two-grids.md",
+      "guideTitle": "Sync two grids",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/sync-two-grids",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/data-management/sync-two-grids/javascript/example1.js",
+      "file": "recipes__data-management__sync-two-grids__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Sync two grids"
+      ],
+      "guide": "recipes/data-management/sync-two-grids/sync-two-grids.md",
+      "guideTitle": "Sync two grids",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/sync-two-grids",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/data-management/sync-two-grids/react/example1.tsx",
+      "file": "recipes__data-management__sync-two-grids__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Sync two grids"
+      ],
+      "guide": "recipes/data-management/sync-two-grids/sync-two-grids.md",
+      "guideTitle": "Sync two grids",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/sync-two-grids",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/data-management/sync-two-grids/javascript/example1.ts",
+      "file": "recipes__data-management__sync-two-grids__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Sync two grids"
+      ],
+      "guide": "recipes/data-management/sync-two-grids/sync-two-grids.md",
+      "guideTitle": "Sync two grids",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/sync-two-grids",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/data-management/undo-redo-custom-ui/angular/example1.ts",
+      "file": "recipes__data-management__undo-redo-custom-ui__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Undo / redo with a custom UI"
+      ],
+      "guide": "recipes/data-management/undo-redo-custom-ui/undo-redo-custom-ui.md",
+      "guideTitle": "Undo / redo with a custom UI",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/undo-redo-custom-ui",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/data-management/undo-redo-custom-ui/javascript/example1.js",
+      "file": "recipes__data-management__undo-redo-custom-ui__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Undo / redo with a custom UI"
+      ],
+      "guide": "recipes/data-management/undo-redo-custom-ui/undo-redo-custom-ui.md",
+      "guideTitle": "Undo / redo with a custom UI",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/undo-redo-custom-ui",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/data-management/undo-redo-custom-ui/react/example1.tsx",
+      "file": "recipes__data-management__undo-redo-custom-ui__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Undo / redo with a custom UI"
+      ],
+      "guide": "recipes/data-management/undo-redo-custom-ui/undo-redo-custom-ui.md",
+      "guideTitle": "Undo / redo with a custom UI",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/undo-redo-custom-ui",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/data-management/undo-redo-custom-ui/javascript/example1.ts",
+      "file": "recipes__data-management__undo-redo-custom-ui__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Undo / redo with a custom UI"
+      ],
+      "guide": "recipes/data-management/undo-redo-custom-ui/undo-redo-custom-ui.md",
+      "guideTitle": "Undo / redo with a custom UI",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/undo-redo-custom-ui",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/editing-validation/dependent-dropdowns/angular/example1.ts",
+      "file": "recipes__editing-validation__dependent-dropdowns__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Editing Validation",
+        "Dependent dropdowns"
+      ],
+      "guide": "recipes/editing-validation/dependent-dropdowns/dependent-dropdowns.md",
+      "guideTitle": "Dependent dropdowns",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/editing-validation/dependent-dropdowns",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/editing-validation/dependent-dropdowns/javascript/example1.js",
+      "file": "recipes__editing-validation__dependent-dropdowns__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Editing Validation",
+        "Dependent dropdowns"
+      ],
+      "guide": "recipes/editing-validation/dependent-dropdowns/dependent-dropdowns.md",
+      "guideTitle": "Dependent dropdowns",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/editing-validation/dependent-dropdowns",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/editing-validation/dependent-dropdowns/react/example1.tsx",
+      "file": "recipes__editing-validation__dependent-dropdowns__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Editing Validation",
+        "Dependent dropdowns"
+      ],
+      "guide": "recipes/editing-validation/dependent-dropdowns/dependent-dropdowns.md",
+      "guideTitle": "Dependent dropdowns",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/editing-validation/dependent-dropdowns",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/editing-validation/dependent-dropdowns/javascript/example1.ts",
+      "file": "recipes__editing-validation__dependent-dropdowns__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Editing Validation",
+        "Dependent dropdowns"
+      ],
+      "guide": "recipes/editing-validation/dependent-dropdowns/dependent-dropdowns.md",
+      "guideTitle": "Dependent dropdowns",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/editing-validation/dependent-dropdowns",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/editing-validation/row-validation-error-summary/angular/example1.ts",
+      "file": "recipes__editing-validation__row-validation-error-summary__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Editing Validation",
+        "Row validation with error summary"
+      ],
+      "guide": "recipes/editing-validation/row-validation-error-summary/row-validation-error-summary.md",
+      "guideTitle": "Row validation with error summary",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/editing-validation/row-validation-error-summary",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/editing-validation/row-validation-error-summary/javascript/example1.js",
+      "file": "recipes__editing-validation__row-validation-error-summary__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Editing Validation",
+        "Row validation with error summary"
+      ],
+      "guide": "recipes/editing-validation/row-validation-error-summary/row-validation-error-summary.md",
+      "guideTitle": "Row validation with error summary",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/editing-validation/row-validation-error-summary",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/editing-validation/row-validation-error-summary/react/example1.tsx",
+      "file": "recipes__editing-validation__row-validation-error-summary__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Editing Validation",
+        "Row validation with error summary"
+      ],
+      "guide": "recipes/editing-validation/row-validation-error-summary/row-validation-error-summary.md",
+      "guideTitle": "Row validation with error summary",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/editing-validation/row-validation-error-summary",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/editing-validation/row-validation-error-summary/javascript/example1.ts",
+      "file": "recipes__editing-validation__row-validation-error-summary__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Editing Validation",
+        "Row validation with error summary"
+      ],
+      "guide": "recipes/editing-validation/row-validation-error-summary/row-validation-error-summary.md",
+      "guideTitle": "Row validation with error summary",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/editing-validation/row-validation-error-summary",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/filtering-and-search/external-search-box/angular/example1.ts",
+      "file": "recipes__filtering-and-search__external-search-box__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering And Search",
+        "External search box"
+      ],
+      "guide": "recipes/filtering-and-search/external-search-box/external-search-box.md",
+      "guideTitle": "External search box",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-and-search/external-search-box",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/filtering-and-search/external-search-box/javascript/example1.js",
+      "file": "recipes__filtering-and-search__external-search-box__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering And Search",
+        "External search box"
+      ],
+      "guide": "recipes/filtering-and-search/external-search-box/external-search-box.md",
+      "guideTitle": "External search box",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-and-search/external-search-box",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/filtering-and-search/external-search-box/react/example1.tsx",
+      "file": "recipes__filtering-and-search__external-search-box__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering And Search",
+        "External search box"
+      ],
+      "guide": "recipes/filtering-and-search/external-search-box/external-search-box.md",
+      "guideTitle": "External search box",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-and-search/external-search-box",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/filtering-and-search/external-search-box/javascript/example1.ts",
+      "file": "recipes__filtering-and-search__external-search-box__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering And Search",
+        "External search box"
+      ],
+      "guide": "recipes/filtering-and-search/external-search-box/external-search-box.md",
+      "guideTitle": "External search box",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-and-search/external-search-box",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/filtering-and-search/highlight-search-matches/angular/example1.ts",
+      "file": "recipes__filtering-and-search__highlight-search-matches__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering And Search",
+        "Highlight search matches"
+      ],
+      "guide": "recipes/filtering-and-search/highlight-search-matches/highlight-search-matches.md",
+      "guideTitle": "Highlight search matches",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-and-search/highlight-search-matches",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/filtering-and-search/highlight-search-matches/javascript/example1.js",
+      "file": "recipes__filtering-and-search__highlight-search-matches__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering And Search",
+        "Highlight search matches"
+      ],
+      "guide": "recipes/filtering-and-search/highlight-search-matches/highlight-search-matches.md",
+      "guideTitle": "Highlight search matches",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-and-search/highlight-search-matches",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/filtering-and-search/highlight-search-matches/react/example1.tsx",
+      "file": "recipes__filtering-and-search__highlight-search-matches__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering And Search",
+        "Highlight search matches"
+      ],
+      "guide": "recipes/filtering-and-search/highlight-search-matches/highlight-search-matches.md",
+      "guideTitle": "Highlight search matches",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-and-search/highlight-search-matches",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/filtering-and-search/highlight-search-matches/javascript/example1.ts",
+      "file": "recipes__filtering-and-search__highlight-search-matches__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering And Search",
+        "Highlight search matches"
+      ],
+      "guide": "recipes/filtering-and-search/highlight-search-matches/highlight-search-matches.md",
+      "guideTitle": "Highlight search matches",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-and-search/highlight-search-matches",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/filtering-search/multi-column-filter-panel/angular/example1.ts",
+      "file": "recipes__filtering-search__multi-column-filter-panel__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering Search",
+        "Multi-column filter panel"
+      ],
+      "guide": "recipes/filtering-search/multi-column-filter-panel/multi-column-filter-panel.md",
+      "guideTitle": "Multi-column filter panel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-search/multi-column-filter-panel",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/filtering-search/multi-column-filter-panel/javascript/example1.js",
+      "file": "recipes__filtering-search__multi-column-filter-panel__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering Search",
+        "Multi-column filter panel"
+      ],
+      "guide": "recipes/filtering-search/multi-column-filter-panel/multi-column-filter-panel.md",
+      "guideTitle": "Multi-column filter panel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-search/multi-column-filter-panel",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/filtering-search/multi-column-filter-panel/react/example1.tsx",
+      "file": "recipes__filtering-search__multi-column-filter-panel__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering Search",
+        "Multi-column filter panel"
+      ],
+      "guide": "recipes/filtering-search/multi-column-filter-panel/multi-column-filter-panel.md",
+      "guideTitle": "Multi-column filter panel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-search/multi-column-filter-panel",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/filtering-search/multi-column-filter-panel/javascript/example1.ts",
+      "file": "recipes__filtering-search__multi-column-filter-panel__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Filtering Search",
+        "Multi-column filter panel"
+      ],
+      "guide": "recipes/filtering-search/multi-column-filter-panel/multi-column-filter-panel.md",
+      "guideTitle": "Multi-column filter panel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/filtering-search/multi-column-filter-panel",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/import-export/export-to-pdf/angular/example1.ts",
+      "file": "recipes__import-export__export-to-pdf__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Import Export",
+        "Export to PDF"
+      ],
+      "guide": "recipes/import-export/export-to-pdf/export-to-pdf.md",
+      "guideTitle": "Export to PDF",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/import-export/export-to-pdf",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/import-export/export-to-pdf/javascript/example1.js",
+      "file": "recipes__import-export__export-to-pdf__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Import Export",
+        "Export to PDF"
+      ],
+      "guide": "recipes/import-export/export-to-pdf/export-to-pdf.md",
+      "guideTitle": "Export to PDF",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/import-export/export-to-pdf",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/import-export/export-to-pdf/react/example1.tsx",
+      "file": "recipes__import-export__export-to-pdf__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Import Export",
+        "Export to PDF"
+      ],
+      "guide": "recipes/import-export/export-to-pdf/export-to-pdf.md",
+      "guideTitle": "Export to PDF",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/import-export/export-to-pdf",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/import-export/export-to-pdf/javascript/example1.ts",
+      "file": "recipes__import-export__export-to-pdf__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Import Export",
+        "Export to PDF"
+      ],
+      "guide": "recipes/import-export/export-to-pdf/export-to-pdf.md",
+      "guideTitle": "Export to PDF",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/import-export/export-to-pdf",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/import-export/import-csv-excel/angular/example1.ts",
+      "file": "recipes__import-export__import-csv-excel__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Import Export",
+        "Import from CSV or Excel"
+      ],
+      "guide": "recipes/import-export/import-csv-excel/import-csv-excel.md",
+      "guideTitle": "Import from CSV or Excel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/import-export/import-csv-excel",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/import-export/import-csv-excel/javascript/example1.js",
+      "file": "recipes__import-export__import-csv-excel__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Import Export",
+        "Import from CSV or Excel"
+      ],
+      "guide": "recipes/import-export/import-csv-excel/import-csv-excel.md",
+      "guideTitle": "Import from CSV or Excel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/import-export/import-csv-excel",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/import-export/import-csv-excel/react/example1.tsx",
+      "file": "recipes__import-export__import-csv-excel__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Import Export",
+        "Import from CSV or Excel"
+      ],
+      "guide": "recipes/import-export/import-csv-excel/import-csv-excel.md",
+      "guideTitle": "Import from CSV or Excel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/import-export/import-csv-excel",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/import-export/import-csv-excel/javascript/example1.ts",
+      "file": "recipes__import-export__import-csv-excel__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Import Export",
+        "Import from CSV or Excel"
+      ],
+      "guide": "recipes/import-export/import-csv-excel/import-csv-excel.md",
+      "guideTitle": "Import from CSV or Excel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/import-export/import-csv-excel",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/performance/lazy-loading/angular/example1.ts",
+      "file": "recipes__performance__lazy-loading__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Performance",
+        "Lazy loading with pagination"
+      ],
+      "guide": "recipes/performance/lazy-loading/lazy-loading.md",
+      "guideTitle": "Lazy loading with pagination",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/performance/lazy-loading",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/performance/lazy-loading/javascript/example1.js",
+      "file": "recipes__performance__lazy-loading__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Performance",
+        "Lazy loading with pagination"
+      ],
+      "guide": "recipes/performance/lazy-loading/lazy-loading.md",
+      "guideTitle": "Lazy loading with pagination",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/performance/lazy-loading",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/performance/lazy-loading/react/example1.tsx",
+      "file": "recipes__performance__lazy-loading__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Performance",
+        "Lazy loading with pagination"
+      ],
+      "guide": "recipes/performance/lazy-loading/lazy-loading.md",
+      "guideTitle": "Lazy loading with pagination",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/performance/lazy-loading",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/performance/persist-column-layout/angular/example1.ts",
+      "file": "recipes__performance__persist-column-layout__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Performance",
+        "Persist and restore column widths and order"
+      ],
+      "guide": "recipes/performance/persist-column-layout/persist-column-layout.md",
+      "guideTitle": "Persist and restore column widths and order",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/performance/persist-column-layout",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/performance/persist-column-layout/javascript/example1.js",
+      "file": "recipes__performance__persist-column-layout__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Performance",
+        "Persist and restore column widths and order"
+      ],
+      "guide": "recipes/performance/persist-column-layout/persist-column-layout.md",
+      "guideTitle": "Persist and restore column widths and order",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/performance/persist-column-layout",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/performance/persist-column-layout/react/example1.tsx",
+      "file": "recipes__performance__persist-column-layout__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Performance",
+        "Persist and restore column widths and order"
+      ],
+      "guide": "recipes/performance/persist-column-layout/persist-column-layout.md",
+      "guideTitle": "Persist and restore column widths and order",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/performance/persist-column-layout",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/real-time/websocket-updates/angular/example1.ts",
+      "file": "recipes__real-time__websocket-updates__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Real Time",
+        "Real-time cell updates via WebSocket"
+      ],
+      "guide": "recipes/real-time/websocket-updates/websocket-updates.md",
+      "guideTitle": "Real-time cell updates via WebSocket",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/real-time/websocket-updates",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/real-time/websocket-updates/javascript/example1.js",
+      "file": "recipes__real-time__websocket-updates__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Real Time",
+        "Real-time cell updates via WebSocket"
+      ],
+      "guide": "recipes/real-time/websocket-updates/websocket-updates.md",
+      "guideTitle": "Real-time cell updates via WebSocket",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/real-time/websocket-updates",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/real-time/websocket-updates/react/example1.tsx",
+      "file": "recipes__real-time__websocket-updates__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Real Time",
+        "Real-time cell updates via WebSocket"
+      ],
+      "guide": "recipes/real-time/websocket-updates/websocket-updates.md",
+      "guideTitle": "Real-time cell updates via WebSocket",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/real-time/websocket-updates",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/real-time/chartjs-sync/angular/example1.ts",
+      "file": "recipes__real-time__chartjs-sync__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Real Time",
+        "Sync rows to a Chart.js chart"
+      ],
+      "guide": "recipes/real-time/chartjs-sync/chartjs-sync.md",
+      "guideTitle": "Sync rows to a Chart.js chart",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/real-time/chartjs-sync",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/real-time/chartjs-sync/javascript/example1.js",
+      "file": "recipes__real-time__chartjs-sync__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Real Time",
+        "Sync rows to a Chart.js chart"
+      ],
+      "guide": "recipes/real-time/chartjs-sync/chartjs-sync.md",
+      "guideTitle": "Sync rows to a Chart.js chart",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/real-time/chartjs-sync",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/real-time/chartjs-sync/react/example1.tsx",
+      "file": "recipes__real-time__chartjs-sync__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Real Time",
+        "Sync rows to a Chart.js chart"
+      ],
+      "guide": "recipes/real-time/chartjs-sync/chartjs-sync.md",
+      "guideTitle": "Sync rows to a Chart.js chart",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/real-time/chartjs-sync",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/real-time/chartjs-sync/javascript/example1.ts",
+      "file": "recipes__real-time__chartjs-sync__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Real Time",
+        "Sync rows to a Chart.js chart"
+      ],
+      "guide": "recipes/real-time/chartjs-sync/chartjs-sync.md",
+      "guideTitle": "Sync rows to a Chart.js chart",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/real-time/chartjs-sync",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/conditional-row-coloring/angular/example1.ts",
+      "file": "recipes__rendering-styling__conditional-row-coloring__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Conditional row coloring"
+      ],
+      "guide": "recipes/rendering-styling/conditional-row-coloring/conditional-row-coloring.md",
+      "guideTitle": "Conditional row coloring",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/conditional-row-coloring",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/conditional-row-coloring/javascript/example1.js",
+      "file": "recipes__rendering-styling__conditional-row-coloring__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Conditional row coloring"
+      ],
+      "guide": "recipes/rendering-styling/conditional-row-coloring/conditional-row-coloring.md",
+      "guideTitle": "Conditional row coloring",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/conditional-row-coloring",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/conditional-row-coloring/react/example1.tsx",
+      "file": "recipes__rendering-styling__conditional-row-coloring__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Conditional row coloring"
+      ],
+      "guide": "recipes/rendering-styling/conditional-row-coloring/conditional-row-coloring.md",
+      "guideTitle": "Conditional row coloring",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/conditional-row-coloring",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/conditional-row-coloring/javascript/example1.ts",
+      "file": "recipes__rendering-styling__conditional-row-coloring__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Conditional row coloring"
+      ],
+      "guide": "recipes/rendering-styling/conditional-row-coloring/conditional-row-coloring.md",
+      "guideTitle": "Conditional row coloring",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/conditional-row-coloring",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/frozen-summary-row/angular/example1.ts",
+      "file": "recipes__rendering-styling__frozen-summary-row__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Frozen summary row"
+      ],
+      "guide": "recipes/rendering-styling/frozen-summary-row/frozen-summary-row.md",
+      "guideTitle": "Frozen summary row",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/frozen-summary-row",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/frozen-summary-row/javascript/example1.js",
+      "file": "recipes__rendering-styling__frozen-summary-row__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Frozen summary row"
+      ],
+      "guide": "recipes/rendering-styling/frozen-summary-row/frozen-summary-row.md",
+      "guideTitle": "Frozen summary row",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/frozen-summary-row",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/frozen-summary-row/react/example1.tsx",
+      "file": "recipes__rendering-styling__frozen-summary-row__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Frozen summary row"
+      ],
+      "guide": "recipes/rendering-styling/frozen-summary-row/frozen-summary-row.md",
+      "guideTitle": "Frozen summary row",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/frozen-summary-row",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/frozen-summary-row/javascript/example1.ts",
+      "file": "recipes__rendering-styling__frozen-summary-row__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Frozen summary row"
+      ],
+      "guide": "recipes/rendering-styling/frozen-summary-row/frozen-summary-row.md",
+      "guideTitle": "Frozen summary row",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/frozen-summary-row",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/sparkline-cell-renderer/angular/example1.ts",
+      "file": "recipes__rendering-styling__sparkline-cell-renderer__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Sparkline cell renderer"
+      ],
+      "guide": "recipes/rendering-styling/sparkline-cell-renderer/sparkline-cell-renderer.md",
+      "guideTitle": "Sparkline cell renderer",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/sparkline-cell-renderer",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/sparkline-cell-renderer/javascript/example1.js",
+      "file": "recipes__rendering-styling__sparkline-cell-renderer__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Sparkline cell renderer"
+      ],
+      "guide": "recipes/rendering-styling/sparkline-cell-renderer/sparkline-cell-renderer.md",
+      "guideTitle": "Sparkline cell renderer",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/sparkline-cell-renderer",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/sparkline-cell-renderer/react/example1.tsx",
+      "file": "recipes__rendering-styling__sparkline-cell-renderer__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Sparkline cell renderer"
+      ],
+      "guide": "recipes/rendering-styling/sparkline-cell-renderer/sparkline-cell-renderer.md",
+      "guideTitle": "Sparkline cell renderer",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/sparkline-cell-renderer",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "docsPath": "recipes/rendering-styling/sparkline-cell-renderer/javascript/example1.ts",
+      "file": "recipes__rendering-styling__sparkline-cell-renderer__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Rendering Styling",
+        "Sparkline cell renderer"
+      ],
+      "guide": "recipes/rendering-styling/sparkline-cell-renderer/sparkline-cell-renderer.md",
+      "guideTitle": "Sparkline cell renderer",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/rendering-styling/sparkline-cell-renderer",
+      "framework": "typescript",
+      "displayName": "TypeScript"
     },
     {
       "docsPath": "guides/rows/row-freezing/angular/example1.ts",
