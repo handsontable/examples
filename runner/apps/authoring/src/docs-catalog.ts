@@ -2,8 +2,8 @@
 //
 // The importer (runner/pipeline/import-docs.mjs) emits, under
 // apps/authoring/public/docs-examples/:
-//   - manifest.json          — metadata list driving the grouped dropdown
-//   - <encoded-docsPath>.json — one full CatalogEntry per example, lazy-fetched
+//   - <bucket>/manifest.json — metadata list driving the grouped dropdown
+//   - <bucket>/<encoded-docsPath>.json — one full CatalogEntry per example, lazy-fetched
 //
 // Examples are opened by their docs content path via the `?docs=` URL param, e.g.
 //   /?docs=guides/columns/column-adding/javascript/example1.ts
@@ -13,6 +13,7 @@ import type { CatalogEntry } from "@handsontable/demo-runtime";
 const BASE = "/docs-examples";
 
 export interface DocsManifestItem {
+  bucket: string;
   docsPath: string;
   file: string;
   breadcrumb: string[];
@@ -28,6 +29,8 @@ export interface DocsManifestItem {
 }
 
 export interface DocsManifest {
+  bucket: string;
+  docsBranch: string;
   generatedFrom: string;
   hotVersion: string;
   count: number;
@@ -50,20 +53,22 @@ export interface DocsGroup {
   items: DocsManifestItem[];
 }
 
-let manifestPromise: Promise<DocsManifest> | null = null;
+const manifestPromises = new Map<string, Promise<DocsManifest>>();
 
-/** Fetch (once) and cache the docs example manifest. */
-export function fetchDocsManifest(): Promise<DocsManifest> {
+/** Fetch (once per bucket) and cache a docs example manifest. */
+export function fetchDocsManifest(bucket: string): Promise<DocsManifest> {
+  let manifestPromise = manifestPromises.get(bucket);
   if (!manifestPromise) {
-    manifestPromise = fetch(`${BASE}/manifest.json`)
+    manifestPromise = fetch(`${BASE}/${bucket}/manifest.json`)
       .then((r) => {
         if (!r.ok) throw new Error(`docs manifest ${r.status}`);
         return r.json() as Promise<DocsManifest>;
       })
       .catch((e) => {
-        manifestPromise = null; // allow retry
+        manifestPromises.delete(bucket); // allow retry
         throw e;
       });
+    manifestPromises.set(bucket, manifestPromise);
   }
   return manifestPromise;
 }
@@ -90,14 +95,18 @@ export function optionLabel(it: DocsManifestItem): string {
 
 const entryCache = new Map<string, DocsCatalogEntry>();
 
-/** Fetch (and cache) the full CatalogEntry for one docs example by its docsPath. */
-export async function loadDocsExample(docsPath: string): Promise<DocsCatalogEntry> {
-  const cached = entryCache.get(docsPath);
+/** Fetch and cache one bucket's full CatalogEntry by its docsPath. */
+export async function loadDocsExample(
+  bucket: string,
+  docsPath: string,
+): Promise<DocsCatalogEntry> {
+  const cacheKey = `${bucket}:${docsPath}`;
+  const cached = entryCache.get(cacheKey);
   if (cached) return cached;
   const file = docsPath.replace(/\//g, "__") + ".json";
-  const res = await fetch(`${BASE}/${file}`);
+  const res = await fetch(`${BASE}/${bucket}/${file}`);
   if (!res.ok) throw new Error(`docs example not found: ${docsPath} (${res.status})`);
   const entry = (await res.json()) as DocsCatalogEntry;
-  entryCache.set(docsPath, entry);
+  entryCache.set(cacheKey, entry);
   return entry;
 }

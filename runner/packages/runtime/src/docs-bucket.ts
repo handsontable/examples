@@ -1,7 +1,20 @@
+import { parse } from "semver";
+
 export interface DocsBucketResolution {
   selectedVersion: string;
   nextVersion: string;
   bucketKeys: Iterable<string>;
+}
+
+/** Derive the docs bucket key a selected version would use, if available. */
+export function deriveDocsBucketCandidate(
+  selectedVersion: string,
+  nextVersion: string,
+): string | null {
+  if (selectedVersion === nextVersion) return "next";
+
+  const version = parse(selectedVersion);
+  return version ? `${version.major}.${version.minor}` : null;
 }
 
 /**
@@ -15,14 +28,6 @@ export function resolveDocsBucket({
   bucketKeys,
 }: DocsBucketResolution): string | null {
   const buckets = new Set(bucketKeys);
-
-  if (selectedVersion === nextVersion) {
-    return buckets.has("next") ? "next" : null;
-  }
-
-  const match = selectedVersion.match(/^(\d+)\.(\d+)(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?$/);
-  if (!match) return null;
-
-  const bucket = `${match[1]}.${match[2]}`;
-  return buckets.has(bucket) ? bucket : null;
+  const candidate = deriveDocsBucketCandidate(selectedVersion, nextVersion);
+  return candidate && buckets.has(candidate) ? candidate : null;
 }

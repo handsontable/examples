@@ -1,6 +1,30 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveDocsBucket } from "../packages/runtime/dist/docs-bucket.js";
+import {
+  deriveDocsBucketCandidate,
+  resolveDocsBucket,
+} from "../packages/runtime/dist/docs-bucket.js";
+
+test("derives next for an exact dist-tags.next version", () => {
+  assert.equal(
+    deriveDocsBucketCandidate("19.0.0-next.1", "19.0.0-next.1"),
+    "next",
+  );
+});
+
+test("derives major.minor for a valid semver release", () => {
+  assert.equal(
+    deriveDocsBucketCandidate("18.0.4", "19.0.0-next.1"),
+    "18.0",
+  );
+});
+
+test("returns null candidate for a malformed selected version", () => {
+  assert.equal(
+    deriveDocsBucketCandidate("not-a-version", "19.0.0-next.1"),
+    null,
+  );
+});
 
 test("selects next only for an exact dist-tags.next version", () => {
   assert.equal(
