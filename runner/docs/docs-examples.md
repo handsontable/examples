@@ -34,11 +34,17 @@ default starter.
 Two dependency-free Node scripts, run from `runner/`:
 
 ```bash
-node pipeline/import-docs.mjs            # default docs dir: ../../handsontable/docs
-node pipeline/import-docs.mjs --docs=/path/to/handsontable/docs
-HOT_DOCS_DIR=/path/to/handsontable/docs node pipeline/import-docs.mjs
+node pipeline/import-docs.mjs --docs-branch=prod-docs/18.0
+node pipeline/import-docs.mjs --docs=/path/to/handsontable/docs --docs-branch=prod-docs/18.0
+HOT_DOCS_DIR=/path/to/handsontable/docs node pipeline/import-docs.mjs --docs-branch=develop
 ```
 
+- `--docs-branch` is required. `prod-docs/<major.minor>` becomes that release
+  bucket (for example, `18.0`); `develop` becomes the `next` bucket.
+- Release buckets bake the concrete version from the checkout's sibling
+  `handsontable/package.json`. The `next` bucket bakes npm's
+  `handsontable` `dist-tags.next`; an unavailable or malformed tag is a fatal
+  import error.
 - **`pipeline/wrap-docs-example.mjs`** — wraps a loose example fragment into a full,
   minimal project per framework. It is a Node port of the docs site's own
   `buildProjectFiles` (the "Edit on StackBlitz" wrapper in
@@ -48,8 +54,12 @@ HOT_DOCS_DIR=/path/to/handsontable/docs node pipeline/import-docs.mjs
   directive for its `@[code]` file refs, detects the framework from the folder,
   wraps each runnable variant, and writes a committed snapshot to
   `apps/authoring/public/docs-examples/`:
-  - `manifest.json` — metadata only (breadcrumb, docsPath, framework); drives the picker.
-  - `<encoded-docsPath>.json` — one full `CatalogEntry` per example, lazy-fetched on open.
+  - `<bucket>/manifest.json` — metadata only (including the bucket, docs branch,
+    and concrete Handsontable version); drives the picker.
+  - `<bucket>/<encoded-docsPath>.json` — one full `CatalogEntry` per example,
+    lazy-fetched on open.
+  - Regenerating a bucket deletes and replaces only that bucket's directory; it
+    never deletes another version's snapshot.
 
 The snapshot is **committed** to the repo (the sync mechanism from the docs repo is
 a later concern). Regenerate it whenever the docs examples change.
