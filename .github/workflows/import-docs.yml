@@ -1,6 +1,9 @@
 name: Import versioned docs examples
 
 on:
+  # Temporary pre-merge validation trigger; remove after the first successful run.
+  push:
+    branches: [feature/DEV-2101_docs-example-ci]
   workflow_dispatch: {}
   repository_dispatch:
     types: [docs-examples-sync]
