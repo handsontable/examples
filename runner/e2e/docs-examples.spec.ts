@@ -61,6 +61,18 @@ test("selecting an example from the cascader loads it", async ({ page }) => {
   await expect(page).toHaveURL(/docs=guides%2Fcolumns%2Fcolumn-adding%2F.+example1/);
 });
 
+test("unresolved docs path shows a not-found screen, not the default starter", async ({ page }) => {
+  await page.goto("/?docs=guides/does/not/exist.tsx");
+
+  await expect(page.getByText("Example not found")).toBeVisible();
+  await expect(page.getByText("guides/does/not/exist.tsx")).toBeVisible();
+
+  // The real regression guard: no starter/preview iframe ever mounts behind the
+  // not-found screen. Asserting only the message would also pass a version that
+  // shows it while the default starter still boots underneath (today's bug).
+  await expect(page.locator("iframe")).toHaveCount(0);
+});
+
 // Live render — needs the external Sandpack bundler; opt-in via E2E_LIVE=1.
 test("live: a JavaScript example renders a Handsontable grid", async ({ page }) => {
   test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");

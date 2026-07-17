@@ -115,6 +115,26 @@ function Splash({ text }: { text: string }) {
   );
 }
 
+function NotFound({ path }: { path: string | null }) {
+  return (
+    <div style={centered}>
+      <Logo size={40} />
+      <p style={{ color: theme.color.text, fontFamily: theme.font.ui, fontWeight: 600, margin: 0 }}>
+        Example not found
+      </p>
+      <p style={{ color: theme.color.textMuted, fontFamily: theme.font.ui, margin: 0 }}>
+        This example may not be imported yet.
+      </p>
+      {path && (
+        <code style={{ color: theme.color.textMuted, fontSize: 12 }}>{path}</code>
+      )}
+      <a href="/" style={{ color: theme.color.accent, fontFamily: theme.font.ui }}>
+        Back to the playground
+      </a>
+    </div>
+  );
+}
+
 function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const savedId = route.mode === "edit" || route.mode === "share" ? route.id : null;
   const isShare = route.mode === "share";
@@ -161,6 +181,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   // Saved-demo state (edit + share modes). Also gates the first mount until a
   // `?docs=` example has resolved, so we don't briefly boot the starter first.
   const [sourceLoaded, setSourceLoaded] = useState(!savedId && !initialDocs);
+  const [docsNotFound, setDocsNotFound] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
@@ -245,7 +266,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       })
       .catch(() => {
         if (cancelled) return;
-        setErrorMessage(`Could not load docs example: ${initialDocs}`);
+        setDocsNotFound(true);
         setSourceLoaded(true);
       });
     return () => { cancelled = true; };
@@ -321,6 +342,8 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         setDocsPath(dp);
         loadWorkspace(e, { ...e.files }, `docs:${dp}`);
       } catch {
+        // Unlike the deep-link (`?docs=`) load path, a working workspace is already
+        // open here, so a toolbar note is enough — no full-screen not-found takeover.
         setErrorMessage(`Could not load docs example: ${dp}`);
       }
     },
@@ -328,7 +351,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   );
 
   useEffect(() => {
-    if (!iframeEl || !sourceLoaded) return;
+    if (!iframeEl || !sourceLoaded || docsNotFound) return;
     setErrorMessage(null);
     const v = validateHandsontableVersion(version);
     if (!v.ok) {
@@ -367,7 +390,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
     // mountGen forces a remount when files are replaced (example switch or fork/edit load).
-  }, [iframeEl, entry, version, mountGen, sourceLoaded]);
+  }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound]);
 
   const onEdit = useCallback((path: string, contents: string) => {
     setFiles((prev) => ({ ...prev, [path]: contents }));
@@ -540,6 +563,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         .sort((a, b) => FW_PREF.indexOf(a.framework) - FW_PREF.indexOf(b.framework))
     : [];
 
+  if (docsNotFound) return <NotFound path={initialDocs} />;
   if (savedId && !sourceLoaded) return <Splash text="Loading demo…" />;
 
   return (

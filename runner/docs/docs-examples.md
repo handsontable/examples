@@ -25,6 +25,10 @@ This mirrors the starter deep link `?example=<framework>`. The picker in the
 authoring app lists a **Starter templates** group followed by one `<optgroup>` per
 guide breadcrumb (e.g. *Columns ▸ Adding and removing columns*).
 
+If `<content-path>` doesn't resolve to an imported snapshot, the runner shows a
+blocking "example not found" screen instead of silently falling back to the
+default starter.
+
 ## How it is built
 
 Two dependency-free Node scripts, run from `runner/`:
