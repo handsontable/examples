@@ -16,7 +16,9 @@
     "typecheck": "pnpm -r run typecheck",
     "lint": "pnpm -r run lint",
     "test": "pnpm --filter @handsontable/demo-runtime build && node --test pipeline/*.test.mjs",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "e2e:matrix": "E2E_STARTER_MATRIX=1 PLAYWRIGHT_JSON_OUTPUT_NAME=test-results/starter-matrix.json playwright test e2e/starter-matrix.spec.ts --workers=2 --retries=1 --reporter=list,json",
+    "e2e:matrix:report": "node scripts/starter-matrix-report.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",
