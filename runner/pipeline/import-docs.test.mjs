@@ -75,3 +75,61 @@ test("develop writes the next bucket with npm dist-tags.next", async (t) => {
   assert.equal(manifest.bucket, "next");
   assert.equal(manifest.hotVersion, "19.0.0-next.1");
 });
+
+test("pins every imported extra dependency to its npm version once", async (t) => {
+  const { docsDir, outDir } = makeFixture(t);
+  const sourcePath = path.join(docsDir, "content", "guides", "example", "javascript", "example1.js");
+  fs.writeFileSync(
+    sourcePath,
+    "import Chart from 'chart.js/auto';\nimport { color } from '@scope/colors';\nconsole.log(Chart, color);\n",
+  );
+  const requests = [];
+
+  await importDocs({
+    docsDir,
+    docsBranch: "prod-docs/18.0",
+    outDir,
+    fetchImpl: async (url) => {
+      requests.push(url);
+      if (url.endsWith("/chart.js")) {
+        return { ok: true, json: async () => ({ "dist-tags": { latest: "4.4.8" } }) };
+      }
+      if (url.endsWith("/%40scope%2Fcolors")) {
+        return { ok: true, json: async () => ({ "dist-tags": { latest: "2.1.0" } }) };
+      }
+      throw new Error(`unexpected registry request ${url}`);
+    },
+  });
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(outDir, "18.0", "manifest.json"), "utf8"));
+  const artifact = JSON.parse(
+    fs.readFileSync(path.join(outDir, "18.0", manifest.examples[0].file), "utf8"),
+  );
+  const dependencies = JSON.parse(artifact.files["/package.json"]).dependencies;
+
+  assert.deepEqual(requests.sort(), [
+    "https://registry.npmjs.org/%40scope%2Fcolors",
+    "https://registry.npmjs.org/chart.js",
+  ]);
+  assert.equal(dependencies["chart.js"], "4.4.8");
+  assert.equal(dependencies["@scope/colors"], "2.1.0");
+  assert.equal(Object.values(dependencies).includes("latest"), false);
+});
+
+test("fails before writing an imported package with no concrete npm version", async (t) => {
+  const { docsDir, outDir } = makeFixture(t);
+  fs.writeFileSync(
+    path.join(docsDir, "content", "guides", "example", "javascript", "example1.js"),
+    "import Chart from 'chart.js';\nconsole.log(Chart);\n",
+  );
+
+  await assert.rejects(
+    importDocs({
+      docsDir,
+      docsBranch: "prod-docs/18.0",
+      outDir,
+      fetchImpl: async () => ({ ok: true, json: async () => ({ "dist-tags": {} }) }),
+    }),
+    /chart\.js.*dist-tags\.latest/,
+  );
+});

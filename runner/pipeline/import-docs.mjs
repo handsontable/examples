@@ -26,7 +26,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { wrapDocsExample } from "./wrap-docs-example.mjs";
-import { normalizeDocsBranch, resolveDocsHotVersion } from "./docs-import-config.mjs";
+import {
+  normalizeDocsBranch,
+  resolveDocsHotVersion,
+  resolveNpmPackageVersion,
+} from "./docs-import-config.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER_DIR = path.resolve(__dirname, "..");
@@ -260,10 +264,31 @@ function collectExtraDeps(codeStrings) {
       const imp = m[1];
       if (imp.startsWith(".") || imp.startsWith("/")) continue;
       const pkg = imp.startsWith("@") ? imp.split("/").slice(0, 2).join("/") : imp.split("/")[0];
-      if (!BUILTIN_PKGS.has(pkg) && !pkg.startsWith("handsontable/")) deps[pkg] = "latest";
+      if (!BUILTIN_PKGS.has(pkg) && !pkg.startsWith("handsontable/")) deps[pkg] = true;
     }
   }
   return deps;
+}
+
+async function resolveExtraDeps(packageNames, { fetchImpl, versionCache }) {
+  const deps = {};
+  for (const packageName of Object.keys(packageNames)) {
+    if (!versionCache.has(packageName)) {
+      versionCache.set(
+        packageName,
+        resolveNpmPackageVersion({ packageName, fetchImpl }),
+      );
+    }
+    deps[packageName] = await versionCache.get(packageName);
+  }
+  return deps;
+}
+
+async function resolveAngularTypeDeps(extraDeps, options) {
+  const typePackages = [];
+  if (extraDeps.papaparse) typePackages.push("@types/papaparse");
+  if (extraDeps.moment) typePackages.push("@types/moment");
+  return resolveExtraDeps(Object.fromEntries(typePackages.map((packageName) => [packageName, true])), options);
 }
 
 // ── Breadcrumb / title helpers ──────────────────────────────────────────────
@@ -332,6 +357,7 @@ export async function importDocs({
   const problems = [];
   let written = 0;
   const seen = new Set();
+  const versionCache = new Map();
 
   // Reset only the selected bucket. Other version snapshots must survive.
   fs.rmSync(bucketOutDir, { recursive: true, force: true });
@@ -386,13 +412,20 @@ export async function importDocs({
           }
 
           const cfg = RUNNER[variant.runner];
-          const extraDeps = collectExtraDeps(Object.values(userFiles));
+          const extraDeps = await resolveExtraDeps(
+            collectExtraDeps(Object.values(userFiles)),
+            { fetchImpl, versionCache },
+          );
+          const extraDevDeps = variant.runner === "angular"
+            ? await resolveAngularTypeDeps(extraDeps, { fetchImpl, versionCache })
+            : {};
           const wrapped = wrapDocsExample({
             framework: WRAP_FRAMEWORK[variant.runner],
             hotVersion,
             exampleId: block.exampleId,
             userFiles,
             extraDeps,
+            extraDevDeps,
           });
 
           // Re-key to leading-slash paths for the runner FilesMap.
