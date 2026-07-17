@@ -233,12 +233,14 @@ function computeTitles(blocks) {
   return titles;
 }
 
-/** Framework folder → runner base framework. */
+/** Framework folder → runner base framework. Returns null for non-frontend
+ *  refs (e.g. recipe tutorial steps under a `server/` folder). */
 function detectFramework(fileRefs) {
   if (fileRefs.some((r) => /\/angular\//.test(r))) return "angular";
   if (fileRefs.some((r) => /\/react\//.test(r))) return "react";
   if (fileRefs.some((r) => /\/vue(?:3)?\//.test(r))) return "vue";
-  return "javascript";
+  if (fileRefs.some((r) => /\/javascript\//.test(r))) return "javascript";
+  return null;
 }
 
 /** Runnable variants to emit for a block, given its framework + available refs. */
