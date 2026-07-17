@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EditorShell, theme, logoUrl, type PreviewStatus } from "@handsontable/demo-editor-shell";
 import {
+  applyHandsontableCss,
   applyHandsontableVersion,
   validateHandsontableVersion,
   type CatalogEntry,
@@ -298,11 +299,15 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       if (prev["/package.json"] === undefined) return prev;
       let next: FilesMap;
       try {
-        next = applyHandsontableVersion(prev, v.value);
+        next = applyHandsontableCss(applyHandsontableVersion(prev, v.value), v.value);
       } catch {
         return prev;
       }
-      if (next["/package.json"] === prev["/package.json"]) return prev; // no change
+      if (
+        next["/package.json"] === prev["/package.json"] &&
+        next["/index.html"] === prev["/index.html"] &&
+        next["/src/index.html"] === prev["/src/index.html"]
+      ) return prev; // no change
       filesRef.current = next;
       return next;
     });

@@ -11,7 +11,7 @@
 
 import { loadSandpackClient } from "@codesandbox/sandpack-client";
 import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
-import { applyHandsontableVersion } from "./version.js";
+import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 // Derive Sandpack's option/setup types straight from the loader signature so we
 // don't depend on the package's exported type names staying stable.
@@ -128,7 +128,7 @@ export class SandpackRuntime implements DemoRuntime {
   /** Apply version dispatch, then shape files into a Sandpack sandbox setup. */
   private buildSetup(files: FilesMap): SandboxSetup {
     const pinned = this.opts.version
-      ? applyHandsontableVersion(files, this.opts.version)
+      ? applyHandsontableCss(applyHandsontableVersion(files, this.opts.version), this.opts.version)
       : files;
     this.files = sanitizeHtml(ensureSandpackDeps(pinned));
 

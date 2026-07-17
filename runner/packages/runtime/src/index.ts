@@ -8,6 +8,7 @@ export type {
 } from "./types.js";
 
 export {
+  applyHandsontableCss,
   applyHandsontableVersion,
   validateHandsontableVersion,
   isHandsontablePackage,

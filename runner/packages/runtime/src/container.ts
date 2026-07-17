@@ -9,7 +9,7 @@
 // is never bundled into the (non-DOM) Worker itself.
 
 import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
-import { applyHandsontableVersion } from "./version.js";
+import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 /** The live-session API accepts only relative POSIX paths. */
 function relativeFiles(files: FilesMap): FilesMap {
@@ -89,7 +89,9 @@ export class ContainerRuntime implements DemoRuntime {
   }
 
   async mount(files: FilesMap): Promise<{ previewUrl: string }> {
-    this.files = this.opts.version ? applyHandsontableVersion(files, this.opts.version) : files;
+    this.files = this.opts.version
+      ? applyHandsontableCss(applyHandsontableVersion(files, this.opts.version), this.opts.version)
+      : files;
 
     const res = await fetch(`${this.opts.apiBase}/api/session`, {
       method: "POST",
