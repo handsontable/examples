@@ -4,15 +4,16 @@ import {
   applyHandsontableCss,
   applyHandsontableVersion,
   deriveDocsBucketCandidate,
+  isNextPrereleaseVersion,
   validateHandsontableVersion,
   type CatalogEntry,
   type DemoRuntime,
   type FilesMap,
 } from "@handsontable/demo-runtime";
 import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
-import { ContainerRuntime } from "@handsontable/demo-runtime/container";
+import { ContainerRuntime, ContainerBootFailure } from "@handsontable/demo-runtime/container";
 import { zipSync, strToU8 } from "fflate";
-import { catalog, getEntry, fetchVersions, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
+import { catalog, getEntry, fetchVersions, checkVersionExists, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
 import {
   fetchDocsManifest,
   loadDocsExample,
@@ -53,10 +54,22 @@ function docsPageUrl(framework: string, permalink: string): string {
 }
 
 /** Turn a raw runtime error into a message that explains container prerequisites. */
-function describeRuntimeError(e: unknown, engine: string): string {
+function describeRuntimeError(e: unknown, engine: string, version: string): string {
+  // A boot-script failure carries its own real (and possibly multiline) log
+  // text — show it verbatim rather than running it through the connectivity
+  // heuristic below, which would otherwise misfire on words like "fetching"
+  // that pnpm's own error output happens to contain.
+  if (e instanceof ContainerBootFailure) return e.message;
   const msg = e instanceof Error ? e.message : String(e);
   if (engine === "container" && /failed to fetch|networkerror|load failed|session start failed|fetch/i.test(msg)) {
     return "This example runs on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
+  }
+  // Sandpack's own bundler message for an unresolved dependency reads like a
+  // transient hiccup worth retrying ("please try again in a couple
+  // seconds") — misleading when the actual cause is a pinned Handsontable
+  // version that was never published, which no amount of retrying fixes.
+  if (engine === "sandpack" && /could not fetch dependencies/i.test(msg)) {
+    return `Handsontable ${version} could not be fetched. Check that this exact version is published on npm.`;
   }
   return msg;
 }
@@ -309,6 +322,25 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     return () => { cancelled = true; };
   }, []);
 
+  // A next-dist-tag version (0.0.0-next-<hash>-<date>) that doesn't match the
+  // currently published next build may just be a docs/staging build's own
+  // commit stamp — never published, so npm can't install it. Fall back to the
+  // published next build and say so, rather than failing the container boot.
+  useEffect(() => {
+    if (!versionsResolved || !nextVersion) return;
+    if (!isNextPrereleaseVersion(version) || version === nextVersion) return;
+    let cancelled = false;
+    const requested = version;
+    checkVersionExists(API_BASE, requested).then((exists) => {
+      if (cancelled || exists) return;
+      setVersion(nextVersion);
+      setVersionWarning(
+        `Handsontable ${requested} isn't a published build; showing the latest next build (${nextVersion}) instead.`,
+      );
+    });
+    return () => { cancelled = true; };
+  }, [version, nextVersion, versionsResolved]);
+
   // A manifest fetch is the existence check for a derived bucket. Resolve it on
   // startup and every selected-version change, then swap or preserve an open
   // docs workspace according to its dirty state.
@@ -533,13 +565,13 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     runtime.onError((e) => {
       if (cancelled) return;
       setStatus("error");
-      setErrorMessage(describeRuntimeError(e, entry.engine));
+      setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
     });
     runtimeRef.current = runtime;
     runtime.mount(filesRef.current).catch((e: unknown) => {
       if (!cancelled) {
         setStatus("error");
-        setErrorMessage(describeRuntimeError(e, entry.engine));
+        setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
       }
     });
     return () => {

@@ -11,6 +11,15 @@
 import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
+/** The container reached the server and booted, but the boot script itself
+ * exited nonzero (e.g. pnpm couldn't resolve the pinned Handsontable
+ * version) — as opposed to the session request never reaching the server at
+ * all. Callers should show this message as-is: it's a real, often-multiline
+ * install/boot log, not a connectivity problem, and its text can incidentally
+ * contain words like "fetching" that would otherwise trip a generic
+ * network-error heuristic. */
+export class ContainerBootFailure extends Error {}
+
 /** The live-session API accepts only relative POSIX paths. */
 function relativeFiles(files: FilesMap): FilesMap {
   return Object.fromEntries(
@@ -133,8 +142,19 @@ export class ContainerRuntime implements DemoRuntime {
           `${this.opts.apiBase}/api/session/${this.sessionId}/status?port=${this.port}`,
         );
         if (r.ok) {
-          const { ready, log } = (await r.json()) as { ready: boolean; log: string };
+          const { ready, log, failed } = (await r.json()) as { ready: boolean; log: string; failed?: boolean };
           if (log && !this.pointed) this.emitProgress(log);
+          if (failed && !this.disposed && !this.pointed) {
+            const detail = log
+              .replace(/\x1b\[[0-9;]*m/g, "")
+              .split("\n")
+              .map((l) => l.trimEnd())
+              .filter(Boolean)
+              .slice(-40)
+              .join("\n");
+            this.emitError(new ContainerBootFailure(detail || "Container failed to install dependencies or start."));
+            return;
+          }
           if (ready && !this.disposed && !this.pointed) {
             // Dev server is up. Point the iframe at it, but keep the loading
             // indicator through the client-render phase (the SPA still has to
