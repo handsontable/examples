@@ -4,15 +4,16 @@ import {
   applyHandsontableCss,
   applyHandsontableVersion,
   deriveDocsBucketCandidate,
+  isNextPrereleaseVersion,
   validateHandsontableVersion,
   type CatalogEntry,
   type DemoRuntime,
   type FilesMap,
 } from "@handsontable/demo-runtime";
 import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
-import { ContainerRuntime } from "@handsontable/demo-runtime/container";
+import { ContainerRuntime, ContainerBootFailure } from "@handsontable/demo-runtime/container";
 import { zipSync, strToU8 } from "fflate";
-import { catalog, getEntry, fetchVersions, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
+import { catalog, getEntry, fetchVersions, checkVersionExists, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
 import {
   fetchDocsManifest,
   loadDocsExample,
@@ -53,10 +54,22 @@ function docsPageUrl(framework: string, permalink: string): string {
 }
 
 /** Turn a raw runtime error into a message that explains container prerequisites. */
-function describeRuntimeError(e: unknown, engine: string): string {
+function describeRuntimeError(e: unknown, engine: string, version: string): string {
+  // A boot-script failure carries its own real (and possibly multiline) log
+  // text — show it verbatim rather than running it through the connectivity
+  // heuristic below, which would otherwise misfire on words like "fetching"
+  // that pnpm's own error output happens to contain.
+  if (e instanceof ContainerBootFailure) return e.message;
   const msg = e instanceof Error ? e.message : String(e);
   if (engine === "container" && /failed to fetch|networkerror|load failed|session start failed|fetch/i.test(msg)) {
     return "This example runs on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
+  }
+  // Sandpack's own bundler message for an unresolved dependency reads like a
+  // transient hiccup worth retrying ("please try again in a couple
+  // seconds") — misleading when the actual cause is a pinned Handsontable
+  // version that was never published, which no amount of retrying fixes.
+  if (engine === "sandpack" && /could not fetch dependencies/i.test(msg)) {
+    return `Handsontable ${version} could not be fetched. Check that this exact version is published on npm.`;
   }
   return msg;
 }
@@ -309,6 +322,39 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     return () => { cancelled = true; };
   }, []);
 
+  // A next-dist-tag version (0.0.0-next-<hash>-<date>) that doesn't match the
+  // currently published next build may just be a docs/staging build's own
+  // commit stamp — never published, so npm can't install it. Fall back to the
+  // published next build and say so, rather than failing the container boot.
+  // `versionCheckPending` holds the runtime-mount effect off the doomed
+  // version while this resolves (see its use below) — otherwise a container
+  // boot (or Sandpack fetch) can fire and fail before the fallback lands.
+  const [versionCheckPending, setVersionCheckPending] = useState(false);
+  useEffect(() => {
+    if (!versionsResolved || !nextVersion) return;
+    if (!isNextPrereleaseVersion(version) || version === nextVersion) {
+      setVersionCheckPending(false);
+      return;
+    }
+    let cancelled = false;
+    const requested = version;
+    setVersionCheckPending(true);
+    checkVersionExists(API_BASE, requested).then((exists) => {
+      if (cancelled) return;
+      setVersionCheckPending(false);
+      if (exists) return;
+      setVersion(nextVersion);
+      setVersionWarning(
+        `Handsontable ${requested} isn't a published build; showing the latest next build (${nextVersion}) instead.`,
+      );
+    });
+    return () => { cancelled = true; };
+  }, [version, nextVersion, versionsResolved]);
+  // True while a next-format version's real availability is still unknown:
+  // either /api/versions hasn't resolved yet, or the exists-check above is
+  // in flight. Blocks the runtime-mount effect until it's settled.
+  const versionPending = isNextPrereleaseVersion(version) && (!versionsResolved || versionCheckPending);
+
   // A manifest fetch is the existence check for a derived bucket. Resolve it on
   // startup and every selected-version change, then swap or preserve an open
   // docs workspace according to its dirty state.
@@ -510,6 +556,15 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
 
   useEffect(() => {
     if (!iframeEl || !sourceLoaded || docsNotFound || docsRuntimeBlocked) return;
+    if (versionPending) {
+      // The previous run's cleanup (below) already disposed its runtime; put
+      // the status back to booting so the UI doesn't keep showing "Live" (or
+      // a stale error) over a torn-down preview while the version resolves.
+      setStatus("booting");
+      setErrorMessage(null);
+      setBootLog("");
+      return;
+    }
     setErrorMessage(null);
     const v = validateHandsontableVersion(version);
     if (!v.ok) {
@@ -533,13 +588,13 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     runtime.onError((e) => {
       if (cancelled) return;
       setStatus("error");
-      setErrorMessage(describeRuntimeError(e, entry.engine));
+      setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
     });
     runtimeRef.current = runtime;
     runtime.mount(filesRef.current).catch((e: unknown) => {
       if (!cancelled) {
         setStatus("error");
-        setErrorMessage(describeRuntimeError(e, entry.engine));
+        setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
       }
     });
     return () => {
@@ -548,7 +603,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
     // mountGen forces a remount when files are replaced (example switch or fork/edit load).
-  }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound, docsRuntimeBlocked]);
+  }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, versionPending]);
 
   const onEdit = useCallback((path: string, contents: string) => {
     const next = { ...filesRef.current, [path]: contents };
@@ -836,11 +891,6 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
           <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
         )}
         <div style={{ flex: 1 }} />
-        {errorMessage && (
-          <span style={{ color: theme.color.danger, fontSize: 12, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={errorMessage}>
-            {errorMessage}
-          </span>
-        )}
         {versionWarning && (
           <span style={{ color: theme.color.warning, fontSize: 12, maxWidth: 380 }} title={versionWarning}>
             {versionWarning}

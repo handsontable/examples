@@ -228,7 +228,18 @@ export default {
           `echo '::starting dev server::'`,
           dev.cmd,
         ].join("\n");
-        await sandbox.startProcess(`sh -lc ${shq(`{ ${script} ; } > ${BOOT_LOG} 2>&1`)}`);
+        // Append the boot script's own exit code as a sentinel line so /status
+        // can detect a failed install/boot (e.g. pnpm can't resolve the pinned
+        // Handsontable version) instead of polling "not ready yet" forever.
+        // Must be a subshell `( ... )`, not a brace group `{ ... }`: the script
+        // sets `-e`, and a brace group shares the outer shell, so a failure
+        // inside it kills the whole `sh -lc` process before the marker echo
+        // ever runs. A subshell isolates that fatal exit so the parent always
+        // reaches the marker append, whether the script failed or (for the
+        // normal case) the dev server is still running in the foreground.
+        await sandbox.startProcess(
+          `sh -lc ${shq(`( ${script} ) > ${BOOT_LOG} 2>&1; echo "__RUNNER_EXIT__:$?" >> ${BOOT_LOG}`)}`,
+        );
 
         // Preview URL host: the wildcard domain in production (PREVIEW_HOST), or
         // the request host in local dev (localhost:8787 -> *.localhost:8787).
@@ -276,7 +287,12 @@ export default {
           const r = await sandbox.exec(`sh -lc "tail -c 2500 ${BOOT_LOG} 2>/dev/null || true"`);
           log = r.stdout ?? "";
         } catch { /* no log yet */ }
-        return json({ ready, log });
+        // The boot script appends "__RUNNER_EXIT__:<code>" once it exits; a
+        // nonzero code means install/boot failed and it'll never become ready.
+        const exitMatch = /__RUNNER_EXIT__:(\d+)\s*$/.exec(log);
+        const failed = exitMatch !== null && exitMatch[1] !== "0";
+        if (exitMatch) log = log.slice(0, exitMatch.index).trimEnd();
+        return json({ ready, log, failed });
       }
 
       // DELETE /api/session/:id -> destroy container
@@ -408,8 +424,31 @@ export default {
         return await serveDemoAsset(env, demoId, sub, { embed });
       }
 
+      // GET /api/versions/exists?v=<version> (public) — does npm have this exact
+      // version published? Used to detect an unresolvable deep-linked/pinned
+      // next-dist-tag build (e.g. a local docs build's own commit stamp that was
+      // never published) so the runner can fall back to the current next build
+      // instead of failing the container's pnpm install.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "versions" && parts[2] === "exists") {
+        const v = url.searchParams.get("v")?.trim() ?? "";
+        if (!v) return json({ error: "v is required" }, 400);
+        const cacheKey = `version-exists:${v}`;
+        const cached = await env.CACHE.get(cacheKey, "json");
+        if (cached) return cors(cacheableJson(cached));
+        try {
+          const r = await fetch(`https://registry.npmjs.org/handsontable/${encodeURIComponent(v)}`);
+          const payload = { exists: r.status === 200 };
+          // A miss might just be "not published yet" for a version some other
+          // request is about to publish; cache negatives briefly, positives longer.
+          await env.CACHE.put(cacheKey, JSON.stringify(payload), { expirationTtl: payload.exists ? 3600 : 300 });
+          return cors(cacheableJson(payload));
+        } catch (e) {
+          return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+        }
+      }
+
       // GET /api/versions (public) — real published Handsontable versions.
-      if (request.method === "GET" && parts[0] === "api" && parts[1] === "versions") {
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "versions" && parts.length === 2) {
         const cached = await env.CACHE.get("versions", "json");
         if (cached) return cors(cacheableJson(cached));
         try {

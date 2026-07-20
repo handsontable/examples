@@ -37,12 +37,13 @@ function tailLines(log: string, n = 12): string {
  *  install/dev-server log is shown so it never looks frozen. */
 export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing }: PreviewPaneProps) {
   const booting = status === "booting";
+  const failed = status === "error";
   const log = bootLog ? tailLines(bootLog) : "";
   return (
     <section style={s.previewPane} aria-label="Preview">
       <div style={s.statusBar(status)}>
         {STATUS_TEXT[status]}
-        {status === "error" && errorMessage ? `: ${errorMessage}` : ""}
+        {status === "error" ? ": Setup failed" : ""}
       </div>
 
       {status === "ready" && syncing && (
@@ -94,6 +95,24 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing 
           ) : (
             <span>Preparing container…</span>
           )}
+        </div>
+      )}
+
+      {failed && errorMessage && (
+        <div
+          style={{
+            position: "absolute",
+            inset: "28px 0 0 0",
+            background: theme.color.surface,
+            padding: 16,
+            overflow: "auto",
+            fontFamily: theme.font.mono,
+            fontSize: 12,
+            color: theme.color.textMuted,
+            zIndex: 2,
+          }}
+        >
+          <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{errorMessage}</pre>
         </div>
       )}
 
