@@ -868,11 +868,6 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
           <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
         )}
         <div style={{ flex: 1 }} />
-        {errorMessage && (
-          <span style={{ color: theme.color.danger, fontSize: 12, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={errorMessage}>
-            {errorMessage}
-          </span>
-        )}
         {versionWarning && (
           <span style={{ color: theme.color.warning, fontSize: 12, maxWidth: 380 }} title={versionWarning}>
             {versionWarning}

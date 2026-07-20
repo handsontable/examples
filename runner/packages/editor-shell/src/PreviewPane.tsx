@@ -43,6 +43,7 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing 
     <section style={s.previewPane} aria-label="Preview">
       <div style={s.statusBar(status)}>
         {STATUS_TEXT[status]}
+        {status === "error" ? ": Setup failed" : ""}
       </div>
 
       {status === "ready" && syncing && (
@@ -111,9 +112,6 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing 
             zIndex: 2,
           }}
         >
-          <div style={{ fontFamily: theme.font.ui, fontSize: 13, fontWeight: 600, color: theme.color.danger, marginBottom: 10 }}>
-            Setup failed
-          </div>
           <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{errorMessage}</pre>
         </div>
       )}
