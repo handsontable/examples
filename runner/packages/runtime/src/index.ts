@@ -19,6 +19,7 @@ export {
 export type { ValidationResult } from "./version.js";
 
 export {
+  deriveDocsBucketCandidate,
   resolveDocsBucket,
 } from "./docs-bucket.js";
 export type { DocsBucketResolution } from "./docs-bucket.js";

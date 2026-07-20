@@ -3,6 +3,7 @@ import { EditorShell, theme, logoUrl, type PreviewStatus } from "@handsontable/d
 import {
   applyHandsontableCss,
   applyHandsontableVersion,
+  deriveDocsBucketCandidate,
   validateHandsontableVersion,
   type CatalogEntry,
   type DemoRuntime,
@@ -12,7 +13,12 @@ import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
 import { ContainerRuntime } from "@handsontable/demo-runtime/container";
 import { zipSync, strToU8 } from "fflate";
 import { catalog, getEntry, fetchVersions, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
-import { fetchDocsManifest, loadDocsExample, type DocsManifestItem } from "./docs-catalog.js";
+import {
+  fetchDocsManifest,
+  loadDocsExample,
+  type DocsManifest,
+  type DocsManifestItem,
+} from "./docs-catalog.js";
 import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
 import { MyDemos } from "./MyDemos.js";
@@ -53,6 +59,23 @@ function describeRuntimeError(e: unknown, engine: string): string {
     return "This example runs on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
   }
   return msg;
+}
+
+function pinHandsontableFiles(files: FilesMap, version: string): FilesMap {
+  const validated = validateHandsontableVersion(version);
+  if (!validated.ok || files["/package.json"] === undefined) return files;
+  try {
+    return applyHandsontableCss(
+      applyHandsontableVersion(files, validated.value),
+      validated.value,
+    );
+  } catch {
+    return files;
+  }
+}
+
+function isMissingDocsResource(error: unknown): boolean {
+  return error instanceof Error && /\b404\b/.test(error.message);
 }
 
 type EditorRoute =
@@ -116,15 +139,17 @@ function Splash({ text }: { text: string }) {
   );
 }
 
-function NotFound({ path }: { path: string | null }) {
+function NotFound({ path, transient = false }: { path: string | null; transient?: boolean }) {
   return (
     <div style={centered}>
       <Logo size={40} />
       <p style={{ color: theme.color.text, fontFamily: theme.font.ui, fontWeight: 600, margin: 0 }}>
-        Example not found
+        {transient ? "Example temporarily unavailable" : "Example not found"}
       </p>
       <p style={{ color: theme.color.textMuted, fontFamily: theme.font.ui, margin: 0 }}>
-        This example may not be imported yet.
+        {transient
+          ? "The documentation catalog could not be loaded. Try again later."
+          : "This example may not be imported yet."}
       </p>
       {path && (
         <code style={{ color: theme.color.textMuted, fontSize: 12 }}>{path}</code>
@@ -155,16 +180,21 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [entry, setEntry] = useState<CatalogEntry>(() => getEntry(framework));
   // Non-null when the current example is a documentation-guide example.
   const [docsPath, setDocsPath] = useState<string | null>(initialDocs);
-  // Docs examples for the Cascader picker (fetched once).
+  // Docs examples for the currently-resolved version bucket.
   const [docsItems, setDocsItems] = useState<DocsManifestItem[]>([]);
+  const [activeDocsBucket, setActiveDocsBucket] = useState<string | null>(null);
+  const [activeDocsManifest, setActiveDocsManifest] = useState<DocsManifest | null>(null);
 
   const [files, setFiles] = useState<FilesMap>(() => ({ ...entry.files }));
   const [version, setVersion] = useState<string>(
     () => new URLSearchParams(location.search).get("v") || DEFAULT_VERSION,
   );
   const [versionOptions, setVersionOptions] = useState<string[]>(VERSION_OPTIONS);
+  const [nextVersion, setNextVersion] = useState("");
+  const [versionsResolved, setVersionsResolved] = useState(false);
   const [status, setStatus] = useState<PreviewStatus>("booting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [versionWarning, setVersionWarning] = useState<string | null>(null);
   const [bootLog, setBootLog] = useState<string>("");
   const [dirty, setDirty] = useState(false);
   const [syncing, setSyncing] = useState(false); // container rebuild in flight
@@ -183,6 +213,8 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   // `?docs=` example has resolved, so we don't briefly boot the starter first.
   const [sourceLoaded, setSourceLoaded] = useState(!savedId && !initialDocs);
   const [docsNotFound, setDocsNotFound] = useState(false);
+  const [docsNotFoundTransient, setDocsNotFoundTransient] = useState(false);
+  const [docsRuntimeBlocked, setDocsRuntimeBlocked] = useState(!!initialDocs);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
@@ -192,6 +224,17 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [linksId, setLinksId] = useState<string | null>(null);
   const [forkedFrom, setForkedFrom] = useState<string | null>(`catalog:${framework}`);
   const [myDemosOpen, setMyDemosOpen] = useState(false);
+  const docsPathRef = useRef<string | null>(docsPath);
+  const dirtyRef = useRef(dirty);
+  const sourceLoadedRef = useRef(sourceLoaded);
+  const activeDocsBucketRef = useRef<string | null>(activeDocsBucket);
+  const activeDocsManifestRef = useRef<DocsManifest | null>(activeDocsManifest);
+  const docsRequestSeqRef = useRef(0);
+  docsPathRef.current = docsPath;
+  dirtyRef.current = dirty;
+  sourceLoadedRef.current = sourceLoaded;
+  activeDocsBucketRef.current = activeDocsBucket;
+  activeDocsManifestRef.current = activeDocsManifest;
 
   /** Replace the whole workspace (entry + files + lineage) and remount. */
   const loadWorkspace = useCallback((nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
@@ -201,6 +244,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     setFiles(nextFiles);
     setForkedFrom(lineage);
     setDirty(false);
+    dirtyRef.current = false;
     setErrorMessage(null);
     setMountGen((g) => g + 1);
   }, []);
@@ -244,35 +288,6 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     return () => { cancelled = true; };
   }, [savedId, isShare, loadWorkspace]);
 
-  // Fetch the docs-example manifest once (drives the breadcrumb-grouped picker).
-  useEffect(() => {
-    if (route.mode === "share") return; // read-only shared view has no picker
-    let cancelled = false;
-    fetchDocsManifest()
-      .then((m) => { if (!cancelled) setDocsItems(m.examples); })
-      .catch(() => { /* picker just shows starters */ });
-    return () => { cancelled = true; };
-  }, [route.mode]);
-
-  // Play mode with `?docs=`: lazy-load the docs example and boot it.
-  useEffect(() => {
-    if (!initialDocs) return;
-    let cancelled = false;
-    loadDocsExample(initialDocs)
-      .then((e) => {
-        if (cancelled) return;
-        loadWorkspace(e, { ...e.files }, `docs:${initialDocs}`);
-        setDocsPath(initialDocs);
-        setSourceLoaded(true);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setDocsNotFound(true);
-        setSourceLoaded(true);
-      });
-    return () => { cancelled = true; };
-  }, [initialDocs, loadWorkspace]);
-
   // Load real published versions from the API (npm-backed); default to latest
   // unless a version was deep-linked (or pinned by the demo being edited/shared).
   useEffect(() => {
@@ -280,38 +295,124 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     fetchVersions(API_BASE)
       .then(({ latest, next, versions }) => {
         if (cancelled) return;
+        setNextVersion(next ?? "");
         const opts = [...new Set([latest, ...versions, next].filter((v): v is string => !!v))];
         if (opts.length) setVersionOptions(opts);
         if (latest && !hadUrlVersion.current) {
           setVersion((cur) => (cur === DEFAULT_VERSION ? latest : cur));
         }
+        setVersionsResolved(true);
       })
-      .catch(() => { /* keep fallback options */ });
+      .catch(() => {
+        if (!cancelled) setVersionsResolved(true); // release buckets can still resolve without dist-tags.next
+      });
     return () => { cancelled = true; };
   }, []);
 
-  // Reflect the selected version in the editor's package.json (re-pin
-  // handsontable + wrapper), keeping any other edits.
+  // A manifest fetch is the existence check for a derived bucket. Resolve it on
+  // startup and every selected-version change, then swap or preserve an open
+  // docs workspace according to its dirty state.
   useEffect(() => {
-    const v = validateHandsontableVersion(version);
-    if (!v.ok) return;
-    setFiles((prev) => {
-      if (prev["/package.json"] === undefined) return prev;
-      let next: FilesMap;
-      try {
-        next = applyHandsontableCss(applyHandsontableVersion(prev, v.value), v.value);
-      } catch {
-        return prev;
+    if (route.mode === "share" || !versionsResolved) return;
+    const requestSeq = ++docsRequestSeqRef.current;
+    const openPath = docsPathRef.current;
+    const initialLoad = !!initialDocs && !sourceLoadedRef.current;
+    const candidate = deriveDocsBucketCandidate(version, nextVersion);
+
+    setDocsItems([]);
+    setActiveDocsBucket(null);
+    setActiveDocsManifest(null);
+    activeDocsBucketRef.current = null;
+    activeDocsManifestRef.current = null;
+    if (openPath) {
+      setDocsRuntimeBlocked(true);
+      setStatus("booting");
+      setErrorMessage(null);
+    }
+
+    const failOpenDocs = (kind: "bucket" | "path" | "fetch") => {
+      if (docsRequestSeqRef.current !== requestSeq) return;
+      if (initialLoad) {
+        setDocsNotFoundTransient(kind === "fetch");
+        setDocsNotFound(true);
+        setSourceLoaded(true);
+        sourceLoadedRef.current = true;
+        return;
       }
-      if (
-        next["/package.json"] === prev["/package.json"] &&
-        next["/index.html"] === prev["/index.html"] &&
-        next["/src/index.html"] === prev["/src/index.html"]
-      ) return prev; // no change
-      filesRef.current = next;
-      return next;
-    });
-  }, [version, framework, mountGen]);
+      if (!openPath) return;
+      const message = kind === "bucket"
+        ? `No documentation examples are available for Handsontable ${version}. Choose another version or a starter.`
+        : kind === "path"
+          ? `This documentation example is unavailable for Handsontable ${version}. Choose another version or a starter.`
+          : `Could not load documentation examples for Handsontable ${version}. Try another version.`;
+      setStatus("error");
+      setErrorMessage(message);
+      setDocsRuntimeBlocked(true);
+    };
+
+    if (!candidate) {
+      failOpenDocs("bucket");
+      return;
+    }
+
+    let cancelled = false;
+    void fetchDocsManifest(candidate)
+      .then(async (manifest) => {
+        if (cancelled || docsRequestSeqRef.current !== requestSeq) return;
+        setDocsItems(manifest.examples);
+        setActiveDocsBucket(candidate);
+        setActiveDocsManifest(manifest);
+        activeDocsBucketRef.current = candidate;
+        activeDocsManifestRef.current = manifest;
+        if (!openPath) return;
+        if (!manifest.examples.some((item) => item.docsPath === openPath)) {
+          failOpenDocs("path");
+          return;
+        }
+
+        if (dirtyRef.current) {
+          const pinned = pinHandsontableFiles(filesRef.current, version);
+          filesRef.current = pinned;
+          setFiles(pinned);
+          setVersionWarning(
+            "This example has unsaved edits; its content may not match the selected version API.",
+          );
+          setErrorMessage(null);
+          setDocsRuntimeBlocked(false);
+          return;
+        }
+
+        try {
+          const docsEntry = await loadDocsExample(candidate, openPath);
+          if (cancelled || docsRequestSeqRef.current !== requestSeq) return;
+          const nextFiles = manifest.hotVersion === version
+            ? { ...docsEntry.files }
+            : pinHandsontableFiles({ ...docsEntry.files }, version);
+          loadWorkspace(docsEntry, nextFiles, `docs:${candidate}:${openPath}`);
+          setDocsPath(openPath);
+          docsPathRef.current = openPath;
+          setVersionWarning(null);
+          setDocsRuntimeBlocked(false);
+          setSourceLoaded(true);
+          sourceLoadedRef.current = true;
+        } catch (error) {
+          failOpenDocs(isMissingDocsResource(error) ? "path" : "fetch");
+        }
+      })
+      .catch((error) => {
+        failOpenDocs(isMissingDocsResource(error) ? "bucket" : "fetch");
+      });
+    return () => { cancelled = true; };
+  }, [initialDocs, loadWorkspace, nextVersion, route.mode, version, versionsResolved]);
+
+  // Starters never load docs artifacts. Version changes only re-pin their
+  // existing package/CSS files and preserve any edits.
+  useEffect(() => {
+    if (docsPath) return;
+    const pinned = pinHandsontableFiles(filesRef.current, version);
+    filesRef.current = pinned;
+    setFiles(pinned);
+  }, [docsPath, version]);
 
   // Keep the URL in sync with the selected example + version — playground only
   // (edit/share have their own /edit/:id, /share/:id paths). Docs examples use
@@ -333,30 +434,82 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   /** Pick a catalog starter template as a fresh starting template (playground). */
   const selectExample = useCallback(
     (fw: string) => {
+      docsRequestSeqRef.current += 1;
       setDocsPath(null);
-      loadWorkspace(getEntry(fw), { ...getEntry(fw).files }, `catalog:${fw}`);
+      docsPathRef.current = null;
+      setDocsRuntimeBlocked(false);
+      setVersionWarning(null);
+      const starter = getEntry(fw);
+      loadWorkspace(starter, pinHandsontableFiles({ ...starter.files }, version), `catalog:${fw}`);
     },
-    [loadWorkspace],
+    [loadWorkspace, version],
   );
 
   /** Open a documentation-guide example (lazy-loaded by its docs content path). */
   const selectDocs = useCallback(
     async (dp: string) => {
+      const bucket = activeDocsBucketRef.current;
+      const manifest = activeDocsManifestRef.current;
+      if (!bucket || !manifest || !manifest.examples.some((item) => item.docsPath === dp)) {
+        setErrorMessage(`Could not load docs example: ${dp}`);
+        return;
+      }
+      const requestSeq = ++docsRequestSeqRef.current;
+      setDocsRuntimeBlocked(true);
+      setStatus("booting");
+      setErrorMessage(null);
       try {
-        const e = await loadDocsExample(dp);
+        const e = await loadDocsExample(bucket, dp);
+        if (docsRequestSeqRef.current !== requestSeq || activeDocsBucketRef.current !== bucket) return;
+        const nextFiles = manifest.hotVersion === version
+          ? { ...e.files }
+          : pinHandsontableFiles({ ...e.files }, version);
         setDocsPath(dp);
-        loadWorkspace(e, { ...e.files }, `docs:${dp}`);
+        docsPathRef.current = dp;
+        loadWorkspace(e, nextFiles, `docs:${bucket}:${dp}`);
+        setVersionWarning(null);
+        setDocsRuntimeBlocked(false);
       } catch {
         // Unlike the deep-link (`?docs=`) load path, a working workspace is already
         // open here, so a toolbar note is enough — no full-screen not-found takeover.
-        setErrorMessage(`Could not load docs example: ${dp}`);
+        if (docsRequestSeqRef.current === requestSeq) {
+          setStatus("error");
+          setErrorMessage(`Could not load docs example: ${dp}`);
+          setDocsRuntimeBlocked(true);
+        }
       }
     },
-    [loadWorkspace],
+    [loadWorkspace, version],
   );
 
+  const changeVersion = useCallback((next: string) => {
+    docsRequestSeqRef.current += 1;
+    setVersionWarning(null);
+    if (docsPathRef.current) {
+      setDocsItems([]);
+      setActiveDocsBucket(null);
+      setActiveDocsManifest(null);
+      activeDocsBucketRef.current = null;
+      activeDocsManifestRef.current = null;
+      setDocsRuntimeBlocked(true);
+      setStatus("booting");
+      setErrorMessage(null);
+    }
+    setVersion(next);
+  }, []);
+
+  // Dispose and visibly clear a docs preview while its target bucket/path is
+  // unresolved or unavailable. The version picker and editor remain usable.
   useEffect(() => {
-    if (!iframeEl || !sourceLoaded || docsNotFound) return;
+    if (!iframeEl || !docsRuntimeBlocked) return;
+    runtimeRef.current?.dispose();
+    runtimeRef.current = null;
+    iframeEl.removeAttribute("srcdoc");
+    iframeEl.src = "about:blank";
+  }, [iframeEl, docsRuntimeBlocked]);
+
+  useEffect(() => {
+    if (!iframeEl || !sourceLoaded || docsNotFound || docsRuntimeBlocked) return;
     setErrorMessage(null);
     const v = validateHandsontableVersion(version);
     if (!v.ok) {
@@ -395,11 +548,14 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
     // mountGen forces a remount when files are replaced (example switch or fork/edit load).
-  }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound]);
+  }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound, docsRuntimeBlocked]);
 
   const onEdit = useCallback((path: string, contents: string) => {
-    setFiles((prev) => ({ ...prev, [path]: contents }));
+    const next = { ...filesRef.current, [path]: contents };
+    filesRef.current = next;
+    setFiles(next);
     setDirty(true);
+    dirtyRef.current = true;
     try {
       runtimeRef.current?.writeFile(path, contents);
     } catch {
@@ -421,6 +577,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     filesRef.current = next;
     setFiles(next);
     setDirty(true);
+    dirtyRef.current = true;
     try { runtimeRef.current?.writeFile(path, ""); } catch { /* not mounted */ }
   }, []);
 
@@ -431,6 +588,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     filesRef.current = next;
     setFiles(next);
     setDirty(true);
+    dirtyRef.current = true;
     try { runtimeRef.current?.deleteFile?.(path); } catch { /* not mounted */ }
   }, []);
 
@@ -442,6 +600,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     filesRef.current = next;
     setFiles(next);
     setDirty(true);
+    dirtyRef.current = true;
     try {
       runtimeRef.current?.writeFile(newPath, content);
       runtimeRef.current?.deleteFile?.(oldPath);
@@ -549,6 +708,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         throw new Error(body.error || `save failed (${res.status})`);
       }
       setDirty(false);
+      dirtyRef.current = false;
     } catch (e) {
       setErrorMessage(e instanceof Error ? e.message : String(e));
     } finally {
@@ -568,7 +728,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         .sort((a, b) => FW_PREF.indexOf(a.framework) - FW_PREF.indexOf(b.framework))
     : [];
 
-  if (docsNotFound) return <NotFound path={initialDocs} />;
+  if (docsNotFound) return <NotFound path={initialDocs} transient={docsNotFoundTransient} />;
   if (savedId && !sourceLoaded) return <Splash text="Loading demo…" />;
 
   return (
@@ -614,7 +774,9 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
               selectedKey={
                 currentDocsMeta
                   ? `${currentDocsMeta.guide}|${currentDocsMeta.exampleId}`
-                  : `starter:${framework}`
+                  : docsPath
+                    ? undefined
+                    : `starter:${framework}`
               }
               onSelect={(leaf: CascaderLeaf) => {
                 if (leaf.kind === "starter") { selectExample(leaf.framework); return; }
@@ -679,6 +841,11 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
             {errorMessage}
           </span>
         )}
+        {versionWarning && (
+          <span style={{ color: theme.color.warning, fontSize: 12, maxWidth: 380 }} title={versionWarning}>
+            {versionWarning}
+          </span>
+        )}
         {isShare ? (
           <>
             <button style={ghostBtn} onClick={downloadZip} title="Download this example (including your edits) as a .zip">
@@ -709,7 +876,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         syncing={syncing}
         version={version}
         versionOptions={versionOptions}
-        onVersionChange={setVersion}
+        onVersionChange={changeVersion}
         onEdit={onEdit}
         onAddFile={addFile}
         onRenameFile={renameFile}
