@@ -8,6 +8,7 @@ export type {
 } from "./types.js";
 
 export {
+  applyHandsontableCss,
   applyHandsontableVersion,
   validateHandsontableVersion,
   isHandsontablePackage,
@@ -16,6 +17,12 @@ export {
   DEFAULT_MAX_MAJOR,
 } from "./version.js";
 export type { ValidationResult } from "./version.js";
+
+export {
+  deriveDocsBucketCandidate,
+  resolveDocsBucket,
+} from "./docs-bucket.js";
+export type { DocsBucketResolution } from "./docs-bucket.js";
 
 export {
   resolveRuntime,

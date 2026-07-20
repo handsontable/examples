@@ -1,0 +1,177 @@
+name: Import versioned docs examples
+
+on:
+  workflow_dispatch: {}
+  repository_dispatch:
+    types: [docs-examples-sync]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: import-docs-examples
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        name: Build docs branch matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_DOCS_BRANCH: ${{ github.event.client_payload.docs_branch }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const releaseBranch = (version) => {
+            const match = typeof version === "string" && version.match(/^(\d+)\.(\d+)\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
+            if (!match) throw new Error(`npm dist-tags.latest must be a concrete semver version; got ${JSON.stringify(version)}`);
+            return { docs_branch: `prod-docs/${match[1]}.${match[2]}`, bucket: `${match[1]}.${match[2]}` };
+          };
+
+          const dispatchBranch = process.env.DISPATCH_DOCS_BRANCH;
+          let matrix;
+          if (process.env.EVENT_NAME === "repository_dispatch" && dispatchBranch) {
+            if (dispatchBranch === "develop") {
+              matrix = [{ docs_branch: "develop", bucket: "next" }];
+            } else {
+              const match = dispatchBranch.match(/^prod-docs\/(\d+)\.(\d+)$/);
+              if (!match) throw new Error(`Unsupported repository_dispatch docs_branch: ${JSON.stringify(dispatchBranch)}`);
+              matrix = [{ docs_branch: dispatchBranch, bucket: `${match[1]}.${match[2]}` }];
+            }
+          } else {
+            const response = await fetch("https://registry.npmjs.org/handsontable");
+            if (!response.ok) throw new Error(`Could not fetch npm dist-tags.latest: registry returned ${response.status}`);
+            const registry = await response.json();
+            matrix = [releaseBranch(registry?.["dist-tags"]?.latest), { docs_branch: "develop", bucket: "next" }];
+          }
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(matrix)}\n`);
+          NODE
+
+  import:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out Handsontable docs source
+        uses: actions/checkout@v4
+        with:
+          repository: handsontable/handsontable
+          ref: ${{ matrix.docs_branch }}
+          path: handsontable
+          token: ${{ secrets.DOCS_REPO_TOKEN || github.token }}
+          sparse-checkout: |
+            /docs/content/**
+            /handsontable/package.json
+          sparse-checkout-cone-mode: false
+
+      - id: import
+        name: Import ${{ matrix.bucket }} bucket
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node pipeline/import-docs.mjs \
+            --docs="$GITHUB_WORKSPACE/handsontable/docs" \
+            --docs-branch="${{ matrix.docs_branch }}" 2>&1 | tee import-docs.log
+
+      - name: Summarize ${{ matrix.bucket }} import
+        if: always()
+        working-directory: .
+        env:
+          BUCKET: ${{ matrix.bucket }}
+          DOCS_BRANCH: ${{ matrix.docs_branch }}
+          IMPORT_OUTCOME: ${{ steps.import.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+
+          const manifestPath = path.join(
+            "runner",
+            "apps",
+            "authoring",
+            "public",
+            "docs-examples",
+            process.env.BUCKET,
+            "manifest.json",
+          );
+          const lines = [
+            `## Docs examples: \`${process.env.BUCKET}\``,
+            "",
+            `- Docs branch: \`${process.env.DOCS_BRANCH}\``,
+            `- Import result: **${process.env.IMPORT_OUTCOME}**`,
+          ];
+          if (fs.existsSync(manifestPath)) {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+            const counts = manifest.examples.reduce((result, { framework }) => {
+              result[framework] = (result[framework] || 0) + 1;
+              return result;
+            }, {});
+            lines.push(`- Handsontable version: \`${manifest.hotVersion}\``);
+            lines.push(`- Examples: ${manifest.count}`);
+            lines.push(`- By framework: ${Object.entries(counts).map(([name, count]) => `${name} (${count})`).join(", ")}`);
+          } else {
+            lines.push("- Manifest: not generated");
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n\n`);
+          NODE
+
+      - name: Fail when import failed
+        if: steps.import.outcome == 'failure'
+        run: exit 1
+
+      - name: Stage ${{ matrix.bucket }} bucket
+        run: |
+          mkdir -p "$RUNNER_TEMP/docs-examples"
+          cp -R "apps/authoring/public/docs-examples/${{ matrix.bucket }}" "$RUNNER_TEMP/docs-examples/${{ matrix.bucket }}"
+
+      - name: Upload ${{ matrix.bucket }} bucket
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-examples-${{ matrix.bucket }}
+          path: ${{ runner.temp }}/docs-examples
+          retention-days: 7
+
+  publish:
+    needs: [prepare, import]
+    if: needs.import.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download generated buckets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: docs-examples-*
+          merge-multiple: true
+          path: runner/apps/authoring/public/docs-examples
+
+      - name: Create or update generated-content pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/docs-example-buckets
+          base: ${{ github.ref_name }}
+          commit-message: "chore(docs): update versioned docs examples"
+          title: "chore(docs): update versioned docs examples"
+          body: |
+            Generated by the **Import versioned docs examples** workflow.
+
+            The workflow imported the requested Handsontable documentation bucket(s)
+            with concrete npm dependency versions.
+          labels: automated

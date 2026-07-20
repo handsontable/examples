@@ -103,6 +103,10 @@ cascader drill-down, framework switching, and the "See in documentation" link.
   `E2E_BASE_URL=https://demos.handsontable.com E2E_LIVE=1 pnpm e2e`.
 - The API deploy workflow also does a post-deploy smoke (`GET /api/health` on
   `demos.handsontable.com` must return 200).
+- A separate, opt-in starter compatibility matrix (`pnpm e2e:matrix`, gated
+  behind `E2E_STARTER_MATRIX=1`) boots every starter at every supported
+  Handsontable major against a live instance — not part of CI, run manually.
+  See `docs/starter-compat-matrix.md`.
 
 ### Authoring app (frontend) → GitHub Actions
 

@@ -8,31 +8,35 @@
 // (pipeline/wrap-docs-example.mjs — the same wrapper the docs "Edit on
 // StackBlitz" button uses), and emits, under apps/authoring/public/docs-examples/:
 //
-//   manifest.json                      — small metadata list that drives the
+//   <bucket>/manifest.json              — small metadata list that drives the
 //                                        breadcrumb-grouped example dropdown.
-//   <encoded-docsPath>.json            — one full CatalogEntry per example,
+//   <bucket>/<encoded-docsPath>.json    — one full CatalogEntry per example,
 //                                        fetched on demand when the user opens it.
 //
 // The runner opens an example by its docs content path, e.g.
 //   /?docs=guides/columns/column-adding/javascript/example1.ts
 //
-// Deterministic and dependency-free (Node built-ins only).
+// Dependency-free (Node built-ins only).
 //
-// Run:  node runner/pipeline/import-docs.mjs [--docs=<path-to-handsontable/docs>]
+// Run:  node runner/pipeline/import-docs.mjs --docs-branch=<branch>
+//        [--docs=<path-to-handsontable/docs>]
 //   env HOT_DOCS_DIR overrides the default ../../handsontable/docs.
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { wrapDocsExample } from "./wrap-docs-example.mjs";
+import {
+  normalizeDocsBranch,
+  resolveDocsHotVersion,
+  resolveNpmPackageVersion,
+} from "./docs-import-config.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER_DIR = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(RUNNER_DIR, "..");
 
-function resolveDocsDir() {
-  const arg = process.argv.find((a) => a.startsWith("--docs="));
-  const raw = arg ? arg.slice("--docs=".length) : process.env.HOT_DOCS_DIR;
+function resolveDocsDir(raw) {
   const candidate = raw
     ? path.resolve(process.cwd(), raw)
     : path.resolve(REPO_ROOT, "..", "handsontable", "docs");
@@ -48,29 +52,7 @@ function resolveDocsDir() {
   return candidate;
 }
 
-const DOCS_DIR = resolveDocsDir();
-const CONTENT_DIR = path.join(DOCS_DIR, "content");
 const OUT_DIR = path.join(RUNNER_DIR, "apps", "authoring", "public", "docs-examples");
-const SOURCE_ROOTS = [
-  { dir: path.join(CONTENT_DIR, "guides"), prefix: [] },
-  { dir: path.join(CONTENT_DIR, "recipes"), prefix: ["Recipes"] },
-];
-
-// Handsontable version to bake into wrapped projects (the runner re-pins it at
-// runtime; this is just the default + the CDN CSS URL version).
-function readHotVersion() {
-  // The core library package lives at <repo>/handsontable/package.json
-  // (docs is <repo>/docs). Mirrors framework-loader.mjs's HOT_VERSION lookup.
-  try {
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(DOCS_DIR, "..", "handsontable", "package.json"), "utf8"),
-    );
-    return pkg.version || "latest";
-  } catch {
-    return "latest";
-  }
-}
-const HOT_VERSION = readHotVersion();
 
 // Packages already provided by each framework scaffold — never added to extraDeps.
 // Mirrors BUILTIN_PKGS in docs/src/plugins/framework-loader.mjs.
@@ -266,9 +248,9 @@ function variantsFor(framework, fileRefs) {
 const WRAP_FRAMEWORK = { javascript: "javascript", typescript: "javascript", react: "react", "react-js": "react", vue: "vue", angular: "angular" };
 const COMPANION_EXT = new Set([".html", ".css"]);
 
-function readRef(ref) {
+function readRef(contentDir, ref) {
   try {
-    return fs.readFileSync(path.join(CONTENT_DIR, ref), "utf8").replace(/\r\n/g, "\n").trimEnd();
+    return fs.readFileSync(path.join(contentDir, ref), "utf8").replace(/\r\n/g, "\n").trimEnd();
   } catch {
     return null;
   }
@@ -282,10 +264,31 @@ function collectExtraDeps(codeStrings) {
       const imp = m[1];
       if (imp.startsWith(".") || imp.startsWith("/")) continue;
       const pkg = imp.startsWith("@") ? imp.split("/").slice(0, 2).join("/") : imp.split("/")[0];
-      if (!BUILTIN_PKGS.has(pkg) && !pkg.startsWith("handsontable/")) deps[pkg] = "latest";
+      if (!BUILTIN_PKGS.has(pkg) && !pkg.startsWith("handsontable/")) deps[pkg] = true;
     }
   }
   return deps;
+}
+
+async function resolveExtraDeps(packageNames, { fetchImpl, versionCache }) {
+  const deps = {};
+  for (const packageName of Object.keys(packageNames)) {
+    if (!versionCache.has(packageName)) {
+      versionCache.set(
+        packageName,
+        resolveNpmPackageVersion({ packageName, fetchImpl }),
+      );
+    }
+    deps[packageName] = await versionCache.get(packageName);
+  }
+  return deps;
+}
+
+async function resolveAngularTypeDeps(extraDeps, options) {
+  const typePackages = [];
+  if (extraDeps.papaparse) typePackages.push("@types/papaparse");
+  if (extraDeps.moment) typePackages.push("@types/moment");
+  return resolveExtraDeps(Object.fromEntries(typePackages.map((packageName) => [packageName, true])), options);
 }
 
 // ── Breadcrumb / title helpers ──────────────────────────────────────────────
@@ -336,17 +339,31 @@ function walkMd(dir, acc = []) {
   return acc;
 }
 
-function main() {
+export async function importDocs({
+  docsDir,
+  docsBranch,
+  outDir = OUT_DIR,
+  fetchImpl,
+}) {
+  const { bucket } = normalizeDocsBranch(docsBranch);
+  const hotVersion = await resolveDocsHotVersion({ docsBranch, docsDir, fetchImpl });
+  const contentDir = path.join(docsDir, "content");
+  const sourceRoots = [
+    { dir: path.join(contentDir, "guides"), prefix: [] },
+    { dir: path.join(contentDir, "recipes"), prefix: ["Recipes"] },
+  ];
+  const bucketOutDir = path.join(outDir, bucket);
   const manifest = [];
   const problems = [];
   let written = 0;
   const seen = new Set();
+  const versionCache = new Map();
 
-  // Reset output dir.
-  fs.rmSync(OUT_DIR, { recursive: true, force: true });
-  fs.mkdirSync(OUT_DIR, { recursive: true });
+  // Reset only the selected bucket. Other version snapshots must survive.
+  fs.rmSync(bucketOutDir, { recursive: true, force: true });
+  fs.mkdirSync(bucketOutDir, { recursive: true });
 
-  for (const root of SOURCE_ROOTS) {
+  for (const root of sourceRoots) {
     const mdFiles = walkMd(root.dir);
 
     for (const mdPath of mdFiles) {
@@ -357,7 +374,7 @@ function main() {
       const guideRelDir = path.relative(root.dir, path.dirname(mdPath)).split(path.sep).join("/");
       const guideTitle = frontmatterTitle(md);
       const crumbs = [...root.prefix, ...breadcrumbFor(guideRelDir, guideTitle)];
-      const guideRel = path.relative(CONTENT_DIR, mdPath).split(path.sep).join("/");
+      const guideRel = path.relative(contentDir, mdPath).split(path.sep).join("/");
       const titles = computeTitles(blocks); // exampleId -> display title
       // Docs page permalink (e.g. "/column-adding"); fall back to the guide folder.
       const permalink = frontmatterField(md, "permalink") ||
@@ -371,7 +388,7 @@ function main() {
         // Gather ref contents once.
         const refContent = {};
         for (const ref of block.fileRefs) {
-          const c = readRef(ref);
+          const c = readRef(contentDir, ref);
           if (c !== null) refContent[ref] = c;
         }
 
@@ -395,13 +412,20 @@ function main() {
           }
 
           const cfg = RUNNER[variant.runner];
-          const extraDeps = collectExtraDeps(Object.values(userFiles));
+          const extraDeps = await resolveExtraDeps(
+            collectExtraDeps(Object.values(userFiles)),
+            { fetchImpl, versionCache },
+          );
+          const extraDevDeps = variant.runner === "angular"
+            ? await resolveAngularTypeDeps(extraDeps, { fetchImpl, versionCache })
+            : {};
           const wrapped = wrapDocsExample({
             framework: WRAP_FRAMEWORK[variant.runner],
-            hotVersion: HOT_VERSION,
+            hotVersion,
             exampleId: block.exampleId,
             userFiles,
             extraDeps,
+            extraDevDeps,
           });
 
           // Re-key to leading-slash paths for the runner FilesMap.
@@ -418,7 +442,7 @@ function main() {
           const entry = {
             ...cfg,
             displayName,
-            htCoreRange: HOT_VERSION,
+            htCoreRange: hotVersion,
             fileCount: Object.keys(files).length,
             assets: [],
             skipped: [],
@@ -434,10 +458,11 @@ function main() {
             lang: cfg.displayName,
           };
 
-          fs.writeFileSync(path.join(OUT_DIR, encodePath(docsPath)), JSON.stringify(entry) + "\n");
+          fs.writeFileSync(path.join(bucketOutDir, encodePath(docsPath)), JSON.stringify(entry) + "\n");
           written++;
 
           manifest.push({
+            bucket,
             docsPath,
             file: encodePath(docsPath),
             breadcrumb: crumbs,
@@ -463,17 +488,25 @@ function main() {
   });
 
   fs.writeFileSync(
-    path.join(OUT_DIR, "manifest.json"),
+    path.join(bucketOutDir, "manifest.json"),
     JSON.stringify(
-      { generatedFrom: "handsontable/docs content/guides/** + content/recipes/**", hotVersion: HOT_VERSION, count: manifest.length, examples: manifest },
+      {
+        bucket,
+        docsBranch,
+        generatedFrom: "handsontable/docs content/guides/** + content/recipes/**",
+        hotVersion,
+        count: manifest.length,
+        examples: manifest,
+      },
       null,
       2,
     ) + "\n",
   );
 
-  console.log(`[import-docs] docs dir: ${DOCS_DIR}`);
-  console.log(`[import-docs] handsontable version: ${HOT_VERSION}`);
-  console.log(`[import-docs] wrote ${written} example artifacts + manifest.json → ${path.relative(REPO_ROOT, OUT_DIR)}`);
+  console.log(`[import-docs] docs dir: ${docsDir}`);
+  console.log(`[import-docs] docs branch: ${docsBranch} (bucket ${bucket})`);
+  console.log(`[import-docs] handsontable version: ${hotVersion}`);
+  console.log(`[import-docs] wrote ${written} example artifacts + manifest.json → ${path.relative(REPO_ROOT, bucketOutDir)}`);
   const byFw = {};
   for (const e of manifest) byFw[e.framework] = (byFw[e.framework] || 0) + 1;
   console.log(`[import-docs] by framework:`, byFw);
@@ -481,8 +514,20 @@ function main() {
   if (problems.length) {
     console.error(`[import-docs] ${problems.length} problems:\n  - ` + problems.slice(0, 30).join("\n  - "));
     if (problems.length > 30) console.error(`  … and ${problems.length - 30} more`);
-    process.exitCode = 1;
+    throw new Error(`[import-docs] ${problems.length} generated artifacts have problems`);
   }
 }
 
-main();
+async function main() {
+  const docsArg = process.argv.find((a) => a.startsWith("--docs="));
+  const branchArg = process.argv.find((a) => a.startsWith("--docs-branch="));
+  const docsDir = resolveDocsDir(docsArg?.slice("--docs=".length) ?? process.env.HOT_DOCS_DIR);
+  await importDocs({ docsDir, docsBranch: branchArg?.slice("--docs-branch=".length) });
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`[import-docs] ${error.message}`);
+    process.exitCode = 1;
+  });
+}

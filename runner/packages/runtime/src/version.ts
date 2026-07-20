@@ -11,6 +11,12 @@ import semver from "semver";
 import type { FilesMap, HandsontableVersionRef } from "./types.js";
 
 export const DEFAULT_MAX_MAJOR = 19;
+// Empirically verified range is 15-19 (DEV-2102 / ADR-0021 decision 10); majors
+// below 15 have never been tested against current starters/wrappers and stay
+// out of scope. Previously only the UI-facing GET /api/versions listing
+// enforced this floor — a direct session/API call bypassing the version
+// dropdown could still request an untested major like 14.
+export const DEFAULT_MIN_MAJOR = 15;
 const MIN_BARE_NUMERIC_PKG_PR_NEW_REF = 1000;
 
 /** Dependency never rewritten: an independently versioned Handsontable plugin. */
@@ -59,6 +65,7 @@ export type ValidationResult =
 export function validateHandsontableVersion(
   value: unknown,
   maxMajor: number = DEFAULT_MAX_MAJOR,
+  minMajor: number = DEFAULT_MIN_MAJOR,
 ): ValidationResult {
   if (value === undefined || value === null) {
     return { ok: false, message: "handsontable-version is required" };
@@ -69,11 +76,11 @@ export function validateHandsontableVersion(
   const urlRef = parsePkgPrNewFromUrl(trimmed);
   if (urlRef !== null) return { ok: true, value: { ref: urlRef, pkgPrNew: true } };
 
-  const capMsg = (normalized: string) => {
+  const rangeMsg = (normalized: string) => {
     const major = semver.major(normalized);
-    return major > maxMajor
-      ? `handsontable-version major must be at most ${maxMajor}; got ${major}`
-      : null;
+    if (major > maxMajor) return `handsontable-version major must be at most ${maxMajor}; got ${major}`;
+    if (major < minMajor) return `handsontable-version major must be at least ${minMajor}; got ${major}`;
+    return null;
   };
 
   if (/^\d+$/.test(trimmed)) {
@@ -90,7 +97,7 @@ export function validateHandsontableVersion(
     const coerced = semver.coerce(trimmed);
     const normalized = coerced ? semver.valid(coerced.version, { loose: true }) : null;
     if (!normalized) return { ok: false, message: `handsontable-version could not be interpreted as semver` };
-    const err = capMsg(normalized);
+    const err = rangeMsg(normalized);
     return err ? { ok: false, message: err } : { ok: true, value: { ref: normalized, pkgPrNew: false } };
   }
 
@@ -102,7 +109,7 @@ export function validateHandsontableVersion(
   if (!normalized) {
     return { ok: false, message: `handsontable-version must be semver-valid or a pkg.pr.new id/URL` };
   }
-  const err = capMsg(normalized);
+  const err = rangeMsg(normalized);
   return err ? { ok: false, message: err } : { ok: true, value: { ref: normalized, pkgPrNew: false } };
 }
 
@@ -147,4 +154,30 @@ export function applyHandsontableVersion(
   };
 
   return { ...files, [pkgPath]: JSON.stringify(next, null, 2) + "\n" };
+}
+
+/**
+ * Return a new FilesMap with the baked Handsontable CDN CSS URL pinned to `version`.
+ * Pure: does not mutate the input. pkg.pr.new builds are not available on unpkg.
+ */
+export function applyHandsontableCss(
+  files: FilesMap,
+  version: HandsontableVersionRef,
+): FilesMap {
+  if (version.pkgPrNew) return files;
+
+  const htmlPath = files["/index.html"] !== undefined
+    ? "/index.html"
+    : files["/src/index.html"] !== undefined
+      ? "/src/index.html"
+      : null;
+  if (!htmlPath) return files;
+
+  const raw = files[htmlPath];
+  if (raw === undefined) return files;
+  const next = raw.replace(
+    /(unpkg\.com\/handsontable@)[^/]+(\/dist\/handsontable\.full\.min\.css)/g,
+    (_, prefix: string, suffix: string) => `${prefix}${version.ref}${suffix}`,
+  );
+  return next === raw ? files : { ...files, [htmlPath]: next };
 }
