@@ -20,8 +20,10 @@ pnpm e2e:matrix:report
 - `pnpm e2e:matrix` sets `E2E_STARTER_MATRIX=1` and runs at `--workers=2`,
   writing JSON results to `test-results/starter-matrix.json`.
 - `pnpm e2e:matrix:report` turns that JSON into a starter × major markdown
-  table, written to `docs/reports/starter-matrix-<date>.md` (and printed to
-  stdout — paste straight into a ticket/PR comment). It accepts multiple JSON
+  table, written to `docs/reports/starter-matrix-<date>.md` and printed to
+  stdout. `docs/reports/` is gitignored — a dated run snapshot isn't living
+  documentation, it's a one-off result. Paste the stdout output straight into
+  the ticket/PR instead of committing the file. It accepts multiple JSON
   paths if you ran the matrix in chunks (see below).
 
 Against a local stack instead of prod: point `E2E_BASE_URL` at your local
@@ -79,5 +81,6 @@ A major with no stable npm release yet (checked live against the npm
 registry, not the app's own sliced `/api/versions` listing) is skipped, not
 failed.
 
-See `docs/reports/` for the latest run's findings and the resulting decision
-on `packages/runtime/src/version.ts`'s minimum-major guard.
+See DEV-2102 (or the PR that introduced this harness) for the first run's
+findings and the resulting decision on `packages/runtime/src/version.ts`'s
+minimum-major guard — the rationale is also recorded in that file's comments.

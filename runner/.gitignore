@@ -21,3 +21,6 @@ build/
 test-results/
 playwright-report/
 .playwright/
+
+# generated starter-matrix run reports — paste into the ticket/PR instead
+docs/reports/
