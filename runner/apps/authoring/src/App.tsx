@@ -326,13 +326,23 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   // currently published next build may just be a docs/staging build's own
   // commit stamp — never published, so npm can't install it. Fall back to the
   // published next build and say so, rather than failing the container boot.
+  // `versionCheckPending` holds the runtime-mount effect off the doomed
+  // version while this resolves (see its use below) — otherwise a container
+  // boot (or Sandpack fetch) can fire and fail before the fallback lands.
+  const [versionCheckPending, setVersionCheckPending] = useState(false);
   useEffect(() => {
     if (!versionsResolved || !nextVersion) return;
-    if (!isNextPrereleaseVersion(version) || version === nextVersion) return;
+    if (!isNextPrereleaseVersion(version) || version === nextVersion) {
+      setVersionCheckPending(false);
+      return;
+    }
     let cancelled = false;
     const requested = version;
+    setVersionCheckPending(true);
     checkVersionExists(API_BASE, requested).then((exists) => {
-      if (cancelled || exists) return;
+      if (cancelled) return;
+      setVersionCheckPending(false);
+      if (exists) return;
       setVersion(nextVersion);
       setVersionWarning(
         `Handsontable ${requested} isn't a published build; showing the latest next build (${nextVersion}) instead.`,
@@ -340,6 +350,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     });
     return () => { cancelled = true; };
   }, [version, nextVersion, versionsResolved]);
+  // True while a next-format version's real availability is still unknown:
+  // either /api/versions hasn't resolved yet, or the exists-check above is
+  // in flight. Blocks the runtime-mount effect until it's settled.
+  const versionPending = isNextPrereleaseVersion(version) && (!versionsResolved || versionCheckPending);
 
   // A manifest fetch is the existence check for a derived bucket. Resolve it on
   // startup and every selected-version change, then swap or preserve an open
@@ -541,7 +555,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   }, [iframeEl, docsRuntimeBlocked]);
 
   useEffect(() => {
-    if (!iframeEl || !sourceLoaded || docsNotFound || docsRuntimeBlocked) return;
+    if (!iframeEl || !sourceLoaded || docsNotFound || docsRuntimeBlocked || versionPending) return;
     setErrorMessage(null);
     const v = validateHandsontableVersion(version);
     if (!v.ok) {
@@ -580,7 +594,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
     // mountGen forces a remount when files are replaced (example switch or fork/edit load).
-  }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound, docsRuntimeBlocked]);
+  }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, versionPending]);
 
   const onEdit = useCallback((path: string, contents: string) => {
     const next = { ...filesRef.current, [path]: contents };
