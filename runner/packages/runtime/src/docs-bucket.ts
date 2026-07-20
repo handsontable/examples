@@ -1,4 +1,5 @@
 import { parse } from "semver";
+import { isNextPrereleaseVersion } from "./version.js";
 
 export interface DocsBucketResolution {
   selectedVersion: string;
@@ -11,7 +12,11 @@ export function deriveDocsBucketCandidate(
   selectedVersion: string,
   nextVersion: string,
 ): string | null {
-  if (selectedVersion === nextVersion) return "next";
+  // Any next-dist-tag build (not just whichever hash is currently live)
+  // shares the same "next" docs content — the API's dist-tags.next pointer
+  // moves with every publish, so a stricter equality check would send an
+  // older-but-still-unreleased next build down the semver-major=0 path.
+  if (selectedVersion === nextVersion || isNextPrereleaseVersion(selectedVersion)) return "next";
 
   const version = parse(selectedVersion);
   return version ? `${version.major}.${version.minor}` : null;

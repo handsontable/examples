@@ -12,6 +12,7 @@ export {
   applyHandsontableVersion,
   validateHandsontableVersion,
   isHandsontablePackage,
+  isNextPrereleaseVersion,
   pkgPrNewDependencyUrl,
   parsePkgPrNewFromUrl,
   DEFAULT_MAX_MAJOR,

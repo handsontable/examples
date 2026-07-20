@@ -18,12 +18,22 @@ export const DEFAULT_MAX_MAJOR = 19;
 // dropdown could still request an untested major like 14.
 export const DEFAULT_MIN_MAJOR = 15;
 const MIN_BARE_NUMERIC_PKG_PR_NEW_REF = 1000;
+// Prerelease build published under the npm `next` dist-tag, e.g.
+// "0.0.0-next-64139ae-20260219" (commit hash + build date). Its major is
+// always 0 under plain semver parsing, so it must bypass the major-range
+// check below rather than being rejected as "major must be at least 15".
+const NEXT_PRERELEASE_RE = /^0\.0\.0-next-[0-9a-f]+-\d{8}$/i;
 
 /** Dependency never rewritten: an independently versioned Handsontable plugin. */
 const NEVER_REWRITE = new Set(["@handsontable/pikaday"]);
 
 export function pkgPrNewDependencyUrl(packageName: string, buildRef: string): string {
   return `https://pkg.pr.new/${packageName}@${buildRef}`;
+}
+
+/** True for an npm `next`-dist-tag prerelease build, e.g. "0.0.0-next-<hash>-<date>". */
+export function isNextPrereleaseVersion(value: string): boolean {
+  return NEXT_PRERELEASE_RE.test(value);
 }
 
 /** Parse a full https://pkg.pr.new/...@ref URL; bare numeric ids handled in validation. */
@@ -75,6 +85,8 @@ export function validateHandsontableVersion(
 
   const urlRef = parsePkgPrNewFromUrl(trimmed);
   if (urlRef !== null) return { ok: true, value: { ref: urlRef, pkgPrNew: true } };
+
+  if (isNextPrereleaseVersion(trimmed)) return { ok: true, value: { ref: trimmed, pkgPrNew: false } };
 
   const rangeMsg = (normalized: string) => {
     const major = semver.major(normalized);
