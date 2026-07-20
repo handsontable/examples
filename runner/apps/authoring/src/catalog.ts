@@ -25,14 +25,23 @@ export async function fetchVersions(
 /** Is `version` an exact published Handsontable version on npm? Used to detect
  * an unresolvable deep-linked next-dist-tag build (e.g. a local docs build's
  * own commit stamp that was never published). Fails open (true) on a network
- * error so a transient hiccup doesn't override the user's requested version. */
+ * error OR a stalled request (a caller may be blocking the runtime mount on
+ * this resolving) so a transient hiccup doesn't override the user's
+ * requested version or hang the preview forever. */
 export async function checkVersionExists(apiBase: string, version: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await fetch(`${apiBase}/api/versions/exists?v=${encodeURIComponent(version)}`);
+    const res = await fetch(
+      `${apiBase}/api/versions/exists?v=${encodeURIComponent(version)}`,
+      { signal: controller.signal },
+    );
     if (!res.ok) return true;
     const body = (await res.json()) as { exists: boolean };
     return body.exists;
   } catch {
     return true;
+  } finally {
+    clearTimeout(timer);
   }
 }

@@ -555,7 +555,16 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   }, [iframeEl, docsRuntimeBlocked]);
 
   useEffect(() => {
-    if (!iframeEl || !sourceLoaded || docsNotFound || docsRuntimeBlocked || versionPending) return;
+    if (!iframeEl || !sourceLoaded || docsNotFound || docsRuntimeBlocked) return;
+    if (versionPending) {
+      // The previous run's cleanup (below) already disposed its runtime; put
+      // the status back to booting so the UI doesn't keep showing "Live" (or
+      // a stale error) over a torn-down preview while the version resolves.
+      setStatus("booting");
+      setErrorMessage(null);
+      setBootLog("");
+      return;
+    }
     setErrorMessage(null);
     const v = validateHandsontableVersion(version);
     if (!v.ok) {
