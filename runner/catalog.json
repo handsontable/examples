@@ -32,6 +32,7 @@
       "port": null,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": null,
       "fileCount": 6,
       "assets": [],
       "skipped": [],
@@ -64,6 +65,7 @@
       "port": null,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": null,
       "fileCount": 11,
       "assets": [],
       "skipped": [],
@@ -101,6 +103,7 @@
       "port": null,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": null,
       "fileCount": 9,
       "assets": [],
       "skipped": [],
@@ -138,6 +141,7 @@
       "port": null,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": null,
       "fileCount": 15,
       "assets": [],
       "skipped": [],
@@ -181,6 +185,7 @@
       "port": null,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": null,
       "fileCount": 10,
       "assets": [],
       "skipped": [],
@@ -219,6 +224,7 @@
       "port": null,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": 17,
       "fileCount": 7,
       "assets": [],
       "skipped": [],
@@ -254,6 +260,7 @@
       "port": null,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": 17,
       "fileCount": 10,
       "assets": [],
       "skipped": [],
@@ -292,6 +299,7 @@
       "port": null,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": 17,
       "fileCount": 11,
       "assets": [],
       "skipped": [],
@@ -331,6 +339,7 @@
       "port": null,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": 17,
       "fileCount": 13,
       "assets": [],
       "skipped": [],
@@ -372,6 +381,7 @@
       "port": null,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": null,
       "fileCount": 28,
       "assets": [
         "public/favicon.ico"
@@ -430,6 +440,7 @@
       "port": 3000,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": 16,
       "fileCount": 17,
       "assets": [
         "src/favicon.ico"
@@ -477,6 +488,7 @@
       "port": 3000,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": null,
       "fileCount": 47,
       "assets": [
         "app/favicon.ico",
@@ -568,6 +580,7 @@
       "port": 3000,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": 17,
       "fileCount": 21,
       "assets": [
         "app/favicon.ico"
@@ -617,6 +630,7 @@
       "port": 4321,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": null,
       "fileCount": 12,
       "assets": [],
       "skipped": [],
@@ -657,6 +671,7 @@
       "port": 3000,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": null,
       "fileCount": 11,
       "assets": [
         "public/favicon.ico"
@@ -698,6 +713,7 @@
       "port": 5173,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
+      "minCoreMajor": null,
       "fileCount": 13,
       "assets": [
         "public/favicon.ico"

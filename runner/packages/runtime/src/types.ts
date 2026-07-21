@@ -30,6 +30,10 @@ export interface CatalogEntry {
   port: number | null;
   installCommand: string;
   htCoreRange: string | null;
+  /** Lowest Handsontable major this starter supports, or null for no floor.
+   * The UI hides lower majors from the version picker and refuses to boot them
+   * (e.g. the UI-library starters need the themes API introduced in core 17). */
+  minCoreMajor: number | null;
   fileCount: number;
   assets: string[];
   skipped: { path: string; reason: string }[];

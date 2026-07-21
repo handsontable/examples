@@ -47,6 +47,25 @@ const FW_DOCS: Record<string, string> = {
   angular: "angular-data-grid",
 };
 
+/** Numeric major of a plain release version (e.g. "17.1.0" -> 17), or null for
+ * next-dist-tag / pkg.pr.new / non-release refs, which are never floor-checked. */
+function releaseMajor(version: string): number | null {
+  if (isNextPrereleaseVersion(version)) return null;
+  const m = /^(\d+)\./.exec(version.trim());
+  return m ? Number(m[1]) : null;
+}
+
+/** A starter may declare a minimum core major (e.g. the UI-library starters need
+ * the themes API added in Handsontable 17); hide lower published majors from its
+ * version picker. next/custom refs (major null) always pass through. */
+function versionsForEntry(options: string[], minCoreMajor: number | null): string[] {
+  if (minCoreMajor == null) return options;
+  return options.filter((v) => {
+    const major = releaseMajor(v);
+    return major == null || major >= minCoreMajor;
+  });
+}
+
 /** Public documentation page URL for a docs example. */
 function docsPageUrl(framework: string, permalink: string): string {
   const prefix = FW_DOCS[framework] ?? "javascript-data-grid";
@@ -572,6 +591,23 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       setErrorMessage(v.message);
       return;
     }
+    // Per-starter floor: these starters were authored against a core API that
+    // older majors lack, so booting them there produces a broken (or blank)
+    // grid. Refuse rather than boot. `releaseMajor` (shared with the version
+    // picker) returns null for next/pkg.pr.new refs, which bypass the check.
+    const requestedMajor = releaseMajor(v.value.ref);
+    if (
+      !docsPath &&
+      entry.minCoreMajor != null &&
+      requestedMajor != null &&
+      requestedMajor < entry.minCoreMajor
+    ) {
+      setStatus("error");
+      setErrorMessage(
+        `Could not load this example for Handsontable ${version}. Try another version.`,
+      );
+      return;
+    }
     setStatus("booting");
     setBootLog("");
     setSyncing(false);
@@ -603,7 +639,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
     // mountGen forces a remount when files are replaced (example switch or fork/edit load).
-  }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, versionPending]);
+  }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, versionPending, docsPath]);
 
   const onEdit = useCallback((path: string, contents: string) => {
     const next = { ...filesRef.current, [path]: contents };
@@ -925,7 +961,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         bootLog={bootLog}
         syncing={syncing}
         version={version}
-        versionOptions={versionOptions}
+        versionOptions={docsPath ? versionOptions : versionsForEntry(versionOptions, entry.minCoreMajor)}
         onVersionChange={changeVersion}
         onEdit={onEdit}
         onAddFile={addFile}

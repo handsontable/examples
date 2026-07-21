@@ -86,7 +86,8 @@
       "buildCommand": "vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "pnpm install --frozen-lockfile"
+      "installCommand": "pnpm install --frozen-lockfile",
+      "minCoreMajor": 17
     },
     "mui": {
       "tier": 1,
@@ -101,7 +102,8 @@
       "buildCommand": "tsc -b && vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "pnpm install --frozen-lockfile"
+      "installCommand": "pnpm install --frozen-lockfile",
+      "minCoreMajor": 17
     },
     "base-web": {
       "tier": 1,
@@ -116,7 +118,8 @@
       "buildCommand": "tsc -b && vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "pnpm install --frozen-lockfile"
+      "installCommand": "pnpm install --frozen-lockfile",
+      "minCoreMajor": 17
     },
     "fluent-ui": {
       "tier": 1,
@@ -131,7 +134,8 @@
       "buildCommand": "tsc -b && vite build",
       "outputDir": "dist",
       "port": null,
-      "installCommand": "pnpm install --frozen-lockfile"
+      "installCommand": "pnpm install --frozen-lockfile",
+      "minCoreMajor": 17
     },
     "vue": {
       "tier": 1,
@@ -159,7 +163,8 @@
       "outputDir": "dist",
       "outputGlob": "dist/*/browser",
       "port": 3000,
-      "installCommand": "pnpm install --frozen-lockfile"
+      "installCommand": "pnpm install --frozen-lockfile",
+      "minCoreMajor": 16
     },
     "next.js": {
       "tier": 2,
@@ -185,7 +190,8 @@
       "outputDir": "out",
       "staticExport": true,
       "port": 3000,
-      "installCommand": "pnpm install --frozen-lockfile"
+      "installCommand": "pnpm install --frozen-lockfile",
+      "minCoreMajor": 17
     },
     "astro": {
       "tier": 2,
