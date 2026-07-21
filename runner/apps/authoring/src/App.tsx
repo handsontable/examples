@@ -593,21 +593,20 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     }
     // Per-starter floor: these starters were authored against a core API that
     // older majors lack, so booting them there produces a broken (or blank)
-    // grid. Refuse rather than boot. next/pkg.pr.new refs bypass the check.
+    // grid. Refuse rather than boot. `releaseMajor` (shared with the version
+    // picker) returns null for next/pkg.pr.new refs, which bypass the check.
+    const requestedMajor = releaseMajor(v.value.ref);
     if (
       !docsPath &&
       entry.minCoreMajor != null &&
-      !v.value.pkgPrNew &&
-      !isNextPrereleaseVersion(v.value.ref)
+      requestedMajor != null &&
+      requestedMajor < entry.minCoreMajor
     ) {
-      const major = Number(v.value.ref.split(".")[0]);
-      if (Number.isFinite(major) && major < entry.minCoreMajor) {
-        setStatus("error");
-        setErrorMessage(
-          `Could not load this example for Handsontable ${version}. Try another version.`,
-        );
-        return;
-      }
+      setStatus("error");
+      setErrorMessage(
+        `Could not load this example for Handsontable ${version}. Try another version.`,
+      );
+      return;
     }
     setStatus("booting");
     setBootLog("");
