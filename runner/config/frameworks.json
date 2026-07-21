@@ -163,7 +163,8 @@
       "outputDir": "dist",
       "outputGlob": "dist/*/browser",
       "port": 3000,
-      "installCommand": "pnpm install --frozen-lockfile"
+      "installCommand": "pnpm install --frozen-lockfile",
+      "minCoreMajor": 16
     },
     "next.js": {
       "tier": 2,

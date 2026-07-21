@@ -440,7 +440,7 @@
       "port": 3000,
       "installCommand": "pnpm install --frozen-lockfile",
       "htCoreRange": "latest",
-      "minCoreMajor": null,
+      "minCoreMajor": 16,
       "fileCount": 17,
       "assets": [
         "src/favicon.ico"
