@@ -148,6 +148,7 @@ function importExample(framework) {
     port: cfg.port,
     installCommand: cfg.installCommand,
     htCoreRange,
+    minCoreMajor: cfg.minCoreMajor ?? null,
     fileCount: Object.keys(files).length,
     assets,
     skipped,

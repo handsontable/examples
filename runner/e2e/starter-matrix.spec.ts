@@ -24,6 +24,7 @@ type CatalogExample = {
   framework: string;
   displayName: string;
   engine: "sandpack" | "container";
+  minCoreMajor: number | null;
 };
 
 const catalog = JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")) as {
@@ -85,6 +86,16 @@ for (const entry of catalog.examples) {
       // it's nothing to test yet. Skip rather than report a false breakage.
       test.skip(!version, `no stable handsontable release published for major ${major} yet`);
       if (!version) return;
+
+      // A starter may declare a minimum core major (e.g. the UI-library starters
+      // need the themes API added in core 17). Below-floor combos are
+      // intentionally unavailable — the authoring app refuses to boot them and
+      // shows a "try another version" message — so they are nothing to test as
+      // bootable, not a breakage. Skip rather than assert a mounted grid.
+      test.skip(
+        entry.minCoreMajor != null && major < entry.minCoreMajor,
+        `${entry.framework} requires Handsontable >= ${entry.minCoreMajor}; ${major} is intentionally unavailable`,
+      );
 
       // Annotate immediately so a failing test still reports which version it
       // was testing — the report shouldn't say "unknown" just because the
