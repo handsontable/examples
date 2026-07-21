@@ -1,9 +1,8 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Card, Space, Tag, Typography } from 'antd';
 import { HotTable, HotColumn } from '@handsontable/react-wrapper';
 import { registerAllModules } from 'handsontable/registry';
-import { getTheme, hasTheme, horizonTheme, registerTheme } from 'handsontable/themes';
-import colorsAnt from 'handsontable/themes/static/variables/colors/ant';
+import { buildHotThemeProps } from './hotTheme';
 
 registerAllModules();
 
@@ -33,36 +32,6 @@ const data = [
     actionHint: null,
   },
 ];
-
-const THEME_NAME = 'horizon-ant-table';
-
-const antTableTheme = (() => {
-  if (hasTheme(THEME_NAME)) {
-    return getTheme(THEME_NAME);
-  }
-  return registerTheme(THEME_NAME, horizonTheme)
-    .params({
-      colors: colorsAnt,
-      tokens: {
-        borderColor: ['colors.palette.200', 'colors.palette.700'],
-        borderRadius: '8px',
-        headerBackgroundColor: ['colors.palette.100', 'colors.palette.800'],
-        headerFontWeight: '600',
-        cellHorizontalBorderColor: ['colors.palette.200', 'colors.palette.700'],
-        cellVerticalBorderColor: ['colors.palette.200', 'colors.palette.700'],
-        cellHorizontalPadding: '16px',
-        cellVerticalPadding: '8px',
-        rowCellEvenBackgroundColor: ['colors.white', 'colors.palette.950'],
-        rowCellOddBackgroundColor: ['colors.white', 'colors.palette.950'],
-        cellReadOnlyBackgroundColor: ['colors.white', 'colors.palette.950'],
-        foregroundColor: ['colors.palette.800', 'colors.palette.100'],
-        linkColor: ['colors.primary.200', 'colors.primary.100'],
-        linkHoverColor: ['colors.primary.100', 'colors.primary.200'],
-      },
-    })
-    .setColorScheme('light')
-    .setDensityType('comfortable');
-})();
 
 function NameCell({ value }) {
   const label = value != null ? String(value) : '';
@@ -111,10 +80,25 @@ function ActionCell({ instance, row }) {
 
 function AntLikeGrid() {
   const readOnlyCell = useCallback(() => ({ readOnly: true }), []);
+  const [themeProps, setThemeProps] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    buildHotThemeProps().then((props) => {
+      if (!cancelled) setThemeProps(props);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!themeProps) {
+    return null;
+  }
 
   return (
     <HotTable
-      theme={antTableTheme}
+      {...themeProps}
       data={data}
       colHeaders={['Name', 'Age', 'Address', 'Tags', 'Action']}
       rowHeaders={false}

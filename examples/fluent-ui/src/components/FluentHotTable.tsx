@@ -1,9 +1,10 @@
+import { useEffect, useState } from 'react';
 import { HotTable, HotColumn } from '@handsontable/react-wrapper';
 import { registerAllModules } from 'handsontable/registry';
 import 'handsontable/styles/handsontable.min.css';
 import 'handsontable/styles/ht-theme-horizon.min.css';
 
-import { fluentDataGridTheme } from '../theme/fluentDataGridTheme';
+import { buildHotThemeProps, type HotThemeProps } from '../theme/hotTheme';
 
 registerAllModules();
 
@@ -14,9 +15,25 @@ const data = [
 ];
 
 export default function FluentHotTable() {
+  const [themeProps, setThemeProps] = useState<HotThemeProps | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    buildHotThemeProps().then((props) => {
+      if (!cancelled) setThemeProps(props);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!themeProps) {
+    return null;
+  }
+
   return (
     <HotTable
-      theme={fluentDataGridTheme}
+      {...themeProps}
       data={data}
       colHeaders={['Team', 'Owner', 'Status', 'Priority']}
       rowHeaders={true}

@@ -1,32 +1,40 @@
 "use client";
-import { useRef, useEffect, memo, forwardRef } from "react";
+import { useRef, useEffect, useState, memo, forwardRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { HotTable, HotColumn, HotTableRef } from "@handsontable/react-wrapper";
-import { registerTheme } from "handsontable/themes";
+import Handsontable from "handsontable";
 import { registerAllModules } from "handsontable/registry";
 
-import tokensHorizon from 'handsontable/themes/static/variables/tokens/horizon';
-
-import { colorsShadcn } from "@/lib/theme/colorsShadcn";
-import { iconsShadcn } from "@/lib/theme/iconsShadcn";
 import { data, config } from "@/lib/helpers";
 
 registerAllModules();
 
-const shadcnDataGridTheme = registerTheme('shadcn-data-grid', {
-  icons: iconsShadcn,
-  colors: colorsShadcn,
-  tokens: tokensHorizon,
-}).params({
-  tokens: {
-    borderRadius: "var(--radius)",
-  },
-}).setColorScheme("light");
+// Handsontable's JS themes API (`handsontable/themes`) exists only from major 17
+// (on 15/16 the subpath is missing from the package `exports` map, so importing
+// it is a compile-time module-not-found). Gate on the runtime version and only
+// load the module that touches the themes API when it exists; on 15/16 fall
+// back to the CSS-based horizon theme, which every supported major ships.
+type HotThemeProps = { theme: unknown } | { themeName: string };
 
-const DataGrid = forwardRef<HotTableRef, unknown>(function DataGrid(_, ref) {
+const HOT_MAJOR = Number(String(Handsontable.version).split(".")[0]);
+
+async function buildHotThemeProps(): Promise<HotThemeProps> {
+  if (HOT_MAJOR >= 17) {
+    const { buildShadcnTheme } = await import("@/lib/theme/hotThemeModern");
+    return { theme: buildShadcnTheme() };
+  }
+
+  await Promise.all([
+    import("handsontable/styles/handsontable.min.css"),
+    import("handsontable/styles/ht-theme-horizon.min.css"),
+  ]);
+  return { themeName: "ht-theme-horizon" };
+}
+
+const DataGrid = forwardRef<HotTableRef, { themeProps: HotThemeProps }>(function DataGrid({ themeProps }, ref) {
   return (<HotTable
     ref={ref}
-    theme={shadcnDataGridTheme}
+    {...themeProps}
     data={data}
     {...config}
   >
@@ -130,6 +138,17 @@ const MemoizedDataGrid = memo(DataGrid);
 function DataGridWrapper() {
   const hotTableRef = useRef<HotTableRef>(null);
   const searchParams = useSearchParams();
+  const [themeProps, setThemeProps] = useState<HotThemeProps | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    buildHotThemeProps().then((props) => {
+      if (!cancelled) setThemeProps(props);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const hot = hotTableRef.current?.hotInstance;
@@ -151,8 +170,12 @@ function DataGridWrapper() {
     }
   }, [searchParams]);
 
+  if (!themeProps) {
+    return null;
+  }
+
   return (
-    <MemoizedDataGrid ref={hotTableRef} />
+    <MemoizedDataGrid ref={hotTableRef} themeProps={themeProps} />
   );
 }
 

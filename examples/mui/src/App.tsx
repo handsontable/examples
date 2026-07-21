@@ -1,51 +1,12 @@
+import { useEffect, useState } from 'react';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
 import { HotTable, HotColumn } from '@handsontable/react-wrapper';
 import { registerAllModules } from 'handsontable/registry';
-import { getTheme, hasTheme, registerTheme } from 'handsontable/themes';
-import tokensHorizon from 'handsontable/themes/static/variables/tokens/horizon';
-import iconsHorizon from 'handsontable/themes/static/variables/icons/horizon';
+import { buildHotThemeProps, type HotThemeProps } from './hotTheme';
 
 registerAllModules();
 
 const muiTheme = createTheme({ palette: { mode: 'light' } });
-
-const THEME_NAME = 'mui-data-grid';
-
-const muiTableTheme = (() => {
-  if (hasTheme(THEME_NAME)) {
-    return getTheme(THEME_NAME);
-  }
-  return registerTheme(THEME_NAME, {
-    icons: iconsHorizon,
-    colors: {
-      palette: {
-        50: muiTheme.palette.grey[50],
-        100: muiTheme.palette.grey[100],
-        200: muiTheme.palette.grey[200],
-        300: muiTheme.palette.grey[300],
-        400: muiTheme.palette.grey[400],
-        500: muiTheme.palette.grey[500],
-        600: muiTheme.palette.grey[600],
-        700: muiTheme.palette.grey[700],
-        800: muiTheme.palette.grey[800],
-        900: muiTheme.palette.grey[900],
-        950: muiTheme.palette.grey[900],
-      },
-      primary: {
-        100: muiTheme.palette.primary.light,
-        200: muiTheme.palette.primary.light,
-        300: muiTheme.palette.primary.main,
-        400: muiTheme.palette.primary.main,
-        500: muiTheme.palette.primary.dark,
-        600: muiTheme.palette.primary.dark,
-      },
-      white: muiTheme.palette.background.paper,
-      black: muiTheme.palette.text.primary,
-      transparent: 'transparent',
-    },
-    tokens: tokensHorizon,
-  }).params({ tokens: { borderRadius: '4px' } });
-})();
 
 interface Person {
   name: string;
@@ -61,12 +22,28 @@ const data: Person[] = [
 ];
 
 export default function App() {
+  const [themeProps, setThemeProps] = useState<HotThemeProps | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    buildHotThemeProps(muiTheme).then((props) => {
+      if (!cancelled) setThemeProps(props);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!themeProps) {
+    return null;
+  }
+
   return (
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
       <div style={{ padding: 16 }}>
         <HotTable
-          theme={muiTableTheme}
+          {...themeProps}
           data={data}
           colHeaders={['Name', 'Age', 'Country', 'Active']}
           rowHeaders={true}
