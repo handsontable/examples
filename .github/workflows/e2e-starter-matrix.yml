@@ -86,8 +86,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: starter-matrix
+          # e2e:matrix runs --reporter=list,json — no HTML playwright-report is
+          # produced, so only the JSON results + generated markdown report exist.
           path: |
             runner/docs/reports/starter-matrix-*.md
             runner/test-results/starter-matrix.json
-            runner/playwright-report/
+          if-no-files-found: error
           retention-days: 14
