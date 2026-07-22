@@ -1,0 +1,95 @@
+name: E2E — starter compatibility matrix
+
+# Boots every starter in catalog.json at the latest patch of each supported
+# Handsontable major (15-19) against a LIVE deployed backend and records what
+# actually breaks (runner/e2e/starter-matrix.spec.ts, DEV-2102 / ADR-0021).
+#
+# Prod-only, on purpose: the container-engine starters need real Tier-2
+# Cloudflare Sandbox sessions (POST /api/session). A local `vite preview` of the
+# authoring app has no API backend, so this targets https://demos.handsontable.com.
+# Anonymous session creation on prod works (the app only sends an Authorization
+# header when a login token exists), so no secrets are required here.
+#
+# Manual only — it spins ~50 real container sessions. A local run at --workers=2
+# --retries=2 took ~36 min (46 passed / 27 skipped); allow headroom for CI +
+# flake retries.
+#
+# SINGLE JOB, --workers=2. Do NOT "optimize" this into a parallel matrix: prod
+# caps live-preview Sandboxes at 5 CONCURRENT *globally* (not per-job), so N
+# parallel jobs x 2 workers = 2N sessions — N=3 already breaks the cap and starves
+# real traffic. Sequential shards give no speedup. Keep it one job at --workers=2.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Deployed app to test against (must have a real API backend)'
+        default: 'https://demos.handsontable.com'
+        required: true
+
+# Two overlapping runs = 4 workers against the global 5-container cap, leaving
+# real traffic 1 slot. cancel-in-progress: false (opposite of ci.yml) on purpose:
+# a cancelled run leaks container sessions — the spec cleans them up in a
+# `finally` that never runs on cancel — so queue a second trigger, don't kill the
+# first.
+concurrency:
+  group: e2e-starter-matrix
+  cancel-in-progress: false
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    # ~36 min observed locally (--workers=2, --retries=2); 180 leaves ample
+    # headroom for slower CI runners + retry storms.
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # No `pnpm build`: the matrix spec only imports catalog.json + fetches npm
+      # and runs against deployed prod, so no workspace build is needed.
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run starter matrix
+        env:
+          E2E_BASE_URL: ${{ inputs.base_url }}
+        # e2e:matrix already sets E2E_STARTER_MATRIX=1, PLAYWRIGHT_JSON_OUTPUT_NAME
+        # and --workers=2 --retries=1 --reporter=list,json.
+        run: pnpm e2e:matrix
+
+      - name: Generate report
+        if: always()
+        run: pnpm e2e:matrix:report
+
+      - name: Publish report to job summary
+        if: always()
+        run: cat docs/reports/starter-matrix-*.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload matrix report + results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: starter-matrix
+          # e2e:matrix runs --reporter=list,json — no HTML playwright-report is
+          # produced, so only the JSON results + generated markdown report exist.
+          path: |
+            runner/docs/reports/starter-matrix-*.md
+            runner/test-results/starter-matrix.json
+          if-no-files-found: error
+          retention-days: 14
