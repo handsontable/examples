@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs";
 // boots every starter in catalog.json at the latest patch of each supported
 // Handsontable major (15-19) and records what actually breaks. Opt-in via
 // E2E_STARTER_MATRIX=1 — this is not part of the deterministic PR suite; it
-// spins ~55 real Tier-2 container sessions (the live-preview `Sandbox` class)
-// and takes ~80-90 minutes.
+// spins ~50 real Tier-2 container sessions (the live-preview `Sandbox` class);
+// a local run at --workers=2 --retries=2 took ~36 minutes.
 //
 // Prod only allows 5 concurrent live-preview containers
 // (workers/api/wrangler.jsonc: Sandbox max_instances=5, separate from
