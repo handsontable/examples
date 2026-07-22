@@ -4,7 +4,7 @@ import {
   CUSTOM_ELEMENTS_SCHEMA,
 } from '@angular/core';
 import { PredefinedMenuItemKey } from 'handsontable/plugins/contextMenu';
-import { HotTableComponent } from '@handsontable/angular-wrapper';
+import { HotTableModule } from '@handsontable/angular-wrapper';
 
 import { getData } from './utils/constants';
 import { alignHeaders, addClassesToRows } from './utils/hooks-callbacks';
@@ -15,7 +15,7 @@ import { alignHeaders, addClassesToRows } from './utils/hooks-callbacks';
   standalone: true,
   templateUrl: './data-grid.component.html',
   //styleUrls: ['./data-grid.scss'],
-  imports: [HotTableComponent],
+  imports: [HotTableModule],
   schemas: [CUSTOM_ELEMENTS_SCHEMA],
 })
 export class DataGridComponent {
@@ -67,11 +67,7 @@ export class DataGridComponent {
       {
         data: 4,
         type: 'date',
-        dateFormat: {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-        },
+        dateFormat: 'DD/MM/YYYY',
         locale: 'en-GB',
         allowInvalid: false,
       },
