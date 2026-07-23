@@ -120,6 +120,33 @@ test("pins every imported extra dependency to its npm version once", async (t) =
   assert.equal(Object.values(dependencies).includes("latest"), false);
 });
 
+// DEV-2130: a react example authored only as `.jsx` used to ship an artifact
+// whose `entry` (/src/main.tsx) pointed at a file the wrapper never emitted —
+// Sandpack "succeeded" without executing anything and the preview stayed blank.
+// The importer must refuse to write such an artifact and fail the run.
+test("fails and skips the artifact when generated files miss the module entry", async (t) => {
+  const { docsDir, outDir } = makeFixture(t);
+  const reactDir = path.join(docsDir, "content", "guides", "example", "react");
+  fs.mkdirSync(reactDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(docsDir, "content", "guides", "example", "index.md"),
+    "---\ntitle: Example guide\n---\n\n## Standard\n::: example #example1\n@[code](@/content/guides/example/react/example1.jsx)\n:::\n",
+  );
+  fs.writeFileSync(
+    path.join(reactDir, "example1.jsx"),
+    "export default function App() { return null; }\n",
+  );
+
+  await assert.rejects(
+    importDocs({ docsDir, docsBranch: "prod-docs/18.0", outDir }),
+    /module entry \/src\/main\.tsx/,
+  );
+
+  const bucket = path.join(outDir, "18.0");
+  const written = fs.existsSync(bucket) ? fs.readdirSync(bucket) : [];
+  assert.equal(written.some((f) => f.includes("react__example1.jsx")), false);
+});
+
 test("fails before writing an imported package with no concrete npm version", async (t) => {
   const { docsDir, outDir } = makeFixture(t);
   fs.writeFileSync(

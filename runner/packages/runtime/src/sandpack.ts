@@ -12,6 +12,7 @@
 import { loadSandpackClient } from "@codesandbox/sandpack-client";
 import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
 import { transpileFilesForParcel } from "./transpile.js";
+import { resolveSandboxEntry } from "./sandbox-entry.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 // Derive Sandpack's option/setup types straight from the loader signature so we
@@ -29,9 +30,6 @@ export interface SandpackRuntimeOptions {
   version?: HandsontableVersionRef;
 }
 
-/** Environments whose entry point is the HTML file rather than a JS/TS module. */
-const HTML_ENTRY_ENVS = new Set(["parcel", "static"]);
-
 /**
  * DEV-2129: `parcel` is the only classic-bundler environment that shares
  * Handsontable's internal module registry across entry points — under the
@@ -44,11 +42,6 @@ const HTML_ENTRY_ENVS = new Set(["parcel", "static"]);
 function normalizeEnv(env: string | null | undefined): string | undefined {
   if (env === "create-react-app" || env === "create-react-app-typescript") return "parcel";
   return env ?? undefined;
-}
-
-/** Map an authored entry path to its compiled name in the parcel sandbox. */
-function toParcelEntry(path: string): string {
-  return path.replace(/\.(tsx|ts|jsx)$/, ".js");
 }
 
 /**
@@ -162,12 +155,11 @@ export class SandpackRuntime implements DemoRuntime {
     }
 
     const env = this.env;
-    const entryPath =
-      env && HTML_ENTRY_ENVS.has(env) && this.entry.htmlEntry
-        ? this.entry.htmlEntry
-        : env === "parcel"
-          ? toParcelEntry(this.entry.entry)
-          : this.entry.entry;
+    // Throws when the resolved entry file is absent from the sandbox files
+    // (DEV-2130) — on mount the rejection surfaces as "Setup failed" instead
+    // of a silent blank preview; on streaming updates pushUpdate()'s catch
+    // keeps the last good sandbox.
+    const entryPath = resolveSandboxEntry(env, this.entry.entry, this.entry.htmlEntry, files);
 
     return {
       files: sandpackFiles,
@@ -233,8 +225,9 @@ export class SandpackRuntime implements DemoRuntime {
   /**
    * Recompute the sandbox from `this.files` and push it. Transpilation is
    * async, so guard with a sequence number: only the newest edit wins, stale
-   * results are dropped. A transpile failure (half-typed code) keeps the last
-   * good sandbox instead of surfacing an error for every keystroke.
+   * results are dropped. A transpile failure (half-typed code) or a
+   * transiently missing entry (mid-rename) keeps the last good sandbox
+   * instead of surfacing an error for every keystroke.
    */
   private updateSeq = 0;
   private pushUpdate(): void {
