@@ -84,14 +84,20 @@ const BUILTIN_PKGS = new Set([
 const RUNNER = {
   javascript: {
     framework: "javascript", displayName: "JavaScript", tier: 1, engine: "sandpack",
-    sandpackTemplate: "vanilla", sandpackEnvironment: "parcel", container: null, htWrappers: [],
+    // The classic bundler's `parcel` env transpiles with babel-standalone 6.26, which
+    // predates optional chaining (`?.`) / nullish (`??`) and parse-fails on modern docs
+    // examples (DEV-2129). `create-react-app-typescript` uses babel 7 (handles ES2020)
+    // and drives plain-DOM JS via the emitted `/src/main.js` module + `index.html` shell.
+    sandpackTemplate: "vanilla", sandpackEnvironment: "create-react-app-typescript", container: null, htWrappers: [],
     entry: "/src/main.js", htmlEntry: "/index.html",
     devCommand: null, buildCommand: "vite build", outputDir: "dist", outputGlob: null,
     staticExport: false, spaMode: false, port: null, installCommand: "pnpm install",
   },
   typescript: {
     framework: "typescript", displayName: "TypeScript", tier: 1, engine: "sandpack",
-    sandpackTemplate: "vanilla-ts", sandpackEnvironment: "parcel", container: null, htWrappers: [],
+    // See the javascript note above: `parcel`/babel-6.26 parse-fails on `?.`/`??`.
+    // `create-react-app-typescript` (babel 7) also transpiles plain `.ts` (DEV-2129).
+    sandpackTemplate: "vanilla-ts", sandpackEnvironment: "create-react-app-typescript", container: null, htWrappers: [],
     entry: "/src/main.ts", htmlEntry: "/index.html",
     devCommand: null, buildCommand: "vite build", outputDir: "dist", outputGlob: null,
     staticExport: false, spaMode: false, port: null, installCommand: "pnpm install",

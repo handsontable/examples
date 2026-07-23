@@ -301,3 +301,22 @@ test("live: a JavaScript example renders a Handsontable grid", async ({ page }) 
   const preview = page.frameLocator("iframe").first();
   await expect(preview.getByText("Ana García").first()).toBeVisible({ timeout: 90_000 });
 });
+
+// DEV-2129: vanilla-JS/TS examples using ES2020 optional chaining (`?.`) / nullish
+// (`??`) must render. They parse-failed under the old `parcel` Sandpack env
+// (babel-standalone 6.26); the fix routes them through `create-react-app-typescript`
+// (babel 7). Guards against a regression back to a transpiler that predates `?.`.
+test("live: a vanilla example using optional chaining renders", async ({ page }) => {
+  test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  test.setTimeout(120_000);
+  const syntaxErrors: string[] = [];
+  page.on("console", (m) => {
+    if (/SyntaxError|Unexpected token/i.test(m.text())) syntaxErrors.push(m.text());
+  });
+  // `example1.js` (rating) uses `star?.dataset.value`; the `.ts` sibling exercises the
+  // TypeScript variant of the same parcel→cra-ts fix.
+  await page.goto("/?docs=recipes/cell-types/rating/javascript/example1.js");
+  const preview = page.frameLocator("iframe").first();
+  await expect(preview.locator(".handsontable td").first()).toBeVisible({ timeout: 90_000 });
+  expect(syntaxErrors, "no babel parse errors on ES2020 syntax").toHaveLength(0);
+});
