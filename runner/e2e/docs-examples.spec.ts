@@ -296,10 +296,12 @@ test("an open docs example with no target bucket stops preview and remains recov
 test("live: a JavaScript example renders a Handsontable grid", async ({ page }) => {
   test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
   test.setTimeout(120_000);
-  await page.goto("/?docs=guides/columns/column-adding/javascript/example1.js");
+  // (column-adding was removed from the docs; accessibility example1 is a
+  // data-rich vanilla example that exists in every bucket.)
+  await page.goto("/?docs=guides/accessibility/accessibility/javascript/example1.js");
   // Sandpack renders the preview into a nested iframe; find the grid inside it.
   const preview = page.frameLocator("iframe").first();
-  await expect(preview.getByText("Ana García").first()).toBeVisible({ timeout: 90_000 });
+  await expect(preview.getByText("Hodkiewicz - Hintz").first()).toBeVisible({ timeout: 90_000 });
 });
 
 // DEV-2129: vanilla-JS/TS examples using ES2020 optional chaining (`?.`) / nullish
@@ -319,4 +321,36 @@ test("live: a vanilla example using optional chaining renders", async ({ page })
   const preview = page.frameLocator("iframe").first();
   await expect(preview.locator(".handsontable td").first()).toBeVisible({ timeout: 90_000 });
   expect(syntaxErrors, "no babel parse errors on ES2020 syntax").toHaveLength(0);
+});
+
+// DEV-2129: rendering alone is not enough — the Sandpack environment must also
+// share Handsontable's internal module registry across entry points, or every
+// options-configured plugin is silently dead (`getPlugin()` returns undefined,
+// context menu never opens). The `create-react-app(-typescript)` environments
+// duplicate the registry; only `parcel` (fed pre-transpiled sources) is safe.
+// These guards check plugin *behavior*, so a render-only regression like the
+// original PR #76 verification gap cannot recur.
+test("live: a vanilla example's context menu plugin works", async ({ page }) => {
+  test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  test.setTimeout(120_000);
+  // guides/accessibility example1 configures `contextMenu: true`.
+  await page.goto("/?docs=guides/accessibility/accessibility/javascript/example1.js");
+  const preview = page.frameLocator("iframe").first();
+  await expect(preview.locator(".handsontable td").first()).toBeVisible({ timeout: 90_000 });
+  await preview.locator(".handsontable td").first().click({ button: "right" });
+  await expect(preview.locator(".htContextMenu").first()).toBeVisible({ timeout: 15_000 });
+});
+
+test("live: a React example's getPlugin() call works", async ({ page }) => {
+  test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  test.setTimeout(120_000);
+  // guides/dialog example1 calls `hotInstance.getPlugin('dialog').show(...)` on
+  // mount — the exact call that crashed (bug C). The dialog content appearing
+  // proves the plugin registry reached the grid.
+  await page.goto("/?docs=guides/dialog/dialog/react/example1.tsx");
+  const preview = page.frameLocator("iframe").first();
+  await expect(preview.locator(".handsontable td").first()).toBeVisible({ timeout: 90_000 });
+  await expect(
+    preview.getByText("This is a basic dialog with default configuration.").first(),
+  ).toBeVisible({ timeout: 30_000 });
 });

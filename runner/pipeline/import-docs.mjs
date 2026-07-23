@@ -82,29 +82,30 @@ const BUILTIN_PKGS = new Set([
 // Angular runs in a Cloudflare Sandbox container (the server derives its dev
 // command/port from the `framework` key).
 const RUNNER = {
+  // DEV-2129: all Tier-1 frameworks run on the classic bundler's `parcel`
+  // environment — the only one that shares Handsontable's internal module
+  // registry across entry points, so `registerAllModules()` actually reaches
+  // the grid (`create-react-app(-typescript)` duplicates the registry and
+  // silently kills every plugin). `parcel`'s babel-standalone 6.26 cannot
+  // parse TS/JSX/ES2018+, so the runtime pre-transpiles sources client-side
+  // before mounting (packages/runtime/src/transpile.ts).
   javascript: {
     framework: "javascript", displayName: "JavaScript", tier: 1, engine: "sandpack",
-    // The classic bundler's `parcel` env transpiles with babel-standalone 6.26, which
-    // predates optional chaining (`?.`) / nullish (`??`) and parse-fails on modern docs
-    // examples (DEV-2129). `create-react-app-typescript` uses babel 7 (handles ES2020)
-    // and drives plain-DOM JS via the emitted `/src/main.js` module + `index.html` shell.
-    sandpackTemplate: "vanilla", sandpackEnvironment: "create-react-app-typescript", container: null, htWrappers: [],
+    sandpackTemplate: "vanilla", sandpackEnvironment: "parcel", container: null, htWrappers: [],
     entry: "/src/main.js", htmlEntry: "/index.html",
     devCommand: null, buildCommand: "vite build", outputDir: "dist", outputGlob: null,
     staticExport: false, spaMode: false, port: null, installCommand: "pnpm install",
   },
   typescript: {
     framework: "typescript", displayName: "TypeScript", tier: 1, engine: "sandpack",
-    // See the javascript note above: `parcel`/babel-6.26 parse-fails on `?.`/`??`.
-    // `create-react-app-typescript` (babel 7) also transpiles plain `.ts` (DEV-2129).
-    sandpackTemplate: "vanilla-ts", sandpackEnvironment: "create-react-app-typescript", container: null, htWrappers: [],
+    sandpackTemplate: "vanilla-ts", sandpackEnvironment: "parcel", container: null, htWrappers: [],
     entry: "/src/main.ts", htmlEntry: "/index.html",
     devCommand: null, buildCommand: "vite build", outputDir: "dist", outputGlob: null,
     staticExport: false, spaMode: false, port: null, installCommand: "pnpm install",
   },
   react: {
     framework: "react", displayName: "React (TS)", tier: 1, engine: "sandpack",
-    sandpackTemplate: "react-ts", sandpackEnvironment: "create-react-app-typescript",
+    sandpackTemplate: "react-ts", sandpackEnvironment: "parcel",
     container: null, htWrappers: ["@handsontable/react-wrapper"],
     entry: "/src/main.tsx", htmlEntry: "/index.html",
     devCommand: null, buildCommand: "vite build", outputDir: "dist", outputGlob: null,
@@ -112,7 +113,7 @@ const RUNNER = {
   },
   "react-js": {
     framework: "react-js", displayName: "React (JS)", tier: 1, engine: "sandpack",
-    sandpackTemplate: "react", sandpackEnvironment: "create-react-app",
+    sandpackTemplate: "react", sandpackEnvironment: "parcel",
     container: null, htWrappers: ["@handsontable/react-wrapper"],
     entry: "/src/main.jsx", htmlEntry: "/index.html",
     devCommand: null, buildCommand: "vite build", outputDir: "dist", outputGlob: null,

@@ -24,10 +24,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@babel/standalone": "^8.0.4",
     "@codesandbox/sandpack-client": "^2.19.8",
     "semver": "^7.7.4"
   },
   "devDependencies": {
+    "@types/babel__standalone": "^7.1.9",
     "@types/semver": "^7.5.8"
   }
 }
