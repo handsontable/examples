@@ -11,6 +11,7 @@
 
 import { loadSandpackClient } from "@codesandbox/sandpack-client";
 import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
+import { transpileFilesForParcel } from "./transpile.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 // Derive Sandpack's option/setup types straight from the loader signature so we
@@ -32,13 +33,22 @@ export interface SandpackRuntimeOptions {
 const HTML_ENTRY_ENVS = new Set(["parcel", "static"]);
 
 /**
- * The classic bundler's JS "create-react-app" environment renders blank for our
- * Vite-structured React examples; the TypeScript variant handles both JS and TSX
- * reliably (it's what the working `react` example uses). Normalize to it.
+ * DEV-2129: `parcel` is the only classic-bundler environment that shares
+ * Handsontable's internal module registry across entry points — under the
+ * `create-react-app(-typescript)` environments the registry is duplicated, so
+ * plugin registration never reaches the grid (`getPlugin()` returns undefined,
+ * context menu / sorting / dialog etc. are silently dead). Route every Tier-1
+ * sandbox through `parcel`; its 2018-era transpiler can't parse TS/JSX/ES2018+,
+ * so sources are pre-compiled client-side (see transpile.ts) before mounting.
  */
 function normalizeEnv(env: string | null | undefined): string | undefined {
-  if (env === "create-react-app") return "create-react-app-typescript";
+  if (env === "create-react-app" || env === "create-react-app-typescript") return "parcel";
   return env ?? undefined;
+}
+
+/** Map an authored entry path to its compiled name in the parcel sandbox. */
+function toParcelEntry(path: string): string {
+  return path.replace(/\.(tsx|ts|jsx)$/, ".js");
 }
 
 /**
@@ -126,22 +136,38 @@ export class SandpackRuntime implements DemoRuntime {
   }
 
   /** Apply version dispatch, then shape files into a Sandpack sandbox setup. */
-  private buildSetup(files: FilesMap): SandboxSetup {
+  private async buildSetup(files: FilesMap): Promise<SandboxSetup> {
     const pinned = this.opts.version
       ? applyHandsontableCss(applyHandsontableVersion(files, this.opts.version), this.opts.version)
       : files;
+    // `this.files` always holds the authored sources; parcel's compiled view is
+    // derived from it on every (re)build and never fed back into the editor.
     this.files = sanitizeHtml(ensureSandpackDeps(pinned));
+    return this.setupFrom(await this.sandboxFiles());
+  }
 
+  private get env(): string | undefined {
+    return normalizeEnv(this.entry.sandpackEnvironment);
+  }
+
+  /** The files the bundler sees: pre-transpiled for parcel, authored otherwise. */
+  private sandboxFiles(): Promise<FilesMap> | FilesMap {
+    return this.env === "parcel" ? transpileFilesForParcel(this.files) : this.files;
+  }
+
+  private setupFrom(files: FilesMap): SandboxSetup {
     const sandpackFiles: Record<string, { code: string }> = {};
-    for (const [path, code] of Object.entries(this.files)) {
+    for (const [path, code] of Object.entries(files)) {
       sandpackFiles[path] = { code };
     }
 
-    const env = normalizeEnv(this.entry.sandpackEnvironment);
+    const env = this.env;
     const entryPath =
       env && HTML_ENTRY_ENVS.has(env) && this.entry.htmlEntry
         ? this.entry.htmlEntry
-        : this.entry.entry;
+        : env === "parcel"
+          ? toParcelEntry(this.entry.entry)
+          : this.entry.entry;
 
     return {
       files: sandpackFiles,
@@ -162,7 +188,7 @@ export class SandpackRuntime implements DemoRuntime {
   }
 
   async mount(files: FilesMap): Promise<{ previewUrl: string }> {
-    const setup = this.buildSetup(files);
+    const setup = await this.buildSetup(files);
     this.client = await loadSandpackClient(this.opts.iframe, setup, this.clientOptions());
 
     this.unlisten = this.client.listen((msg: unknown) => this.onMessage(msg));
@@ -192,9 +218,7 @@ export class SandpackRuntime implements DemoRuntime {
   writeFile(path: string, contents: string): void {
     if (!this.client) throw new Error("SandpackRuntime.writeFile called before mount()");
     this.files = { ...this.files, [path]: contents };
-    const sandpackFiles: Record<string, { code: string }> = {};
-    for (const [p, code] of Object.entries(this.files)) sandpackFiles[p] = { code };
-    this.client.updateSandbox({ ...this.buildSetupFrom(sandpackFiles) } as SandboxSetup);
+    this.pushUpdate();
   }
 
   /** Remove a file and recompile (file-tree delete/rename). */
@@ -203,18 +227,26 @@ export class SandpackRuntime implements DemoRuntime {
     const next = { ...this.files };
     delete next[path];
     this.files = next;
-    const sandpackFiles: Record<string, { code: string }> = {};
-    for (const [p, code] of Object.entries(this.files)) sandpackFiles[p] = { code };
-    this.client.updateSandbox({ ...this.buildSetupFrom(sandpackFiles) } as SandboxSetup);
+    this.pushUpdate();
   }
 
-  private buildSetupFrom(sandpackFiles: Record<string, { code: string }>): SandboxSetup {
-    const env = normalizeEnv(this.entry.sandpackEnvironment);
-    const entryPath =
-      env && HTML_ENTRY_ENVS.has(env) && this.entry.htmlEntry
-        ? this.entry.htmlEntry
-        : this.entry.entry;
-    return { files: sandpackFiles, entry: entryPath, template: env } as SandboxSetup;
+  /**
+   * Recompute the sandbox from `this.files` and push it. Transpilation is
+   * async, so guard with a sequence number: only the newest edit wins, stale
+   * results are dropped. A transpile failure (half-typed code) keeps the last
+   * good sandbox instead of surfacing an error for every keystroke.
+   */
+  private updateSeq = 0;
+  private pushUpdate(): void {
+    const seq = ++this.updateSeq;
+    Promise.resolve(this.sandboxFiles())
+      .then((files) => {
+        if (!this.client || seq !== this.updateSeq) return;
+        this.client.updateSandbox(this.setupFrom(files));
+      })
+      .catch(() => {
+        /* mid-edit parse error — the user is still typing */
+      });
   }
 
   dispose(): void {

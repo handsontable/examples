@@ -54,6 +54,10 @@ test("regenerating a release bucket preserves a sibling next bucket", async (t) 
     fs.readFileSync(path.join(outDir, "18.0", manifest.examples[0].file), "utf8"),
   );
   assert.equal(artifact.htCoreRange, "18.0.3");
+  // DEV-2129: Tier-1 sandboxes must run on `parcel` — the only classic-bundler
+  // environment that shares Handsontable's module registry (plugins work).
+  // Modern syntax/TSX is handled by client-side pre-transpilation, not the env.
+  assert.equal(artifact.sandpackEnvironment, "parcel");
   assert.equal(JSON.parse(artifact.files["/package.json"]).dependencies.handsontable, "18.0.3");
   assert.match(artifact.files["/index.html"], /handsontable@18\.0\.3/);
 });
