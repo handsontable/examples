@@ -7,6 +7,7 @@
 // Sharing endpoints (POST/GET/PATCH/DELETE /api/demos) land in Deliverable 5.
 
 import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/sandbox";
+import { pickLatestNextVersion } from "@handsontable/demo-runtime";
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
@@ -456,9 +457,14 @@ export default {
           const j = (await r.json()) as {
             "dist-tags"?: Record<string, string>;
             versions?: Record<string, unknown>;
+            time?: Record<string, string>;
           };
           const latest = j["dist-tags"]?.latest ?? null;
-          const next = j["dist-tags"]?.next ?? null;
+          // Newest -next build by publish date — the `next` dist-tag went
+          // stale (2026-02-19) while nightlies kept publishing, and serving
+          // it here re-pinned docs examples onto a five-month-old core. The
+          // tag is only a fallback for a registry document without `time`.
+          const next = pickLatestNextVersion(j.time) ?? j["dist-tags"]?.next ?? null;
           const cmp = (a: string, b: string) => {
             const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
             for (let i = 0; i < 3; i++) { const d = (pb[i] ?? 0) - (pa[i] ?? 0); if (d) return d; }

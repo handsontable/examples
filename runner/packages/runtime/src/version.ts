@@ -36,6 +36,29 @@ export function isNextPrereleaseVersion(value: string): boolean {
   return NEXT_PRERELEASE_RE.test(value);
 }
 
+/** Matches nightly (`0.0.0-next-<hash>-<date>`) and dotted (`19.0.0-next.1`) prereleases. */
+const ANY_NEXT_VERSION_RE = /^\d+\.\d+\.\d+-next[.-]/;
+
+/**
+ * Newest `-next` version by npm publish date, from a registry document's
+ * `time` map — or null when none exists. The `next` dist-tag is deliberately
+ * not consulted: it went stale on 2026-02-19 while nightlies kept publishing,
+ * silently pinning docs examples to a five-month-old build. A string or
+ * semver-prerelease sort would not do either — the nightly hash sits in the
+ * prerelease identifier, so an old build can sort above newer ones. (The
+ * docs importer applies the same rule in pipeline/docs-import-config.mjs.)
+ */
+export function pickLatestNextVersion(time: Record<string, string> | undefined): string | null {
+  let newest: { version: string; publishedAt: number } | null = null;
+  for (const [version, published] of Object.entries(time ?? {})) {
+    if (!ANY_NEXT_VERSION_RE.test(version)) continue; // skips created/modified/stable
+    const publishedAt = Date.parse(published);
+    if (Number.isNaN(publishedAt)) continue;
+    if (!newest || publishedAt > newest.publishedAt) newest = { version, publishedAt };
+  }
+  return newest?.version ?? null;
+}
+
 /** Parse a full https://pkg.pr.new/...@ref URL; bare numeric ids handled in validation. */
 export function parsePkgPrNewFromUrl(value: string): string | null {
   try {

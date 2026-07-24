@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyHandsontableCss, validateHandsontableVersion } from "../packages/runtime/dist/version.js";
+import { applyHandsontableCss, pickLatestNextVersion, validateHandsontableVersion } from "../packages/runtime/dist/version.js";
 
 const cssUrl = (version) =>
   `https://unpkg.com/handsontable@${version}/dist/handsontable.full.min.css`;
@@ -71,4 +71,41 @@ test("pkg.pr.new refs bypass the floor (and ceiling) check", () => {
 test("custom minMajor/maxMajor override the defaults", () => {
   assert.equal(validateHandsontableVersion("14.0.0", 19, 10).ok, true);
   assert.equal(validateHandsontableVersion("9.0.0", 19, 10).ok, false);
+});
+
+// The npm `next` dist-tag went stale on 2026-02-19 while nightlies kept
+// publishing — /api/versions kept advertising the February build as "next",
+// re-pinning docs examples onto a five-month-old core at runtime. Never trust
+// the tag: pick the newest `-next` version by publish date from the registry
+// `time` map. (The importer applies the same rule at build time in
+// pipeline/docs-import-config.mjs.)
+test("pickLatestNextVersion picks the newest -next build by publish date", () => {
+  const time = {
+    created: "2020-01-01T00:00:00.000Z",
+    modified: "2026-07-24T09:00:00.000Z",
+    "18.0.1": "2026-06-02T10:00:00.000Z",
+    // Alphabetically larger hash than the July builds — a string sort would
+    // wrongly pick this one.
+    "0.0.0-next-64139ae-20260219": "2026-02-19T04:00:00.000Z",
+    "0.0.0-next-9366f60-20260723": "2026-07-23T04:00:00.000Z",
+    "0.0.0-next-09631ad-20260724": "2026-07-24T04:00:00.000Z",
+  };
+  assert.equal(pickLatestNextVersion(time), "0.0.0-next-09631ad-20260724");
+});
+
+test("pickLatestNextVersion counts dotted -next prereleases and skips invalid dates", () => {
+  assert.equal(
+    pickLatestNextVersion({
+      "19.0.0-next.2": "2026-07-01T00:00:00.000Z",
+      "0.0.0-next-aaaaaaa-20260601": "not-a-date",
+      "18.0.1": "2026-07-24T08:00:00.000Z",
+    }),
+    "19.0.0-next.2",
+  );
+});
+
+test("pickLatestNextVersion returns null when no -next versions exist", () => {
+  assert.equal(pickLatestNextVersion({ created: "2020-01-01T00:00:00.000Z", "18.0.1": "2026-06-02T10:00:00.000Z" }), null);
+  assert.equal(pickLatestNextVersion({}), null);
+  assert.equal(pickLatestNextVersion(undefined), null);
 });
