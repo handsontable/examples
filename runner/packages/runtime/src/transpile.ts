@@ -30,14 +30,25 @@ const SOURCE_RE = /\.(tsx|ts|jsx|js)$/;
 /** Chrome 58 ≈ ES2017 without object rest/spread — the babel 6.26 parse floor. */
 const TARGETS = { chrome: "58" };
 
+// JSX factory identifiers injected into compiled output. Modern docs examples
+// never `import React` (they're written for the automatic JSX runtime), so
+// classic-runtime output calling `React.createElement` would throw "React is
+// not defined" at render. Compile JSX to a private pragma instead and prepend
+// its own `react` import whenever the output uses it.
+const JSX_PRAGMA = "__hotJsx";
+const JSX_PRAGMA_FRAG = "__hotJsxFrag";
+const JSX_IMPORT = `import { createElement as ${JSX_PRAGMA}, Fragment as ${JSX_PRAGMA_FRAG} } from "react";\n`;
+
 function presetsFor(path: string): unknown[] {
   // `modules: false` keeps ES module syntax: parcel resolves `import` itself,
   // and converting to CJS is unnecessary churn in the produced code.
   const presets: unknown[] = [["env", { targets: TARGETS, modules: false }]];
   if (/\.tsx?$/.test(path)) presets.push("typescript");
-  // Classic runtime (React.createElement): the classic bundler predates the
-  // automatic runtime's `react/jsx-runtime` subpath import.
-  if (/\.(tsx|jsx)$/.test(path)) presets.push(["react", { runtime: "classic" }]);
+  // Classic runtime: the classic bundler predates the automatic runtime's
+  // `react/jsx-runtime` subpath import. The pragma keeps it self-contained.
+  if (/\.(tsx|jsx)$/.test(path)) {
+    presets.push(["react", { runtime: "classic", pragma: JSX_PRAGMA, pragmaFrag: JSX_PRAGMA_FRAG }]);
+  }
   return presets;
 }
 
@@ -71,6 +82,7 @@ export async function transpileFilesForParcel(files: FilesMap): Promise<FilesMap
     } catch (e) {
       throw new Error(`Failed to transpile ${path} for the parcel sandbox: ${(e as Error).message}`);
     }
+    if (compiled.includes(JSX_PRAGMA)) compiled = JSX_IMPORT + compiled;
     const jsPath = path.replace(SOURCE_RE, ".js");
     if (jsPath !== path) renamed.push([path, jsPath]);
     out[jsPath] = compiled;

@@ -341,6 +341,25 @@ test("live: a vanilla example's context menu plugin works", async ({ page }) => 
   await expect(preview.locator(".htContextMenu").first()).toBeVisible({ timeout: 15_000 });
 });
 
+// Most React docs examples are written for the automatic JSX runtime and never
+// `import React` — the classic-runtime output we feed parcel must inject its
+// own factory import ("React is not defined" prod regression, 2026-07-24). The
+// dialog guard below can't catch this class: that example happens to import
+// React. Guard with a modern-import-style example.
+test("live: a React example that never imports React renders", async ({ page }) => {
+  test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  test.setTimeout(120_000);
+  const errors: string[] = [];
+  page.on("console", (m) => {
+    if (/React is not defined|ReferenceError/i.test(m.text())) errors.push(m.text());
+  });
+  // selection example1 imports only hooks: `import { useRef, useState, useEffect } from 'react'`.
+  await page.goto("/?docs=guides/cell-features/selection/react/example1.tsx");
+  const preview = page.frameLocator("iframe").first();
+  await expect(preview.locator(".handsontable td").first()).toBeVisible({ timeout: 90_000 });
+  expect(errors, "no ReferenceError from compiled JSX").toHaveLength(0);
+});
+
 test("live: a React example's getPlugin() call works", async ({ page }) => {
   test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
   test.setTimeout(120_000);
