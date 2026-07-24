@@ -56,6 +56,46 @@ export async function resolveNpmPackageVersion({
   return assertConcreteVersion(registry?.["dist-tags"]?.[distTag], source);
 }
 
+// Matches nightly (`0.0.0-next-<hash>-<date>`) and dotted (`19.0.0-next.1`)
+// prerelease versions.
+const NEXT_VERSION_RE = /^\d+\.\d+\.\d+-next[.-]/;
+
+/**
+ * Newest `-next` Handsontable version by npm publish date. The `next`
+ * dist-tag is deliberately not consulted: it went stale on 2026-02-19 while
+ * nightlies kept publishing daily, silently pinning every docs example to a
+ * five-month-old build (getPlugin('notification') === undefined).
+ */
+export async function resolveLatestNextVersion({ fetchImpl = globalThis.fetch } = {}) {
+  const source = "npm handsontable next version by publish date";
+  if (typeof fetchImpl !== "function") {
+    throw new Error(`Could not fetch ${source}: fetch is unavailable`);
+  }
+
+  let registry;
+  try {
+    const response = await fetchImpl(`${NPM_REGISTRY_URL}/handsontable`);
+    if (!response?.ok) {
+      throw new Error(`registry returned ${response?.status ?? "an error"}`);
+    }
+    registry = await response.json();
+  } catch (error) {
+    throw new Error(`Could not resolve ${source}: ${error.message}`);
+  }
+
+  let newest = null;
+  for (const [version, published] of Object.entries(registry?.time ?? {})) {
+    if (!NEXT_VERSION_RE.test(version)) continue; // skips created/modified/stable
+    const publishedAt = Date.parse(published);
+    if (Number.isNaN(publishedAt)) continue;
+    if (!newest || publishedAt > newest.publishedAt) newest = { version, publishedAt };
+  }
+  if (!newest) {
+    throw new Error(`Could not resolve ${source}: no -next versions in the registry time map`);
+  }
+  return assertConcreteVersion(newest.version, source);
+}
+
 export async function resolveDocsHotVersion({
   docsBranch,
   docsDir,
@@ -75,9 +115,5 @@ export async function resolveDocsHotVersion({
     return assertConcreteVersion(packageJson.version, `${packagePath} version`);
   }
 
-  return resolveNpmPackageVersion({
-    packageName: "handsontable",
-    distTag: "next",
-    fetchImpl,
-  });
+  return resolveLatestNextVersion({ fetchImpl });
 }

@@ -62,7 +62,7 @@ test("regenerating a release bucket preserves a sibling next bucket", async (t) 
   assert.match(artifact.files["/index.html"], /handsontable@18\.0\.3/);
 });
 
-test("develop writes the next bucket with npm dist-tags.next", async (t) => {
+test("develop writes the next bucket with the newest npm -next version by publish date", async (t) => {
   const { docsDir, outDir } = makeFixture(t);
 
   await importDocs({
@@ -71,7 +71,15 @@ test("develop writes the next bucket with npm dist-tags.next", async (t) => {
     outDir,
     fetchImpl: async () => ({
       ok: true,
-      json: async () => ({ "dist-tags": { next: "19.0.0-next.1" } }),
+      json: async () => ({
+        // Stale tag — must be ignored in favour of the publish-date winner.
+        "dist-tags": { next: "0.0.0-next-64139ae-20260219" },
+        time: {
+          created: "2020-01-01T00:00:00.000Z",
+          "0.0.0-next-64139ae-20260219": "2026-02-19T04:00:00.000Z",
+          "19.0.0-next.1": "2026-07-24T04:00:00.000Z",
+        },
+      }),
     }),
   });
 
