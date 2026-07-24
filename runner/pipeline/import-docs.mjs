@@ -440,8 +440,16 @@ export async function importDocs({
           for (const [k, v] of Object.entries(wrapped)) files["/" + k] = v;
 
           if (!files["/package.json"]) { problems.push(`${docsPath}: no package.json`); continue; }
-          if (!files[cfg.entry] && !files[cfg.htmlEntry ?? ""]) {
-            problems.push(`${docsPath}: entry ${cfg.entry} / ${cfg.htmlEntry} missing`);
+          // DEV-2130: an artifact whose entry points at a file the wrapper never
+          // emitted mounts a sandbox that "succeeds" without executing anything
+          // (blank preview, no error banner). Refuse to write it.
+          if (!files[cfg.entry]) {
+            problems.push(`${docsPath}: module entry ${cfg.entry} missing from generated files`);
+            continue;
+          }
+          if (cfg.htmlEntry && !files[cfg.htmlEntry]) {
+            problems.push(`${docsPath}: html entry ${cfg.htmlEntry} missing from generated files`);
+            continue;
           }
 
           const exampleTitle = titles.get(block.exampleId) || block.exampleId;
@@ -521,7 +529,10 @@ export async function importDocs({
   if (problems.length) {
     console.error(`[import-docs] ${problems.length} problems:\n  - ` + problems.slice(0, 30).join("\n  - "));
     if (problems.length > 30) console.error(`  … and ${problems.length - 30} more`);
-    throw new Error(`[import-docs] ${problems.length} generated artifacts have problems`);
+    throw new Error(
+      `[import-docs] ${problems.length} generated artifacts have problems:\n  - ` +
+        problems.slice(0, 30).join("\n  - "),
+    );
   }
 }
 
