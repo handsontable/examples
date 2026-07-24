@@ -27,6 +27,29 @@ function loadBabel(): Promise<Babel> {
 
 const SOURCE_RE = /\.(tsx|ts|jsx|js)$/;
 
+/**
+ * Compile a plain-JS dependency dist down to the babel 6 parse floor (used by
+ * dep-shims.ts for packages whose published dist uses post-ES2017 syntax).
+ * `sourceType: "unambiguous"` keeps UMD bundles in script mode so their
+ * top-level `this` survives, while ESM dists keep their import/export syntax.
+ */
+export async function transpileDependencyDist(code: string, filename: string): Promise<string> {
+  const babel = await loadBabel();
+  const compiled = babel.transform(code, {
+    filename,
+    presets: [["env", { targets: TARGETS, modules: false, include: ["transform-classes"] }]],
+    sourceType: "unambiguous",
+    sourceMaps: false,
+    babelrc: false,
+    configFile: false,
+    // Dependency dists can be hundreds of KB; compact output keeps the
+    // recompile that follows (babel 6 in the bundler) cheap.
+    compact: true,
+  }).code;
+  if (!compiled) throw new Error(`transpiling ${filename} produced no output`);
+  return compiled;
+}
+
 /** Chrome 58 ≈ ES2017 without object rest/spread — the babel 6.26 parse floor. */
 const TARGETS = { chrome: "58" };
 
@@ -42,7 +65,16 @@ const JSX_IMPORT = `import { createElement as ${JSX_PRAGMA}, Fragment as ${JSX_P
 function presetsFor(path: string): unknown[] {
   // `modules: false` keeps ES module syntax: parcel resolves `import` itself,
   // and converting to CJS is unnecessary churn in the produced code.
-  const presets: unknown[] = [["env", { targets: TARGETS, modules: false }]];
+  //
+  // `transform-classes` is force-included even though the target supports
+  // classes: if any `class` reaches the bundler, babel 6 downlevels it to an
+  // ES5 constructor whose `Parent.call(this)` throws when the parent is a
+  // native ES6 class from a dependency dist (hyperformula's FunctionPlugin).
+  // Babel 8's transform goes through Reflect.construct, which native parents
+  // accept — and babel 6 then sees no `class` at all.
+  const presets: unknown[] = [
+    ["env", { targets: TARGETS, modules: false, include: ["transform-classes"] }],
+  ];
   if (/\.tsx?$/.test(path)) presets.push("typescript");
   // Classic runtime: the classic bundler predates the automatic runtime's
   // `react/jsx-runtime` subpath import. The pragma keeps it self-contained.

@@ -36,6 +36,24 @@ async function runWithReactStub(compiledCode) {
   }
 }
 
+// Execute a compiled module against a stubbed npm package. Used to prove that
+// downleveled classes can still subclass a *native* ES6 class exported by a
+// dependency dist that babel 6 never touches (hyperformula's FunctionPlugin).
+async function runWithStubPackage(compiledCode, pkgName, stubSource) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "transpile-exec-"));
+  try {
+    const pkgDir = path.join(root, "node_modules", pkgName);
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify({ name: pkgName, version: "0.0.0", type: "module", main: "index.js" }));
+    fs.writeFileSync(path.join(pkgDir, "index.js"), stubSource);
+    const modPath = path.join(root, "app.mjs");
+    fs.writeFileSync(modPath, compiledCode);
+    return await import(pathToFileURL(modPath).href);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // DEV-2129: the classic Sandpack `parcel` environment (babel-standalone 6.26)
 // shares Handsontable's internal module registry across entry points (plugins
 // work) but cannot parse TS/TSX or ES2018+ syntax. transpileFilesForParcel
@@ -182,6 +200,44 @@ test("leaves non-source files untouched", async () => {
   const out = await transpileFilesForParcel(files);
   assert.equal(out["/package.json"], files["/package.json"]);
   assert.equal(out["/styles.css"], files["/styles.css"]);
+});
+
+// The parcel bundler's babel 6 downlevels any `class` it sees to an ES5
+// constructor function that calls its parent with `Parent.call(this)` — which
+// throws "Class constructor X cannot be invoked without 'new'" when the parent
+// is a native ES6 class from a dependency dist (hyperformula's FunctionPlugin,
+// prod regression 2026-07-24). Downlevel classes ourselves: babel 8's class
+// transform goes through Reflect.construct, which native parents accept, and
+// babel 6 then sees no `class` at all.
+test("downlevels classes to ES5 so babel 6 never transforms them", async () => {
+  const out = await transpileFilesForParcel({
+    "/src/main.js":
+      "import { FunctionPlugin } from 'hyperformula';\n" +
+      "export class MyPlugin extends FunctionPlugin {\n" +
+      "  hello() { return 'hi'; }\n" +
+      "}\n",
+  });
+  const code = out["/src/main.js"];
+  assert.ok(!/\bclass\b/.test(code.replace(/"[^"]*"|'[^']*'/g, "")), "no class syntax left");
+});
+
+test("downleveled class can subclass a native ES6 class from a dependency", async () => {
+  const out = await transpileFilesForParcel({
+    "/src/main.js":
+      "import { FunctionPlugin } from 'hyperformula';\n" +
+      "export class MyPlugin extends FunctionPlugin {\n" +
+      "  constructor() { super(); this.own = 1; }\n" +
+      "}\n",
+  });
+  const mod = await runWithStubPackage(
+    out["/src/main.js"],
+    "hyperformula",
+    // Native class, never transpiled — like a real dependency dist.
+    "export class FunctionPlugin { constructor() { this.base = true; } }\n",
+  );
+  const instance = new mod.MyPlugin();
+  assert.equal(instance.base, true, "native parent constructor ran");
+  assert.equal(instance.own, 1, "subclass constructor ran");
 });
 
 test("throws a filename-tagged error on unparseable source", async () => {
