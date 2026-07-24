@@ -9,6 +9,7 @@
 // is never bundled into the (non-DOM) Worker itself.
 
 import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
+import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 /** The container reached the server and booted, but the boot script itself
@@ -19,6 +20,15 @@ import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
  * contain words like "fetching" that would otherwise trip a generic
  * network-error heuristic. */
 export class ContainerBootFailure extends Error {}
+
+/** POST /api/session failed. `status` distinguishes the server's 410
+ * "closed while being created" (session already destroyed server-side; a
+ * follow-up DELETE would only re-extend its tombstone) from other failures. */
+export class SessionStartError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+  }
+}
 
 /** The live-session API accepts only relative POSIX paths. */
 function relativeFiles(files: FilesMap): FilesMap {
@@ -38,7 +48,9 @@ export interface ContainerRuntimeOptions {
   apiBase: string;
   /** Pin Handsontable to this version before starting the session. */
   version?: HandsontableVersionRef;
-  /** Optional stable session id (else the server generates one). */
+  /** Optional session id (else a fresh one is minted per mount). MUST be
+   *  unique per create: the server tombstones a deleted id for 10 minutes and
+   *  tears down any session recreated under it in that window. */
   sessionId?: string;
   /** Debounce for streamed edits (ms). */
   writeDebounceMs?: number;
@@ -52,6 +64,11 @@ export class ContainerRuntime implements DemoRuntime {
   private readonly entry: CatalogEntry;
   private readonly opts: ContainerRuntimeOptions;
   private sessionId: string | null = null;
+  // sessionId exists from the moment mount() starts (so a tab close can always
+  // DELETE), but the session accepts writes only once the create POST has
+  // succeeded — streaming an edit mid-create would race the create handler's
+  // own writeFiles and could overwrite the newer edit with the boot snapshot.
+  private mounted = false;
   private files: FilesMap = {};
   private readonly readyCbs = new Set<() => void>();
   private readonly errorCbs = new Set<(e: Error) => void>();
@@ -65,6 +82,19 @@ export class ContainerRuntime implements DemoRuntime {
   private pointed = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  // Tear the session down when the page goes away (tab close, navigation) —
+  // otherwise the container squats one of the few live-preview instance slots
+  // until sleepAfter expires. pagehide is the reliable end-of-page signal
+  // (fires on tab close and navigation; unload/beforeunload are skipped by
+  // bfcache-eligible navigations and headless closes). A bfcache freeze
+  // (persisted=true) is NOT the end of the page — the browser may restore it
+  // via back/forward, and a disposed runtime would leave that restored page
+  // with a dead preview. Keep the session; if the page never comes back, the
+  // container's sleepAfter idle window reclaims the slot (keepalive pings are
+  // frozen along with the page).
+  private readonly onPagehide = (event: PageTransitionEvent) => {
+    if (!event.persisted) this.dispose();
+  };
 
   constructor(entry: CatalogEntry, opts: ContainerRuntimeOptions) {
     if (entry.engine !== "container") {
@@ -102,30 +132,66 @@ export class ContainerRuntime implements DemoRuntime {
       ? applyHandsontableCss(applyHandsontableVersion(files, this.opts.version), this.opts.version)
       : files;
 
-    const res = await fetch(`${this.opts.apiBase}/api/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        framework: this.entry.framework,
-        files: relativeFiles(this.files),
-        sessionId: this.opts.sessionId,
-        htVersion: this.opts.version?.ref,
-      }),
-    });
-    if (!res.ok) {
-      const msg = await res.text().catch(() => res.statusText);
-      throw new Error(`session start failed (${res.status}): ${msg}`);
-    }
-    const { sessionId, previewUrl, port } = (await res.json()) as {
-      sessionId: string;
-      previewUrl: string;
-      port: number;
-    };
+    // Mint the session id client-side (mintSessionId is shared with the
+    // Worker so both sides always produce the same shape) and register the
+    // pagehide teardown BEFORE the session request: the server starts creating
+    // the container while the POST is in flight (file writes alone boot it),
+    // and a tab close during that window — at its widest when the instance
+    // pool is full and the request is stuck waiting for a slot — must already
+    // know an id to DELETE. With a server-minted id there is nothing to
+    // delete yet.
+    const sessionId = this.opts.sessionId?.trim() || mintSessionId(this.entry.framework);
     this.sessionId = sessionId;
+    window.addEventListener("pagehide", this.onPagehide);
+
+    let previewUrl: string;
+    let port: number;
+    try {
+      const res = await fetch(`${this.opts.apiBase}/api/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          framework: this.entry.framework,
+          files: relativeFiles(this.files),
+          sessionId,
+          htVersion: this.opts.version?.ref,
+        }),
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => res.statusText);
+        throw new SessionStartError(res.status, `session start failed (${res.status}): ${msg}`);
+      }
+      ({ previewUrl, port } = (await res.json()) as { previewUrl: string; port: number });
+    } catch (err) {
+      // A failed create can still leave a half-created session server-side
+      // (the POST handler's file writes boot the container before the step
+      // that failed). Tear the runtime down and DELETE by the local id —
+      // dispose() alone can't be trusted with it: a mid-flight dispose() may
+      // already have nulled this.sessionId. Exception: on the server's 410
+      // ("closed while being created") the session is already destroyed, and
+      // another DELETE would only re-extend its tombstone TTL.
+      this.sessionId = null;
+      this.dispose();
+      if (!(err instanceof SessionStartError && err.status === 410)) this.deleteSession(sessionId);
+      throw err instanceof Error ? err : new Error(String(err));
+    }
     this.previewUrl = previewUrl;
     this.port = port;
 
-    if (this.disposed) return { previewUrl };
+    if (this.disposed) {
+      // dispose() ran while the session request was in flight. Its DELETE
+      // raced the server's container creation, so now that creation has
+      // definitely finished, send another to tear down whatever won the race.
+      this.deleteSession(sessionId);
+      return { previewUrl };
+    }
+
+    // The session now accepts writes; stream any edits buffered while the
+    // create was in flight (the create wrote the mount-time snapshot, so a
+    // buffered edit is strictly newer — and flushing only from here on can
+    // no longer race the create handler's writeFiles).
+    this.mounted = true;
+    if (this.pending.size > 0) void this.flush();
 
     // The container boots asynchronously (install + dev server). Poll status for
     // progress; only point the iframe at the preview once the dev server is up.
@@ -141,6 +207,12 @@ export class ContainerRuntime implements DemoRuntime {
         const r = await fetch(
           `${this.opts.apiBase}/api/session/${this.sessionId}/status?port=${this.port}`,
         );
+        // 410 = the session was tombstoned (closed elsewhere); it can never
+        // become ready, so stop polling instead of rescheduling forever.
+        if (r.status === 410) {
+          if (!this.disposed && !this.pointed) this.emitError(new Error("The session was closed."));
+          return;
+        }
         if (r.ok) {
           const { ready, log, failed } = (await r.json()) as { ready: boolean; log: string; failed?: boolean };
           if (log && !this.pointed) this.emitProgress(log);
@@ -185,7 +257,9 @@ export class ContainerRuntime implements DemoRuntime {
     })();
   }
 
-  /** Stream an edit; the container dev server HMRs it. Debounced per burst. */
+  /** Stream an edit; the container dev server HMRs it. Debounced per burst.
+   *  An edit made while the create POST is still in flight is buffered
+   *  (flush() is gated on `mounted`) and streamed as soon as it succeeds. */
   writeFile(path: string, contents: string): void {
     if (!this.sessionId) throw new Error("ContainerRuntime.writeFile called before mount()");
     this.files = { ...this.files, [path]: contents };
@@ -201,6 +275,11 @@ export class ContainerRuntime implements DemoRuntime {
     const next = { ...this.files };
     delete next[path];
     this.files = next;
+    // Mid-create there is nothing to delete server-side yet, and the RPC
+    // would race the create's own writeFiles. Local removal is enough: the
+    // pre-existing limitation that a mid-boot delete does not propagate to
+    // the already-snapshotted container is unchanged.
+    if (!this.mounted) return;
     void fetch(
       `${this.opts.apiBase}/api/session/${this.sessionId}/file?path=${encodeURIComponent(relativePath(path))}`,
       { method: "DELETE" },
@@ -215,15 +294,29 @@ export class ContainerRuntime implements DemoRuntime {
     this.keepaliveTimer = setInterval(() => {
       if (this.disposed || !this.sessionId) return;
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      void fetch(`${this.opts.apiBase}/api/session/${this.sessionId}/status?port=${this.port}`).catch(() => {});
+      void fetch(`${this.opts.apiBase}/api/session/${this.sessionId}/status?port=${this.port}`)
+        .then((r) => {
+          // Session tombstoned elsewhere — pinging it forever is pointless.
+          if (r.status === 410 && this.keepaliveTimer) {
+            clearInterval(this.keepaliveTimer);
+            this.keepaliveTimer = null;
+          }
+        })
+        .catch(() => {});
     }, intervalMs);
   }
 
   private async flush() {
-    if (!this.sessionId || this.disposed) return;
+    // Gated on `mounted`: a flush before the create POST succeeds would race
+    // the create handler's writeFiles. Buffered edits are flushed by mount().
+    if (!this.mounted || !this.sessionId || this.disposed) return;
     const batch = [...this.pending.entries()];
     this.pending.clear();
     for (const [path, contents] of batch) {
+      // Re-check per iteration: a dispose() during an earlier await must stop
+      // the rest of the batch — writes to a torn-down session are pointless
+      // (and, unguarded server-side, would resurrect its container).
+      if (!this.sessionId || this.disposed) return;
       try {
         await fetch(`${this.opts.apiBase}/api/session/${this.sessionId}/file`, {
           method: "POST",
@@ -236,19 +329,31 @@ export class ContainerRuntime implements DemoRuntime {
     }
   }
 
+  /** Best-effort server-side session destroy; the container also auto-sleeps.
+   *  keepalive lets the request outlive the page when this runs from pagehide
+   *  (tab close). Takes the id explicitly so callers can tear down a session
+   *  whose id dispose() has already nulled (mid-flight mount races). */
+  private deleteSession(id: string): void {
+    void fetch(`${this.opts.apiBase}/api/session/${id}`, { method: "DELETE", keepalive: true }).catch(() => {});
+  }
+
   dispose(): void {
     this.disposed = true;
+    window.removeEventListener("pagehide", this.onPagehide);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     if (this.pollTimer) clearTimeout(this.pollTimer);
     if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
+    // Point the preview away from the dead session. Preview traffic proxies
+    // straight to the container BEFORE any tombstone check (proxyToSandbox is
+    // the Worker's first routing step), so a still-mounted iframe — above all
+    // its Vite HMR WebSocket reconnect loop — would resurrect the container
+    // this dispose just destroyed.
+    if (this.pointed) this.opts.iframe.src = "about:blank";
     this.progressCbs.clear();
     const id = this.sessionId;
     this.sessionId = null;
     this.readyCbs.clear();
     this.errorCbs.clear();
-    if (id) {
-      // Best-effort teardown; container also auto-sleeps.
-      void fetch(`${this.opts.apiBase}/api/session/${id}`, { method: "DELETE" }).catch(() => {});
-    }
+    if (id) this.deleteSession(id);
   }
 }
