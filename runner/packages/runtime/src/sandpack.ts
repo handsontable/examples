@@ -12,6 +12,7 @@
 import { loadSandpackClient } from "@codesandbox/sandpack-client";
 import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
 import { transpileFilesForParcel } from "./transpile.js";
+import { applyDepShims } from "./dep-shims.js";
 import { resolveSandboxEntry } from "./sandbox-entry.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
@@ -143,9 +144,16 @@ export class SandpackRuntime implements DemoRuntime {
     return normalizeEnv(this.entry.sandpackEnvironment);
   }
 
-  /** The files the bundler sees: pre-transpiled for parcel, authored otherwise. */
+  /**
+   * The files the bundler sees: pre-transpiled for parcel (with dependency
+   * shims for dists babel 6 cannot parse — see dep-shims.ts), authored
+   * otherwise. Shims are cached per package version, so streaming edits only
+   * pay for them once.
+   */
   private sandboxFiles(): Promise<FilesMap> | FilesMap {
-    return this.env === "parcel" ? transpileFilesForParcel(this.files) : this.files;
+    return this.env === "parcel"
+      ? transpileFilesForParcel(this.files).then(applyDepShims)
+      : this.files;
   }
 
   private setupFrom(files: FilesMap): SandboxSetup {
