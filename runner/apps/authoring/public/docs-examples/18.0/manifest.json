@@ -3,7 +3,7 @@
   "docsBranch": "prod-docs/18.0",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
   "hotVersion": "18.0.0",
-  "count": 1260,
+  "count": 1261,
   "examples": [
     {
       "bucket": "18.0",
@@ -12981,8 +12981,8 @@
     },
     {
       "bucket": "18.0",
-      "docsPath": "guides/getting-started/demo/react/example2.jsx",
-      "file": "guides__getting-started__demo__react__example2.jsx.json",
+      "docsPath": "guides/getting-started/demo/react/example2.tsx",
+      "file": "guides__getting-started__demo__react__example2.tsx.json",
       "breadcrumb": [
         "Getting Started",
         "Demo"
@@ -13317,6 +13317,70 @@
     },
     {
       "bucket": "18.0",
+      "docsPath": "guides/getting-started/installation/angular/example1.ts",
+      "file": "guides__getting-started__installation__angular__example1.ts.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Installation"
+      ],
+      "guide": "guides/getting-started/installation/installation.md",
+      "guideTitle": "Installation",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/installation",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "18.0",
+      "docsPath": "guides/getting-started/installation/javascript/example1.js",
+      "file": "guides__getting-started__installation__javascript__example1.js.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Installation"
+      ],
+      "guide": "guides/getting-started/installation/installation.md",
+      "guideTitle": "Installation",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/installation",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "18.0",
+      "docsPath": "guides/getting-started/installation/react/example1.tsx",
+      "file": "guides__getting-started__installation__react__example1.tsx.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Installation"
+      ],
+      "guide": "guides/getting-started/installation/installation.md",
+      "guideTitle": "Installation",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/installation",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "18.0",
+      "docsPath": "guides/getting-started/installation/javascript/example1.ts",
+      "file": "guides__getting-started__installation__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Installation"
+      ],
+      "guide": "guides/getting-started/installation/installation.md",
+      "guideTitle": "Installation",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/installation",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "18.0",
       "docsPath": "guides/getting-started/installation/vue/example1.vue",
       "file": "guides__getting-started__installation__vue__example1.vue.json",
       "breadcrumb": [
@@ -13330,54 +13394,6 @@
       "docPermalink": "/installation",
       "framework": "vue",
       "displayName": "Vue 3"
-    },
-    {
-      "bucket": "18.0",
-      "docsPath": "guides/getting-started/installation/javascript/example.js",
-      "file": "guides__getting-started__installation__javascript__example.js.json",
-      "breadcrumb": [
-        "Getting Started",
-        "Installation"
-      ],
-      "guide": "guides/getting-started/installation/installation.md",
-      "guideTitle": "Installation",
-      "exampleId": "example",
-      "exampleTitle": "Preview the result",
-      "docPermalink": "/installation",
-      "framework": "javascript",
-      "displayName": "JavaScript"
-    },
-    {
-      "bucket": "18.0",
-      "docsPath": "guides/getting-started/installation/react/example.tsx",
-      "file": "guides__getting-started__installation__react__example.tsx.json",
-      "breadcrumb": [
-        "Getting Started",
-        "Installation"
-      ],
-      "guide": "guides/getting-started/installation/installation.md",
-      "guideTitle": "Installation",
-      "exampleId": "example",
-      "exampleTitle": "Preview the result",
-      "docPermalink": "/installation",
-      "framework": "react",
-      "displayName": "React (TS)"
-    },
-    {
-      "bucket": "18.0",
-      "docsPath": "guides/getting-started/installation/javascript/example.ts",
-      "file": "guides__getting-started__installation__javascript__example.ts.json",
-      "breadcrumb": [
-        "Getting Started",
-        "Installation"
-      ],
-      "guide": "guides/getting-started/installation/installation.md",
-      "guideTitle": "Installation",
-      "exampleId": "example",
-      "exampleTitle": "Preview the result",
-      "docPermalink": "/installation",
-      "framework": "typescript",
-      "displayName": "TypeScript"
     },
     {
       "bucket": "18.0",
