@@ -42,7 +42,16 @@ const JSX_IMPORT = `import { createElement as ${JSX_PRAGMA}, Fragment as ${JSX_P
 function presetsFor(path: string): unknown[] {
   // `modules: false` keeps ES module syntax: parcel resolves `import` itself,
   // and converting to CJS is unnecessary churn in the produced code.
-  const presets: unknown[] = [["env", { targets: TARGETS, modules: false }]];
+  //
+  // `transform-classes` is force-included even though the target supports
+  // classes: if any `class` reaches the bundler, babel 6 downlevels it to an
+  // ES5 constructor whose `Parent.call(this)` throws when the parent is a
+  // native ES6 class from a dependency dist (hyperformula's FunctionPlugin).
+  // Babel 8's transform goes through Reflect.construct, which native parents
+  // accept — and babel 6 then sees no `class` at all.
+  const presets: unknown[] = [
+    ["env", { targets: TARGETS, modules: false, include: ["transform-classes"] }],
+  ];
   if (/\.tsx?$/.test(path)) presets.push("typescript");
   // Classic runtime: the classic bundler predates the automatic runtime's
   // `react/jsx-runtime` subpath import. The pragma keeps it self-contained.
