@@ -1,6 +1,40 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { transpileFilesForParcel } from "../packages/runtime/dist/transpile.js";
+
+// Execute a compiled module with a stubbed `react` package and return the
+// stub's createElement call log. Static assertions alone let a "React is not
+// defined" regression ship — compiled JSX must actually run.
+async function runWithReactStub(compiledCode) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "transpile-exec-"));
+  try {
+    const reactDir = path.join(root, "node_modules", "react");
+    fs.mkdirSync(reactDir, { recursive: true });
+    fs.writeFileSync(path.join(reactDir, "package.json"), JSON.stringify({ name: "react", version: "0.0.0", type: "module", main: "index.js" }));
+    fs.writeFileSync(
+      path.join(reactDir, "index.js"),
+      "export const calls = [];\n" +
+        "export function createElement(type, props, ...children) { calls.push({ type, props, children }); return { type, props, children }; }\n" +
+        "export const Fragment = Symbol('Fragment');\n" +
+        "export const useMemo = (fn) => fn();\n" +
+        "export const useRef = (v) => ({ current: v });\n" +
+        "export const useEffect = () => {};\n" +
+        "export const useState = (v) => [v, () => {}];\n" +
+        "export default { createElement, Fragment, useMemo, useRef, useEffect, useState };\n",
+    );
+    const modPath = path.join(root, "app.mjs");
+    fs.writeFileSync(modPath, compiledCode);
+    const mod = await import(pathToFileURL(modPath).href);
+    const react = await import(pathToFileURL(path.join(reactDir, "index.js")).href);
+    return { mod, calls: react.calls };
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
 
 // DEV-2129: the classic Sandpack `parcel` environment (babel-standalone 6.26)
 // shares Handsontable's internal module registry across entry points (plugins
@@ -26,10 +60,48 @@ test("compiles TSX to plain JS renamed to .js: no types, no JSX, no ES2020 synta
   assert.equal(out["/src/App.tsx"], undefined);
   const code = out["/src/App.js"];
   assert.ok(code, "App.tsx becomes App.js");
-  assert.ok(code.includes("React.createElement"), "JSX compiled to createElement");
+  assert.ok(!/<[A-Za-z]/.test(code.replace(/"[^"]*"|'[^']*'/g, "")), "no raw JSX left");
+  assert.match(code, /import \{ createElement as .*\} from "react"/, "JSX factory imported");
   assert.ok(!code.includes(": string"), "type annotations stripped");
   assert.ok(!/\?\./.test(code), "optional chaining downleveled");
   assert.ok(!/\?\?/.test(code), "nullish coalescing downleveled");
+});
+
+// Modern React docs examples never `import React` (they're written for the
+// automatic JSX runtime). The classic-runtime output we generate for the old
+// parcel bundler must therefore bring its own factory import, or every such
+// example throws "React is not defined" at first render (prod regression,
+// 2026-07-24).
+test("compiled JSX from a module that never imports React executes", async () => {
+  const out = await transpileFilesForParcel({
+    "/src/App.tsx":
+      "import { useMemo } from 'react';\n" +
+      "const App = () => <div title=\"x\"><span>hi</span></div>;\n" +
+      "export default App;\n",
+  });
+  const { mod, calls } = await runWithReactStub(out["/src/App.js"]);
+  mod.default();
+  assert.ok(calls.length >= 2, "createElement was reached through the injected import");
+  assert.ok(calls.some((c) => c.type === "div"), "renders the div element");
+});
+
+test("compiled JSX fragments execute without a React import", async () => {
+  const out = await transpileFilesForParcel({
+    "/src/App.jsx": "const App = () => <><b>a</b></>;\nexport default App;\n",
+  });
+  const { mod, calls } = await runWithReactStub(out["/src/App.js"]);
+  mod.default();
+  assert.ok(calls.length >= 1, "fragment JSX executes");
+});
+
+test("a source that already imports React still compiles and executes once", async () => {
+  const out = await transpileFilesForParcel({
+    "/src/App.tsx":
+      "import React from 'react';\nconst App = () => <div />;\nexport default App;\n",
+  });
+  const { mod, calls } = await runWithReactStub(out["/src/App.js"]);
+  mod.default();
+  assert.equal(calls.length, 1);
 });
 
 test("keeps ES module syntax (parcel resolves imports; CJS would break dedupe)", async () => {
