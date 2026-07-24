@@ -1,0 +1,86 @@
+name: E2E — live render (Sandpack bundler)
+
+# Runs the E2E_LIVE=1 checks in runner/e2e/docs-examples.spec.ts — the tests
+# that need the external hosted Sandpack bundler and therefore stay out of the
+# deterministic PR suite (ci.yml). These are the ONLY tests that exercise what
+# actually renders inside a Tier-1 sandbox: grid boots, plugins work
+# (context menu opens, getPlugin() calls succeed), compiled JSX executes.
+# Both DEV-2129 regressions (dead plugins, "React is not defined") were
+# invisible to PR CI and would have been caught here.
+#
+# Manual only (not a merge gate — owner decision): depends on an external
+# service, so a bundler outage would block merges. Run it:
+#   - before merging any change to packages/runtime (sandpack.ts, transpile.ts)
+#     or pipeline/import-docs.mjs — pick your branch in the dispatch UI;
+#   - after a deploy / docs-bucket regen, with base_url pointed at prod.
+#
+# Two modes:
+#   - base_url empty (default): builds the workspace from the selected ref and
+#     tests it via a local `vite preview` (playwright.config.ts webServer) —
+#     validates YOUR CODE against the live bundler before it ships.
+#   - base_url set (e.g. https://demos.handsontable.com): tests the deployed
+#     app directly — post-deploy smoke; no build needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Deployed app URL to test (leave empty to build and test the selected ref locally)'
+        default: ''
+        required: false
+
+permissions:
+  contents: read
+
+# Live tests hold no server-side sessions (unlike the starter matrix), so
+# cancelling a superseded run is safe.
+concurrency:
+  group: e2e-live-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    # Local live run takes seconds once built; leave headroom for a cold
+    # hosted-bundler transpile of the heavier examples.
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build workspace + authoring app (local mode only)
+        if: inputs.base_url == ''
+        run: |
+          pnpm build
+          pnpm --filter @handsontable/demo-authoring build
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: E2E with live-render checks
+        env:
+          E2E_LIVE: '1'
+          E2E_BASE_URL: ${{ inputs.base_url }}
+        run: pnpm e2e e2e/docs-examples.spec.ts
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-live
+          path: runner/playwright-report/
+          retention-days: 7
