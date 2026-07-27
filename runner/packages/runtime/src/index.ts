@@ -26,6 +26,8 @@ export {
 } from "./docs-bucket.js";
 export type { DocsBucketResolution } from "./docs-bucket.js";
 
+export { mintSessionId } from "./session.js";
+
 export {
   resolveRuntime,
   resolveRuntimeKind,

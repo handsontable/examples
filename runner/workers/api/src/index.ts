@@ -7,7 +7,7 @@
 // Sharing endpoints (POST/GET/PATCH/DELETE /api/demos) land in Deliverable 5.
 
 import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/sandbox";
-import { pickLatestNextVersion } from "@handsontable/demo-runtime";
+import { mintSessionId, pickLatestNextVersion } from "@handsontable/demo-runtime";
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
@@ -19,12 +19,16 @@ import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, upd
 // resolves each demo's deps at session start (per-framework images can't be
 // previewed by the SDK). The builder (no preview) keeps its own class.
 // Idle window before a live-preview container scales to zero. While a demo tab
-// is open the client keepalive + HMR WebSocket keep resetting this timer, so the
-// dev server stays warm during active use and only sleeps (stops billing) once
-// the user is truly gone. Disk is ephemeral, so a slept container cold-boots on
-// return — the point is to avoid that mid-session, not to make wake cheap.
+// is open the client keepalive (60s pings) + HMR WebSocket keep resetting this
+// timer, so the dev server stays warm during active use and only sleeps (stops
+// billing) once the user is truly gone. Closing the tab tears the session down
+// immediately (ContainerRuntime's pagehide dispose), so this window only covers
+// hidden tabs and crashed clients — with max_instances at 5, a long window lets
+// abandoned sessions exhaust the pool. Disk is ephemeral, so a slept container
+// cold-boots on return — the point is to avoid that mid-session, not to make
+// wake cheap.
 export class Sandbox extends SandboxBase {
-  sleepAfter = "15m";
+  sleepAfter = "5m";
 }
 export class BuilderSandbox extends SandboxBase {}
 
@@ -90,9 +94,15 @@ type SandboxLike = {
 const getSandboxShallow = getSandbox as unknown as (ns: unknown, id: string) => SandboxLike;
 /** The single live-preview sandbox namespace (required by proxyToSandbox). */
 const liveSbx = (env: Env, id: string): SandboxLike => getSandboxShallow(env.Sandbox, id);
-/** Sanitize a session id to the chars proxyToSandbox allows in a preview host. */
-const sessionIdFor = (framework: string) =>
-  `${framework.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${crypto.randomUUID().slice(0, 8)}`;
+/** True when DELETE /api/session/:id has tombstoned this session (see that
+ *  handler). Every session-scoped handler must check this BEFORE any sandbox
+ *  RPC: the SDK auto-boots a destroyed container on any call (containerFetch
+ *  restarts it if it isn't running), so a straggler file write or status ping
+ *  would resurrect an empty container under a dead id and squat a pool slot.
+ *  A KV read failure counts as "no tombstone" — refusing healthy sessions on
+ *  a KV hiccup is worse than falling back to the sleepAfter backstop. */
+const isTombstoned = async (env: Env, sessionId: string): Promise<boolean> =>
+  (await env.CACHE.get(`session-tombstone:${sessionId}`).catch(() => null)) !== null;
 
 function cors(resp: Response): Response {
   const h = new Headers(resp.headers);
@@ -194,61 +204,117 @@ export default {
         if (!dev || !cfg) return json({ error: `Tier-2 not wired for framework: ${body.framework}` }, 400);
         const files = validateFiles(body.files);
 
-        const sessionId = body.sessionId?.trim() || sessionIdFor(body.framework);
+        const sessionId = body.sessionId?.trim() || mintSessionId(body.framework);
         const sandbox = liveSbx(env, sessionId);
+        // Shared teardown for the create/delete race, used on BOTH create
+        // exits (success and throw): a DELETE that landed before or during
+        // this create means the container built here belongs to a client
+        // that is already gone.
+        const closedWhileCreating = async (): Promise<Response | null> => {
+          if (!(await isTombstoned(env, sessionId))) return null;
+          try { await sandbox.destroy(); } catch { /* best effort */ }
+          return json({ error: "session was closed while it was being created" }, 410);
+        };
 
-        await writeFiles(sandbox, files);
-        // Boot asynchronously (returns immediately; UI polls /status for live
-        // progress). Default boot seeds immutable baked dependencies, then runs
-        // fast frozen pnpm reconciliation. Keep submitted starters frozen; only
-        // custom package or lock metadata may update the lockfile.
-        const dependencyFingerprint = await dependencyMetadataFingerprint({
-          packageJson: files["package.json"],
-          pnpmLock: files["pnpm-lock.yaml"],
-        });
-        const metadataDiffersFromStarter = dependencyFingerprint !== dev.sourceDependencyFingerprint;
-        const installDependencies = files["pnpm-lock.yaml"] !== undefined
-          ? [
-              `if ! pnpm install --frozen-lockfile; then`,
-              metadataDiffersFromStarter
-                ? `  echo '::frozen install failed for custom metadata; retrying non-frozen::'; pnpm install --no-frozen-lockfile`
-                : `  echo '::error::frozen install failed for generated starter metadata; refusing to modify its lockfile' >&2; exit 1`,
-              `fi`,
-            ]
-          : metadataDiffersFromStarter
-            ? [`echo '::no lockfile for custom metadata; installing non-frozen::'; pnpm install --no-frozen-lockfile`]
-            : [`echo '::error::generated starter is missing its lockfile; refusing non-frozen install' >&2; exit 1`];
-        const script = [
-          `set -e`,
-          `cd ${CONTAINER_ROOT}`,
-          `echo '::seeding immutable baked dependencies::'`,
-          `rm -rf ./node_modules`,
-          `cp -al /baked/${dev.bakedKey}/node_modules ./node_modules`,
-          `echo '::reconciling dependencies with pnpm::'`,
-          ...installDependencies,
-          `echo '::starting dev server::'`,
-          dev.cmd,
-        ].join("\n");
-        // Append the boot script's own exit code as a sentinel line so /status
-        // can detect a failed install/boot (e.g. pnpm can't resolve the pinned
-        // Handsontable version) instead of polling "not ready yet" forever.
-        // Must be a subshell `( ... )`, not a brace group `{ ... }`: the script
-        // sets `-e`, and a brace group shares the outer shell, so a failure
-        // inside it kills the whole `sh -lc` process before the marker echo
-        // ever runs. A subshell isolates that fatal exit so the parent always
-        // reaches the marker append, whether the script failed or (for the
-        // normal case) the dev server is still running in the foreground.
-        await sandbox.startProcess(
-          `sh -lc ${shq(`( ${script} ) > ${BOOT_LOG} 2>&1; echo "__RUNNER_EXIT__:$?" >> ${BOOT_LOG}`)}`,
-        );
+        // A tab closed while this create is in flight can only send one
+        // best-effort DELETE (pagehide keepalive) and then it's gone — if that
+        // DELETE lands mid-create, or even BEFORE this handler runs (the tiny
+        // keepalive DELETE can overtake the large POST body), the container
+        // built here would be orphaned until sleepAfter. The DELETE handler
+        // drops a tombstone; it is re-checked when the create finishes —
+        // successfully OR by throwing, since a failed step may equally have
+        // left a recreated container behind. The tombstone is deliberately
+        // never cleared here: wiping it up front would blind those checks to
+        // a DELETE that already arrived. This requires session ids to be
+        // unique per create (they are: client and server both mint a fresh
+        // UUID suffix) — recreating a deleted id within the tombstone TTL
+        // would be torn down by the end-of-create check.
+        try {
+          await writeFiles(sandbox, files);
+          // Boot asynchronously (returns immediately; UI polls /status for live
+          // progress). Default boot seeds immutable baked dependencies, then runs
+          // fast frozen pnpm reconciliation. Keep submitted starters frozen; only
+          // custom package or lock metadata may update the lockfile.
+          const dependencyFingerprint = await dependencyMetadataFingerprint({
+            packageJson: files["package.json"],
+            pnpmLock: files["pnpm-lock.yaml"],
+          });
+          const metadataDiffersFromStarter = dependencyFingerprint !== dev.sourceDependencyFingerprint;
+          const installDependencies = files["pnpm-lock.yaml"] !== undefined
+            ? [
+                `if ! pnpm install --frozen-lockfile; then`,
+                metadataDiffersFromStarter
+                  ? `  echo '::frozen install failed for custom metadata; retrying non-frozen::'; pnpm install --no-frozen-lockfile`
+                  : `  echo '::error::frozen install failed for generated starter metadata; refusing to modify its lockfile' >&2; exit 1`,
+                `fi`,
+              ]
+            : metadataDiffersFromStarter
+              ? [`echo '::no lockfile for custom metadata; installing non-frozen::'; pnpm install --no-frozen-lockfile`]
+              : [`echo '::error::generated starter is missing its lockfile; refusing non-frozen install' >&2; exit 1`];
+          const script = [
+            `set -e`,
+            `cd ${CONTAINER_ROOT}`,
+            `echo '::seeding immutable baked dependencies::'`,
+            `rm -rf ./node_modules`,
+            `cp -al /baked/${dev.bakedKey}/node_modules ./node_modules`,
+            `echo '::reconciling dependencies with pnpm::'`,
+            ...installDependencies,
+            `echo '::starting dev server::'`,
+            dev.cmd,
+          ].join("\n");
+          // Append the boot script's own exit code as a sentinel line so /status
+          // can detect a failed install/boot (e.g. pnpm can't resolve the pinned
+          // Handsontable version) instead of polling "not ready yet" forever.
+          // Must be a subshell `( ... )`, not a brace group `{ ... }`: the script
+          // sets `-e`, and a brace group shares the outer shell, so a failure
+          // inside it kills the whole `sh -lc` process before the marker echo
+          // ever runs. A subshell isolates that fatal exit so the parent always
+          // reaches the marker append, whether the script failed or (for the
+          // normal case) the dev server is still running in the foreground.
+          await sandbox.startProcess(
+            `sh -lc ${shq(`( ${script} ) > ${BOOT_LOG} 2>&1; echo "__RUNNER_EXIT__:$?" >> ${BOOT_LOG}`)}`,
+          );
 
-        // Preview URL host: the wildcard domain in production (PREVIEW_HOST), or
-        // the request host in local dev (localhost:8787 -> *.localhost:8787).
-        const previewHost = env.PREVIEW_HOST && env.PREVIEW_HOST.length ? env.PREVIEW_HOST : url.host;
-        const exposed = await sandbox.exposePort(dev.port, { hostname: previewHost });
-        const previewUrl = (exposed as { url?: string; exposedAt?: string }).url
-          ?? (exposed as { exposedAt?: string }).exposedAt;
-        return json({ sessionId, previewUrl, port: dev.port });
+          // Preview URL host: the wildcard domain in production (PREVIEW_HOST), or
+          // the request host in local dev (localhost:8787 -> *.localhost:8787).
+          const previewHost = env.PREVIEW_HOST && env.PREVIEW_HOST.length ? env.PREVIEW_HOST : url.host;
+          const exposed = await sandbox.exposePort(dev.port, { hostname: previewHost });
+          const previewUrl = (exposed as { url?: string; exposedAt?: string }).url
+            ?? (exposed as { exposedAt?: string }).exposedAt;
+
+          // Create/delete race check: if the client's DELETE landed while this
+          // create was still running — or arrived before it even started — its
+          // destroy() hit nothing durable and the work since then booted a
+          // container for a client that is already gone.
+          // (KV reads are immediately consistent within a colo, and the DELETE
+          // comes from the same client/colo as this POST; cross-colo lag is
+          // covered by the sleepAfter backstop.)
+          return (await closedWhileCreating()) ?? json({ sessionId, previewUrl, port: dev.port });
+        } catch (err) {
+          // A create step that throws may still have left a booted container
+          // behind (every sandbox RPC auto-boots one), and if the client's
+          // DELETE already landed there is no client left to clean it up —
+          // run the same tombstone check before surfacing the error.
+          const closed = await closedWhileCreating();
+          if (closed) return closed;
+          throw err;
+        }
+      }
+
+      // Central resurrection gate for every /api/session/:id/* subroute: a
+      // straggler request racing a tab-close DELETE (file write, status or
+      // keepalive ping, file delete) must not touch the sandbox — any RPC
+      // auto-boots the destroyed container. Create (length 2) and the session
+      // DELETE itself (length 3) stay outside the gate. New subroutes are
+      // covered by default instead of each hand-copying the check.
+      if (parts[0] === "api" && parts[1] === "session" && parts.length >= 4
+        && await isTombstoned(env, parts[2]!)) {
+        // A file delete against a torn-down session is a satisfied no-op;
+        // everything else reports the session gone.
+        if (request.method === "DELETE" && parts[3] === "file") {
+          return cors(new Response(null, { status: 204 }));
+        }
+        return json({ error: "session closed" }, 410);
       }
 
       // POST /api/session/:id/file  { path, contents } -> 204   (streams an edit; HMR picks it up)
@@ -298,7 +364,18 @@ export default {
 
       // DELETE /api/session/:id -> destroy container
       if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "session" && parts.length === 3) {
-        const sandbox = liveSbx(env, parts[2]!);
+        const sessionId = parts[2]!;
+        // Tombstone BEFORE destroying: if a create for this id is still in
+        // flight (tab closed mid-POST), destroy() alone hits a half-built
+        // session and the create keeps going — the POST handler re-checks
+        // this marker when it finishes and tears the orphan down. TTL keeps
+        // stale markers from accumulating. Best-effort: a KV hiccup must not
+        // block the primary destroy below (without the marker the mid-create
+        // race falls back to the sleepAfter backstop).
+        try {
+          await env.CACHE.put(`session-tombstone:${sessionId}`, "1", { expirationTtl: 600 });
+        } catch { /* tombstone is defense-in-depth only */ }
+        const sandbox = liveSbx(env, sessionId);
         await sandbox.destroy();
         return cors(new Response(null, { status: 204 }));
       }
