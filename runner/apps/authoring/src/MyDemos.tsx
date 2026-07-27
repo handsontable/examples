@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { theme } from "@handsontable/demo-editor-shell";
+import { reportError } from "./sentry.js";
 
 interface DemoListItem {
   id: string;
@@ -32,14 +33,22 @@ export function MyDemos({ apiBase, token, onClose }: MyDemosProps) {
         const data = (await r.json()) as { demos: DemoListItem[] };
         setDemos(data.demos);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => {
+        reportError(e, "my-demos-list");
+        setError(String(e));
+      });
   }, [apiBase, token]);
 
   async function remove(id: string) {
     const res = await fetch(`${apiBase}/api/demos/${id}`, {
       method: "DELETE",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
-    }).catch(() => null);
+    }).catch((e: unknown) => {
+      // Nothing in the UI changes on failure, so without this the revoke just
+      // appears not to have happened.
+      reportError(e, "demo-revoke");
+      return null;
+    });
     if (res && (res.status === 204 || res.ok)) {
       setDemos((cur) => (cur ? cur.map((d) => (d.id === id ? { ...d, revoked: 1 } : d)) : cur));
     }

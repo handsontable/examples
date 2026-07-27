@@ -11,7 +11,7 @@ import {
   type FilesMap,
 } from "@handsontable/demo-runtime";
 import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
-import { ContainerRuntime, ContainerBootFailure } from "@handsontable/demo-runtime/container";
+import { ContainerRuntime, ContainerBootFailure, SessionStartError } from "@handsontable/demo-runtime/container";
 import { zipSync, strToU8 } from "fflate";
 import { catalog, getEntry, fetchVersions, checkVersionExists, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
 import {
@@ -24,6 +24,7 @@ import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
 import { MyDemos } from "./MyDemos.js";
 import { ShareLinks } from "./ShareLinks.js";
+import { reportError, reportingEnabled, Sentry } from "./sentry.js";
 
 const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefined;
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
@@ -91,6 +92,48 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
     return `Handsontable ${version} could not be fetched. Check that this exact version is published on npm.`;
   }
   return msg;
+}
+
+/**
+ * Decide whether a preview failure is ours to fix, and report it if so.
+ *
+ * `DemoRuntime.onError` is a mixed channel. On the Sandpack engine it carries
+ * compile and runtime errors from the example code being edited — a typo
+ * mid-keystroke, an example that was imported broken. That is product output, not
+ * an application fault, and reporting it would bury the signal (and the quota)
+ * under one issue per syntax error.
+ *
+ * The container engine is the opposite: `SessionStartError` is how the Tier-2
+ * instance pool refuses a session (the exhaustion class of failure behind PR #87)
+ * and `ContainerBootFailure` is a dev server that could not install or start.
+ * Those are exactly what we want to hear about. 410 is excluded — it means the
+ * client had already navigated away and the server tore the session down, which
+ * is the designed outcome, not a failure.
+ *
+ * Fingerprinted by error class: `ContainerBootFailure` carries the raw boot log,
+ * which differs per example and would otherwise shard one problem into hundreds
+ * of issues.
+ */
+function reportRuntimeError(e: unknown, engine: string): void {
+  if (!reportingEnabled || engine !== "container") return;
+  if (e instanceof SessionStartError) {
+    if (e.status === 410) return;
+    Sentry.captureException(e, {
+      tags: { context: "tier2-session-start", session_status: String(e.status) },
+      fingerprint: ["tier2-session-start", String(e.status)],
+    });
+    return;
+  }
+  if (e instanceof ContainerBootFailure) {
+    Sentry.captureException(e, {
+      tags: { context: "tier2-container-boot" },
+      fingerprint: ["tier2-container-boot"],
+    });
+    return;
+  }
+  // Normal teardown: dispose() races a pending message, or the tab is closing.
+  if (e instanceof Error && e.message === "The session was closed.") return;
+  Sentry.captureException(e, { tags: { context: "tier2-runtime" } });
 }
 
 function pinHandsontableFiles(files: FilesMap, version: string): FilesMap {
@@ -313,7 +356,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         }
         loadWorkspace(getEntry(src.framework), src.files, savedId);
         setSourceLoaded(true);
-      } catch {
+      } catch (error) {
+        // A share/edit link that no longer resolves: missing D1 row, unreadable R2
+        // snapshot, or a framework the catalog no longer has.
+        reportError(error, "saved-demo-load");
         if (!cancelled) { setErrorMessage("This demo is unavailable."); setSourceLoaded(true); }
       }
     })();
@@ -335,7 +381,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         }
         setVersionsResolved(true);
       })
-      .catch(() => {
+      .catch((error) => {
+        // Fails open onto the hardcoded VERSION_OPTIONS, so the picker silently
+        // goes stale rather than breaking — worth knowing about.
+        reportError(error, "versions-fetch");
         if (!cancelled) setVersionsResolved(true); // release buckets can still resolve without dist-tags.next
       });
     return () => { cancelled = true; };
@@ -461,10 +510,16 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
           setSourceLoaded(true);
           sourceLoadedRef.current = true;
         } catch (error) {
+          // The DEV-2130 class: a docs page links an example the runner can't
+          // open. Tagged by which step failed so a missing artifact (docs linking
+          // an example that was never imported) is distinguishable from a
+          // transient fetch.
+          reportError(error, `docs-example-load:${isMissingDocsResource(error) ? "path" : "fetch"}`);
           failOpenDocs(isMissingDocsResource(error) ? "path" : "fetch");
         }
       })
       .catch((error) => {
+        reportError(error, `docs-bucket-resolve:${isMissingDocsResource(error) ? "bucket" : "fetch"}`);
         failOpenDocs(isMissingDocsResource(error) ? "bucket" : "fetch");
       });
     return () => { cancelled = true; };
@@ -534,7 +589,8 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         loadWorkspace(e, nextFiles, `docs:${bucket}:${dp}`);
         setVersionWarning(null);
         setDocsRuntimeBlocked(false);
-      } catch {
+      } catch (error) {
+        reportError(error, "docs-example-switch");
         // Unlike the deep-link (`?docs=`) load path, a working workspace is already
         // open here, so a toolbar note is enough — no full-screen not-found takeover.
         if (docsRequestSeqRef.current === requestSeq) {
@@ -625,6 +681,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       if (cancelled) return;
       setStatus("error");
       setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
+      reportRuntimeError(e, entry.engine);
     });
     runtimeRef.current = runtime;
     runtime.mount(filesRef.current).catch((e: unknown) => {
@@ -632,6 +689,9 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         setStatus("error");
         setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
       }
+      // Reported even when cancelled: a session the pool refused still failed,
+      // and the unmount that set `cancelled` is often the user giving up on it.
+      reportRuntimeError(e, entry.engine);
     });
     return () => {
       cancelled = true;
@@ -741,6 +801,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       setLinksId(id);
       setShareLinksOpen(true);
     } catch (e) {
+      reportError(e, "demo-embed");
       setErrorMessage(e instanceof Error ? e.message : String(e));
     } finally {
       setEmbedding(false);
@@ -772,6 +833,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       const { id } = (await res.json()) as { id: string };
       location.href = `/edit/${id}`; // boot into the edit page for the new demo
     } catch (e) {
+      reportError(e, "demo-fork");
       setErrorMessage(e instanceof Error ? e.message : String(e));
       setForking(false);
     }
@@ -801,6 +863,9 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       setDirty(false);
       dirtyRef.current = false;
     } catch (e) {
+      // Losing a save is the worst outcome in the app — the user's edits are only
+      // in this tab's memory until the PATCH lands.
+      reportError(e, "demo-save");
       setErrorMessage(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);

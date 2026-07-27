@@ -146,6 +146,58 @@ Auth: repo secret **`CLOUDFLARE_API_TOKEN`** (account id is read from
 If routes move out of `wrangler.jsonc` into the deploy command (ADR-0020), add
 the corresponding `--route` flags to the API workflow's `wrangler deploy` step.
 
+## Error monitoring (Sentry)
+
+Errors only — no tracing, no session replay, no profiling. One Sentry project
+serves both surfaces, separated by `environment`: `authoring-production` (browser)
+and `api-production` (Worker).
+
+**The DSN is committed, in two places**, because a DSN is a write-only ingest
+endpoint that ships inside the JS bundle by construction — hiding it buys nothing,
+and keeping it out of `wrangler secret` means changing it needs no Cloudflare
+access. Abuse is bounded Sentry-side (allowed domains, inbound filters, spike
+protection).
+
+- Browser: `VITE_SENTRY_DSN` in `apps/authoring/.env.production`.
+- Worker: `ERROR_REPORTING_DSN` in the `vars` block of
+  `workers/api/wrangler.jsonc`.
+
+> The Worker var is **not** called `SENTRY_DSN` on purpose. `@sentry/cloudflare`
+> falls back to reading `env.SENTRY_DSN` whenever the options object omits a dsn,
+> which initialises the client straight from env and defeats the local-dev gate
+> below. Under any other key that fallback finds nothing.
+
+**Nothing is reported outside production.** `.env.production` is committed and so
+is loaded by every production-mode build — including CI's authoring build, whose
+output Playwright then serves at `localhost:4173`. Both surfaces therefore gate on
+a host:
+
+- browser: `window.location.hostname === "demos.handsontable.com"`
+  (`apps/authoring/src/sentry.ts`);
+- Worker: `PREVIEW_HOST` matching the production host — the same prod-vs-local
+  switch Tier-2 preview URLs use, overridden in `workers/api/.dev.vars`
+  (`workers/api/src/index.ts`).
+
+**Preview-iframe errors are deliberately not reported.** The iframe runs arbitrary
+authored and imported example code, so a compile error or a mid-keystroke typo is
+product output, not an application fault. `reportRuntimeError` in
+`apps/authoring/src/App.tsx` reports only container-engine faults —
+`SessionStartError` (Tier-2 pool refusing a session; 410 excluded, that is normal
+teardown) and `ContainerBootFailure` — and never anything from the Sandpack engine.
+
+**Releases.** The frontend release is the commit (`GITHUB_SHA`, injected as
+`VITE_SENTRY_RELEASE`). The Worker release is Cloudflare's per-deploy version id
+via the `version_metadata` binding, so the API deploy workflow needs no change.
+
+**`SENTRY_AUTH_TOKEN`** is the one real credential: a GitHub Actions repo secret,
+used only at build time by `@sentry/vite-plugin` to upload browser source maps.
+Never committed, not needed at runtime. Also set repo **variables** `SENTRY_ORG`
+and `SENTRY_PROJECT` (slugs — not the numeric ids in the DSN). All three are
+attached to the authoring build step of `deploy-runner-authoring.yml` only; the
+`test` job reuses `ci.yml` and gets none of them, so PR builds neither emit source
+maps nor create a release. Without the token the plugin disables itself and
+`build.sourcemap` stays off, so no `.map` files are produced or published.
+
 ## Login broker
 
 Authoring uses the Handsontable Google login broker (see
