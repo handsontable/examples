@@ -38,7 +38,10 @@ if (reportingEnabled) {
   Sentry.init({
     dsn: DSN,
     environment: "authoring-production",
-    release: import.meta.env.VITE_SENTRY_RELEASE as string | undefined,
+    // `|| undefined` matters: the define below substitutes "" when GITHUB_SHA is
+    // absent, and a release of "" would not match the SHA-named artifact bundle
+    // the plugin uploads — source maps would silently stop resolving.
+    release: (import.meta.env.VITE_SENTRY_RELEASE as string | undefined) || undefined,
     // Errors only. Spans would triple the event volume for signal we don't act on.
     tracesSampleRate: 0,
     ignoreErrors: IGNORED,

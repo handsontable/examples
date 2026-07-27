@@ -192,11 +192,20 @@ via the `version_metadata` binding, so the API deploy workflow needs no change.
 **`SENTRY_AUTH_TOKEN`** is the one real credential: a GitHub Actions repo secret,
 used only at build time by `@sentry/vite-plugin` to upload browser source maps.
 Never committed, not needed at runtime. Also set repo **variables** `SENTRY_ORG`
-and `SENTRY_PROJECT` (slugs — not the numeric ids in the DSN). All three are
-attached to the authoring build step of `deploy-runner-authoring.yml` only; the
-`test` job reuses `ci.yml` and gets none of them, so PR builds neither emit source
-maps nor create a release. Without the token the plugin disables itself and
-`build.sourcemap` stays off, so no `.map` files are produced or published.
+and `SENTRY_PROJECT` (slugs — not the numeric ids in the DSN).
+
+**Create all three together, or none.** `vite.config.ts` enables the plugin only
+when all three are present, because a token with no org/project has no upload
+target. All three are attached to the authoring build step of
+`deploy-runner-authoring.yml` only; the `test` job reuses `ci.yml` and gets none of
+them, so PR builds neither emit source maps nor create a release. With upload off,
+`build.sourcemap` is off too, so no `.map` files are produced or published.
+
+Note that a *failed* upload (bad token, wrong slug) does **not** fail the build —
+`sentry-cli` logs the error and vite still exits 0. The symptom is unreadable
+minified stack traces in Sentry, not a red deploy. If prod traces stop resolving,
+check the deploy log for `[sentry-vite-plugin] Error`. The post-upload cleanup
+still runs on failure, so a failed upload never publishes `.map` files.
 
 ## Login broker
 
