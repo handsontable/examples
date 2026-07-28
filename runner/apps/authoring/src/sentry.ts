@@ -29,10 +29,36 @@ export const reportingEnabled =
 
 /**
  * Browser noise that is never actionable: a benign layout-loop warning browsers
- * surface as an error, and the two shapes an in-flight request takes when the
- * user navigates away mid-fetch.
+ * surface as an error, plus the shapes an in-flight request takes when the user
+ * navigates away mid-fetch (`Failed to fetch` in Chrome, `Load failed` in Safari).
+ *
+ * These are matched ONLY against unhandled errors — see `isUnhandledNoise`. They
+ * must not go in `ignoreErrors`: that runs in the event-filters integration, which
+ * processes every event including explicit `captureException` calls, so
+ * `/Failed to fetch/` there would silently discard the offline broker and
+ * `/api/versions` failures that `reportError` exists to surface.
  */
-const IGNORED = [/^ResizeObserver loop/i, /^AbortError/i, /Failed to fetch/i, /Load failed/i];
+const UNHANDLED_NOISE = [
+  /^ResizeObserver loop/i,
+  /^AbortError/i,
+  /Failed to fetch/i,
+  /Load failed/i,
+];
+
+/**
+ * True for a global `onerror` / `onunhandledrejection` event whose message is
+ * known noise. `mechanism.handled === false` is what distinguishes those from
+ * anything we reported on purpose (`captureException` sets `handled: true`), and
+ * it is populated before `beforeSend` runs.
+ */
+function isUnhandledNoise(event: Sentry.ErrorEvent): boolean {
+  const values = event.exception?.values ?? [];
+  return values.some(
+    (v) =>
+      v.mechanism?.handled === false &&
+      UNHANDLED_NOISE.some((re) => re.test(v.value ?? "") || re.test(v.type ?? "")),
+  );
+}
 
 if (reportingEnabled) {
   Sentry.init({
@@ -44,8 +70,8 @@ if (reportingEnabled) {
     release: (import.meta.env.VITE_SENTRY_RELEASE as string | undefined) || undefined,
     // Errors only. Spans would triple the event volume for signal we don't act on.
     tracesSampleRate: 0,
-    ignoreErrors: IGNORED,
     beforeSend(event) {
+      if (isUnhandledNoise(event)) return null;
       // The preview iframe runs arbitrary authored and imported example code, so
       // a compile error or a typo there is product output, not an application
       // fault — see reportRuntimeError in App.tsx. Being cross-origin, the iframe
