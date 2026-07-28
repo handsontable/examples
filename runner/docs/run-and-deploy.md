@@ -191,8 +191,24 @@ via the `version_metadata` binding, so the API deploy workflow needs no change.
 
 **`SENTRY_AUTH_TOKEN`** is the one real credential: a GitHub Actions repo secret,
 used only at build time by `@sentry/vite-plugin` to upload browser source maps.
-Never committed, not needed at runtime. Also set repo **variables** `SENTRY_ORG`
-and `SENTRY_PROJECT` (slugs — not the numeric ids in the DSN).
+Never committed, not needed at runtime.
+
+Create it as an **Organization Auth Token** — Sentry → Settings → Auth Tokens
+(`https://sentry.io/settings/handsoncode/auth-tokens/`), value prefixed `sntrys_`,
+shown once. Its scope is fixed at `org:ci` (Source Map Upload, Release Creation,
+Code Mappings), which is exactly what the plugin needs and nothing more; there is
+no scope checklist to get wrong. Not to be confused with the **Deploy Token** on a
+project's release-tracking settings page — that one only drives the release webhook
+and cannot upload source maps.
+
+Alongside it, repo **variables** (not secrets — neither is sensitive):
+
+| Variable | Value |
+|---|---|
+| `SENTRY_ORG` | `handsoncode` |
+| `SENTRY_PROJECT` | `demos` |
+
+Slugs, not the numeric ids in the DSN (`o95873` / `4511806997135360`).
 
 **Create all three together, or none.** `vite.config.ts` enables the plugin only
 when all three are present, because a token with no org/project has no upload
