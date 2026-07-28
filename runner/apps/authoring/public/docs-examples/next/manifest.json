@@ -2,7 +2,7 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-09631ad-20260724",
+  "hotVersion": "0.0.0-next-698aa83-20260728",
   "count": 1452,
   "examples": [
     {
@@ -13845,6 +13845,22 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/formulas/formula-calculation/angular/example-custom-functions.ts",
+      "file": "guides__formulas__formula-calculation__angular__example-custom-functions.ts.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula calculation"
+      ],
+      "guide": "guides/formulas/formula-calculation/formula-calculation.md",
+      "guideTitle": "Formula calculation",
+      "exampleId": "example-custom-functions",
+      "exampleTitle": "Demo: custom COMMISSION function",
+      "docPermalink": "/formula-calculation",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/formulas/formula-calculation/javascript/example-custom-functions.js",
       "file": "guides__formulas__formula-calculation__javascript__example-custom-functions.js.json",
       "breadcrumb": [
@@ -14223,22 +14239,6 @@
       "guideTitle": "Formula calculation",
       "exampleId": "example4",
       "exampleTitle": "Demo: formula-based named expressions (2)",
-      "docPermalink": "/formula-calculation",
-      "framework": "angular",
-      "displayName": "Angular"
-    },
-    {
-      "bucket": "next",
-      "docsPath": "guides/formulas/formula-calculation/angular/example5.ts",
-      "file": "guides__formulas__formula-calculation__angular__example5.ts.json",
-      "breadcrumb": [
-        "Formulas",
-        "Formula calculation"
-      ],
-      "guide": "guides/formulas/formula-calculation/formula-calculation.md",
-      "guideTitle": "Formula calculation",
-      "exampleId": "example5",
-      "exampleTitle": "Demo: custom COMMISSION function (2)",
       "docPermalink": "/formula-calculation",
       "framework": "angular",
       "displayName": "Angular"
