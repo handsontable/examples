@@ -44,14 +44,18 @@ export function MyDemos({ apiBase, token, onClose }: MyDemosProps) {
       method: "DELETE",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     }).catch((e: unknown) => {
-      // Nothing in the UI changes on failure, so without this the revoke just
-      // appears not to have happened.
       reportError(e, "demo-revoke");
       return null;
     });
     if (res && (res.status === 204 || res.ok)) {
       setDemos((cur) => (cur ? cur.map((d) => (d.id === id ? { ...d, revoked: 1 } : d)) : cur));
+      return;
     }
+    // Every failure path leaves the list exactly as it was, with nothing in the UI
+    // to say why, so the revoke simply looks like it didn't happen. A non-OK
+    // response is as silent as a network error and needs reporting just the same —
+    // `res === null` was already reported in the catch above.
+    if (res) reportError(new Error(`revoke failed (${res.status})`), "demo-revoke");
   }
 
   return (
