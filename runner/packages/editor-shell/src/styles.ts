@@ -9,6 +9,9 @@ import { theme } from "./theme.js";
 
 const t = theme;
 
+/** Sidebar column, per `48:6748`. */
+export const SIDEBAR_WIDTH = 240;
+
 export const s = {
   shell: {
     display: "grid",
@@ -20,39 +23,205 @@ export const s = {
     fontFamily: t.font.ui,
   } satisfies CSSProperties,
 
-  body: {
+  /**
+   * The preview holds a fixed half of the window and the *editor* absorbs the
+   * sidebar — measured, not assumed: the preview column starts at x=864 of 1728
+   * in both `72:15697` (sidebar collapsed) and `48:6560` (sidebar open at 240).
+   * `1fr 1fr` would put the boundary at 984 with the sidebar open. T6 replaces
+   * this with the draggable ratio.
+   */
+  body: (sidebarOpen: boolean): CSSProperties => ({
     display: "grid",
-    gridTemplateColumns: "220px minmax(0, 1fr) minmax(0, 1fr)",
+    gridTemplateColumns: sidebarOpen ? `${SIDEBAR_WIDTH}px minmax(0, 1fr) 50%` : "minmax(0, 1fr) 50%",
     minHeight: 0,
     height: "100%",
-  } satisfies CSSProperties,
+  }),
 
-  toolbar: {
-    display: "flex",
-    alignItems: "center",
-    gap: t.space(3),
-    padding: `${t.space(2)} ${t.space(4)}`,
-    borderBottom: `1px solid ${t.color.border}`,
-    background: t.color.surface,
-  } satisfies CSSProperties,
-
-  brand: {
+  /** Row 1 (`72:15840`): 72px tall, the most-raised chrome.
+   *  `zIndex` is load-bearing: the centred pill is positioned with a
+   *  `transform`, which makes it a stacking context, so a popover opened inside
+   *  it (the example cascader) can only stack against the rest of the page
+   *  through this bar. Without it the preview pane — `position: relative`, later
+   *  in the DOM — paints over the popover. */
+  topBar: {
+    position: "relative",
+    zIndex: 30,
     display: "flex",
     alignItems: "center",
     gap: t.space(2),
-    fontWeight: 700,
-    letterSpacing: "-0.01em",
+    height: 72,
+    padding: `0 ${t.space(5)}`,
+    boxSizing: "border-box",
+    borderBottom: `1px solid ${t.color.border}`,
+    background: t.color.surfaceRaised,
+    fontFamily: t.font.ui,
+    color: t.color.text,
   } satisfies CSSProperties,
 
-  frameworkTag: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: t.color.accent,
-    background: t.color.accentSoft,
-    border: `1px solid ${t.color.accentBorder}`,
-    borderRadius: t.radius.sm,
-    padding: `2px 8px`,
+  /**
+   * The centred example pill. Two forms in the design: a fixed 480px cascader
+   * trigger with a search icon (`72:15859`, play mode) and a shrink-to-fit demo
+   * title (`48:6580`, edit/share).
+   */
+  examplePill: (fixed: boolean): CSSProperties => ({
+    position: "absolute",
+    left: "50%",
+    transform: "translateX(-50%)",
+    display: "flex",
+    alignItems: "center",
+    gap: t.space(2),
+    height: 36,
+    width: fixed ? 480 : "auto",
+    maxWidth: "min(480px, 40vw)",
+    padding: `0 ${t.space(2)}`,
+    boxSizing: "border-box",
+    borderRadius: t.radius.md,
+    border: `1px solid ${t.color.border}`,
+    background: t.color.surface,
+    color: t.color.text,
+    fontFamily: t.font.ui,
+    fontSize: 13,
+  }),
+
+  /** Row 2 (`72:15811` / `72:15706`): 36px, one bar per body column. */
+  bar: {
+    display: "flex",
+    alignItems: "center",
+    height: 36,
+    flex: "0 0 auto",
+    borderBottom: `1px solid ${t.color.border}`,
+    background: t.color.surface,
+    fontFamily: t.font.ui,
+    fontSize: 13,
+    color: t.color.text,
   } satisfies CSSProperties,
+
+  /** The 36×36 square every row-2 control is drawn in. */
+  iconButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 36,
+    height: 36,
+    flex: "0 0 auto",
+    padding: 0,
+    border: "none",
+    background: "transparent",
+    borderRadius: t.radius.md,
+    color: t.color.text,
+    cursor: "pointer",
+    textDecoration: "none",
+  } satisfies CSSProperties,
+
+  /** Editor tab (`72:15815`). One open file at a time until T4. */
+  tab: (active: boolean): CSSProperties => ({
+    display: "inline-flex",
+    alignItems: "center",
+    gap: t.space(1),
+    height: 36,
+    padding: `0 ${t.space(2)} 0 6px`,
+    border: "none",
+    borderBottom: `2px solid ${active ? t.color.accent : "transparent"}`,
+    background: active ? t.color.surfaceMuted : "transparent",
+    color: active ? t.color.text : t.color.textMuted,
+    fontFamily: t.font.ui,
+    fontSize: 13,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  }),
+
+  /** Read-only preview address (`72:15710`). */
+  urlField: {
+    display: "flex",
+    alignItems: "center",
+    gap: t.space(2),
+    flex: 1,
+    minWidth: 0,
+    height: 20,
+    padding: `0 ${t.space(2)}`,
+    border: "none",
+    background: "transparent",
+    color: t.color.textMuted,
+    fontFamily: t.font.ui,
+    fontSize: 13,
+    textAlign: "left",
+    cursor: "pointer",
+  } satisfies CSSProperties,
+
+  /** Version / framework dropdown trigger (`72:16737`, `72:16741`). */
+  menuButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: t.space(1),
+    height: 36,
+    padding: `0 ${t.space(3)}`,
+    border: "none",
+    background: "transparent",
+    color: t.color.text,
+    fontFamily: t.font.ui,
+    fontSize: 13,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  } satisfies CSSProperties,
+
+  menuPopover: {
+    position: "absolute",
+    top: "100%",
+    right: 0,
+    zIndex: 20,
+    minWidth: 180,
+    maxHeight: 320,
+    overflowY: "auto",
+    padding: t.space(1),
+    borderRadius: t.radius.md,
+    border: `1px solid ${t.color.border}`,
+    background: t.color.surfaceRaised,
+    boxShadow: t.shadow.popover,
+  } satisfies CSSProperties,
+
+  menuItem: (active: boolean): CSSProperties => ({
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    border: "none",
+    borderRadius: t.radius.sm,
+    background: active ? t.color.accentSoft : "transparent",
+    color: active ? t.color.text : t.color.textMuted,
+    fontFamily: t.font.ui,
+    fontSize: 13,
+    fontWeight: active ? 600 : 400,
+    padding: `6px ${t.space(2)}`,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  }),
+
+  /**
+   * The authed action bar (ADR-0023). Signed-in-only, in no frame — it exists so
+   * anonymous visitors see exactly the two designed rows.
+   */
+  authedBar: {
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: t.space(2),
+    padding: `${t.space(2)} ${t.space(3)}`,
+    flex: "0 0 auto",
+    borderBottom: `1px solid ${t.color.border}`,
+    background: t.color.surfaceMuted,
+    fontFamily: t.font.ui,
+    fontSize: 13,
+    color: t.color.text,
+  } satisfies CSSProperties,
+
+  /** Body column wrapper — bars stack above the pane, which takes the rest.
+   *  `divided` draws the editor/preview boundary (`line 72:15839`). */
+  column: (divided?: boolean): CSSProperties => ({
+    display: "flex",
+    flexDirection: "column",
+    minWidth: 0,
+    minHeight: 0,
+    borderRight: divided ? `1px solid ${t.color.border}` : undefined,
+  }),
 
   spacer: { flex: 1 } satisfies CSSProperties,
 
@@ -100,15 +269,16 @@ export const s = {
   }),
 
   editorPane: {
+    flex: 1,
     minWidth: 0,
     minHeight: 0,
     display: "flex",
     flexDirection: "column",
-    borderRight: `1px solid ${t.color.border}`,
     background: t.color.editorBg,
   } satisfies CSSProperties,
 
   previewPane: {
+    flex: 1,
     minWidth: 0,
     minHeight: 0,
     position: "relative",

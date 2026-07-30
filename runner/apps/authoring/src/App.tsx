@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   EditorShell,
+  IconSearch,
+  shellStyles,
   theme,
-  ThemeToggle,
   useLogoUrl,
   useTheme,
   type PreviewStatus,
@@ -245,6 +246,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [mountGen, setMountGen] = useState(0);
 
   const [iframeEl, setIframeEl] = useState<HTMLIFrameElement | null>(null);
+  // Where the running preview lives, as reported by mount(). Tier 2 gives the
+  // container's preview origin; Tier 1 has none to give (Sandpack renders into
+  // the iframe without navigating), so the row-2 field falls back.
+  const [previewUrl, setPreviewUrl] = useState("");
   const runtimeRef = useRef<DemoRuntime | null>(null);
   const filesRef = useRef<FilesMap>(files);
   filesRef.current = files;
@@ -635,12 +640,23 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
     });
     runtimeRef.current = runtime;
-    runtime.mount(filesRef.current).catch((e: unknown) => {
-      if (!cancelled) {
-        setStatus("error");
-        setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
-      }
-    });
+    setPreviewUrl("");
+    runtime
+      .mount(filesRef.current)
+      .then(({ previewUrl: url }) => {
+        // Container only. Tier 1 hands back whatever `iframe.src` happens to be
+        // at mount time, which is Sandpack's *bundler* origin — not an address
+        // the user could act on, and a CodeSandbox mark we don't surface
+        // (ADR-0001, white-label). The row-2 field falls back instead.
+        const own = entry.engine === "container" && /^https?:\/\//.test(url);
+        if (!cancelled) setPreviewUrl(own ? url : "");
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setStatus("error");
+          setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
+        }
+      });
     return () => {
       cancelled = true;
       runtime.dispose();
@@ -815,6 +831,21 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     }
   }, [savedId, isShare, title, description, version]);
 
+  /** Row-2 refresh (`72:15708`). Reloads the running preview in place — never a
+   *  remount, which for Tier 2 would mint a fresh container session per click. */
+  const refreshPreview = useCallback(() => {
+    runtimeRef.current?.reload?.();
+  }, []);
+
+  /** `window-maximize` (`72:15715`). `?mode=full` is the chrome-less, preview-only
+   *  view; it resolves today for the share route (see `parseRoute` above), and T8
+   *  extends it to the rest. */
+  const openFullWindow = useCallback(() => {
+    const url = new URL(location.href);
+    url.searchParams.set("mode", "full");
+    window.open(url.toString(), "_blank", "noopener");
+  }, []);
+
   const clientUrl = linksId ? `${location.origin}/share/${linksId}` : "";
   // The embed carries the shell's mode as a *preferred* theme hint. Whether and how
   // /embed/:id acts on it is out of scope for DEV-2027 (ADR-0022).
@@ -829,145 +860,29 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         .sort((a, b) => FW_PREF.indexOf(a.framework) - FW_PREF.indexOf(b.framework))
     : [];
 
+  // Row 2's framework pill (`72:16741`) — same data and same show/hide rule as
+  // the button group it replaces: only docs examples have variants, starters are
+  // picked through the cascader instead (ADR-0023).
+  const frameworks = currentFrameworks.map((f) => ({
+    key: f.docsPath,
+    label: FW_LABEL[f.framework] ?? f.displayName,
+    active: f.docsPath === docsPath,
+  }));
+
+  // The public address for the row-2 field: a saved demo's own page. A docs
+  // example or an unsaved playground has none, and falls back to `previewUrl`.
+  const publicUrl = savedId ? `${location.origin}/${isShare ? "share" : "edit"}/${savedId}` : "";
+
   if (docsNotFound) return <NotFound path={initialDocs} transient={docsNotFoundTransient} />;
   if (savedId && !sourceLoaded) return <Splash text="Loading demo…" />;
 
   return (
-    <div style={{ height: "100%", display: "grid", gridTemplateRows: "auto 1fr" }}>
-      <div style={topBar}>
-        {route.mode === "share" ? (
-          <>
-            <Logo size={22} />
-            <div style={{ minWidth: 0 }}>
-              <div style={sharedTitle}>{title || "Shared demo"}</div>
-              {description && <div style={sharedDesc}>{description}</div>}
-            </div>
-          </>
-        ) : route.mode === "edit" ? (
-          <>
-            <span style={{ color: theme.color.textMuted }}>Editing</span>
-            <input
-              style={{ ...selectStyle, fontFamily: theme.font.ui, width: 220 }}
-              value={title}
-              onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
-              placeholder="Demo title"
-              aria-label="Demo title"
-            />
-            <input
-              style={{ ...selectStyle, fontFamily: theme.font.ui, width: 300 }}
-              value={description}
-              onChange={(e) => { setDescription(e.target.value); setDirty(true); }}
-              placeholder="Description (optional)"
-              aria-label="Demo description"
-            />
-          </>
-        ) : (
-          <>
-            <span style={{ color: theme.color.textMuted }}>Example</span>
-            <DocsCascader
-              manifestItems={docsItems}
-              starters={catalog.examples.map((e) => ({ framework: e.framework, displayName: e.displayName }))}
-              currentLabel={
-                currentDocsMeta
-                  ? `${currentDocsMeta.breadcrumb.join(" ▸ ")} · ${currentDocsMeta.exampleTitle}`
-                  : entry.displayName
-              }
-              selectedKey={
-                currentDocsMeta
-                  ? `${currentDocsMeta.guide}|${currentDocsMeta.exampleId}`
-                  : docsPath
-                    ? undefined
-                    : `starter:${framework}`
-              }
-              onSelect={(leaf: CascaderLeaf) => {
-                if (leaf.kind === "starter") { selectExample(leaf.framework); return; }
-                const pick =
-                  leaf.frameworks.find((f) => f.framework === framework) ??
-                  FW_PREF.map((p) => leaf.frameworks.find((f) => f.framework === p)).find(Boolean) ??
-                  leaf.frameworks[0];
-                if (pick) void selectDocs(pick.docsPath);
-              }}
-            />
-            {currentFrameworks.length > 0 && (
-              <div style={{ display: "flex", gap: 4 }} role="group" aria-label="Framework">
-                {currentFrameworks.map((f) => {
-                  const active = f.docsPath === docsPath;
-                  return (
-                    <button
-                      key={f.framework}
-                      type="button"
-                      onClick={() => void selectDocs(f.docsPath)}
-                      style={{ ...fwBtn, ...(active ? fwBtnActive : null) }}
-                      title={f.displayName}
-                      aria-pressed={active}
-                    >
-                      {FW_LABEL[f.framework] ?? f.displayName}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {currentDocsMeta && (
-              <a
-                style={githubLink}
-                href={docsPageUrl(framework, currentDocsMeta.docPermalink)}
-                target="_blank"
-                rel="noreferrer"
-                title="Open the documentation page for this example"
-              >
-                See in documentation ↗
-              </a>
-            )}
-            <a
-              style={githubLink}
-              href={
-                docsPath
-                  ? `https://github.com/handsontable/handsontable/tree/develop/docs/content/${docsPath.split("/").slice(0, -1).join("/")}`
-                  : `https://github.com/handsontable/examples/tree/master/examples/${framework}`
-              }
-              target="_blank"
-              rel="noreferrer"
-              title="View this example's source on GitHub"
-            >
-              {docsPath ? "See on GitHub ↗" : "Fork on GitHub ↗"}
-            </a>
-          </>
-        )}
-        {!isShare && user && (
-          <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
-        )}
-        <div style={{ flex: 1 }} />
-        {versionWarning && (
-          <span style={{ color: theme.color.warning, fontSize: 12, maxWidth: 380 }} title={versionWarning}>
-            {versionWarning}
-          </span>
-        )}
-        {/* Figma 48:6560 puts the toggle immediately left of Download / Sign in.
-            T2 rebuilds this bar around it. */}
-        <ThemeToggle />
-        {isShare ? (
-          <>
-            <button style={ghostBtn} onClick={downloadZip} title="Download this example (including your edits) as a .zip">
-              Download
-            </button>
-            <span style={{ color: theme.color.textMuted, fontSize: 12, fontFamily: theme.font.mono, whiteSpace: "nowrap" }}>
-              {entry.displayName} · HOT {version}
-            </span>
-          </>
-        ) : user ? (
-          <>
-            <span style={{ color: theme.color.textMuted, fontSize: 12 }}>{user.email}</span>
-            <button style={ghostBtn} onClick={logout}>Log out</button>
-          </>
-        ) : (
-          <button style={ghostBtn} onClick={login}>Sign in with Handsontable</button>
-        )}
-      </div>
-
+    <div style={{ height: "100%", minHeight: 0 }}>
       <EditorShell
         frameworkLabel={entry.displayName}
         files={files}
         entry={entry.entry}
+        workspaceGen={mountGen}
         iframeRef={setIframeEl}
         status={status}
         errorMessage={errorMessage}
@@ -990,6 +905,93 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         sharing={forking}
         saving={saving}
         dirty={dirty}
+        versionWarning={versionWarning}
+        // ---- chrome (T2) --------------------------------------------------
+        examplePill={
+          isShare || route.mode === "edit" ? (
+            // No leading mark: the frames put a 20×20 Handsontable *square*
+            // there (`48:6582`), and the repo has only the 145×22 wordmark —
+            // scaled to 20px tall it swamps the pill. Logged as an open item;
+            // the same asset gap blocks the favicon (T9).
+            <div style={shellStyles.examplePill(false)} title={description || undefined}>
+              <span style={pillLabel}>{title || (isShare ? "Shared demo" : "Untitled demo")}</span>
+            </div>
+          ) : (
+            <div style={shellStyles.examplePill(true)}>
+              <DocsCascader
+                manifestItems={docsItems}
+                starters={catalog.examples.map((e) => ({ framework: e.framework, displayName: e.displayName }))}
+                currentLabel={
+                  currentDocsMeta
+                    ? `${currentDocsMeta.breadcrumb.join(" ▸ ")} · ${currentDocsMeta.exampleTitle}`
+                    : entry.displayName
+                }
+                selectedKey={
+                  currentDocsMeta
+                    ? `${currentDocsMeta.guide}|${currentDocsMeta.exampleId}`
+                    : docsPath
+                      ? undefined
+                      : `starter:${framework}`
+                }
+                onSelect={(leaf: CascaderLeaf) => {
+                  if (leaf.kind === "starter") { selectExample(leaf.framework); return; }
+                  const pick =
+                    leaf.frameworks.find((f) => f.framework === framework) ??
+                    FW_PREF.map((p) => leaf.frameworks.find((f) => f.framework === p)).find(Boolean) ??
+                    leaf.frameworks[0];
+                  if (pick) void selectDocs(pick.docsPath);
+                }}
+              />
+              <IconSearch aria-hidden="true" />
+            </div>
+          )
+        }
+        // Signed-in-only and drawn in no frame, so they live in the action bar
+        // rather than the designed top bar (ADR-0023).
+        authedExtras={
+          <>
+            {route.mode === "edit" && (
+              <>
+                <input
+                  style={{ ...selectStyle, fontFamily: theme.font.ui, width: 220 }}
+                  value={title}
+                  onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
+                  placeholder="Demo title"
+                  aria-label="Demo title"
+                />
+                <input
+                  style={{ ...selectStyle, fontFamily: theme.font.ui, width: 300 }}
+                  value={description}
+                  onChange={(e) => { setDescription(e.target.value); setDirty(true); }}
+                  placeholder="Description (optional)"
+                  aria-label="Demo description"
+                />
+              </>
+            )}
+            {!isShare && (
+              <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
+            )}
+            <span style={{ color: theme.color.textMuted, fontSize: 12 }}>{user?.email}</span>
+            <button style={ghostBtn} onClick={logout}>Log out</button>
+          </>
+        }
+        publicUrl={publicUrl}
+        previewUrl={previewUrl}
+        onRefreshPreview={refreshPreview}
+        onMaximize={openFullWindow}
+        // Not gated on auth: share mode has always offered Download to anonymous
+        // visitors, and no frame shows an anonymous share view (ADR-0023 rule 1).
+        onDownload={downloadZip}
+        onSignIn={login}
+        frameworks={frameworks}
+        onFrameworkChange={(docsPathKey) => void selectDocs(docsPathKey)}
+        docsUrl={currentDocsMeta ? docsPageUrl(framework, currentDocsMeta.docPermalink) : undefined}
+        repoUrl={
+          docsPath
+            ? `https://github.com/handsontable/handsontable/tree/develop/docs/content/${docsPath.split("/").slice(0, -1).join("/")}`
+            : `https://github.com/handsontable/examples/tree/master/examples/${framework}`
+        }
+        repoLabel={docsPath ? "See this example on GitHub" : "Fork this starter on GitHub"}
       />
 
       {shareLinksOpen && linksId && (
@@ -1019,19 +1021,6 @@ const centered: React.CSSProperties = {
   gap: 12,
   background: theme.color.surface,
 };
-const topBar: React.CSSProperties = {
-  display: "flex",
-  gap: 10,
-  alignItems: "center",
-  padding: "6px 16px",
-  borderBottom: `1px solid ${theme.color.border}`,
-  fontFamily: theme.font.ui,
-  fontSize: 13,
-  // The top bar is the most-raised chrome — #222222 in dark, #ffffff in light
-  // (48:6560 / 31:6438).
-  background: theme.color.surfaceRaised,
-  color: theme.color.text,
-};
 // Form controls need an explicit background/colour: left unset, the UA default
 // paints them light regardless of the shell mode.
 const selectStyle: React.CSSProperties = {
@@ -1054,39 +1043,8 @@ const ghostBtn: React.CSSProperties = {
   padding: "5px 10px",
   cursor: "pointer",
 };
-const fwBtn: React.CSSProperties = {
-  fontFamily: theme.font.ui,
-  fontSize: 12,
-  border: `1px solid ${theme.color.border}`,
-  background: theme.color.surface,
-  color: theme.color.textMuted,
-  borderRadius: 7,
-  padding: "4px 9px",
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-};
-const fwBtnActive: React.CSSProperties = {
-  background: theme.color.accent,
-  color: theme.color.accentContrast,
-  borderColor: theme.color.accent,
-  fontWeight: 600,
-};
-const githubLink: React.CSSProperties = {
-  fontFamily: theme.font.ui,
-  fontSize: 12.5,
-  color: theme.color.text,
-  textDecoration: "none",
-  border: `1px solid ${theme.color.border}`,
-  background: theme.color.surface,
-  borderRadius: 8,
-  padding: "5px 10px",
-  whiteSpace: "nowrap",
-};
-const sharedTitle: React.CSSProperties = {
-  fontSize: 14, fontWeight: 600, color: theme.color.text,
-  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-};
-const sharedDesc: React.CSSProperties = {
-  fontSize: 12, color: theme.color.textMuted,
+/** The demo title inside the centred pill (`48:6583`). */
+const pillLabel: React.CSSProperties = {
+  fontSize: 13, fontWeight: 500, color: theme.color.text,
   whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
 };

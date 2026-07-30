@@ -9,10 +9,17 @@ export { EditorShell } from "./EditorShell.js";
 export type { EditorShellProps } from "./EditorShell.js";
 export { CodeEditor } from "./CodeEditor.js";
 export { FileTree } from "./FileTree.js";
-export { Toolbar } from "./Toolbar.js";
 export { PreviewPane } from "./PreviewPane.js";
 export type { PreviewStatus } from "./PreviewPane.js";
-export { s as shellStyles } from "./styles.js";
+// Chrome (T2). `Toolbar` is gone — its contents are split across these.
+export { TopBar } from "./TopBar.js";
+export { EditorBar } from "./EditorBar.js";
+export { PreviewBar } from "./PreviewBar.js";
+export type { FrameworkChoice } from "./PreviewBar.js";
+export { AuthedActionBar } from "./AuthedActionBar.js";
+export { MenuButton } from "./MenuButton.js";
+export type { MenuOption } from "./MenuButton.js";
+export { s as shellStyles, SIDEBAR_WIDTH } from "./styles.js";
 export { logoUrl, useLogoUrl } from "./useLogoUrl.js";
 // Icons — tabler for UI, seti-ui for file types. See src/icons/index.ts.
 export * from "./icons/index.js";

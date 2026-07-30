@@ -182,10 +182,13 @@ export function DocsCascader({ manifestItems, starters, currentLabel, selectedKe
   };
 
   return (
-    <div ref={wrapRef} style={{ position: "relative" }}>
+    // `flex: 1` so the trigger fills the pill and the pill's search icon stays
+    // pinned to its right edge (`72:15865`), not tucked against the label.
+    <div ref={wrapRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
       <button type="button" style={s.trigger} onClick={() => setOpen((o) => !o)} title={currentLabel}>
+        {/* No chevron: `72:15863` has it `hidden`. The pill's search icon is
+            the affordance the design gives this trigger. */}
         <span style={s.triggerLabel}>{currentLabel}</span>
-        <span style={{ color: theme.color.textMuted, marginLeft: 6 }}>▾</span>
       </button>
 
       {open && (
@@ -255,20 +258,26 @@ export function DocsCascader({ manifestItems, starters, currentLabel, selectedKe
 }
 
 const s: Record<string, React.CSSProperties> = {
+  // Chrome-less: T2 renders this inside the top bar's example pill
+  // (`shellStyles.examplePill`, frame `72:15859`), which draws the one box the
+  // design shows. A border/background here would nest a second box inside it.
   trigger: {
-    display: "inline-flex", alignItems: "center", maxWidth: 380,
-    fontFamily: theme.font.ui, fontSize: 13, padding: "5px 10px",
-    borderRadius: 8, border: `1px solid ${theme.color.border}`,
-    background: theme.color.surface, cursor: "pointer", color: theme.color.text,
+    display: "inline-flex", alignItems: "center", flex: 1, minWidth: 0,
+    fontFamily: theme.font.ui, fontSize: 13, padding: 0,
+    border: "none", background: "transparent", cursor: "pointer", color: theme.color.text,
   },
   triggerLabel: {
-    maxWidth: 340, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+    flex: 1, minWidth: 0, textAlign: "left",
+    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
   },
   pop: {
     position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 1000,
     background: theme.color.surfaceRaised, border: `1px solid ${theme.color.border}`,
     borderRadius: 10, boxShadow: theme.shadow.popover, overflow: "hidden",
-    minWidth: 260,
+    // `max-content`, not `minWidth`: since T2 the trigger lives inside the top
+    // bar's 480px example pill, which is the popover's containing block. Left to
+    // shrink-to-fit it would size against that 480 and clip the second column.
+    minWidth: 260, width: "max-content",
   },
   searchRow: { padding: 8, borderBottom: `1px solid ${theme.color.border}`, background: theme.color.surfaceMuted },
   search: {

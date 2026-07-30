@@ -221,6 +221,24 @@ export class SandpackRuntime implements DemoRuntime {
     this.pushUpdate();
   }
 
+  /** Re-run the sandbox from the current sources. `isInitializationCompile`
+   *  makes the bundler treat it as a first compile rather than an incremental
+   *  update, which is what the refresh button means. No new client, no reload
+   *  of the bundler itself. */
+  reload(): void {
+    if (!this.client) return;
+    Promise.resolve(this.sandboxFiles())
+      .then((files) => {
+        // A pushUpdate() started before this may still land; bump the sequence
+        // so its stale result is dropped rather than overwriting the refresh.
+        this.updateSeq++;
+        this.client?.updateSandbox(this.setupFrom(files), true);
+      })
+      .catch(() => {
+        /* unparseable sources — the last good sandbox keeps running */
+      });
+  }
+
   /** Remove a file and recompile (file-tree delete/rename). */
   deleteFile(path: string): void {
     if (!this.client) return;

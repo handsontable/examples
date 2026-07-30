@@ -57,6 +57,13 @@ export interface DemoRuntime {
   writeFile(path: string, contents: string): void;
   /** Remove a file from the running preview (file-tree delete/rename). */
   deleteFile?(path: string): void;
+  /**
+   * Re-run the current preview without re-creating the session (the row-2
+   * refresh button, `72:15708`). Deliberately *not* a remount: for Tier 2 that
+   * would mint a fresh container against a five-slot pool on every click.
+   * A no-op before mount.
+   */
+  reload?(): void;
   onReady(cb: () => void): void;
   onError(cb: (e: Error) => void): void;
   dispose(): void;
