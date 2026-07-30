@@ -113,22 +113,24 @@ export const s = {
     textDecoration: "none",
   } satisfies CSSProperties,
 
-  /** Editor tab (`72:15815`). One open file at a time until T4. */
-  tab: (active: boolean): CSSProperties => ({
-    display: "inline-flex",
-    alignItems: "center",
-    gap: t.space(1),
+  /**
+   * The editor column's own row-2 bar. Same 36px as `bar`, but it takes the tab
+   * strip's recessed background and inset hairline rather than `bar`'s `surface`
+   * + bottom border, so the sidebar toggle and `EditorTabs` read as one row with
+   * no seam. `surface` is unusable here: it is `#ffffff` in light, identical to
+   * an active tab (T4's measurement, `EditorTabs.tsx`).
+   */
+  editorBar: {
+    display: "flex",
+    alignItems: "stretch",
     height: 36,
-    padding: `0 ${t.space(2)} 0 6px`,
-    border: "none",
-    borderBottom: `2px solid ${active ? t.color.accent : "transparent"}`,
-    background: active ? t.color.surfaceMuted : "transparent",
-    color: active ? t.color.text : t.color.textMuted,
+    flex: "0 0 auto",
+    background: t.color.surfaceSunken,
+    boxShadow: `inset 0 -1px 0 ${t.color.border}`,
     fontFamily: t.font.ui,
     fontSize: 13,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  }),
+    color: t.color.text,
+  } satisfies CSSProperties,
 
   /** Read-only preview address (`72:15710`). */
   urlField: {
@@ -268,12 +270,18 @@ export const s = {
     whiteSpace: "nowrap",
   }),
 
-  editorPane: {
+  // CodeMirror's slot between the tab strip and the status bar. `overflow: hidden`
+  // is load-bearing: without it the editor's scroller pushes the status bar out of
+  // the pane instead of scrolling inside its own box.
+  //
+  // This replaced `editorPane`, T2's wrapper around CodeEditor, when T4's tabs and
+  // status bar arrived — the editor column is now `s.column` and this is just the
+  // middle slot, so it carries the editor background `editorPane` used to.
+  editorBody: {
     flex: 1,
     minWidth: 0,
     minHeight: 0,
-    display: "flex",
-    flexDirection: "column",
+    overflow: "hidden",
     background: t.color.editorBg,
   } satisfies CSSProperties,
 

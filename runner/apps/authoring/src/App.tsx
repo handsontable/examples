@@ -882,7 +882,6 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         frameworkLabel={entry.displayName}
         files={files}
         entry={entry.entry}
-        workspaceGen={mountGen}
         iframeRef={setIframeEl}
         status={status}
         errorMessage={errorMessage}

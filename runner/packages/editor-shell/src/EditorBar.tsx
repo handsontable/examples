@@ -1,26 +1,27 @@
 // The editor column's 36px bar (`72:15811`): sidebar toggle + file tabs.
 //
-// One tab at a time — the shell still keeps a single `active` path. The design
-// draws two tabs; real multi-tab state is T4's, and the strip moves into
-// `EditorTabs.tsx` then. The shape ships now because T2's acceptance is that the
-// anonymous view matches the frames, and the frames show tabs.
+// The toggle is this file's; the tabs are `EditorTabs` (T4, DEV-2158), which
+// owns their shape and the single-file rule. The two sit in one row because the
+// frame draws one row — the toggle occupies `72:15812`, the tabs start at x=36 —
+// and the bar carries the strip's own recessed background and inset hairline so
+// there is no seam between them.
 
-import { FileIcon, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconX } from "./icons/index.js";
+import { EditorTabs } from "./EditorTabs.js";
+import { IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand } from "./icons/index.js";
 import { s } from "./styles.js";
 
 export interface EditorBarProps {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
-  /** The open file, or "" when the tab was closed. */
+  /** Open files, in tab order. Exactly one entry until multi-tab lands. */
+  paths: string[];
   active: string;
-  /** Close the tab, leaving the editor pane empty until a file is picked. */
-  onClose: () => void;
+  onSelect: (path: string) => void;
 }
 
-export function EditorBar({ sidebarOpen, onToggleSidebar, active, onClose }: EditorBarProps) {
-  const name = active.replace(/^.*\//, "");
+export function EditorBar({ sidebarOpen, onToggleSidebar, paths, active, onSelect }: EditorBarProps) {
   return (
-    <div style={s.bar}>
+    <div style={s.editorBar}>
       <button
         type="button"
         className="hot-icon-btn"
@@ -33,22 +34,7 @@ export function EditorBar({ sidebarOpen, onToggleSidebar, active, onClose }: Edi
         {sidebarOpen ? <IconLayoutSidebarLeftCollapse /> : <IconLayoutSidebarLeftExpand />}
       </button>
 
-      {active && (
-        <div style={s.tab(true)} aria-current="page">
-          <FileIcon path={active} size={24} />
-          {name}
-          <button
-            type="button"
-            className="hot-icon-btn"
-            style={{ ...s.iconButton, width: 24, height: 24 }}
-            onClick={onClose}
-            aria-label={`Close ${name}`}
-            title={`Close ${name}`}
-          >
-            <IconX />
-          </button>
-        </div>
-      )}
+      <EditorTabs paths={paths} active={active} onSelect={onSelect} />
     </div>
   );
 }

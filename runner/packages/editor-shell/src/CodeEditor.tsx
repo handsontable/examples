@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import CodeMirror from "@uiw/react-codemirror";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import CodeMirror, { type ViewUpdate } from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
@@ -35,18 +35,47 @@ function languageFor(path: string) {
   }
 }
 
+/** Caret position, 1-based, as the status bar shows it. */
+export interface CursorPosition {
+  line: number;
+  col: number;
+}
+
 export interface CodeEditorProps {
   path: string;
   value: string;
   onChange: (value: string) => void;
   readOnly?: boolean;
+  /** Live caret position, for the editor status bar. */
+  onCursorChange?: (pos: CursorPosition) => void;
 }
 
 /** Thin CodeMirror wrapper: picks a language by file extension, and the GitHub
  *  Light/Dark theme so code colours match the documentation site (Figma `11:2535`). */
-export function CodeEditor({ path, value, onChange, readOnly }: CodeEditorProps) {
+export function CodeEditor({ path, value, onChange, readOnly, onCursorChange }: CodeEditorProps) {
   const extensions = useMemo(() => languageFor(path), [path]);
   const { mode } = useTheme();
+
+  // `useCodeMirror` installs `onUpdate` as an *extension*
+  // (`EditorView.updateListener.of(onUpdate)`), so a handler with a fresh identity
+  // each render churns the editor's extensions on every render — and this one calls
+  // setState in the parent. Hence the empty-dep callback reading a ref: the
+  // extension identity never changes, whatever the caller passes.
+  const cursorRef = useRef(onCursorChange);
+  useEffect(() => {
+    cursorRef.current = onCursorChange;
+  }, [onCursorChange]);
+
+  const handleUpdate = useCallback((vu: ViewUpdate) => {
+    if (!vu.docChanged && !vu.selectionSet && !vu.focusChanged) return;
+    // Derived here rather than taken from `onStatistics`, whose `line` is
+    // `lineAt(selection.main.from)` — the wrong line for an upward multi-line
+    // selection — and which carries no column at all.
+    const { head } = vu.state.selection.main;
+    const line = vu.state.doc.lineAt(head);
+    cursorRef.current?.({ line: line.number, col: head - line.from + 1 });
+  }, []);
+
   return (
     <CodeMirror
       value={value}
@@ -57,6 +86,7 @@ export function CodeEditor({ path, value, onChange, readOnly }: CodeEditorProps)
       editable={!readOnly}
       readOnly={readOnly}
       onChange={onChange}
+      onUpdate={handleUpdate}
       basicSetup={{
         lineNumbers: true,
         highlightActiveLine: true,
