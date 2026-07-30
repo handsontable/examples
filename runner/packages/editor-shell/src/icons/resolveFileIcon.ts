@@ -1,11 +1,13 @@
 // Map a file path to its seti-ui icon (DEV-2155 / ADR-0024).
 //
 // Resolution order, most specific first:
-//   1. exact basename        — "tsconfig.json", "LICENSE", "vite.config.ts"
-//   2. longest dotted suffix — ".test.ts" before ".ts"; also covers dotfiles
+//   1. exact basename        — "tsconfig.json", "vite.config.ts"
+//   2. substring            — upstream's `.icon-partial` rules, so "LICENSE.txt"
+//                              gets the licence glyph and not the `.txt` one
+//   3. longest dotted suffix — ".test.ts" before ".ts"; also covers dotfiles
 //                              (".gitignore" is the whole basename) and plain
 //                              extensions (the last iteration)
-//   3. the generic `default` icon
+//   4. the generic `default` icon
 //
 // Keep in step with `replayResolve()` in scripts/sync-seti-icons.mjs — that
 // replay is what gates the fallback behaviour, since the package has no build
@@ -13,6 +15,7 @@
 
 import {
   SETI_BY_NAME,
+  SETI_BY_PARTIAL,
   SETI_BY_SUFFIX,
   SETI_FALLBACK,
   SETI_FOLDER,
@@ -45,6 +48,10 @@ export function resolveFileIcon(pathOrName: string): ResolvedFileIcon {
 
   const byName = SETI_BY_NAME[base];
   if (byName) return geometryOf(byName);
+
+  for (const entry of SETI_BY_PARTIAL) {
+    if (base.includes(entry.match)) return geometryOf(entry);
+  }
 
   const parts = base.split(".");
   for (let i = 1; i < parts.length; i += 1) {

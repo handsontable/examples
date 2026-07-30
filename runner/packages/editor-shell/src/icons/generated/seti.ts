@@ -23,15 +23,23 @@ export type SetiPath = {
 /** An icon's geometry. Most are 32x32, but not all — carry the viewBox with the paths. */
 export type SetiGeometry = { readonly viewBox: string; readonly paths: readonly SetiPath[] };
 
-/** Exact filename match — checked before any suffix. */
+/** Exact filename match — checked first. */
 export const SETI_BY_NAME: Readonly<Record<string, SetiEntry>> = {
-  "LICENSE": { icon: "license", color: "#cbcb41" },
   "README.md": { icon: "info", color: "#519aba" },
   "tsconfig.json": { icon: "tsconfig", color: "#519aba" },
   "vite.config.js": { icon: "vite", color: "#cbcb41" },
   "vite.config.ts": { icon: "vite", color: "#cbcb41" },
   "yarn.lock": { icon: "yarn", color: "#519aba" },
 };
+
+/**
+ * Substring match, from upstream's `.icon-partial(…)` rules — checked after exact
+ * names and before suffixes, so `LICENSE.txt` gets the licence glyph rather than
+ * the generic `.txt` one. Ordered; first hit wins.
+ */
+export const SETI_BY_PARTIAL: readonly (SetiEntry & { readonly match: string })[] = [
+  { match: "LICENSE", icon: "license", color: "#cbcb41" },
+];
 
 /** Dotted suffix match — longest first, so ".test.ts" beats ".ts". */
 export const SETI_BY_SUFFIX: Readonly<Record<string, SetiEntry>> = {

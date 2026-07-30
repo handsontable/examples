@@ -58,8 +58,16 @@ const CURATED_SUFFIXES = [
 
 const CURATED_NAMES = [
   "tsconfig.json", "vite.config.ts", "vite.config.js", "yarn.lock",
-  "README.md", "LICENSE",
+  "README.md",
 ];
+
+// `.icon-partial(…)` keys — upstream matches these as a substring of the
+// filename, and that matters: every starter ships `LICENSE.txt`, which exact
+// matching would send to `.txt` -> `default` instead of the license glyph.
+// Checked after exact names and before suffixes, mirroring upstream's ordering
+// (the partial rules are emitted later in mapping.less, so they win over the
+// extension rules).
+const CURATED_PARTIALS = ["LICENSE"];
 
 // Rendered by <FolderIcon />. mapping.less has no entry for it, so its colour
 // comes from the SVG's own fill — the one place the baked fill is used.
@@ -82,28 +90,28 @@ function parseColors(less) {
 }
 
 /**
- * `.icon-set(".ts", "typescript", @blue);` and the `.icon-partial(…)` form,
- * either quote style. Upstream's partial matching is substring-based; we reduce
- * it to exact-name matching (only ~48 entries, and the curated ones — LICENSE —
- * are whole filenames in practice).
+ * `.icon-set(".ts", "typescript", @blue);` and `.icon-partial("LICENSE", …)`,
+ * either quote style. The two call forms mean different things upstream — set is
+ * an exact/suffix match, partial is a substring — so they're kept apart.
  */
 function parseMapping(less) {
   const suffixes = new Map();
   const names = new Map();
+  const partials = new Map();
   const re =
-    /\.icon-(?:set|partial)\(\s*(['"])(.+?)\1\s*,\s*(['"])(.+?)\3\s*,\s*@([a-z0-9-]+)\s*\)/g;
+    /\.icon-(set|partial)\(\s*(['"])(.+?)\2\s*,\s*(['"])(.+?)\4\s*,\s*@([a-z0-9-]+)\s*\)/g;
   for (const m of less.matchAll(re)) {
-    const key = m[2];
-    const entry = { icon: m[4], colorVar: m[5] };
-    // A leading dot means "matches the end of a filename" — which covers both
-    // real extensions (".ts") and dotfiles (".gitignore"), since the runtime
-    // resolver walks dotted suffixes of the basename. Everything else is a
-    // whole filename. First win: upstream states the generic rule before later
-    // overrides, and taking the first keeps regeneration stable.
-    const target = key.startsWith(".") ? suffixes : names;
+    const key = m[3];
+    const entry = { icon: m[5], colorVar: m[6] };
+    // For `.icon-set`, a leading dot means "matches the end of a filename" —
+    // covering both real extensions (".ts") and dotfiles (".gitignore"), since
+    // the runtime resolver walks dotted suffixes of the basename. Everything
+    // else is a whole filename. First win: upstream states the generic rule
+    // before later overrides, and taking the first keeps regeneration stable.
+    const target = m[1] === "partial" ? partials : key.startsWith(".") ? suffixes : names;
     if (!target.has(key)) target.set(key, entry);
   }
-  return { suffixes, names };
+  return { suffixes, names, partials };
 }
 
 /**
@@ -160,7 +168,8 @@ function parseSvg(name, svg) {
 }
 
 function resolve(mapping, colors, key, kind) {
-  const table = kind === "name" ? mapping.names : mapping.suffixes;
+  const table =
+    kind === "name" ? mapping.names : kind === "partial" ? mapping.partials : mapping.suffixes;
   const hit = table.get(key);
   if (!hit) {
     throw new Error(
@@ -179,9 +188,12 @@ function resolve(mapping, colors, key, kind) {
  * step and the repo has no DOM test runner, so this is where it gets checked.
  * Must stay in step with resolveFileIcon.ts.
  */
-function replayResolve(byName, bySuffix, filePath) {
+function replayResolve(byName, byPartial, bySuffix, filePath) {
   const base = filePath.split("/").pop() ?? filePath;
   if (byName[base]) return byName[base];
+  for (const { match, ...entry } of byPartial) {
+    if (base.includes(match)) return entry;
+  }
   const parts = base.split(".");
   for (let i = 1; i < parts.length; i += 1) {
     const suffix = `.${parts.slice(i).join(".")}`;
@@ -200,6 +212,9 @@ const FIXTURES = [
   ["pnpm-lock.yaml", "yml"],
   ["vite.config.ts", "vite"],
   ["LICENSE", "license"],
+  // Every starter ships this one, and `.txt` is a curated suffix — so it also
+  // pins the partial step ahead of the suffix walk.
+  ["LICENSE.txt", "license"],
   [".gitignore", "git"],
   ["src/app/data-grid.component.ts", "typescript"],
   ["src/pages/index.astro", null],
@@ -242,6 +257,10 @@ async function main() {
   for (const key of CURATED_SUFFIXES) bySuffix[key] = resolve(mapping, colors, key, "suffix");
   const byName = {};
   for (const key of CURATED_NAMES) byName[key] = resolve(mapping, colors, key, "name");
+  const byPartial = CURATED_PARTIALS.map((key) => ({
+    match: key,
+    ...resolve(mapping, colors, key, "partial"),
+  }));
 
   const fallbackColor = colors.white;
   if (!fallbackColor) throw new Error("ui-variables.less has no @white for the fallback icon");
@@ -251,6 +270,7 @@ async function main() {
     ...new Set([
       ...Object.values(bySuffix).map((e) => e.icon),
       ...Object.values(byName).map((e) => e.icon),
+      ...byPartial.map((e) => e.icon),
       FALLBACK_ICON,
       FOLDER_ICON,
     ]),
@@ -269,14 +289,18 @@ async function main() {
   const folder = { icon: FOLDER_ICON, color: folderFill };
 
   // Assertions — fail before writing, never emit a table that can't resolve.
-  for (const [key, entry] of [...Object.entries(bySuffix), ...Object.entries(byName)]) {
+  for (const [key, entry] of [
+    ...Object.entries(bySuffix),
+    ...Object.entries(byName),
+    ...byPartial.map((e) => [e.match, e]),
+  ]) {
     if (!geometry[entry.icon]) throw new Error(`${key} -> ${entry.icon} has no path data`);
   }
   if (!geometry[FALLBACK_ICON]) throw new Error(`fallback icon ${FALLBACK_ICON} has no path data`);
   if (!geometry[FOLDER_ICON]) throw new Error(`folder icon ${FOLDER_ICON} has no path data`);
 
   for (const [file, expected] of FIXTURES) {
-    const hit = replayResolve(byName, bySuffix, file);
+    const hit = replayResolve(byName, byPartial, bySuffix, file);
     const actual = hit ? hit.icon : null;
     if (actual !== expected) {
       throw new Error(
@@ -317,10 +341,21 @@ export type SetiPath = {
 /** An icon's geometry. Most are 32x32, but not all — carry the viewBox with the paths. */
 export type SetiGeometry = { readonly viewBox: string; readonly paths: readonly SetiPath[] };
 
-/** Exact filename match — checked before any suffix. */
+/** Exact filename match — checked first. */
 export const SETI_BY_NAME: Readonly<Record<string, SetiEntry>> = {
 ${emit(sortedNames)}
 };
+
+/**
+ * Substring match, from upstream's \`.icon-partial(…)\` rules — checked after exact
+ * names and before suffixes, so \`LICENSE.txt\` gets the licence glyph rather than
+ * the generic \`.txt\` one. Ordered; first hit wins.
+ */
+export const SETI_BY_PARTIAL: readonly (SetiEntry & { readonly match: string })[] = [
+${byPartial
+  .map((e) => `  { match: ${ts(e.match)}, icon: ${ts(e.icon)}, color: ${ts(e.color)} },`)
+  .join("\n")}
+];
 
 /** Dotted suffix match — longest first, so ".test.ts" beats ".ts". */
 export const SETI_BY_SUFFIX: Readonly<Record<string, SetiEntry>> = {
@@ -344,6 +379,7 @@ ${iconNames.map((n) => `  ${ts(n)}: ${emitGeometry(geometry[n])},`).join("\n")}
   console.log(
     `wrote ${path.relative(RUNNER_DIR, OUT_FILE)} — ${iconNames.length} icons, ` +
       `${sortedSuffixes.length} suffixes, ${sortedNames.length} names, ` +
+      `${byPartial.length} partials, ` +
       `${FIXTURES.length} resolver fixtures passed`,
   );
 }

@@ -43,12 +43,16 @@ the generator.
   Geometry is emitted with `fill="currentColor"` and coloured through CSS `color`, so one code
   path covers selection and muted states. `folder` is the single exception — it has no mapping
   entry, so it borrows its own fill.
-- **Coverage is curated** to file types the runner can contain: 38 suffixes, 6 exact filenames,
-  29 icons, ~22KB. `catalog.json`'s 124 example filenames use 17 extensions; the starters add
+- **Both of upstream's match kinds are kept.** `.icon-set` keys become exact-name or
+  suffix lookups; `.icon-partial` keys stay substring matches, checked between the two. That
+  ordering is load-bearing: every starter ships `LICENSE.txt`, and `.txt` is a curated suffix, so
+  exact-only matching would draw it with the generic `default` glyph.
+- **Coverage is curated** to file types the runner can contain: 38 suffixes, 5 exact filenames,
+  1 substring rule, 29 icons, ~22KB. `catalog.json`'s 124 example filenames use 17 extensions; the starters add
   angular/astro/nuxt shapes. Nothing in the runner produces `bsl` or `coldfusion`.
 - **The generator fails rather than degrades.** Every curated key must resolve against
   `mapping.less`; every icon must have geometry; no `transform`, no non-`<path>` geometry, at
-  most one distinct fill. It also replays the runtime resolver over 14 fixtures, which is what
+  most one distinct fill. It also replays the runtime resolver over 15 fixtures, which is what
   gates "unknown extension falls back to a generic icon" — `editor-shell` has no build step and
   the repo has no DOM test runner, so `tsc --noEmit` plus these assertions are T1's whole gate.
 
