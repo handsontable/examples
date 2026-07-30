@@ -13,9 +13,19 @@ export { EditorTabs } from "./EditorTabs.js";
 export type { EditorTabsProps } from "./EditorTabs.js";
 export { EditorStatusBar } from "./EditorStatusBar.js";
 export type { EditorStatusBarProps } from "./EditorStatusBar.js";
-export { FileTree } from "./FileTree.js";
 export { PreviewPane } from "./PreviewPane.js";
 export type { PreviewStatus } from "./PreviewPane.js";
+// Left sidebar (T3). `FileTree` is now the FILES section of `Sidebar`, not the column.
+export { Sidebar } from "./Sidebar.js";
+export type { SidebarProps } from "./Sidebar.js";
+export { BoxInfo, formatCreated } from "./BoxInfo.js";
+export type { BoxInfoProps } from "./BoxInfo.js";
+export { Dependencies, parseDependencies } from "./Dependencies.js";
+export type { DependenciesProps, Dependency } from "./Dependencies.js";
+export { FileTree, buildFileTree } from "./FileTree.js";
+export type { FileTreeProps } from "./FileTree.js";
+export { SectionHeader } from "./SectionHeader.js";
+export type { SectionHeaderProps } from "./SectionHeader.js";
 // Chrome (T2). `Toolbar` is gone — its contents are split across these.
 export { TopBar } from "./TopBar.js";
 export { EditorBar } from "./EditorBar.js";
@@ -25,6 +35,6 @@ export { AuthedActionBar } from "./AuthedActionBar.js";
 export { MenuButton } from "./MenuButton.js";
 export type { MenuOption } from "./MenuButton.js";
 export { s as shellStyles, SIDEBAR_WIDTH } from "./styles.js";
-export { logoUrl, useLogoUrl } from "./useLogoUrl.js";
+export { logoUrl, markUrl, useLogoUrl } from "./useLogoUrl.js";
 // Icons — tabler for UI, seti-ui for file types. See src/icons/index.ts.
 export * from "./icons/index.js";

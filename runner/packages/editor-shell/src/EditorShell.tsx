@@ -4,8 +4,8 @@ import { AuthedActionBar } from "./AuthedActionBar.js";
 import { CodeEditor, type CursorPosition } from "./CodeEditor.js";
 import { EditorBar } from "./EditorBar.js";
 import { EditorStatusBar } from "./EditorStatusBar.js";
-import { FileTree } from "./FileTree.js";
 import { PreviewBar, type FrameworkChoice } from "./PreviewBar.js";
+import { Sidebar } from "./Sidebar.js";
 import { PreviewPane, type PreviewStatus } from "./PreviewPane.js";
 import { TopBar } from "./TopBar.js";
 import { s } from "./styles.js";
@@ -28,6 +28,17 @@ export interface EditorShellProps {
   versionOptions: string[];
   onVersionChange: (v: string) => void;
   versionWarning?: string | null;
+
+  /** BOX INFO. `title` falls back to the example's display name for unsaved workspaces;
+   *  `description` / `createdAt` only exist for a saved demo and their rows self-hide. */
+  title?: string;
+  description?: string;
+  createdAt?: string;
+  /** Zips the live workspace — surfaced in the sidebar's FILES header, every mode.
+   *  Same callback the top bar's `onDownload` takes; there is one zip path. */
+  onDownloadAll?: () => void;
+  // Sidebar visibility is not a prop: T2 owns it as `sidebarOpen` state here, toggled
+  // from `EditorBar`. T3 deliberately did not add a second source of truth.
 
   /** Fired on every edit. The app updates its files map and calls runtime.writeFile. */
   onEdit: (path: string, contents: string) => void;
@@ -116,11 +127,18 @@ export function EditorShell(props: EditorShellProps) {
       />
 
       <div style={s.body(sidebarOpen)}>
+        {/* Unmounted, not zero-width: a 0px track still paints the sidebar's right
+            border, and `65:19433` has nothing at the left edge. */}
         {sidebarOpen && (
-          <FileTree
+          <Sidebar
+            title={props.title ?? props.frameworkLabel}
+            description={props.description}
+            createdAt={props.createdAt}
+            packageJson={props.files["/package.json"]}
             paths={paths}
             active={active}
             onSelect={setActive}
+            onDownloadAll={props.onDownloadAll}
             editable={!!props.onAddFile}
             onAddFile={props.onAddFile}
             onRenameFile={props.onRenameFile}

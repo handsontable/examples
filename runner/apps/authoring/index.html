@@ -43,6 +43,18 @@
       /* Borderless square icon buttons (theme toggle today; the row-2 icons in T2).
          Needs a class because :hover can't be expressed inline. */
       .hot-icon-btn:hover { background: var(--hot-color-hover); }
+      /* Sidebar rows (T3). The row actions and the npm external-link are drawn at
+         opacity 0 and revealed on hover (72:17018, 72:17074) — inline styles can't
+         express either the hover or the descendant selector. :focus-within is not
+         optional: an opacity-0 button is still tabbable, so without it keyboard focus
+         lands on something invisible. */
+      .hot-file-row { transition: background-color 0.12s ease; }
+      .hot-file-row:hover { background: var(--hot-color-hover); }
+      .hot-row-actions, .hot-dep-link { opacity: 0; transition: opacity 0.12s ease; }
+      .hot-file-row:hover .hot-row-actions,
+      .hot-file-row:focus-within .hot-row-actions,
+      .hot-dep-row:hover .hot-dep-link,
+      .hot-dep-row:focus-within .hot-dep-link { opacity: 1; }
     </style>
   </head>
   <body>

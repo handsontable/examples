@@ -29,6 +29,10 @@ export const s = {
    * in both `72:15697` (sidebar collapsed) and `48:6560` (sidebar open at 240).
    * `1fr 1fr` would put the boundary at 984 with the sidebar open. T6 replaces
    * this with the draggable ratio.
+   *
+   * The collapsed form drops the track entirely rather than sizing it to 0: the
+   * sidebar carries a right border, which a zero-width track would still paint as
+   * a seam, and `65:19433` has nothing at the left edge.
    */
   body: (sidebarOpen: boolean): CSSProperties => ({
     display: "grid",
@@ -246,29 +250,20 @@ export const s = {
   } satisfies CSSProperties,
 
   sidebar: {
+    display: "flex",
+    flexDirection: "column",
+    // BOX INFO + FILES at the top, DEPENDENCIES pinned to the bottom (72:16975).
+    justifyContent: "space-between",
     borderRight: `1px solid ${t.color.border}`,
     // Recessed relative to the panes — #000000 in dark (31:6438).
     background: t.color.surfaceSunken,
-    overflowY: "auto",
-    padding: t.space(2),
+    // No scroll here: the FILES body scrolls instead, so DEPENDENCIES stays pinned.
+    overflow: "hidden",
     minHeight: 0,
   } satisfies CSSProperties,
 
-  fileItem: (active: boolean): CSSProperties => ({
-    display: "block",
-    width: "100%",
-    textAlign: "left",
-    border: "none",
-    background: active ? t.color.accentSoft : "transparent",
-    color: active ? t.color.text : t.color.textMuted,
-    fontWeight: active ? 600 : 400,
-    fontFamily: t.font.mono,
-    fontSize: 12.5,
-    padding: `4px 8px`,
-    borderRadius: t.radius.sm,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  }),
+  // `fileItem` is gone: the sidebar's rows carry their own styles in `FileTree.tsx`,
+  // and their fills live in the app's global block so `:hover` can reach them.
 
   // CodeMirror's slot between the tab strip and the status bar. `overflow: hidden`
   // is load-bearing: without it the editor's scroller pushes the status bar out of
