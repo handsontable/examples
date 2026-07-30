@@ -1,0 +1,316 @@
+# DEV-2027 — Demo runner UI/UX redesign — subtask breakdown
+
+Task: [DEV-2027](https://app.clickup.com/t/86camqwaw)
+Design: [Figma Sandbox / section `18.1`](https://www.figma.com/design/KCl2Csh9WUSwCrddffnYuD/Sandbox?node-id=72-18175) (fileKey `KCl2Csh9WUSwCrddffnYuD`)
+Repo: `handsontable/examples` → `runner/packages/editor-shell/src/` + `runner/apps/authoring/src/`
+Decisions: [ADR-0022](adr/0022-shell-theming-via-css-custom-properties.md) (theming),
+[ADR-0023](adr/0023-redesign-scope-and-shipping.md) (scope rules, deferred gaps, shipping)
+
+## Ground rules for this redesign
+
+1. **Feature exists but isn't in the design** → keep it, restyle it to the design system.
+   Never delete working functionality because a frame omits it.
+2. **Design introduces something new** → decide per item: build now, or split into its own
+   feature task. Each new element below carries that call explicitly.
+3. **Branching.** One integration branch `feat/DEV-2027-redesign` off `master`. Every subtask
+   is its own branch off it, PR'd *into* it — small reviewable PRs, one production deploy at
+   the end. Deploy is manual (no CI), so a single deploy is the point.
+
+## Frame index
+
+| Node | Name | What it shows |
+|---|---|---|
+| `48:6560` | Light mode / Light example | Baseline fork/edit view, light chrome |
+| `31:6438` | Fork preview — Dark mode / Dark example / Show Files Sidebar | Dark chrome, sidebar with nested `src/` folder |
+| `65:21451` | Light mode / Dark example | **Mixed**: light chrome + dark grid |
+| `65:19433` | Dark mode / Dark, system example / Default view | Sidebar collapsed |
+| `72:15697` | Example (before login) | Full toolbar: version + framework selectors, panel toggles, Sign in |
+| `72:14610` | Example (before login, booting) | Loading state — spinner + "Loading data …" |
+| `72:26445` | Example Refreash | Preview refresh in flight |
+| `72:17078` | Search | Example-picker cascader popover |
+| `65:20432` | Mode Full | Preview-only mode |
+| `72:11913` | Mode Embed Docs | Bare grid, light, no chrome |
+| `72:13670` | Mode Embed Docs | Bare grid, **dark**, no chrome |
+| `85:9970`, `85:16935` | Resize | Splitter drag state (light + dark) |
+| `11:2471` | icons | seti-ui file-type icon sheet |
+| `65:24280` | Mode Full | *not rendered — name-inferred pair of `65:20432`* |
+| `65:17596` | Fork preview — Dark mode / Light example | *not rendered — name-inferred* |
+
+Sticky notes (decisions baked into the design):
+- `11:2535` — code colors = same as docs, GitHub Theme Dark/Light
+- `11:2545` — icons = tabler-icons + seti-ui (file icons)
+- `72:16829` — book icon → docs page, github icon → example repo
+- `72:14527` — embed iframe: `body { margin: 0 }` → **out of scope**, `/embed/:id` dropped (T8)
+- `72:14532` — no rename / delete / add file in the sidebar in fork/view mode
+  → **conflicts with ground rule 1** (that CRUD exists and works). See T3.
+
+Row-2 icon inventory, read from `72:15697`'s layer names (settles what the icons actually are):
+`tabler-icon-layout-sidebar-left-expand` (sidebar toggle) · `tabler-icon-x` (tab close) ·
+`tabler-icon-search` (in the centre pill) · `tabler-icon-refresh` (preview) ·
+version pill + `chevron-down` · `tabler-icon-brand-react-native` + `chevron-down` (framework) ·
+`tabler-icon-book` (docs) · `tabler-icon-brand-github` (repo) · `tabler-icon-window-maximize`.
+**There are no editor/preview panel-toggle buttons in the design.**
+
+## Gap summary — why this is not a repaint
+
+`theme.ts` is a single frozen light palette. `styles.ts` exports a module-level
+`const s = {...}` computed at import time from it — it **structurally cannot** do dark mode.
+Everything visual downstream depends on replacing that first.
+
+---
+
+## T0 — Theming foundation: dual-mode tokens (BLOCKING)
+
+**Scope.** Rewrite `theme.ts` as a two-mode token set (light/dark) emitted as CSS custom
+properties on a root element; convert `styles.ts` from a frozen object to variable-driven
+styles. Theme toggle in the top bar (sun/moon), persisted to `localStorage`, defaulting to
+`prefers-color-scheme`. CodeMirror theme swapped to GitHub Dark/Light to match docs.
+
+The toggle drives the **whole authoring app** — chrome and all app surfaces.
+
+**Embed:** the app appends a *preferred* theme to the embed URL it hands out — built at
+`apps/authoring/src/App.tsx:811` and surfaced through `ShareDialog.tsx`. Those two files are
+the whole of it. How the embed acts on that hint is **out of scope for DEV-2027**.
+
+**Files.** `theme.ts`, `styles.ts`, `CodeEditor.tsx`, root of `App.tsx`; touches every shell component.
+**Nodes.** `48:6560`, `31:6438`, `65:21451`.
+**Acceptance.** Toggle flips every app surface with no flash on load; no hard-coded hex outside
+`theme.ts`; both packages typecheck.
+**Blocks.** T2–T8.
+
+> Note on the example's own theme: the running example imports its own
+> `ht-theme-main.min.css` inside the iframe, so the shell cannot restyle it. Mixed frames like
+> `65:21451` (light chrome + dark grid) are that, not a second toggle. Nothing to build.
+
+---
+
+## T1 — Icon system (BLOCKING for T2/T3/T4)
+
+**Scope.** One shared icon layer. tabler-icons for UI (chevron, refresh, download,
+external-link, search, panel toggles, sun/moon, book, github) + seti-ui file-type icons mapped
+by extension (~150 in `11:2471`). Decide inline-SVG components vs a package dependency.
+
+**Files.** new `packages/editor-shell/src/icons/`.
+**Nodes.** `11:2471`, sticky `11:2545`.
+**Acceptance.** Single import surface; unknown extension falls back to a generic icon.
+
+---
+
+## T2 — App chrome: top bar + secondary bar
+
+**Scope.** Two-row chrome.
+Row 1: logo · centered example pill (HOT icon + search affordance) · theme toggle ·
+`Download` (authed) / `Sign in` (anon).
+Row 2: sidebar toggle · file tabs · divider · preview refresh · URL bar · version selector ·
+framework selector · book (docs) · github (repo) · window-maximize.
+
+**No panel toggles.** Confirmed from layer names — the three right-hand icons are `book`,
+`brand-github` and `window-maximize`, not show/hide-pane buttons.
+
+**Framework selector — restyle, not a feature.** It already exists as a button group
+(`apps/authoring/src/App.tsx:881-899`, `currentFrameworks` + `FW_LABEL`), rendered only when
+the current example has framework variants — i.e. docs examples. Starter templates have no
+variants and correctly show nothing; they're picked through the example cascader instead.
+This subtask converts that button row into the design's `React ▾` dropdown and keeps the same
+show/hide rule.
+
+**Docs / GitHub links — restyle, not a feature.** `See in documentation ↗` /
+`See on GitHub ↗` already exist (`App.tsx:900-923`); sticky `72:16829` is just their icon form.
+
+*New in this subtask:* the centered example pill, the preview URL bar, `window-maximize`.
+All small — **build now**.
+
+### Authed action bar (new — not in any frame)
+
+Six working affordances appear in no frame: `Save` + `Share` (`mode="edit"`), `Embed` +
+`Fork this demo` (`mode="play"`) — all `Toolbar.tsx:93-132` — the custom-version input
+(`Toolbar.tsx:73-87`) and the `My demos` toggle (`App.tsx:924`). All six are signed-in-only.
+
+**Resolution:** they get their own bar in the **right panel, above the preview**, rendered only
+when signed in. Anonymous visitors see exactly the chrome the design shows — the two designed
+rows, unchanged. The extra bar is additive and invisible to the audience the frames depict.
+
+Styled to the T0 token set; layout to dev judgment within that column.
+
+**Files.** `Toolbar.tsx` (rewrite), `EditorShell.tsx`, `App.tsx` (top-bar region), `styles.ts`.
+**Nodes.** `72:15697`, `48:6560`, `31:6438`.
+**Depends.** T0, T1.
+
+---
+
+## T3 — Left sidebar: BOX INFO / FILES / DEPENDENCIES
+
+**Scope.** Three collapsible sections replacing today's flat `FileTree`.
+- **BOX INFO** — title, description, Handsontable badge, created date. Data already exists:
+  `demos` carries `title`/`description`/`created_at`, API returns all three
+  (`workers/api/src/index.ts:146-151`). Display only, no backend work. **New — build now.**
+- **FILES** — real folder tree (`src/` expandable), seti-ui icons, download-all icon.
+- **DEPENDENCIES** — parse `package.json`, list name + npm link. **New — build now** (small).
+- Collapsed-sidebar state driven from the row-2 toggle.
+
+### File add / rename / delete — gate per mode (decided)
+
+`addFile`/`renameFile`/`deleteFile` are implemented (`App.tsx:665-698`) and passed
+**unconditionally** (`App.tsx:967-969`); `FileTree` renders `+` / ✎ / ✕ whenever handlers
+exist (`EditorShell.tsx:91`) — so today they appear in every mode, share included.
+
+**Follow the design:** expose them only where the design calls for them. Sticky `72:14532`
+names "fork/view" as the modes without them, which maps to the shell's `play` and `share`
+modes; `edit` (your own saved demo) keeps full CRUD.
+
+| mode | today | after |
+|---|---|---|
+| `play` — playground / docs example | CRUD shown | **hidden** |
+| `share` — read-only public playground | CRUD shown | **hidden** |
+| `edit` — your saved demo | CRUD shown | CRUD kept, restyled |
+
+Implementation: pass the handlers conditionally on `mode === "edit"` rather than deleting
+anything — `App.tsx:967-969`. Keep `editable` as the shell's switch.
+
+Scope note: this governs the **file set** only. Editing file *contents* is unchanged in all
+three modes.
+
+> Worth one line of confirmation from design at review: no frame anywhere in `18.1` shows a
+> `+` control, so "keep CRUD in `edit`" is a reading of the sticky's wording, not something a
+> frame demonstrates.
+
+**Files.** `FileTree.tsx` split into `Sidebar.tsx` / `FileTree.tsx` / `BoxInfo.tsx` / `Dependencies.tsx`.
+**Nodes.** `31:6438` (nested), `48:6560` (flat), `65:19433` (collapsed).
+**Depends.** T0, T1.
+
+---
+
+## T4 — Editor pane: file tabs + status bar
+
+**Scope.** Build the tab strip to the design — tab shape, active state, file-type icon, close ✕
+— but **one open file at a time**. `EditorShell` keeps its single `active` string; selecting a
+file in the tree replaces the tab. No new tab state, no multi-tab bookkeeping.
+
+**Multi-tab is a deliberate gap for a future task.** The design shows two tabs
+(`index.ts`, `index.html`); we ship the visual system now and add real multi-file tabs later
+without re-designing anything.
+
+Bottom status bar: `Ln 1, Col 1 · Spaces: 2 · UTF-8 · Layout: U.S.` — needs CodeMirror cursor
+position surfaced. New, small — build now.
+
+**Files.** `EditorShell.tsx`, `CodeEditor.tsx`, new `EditorTabs.tsx`, `EditorStatusBar.tsx`.
+**Nodes.** `48:6560`, `31:6438`.
+**Depends.** T0, T1.
+
+---
+
+## T5 — Preview pane chrome + boot / loading / refresh states
+
+**Scope.** Status bar moves from a full-width colored bar at the top of the preview to a
+bottom bar (`● ready` · `React (Vite, TS)` · `Handsontable 18.0.0`). URL bar + refresh +
+open-in-new land in row 2 (T2). Refresh-in-flight spinner over the pane.
+
+**Boot log stays.** The design shows only a spinner + "Loading data …" and omits the live
+Tier-2 install/dev-server log. That log is the main signal when a container is slow or stuck —
+treated as a **gap in the design, not a removal**. Keep it; restyle it to the token set and
+put it under the spinner (or behind a "Details" disclosure), implementer's call.
+
+Error state has **no frame** — restyle the existing one to the design system (T9 rule).
+
+**Files.** `PreviewPane.tsx`, `styles.ts`.
+**Nodes.** `72:14610` (loading), `72:26445` (refresh), `48:6560` (ready).
+**Depends.** T0, T1.
+
+---
+
+## T6 — Resizable split
+
+**Scope.** Draggable splitter between editor and preview (blue active handle, `85:9970`), min
+widths, ratio persisted. `s.body` is a fixed `220px 1fr 1fr` grid today.
+
+Panel show/hide toggles are **not in the design** (see the row-2 icon inventory) — dropped.
+
+*New, self-contained, low risk — **build now**.*
+
+**Files.** `EditorShell.tsx`, `styles.ts`, new `SplitPane.tsx`.
+**Nodes.** `85:9970`, `85:16935`.
+**Depends.** T0.
+
+---
+
+## T7 — Example picker cascader
+
+**Scope.** Restyle the existing `DocsCascader.tsx` to the design's popover: search input +
+category column → grouped example column with section headers (`CONTEXT MENU`,
+`DRAG TO SCROLL`, `EMPTY DATA STATE`, …). Behaviour already exists (starters + docs examples,
+framework auto-pick via `FW_PREF`) — keep it.
+
+**Files.** `apps/authoring/src/DocsCascader.tsx`, `docs-catalog.ts` (grouping/search helpers).
+**Nodes.** `72:17078`.
+**Depends.** T0, T1, T2.
+
+---
+
+## T8 — Modes & routes: full / logged-out
+
+**Scope.**
+- `?mode=full` — top bar + URL bar + preview + bottom status bar, no editor/sidebar
+  (`65:20432`). This is the authoring app wrapping the static `/d/:id/` build in an iframe
+  (`App.tsx:136-143`), so the chrome is shell code.
+- Logged-out — `Sign in` instead of `Download`; version + framework selectors visible (`72:15697`).
+
+**`/d/:id` and `/embed/:id` are out of scope.** They are prebuilt static R2 artifacts streamed
+by `serveDemoAsset` (`workers/api/src/share.ts:353`) and contain no shell code. Embed shows the
+preview and nothing else — no chrome to design. Frames `72:11913` / `72:13670` need no work.
+
+**Files.** `apps/authoring/src/App.tsx`, `EditorShell.tsx`.
+**Depends.** T2–T6.
+
+---
+
+## T9 — Apply the design system to existing, undesigned functionality
+
+No Figma frames exist for any of these. They stay; they get rebuilt against the T0 token set
+and the T1 icon set, to dev judgment.
+
+- My demos list + empty state (`MyDemos.tsx`)
+- Share / Edit dialogs, copy affordances, revoke/delete confirmations (`ShareDialog.tsx`, `ShareLinks.tsx`)
+- Error states — preview failure, container failure, revoked/404 demo
+- Branding: favicon, page titles, meta
+- Responsive / narrow viewport. The two "Resize" frames are the **splitter drag**, not a
+  breakpoint study — there is no mobile or tablet frame anywhere in section `18.1`.
+
+**Depends.** T0, T1. Can run in parallel with T2–T7.
+
+---
+
+## Ordering
+
+```
+T0 tokens ──┬── T2 chrome ──┬── T7 cascader ──┐
+T1 icons ───┤   T3 sidebar  │                 ├── T8 modes
+            │   T4 tabs     │                 │
+            │   T5 preview  │                 │
+            ├── T6 split ───┘                 │
+            └── T9 undesigned surfaces ───────┘
+```
+
+T0 lands first and alone — every other subtask rebases on it. T1 runs alongside. T2–T7 and T9
+parallelize once both land. All PRs target `feat/DEV-2027-redesign`; one deploy from it.
+
+**Possible merges if 9 subtasks is too many:** T4+T5 (both pane chrome), T2+T7 (the cascader is
+the pill's behaviour), T6 into T2.
+
+## Deliberate gaps — designed but deferred to future tasks
+
+- **Multi-file tabs.** Tab strip ships styled, single active file. (T4)
+- **Embed theme handling.** The app emits a preferred-theme hint; acting on it is not
+  DEV-2027. (T0)
+
+## Remaining decisions
+
+None blocking. One item to confirm with design during review: whether `edit` mode keeps the
+file `+` / ✎ / ✕ controls (T3) — no frame shows them anywhere, so the plan reads that from
+sticky `72:14532`'s wording.
+
+*Resolved:* theme drives the whole app, embed handling out of scope (T0) · `/d/:id` +
+`/embed/:id` dropped (T8) · framework select is a restyle of existing docs-example buttons,
+starters unaffected (T2) · authed actions get their own bar in the right panel above the
+preview, signed-in only (T2) · boot log stays (T5) · tabs styled but single-file (T4) · file
+CRUD gated to `edit` mode (T3) · undesigned surfaces get the design system, not deletion (T9) ·
+integration branch + sub-PRs, single deploy.
