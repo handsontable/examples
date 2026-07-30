@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FilesMap } from "@handsontable/demo-runtime";
-import { CodeEditor } from "./CodeEditor.js";
+import { CodeEditor, type CursorPosition } from "./CodeEditor.js";
+import { EditorTabs } from "./EditorTabs.js";
+import { EditorStatusBar } from "./EditorStatusBar.js";
 import { FileTree } from "./FileTree.js";
 import { Toolbar } from "./Toolbar.js";
 import { PreviewPane, type PreviewStatus } from "./PreviewPane.js";
@@ -47,6 +49,8 @@ export interface EditorShellProps {
   dirty?: boolean;
 }
 
+const CURSOR_ORIGIN: CursorPosition = { line: 1, col: 1 };
+
 /**
  * Framework-agnostic editor: file tree | code editor | live preview + toolbar.
  * Binds only to props — it has no knowledge of Sandpack vs container.
@@ -63,6 +67,15 @@ export function EditorShell(props: EditorShellProps) {
       setActive(props.files[props.entry] !== undefined ? props.entry : (paths[0] ?? ""));
     }
   }, [props.files, props.entry, active, paths]);
+
+  // A fresh CodeMirror doc starts its selection at position 0, so Ln 1, Col 1 is
+  // correct at mount and no `onCreateEditor` read is needed. `CodeEditor` is
+  // re-keyed per file (ADR-0016) and a mount emits no update event, so the readout
+  // has to be reset here when the active file changes.
+  const [cursor, setCursor] = useState<CursorPosition>(CURSOR_ORIGIN);
+  useEffect(() => {
+    setCursor(CURSOR_ORIGIN);
+  }, [active]);
 
   return (
     <div style={s.shell}>
@@ -94,14 +107,20 @@ export function EditorShell(props: EditorShellProps) {
           onDeleteFile={props.onDeleteFile}
         />
         <div style={s.editorPane}>
-          {active && (
-            <CodeEditor
-              key={active}
-              path={active}
-              value={props.files[active] ?? ""}
-              onChange={(v) => props.onEdit(active, v)}
-            />
-          )}
+          {/* One open file at a time — the tab strip mirrors `active` (ADR-0023). */}
+          <EditorTabs paths={active ? [active] : []} active={active} onSelect={setActive} />
+          <div style={s.editorBody}>
+            {active && (
+              <CodeEditor
+                key={active}
+                path={active}
+                value={props.files[active] ?? ""}
+                onChange={(v) => props.onEdit(active, v)}
+                onCursorChange={setCursor}
+              />
+            )}
+          </div>
+          <EditorStatusBar line={cursor.line} col={cursor.col} />
         </div>
         <PreviewPane
           iframeRef={props.iframeRef}

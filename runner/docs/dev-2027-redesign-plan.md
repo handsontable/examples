@@ -219,6 +219,32 @@ position surfaced. New, small — build now.
 **Nodes.** `48:6560`, `31:6438`.
 **Depends.** T0, T1.
 
+**Shipped (DEV-2158).** `EditorTabs.tsx` + `EditorStatusBar.tsx`, both re-exported from the
+barrel, slotted into `s.editorPane` around a new `s.editorBody` wrapper (`flex: 1; minHeight: 0;
+overflow: hidden` — without the last one CodeMirror's scroller pushes the status bar out of the
+pane). Measured off `31:6598` / `31:6618`: strip 36px on `surfaceSunken`, active tab
+`surfaceRaised` with a 24px seti icon, 12px label, 16px `IconX`; status bar 28px on `editorBg`,
+`4px 16px`, 24px gaps, 10px `textMuted`. The strip's bottom hairline is an **inset shadow**, not
+a border — inset shadows paint below children, so the active tab's opaque background covers it
+while transparent inactive tabs let it through, which is the frames' behaviour without any
+negative margins. Both tab states are written out although only the active one renders, so
+multi-tab is a state change rather than a restyle. T4 is the first consumer of T1's `FileIcon`.
+
+Cursor position comes from `onUpdate` on `@uiw/react-codemirror`, derived as
+`head - lineAt(head).from + 1`, not from `onStatistics` — whose `line` is
+`lineAt(selection.main.from)`, the wrong line for an upward multi-line selection, and which
+carries no column. The handler is an empty-dep `useCallback` reading a ref: `useCodeMirror`
+installs `onUpdate` as an *extension*, so an unstable handler churns the editor's extensions on
+every render while this one sets state in the shell. Verified in a browser against the compound
+path — real typing, where `docChanged` fans out to both `setCursor` here and `onEdit` up into the
+app and back down as a new `value` — with zero idle DOM mutations in the pane afterwards and no
+frame-rate regression. `Spaces: 2` / `UTF-8` / `Layout: U.S.` are static; see open items 6–8.
+
+One consequence of `s.editorBody`'s clip worth recording: CodeMirror parents its tooltips inside
+the editor, so completion popups are now clipped 28px higher than before. CM6 measures the space
+available and flips upward rather than being sheared — checked with the caret 5px above the clip
+edge, where the popup opened fully inside the pane. No `tooltipSpace` configuration needed.
+
 ---
 
 ## T5 — Preview pane chrome + boot / loading / refresh states
@@ -337,6 +363,13 @@ subtask that surfaced it and what evidence exists.
 | 3 | Angular container ignores global `styles.css` edits | potential bug | T0 |
 | 4 | Two file rows in `31:6438` use an icon seti's own mapping doesn't give them | design decision | T1 |
 | 5 | T1's scope line says "panel toggles"; the design has none | doc fix | T1 |
+| 6 | No token pair matches the tab strip in both modes | design decision | T4 |
+| 7 | The ramp table puts both status bars on `surfaceMuted`; measurement says `editorBg` | doc fix | T4 |
+| 8 | `Spaces: 2` / `UTF-8` / `Layout: U.S.` are static labels | design decision | T4 |
+| 9 | The tab close ✕ is decorative until multi-tab lands | design decision | T4 |
+| 10 | The active tab's left border in the frame is a light-mode `text` colour | design decision | T4 |
+| 11 | GitHub Dark's own background is a step darker than `editorBg` | design decision | T4 |
+| 12 | The universal `button:hover` rollover now dims the active tab | design decision | T4 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -397,6 +430,78 @@ to `.json`, precisely as drawn), `pnpm-lock.yaml` yml purple, the `src` folder `
 `:105` above lists "panel toggles" among the tabler icons to ship, and `:52` states — from the
 `72:15697` layer names — that there are no panel-toggle buttons in the design. T1 shipped no such
 icon. The scope line is the stale half; T2 dropping the toggles is the settled call.
+
+### 6. No token pair matches the tab strip in both modes (design decision)
+
+Sampled from the two frames, the tab strip is `#f7f7f9` light / `#070604` dark — the same colour
+the frames give the **left sidebar** and the **preview surround**, in both modes. No shipped token
+is that pair: `surfaceSunken` is `#f7f7f9`/`#000000`, `surface` is `#ffffff`/`#070604`.
+
+T4 ships `surfaceSunken`, so the strip matches the sidebar (`styles.ts:80`) as the frames do, and
+is exact in light. `surface` is not merely a worse fit but unusable: it is `#ffffff` in light,
+identical to the active tab's `surfaceRaised`, so the active state would vanish in light mode.
+
+The underlying question is T0's, not T4's: the ramp reads the four steps as
+`sunken #000000 < surface #070604 < muted #19191c < raised #222222`, while the frames paint
+sidebar, tab strip and preview surround all at `#070604` and reserve `#000000` for nothing. Either
+the frames collapse two steps the ramp separates, or `surfaceSunken` should be `#070604` and the
+ramp has one step too many. One design call fixes both surfaces.
+
+### 7. Both status bars measure `editorBg`, not `surfaceMuted` (doc fix)
+
+The ramp table at `:83` assigns `surfaceMuted` to "editor pane, both status bars". Measured, the
+editor pane, the editor status bar and the preview status bar are all `#ffffff` / `#19191c` —
+which is `editorBg`, and which is what T0 actually shipped for the pane (`styles.ts:108`).
+`surfaceMuted` is `#f7f7f9` in light, so the table is right in dark and wrong in light. T4's
+status bar uses `editorBg`; T5 will hit the same row for the preview bar.
+
+### 8. `Spaces: 2` / `UTF-8` / `Layout: U.S.` are static labels (design decision)
+
+Only `Ln n, Col n` has a live source. `Statistics.tabSize` reports the CM6 default rather than the
+design's 2, and `indentUnit` — the extension that would make the label true — lives in
+`@codemirror/language`, which `@uiw/react-codemirror` does not re-export and which the package
+does not depend on. Adding `EditorState.tabSize.of(2)` would only change how a literal tab
+renders, and our files are space-indented, so it would buy nothing observable while implying the
+label is derived. Encoding and keyboard layout have no source at all in a browser editor.
+
+Decide whether the three stay as design decoration, or the two that could be made real
+(indent size, and encoding as a constant) get wired to something. Nothing depends on this.
+
+### 9. The tab close ✕ is decorative until multi-tab lands (design decision)
+
+With one open file there is no close action: closing would leave an empty editor. T4 renders the
+glyph `aria-hidden` and non-interactive rather than as a `disabled` button, which would imply an
+action that becomes available later. It becomes a real button with multi-tab support (ADR-0023).
+
+### 10. The active tab's left border is `#262624` in the frame (design decision)
+
+`31:6602` binds its left border to `horizon/palette/700` — `#262624`, which is the shell's light
+`text`. Against a light tab strip that is a near-black hairline; in dark it is indistinguishable
+from `border` `#222222`. Inactive tabs use `palette/800` (= `border`) for the same edge. Read as a
+Figma slip and shipped as `border` for both. Worth one line of confirmation at review.
+
+### 11. GitHub Dark is a step darker than `editorBg` (design decision)
+
+The dark frames paint the editor body `#19191c`, which is what `editorBg` gives the pane. The
+CodeMirror theme T0 chose to match the docs site paints its own `#0d1117`, so in dark mode the
+editor content sits a step darker than the pane it is in. Invisible until now, because CodeMirror
+filled the pane edge to edge; T4's status bar puts `#19191c` directly beneath `#0d1117` and makes
+the seam legible. Light is unaffected — GitHub Light is `#ffffff`, exactly `editorBg`.
+
+Either the frames' editor body was drawn without the real CM theme in mind, or the dark editor
+wants a tokenised CodeMirror theme rather than `githubDark`. Not T4's call to make.
+
+### 12. The universal `button:hover` rollover reaches the tabs (design decision)
+
+`apps/authoring/index.html:37` applies `filter: brightness(0.92)` to every `button` and `a` as a
+deliberate universal rollover. A tab is a button, so hovering one dims it — including the *active*
+tab and its seti icon, which no frame asks for. It is the same treatment every existing button in
+the app already gets, so T4 changed nothing here and left it alone.
+
+Decide at review whether tabs want a real hover (an inactive tab lifting to `hover`, the active
+one inert, which is the usual editor idiom) or whether the universal rollover is enough. A real
+one needs a class, since `:hover` cannot be expressed inline — the same reason `.hot-icon-btn`
+exists.
 
 ## Remaining decisions
 
