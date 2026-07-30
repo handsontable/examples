@@ -10,15 +10,17 @@
          THEME_ATTR / THEME_STORAGE_KEY in packages/editor-shell/src/theme.ts. -->
     <script>
       (function () {
-        try {
-          var m = localStorage.getItem("hot-theme");
-          if (m !== "light" && m !== "dark") {
+        var m = null;
+        // Reading storage throws outright when it is disabled (Safari private mode,
+        // blocked cookies). Guard it alone, so losing it doesn't also lose the OS
+        // preference — the whole point of the fallback.
+        try { m = localStorage.getItem("hot-theme"); } catch (e) {}
+        if (m !== "light" && m !== "dark") {
+          try {
             m = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-          }
-          document.documentElement.setAttribute("data-hot-theme", m);
-        } catch (e) {
-          document.documentElement.setAttribute("data-hot-theme", "light");
+          } catch (e) { m = "light"; }
         }
+        document.documentElement.setAttribute("data-hot-theme", m);
       })();
     </script>
     <style>

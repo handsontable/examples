@@ -8,6 +8,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -54,6 +55,11 @@ export interface ThemeProviderProps {
  *  `EditorShell`, and the authoring app has early returns above its main tree. */
 export function ThemeProvider({ children }: ThemeProviderProps) {
   const [mode, setModeState] = useState<ThemeMode>(currentMode);
+  // Whether the user has chosen a mode — tracked here rather than read back out of
+  // `localStorage`, because a blocked write must not silently demote the choice to
+  // "still following the OS". Seeded from storage so a choice made in an earlier
+  // session still counts.
+  const chosen = useRef(storedChoice() !== null);
 
   // Push React's view back onto <html>. A no-op on first render when the
   // pre-paint script already agreed; the write that matters is on toggle.
@@ -65,18 +71,19 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   useEffect(() => {
     const mq = window.matchMedia(DARK_QUERY);
     const onChange = (e: MediaQueryListEvent) => {
-      if (storedChoice() === null) setModeState(e.matches ? "dark" : "light");
+      if (!chosen.current) setModeState(e.matches ? "dark" : "light");
     };
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
   const setMode = useCallback((next: ThemeMode) => {
+    chosen.current = true;
     setModeState(next);
     try {
       localStorage.setItem(THEME_STORAGE_KEY, next);
     } catch {
-      // Non-persistent is still usable for the session.
+      // Non-persistent, but still authoritative for this session — hence the ref.
     }
   }, []);
 
