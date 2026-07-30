@@ -108,6 +108,15 @@ export const s = {
     background: t.color.editorBg,
   } satisfies CSSProperties,
 
+  // CodeMirror's slot between the tab strip and the status bar. `overflow: hidden`
+  // is load-bearing: without it the editor's scroller pushes the status bar out of
+  // the pane instead of scrolling inside its own box.
+  editorBody: {
+    flex: 1,
+    minHeight: 0,
+    overflow: "hidden",
+  } satisfies CSSProperties,
+
   previewPane: {
     minWidth: 0,
     minHeight: 0,
