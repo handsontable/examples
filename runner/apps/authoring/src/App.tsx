@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   EditorShell,
-  IconSearch,
   shellStyles,
   theme,
   useLogoUrl,
@@ -945,7 +944,6 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
                   if (pick) void selectDocs(pick.docsPath);
                 }}
               />
-              <IconSearch aria-hidden="true" />
             </div>
           )
         }

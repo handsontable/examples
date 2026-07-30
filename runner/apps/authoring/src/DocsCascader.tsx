@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { theme } from "@handsontable/demo-editor-shell";
+import { IconSearch, theme } from "@handsontable/demo-editor-shell";
 import type { DocsManifestItem } from "./docs-catalog.js";
 
 // A Cascader-style example picker (à la Ant Design's Cascader): the ~1,100 docs
@@ -182,13 +182,17 @@ export function DocsCascader({ manifestItems, starters, currentLabel, selectedKe
   };
 
   return (
-    // `flex: 1` so the trigger fills the pill and the pill's search icon stays
-    // pinned to its right edge (`72:15865`), not tucked against the label.
+    // `flex: 1` so the trigger fills the top bar's example pill and the search
+    // icon stays pinned to its right edge (`72:15865`), not tucked against the
+    // label.
     <div ref={wrapRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
       <button type="button" style={s.trigger} onClick={() => setOpen((o) => !o)} title={currentLabel}>
-        {/* No chevron: `72:15863` has it `hidden`. The pill's search icon is
-            the affordance the design gives this trigger. */}
+        {/* No chevron: `72:15863` has it `hidden`, and the search icon is the
+            affordance the design gives this trigger instead. It lives *inside*
+            the button — as a sibling it looked like the opener without being
+            one, since only the label area would have toggled the menu. */}
         <span style={s.triggerLabel}>{currentLabel}</span>
+        <IconSearch />
       </button>
 
       {open && (
@@ -262,7 +266,11 @@ const s: Record<string, React.CSSProperties> = {
   // (`shellStyles.examplePill`, frame `72:15859`), which draws the one box the
   // design shows. A border/background here would nest a second box inside it.
   trigger: {
-    display: "inline-flex", alignItems: "center", flex: 1, minWidth: 0,
+    // `width: 100%`, not `flex: 1` — the wrapper is a positioned block (it is the
+    // popover's containing block), so a flex value on this button would do
+    // nothing and the search icon would sit tucked against the label instead of
+    // at the pill's right edge.
+    display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0,
     fontFamily: theme.font.ui, fontSize: 13, padding: 0,
     border: "none", background: "transparent", cursor: "pointer", color: theme.color.text,
   },
