@@ -38,7 +38,12 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing 
     // pane; the old full-width accent status strip is gone. `● ready` lands in a
     // *bottom* 28px bar (`72:15699`) — that is T5. Until then the boot and error
     // overlays carry the state, so nothing is lost.
-    <section style={s.previewPane} aria-label="Preview">
+    // `data-preview-status` is the machine-readable readiness signal. It used to
+    // be the text of the status strip above, which the starter matrix polled for
+    // "Live"; that strip is gone (the design gives the preview one bar, and T5
+    // moves the readout to the bottom). An attribute keeps the signal out of the
+    // chrome entirely, so restyling can never break the suite again.
+    <section style={s.previewPane} aria-label="Preview" data-preview-status={status}>
       {status === "ready" && syncing && (
         <div
           style={{
