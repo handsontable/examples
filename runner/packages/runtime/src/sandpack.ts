@@ -227,16 +227,7 @@ export class SandpackRuntime implements DemoRuntime {
    *  of the bundler itself. */
   reload(): void {
     if (!this.client) return;
-    Promise.resolve(this.sandboxFiles())
-      .then((files) => {
-        // A pushUpdate() started before this may still land; bump the sequence
-        // so its stale result is dropped rather than overwriting the refresh.
-        this.updateSeq++;
-        this.client?.updateSandbox(this.setupFrom(files), true);
-      })
-      .catch(() => {
-        /* unparseable sources — the last good sandbox keeps running */
-      });
+    this.pushUpdate(true);
   }
 
   /** Remove a file and recompile (file-tree delete/rename). */
@@ -254,14 +245,21 @@ export class SandpackRuntime implements DemoRuntime {
    * results are dropped. A transpile failure (half-typed code) or a
    * transiently missing entry (mid-rename) keeps the last good sandbox
    * instead of surfacing an error for every keystroke.
+   *
+   * `initial` marks the push as a first compile rather than an incremental
+   * update — what `reload()` means. It shares this path rather than having its
+   * own so the sequence guard covers it too: claiming the sequence *before* the
+   * await is the whole point, and a refresh that claimed it afterwards could
+   * publish its own pre-keystroke transpile over a newer edit and then make
+   * that edit's result look stale.
    */
   private updateSeq = 0;
-  private pushUpdate(): void {
+  private pushUpdate(initial = false): void {
     const seq = ++this.updateSeq;
     Promise.resolve(this.sandboxFiles())
       .then((files) => {
         if (!this.client || seq !== this.updateSeq) return;
-        this.client.updateSandbox(this.setupFrom(files));
+        this.client.updateSandbox(this.setupFrom(files), initial);
       })
       .catch(() => {
         /* mid-edit parse error — the user is still typing */

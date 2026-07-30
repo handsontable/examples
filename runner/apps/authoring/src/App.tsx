@@ -986,10 +986,16 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         frameworks={frameworks}
         onFrameworkChange={(docsPathKey) => void selectDocs(docsPathKey)}
         docsUrl={currentDocsMeta ? docsPageUrl(framework, currentDocsMeta.docPermalink) : undefined}
+        // Play only, as before. A saved demo's source is the demo itself, not
+        // the starter it was forked from, so pointing at the starter repo there
+        // would be wrong — and `48:6560`, the one edit-mode frame, ends its bar
+        // at `window-maximize`.
         repoUrl={
-          docsPath
-            ? `https://github.com/handsontable/handsontable/tree/develop/docs/content/${docsPath.split("/").slice(0, -1).join("/")}`
-            : `https://github.com/handsontable/examples/tree/master/examples/${framework}`
+          route.mode !== "play"
+            ? undefined
+            : docsPath
+              ? `https://github.com/handsontable/handsontable/tree/develop/docs/content/${docsPath.split("/").slice(0, -1).join("/")}`
+              : `https://github.com/handsontable/examples/tree/master/examples/${framework}`
         }
         repoLabel={docsPath ? "See this example on GitHub" : "Fork this starter on GitHub"}
       />
