@@ -442,6 +442,7 @@ subtask that surfaced it and what evidence exists.
 | 14 | Tier-1 has no preview URL to put in the row-2 address field | design decision | T2 |
 | 15 | The version warning has no home in a 36px bar | design decision | T2 |
 | 16 | An inline `background` silently kills any stylesheet `:hover` on the same element | gotcha | T3 |
+| 17 | A late Sandpack mount could revive a preview the app had stopped | fixed bug | T3 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -643,6 +644,31 @@ Both fills moved into the global block keyed off `data-active`, hover declared l
 specificity resolves in its favour. **Applies to T5–T9:** any element that needs a stylesheet
 hover must not set that same property inline. Verify by reading `getComputedStyle` under a real
 pointer — synthetic `mouseover` events do not trigger CSS `:hover`.
+
+### 17. A late Sandpack mount could revive a stopped preview (fixed bug — T5 owns the surface)
+
+`SandpackRuntime.mount()` awaits `buildSetup` and then `loadSandpackClient`, and the loader
+points the iframe at the bundler origin itself. `dispose()` only destroyed `this.client`, which
+is still `null` while a mount is in flight — so a mount resolving *after* disposal re-pointed an
+iframe the app had already blanked. `ContainerRuntime` always guarded this (`container.ts:360`,
+`if (this.pointed)`); Sandpack did not.
+
+This is why blocking a docs preview (`App.tsx`'s `docsRuntimeBlocked` effect: dispose, then
+`iframe.src = "about:blank"`) was only *usually* durable. `e2e/docs-examples.spec.ts:297` asserts
+it and passed on luck — the mount happened to resolve before the blank. Adding one `<img>` to the
+sidebar in T3 reordered it and turned the spec red, which is how the race surfaced.
+
+`dispose()` now sets a flag `mount()` re-checks after both awaits, destroying the late client and
+restoring `about:blank` — but only when the instance still owns the iframe. That second half
+matters because `dispose()` is *also* called on every ordinary re-mount: the mount effect
+disposes the old runtime and immediately mounts a new one on the same frame, so an unconditional
+blank would kill the successor's live preview. Each mount claims the frame before its first
+await. The ownership half is defensive: reachable by inspection, not reproduced — four manual
+dispose/remount cycles missed the window, and a build without the check behaved identically.
+
+Note for T5: the five specs that actually mount Sandpack are `live:`-prefixed and gated behind
+`E2E_LIVE=1`. A default `playwright test` run skips every one of them, so a green default run
+proves nothing about preview mount/teardown.
 
 ## Remaining decisions
 
