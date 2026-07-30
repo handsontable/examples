@@ -869,9 +869,13 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     active: f.docsPath === docsPath,
   }));
 
-  // The public address for the row-2 field: a saved demo's own page. A docs
-  // example or an unsaved playground has none, and falls back to `previewUrl`.
-  const publicUrl = savedId ? `${location.origin}/${isShare ? "share" : "edit"}/${savedId}` : "";
+  // The public address for the row-2 field. Always `/share/:id`, never
+  // `/edit/:id`, even while editing: the field is click-to-copy, and `/edit`
+  // is auth-gated (`Gate` sends a signed-out visitor to the login broker, which
+  // only accepts @handsontable.com). `/share/:id` is the same demo, served
+  // without auth — the link `ShareLinks` hands out. A docs example or an unsaved
+  // playground has neither, and falls back to `previewUrl`.
+  const publicUrl = savedId ? `${location.origin}/share/${savedId}` : "";
 
   if (docsNotFound) return <NotFound path={initialDocs} transient={docsNotFoundTransient} />;
   if (savedId && !sourceLoaded) return <Splash text="Loading demo…" />;

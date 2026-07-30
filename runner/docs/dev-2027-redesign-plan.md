@@ -551,7 +551,9 @@ mark asset (two inks, or `currentColor`) closes both. Needs the file from design
 
 ### 14. Tier 1 has no preview URL for the row-2 address field (design decision)
 
-The field shows the demo's public URL when it has one, else the URL `mount()` reports. Tier 2
+The field shows the demo's public URL when it has one — always `/share/:id`, never `/edit/:id`,
+even while editing: the field is click-to-copy and `/edit` is auth-gated behind a broker that
+only accepts `@handsontable.com` — else the URL `mount()` reports. Tier 2
 gives the container's preview origin. Tier 1 does not: `SandpackRuntime.mount` returns
 `this.opts.iframe.src` (`sandpack.ts:195`), which at that moment is Sandpack's *bundler* origin
 — `https://…sandpack.codesandbox.io/`. That is both meaningless to the user and a CodeSandbox
