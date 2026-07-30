@@ -57,15 +57,15 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing 
             alignItems: "center",
             gap: 6,
             background: theme.color.accent,
-            color: "#fff",
+            color: theme.color.accentContrast,
             fontFamily: theme.font.ui,
             fontSize: 12,
             padding: "4px 10px",
             borderRadius: 999,
-            boxShadow: "0 2px 8px rgba(0,0,0,0.18)",
+            boxShadow: theme.shadow.sm,
           }}
         >
-          <Spinner light />
+          <Spinner onAccent />
           Applying changes…
         </div>
       )}
@@ -126,15 +126,16 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing 
   );
 }
 
-function Spinner({ light }: { light?: boolean }) {
+/** `onAccent`: the small variant that sits on an accent-filled pill. */
+function Spinner({ onAccent }: { onAccent?: boolean }) {
   return (
     <span
       aria-hidden="true"
       style={{
-        width: light ? 11 : 14,
-        height: light ? 11 : 14,
-        border: `2px solid ${light ? "rgba(255,255,255,0.4)" : theme.color.border}`,
-        borderTopColor: light ? "#fff" : theme.color.accent,
+        width: onAccent ? 11 : 14,
+        height: onAccent ? 11 : 14,
+        border: `2px solid ${onAccent ? theme.color.accentContrastSoft : theme.color.border}`,
+        borderTopColor: onAccent ? theme.color.accentContrast : theme.color.accent,
         borderRadius: "50%",
         display: "inline-block",
         animation: "hot-spin 0.8s linear infinite",

@@ -116,7 +116,7 @@ export function FileTree({ paths, active, onSelect, editable, onAddFile, onRenam
                 </button>
                 <button
                   type="button"
-                  style={{ ...iconBtn, color: "#d1242f" }}
+                  style={{ ...iconBtn, color: theme.color.danger }}
                   title="Delete"
                   onClick={() => onDeleteFile?.(p)}
                 >
@@ -152,4 +152,7 @@ const editInput: React.CSSProperties = {
   width: "calc(100% - 16px)", margin: "2px 8px", boxSizing: "border-box",
   fontFamily: theme.font.mono, fontSize: 12, padding: "4px 6px",
   border: `1px solid ${theme.color.accent}`, borderRadius: 6,
+  // Raised, not `surface`: this floats over the recessed sidebar, which is
+  // #000000 in dark — `surface` (#070604) would be all but invisible against it.
+  background: theme.color.surfaceRaised, color: theme.color.text,
 };

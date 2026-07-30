@@ -266,8 +266,8 @@ const s: Record<string, React.CSSProperties> = {
   },
   pop: {
     position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 1000,
-    background: theme.color.surface, border: `1px solid ${theme.color.border}`,
-    borderRadius: 10, boxShadow: "0 12px 32px rgba(0,0,0,0.18)", overflow: "hidden",
+    background: theme.color.surfaceRaised, border: `1px solid ${theme.color.border}`,
+    borderRadius: 10, boxShadow: theme.shadow.popover, overflow: "hidden",
     minWidth: 260,
   },
   searchRow: { padding: 8, borderBottom: `1px solid ${theme.color.border}`, background: theme.color.surfaceMuted },
@@ -288,7 +288,7 @@ const s: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   itemActive: { background: theme.color.surfaceMuted, fontWeight: 600 },
-  itemSelected: { background: theme.color.accent, color: "#fff", fontWeight: 600 },
+  itemSelected: { background: theme.color.accent, color: theme.color.accentContrast, fontWeight: 600 },
   itemLabel: { overflow: "hidden", textOverflow: "ellipsis" },
   results: { maxHeight: 400, overflowY: "auto", padding: 4, minWidth: 420 },
   resultRow: {

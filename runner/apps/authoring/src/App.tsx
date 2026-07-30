@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { EditorShell, theme, logoUrl, type PreviewStatus } from "@handsontable/demo-editor-shell";
+import {
+  EditorShell,
+  theme,
+  ThemeToggle,
+  useLogoUrl,
+  useTheme,
+  type PreviewStatus,
+} from "@handsontable/demo-editor-shell";
 import {
   applyHandsontableCss,
   applyHandsontableVersion,
@@ -196,6 +203,7 @@ function NotFound({ path, transient = false }: { path: string | null; transient?
 function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const savedId = route.mode === "edit" || route.mode === "share" ? route.id : null;
   const isShare = route.mode === "share";
+  const { mode: themeMode } = useTheme();
 
   // Initial example/version come from the URL so the playground is deep-linkable.
   // `?docs=<content-path>` opens a documentation-guide example (lazy-loaded);
@@ -808,7 +816,9 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   }, [savedId, isShare, title, description, version]);
 
   const clientUrl = linksId ? `${location.origin}/share/${linksId}` : "";
-  const embedUrl = linksId ? `${API_BASE}/embed/${linksId}` : "";
+  // The embed carries the shell's mode as a *preferred* theme hint. Whether and how
+  // /embed/:id acts on it is out of scope for DEV-2027 (ADR-0022).
+  const embedUrl = linksId ? `${API_BASE}/embed/${linksId}?theme=${themeMode}` : "";
 
   // The framework variants available for the currently-open docs example — drive
   // the separate framework picker shown next to the example Cascader.
@@ -932,6 +942,9 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
             {versionWarning}
           </span>
         )}
+        {/* Figma 48:6560 puts the toggle immediately left of Download / Sign in.
+            T2 rebuilds this bar around it. */}
+        <ThemeToggle />
         {isShare ? (
           <>
             <button style={ghostBtn} onClick={downloadZip} title="Download this example (including your edits) as a .zip">
@@ -993,6 +1006,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
 // ---- small shared UI bits --------------------------------------------------
 
 function Logo({ size = 24 }: { size?: number }) {
+  const logoUrl = useLogoUrl();
   return <img src={logoUrl} alt="Handsontable" style={{ height: size, display: "block" }} />;
 }
 
@@ -1013,14 +1027,21 @@ const topBar: React.CSSProperties = {
   borderBottom: `1px solid ${theme.color.border}`,
   fontFamily: theme.font.ui,
   fontSize: 13,
-  background: theme.color.surfaceMuted,
+  // The top bar is the most-raised chrome — #222222 in dark, #ffffff in light
+  // (48:6560 / 31:6438).
+  background: theme.color.surfaceRaised,
+  color: theme.color.text,
 };
+// Form controls need an explicit background/colour: left unset, the UA default
+// paints them light regardless of the shell mode.
 const selectStyle: React.CSSProperties = {
   fontFamily: theme.font.mono,
   fontSize: 13,
   padding: "4px 8px",
   borderRadius: 8,
   border: `1px solid ${theme.color.border}`,
+  background: theme.color.surface,
+  color: theme.color.text,
   boxSizing: "border-box",
 };
 const ghostBtn: React.CSSProperties = {
@@ -1028,6 +1049,7 @@ const ghostBtn: React.CSSProperties = {
   fontSize: 12.5,
   border: `1px solid ${theme.color.border}`,
   background: theme.color.surface,
+  color: theme.color.text,
   borderRadius: 8,
   padding: "5px 10px",
   cursor: "pointer",
@@ -1045,7 +1067,7 @@ const fwBtn: React.CSSProperties = {
 };
 const fwBtnActive: React.CSSProperties = {
   background: theme.color.accent,
-  color: "#fff",
+  color: theme.color.accentContrast,
   borderColor: theme.color.accent,
   fontWeight: 600,
 };

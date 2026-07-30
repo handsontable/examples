@@ -4,9 +4,33 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Handsontable Demos — Authoring</title>
+    <!-- Theme mode must be on <html> before the first paint, or a dark-mode reload
+         flashes light. Runs synchronously ahead of the module script; React reads
+         this attribute rather than re-deriving the mode. Keep in sync with
+         THEME_ATTR / THEME_STORAGE_KEY in packages/editor-shell/src/theme.ts. -->
+    <script>
+      (function () {
+        var m = null;
+        // Reading storage throws outright when it is disabled (Safari private mode,
+        // blocked cookies). Guard it alone, so losing it doesn't also lose the OS
+        // preference — the whole point of the fallback.
+        try { m = localStorage.getItem("hot-theme"); } catch (e) {}
+        if (m !== "light" && m !== "dark") {
+          try {
+            m = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          } catch (e) { m = "light"; }
+        }
+        document.documentElement.setAttribute("data-hot-theme", m);
+      })();
+    </script>
     <style>
       html, body, #root { height: 100%; margin: 0; }
       * { box-sizing: border-box; }
+      /* The only colour literals outside theme.ts (besides the logo SVGs): the
+         custom properties don't exist yet this early, and this is what fills the
+         viewport before React mounts. Mirrors --hot-color-surface. */
+      html, body { background: #ffffff; }
+      html[data-hot-theme="dark"], html[data-hot-theme="dark"] body { background: #070604; }
       /* Universal rollover for every button and link (works over inline styles
          since `filter` isn't set inline). */
       button, a { transition: filter 0.12s ease, background-color 0.12s ease; }
@@ -15,7 +39,10 @@
       /* Cascader rows get a subtle hover background (inline-selected rows keep
          their accent via !important-free specificity — selected wins visually). */
       .hot-casc-row { transition: background-color 0.12s ease; }
-      .hot-casc-row:hover { background: rgba(120, 130, 150, 0.16); }
+      .hot-casc-row:hover { background: var(--hot-color-hover); }
+      /* Borderless square icon buttons (theme toggle today; the row-2 icons in T2).
+         Needs a class because :hover can't be expressed inline. */
+      .hot-icon-btn:hover { background: var(--hot-color-hover); }
     </style>
   </head>
   <body>

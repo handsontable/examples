@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { theme } from "@handsontable/demo-editor-shell";
+import { theme, useTheme } from "@handsontable/demo-editor-shell";
 import type { FilesMap } from "@handsontable/demo-runtime";
 
 export interface ShareResult {
@@ -30,6 +30,7 @@ export function ShareDialog(props: ShareDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ShareResult | null>(props.initialResult);
   const [copied, setCopied] = useState<"" | "view" | "embed">("");
+  const { mode: themeMode } = useTheme();
 
   async function create() {
     if (!title.trim()) { setError("Please add a title."); return; }
@@ -59,7 +60,9 @@ export function ShareDialog(props: ShareDialogProps) {
       const r: ShareResult = {
         id: data.id,
         viewUrl: `${props.apiBase}${data.url}`,
-        embedUrl: `${props.apiBase}${data.embedUrl}`,
+        // Preferred-theme hint, same as App.tsx's embedUrl (ADR-0022). The path
+        // comes from the API, so don't assume it has no query of its own.
+        embedUrl: `${props.apiBase}${data.embedUrl}${data.embedUrl.includes("?") ? "&" : "?"}theme=${themeMode}`,
       };
       setResult(r);
       props.onResult(r);
@@ -134,22 +137,25 @@ function Overlay({ children, onClose }: { children: React.ReactNode; onClose: ()
 }
 
 const overlay: React.CSSProperties = {
-  position: "fixed", inset: 0, background: "rgba(15,23,32,0.45)",
+  position: "fixed", inset: 0, background: theme.color.scrim,
   display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
 };
 const modal: React.CSSProperties = {
-  width: 460, maxWidth: "92vw", background: "#fff", borderRadius: 12,
-  padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,0.25)", fontFamily: theme.font.ui,
+  width: 460, maxWidth: "92vw", background: theme.color.surfaceRaised, borderRadius: 12,
+  padding: 24, boxShadow: theme.shadow.dialog, fontFamily: theme.font.ui,
+  color: theme.color.text,
 };
 const label: React.CSSProperties = { display: "block", fontSize: 12, color: theme.color.textMuted, margin: "10px 0 4px" };
 const input: React.CSSProperties = {
   width: "100%", boxSizing: "border-box", fontFamily: theme.font.ui, fontSize: 14,
   padding: "8px 10px", border: `1px solid ${theme.color.border}`, borderRadius: 8,
+  background: theme.color.surface, color: theme.color.text,
 };
 const row: React.CSSProperties = { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 };
 const ghost: React.CSSProperties = {
   fontFamily: theme.font.ui, fontSize: 13, border: `1px solid ${theme.color.border}`,
-  background: "#fff", borderRadius: 8, padding: "8px 14px", cursor: "pointer",
+  background: theme.color.surface, color: theme.color.text, borderRadius: 8,
+  padding: "8px 14px", cursor: "pointer",
 };
-const primary: React.CSSProperties = { ...ghost, border: `1px solid ${theme.color.accent}`, background: theme.color.accent, color: "#fff", fontWeight: 600 };
+const primary: React.CSSProperties = { ...ghost, border: `1px solid ${theme.color.accent}`, background: theme.color.accent, color: theme.color.accentContrast, fontWeight: 600 };
 const errorText: React.CSSProperties = { color: theme.color.danger, fontSize: 13, margin: "8px 0 0" };

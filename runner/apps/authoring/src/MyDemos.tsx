@@ -74,7 +74,7 @@ export function MyDemos({ apiBase, token, onClose }: MyDemosProps) {
             )}
             {!d.revoked && <a style={link} href={`/edit/${d.id}`}>Edit</a>}
             {!d.revoked && (
-              <button style={{ ...link, color: "#d1242f", borderColor: "#f3c2c2" }} onClick={() => remove(d.id)}>
+              <button style={{ ...link, color: theme.color.danger, borderColor: theme.color.dangerBorder }} onClick={() => remove(d.id)}>
                 Delete
               </button>
             )}
@@ -87,9 +87,9 @@ export function MyDemos({ apiBase, token, onClose }: MyDemosProps) {
 
 const panel: React.CSSProperties = {
   position: "fixed", top: 0, right: 0, height: "100%", width: 340, maxWidth: "90vw",
-  background: "#fff", borderLeft: `1px solid ${theme.color.border}`,
-  boxShadow: "-8px 0 24px rgba(0,0,0,0.08)", zIndex: 900, overflowY: "auto",
-  fontFamily: theme.font.ui,
+  background: theme.color.surfaceRaised, borderLeft: `1px solid ${theme.color.border}`,
+  boxShadow: theme.shadow.panel, zIndex: 900, overflowY: "auto",
+  fontFamily: theme.font.ui, color: theme.color.text,
 };
 const header: React.CSSProperties = {
   display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -103,5 +103,5 @@ const item: React.CSSProperties = {
 const link: React.CSSProperties = {
   fontFamily: theme.font.ui, fontSize: 12, color: theme.color.accent,
   border: `1px solid ${theme.color.border}`, borderRadius: 6, padding: "3px 8px",
-  background: "#fff", cursor: "pointer", textDecoration: "none",
+  background: theme.color.surface, cursor: "pointer", textDecoration: "none",
 };

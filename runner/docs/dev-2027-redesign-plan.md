@@ -72,6 +72,21 @@ The toggle drives the **whole authoring app** — chrome and all app surfaces.
 `apps/authoring/src/App.tsx:811` and surfaced through `ShareDialog.tsx`. Those two files are
 the whole of it. How the embed acts on that hint is **out of scope for DEV-2027**.
 
+**Measured ramp** — sampled pixel-by-pixel out of the frames, not inferred from the variable
+list. Only the dark frame separates the steps; light collapses onto `#ffffff` / `#f7f7f9`.
+Downstream subtasks should assign from this table rather than re-deriving it:
+
+| token | light | dark | surfaces (per `48:6560` / `31:6438`) |
+|---|---|---|---|
+| `surfaceSunken` | `#f7f7f9` | `#000000` | left sidebar |
+| `surface` | `#ffffff` | `#070604` | row-2 bar, tab strip, preview surround |
+| `surfaceMuted` | `#f7f7f9` | `#19191c` | editor pane, both status bars |
+| `surfaceRaised` | `#ffffff` | `#222222` | top bar, popovers, dialogs, drawers |
+
+`border` `#e7e7e9`/`#222222` · `text` `#262624`/`#d1d1d4` · `accent` `#1A42E8` in both modes.
+`theme.shadow.*` covers `sm` / `popover` / `dialog` / `panel`. `color-scheme` is emitted per mode,
+so native scrollbars and `<select>` popups follow the shell — no token can reach those.
+
 **Files.** `theme.ts`, `styles.ts`, `CodeEditor.tsx`, root of `App.tsx`; touches every shell component.
 **Nodes.** `48:6560`, `31:6438`, `65:21451`.
 **Acceptance.** Toggle flips every app surface with no flash on load; no hard-coded hex outside
@@ -301,6 +316,53 @@ the pill's behaviour), T6 into T2.
 - **Multi-file tabs.** Tab strip ships styled, single active file. (T4)
 - **Embed theme handling.** The app emits a preferred-theme hint; acting on it is not
   DEV-2027. (T0)
+
+## Open items raised during implementation
+
+A running log. Subtasks **append** here rather than resolving inline — the calls get made in one
+pass at the end of the redesign, so nothing blocks a subtask from landing. Each item names the
+subtask that surfaced it and what evidence exists.
+
+| # | Item | Kind | Raised by |
+|---|---|---|---|
+| 1 | Dark `textMuted` deviates from the Figma variable | design decision | T0 |
+| 2 | `ShareDialog.tsx` is dead code the docs still reference | cleanup + doc fix | T0 |
+| 3 | Angular container ignores global `styles.css` edits | potential bug | T0 |
+
+### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
+
+`component/buttons/icon/enabled/icon-button-icon-color` is `#727272` in the dark frame, which
+lands at roughly 3.9:1 on `surface` `#070604` — under WCAG AA for normal text. `theme.ts` ships
+`#8f8f94` instead.
+
+The Figma value may well be intended for *icons* (where AA for text doesn't apply) rather than
+the muted body text the shell uses the token for, in which case the real fix is two tokens —
+`textMuted` and an `iconMuted` — not one lightened value. Needs a design call.
+
+### 2. `ShareDialog.tsx` is dead code (cleanup + doc fix)
+
+Nothing imports it. The live flow is `ShareLinks.tsx`, reached from `App.tsx`. Both DEV-2154 and
+ADR-0022 name `ShareDialog.tsx` as *the* surface that hands out the embed URL, so those
+references are stale — the ADR's file citation is wrong, not just incomplete.
+
+T0 tokenised it and gave it the theme hint anyway, so it stays consistent if someone revives it.
+Decide: delete it and correct ADR-0022's wording, or wire it back. Touches T9 (dialog surfaces).
+
+### 3. Angular container ignores global `styles.css` edits (potential bug)
+
+Found while running `runner:verify` for T0, in the Tier-2 Angular starter. Not caused by the
+theming work — the shell's push path is demonstrably fine — and not investigated further.
+
+Observed: editing `src/styles.css` in the editor pushes successfully
+(`POST /api/session/:id/file` → 204) but the rule never applies in the preview within 30s.
+Editing `src/app/data-grid.component.ts` in the same session applies in ~2s. So the transport
+works and Angular's rebuild works; only global-stylesheet changes fail to reach the page.
+
+Not established: whether this predates the redesign branch, whether it affects the other Tier-2
+frameworks (Next.js, Nuxt, Astro, Remix) or is Angular-specific, and whether the container's dev
+server rebuilds the stylesheet at all versus rebuilding it but not reloading it. A user editing
+CSS in an Angular demo sees nothing happen, so it is worth a real look — likely its own ticket
+outside DEV-2027.
 
 ## Remaining decisions
 
