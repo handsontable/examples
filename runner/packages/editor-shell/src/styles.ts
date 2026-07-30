@@ -1,5 +1,9 @@
 // Shared inline-style objects derived from the branding theme. Kept in one place
 // so the shell reads as one intentional system rather than ad-hoc CSS.
+//
+// This stays a frozen module-level object even though the shell is now two-mode:
+// every `t.color.*` is a `var(--hot-…)` reference, so the browser re-resolves it
+// when the root attribute flips. Nothing here needs to be recomputed (ADR-0022).
 import type { CSSProperties } from "react";
 import { theme } from "./theme.js";
 
@@ -44,8 +48,8 @@ export const s = {
     fontSize: 12,
     fontWeight: 600,
     color: t.color.accent,
-    background: `${t.color.accent}14`,
-    border: `1px solid ${t.color.accent}33`,
+    background: t.color.accentSoft,
+    border: `1px solid ${t.color.accentBorder}`,
     borderRadius: t.radius.sm,
     padding: `2px 8px`,
   } satisfies CSSProperties,
@@ -83,7 +87,7 @@ export const s = {
     width: "100%",
     textAlign: "left",
     border: "none",
-    background: active ? `${t.color.accent}18` : "transparent",
+    background: active ? t.color.accentSoft : "transparent",
     color: active ? t.color.text : t.color.textMuted,
     fontWeight: active ? 600 : 400,
     fontFamily: t.font.mono,
@@ -107,7 +111,7 @@ export const s = {
     minWidth: 0,
     minHeight: 0,
     position: "relative",
-    background: "#fff",
+    background: t.color.previewBg,
     display: "flex",
     flexDirection: "column",
   } satisfies CSSProperties,
@@ -124,7 +128,7 @@ export const s = {
     fontFamily: t.font.mono,
     padding: `4px 10px`,
     color:
-      kind === "error" ? "#fff" : kind === "ready" ? t.color.accentContrast : t.color.text,
+      kind === "error" || kind === "ready" ? t.color.accentContrast : t.color.text,
     background:
       kind === "error" ? t.color.danger : kind === "ready" ? t.color.accent : t.color.surfaceMuted,
   }),

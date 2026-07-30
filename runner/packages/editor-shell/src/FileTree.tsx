@@ -116,7 +116,7 @@ export function FileTree({ paths, active, onSelect, editable, onAddFile, onRenam
                 </button>
                 <button
                   type="button"
-                  style={{ ...iconBtn, color: "#d1242f" }}
+                  style={{ ...iconBtn, color: theme.color.danger }}
                   title="Delete"
                   onClick={() => onDeleteFile?.(p)}
                 >

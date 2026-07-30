@@ -1,5 +1,6 @@
 import { s } from "./styles.js";
-import logoUrl from "./logo.svg";
+import { theme } from "./theme.js";
+import { useLogoUrl } from "./useLogoUrl.js";
 
 export interface ToolbarProps {
   frameworkLabel: string;
@@ -40,6 +41,7 @@ export function Toolbar({
   shareUrl,
   dirty,
 }: ToolbarProps) {
+  const logoUrl = useLogoUrl();
   const options = versionOptions.includes(version)
     ? versionOptions
     : [version, ...versionOptions];
@@ -54,10 +56,10 @@ export function Toolbar({
 
       {/* The version is locked on the read-only share playground. */}
       {mode === "share" ? (
-        <span style={{ fontSize: 12, color: "#647382" }}>Handsontable {version}</span>
+        <span style={{ fontSize: 12, color: theme.color.textMuted }}>Handsontable {version}</span>
       ) : (
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-          <span style={{ color: "#647382" }}>Handsontable</span>
+          <span style={{ color: theme.color.textMuted }}>Handsontable</span>
           <select
             style={s.select}
             value={version}

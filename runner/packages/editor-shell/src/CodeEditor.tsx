@@ -1,11 +1,12 @@
 import { useMemo } from "react";
 import CodeMirror from "@uiw/react-codemirror";
-import { oneDark } from "@codemirror/theme-one-dark";
+import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
 import { css } from "@codemirror/lang-css";
 import { json } from "@codemirror/lang-json";
 import { vue } from "@codemirror/lang-vue";
+import { useTheme } from "./useTheme.js";
 
 function languageFor(path: string) {
   const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
@@ -41,15 +42,17 @@ export interface CodeEditorProps {
   readOnly?: boolean;
 }
 
-/** Thin CodeMirror wrapper: picks a language by file extension, dark theme. */
+/** Thin CodeMirror wrapper: picks a language by file extension, and the GitHub
+ *  Light/Dark theme so code colours match the documentation site (Figma `11:2535`). */
 export function CodeEditor({ path, value, onChange, readOnly }: CodeEditorProps) {
   const extensions = useMemo(() => languageFor(path), [path]);
+  const { mode } = useTheme();
   return (
     <CodeMirror
       value={value}
       height="100%"
       style={{ height: "100%", fontSize: 13 }}
-      theme={oneDark}
+      theme={mode === "dark" ? githubDark : githubLight}
       extensions={extensions}
       editable={!readOnly}
       readOnly={readOnly}
