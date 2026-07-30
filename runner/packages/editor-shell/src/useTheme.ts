@@ -7,6 +7,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -63,7 +64,13 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
 
   // Push React's view back onto <html>. A no-op on first render when the
   // pre-paint script already agreed; the write that matters is on toggle.
-  useEffect(() => {
+  //
+  // Layout, not passive: this attribute is what the CSS variables key off, while
+  // the mode also drives committed DOM (the logo asset, CodeMirror's theme). A
+  // passive effect is not guaranteed to run before the browser paints, so the two
+  // could disagree for a frame — a white wordmark on a still-light bar. A layout
+  // effect runs synchronously after commit and before paint, so they cannot.
+  useLayoutEffect(() => {
     document.documentElement.setAttribute(THEME_ATTR, mode);
   }, [mode]);
 
