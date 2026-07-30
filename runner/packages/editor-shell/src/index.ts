@@ -14,3 +14,5 @@ export { PreviewPane } from "./PreviewPane.js";
 export type { PreviewStatus } from "./PreviewPane.js";
 export { s as shellStyles } from "./styles.js";
 export { logoUrl, useLogoUrl } from "./useLogoUrl.js";
+// Icons — tabler for UI, seti-ui for file types. See src/icons/index.ts.
+export * from "./icons/index.js";

@@ -29,3 +29,4 @@ once Accepted.
 | [0021](0021-versioned-docs-examples-and-version-switch-correctness.md) | Versioned docs-example snapshots and version-switch correctness | Accepted |
 | [0022](0022-shell-theming-via-css-custom-properties.md) | Shell theming via CSS custom properties; the example owns its own theme | Accepted |
 | [0023](0023-redesign-scope-and-shipping.md) | DEV-2027 redesign — scope rules, deferred gaps, and shipping | Accepted |
+| [0024](0024-icon-system.md) | Icon system — tabler-icons as a dependency, seti-ui generated from source | Accepted |
