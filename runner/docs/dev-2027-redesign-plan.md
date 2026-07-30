@@ -158,6 +158,40 @@ Styled to the T0 token set; layout to dev judgment within that column.
 **Nodes.** `72:15697`, `48:6560`, `31:6438`.
 **Depends.** T0, T1.
 
+**Shipped (DEV-2156).** `Toolbar.tsx` deleted; its job split across `TopBar.tsx`,
+`EditorBar.tsx`, `PreviewBar.tsx`, `AuthedActionBar.tsx` and a shared `MenuButton.tsx`.
+Three measured corrections to the scope above:
+
+- **Row 2 is two bars, not one.** `72:15811` sits inside the editor column frame and `72:15706`
+  inside the preview column frame — there is no full-width secondary row. The only rule at that
+  height is the sidebar/editor boundary, which `s.sidebar`'s `borderRight` already draws, so
+  there is no divider component either.
+- **The preview column is a fixed half.** It starts at `x=864` of 1728 in *both* `72:15697`
+  (sidebar collapsed) and `48:6560` (sidebar open at 240) — the editor absorbs the sidebar.
+  `s.body` is `240px minmax(0,1fr) 50%`; `1fr 1fr` would put the boundary at 984. T6 replaces
+  this with the draggable ratio.
+- **`Download` is not gated on auth.** The scope line says `Download` (authed) / `Sign in`
+  (anon), but share mode has always offered Download to anonymous visitors and no frame shows an
+  anonymous share view. Ground rule 1 wins: Download renders whenever a file set exists, Sign in
+  when anonymous, and an anonymous share page shows both.
+
+The refresh button needed a `reload()` on `DemoRuntime` (`types.ts`, `container.ts`,
+`sandpack.ts`) — container re-points the iframe at its existing `previewUrl`, Sandpack re-runs
+`updateSandbox(setup, true)`. Neither creates a session: a remount would mint a fresh container
+per click against a five-slot pool.
+
+Also landed here: `PreviewPane`'s full-width accent status strip is gone (the design gives the
+preview one bar, and `● ready` belongs in T5's *bottom* bar); the tab strip renders inline in
+`EditorBar` with one open file, and T4 extracts it; `App.tsx` now captures `mount()`'s
+`previewUrl` for the row-2 address field.
+
+Two things the pill did to `DocsCascader` that T7 should know about, since T2 only meant to
+restyle its trigger. Its `trigger` lost its border/background — the pill is the one box the
+design draws (`72:15859`), and keeping both nested two. And `s.pop` gained
+`width: max-content` plus `s.topBar` a `zIndex`: the pill is centred with a `transform`, which
+makes it a stacking context, so without that the preview pane — `position: relative`, later in
+the DOM — painted straight over the open popover.
+
 ---
 
 ## T3 — Left sidebar: BOX INFO / FILES / DEPENDENCIES
@@ -370,6 +404,9 @@ subtask that surfaced it and what evidence exists.
 | 10 | The active tab's left border in the frame is a light-mode `text` colour | design decision | T4 |
 | 11 | GitHub Dark's own background is a step darker than `editorBg` | design decision | T4 |
 | 12 | The universal `button:hover` rollover now dims the active tab | design decision | T4 |
+| 13 | The example pill's 20×20 Handsontable mark has no asset in the repo | asset gap | T2 |
+| 14 | Tier-1 has no preview URL to put in the row-2 address field | design decision | T2 |
+| 15 | The version warning has no home in a 36px bar | design decision | T2 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -502,6 +539,45 @@ Decide at review whether tabs want a real hover (an inactive tab lifting to `hov
 one inert, which is the usual editor idiom) or whether the universal rollover is enough. A real
 one needs a class, since `:hover` cannot be expressed inline — the same reason `.hot-icon-btn`
 exists.
+
+### 13. The example pill's Handsontable mark has no asset (asset gap)
+
+Both pill forms draw a 20×20 rounded-square Handsontable mark to the left of the label —
+`48:6582` (`image 3`) and `72:15861` (`image 2`). The repo has only the 145×22 wordmark
+(`logo.svg` / `logo-light.svg`), which at 20px tall is ~130px wide and swamps the pill. T2 ships
+the pill without a leading mark.
+
+The same gap blocks the favicon, which T9 lists and which currently 404s in dev. One square
+mark asset (two inks, or `currentColor`) closes both. Needs the file from design.
+
+### 14. Tier 1 has no preview URL for the row-2 address field (design decision)
+
+The field shows the demo's public URL when it has one — always `/share/:id`, never `/edit/:id`,
+even while editing: the field is click-to-copy and `/edit` is auth-gated behind a broker that
+only accepts `@handsontable.com` — else the URL `mount()` reports. Tier 2
+gives the container's preview origin. Tier 1 does not: `SandpackRuntime.mount` returns
+`this.opts.iframe.src` (`sandpack.ts:195`), which at that moment is Sandpack's *bundler* origin
+— `https://…sandpack.codesandbox.io/`. That is both meaningless to the user and a CodeSandbox
+mark, which ADR-0001 keeps out of the UI. T2 therefore surfaces the URL only for the container
+engine and renders a muted `Live preview` placeholder otherwise.
+
+So an anonymous playground on a Tier-1 starter — the exact case `72:15697` draws with a
+`/share/…` URL in the field — shows the placeholder. Options if that reads as empty: drop the
+field when there is no URL, or show the browser's own address. Worth one line from design.
+
+### 15. The version warning has no home in a 36px bar (design decision)
+
+`versionWarning` used to sit in the old top bar, which grew with its content, so a long string
+simply wrapped. Row 2 is a fixed 36px and both strings run ~90 characters —
+"Handsontable X isn't a published build; showing the latest next build (Y) instead." and
+"This example has unsaved edits; its content may not match the selected version API." — so the
+span now clamps to one line with an ellipsis and keeps the full text in `title`.
+
+That is a compromise: a truncated warning is a warning you can miss, and a `title` tooltip is
+not reachable by touch. No frame shows a warning anywhere in section `18.1`, so there is no
+designed slot to move it to. Options worth a design call: an ⚠ icon in the bar that opens the
+text on click, a transient toast over the preview, or a line in the preview's bottom status bar
+(T5) — which the frames do draw, and which has the width.
 
 ## Remaining decisions
 

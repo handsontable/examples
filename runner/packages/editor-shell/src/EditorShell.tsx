@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { FilesMap } from "@handsontable/demo-runtime";
+import { AuthedActionBar } from "./AuthedActionBar.js";
 import { CodeEditor, type CursorPosition } from "./CodeEditor.js";
-import { EditorTabs } from "./EditorTabs.js";
+import { EditorBar } from "./EditorBar.js";
 import { EditorStatusBar } from "./EditorStatusBar.js";
 import { FileTree } from "./FileTree.js";
-import { Toolbar } from "./Toolbar.js";
+import { PreviewBar, type FrameworkChoice } from "./PreviewBar.js";
 import { PreviewPane, type PreviewStatus } from "./PreviewPane.js";
+import { TopBar } from "./TopBar.js";
 import { s } from "./styles.js";
 
 export interface EditorShellProps {
@@ -25,6 +27,7 @@ export interface EditorShellProps {
   version: string;
   versionOptions: string[];
   onVersionChange: (v: string) => void;
+  versionWarning?: string | null;
 
   /** Fired on every edit. The app updates its files map and calls runtime.writeFile. */
   onEdit: (path: string, contents: string) => void;
@@ -38,7 +41,7 @@ export interface EditorShellProps {
   /** Create an embeddable (docs-only) version from the current playground code. */
   onEmbed?: () => void;
   embedding?: boolean;
-  /** Signed in? Gates Save/Share/custom-version vs a Fork call-to-action. */
+  /** Signed in? Gates the authed action bar and the Sign in button. */
   authed: boolean;
   /** "play" (playground -> Fork), "edit" (saved demo -> Save/Share), or
    *  "share" (read-only public playground). */
@@ -47,19 +50,45 @@ export interface EditorShellProps {
   saving?: boolean;
   shareUrl?: string | null;
   dirty?: boolean;
+
+  // ---- chrome (T2) --------------------------------------------------------
+  /** Centred top-bar pill: the app's example cascader, or the demo title. */
+  examplePill?: ReactNode;
+  /** App-owned signed-in controls appended to the authed action bar. */
+  authedExtras?: ReactNode;
+  /** Public demo URL for the row-2 address field, when the demo has one. */
+  publicUrl?: string;
+  /** Where the preview iframe is actually pointed (Tier 2 only). */
+  previewUrl?: string;
+  onRefreshPreview?: () => void;
+  onMaximize?: () => void;
+  onDownload?: () => void;
+  onSignIn?: () => void;
+  /** Framework variants of the current docs example. Empty for starters. */
+  frameworks?: FrameworkChoice[];
+  onFrameworkChange?: (key: string) => void;
+  docsUrl?: string;
+  repoUrl?: string;
+  repoLabel?: string;
 }
 
 const CURSOR_ORIGIN: CursorPosition = { line: 1, col: 1 };
 
 /**
- * Framework-agnostic editor: file tree | code editor | live preview + toolbar.
+ * Framework-agnostic editor: chrome + file tree | code editor | live preview.
  * Binds only to props — it has no knowledge of Sandpack vs container.
+ *
+ * Layout follows the frames: one 72px top bar, then a body of three columns,
+ * the editor and preview each carrying their own 36px bar (`72:15811` /
+ * `72:15706`). There is no full-width second row.
  */
 export function EditorShell(props: EditorShellProps) {
   const paths = useMemo(() => Object.keys(props.files), [props.files]);
   const [active, setActive] = useState(() =>
     props.files[props.entry] !== undefined ? props.entry : (paths[0] ?? ""),
   );
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const mode = props.mode ?? "play";
 
   // Keep the active file valid if the file set changes (e.g. example switch).
   useEffect(() => {
@@ -79,36 +108,35 @@ export function EditorShell(props: EditorShellProps) {
 
   return (
     <div style={s.shell}>
-      <Toolbar
-        frameworkLabel={props.frameworkLabel}
-        version={props.version}
-        versionOptions={props.versionOptions}
-        onVersionChange={props.onVersionChange}
-        onSave={props.onSave}
-        onShare={props.onShare}
-        onFork={props.onFork}
-        onEmbed={props.onEmbed}
-        embedding={props.embedding}
+      <TopBar
+        examplePill={props.examplePill}
+        onDownload={props.onDownload}
+        onSignIn={props.onSignIn}
         authed={props.authed}
-        mode={props.mode}
-        sharing={props.sharing}
-        saving={props.saving}
-        shareUrl={props.shareUrl}
-        dirty={props.dirty}
       />
-      <div style={s.body}>
-        <FileTree
-          paths={paths}
-          active={active}
-          onSelect={setActive}
-          editable={!!props.onAddFile}
-          onAddFile={props.onAddFile}
-          onRenameFile={props.onRenameFile}
-          onDeleteFile={props.onDeleteFile}
-        />
-        <div style={s.editorPane}>
+
+      <div style={s.body(sidebarOpen)}>
+        {sidebarOpen && (
+          <FileTree
+            paths={paths}
+            active={active}
+            onSelect={setActive}
+            editable={!!props.onAddFile}
+            onAddFile={props.onAddFile}
+            onRenameFile={props.onRenameFile}
+            onDeleteFile={props.onDeleteFile}
+          />
+        )}
+
+        <div style={s.column(true)}>
           {/* One open file at a time — the tab strip mirrors `active` (ADR-0023). */}
-          <EditorTabs paths={active ? [active] : []} active={active} onSelect={setActive} />
+          <EditorBar
+            sidebarOpen={sidebarOpen}
+            onToggleSidebar={() => setSidebarOpen((o) => !o)}
+            paths={active ? [active] : []}
+            active={active}
+            onSelect={setActive}
+          />
           <div style={s.editorBody}>
             {active && (
               <CodeEditor
@@ -122,13 +150,49 @@ export function EditorShell(props: EditorShellProps) {
           </div>
           <EditorStatusBar line={cursor.line} col={cursor.col} />
         </div>
-        <PreviewPane
-          iframeRef={props.iframeRef}
-          status={props.status}
-          errorMessage={props.errorMessage}
-          bootLog={props.bootLog}
-          syncing={props.syncing}
-        />
+
+        <div style={s.column()}>
+          <PreviewBar
+            publicUrl={props.publicUrl}
+            previewUrl={props.previewUrl}
+            onRefresh={props.onRefreshPreview}
+            onMaximize={props.onMaximize}
+            version={props.version}
+            versionOptions={props.versionOptions}
+            onVersionChange={props.onVersionChange}
+            versionLocked={mode === "share"}
+            versionWarning={props.versionWarning}
+            frameworks={props.frameworks}
+            onFrameworkChange={props.onFrameworkChange}
+            docsUrl={props.docsUrl}
+            repoUrl={props.repoUrl}
+            repoLabel={props.repoLabel}
+          />
+
+          {props.authed && (
+            <AuthedActionBar
+              mode={mode}
+              onSave={props.onSave}
+              onShare={props.onShare}
+              onFork={props.onFork}
+              onEmbed={props.onEmbed}
+              onVersionChange={props.onVersionChange}
+              embedding={props.embedding}
+              sharing={props.sharing}
+              saving={props.saving}
+              dirty={props.dirty}
+              extras={props.authedExtras}
+            />
+          )}
+
+          <PreviewPane
+            iframeRef={props.iframeRef}
+            status={props.status}
+            errorMessage={props.errorMessage}
+            bootLog={props.bootLog}
+            syncing={props.syncing}
+          />
+        </div>
       </div>
     </div>
   );

@@ -14,12 +14,6 @@ export interface PreviewPaneProps {
   syncing?: boolean;
 }
 
-const STATUS_TEXT: Record<PreviewStatus, string> = {
-  booting: "Booting preview…",
-  ready: "Live",
-  error: "Error",
-};
-
 /** Clean a raw boot log into a few readable recent lines. */
 function tailLines(log: string, n = 12): string {
   return log
@@ -40,17 +34,21 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing 
   const failed = status === "error";
   const log = bootLog ? tailLines(bootLog) : "";
   return (
-    <section style={s.previewPane} aria-label="Preview">
-      <div style={s.statusBar(status)}>
-        {STATUS_TEXT[status]}
-        {status === "error" ? ": Setup failed" : ""}
-      </div>
-
+    // The design gives the preview one bar, and it is `PreviewBar` above this
+    // pane; the old full-width accent status strip is gone. `● ready` lands in a
+    // *bottom* 28px bar (`72:15699`) — that is T5. Until then the boot and error
+    // overlays carry the state, so nothing is lost.
+    // `data-preview-status` is the machine-readable readiness signal. It used to
+    // be the text of the status strip above, which the starter matrix polled for
+    // "Live"; that strip is gone (the design gives the preview one bar, and T5
+    // moves the readout to the bottom). An attribute keeps the signal out of the
+    // chrome entirely, so restyling can never break the suite again.
+    <section style={s.previewPane} aria-label="Preview" data-preview-status={status}>
       {status === "ready" && syncing && (
         <div
           style={{
             position: "absolute",
-            top: 36,
+            top: 12,
             right: 12,
             zIndex: 3,
             display: "flex",
@@ -74,7 +72,7 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing 
         <div
           style={{
             position: "absolute",
-            inset: "28px 0 0 0",
+            inset: 0,
             background: theme.color.surface,
             padding: 16,
             overflow: "auto",
@@ -102,7 +100,7 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing 
         <div
           style={{
             position: "absolute",
-            inset: "28px 0 0 0",
+            inset: 0,
             background: theme.color.surface,
             padding: 16,
             overflow: "auto",

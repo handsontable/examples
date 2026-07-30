@@ -151,6 +151,18 @@ function editor(page: import("@playwright/test").Page) {
   return page.locator(".cm-content");
 }
 
+// Since T2 (DEV-2156) the version and framework pickers are custom listboxes in
+// the preview bar, not a native <select> and a button group — `selectOption`
+// and `aria-pressed` no longer apply. Open the trigger, click the option.
+async function pickFromMenu(
+  page: import("@playwright/test").Page,
+  menu: "Handsontable version" | "Framework",
+  option: string,
+) {
+  await page.getByRole("button", { name: menu, exact: true }).click();
+  await page.getByRole("option", { name: option, exact: true }).click();
+}
+
 test("opens a docs example: breadcrumb, framework picker, docs link", async ({ page }) => {
   await installRouteFixtures(page);
   await page.goto(REACT_EXAMPLE);
@@ -159,16 +171,22 @@ test("opens a docs example: breadcrumb, framework picker, docs link", async ({ p
   const trigger = page.getByRole("button", { name: /Adding and removing columns/ });
   await expect(trigger).toBeVisible();
 
-  // Separate framework picker with the active one pressed.
-  const react = page.getByRole("button", { name: "React", exact: true });
-  await expect(react).toBeVisible();
-  await expect(react).toHaveAttribute("aria-pressed", "true");
+  // Framework picker: the active variant labels the trigger, the rest sit in its
+  // menu with the active one selected.
+  const framework = page.getByRole("button", { name: "Framework", exact: true });
+  await expect(framework).toContainText("React");
+  await framework.click();
+  await expect(page.getByRole("option", { name: "React", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   for (const fw of ["TypeScript", "JavaScript", "Vue", "Angular"]) {
-    await expect(page.getByRole("button", { name: fw, exact: true })).toBeVisible();
+    await expect(page.getByRole("option", { name: fw, exact: true })).toBeVisible();
   }
+  await page.keyboard.press("Escape");
 
-  // "See in documentation" points at the correct framework-specific docs page.
-  const docsLink = page.getByRole("link", { name: /See in documentation/ });
+  // The docs link is an icon button now; its label carries the meaning.
+  const docsLink = page.getByRole("link", { name: /documentation page/i });
   await expect(docsLink).toHaveAttribute(
     "href",
     "https://handsontable.com/docs/react-data-grid/column-adding/",
@@ -196,7 +214,7 @@ test("cascader drills down and highlights the current selection", async ({ page 
 test("switching framework updates the URL", async ({ page }) => {
   await installRouteFixtures(page);
   await page.goto(REACT_EXAMPLE);
-  await page.getByRole("button", { name: "Vue", exact: true }).click();
+  await pickFromMenu(page, "Framework", "Vue");
   await expect(page).toHaveURL(/docs=guides%2Fcolumns%2Fcolumn-adding%2Fvue%2Fexample2\.vue/);
 });
 
@@ -229,7 +247,7 @@ test("clean version switch replaces docs source from the target bucket", async (
   await page.goto(`/?docs=${DOCS_PATH}&v=18.0.0`);
   await expect(editor(page)).toContainText(`18.0:${DOCS_PATH}`);
 
-  await page.getByLabel("Handsontable version", { exact: true }).selectOption(NEXT_VERSION);
+  await pickFromMenu(page, "Handsontable version", NEXT_VERSION);
 
   await expect(editor(page)).toContainText(`next:${DOCS_PATH}`);
   expect(requests).toContain(`/docs-examples/18.0/${DOCS_PATH.replace(/\//g, "__")}.json`);
@@ -242,7 +260,7 @@ test("dirty version switch preserves edits, re-pins, and warns", async ({ page }
   await expect(editor(page)).toContainText(`18.0:${DOCS_PATH}`);
   await editor(page).fill("export const userEdit = true;");
 
-  await page.getByLabel("Handsontable version", { exact: true }).selectOption(NEXT_VERSION);
+  await pickFromMenu(page, "Handsontable version", NEXT_VERSION);
 
   await expect(editor(page)).toContainText("export const userEdit = true;");
   await expect(page.getByText(/content may not match the selected version API/i)).toBeVisible();
@@ -256,7 +274,7 @@ test("same docs path uses isolated next and release cache entries", async ({ pag
   await page.goto(`/?docs=${DOCS_PATH}&v=${NEXT_VERSION}`);
   await expect(editor(page)).toContainText(`next:${DOCS_PATH}`);
 
-  await page.getByLabel("Handsontable version", { exact: true }).selectOption("18.0.0");
+  await pickFromMenu(page, "Handsontable version", "18.0.0");
 
   await expect(editor(page)).toContainText(`18.0:${DOCS_PATH}`);
   expect(requests.filter((path) => path.endsWith(`${DOCS_PATH.replace(/\//g, "__")}.json`))).toEqual([
@@ -281,7 +299,7 @@ test("an open docs example with no target bucket stops preview and remains recov
   await page.goto(`/?docs=${DOCS_PATH}&v=18.0.0`);
   await expect(editor(page)).toContainText(`18.0:${DOCS_PATH}`);
 
-  await page.getByLabel("Handsontable version", { exact: true }).selectOption("17.1.0");
+  await pickFromMenu(page, "Handsontable version", "17.1.0");
 
   await expect(page.getByText(/No documentation examples are available for Handsontable 17\.1\.0/).first()).toBeVisible();
   await expect(page.locator("section[aria-label='Preview'] iframe")).toHaveAttribute("src", "about:blank");

@@ -268,6 +268,15 @@ export class ContainerRuntime implements DemoRuntime {
     this.flushTimer = setTimeout(() => void this.flush(), this.opts.writeDebounceMs ?? 250);
   }
 
+  /** Re-navigate the iframe to the same preview URL. The session, the container
+   *  and the dev server are all left alone — only the page reloads. Before the
+   *  iframe has been pointed at the preview (still booting) there is nothing to
+   *  reload. */
+  reload(): void {
+    if (this.disposed || !this.pointed || !this.previewUrl) return;
+    this.opts.iframe.src = this.previewUrl;
+  }
+
   /** Remove a file from the running container (file-tree delete/rename). */
   deleteFile(path: string): void {
     if (!this.sessionId) return;
