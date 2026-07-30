@@ -8,9 +8,11 @@
 // from them still flips when the mode changes. That is what lets `styles.ts` stay a
 // module-level `const` instead of becoming a hook.
 //
-// This file is the only place a colour literal may appear. The two exceptions
-// outside it are the SVG logo assets and the pre-paint `html`/`body` background in
-// `apps/authoring/index.html`, which runs before these variables exist.
+// This file is the only place a colour literal may appear. The three exceptions
+// outside it are the SVG logo assets, the pre-paint `html`/`body` background in
+// `apps/authoring/index.html` (which runs before these variables exist), and the
+// generated seti-ui file-icon palette in `src/icons/generated/` — upstream brand
+// colours, identical in both modes, regenerated from source (ADR-0024).
 
 export type ThemeMode = "light" | "dark";
 
