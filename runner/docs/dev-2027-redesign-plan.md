@@ -109,6 +109,13 @@ by extension (~150 in `11:2471`). Decide inline-SVG components vs a package depe
 **Nodes.** `11:2471`, sticky `11:2545`.
 **Acceptance.** Single import surface; unknown extension falls back to a generic icon.
 
+**Shipped (DEV-2155, ADR-0024).** `@tabler/icons-react` as a dependency, re-exported through
+`src/icons/ui.tsx` with the design's 16px/2px defaults pinned; seti-ui generated from a pinned
+commit by `scripts/sync-seti-icons.mjs` into `src/icons/generated/seti.ts` (29 icons, 38 suffixes,
+6 exact filenames). `<FileIcon path="…" />` + `<FolderIcon />` + `resolveFileIcon()`, all
+re-exported from the package barrel. Colour comes from seti's `mapping.less`, not each SVG's baked
+fill — see open item 4.
+
 ---
 
 ## T2 — App chrome: top bar + secondary bar
@@ -328,6 +335,8 @@ subtask that surfaced it and what evidence exists.
 | 1 | Dark `textMuted` deviates from the Figma variable | design decision | T0 |
 | 2 | `ShareDialog.tsx` is dead code the docs still reference | cleanup + doc fix | T0 |
 | 3 | Angular container ignores global `styles.css` edits | potential bug | T0 |
+| 4 | Two file rows in `31:6438` use an icon seti's own mapping doesn't give them | design decision | T1 |
+| 5 | T1's scope line says "panel toggles"; the design has none | doc fix | T1 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -363,6 +372,31 @@ frameworks (Next.js, Nuxt, Astro, Remix) or is Angular-specific, and whether the
 server rebuilds the stylesheet at all versus rebuilding it but not reloading it. A user editing
 CSS in an Angular demo sees nothing happen, so it is worth a real look — likely its own ticket
 outside DEV-2027.
+
+### 4. `index.html` and `tsconfig.json` are drawn with the `ejs` icon (design decision)
+
+The frames take their file icons from seti-ui's raw `.svg` files, baked fills and all — sampled
+out of `72:16991`, `main.ts` is `#529bba` (`typescript.svg`'s own fill) and `pnpm-lock.yaml` is
+`#9f74b3` (`yml.svg`'s). T1 instead resolves colour through `mapping.less` + `ui-variables.less`,
+which is what seti's own editor does and the only place per-key colours exist (`.test.ts` is an
+*orange* typescript, `.ts` a blue one). Two consequences:
+
+- **Glyph mismatch, two rows.** `72:17026` (`index.html`) and `72:17056` (`tsconfig.json`) are
+  both the layer `ejs 1`, measured `#d3c238` — the yellow `ejs` icon. seti maps `.html` to
+  `html`/orange and `tsconfig.json` to `tsconfig`/blue, which is what ships. Reads like the
+  designer grabbed a neighbouring sheet cell; worth one line of confirmation.
+- **Hex drift, every row.** Mapping values sit 1–2 units off the baked fills (`#519aba` vs
+  `#529bba`, `#a074c4` vs `#9f74b3`). Imperceptible, and not worth abandoning per-key colour for.
+
+Everything else matches the frame exactly: `main.ts`/`index.ts` typescript blue, `styles.css` css
+blue, `package.json` the generic json yellow (seti has no `package.json` entry — it falls through
+to `.json`, precisely as drawn), `pnpm-lock.yaml` yml purple, the `src` folder `#ababab`.
+
+### 5. T1's scope line says "panel toggles"; the design has none (doc fix)
+
+`:105` above lists "panel toggles" among the tabler icons to ship, and `:52` states — from the
+`72:15697` layer names — that there are no panel-toggle buttons in the design. T1 shipped no such
+icon. The scope line is the stale half; T2 dropping the toggles is the settled call.
 
 ## Remaining decisions
 

@@ -32,7 +32,9 @@ into the iframe document.
 ## Consequences
 - Every visual subtask in the redesign depends on this landing first; it is a refactor with a
   wide blast radius and no user-visible payload of its own.
-- No hard-coded colour may remain outside `theme.ts`.
+- No hard-coded colour may remain outside `theme.ts`, save the SVG logo assets, the pre-paint
+  background in `apps/authoring/index.html`, and the generated seti-ui file-icon palette
+  (ADR-0024) — upstream brand colours, identical in both modes.
 - A demo whose source declares a light theme renders light inside a dark shell. That is
   intended, and matches the design.
 - Re-theming the example on demand stays possible later, but it is runtime/iframe plumbing —
