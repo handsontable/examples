@@ -1,6 +1,6 @@
 // Framework-agnostic editor shell. Binds only to the DemoRuntime interface
 // (via props/callbacks) — no knowledge of Sandpack vs container engines.
-export { theme, palette, installThemeCss, THEME_CSS, THEME_ATTR, THEME_STORAGE_KEY } from "./theme.js";
+export { theme, THEME_CSS, THEME_ATTR, THEME_STORAGE_KEY } from "./theme.js";
 export type { Theme, ThemeMode } from "./theme.js";
 export { ThemeProvider, useTheme } from "./useTheme.js";
 export type { ThemeContextValue } from "./useTheme.js";

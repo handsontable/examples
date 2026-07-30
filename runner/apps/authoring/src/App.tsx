@@ -1027,7 +1027,9 @@ const topBar: React.CSSProperties = {
   borderBottom: `1px solid ${theme.color.border}`,
   fontFamily: theme.font.ui,
   fontSize: 13,
-  background: theme.color.surfaceMuted,
+  // The top bar is the most-raised chrome — #222222 in dark, #ffffff in light
+  // (48:6560 / 31:6438).
+  background: theme.color.surfaceRaised,
   color: theme.color.text,
 };
 // Form controls need an explicit background/colour: left unset, the UA default

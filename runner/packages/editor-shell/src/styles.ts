@@ -76,7 +76,8 @@ export const s = {
 
   sidebar: {
     borderRight: `1px solid ${t.color.border}`,
-    background: t.color.surfaceMuted,
+    // Recessed relative to the panes — #000000 in dark (31:6438).
+    background: t.color.surfaceSunken,
     overflowY: "auto",
     padding: t.space(2),
     minHeight: 0,

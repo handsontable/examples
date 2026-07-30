@@ -60,8 +60,9 @@ export function ShareDialog(props: ShareDialogProps) {
       const r: ShareResult = {
         id: data.id,
         viewUrl: `${props.apiBase}${data.url}`,
-        // Preferred-theme hint, same as App.tsx's embedUrl (ADR-0022).
-        embedUrl: `${props.apiBase}${data.embedUrl}?theme=${themeMode}`,
+        // Preferred-theme hint, same as App.tsx's embedUrl (ADR-0022). The path
+        // comes from the API, so don't assume it has no query of its own.
+        embedUrl: `${props.apiBase}${data.embedUrl}${data.embedUrl.includes("?") ? "&" : "?"}theme=${themeMode}`,
       };
       setResult(r);
       props.onResult(r);

@@ -33,9 +33,13 @@ const LIGHT_COLORS = {
   accentBorder: "#1A42E833", // tinted border (was `${accent}33`)
   accentSelection: "#1A42E844",
 
-  surface: "#ffffff",
-  surfaceMuted: "#f7f7f9", // horizon/palette/50
-  surfaceRaised: "#ffffff", // popovers, dialogs, drawers
+  // Four elevation steps, sampled off the dark frame 31:6438 — which is the only
+  // one that separates them, since light collapses onto #ffffff / #f7f7f9:
+  //   sunken #000000  <  surface #070604  <  muted #19191c  <  raised #222222
+  surface: "#ffffff", // app ground: row-2 bar, preview surround
+  surfaceSunken: "#f7f7f9", // recessed: the left sidebar
+  surfaceMuted: "#f7f7f9", // content panes: editor, status bars
+  surfaceRaised: "#ffffff", // top bar, popovers, dialogs, drawers
   border: "#e7e7e9", // horizon/palette/100
   text: "#262624", // horizon/palette/700
   textMuted: "#727272",
@@ -69,6 +73,7 @@ const DARK_COLORS: Record<ColorToken, string> = {
   accentSelection: "#1A42E855",
 
   surface: "#070604", // horizon/palette/950
+  surfaceSunken: "#000000", // horizon/black
   surfaceMuted: "#19191c", // horizon/palette/900
   surfaceRaised: "#222222", // horizon/palette/800
   border: "#222222",
@@ -78,7 +83,7 @@ const DARK_COLORS: Record<ColorToken, string> = {
   textMuted: "#8f8f94",
   hover: "rgba(255, 255, 255, 0.08)",
 
-  editorBg: "#070604",
+  editorBg: "#19191c", // matches the editor pane in 31:6438
   previewBg: "#070604",
 
   danger: "#f0616b",
@@ -133,12 +138,6 @@ export const theme = {
 } as const;
 
 export type Theme = typeof theme;
-
-/** The resolved literal palette for a mode. For consumers that need a real colour
- *  value rather than a `var()` reference — e.g. a CodeMirror theme definition. */
-export function palette(mode: ThemeMode): Record<ColorToken, string> {
-  return mode === "dark" ? DARK_COLORS : { ...LIGHT_COLORS };
-}
 
 // ---------------------------------------------------------------------------
 // Stylesheet
