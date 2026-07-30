@@ -92,6 +92,13 @@ function ensureSandpackDeps(files: FilesMap): FilesMap {
   return { ...files, "/package.json": JSON.stringify({ ...pkg, dependencies: deps }, null, 2) + "\n" };
 }
 
+/**
+ * Which runtime instance last pointed a given iframe. The mount effect disposes the old
+ * runtime and mounts a new one on the *same* iframe, so "am I disposed?" is not enough to
+ * decide whether blanking is safe — the successor may already own the frame.
+ */
+const IFRAME_OWNER = new WeakMap<HTMLIFrameElement, object>();
+
 export class SandpackRuntime implements DemoRuntime {
   private readonly entry: CatalogEntry;
   private readonly opts: SandpackRuntimeOptions;
@@ -101,6 +108,12 @@ export class SandpackRuntime implements DemoRuntime {
   private readonly errorCbs = new Set<(e: Error) => void>();
   private unlisten: (() => void) | null = null;
   private didReady = false;
+  /** Set by `dispose()`. `loadSandpackClient` points the iframe at the bundler itself,
+   *  so a mount still in flight when we are disposed would resurrect a torn-down
+   *  preview after the caller had already blanked it. */
+  private disposed = false;
+  /** Our claim on the iframe, registered in `mount()` before the first await. */
+  private claim: object | null = null;
 
   constructor(entry: CatalogEntry, opts: SandpackRuntimeOptions) {
     if (entry.engine !== "sandpack") {
@@ -188,9 +201,28 @@ export class SandpackRuntime implements DemoRuntime {
   }
 
   async mount(files: FilesMap): Promise<{ previewUrl: string }> {
-    const setup = await this.buildSetup(files);
-    this.client = await loadSandpackClient(this.opts.iframe, setup, this.clientOptions());
+    // Claim the iframe before the first await, so a successor mounting on the same frame
+    // takes ownership synchronously and this instance can tell it has been superseded.
+    const claim = {};
+    this.claim = claim;
+    IFRAME_OWNER.set(this.opts.iframe, claim);
 
+    const setup = await this.buildSetup(files);
+    const client = await loadSandpackClient(this.opts.iframe, setup, this.clientOptions());
+
+    // Both awaits above can outlive a `dispose()`. `loadSandpackClient` has by now pointed
+    // the iframe at the bundler origin, so returning quietly is not enough — undo it, or a
+    // preview the caller deliberately stopped comes back to life.
+    if (this.disposed) {
+      client.destroy?.();
+      // Only if nobody else has claimed the frame since. The mount effect disposes the old
+      // runtime and immediately mounts a new one on this same iframe, and blanking there
+      // would kill the successor's live preview instead of our own dead one.
+      if (IFRAME_OWNER.get(this.opts.iframe) === claim) this.opts.iframe.src = "about:blank";
+      return { previewUrl: "" };
+    }
+
+    this.client = client;
     this.unlisten = this.client.listen((msg: unknown) => this.onMessage(msg));
     return { previewUrl: this.opts.iframe.src };
   }
@@ -267,6 +299,7 @@ export class SandpackRuntime implements DemoRuntime {
   }
 
   dispose(): void {
+    this.disposed = true;
     try {
       this.unlisten?.();
     } finally {
