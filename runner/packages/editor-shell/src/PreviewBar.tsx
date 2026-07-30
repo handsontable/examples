@@ -118,9 +118,23 @@ export function PreviewBar({
         </span>
       </button>
 
+      {/* The bar is a fixed 36px and both warning strings run ~90 characters, so
+          this has to clamp to one line — left to wrap it pushes itself out of the
+          bar and over whatever is below. The full text stays reachable through
+          `title`. The design budgets no room for a warning here at all; logged
+          as an open item. */}
       {versionWarning && (
         <span
-          style={{ color: theme.color.warning, fontSize: 12, maxWidth: 260, flex: "0 0 auto" }}
+          style={{
+            color: theme.color.warning,
+            fontSize: 12,
+            flex: "0 1 auto",
+            minWidth: 0,
+            maxWidth: 320,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
           title={versionWarning}
         >
           {versionWarning}

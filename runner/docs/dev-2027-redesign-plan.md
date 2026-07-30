@@ -406,6 +406,7 @@ subtask that surfaced it and what evidence exists.
 | 12 | The universal `button:hover` rollover now dims the active tab | design decision | T4 |
 | 13 | The example pill's 20×20 Handsontable mark has no asset in the repo | asset gap | T2 |
 | 14 | Tier-1 has no preview URL to put in the row-2 address field | design decision | T2 |
+| 15 | The version warning has no home in a 36px bar | design decision | T2 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -563,6 +564,20 @@ engine and renders a muted `Live preview` placeholder otherwise.
 So an anonymous playground on a Tier-1 starter — the exact case `72:15697` draws with a
 `/share/…` URL in the field — shows the placeholder. Options if that reads as empty: drop the
 field when there is no URL, or show the browser's own address. Worth one line from design.
+
+### 15. The version warning has no home in a 36px bar (design decision)
+
+`versionWarning` used to sit in the old top bar, which grew with its content, so a long string
+simply wrapped. Row 2 is a fixed 36px and both strings run ~90 characters —
+"Handsontable X isn't a published build; showing the latest next build (Y) instead." and
+"This example has unsaved edits; its content may not match the selected version API." — so the
+span now clamps to one line with an ellipsis and keeps the full text in `title`.
+
+That is a compromise: a truncated warning is a warning you can miss, and a `title` tooltip is
+not reachable by touch. No frame shows a warning anywhere in section `18.1`, so there is no
+designed slot to move it to. Options worth a design call: an ⚠ icon in the bar that opens the
+text on click, a transient toast over the preview, or a line in the preview's bottom status bar
+(T5) — which the frames do draw, and which has the width.
 
 ## Remaining decisions
 
