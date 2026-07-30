@@ -49,6 +49,11 @@
          optional: an opacity-0 button is still tabbable, so without it keyboard focus
          lands on something invisible. */
       .hot-file-row { transition: background-color 0.12s ease; }
+      /* Both fills live here rather than inline: an inline background outranks a
+         stylesheet :hover rule, so an inline one would kill the hover entirely. Equal
+         specificity, so source order decides — hover last, and it wins on the active
+         row too. */
+      .hot-file-row[data-active="true"] { background: var(--hot-color-surface-muted); }
       .hot-file-row:hover { background: var(--hot-color-hover); }
       .hot-row-actions, .hot-dep-link { opacity: 0; transition: opacity 0.12s ease; }
       .hot-file-row:hover .hot-row-actions,

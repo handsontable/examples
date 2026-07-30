@@ -239,7 +239,7 @@ export function FileTree({
                 onBlur={() => commitRename(node.path)}
               />
             ) : node.kind === "dir" ? (
-              <div key={node.path} className="hot-file-row" style={row(false)}>
+              <div key={node.path} className="hot-file-row" style={row}>
                 <button
                   type="button"
                   style={rowButton}
@@ -256,7 +256,12 @@ export function FileTree({
                 </button>
               </div>
             ) : (
-              <div key={node.path} className="hot-file-row" style={row(node.path === active)}>
+              <div
+                key={node.path}
+                className="hot-file-row"
+                data-active={node.path === active ? "true" : undefined}
+                style={row}
+              >
                 <button
                   type="button"
                   style={rowButton}
@@ -324,15 +329,18 @@ const body: CSSProperties = {
   background: theme.color.surface,
 };
 
-const row = (activeRow: boolean): CSSProperties => ({
+// No `background` here on purpose. Both the active and hover fills live in the app's
+// global stylesheet, keyed off `data-active`: an inline background — even
+// `transparent` — outranks a stylesheet `:hover` rule, so setting it here would
+// silently kill the row hover the design calls for.
+const row: CSSProperties = {
   display: "flex",
   alignItems: "center",
   height: 24,
   padding: `0 ${theme.space(3)}`,
   overflow: "clip",
   flex: "0 0 auto",
-  background: activeRow ? theme.color.surfaceMuted : "transparent",
-});
+};
 
 const rowButton: CSSProperties = {
   display: "flex",
