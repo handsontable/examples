@@ -283,15 +283,24 @@ export class SandpackRuntime implements DemoRuntime {
    *  "your refresh recompiled". */
   reload(): Promise<void> {
     if (!this.client) return Promise.resolve();
+    const settlers = this.reloadSettlers;
     const done = new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      // Deregisters itself, matching `ContainerRuntime.reload()`. Without that, a
+      // settler that fired from the timeout stayed in the set: harmless today, because
+      // `settleReload()` empties the set wholesale and a second call resolves an
+      // already-resolved promise, but it grows the set for as long as reloads keep
+      // timing out with no `done` behind them, and it quietly relies on `settleReload`
+      // never becoming selective about which waiters it settles.
+      const settle = () => {
+        if (timer !== undefined) clearTimeout(timer);
+        settlers.delete(settle);
+        resolve();
+      };
       // A refresh whose compile never reports back (dead bundler iframe) must not pin
       // the shell's spinner. The promise reports "no longer in flight", not success.
-      const timer = setTimeout(settle, RELOAD_TIMEOUT_MS);
-      function settle() {
-        clearTimeout(timer);
-        resolve();
-      }
-      this.reloadSettlers.add(settle);
+      timer = setTimeout(settle, RELOAD_TIMEOUT_MS);
+      settlers.add(settle);
     });
     this.pushUpdate(true);
     return done;
