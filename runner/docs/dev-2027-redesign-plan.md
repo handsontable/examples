@@ -1173,6 +1173,16 @@ colleague's share link was offered **Sign in** while holding a live session.
 the top bar keys off; `authed` still gates the action bar and stays `false`. The identity is
 never a render gate, so the page paints exactly as fast as before.
 
+**The resolve has three states, not two** (caught in review). `currentUser()` round-trips the
+external broker, so seeding `accountUser` as `null` meant "anonymous, confirmed" for a few
+hundred milliseconds and the bar offered a signed-in visitor a working **Sign in** — the exact
+thing the split removes, just briefly. `undefined` is now pending, and `accountPending` withholds
+`onSignIn`, so the window renders neither control rather than the wrong one.
+
+Worth knowing when testing this by hand: `apps/authoring/.env.local` sets `VITE_DEV_USER`, which
+short-circuits `currentUser()` before the fetch. Any test of the broker path has to override it
+(`VITE_DEV_USER= pnpm dev`) or it silently exercises the bypass instead.
+
 ### 36. A `<button>` with no inline `background` gets the UA's `buttonface` (gotcha)
 
 The corollary to item 16, and it bit three times during T9. Item 16 says an inline `background`

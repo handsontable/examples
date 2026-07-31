@@ -226,15 +226,28 @@ function MyDemosRoute() {
  * "Sign in". The identity is resolved here and handed to the top bar alone —
  * never rendered as a gate, so nothing waits on it and the page paints as fast
  * as it always did.
+ *
+ * `undefined` while that resolve is in flight, and it is a real wait: `currentUser()`
+ * round-trips the external broker. Seeding `null` instead would mean "anonymous,
+ * confirmed" for those few hundred milliseconds and the bar would offer a signed-in
+ * visitor **Sign in** — reintroducing the exact thing this split exists to remove,
+ * clickable. Pending renders neither control.
  */
 function ShareRoute({ route }: { route: { mode: "share"; id: string } }) {
-  const [accountUser, setAccountUser] = useState<User | null>(null);
+  const [accountUser, setAccountUser] = useState<User | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
     currentUser().then((u) => { if (live) setAccountUser(u); });
     return () => { live = false; };
   }, []);
-  return <Authoring user={null} accountUser={accountUser} route={route} />;
+  return (
+    <Authoring
+      user={null}
+      accountUser={accountUser ?? null}
+      accountPending={accountUser === undefined}
+      route={route}
+    />
+  );
 }
 
 /**
@@ -407,10 +420,14 @@ function Authoring({
   // Defaults to `user`: in `play` and `edit` the workspace identity *is* the
   // account identity. Only `ShareRoute` passes them apart.
   accountUser = user,
+  // Only `ShareRoute` sets this. `Gate` resolves the user before it renders
+  // `Authoring` at all, so there is never an unresolved window there.
+  accountPending = false,
 }: {
   user: User | null;
   route: EditorRoute;
   accountUser?: User | null;
+  accountPending?: boolean;
 }) {
   const savedId = route.mode === "edit" || route.mode === "share" ? route.id : null;
   const isShare = route.mode === "share";
@@ -1234,7 +1251,11 @@ function Authoring({
         // `72:15697` (anonymous `play`) does draw `Sign in` alone — kept anyway, per the
         // same rule, and logged as an open item rather than dropping a working control.
         onDownload={downloadZip}
-        onSignIn={login}
+        // Withheld while the identity is still resolving, which is the only thing
+        // that makes the top bar render `Sign in`. Offering it to someone who turns
+        // out to be signed in — and who could click it — is worse than a bar that
+        // is briefly one control short.
+        onSignIn={accountPending ? undefined : login}
         frameworks={frameworks}
         onFrameworkChange={(docsPathKey) => void selectDocs(docsPathKey)}
         docsUrl={currentDocsMeta ? docsPageUrl(framework, currentDocsMeta.docPermalink) : undefined}
