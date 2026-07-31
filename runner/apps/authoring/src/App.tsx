@@ -261,6 +261,8 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [docsRuntimeBlocked, setDocsRuntimeBlocked] = useState(!!initialDocs);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  /** Saved demos only — the sidebar's BOX INFO drops the row when it's empty. */
+  const [createdAt, setCreatedAt] = useState("");
   const [saving, setSaving] = useState(false);
   const [forking, setForking] = useState(false);
   const [embedding, setEmbedding] = useState(false);
@@ -315,9 +317,15 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         }
         const src = (await srcRes.json()) as { framework: string; files: FilesMap };
         if (metaRes.ok) {
-          const meta = (await metaRes.json()) as { title: string; description: string | null; ht_version: string };
+          const meta = (await metaRes.json()) as {
+            title: string;
+            description: string | null;
+            ht_version: string;
+            created_at: string | null;
+          };
           setTitle(meta.title ?? "");
           setDescription(meta.description ?? "");
+          setCreatedAt(meta.created_at ?? "");
           if (meta.ht_version) {
             hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
             setVersion(meta.ht_version);
@@ -894,9 +902,17 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         versionOptions={docsPath ? versionOptions : versionsForEntry(versionOptions, entry.minCoreMajor)}
         onVersionChange={changeVersion}
         onEdit={onEdit}
-        onAddFile={addFile}
-        onRenameFile={renameFile}
-        onDeleteFile={deleteFile}
+        title={title || entry.displayName}
+        description={description}
+        createdAt={createdAt}
+        onDownloadAll={downloadZip}
+        // Changing the *file set* is owner-only (ADR-0023): `play` is a playground or docs
+        // example and `share` is read-only, so neither gets add/rename/delete. Editing file
+        // *contents* is unaffected in all three modes. Withholding the handlers is also what
+        // flips the shell's `editable` switch — nothing was deleted to achieve this.
+        onAddFile={route.mode === "edit" ? addFile : undefined}
+        onRenameFile={route.mode === "edit" ? renameFile : undefined}
+        onDeleteFile={route.mode === "edit" ? deleteFile : undefined}
         onSave={onSave}
         onShare={() => { setLinksId(savedId); setShareLinksOpen(true); }}
         onFork={onFork}

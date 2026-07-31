@@ -206,9 +206,10 @@ the DOM — painted straight over the open popover.
 
 ### File add / rename / delete — gate per mode (decided)
 
-`addFile`/`renameFile`/`deleteFile` are implemented (`App.tsx:665-698`) and passed
-**unconditionally** (`App.tsx:967-969`); `FileTree` renders `+` / ✎ / ✕ whenever handlers
-exist (`EditorShell.tsx:91`) — so today they appear in every mode, share included.
+`addFile`/`deleteFile`/`renameFile` are implemented (`App.tsx:696-730`) and were passed
+**unconditionally** (`App.tsx:897-899` as T2 left them, now `913-915` with the gate);
+`FileTree` renders `+` / ✎ / ✕ whenever handlers exist — so before T3 they appeared in every
+mode, share included. Line numbers here are post-T3; they have moved once per subtask so far.
 
 **Follow the design:** expose them only where the design calls for them. Sticky `72:14532`
 names "fork/view" as the modes without them, which maps to the shell's `play` and `share`
@@ -221,18 +222,51 @@ modes; `edit` (your own saved demo) keeps full CRUD.
 | `edit` — your saved demo | CRUD shown | CRUD kept, restyled |
 
 Implementation: pass the handlers conditionally on `mode === "edit"` rather than deleting
-anything — `App.tsx:967-969`. Keep `editable` as the shell's switch.
+anything. Keep `editable` as the shell's switch. Gate only the two CRUD buttons, not the header
+group they sit in — the download-all icon and the collapse chevron share `72:16994` and must
+render in every mode.
 
 Scope note: this governs the **file set** only. Editing file *contents* is unchanged in all
 three modes.
 
-> Worth one line of confirmation from design at review: no frame anywhere in `18.1` shows a
+> ~~Worth one line of confirmation from design at review: no frame anywhere in `18.1` shows a
 > `+` control, so "keep CRUD in `edit`" is a reading of the sticky's wording, not something a
-> frame demonstrates.
+> frame demonstrates.~~ **Closed by layer data** — see the resolution below.
 
 **Files.** `FileTree.tsx` split into `Sidebar.tsx` / `FileTree.tsx` / `BoxInfo.tsx` / `Dependencies.tsx`.
 **Nodes.** `31:6438` (nested), `48:6560` (flat), `65:19433` (collapsed).
 **Depends.** T0, T1.
+
+**Shipped (DEV-2157).** `Sidebar.tsx` composes `BoxInfo.tsx` + `FileTree.tsx` +
+`Dependencies.tsx`, with the shared section chrome in `SectionHeader.tsx` — its own module
+rather than a local helper, because `FileTree` renders its own header and importing it from
+`Sidebar` would be a cycle. `FileTree` keeps its name and its `(paths, active, onSelect)`
+contract but is now the FILES *section*, not the column. First consumer of T1's icon layer.
+
+Four things worth carrying forward:
+
+- **The `+` caveat above is closed, and the design does have CRUD.** The FILES header group
+  `72:16994` contains `72:16999 tabler-icon-folder-plus` and `72:17001 tabler-icon-plus`, both
+  `hidden="true"`, and every file row carries `tabler-icon-pencil` / `tabler-icon-trash-x` at
+  `opacity-0`. It is a hidden layer variant for the non-edit state, not an absence. Two
+  consequences: `+`/`folder-plus` belong in the section *header* (not their own row), and
+  pencil/trash are per-row and hover-revealed. Both implemented that way.
+- **Directory expansion stores *collapsed* paths, not expanded ones.** `props.files` is
+  replaced wholesale on every example switch and `mountGen` does not re-key `EditorShell`
+  (`App.tsx:657-658`), so a set seeded with expanded dirs leaves the *new* workspace's folders
+  shut. Verified: shutting two dirs on the Vue starter then switching in-session to Next.js
+  gives 9 directories, all expanded.
+- **Empty directories are not representable.** `FilesMap` is flat
+  (`packages/runtime/src/types.ts:6`), so a directory exists only as some file's path prefix.
+  `folder-plus` therefore means "new file under a new prefix", and deleting a directory's last
+  file makes the directory disappear. Both are correct, not defects.
+- **`created_at` needed client work despite "no backend work".** The worker already returned it
+  via `publicView` (`workers/api/src/index.ts:151`), but the app's metadata cast picked only
+  three fields — so the field was added to the cast plus a `createdAt` state var.
+
+The sidebar toggle came from T2 (`sidebarOpen` in `EditorShell` + `EditorBar`); T3 deliberately
+added no second source of truth. Download-all reuses `downloadZip`, the same callback the top
+bar's `onDownload` takes — one zip path, not two.
 
 ---
 
@@ -407,6 +441,8 @@ subtask that surfaced it and what evidence exists.
 | 13 | The example pill's 20×20 Handsontable mark has no asset in the repo | asset gap | T2 |
 | 14 | Tier-1 has no preview URL to put in the row-2 address field | design decision | T2 |
 | 15 | The version warning has no home in a 36px bar | design decision | T2 |
+| 16 | An inline `background` silently kills any stylesheet `:hover` on the same element | gotcha | T3 |
+| 17 | A late Sandpack mount could revive a preview the app had stopped | fixed bug | T3 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -550,6 +586,18 @@ the pill without a leading mark.
 The same gap blocks the favicon, which T9 lists and which currently 404s in dev. One square
 mark asset (two inks, or `currentColor`) closes both. Needs the file from design.
 
+**Resolved by T3 — the asset now exists.** BOX INFO needs the same 20×20 mark (`72:16988`), so
+DEV-2157 added `packages/editor-shell/src/mark.svg`, exported as `markUrl` from `useLogoUrl.ts`.
+It is package-level precisely so the pill and the favicon can share it. No per-mode variant is
+needed: the mark carries its own dark plate, so it reads on either shell surface.
+
+Figma exports this node as a raster fill, not vector, so the SVG was authored from the node's
+measured geometry — white-pixel bounding boxes sampled off the 400×400 export, giving the H at
+`x 91–249 / y 77–251` with a `39px` crossbar and the period at `x 262–319 / y 265–322` on a
+`#0F0F10` plate. Corners are square in the asset; the 2px radius is applied by the consumer, as
+the frame does. **Still worth a real asset from design** if brand has an official one — this is
+a faithful trace, not the source file. Wiring it into the pill is T2/T9's call, not T3's.
+
 ### 14. Tier 1 has no preview URL for the row-2 address field (design decision)
 
 The field shows the demo's public URL when it has one — always `/share/:id`, never `/edit/:id`,
@@ -578,6 +626,49 @@ not reachable by touch. No frame shows a warning anywhere in section `18.1`, so 
 designed slot to move it to. Options worth a design call: an ⚠ icon in the bar that opens the
 text on click, a transient toast over the preview, or a line in the preview's bottom status bar
 (T5) — which the frames do draw, and which has the width.
+
+### 16. An inline `background` silently kills a stylesheet `:hover` (gotcha)
+
+The shell styles components with inline `CSSProperties`, so `:hover`, `:focus-within` and
+descendant selectors are unreachable from the package and live in the app's global block
+(`apps/authoring/index.html`) — `.hot-casc-row`, `.hot-icon-btn`, and now `.hot-file-row`.
+
+The trap: an inline declaration outranks any stylesheet rule for the same property, **including
+`transparent`**. T3's file rows initially set `background: activeRow ? surfaceMuted :
+"transparent"` inline, which made `.hot-file-row:hover { background: … }` dead code. It was
+caught only because the browser check measured the hovered row's computed background rather than
+just confirming the row-actions reveal — and the reveal *did* work, because `opacity` was never
+set inline.
+
+Both fills moved into the global block keyed off `data-active`, hover declared last so equal
+specificity resolves in its favour. **Applies to T5–T9:** any element that needs a stylesheet
+hover must not set that same property inline. Verify by reading `getComputedStyle` under a real
+pointer — synthetic `mouseover` events do not trigger CSS `:hover`.
+
+### 17. A late Sandpack mount could revive a stopped preview (fixed bug — T5 owns the surface)
+
+`SandpackRuntime.mount()` awaits `buildSetup` and then `loadSandpackClient`, and the loader
+points the iframe at the bundler origin itself. `dispose()` only destroyed `this.client`, which
+is still `null` while a mount is in flight — so a mount resolving *after* disposal re-pointed an
+iframe the app had already blanked. `ContainerRuntime` always guarded this (`container.ts:360`,
+`if (this.pointed)`); Sandpack did not.
+
+This is why blocking a docs preview (`App.tsx`'s `docsRuntimeBlocked` effect: dispose, then
+`iframe.src = "about:blank"`) was only *usually* durable. `e2e/docs-examples.spec.ts:297` asserts
+it and passed on luck — the mount happened to resolve before the blank. Adding one `<img>` to the
+sidebar in T3 reordered it and turned the spec red, which is how the race surfaced.
+
+`dispose()` now sets a flag `mount()` re-checks after both awaits, destroying the late client and
+restoring `about:blank` — but only when the instance still owns the iframe. That second half
+matters because `dispose()` is *also* called on every ordinary re-mount: the mount effect
+disposes the old runtime and immediately mounts a new one on the same frame, so an unconditional
+blank would kill the successor's live preview. Each mount claims the frame before its first
+await. The ownership half is defensive: reachable by inspection, not reproduced — four manual
+dispose/remount cycles missed the window, and a build without the check behaved identically.
+
+Note for T5: the five specs that actually mount Sandpack are `live:`-prefixed and gated behind
+`E2E_LIVE=1`. A default `playwright test` run skips every one of them, so a green default run
+proves nothing about preview mount/teardown.
 
 ## Remaining decisions
 
