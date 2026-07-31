@@ -28,12 +28,24 @@ export interface PreviewPaneProps {
   refreshing?: boolean;
 }
 
-/** Clean a raw boot log into a few readable recent lines. */
+/** Clean a raw boot log into a few readable recent lines.
+ *
+ *  `ContainerRuntime.emitProgress` streams the log **raw** — its own `\x1b` strip is on
+ *  the failure path only (`container.ts:228`), so escapes arrive here intact. The old
+ *  pattern was `/\[[0-9;]*m/`, missing the ESC byte: it left an orphan `\x1b` behind
+ *  every colour code and would eat a literal `[31m` out of ordinary text. That was
+ *  survivable while the log lived in a collapsed block; T5 promotes the newest line to
+ *  an always-visible single row, where the artefacts show.
+ *
+ *  Full CSI, not just colour (`m`): pnpm and vite emit erase-line and cursor-move codes
+ *  (`\x1b[2K`, `\x1b[1G`) as they redraw progress, and those are exactly what a boot log
+ *  is full of. Carriage returns get the same treatment — a progress line rewritten with
+ *  `\r` should read as whatever it ended up as, not as every frame concatenated. */
 function tailLines(log: string, n = 12): string {
   return log
-    .replace(/\[[0-9;]*m/g, "") // strip ANSI colors
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
     .split("\n")
-    .map((l) => l.trimEnd())
+    .map((l) => l.slice(l.lastIndexOf("\r") + 1).trimEnd())
     .filter(Boolean)
     .slice(-n)
     .join("\n");
