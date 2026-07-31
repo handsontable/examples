@@ -163,17 +163,28 @@ export function useSplitPane(sidebarOpen: boolean): SplitPane {
     [commit, dragging],
   );
 
+  /** Every path that sets the ratio from something other than a pointer position
+   *  goes through here — a keystroke, a reset — so none of them can skip the pane
+   *  minima the drag enforces. Below ~1122px with the sidebar open, even the
+   *  designed 50% starves the editor, and "restore the default" has to mean the
+   *  closest legal split rather than an illegal one. */
+  const commitClamped = useCallback(
+    (want: number) => {
+      const rect = bodyRef.current?.getBoundingClientRect();
+      commit(rect && rect.width > 0 ? clampToPanes(want, rect.width, sidebarOpen) : bound(want));
+    },
+    [commit, sidebarOpen],
+  );
+
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
       // Left grows the preview, right grows the editor — the seam follows the key.
       const delta = e.key === "ArrowLeft" ? STEP : e.key === "ArrowRight" ? -STEP : 0;
       if (delta === 0 && e.key !== "Home") return;
       e.preventDefault();
-      const want = e.key === "Home" ? SPLIT_DEFAULT : live.current + delta;
-      const rect = bodyRef.current?.getBoundingClientRect();
-      commit(rect && rect.width > 0 ? clampToPanes(want, rect.width, sidebarOpen) : bound(want));
+      commitClamped(e.key === "Home" ? SPLIT_DEFAULT : live.current + delta);
     },
-    [commit, sidebarOpen],
+    [commitClamped],
   );
 
   return {
@@ -188,7 +199,7 @@ export function useSplitPane(sidebarOpen: boolean): SplitPane {
     onPointerMove,
     endDrag,
     onKeyDown,
-    reset: useCallback(() => commit(SPLIT_DEFAULT), [commit]),
+    reset: useCallback(() => commitClamped(SPLIT_DEFAULT), [commitClamped]),
   };
 }
 

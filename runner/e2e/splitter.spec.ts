@@ -116,6 +116,29 @@ test("a clamped drag leaves no accent behind when it ends off the seam", async (
   expect(await barOpacity()).toBe("1");
 });
 
+test("reset keeps the pane minimum on a viewport too narrow for the designed split", async ({ page }) => {
+  // Under ~1122px with the sidebar open, 50% of the body leaves the editor below
+  // its 320px minimum, so "restore the default" has to mean the closest legal
+  // split. Drag and Home already clamped; double-click has to agree with them.
+  await page.setViewportSize({ width: 900, height: 720 });
+  await openPlayground(page);
+  const splitter = page.locator(SPLITTER);
+  const editorFloor = 240 + 320; // sidebar + the editor's minimum
+
+  await dragSeam(page, -300); // hard against the clamp
+  const clamped = await seamX(page);
+  expect(clamped).toBeGreaterThanOrEqual(editorFloor - 1);
+
+  await dragSeam(page, 100);
+  await splitter.dblclick();
+  expect(await seamX(page)).toBeGreaterThanOrEqual(editorFloor - 1);
+
+  await dragSeam(page, 100);
+  await splitter.focus();
+  await page.keyboard.press("Home");
+  expect(await seamX(page)).toBeGreaterThanOrEqual(editorFloor - 1);
+});
+
 test("double-click restores the designed split", async ({ page }) => {
   await openPlayground(page);
   const designed = await seamX(page);
