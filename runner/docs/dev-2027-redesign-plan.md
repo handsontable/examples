@@ -354,13 +354,15 @@ descendant: `e2e/starter-matrix.spec.ts:144` polls the first, `e2e/docs-examples
 selects on the second. Verified after the restructure.
 
 **`reload()` now returns `Promise<void>`** (`types.ts`, `container.ts`, `sandpack.ts`), which
-is what the refresh spinner waits on. Container resolves on the reloaded page's `load` —
-`src` navigation is what a refresh *is*, and `load` fires on the frame element regardless of
-origin. Sandpack resolves on the bundler's next `done`, settled at the **top** of that case,
-before the `compilatonError` early return: settling next to `emitReady()` would leave a
-refresh of a file with a syntax error hanging until the timeout. Both also settle on a 10s
-timeout and on `dispose()`, and never reject — failure already has `onError`. Measured on a
-Tier-1 starter: the spinner cleared at ~3.1s off the real `done`, not the timeout.
+is what the refresh spinner waits on. It never rejects — failure already has `onError`.
+
+The two tiers settle on genuinely different things, and the difference is not cosmetic.
+Container resolves on the reloaded page's `load`: `src` navigation is what a refresh *is*, and
+`load` fires on the frame element regardless of origin, with a 10s timeout and `dispose()` as
+backstops. Sandpack resolves on **its own transpile + dispatch**, because the bundler sends
+nothing back for an `updateSandbox(setup, true)` — see open item 26, which records the
+measurement and what a follow-up should not re-derive. Building it on `done` made every Tier-1
+refresh hold a spinner over a blanked pane for the full 10s timeout.
 
 **The boot overlay is gated on the engine, not on `bootLog` being non-empty.** The first cut
 inferred the tier from the log, which read correctly until a wedged container pool made
@@ -574,7 +576,7 @@ subtask that surfaced it and what evidence exists.
 | 23 | Figma `common/colors/accent-color` is `#4669f6`; `theme.ts` ships `#1A42E8` | design decision | T7 |
 | 24 | The category column's scrollbar eats into the 179px the design gives labels | design decision | T7 |
 | 25 | TypeScript docs examples boot with a `/src/main.js` entry against a `.ts` file | pre-existing bug | T7 |
-| 26 | A Tier-1 refresh settles on the next compile, which a concurrent edit can own | design decision | T5 |
+| 26 | Tier 1 has no refresh-completion signal, and may not recompile at all | open question | T5 |
 | 27 | The Handsontable version renders twice in `play` mode | design decision | T5 |
 | 28 | `72:14610` draws chrome above a splash that renders before the shell exists | design decision | T5 |
 | 29 | `README.md` lists `runner/apps/viewer/`, which does not exist | doc fix | T5 |
@@ -911,17 +913,35 @@ so `FW_PREF` and T7 are both exonerated. Note the manifest puts TypeScript varia
 
 Same shape as the `.jsx`-vs-`main.tsx` mismatch tracked under DEV-2130. Left alone: nothing about
 it is chrome, and fixing entry resolution inside a restyle PR would bury it.
-### 26. A Tier-1 refresh settles on the next compile, not necessarily its own (design decision)
+### 26. Tier 1 has no refresh-completion signal, and may not recompile at all (open question)
 
-`SandpackRuntime.reload()` is `pushUpdate(true)`, which shares `updateSeq` with `writeFile`
-(`sandpack.ts`). Type while a refresh is in flight and the newer edit claims the sequence, so
-the refresh's own transpile is never published and the `done` that settles the promise belongs
-to the edit. The observable outcome is still correct — the preview rebuilt, from newer sources
-— but the promise means "the preview recompiled", not "your refresh recompiled".
+T5 first built the Tier-1 refresh promise to settle on the bundler's next `done`, reasoning
+that `reload()` → `pushUpdate(true)` → `updateSandbox(setup, true)` triggers a compile that
+reports back. **It does not.** Measured in a browser: after a refresh click the parent window
+sees **no messages at all** for the following 11 seconds, while a `done` on mount arrives
+normally and drives `emitReady()` — so the listener is fine and it is this specific call that
+goes unanswered. The promise therefore never resolved early and always rode its 10s timeout
+out: the shell blanked the pane and held a spinner over it for a full 10s on **every** Tier-1
+refresh.
 
-Not worth fixing by giving refresh its own sequence: the two would then race to publish, and a
-refresh that won would put pre-keystroke output over a newer edit. The sequence guard exists
-precisely to stop that. Tier 2 has no equivalent ambiguity — it resolves on a real `load`.
+Shipped instead: `SandpackRuntime.reload()` settles on its own transpile + dispatch, which is
+work we actually perform and can time (measured 48–62ms on a warm React starter, three
+consecutive runs, no timeouts). The promise means "your update has been handed to the bundler",
+and the timeout, the waiter set and the `settleReload()` hook are all gone with it. Tier 2 is
+unaffected — a container re-navigates the iframe, so its `load` is a real completion event.
+
+**The open question is what `updateSandbox(setup, true)` does with an unchanged file set.** If
+it no-ops, the Tier-1 refresh button does nothing at all, and the silence is the symptom rather
+than the bug — which would make T2's "`isInitializationCompile` re-runs the sandbox" claim
+wrong. Not chased here: it predates T5, the button is T2's, and settling this needs a look at
+the bundler protocol rather than at chrome. Worth its own ticket.
+
+Two things a follow-up should not re-derive. Arming the `done` listener *after* dispatch does
+not help: the transpile is awaited first, so the resulting message can land in the same turn
+the dispatch promise resolves, and arming late loses that race — measured 10.07s to clear.
+And giving refresh its own sequence number instead of sharing `updateSeq` with `writeFile` is
+worse: the two would race to publish, and a refresh that won would put pre-keystroke output
+over a newer edit, which is exactly what the shared guard exists to prevent.
 
 ### 27. The Handsontable version renders twice in `play` mode (design decision)
 

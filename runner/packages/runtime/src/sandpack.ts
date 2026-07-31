@@ -99,10 +99,6 @@ function ensureSandpackDeps(files: FilesMap): FilesMap {
  */
 const IFRAME_OWNER = new WeakMap<HTMLIFrameElement, object>();
 
-/** How long `reload()` waits for the bundler to report a completed compile before
- *  settling anyway. Generous: a slow transpile should still settle on the real message. */
-const RELOAD_TIMEOUT_MS = 10_000;
-
 export class SandpackRuntime implements DemoRuntime {
   private readonly entry: CatalogEntry;
   private readonly opts: SandpackRuntimeOptions;
@@ -118,9 +114,6 @@ export class SandpackRuntime implements DemoRuntime {
   private disposed = false;
   /** Our claim on the iframe, registered in `mount()` before the first await. */
   private claim: object | null = null;
-  /** Settle callbacks for in-flight `reload()` promises. `dispose()` closes them out so
-   *  the shell's refresh spinner never outlives the runtime it was waiting on. */
-  private readonly reloadSettlers = new Set<() => void>();
 
   constructor(entry: CatalogEntry, opts: SandpackRuntimeOptions) {
     if (entry.engine !== "sandpack") {
@@ -238,20 +231,12 @@ export class SandpackRuntime implements DemoRuntime {
     const m = msg as { type?: string; action?: string; compilatonError?: boolean; message?: string };
     switch (m.type) {
       case "done":
-        // Settle a pending reload *before* the error check. `compilatonError` returns
-        // early, so settling next to `emitReady()` would leave a refresh of a file with
-        // a syntax error hanging until the timeout — the case the timeout exists to
-        // backstop, not to handle. The resolver means "a compile cycle completed", not
-        // "a compile succeeded"; that is why it is separate from the ready path, whose
-        // one-shot `didReady` guard must stay as it is.
         // (`compilatonError` is misspelled in the upstream payload. Leave it.)
-        this.settleReload();
         if (m.compilatonError) return; // error surfaced via its own message
         this.emitReady();
         break;
       case "action":
         if (m.action === "show-error") {
-          this.settleReload();
           this.emitError(new Error(m.message || "Sandpack compile error"));
         }
         break;
@@ -281,38 +266,22 @@ export class SandpackRuntime implements DemoRuntime {
    *  be published at all. The observable outcome is still right — the preview did
    *  rebuild, from newer sources — but the promise means "the preview recompiled", not
    *  "your refresh recompiled". */
+  /** Settles once our transpile is done and the update has been handed to the bundler.
+   *
+   *  It deliberately does **not** wait for a `done` message. Measured in a browser: after
+   *  `updateSandbox(setup, true)` no `done` ever arrives — the parent sees no messages at
+   *  all in the following 11s — while a `done` on mount arrives fine and drives
+   *  `emitReady()`, so the listener is not at fault. A refresh-completion promise built on
+   *  `done` therefore never resolves early and always rides the timeout out: the shell's
+   *  spinner sat over a blanked pane for a full 10s on **every** Tier-1 refresh.
+   *
+   *  Whether `updateSandbox` with an unchanged file set recompiles at all is the open
+   *  question behind that (see open item 26); either way, waiting on a message that does
+   *  not come is worse than reporting what we do know. The transpile is real work we
+   *  perform and can time, so that is what the promise covers. */
   reload(): Promise<void> {
     if (!this.client) return Promise.resolve();
-    const settlers = this.reloadSettlers;
-    const done = new Promise<void>((resolve) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      // Deregisters itself, matching `ContainerRuntime.reload()`. Without that, a
-      // settler that fired from the timeout stayed in the set: harmless today, because
-      // `settleReload()` empties the set wholesale and a second call resolves an
-      // already-resolved promise, but it grows the set for as long as reloads keep
-      // timing out with no `done` behind them, and it quietly relies on `settleReload`
-      // never becoming selective about which waiters it settles.
-      const settle = () => {
-        if (timer !== undefined) clearTimeout(timer);
-        settlers.delete(settle);
-        resolve();
-      };
-      // A refresh whose compile never reports back (dead bundler iframe) must not pin
-      // the shell's spinner. The promise reports "no longer in flight", not success.
-      timer = setTimeout(settle, RELOAD_TIMEOUT_MS);
-      settlers.add(settle);
-    });
-    this.pushUpdate(true);
-    return done;
-  }
-
-  /** Close out every in-flight `reload()`. One compile cycle settles them all: they are
-   *  all waiting on "the preview recompiled", and it just did. */
-  private settleReload(): void {
-    if (!this.reloadSettlers.size) return;
-    const settlers = [...this.reloadSettlers];
-    this.reloadSettlers.clear();
-    for (const settle of settlers) settle();
+    return this.pushUpdate(true);
   }
 
   /** Remove a file and recompile (file-tree delete/rename). */
@@ -337,11 +306,15 @@ export class SandpackRuntime implements DemoRuntime {
    * await is the whole point, and a refresh that claimed it afterwards could
    * publish its own pre-keystroke transpile over a newer edit and then make
    * that edit's result look stale.
+   *
+   * Returns a promise that settles once the push has been *dispatched* — or dropped as
+   * superseded, or failed to transpile. `reload()` needs that edge: it must not start
+   * listening for a `done` until its own update is on the wire.
    */
   private updateSeq = 0;
-  private pushUpdate(initial = false): void {
+  private pushUpdate(initial = false): Promise<void> {
     const seq = ++this.updateSeq;
-    Promise.resolve(this.sandboxFiles())
+    return Promise.resolve(this.sandboxFiles())
       .then((files) => {
         if (!this.client || seq !== this.updateSeq) return;
         this.client.updateSandbox(this.setupFrom(files), initial);
@@ -361,7 +334,9 @@ export class SandpackRuntime implements DemoRuntime {
       this.client = null;
       this.readyCbs.clear();
       this.errorCbs.clear();
-      this.settleReload();
+      // No reload bookkeeping to drain: `reload()` settles on its own transpile, and
+      // `pushUpdate` always settles (it catches), so a dispose mid-refresh cannot leave a
+      // promise hanging.
     }
   }
 }
