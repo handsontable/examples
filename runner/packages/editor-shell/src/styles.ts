@@ -17,6 +17,11 @@ export const SIDEBAR_WIDTH = 240;
  *  a React render per pointermove (`SplitPane.tsx`). */
 export const SPLIT_VAR = "--hot-split";
 
+/** How far the splitter's pointer target overhangs its 1px track, each side.
+ *  `SplitPane` re-uses it to decide whether a released pointer is still on the
+ *  handle, so the hit box has one definition. */
+export const SPLITTER_HIT_SLOP = 4;
+
 export const s = {
   shell: {
     display: "grid",
@@ -260,8 +265,8 @@ export const s = {
     position: "absolute",
     top: 0,
     bottom: 0,
-    left: -4,
-    right: -4,
+    left: -SPLITTER_HIT_SLOP,
+    right: -SPLITTER_HIT_SLOP,
     cursor: "col-resize",
   } satisfies CSSProperties,
 

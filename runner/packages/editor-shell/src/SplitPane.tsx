@@ -13,7 +13,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
-import { s, SIDEBAR_WIDTH, SPLIT_VAR } from "./styles.js";
+import { s, SIDEBAR_WIDTH, SPLITTER_HIT_SLOP, SPLIT_VAR } from "./styles.js";
 import { SPLIT_STORAGE_KEY } from "./theme.js";
 
 /** The designed split — the preview starts at x=864 of 1728 (`72:15697`). */
@@ -144,6 +144,19 @@ export function useSplitPane(sidebarOpen: boolean): SplitPane {
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {
         e.currentTarget.releasePointerCapture(e.pointerId);
       }
+      // Recompute hover from where the pointer actually is rather than trusting a
+      // `pointerleave` to arrive. During the drag the hit target is the overlay,
+      // a descendant, so the separator never gets one; releasing capture makes the
+      // browser re-derive boundary events, and Chromium does fire the leave — but
+      // a clamped drag ends with the pointer far from the seam, and an engine that
+      // skipped that would leave the accent painted at rest.
+      const rect = e.currentTarget.getBoundingClientRect();
+      setHovered(
+        e.clientX >= rect.left - SPLITTER_HIT_SLOP &&
+          e.clientX <= rect.right + SPLITTER_HIT_SLOP &&
+          e.clientY >= rect.top &&
+          e.clientY <= rect.bottom,
+      );
       setDragging(false);
       commit(live.current);
     },

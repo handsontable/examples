@@ -90,6 +90,32 @@ test("a focused seam keeps its indicator when the pointer passes over and off", 
   expect(await barOpacity()).toBe("0");
 });
 
+test("a clamped drag leaves no accent behind when it ends off the seam", async ({ page }) => {
+  await openPlayground(page);
+  const splitter = page.locator(SPLITTER);
+  const barOpacity = () =>
+    splitter.locator("div").first().evaluate((el) => getComputedStyle(el).opacity);
+  const box = (await splitter.boundingBox())!;
+  const y = box.y + box.height / 2;
+
+  // Far enough left that the 320px editor minimum stops the seam long before the
+  // pointer does — so the drag ends with the pointer deep inside the editor.
+  await page.mouse.move(box.x, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 400, y, { steps: 10 });
+  await page.mouse.up();
+  expect((await splitter.boundingBox())!.x).toBeGreaterThan(box.x - 400);
+  expect(await barOpacity()).toBe("0");
+
+  // An unclamped drag ends with the pointer *on* the seam, which stays accented.
+  const after = (await splitter.boundingBox())!;
+  await page.mouse.move(after.x, y);
+  await page.mouse.down();
+  await page.mouse.move(after.x + 120, y, { steps: 10 });
+  await page.mouse.up();
+  expect(await barOpacity()).toBe("1");
+});
+
 test("double-click restores the designed split", async ({ page }) => {
   await openPlayground(page);
   const designed = await seamX(page);
