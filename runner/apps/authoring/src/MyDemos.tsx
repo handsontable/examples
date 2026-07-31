@@ -118,7 +118,10 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       clearBusy(demo.id);
-      setConfirming(null);
+      // Only if this demo's dialog is still the one open. An unconditional clear
+      // would close a confirmation the user had since opened for a *different*
+      // card, when this request happened to settle underneath it.
+      setConfirming((cur) => (cur?.id === demo.id ? null : cur));
     }
   }
 
@@ -223,8 +226,22 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
         </main>
       </div>
 
+      {/* Every dismissal is withheld once the DELETE is in flight — Cancel, the X,
+          Escape and the scrim all route through `onClose`.
+
+          Not an oversight dressed up: aborting the fetch would not un-revoke
+          anything. The worker has the request, and `AbortController` only stops
+          the client listening for the answer. A Cancel that left the demo revoked
+          would be a worse lie than a button that briefly refuses. It settles in
+          one round trip and the label says what is happening. */}
       {confirming && (
-        <Dialog title="Delete this demo?" onClose={() => setConfirming(null)}>
+        <Dialog
+          title="Delete this demo?"
+          onClose={() => {
+            if (busy[confirming.id] === "delete") return;
+            setConfirming(null);
+          }}
+        >
           <p style={confirmBody}>
             <strong>{confirming.title}</strong> will stop resolving: its share link starts
             returning 410 and anyone holding it loses access. This can't be undone.
@@ -246,6 +263,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
               data-autofocus
               style={ghostButton}
               onClick={() => setConfirming(null)}
+              disabled={busy[confirming.id] === "delete"}
             >
               Cancel
             </button>
