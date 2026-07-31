@@ -118,12 +118,21 @@ export function DocsCascader({
   }, [open]);
 
   // ---- open / close ------------------------------------------------------
+  // Read through a ref so the effect below can depend on `open` alone. `App`
+  // rebuilds the `starters` array on every render (`App.tsx:941`), which gives
+  // `model` a fresh identity each time; as effect deps those would re-run this
+  // on every parent render while the popover is open — snapping the category
+  // column back and pulling focus off the row a keyboard user is walking.
+  const reveal = useRef({ selectedKey, model });
+  reveal.current = { selectedKey, model };
+
   useEffect(() => {
     if (open) {
       setTimeout(() => searchRef.current?.focus(), 0);
       // Reveal the current selection: switch to its category and force its group
       // open, so the highlighted row is actually on screen.
-      const at = selectedKey ? model.locate.get(selectedKey) : undefined;
+      const { selectedKey: key, model: m } = reveal.current;
+      const at = key ? m.locate.get(key) : undefined;
       setActiveCat(at?.categoryKey ?? STARTERS_CATEGORY_KEY);
       setCollapsed((prev) => {
         if (!at || !prev.has(at.groupKey)) return prev;
@@ -136,7 +145,7 @@ export function DocsCascader({
       setCollapsed(new Set<string>());
       setFocus(null);
     }
-  }, [open, selectedKey, model]);
+  }, [open]);
 
   // Scroll the highlighted row into view once the columns have rendered.
   useEffect(() => {
@@ -408,7 +417,10 @@ export function DocsCascader({
                         </div>
                       )}
                       {!isCollapsed && (
-                        <div role="group" aria-label={g.header || activeCategory.label}>
+                        // A headerless group takes no name of its own: the tree
+                        // already carries one, and naming it after the category
+                        // would collide with the left column's section group.
+                        <div role="group" aria-label={g.header || undefined}>
                           {g.items.map((it) => {
                             const idx = ++exIdx;
                             const selected = it.key === selectedKey;
@@ -501,7 +513,12 @@ const s = {
   },
 
   body: { display: "flex", gap: 10, alignItems: "stretch", maxHeight: BODY_MAX_HEIGHT, minHeight: 0 },
-  catCol: { flex: `0 0 ${CAT_COL_WIDTH}px`, minWidth: 0, overflowY: "auto" },
+  // `scrollbarWidth: thin` claws back most of the ~15px a classic scrollbar
+  // takes out of the 179 (Windows/Linux always; macOS when "always show
+  // scrollbars" is on). The design draws no scrollbar at all because it shows 16
+  // categories — the live manifest has 28 — so some loss is unavoidable here;
+  // every row carries a `title` with its full label. Logged as open item 22.
+  catCol: { flex: `0 0 ${CAT_COL_WIDTH}px`, minWidth: 0, overflowY: "auto", scrollbarWidth: "thin" },
   exCol: { flex: 1, minWidth: 0, overflowY: "auto" },
 
   sectionLabel: { ...headerLabel, display: "block", padding: `0 ${theme.space(2)}` },
