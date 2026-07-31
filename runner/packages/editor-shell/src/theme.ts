@@ -20,6 +20,9 @@ export type ThemeMode = "light" | "dark";
 export const THEME_ATTR = "data-hot-theme";
 /** `localStorage` key holding an explicit user choice. Absent ⇒ follow the OS. */
 export const THEME_STORAGE_KEY = "hot-theme";
+/** `localStorage` key holding the editor/preview split as a 0–1 fraction of the
+ *  body width. Absent ⇒ the designed 50%. */
+export const SPLIT_STORAGE_KEY = "hot-split";
 
 // ---------------------------------------------------------------------------
 // Palettes. Neutrals are the Handsontable `horizon` ramp, read off the Figma
@@ -34,6 +37,10 @@ const LIGHT_COLORS = {
   accentSoft: "#1A42E814", // tinted fill (was `${accent}14`)
   accentBorder: "#1A42E833", // tinted border (was `${accent}33`)
   accentSelection: "#1A42E844",
+  // The editor/preview seam while hovered or dragged (85:11001). Sampled off the
+  // two drag frames: light is plain `accent`, dark is *lifted* — #4669F6, which is
+  // neither `accent` nor dark `accentHover` (#3b5cf0). Hence its own pair.
+  splitterActive: "#1A42E8",
 
   // Four elevation steps, sampled off the dark frame 31:6438 — which is the only
   // one that separates them, since light collapses onto #ffffff / #f7f7f9:
@@ -73,6 +80,7 @@ const DARK_COLORS: Record<ColorToken, string> = {
   accentSoft: "#1A42E829",
   accentBorder: "#1A42E84d",
   accentSelection: "#1A42E855",
+  splitterActive: "#4669F6", // measured on 85:9970 — brand blue lifted off the dark ground
 
   surface: "#070604", // horizon/palette/950
   surfaceSunken: "#000000", // horizon/black

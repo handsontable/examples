@@ -12,6 +12,11 @@ const t = theme;
 /** Sidebar column, per `48:6748`. */
 export const SIDEBAR_WIDTH = 240;
 
+/** The preview's share of the body, as a CSS length. Read from a custom property
+ *  so a drag can move the seam by writing one property on the body node, without
+ *  a React render per pointermove (`SplitPane.tsx`). */
+export const SPLIT_VAR = "--hot-split";
+
 export const s = {
   shell: {
     display: "grid",
@@ -24,19 +29,23 @@ export const s = {
   } satisfies CSSProperties,
 
   /**
-   * The preview holds a fixed half of the window and the *editor* absorbs the
-   * sidebar — measured, not assumed: the preview column starts at x=864 of 1728
-   * in both `72:15697` (sidebar collapsed) and `48:6560` (sidebar open at 240).
-   * `1fr 1fr` would put the boundary at 984 with the sidebar open. T6 replaces
-   * this with the draggable ratio.
+   * The preview holds a share of the *whole body*, sidebar track included, and the
+   * *editor* absorbs the sidebar — measured, not assumed: the preview column starts
+   * at x=864 of 1728 in both `72:15697` (sidebar collapsed) and `48:6560` (sidebar
+   * open at 240). `1fr 1fr` would put the boundary at 984 with the sidebar open.
+   * T6 made that share draggable but kept it body-relative, so toggling the sidebar
+   * still does not move the seam.
    *
    * The collapsed form drops the track entirely rather than sizing it to 0: the
    * sidebar carries a right border, which a zero-width track would still paint as
    * a seam, and `65:19433` has nothing at the left edge.
+   *
+   * The 1px track between the two panes is the splitter, which paints the
+   * editor/preview boundary the editor column used to carry as a `borderRight`.
    */
   body: (sidebarOpen: boolean): CSSProperties => ({
     display: "grid",
-    gridTemplateColumns: sidebarOpen ? `${SIDEBAR_WIDTH}px minmax(0, 1fr) 50%` : "minmax(0, 1fr) 50%",
+    gridTemplateColumns: `${sidebarOpen ? `${SIDEBAR_WIDTH}px ` : ""}minmax(0, 1fr) 1px var(${SPLIT_VAR}, 50%)`,
     minHeight: 0,
     height: "100%",
   }),
@@ -220,14 +229,67 @@ export const s = {
   } satisfies CSSProperties,
 
   /** Body column wrapper — bars stack above the pane, which takes the rest.
-   *  `divided` draws the editor/preview boundary (`line 72:15839`). */
-  column: (divided?: boolean): CSSProperties => ({
+   *  The editor/preview boundary (`line 72:15839`) is no longer drawn here: the
+   *  splitter track between the two columns is that line. */
+  column: (): CSSProperties => ({
     display: "flex",
     flexDirection: "column",
     minWidth: 0,
     minHeight: 0,
-    borderRight: divided ? `1px solid ${t.color.border}` : undefined,
   }),
+
+  /** The splitter's own 1px grid track. At rest it *is* the editor/preview border,
+   *  full body height (`85:11001`: y=72, h=828 — through both row-2 bars and both
+   *  status bars).
+   *
+   *  `zIndex` is load-bearing: the hit area and the active bar overflow ±4px into
+   *  the neighbouring columns, and `previewPane` is `position: relative` and later
+   *  in the DOM, so without it the preview paints over both. */
+  splitter: {
+    position: "relative",
+    zIndex: 20,
+    background: t.color.border,
+    cursor: "col-resize",
+    // The handle is focusable; the ring would be a 1px slit, so the active bar is
+    // the focus affordance instead (see `splitterBar`).
+    outline: "none",
+  } satisfies CSSProperties,
+
+  /** Pointer target, widened past the 1px line without widening the line. */
+  splitterHit: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: -4,
+    right: -4,
+    cursor: "col-resize",
+  } satisfies CSSProperties,
+
+  /** The 3px accent seam of the drag frames. Painted as an overflowing child so
+   *  the track stays 1px and nothing reflows when it appears. */
+  splitterBar: (active: boolean): CSSProperties => ({
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: -1,
+    width: 3,
+    background: t.color.splitterActive,
+    opacity: active ? 1 : 0,
+    pointerEvents: "none",
+  }),
+
+  /** Covers the window while dragging. One element solves three problems: the
+   *  preview iframe would otherwise swallow the pointer, CodeMirror would select
+   *  text under the drag, and the cursor would flicker between the panes.
+   *  `setPointerCapture` on the handle is kept as well — cross-origin frames are
+   *  worth belt and braces. */
+  splitterOverlay: {
+    position: "fixed",
+    inset: 0,
+    zIndex: 40,
+    cursor: "col-resize",
+    userSelect: "none",
+  } satisfies CSSProperties,
 
   spacer: { flex: 1 } satisfies CSSProperties,
 

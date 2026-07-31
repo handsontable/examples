@@ -7,6 +7,7 @@ import { EditorStatusBar } from "./EditorStatusBar.js";
 import { PreviewBar, type FrameworkChoice } from "./PreviewBar.js";
 import { Sidebar } from "./Sidebar.js";
 import { PreviewPane, type PreviewStatus } from "./PreviewPane.js";
+import { SplitHandle, useSplitPane } from "./SplitPane.js";
 import { TopBar } from "./TopBar.js";
 import { s } from "./styles.js";
 
@@ -100,6 +101,9 @@ export function EditorShell(props: EditorShellProps) {
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const mode = props.mode ?? "play";
+  // The editor/preview ratio: rendered onto the body grid, dragged from the
+  // splitter that sits between the two columns (`SplitPane.tsx`).
+  const split = useSplitPane(sidebarOpen);
 
   // Keep the active file valid if the file set changes (e.g. example switch).
   useEffect(() => {
@@ -126,7 +130,7 @@ export function EditorShell(props: EditorShellProps) {
         authed={props.authed}
       />
 
-      <div style={s.body(sidebarOpen)}>
+      <div ref={split.bodyRef} style={{ ...s.body(sidebarOpen), ...split.bodyStyle }}>
         {/* Unmounted, not zero-width: a 0px track still paints the sidebar's right
             border, and `65:19433` has nothing at the left edge. */}
         {sidebarOpen && (
@@ -146,7 +150,7 @@ export function EditorShell(props: EditorShellProps) {
           />
         )}
 
-        <div style={s.column(true)}>
+        <div style={s.column()}>
           {/* One open file at a time — the tab strip mirrors `active` (ADR-0023). */}
           <EditorBar
             sidebarOpen={sidebarOpen}
@@ -168,6 +172,8 @@ export function EditorShell(props: EditorShellProps) {
           </div>
           <EditorStatusBar line={cursor.line} col={cursor.col} />
         </div>
+
+        <SplitHandle split={split} />
 
         <div style={s.column()}>
           <PreviewBar
