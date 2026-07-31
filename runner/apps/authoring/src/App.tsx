@@ -510,6 +510,21 @@ function Authoring({
   const [editInfoOpen, setEditInfoOpen] = useState(
     () => route.mode === "edit" && new URLSearchParams(location.search).get("edit") === "info",
   );
+
+  /** Close the dialog *and* drop `?edit=info`.
+   *
+   *  The param is a one-shot instruction from My Demos' Rename, not state. Left
+   *  in the URL it outlives the thing it opened: a reload — or anything else
+   *  that remounts — reopens the dialog the user already dismissed or saved, and
+   *  the link is wrong if copied. `replaceState` so it doesn't add history. */
+  const closeEditInfo = useCallback(() => {
+    setEditInfoOpen(false);
+    const url = new URL(location.href);
+    if (url.searchParams.has("edit")) {
+      url.searchParams.delete("edit");
+      history.replaceState(null, "", url.pathname + url.search + url.hash);
+    }
+  }, []);
   const docsPathRef = useRef<string | null>(docsPath);
   const dirtyRef = useRef(dirty);
   const sourceLoadedRef = useRef(sourceLoaded);
@@ -1284,7 +1299,7 @@ function Authoring({
         <EditInfoDialog
           title={title}
           description={description}
-          onClose={() => setEditInfoOpen(false)}
+          onClose={closeEditInfo}
           // Marks the workspace dirty rather than PATCHing on its own: the code and
           // the metadata are one snapshot, and `onSave` sends both in a single
           // rebuilding PATCH. Saving here too would rebuild twice.
@@ -1292,7 +1307,7 @@ function Authoring({
             setTitle(next.title);
             setDescription(next.description);
             setDirty(true);
-            setEditInfoOpen(false);
+            closeEditInfo();
           }}
         />
       )}

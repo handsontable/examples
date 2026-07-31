@@ -16,7 +16,14 @@
 //   * loading and error states — the drawer had bare "Loading…" text and
 //     swallowed every delete failure silently
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   AccountMenu,
   Dialog,
@@ -392,6 +399,28 @@ function CardMenu({
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const popRef = useRef<HTMLDivElement | null>(null);
+  /** Open upwards when there isn't room below. */
+  const [dropUp, setDropUp] = useState(false);
+
+  // The grid scrolls (`main` is `overflow-y: auto`), so a card near the bottom
+  // opens its menu past the fold — measured at 631px against a 620px pane. The
+  // pane can be scrolled to reach it, but a menu that appears off-screen reads
+  // as broken. Measure the real popover rather than assume a height: the row
+  // count is fixed today but the menu is not.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const trigger = wrapRef.current?.getBoundingClientRect();
+    const menu = popRef.current?.getBoundingClientRect();
+    if (!trigger || !menu) return;
+    const pane = wrapRef.current?.closest("main")?.getBoundingClientRect();
+    const limit = Math.min(pane?.bottom ?? Infinity, window.innerHeight);
+    // Only flip if flipping actually helps — on a very short viewport neither
+    // direction fits and dropping up would just clip against the top instead.
+    const fitsBelow = trigger.bottom + menu.height <= limit;
+    const fitsAbove = trigger.top - menu.height >= (pane?.top ?? 0);
+    setDropUp(!fitsBelow && fitsAbove);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -427,7 +456,7 @@ function CardMenu({
       </button>
 
       {open && (
-        <div style={cardPopover} role="menu">
+        <div ref={popRef} style={cardPopover(dropUp)} role="menu">
           <a href={`/edit/${demo.id}`} role="menuitem" className="hot-menu-row" style={cardMenuRow()}>
             Open
           </a>
@@ -586,9 +615,9 @@ const kebab: CSSProperties = {
   cursor: "pointer",
 };
 
-const cardPopover: CSSProperties = {
+const cardPopover = (dropUp: boolean): CSSProperties => ({
   position: "absolute",
-  top: "100%",
+  ...(dropUp ? { bottom: "100%" } : { top: "100%" }),
   right: 0,
   zIndex: 30,
   width: 120,
@@ -597,7 +626,7 @@ const cardPopover: CSSProperties = {
   border: `1px solid ${theme.color.border}`,
   background: theme.color.surfaceRaised,
   boxShadow: theme.shadow.popover,
-};
+});
 
 // The destructive row sets no `color` either — `.hot-menu-row[data-danger]` owns
 // both the resting red and the inverted hover, and an inline colour would leave
