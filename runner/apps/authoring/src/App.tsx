@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   EditorShell,
   shellStyles,
+  Spinner,
   theme,
   useLogoUrl,
   useTheme,
@@ -164,16 +165,22 @@ function Gate({ route }: { route: { mode: "play" } | { mode: "edit"; id: string 
     if (user === null && route.mode === "edit") login(); // return_to preserves /edit/:id
   }, [user, route.mode]);
 
-  if (user === undefined) return <Splash text="Loading…" />;
+  // The frame gives the loading screen one string, so both load states use it. The
+  // sign-in line below is a different message, not a load state, and keeps its own.
+  if (user === undefined) return <Splash text="Loading data …" />;
   if (user === null && route.mode === "edit") return <Splash text="Sign in to edit this demo…" />;
   return <Authoring user={user} route={route} />;
 }
 
+/** `72:14610`: a spinner and one line, nothing else. The frame draws the top bar above
+ *  it, which this cannot — the splash renders precisely because the shell's state (user,
+ *  example, version) hasn't resolved yet, so there is no chrome to draw. Logged as an
+ *  open item. */
 function Splash({ text }: { text: string }) {
   return (
     <div style={centered}>
-      <Logo size={40} />
-      <p style={{ color: theme.color.textMuted, fontFamily: theme.font.ui }}>{text}</p>
+      <Spinner size={20} />
+      <p style={{ color: theme.color.textMuted, fontFamily: theme.font.ui, margin: 0 }}>{text}</p>
     </div>
   );
 }
@@ -238,6 +245,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [bootLog, setBootLog] = useState<string>("");
   const [dirty, setDirty] = useState(false);
   const [syncing, setSyncing] = useState(false); // container rebuild in flight
+  const [refreshing, setRefreshing] = useState(false); // row-2 refresh in flight
+  // Guards the refresh promise's own completion: a second click, an example switch or a
+  // version change can land mid-flight, and a stale settle must not clear a newer spinner.
+  const refreshSeqRef = useRef(0);
   const containerModeRef = useRef(false);
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Bumped whenever the whole workspace is replaced (example switch or fork) so
@@ -631,6 +642,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     setStatus("booting");
     setBootLog("");
     setSyncing(false);
+    // A remount supersedes any refresh. Bump the sequence as well as clearing the flag,
+    // so the superseded promise's own settle can't turn the spinner back off later.
+    refreshSeqRef.current += 1;
+    setRefreshing(false);
     containerModeRef.current = entry.engine === "container";
     let cancelled = false;
     const runtime =
@@ -839,9 +854,19 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   }, [savedId, isShare, title, description, version]);
 
   /** Row-2 refresh (`72:15708`). Reloads the running preview in place — never a
-   *  remount, which for Tier 2 would mint a fresh container session per click. */
+   *  remount, which for Tier 2 would mint a fresh container session per click.
+   *
+   *  `reload()`'s promise settles when the refresh has landed (or timed out, or the
+   *  runtime went away); it never rejects, so there is no failure branch here —
+   *  `onError` already owns that. */
   const refreshPreview = useCallback(() => {
-    runtimeRef.current?.reload?.();
+    const runtime = runtimeRef.current;
+    if (!runtime?.reload) return;
+    const seq = ++refreshSeqRef.current;
+    setRefreshing(true);
+    void Promise.resolve(runtime.reload()).then(() => {
+      if (seq === refreshSeqRef.current) setRefreshing(false);
+    });
   }, []);
 
   /** `window-maximize` (`72:15715`). `?mode=full` is the chrome-less, preview-only
@@ -884,20 +909,34 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   // playground has neither, and falls back to `previewUrl`.
   const publicUrl = savedId ? `${location.origin}/share/${savedId}` : "";
 
+  // The short project label for the preview status bar (`48:6706`). `entry.displayName`
+  // is only usable for a starter; for a docs example it is the long
+  // `"Columns ▸ … · Standard example · React (TS)"` string that `import-docs.mjs` builds,
+  // which overwrites the short name irrecoverably. Resolving through the starter catalog
+  // by framework key gives the design's exact wording ("React (Vite, TS)") and describes
+  // the authored project, which is the same thing it describes for a starter. `.find`,
+  // not `getEntry` — that throws on an unknown key.
+  const frameworkName =
+    catalog.examples.find((x) => x.framework === entry.framework)?.displayName ??
+    entry.displayName;
+
   if (docsNotFound) return <NotFound path={initialDocs} transient={docsNotFoundTransient} />;
-  if (savedId && !sourceLoaded) return <Splash text="Loading demo…" />;
+  if (savedId && !sourceLoaded) return <Splash text="Loading data …" />;
 
   return (
     <div style={{ height: "100%", minHeight: 0 }}>
       <EditorShell
         frameworkLabel={entry.displayName}
+        frameworkName={frameworkName}
         files={files}
         entry={entry.entry}
         iframeRef={setIframeEl}
         status={status}
         errorMessage={errorMessage}
         bootLog={bootLog}
+        containerBoot={entry.engine === "container"}
         syncing={syncing}
+        refreshing={refreshing}
         version={version}
         versionOptions={docsPath ? versionOptions : versionsForEntry(versionOptions, entry.minCoreMajor)}
         onVersionChange={changeVersion}

@@ -99,6 +99,10 @@ function ensureSandpackDeps(files: FilesMap): FilesMap {
  */
 const IFRAME_OWNER = new WeakMap<HTMLIFrameElement, object>();
 
+/** How long `reload()` waits for the bundler to report a completed compile before
+ *  settling anyway. Generous: a slow transpile should still settle on the real message. */
+const RELOAD_TIMEOUT_MS = 10_000;
+
 export class SandpackRuntime implements DemoRuntime {
   private readonly entry: CatalogEntry;
   private readonly opts: SandpackRuntimeOptions;
@@ -114,6 +118,9 @@ export class SandpackRuntime implements DemoRuntime {
   private disposed = false;
   /** Our claim on the iframe, registered in `mount()` before the first await. */
   private claim: object | null = null;
+  /** Settle callbacks for in-flight `reload()` promises. `dispose()` closes them out so
+   *  the shell's refresh spinner never outlives the runtime it was waiting on. */
+  private readonly reloadSettlers = new Set<() => void>();
 
   constructor(entry: CatalogEntry, opts: SandpackRuntimeOptions) {
     if (entry.engine !== "sandpack") {
@@ -231,11 +238,20 @@ export class SandpackRuntime implements DemoRuntime {
     const m = msg as { type?: string; action?: string; compilatonError?: boolean; message?: string };
     switch (m.type) {
       case "done":
+        // Settle a pending reload *before* the error check. `compilatonError` returns
+        // early, so settling next to `emitReady()` would leave a refresh of a file with
+        // a syntax error hanging until the timeout — the case the timeout exists to
+        // backstop, not to handle. The resolver means "a compile cycle completed", not
+        // "a compile succeeded"; that is why it is separate from the ready path, whose
+        // one-shot `didReady` guard must stay as it is.
+        // (`compilatonError` is misspelled in the upstream payload. Leave it.)
+        this.settleReload();
         if (m.compilatonError) return; // error surfaced via its own message
         this.emitReady();
         break;
       case "action":
         if (m.action === "show-error") {
+          this.settleReload();
           this.emitError(new Error(m.message || "Sandpack compile error"));
         }
         break;
@@ -256,10 +272,38 @@ export class SandpackRuntime implements DemoRuntime {
   /** Re-run the sandbox from the current sources. `isInitializationCompile`
    *  makes the bundler treat it as a first compile rather than an incremental
    *  update, which is what the refresh button means. No new client, no reload
-   *  of the bundler itself. */
-  reload(): void {
-    if (!this.client) return;
+   *  of the bundler itself.
+   *
+   *  Resolves on the bundler's next `done` (or `show-error`) — not on the ready path,
+   *  which is one-shot. Known approximation: `reload()` shares `updateSeq` with
+   *  `writeFile`, so typing during a refresh means the compile that settles this is the
+   *  newer edit's rather than the refresh's, and the refresh's own transpile may never
+   *  be published at all. The observable outcome is still right — the preview did
+   *  rebuild, from newer sources — but the promise means "the preview recompiled", not
+   *  "your refresh recompiled". */
+  reload(): Promise<void> {
+    if (!this.client) return Promise.resolve();
+    const done = new Promise<void>((resolve) => {
+      // A refresh whose compile never reports back (dead bundler iframe) must not pin
+      // the shell's spinner. The promise reports "no longer in flight", not success.
+      const timer = setTimeout(settle, RELOAD_TIMEOUT_MS);
+      function settle() {
+        clearTimeout(timer);
+        resolve();
+      }
+      this.reloadSettlers.add(settle);
+    });
     this.pushUpdate(true);
+    return done;
+  }
+
+  /** Close out every in-flight `reload()`. One compile cycle settles them all: they are
+   *  all waiting on "the preview recompiled", and it just did. */
+  private settleReload(): void {
+    if (!this.reloadSettlers.size) return;
+    const settlers = [...this.reloadSettlers];
+    this.reloadSettlers.clear();
+    for (const settle of settlers) settle();
   }
 
   /** Remove a file and recompile (file-tree delete/rename). */
@@ -308,6 +352,7 @@ export class SandpackRuntime implements DemoRuntime {
       this.client = null;
       this.readyCbs.clear();
       this.errorCbs.clear();
+      this.settleReload();
     }
   }
 }

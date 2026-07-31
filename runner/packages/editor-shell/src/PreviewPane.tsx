@@ -1,3 +1,6 @@
+import { useState, type CSSProperties } from "react";
+import { IconChevronDown, IconChevronRight } from "./icons/index.js";
+import { Spinner } from "./Spinner.js";
 import { s } from "./styles.js";
 import { theme } from "./theme.js";
 
@@ -10,14 +13,25 @@ export interface PreviewPaneProps {
   errorMessage?: string | null;
   /** Live boot log for Tier-2 container sessions (shown while booting). */
   bootLog?: string;
+  /** This preview boots a real dev server (Tier 2): the wait is tens of seconds and a
+   *  log will follow, so the boot overlay explains itself. Tier 1 compiles in-browser in
+   *  about a second and gets the designed spinner alone.
+   *
+   *  Deliberately a flag rather than `!!bootLog`: the log only starts arriving once the
+   *  session POST returns, and that request is exactly what stalls when the container
+   *  pool is full — the window where the explanation matters most is the window where
+   *  there is no log to infer it from. */
+  containerBoot?: boolean;
   /** A container rebuild is in flight after an edit. */
   syncing?: boolean;
+  /** A row-2 refresh is in flight (`72:26445`). */
+  refreshing?: boolean;
 }
 
 /** Clean a raw boot log into a few readable recent lines. */
 function tailLines(log: string, n = 12): string {
   return log
-    .replace(/\[[0-9;]*m/g, "") // strip ANSI colors
+    .replace(/\[[0-9;]*m/g, "") // strip ANSI colors
     .split("\n")
     .map((l) => l.trimEnd())
     .filter(Boolean)
@@ -27,90 +41,71 @@ function tailLines(log: string, n = 12): string {
 
 /** The single preview-iframe slot. Identical for Tier 1 (Sandpack drives the
  *  iframe) and Tier 2 (iframe.src = container preview URL) — the shell never
- *  knows which engine is behind it. While a Tier-2 container boots, the live
- *  install/dev-server log is shown so it never looks frozen. */
-export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing }: PreviewPaneProps) {
+ *  knows which engine is behind it.
+ *
+ *  Every overlay is `inset: 0`, so it covers the iframe and nothing else: the readiness
+ *  readout is `PreviewStatusBar`, a *sibling* of this section in the preview column, and
+ *  it therefore stays visible in all four states. `72:26445` shows exactly that — a
+ *  blanked pane with the bar still reading `● ready`. */
+export function PreviewPane({
+  iframeRef,
+  status,
+  errorMessage,
+  bootLog,
+  containerBoot,
+  syncing,
+  refreshing,
+}: PreviewPaneProps) {
   const booting = status === "booting";
   const failed = status === "error";
   const log = bootLog ? tailLines(bootLog) : "";
+  // A refresh blanks the pane, so the badge would be describing work on an empty
+  // surface that the refresh spinner is already describing.
+  const showSyncing = status === "ready" && syncing && !refreshing;
   return (
-    // The design gives the preview one bar, and it is `PreviewBar` above this
-    // pane; the old full-width accent status strip is gone. `● ready` lands in a
-    // *bottom* 28px bar (`72:15699`) — that is T5. Until then the boot and error
-    // overlays carry the state, so nothing is lost.
-    // `data-preview-status` is the machine-readable readiness signal. It used to
-    // be the text of the status strip above, which the starter matrix polled for
-    // "Live"; that strip is gone (the design gives the preview one bar, and T5
-    // moves the readout to the bottom). An attribute keeps the signal out of the
-    // chrome entirely, so restyling can never break the suite again.
+    // `data-preview-status` is the machine-readable readiness signal. It used to be the
+    // text of a coloured strip at the top of the pane, which the starter matrix polled
+    // for "Live"; T2 removed the strip and T5 moved the readout to the bottom bar. An
+    // attribute keeps the signal out of the chrome entirely, so restyling can never
+    // break the suite again. Both it and `aria-label` are a test contract
+    // (`e2e/starter-matrix.spec.ts:144`, `e2e/docs-examples.spec.ts:305`) — leave them,
+    // and leave the iframe a descendant of this section.
     <section style={s.previewPane} aria-label="Preview" data-preview-status={status}>
-      {status === "ready" && syncing && (
-        <div
-          style={{
-            position: "absolute",
-            top: 12,
-            right: 12,
-            zIndex: 3,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            background: theme.color.accent,
-            color: theme.color.accentContrast,
-            fontFamily: theme.font.ui,
-            fontSize: 12,
-            padding: "4px 10px",
-            borderRadius: 999,
-            boxShadow: theme.shadow.sm,
-          }}
-        >
+      {showSyncing && (
+        <div style={syncPill}>
           <Spinner onAccent />
           Applying changes…
         </div>
       )}
 
       {booting && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            background: theme.color.surface,
-            padding: 16,
-            overflow: "auto",
-            fontFamily: theme.font.mono,
-            fontSize: 12,
-            color: theme.color.textMuted,
-            zIndex: 2,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, color: theme.color.text }}>
-            <Spinner />
-            <span style={{ fontFamily: theme.font.ui, fontSize: 13 }}>
-              Starting the live dev server — first load installs dependencies and can take a minute…
-            </span>
-          </div>
-          {log ? (
-            <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{log}</pre>
-          ) : (
-            <span>Preparing container…</span>
-          )}
+        <div style={overlay}>
+          <Spinner size={20} />
+          <p style={headline}>Loading data …</p>
+          {/* The design draws only the spinner and that headline, and that is all a
+              Tier-1 boot gets — it compiles in about a second. The live install /
+              dev-server log is a gap in the design rather than a removal: it is the only
+              signal when a container is slow or stuck, so a Tier-2 boot keeps it. */}
+          {containerBoot && <BootLog log={log} />}
         </div>
       )}
 
       {failed && errorMessage && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            background: theme.color.surface,
-            padding: 16,
-            overflow: "auto",
-            fontFamily: theme.font.mono,
-            fontSize: 12,
-            color: theme.color.textMuted,
-            zIndex: 2,
-          }}
-        >
-          <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{errorMessage}</pre>
+        // No frame exists for the error state, so T9's rule applies: rebuild it against
+        // the token set, to dev judgment.
+        <div style={overlay}>
+          <div style={errorCard}>
+            <p style={errorTitle}>The preview could not start</p>
+            <pre style={errorBody}>{errorMessage}</pre>
+          </div>
+        </div>
+      )}
+
+      {status === "ready" && refreshing && (
+        // `previewBg`, not `surface`: the frame blanks the pane to the surround colour
+        // rather than layering a panel over it.
+        <div style={{ ...overlay, background: theme.color.previewBg }}>
+          <Spinner size={20} />
         </div>
       )}
 
@@ -124,22 +119,168 @@ export function PreviewPane({ iframeRef, status, errorMessage, bootLog, syncing 
   );
 }
 
-/** `onAccent`: the small variant that sits on an accent-filled pill. */
-function Spinner({ onAccent }: { onAccent?: boolean }) {
+/** What the wait is, the newest log line, and the tail behind a disclosure.
+ *
+ *  The caption renders before any log arrives — the session POST is what stalls when the
+ *  container pool is full, and that is precisely when the user needs to be told the wait
+ *  is expected. `Preparing container…` stands in for the live line until the first
+ *  progress arrives, so the block never renders half-empty.
+ *
+ *  A button and a chevron rather than `<details>`/`<summary>`: hiding the native marker
+ *  needs `list-style: none` *and* `::-webkit-details-marker { display: none }`, both
+ *  pseudo-element rules that inline styles cannot express — and `editor-shell` may not
+ *  reach into the consuming app's global stylesheet. `FileTree` already uses these two
+ *  icons for the same job. */
+function BootLog({ log }: { log: string }) {
+  const [open, setOpen] = useState(false);
+  const last = log ? log.slice(log.lastIndexOf("\n") + 1) : "Preparing container…";
   return (
-    <span
-      aria-hidden="true"
-      style={{
-        width: onAccent ? 11 : 14,
-        height: onAccent ? 11 : 14,
-        border: `2px solid ${onAccent ? theme.color.accentContrastSoft : theme.color.border}`,
-        borderTopColor: onAccent ? theme.color.accentContrast : theme.color.accent,
-        borderRadius: "50%",
-        display: "inline-block",
-        animation: "hot-spin 0.8s linear infinite",
-      }}
-    >
-      <style>{`@keyframes hot-spin{to{transform:rotate(360deg)}}`}</style>
-    </span>
+    <div style={logBlock}>
+      <p style={caption}>
+        Starting the live dev server — first load installs dependencies and can take a minute…
+      </p>
+      <span style={liveLine} title={last}>
+        {last}
+      </span>
+      {log && (
+        <>
+          <button
+            type="button"
+            style={detailsButton}
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+          >
+            {open ? <IconChevronDown /> : <IconChevronRight />}
+            Details
+          </button>
+          {open && <pre style={logTail}>{log}</pre>}
+        </>
+      )}
+    </div>
   );
 }
+
+/** Covers the iframe only — `PreviewStatusBar` sits outside this section. */
+const overlay: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  zIndex: 2,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: theme.space(2),
+  padding: theme.space(4),
+  overflow: "auto",
+  background: theme.color.surface,
+  fontFamily: theme.font.ui,
+  color: theme.color.text,
+};
+
+const headline: CSSProperties = { margin: 0, fontSize: 13 };
+
+const syncPill: CSSProperties = {
+  position: "absolute",
+  top: theme.space(3),
+  right: theme.space(3),
+  zIndex: 3,
+  display: "flex",
+  alignItems: "center",
+  gap: theme.space(2),
+  padding: "4px 10px",
+  borderRadius: theme.radius.md,
+  background: theme.color.accent,
+  color: theme.color.accentContrast,
+  fontFamily: theme.font.ui,
+  fontSize: 12,
+  boxShadow: theme.shadow.sm,
+};
+
+const logBlock: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: theme.space(2),
+  width: "100%",
+  maxWidth: 560,
+  minWidth: 0,
+};
+
+const caption: CSSProperties = {
+  margin: 0,
+  fontSize: 12,
+  color: theme.color.textMuted,
+  textAlign: "center",
+};
+
+const liveLine: CSSProperties = {
+  maxWidth: "100%",
+  fontFamily: theme.font.mono,
+  fontSize: 12,
+  color: theme.color.textMuted,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const detailsButton: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  padding: `2px ${theme.space(2)}`,
+  border: "none",
+  borderRadius: theme.radius.sm,
+  background: "transparent",
+  color: theme.color.textMuted,
+  fontFamily: theme.font.ui,
+  fontSize: 12,
+  cursor: "pointer",
+};
+
+const logTail: CSSProperties = {
+  margin: 0,
+  width: "100%",
+  maxHeight: 220,
+  overflow: "auto",
+  padding: theme.space(2),
+  borderRadius: theme.radius.sm,
+  border: `1px solid ${theme.color.border}`,
+  background: theme.color.surfaceSunken,
+  fontFamily: theme.font.mono,
+  fontSize: 12,
+  color: theme.color.textMuted,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+  textAlign: "left",
+};
+
+const errorCard: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: theme.space(2),
+  width: "100%",
+  maxWidth: 560,
+  minWidth: 0,
+  padding: theme.space(4),
+  borderRadius: theme.radius.md,
+  border: `1px solid ${theme.color.dangerBorder}`,
+  background: theme.color.surface,
+};
+
+const errorTitle: CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  fontWeight: 600,
+  color: theme.color.danger,
+};
+
+const errorBody: CSSProperties = {
+  margin: 0,
+  maxHeight: 240,
+  overflow: "auto",
+  fontFamily: theme.font.mono,
+  fontSize: 12,
+  color: theme.color.textMuted,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+};

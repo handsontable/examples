@@ -170,11 +170,19 @@ function block(
   return `${selector}{${decls.join(";")}}`;
 }
 
+/** The shell's one animation. It lives here rather than in a `<style>` inside
+ *  `Spinner` because T5 renders spinners in four places (boot overlay, refresh
+ *  overlay, syncing pill, the app's splash) and a per-instance `<style>` duplicates
+ *  the rule once per mount. It cannot live in the consuming app's global block
+ *  either — `editor-shell` has to stay self-contained. */
+const KEYFRAMES = `@keyframes hot-spin{to{transform:rotate(360deg)}}`;
+
 /** Light lives on bare `:root` so it is also the fallback if the attribute is
  *  missing (e.g. the inline pre-paint script threw). */
 export const THEME_CSS = [
   block(":root", "light", LIGHT_COLORS, LIGHT_SHADOWS),
   block(`:root[${THEME_ATTR}="dark"]`, "dark", DARK_COLORS, DARK_SHADOWS),
+  KEYFRAMES,
 ].join("\n");
 
 const STYLE_ID = "hot-theme-vars";

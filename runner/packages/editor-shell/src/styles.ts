@@ -364,15 +364,33 @@ export const s = {
     flex: 1,
   } satisfies CSSProperties,
 
-  statusBar: (kind: "booting" | "ready" | "error"): CSSProperties => ({
-    fontSize: 12,
-    fontFamily: t.font.mono,
-    padding: `4px 10px`,
-    color:
-      kind === "error" || kind === "ready" ? t.color.accentContrast : t.color.text,
-    background:
-      kind === "error" ? t.color.danger : kind === "ready" ? t.color.accent : t.color.surfaceMuted,
-  }),
+  /**
+   * The 28px bottom band, shared by both panes: `48:6740` (editor) and `48:6701`
+   * (preview) are both y=800 h=28 inside their own column frame, so they read as one
+   * rule spanning the window. Sharing the object is what keeps them flush — consumers
+   * add only their own inner layout (the editor's 24px segment gaps, the preview's
+   * left/right split).
+   *
+   * `editorBg`, not `surfaceMuted` and not `previewBg`: measured #ffffff / #19191c off
+   * the frames (see open item 7). `previewBg` is #070604 in dark — a step darker, while
+   * the frames draw this band *lighter* than the preview surround, not level with it.
+   */
+  paneStatusBar: {
+    display: "flex",
+    alignItems: "center",
+    height: 28,
+    padding: "4px 16px",
+    boxSizing: "border-box",
+    flexShrink: 0,
+    borderTop: `1px solid ${t.color.border}`,
+    background: t.color.editorBg,
+    fontFamily: t.font.ui,
+    fontSize: 10,
+    lineHeight: "20px",
+    color: t.color.textMuted,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+  } satisfies CSSProperties,
 
   select: {
     fontFamily: t.font.mono,

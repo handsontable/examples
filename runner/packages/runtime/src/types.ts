@@ -62,8 +62,16 @@ export interface DemoRuntime {
    * refresh button, `72:15708`). Deliberately *not* a remount: for Tier 2 that
    * would mint a fresh container against a five-slot pool on every click.
    * A no-op before mount.
+   *
+   * The returned promise settles when the refresh has landed, which is what drives
+   * T5's in-flight spinner. It **never rejects** and it does not report success: a
+   * failed refresh settles like any other, because failure already has its own
+   * channel in `onError`. Both shipped implementations also settle on a timeout and
+   * on `dispose()`, so a dead preview can't pin a spinner on screen. The union with
+   * `void` keeps the method optional for any implementation that has nothing to
+   * await.
    */
-  reload?(): void;
+  reload?(): Promise<void> | void;
   onReady(cb: () => void): void;
   onError(cb: (e: Error) => void): void;
   dispose(): void;
