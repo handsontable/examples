@@ -337,15 +337,56 @@ Error state has **no frame** — restyle the existing one to the design system (
 ## T6 — Resizable split
 
 **Scope.** Draggable splitter between editor and preview (blue active handle, `85:9970`), min
-widths, ratio persisted. `s.body` is a fixed `220px 1fr 1fr` grid today.
+widths, ratio persisted. `s.body` was a fixed `240px minmax(0,1fr) 50%` grid — *not* the
+`220px 1fr 1fr` this line claimed before T6 measured it.
 
 Panel show/hide toggles are **not in the design** (see the row-2 icon inventory) — dropped.
 
-*New, self-contained, low risk — **build now**.*
-
 **Files.** `EditorShell.tsx`, `styles.ts`, new `SplitPane.tsx`.
-**Nodes.** `85:9970`, `85:16935`.
+**Nodes.** `85:9970` (**dark**), `85:16935` (**light**) — the labels were the other way round
+here and in the ticket.
 **Depends.** T0.
+
+**Shipped (DEV-2160).** `useSplitPane()` + `<SplitHandle>` in `SplitPane.tsx`; the grid stays in
+`s.body`, which already encoded the rule the ratio has to respect. Four measured points:
+
+- **The ratio is a fraction of the whole body, sidebar track included.** That is what T2
+  measured (preview from x=864 of 1728 with the sidebar both open and collapsed), so keeping the
+  fraction body-relative is what stops the sidebar toggle from moving the seam — asserted in
+  `e2e/splitter.spec.ts`. `s.body` is now
+  `240px minmax(0,1fr) 1px var(--hot-split, 50%)`; the 1px track *is* the splitter, so
+  `s.column`'s `divided` branch and the editor's `borderRight` are gone.
+- **Line `85:11001` spans the full body** (y=72, h=828) — through both row-2 bars and both status
+  bars. A grid track does that for free. Rendered output matches the frames to the pixel: 3px,
+  `#1A42E8` light / `#4669F6` dark while dragging, the 1px `border` token at rest.
+- **The active blue needed its own token pair.** Light is plain `accent`; dark is *lifted* to
+  `#4669F6`, which is neither `accent` nor dark `accentHover` (`#3b5cf0`). Hence
+  `splitterActive`. Both frames are the drag state only, so the accent shows on hover, focus and
+  drag — never at rest.
+- **The ratio reaches the DOM two ways, deliberately.** React renders it as an inline custom
+  property so a restored ratio is correct in the first paint; the drag then writes that same
+  property straight onto the node, since a render per `pointermove` walks the keyed CodeMirror
+  instance and the preview pane. State and `localStorage` are touched once, on `pointerup`.
+  A `useLayoutEffect` was the first attempt and is **wrong** here — see open item 18.
+
+The drag survives the preview iframe through `setPointerCapture` *and* a `position: fixed`
+overlay mounted for the duration; the overlay also stops CodeMirror selecting text under the
+drag and keeps the `col-resize` cursor across both panes. `85:16932` (`.ht/cursor`) is a drawn
+glyph in the frame — the native cursor covers it.
+
+The handle is a `role="separator"` with `tabIndex=0`: ArrowLeft/Right move the seam 2%, `Home`
+and double-click restore the designed 50%. Not in the design; a keyboard-only user otherwise has
+no way to reach the affordance at all.
+
+Clamped to 20–80% of the body plus a 320px minimum per pane, measured from the drag's own rect.
+Nothing re-clamps afterwards — narrow viewports are T9's (open item 19).
+
+Verified live, not only against the empty frame the spec drags over: `?example=react` on the dev
+server with Sandpack actually booted and a Handsontable grid rendered inside the cross-origin
+iframe. The seam tracked the pointer through it (599 → 798 in four measured steps), dragged back,
+left the grid alive and the preview `ready`, selected no editor text, and survived a reload.
+The Tier-2 container path was not exercised — it needs Docker and the API worker — but the shell
+code is engine-agnostic and the frame is the same element.
 
 ---
 
@@ -443,6 +484,8 @@ subtask that surfaced it and what evidence exists.
 | 15 | The version warning has no home in a 36px bar | design decision | T2 |
 | 16 | An inline `background` silently kills any stylesheet `:hover` on the same element | gotcha | T3 |
 | 17 | A late Sandpack mount could revive a preview the app had stopped | fixed bug | T3 |
+| 18 | A child's `useLayoutEffect` runs before an ancestor's `ref` is attached | gotcha | T6 |
+| 19 | Nothing re-clamps the split after the drag that set it | deferred to T9 | T6 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -669,6 +712,36 @@ dispose/remount cycles missed the window, and a build without the check behaved 
 Note for T5: the five specs that actually mount Sandpack are `live:`-prefixed and gated behind
 `E2E_LIVE=1`. A default `playwright test` run skips every one of them, so a green default run
 proves nothing about preview mount/teardown.
+
+### 18. A child's `useLayoutEffect` runs before an ancestor's `ref` is attached (gotcha)
+
+T6's first cut restored the persisted ratio from a `useLayoutEffect` inside `SplitHandle`, writing
+`--hot-split` onto `EditorShell`'s body node through the ref it was handed. It silently did
+nothing. React commits bottom-up: a descendant's layout effect runs *before* its ancestor's ref
+is attached, so `bodyRef.current` was still `null` — and the optional-chained write no-oped
+without a symptom. Drags worked (by then the ref was live) and only a reload lost the ratio.
+
+Which is why the value is a plain inline style now: React puts the custom property on the grid in
+the first paint, and nothing depends on commit ordering. `useTheme`'s layout effect is *not* a
+counterexample — it writes to `document.documentElement`, which exists before React does.
+
+Two lessons for the rest of the redesign. An optional-chained DOM write is an error handler that
+never reports; if the node must be there, the failure should be visible. And a persistence bug of
+exactly this shape is invisible to a within-page test — `e2e/splitter.spec.ts` caught it only
+because it reloads and re-measures.
+
+One trap in that spec worth naming: an `addInitScript` that clears the storage key also runs on
+`page.reload()`, so it silently defeats the persistence assertion it was meant to isolate. Each
+test already gets a fresh context; no reset is needed.
+
+### 19. Nothing re-clamps the split after the drag that set it (deferred to T9)
+
+The 320px-per-pane minimum is enforced from the rect a drag measures, so a *drag* can never
+starve a pane. Two later events can, because the fraction is held fixed and nothing re-runs the
+clamp: shrinking the window (at a narrow enough width, 20% of the body is under 320px), and
+**opening the sidebar** after dragging wide with it collapsed — the editor loses 240px it was
+never re-measured for. No `ResizeObserver`, deliberately: T9 owns narrow viewports, and there is
+no breakpoint frame anywhere in section `18.1` to clamp toward.
 
 ## Remaining decisions
 
