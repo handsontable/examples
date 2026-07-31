@@ -1062,6 +1062,15 @@ Verified by giving the dev server a proxy for `/api`, `/d` and `/embed` and poin
 Worth folding into `vite.config.ts` as a dev-only proxy so `pnpm dev` matches production; not done
 here because it changes every local request path, not just full mode's.
 
+### 32. `pnpm typecheck` needs a `pnpm build` first on this branch (build-order note)
+
+`apps/authoring` typechecks against `packages/runtime/dist`, not its source, and that `dist` was
+built before T5 added `reload()` to `DemoRuntime`. On a fresh clone of the integration branch
+`pnpm typecheck` therefore fails with `Property 'reload' does not exist on type 'DemoRuntime'`
+until `pnpm build` regenerates the declarations. Predates T8; the fix is either committing to
+build in CI before typechecking or pointing the app's path mapping at the package source, which
+is what the `editor-shell` alias in `vite.config.ts` already does for the shell.
+
 ## Remaining decisions
 
 None blocking. One item to confirm with design during review: whether `edit` mode keeps the
