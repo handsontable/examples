@@ -51,7 +51,13 @@ interface DemoListItem {
   updated_at: string;
 }
 
-type Busy = { id: string; what: "fork" | "delete" } | null;
+/** In-flight action **per demo id**, not one global slot.
+ *
+ *  A single slot looked adequate because each card disables its own kebab — but
+ *  it only disables *its own*. Starting a fork on a second card while the first
+ *  is still running overwrote the slot, dropping the first card's spinner, and
+ *  whichever request settled first cleared the other one's state too. */
+type BusyMap = Record<string, "fork" | "delete">;
 
 export interface MyDemosPageProps {
   apiBase: string;
@@ -61,8 +67,16 @@ export interface MyDemosPageProps {
 export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
   const [demos, setDemos] = useState<DemoListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<Busy>(null);
+  const [busy, setBusy] = useState<BusyMap>({});
   const [confirming, setConfirming] = useState<DemoListItem | null>(null);
+
+  const markBusy = (id: string, what: "fork" | "delete") =>
+    setBusy((b) => ({ ...b, [id]: what }));
+  const clearBusy = (id: string) =>
+    setBusy((b) => {
+      const { [id]: _gone, ...rest } = b;
+      return rest;
+    });
 
   const load = useCallback(async () => {
     setError(null);
@@ -88,7 +102,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
    *  stays. Reflected locally rather than refetched: the list is `updated_at DESC`
    *  and a refetch would reorder the grid under the user's cursor. */
   async function remove(demo: DemoListItem) {
-    setBusy({ id: demo.id, what: "delete" });
+    markBusy(demo.id, "delete");
     setError(null);
     const token = getToken();
     try {
@@ -103,7 +117,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
       // no-op. Say so instead.
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(null);
+      clearBusy(demo.id);
       setConfirming(null);
     }
   }
@@ -112,7 +126,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
    *  create time. So a fork is: read the source snapshot, POST it back as a new
    *  demo. Same two calls `App.tsx`'s `onFork` makes. */
   async function fork(demo: DemoListItem) {
-    setBusy({ id: demo.id, what: "fork" });
+    markBusy(demo.id, "fork");
     setError(null);
     const token = getToken();
     try {
@@ -139,7 +153,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
       location.href = `/edit/${id}`;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      setBusy(null);
+      clearBusy(demo.id);
     }
     // No `finally`: the success path navigates away, and clearing `busy` first
     // would flash the card back to idle mid-navigation.
@@ -187,7 +201,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
                   demo={d}
                   ownerName={ownerName}
                   ownerInitial={ownerInitial}
-                  busy={busy?.id === d.id ? busy.what : null}
+                  busy={busy[d.id] ?? null}
                   onCopyLink={() => void copyLink(d)}
                   onFork={() => void fork(d)}
                   onDelete={() => setConfirming(d)}
@@ -218,9 +232,9 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
               type="button"
               style={dangerButton}
               onClick={() => void remove(confirming)}
-              disabled={busy?.what === "delete"}
+              disabled={busy[confirming.id] === "delete"}
             >
-              {busy?.what === "delete" ? "Deleting…" : "Delete"}
+              {busy[confirming.id] === "delete" ? "Deleting…" : "Delete"}
             </button>
             <button type="button" style={ghostButton} onClick={() => setConfirming(null)}>
               Cancel
