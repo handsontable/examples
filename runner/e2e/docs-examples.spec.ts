@@ -219,16 +219,20 @@ test("cascader section headers collapse and re-expand", async ({ page }) => {
   await page.goto(REACT_EXAMPLE);
   await page.getByRole("button", { name: /Adding and removing columns/ }).click();
 
-  const header = page.getByRole("treeitem", { name: "Adding and removing columns" });
+  // The focusable `treeitem` wraps the whole node (ARIA requires it to contain the
+  // group it expands), so `aria-expanded` is asserted there but the click has to go
+  // to the visible header row — the node's own centre is over an example.
+  const node = page.getByRole("treeitem", { name: "Adding and removing columns" });
+  const toggle = node.locator(".hot-casc-header");
   const group = page.getByRole("group", { name: "Adding and removing columns" });
-  await expect(header).toHaveAttribute("aria-expanded", "true");
+  await expect(node).toHaveAttribute("aria-expanded", "true");
   await expect(group).toBeVisible();
 
-  await header.click();
-  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(node).toHaveAttribute("aria-expanded", "false");
   await expect(group).toHaveCount(0);
 
-  await header.click();
+  await toggle.click();
   await expect(group).toBeVisible();
 });
 
@@ -250,6 +254,29 @@ test("cascader is keyboard navigable", async ({ page }) => {
   await page.keyboard.press("Enter");
 
   await expect(page).toHaveURL(/docs=guides%2Fcolumns%2Fcolumn-adding%2F.+example1/);
+});
+
+test("hovering a category keeps the example column keyboard-navigable", async ({ page }) => {
+  await installRouteFixtures(page);
+  await page.goto("/?example=react");
+  await page.getByRole("button", { name: /React/ }).first().click();
+
+  // Walk into the example column, then hover a *different* category. That swaps
+  // the column out and unmounts the focused row — focus used to fall to <body>
+  // and every further arrow key was swallowed.
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("treeitem", { name: "Adding and removing columns" })).toBeFocused();
+
+  await page.getByRole("option", { name: "Starter templates" }).hover();
+
+  // Focus survived the swap — it sits on the rebuilt column's first row...
+  const rows = page.getByRole("treeitem");
+  await expect(rows.first()).toBeFocused();
+  // ...and arrow keys still move it, which is what the bug swallowed.
+  await page.keyboard.press("ArrowDown");
+  await expect(rows.nth(1)).toBeFocused();
 });
 
 test("switching framework updates the URL", async ({ page }) => {

@@ -44,7 +44,12 @@
       .hot-casc-header:hover { background: var(--hot-color-hover); }
       /* The cascader's rows are divs carrying a roving tabindex (T7), so they get
          no UA focus ring of their own. :focus-visible keeps it off mouse clicks. */
-      .hot-casc-row:focus-visible, .hot-casc-header:focus-visible {
+      .hot-casc-row:focus-visible { outline: 2px solid var(--hot-color-accent); }
+      /* A section header's focusable node wraps its whole subtree, because an ARIA
+         treeitem must contain the group it expands. So the ring goes on the header
+         row inside the node — on the node itself it would box in every example. */
+      .hot-casc-node:focus-visible { outline: none; }
+      .hot-casc-node:focus-visible > .hot-casc-header {
         outline: 2px solid var(--hot-color-accent);
       }
       /* Borderless square icon buttons (theme toggle today; the row-2 icons in T2).

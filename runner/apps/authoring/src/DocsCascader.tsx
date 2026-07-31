@@ -190,6 +190,21 @@ export function DocsCascader({
     searchRef.current?.focus();
   }, []);
 
+  // Hovering (or clicking) a category swaps the example column out from under the
+  // keyboard: the focused row unmounts, focus falls to `<body>`, and because
+  // `focusSeq` never changed nothing re-focuses — every further arrow key is
+  // swallowed until the user tabs or clicks. Re-assert focus at the top of the
+  // rebuilt column. Read through refs so this fires on the category change only,
+  // not on every focus move.
+  const focusRef = useRef(focus);
+  focusRef.current = focus;
+  const exRowsRef = useRef(exRows);
+  exRowsRef.current = exRows;
+
+  useEffect(() => {
+    if (focusRef.current?.col === "ex") moveFocus("ex", 0, exRowsRef.current.length);
+  }, [activeCategory?.key, moveFocus]);
+
   const setRowRef = (col: FocusCol, idx: number) => (el: HTMLDivElement | null) => {
     if (el) rowRefs.current.set(`${col}:${idx}`, el);
     else rowRefs.current.delete(`${col}:${idx}`);
@@ -393,59 +408,81 @@ export function DocsCascader({
               <div style={s.exCol} role="tree" aria-label="Examples">
                 {activeCategory?.groups.map((g) => {
                   const isCollapsed = collapsed.has(g.key);
-                  const headerIdx = g.header ? ++exIdx : -1;
-                  return (
-                    <div key={g.key} style={s.group}>
-                      {g.header && (
+                  // Consumes indices, so it must not run for a collapsed group —
+                  // `exRows` doesn't count hidden rows either.
+                  const renderItems = () =>
+                    g.items.map((it) => {
+                      const idx = ++exIdx;
+                      const selected = it.key === selectedKey;
+                      return (
                         <div
-                          ref={setRowRef("ex", headerIdx)}
-                          className="hot-casc-header"
-                          style={s.groupHeader}
+                          key={it.key}
+                          ref={(el) => {
+                            setRowRef("ex", idx)(el);
+                            if (selected) selectedRef.current = el;
+                          }}
+                          className="hot-casc-row"
+                          style={selected ? { ...s.exItem, ...s.exItemSelected } : s.exItem}
                           role="treeitem"
-                          aria-expanded={!isCollapsed}
-                          aria-label={g.header}
-                          tabIndex={tabIndexFor("ex", headerIdx)}
-                          onKeyDown={(e) =>
-                            onExKeyDown(e, headerIdx, { kind: "header", key: g.key, collapsed: isCollapsed })
-                          }
-                          onClick={() => toggleGroup(g.key)}
+                          aria-selected={selected}
+                          tabIndex={tabIndexFor("ex", idx)}
+                          onKeyDown={(e) => onExKeyDown(e, idx, { kind: "item", key: it.key, leaf: it.leaf })}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => choose(it.leaf)}
                         >
-                          <span style={s.groupHeaderLabel}>{g.header}</span>
-                          <span style={s.chevron}>
-                            {isCollapsed ? <IconChevronRight /> : <IconChevronDown />}
-                          </span>
+                          <span style={s.rowLabel} title={it.label}>{it.label}</span>
                         </div>
-                      )}
+                      );
+                    });
+
+                  // A depth-1 category has no section header, so its examples are
+                  // `treeitem`s straight off the tree. `role="none"` keeps this
+                  // wrapper transparent for ARIA ownership; it exists only to carry
+                  // the group's bottom margin.
+                  if (!g.header) {
+                    return (
+                      <div key={g.key} role="none" style={s.group}>
+                        {renderItems()}
+                      </div>
+                    );
+                  }
+
+                  const headerIdx = ++exIdx;
+                  return (
+                    // The `group` nests *inside* this `treeitem` rather than beside
+                    // it: ARIA requires a parent treeitem to contain (or `aria-owns`)
+                    // its group, otherwise `aria-expanded` announces a state that
+                    // owns no children. The focusable node is therefore the whole
+                    // subtree, and the visible row is the inner header div.
+                    <div
+                      key={g.key}
+                      ref={setRowRef("ex", headerIdx)}
+                      className="hot-casc-node"
+                      style={s.group}
+                      role="treeitem"
+                      aria-expanded={!isCollapsed}
+                      aria-label={g.header}
+                      tabIndex={tabIndexFor("ex", headerIdx)}
+                      // The items live inside this node, so their key events bubble
+                      // through here — only act on the node's own.
+                      onKeyDown={(e) => {
+                        if (e.target !== e.currentTarget) return;
+                        onExKeyDown(e, headerIdx, { kind: "header", key: g.key, collapsed: isCollapsed });
+                      }}
+                    >
+                      <div
+                        className="hot-casc-header"
+                        style={s.groupHeader}
+                        onClick={() => toggleGroup(g.key)}
+                      >
+                        <span style={s.groupHeaderLabel}>{g.header}</span>
+                        <span style={s.chevron}>
+                          {isCollapsed ? <IconChevronRight /> : <IconChevronDown />}
+                        </span>
+                      </div>
                       {!isCollapsed && (
-                        // A headerless group takes no name of its own: the tree
-                        // already carries one, and naming it after the category
-                        // would collide with the left column's section group.
-                        <div role="group" aria-label={g.header || undefined}>
-                          {g.items.map((it) => {
-                            const idx = ++exIdx;
-                            const selected = it.key === selectedKey;
-                            return (
-                              <div
-                                key={it.key}
-                                ref={(el) => {
-                                  setRowRef("ex", idx)(el);
-                                  if (selected) selectedRef.current = el;
-                                }}
-                                className="hot-casc-row"
-                                style={selected ? { ...s.exItem, ...s.exItemSelected } : s.exItem}
-                                role="treeitem"
-                                aria-selected={selected}
-                                tabIndex={tabIndexFor("ex", idx)}
-                                onKeyDown={(e) =>
-                                  onExKeyDown(e, idx, { kind: "item", key: it.key, leaf: it.leaf })
-                                }
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => choose(it.leaf)}
-                              >
-                                <span style={s.rowLabel} title={it.label}>{it.label}</span>
-                              </div>
-                            );
-                          })}
+                        <div role="group" aria-label={g.header}>
+                          {renderItems()}
                         </div>
                       )}
                     </div>
