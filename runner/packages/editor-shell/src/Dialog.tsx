@@ -84,11 +84,31 @@ export function Dialog({ title, onClose, children, width = 356 }: DialogProps) {
       // Cycle within the card. Without this, Tab walks into the page behind the
       // scrim, which is still fully interactive to a keyboard.
       const items = focusables();
-      if (items.length === 0) return;
+      const active = document.activeElement;
+      const inside = !!cardRef.current?.contains(active);
+
+      // Nothing focusable left — every control disabled — so park on the card
+      // rather than letting Tab leave. Same reason as the branch below.
+      if (items.length === 0) {
+        e.preventDefault();
+        cardRef.current?.focus();
+        return;
+      }
       const first = items[0]!;
       const last = items[items.length - 1]!;
-      const active = document.activeElement;
-      if (e.shiftKey && (active === first || !cardRef.current?.contains(active))) {
+
+      // Focus outside the card is reachable without the user ever tabbing out:
+      // disabling the control that had focus drops it to <body>. The delete
+      // confirmation does exactly that — pressing Delete disables both Delete
+      // and Cancel while the request is in flight. Pull it back on *either*
+      // direction; handling only Shift+Tab let a forward Tab walk into the page
+      // behind the scrim while dismissal was still blocked.
+      if (!inside) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+        return;
+      }
+      if (e.shiftKey && active === first) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && active === last) {
