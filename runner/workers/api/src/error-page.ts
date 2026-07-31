@@ -35,7 +35,11 @@ const DARK: Record<keyof typeof LIGHT, string> = {
   border: "#222222",
   text: "#d1d1d4",
   textMuted: "#8f8f94",
-  accent: "#4669F6",
+  // Same value as light: `accent` is the brand blue and is mode-invariant in
+  // `theme.ts`. This briefly shipped as `#4669F6`, which is dark `splitterActive`
+  // — a different token that happens to be a lifted blue. Don't "fix" the
+  // duplication away; the Record type is what keeps the two palettes in step.
+  accent: "#1A42E8",
 };
 
 /** `packages/editor-shell/src/mark.svg`, inlined. Mode-invariant brand asset. */

@@ -700,6 +700,7 @@ subtask that surfaced it and what evidence exists.
 | 35 | `/share/:id` now shows a signed-in visitor their account menu instead of `Sign in` | behaviour change | T9 |
 | 36 | A `<button>` with no inline `background` gets the UA's `buttonface` slab | gotcha | T9 |
 | 37 | No owner display name or avatar exists anywhere in the stack | asset/data gap | T9 |
+| 38 | `accent` as link text on a dark surface lands under WCAG AA | design decision | T9 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -1218,6 +1219,22 @@ name. It takes no dependency on the external login broker returning `name`/`pict
 broker is Google-backed and plausibly does, but this repo has never read or typed them, and that
 cannot be confirmed from a code read. Worth one live call to `/broker/userinfo` before item 33
 is scoped: if the payload carries them, the profile table gets smaller.
+
+### 38. `accent` as link text on a dark surface is under AA (design decision)
+
+`error-page.ts` briefly shipped dark `accent` as `#4669F6`. That is dark **`splitterActive`** — a
+different token that happens to be a lifted blue — not `accent`, which `theme.ts` holds at
+`#1A42E8` in *both* modes because it is the brand colour. Caught in review; the file now mirrors
+`theme.ts`, which is what its header promises.
+
+Mirroring it faithfully surfaces something pre-existing, though: `#1A42E8` on the dark card
+`#222222` is about **2.3:1**, well under WCAG AA's 4.5:1 for body text. The lifted `#4669F6`
+would have been ~3.5:1 — better, still short, and wrong by name.
+
+This is not the error page's problem to solve unilaterally: the shell already renders
+`accent`-coloured text on dark surfaces elsewhere, so a fix belongs in `theme.ts` as a
+dark-mode-only `accentText` (or a lift to `accentHover`'s `#3b5cf0`) applied everywhere at once.
+Flag at design review alongside item 1, which lifted dark `textMuted` for exactly this reason.
 
 ## Remaining decisions
 
