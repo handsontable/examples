@@ -45,6 +45,9 @@ export interface EditorShellProps {
   title?: string;
   description?: string;
   createdAt?: string;
+  /** Opens the Edit info dialog from the BOX INFO pencil (`114:21684`). Named
+   *  `onEditInfo`, not `onEdit`, because `onEdit` below is the file-content one. */
+  onEditInfo?: () => void;
   /** Zips the live workspace — surfaced in the sidebar's FILES header, every mode.
    *  Same callback the top bar's `onDownload` takes; there is one zip path. */
   onDownloadAll?: () => void;
@@ -63,8 +66,15 @@ export interface EditorShellProps {
   /** Create an embeddable (docs-only) version from the current playground code. */
   onEmbed?: () => void;
   embedding?: boolean;
-  /** Signed in? Gates the authed action bar and the Sign in button. */
+  /** Signed in *for this workspace*? Gates the authed action bar. Since T9 this no
+   *  longer gates the top bar: `/share/:id` passes `false` here while still handing
+   *  down `accountEmail`, so a signed-in visitor keeps their account menu on a
+   *  read-only page instead of being offered "Sign in". */
   authed: boolean;
+  /** Signed-in identity for the top bar's account menu (`114:21480`). */
+  accountEmail?: string;
+  onMyDemos?: () => void;
+  onLogout?: () => void;
   /** "play" (playground -> Fork), "edit" (saved demo -> Save/Share), or
    *  "share" (read-only public playground). */
   mode?: "play" | "edit" | "share";
@@ -137,7 +147,9 @@ export function EditorShell(props: EditorShellProps) {
         examplePill={props.examplePill}
         onDownload={props.onDownload}
         onSignIn={props.onSignIn}
-        authed={props.authed}
+        accountEmail={props.accountEmail}
+        onMyDemos={props.onMyDemos}
+        onLogout={props.onLogout}
       />
 
       <div ref={split.bodyRef} style={{ ...s.body(sidebarOpen), ...split.bodyStyle }}>
@@ -148,6 +160,7 @@ export function EditorShell(props: EditorShellProps) {
             title={props.title ?? props.frameworkLabel}
             description={props.description}
             createdAt={props.createdAt}
+            onEdit={props.onEditInfo}
             packageJson={props.files["/package.json"]}
             paths={paths}
             active={active}

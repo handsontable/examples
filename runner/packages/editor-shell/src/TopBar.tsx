@@ -5,6 +5,7 @@
 // edit/share the demo title. Everything else is shell-owned.
 
 import type { ReactNode } from "react";
+import { AccountMenu } from "./AccountMenu.js";
 import { IconDownload } from "./icons/index.js";
 import { s } from "./styles.js";
 import { theme } from "./theme.js";
@@ -18,10 +19,23 @@ export interface TopBarProps {
   onDownload?: () => void;
   /** Start the sign-in flow. Rendered only when anonymous. */
   onSignIn?: () => void;
-  authed: boolean;
+  /** Signed-in identity for the account menu (`114:21480`), and what the bar now
+   *  keys "signed in" off — not the shell's `authed`, deliberately. `/share/:id`
+   *  renders the editor as anonymous (read-only, no action bar) but the visitor
+   *  may well have a session, and offering them "Sign in" then is wrong. */
+  accountEmail?: string;
+  onMyDemos?: () => void;
+  onLogout?: () => void;
 }
 
-export function TopBar({ examplePill, onDownload, onSignIn, authed }: TopBarProps) {
+export function TopBar({
+  examplePill,
+  onDownload,
+  onSignIn,
+  accountEmail,
+  onMyDemos,
+  onLogout,
+}: TopBarProps) {
   const logoUrl = useLogoUrl();
   return (
     <header style={s.topBar}>
@@ -46,10 +60,14 @@ export function TopBar({ examplePill, onDownload, onSignIn, authed }: TopBarProp
 
       {/* No icon: `72:15885` draws a download glyph here only because the frame
           was duplicated from the Download button. */}
-      {!authed && onSignIn && (
+      {!accountEmail && onSignIn && (
         <button type="button" style={actionButton} onClick={onSignIn}>
           Sign in
         </button>
+      )}
+
+      {accountEmail && onMyDemos && onLogout && (
+        <AccountMenu email={accountEmail} onMyDemos={onMyDemos} onLogout={onLogout} />
       )}
     </header>
   );

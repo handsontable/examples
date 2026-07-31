@@ -33,8 +33,9 @@ import {
 } from "./docs-catalog.js";
 import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
-import { MyDemos } from "./MyDemos.js";
 import { ShareLinks } from "./ShareLinks.js";
+import { EditInfoDialog } from "./EditInfoDialog.js";
+import { MyDemosPage } from "./MyDemos.js";
 
 const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefined;
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
@@ -144,7 +145,12 @@ type EditorRoute =
   | { mode: "edit"; id: string }
   | { mode: "share"; id: string };
 
-function parseRoute(): EditorRoute {
+/** Routes that are not the editor at all. Kept out of `EditorRoute` so every
+ *  `route.mode` switch inside `Authoring` stays exhaustive over editor modes. */
+type AppRoute = EditorRoute | { mode: "myDemos" };
+
+function parseRoute(): AppRoute {
+  if (/^\/my-demos\/?$/.test(location.pathname)) return { mode: "myDemos" };
   const m = location.pathname.match(/^\/(edit|share)\/([A-Za-z0-9_-]+)\/?$/);
   if (m) return { mode: m[1] as "edit" | "share", id: m[2]! };
   return { mode: "play" };
@@ -160,18 +166,75 @@ function parseRoute(): EditorRoute {
  * mode renders is the one `/share/:id` already serves publicly, so this exposes nothing
  * new — and the maximize button has to work from the editor, which is where it lives.
  */
-function fullModeId(route: EditorRoute): string | null {
-  if (route.mode === "play") return null;
+function fullModeId(route: AppRoute): string | null {
+  if (route.mode === "play" || route.mode === "myDemos") return null;
   return new URLSearchParams(location.search).get("mode") === "full" ? route.id : null;
+}
+
+const SITE_TITLE = "Handsontable Demos";
+
+/**
+ * Sets `document.title`. Before T9 there was one static title — "Handsontable
+ * Demos — Authoring" — which was wrong on `/share/:id` (public, not authoring)
+ * and uninformative in a tab strip full of demos.
+ *
+ * A hook rather than a render-time assignment: the demo's own title arrives
+ * asynchronously, and writing during render would make the effect order decide
+ * what a browser tab says.
+ */
+function useDocumentTitle(name?: string | null) {
+  useEffect(() => {
+    document.title = name ? `${name} — ${SITE_TITLE}` : SITE_TITLE;
+  }, [name]);
 }
 
 export function App() {
   const route = parseRoute();
   const fullId = fullModeId(route);
   if (fullId) return <FullMode id={fullId} />;
+  // Before `Gate`/`Authoring`, which boot a container session this page has no
+  // use for. It is auth-gated all the same — the listing is per-user.
+  if (route.mode === "myDemos") return <MyDemosRoute />;
   // The share page is a public, read-only playground — no auth needed.
-  if (route.mode === "share") return <Authoring user={null} route={route} />;
+  if (route.mode === "share") return <ShareRoute route={route} />;
   return <Gate route={route} />;
+}
+
+/** `/my-demos`. Same login-on-anonymous contract as `/edit/:id`: the listing is
+ *  `WHERE created_by = <caller>`, so there is nothing to show a stranger. */
+function MyDemosRoute() {
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  useEffect(() => {
+    currentUser().then(setUser);
+  }, []);
+  useEffect(() => {
+    if (user === null) login(); // return_to preserves /my-demos
+  }, [user]);
+  useDocumentTitle("My demos");
+
+  if (user === undefined) return <Splash text="Loading data …" />;
+  if (user === null) return <Splash text="Sign in to see your demos…" />;
+  return <MyDemosPage apiBase={API_BASE} user={user} />;
+}
+
+/**
+ * `/share/:id` — public and read-only, so the workspace is always anonymous
+ * (`user={null}`: no action bar, no file CRUD, no save).
+ *
+ * The *account menu* is a separate question. Before T9 the top bar keyed off the
+ * same `user`, so a signed-in visitor opening someone's share link was offered
+ * "Sign in". The identity is resolved here and handed to the top bar alone —
+ * never rendered as a gate, so nothing waits on it and the page paints as fast
+ * as it always did.
+ */
+function ShareRoute({ route }: { route: { mode: "share"; id: string } }) {
+  const [accountUser, setAccountUser] = useState<User | null>(null);
+  useEffect(() => {
+    let live = true;
+    currentUser().then((u) => { if (live) setAccountUser(u); });
+    return () => { live = false; };
+  }, []);
+  return <Authoring user={null} accountUser={accountUser} route={route} />;
 }
 
 /**
@@ -207,6 +270,8 @@ function FullMode({ id }: { id: string }) {
       .catch(() => { /* the status dot reports the build; a missing title is not an error state */ });
     return () => { cancelled = true; };
   }, [id]);
+
+  useDocumentTitle(title || null);
 
   // `framework` and the files only exist on the source snapshot. The files are what
   // `Download` zips; without them the button hides rather than handing over an empty zip.
@@ -251,8 +316,10 @@ function FullMode({ id }: { id: string }) {
 
   return (
     <div style={{ ...shellStyles.shell, gridTemplateRows: "auto 1fr" }}>
+      {/* No `accountEmail`: `65:20432` draws no account control, and full mode had
+          no Sign in either — it was already passing `authed={false}` with no
+          `onSignIn`, so the top-right has always been theme toggle + Download. */}
       <TopBar
-        authed={false}
         examplePill={
           <div style={shellStyles.examplePill(false)}>
             <span style={pillLabel}>{title || "Shared demo"}</span>
@@ -334,7 +401,17 @@ function NotFound({ path, transient = false }: { path: string | null; transient?
   );
 }
 
-function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
+function Authoring({
+  user,
+  route,
+  // Defaults to `user`: in `play` and `edit` the workspace identity *is* the
+  // account identity. Only `ShareRoute` passes them apart.
+  accountUser = user,
+}: {
+  user: User | null;
+  route: EditorRoute;
+  accountUser?: User | null;
+}) {
   const savedId = route.mode === "edit" || route.mode === "share" ? route.id : null;
   const isShare = route.mode === "share";
   const { mode: themeMode } = useTheme();
@@ -407,7 +484,15 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [shareLinksOpen, setShareLinksOpen] = useState(false);
   const [linksId, setLinksId] = useState<string | null>(null);
   const [forkedFrom, setForkedFrom] = useState<string | null>(`catalog:${framework}`);
-  const [myDemosOpen, setMyDemosOpen] = useState(false);
+  /** Edit info (`114:24410`), opened from the BOX INFO pencil. Replaces the two
+   *  bare inputs T2 had to park in the authed action bar for want of a frame.
+   *
+   *  Seeded from `?edit=info`, which is what My Demos' **Rename** navigates to —
+   *  without it Rename and Open would be the same link. Read once, at mount:
+   *  after that the dialog is the user's to open and close. */
+  const [editInfoOpen, setEditInfoOpen] = useState(
+    () => route.mode === "edit" && new URLSearchParams(location.search).get("edit") === "info",
+  );
   const docsPathRef = useRef<string | null>(docsPath);
   const dirtyRef = useRef(dirty);
   const sourceLoadedRef = useRef(sourceLoaded);
@@ -999,6 +1084,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   // /embed/:id acts on it is out of scope for DEV-2027 (ADR-0022).
   const embedUrl = linksId ? `${API_BASE}/embed/${linksId}?theme=${themeMode}` : "";
 
+  // Same string the top bar's pill shows: a saved demo's title, otherwise the
+  // example's display name.
+  useDocumentTitle(title || entry.displayName);
+
   // The framework variants available for the currently-open docs example — drive
   // the separate framework picker shown next to the example Cascader.
   const currentDocsMeta = docsPath ? docsItems.find((i) => i.docsPath === docsPath) : undefined;
@@ -1060,6 +1149,9 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         title={title || entry.displayName}
         description={description}
         createdAt={createdAt}
+        // Same owner-only gate as the file CRUD below: only `edit` mode is the
+        // owner's own demo, so only there is the metadata editable.
+        onEditInfo={route.mode === "edit" ? () => setEditInfoOpen(true) : undefined}
         onDownloadAll={downloadZip}
         // Changing the *file set* is owner-only (ADR-0023): `play` is a playground or docs
         // example and `share` is read-only, so neither gets add/rename/delete. Editing file
@@ -1074,6 +1166,11 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         onEmbed={onEmbed}
         embedding={embedding}
         authed={!!user}
+        // Account menu (`114:21480`). Keyed off `accountUser`, not `user`, so it
+        // survives `/share/:id` — see `ShareRoute`.
+        accountEmail={accountUser?.email}
+        onMyDemos={() => { location.href = "/my-demos"; }}
+        onLogout={logout}
         mode={route.mode}
         sharing={forking}
         saving={saving}
@@ -1120,33 +1217,11 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         }
         // Signed-in-only and drawn in no frame, so they live in the action bar
         // rather than the designed top bar (ADR-0023).
-        authedExtras={
-          <>
-            {route.mode === "edit" && (
-              <>
-                <input
-                  style={{ ...selectStyle, fontFamily: theme.font.ui, width: 220 }}
-                  value={title}
-                  onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
-                  placeholder="Demo title"
-                  aria-label="Demo title"
-                />
-                <input
-                  style={{ ...selectStyle, fontFamily: theme.font.ui, width: 300 }}
-                  value={description}
-                  onChange={(e) => { setDescription(e.target.value); setDirty(true); }}
-                  placeholder="Description (optional)"
-                  aria-label="Demo description"
-                />
-              </>
-            )}
-            {!isShare && (
-              <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
-            )}
-            <span style={{ color: theme.color.textMuted, fontSize: 12 }}>{user?.email}</span>
-            <button style={ghostBtn} onClick={logout}>Log out</button>
-          </>
-        }
+        // T9 emptied this. Title/description moved into the Edit info dialog behind
+        // the BOX INFO pencil (`114:24410`), and My demos / the identity / Log out
+        // moved into the top bar's account menu (`114:21480`) — both now have frames,
+        // so they no longer need the unframed overflow row ADR-0023 gave them.
+        authedExtras={undefined}
         publicUrl={publicUrl}
         previewUrl={previewUrl}
         onRefreshPreview={refreshPreview}
@@ -1181,8 +1256,21 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         <ShareLinks clientUrl={clientUrl} embedUrl={embedUrl} onClose={() => setShareLinksOpen(false)} />
       )}
 
-      {myDemosOpen && (
-        <MyDemos apiBase={API_BASE} token={getToken()} onClose={() => setMyDemosOpen(false)} />
+      {editInfoOpen && (
+        <EditInfoDialog
+          title={title}
+          description={description}
+          onClose={() => setEditInfoOpen(false)}
+          // Marks the workspace dirty rather than PATCHing on its own: the code and
+          // the metadata are one snapshot, and `onSave` sends both in a single
+          // rebuilding PATCH. Saving here too would rebuild twice.
+          onSave={(next) => {
+            setTitle(next.title);
+            setDescription(next.description);
+            setDirty(true);
+            setEditInfoOpen(false);
+          }}
+        />
       )}
     </div>
   );
@@ -1204,28 +1292,11 @@ const centered: React.CSSProperties = {
   gap: 12,
   background: theme.color.surface,
 };
-// Form controls need an explicit background/colour: left unset, the UA default
-// paints them light regardless of the shell mode.
-const selectStyle: React.CSSProperties = {
-  fontFamily: theme.font.mono,
-  fontSize: 13,
-  padding: "4px 8px",
-  borderRadius: 8,
-  border: `1px solid ${theme.color.border}`,
-  background: theme.color.surface,
-  color: theme.color.text,
-  boxSizing: "border-box",
-};
-const ghostBtn: React.CSSProperties = {
-  fontFamily: theme.font.ui,
-  fontSize: 12.5,
-  border: `1px solid ${theme.color.border}`,
-  background: theme.color.surface,
-  color: theme.color.text,
-  borderRadius: 8,
-  padding: "5px 10px",
-  cursor: "pointer",
-};
+// `selectStyle` and `ghostBtn` lived here for the unframed authed-extras row —
+// the title/description inputs and the My demos / Log out buttons. T9 moved all
+// of that into the Edit info dialog and the account menu, both of which style
+// themselves from the token set, so the two locals had no callers left.
+
 /** The demo title inside the centred pill (`48:6583`). */
 const pillLabel: React.CSSProperties = {
   fontSize: 13, fontWeight: 500, color: theme.color.text,

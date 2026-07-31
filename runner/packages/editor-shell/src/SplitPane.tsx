@@ -6,6 +6,8 @@
 // what keeps the seam still when the sidebar is toggled (`styles.ts`'s `body`).
 import {
   useCallback,
+  useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -22,8 +24,8 @@ export const SPLIT_DEFAULT = 0.5;
 /** Hard bounds, whatever the viewport. */
 const MIN_FRACTION = 0.2;
 const MAX_FRACTION = 0.8;
-/** Neither pane goes below this while the viewport has room for both. Narrow
- *  viewports are T9's; here the hard bounds simply win. */
+/** Neither pane goes below this while the viewport has room for both. Below the
+ *  width where both minima fit, the hard bounds simply win. */
 const MIN_PANE = 320;
 /** Arrow-key step. */
 const STEP = 0.02;
@@ -93,6 +95,10 @@ export function useSplitPane(sidebarOpen: boolean): SplitPane {
   const [focused, setFocused] = useState(false);
   /** The live value mid-drag, which state deliberately does not track. */
   const live = useRef(fraction);
+  /** The last ratio the *user* asked for, as opposed to one a re-clamp imposed.
+   *  A narrow window forces the seam inwards; widening it again has to give the
+   *  chosen ratio back, so the re-clamp reads this and never overwrites it. */
+  const desired = useRef(fraction);
 
   const write = useCallback((f: number) => {
     live.current = f;
@@ -101,6 +107,7 @@ export function useSplitPane(sidebarOpen: boolean): SplitPane {
 
   const commit = useCallback(
     (f: number) => {
+      desired.current = f;
       write(f);
       setFraction(f);
       try {
@@ -111,6 +118,42 @@ export function useSplitPane(sidebarOpen: boolean): SplitPane {
     },
     [write],
   );
+
+  /**
+   * Re-apply the pane minima to the *current* body width (open item 19).
+   *
+   * Until T9 the minima were enforced only at drag time, so two ordinary actions
+   * left a pane starved: shrinking the window, and opening the sidebar after
+   * dragging wide with it collapsed — the editor loses 240px it was never
+   * re-measured for.
+   *
+   * Neither persists and neither touches `desired`: this is the window imposing
+   * a bound, not the user choosing one. Widening back restores what they picked.
+   */
+  const reclamp = useCallback(() => {
+    const rect = bodyRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    const next = clampToPanes(desired.current, rect.width, sidebarOpen);
+    if (Math.abs(next - live.current) < 0.0005) return;
+    write(next);
+    setFraction(next);
+  }, [sidebarOpen, write]);
+
+  // Layout, not passive: the sidebar's track appears in the same commit, and a
+  // passive effect would paint one frame with the old ratio against the new
+  // column count — visibly a starved editor.
+  useLayoutEffect(reclamp, [reclamp]);
+
+  useEffect(() => {
+    const node = bodyRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    // On the body rather than the window: it catches the same viewport resizes
+    // plus anything else that changes the grid's width. Writing `--hot-split`
+    // resizes the *children*, not this node, so the callback can't feed itself.
+    const ro = new ResizeObserver(reclamp);
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [reclamp]);
 
   /** The fraction a pointer at `clientX` asks for, clamped. */
   const fractionAt = useCallback(

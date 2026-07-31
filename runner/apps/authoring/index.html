@@ -3,7 +3,40 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Handsontable Demos — Authoring</title>
+    <!-- "Authoring" was the only title, on every route including the public
+         /share/:id. The SPA now rewrites it per route (`documentTitle` in
+         App.tsx); this is the pre-hydration default and the /404 fallback. -->
+    <title>Handsontable Demos</title>
+    <meta
+      name="description"
+      content="Live, editable Handsontable examples across JavaScript, React, Angular and Vue. Fork one, edit it in the browser, and share a link."
+    />
+    <!-- The mark is transparent-background with a black or white H, so it needs
+         both. Same asset and the same media-query pairing as the documentation
+         site (handsontable/handsontable, docs/src/components/Head.astro). -->
+    <link rel="icon" media="(prefers-color-scheme: light)" href="/favicon.png" />
+    <link rel="icon" media="(prefers-color-scheme: dark)" href="/favicon-dark.png" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
+    <!-- Mirrors --hot-color-surface, like the pre-paint background below. -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#070604" />
+    <!-- og:url and og:image must be absolute — a crawler has no page context to
+         resolve a path against, so a relative one yields no card at all. Hardcoded
+         to the production origin rather than derived at runtime: the crawlers that
+         read these don't run the SPA's JavaScript. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Handsontable Demos" />
+    <meta property="og:title" content="Handsontable Demos" />
+    <meta
+      property="og:description"
+      content="Live, editable Handsontable examples across JavaScript, React, Angular and Vue."
+    />
+    <meta property="og:url" content="https://demos.handsontable.com/" />
+    <meta
+      property="og:image"
+      content="https://demos.handsontable.com/handsontable-banner-og.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
     <!-- Theme mode must be on <html> before the first paint, or a dark-mode reload
          flashes light. Runs synchronously ahead of the module script; React reads
          this attribute rather than re-deriving the mode. Keep in sync with
@@ -54,6 +87,12 @@
       }
       /* Borderless square icon buttons (theme toggle today; the row-2 icons in T2).
          Needs a class because :hover can't be expressed inline. */
+      /* Transparent base, for the same reason as .hot-menu-row below: callers that
+         don't set `background` inline would otherwise get the UA's `buttonface`.
+         (The T2/T3 bar buttons do set it inline via `s.iconButton`, so for those
+         this rule and the :hover are both inert — the universal brightness filter
+         is their rollover.) */
+      .hot-icon-btn { background: transparent; }
       .hot-icon-btn:hover { background: var(--hot-color-hover); }
       /* Sidebar rows (T3). The row actions and the npm external-link are drawn at
          opacity 0 and revealed on hover (72:17018, 72:17074) — inline styles can't
@@ -67,6 +106,28 @@
          row too. */
       .hot-file-row[data-active="true"] { background: var(--hot-color-surface-muted); }
       .hot-file-row:hover { background: var(--hot-color-hover); }
+      /* Popover rows: the account menu (T9) and the demo card's kebab. Same reason
+         as .hot-file-row — the fill can't be inline or it would outrank :hover. */
+      /* The base fill has to live here too, not inline: a <button> without one
+         falls back to the UA's `buttonface`, which paints a grey slab in both
+         modes. Same equal-specificity/source-order trick as .hot-file-row —
+         transparent first, hover second, hover wins. */
+      .hot-menu-row { background: transparent; transition: background-color 0.12s ease; }
+      .hot-menu-row:hover { background: var(--hot-color-hover); }
+      .hot-menu-row[data-active="true"] { background: var(--hot-color-hover); }
+      /* The destructive row's *text* colour belongs here too, for exactly the
+         reason its background does: the hover inverts both, and an inline colour
+         would leave red text sitting on the red fill. */
+      .hot-menu-row[data-danger="true"] { color: var(--hot-color-danger); }
+      .hot-menu-row[data-danger="true"]:hover {
+        background: var(--hot-color-danger);
+        color: var(--hot-color-accent-contrast);
+      }
+      /* Demo cards (T9, 114:26635). The resting border lives here, not inline: an
+         inline `border` shorthand carries border-color and would outrank the
+         hover. Revoked cards don't take the class — they have nothing to click. */
+      .hot-demo-card { border: 1px solid var(--hot-color-border); transition: border-color 0.12s ease; }
+      .hot-demo-card:hover { border-color: var(--hot-color-accent-border); }
       .hot-row-actions, .hot-dep-link { opacity: 0; transition: opacity 0.12s ease; }
       .hot-file-row:hover .hot-row-actions,
       .hot-file-row:focus-within .hot-row-actions,

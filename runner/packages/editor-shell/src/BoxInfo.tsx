@@ -1,7 +1,8 @@
 // The BOX INFO section (`72:16978`): title, description, product badge, created date.
 // Display only — every value arrives as a prop, nothing is fetched or derived here.
 import type { CSSProperties } from "react";
-import { SectionHeader } from "./SectionHeader.js";
+import { SectionHeader, iconBtn } from "./SectionHeader.js";
+import { IconPencil } from "./icons/index.js";
 import { markUrl } from "./useLogoUrl.js";
 import { theme } from "./theme.js";
 
@@ -14,6 +15,10 @@ export interface BoxInfoProps {
   createdAt?: string;
   collapsed: boolean;
   onToggle: () => void;
+  /** Opens the Edit info dialog (`114:21684` — the pencil left of the chevron).
+   *  Omitted wherever the title/description aren't editable: playground and docs
+   *  examples have no demo row, and a share view isn't the owner's. */
+  onEdit?: () => void;
 }
 
 const MONTHS = [
@@ -33,12 +38,24 @@ export function formatCreated(iso: string): string | null {
   return `${MONTHS[d.getMonth()]} ${day}${suffix}, ${d.getFullYear()}`;
 }
 
-export function BoxInfo({ title, description, createdAt, collapsed, onToggle }: BoxInfoProps) {
+export function BoxInfo({ title, description, createdAt, collapsed, onToggle, onEdit }: BoxInfoProps) {
   const created = createdAt ? formatCreated(createdAt) : null;
 
   return (
     <section style={section} aria-label="Box info">
-      <SectionHeader label="Box info" collapsed={collapsed} onToggle={onToggle} divided={false} />
+      <SectionHeader
+        label="Box info"
+        collapsed={collapsed}
+        onToggle={onToggle}
+        divided={false}
+        actions={
+          onEdit && (
+            <button type="button" className="hot-icon-btn" style={iconBtn} title="Edit info" onClick={onEdit}>
+              <IconPencil />
+            </button>
+          )
+        }
+      />
       {!collapsed && (
         <div style={body}>
           <div>
