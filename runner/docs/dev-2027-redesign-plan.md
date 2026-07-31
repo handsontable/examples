@@ -701,6 +701,7 @@ subtask that surfaced it and what evidence exists.
 | 36 | A `<button>` with no inline `background` gets the UA's `buttonface` slab | gotcha | T9 |
 | 37 | No owner display name or avatar exists anywhere in the stack | asset/data gap | T9 |
 | 38 | `accent` as link text on a dark surface lands under WCAG AA | design decision | T9 |
+| 39 | `114:23289`'s full-window label describes behaviour the app doesn't have | design copy fix | T9 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -1235,6 +1236,26 @@ This is not the error page's problem to solve unilaterally: the shell already re
 `accent`-coloured text on dark surfaces elsewhere, so a fix belongs in `theme.ts` as a
 dark-mode-only `accentText` (or a lift to `accentHover`'s `#3b5cf0`) applied everywhere at once.
 Flag at design review alongside item 1, which lifted dark `textMuted` for exactly this reason.
+
+### 39. The share dialog's full-window label describes behaviour we don't have (design copy fix)
+
+`114:23289` labels the middle row **"Full-window (example only — embed in any iframe)"**. Both
+halves are false as shipped:
+
+- **"example only"** — `?mode=full` stopped being bare in T8. It carries the design's own chrome:
+  top bar, URL bar, status bar. The chrome-less surface is the docs embed on the row below.
+- **"embed in any iframe"** — it cannot be embedded at all. The page iframes `/d/:id/`, which
+  sends `frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN` (`share.ts`). A third-party
+  ancestor puts itself in the chain, so `'self'` fails and the inner demo is blocked.
+
+Copying it verbatim would have pointed anyone wanting a bare embed at the one URL that can't do
+it, which is worse than a frame going unimplemented. ADR-0023 rule 1 is about not *deleting*
+working functionality for want of a frame; it does not oblige us to ship copy that contradicts
+the code. T9 ships "Full-window (the demo without the editor)".
+
+**Confirm the wording with design.** The intent behind the frame's copy may be a request — a
+genuinely embeddable chrome-less full-window URL — rather than a description of today. If so
+that is a feature, not a label.
 
 ## Remaining decisions
 

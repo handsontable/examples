@@ -236,7 +236,15 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
             >
               {busy[confirming.id] === "delete" ? "Deleting…" : "Delete"}
             </button>
-            <button type="button" style={ghostButton} onClick={() => setConfirming(null)}>
+            {/* Focus lands here, not on Delete: the destructive control is first
+                in the DOM, and focusing it would make Space or Enter delete the
+                demo the dialog exists to ask about. */}
+            <button
+              type="button"
+              data-autofocus
+              style={ghostButton}
+              onClick={() => setConfirming(null)}
+            >
               Cancel
             </button>
           </div>

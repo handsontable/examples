@@ -40,11 +40,16 @@ export function ShareLinks({
         copied={copied === "client"}
         onCopy={() => copy("client", clientUrl)}
       />
-      {/* The full-window link stopped being bare in T8: `?mode=full` now carries the
-          design's chrome (top bar, URL bar, status bar) around the built demo. The
-          chrome-less surface is the docs embed, which is what the third row points at. */}
+      {/* The frame labels this row "example only — embed in any iframe". Both halves
+          are false, so the copy is not taken from it (open item 39):
+            * `?mode=full` stopped being bare in T8 — it carries the design's chrome
+              (top bar, URL bar, status bar) around the built demo.
+            * It cannot be embedded anywhere. The page iframes `/d/:id/`, which sends
+              `frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN` (`share.ts`),
+              so a third-party ancestor blocks the inner demo.
+          The chrome-less, genuinely embeddable surface is the docs embed below. */}
       <LinkRow
-        label="Full-window (example only — embed in any iframe)"
+        label="Full-window (the demo without the editor)"
         value={fullUrl}
         copied={copied === "full"}
         onCopy={() => copy("full", fullUrl)}

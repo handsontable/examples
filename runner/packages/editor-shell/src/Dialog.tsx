@@ -37,12 +37,15 @@ export interface DialogProps {
 
 export function Dialog({ title, onClose, children, width = 356 }: DialogProps) {
   const cardRef = useRef<HTMLDivElement | null>(null);
+  /** Just the caller's content, so initial focus can skip the close button. */
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const titleId = useId();
 
   // Read once, on mount: by the time we restore, the trigger may be the only
   // sensible target and `document.activeElement` will be inside the card.
   const returnTo = useRef<HTMLElement | null>(null);
 
+  /** Tab order: everything focusable in the card, close button included. */
   const focusables = useCallback(
     () => Array.from(cardRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []),
     [],
@@ -50,9 +53,23 @@ export function Dialog({ title, onClose, children, width = 356 }: DialogProps) {
 
   useEffect(() => {
     returnTo.current = document.activeElement as HTMLElement | null;
-    // The first field, or the card itself — never nothing, or Tab would escape
-    // to the page behind the scrim on the very first press.
-    (focusables()[0] ?? cardRef.current)?.focus();
+    // Deliberately *not* `focusables()[0]`. The close button lives in the title
+    // row, above `children`, so it is always first in the DOM — and landing there
+    // means Edit info and Rename open with focus on the X: typing does nothing,
+    // and Space dismisses the dialog instead of entering a character.
+    //
+    // Prefer whatever the content marks `data-autofocus`, else its first
+    // focusable, else the close button, else the card. Never nothing, or the
+    // first Tab escapes to the page behind the scrim.
+    //
+    // The `data-autofocus` hatch exists for destructive confirms: their first
+    // content control is the destructive one, and landing there means Space or
+    // Enter carries out the thing being confirmed. They point it at Cancel.
+    const content = Array.from(
+      contentRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [],
+    );
+    const marked = contentRef.current?.querySelector<HTMLElement>("[data-autofocus]");
+    (marked ?? content[0] ?? focusables()[0] ?? cardRef.current)?.focus();
     return () => returnTo.current?.focus?.();
   }, [focusables]);
 
@@ -110,7 +127,7 @@ export function Dialog({ title, onClose, children, width = 356 }: DialogProps) {
             <IconX size={20} />
           </button>
         </div>
-        {children}
+        <div ref={contentRef}>{children}</div>
       </div>
     </div>
   );
