@@ -26,15 +26,22 @@ into the iframe document.
 - **The example's theme stays the example's own.** The shell does not re-theme the running
   preview. Mixed light-chrome/dark-grid frames are that, not a second control.
 - For `/embed/:id`, the app appends a *preferred* theme to the embed URL it hands out
-  (`apps/authoring/src/App.tsx:811`, surfaced via `ShareDialog.tsx`). Whether and how the
+  (`apps/authoring/src/App.tsx`, surfaced via `ShareLinks.tsx`). Whether and how the
   embed acts on that hint is out of scope here.
+  <!-- Corrected in T9 (DEV-2163): this originally cited `ShareDialog.tsx`, which was dead
+       code — nothing ever imported it. The live surface has always been `ShareLinks.tsx`.
+       `ShareDialog.tsx` was deleted in T9; see plan open item 2. -->
+
 
 ## Consequences
 - Every visual subtask in the redesign depends on this landing first; it is a refactor with a
   wide blast radius and no user-visible payload of its own.
 - No hard-coded colour may remain outside `theme.ts`, save the SVG logo assets, the pre-paint
-  background in `apps/authoring/index.html`, and the generated seti-ui file-icon palette
-  (ADR-0024) — upstream brand colours, identical in both modes.
+  background in `apps/authoring/index.html`, the generated seti-ui file-icon palette
+  (ADR-0024) — upstream brand colours, identical in both modes — and
+  `workers/api/src/error-page.ts` (T9). The worker is a separate bundle that cannot import the
+  shell, so its branded 404/410 pages restate a handful of the tokens as literals, in the same
+  spirit as the pre-paint script. Keep them in sync with `theme.ts`.
 - A demo whose source declares a light theme renders light inside a dark shell. That is
   intended, and matches the design.
 - Re-theming the example on demand stays possible later, but it is runtime/iframe plumbing —

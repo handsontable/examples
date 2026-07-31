@@ -68,9 +68,10 @@ styles. Theme toggle in the top bar (sun/moon), persisted to `localStorage`, def
 
 The toggle drives the **whole authoring app** — chrome and all app surfaces.
 
-**Embed:** the app appends a *preferred* theme to the embed URL it hands out — built at
-`apps/authoring/src/App.tsx:811` and surfaced through `ShareDialog.tsx`. Those two files are
+**Embed:** the app appends a *preferred* theme to the embed URL it hands out — built in
+`apps/authoring/src/App.tsx` and surfaced through `ShareLinks.tsx`. Those two files are
 the whole of it. How the embed acts on that hint is **out of scope for DEV-2027**.
+(This originally named `ShareDialog.tsx`, which nothing imported; T9 deleted it — open item 2.)
 
 **Measured ramp** — sampled pixel-by-pixel out of the frames, not inferred from the variable
 list. Only the dark frame separates the steps; light collapses onto `#ffffff` / `#f7f7f9`.
@@ -563,17 +564,73 @@ Logged-out chrome needed **no code**: see open item 30.
 
 ## T9 — Apply the design system to existing, undesigned functionality
 
-No Figma frames exist for any of these. They stay; they get rebuilt against the T0 token set
-and the T1 icon set, to dev judgment.
+**Shipped** (DEV-2163). Its premise changed mid-flight: an **After Login** section
+(`114:23287`) was added to the Figma file after the subtask was written, and it supplies real
+frames for surfaces T9 had been told to invent. So T9 split three ways.
 
-- My demos list + empty state (`MyDemos.tsx`)
-- Share / Edit dialogs, copy affordances, revoke/delete confirmations (`ShareDialog.tsx`, `ShareLinks.tsx`)
-- Error states — preview failure, container failure, revoked/404 demo
-- Branding: favicon, page titles, meta
-- Responsive / narrow viewport. The two "Resize" frames are the **splitter drag**, not a
-  breakpoint study — there is no mobile or tablet frame anywhere in section `18.1`.
+### A — designed after all, built to frame
 
-**Depends.** T0, T1. Can run in parallel with T2–T7.
+| Surface | Frame | Landed as |
+|---|---|---|
+| My Demos **page** | `114:25521` | `apps/authoring/src/MyDemos.tsx`, rewritten from a 340px drawer into a route |
+| Account menu | `114:21480` | `packages/editor-shell/src/AccountMenu.tsx`, in `TopBar` |
+| Share links dialog | `114:23289` | `apps/authoring/src/ShareLinks.tsx`, rebuilt |
+| Edit info dialog | `114:24410` | `apps/authoring/src/EditInfoDialog.tsx` (new) |
+| BOX INFO pencil | `114:21684` | `BoxInfo`'s `onEdit`, opening the above |
+
+The card grid, the kebab (Open / Copy link / Fork / Rename / Delete) and the `+ Create` tile are
+all from `114:25521` / `114:27012`. Rename routes to `/edit/:id?edit=info` rather than editing in
+place: a demo's title and its code are one PATCH, and the Edit info dialog already lives there.
+The query param is what keeps Rename from being a second Open — it opens the same page with the
+dialog already up.
+
+Two supporting pieces the frames imply but don't draw:
+
+- **`packages/editor-shell/src/Dialog.tsx`** — there was no dialog primitive at all. Both designed
+  dialogs are the same 356px card, and neither hand-rolled overlay had `role="dialog"`, a focus
+  trap or an Escape handler.
+- **Five icons** added to `icons/ui.tsx` per ADR-0024: `IconListDetails`, `IconSettings2`,
+  `IconLogin2`, `IconDotsVertical` (all read off layer names) and `IconCopy`.
+
+### B — still undesigned, dev judgment (ADR-0023 rule 1)
+
+- **Error states.** Existing handling kept verbatim — same statuses, same triggers. Only the
+  *body* changed: `share.ts`'s 404/410 and `index.ts`'s catch-all were bare `text/plain`, so a
+  revoked share link rendered browser-default with no branding. New
+  `workers/api/src/error-page.ts` gives document requests a self-contained branded page;
+  `/api/*` keeps JSON and a missing hashed asset keeps plain text (`wantsHtmlError`).
+- **Favicon / titles / meta.** Resolved by *reuse*, not a new asset: `favicon.png`,
+  `favicon-dark.png` and `handsontable-banner-og.png` are copied from
+  `handsontable/handsontable@develop`'s `docs/public/`, wired with the same
+  `prefers-color-scheme` link pair the documentation site uses
+  (`docs/src/components/Head.astro:14-15`). The title is now route-aware — it said
+  "Authoring" on public `/share/:id`.
+- **Responsive.** Deliberately *not* a breakpoint system; there is no frame to build to. Two
+  concrete fixes only: the splitter re-clamp (open item 19) and `auto-fill` card wrapping.
+- **Delete confirmation**, **empty state**, **revoked cards**. Confirmed on the ticket: keep a
+  confirmation (there was none — `remove()` fired `DELETE` on the first click), keep the empty
+  state simple, and keep revoked demos *visible* and muted rather than hidden.
+
+### C — split out
+
+**The Settings page** (`114:26833`) is a new feature, not design-system application: it needs a
+profile table, a migration, profile endpoints and avatar storage, none of which exist. Per
+ADR-0023 rule 2 it becomes its own task. T9 renders the menu row disabled — which is exactly how
+`114:21480` draws it.
+
+### Behaviour changes worth knowing
+
+- **`authedExtras` is now empty.** The title/description inputs and the My demos / identity /
+  Log out buttons lived in the unframed authed action bar only because ADR-0023 had nowhere else
+  to put them. All of it now has a frame.
+- **The top bar keys off `accountEmail`, not `authed`.** `/share/:id` renders the workspace
+  anonymous on purpose (read-only, no action bar), and it used to offer a signed-in visitor
+  "Sign in". `ShareRoute` resolves the identity for the menu alone, without gating the render.
+- **`description` can now be cleared.** `index.ts`'s two PATCH branches coalesced with `??`, so
+  `null` restored the old text. Invisible while it was a bare input; obviously broken behind a
+  Save button.
+
+**Depends.** T0, T1. Ran in parallel with T2–T7.
 
 ---
 
@@ -609,7 +666,7 @@ subtask that surfaced it and what evidence exists.
 | # | Item | Kind | Raised by |
 |---|---|---|---|
 | 1 | Dark `textMuted` deviates from the Figma variable | design decision | T0 |
-| 2 | `ShareDialog.tsx` is dead code the docs still reference | cleanup + doc fix | T0 |
+| 2 | ~~`ShareDialog.tsx` is dead code the docs still reference~~ **closed by T9** — deleted, ADR-0022 corrected | cleanup + doc fix | T0 |
 | 3 | Angular container ignores global `styles.css` edits | potential bug | T0 |
 | 4 | Two file rows in `31:6438` use an icon seti's own mapping doesn't give them | design decision | T1 |
 | 5 | T1's scope line says "panel toggles"; the design has none | doc fix | T1 |
@@ -621,12 +678,13 @@ subtask that surfaced it and what evidence exists.
 | 11 | GitHub Dark's own background is a step darker than `editorBg` | design decision | T4 |
 | 12 | The universal `button:hover` rollover now dims the active tab | design decision | T4 |
 | 13 | The example pill's 20×20 Handsontable mark has no asset in the repo | asset gap | T2 |
+|  | ↳ **favicon half closed by T9** — reused the docs site's shipped `favicon.png` / `favicon-dark.png`. The *pill* mark is still open. | | |
 | 14 | Tier-1 has no preview URL to put in the row-2 address field | design decision | T2 |
 | 15 | The version warning has no home in a 36px bar | design decision | T2 |
 | 16 | An inline `background` silently kills any stylesheet `:hover` on the same element | gotcha | T3 |
 | 17 | A late Sandpack mount could revive a preview the app had stopped | fixed bug | T3 |
 | 18 | A child's `useLayoutEffect` runs before an ancestor's `ref` is attached | gotcha | T6 |
-| 19 | Nothing re-clamps the split after the drag that set it | deferred to T9 | T6 |
+| 19 | ~~Nothing re-clamps the split after the drag that set it~~ **closed by T9** — `reclamp()` on a `ResizeObserver` + sidebar toggle | deferred to T9 | T6 |
 | 20 | The search placeholder reads `Search examples…`, the design says `Search ...` | design decision | T7 |
 | 21 | `Recipes` is promoted to its own left-column section; the design shows it flat | design decision | T7 |
 | 22 | `next` carries both `Filtering And Search` and `Filtering Search` | upstream data bug | T7 |
@@ -637,6 +695,13 @@ subtask that surfaced it and what evidence exists.
 | 27 | The Handsontable version renders twice in `play` mode | design decision | T5 |
 | 28 | `72:14610` draws chrome above a splash that renders before the shell exists | design decision | T5 |
 | 29 | `README.md` lists `runner/apps/viewer/`, which does not exist | doc fix | T5 |
+| 33 | The Settings page is a new feature, not design-system application | split out | T9 |
+| 34 | The design shows no revoked state for a demo card, but the API only ever revokes | design decision | T9 |
+| 35 | `/share/:id` now shows a signed-in visitor their account menu instead of `Sign in` | behaviour change | T9 |
+| 36 | A `<button>` with no inline `background` gets the UA's `buttonface` slab | gotcha | T9 |
+| 37 | No owner display name or avatar exists anywhere in the stack | asset/data gap | T9 |
+| 38 | `accent` as link text on a dark surface lands under WCAG AA | design decision | T9 |
+| 39 | `114:23289`'s full-window label describes behaviour the app doesn't have | design copy fix | T9 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -1070,6 +1135,127 @@ built before T5 added `reload()` to `DemoRuntime`. On a fresh clone of the integ
 until `pnpm build` regenerates the declarations. Predates T8; the fix is either committing to
 build in CI before typechecking or pointing the app's path mapping at the package source, which
 is what the `editor-shell` alias in `vite.config.ts` already does for the shell.
+
+### 33. The Settings page is a new feature, not design-system application (split out)
+
+`114:26833` draws a profile page — Name, Description, avatar Upload / Remove. Nothing behind it
+exists: the database has exactly two tables (`demos`, `build_cache`), there is no `/api/me`, and
+identity is a bare `@handsontable.com` email denormalised into `demos.created_by`. Building it
+means a new table, a migration, profile `GET`/`PATCH`, and avatar upload to R2 with the
+validation that implies.
+
+Per ADR-0023 rule 2 (a *new* design element is decided per item — build now, or split and record
+the gap) this is split into its own task. T9 ships the menu row disabled, which is how
+`114:21480` draws it — the design itself reads it as later work.
+
+### 34. No revoked state for a demo card (design decision)
+
+`DELETE /api/demos/:id` has never hard-deleted. It sets `revoked=1`; the row survives, `/d/:id`
+starts answering 410, and there is no unrevoke. Every card in `114:25521` is live — the design
+has no muted, disabled or archived variant, and no frame for the delete confirmation either.
+
+Confirmed on DEV-2163: **keep revoke, keep the card visible.** Revoked cards render at
+`opacity: 0.55` with a `danger`-bordered badge, and carry **no kebab at all**. Every action needs
+something the revoke took away: `getDemoSource` returns null once `revoked` is set
+(`share.ts`), so Open *and* Rename both land the edit page on "This demo is unavailable."; Copy
+link hands out a URL that 410s; Fork has no source to read; Delete already happened. An earlier
+cut kept Rename, which was a dead end — a menu of dead ends is worse than no menu.
+
+A hard-delete endpoint was considered and rejected: `forked_from` stores demo ids, R2 artifacts
+are never cleaned up, and already-revoked rows would need a migration story. That is a data
+lifecycle decision, not a redesign one.
+
+### 35. `/share/:id` shows a signed-in visitor their account menu (behaviour change)
+
+`App.tsx` hardcodes `user={null}` on the share route, correctly — the page is public and
+read-only. Before T9 the top bar keyed off the same value, so a signed-in user opening a
+colleague's share link was offered **Sign in** while holding a live session.
+
+`ShareRoute` now resolves the identity separately and passes it as `accountEmail`, which is what
+the top bar keys off; `authed` still gates the action bar and stays `false`. The identity is
+never a render gate, so the page paints exactly as fast as before.
+
+**The resolve has three states, not two** (caught in review). `currentUser()` round-trips the
+external broker, so seeding `accountUser` as `null` meant "anonymous, confirmed" for a few
+hundred milliseconds and the bar offered a signed-in visitor a working **Sign in** — the exact
+thing the split removes, just briefly. `undefined` is now pending, and `accountPending` withholds
+`onSignIn`, so the window renders neither control rather than the wrong one.
+
+Worth knowing when testing this by hand: `apps/authoring/.env.local` sets `VITE_DEV_USER`, which
+short-circuits `currentUser()` before the fetch. Any test of the broker path has to override it
+(`VITE_DEV_USER= pnpm dev`) or it silently exercises the bypass instead.
+
+### 36. A `<button>` with no inline `background` gets the UA's `buttonface` (gotcha)
+
+The corollary to item 16, and it bit three times during T9. Item 16 says an inline `background`
+outranks a stylesheet `:hover`, so a hoverable button must not set one — but omitting it
+entirely falls through to the user-agent default, which paints a light-grey slab in *both*
+modes. Caught on the My Demos nav, where "Log out" read as the selected row.
+
+The fix is the one `.hot-file-row` already used: put **both** fills in the stylesheet, base first
+and `:hover` second. Equal specificity, source order decides. A button that is genuinely never
+hovered — a disabled row — can keep an inline `background: "transparent"` instead.
+
+**Item 16 is not only about `background`.** Review of T9 found two more inline properties killing
+their own hover, and both are easy to miss:
+
+- **`color`.** The kebab's Delete row inverts to white-on-red; an inline `color: danger` left red
+  text on the red fill. Any property the hover changes has to stay out of the inline object.
+- **The `border` shorthand.** `.hot-demo-card:hover { border-color: … }` was dead because the
+  card set `border: 1px solid …` inline — the shorthand carries `border-color`, so it wins even
+  though the rule names only the longhand.
+
+Verify these the way the item says: a real pointer plus `getComputedStyle`, comparing rest
+against hover. A synthetic `mouseover` doesn't fire CSS `:hover`, and eyeballing a screenshot
+can't tell a subtle live hover from a dead one.
+
+### 37. No owner display name or avatar exists anywhere (asset/data gap)
+
+`114:25521`'s card footer and `114:21480`'s trigger both draw a round avatar with a name. The
+data for neither exists. `auth.ts` types `User` as `{ email, sub?, exp? }`; the API's
+`publicView` strips `created_by`; there is no profile table.
+
+T9 renders a monogram from the email's first letter, and the local part where the design wants a
+name. It takes no dependency on the external login broker returning `name`/`picture` — the
+broker is Google-backed and plausibly does, but this repo has never read or typed them, and that
+cannot be confirmed from a code read. Worth one live call to `/broker/userinfo` before item 33
+is scoped: if the payload carries them, the profile table gets smaller.
+
+### 38. `accent` as link text on a dark surface is under AA (design decision)
+
+`error-page.ts` briefly shipped dark `accent` as `#4669F6`. That is dark **`splitterActive`** — a
+different token that happens to be a lifted blue — not `accent`, which `theme.ts` holds at
+`#1A42E8` in *both* modes because it is the brand colour. Caught in review; the file now mirrors
+`theme.ts`, which is what its header promises.
+
+Mirroring it faithfully surfaces something pre-existing, though: `#1A42E8` on the dark card
+`#222222` is about **2.3:1**, well under WCAG AA's 4.5:1 for body text. The lifted `#4669F6`
+would have been ~3.5:1 — better, still short, and wrong by name.
+
+This is not the error page's problem to solve unilaterally: the shell already renders
+`accent`-coloured text on dark surfaces elsewhere, so a fix belongs in `theme.ts` as a
+dark-mode-only `accentText` (or a lift to `accentHover`'s `#3b5cf0`) applied everywhere at once.
+Flag at design review alongside item 1, which lifted dark `textMuted` for exactly this reason.
+
+### 39. The share dialog's full-window label describes behaviour we don't have (design copy fix)
+
+`114:23289` labels the middle row **"Full-window (example only — embed in any iframe)"**. Both
+halves are false as shipped:
+
+- **"example only"** — `?mode=full` stopped being bare in T8. It carries the design's own chrome:
+  top bar, URL bar, status bar. The chrome-less surface is the docs embed on the row below.
+- **"embed in any iframe"** — it cannot be embedded at all. The page iframes `/d/:id/`, which
+  sends `frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN` (`share.ts`). A third-party
+  ancestor puts itself in the chain, so `'self'` fails and the inner demo is blocked.
+
+Copying it verbatim would have pointed anyone wanting a bare embed at the one URL that can't do
+it, which is worse than a frame going unimplemented. ADR-0023 rule 1 is about not *deleting*
+working functionality for want of a frame; it does not oblige us to ship copy that contradicts
+the code. T9 ships "Full-window (the demo without the editor)".
+
+**Confirm the wording with design.** The intent behind the frame's copy may be a request — a
+genuinely embeddable chrome-less full-window URL — rather than a description of today. If so
+that is a feature, not a label.
 
 ## Remaining decisions
 

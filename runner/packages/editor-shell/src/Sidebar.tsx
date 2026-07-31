@@ -10,7 +10,7 @@ import { s } from "./styles.js";
 type SectionId = "boxInfo" | "files" | "dependencies";
 
 export interface SidebarProps
-  extends Pick<BoxInfoProps, "title" | "description" | "createdAt">,
+  extends Pick<BoxInfoProps, "title" | "description" | "createdAt" | "onEdit">,
     Pick<
       FileTreeProps,
       "paths" | "active" | "onSelect" | "onDownloadAll" | "editable" | "onAddFile" | "onRenameFile" | "onDeleteFile"
@@ -23,6 +23,7 @@ export function Sidebar({
   title,
   description,
   createdAt,
+  onEdit,
   packageJson,
   paths,
   active,
@@ -51,6 +52,7 @@ export function Sidebar({
           title={title}
           description={description}
           createdAt={createdAt}
+          onEdit={onEdit}
           collapsed={shut.has("boxInfo")}
           onToggle={toggle("boxInfo")}
         />

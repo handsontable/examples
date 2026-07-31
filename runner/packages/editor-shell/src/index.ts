@@ -46,6 +46,12 @@ export type { FullBarProps } from "./FullBar.js";
 export { AuthedActionBar } from "./AuthedActionBar.js";
 export { MenuButton } from "./MenuButton.js";
 export type { MenuOption } from "./MenuButton.js";
+// Undesigned-surface work (T9). `Dialog` is the primitive the two After Login
+// dialog frames share; `AccountMenu` is the avatar popover from `114:21480`.
+export { Dialog } from "./Dialog.js";
+export type { DialogProps } from "./Dialog.js";
+export { AccountMenu } from "./AccountMenu.js";
+export type { AccountMenuProps } from "./AccountMenu.js";
 export { s as shellStyles, SIDEBAR_WIDTH } from "./styles.js";
 export { logoUrl, markUrl, useLogoUrl } from "./useLogoUrl.js";
 // Icons — tabler for UI, seti-ui for file types. See src/icons/index.ts.
