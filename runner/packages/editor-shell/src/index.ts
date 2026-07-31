@@ -15,6 +15,13 @@ export { EditorStatusBar } from "./EditorStatusBar.js";
 export type { EditorStatusBarProps } from "./EditorStatusBar.js";
 export { PreviewPane } from "./PreviewPane.js";
 export type { PreviewStatus } from "./PreviewPane.js";
+// Preview chrome (T5). `PreviewStatusBar` is exported on its own because T8's
+// `?mode=full` view is "top bar + URL bar + preview + bottom status bar", without the
+// rest of the shell. `Spinner` is exported because the app's splash needs it too.
+export { PreviewStatusBar } from "./PreviewStatusBar.js";
+export type { PreviewStatusBarProps } from "./PreviewStatusBar.js";
+export { Spinner } from "./Spinner.js";
+export type { SpinnerProps } from "./Spinner.js";
 // Left sidebar (T3). `FileTree` is now the FILES section of `Sidebar`, not the column.
 export { Sidebar } from "./Sidebar.js";
 export type { SidebarProps } from "./Sidebar.js";

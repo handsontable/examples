@@ -332,6 +332,60 @@ Error state has **no frame** — restyle the existing one to the design system (
 **Nodes.** `72:14610` (loading), `72:26445` (refresh), `48:6560` (ready).
 **Depends.** T0, T1.
 
+**Shipped (DEV-2159).** New `PreviewStatusBar.tsx` + `Spinner.tsx`; `s.statusBar()` deleted
+(orphaned since T2 removed the strip it styled).
+
+**The bar is a sibling of `PreviewPane`, not a child.** Every overlay in that section is
+`position: absolute; inset: 0`, so a bar inside it is painted over by the boot, error and
+refresh overlays — which is exactly why the pre-T2 top strip had to buy its way out with
+`inset: "28px 0 0 0"` on each overlay. As the preview column's last child it also lands in
+the same band as `EditorStatusBar` with no arithmetic: measured flush at `top: 734,
+height: 28` in a 762px viewport, with T6's 1px splitter track between them. `48:6701` and
+`48:6740` are both y=800 h=28 inside their own column frames, which is that band.
+
+Geometry off `48:6701`: 28px, `4px 16px`, 6px `success` dot 4px from its label, right group
+`marginLeft: auto` with a 12px gap. Both bars share `s.paneStatusBar` on `editorBg`
+(#ffffff / #19191c, exact) — sharing the object is what stops them drifting apart.
+`previewBg` is wrong here: #070604 in dark, a step darker, where the frames paint this band
+*lighter* than the preview surround. Extends open item 7.
+
+`data-preview-status` and `aria-label="Preview"` stay on the `<section>`, iframe still a
+descendant: `e2e/starter-matrix.spec.ts:144` polls the first, `e2e/docs-examples.spec.ts:305`
+selects on the second. Verified after the restructure.
+
+**`reload()` now returns `Promise<void>`** (`types.ts`, `container.ts`, `sandpack.ts`), which
+is what the refresh spinner waits on. It never rejects — failure already has `onError`.
+
+The two tiers settle on genuinely different things, and the difference is not cosmetic.
+Container resolves on the reloaded page's `load`: `src` navigation is what a refresh *is*, and
+`load` fires on the frame element regardless of origin, with a 10s timeout and `dispose()` as
+backstops. Sandpack resolves on **its own transpile + dispatch**, because the bundler sends
+nothing back for an `updateSandbox(setup, true)` — see open item 26, which records the
+measurement and what a follow-up should not re-derive. Building it on `done` made every Tier-1
+refresh hold a spinner over a blanked pane for the full 10s timeout.
+
+**The boot overlay is gated on the engine, not on `bootLog` being non-empty.** The first cut
+inferred the tier from the log, which read correctly until a wedged container pool made
+`POST /api/session` hang for 100s+ — and the log only starts arriving *after* that request
+returns, so the window where the user most needs to be told the wait is expected is the
+window with no log to infer it from. `containerBoot` is now an explicit prop. Tier 1 gets
+the designed spinner and "Loading data …" alone; Tier 2 adds the wait explanation, the newest
+log line (`Preparing container…` until the first arrives) and the tail behind `Details`.
+
+`Details` is a button plus a chevron rather than `<details>`/`<summary>`: hiding the native
+marker needs `list-style: none` *and* `::-webkit-details-marker { display: none }`, both
+pseudo-element rules inline styles cannot express, and `editor-shell` may not reach the app's
+global block — the same constraint that moved `hot-spin`'s keyframes into `THEME_CSS`.
+
+`syncing` stays the non-blocking corner badge, restyled. It fires on Tier-2 keystroke bursts;
+blanking the grid per keystroke is worse than a badge. `refreshing` suppresses it — the pane
+is already blank behind the refresh spinner.
+
+Also here: `Splash` rebuilt to `72:14610` (spinner + one line), and `frameworkName` added as
+its own prop rather than repurposing `frameworkLabel` — for a docs example `entry.displayName`
+is the long `"Columns ▸ … · Standard example · React (TS)"` breadcrumb, so the short label is
+resolved through the starter catalog by framework key (`.find`, not `getEntry`, which throws).
+
 ---
 
 ## T6 — Resizable split
@@ -522,6 +576,10 @@ subtask that surfaced it and what evidence exists.
 | 23 | Figma `common/colors/accent-color` is `#4669f6`; `theme.ts` ships `#1A42E8` | design decision | T7 |
 | 24 | The category column's scrollbar eats into the 179px the design gives labels | design decision | T7 |
 | 25 | TypeScript docs examples boot with a `/src/main.js` entry against a `.ts` file | pre-existing bug | T7 |
+| 26 | Tier 1 has no refresh-completion signal, and may not recompile at all | open question | T5 |
+| 27 | The Handsontable version renders twice in `play` mode | design decision | T5 |
+| 28 | `72:14610` draws chrome above a splash that renders before the shell exists | design decision | T5 |
+| 29 | `README.md` lists `runner/apps/viewer/`, which does not exist | doc fix | T5 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -855,6 +913,65 @@ so `FW_PREF` and T7 are both exonerated. Note the manifest puts TypeScript varia
 
 Same shape as the `.jsx`-vs-`main.tsx` mismatch tracked under DEV-2130. Left alone: nothing about
 it is chrome, and fixing entry resolution inside a restyle PR would bury it.
+### 26. Tier 1 has no refresh-completion signal, and may not recompile at all (open question)
+
+T5 first built the Tier-1 refresh promise to settle on the bundler's next `done`, reasoning
+that `reload()` → `pushUpdate(true)` → `updateSandbox(setup, true)` triggers a compile that
+reports back. **It does not.** Measured in a browser: after a refresh click the parent window
+sees **no messages at all** for the following 11 seconds, while a `done` on mount arrives
+normally and drives `emitReady()` — so the listener is fine and it is this specific call that
+goes unanswered. The promise therefore never resolved early and always rode its 10s timeout
+out: the shell blanked the pane and held a spinner over it for a full 10s on **every** Tier-1
+refresh.
+
+Shipped instead: `SandpackRuntime.reload()` settles on its own transpile + dispatch, which is
+work we actually perform and can time (measured 48–62ms on a warm React starter, three
+consecutive runs, no timeouts). The promise means "your update has been handed to the bundler",
+and the timeout, the waiter set and the `settleReload()` hook are all gone with it. Tier 2 is
+unaffected — a container re-navigates the iframe, so its `load` is a real completion event.
+
+**The open question is what `updateSandbox(setup, true)` does with an unchanged file set.** If
+it no-ops, the Tier-1 refresh button does nothing at all, and the silence is the symptom rather
+than the bug — which would make T2's "`isInitializationCompile` re-runs the sandbox" claim
+wrong. Not chased here: it predates T5, the button is T2's, and settling this needs a look at
+the bundler protocol rather than at chrome. Worth its own ticket.
+
+Two things a follow-up should not re-derive. Arming the `done` listener *after* dispatch does
+not help: the transpile is awaited first, so the resulting message can land in the same turn
+the dispatch promise resolves, and arming late loses that race — measured 10.07s to clear.
+And giving refresh its own sequence number instead of sharing `updateSeq` with `writeFile` is
+worse: the two would race to publish, and a refresh that won would put pre-keystroke output
+over a newer edit, which is exactly what the shared guard exists to prevent.
+
+### 27. The Handsontable version renders twice in `play` mode (design decision)
+
+`PreviewBar`'s row-2 `MenuButton` renders `Handsontable` + `{version}` and the new bottom bar
+renders `Handsontable {version}` again, so a playground shows the version in two places about
+700px apart. No frame shows the collision: `48:6560` is a *saved demo*, which has no version
+menu, and it is the only frame that draws the bottom bar's right-hand group.
+
+Both are defensible on their own — the menu is the control, the bar is the readout — and the
+design asks for each. Needs a call on which one survives in `play`. Note the bar is also the
+only version readout in T8's `?mode=full`, which has no row 2, so deleting it there is not an
+option.
+
+### 28. `72:14610` draws chrome above a splash that has no chrome to draw (design decision)
+
+The loading frame shows the top bar — logo, search pill, theme toggle, Sign in — above the
+centred spinner. `Splash` cannot: it renders *because* the user, example or saved demo has not
+resolved yet, so there is nothing to fill a top bar with. T5 ships the spinner and the copy and
+skips the chrome.
+
+Two readings: the frame is a composite (chrome drawn for context, not specified for this
+state), or the app should render a real skeleton top bar during load. The second is a bigger
+change than a splash — it needs the shell's chrome to render against absent state.
+
+### 29. `README.md` lists `runner/apps/viewer/`, which does not exist (doc fix)
+
+`runner/README.md`'s package table names `runner/apps/viewer/` as a "public read-only `/d/:id`
+viewer". `runner/apps/` contains only `authoring/`, and `/d/:id` is served by the Worker from
+prebuilt R2 artifacts (`workers/api/src/share.ts`) with no app involved — which ADR-0020 and
+T8's scope both already say. The table row is stale; nothing is missing.
 
 ## Remaining decisions
 

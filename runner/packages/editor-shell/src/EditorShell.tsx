@@ -7,12 +7,18 @@ import { EditorStatusBar } from "./EditorStatusBar.js";
 import { PreviewBar, type FrameworkChoice } from "./PreviewBar.js";
 import { Sidebar } from "./Sidebar.js";
 import { PreviewPane, type PreviewStatus } from "./PreviewPane.js";
+import { PreviewStatusBar } from "./PreviewStatusBar.js";
 import { SplitHandle, useSplitPane } from "./SplitPane.js";
 import { TopBar } from "./TopBar.js";
 import { s } from "./styles.js";
 
 export interface EditorShellProps {
   frameworkLabel: string;
+  /** Short project label for the preview status bar — `React (Vite, TS)` (`48:6706`).
+   *  Distinct from `frameworkLabel`, which is the sidebar's title fallback: for a docs
+   *  example that one is the long `"Columns ▸ … · Standard example · React (TS)"`
+   *  breadcrumb string, which the bar has no room for. */
+  frameworkName?: string;
   files: FilesMap;
   /** Entry path to open first (e.g. "/src/index.tsx"). */
   entry: string;
@@ -22,8 +28,12 @@ export interface EditorShellProps {
   errorMessage?: string | null;
   /** Live boot log for Tier-2 container sessions (shown while booting). */
   bootLog?: string;
+  /** Tier 2: the boot overlay explains the tens-of-seconds wait and carries the log. */
+  containerBoot?: boolean;
   /** A container rebuild is in flight after an edit (shows "Applying changes…"). */
   syncing?: boolean;
+  /** A row-2 refresh is in flight — blanks the pane behind a spinner (`72:26445`). */
+  refreshing?: boolean;
 
   version: string;
   versionOptions: string[];
@@ -214,7 +224,19 @@ export function EditorShell(props: EditorShellProps) {
             status={props.status}
             errorMessage={props.errorMessage}
             bootLog={props.bootLog}
+            containerBoot={props.containerBoot}
             syncing={props.syncing}
+            refreshing={props.refreshing}
+          />
+
+          {/* Outside `PreviewPane`, deliberately: its overlays are `inset: 0`, so a bar
+              inside that section would be painted over by every one of them. Here it
+              also lands in the same 28px band as `EditorStatusBar` above, which is how
+              the frames draw the two (`48:6701` / `48:6740`). */}
+          <PreviewStatusBar
+            status={props.status}
+            frameworkName={props.frameworkName}
+            version={props.version}
           />
         </div>
       </div>

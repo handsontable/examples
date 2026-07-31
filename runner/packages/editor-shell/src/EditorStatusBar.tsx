@@ -10,7 +10,7 @@
 // have no source at all in a browser editor.
 
 import type { CSSProperties } from "react";
-import { theme } from "./theme.js";
+import { s } from "./styles.js";
 
 export interface EditorStatusBarProps {
   /** 1-based caret line. */
@@ -33,23 +33,10 @@ export function EditorStatusBar({ line, col }: EditorStatusBarProps) {
   );
 }
 
-// `editorBg`, not `surfaceMuted`: measured #ffffff / #19191c off the frames, which
-// is the same token the editor pane already uses — the bar reads as part of the
-// editor rather than as a separate strip.
-const bar: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 24,
-  height: 28,
-  padding: "4px 16px",
-  boxSizing: "border-box",
-  flexShrink: 0,
-  borderTop: `1px solid ${theme.color.border}`,
-  background: theme.color.editorBg,
-  fontFamily: theme.font.ui,
-  fontSize: 10,
-  lineHeight: "20px",
-  color: theme.color.textMuted,
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-};
+// The band itself is `s.paneStatusBar`, shared with `PreviewStatusBar` — that shared
+// object is what keeps the two bars flush across the editor/preview boundary, as the
+// frames draw them. It is on `editorBg`, not `surfaceMuted`: measured #ffffff / #19191c
+// off the frames, the same token the editor pane already uses, so the bar reads as part
+// of the editor rather than as a separate strip (open item 7). Only the 24px segment
+// gap is this bar's own.
+const bar: CSSProperties = { ...s.paneStatusBar, gap: 24 };

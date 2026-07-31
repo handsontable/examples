@@ -30,6 +30,10 @@ export class SessionStartError extends Error {
   }
 }
 
+/** How long `reload()` waits for the reloaded page's `load` before settling anyway.
+ *  Generous: a container that is merely slow should still resolve on the real event. */
+const RELOAD_TIMEOUT_MS = 10_000;
+
 /** The live-session API accepts only relative POSIX paths. */
 function relativeFiles(files: FilesMap): FilesMap {
   return Object.fromEntries(
@@ -80,6 +84,9 @@ export class ContainerRuntime implements DemoRuntime {
   private previewUrl = "";
   private port = 0;
   private pointed = false;
+  /** Settle callbacks for in-flight `reload()` promises, so `dispose()` can close them
+   *  out rather than leaving the shell's refresh spinner up on a torn-down preview. */
+  private readonly reloadSettlers = new Set<() => void>();
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   // Tear the session down when the page goes away (tab close, navigation) —
@@ -271,10 +278,32 @@ export class ContainerRuntime implements DemoRuntime {
   /** Re-navigate the iframe to the same preview URL. The session, the container
    *  and the dev server are all left alone — only the page reloads. Before the
    *  iframe has been pointed at the preview (still booting) there is nothing to
-   *  reload. */
-  reload(): void {
-    if (this.disposed || !this.pointed || !this.previewUrl) return;
-    this.opts.iframe.src = this.previewUrl;
+   *  reload.
+   *
+   *  Resolves on the reloaded page's `load`, which is the honest completion signal
+   *  here: `src` navigation is exactly what a refresh does. Cross-origin is no
+   *  obstacle — `load` fires on the frame element regardless of what it loaded. */
+  reload(): Promise<void> {
+    if (this.disposed || !this.pointed || !this.previewUrl) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const iframe = this.opts.iframe;
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        iframe.removeEventListener("load", settle);
+        this.reloadSettlers.delete(settle);
+        resolve();
+      };
+      // A container whose dev server died never navigates, and an unresolved promise
+      // would leave the shell's spinner up forever. The promise reports "no longer in
+      // flight", not success, so resolving on timeout is the correct outcome.
+      const timer = setTimeout(settle, RELOAD_TIMEOUT_MS);
+      this.reloadSettlers.add(settle);
+      iframe.addEventListener("load", settle, { once: true });
+      iframe.src = this.previewUrl;
+    });
   }
 
   /** Remove a file from the running container (file-tree delete/rename). */
@@ -358,6 +387,9 @@ export class ContainerRuntime implements DemoRuntime {
     // its Vite HMR WebSocket reconnect loop — would resurrect the container
     // this dispose just destroyed.
     if (this.pointed) this.opts.iframe.src = "about:blank";
+    // On the `pointed` path that `about:blank` fires its own `load` and would settle
+    // these anyway; doing it here too costs a line and drops the ordering assumption.
+    for (const settle of [...this.reloadSettlers]) settle();
     this.progressCbs.clear();
     const id = this.sessionId;
     this.sessionId = null;
