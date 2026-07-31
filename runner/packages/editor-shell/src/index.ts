@@ -38,6 +38,11 @@ export { TopBar } from "./TopBar.js";
 export { EditorBar } from "./EditorBar.js";
 export { PreviewBar } from "./PreviewBar.js";
 export type { FrameworkChoice } from "./PreviewBar.js";
+export { PreviewUrlField } from "./PreviewUrlField.js";
+export type { PreviewUrlFieldProps } from "./PreviewUrlField.js";
+// Full mode (T8) — `?mode=full` is top bar + this bar + preview + status bar.
+export { FullBar } from "./FullBar.js";
+export type { FullBarProps } from "./FullBar.js";
 export { AuthedActionBar } from "./AuthedActionBar.js";
 export { MenuButton } from "./MenuButton.js";
 export type { MenuOption } from "./MenuButton.js";

@@ -6,7 +6,6 @@
 // maximize alone. That conditionality already existed in the app; the redesign
 // changes the form, not the rule (ADR-0023).
 
-import { useState } from "react";
 import {
   IconBook,
   IconBrandGithub,
@@ -15,6 +14,7 @@ import {
   IconWindowMaximize,
 } from "./icons/index.js";
 import { MenuButton } from "./MenuButton.js";
+import { PreviewUrlField } from "./PreviewUrlField.js";
 import { s } from "./styles.js";
 import { theme } from "./theme.js";
 
@@ -66,20 +66,8 @@ export function PreviewBar({
   repoLabel,
 }: PreviewBarProps) {
   const url = publicUrl || previewUrl || "";
-  const [copied, setCopied] = useState(false);
   const options = versionOptions.includes(version) ? versionOptions : [version, ...versionOptions];
   const activeFramework = frameworks?.find((f) => f.active);
-
-  async function copyUrl() {
-    if (!url) return;
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked (insecure origin / permission) — nothing to fall back to */
-    }
-  }
 
   return (
     <div style={s.bar}>
@@ -96,27 +84,7 @@ export function PreviewBar({
         </button>
       )}
 
-      {/* Read-only: this reports where the preview lives, it is not an address
-          bar. Tier 1 has no meaningful URL (Sandpack renders into the iframe
-          without navigating), so it falls back to a placeholder. */}
-      <button
-        type="button"
-        style={{ ...s.urlField, cursor: url ? "pointer" : "default" }}
-        onClick={copyUrl}
-        disabled={!url}
-        title={url ? "Copy this URL" : undefined}
-      >
-        <span
-          style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            fontStyle: url ? "normal" : "italic",
-          }}
-        >
-          {copied ? "Copied" : url || "Live preview"}
-        </span>
-      </button>
+      <PreviewUrlField url={url} />
 
       {/* The bar is a fixed 36px and both warning strings run ~90 characters, so
           this has to clamp to one line — left to wrap it pushes itself out of the
