@@ -70,6 +70,26 @@ test("the seam holds still when the sidebar is toggled", async ({ page }) => {
   expect(await seamX(page)).toBeCloseTo(before, -1);
 });
 
+test("a focused seam keeps its indicator when the pointer passes over and off", async ({ page }) => {
+  await openPlayground(page);
+  const splitter = page.locator(SPLITTER);
+  // The accent bar is the only focus affordance — the track is 1px, so an outline
+  // would be a slit. Its opacity is therefore the indicator under test.
+  const barOpacity = () =>
+    splitter.locator("div").first().evaluate((el) => getComputedStyle(el).opacity);
+
+  await splitter.focus();
+  expect(await barOpacity()).toBe("1");
+
+  const box = (await splitter.boundingBox())!;
+  await page.mouse.move(box.x, box.y + box.height / 2); // over
+  await page.mouse.move(box.x - 200, box.y + box.height / 2); // and away again
+
+  expect(await barOpacity()).toBe("1");
+  await splitter.blur();
+  expect(await barOpacity()).toBe("0");
+});
+
 test("double-click restores the designed split", async ({ page }) => {
   await openPlayground(page);
   const designed = await seamX(page);

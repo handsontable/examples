@@ -59,8 +59,10 @@ export interface SplitPane {
   bodyStyle: CSSProperties;
   fraction: number;
   dragging: boolean;
+  /** Paint the accent seam: hovered, focused, or being dragged. */
   active: boolean;
   setHovered: (hovered: boolean) => void;
+  setFocused: (focused: boolean) => void;
   onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
   endDrag: (e: ReactPointerEvent<HTMLDivElement>) => void;
@@ -84,7 +86,11 @@ export function useSplitPane(sidebarOpen: boolean): SplitPane {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [fraction, setFraction] = useState(storedFraction);
   const [dragging, setDragging] = useState(false);
+  // Two flags, not one: the accent bar is the *only* focus affordance (a focus
+  // ring on a 1px track is a slit), so a pointer passing over and off a focused
+  // separator must not take the keyboard user's indicator with it.
   const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
   /** The live value mid-drag, which state deliberately does not track. */
   const live = useRef(fraction);
 
@@ -162,8 +168,9 @@ export function useSplitPane(sidebarOpen: boolean): SplitPane {
     bodyStyle: { [SPLIT_VAR]: asWidth(fraction) } as CSSProperties,
     fraction,
     dragging,
-    active: dragging || hovered,
+    active: dragging || hovered || focused,
     setHovered,
+    setFocused,
     onPointerDown,
     onPointerMove,
     endDrag,
@@ -198,8 +205,8 @@ export function SplitHandle({ split }: SplitHandleProps) {
       onPointerCancel={split.endDrag}
       onKeyDown={split.onKeyDown}
       onDoubleClick={split.reset}
-      onFocus={() => split.setHovered(true)}
-      onBlur={() => split.setHovered(false)}
+      onFocus={() => split.setFocused(true)}
+      onBlur={() => split.setFocused(false)}
       onPointerEnter={() => split.setHovered(true)}
       onPointerLeave={() => split.setHovered(false)}
     >
