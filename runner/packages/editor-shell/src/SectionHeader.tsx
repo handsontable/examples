@@ -57,7 +57,10 @@ const headerRow: CSSProperties = {
   flex: "0 0 auto",
 };
 
-const headerLabel: CSSProperties = {
+/** The design's small-caps section-header type (`72:18121`, `72:16981`). Exported
+ *  because T7's cascader groups use the identical treatment — sharing it is why
+ *  this module exists rather than living inside `Sidebar`. */
+export const headerLabel: CSSProperties = {
   fontFamily: theme.font.ui,
   fontSize: 10,
   lineHeight: "20px",

@@ -401,6 +401,36 @@ framework auto-pick via `FW_PREF`) — keep it.
 **Nodes.** `72:17078`.
 **Depends.** T0, T1, T2.
 
+**Shipped (DEV-2161).** The depth-driven N+1 column stack is gone; the popover is a fixed two
+columns at the pill's own width. `docs-catalog.ts` now owns the model (`buildPickerModel`,
+`searchLeaves`) and `DocsCascader.tsx` is presentation — the dead `groupByBreadcrumb` /
+`optionLabel` / `DocsGroup` exports left over from the old `<select>` are deleted. Three things
+worth knowing:
+
+- **Recipes is promoted into the left column** under a `RECIPES` label (open item 19). That is
+  what makes "exactly two columns" possible at all, and it is a deviation from the frame.
+- **Keyboard navigation is new**, not restyled — the component had only Escape. Roving `tabindex`
+  over both columns: `ArrowDown` from the search field enters the list, `ArrowRight`/`Enter`
+  crosses into the examples, `ArrowLeft` returns, `Enter` selects or toggles a section, and the
+  walk skips rows inside a collapsed group. The category column is a `listbox`; the example
+  column is a **`tree`**, because `listbox` has no valid content model for an expandable header.
+- **The section-header chevrons are live**, not decorative (unlike the tab close ✕, item 9) —
+  groups collapse. Collapse state resets on close, and opening force-expands the group holding
+  the current selection so the highlighted row is never hidden.
+
+T2's `width: "max-content"` on the popover is retired for `width: "100%"`: the design sizes the
+popover *to* the pill, so the pill being its containing block — previously the thing that clipped
+it — is now exactly what is wanted. `s.topBar`'s `zIndex` still matters and is untouched.
+`SectionHeader.tsx` now exports its `headerLabel` type style, which the cascader's group headers
+and left-column section labels both reuse.
+
+Three e2e specs bound to the old layout. `docs-examples.spec.ts:227` was the real breakage:
+`getByText("Standard example")` matched once when a single guide's examples showed at a time, and
+"Standard example" is the commonest title in the manifest — it is now scoped through
+`getByRole("group")`, which the a11y markup provides anyway. The `✓` glyph is gone, so the
+assertion that a stranded starter isn't selected now reads `aria-selected` instead of row text.
+Two specs added: collapse/re-expand, and the keyboard walk.
+
 ---
 
 ## T8 — Modes & routes: full / logged-out
@@ -486,6 +516,12 @@ subtask that surfaced it and what evidence exists.
 | 17 | A late Sandpack mount could revive a preview the app had stopped | fixed bug | T3 |
 | 18 | A child's `useLayoutEffect` runs before an ancestor's `ref` is attached | gotcha | T6 |
 | 19 | Nothing re-clamps the split after the drag that set it | deferred to T9 | T6 |
+| 20 | The search placeholder reads `Search examples…`, the design says `Search ...` | design decision | T7 |
+| 21 | `Recipes` is promoted to its own left-column section; the design shows it flat | design decision | T7 |
+| 22 | `next` carries both `Filtering And Search` and `Filtering Search` | upstream data bug | T7 |
+| 23 | Figma `common/colors/accent-color` is `#4669f6`; `theme.ts` ships `#1A42E8` | design decision | T7 |
+| 24 | The category column's scrollbar eats into the 179px the design gives labels | design decision | T7 |
+| 25 | TypeScript docs examples boot with a `/src/main.js` entry against a `.ts` file | pre-existing bug | T7 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -742,6 +778,83 @@ clamp: shrinking the window (at a narrow enough width, 20% of the body is under 
 **opening the sidebar** after dragging wide with it collapsed — the editor loses 240px it was
 never re-measured for. No `ResizeObserver`, deliberately: T9 owns narrow viewports, and there is
 no breakpoint frame anywhere in section `18.1` to clamp toward.
+
+### 20. Search placeholder is `Search examples…`, not the design's `Search ...` (design decision)
+
+`72:18031` labels the cascader's search field `Search ...`. The field kept its existing
+`Search examples…`: it is also the input's accessible name, where "examples" is the word that
+says *what* is being searched, and three specs bind to it. Trivially changed if design wants the
+shorter string — but then `aria-label` should keep the longer one.
+
+### 21. `Recipes` is promoted to its own left-column section (design decision)
+
+The design (`72:18037`) draws one flat column of 15 categories, `Recipies` among them. The
+manifest does not fit that shape: 152 examples carry a **three**-segment breadcrumb, all under
+`Recipes` (`["Recipes", "Cell Types", "Star Rating"]`), against 1,250 at two segments and 50 at
+one. A flat `Recipes` row would need a third column for those 152 — which breaks the popover's
+fixed 480px, the one width the design is explicit about.
+
+Shipped instead: the left column carries section labels, and Recipes' 12 sub-categories are
+promoted to first-level rows beneath a `RECIPES` label, so every category resolves to exactly one
+level of section headers. Two consequences a reviewer should know about:
+
+- Four Recipes sub-categories (`Accessibility`, `Cell Types`, `Context Menu`, `Data Management`)
+  share a name with a documentation category. Keys are namespaced (`Recipes|Cell Types`); the
+  section label is the only *visual* disambiguator.
+- 16 documentation categories + 12 Recipes + starters is ~920px of rows against the design's
+  512px column, so the category column scrolls. The design shows no scrollbar.
+
+Also note the design's `Optimilzation` and `Recipies` are Figma typos — the manifest values are
+`Optimization` and `Recipes`, and the shipped UI uses those.
+
+### 22. `next` carries both `Filtering And Search` and `Filtering Search` (upstream data bug)
+
+The `next` bucket has two Recipes sub-categories that are plainly the same thing — `Filtering And
+Search` (2 guides) and `Filtering Search` (1). Invisible while Recipes was one collapsed row;
+promoting its sub-categories to the left column puts them side by side.
+
+Rendered verbatim rather than normalised in the picker: merging them client-side would hide a
+docs-repo inconsistency the importer faithfully reproduces, and the fix belongs upstream in the
+guide's directory naming. `18.0` is unaffected.
+
+### 23. Figma `common/colors/accent-color` is `#4669f6`, `theme.ts` is `#1A42E8` (design decision)
+
+`get_variable_defs` on the cascader popover returns `common/colors/accent-color: #4669f6`, while
+`theme.ts` ships `#1A42E8` (read off frames `48:6560` / `31:6438` in T0). Not acted on: `theme.ts`
+is the single source of branding tokens by its own charter, and changing `accent` would repaint
+every surface in the app, not just this popover. Logged so the two get reconciled in one pass —
+same shape as item 1.
+
+### 24. The category column's scrollbar eats into the 179px the design gives labels (design decision)
+
+`72:18037` is a 179px column showing 16 categories with no scrollbar, and `Accessories and Menus`
+fits its 143px text area. The live manifest has 28 categories, so the column must scroll — and a
+classic scrollbar (Windows/Linux always; macOS when "always show scrollbars" is on) takes ~15px
+out of that 179, at which point the label renders `Accessories And …`.
+
+Mitigated, not solved: `scrollbarWidth: "thin"` recovers most of the track, and every row carries
+a `title` with its full label. `scrollbar-gutter: stable` is *not* the fix — it reserves the track
+unconditionally, so the content box stays narrow either way. A real fix means either a wider
+popover than the design's 480px or shorter category labels; both are design calls.
+
+### 25. TypeScript docs examples boot with a `/src/main.js` entry (pre-existing bug — not T7)
+
+Found while confirming T7's `FW_PREF` fallback: from a React example, picking `Accessibility ▸
+Standard example` (which has no React variant) correctly resolves to the TypeScript variant, and
+then the preview fails with
+
+```
+ModuleNotFoundError: Could not find module in path: '../index.ts' relative to '/src/main.js'
+```
+
+The sidebar shows `src/main.ts` and `index.ts`, so the files are right and the *entry* is wrong.
+**Not caused by the picker** — the identical error reproduces on a direct
+`?docs=guides/accessibility/accessibility/javascript/example1.ts` load with no picker interaction,
+so `FW_PREF` and T7 are both exonerated. Note the manifest puts TypeScript variants under a
+`javascript/` directory with a `.ts` extension, which is the likely trigger.
+
+Same shape as the `.jsx`-vs-`main.tsx` mismatch tracked under DEV-2130. Left alone: nothing about
+it is chrome, and fixing entry resolution inside a restyle PR would bury it.
 
 ## Remaining decisions
 

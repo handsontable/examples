@@ -202,13 +202,81 @@ test("cascader drills down and highlights the current selection", async ({ page 
   await expect(page.getByPlaceholder("Search examples…")).toBeVisible();
   await expect(page.getByText("Starter templates", { exact: true })).toBeVisible();
 
-  // The currently-open example is highlighted (✓) and expanded to (the leaf
-  // label is an exact match; the trigger/banner show a longer truncated string).
-  await expect(page.getByText("Add and remove columns from the context menu", { exact: true })).toBeVisible();
+  // Opening reveals the current selection: its category is active and its group
+  // is forced open, so the row is on screen and marked selected. (The leaf label
+  // is an exact match; the trigger/banner show a longer truncated string.)
+  const current = page.getByText("Add and remove columns from the context menu", { exact: true });
+  await expect(current).toBeVisible();
+  await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(1);
 
   // Search narrows results.
   await page.getByPlaceholder("Search examples…").fill("context menu");
   await expect(page.getByText(/Adding and removing columns ▸ Add and remove columns/).first()).toBeVisible();
+});
+
+test("cascader section headers collapse and re-expand", async ({ page }) => {
+  await installRouteFixtures(page);
+  await page.goto(REACT_EXAMPLE);
+  await page.getByRole("button", { name: /Adding and removing columns/ }).click();
+
+  // The focusable `treeitem` wraps the whole node (ARIA requires it to contain the
+  // group it expands), so `aria-expanded` is asserted there but the click has to go
+  // to the visible header row — the node's own centre is over an example.
+  const node = page.getByRole("treeitem", { name: "Adding and removing columns" });
+  const toggle = node.locator(".hot-casc-header");
+  const group = page.getByRole("group", { name: "Adding and removing columns" });
+  await expect(node).toHaveAttribute("aria-expanded", "true");
+  await expect(group).toBeVisible();
+
+  await toggle.click();
+  await expect(node).toHaveAttribute("aria-expanded", "false");
+  await expect(group).toHaveCount(0);
+
+  await toggle.click();
+  await expect(group).toBeVisible();
+});
+
+test("cascader is keyboard navigable", async ({ page }) => {
+  await installRouteFixtures(page);
+  await page.goto("/?example=react"); // start on a starter
+  await page.getByRole("button", { name: /React/ }).first().click();
+
+  // The search input takes focus on open; ArrowDown walks into the category
+  // column, ArrowRight crosses into the examples, Enter selects.
+  await expect(page.getByPlaceholder("Search examples…")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("option", { name: "Starter templates" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("option", { name: "Columns" })).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("treeitem", { name: "Adding and removing columns" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+
+  await expect(page).toHaveURL(/docs=guides%2Fcolumns%2Fcolumn-adding%2F.+example1/);
+});
+
+test("hovering a category keeps the example column keyboard-navigable", async ({ page }) => {
+  await installRouteFixtures(page);
+  await page.goto("/?example=react");
+  await page.getByRole("button", { name: /React/ }).first().click();
+
+  // Walk into the example column, then hover a *different* category. That swaps
+  // the column out and unmounts the focused row — focus used to fall to <body>
+  // and every further arrow key was swallowed.
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("treeitem", { name: "Adding and removing columns" })).toBeFocused();
+
+  await page.getByRole("option", { name: "Starter templates" }).hover();
+
+  // Focus survived the swap — it sits on the rebuilt column's first row...
+  const rows = page.getByRole("treeitem");
+  await expect(rows.first()).toBeFocused();
+  // ...and arrow keys still move it, which is what the bug swallowed.
+  await page.keyboard.press("ArrowDown");
+  await expect(rows.nth(1)).toBeFocused();
 });
 
 test("switching framework updates the URL", async ({ page }) => {
@@ -223,8 +291,13 @@ test("selecting an example from the cascader loads it", async ({ page }) => {
   await page.goto("/?example=react"); // start on a starter
   await page.getByRole("button", { name: /React/ }).first().click(); // open picker
   await page.getByText("Columns", { exact: true }).click();
-  await page.getByText("Adding and removing columns", { exact: true }).click();
-  await page.getByText("Standard example", { exact: true }).click();
+  // Scoped to the group rather than the whole popover: every group under a
+  // category renders at once now, and "Standard example" is the commonest title
+  // in the manifest — unscoped, it is a strict-mode violation, not a miss.
+  await page
+    .getByRole("group", { name: "Adding and removing columns" })
+    .getByText("Standard example", { exact: true })
+    .click();
   await expect(page).toHaveURL(/docs=guides%2Fcolumns%2Fcolumn-adding%2F.+example1/);
 });
 
@@ -306,8 +379,11 @@ test("an open docs example with no target bucket stops preview and remains recov
   await page.getByRole("button", { name: /React/ }).first().click();
   await expect(page.getByText("Starter templates", { exact: true })).toBeVisible();
   await page.getByText("Starter templates", { exact: true }).click();
-  const reactStarter = page.locator(".hot-casc-row").filter({ hasText: "React (Vite, TS)" });
-  await expect(reactStarter).not.toContainText("✓");
+  // The stranded docs example must not leave a starter looking like the current
+  // selection. Asserted on `aria-selected` — the design has no checkmark glyph,
+  // so a text assertion would now pass no matter what the picker highlighted.
+  const reactStarter = page.getByRole("treeitem", { name: "React (Vite, TS)" });
+  await expect(reactStarter).toHaveAttribute("aria-selected", "false");
 });
 
 // Live render — needs the external Sandpack bundler; opt-in via E2E_LIVE=1.

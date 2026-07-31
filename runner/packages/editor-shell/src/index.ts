@@ -24,7 +24,7 @@ export { Dependencies, parseDependencies } from "./Dependencies.js";
 export type { DependenciesProps, Dependency } from "./Dependencies.js";
 export { FileTree, buildFileTree } from "./FileTree.js";
 export type { FileTreeProps } from "./FileTree.js";
-export { SectionHeader } from "./SectionHeader.js";
+export { SectionHeader, headerLabel } from "./SectionHeader.js";
 export type { SectionHeaderProps } from "./SectionHeader.js";
 // Chrome (T2). `Toolbar` is gone — its contents are split across these.
 export { TopBar } from "./TopBar.js";
