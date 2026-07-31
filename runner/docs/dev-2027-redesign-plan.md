@@ -379,7 +379,14 @@ and double-click restore the designed 50%. Not in the design; a keyboard-only us
 no way to reach the affordance at all.
 
 Clamped to 20–80% of the body plus a 320px minimum per pane, measured from the drag's own rect.
-Nothing re-clamps on window resize — narrow viewports are T9's (open item 19).
+Nothing re-clamps afterwards — narrow viewports are T9's (open item 19).
+
+Verified live, not only against the empty frame the spec drags over: `?example=react` on the dev
+server with Sandpack actually booted and a Handsontable grid rendered inside the cross-origin
+iframe. The seam tracked the pointer through it (599 → 798 in four measured steps), dragged back,
+left the grid alive and the preview `ready`, selected no editor text, and survived a reload.
+The Tier-2 container path was not exercised — it needs Docker and the API worker — but the shell
+code is engine-agnostic and the frame is the same element.
 
 ---
 
@@ -478,7 +485,7 @@ subtask that surfaced it and what evidence exists.
 | 16 | An inline `background` silently kills any stylesheet `:hover` on the same element | gotcha | T3 |
 | 17 | A late Sandpack mount could revive a preview the app had stopped | fixed bug | T3 |
 | 18 | A child's `useLayoutEffect` runs before an ancestor's `ref` is attached | gotcha | T6 |
-| 19 | Nothing re-clamps the split when the window shrinks | deferred to T9 | T6 |
+| 19 | Nothing re-clamps the split after the drag that set it | deferred to T9 | T6 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -727,12 +734,14 @@ One trap in that spec worth naming: an `addInitScript` that clears the storage k
 `page.reload()`, so it silently defeats the persistence assertion it was meant to isolate. Each
 test already gets a fresh context; no reset is needed.
 
-### 19. Nothing re-clamps the split when the window shrinks (deferred to T9)
+### 19. Nothing re-clamps the split after the drag that set it (deferred to T9)
 
 The 320px-per-pane minimum is enforced from the rect a drag measures, so a *drag* can never
-starve a pane. Shrinking the window afterwards can: the stored fraction holds, and at a narrow
-enough width 20% of the body is under 320px. No `ResizeObserver`, deliberately — T9 owns narrow
-viewports, and there is no breakpoint frame anywhere in section `18.1` to clamp toward.
+starve a pane. Two later events can, because the fraction is held fixed and nothing re-runs the
+clamp: shrinking the window (at a narrow enough width, 20% of the body is under 320px), and
+**opening the sidebar** after dragging wide with it collapsed — the editor loses 240px it was
+never re-measured for. No `ResizeObserver`, deliberately: T9 owns narrow viewports, and there is
+no breakpoint frame anywhere in section `18.1` to clamp toward.
 
 ## Remaining decisions
 
