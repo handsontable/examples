@@ -182,7 +182,9 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
         }
         accountEmail={user.email}
         onMyDemos={() => { location.href = "/my-demos"; }}
-        onLogout={logout}
+        // Never a bare reload here: `/my-demos` answers a null user with
+        // `login()`, so logging out in place would re-enter the broker.
+        onLogout={() => logout("/")}
       />
 
       <div style={body}>
@@ -268,7 +270,7 @@ function SideNav() {
         Settings
       </button>
       <div style={navRule} role="separator" />
-      <button type="button" className="hot-menu-row" style={navRow()} onClick={logout}>
+      <button type="button" className="hot-menu-row" style={navRow()} onClick={() => logout("/")}>
         <IconLogin2 />
         Log out
       </button>

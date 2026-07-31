@@ -1187,7 +1187,10 @@ function Authoring({
         // survives `/share/:id` — see `ShareRoute`.
         accountEmail={accountUser?.email}
         onMyDemos={() => { location.href = "/my-demos"; }}
-        onLogout={logout}
+        // `edit` is auth-gated — `Gate` answers a null user with `login()`, so a
+        // plain reload would bounce straight back to the broker. `play` and
+        // `share` render fine anonymously and keep their example.
+        onLogout={route.mode === "edit" ? () => logout("/") : () => logout()}
         mode={route.mode}
         sharing={forking}
         saving={saving}
