@@ -521,6 +521,7 @@ subtask that surfaced it and what evidence exists.
 | 22 | `next` carries both `Filtering And Search` and `Filtering Search` | upstream data bug | T7 |
 | 23 | Figma `common/colors/accent-color` is `#4669f6`; `theme.ts` ships `#1A42E8` | design decision | T7 |
 | 24 | The category column's scrollbar eats into the 179px the design gives labels | design decision | T7 |
+| 25 | TypeScript docs examples boot with a `/src/main.js` entry against a `.ts` file | pre-existing bug | T7 |
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -835,6 +836,25 @@ Mitigated, not solved: `scrollbarWidth: "thin"` recovers most of the track, and 
 a `title` with its full label. `scrollbar-gutter: stable` is *not* the fix — it reserves the track
 unconditionally, so the content box stays narrow either way. A real fix means either a wider
 popover than the design's 480px or shorter category labels; both are design calls.
+
+### 25. TypeScript docs examples boot with a `/src/main.js` entry (pre-existing bug — not T7)
+
+Found while confirming T7's `FW_PREF` fallback: from a React example, picking `Accessibility ▸
+Standard example` (which has no React variant) correctly resolves to the TypeScript variant, and
+then the preview fails with
+
+```
+ModuleNotFoundError: Could not find module in path: '../index.ts' relative to '/src/main.js'
+```
+
+The sidebar shows `src/main.ts` and `index.ts`, so the files are right and the *entry* is wrong.
+**Not caused by the picker** — the identical error reproduces on a direct
+`?docs=guides/accessibility/accessibility/javascript/example1.ts` load with no picker interaction,
+so `FW_PREF` and T7 are both exonerated. Note the manifest puts TypeScript variants under a
+`javascript/` directory with a `.ts` extension, which is the likely trigger.
+
+Same shape as the `.jsx`-vs-`main.tsx` mismatch tracked under DEV-2130. Left alone: nothing about
+it is chrome, and fixing entry resolution inside a restyle PR would bury it.
 
 ## Remaining decisions
 

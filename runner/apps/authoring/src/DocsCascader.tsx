@@ -517,7 +517,7 @@ const s = {
   // takes out of the 179 (Windows/Linux always; macOS when "always show
   // scrollbars" is on). The design draws no scrollbar at all because it shows 16
   // categories — the live manifest has 28 — so some loss is unavoidable here;
-  // every row carries a `title` with its full label. Logged as open item 22.
+  // every row carries a `title` with its full label. Logged as open item 24.
   catCol: { flex: `0 0 ${CAT_COL_WIDTH}px`, minWidth: 0, overflowY: "auto", scrollbarWidth: "thin" },
   exCol: { flex: 1, minWidth: 0, overflowY: "auto" },
 
