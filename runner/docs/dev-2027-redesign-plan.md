@@ -502,6 +502,63 @@ preview and nothing else — no chrome to design. Frames `72:11913` / `72:13670`
 **Files.** `apps/authoring/src/App.tsx`, `EditorShell.tsx`.
 **Depends.** T2–T6.
 
+**Shipped (DEV-2162).** `FullEmbed` → `FullMode`: `TopBar` + new `FullBar` + the same static
+iframe + `PreviewStatusBar`. `EditorShell.tsx` was not touched — full mode has no workspace, so
+it composes the shell's parts directly instead of growing a layout variant inside a component
+that binds to a `DemoRuntime`.
+
+**The full-mode bar is three elements, and `PreviewBar` could not be one of them.** `65:20487`
+is refresh · URL · `window-minimize` — no version pill, no framework pill, no book, no github.
+`PreviewBarProps` requires `version` / `versionOptions` / `onVersionChange` by construction
+(T2), so the URL field moved to its own `PreviewUrlField.tsx` (clipboard write, the 1.5s
+`copied` window, the ellipsis clamp, disabled-when-empty) and both bars compose it. Widening
+`PreviewBar` with optional props would have put full-mode branches inside T2's component for the
+one element the two bars share.
+
+**`?mode=full` needs a saved id, and now says so in one place.** It used to be read inside
+`App()`'s `share` branch, so `/edit/:id?mode=full` and `/?mode=full` silently fell through to
+the full app — and `openFullWindow` stamps the param onto *the current* URL, so
+`window-maximize` in `play` opened a duplicate of the app in a new tab. `fullModeId(route)`
+answers it per route: `share` and `edit` resolve (both render the build `/share/:id` already
+serves publicly — no new exposure), `play` cannot (no id, therefore no `/d/:id/` artifact), and
+`onMaximize` is withheld there so the UI can't reach it either.
+
+**The status dot is a `GET` probe, not the iframe's `load` event.** `load` fires for a 404 page
+too, and `/d/:id/` exists only if `runBuild` succeeded at fork time, so a demo without a build
+would have reported `● ready` over the worker's "Not found" — which the iframe does render, being
+the response body. The frame is cross-origin, so it cannot be introspected. `GET`, not `HEAD`:
+that route is gated on `request.method === "GET"` (`workers/api/src/index.ts:493`), so a `HEAD`
+never reaches `serveDemoAsset` and *every* full-mode view would have read `error`. The HTML entry
+is `max-age=0, must-revalidate` and the iframe requests the same URL, so this is one conditional
+request, not a second download. 404 (no demo, or no artifact) and 410 (revoked) both fail `ok`.
+
+**Chrome renders on the first paint; metadata fills in behind it.** Share mode blocks on
+`Splash` until its source arrives, but here that would delay the demo itself to wait on a pill
+title. Instead `FullMode` renders immediately (the iframe starts loading at once — the point of
+wrapping the prebuilt artifact) and the title, version and framework label land as their fetches
+settle: `/api/demos/:id` for `title` + `ht_version`, `/api/demos/:id/source` for `framework` (→
+the catalog's short `React (Vite, TS)`) and the files `Download` zips. `PreviewStatusBar`'s
+`version` is required, so it falls back to `DEFAULT_VERSION`; `Download` hides when the source
+fetch fails rather than handing over an empty zip. `downloadWorkspaceZip()` is now module-level
+in `App.tsx` — full mode has no `filesRef` to close over.
+
+`sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"` carried over
+unchanged. Refresh re-keys the iframe (`reloadGen`), which re-requests the build *and* re-probes;
+minimize is a navigation with the `mode` param deleted, not `window.close()` — `close()` only
+works for a window the script opened, so it does nothing on a pasted link.
+
+**No `Sign in` in full mode**, matching the frame: nothing in the view needs auth, and the build
+is public. `authed={false}` with no `onSignIn`.
+
+**Theme toggles the chrome only.** The iframe is the prebuilt artifact with its own
+`ht-theme-main.min.css` (ADR-0022), so light chrome + dark grid in full mode is correct, the same
+mix `65:21451` draws. Nothing to build.
+
+**The full-window share link stopped being bare**, so `ShareLinks.tsx`'s copy changed with it:
+that row used to read "example only — embed in any iframe", which is now `/embed/:id`'s job.
+
+Logged-out chrome needed **no code**: see open item 30.
+
 ---
 
 ## T9 — Apply the design system to existing, undesigned functionality
@@ -972,6 +1029,47 @@ change than a splash — it needs the shell's chrome to render against absent st
 viewer". `runner/apps/` contains only `authoring/`, and `/d/:id` is served by the Worker from
 prebuilt R2 artifacts (`workers/api/src/share.ts`) with no app involved — which ADR-0020 and
 T8's scope both already say. The table row is stale; nothing is missing.
+
+### 30. `72:15697` gives the anonymous view `Sign in` alone, no `Download` (design decision)
+
+The frame's top-right group (`72:15867`) is theme toggle + `Sign in`, 127px — no `Download`. The
+app passes `onDownload` unconditionally (`App.tsx`), so an anonymous visitor sees both, in `play`
+as well as `share`.
+
+T8 kept both, per ADR-0023 rule 1: `Download` works for anonymous visitors today and a frame
+omitting it is not an instruction to remove it. Worth noting the button is not the only way out
+either — the sidebar's FILES header carries the same zip in every mode — so hiding it would cost
+little if design wants the frame followed exactly. One-line change either way
+(`onDownload={user ? downloadZip : undefined}`), which is why it is logged rather than guessed.
+
+Related: `72:15697` is the anonymous **`play`** view, not an anonymous share view — its pill
+holds the cascader and `tabler-icon-search` (`72:15865`). `TopBar.tsx`'s comment predates that
+reading and says no frame shows an anonymous view at all; the share half of that is still true.
+
+### 31. Full mode needs the SPA and the worker on one origin, which plain `vite dev` isn't (dev-env note)
+
+`serveDemoAsset` sends `frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` for `/d/:id`
+(`share.ts`) and is *not* wrapped in `cors()`. Production is fine — `.env.production` points
+`VITE_API_BASE` at `https://demos.handsontable.com`, the same origin the SPA is served from — so
+the iframe frames and the status probe is a same-origin `fetch`.
+
+Locally the default setup is not that: the app runs on Vite's port and the worker on 8787, so the
+iframe is refused *and* the probe fails CORS, which reads as `● error` on a demo that is fine.
+The iframe half predates T8 (`FullEmbed` had it); the probe half is new.
+
+Verified by giving the dev server a proxy for `/api`, `/d` and `/embed` and pointing
+`VITE_API_BASE` back at the dev server's own origin — which reproduces production's topology.
+Worth folding into `vite.config.ts` as a dev-only proxy so `pnpm dev` matches production; not done
+here because it changes every local request path, not just full mode's.
+
+### 32. `pnpm typecheck` needs a `pnpm build` first on this branch (build-order note)
+
+`apps/authoring` typechecks against `packages/runtime/dist`, not its source, and that `dist` was
+built before T5 added `reload()` to `DemoRuntime`. On a fresh clone of the integration branch
+`pnpm typecheck` therefore fails with `Property 'reload' does not exist on type 'DemoRuntime'`
+until `pnpm build` regenerates the declarations. Predates T8; the fix is either committing to
+build in CI before typechecking or pointing the app's path mapping at the package source, which
+is what the `editor-shell` alias in `vite.config.ts` already does for the shell.
 
 ## Remaining decisions
 

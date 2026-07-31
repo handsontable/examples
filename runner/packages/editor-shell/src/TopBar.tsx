@@ -33,10 +33,10 @@ export function TopBar({ examplePill, onDownload, onSignIn, authed }: TopBarProp
 
       <ThemeToggle />
 
-      {/* Download is gated on having files, not on auth. The design's top-right
-          is "Download (authed) / Sign in (anon)", but share mode has always
-          offered Download to anonymous visitors and no frame shows an anonymous
-          share view — ADR-0023 rule 1 keeps it. Anonymous share shows both. */}
+      {/* Download is gated on having files, not on auth. The design's top-right is
+          "Download (authed) / Sign in (anon)" — `72:15697` draws `Sign in` alone —
+          but Download has always worked for anonymous visitors, so ADR-0023 rule 1
+          keeps it and the anonymous view shows both. See open item 30. */}
       {onDownload && (
         <button type="button" style={actionButton} onClick={onDownload} title="Download this example (including your edits) as a .zip">
           <IconDownload />

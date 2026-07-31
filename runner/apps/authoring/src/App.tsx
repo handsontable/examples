@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   EditorShell,
+  FullBar,
+  PreviewStatusBar,
   shellStyles,
   Spinner,
   theme,
+  TopBar,
   useLogoUrl,
   useTheme,
   type PreviewStatus,
@@ -118,6 +121,24 @@ function isMissingDocsResource(error: unknown): boolean {
   return error instanceof Error && /\b404\b/.test(error.message);
 }
 
+/** Zip a file map and hand it to the browser. Module-level because two callers need
+ *  it: the shell's `Download` (live, possibly-edited workspace) and full mode, which
+ *  has no workspace — only the files it fetched from the source snapshot. */
+function downloadWorkspaceZip(files: FilesMap, name: string): void {
+  const entries: Record<string, Uint8Array> = {};
+  for (const [p, c] of Object.entries(files)) entries[p.replace(/^\//, "")] = strToU8(c);
+  const bytes = zipSync(entries, { level: 6 });
+  const base = (name || "handsontable-demo")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "handsontable-demo";
+  const blob = new Blob([bytes as BlobPart], { type: "application/zip" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${base}.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 type EditorRoute =
   | { mode: "play" }
   | { mode: "edit"; id: string }
@@ -129,29 +150,135 @@ function parseRoute(): EditorRoute {
   return { mode: "play" };
 }
 
+/**
+ * `?mode=full` resolves for a *saved* demo only — full mode shows the prebuilt
+ * `/d/:id/` artifact, and `play` has no id and therefore no artifact. `window-maximize`
+ * is withheld in `play` for the same reason, so the param cannot be reached from the UI
+ * there either.
+ *
+ * `edit` resolves it as well as `share`: `/edit/:id` is auth-gated, but the build full
+ * mode renders is the one `/share/:id` already serves publicly, so this exposes nothing
+ * new — and the maximize button has to work from the editor, which is where it lives.
+ */
+function fullModeId(route: EditorRoute): string | null {
+  if (route.mode === "play") return null;
+  return new URLSearchParams(location.search).get("mode") === "full" ? route.id : null;
+}
+
 export function App() {
   const route = parseRoute();
+  const fullId = fullModeId(route);
+  if (fullId) return <FullMode id={fullId} />;
   // The share page is a public, read-only playground — no auth needed.
-  if (route.mode === "share") {
-    // ?mode=full → chrome-less, example-only, full-window (for iframe embedding).
-    const full = new URLSearchParams(location.search).get("mode") === "full";
-    return full ? <FullEmbed id={route.id} /> : <Authoring user={null} route={route} />;
-  }
+  if (route.mode === "share") return <Authoring user={null} route={route} />;
   return <Gate route={route} />;
 }
 
-/** Chrome-less full-window view of a saved demo's built output — the whole
- *  window is just the running example, so `/share/:id?mode=full` drops cleanly
- *  into an <iframe> on any site. Wraps the static /d/:id/ build (cheap, instant,
- *  no live container); the outer SPA page carries no frame restrictions. */
-function FullEmbed({ id }: { id: string }) {
+/**
+ * `65:20432` — a saved demo's built output, full window, under the design's chrome:
+ * top bar, URL bar, preview, status bar. No editor, no sidebar, no authed action bar.
+ *
+ * Wraps the static `/d/:id/` build, so this stays the cheap path — no Sandpack, no
+ * container, nothing to boot. The chrome renders on the first paint (the iframe starts
+ * loading immediately) and the metadata fills in behind it; a `Splash` here would delay
+ * the demo itself to wait on a title.
+ *
+ * Nothing in this view needs auth: the build it shows is what `/share/:id` already
+ * serves publicly. Hence no `Sign in` — the frame draws none either.
+ */
+function FullMode({ id }: { id: string }) {
+  const [title, setTitle] = useState("");
+  const [version, setVersion] = useState(DEFAULT_VERSION);
+  const [frameworkName, setFrameworkName] = useState<string | undefined>(undefined);
+  const [files, setFiles] = useState<FilesMap | null>(null);
+  const [status, setStatus] = useState<PreviewStatus>("booting");
+  // Bumped by refresh; re-keys the iframe (which re-requests the build) and re-probes.
+  const [reloadGen, setReloadGen] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/api/demos/${id}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((meta: { title?: string; ht_version?: string } | null) => {
+        if (cancelled || !meta) return;
+        setTitle(meta.title ?? "");
+        if (meta.ht_version) setVersion(meta.ht_version);
+      })
+      .catch(() => { /* the status dot reports the build; a missing title is not an error state */ });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  // `framework` and the files only exist on the source snapshot. The files are what
+  // `Download` zips; without them the button hides rather than handing over an empty zip.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/api/demos/${id}/source`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((src: { framework: string; files: FilesMap } | null) => {
+        if (cancelled || !src) return;
+        setFiles(src.files);
+        // The design's short label ("React (Vite, TS)") comes from the starter catalog,
+        // same resolution the shell's status bar uses in every other mode.
+        setFrameworkName(catalog.examples.find((x) => x.framework === src.framework)?.displayName);
+      })
+      .catch(() => { /* Download stays hidden */ });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  // The dot cannot come from the iframe's `load` event: that fires for a 404 page too,
+  // and `/d/:id/` only exists if `runBuild` succeeded at fork time — a demo without a
+  // build would report `ready` over the worker's "Not found". The frame is cross-origin,
+  // so it cannot be introspected either. Probe the same URL instead: `GET`, because the
+  // route is gated on it (`workers/api/src/index.ts`), and the HTML entry is served
+  // `max-age=0, must-revalidate`, so this is one conditional request rather than a
+  // second download. 404 (no demo / no artifact) and 410 (revoked) both fail `ok`.
+  useEffect(() => {
+    let cancelled = false;
+    setStatus("booting");
+    fetch(`${API_BASE}/d/${id}/`)
+      .then((res) => { if (!cancelled) setStatus(res.ok ? "ready" : "error"); })
+      .catch(() => { if (!cancelled) setStatus("error"); });
+    return () => { cancelled = true; };
+  }, [id, reloadGen]);
+
+  /** Leaving full mode is a navigation, not `window.close()`: `close()` only works for
+   *  a window the script opened, so it silently does nothing on a pasted link. */
+  const leaveFullWindow = useCallback(() => {
+    const url = new URL(location.href);
+    url.searchParams.delete("mode");
+    location.assign(url.toString());
+  }, []);
+
   return (
-    <iframe
-      title="Handsontable demo"
-      src={`${API_BASE}/d/${id}/`}
-      style={{ position: "fixed", inset: 0, width: "100%", height: "100%", border: "none", display: "block" }}
-      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-    />
+    <div style={{ ...shellStyles.shell, gridTemplateRows: "auto 1fr" }}>
+      <TopBar
+        authed={false}
+        examplePill={
+          <div style={shellStyles.examplePill(false)}>
+            <span style={pillLabel}>{title || "Shared demo"}</span>
+          </div>
+        }
+        onDownload={files ? () => downloadWorkspaceZip(files, title) : undefined}
+      />
+
+      <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto", minHeight: 0 }}>
+        <FullBar
+          url={`${location.origin}/share/${id}`}
+          onRefresh={() => setReloadGen((g) => g + 1)}
+          onMinimize={leaveFullWindow}
+        />
+
+        <iframe
+          key={reloadGen}
+          title="Handsontable demo"
+          src={`${API_BASE}/d/${id}/`}
+          style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+        />
+
+        <PreviewStatusBar status={status} frameworkName={frameworkName} version={version} />
+      </div>
+    </div>
   );
 }
 
@@ -746,18 +873,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
 
   /** Download the current (possibly-edited) workspace as a .zip. */
   const downloadZip = useCallback(() => {
-    const entries: Record<string, Uint8Array> = {};
-    for (const [p, c] of Object.entries(filesRef.current)) entries[p.replace(/^\//, "")] = strToU8(c);
-    const bytes = zipSync(entries, { level: 6 });
-    const base = (title || entry.displayName || "handsontable-demo")
-      .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "handsontable-demo";
-    const blob = new Blob([bytes as BlobPart], { type: "application/zip" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${base}.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadWorkspaceZip(filesRef.current, title || entry.displayName);
   }, [title, entry.displayName]);
 
   /** Create an embeddable (docs-only) version from the current playground code
@@ -869,9 +985,9 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     });
   }, []);
 
-  /** `window-maximize` (`72:15715`). `?mode=full` is the chrome-less, preview-only
-   *  view; it resolves today for the share route (see `parseRoute` above), and T8
-   *  extends it to the rest. */
+  /** `window-maximize` (`72:15715`). Opens `?mode=full` — the preview-only view of the
+   *  demo's built output (`FullMode`, `65:20432`). Saved demos only: the button is
+   *  withheld in `play`, which has no id and so no `/d/:id/` build to show. */
   const openFullWindow = useCallback(() => {
     const url = new URL(location.href);
     url.searchParams.set("mode", "full");
@@ -1034,9 +1150,14 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         publicUrl={publicUrl}
         previewUrl={previewUrl}
         onRefreshPreview={refreshPreview}
-        onMaximize={openFullWindow}
+        // Saved demos only. `?mode=full` renders the prebuilt `/d/:id/` artifact, which a
+        // `play` workspace does not have — before T8 the button there opened a duplicate
+        // of the full app in a new tab.
+        onMaximize={savedId ? openFullWindow : undefined}
         // Not gated on auth: share mode has always offered Download to anonymous
         // visitors, and no frame shows an anonymous share view (ADR-0023 rule 1).
+        // `72:15697` (anonymous `play`) does draw `Sign in` alone — kept anyway, per the
+        // same rule, and logged as an open item rather than dropping a working control.
         onDownload={downloadZip}
         onSignIn={login}
         frameworks={frameworks}

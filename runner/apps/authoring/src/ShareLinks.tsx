@@ -28,11 +28,14 @@ export function ShareLinks({
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <h2 style={{ fontFamily: theme.font.ui, fontSize: 18, margin: "0 0 4px" }}>Share this demo</h2>
+        {/* The full-window link stopped being bare in T8: `?mode=full` now carries the
+            design's chrome (top bar, URL bar, status bar) around the built demo. The
+            chrome-less surface is the docs embed, which is what this copy points at. */}
         <p style={{ color: theme.color.textMuted, fontFamily: theme.font.ui, fontSize: 13, marginTop: 0 }}>
-          The client link is public. The full-window link is example-only and iframe-embeddable anywhere; the docs embed URL only renders inside handsontable.com docs.
+          The client link is public. The full-window link shows the built demo without the editor; the docs embed URL is the bare grid, and only renders inside handsontable.com docs.
         </p>
         <LinkRow label="Client link (public, editable view)" value={clientUrl} copied={copied === "client"} onCopy={() => copy("client", clientUrl)} />
-        <LinkRow label="Full-window (example only — embed in any iframe)" value={fullUrl} copied={copied === "full"} onCopy={() => copy("full", fullUrl)} />
+        <LinkRow label="Full-window (demo only, no editor)" value={fullUrl} copied={copied === "full"} onCopy={() => copy("full", fullUrl)} />
         <LinkRow label="Docs embed URL (handsontable.com only)" value={embedUrl} copied={copied === "embed"} onCopy={() => copy("embed", embedUrl)} />
         <div style={row}>
           <a style={{ ...ghost, textDecoration: "none", textAlign: "center" }} href={clientUrl} target="_blank" rel="noreferrer">Open</a>
