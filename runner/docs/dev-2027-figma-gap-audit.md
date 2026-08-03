@@ -272,8 +272,9 @@ Listed so the sweep is complete, not re-argued. All were logged with a rationale
 
 # Subtask breakdown
 
-Decisions taken on this audit (2026-08-03), grouped into five subtasks by topic. T11–T14 are mutually
-independent; T10 is the only one carrying an open design question, and only for one control.
+Decisions taken on this audit (2026-08-03), grouped into five subtasks by topic. T11–T13 are mutually
+independent and T14 trails all of them (see [Sequencing](#sequencing) — this originally said "T11–T14",
+corrected in DEV-2171); T10 is the only one carrying an open design question, and only for one control.
 
 ## T10 — Authed action surfaces: retire the unframed bar
 
@@ -409,13 +410,23 @@ Size **XS**.
 
 ## Sequencing
 
-T11–T14 are independent and can land in any order. T10 should follow T11, since both touch the same
-region of `App.tsx`. Within T10, the icon-form pending state comes before the relocations.
+> **CORRECTED (DEV-2171).** This section originally read *"T11–T14 are independent and can land in any
+> order."* That is wrong for **T14**, which is a trailing sweep: every claim it corrects is invalidated
+> by one of T10–T13, so it cannot precede them. Correct reading: **T11–T13 are independent; T14
+> trails all of them.** The rest of this section is now history — all five subtasks have landed.
+
+T11–T13 are independent and can land in any order. T10 should follow T11, since both touch the same
+region of `App.tsx`. Within T10, the icon-form pending state comes before the relocations. T14 runs
+last, after every subtask whose comments it corrects.
 
 T10 and T12 are the two substantial ones (**M** each) and are the natural parallel pair — T10 is chrome
 around the panes, T12 is inside the editor pane. They overlap only on `dirty`: T10 deletes the component
 that consumes it today, T12 splits it per file. Whichever lands second inherits that reconciliation, so
 it is worth agreeing the shape of the per-file dirty set before either starts.
+
+**Order actually taken:** T10 (`b336b96`, DEV-2167) → T11 (`25ee6ba`, DEV-2168) → T12 (`2169818`,
+DEV-2169) → T13 (`59be18d`, DEV-2170) → T14 (DEV-2171). T10 landed before T11 rather than after; the
+`dirty` reconciliation fell to T12, which split it per file over the component T10 had already deleted.
 
 ---
 
