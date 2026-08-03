@@ -344,6 +344,38 @@ test("the whole strip is one Tab stop however many files are open", async ({ pag
   expect(inStrip).toBe(2); // the active tab and its close button, and nothing else
 });
 
+test("hovering the active tab keeps its raised fill", async ({ page }) => {
+  // `.hot-tab:hover` and `.hot-tab[data-active="true"]` are both (0,2,0), so source
+  // order decides — and getting it wrong makes the *selected* tab go translucent the
+  // moment you reach for its ✕, i.e. read as inactive. T4 was immune because the fill
+  // was inline; moving it into the stylesheet (items 16/36) is what put it at risk.
+  //
+  // Asserted as "unchanged from rest" rather than against a literal colour, so the
+  // test survives a token change. Every read waits out the 120ms background-color
+  // transition — `getComputedStyle` returns the animating value, so an immediate read
+  // reports the *old* colour and this passes for the wrong reason.
+  await openReact(page);
+  await fileRow(page, "/src/constants.ts").click();
+
+  const fill = async (path: string) => {
+    await page.waitForTimeout(300);
+    return tab(page, path).evaluate((el) => getComputedStyle(el).backgroundColor);
+  };
+
+  await page.mouse.move(0, 400); // off the strip, so nothing is hovered
+  const activeRest = await fill("/src/constants.ts");
+  const inactiveRest = await fill("/src/index.tsx");
+  expect(activeRest).not.toBe(inactiveRest); // precondition: the fill is visible at all
+
+  await tab(page, "/src/constants.ts").hover();
+  expect(await fill("/src/constants.ts")).toBe(activeRest);
+
+  // …while an inactive tab still gets its rollover, which is the rule being ordered
+  // around and would otherwise be the easy thing to break in fixing this.
+  await tab(page, "/src/index.tsx").hover();
+  expect(await fill("/src/index.tsx")).not.toBe(inactiveRest);
+});
+
 test("the strip's keys still work with focus on a close button", async ({ page }) => {
   // The ✕ is a deliberate second Tab stop, so it must not be a dead end. It swallows
   // Enter and Space only — those mean "close" here and "select" on the tab — and lets

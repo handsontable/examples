@@ -138,8 +138,16 @@
          outrank the :hover — and a tab that set none would fall through to the UA's
          buttonface (open items 16 / 36). */
       .hot-tab { background: transparent; transition: background-color 0.12s ease; }
-      .hot-tab[data-active="true"] { background: var(--hot-color-surface-raised); }
       .hot-tab:hover { background: var(--hot-color-hover); }
+      /* Active goes *last* here — the opposite order to .hot-file-row above, and
+         deliberately so. Both selectors are (0,2,0), so source order decides: on a
+         file row the hover is meant to win even on the active row, but on a tab the
+         raised fill *is* the "this is the open file" signal, and dropping it on hover
+         — including on the way to the ✕ — makes the active tab read as inactive.
+         T4 got this for free by setting the fill inline, which no :hover could reach;
+         moving it into the stylesheet is what put it at risk. */
+      .hot-tab[data-active="true"],
+      .hot-tab[data-active="true"]:hover { background: var(--hot-color-surface-raised); }
       /* The tab is a div carrying a roving tabindex, so it has no UA ring of its own. */
       .hot-tab:focus-visible { outline: 2px solid var(--hot-color-accent); }
       /* The glyph swap (open item 43, audit A6): ✕ at rest, the unsaved-changes dot in
