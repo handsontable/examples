@@ -395,7 +395,22 @@ export function EditorShell(props: EditorShellProps) {
                 and why both states are absolutely positioned. */}
             {openPaths.map((path) => (
               <div
-                key={path}
+                // Keyed by workspace *and* path, not path alone. Two workspaces
+                // routinely share an entry (`React (Vite, TS)` and `MUI + React` are
+                // both `/src/index.tsx`), and on a bare `path` key React reuses the
+                // previous workspace's CodeEditor for it. The new file's contents do
+                // land in the doc, so it looks right — but the old undo stack rides
+                // along, and one Cmd+Z rewrites the whole file back to the *previous
+                // example's* source, through `onEdit` and on into the preview.
+                //
+                // It also silently disables this pane's caret read-back: without a
+                // remount `onCreateEditor` never fires again, so the view stays absent
+                // from `viewsRef` (which the workspace switch just cleared) for the
+                // rest of the session.
+                //
+                // Within a workspace the key is stable, which is what keeps per-tab
+                // undo — the whole point of mounting every tab — working.
+                key={`${props.workspaceKey ?? ""} ${path}`}
                 id={tabPanelId(path)}
                 role="tabpanel"
                 aria-labelledby={tabId(path)}

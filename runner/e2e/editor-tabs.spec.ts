@@ -238,6 +238,44 @@ test("saving clears the dot without disturbing the workspace Save state", async 
 
 // ---- reconciliation with the file set --------------------------------------
 
+/** The example cascader's trigger, then a starter leaf in its tree. Driving the real
+ *  in-app switch matters: `page.goto` is a fresh page load and never exercises the
+ *  `workspaceKey` path at all. */
+async function switchStarter(page: Page, label: string) {
+  await page.locator('button[aria-haspopup="dialog"]').click();
+  const dialog = page.getByRole("dialog", { name: "Choose an example" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("treeitem", { name: label, exact: true }).click();
+}
+
+test("an example switch does not carry undo history into the new workspace", async ({ page }) => {
+  // `React (Vite, TS)` and `MUI + React` both have `/src/index.tsx` as their entry, and
+  // that collision is the whole test: panes are keyed by path, so a reused path lets
+  // React keep the *previous* workspace's CodeEditor mounted. Its undo stack comes with
+  // it, so one Cmd+Z writes the old example's source into the new one through `onEdit`
+  // — and because the instance never remounts, `onCreateEditor` never fires again and
+  // the view stays missing from the shell's map for the rest of the session.
+  await openReact(page);
+  await activeEditor(page).click();
+  await page.keyboard.type("// from the react starter");
+  await expect(activeEditor(page)).toContainText("// from the react starter");
+
+  await switchStarter(page, "MUI + React");
+  await expect(tab(page, "/src/index.tsx")).toBeVisible();
+  await expect(activeEditor(page)).not.toContainText("// from the react starter");
+
+  // The undo stack must not have survived the switch.
+  await activeEditor(page).click();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(activeEditor(page)).not.toContainText("// from the react starter");
+
+  // …and the fresh instance registered itself, so per-tab undo still works here.
+  await page.keyboard.type("// from mui");
+  await expect(activeEditor(page)).toContainText("// from mui");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(activeEditor(page)).not.toContainText("// from mui");
+});
+
 test("switching example discards the previous workspace's tabs", async ({ page }) => {
   // The trap T3 hit with directory expansion, and the reason `workspaceKey` exists:
   // both starters contain `/package.json`, so reconciling by "does this path still
