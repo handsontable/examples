@@ -67,18 +67,20 @@ npx wrangler dev            # http://localhost:8787
 
 ```bash
 cd apps/authoring
-# .env.local (gitignored):  VITE_API_BASE=http://localhost:8787
+# .env.local (gitignored):  VITE_API_BASE=http://localhost:5173   # this dev server, not :8787
 #                           VITE_DEV_USER=you@handsontable.com   # bypasses broker login locally
 pnpm --filter @handsontable/demo-authoring dev   # http://localhost:5173
 ```
 
 Two traps in that setup:
 
-- **`?mode=full` needs the SPA and the worker on one origin, which this is not.** `serveDemoAsset`
-  sends `frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` for `/d/:id` and is not wrapped in
-  `cors()`. Production is same-origin so it works there; locally the iframe is refused *and* the
-  status probe fails CORS, which renders as `● error` on a demo that is fine. Give the dev server a
-  proxy for `/api`, `/d` and `/embed` and point `VITE_API_BASE` at its own origin.
+- **`?mode=full` needs the SPA and the worker on one origin.** `serveDemoAsset` sends
+  `frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` for `/d/:id` and is not wrapped in
+  `cors()`. Production is same-origin so it works there; point `VITE_API_BASE` straight at `:8787`
+  and the iframe is refused ("localhost refused to connect") *and* the status probe fails CORS,
+  which renders as `● error` on a demo that is fine. `vite.config.ts` proxies `/api`, `/d` and
+  `/embed` to the worker for exactly this reason — keep `VITE_API_BASE` on the dev server's own
+  origin. An **empty** value does not work: `App.tsx` falls back to `:8787` on any falsy value.
 - **`VITE_DEV_USER` short-circuits `currentUser()` before the fetch.** Any test of the real broker
   path has to override it (`VITE_DEV_USER= pnpm dev`) or it silently exercises the bypass instead.
 
@@ -123,12 +125,18 @@ cd apps/authoring && pnpm --filter @handsontable/demo-authoring build && npx wra
 - `apps/authoring/.env.production` (**committed**, no secrets) → `VITE_API_BASE=https://demos.handsontable.com`.
 - `apps/authoring/.env.local` (**gitignored**) holds the dev bypass (`VITE_DEV_USER`) + local API base.
 
-**Always build prod with `.env.local` absent** or the dev-login bypass and `localhost:8787` leak
-into the bundle. After building, sanity-check:
+**Always build prod with `.env.local` absent** or the dev-login bypass leaks into the bundle.
+After building, sanity-check:
 
 ```bash
 grep -rl "localhost:8787\|VITE_DEV_USER\|dev@handsontable.com" apps/authoring/dist && echo BAD || echo OK
 ```
+
+`VITE_API_BASE` itself is not the risk — `.env.production` is mode-specific, so it outranks
+`.env.local` and the base compiles to `demos.handsontable.com` either way. `dev@handsontable.com`
+is what catches a leaked `.env.local`; `localhost:8787` catches a missing `.env.production`
+(the `|| "http://localhost:8787"` fallback in `App.tsx` surviving into the bundle). Don't widen
+that term to a bare `localhost:` — catalog README text mentions dev-server ports and it false-fires.
 
 ## CI/CD
 
