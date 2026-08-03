@@ -326,3 +326,42 @@ test("the strip is one tab stop with arrow-key roving and Delete-to-close", asyn
   await expect(tab(page, "/src/styles.css")).toHaveCount(0);
   await expect(tabs(page)).toHaveCount(2);
 });
+
+test("the whole strip is one Tab stop however many files are open", async ({ page }) => {
+  // A native `<button>` is focusable by default, so the close ✕ silently added one Tab
+  // stop *per open file* — the roving model says the strip is one stop, plus the active
+  // tab's own ✕. Counted rather than asserted on attributes, because the failure is
+  // about how many times a keyboard user presses Tab.
+  await openReact(page);
+  for (const p of ["/src/constants.ts", "/src/styles.css", "/index.html"]) {
+    await fileRow(page, p).click();
+  }
+  await expect(tabs(page)).toHaveCount(4);
+
+  const inStrip = await strip(page).evaluate(
+    (el) => [...el.querySelectorAll("*")].filter((n) => (n as HTMLElement).tabIndex === 0).length,
+  );
+  expect(inStrip).toBe(2); // the active tab and its close button, and nothing else
+});
+
+test("closing keeps focus in the strip instead of dropping it on the body", async ({ page }) => {
+  await openReact(page);
+  await fileRow(page, "/src/constants.ts").click();
+  await fileRow(page, "/src/styles.css").click();
+
+  // Closing unmounts the focused element; without a handoff, focus falls to <body> and
+  // the next close needs a full tab-in from the top of the page.
+  await tab(page, "/src/styles.css").focus();
+  await page.keyboard.press("Delete");
+  await expect(tab(page, "/src/constants.ts")).toBeFocused();
+
+  // …and a second Delete works straight away, which is the point.
+  await page.keyboard.press("Delete");
+  await expect(tab(page, "/src/index.tsx")).toBeFocused();
+
+  // Last tab: nothing to hand focus to, so the strip itself takes it — the user keeps
+  // their place in the page rather than being sent back to the top.
+  await page.keyboard.press("Delete");
+  await expect(tabs(page)).toHaveCount(0);
+  await expect(strip(page)).toBeFocused();
+});

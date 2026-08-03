@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { EditorView } from "@uiw/react-codemirror";
 import type { FilesMap } from "@handsontable/demo-runtime";
 import { CodeEditor, type CursorPosition } from "./CodeEditor.js";
 import { EditorBar } from "./EditorBar.js";
-import { tabId, tabPanelId } from "./EditorTabs.js";
+import { TAB_STRIP_ID, tabId, tabPanelId } from "./EditorTabs.js";
 import { EditorStatusBar } from "./EditorStatusBar.js";
 import { PreviewBar, type FrameworkChoice } from "./PreviewBar.js";
 import { Sidebar } from "./Sidebar.js";
@@ -190,12 +198,38 @@ export function EditorShell(props: EditorShellProps) {
       // `setOpenPaths` callback is a side effect in a reducer, which StrictMode
       // double-invokes.
       const next = openPaths.filter((p) => p !== path);
+      const nextActive = active === path ? (next[i] ?? next[i - 1] ?? "") : active;
+      // Closing unmounts whatever the user was focused on, and focus then falls back to
+      // `<body>` — so a keyboard user has to tab in from the top of the page again just
+      // to close a second tab. Hand it to the neighbour instead.
+      //
+      // Gated on focus having been *in the strip*: a delete from the file tree also
+      // lands here, and yanking focus out of the sidebar mid-interaction would be its
+      // own bug. A mouse click on the ✕ does pass this test, which is what we want —
+      // that click has already taken focus off whatever had it.
+      if (document.activeElement?.closest('[role="tablist"]')) {
+        pendingFocusRef.current = nextActive;
+      }
       setOpenPaths(next);
-      if (active === path) setActive(next[i] ?? next[i - 1] ?? "");
+      if (active === path) setActive(nextActive);
       viewsRef.current.delete(path);
     },
     [openPaths, active],
   );
+
+  // Applied after the close has rendered — the element to focus is not the active tab
+  // until then. A layout effect, not `useEffect`: focus has to land before paint, or
+  // the ring flashes on the old position first.
+  const pendingFocusRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const target = pendingFocusRef.current;
+    if (target === null) return;
+    pendingFocusRef.current = null;
+    // Nothing left to focus once the last tab goes, so the strip itself takes it
+    // (`tabIndex={-1}`, reachable only this way). The user keeps their place in the
+    // page and the next Tab carries on from the editor bar rather than from the top.
+    document.getElementById(target ? tabId(target) : TAB_STRIP_ID)?.focus();
+  }, [openPaths]);
 
   // Discard the open set when the *workspace* is replaced. Reconciling by path would
   // keep a tab open across an example switch whenever both examples happen to contain

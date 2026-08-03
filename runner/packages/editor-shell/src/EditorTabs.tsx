@@ -32,6 +32,10 @@ import { theme } from "./theme.js";
 /** 24px in the frames — larger than the 16px the file tree uses. */
 const TAB_ICON_SIZE = 24;
 
+/** The strip itself. `EditorShell` needs to reach it to park focus there when the last
+ *  tab is closed and there is no tab left to hand focus to. */
+export const TAB_STRIP_ID = "hot-tab-strip";
+
 /** Ties each tab to the pane it selects, so `aria-selected` refers to something.
  *  Shared with `EditorShell`, which stamps the matching ids on the panes. */
 export function tabId(path: string): string {
@@ -106,10 +110,14 @@ export function EditorTabs({ paths, active, onSelect, onClose, dirtyPaths }: Edi
   return (
     <div
       ref={stripRef}
+      id={TAB_STRIP_ID}
       className="hot-tab-strip"
       style={strip}
       role="tablist"
       aria-label="Open files"
+      // Not a Tab stop — focusable only programmatically, so `EditorShell` has
+      // somewhere to put focus when the tab that had it was the last one.
+      tabIndex={-1}
     >
       {paths.map((path, i) => {
         const isActive = path === active;
@@ -140,6 +148,12 @@ export function EditorTabs({ paths, active, onSelect, onClose, dirtyPaths }: Edi
               type="button"
               className="hot-tab-close"
               style={closeBtn}
+              // Part of the roving sequence, not outside it. A native button is
+              // focusable by default, so leaving this alone gave the strip one extra
+              // Tab stop *per open file* — four open tabs measured five stops where the
+              // model calls for two. Keyed to `isActive` for the same reason the tab
+              // itself is: the whole strip is one stop, plus the active tab's own ✕.
+              tabIndex={isActive ? 0 : -1}
               // The tab carries `title={path}`; the ✕ inherits nothing useful from it.
               aria-label={`Close ${basename(path)}`}
               // A tab is a view, not a buffer — closing discards nothing. The stop is
