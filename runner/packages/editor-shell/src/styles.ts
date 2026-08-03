@@ -215,24 +215,6 @@ export const s = {
     whiteSpace: "nowrap",
   }),
 
-  /**
-   * The authed action bar (ADR-0023). Signed-in-only, in no frame — it exists so
-   * anonymous visitors see exactly the two designed rows.
-   */
-  authedBar: {
-    display: "flex",
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: t.space(2),
-    padding: `${t.space(2)} ${t.space(3)}`,
-    flex: "0 0 auto",
-    borderBottom: `1px solid ${t.color.border}`,
-    background: t.color.surfaceMuted,
-    fontFamily: t.font.ui,
-    fontSize: 13,
-    color: t.color.text,
-  } satisfies CSSProperties,
-
   /** Body column wrapper — bars stack above the pane, which takes the rest.
    *  The editor/preview boundary (`line 72:15839`) is no longer drawn here: the
    *  splitter track between the two columns is that line. */
@@ -297,24 +279,6 @@ export const s = {
   } satisfies CSSProperties,
 
   spacer: { flex: 1 } satisfies CSSProperties,
-
-  button: {
-    fontFamily: t.font.ui,
-    fontSize: 13,
-    fontWeight: 600,
-    border: `1px solid ${t.color.border}`,
-    background: t.color.surface,
-    color: t.color.text,
-    borderRadius: t.radius.md,
-    padding: `6px 14px`,
-    cursor: "pointer",
-  } satisfies CSSProperties,
-
-  buttonPrimary: {
-    border: `1px solid ${t.color.accent}`,
-    background: t.color.accent,
-    color: t.color.accentContrast,
-  } satisfies CSSProperties,
 
   sidebar: {
     display: "flex",

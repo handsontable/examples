@@ -1,5 +1,5 @@
-// Row 1 of the chrome (`72:15840`): logo · centred example pill · theme toggle ·
-// Download / Sign in. 72px tall, `surfaceRaised`.
+// Row 1 of the chrome (`72:15840`): logo · centred example pill · the mode action ·
+// theme toggle · Download / Sign in. 72px tall, `surfaceRaised`.
 //
 // The pill is a slot: in play mode the app puts its example cascader there, in
 // edit/share the demo title. Everything else is shell-owned.
@@ -7,6 +7,7 @@
 import type { ReactNode } from "react";
 import { AccountMenu } from "./AccountMenu.js";
 import { IconDownload } from "./icons/index.js";
+import { Spinner } from "./Spinner.js";
 import { s } from "./styles.js";
 import { theme } from "./theme.js";
 import { ThemeToggle } from "./ThemeToggle.js";
@@ -26,6 +27,17 @@ export interface TopBarProps {
   accountEmail?: string;
   onMyDemos?: () => void;
   onLogout?: () => void;
+
+  /** The mode action, left of the theme toggle (`114:24402` and its three
+   *  siblings). At most one of these is ever set, and **`EditorShell` decides
+   *  which** — never this component. It cannot be derived here: `accountEmail`
+   *  above is present on `/share/:id` for a signed-in visitor who is precisely
+   *  the person who must not get a Fork button. See `EditorShell`'s call. */
+  onFork?: () => void;
+  forking?: boolean;
+  onSave?: () => void;
+  saving?: boolean;
+  dirty?: boolean;
 }
 
 export function TopBar({
@@ -35,6 +47,11 @@ export function TopBar({
   accountEmail,
   onMyDemos,
   onLogout,
+  onFork,
+  forking,
+  onSave,
+  saving,
+  dirty,
 }: TopBarProps) {
   const logoUrl = useLogoUrl();
   return (
@@ -44,6 +61,36 @@ export function TopBar({
       {examplePill}
 
       <div style={s.spacer} />
+
+      {/* Fork in `play`, Save in `edit` — one slot, keyed by mode upstream. The
+          frames draw it here, left of the toggle, in all four After Login
+          workspaces, and they size it 49px: the label is `Fork`, not the old
+          bar's `Fork this demo` (ADR-0025, audit A2). */}
+      {onFork && (
+        <button
+          type="button"
+          style={modeActionButton}
+          onClick={onFork}
+          disabled={forking}
+          aria-label={forking ? "Creating…" : undefined}
+          title={forking ? "Creating…" : "Fork this demo into your own editable, shareable client demo"}
+        >
+          {forking ? <Spinner size={14} /> : "Fork"}
+        </button>
+      )}
+
+      {onSave && (
+        <button
+          type="button"
+          style={modeActionButton}
+          onClick={onSave}
+          disabled={saving}
+          aria-label={saving ? "Saving…" : undefined}
+          title={saving ? "Saving…" : "Save this demo (Ctrl+S)"}
+        >
+          {saving ? <Spinner size={14} /> : dirty ? "Save •" : "Save"}
+        </button>
+      )}
 
       <ThemeToggle />
 
@@ -89,4 +136,17 @@ const actionButton: React.CSSProperties = {
   fontWeight: 600,
   cursor: "pointer",
   whiteSpace: "nowrap",
+};
+
+/**
+ * Same button, with the box pinned so the in-flight swap cannot move anything.
+ * The slot's content changes width four ways (`Fork` / `Save` / `Save •` /
+ * a 14px spinner), and it sits left of the toggle and the avatar — an unpinned
+ * box would shuffle the whole right-hand group the moment a request starts.
+ * 72px is the widest resting label (`Save •`) plus the 12px padding either side.
+ */
+const modeActionButton: React.CSSProperties = {
+  ...actionButton,
+  justifyContent: "center",
+  minWidth: 72,
 };

@@ -15,6 +15,9 @@
 //   `tabler-icon-login-2`       — same, Log out row (`114:21804`). The design
 //                                 really does use `login-2`, not `logout`.
 //   `tabler-icon-dots-vertical` — the demo card's kebab (`114:26977`)
+//   `tabler-icon-share`         — heads the preview bar's right icon group in
+//                                 `114:21146` / `114:23289` / `114:24410`
+//                                 (DEV-2167 / T10, audit finding A3)
 //   `IconCopy`                  — the copy affordance inside each field of the
 //                                 share dialog (`114:23289`). Read off the
 //                                 rendered glyph, not a layer name: the dialog's
@@ -45,6 +48,7 @@ import {
   IconRefresh as TablerRefresh,
   IconSearch as TablerSearch,
   IconSettings2 as TablerSettings2,
+  IconShare as TablerShare,
   IconSun as TablerSun,
   IconTrashX as TablerTrashX,
   IconWindowMaximize as TablerWindowMaximize,
@@ -94,6 +98,7 @@ export const IconPlus = ui("IconPlus", TablerPlus);
 export const IconRefresh = ui("IconRefresh", TablerRefresh);
 export const IconSearch = ui("IconSearch", TablerSearch);
 export const IconSettings2 = ui("IconSettings2", TablerSettings2);
+export const IconShare = ui("IconShare", TablerShare);
 export const IconSun = ui("IconSun", TablerSun);
 export const IconTrashX = ui("IconTrashX", TablerTrashX);
 export const IconWindowMaximize = ui("IconWindowMaximize", TablerWindowMaximize);
