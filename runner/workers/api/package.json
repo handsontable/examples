@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@cloudflare/sandbox": "^0.12.3",
-    "@handsontable/demo-runtime": "workspace:*"
+    "@handsontable/demo-runtime": "workspace:*",
+    "@sentry/cloudflare": "^10.68.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",

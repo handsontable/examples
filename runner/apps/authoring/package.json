@@ -12,11 +12,13 @@
   "dependencies": {
     "@handsontable/demo-editor-shell": "workspace:*",
     "@handsontable/demo-runtime": "workspace:*",
+    "@sentry/react": "^10.68.0",
     "fflate": "^0.8.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@sentry/vite-plugin": "^5.4.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

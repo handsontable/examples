@@ -2,6 +2,8 @@
 // the broker rejects non-@handsontable.com accounts. The token is per-user,
 // per-session; kept in sessionStorage, never persisted or logged.
 
+import { reportError } from "./sentry.js";
+
 const BROKER = import.meta.env.VITE_LOGIN_BROKER_URL || "https://mcp-auth-proxy-j0tb.onrender.com";
 const TOKEN_KEY = "hot_token";
 
@@ -44,7 +46,10 @@ export async function currentUser(): Promise<User | null> {
       return null;
     }
     return (await res.json()) as User;
-  } catch {
+  } catch (error) {
+    // The broker being unreachable presents as "signed out" with no explanation,
+    // and every write endpoint then rejects.
+    reportError(error, "broker-userinfo");
     return null;
   }
 }

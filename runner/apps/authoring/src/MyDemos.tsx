@@ -40,6 +40,7 @@ import {
 } from "@handsontable/demo-editor-shell";
 import { getEntry } from "./catalog.js";
 import { getToken, logout, type User } from "./auth.js";
+import { reportError } from "./sentry.js";
 
 /** Mirrors the `GET /api/demos` projection. The pre-T9 drawer declared a narrower
  *  shape and threw away `description`, `created_at` and `forked_from` — all three
@@ -96,6 +97,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
       const data = (await res.json()) as { demos: DemoListItem[] };
       setDemos(data.demos);
     } catch (e) {
+      reportError(e, "my-demos-list");
       setDemos([]);
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -121,7 +123,9 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
       setDemos((cur) => cur?.map((d) => (d.id === demo.id ? { ...d, revoked: 1 } : d)) ?? cur);
     } catch (e) {
       // The drawer's `.catch(() => null)` meant a failed delete looked like a
-      // no-op. Say so instead.
+      // no-op. Say so instead. Reported too: a non-OK response is as silent
+      // server-side as a network error and needs the same visibility.
+      reportError(e, "demo-revoke");
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       clearBusy(demo.id);
@@ -162,6 +166,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
       const { id } = (await res.json()) as { id: string };
       location.href = `/edit/${id}`;
     } catch (e) {
+      reportError(e, "demo-fork");
       setError(e instanceof Error ? e.message : String(e));
       clearBusy(demo.id);
     }
