@@ -162,14 +162,20 @@ export function EditorTabs({ paths, active, onSelect, onClose, dirtyPaths }: Edi
                 e.stopPropagation();
                 onClose(path);
               }}
-              // Without this the strip's Delete/Backspace handler double-fires, and
-              // Enter/Space would select the tab instead of closing it.
+              // **Only** Enter and Space are swallowed, and only because they mean
+              // different things in the two places: on the tab they select it, on the
+              // ✕ they close it.
+              //
+              // Everything else has to bubble to the strip's roving handler. A blanket
+              // `stopPropagation` here was harmless while this button was unreachable
+              // by keyboard; the moment it became a Tab stop it turned into a dead end
+              // — Arrow/Home/End and Delete-to-close all stopped working as soon as you
+              // tabbed onto the ✕, with no way out but Tab.
               onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
                 e.stopPropagation();
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onClose(path);
-                }
+                onClose(path);
               }}
             >
               <span className="hot-tab-x" style={glyph}>

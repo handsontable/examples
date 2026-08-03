@@ -344,6 +344,40 @@ test("the whole strip is one Tab stop however many files are open", async ({ pag
   expect(inStrip).toBe(2); // the active tab and its close button, and nothing else
 });
 
+test("the strip's keys still work with focus on a close button", async ({ page }) => {
+  // The ✕ is a deliberate second Tab stop, so it must not be a dead end. It swallows
+  // Enter and Space only — those mean "close" here and "select" on the tab — and lets
+  // everything else reach the strip's roving handler.
+  await openReact(page);
+  await fileRow(page, "/src/constants.ts").click();
+  await fileRow(page, "/src/styles.css").click();
+
+  const x = closeButton(page, "/src/styles.css", "styles.css");
+  await x.focus();
+  await expect(x).toBeFocused();
+
+  // Roving still moves, and lands on a tab rather than stranding you on the button.
+  await page.keyboard.press("ArrowLeft");
+  await expect(tab(page, "/src/constants.ts")).toBeFocused();
+
+  await x.focus();
+  await page.keyboard.press("Home");
+  await expect(tab(page, "/src/index.tsx")).toBeFocused();
+
+  // Delete-to-close reaches the tab handler and closes exactly one tab.
+  await x.focus();
+  await page.keyboard.press("Delete");
+  await expect(tab(page, "/src/styles.css")).toHaveCount(0);
+  await expect(tabs(page)).toHaveCount(2);
+
+  // …and Enter on the ✕ still closes rather than selecting.
+  const x2 = closeButton(page, "/src/constants.ts", "constants.ts");
+  await x2.focus();
+  await page.keyboard.press("Enter");
+  await expect(tab(page, "/src/constants.ts")).toHaveCount(0);
+  await expect(tabs(page)).toHaveCount(1);
+});
+
 test("closing keeps focus in the strip instead of dropping it on the body", async ({ page }) => {
   await openReact(page);
   await fileRow(page, "/src/constants.ts").click();
