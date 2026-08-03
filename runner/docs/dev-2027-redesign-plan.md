@@ -1302,6 +1302,15 @@ Verify these the way the item says: a real pointer plus `getComputedStyle`, comp
 against hover. A synthetic `mouseover` doesn't fire CSS `:hover`, and eyeballing a screenshot
 can't tell a subtle live hover from a dead one.
 
+**One correction to that procedure, found in T12 — it produces a false negative.** These
+elements also carry `transition: background-color 0.12s ease`, and `getComputedStyle` returns
+the *currently animating* value, not the target. Read immediately after `hover()`, a perfectly
+live rollover reports its resting colour — T12 measured `rgba(0, 0, 0, 0)` on a tab whose hover
+works, then `rgba(120, 130, 150, 0.008)` on the retry: `--hot-color-hover` at 5% of the way
+through its own transition. **Wait out the transition before reading**, and move the pointer off
+the element before reading the *resting* value, or the hover fill masks it. Properties with no
+transition (the `display` swap on T12's tab glyphs) can be read immediately.
+
 ### 37. No owner display name or avatar exists anywhere (asset/data gap)
 
 `114:25521`'s card footer and `114:21480`'s trigger both draw a round avatar with a name. The
