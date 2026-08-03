@@ -101,6 +101,18 @@ export const s = {
     fontSize: 13,
   }),
 
+  /** The pill's leading 20×20 Handsontable mark (`48:6582`). The 2px radius is the
+   *  consumer's, as the frame does — `mark.svg` itself has square corners. Only the
+   *  pills that name an *example* carry it; the My Demos page label (`114:26625`)
+   *  draws none. */
+  examplePillMark: {
+    width: 20,
+    height: 20,
+    borderRadius: 2,
+    display: "block",
+    flex: "0 0 auto",
+  } satisfies CSSProperties,
+
   /** Row 2 (`72:15811` / `72:15706`): 36px, one bar per body column. */
   bar: {
     display: "flex",

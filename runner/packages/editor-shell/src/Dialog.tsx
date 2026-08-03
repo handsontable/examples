@@ -2,7 +2,7 @@
 //
 // Built to the two After Login dialog frames, which are the same card at the same
 // width with different contents: `114:23289` (Share this demo) and `114:24410`
-// (Edit info). Both draw a 356px card, 24px padding, a 12px radius, an 18px
+// (Edit info). Both draw a 360px card, 24px padding, a 12px radius, an 18px
 // semibold title and a bare `tabler-icon-x` in the top-right corner.
 //
 // This exists because there was no dialog primitive at all: `ShareLinks` and
@@ -35,7 +35,7 @@ export interface DialogProps {
   width?: number;
 }
 
-export function Dialog({ title, onClose, children, width = 356 }: DialogProps) {
+export function Dialog({ title, onClose, children, width = 360 }: DialogProps) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   /** Just the caller's content, so initial focus can skip the close button. */
   const contentRef = useRef<HTMLDivElement | null>(null);

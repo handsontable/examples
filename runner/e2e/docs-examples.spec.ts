@@ -214,6 +214,45 @@ test("cascader drills down and highlights the current selection", async ({ page 
   await expect(page.getByText(/Adding and removing columns ▸ Add and remove columns/).first()).toBeVisible();
 });
 
+// The popover is positioned against the *pill*, not the trigger's wrapper, and
+// the design sizes it to the pill (`72:18028`). That holds only while nothing
+// between the two is positioned — so it survives on a `position` nobody thinks
+// to check. DEV-2170 broke it by putting the mark beside the cascader while the
+// wrapper was still `relative`: the popover slid 28px right and lost 28px, and
+// `top: calc(100% + 4px)` had been resolving against the wrapper's 16px trigger
+// height all along, overlapping the pill by 6px. Geometry, because that is the
+// only thing that catches it.
+test("the cascader popover stays aligned to the example pill", async ({ page }) => {
+  await installRouteFixtures(page);
+  await page.goto(REACT_EXAMPLE);
+
+  const trigger = page.getByRole("button", { name: /Adding and removing columns/ });
+  await trigger.click();
+  const popover = page.getByRole("dialog", { name: "Choose an example" });
+  await expect(popover).toBeVisible();
+
+  const geo = await page.evaluate(() => {
+    const pop = document.querySelector('[role="dialog"][aria-label="Choose an example"]')!;
+    // The pill is the 36px-high absolutely-positioned box holding the trigger.
+    let pill = pop.parentElement!;
+    while (pill && Math.round(pill.getBoundingClientRect().height) !== 36) pill = pill.parentElement!;
+    const p = pop.getBoundingClientRect();
+    const l = pill.getBoundingClientRect();
+    return {
+      dx: Math.round(p.left - l.left),
+      dWidth: Math.round(p.width - l.width),
+      gapBelowPill: Math.round(p.top - l.bottom),
+    };
+  });
+
+  // 1px each side is the pill's border: the popover fills its padding box.
+  expect(Math.abs(geo.dx)).toBeLessThanOrEqual(2);
+  expect(Math.abs(geo.dWidth)).toBeLessThanOrEqual(4);
+  // Below the pill, not overlapping it.
+  expect(geo.gapBelowPill).toBeGreaterThan(0);
+  expect(geo.gapBelowPill).toBeLessThanOrEqual(8);
+});
+
 test("cascader section headers collapse and re-expand", async ({ page }) => {
   await installRouteFixtures(page);
   await page.goto(REACT_EXAMPLE);

@@ -303,7 +303,17 @@ export function DocsCascader({
     // `flex: 1` so the trigger fills the top bar's example pill and the search
     // icon stays pinned to its right edge (`72:15865`), not tucked against the
     // label.
-    <div ref={wrapRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
+    //
+    // Deliberately *not* `position: relative`: the pill is the popover's
+    // containing block (`s.pop`), and it can only stay so while nothing between
+    // it and the popover is positioned. This wrapper used to be, which worked
+    // only as long as it happened to span the pill — it stopped the moment T13
+    // put the 20×20 mark beside it (the popover lost 28px and slid 28px right),
+    // and `top: calc(100% + 4px)` was already resolving against this wrapper's
+    // 16px trigger height rather than the pill's 36px, overlapping the pill by
+    // 6px. `wrapRef` only needs `contains()` for the outside-click check, which
+    // does not care about positioning.
+    <div ref={wrapRef} style={{ flex: 1, minWidth: 0 }}>
       <button
         type="button"
         style={s.trigger}
@@ -510,10 +520,9 @@ const s = {
   // (`shellStyles.examplePill`, frame `72:15859`), which draws the one box the
   // design shows. A border/background here would nest a second box inside it.
   trigger: {
-    // `width: 100%`, not `flex: 1` — the wrapper is a positioned block (it is the
-    // popover's containing block), so a flex value on this button would do
-    // nothing and the search icon would sit tucked against the label instead of
-    // at the pill's right edge.
+    // `width: 100%`, not `flex: 1` — the wrapper is a plain block, so a flex
+    // value on this button would do nothing and the search icon would sit tucked
+    // against the label instead of at the pill's right edge.
     display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0,
     fontFamily: theme.font.ui, fontSize: 13, padding: 0,
     border: "none", background: "transparent", cursor: "pointer", color: theme.color.text,
@@ -526,7 +535,9 @@ const s = {
     position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 1000,
     // `100%`, not the `max-content` this carried since T2: the design sizes the
     // popover *to* the pill, so the pill being its containing block — the thing
-    // that used to clip a wider popover — is now exactly what is wanted.
+    // that used to clip a wider popover — is now exactly what is wanted. That
+    // holds only because the trigger's wrapper is unpositioned; see the note
+    // there before giving anything between here and the pill a `position`.
     width: "100%", boxSizing: "border-box",
     display: "flex", flexDirection: "column", gap: 10,
     padding: theme.space(2),
