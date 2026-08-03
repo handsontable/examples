@@ -153,6 +153,7 @@ test("the share icon and Fork show their in-flight state", async ({ page }) => {
   const preparing = page.getByRole("button", { name: "Preparing…" });
   await expect(preparing).toBeVisible();
   await expect(preparing).toBeDisabled();
+  await expect(preparing).toHaveCSS("cursor", "default");
   // …and it resolves back rather than sticking.
   await expect(shareDialog(page)).toBeVisible();
   await expect(shareIcon(page)).toBeEnabled();
@@ -170,6 +171,8 @@ test("Fork shows its in-flight state and is driven by `forking`, not `sharing`",
   const creating = page.getByRole("button", { name: "Creating…" });
   await expect(creating).toBeVisible();
   await expect(creating).toBeDisabled();
+  // A disabled button keeps its base `cursor` unless something clears it.
+  await expect(creating).toHaveCSS("cursor", "default");
   // The regression this guards: while Fork is in flight the *share* icon must
   // stay live. Before T10 one flag drove both under two different names.
   await expect(shareIcon(page)).toBeEnabled();
@@ -246,6 +249,36 @@ test("Ctrl+S saves in edit mode", async ({ page }) => {
   });
   expect(defaultPrevented).toBe(true);
   await expect.poll(() => patches.length).toBe(2);
+});
+
+test("Ctrl+S does not save the workspace from under an open dialog", async ({ page }) => {
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await signIn(page);
+
+  const patches: string[] = [];
+  await page.route(`**/api/demos/${DEMO_ID}`, async (route) => {
+    if (route.request().method() === "PATCH") {
+      patches.push(route.request().method());
+      return route.fulfill({ json: { ok: true } });
+    }
+    return route.fallback();
+  });
+
+  // `?edit=info` opens the Edit info dialog at mount (`App.tsx:516`).
+  await page.goto(`/edit/${DEMO_ID}?edit=info`);
+  const dialog = page.getByRole("dialog", { name: "Edit info" });
+  await expect(dialog).toBeVisible();
+
+  // Type a draft title. It lives in the dialog's local state until *its* Save,
+  // so a workspace save here would persist the old one behind the new.
+  await dialog.getByLabel("Title").fill("A draft nobody committed");
+  await page.keyboard.press("ControlOrMeta+s");
+
+  // Swallowed: no PATCH, and the dialog is still up with the draft intact.
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("Title")).toHaveValue("A draft nobody committed");
+  expect(patches).toHaveLength(0);
 });
 
 test("a signed-in visitor gets no authed actions on someone else's share", async ({ page }) => {

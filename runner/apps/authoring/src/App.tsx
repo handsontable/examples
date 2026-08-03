@@ -1125,11 +1125,19 @@ function Authoring({
       // Shift+Cmd+S stays free for whatever the browser does with it.
       if (e.key.toLowerCase() !== "s" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
       e.preventDefault();
+      // A modal owns the keyboard while it is up, and `Dialog` traps Tab and
+      // Escape but knows nothing about this. `EditInfoDialog` matters most: it
+      // holds title and description as *drafts* and lifts them only on its own
+      // Save, so saving the workspace from under it would persist the old
+      // metadata while the dialog still shows the new — which reads, from the
+      // outside, exactly like the dialog having saved. Swallowed rather than
+      // passed through, so the browser's own dialog stays shut either way.
+      if (editInfoOpen || shareLinksOpen) return;
       if (!saving) void onSave();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [user, route.mode, saving, onSave]);
+  }, [user, route.mode, saving, onSave, editInfoOpen, shareLinksOpen]);
 
   /** Row-2 refresh (`72:15708`). Reloads the running preview in place — never a
    *  remount, which for Tier 2 would mint a fresh container session per click.

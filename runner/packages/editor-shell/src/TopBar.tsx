@@ -69,7 +69,7 @@ export function TopBar({
       {onFork && (
         <button
           type="button"
-          style={modeActionButton}
+          style={pending(modeActionButton, forking)}
           onClick={onFork}
           disabled={forking}
           aria-label={forking ? "Creating…" : undefined}
@@ -82,7 +82,7 @@ export function TopBar({
       {onSave && (
         <button
           type="button"
-          style={modeActionButton}
+          style={pending(modeActionButton, saving)}
           onClick={onSave}
           disabled={saving}
           aria-label={saving ? "Saving…" : undefined}
@@ -150,3 +150,9 @@ const modeActionButton: React.CSSProperties = {
   justifyContent: "center",
   minWidth: 72,
 };
+
+/** A disabled button still carries whatever `cursor` its base style set, so an
+ *  in-flight action goes on advertising itself as clickable. Matches what the
+ *  preview bar's share icon does while it mints. */
+const pending = (base: React.CSSProperties, busy?: boolean): React.CSSProperties =>
+  busy ? { ...base, cursor: "default" } : base;
