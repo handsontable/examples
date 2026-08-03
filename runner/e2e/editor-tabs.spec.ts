@@ -185,7 +185,7 @@ test("closing the active tab activates a neighbour, and the last close empties t
   await expect(tabs(page)).toHaveCount(1);
 });
 
-// ---- the unsaved-changes dot (finding A6, open item 43) --------------------
+// ---- the unsaved-changes dot (ADR-0025 §3) ---------------------------------
 
 test("the dot marks only the edited file, and reverts to the close ✕ on hover", async ({ page }) => {
   await openReact(page);
@@ -206,7 +206,7 @@ test("the dot marks only the edited file, and reverts to the close ✕ on hover"
 
   // Hover restores the ✕, so closing a dirty tab is still reachable. `hover()` drives
   // real CDP mouse input, so this exercises CSS `:hover` — a synthetic `mouseover`
-  // would not (open items 16 / 36).
+  // would not (ADR-0026).
   await tab(page, "/src/constants.ts").hover();
   expect(await glyph(page, "/src/constants.ts")).toBe("x");
 

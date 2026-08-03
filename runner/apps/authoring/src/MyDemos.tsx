@@ -518,7 +518,7 @@ const sideNav: CSSProperties = {
 
 // Enabled rows set no `background` at all: `.hot-menu-row` supplies both the
 // transparent base and the hover, and an inline value would outrank the hover
-// (open item 16). The disabled row isn't hoverable, so it can carry its own —
+// (ADR-0026). The disabled row isn't hoverable, so it can carry its own —
 // and it must, or the UA's `buttonface` paints a grey slab.
 const navRow = (disabled = false): CSSProperties => ({
   display: "flex",
@@ -561,7 +561,8 @@ const grid: CSSProperties = {
 };
 
 // No inline `border` on a live card: the shorthand carries `border-color`, which
-// would outrank `.hot-demo-card:hover` (open item 16's shape again). A revoked
+// would outrank `.hot-demo-card:hover` (ADR-0026 — the shorthand carries
+// `border-color`, so it wins over a rule naming only the longhand). A revoked
 // card takes no class — nothing on it is interactive — so it carries its own.
 const card = (revoked: boolean): CSSProperties => ({
   display: "flex",

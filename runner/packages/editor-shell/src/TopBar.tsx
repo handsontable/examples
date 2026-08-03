@@ -97,7 +97,7 @@ export function TopBar({
       {/* Download is gated on having files, not on auth. The design's top-right is
           "Download (authed) / Sign in (anon)" — `72:15697` draws `Sign in` alone —
           but Download has always worked for anonymous visitors, so ADR-0023 rule 1
-          keeps it and the anonymous view shows both. See open item 30. */}
+          keeps it and the anonymous view shows both. See ADR-0027 §2. */}
       {onDownload && (
         <button type="button" style={actionButton} onClick={onDownload} title="Download this example (including your edits) as a .zip">
           <IconDownload />

@@ -110,8 +110,8 @@ export function PreviewBar({
       {/* The bar is a fixed 36px and both warning strings run ~90 characters, so
           this has to clamp to one line — left to wrap it pushes itself out of the
           bar and over whatever is below. The full text stays reachable through
-          `title`. The design budgets no room for a warning here at all; logged
-          as an open item. */}
+          `title`. The design budgets no room for a warning here at all; the
+          placement question is DEV-2173. */}
       {versionWarning && (
         <span
           style={{

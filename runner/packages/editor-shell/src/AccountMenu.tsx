@@ -141,7 +141,7 @@ const popover: CSSProperties = {
 
 // Enabled rows set no `background`: `.hot-menu-row` in the app's global block
 // gives them a transparent base *and* the hover, and an inline value would
-// outrank the hover (open item 16). The disabled row carries its own, because it
+// outrank the hover (ADR-0026). The disabled row carries its own, because it
 // has no class — and without one the UA's `buttonface` paints a grey slab.
 const menuRow = (disabled?: boolean): CSSProperties => ({
   display: "flex",

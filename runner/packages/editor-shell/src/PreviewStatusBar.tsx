@@ -68,5 +68,5 @@ const right: CSSProperties = {
 };
 
 /** A long framework name yields to the version rather than shoving it out of the bar —
- *  the same clamp T2 needed for the version warning (open item 15). */
+ *  the same clamp T2 needed for the version warning (DEV-2173). */
 const clamp: CSSProperties = { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" };

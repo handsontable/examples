@@ -120,7 +120,9 @@ export function useSplitPane(sidebarOpen: boolean): SplitPane {
   );
 
   /**
-   * Re-apply the pane minima to the *current* body width (open item 19).
+   * Re-apply the pane minima to the *current* body width. A drag can never starve a
+   * pane, but a window resize or opening the sidebar can, since the fraction is held
+   * fixed and nothing else re-runs the clamp.
    *
    * Until T9 the minima were enforced only at drag time, so two ordinary actions
    * left a pane starved: shrinking the window, and opening the sidebar after

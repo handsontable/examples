@@ -17,7 +17,7 @@
 //   `tabler-icon-dots-vertical` — the demo card's kebab (`114:26977`)
 //   `tabler-icon-share`         — heads the preview bar's right icon group in
 //                                 `114:21146` / `114:23289` / `114:24410`
-//                                 (DEV-2167 / T10, audit finding A3)
+//                                 (DEV-2167 / T10, ADR-0025 §1)
 //   `IconCopy`                  — the copy affordance inside each field of the
 //                                 share dialog (`114:23289`). Read off the
 //                                 rendered glyph, not a layer name: the dialog's
@@ -25,7 +25,7 @@
 //
 // And one from the same section, added by DEV-2169 / T12:
 //   `IconCircleFilled`          — the unsaved-changes dot on a tab (`114:26604`,
-//                                 audit finding A6). The layer is named
+//                                 ADR-0025 §3). The layer is named
 //                                 `tabler-icon-circle`, but it *renders* filled,
 //                                 and an outline ring reads as a radio button
 //                                 rather than a modified marker. Filled is the

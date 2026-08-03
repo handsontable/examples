@@ -276,7 +276,7 @@ export class SandpackRuntime implements DemoRuntime {
    *  spinner sat over a blanked pane for a full 10s on **every** Tier-1 refresh.
    *
    *  Whether `updateSandbox` with an unchanged file set recompiles at all is the open
-   *  question behind that (see open item 26); either way, waiting on a message that does
+   *  question behind that (see DEV-2176); either way, waiting on a message that does
    *  not come is worse than reporting what we do know. The transpile is real work we
    *  perform and can time, so that is what the promise covers. */
   reload(): Promise<void> {
