@@ -1,6 +1,7 @@
 # ADR-0022: Shell theming via CSS custom properties; the example owns its own theme
 
-**Status:** Accepted
+**Status:** Accepted (embed theme *hint* dropped by
+[ADR-0025](0025-redesign-scope-corrections-after-login-frames.md); everything else stands)
 
 ## Context
 The DEV-2027 redesign (Figma `KCl2Csh9WUSwCrddffnYuD`, section `18.1`) specifies a light and a
@@ -31,6 +32,10 @@ into the iframe document.
   <!-- Corrected in T9 (DEV-2163): this originally cited `ShareDialog.tsx`, which was dead
        code — nothing ever imported it. The live surface has always been `ShareLinks.tsx`.
        `ShareDialog.tsx` was deleted in T9; see plan open item 2. -->
+  <!-- Superseded by ADR-0025: the hint is DROPPED. `share.ts`, which serves `/embed/:id`, never
+       read `theme`, so the parameter had no effect — a URL promising behaviour the server does
+       not have. Embed *theming* stays deferred and the rest of this bullet's reasoning (the
+       example owns its own theme) is unchanged. See plan open item 44. -->
 
 
 ## Consequences

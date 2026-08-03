@@ -27,6 +27,7 @@ once Accepted.
 | [0019](0019-docs-guide-examples-and-render-ms-removal.md) | Documentation-guide examples in the runner; remove render-ms | Accepted |
 | [0020](0020-routes-in-deploy-command-not-config.md) | Worker routes live in the deploy command, not wrangler.jsonc | Accepted |
 | [0021](0021-versioned-docs-examples-and-version-switch-correctness.md) | Versioned docs-example snapshots and version-switch correctness | Accepted |
-| [0022](0022-shell-theming-via-css-custom-properties.md) | Shell theming via CSS custom properties; the example owns its own theme | Accepted |
-| [0023](0023-redesign-scope-and-shipping.md) | DEV-2027 redesign — scope rules, deferred gaps, and shipping | Accepted |
+| [0022](0022-shell-theming-via-css-custom-properties.md) | Shell theming via CSS custom properties; the example owns its own theme | Accepted (embed theme hint dropped, ADR-0025) |
+| [0023](0023-redesign-scope-and-shipping.md) | DEV-2027 redesign — scope rules, deferred gaps, and shipping | Accepted (three applied decisions superseded by 0025) |
 | [0024](0024-icon-system.md) | Icon system — tabler-icons as a dependency, seti-ui generated from source | Accepted |
+| [0025](0025-redesign-scope-corrections-after-login-frames.md) | DEV-2027 redesign — scope corrections after the After Login frames | Accepted |

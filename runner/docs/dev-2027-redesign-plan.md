@@ -4,7 +4,16 @@ Task: [DEV-2027](https://app.clickup.com/t/86camqwaw)
 Design: [Figma Sandbox / section `18.1`](https://www.figma.com/design/KCl2Csh9WUSwCrddffnYuD/Sandbox?node-id=72-18175) (fileKey `KCl2Csh9WUSwCrddffnYuD`)
 Repo: `handsontable/examples` → `runner/packages/editor-shell/src/` + `runner/apps/authoring/src/`
 Decisions: [ADR-0022](adr/0022-shell-theming-via-css-custom-properties.md) (theming),
-[ADR-0023](adr/0023-redesign-scope-and-shipping.md) (scope rules, deferred gaps, shipping)
+[ADR-0023](adr/0023-redesign-scope-and-shipping.md) (scope rules, deferred gaps, shipping),
+[ADR-0025](adr/0025-redesign-scope-corrections-after-login-frames.md) (scope corrections — supersedes
+three of ADR-0023's applied decisions)
+
+> **Read this first if you are picking up work here.** The **After Login** section (`114:*`) was added
+> to the Figma file *after* these subtasks were written. T9 re-derived against it; **T2–T8 did not**, so
+> three shipped decisions rested on premises those frames falsify. The audit is
+> [`dev-2027-figma-gap-audit.md`](dev-2027-figma-gap-audit.md), the decisions are ADR-0025, and the
+> follow-up work is subtasks **T10–T14** below. Where a section's shipped notes conflict with ADR-0025,
+> ADR-0025 wins.
 
 ## Ground rules for this redesign
 
@@ -33,8 +42,26 @@ Decisions: [ADR-0022](adr/0022-shell-theming-via-css-custom-properties.md) (them
 | `72:13670` | Mode Embed Docs | Bare grid, **dark**, no chrome |
 | `85:9970`, `85:16935` | Resize | Splitter drag state (light + dark) |
 | `11:2471` | icons | seti-ui file-type icon sheet |
-| `65:24280` | Mode Full | *not rendered — name-inferred pair of `65:20432`* |
-| `65:17596` | Fork preview — Dark mode / Light example | *not rendered — name-inferred* |
+| `65:24280` | Mode Full | Light, full-width preview; Download + theme top-right, `window-minimize` |
+| `65:17596` | Fork preview — Dark mode / Light example | Full frame; BOX INFO chevron only, CRUD hidden |
+| `65:23282` | Light mode / Light example | Light twin of `65:19433` — sidebar collapsed |
+
+The last three rows were listed as *"not rendered — name-inferred"* (and `65:23282` was missing) until
+the gap audit read them. All render fully, and their content **confirms** what T3 and T8 shipped.
+
+### After Login section (`114:*`) — added to Figma after these subtasks were written
+
+| Node | Name | What it shows |
+|---|---|---|
+| `114:21146` | After Login Example | **Complete signed-in workspace** — `Fork` in the top bar, `share` in the preview bar, a pencil on the version pill, CRUD unhidden in the sidebar, a dirty dot on the active tab |
+| `114:21480` | Menu | Account popover — My demos / Settings (greyed) / Log out |
+| `114:23289` | Sahre links *(sic)* | Share dialog over the authed workspace |
+| `114:24410` | Sandbox info edit | Edit-info dialog — Title, Description, Save / Cancel |
+| `114:25521` | After Login Example | My Demos page — 320px nav, card grid, kebab, `+ Create` |
+| `114:26833` | After Login Example | Settings page — Name, Description, avatar Upload / Remove |
+
+T9 built to the last four. **`114:21146` was absent from this index entirely** and is the frame that
+drives ADR-0025; its chrome findings were verified across all four workspace frames, not read off one.
 
 Sticky notes (decisions baked into the design):
 - `11:2535` — code colors = same as docs, GitHub Theme Dark/Light
@@ -42,7 +69,13 @@ Sticky notes (decisions baked into the design):
 - `72:16829` — book icon → docs page, github icon → example repo
 - `72:14527` — embed iframe: `body { margin: 0 }` → **out of scope**, `/embed/:id` dropped (T8)
 - `72:14532` — no rename / delete / add file in the sidebar in fork/view mode
-  → **conflicts with ground rule 1** (that CRUD exists and works). See T3.
+  → **conflicts with ground rule 1** (that CRUD exists and works). See T3, then **ADR-0025**: read
+  together with `114:26599`, "fork/view" means *not signed in*, which is how the two stickies reconcile.
+- `114:26599` — **"CRUD w sidebar po zalogowaniu"** (*CRUD in the sidebar after logging in*) → settles the
+  gate as auth-based, not mode-based, superseding T3's reading. See open item 41.
+- `114:26732` — "Ta strefa w przyszlosci moze sie rozrosnac o inne elementy, zarzadzanie userami,
+  folderami etc." (*this zone may grow: user management, folders…*), beside My Demos' left nav →
+  forward-looking, no work now; confirms the 320px rail is meant as a real nav. Relevant to item 33.
 
 Row-2 icon inventory, read from `72:15697`'s layer names (settles what the icons actually are):
 `tabler-icon-layout-sidebar-left-expand` (sidebar toggle) · `tabler-icon-x` (tab close) ·
@@ -153,6 +186,13 @@ Six working affordances appear in no frame: `Save` + `Share` (`mode="edit"`), `E
 when signed in. Anonymous visitors see exactly the chrome the design shows — the two designed
 rows, unchanged. The extra bar is additive and invisible to the audience the frames depict.
 
+> **SUPERSEDED by ADR-0025 → T10.** "Appear in no frame" expired when the After Login section landed.
+> `Fork` is in the top bar (4/4 workspace frames), `Share` is a preview-bar icon (3/4), and the
+> custom-version input is a pencil on the version pill (`114:24396`). `Embed` needs no surface — it is
+> the same `POST /api/demos` as `Fork` and its output is already the Share dialog's third row, so the
+> share icon becomes mode-aware. Only `Save` stays undesigned. **The bar is retired.** Prerequisite: an
+> icon-form pending treatment, since a 36px button cannot render "Creating…".
+
 Styled to the T0 token set; layout to dev judgment within that column.
 
 **Files.** `Toolbar.tsx` (rewrite), `EditorShell.tsx`, `App.tsx` (top-bar region), `styles.ts`.
@@ -222,6 +262,14 @@ modes; `edit` (your own saved demo) keeps full CRUD.
 | `share` — read-only public playground | CRUD shown | **hidden** |
 | `edit` — your saved demo | CRUD shown | CRUD kept, restyled |
 
+> **SUPERSEDED by ADR-0025 → T11.** The gate is **auth**, not mode. Sticky `114:26599` says so
+> ("CRUD w sidebar po zalogowaniu"), and the `hidden` flag on `folder-plus`/`plus` is bimodal across the
+> file: hidden in all 7 Before Login / Fork preview frames, visible in all 4 After Login frames. So
+> "fork/view" in sticky `72:14532` means *not signed in*. New gate:
+> `!!user && mode !== "share"` — the `play` row above flips to **CRUD when signed in**. `share` stays
+> excluded: the design never models ownership, so no frame shows a signed-in visitor on someone else's
+> demo, and granting CRUD there would be a behaviour change rather than a restyle.
+
 Implementation: pass the handlers conditionally on `mode === "edit"` rather than deleting
 anything. Keep `editable` as the shell's switch. Gate only the two CRUD buttons, not the header
 group they sit in — the download-all icon and the collapse chevron share `72:16994` and must
@@ -280,6 +328,12 @@ file in the tree replaces the tab. No new tab state, no multi-tab bookkeeping.
 **Multi-tab is a deliberate gap for a future task.** The design shows two tabs
 (`index.ts`, `index.html`); we ship the visual system now and add real multi-file tabs later
 without re-designing anything.
+
+> **SUPERSEDED by ADR-0025 → T12.** Multi-file tabs are in scope. T4's bet paid off — both tab states
+> were written out, so this is a state change rather than a restyle. What T4 could not know: `dirty` is a
+> single workspace-level boolean, so a truthful per-tab dot needs per-file tracking. Undesigned and
+> decided inside T12: tab overflow, the last-tab-closed empty state, per-file undo history (`CodeEditor`
+> is keyed on `active`, so switching remounts CodeMirror), and open-set persistence.
 
 Bottom status bar: `Ln 1, Col 1 · Spaces: 2 · UTF-8 · Layout: U.S.` — needs CodeMirror cursor
 position surfaced. New, small — build now.
@@ -653,9 +707,15 @@ the pill's behaviour), T6 into T2.
 
 ## Deliberate gaps — designed but deferred to future tasks
 
-- **Multi-file tabs.** Tab strip ships styled, single active file. (T4)
-- **Embed theme handling.** The app emits a preferred-theme hint; acting on it is not
-  DEV-2027. (T0)
+- ~~**Multi-file tabs.** Tab strip ships styled, single active file. (T4)~~ **Closed by ADR-0025** —
+  in scope as **T12**. The ✕ and the unsaved indicator are only meaningful with more than one open file,
+  so deferring them meant rebuilding `EditorTabs` twice.
+- **Embed theme *handling*.** Still deferred: `72:11913` / `72:13670` are structurally identical and
+  differ only in colour, so they read as a light example and a dark example — ADR-0022's position.
+  **But the `?theme=` hint the app emitted is dropped** (ADR-0025, open item 44): `share.ts` never read
+  it, so it was a URL promising behaviour the server does not have.
+- **The Settings page** (`114:26833`). Its own task — new profile table, migration, endpoints, avatar
+  storage. See item 33; unchanged by this audit.
 
 ## Open items raised during implementation
 
@@ -702,6 +762,17 @@ subtask that surfaced it and what evidence exists.
 | 37 | No owner display name or avatar exists anywhere in the stack | asset/data gap | T9 |
 | 38 | `accent` as link text on a dark surface lands under WCAG AA | design decision | T9 |
 | 39 | `114:23289`'s full-window label describes behaviour the app doesn't have | design copy fix | T9 |
+| 40 | `Fork` / `Share` / custom version have designed homes — the authed action bar is retired | **decided** (ADR-0025) | audit → T10 |
+| 41 | Sidebar file CRUD follows **login**, not mode | **decided** (ADR-0025) | audit → T11 |
+| 42 | Multi-file tabs move into scope; per-file `dirty` is the data-model change | **decided** (ADR-0025) | audit → T12 |
+| 43 | The tab glyph is a dirty dot at rest, the ✕ on hover | **decided** (ADR-0025) | audit → T12 |
+| 44 | The embed URL's `?theme=` is inert and gets dropped | **decided** (ADR-0025) | audit → T13 |
+| 45 | Frame-index omissions and two stale "not rendered" rows | doc fix | audit → T14 |
+| 46 | The designed dialog card is 360px, not 356 | cosmetic | audit → T13 |
+
+Items **40–46** come from the [DEV-2027 Figma gap audit](dev-2027-figma-gap-audit.md), which re-read the
+file against the shipped branch after the **After Login** section landed. The audit also **closes three
+existing items** — see the resolutions appended to 9, 13 and 27 below.
 
 ### 1. Dark `textMuted` — `#8f8f94`, not the Figma `#727272` (design decision)
 
@@ -805,6 +876,11 @@ With one open file there is no close action: closing would leave an empty editor
 glyph `aria-hidden` and non-interactive rather than as a `disabled` button, which would imply an
 action that becomes available later. It becomes a real button with multi-tab support (ADR-0023).
 
+**Closed by the gap audit → T12.** Multi-tab is in scope (ADR-0025), so the ✕ becomes a real control.
+Per item 43 the glyph is a **dirty dot at rest and the ✕ on hover**. Note the audit also established
+that closing a tab cannot lose edits — contents live in the app's `files` map and `EditorShell` holds
+only a view pointer — so no confirmation dialog is needed, only a test.
+
 ### 10. The active tab's left border is `#262624` in the frame (design decision)
 
 `31:6602` binds its left border to `horizon/palette/700` — `#262624`, which is the shell's light
@@ -856,6 +932,10 @@ measured geometry — white-pixel bounding boxes sampled off the 400×400 export
 `#0F0F10` plate. Corners are square in the asset; the 2px radius is applied by the consumer, as
 the frame does. **Still worth a real asset from design** if brand has an official one — this is
 a faithful trace, not the source file. Wiring it into the pill is T2/T9's call, not T3's.
+
+**Neither T2 nor T9 wired it — assigned to T13.** `markUrl` is consumed only by `BoxInfo.tsx`, while
+`App.tsx`'s pill still carries T2's comment justifying the omission by an asset gap T3 had already
+closed. Every After Login frame draws the mark in the pill. One import, plus deleting the stale comment.
 
 ### 14. Tier 1 has no preview URL for the row-2 address field (design decision)
 
@@ -1077,6 +1157,13 @@ design asks for each. Needs a call on which one survives in `play`. Note the bar
 only version readout in T8's `?mode=full`, which has no row 2, so deleting it there is not an
 option.
 
+**CLOSED by the gap audit — keep both.** The premise above ("no frame shows the collision") is a
+measurement error. **Five frames draw the version in the row-2 pill and the bottom status bar at once:**
+`72:15697`, `72:17078`, `114:21146`, `114:23289`, `114:24410`. The first two are in the **Before Login**
+section and predate the After Login frames, so this was answerable when the item was written. The
+duplication is intended, exactly as the paragraph above guessed — the menu is the control, the bar is the
+readout. No design call, no code change.
+
 ### 28. `72:14610` draws chrome above a splash that has no chrome to draw (design decision)
 
 The loading frame shows the top bar — logo, search pill, theme toggle, Sign in — above the
@@ -1259,13 +1346,50 @@ that is a feature, not a label.
 
 ## Remaining decisions
 
-None blocking. One item to confirm with design during review: whether `edit` mode keeps the
-file `+` / ✎ / ✕ controls (T3) — no frame shows them anywhere, so the plan reads that from
-sticky `72:14532`'s wording.
+~~One item to confirm with design during review: whether `edit` mode keeps the file `+` / ✎ / ✕
+controls (T3) — no frame shows them anywhere, so the plan reads that from sticky `72:14532`'s
+wording.~~ **Answered** — `114:21146` and its three siblings show `+` and `folder-plus` unhidden, and
+sticky `114:26599` states the rule. See item 41 / ADR-0025.
+
+Open after the gap audit:
+
+1. **Where `Save` goes** (item 40 / T10). The only authed action with no frame. Recommended: the
+   mode-keyed top-right slot that already holds `Fork` when the demo is not yours and `Download` when it
+   is, plus `Cmd/Ctrl+S`. Blocks nothing else in T10.
+2. **The colour reconciliation cluster — items 1, 6, 23, 38.** Dark `textMuted`; the ramp's four steps
+   against three painted surfaces; Figma `accent-color` `#4669f6` vs shipped `#1A42E8`; accent-on-dark
+   under WCAG AA. Each item says a single design call fixes it — they want **one conversation, not four**.
+3. **Item 37's broker check.** One live call to `/broker/userinfo`: if it returns `name` / `picture`, the
+   avatar gap closes without a profile table and item 33 (Settings) gets materially smaller. Worth doing
+   before Settings is scoped.
+
+Lower-confidence readings worth one line from design, none blocking: item 4 (two file rows drawn with the
+`ejs` icon), item 10 (the active tab's left border), item 20 (`Search ...` placeholder), and item 43's
+dirty dot, which appears in exactly one frame.
 
 *Resolved:* theme drives the whole app, embed handling out of scope (T0) · `/d/:id` +
 `/embed/:id` dropped (T8) · framework select is a restyle of existing docs-example buttons,
-starters unaffected (T2) · authed actions get their own bar in the right panel above the
-preview, signed-in only (T2) · boot log stays (T5) · tabs styled but single-file (T4) · file
-CRUD gated to `edit` mode (T3) · undesigned surfaces get the design system, not deletion (T9) ·
-integration branch + sub-PRs, single deploy.
+starters unaffected (T2) · ~~authed actions get their own bar in the right panel above the
+preview, signed-in only (T2)~~ **bar retired, ADR-0025** · boot log stays (T5) · ~~tabs styled but
+single-file (T4)~~ **multi-tab in scope, ADR-0025** · ~~file CRUD gated to `edit` mode (T3)~~ **gated on
+sign-in, ADR-0025** · undesigned surfaces get the design system, not deletion (T9) ·
+integration branch + sub-PRs, single deploy · version shown in both the pill and the status bar is
+intended (item 27) · the embed `?theme=` hint is dropped (item 44).
+
+## Follow-up subtasks T10–T14
+
+The gap audit's work, grouped by topic. Full scope, evidence and file lists in
+[`dev-2027-figma-gap-audit.md`](dev-2027-figma-gap-audit.md).
+
+| # | Subtask | Covers | Size |
+|---|---|---|---|
+| **T10** | Authed action surfaces — retire the unframed bar | items 40, 46 | M |
+| **T11** | Sidebar file CRUD follows login, not mode | item 41 | S |
+| **T12** | Editor tabs — multi-file tabs + unsaved indicator | items 42, 43, closes 9 | M |
+| **T13** | Small fixes — pill mark, dialog width, inert `?theme=` | items 13, 44, 46 | XS |
+| **T14** | Documentation corrections | item 45 | XS |
+
+T11–T14 are independent. **T10 should follow T11** — both touch the same region of `App.tsx`. T10 and
+T12 are the two substantial ones and parallelise (chrome around the panes vs inside the editor pane),
+overlapping only on `dirty`: T10 deletes the component that consumes it, T12 splits it per file. Agree
+the per-file dirty shape before either starts.

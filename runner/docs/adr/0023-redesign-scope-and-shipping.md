@@ -1,6 +1,10 @@
 # ADR-0023: DEV-2027 redesign — scope rules, deferred gaps, and shipping
 
-**Status:** Accepted
+**Status:** Accepted — scope **rules** stand; three applied decisions superseded by
+[ADR-0025](0025-redesign-scope-corrections-after-login-frames.md) after the Figma **After Login**
+section (`114:*`) was added: the authed action bar (retired), the file-CRUD gate (now signed-in,
+not `edit` mode), and the multi-file-tab deferral (now in scope). The unresolved caveat at the foot
+of this record is answered there.
 
 ## Context
 The DEV-2027 design (Figma `KCl2Csh9WUSwCrddffnYuD`, section `18.1`) covers the authoring
