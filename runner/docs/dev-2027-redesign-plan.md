@@ -772,6 +772,7 @@ subtask that surfaced it and what evidence exists.
 | 47 | A signed-in `play` user's added file is lost on an example switch | design decision | T11 |
 | 48 | `Download` stays unconditional — the top bar's mode slot holds `Fork` / `Save` only | deviation | T10 |
 | 49 | The version pencil sits after the pill's chevron, not before it | deviation | T10 |
+| 50 | The preview bar overflows a narrow preview column — pre-existing, and T10 adds 72px to it | design decision | T10 |
 
 Items **40–46** come from the [DEV-2027 Figma gap audit](dev-2027-figma-gap-audit.md), which re-read the
 file against the shipped branch after the **After Login** section landed. The audit also **closes three
@@ -1384,6 +1385,28 @@ The visual cost is nil: `s.menuButton` sets `border: none` / `background: transp
 has no box at rest for the pencil to fall outside of, only a hover fill. Worth revisiting only if
 the pill ever gains a border. A4 is medium confidence anyway — 1 of 5 pills in the file carry the
 glyph — so restructuring `MenuButton` around it would be the wrong weight of response.
+
+### 50. The preview bar overflows a narrow preview column (design decision)
+
+`s.bar` is a fixed 36px row of `flex: 0 0 auto` controls with one flexible child (`PreviewUrlField`).
+Once that child has collapsed to zero, anything further spills out of the column. Measured in the
+browser at the splitter's own minimum (`MIN_PANE = 320`, `SplitPane.tsx:29`), on a bar carrying the
+docs-example set — refresh, URL, version pill, framework pill, book, github:
+
+| | overflow at a 320px preview column |
+|---|---|
+| before T10 | **140px** |
+| after T10 | **212px** |
+
+So this is **pre-existing** — the bar was already over-subscribed at the narrow end, which is what
+the `versionWarning` clamp at `PreviewBar.tsx:89-93` was working around — and T10 adds exactly the
+72px of its two new 36px controls. A starter, which carries no framework pill or book link, still
+fits: 312px of fixed content against the 320px floor.
+
+Not fixed here because every fix is a design call, not a restyle: let the version pill shrink and
+ellipsize, collapse the right icon group into an overflow kebab past a threshold, or raise
+`MIN_PANE`. The frames budget no room for any of it — they draw the bar at one width only. Worth
+taking with items 1/6/23/38 in the single design conversation those already want.
 
 ## Remaining decisions
 
