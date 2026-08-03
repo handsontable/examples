@@ -18,7 +18,8 @@ pnpm install          # pnpm monorepo; Node 20+
 ```
 
 Work happens on a feature branch off `master`, opened as a PR against `handsontable/examples`
-(current WIP branch: `runner-live-demos`, PR #37). Cursor **Bugbot** auto-reviews each PR push.
+(current WIP branch: `feat/DEV-2027-redesign`, the DEV-2027 redesign integration branch — subtasks are
+PR'd into it, not into `master`, per ADR-0023). Cursor **Bugbot** auto-reviews each PR push.
 
 ## Layout
 
