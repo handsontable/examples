@@ -162,7 +162,9 @@ These already have open-item numbers. Only the *reason recorded against them* ne
   exists" (`packages/editor-shell/src/mark.svg`, exported as `markUrl`), yet `markUrl` is consumed only
   by `BoxInfo.tsx:66`. `App.tsx:1217-1220` still carries T2's comment explaining that the pill ships
   without a mark *because the repo only has the wordmark*. That justification expired when T3 landed the
-  asset; every After Login frame still draws the mark in the pill. Cheapest real fix on this list.
+  asset. Cheapest real fix on this list. **Closed by T13** (DEV-2170) — but note this bullet's original
+  claim that "every After Login frame draws the mark in the pill" is **false**: `114:26625` ("My Demos")
+  draws none, so the mark went to 3 of the 4 pill sites. See plan item 13 for the arithmetic.
 - **Item 30 / `TopBar.tsx:61-62`.** Reasoned from the anonymous frame alone, correctly at the time. The
   authed top-right group now has four frames of its own (A2), and they show `Fork` + theme + avatar with
   no `Download`.
@@ -375,11 +377,13 @@ Size **M** (was S before multi-tab folded in).
 
 Three XS items with unambiguous evidence:
 
-- **Example pill mark** (item 13). Wire `markUrl` into `examplePill` for both pill forms and delete the
-  stale comment at `App.tsx:1217-1220` that justifies its absence by an asset gap T3 closed.
-- **Dialog width** 356 → 360 (`Dialog.tsx:38`).
-- **Drop the inert `?theme=`** from the emitted embed URL (D2, `App.tsx:1117`) — or schedule embed
-  theming. Not both left as-is.
+- **Example pill mark** (item 13). Wire `markUrl` into `examplePill` and delete the stale comment that
+  justifies its absence by an asset gap T3 closed. **Done by T13** — for the 3 pill sites that name an
+  example, *not* "both pill forms": `114:26625` ("My Demos") draws no mark, and it uses the same
+  shrink-to-fit form as the demo title, so the mark does not follow the form. See plan item 13.
+- **Dialog width** 356 → 360 (`Dialog.tsx:38`). **Done by T13.**
+- **Drop the inert `?theme=`** from the emitted embed URL (D2) — or schedule embed
+  theming. Not both left as-is. **Done by T13** — dropped.
 
 Size **XS**.
 
