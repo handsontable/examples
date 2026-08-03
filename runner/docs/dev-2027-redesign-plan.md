@@ -763,12 +763,13 @@ subtask that surfaced it and what evidence exists.
 | 38 | `accent` as link text on a dark surface lands under WCAG AA | design decision | T9 |
 | 39 | `114:23289`'s full-window label describes behaviour the app doesn't have | design copy fix | T9 |
 | 40 | `Fork` / `Share` / custom version have designed homes — the authed action bar is retired | **decided** (ADR-0025) | audit → T10 |
-| 41 | Sidebar file CRUD follows **login**, not mode | **decided** (ADR-0025) | audit → T11 |
+| 41 | ~~Sidebar file CRUD follows **login**, not mode~~ **closed by T11** — the gate is `!!user && !isShare` (DEV-2168) | **decided** (ADR-0025) | audit → T11 |
 | 42 | Multi-file tabs move into scope; per-file `dirty` is the data-model change | **decided** (ADR-0025) | audit → T12 |
 | 43 | The tab glyph is a dirty dot at rest, the ✕ on hover | **decided** (ADR-0025) | audit → T12 |
 | 44 | The embed URL's `?theme=` is inert and gets dropped | **decided** (ADR-0025) | audit → T13 |
 | 45 | Frame-index omissions and two stale "not rendered" rows | doc fix | audit → T14 |
 | 46 | The designed dialog card is 360px, not 356 | cosmetic | audit → T13 |
+| 47 | A signed-in `play` user's added file is lost on an example switch | design decision | T11 |
 
 Items **40–46** come from the [DEV-2027 Figma gap audit](dev-2027-figma-gap-audit.md), which re-read the
 file against the shipped branch after the **After Login** section landed. The audit also **closes three
@@ -1344,6 +1345,18 @@ the code. T9 ships "Full-window (the demo without the editor)".
 genuinely embeddable chrome-less full-window URL — rather than a description of today. If so
 that is a feature, not a label.
 
+### 47. A signed-in `play` user's added file is lost on an example switch (design decision)
+
+T11 gave `play` the file CRUD controls, and a `play` workspace is not persisted: `files` is replaced
+wholesale whenever the cascader picks another example or another framework (`mountGen` remounts the
+runtime), and nothing warns first. The same is already true of *content* edits, so this is
+pre-existing in kind — T11 extends it to the file set, where the loss is more visible because the
+sidebar row the user created disappears.
+
+Not fixed here: the honest fixes are a dirty-guard prompt on switching or a per-example draft store,
+and both are features rather than design-system application. `Download` and `Fork` both capture the
+current workspace, so nothing is unrecoverable if you notice in time.
+
 ## Remaining decisions
 
 ~~One item to confirm with design during review: whether `edit` mode keeps the file `+` / ✎ / ✕
@@ -1384,7 +1397,7 @@ The gap audit's work, grouped by topic. Full scope, evidence and file lists in
 | # | Subtask | Covers | Size |
 |---|---|---|---|
 | **T10** | Authed action surfaces — retire the unframed bar | items 40, 46 | M |
-| **T11** | Sidebar file CRUD follows login, not mode | item 41 | S |
+| **T11** | ~~Sidebar file CRUD follows login, not mode~~ **landed** (DEV-2168) — raised item 47 | item 41 | S |
 | **T12** | Editor tabs — multi-file tabs + unsaved indicator | items 42, 43, closes 9 | M |
 | **T13** | Small fixes — pill mark, dialog width, inert `?theme=` | items 13, 44, 46 | XS |
 | **T14** | Documentation corrections | item 45 | XS |

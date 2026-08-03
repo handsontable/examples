@@ -431,6 +431,12 @@ function Authoring({
 }) {
   const savedId = route.mode === "edit" || route.mode === "share" ? route.id : null;
   const isShare = route.mode === "share";
+  // Changing the *file set* follows being signed in (ADR-0025), not the mode — see the
+  // `onAddFile` props below. One flag, not the expression three times: `EditorShell`
+  // derives its `editable` switch from `!!onAddFile` and `FileTree` gates the header
+  // `+` / `folder-plus` *and* the per-row ✎ / ✕ on it, so the three handlers have to
+  // appear and disappear together or the sidebar contradicts itself.
+  const canEditFiles = !!user && !isShare;
   const { mode: themeMode } = useTheme();
 
   // Initial example/version come from the URL so the playground is deep-linkable.
@@ -1181,17 +1187,27 @@ function Authoring({
         title={title || entry.displayName}
         description={description}
         createdAt={createdAt}
-        // Same owner-only gate as the file CRUD below: only `edit` mode is the
-        // owner's own demo, so only there is the metadata editable.
+        // `edit` only — and no longer the same gate as the file CRUD below, which
+        // follows sign-in (ADR-0025). Title and description belong to a *saved* demo
+        // row; a `play` workspace has no record to edit, so being signed in there
+        // gives the pencil nothing to open.
         onEditInfo={route.mode === "edit" ? () => setEditInfoOpen(true) : undefined}
         onDownloadAll={downloadZip}
-        // Changing the *file set* is owner-only (ADR-0023): `play` is a playground or docs
-        // example and `share` is read-only, so neither gets add/rename/delete. Editing file
-        // *contents* is unaffected in all three modes. Withholding the handlers is also what
-        // flips the shell's `editable` switch — nothing was deleted to achieve this.
-        onAddFile={route.mode === "edit" ? addFile : undefined}
-        onRenameFile={route.mode === "edit" ? renameFile : undefined}
-        onDeleteFile={route.mode === "edit" ? deleteFile : undefined}
+        // Changing the *file set* follows being **signed in** (ADR-0025), not the mode.
+        // Sticky `114:26599` states it — "CRUD w sidebar po zalogowaniu" — and the `hidden`
+        // flag on `folder-plus` / `plus` is bimodal across the file: hidden in all 7 Before
+        // Login frames, visible in all 4 After Login ones. So sticky `72:14532`'s "fork/view
+        // mode" means *not signed in*, which is the reading ADR-0023 got wrong.
+        //
+        // `share` stays excluded: the design's only axis is Before / After Login and it never
+        // models ownership, so letting a signed-in visitor mutate someone else's file set
+        // would be a behaviour change rather than a restyle. (`ShareRoute` passes `user={null}`,
+        // so `!!user` already excludes it — `isShare` says so out loud and survives that
+        // changing.) Editing file *contents* is unaffected in all three modes, and nothing
+        // persists here without `onSave`.
+        onAddFile={canEditFiles ? addFile : undefined}
+        onRenameFile={canEditFiles ? renameFile : undefined}
+        onDeleteFile={canEditFiles ? deleteFile : undefined}
         onSave={onSave}
         onShare={() => { setLinksId(savedId); setShareLinksOpen(true); }}
         onFork={onFork}
