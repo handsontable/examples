@@ -133,6 +133,43 @@
       .hot-file-row:focus-within .hot-row-actions,
       .hot-dep-row:hover .hot-dep-link,
       .hot-dep-row:focus-within .hot-dep-link { opacity: 1; }
+      /* Editor file tabs (T12, DEV-2169). Same reason as .hot-file-row: both fills
+         live here, base first and hover second, because an inline background would
+         outrank the :hover — and a tab that set none would fall through to the UA's
+         buttonface (open items 16 / 36). */
+      .hot-tab { background: transparent; transition: background-color 0.12s ease; }
+      .hot-tab:hover { background: var(--hot-color-hover); }
+      /* Active goes *last* here — the opposite order to .hot-file-row above, and
+         deliberately so. Both selectors are (0,2,0), so source order decides: on a
+         file row the hover is meant to win even on the active row, but on a tab the
+         raised fill *is* the "this is the open file" signal, and dropping it on hover
+         — including on the way to the ✕ — makes the active tab read as inactive.
+         T4 got this for free by setting the fill inline, which no :hover could reach;
+         moving it into the stylesheet is what put it at risk. */
+      .hot-tab[data-active="true"],
+      .hot-tab[data-active="true"]:hover { background: var(--hot-color-surface-raised); }
+      /* The tab is a div carrying a roving tabindex, so it has no UA ring of its own. */
+      .hot-tab:focus-visible { outline: 2px solid var(--hot-color-accent); }
+      /* The glyph swap (open item 43, audit A6): ✕ at rest, the unsaved-changes dot in
+         its place while that file is dirty, and the ✕ back on hover or focus so the
+         close action is never unreachable. Both glyphs are always in the DOM and the
+         slot is a fixed 16px square, so the tab does not change width either way —
+         which is also why `display` must not be set inline on them. */
+      .hot-tab-x { display: flex; }
+      .hot-tab-dot { display: none; }
+      .hot-tab[data-dirty="true"] .hot-tab-x { display: none; }
+      .hot-tab[data-dirty="true"] .hot-tab-dot { display: flex; }
+      .hot-tab[data-dirty="true"]:hover .hot-tab-x,
+      .hot-tab[data-dirty="true"]:focus-within .hot-tab-x { display: flex; }
+      .hot-tab[data-dirty="true"]:hover .hot-tab-dot,
+      .hot-tab[data-dirty="true"]:focus-within .hot-tab-dot { display: none; }
+      .hot-tab-close { background: transparent; }
+      .hot-tab-close:hover { background: var(--hot-color-hover); }
+      /* The strip scrolls when the open files outgrow it. Both properties: the WebKit
+         pseudo-element alone still leaves a scrollbar in Firefox, and a 36px bar has
+         no room for one — it would sit on the strip's inset hairline. */
+      .hot-tab-strip { scrollbar-width: none; }
+      .hot-tab-strip::-webkit-scrollbar { display: none; }
     </style>
   </head>
   <body>

@@ -147,8 +147,14 @@ async function installRouteFixtures(
   });
 }
 
+/** The *visible* editor.
+ *
+ *  Scoped to the shown pane since T12 (DEV-2169): every open tab keeps its own
+ *  CodeMirror instance mounted so switching files preserves undo history, so a bare
+ *  `.cm-content` matches one element per open tab and trips strict mode as soon as a
+ *  test opens a second file. */
 function editor(page: import("@playwright/test").Page) {
-  return page.locator(".cm-content");
+  return page.locator('[data-pane-active="true"] .cm-content');
 }
 
 // Since T2 (DEV-2156) the version and framework pickers are custom listboxes in
