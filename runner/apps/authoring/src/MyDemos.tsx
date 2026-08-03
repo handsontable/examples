@@ -772,7 +772,9 @@ const ghostButton: CSSProperties = {
   padding: `0 ${theme.space(3)}`,
   border: `1px solid ${theme.color.border}`,
   borderRadius: theme.radius.md,
-  background: theme.color.surface,
+  // Outline-only per the frames — `surface` painted a black block on the
+  // `surfaceRaised` card in dark, invisible in light where the two collapse.
+  background: "transparent",
   color: theme.color.text,
   fontFamily: theme.font.ui,
   fontSize: 13,
