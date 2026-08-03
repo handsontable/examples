@@ -18,10 +18,7 @@ pnpm install          # pnpm monorepo; Node 20+
 ```
 
 Work happens on a feature branch off `master`, opened as a PR against `handsontable/examples`.
-Check `git branch -r` first for a long-lived **integration branch**: a large effort may target one
-instead of `master`, with each subtask PR'd into it and a single deploy at the end (the DEV-2027
-redesign used `feat/DEV-2027-redesign` this way — see ADR-0023). Cursor **Bugbot** auto-reviews each
-PR push.
+Cursor **Bugbot** auto-reviews each PR push.
 
 ## Layout
 
