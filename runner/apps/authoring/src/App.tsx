@@ -1119,7 +1119,11 @@ function Authoring({
   useEffect(() => {
     if (!user || route.mode !== "edit") return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "s" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      // Case-folded, because Caps Lock makes `e.key` "S" with `shiftKey` false —
+      // which a bare `!== "s"` rejects, skipping the save *and* letting the
+      // browser dialog through. `shiftKey` is still excluded on its own, so
+      // Shift+Cmd+S stays free for whatever the browser does with it.
+      if (e.key.toLowerCase() !== "s" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
       e.preventDefault();
       if (!saving) void onSave();
     };

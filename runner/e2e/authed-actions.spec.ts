@@ -225,6 +225,27 @@ test("Ctrl+S saves in edit mode", async ({ page }) => {
   // The dot clears on a successful save — the workspace-level `dirty` boolean
   // T10 keeps consuming, and the one T12 must not break when it adds per-file.
   await expect(saveButton(page)).toHaveText("Save");
+
+  // Caps Lock sends `key: "S"` with `shiftKey` false. Dispatched rather than
+  // pressed because Playwright cannot latch Caps Lock, and the handler is on
+  // `document` — the guard is what is under test here, and a case-sensitive one
+  // would both skip the save and let the browser's own dialog through.
+  await page.locator(".cm-content").click();
+  await page.keyboard.type("// more");
+  await expect(saveButton(page)).toHaveText("Save •");
+
+  const defaultPrevented = await page.evaluate(() => {
+    const e = new KeyboardEvent("keydown", {
+      key: "S",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(e);
+    return e.defaultPrevented;
+  });
+  expect(defaultPrevented).toBe(true);
+  await expect.poll(() => patches.length).toBe(2);
 });
 
 test("a signed-in visitor gets no authed actions on someone else's share", async ({ page }) => {
