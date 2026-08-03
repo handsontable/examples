@@ -68,6 +68,11 @@ async function stubMint(page: Page, holdMs = 0) {
 const forkButton = (page: Page) => page.getByRole("button", { name: "Fork", exact: true });
 const saveButton = (page: Page) => page.getByRole("button", { name: /^Save/ });
 const shareIcon = (page: Page) => page.getByRole("button", { name: "Share this demo" });
+/** The *visible* editor. Scoped to the shown pane since T12 (DEV-2169): every open
+ *  tab keeps its own mounted CodeMirror, so a bare `.cm-content` matches one element
+ *  per open tab. Only one file is open in these tests today, but the scoping is what
+ *  keeps that from being load-bearing. */
+const editor = (page: Page) => page.locator('[data-pane-active="true"] .cm-content');
 /** `exact`, or it also matches the pencil's "Set a custom Handsontable version". */
 const versionPill = (page: Page) =>
   page.getByRole("button", { name: "Handsontable version", exact: true });
@@ -219,7 +224,7 @@ test("Ctrl+S saves in edit mode", async ({ page }) => {
   // focus actually is when they reach for Save. CodeMirror installs its own
   // keydown handling on `.cm-content`, so a shortcut proven only against
   // `<body>` proves nothing about the case the shortcut exists for.
-  await page.locator(".cm-content").click();
+  await editor(page).click();
   await page.keyboard.type("// edit");
   await expect(saveButton(page)).toHaveText("Save •");
 
@@ -233,7 +238,7 @@ test("Ctrl+S saves in edit mode", async ({ page }) => {
   // pressed because Playwright cannot latch Caps Lock, and the handler is on
   // `document` — the guard is what is under test here, and a case-sensitive one
   // would both skip the save and let the browser's own dialog through.
-  await page.locator(".cm-content").click();
+  await editor(page).click();
   await page.keyboard.type("// more");
   await expect(saveButton(page)).toHaveText("Save •");
 

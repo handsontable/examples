@@ -471,6 +471,12 @@ function Authoring({
   const [versionWarning, setVersionWarning] = useState<string | null>(null);
   const [bootLog, setBootLog] = useState<string>("");
   const [dirty, setDirty] = useState(false);
+  // Which *files* are unsaved, for the per-tab dot in the editor strip (T12, ADR-0025
+  // §3). Not derivable from `dirty`, and `dirty` is not derivable from it either: the
+  // Edit info dialog marks the workspace dirty with no file path at all (see its
+  // `onSave` below), and `dirty` is what `Save •` and the docs-switch guard read. Two
+  // facts, two pieces of state.
+  const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(() => new Set());
   const [syncing, setSyncing] = useState(false); // container rebuild in flight
   const [refreshing, setRefreshing] = useState(false); // row-2 refresh in flight
   // Guards the refresh promise's own completion: a second click, an example switch or a
@@ -543,18 +549,48 @@ function Authoring({
   activeDocsBucketRef.current = activeDocsBucket;
   activeDocsManifestRef.current = activeDocsManifest;
 
-  /** Replace the whole workspace (entry + files + lineage) and remount. */
-  const loadWorkspace = useCallback((nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
-    filesRef.current = nextFiles; // ensure the mount effect reads the new files
-    setEntry(nextEntry);
-    setFramework(nextEntry.framework);
-    setFiles(nextFiles);
-    setForkedFrom(lineage);
+  /** Mark the workspace unsaved, and the named files with it.
+   *
+   *  Every mutation below goes through this rather than setting `dirty` alone, so the
+   *  two can't drift — a dot that outlives its edit, or an edit with no dot, both read
+   *  as bugs in the indicator rather than in the caller that forgot a line.
+   *
+   *  Called with no paths for a metadata-only change (the Edit info dialog). */
+  const markDirty = useCallback((...touched: string[]) => {
+    setDirty(true);
+    dirtyRef.current = true;
+    if (!touched.length) return;
+    setDirtyPaths((prev) => {
+      const next = new Set(prev);
+      for (const p of touched) next.add(p);
+      return next;
+    });
+  }, []);
+
+  /** Saved or replaced — nothing is outstanding. */
+  const clearDirty = useCallback(() => {
     setDirty(false);
     dirtyRef.current = false;
-    setErrorMessage(null);
-    setMountGen((g) => g + 1);
+    setDirtyPaths((prev) => (prev.size ? new Set() : prev));
   }, []);
+
+  /** Replace the whole workspace (entry + files + lineage) and remount. */
+  const loadWorkspace = useCallback(
+    (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
+      filesRef.current = nextFiles; // ensure the mount effect reads the new files
+      setEntry(nextEntry);
+      setFramework(nextEntry.framework);
+      setFiles(nextFiles);
+      setForkedFrom(lineage);
+      clearDirty();
+      setErrorMessage(null);
+      // Also what tells `EditorShell` to discard its open tabs: this counter is passed
+      // down as `workspaceKey`, and it is the only truthful "this is a different
+      // workspace now" signal the app has.
+      setMountGen((g) => g + 1);
+    },
+    [clearDirty],
+  );
 
   // Edit/share mode: load the saved demo's source + metadata into the workspace.
   useEffect(() => {
@@ -937,62 +973,88 @@ function Authoring({
     // mountGen forces a remount when files are replaced (example switch or fork/edit load).
   }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, versionPending, docsPath]);
 
-  const onEdit = useCallback((path: string, contents: string) => {
-    const next = { ...filesRef.current, [path]: contents };
-    filesRef.current = next;
-    setFiles(next);
-    setDirty(true);
-    dirtyRef.current = true;
-    try {
-      runtimeRef.current?.writeFile(path, contents);
-    } catch {
-      /* not mounted */
-    }
-    // Container frameworks rebuild server-side (a few seconds); show feedback.
-    if (containerModeRef.current) {
-      setSyncing(true);
-      if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
-      syncTimerRef.current = setTimeout(() => setSyncing(false), 4000);
-    }
-  }, []);
+  const onEdit = useCallback(
+    (path: string, contents: string) => {
+      const next = { ...filesRef.current, [path]: contents };
+      filesRef.current = next;
+      setFiles(next);
+      markDirty(path);
+      try {
+        runtimeRef.current?.writeFile(path, contents);
+      } catch {
+        /* not mounted */
+      }
+      // Container frameworks rebuild server-side (a few seconds); show feedback.
+      if (containerModeRef.current) {
+        setSyncing(true);
+        if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = setTimeout(() => setSyncing(false), 4000);
+      }
+    },
+    [markDirty],
+  );
 
   // ---- File-tree CRUD (CodeSandbox-style). Edits the in-memory workspace and
   // the live preview; only Save (edit mode, owner) persists them. ----
-  const addFile = useCallback((path: string) => {
-    if (filesRef.current[path] !== undefined) return;
-    const next = { ...filesRef.current, [path]: "" };
-    filesRef.current = next;
-    setFiles(next);
-    setDirty(true);
-    dirtyRef.current = true;
-    try { runtimeRef.current?.writeFile(path, ""); } catch { /* not mounted */ }
-  }, []);
+  const addFile = useCallback(
+    (path: string) => {
+      if (filesRef.current[path] !== undefined) return;
+      const next = { ...filesRef.current, [path]: "" };
+      filesRef.current = next;
+      setFiles(next);
+      markDirty(path);
+      try { runtimeRef.current?.writeFile(path, ""); } catch { /* not mounted */ }
+    },
+    [markDirty],
+  );
 
-  const deleteFile = useCallback((path: string) => {
-    if (filesRef.current[path] === undefined) return;
-    const next = { ...filesRef.current };
-    delete next[path];
-    filesRef.current = next;
-    setFiles(next);
-    setDirty(true);
-    dirtyRef.current = true;
-    try { runtimeRef.current?.deleteFile?.(path); } catch { /* not mounted */ }
-  }, []);
+  const deleteFile = useCallback(
+    (path: string) => {
+      if (filesRef.current[path] === undefined) return;
+      const next = { ...filesRef.current };
+      delete next[path];
+      filesRef.current = next;
+      setFiles(next);
+      // The workspace stays dirty — a deletion is unsaved work — but the *path* stops
+      // being dirty, because there is no longer a file or a tab to dot.
+      markDirty();
+      setDirtyPaths((prev) => {
+        if (!prev.has(path)) return prev;
+        const rest = new Set(prev);
+        rest.delete(path);
+        return rest;
+      });
+      try { runtimeRef.current?.deleteFile?.(path); } catch { /* not mounted */ }
+    },
+    [markDirty],
+  );
 
-  const renameFile = useCallback((oldPath: string, newPath: string) => {
-    const content = filesRef.current[oldPath] ?? "";
-    const next = { ...filesRef.current };
-    delete next[oldPath];
-    next[newPath] = content;
-    filesRef.current = next;
-    setFiles(next);
-    setDirty(true);
-    dirtyRef.current = true;
-    try {
-      runtimeRef.current?.writeFile(newPath, content);
-      runtimeRef.current?.deleteFile?.(oldPath);
-    } catch { /* not mounted */ }
-  }, []);
+  const renameFile = useCallback(
+    (oldPath: string, newPath: string) => {
+      const content = filesRef.current[oldPath] ?? "";
+      const next = { ...filesRef.current };
+      delete next[oldPath];
+      next[newPath] = content;
+      filesRef.current = next;
+      setFiles(next);
+      // The rename itself is unsaved work, so the new path is dirty either way; the
+      // old one has to go, or its dot would outlive the file it described. The tab
+      // follows the rename — `EditorShell` remaps it (that wrapper is why renaming an
+      // open file no longer closes its tab).
+      markDirty(newPath);
+      setDirtyPaths((prev) => {
+        if (!prev.has(oldPath)) return prev;
+        const rest = new Set(prev);
+        rest.delete(oldPath);
+        return rest;
+      });
+      try {
+        runtimeRef.current?.writeFile(newPath, content);
+        runtimeRef.current?.deleteFile?.(oldPath);
+      } catch { /* not mounted */ }
+    },
+    [markDirty],
+  );
 
   /** Download the current (possibly-edited) workspace as a .zip. */
   const downloadZip = useCallback(() => {
@@ -1083,14 +1145,13 @@ function Authoring({
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || `save failed (${res.status})`);
       }
-      setDirty(false);
-      dirtyRef.current = false;
+      clearDirty();
     } catch (e) {
       setErrorMessage(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
-  }, [savedId, isShare, title, description, version]);
+  }, [savedId, isShare, title, description, version, clearDirty]);
 
   /**
    * The preview bar's share icon, mode-aware (ADR-0025). `edit` has a saved demo
@@ -1220,6 +1281,11 @@ function Authoring({
         frameworkName={frameworkName}
         files={files}
         entry={entry.entry}
+        // Tells the shell to discard its open tabs. `files` alone can't: it is replaced
+        // on every keystroke as well as on every example switch, and two workspaces
+        // routinely share path names. `mountGen` changes only in `loadWorkspace`, which
+        // is exactly the "different workspace now" moment (T12).
+        workspaceKey={mountGen}
         iframeRef={setIframeEl}
         status={status}
         errorMessage={errorMessage}
@@ -1273,7 +1339,11 @@ function Authoring({
         // dialog straight off `savedId`.
         sharing={embedding}
         saving={saving}
+        // Two facts, not one: `dirty` is the workspace (the top bar's `Save •`, which
+        // an Edit-info change must light up even though it touched no file), and
+        // `dirtyPaths` is which files carry the per-tab dot (T12).
         dirty={dirty}
+        dirtyPaths={dirtyPaths}
         versionWarning={versionWarning}
         // ---- chrome (T2) --------------------------------------------------
         examplePill={
@@ -1360,10 +1430,14 @@ function Authoring({
           // Marks the workspace dirty rather than PATCHing on its own: the code and
           // the metadata are one snapshot, and `onSave` sends both in a single
           // rebuilding PATCH. Saving here too would rebuild twice.
+          //
+          // `markDirty()` with no path, deliberately: the title and description belong
+          // to no file, so this must not dot a tab. It is also the reason `dirty` can't
+          // just be `dirtyPaths.size > 0` (T12).
           onSave={(next) => {
             setTitle(next.title);
             setDescription(next.description);
-            setDirty(true);
+            markDirty();
             closeEditInfo();
           }}
         />

@@ -23,6 +23,14 @@
 //                                 rendered glyph, not a layer name: the dialog's
 //                                 button is an unnamed frame.
 //
+// And one from the same section, added by DEV-2169 / T12:
+//   `IconCircleFilled`          — the unsaved-changes dot on a tab (`114:26604`,
+//                                 audit finding A6). The layer is named
+//                                 `tabler-icon-circle`, but it *renders* filled,
+//                                 and an outline ring reads as a radio button
+//                                 rather than a modified marker. Filled is the
+//                                 truthful import; the layer name is the slip.
+//
 // The wrapper exists to pin the design's 16px/2px rendering (tabler defaults to
 // 24px) and to mark icons `aria-hidden` — labels live on the enclosing button.
 // Both are overridable via props.
@@ -33,6 +41,7 @@ import {
   IconBrandReactNative as TablerBrandReactNative,
   IconChevronDown as TablerChevronDown,
   IconChevronRight as TablerChevronRight,
+  IconCircleFilled as TablerCircleFilled,
   IconCopy as TablerCopy,
   IconDotsVertical as TablerDotsVertical,
   IconDownload as TablerDownload,
@@ -77,6 +86,7 @@ export const IconBrandGithub = ui("IconBrandGithub", TablerBrandGithub);
 export const IconBrandReactNative = ui("IconBrandReactNative", TablerBrandReactNative);
 export const IconChevronDown = ui("IconChevronDown", TablerChevronDown);
 export const IconChevronRight = ui("IconChevronRight", TablerChevronRight);
+export const IconCircleFilled = ui("IconCircleFilled", TablerCircleFilled);
 export const IconCopy = ui("IconCopy", TablerCopy);
 export const IconDotsVertical = ui("IconDotsVertical", TablerDotsVertical);
 export const IconDownload = ui("IconDownload", TablerDownload);

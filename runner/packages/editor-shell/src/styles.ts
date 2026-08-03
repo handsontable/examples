@@ -303,12 +303,50 @@ export const s = {
   // This replaced `editorPane`, T2's wrapper around CodeEditor, when T4's tabs and
   // status bar arrived — the editor column is now `s.column` and this is just the
   // middle slot, so it carries the editor background `editorPane` used to.
+  // `position: relative` since DEV-2169: this is now the containing block for one
+  // absolutely-positioned pane per open tab (see `editorPane` below).
   editorBody: {
     flex: 1,
     minWidth: 0,
     minHeight: 0,
+    position: "relative",
     overflow: "hidden",
     background: t.color.editorBg,
+  } satisfies CSSProperties,
+
+  /**
+   * One open file's editor, stacked inside `editorBody` (DEV-2169). Every open tab
+   * stays mounted so switching keeps its undo history and scroll position; only the
+   * active one is visible.
+   *
+   * Two things here are load-bearing and easy to "simplify" wrongly:
+   *
+   *  - **`visibility: hidden`, not `display: none`.** A CM6 view with no dimensions
+   *    mismeasures its own gutters, so a `display: none` pane comes back with the
+   *    line numbers out of alignment. Hidden panes keep their real box.
+   *  - **Both states are `position: absolute; inset: 0`.** `CodeEditor` asks for
+   *    `height: 100%`, which resolves today only because it is a direct child of a
+   *    flex item with a definite height. A static wrapper would resolve that against
+   *    `auto` and collapse the editor to nothing.
+   */
+  editorPane: (visible: boolean): CSSProperties => ({
+    position: "absolute",
+    inset: 0,
+    visibility: visible ? "visible" : "hidden",
+  }),
+
+  /** Nothing open — every tab was closed. No frame draws this (ADR-0023 rule 1). */
+  editorEmpty: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: t.space(4),
+    textAlign: "center",
+    fontFamily: t.font.ui,
+    fontSize: 13,
+    color: t.color.textMuted,
   } satisfies CSSProperties,
 
   previewPane: {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import CodeMirror, { type ViewUpdate } from "@uiw/react-codemirror";
+import CodeMirror, { type EditorView, type ViewUpdate } from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
@@ -48,11 +48,26 @@ export interface CodeEditorProps {
   readOnly?: boolean;
   /** Live caret position, for the editor status bar. */
   onCursorChange?: (pos: CursorPosition) => void;
+  /** Hands the underlying view to the shell once, at mount.
+   *
+   *  Needed since DEV-2169, which stops re-keying this component per file and keeps
+   *  every open tab mounted instead. Two things then need the view directly: reading
+   *  the live caret back when a tab is re-activated (the status bar no longer gets a
+   *  fresh mount to reset it), and `requestMeasure()` on a pane returning from
+   *  `visibility: hidden`. */
+  onCreateEditor?: (view: EditorView) => void;
 }
 
 /** Thin CodeMirror wrapper: picks a language by file extension, and the GitHub
  *  Light/Dark theme so code colours match the documentation site (Figma `11:2535`). */
-export function CodeEditor({ path, value, onChange, readOnly, onCursorChange }: CodeEditorProps) {
+export function CodeEditor({
+  path,
+  value,
+  onChange,
+  readOnly,
+  onCursorChange,
+  onCreateEditor,
+}: CodeEditorProps) {
   const extensions = useMemo(() => languageFor(path), [path]);
   const { mode } = useTheme();
 
@@ -87,6 +102,7 @@ export function CodeEditor({ path, value, onChange, readOnly, onCursorChange }: 
       readOnly={readOnly}
       onChange={onChange}
       onUpdate={handleUpdate}
+      onCreateEditor={onCreateEditor}
       basicSetup={{
         lineNumbers: true,
         highlightActiveLine: true,

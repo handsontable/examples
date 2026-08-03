@@ -773,6 +773,8 @@ subtask that surfaced it and what evidence exists.
 | 48 | `Download` stays unconditional — the top bar's mode slot holds `Fork` / `Save` only | deviation | T10 |
 | 49 | The version pencil sits after the pill's chevron, not before it | deviation | T10 |
 | 50 | The preview bar overflows a narrow preview column — pre-existing, and T10 adds 72px to it | design decision | T10 |
+| 51 | The open-tab set is not persisted across a reload | deferred | T12 |
+| 52 | No `Cmd/Ctrl+W` or `Ctrl+Tab` — both are browser-reserved | deviation | T12 |
 
 Items **40–46** come from the [DEV-2027 Figma gap audit](dev-2027-figma-gap-audit.md), which re-read the
 file against the shipped branch after the **After Login** section landed. The audit also **closes three
@@ -1407,6 +1409,23 @@ Not fixed here because every fix is a design call, not a restyle: let the versio
 ellipsize, collapse the right icon group into an overflow kebab past a threshold, or raise
 `MIN_PANE`. The frames budget no room for any of it — they draw the bar at one width only. Worth
 taking with items 1/6/23/38 in the single design conversation those already want.
+
+### 51. The open-tab set is not persisted across a reload (deferred)
+
+Undesigned — no frame shows a returning session — so ADR-0023 rule 1 applies. T12 reopens the entry
+file alone on load, which is what the app did before it. Persisting the set means choosing a scope
+(per demo? per example? per browser?) and a home (`localStorage`, or the saved demo row), and the
+`play` playground has no identity to key it by. Deliberately left until someone asks for it.
+
+### 52. No `Cmd/Ctrl+W` or `Ctrl+Tab` on the tab strip (deviation)
+
+The two shortcuts the frames imply by drawing tabs at all, and both are browser-reserved: Chrome
+closes the browser tab on `Cmd/Ctrl+W` and cycles browser tabs on `Ctrl+Tab`, neither of which a page
+can intercept. Hijacking the first would also be actively hostile — a user who means to close the
+browser tab and loses a keystroke to the editor has no way to tell what happened.
+
+What T12 ships instead is reachable and unreserved: a roving `tabindex` across the strip with
+Left/Right/Home/End, Enter or Space to activate, and Delete/Backspace to close the focused tab.
 
 ## Remaining decisions
 
