@@ -129,7 +129,11 @@ const actionButton: React.CSSProperties = {
   flex: "0 0 auto",
   border: `1px solid ${theme.color.border}`,
   borderRadius: theme.radius.md,
-  background: theme.color.surface,
+  // Transparent, not `surface`: the secondary button is outline-only in the
+  // frames. Light hid the difference (surface == surfaceRaised == #ffffff);
+  // dark separates the ramp, and `surface` (#070604) read as a black block on
+  // the #222222 bar.
+  background: "transparent",
   color: theme.color.text,
   fontFamily: theme.font.ui,
   fontSize: 13,
