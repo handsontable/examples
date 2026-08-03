@@ -9,10 +9,14 @@ subtasks were written. An **After Login** section (`114:*`) was added to the fil
 (DEV-2163) re-derived its own scope against it, but **T2–T8 were never re-audited**, so three of
 ADR-0023's applied decisions rest on premises the new frames falsify.
 
-The audit is recorded in [`dev-2027-figma-gap-audit.md`](../dev-2027-figma-gap-audit.md) with the
-node-level evidence. The frames concerned are `114:21146` (a complete signed-in workspace, absent
-from the plan's frame index entirely), plus `114:21480`, `114:23289` and `114:24410`, which repeat
-its chrome. Each finding below was checked across all four rather than read off one frame.
+The frames concerned are `114:21146` (a complete signed-in workspace, absent from the redesign's
+frame index entirely), plus `114:21480`, `114:23289` and `114:24410`, which repeat its chrome. Each
+finding below was checked across all four rather than read off one frame. What every node id shows
+is tabulated in [ADR-0027's appendix](0027-dev-2027-shipped-deviations.md#appendix--figma-frame-index).
+
+The node-level evidence originally lived in `dev-2027-figma-gap-audit.md`, a working document
+retired with the redesign (DEV-2172). Its durable half is ADR-0027; the rest was history, or
+questions that became their own tasks.
 
 ADR-0023's scope **rules** are unaffected and still govern. What changes is how three of them apply.
 
