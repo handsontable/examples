@@ -41,7 +41,7 @@ export function ShareLinks({
         onCopy={() => copy("client", clientUrl)}
       />
       {/* The frame labels this row "example only — embed in any iframe". Both halves
-          are false, so the copy is not taken from it (open item 39):
+          are false, so the copy is not taken from it (ADR-0027 §10):
             * `?mode=full` stopped being bare in T8 — it carries the design's chrome
               (top bar, URL bar, status bar) around the built demo.
             * It cannot be embedded anywhere. The page iframes `/d/:id/`, which sends
@@ -135,7 +135,7 @@ const input: React.CSSProperties = {
   textOverflow: "ellipsis",
 };
 
-// No inline `background` — it would outrank `.hot-icon-btn:hover` (open item 16).
+// No inline `background` — it would outrank `.hot-icon-btn:hover` (ADR-0026).
 // The copied state is carried by colour, which nothing in the stylesheet sets.
 const copyButton = (copied: boolean): React.CSSProperties => ({
   display: "inline-flex",

@@ -193,7 +193,7 @@ const heading: CSSProperties = {
 };
 
 // No inline `background`: it would outrank `.hot-icon-btn:hover` in the app's
-// global block (plan open item 16, "applies to T5–T9").
+// global block (ADR-0026).
 const closeButton: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",

@@ -31,3 +31,5 @@ once Accepted.
 | [0023](0023-redesign-scope-and-shipping.md) | DEV-2027 redesign — scope rules, deferred gaps, and shipping | Accepted (three applied decisions superseded by 0025) |
 | [0024](0024-icon-system.md) | Icon system — tabler-icons as a dependency, seti-ui generated from source | Accepted |
 | [0025](0025-redesign-scope-corrections-after-login-frames.md) | DEV-2027 redesign — scope corrections after the After Login frames | Accepted |
+| [0026](0026-shell-styling-inline-vs-stylesheet.md) | Shell styling — inline component styles, interaction states in the global stylesheet | Accepted |
+| [0027](0027-dev-2027-shipped-deviations.md) | DEV-2027 — where the shipped UI deliberately departs from the frames | Accepted |

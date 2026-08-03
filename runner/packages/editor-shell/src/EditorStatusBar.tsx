@@ -37,6 +37,7 @@ export function EditorStatusBar({ line, col }: EditorStatusBarProps) {
 // object is what keeps the two bars flush across the editor/preview boundary, as the
 // frames draw them. It is on `editorBg`, not `surfaceMuted`: measured #ffffff / #19191c
 // off the frames, the same token the editor pane already uses, so the bar reads as part
-// of the editor rather than as a separate strip (open item 7). Only the 24px segment
+// of the editor rather than as a separate strip — measured, the pane and both status
+// bars are all `editorBg`. Only the 24px segment
 // gap is this bar's own.
 const bar: CSSProperties = { ...s.paneStatusBar, gap: 24 };

@@ -136,7 +136,7 @@
       /* Editor file tabs (T12, DEV-2169). Same reason as .hot-file-row: both fills
          live here, base first and hover second, because an inline background would
          outrank the :hover — and a tab that set none would fall through to the UA's
-         buttonface (open items 16 / 36). */
+         buttonface (ADR-0026). */
       .hot-tab { background: transparent; transition: background-color 0.12s ease; }
       .hot-tab:hover { background: var(--hot-color-hover); }
       /* Active goes *last* here — the opposite order to .hot-file-row above, and
@@ -150,7 +150,7 @@
       .hot-tab[data-active="true"]:hover { background: var(--hot-color-surface-raised); }
       /* The tab is a div carrying a roving tabindex, so it has no UA ring of its own. */
       .hot-tab:focus-visible { outline: 2px solid var(--hot-color-accent); }
-      /* The glyph swap (open item 43, audit A6): ✕ at rest, the unsaved-changes dot in
+      /* The glyph swap (ADR-0025 §3): ✕ at rest, the unsaved-changes dot in
          its place while that file is dirty, and the ✕ back on hover or focus so the
          close action is never unreachable. Both glyphs are always in the DOM and the
          slot is a fixed 16px square, so the tab does not change width either way —

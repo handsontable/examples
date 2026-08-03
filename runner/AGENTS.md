@@ -72,6 +72,16 @@ cd apps/authoring
 pnpm --filter @handsontable/demo-authoring dev   # http://localhost:5173
 ```
 
+Two traps in that setup:
+
+- **`?mode=full` needs the SPA and the worker on one origin, which this is not.** `serveDemoAsset`
+  sends `frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` for `/d/:id` and is not wrapped in
+  `cors()`. Production is same-origin so it works there; locally the iframe is refused *and* the
+  status probe fails CORS, which renders as `● error` on a demo that is fine. Give the dev server a
+  proxy for `/api`, `/d` and `/embed` and point `VITE_API_BASE` at its own origin.
+- **`VITE_DEV_USER` short-circuits `currentUser()` before the fetch.** Any test of the real broker
+  path has to override it (`VITE_DEV_USER= pnpm dev`) or it silently exercises the bypass instead.
+
 ## Verify before pushing
 
 ```bash
@@ -80,6 +90,22 @@ pnpm --filter @handsontable/demo-editor-shell typecheck
 pnpm --filter @handsontable/demo-authoring typecheck
 ( cd workers/api && npx wrangler deploy --dry-run )   # typechecks the worker + builds the image
 ```
+
+The `demo-runtime build` is first on purpose: `apps/authoring` typechecks against
+`packages/runtime/dist`, not its source, so a stale `dist` fails on symbols the source has.
+
+What a green E2E run does and does not prove:
+
+- **The specs that actually mount Sandpack are gated behind `E2E_LIVE=1`.** A default
+  `playwright test` skips every one, so a green default run proves nothing about preview
+  mount/teardown.
+- **A persistence bug is invisible to a within-page test.** It only shows up in a spec that reloads
+  and re-measures. Watch for an `addInitScript` that clears the storage key — it runs on
+  `page.reload()` too, silently defeating the assertion it was meant to isolate. Each test already
+  gets a fresh context, so no reset is needed.
+- **Interaction states need a real pointer and `getComputedStyle`** — see
+  [ADR-0026](docs/adr/0026-shell-styling-inline-vs-stylesheet.md). A synthetic `mouseover` does not
+  fire CSS `:hover`, and a screenshot cannot tell a subtle live hover from a dead one.
 
 ## Build & deploy
 

@@ -15,13 +15,13 @@
 //
 // **The glyph slot is always occupied**, so a tab never changes width: the ✕ at
 // rest, the unsaved-changes dot in its place when that file is dirty, and the ✕
-// back again on hover or focus so closing is always reachable (open item 43,
-// audit finding A6 — `114:21146` draws `tabler-icon-circle` on the active tab
+// back again on hover or focus so closing is always reachable (ADR-0025 §3 —
+// `114:21146` draws `tabler-icon-circle` on the active tab
 // where every other tab in the file draws `tabler-icon-x`).
 //
 // The swap lives in the app's global block, not here: `:hover` is unreachable
 // from inline styles, and an inline value on the same property would outrank the
-// stylesheet rule anyway — including `transparent` (open items 16 / 36). Hence
+// stylesheet rule anyway — including `transparent` (ADR-0026). Hence
 // `.hot-tab` / `.hot-tab-x` / `.hot-tab-dot` and no inline `display` or
 // `background` on any of them.
 
@@ -229,7 +229,7 @@ const strip: CSSProperties = {
 };
 
 // No `background` here, deliberately: both fills live in the global block, or the
-// inline one would outrank `.hot-tab:hover` (open items 16 / 36).
+// inline one would outrank `.hot-tab:hover` (ADR-0026).
 const tab = (isFirst: boolean): CSSProperties => ({
   display: "flex",
   alignItems: "center",

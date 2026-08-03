@@ -386,7 +386,8 @@ export const s = {
    * left/right split).
    *
    * `editorBg`, not `surfaceMuted` and not `previewBg`: measured #ffffff / #19191c off
-   * the frames (see open item 7). `previewBg` is #070604 in dark — a step darker, while
+   * the frames — measured, both status bars are `editorBg`, not `surfaceMuted`.
+   * `previewBg` is #070604 in dark — a step darker, while
    * the frames draw this band *lighter* than the preview surround, not level with it.
    */
   paneStatusBar: {

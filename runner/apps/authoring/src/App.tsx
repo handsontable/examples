@@ -382,8 +382,9 @@ function Gate({ route }: { route: { mode: "play" } | { mode: "edit"; id: string 
 
 /** `72:14610`: a spinner and one line, nothing else. The frame draws the top bar above
  *  it, which this cannot — the splash renders precisely because the shell's state (user,
- *  example, version) hasn't resolved yet, so there is no chrome to draw. Logged as an
- *  open item. */
+ *  example, version) hasn't resolved yet, so there is no chrome to draw. Either the
+ *  frame is a composite (chrome drawn for context, not specified for this state), or
+ *  the app wants a real skeleton top bar during load — a bigger change than a splash. */
 function Splash({ text }: { text: string }) {
   return (
     <div style={centered}>
@@ -1400,7 +1401,7 @@ function Authoring({
         // Not gated on auth: share mode has always offered Download to anonymous
         // visitors, and no frame shows an anonymous share view (ADR-0023 rule 1).
         // `72:15697` (anonymous `play`) does draw `Sign in` alone — kept anyway, per the
-        // same rule, and logged as an open item rather than dropping a working control.
+        // same rule, rather than dropping a working control. See ADR-0027 §2.
         onDownload={downloadZip}
         // Withheld while the identity is still resolving, which is the only thing
         // that makes the top bar render `Sign in`. Offering it to someone who turns
