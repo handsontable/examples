@@ -752,7 +752,7 @@ subtask that surfaced it and what evidence exists.
 | 24 | The category column's scrollbar eats into the 179px the design gives labels | design decision | T7 |
 | 25 | TypeScript docs examples boot with a `/src/main.js` entry against a `.ts` file | pre-existing bug | T7 |
 | 26 | Tier 1 has no refresh-completion signal, and may not recompile at all | open question | T5 |
-| 27 | ~~The Handsontable version renders twice in `play` mode~~ **closed by the gap audit (D1)** — five frames draw *both* readouts, two of them predating the After Login section, so "no frame shows the collision" was a measurement error. Both are intended; keep them | design decision | T5 → audit |
+| 27 | ~~The Handsontable version renders twice in `play` mode~~ **closed by T14** (DEV-2171) per the audit's D1 — five frames draw *both* readouts, two of them predating the After Login section, so "no frame shows the collision" was a measurement error. Both are intended; keep them | design decision | T5 → T14 |
 | 28 | `72:14610` draws chrome above a splash that renders before the shell exists | design decision | T5 |
 | 29 | ~~`README.md` lists `runner/apps/viewer/`, which does not exist~~ **closed by T14** (DEV-2171) — the row is folded into `workers/api/`, which is what actually serves `/d/:id` and `/embed/:id`, so the README keeps its only pointer to those routes | doc fix | T5 → T14 |
 | 33 | The Settings page is a new feature, not design-system application | split out | T9 |
@@ -773,9 +773,9 @@ subtask that surfaced it and what evidence exists.
 | 48 | `Download` stays unconditional — the top bar's mode slot holds `Fork` / `Save` only | deviation | T10 |
 | 49 | The version pencil sits after the pill's chevron, not before it | deviation | T10 |
 | 50 | The preview bar overflows a narrow preview column — pre-existing, and T10 adds 72px to it | design decision | T10 |
-| 51 | `pipeline/import.mjs:3` says "the 13 example directories"; `config/frameworks.json` and `catalog.json` both hold **16**. Left alone by T14 — it is a code file, and the same stale count in `README.md` was fixed there instead | doc fix | T14 |
 | 51 | The open-tab set is not persisted across a reload | deferred | T12 |
 | 52 | No `Cmd/Ctrl+W` or `Ctrl+Tab` — both are browser-reserved | deviation | T12 |
+| 53 | `pipeline/import.mjs:3` says "the 13 example directories"; `config/frameworks.json` and `catalog.json` both hold **16**. Left alone by T14 — it is a code file, and the same stale count in `README.md` was fixed there instead | doc fix | T14 |
 
 Items **40–46** come from the [DEV-2027 Figma gap audit](dev-2027-figma-gap-audit.md), which re-read the
 file against the shipped branch after the **After Login** section landed. The audit also **closes three
