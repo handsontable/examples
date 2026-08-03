@@ -1092,6 +1092,53 @@ function Authoring({
     }
   }, [savedId, isShare, title, description, version]);
 
+  /**
+   * The preview bar's share icon, mode-aware (ADR-0025). `edit` has a saved demo
+   * already, so it just opens the dialog; `play` has nothing to link to yet, so it
+   * mints one first — which is precisely what the retired `Embed` button did, down
+   * to the dialog it opened. Embed keeps no button of its own because that dialog's
+   * third row already *is* the docs embed URL.
+   *
+   * `onFork` is deliberately not folded in with it: it posts the same body, but it
+   * navigates to `/edit/:id` afterwards, and losing the playground is the difference
+   * users actually care about.
+   */
+  const onShare = useCallback(() => {
+    if (route.mode === "play") return void onEmbed();
+    setLinksId(savedId);
+    setShareLinksOpen(true);
+  }, [route.mode, onEmbed, savedId]);
+
+  /**
+   * `Cmd/Ctrl+S`. The top bar's Save is the only authed action the design never
+   * framed (ADR-0025), so it gets the shortcut every editor has trained people to
+   * expect. Gated exactly as the button is, and `preventDefault` regardless of the
+   * gate — offering the browser's "save this page" dialog inside an editor is
+   * worse than doing nothing.
+   */
+  useEffect(() => {
+    if (!user || route.mode !== "edit") return;
+    const onKey = (e: KeyboardEvent) => {
+      // Case-folded, because Caps Lock makes `e.key` "S" with `shiftKey` false —
+      // which a bare `!== "s"` rejects, skipping the save *and* letting the
+      // browser dialog through. `shiftKey` is still excluded on its own, so
+      // Shift+Cmd+S stays free for whatever the browser does with it.
+      if (e.key.toLowerCase() !== "s" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      e.preventDefault();
+      // A modal owns the keyboard while it is up, and `Dialog` traps Tab and
+      // Escape but knows nothing about this. `EditInfoDialog` matters most: it
+      // holds title and description as *drafts* and lifts them only on its own
+      // Save, so saving the workspace from under it would persist the old
+      // metadata while the dialog still shows the new — which reads, from the
+      // outside, exactly like the dialog having saved. Swallowed rather than
+      // passed through, so the browser's own dialog stays shut either way.
+      if (editInfoOpen || shareLinksOpen) return;
+      if (!saving) void onSave();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [user, route.mode, saving, onSave, editInfoOpen, shareLinksOpen]);
+
   /** Row-2 refresh (`72:15708`). Reloads the running preview in place — never a
    *  remount, which for Tier 2 would mint a fresh container session per click.
    *
@@ -1209,10 +1256,8 @@ function Authoring({
         onRenameFile={canEditFiles ? renameFile : undefined}
         onDeleteFile={canEditFiles ? deleteFile : undefined}
         onSave={onSave}
-        onShare={() => { setLinksId(savedId); setShareLinksOpen(true); }}
+        onShare={onShare}
         onFork={onFork}
-        onEmbed={onEmbed}
-        embedding={embedding}
         authed={!!user}
         // Account menu (`114:21480`). Keyed off `accountUser`, not `user`, so it
         // survives `/share/:id` — see `ShareRoute`.
@@ -1223,7 +1268,10 @@ function Authoring({
         // `share` render fine anonymously and keep their example.
         onLogout={route.mode === "edit" ? () => logout("/") : () => logout()}
         mode={route.mode}
-        sharing={forking}
+        forking={forking}
+        // Only `play` mints, so only `play` is ever pending — `edit` opens the
+        // dialog straight off `savedId`.
+        sharing={embedding}
         saving={saving}
         dirty={dirty}
         versionWarning={versionWarning}
@@ -1266,13 +1314,6 @@ function Authoring({
             </div>
           )
         }
-        // Signed-in-only and drawn in no frame, so they live in the action bar
-        // rather than the designed top bar (ADR-0023).
-        // T9 emptied this. Title/description moved into the Edit info dialog behind
-        // the BOX INFO pencil (`114:24410`), and My demos / the identity / Log out
-        // moved into the top bar's account menu (`114:21480`) — both now have frames,
-        // so they no longer need the unframed overflow row ADR-0023 gave them.
-        authedExtras={undefined}
         publicUrl={publicUrl}
         previewUrl={previewUrl}
         onRefreshPreview={refreshPreview}

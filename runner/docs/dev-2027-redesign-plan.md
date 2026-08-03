@@ -762,7 +762,7 @@ subtask that surfaced it and what evidence exists.
 | 37 | No owner display name or avatar exists anywhere in the stack | asset/data gap | T9 |
 | 38 | `accent` as link text on a dark surface lands under WCAG AA | design decision | T9 |
 | 39 | `114:23289`'s full-window label describes behaviour the app doesn't have | design copy fix | T9 |
-| 40 | `Fork` / `Share` / custom version have designed homes — the authed action bar is retired | **decided** (ADR-0025) | audit → T10 |
+| 40 | ~~`Fork` / `Share` / custom version have designed homes — the authed action bar is retired~~ **closed by T10** — the bar is deleted (DEV-2167); raised items 48, 49 | **decided** (ADR-0025) | audit → T10 |
 | 41 | ~~Sidebar file CRUD follows **login**, not mode~~ **closed by T11** — the gate is `!!user && !isShare` (DEV-2168) | **decided** (ADR-0025) | audit → T11 |
 | 42 | Multi-file tabs move into scope; per-file `dirty` is the data-model change | **decided** (ADR-0025) | audit → T12 |
 | 43 | The tab glyph is a dirty dot at rest, the ✕ on hover | **decided** (ADR-0025) | audit → T12 |
@@ -770,6 +770,9 @@ subtask that surfaced it and what evidence exists.
 | 45 | Frame-index omissions and two stale "not rendered" rows | doc fix | audit → T14 |
 | 46 | The designed dialog card is 360px, not 356 | cosmetic | audit → T13 |
 | 47 | A signed-in `play` user's added file is lost on an example switch | design decision | T11 |
+| 48 | `Download` stays unconditional — the top bar's mode slot holds `Fork` / `Save` only | deviation | T10 |
+| 49 | The version pencil sits after the pill's chevron, not before it | deviation | T10 |
+| 50 | The preview bar overflows a narrow preview column — pre-existing, and T10 adds 72px to it | design decision | T10 |
 
 Items **40–46** come from the [DEV-2027 Figma gap audit](dev-2027-figma-gap-audit.md), which re-read the
 file against the shipped branch after the **After Login** section landed. The audit also **closes three
@@ -1357,6 +1360,54 @@ Not fixed here: the honest fixes are a dirty-guard prompt on switching or a per-
 and both are features rather than design-system application. `Download` and `Fork` both capture the
 current workspace, so nothing is unrecoverable if you notice in time.
 
+### 48. `Download` stays unconditional — the mode slot holds `Fork` / `Save` only (deviation)
+
+ADR-0025 places `Save` in "the same mode-keyed top-right slot that holds `Fork` when the demo is not
+yours and `Download` when it is". That rule was *inferred* from A2's frames, and the code does not
+work that way: `TopBar.tsx` renders `Download` whenever `onDownload` is set, deliberately, because
+ADR-0023 rule 1 keeps it for anonymous visitors who have always had it (item 30). Implementing the
+ADR's wording literally would **remove `Download` in `play`** — a behaviour regression dressed as a
+restyle.
+
+T10 therefore splits the difference: a new mode slot left of the theme toggle carries `Fork` in
+`play` and `Save` in `edit`, and `Download` keeps its own place to the toggle's right. A2's measured
+group — `Fork` 49 · theme 36 · avatar 36 — backs the placement; the frames simply never drew a
+signed-in `Download`, which is omission, not removal.
+
+### 49. The version pencil sits after the pill's chevron, not before it (deviation)
+
+`114:24396` draws `tabler-icon-pencil` inside the version pill's frame, adjoining the chevron. It
+ships immediately *after* the pill instead. `MenuButton`'s chevron is the last child of the trigger
+`<button>` whose only job is toggling the listbox, so a pencil rendered before it would be a nested
+interactive that opens the menu on click — the one thing it must not do.
+
+The visual cost is nil: `s.menuButton` sets `border: none` / `background: transparent`, so the pill
+has no box at rest for the pencil to fall outside of, only a hover fill. Worth revisiting only if
+the pill ever gains a border. A4 is medium confidence anyway — 1 of 5 pills in the file carry the
+glyph — so restructuring `MenuButton` around it would be the wrong weight of response.
+
+### 50. The preview bar overflows a narrow preview column (design decision)
+
+`s.bar` is a fixed 36px row of `flex: 0 0 auto` controls with one flexible child (`PreviewUrlField`).
+Once that child has collapsed to zero, anything further spills out of the column. Measured in the
+browser at the splitter's own minimum (`MIN_PANE = 320`, `SplitPane.tsx:29`), on a bar carrying the
+docs-example set — refresh, URL, version pill, framework pill, book, github:
+
+| | overflow at a 320px preview column |
+|---|---|
+| before T10 | **140px** |
+| after T10 | **212px** |
+
+So this is **pre-existing** — the bar was already over-subscribed at the narrow end, which is what
+the `versionWarning` clamp at `PreviewBar.tsx:89-93` was working around — and T10 adds exactly the
+72px of its two new 36px controls. A starter, which carries no framework pill or book link, still
+fits: 312px of fixed content against the 320px floor.
+
+Not fixed here because every fix is a design call, not a restyle: let the version pill shrink and
+ellipsize, collapse the right icon group into an overflow kebab past a threshold, or raise
+`MIN_PANE`. The frames budget no room for any of it — they draw the bar at one width only. Worth
+taking with items 1/6/23/38 in the single design conversation those already want.
+
 ## Remaining decisions
 
 ~~One item to confirm with design during review: whether `edit` mode keeps the file `+` / ✎ / ✕
@@ -1366,9 +1417,12 @@ sticky `114:26599` states the rule. See item 41 / ADR-0025.
 
 Open after the gap audit:
 
-1. **Where `Save` goes** (item 40 / T10). The only authed action with no frame. Recommended: the
+1. ~~**Where `Save` goes** (item 40 / T10). The only authed action with no frame. Recommended: the
    mode-keyed top-right slot that already holds `Fork` when the demo is not yours and `Download` when it
-   is, plus `Cmd/Ctrl+S`. Blocks nothing else in T10.
+   is, plus `Cmd/Ctrl+S`.~~ **Answered and shipped by T10** — the recommendation was taken, with the
+   `Download` half of it declined (item 48). `Save` is the `edit` face of a new top-bar mode slot whose
+   `play` face is `Fork`, and `Cmd/Ctrl+S` is wired. Still the one placement wanting design sign-off at
+   review, since no frame shows it.
 2. **The colour reconciliation cluster — items 1, 6, 23, 38.** Dark `textMuted`; the ramp's four steps
    against three painted surfaces; Figma `accent-color` `#4669f6` vs shipped `#1A42E8`; accent-on-dark
    under WCAG AA. Each item says a single design call fixes it — they want **one conversation, not four**.
@@ -1396,7 +1450,7 @@ The gap audit's work, grouped by topic. Full scope, evidence and file lists in
 
 | # | Subtask | Covers | Size |
 |---|---|---|---|
-| **T10** | Authed action surfaces — retire the unframed bar | items 40, 46 | M |
+| **T10** | ~~Authed action surfaces — retire the unframed bar~~ **landed** (DEV-2167) — raised items 48, 49 | items 40, 46 | M |
 | **T11** | ~~Sidebar file CRUD follows login, not mode~~ **landed** (DEV-2168) — raised item 47 | item 41 | S |
 | **T12** | Editor tabs — multi-file tabs + unsaved indicator | items 42, 43, closes 9 | M |
 | **T13** | Small fixes — pill mark, dialog width, inert `?theme=` | items 13, 44, 46 | XS |

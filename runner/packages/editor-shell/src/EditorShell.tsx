@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { FilesMap } from "@handsontable/demo-runtime";
-import { AuthedActionBar } from "./AuthedActionBar.js";
 import { CodeEditor, type CursorPosition } from "./CodeEditor.js";
 import { EditorBar } from "./EditorBar.js";
 import { EditorStatusBar } from "./EditorStatusBar.js";
@@ -60,16 +59,17 @@ export interface EditorShellProps {
   onAddFile?: (path: string) => void;
   onRenameFile?: (oldPath: string, newPath: string) => void;
   onDeleteFile?: (path: string) => void;
+  /** Persist the saved demo. Surfaced as the top bar's mode action in `edit`. */
   onSave: () => void;
+  /** Open the share dialog. The app makes it mode-aware — in `play` it mints the
+   *  demo first, which is what the retired `Embed` button did (ADR-0025). */
   onShare: () => void;
   onFork: () => void;
-  /** Create an embeddable (docs-only) version from the current playground code. */
-  onEmbed?: () => void;
-  embedding?: boolean;
-  /** Signed in *for this workspace*? Gates the authed action bar. Since T9 this no
-   *  longer gates the top bar: `/share/:id` passes `false` here while still handing
-   *  down `accountEmail`, so a signed-in visitor keeps their account menu on a
-   *  read-only page instead of being offered "Sign in". */
+  /** Signed in *for this workspace*? Gates every authed affordance: the top bar's
+   *  Fork/Save slot, the preview bar's share icon and its version pencil. Since T9
+   *  this does not gate the top bar as a whole: `/share/:id` passes `false` here
+   *  while still handing down `accountEmail`, so a signed-in visitor keeps their
+   *  account menu on a read-only page instead of being offered "Sign in". */
   authed: boolean;
   /** Signed-in identity for the top bar's account menu (`114:21480`). */
   accountEmail?: string;
@@ -78,6 +78,10 @@ export interface EditorShellProps {
   /** "play" (playground -> Fork), "edit" (saved demo -> Save/Share), or
    *  "share" (read-only public playground). */
   mode?: "play" | "edit" | "share";
+  /** A `play`-mode fork is in flight. Named for what it does: it drives the Fork
+   *  button, and until T10 it was called `sharing` while nothing named share used it. */
+  forking?: boolean;
+  /** A share is in flight — only ever true in `play`, where the dialog needs a mint. */
   sharing?: boolean;
   saving?: boolean;
   shareUrl?: string | null;
@@ -86,8 +90,6 @@ export interface EditorShellProps {
   // ---- chrome (T2) --------------------------------------------------------
   /** Centred top-bar pill: the app's example cascader, or the demo title. */
   examplePill?: ReactNode;
-  /** App-owned signed-in controls appended to the authed action bar. */
-  authedExtras?: ReactNode;
   /** Public demo URL for the row-2 address field, when the demo has one. */
   publicUrl?: string;
   /** Where the preview iframe is actually pointed (Tier 2 only). */
@@ -150,6 +152,16 @@ export function EditorShell(props: EditorShellProps) {
         accountEmail={props.accountEmail}
         onMyDemos={props.onMyDemos}
         onLogout={props.onLogout}
+        // The mode action is resolved here, not in `TopBar`, and off `authed`
+        // rather than off `accountEmail`. The two disagree on exactly one route:
+        // a signed-in visitor to `/share/:id` has an `accountEmail` (so they keep
+        // their account menu, T9) but `authed: false` (the demo is not theirs).
+        // Keying the slot off the identity would hand them a Fork button.
+        onFork={props.authed && mode === "play" ? props.onFork : undefined}
+        forking={props.forking}
+        onSave={props.authed && mode === "edit" ? props.onSave : undefined}
+        saving={props.saving}
+        dirty={props.dirty}
       />
 
       <div ref={split.bodyRef} style={{ ...s.body(sidebarOpen), ...split.bodyStyle }}>
@@ -209,28 +221,17 @@ export function EditorShell(props: EditorShellProps) {
             onVersionChange={props.onVersionChange}
             versionLocked={mode === "share"}
             versionWarning={props.versionWarning}
+            // Both signed-in only, and both excluded from `share` — where the
+            // version is pinned and the demo is someone else's to share.
+            versionEditable={props.authed && mode !== "share"}
             frameworks={props.frameworks}
             onFrameworkChange={props.onFrameworkChange}
+            onShare={props.authed && mode !== "share" ? props.onShare : undefined}
+            sharing={props.sharing}
             docsUrl={props.docsUrl}
             repoUrl={props.repoUrl}
             repoLabel={props.repoLabel}
           />
-
-          {props.authed && (
-            <AuthedActionBar
-              mode={mode}
-              onSave={props.onSave}
-              onShare={props.onShare}
-              onFork={props.onFork}
-              onEmbed={props.onEmbed}
-              onVersionChange={props.onVersionChange}
-              embedding={props.embedding}
-              sharing={props.sharing}
-              saving={props.saving}
-              dirty={props.dirty}
-              extras={props.authedExtras}
-            />
-          )}
 
           <PreviewPane
             iframeRef={props.iframeRef}

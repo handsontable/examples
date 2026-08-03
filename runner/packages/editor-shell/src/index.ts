@@ -43,7 +43,6 @@ export type { PreviewUrlFieldProps } from "./PreviewUrlField.js";
 // Full mode (T8) — `?mode=full` is top bar + this bar + preview + status bar.
 export { FullBar } from "./FullBar.js";
 export type { FullBarProps } from "./FullBar.js";
-export { AuthedActionBar } from "./AuthedActionBar.js";
 export { MenuButton } from "./MenuButton.js";
 export type { MenuOption } from "./MenuButton.js";
 // Undesigned-surface work (T9). `Dialog` is the primitive the two After Login

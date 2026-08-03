@@ -261,6 +261,12 @@ test("hovering a category keeps the example column keyboard-navigable", async ({
   await page.goto("/?example=react");
   await page.getByRole("button", { name: /React/ }).first().click();
 
+  // Wait for the open to settle before typing, as the test above does. The
+  // cascader focuses its search input from a `setTimeout(…, 0)`
+  // (`DocsCascader.tsx:131`), so arrow keys pressed before that lands are either
+  // swallowed or undone by it — a race that only shows up under load.
+  await expect(page.getByPlaceholder("Search examples…")).toBeFocused();
+
   // Walk into the example column, then hover a *different* category. That swaps
   // the column out and unmounts the focused row — focus used to fall to <body>
   // and every further arrow key was swallowed.
