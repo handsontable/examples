@@ -54,10 +54,12 @@ async function stubSavedDemo(page: Page) {
  * registers) requires a literal `/` after `demos` and so never matches the POST.
  * The two handlers cannot shadow each other.
  */
-async function stubMint(page: Page) {
+async function stubMint(page: Page, holdMs = 0) {
   const posts: string[] = [];
   await page.route("**/api/demos", async (route) => {
     posts.push(route.request().postData() ?? "");
+    // A deliberate hold when asked, so the in-flight treatment is observable.
+    if (holdMs) await new Promise((r) => setTimeout(r, holdMs));
     await route.fulfill({ json: { id: MINTED_ID } });
   });
   return posts;
@@ -134,6 +136,45 @@ test("the play share icon mints a demo, then opens the same dialog Embed did", a
   );
 });
 
+// The prerequisite ADR-0025 called out: a 36px icon and a 49px button cannot
+// render "Preparing…" or "Creating…", so both had to grow an icon-form pending
+// treatment before Fork and Share could move here. Nothing in the type system
+// guards this — `forking` and `sharing` are both optional booleans, so wiring
+// the wrong one at the call site still compiles.
+test("the share icon and Fork show their in-flight state", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await stubMint(page, 1500);
+  await page.goto("/?example=react");
+
+  await expect(accountAvatar(page)).toBeVisible();
+
+  await shareIcon(page).click();
+  const preparing = page.getByRole("button", { name: "Preparing…" });
+  await expect(preparing).toBeVisible();
+  await expect(preparing).toBeDisabled();
+  // …and it resolves back rather than sticking.
+  await expect(shareDialog(page)).toBeVisible();
+  await expect(shareIcon(page)).toBeEnabled();
+});
+
+test("Fork shows its in-flight state and is driven by `forking`, not `sharing`", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await stubMint(page, 1500);
+  await page.goto("/?example=react");
+
+  await expect(accountAvatar(page)).toBeVisible();
+
+  await forkButton(page).click();
+  const creating = page.getByRole("button", { name: "Creating…" });
+  await expect(creating).toBeVisible();
+  await expect(creating).toBeDisabled();
+  // The regression this guards: while Fork is in flight the *share* icon must
+  // stay live. Before T10 one flag drove both under two different names.
+  await expect(shareIcon(page)).toBeEnabled();
+});
+
 test("signed-in edit swaps Fork for Save and shares without minting", async ({ page }) => {
   await stubShell(page);
   await stubSavedDemo(page);
@@ -171,8 +212,19 @@ test("Ctrl+S saves in edit mode", async ({ page }) => {
   await page.goto(`/edit/${DEMO_ID}`);
   await expect(saveButton(page)).toBeVisible();
 
+  // Focus inside CodeMirror before pressing, because that is where a user's
+  // focus actually is when they reach for Save. CodeMirror installs its own
+  // keydown handling on `.cm-content`, so a shortcut proven only against
+  // `<body>` proves nothing about the case the shortcut exists for.
+  await page.locator(".cm-content").click();
+  await page.keyboard.type("// edit");
+  await expect(saveButton(page)).toHaveText("Save •");
+
   await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => patches.length).toBe(1);
+  // The dot clears on a successful save — the workspace-level `dirty` boolean
+  // T10 keeps consuming, and the one T12 must not break when it adds per-file.
+  await expect(saveButton(page)).toHaveText("Save");
 });
 
 test("a signed-in visitor gets no authed actions on someone else's share", async ({ page }) => {

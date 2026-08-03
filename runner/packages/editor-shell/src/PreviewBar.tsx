@@ -261,8 +261,10 @@ export function PreviewBar({
   );
 }
 
-/** Sized to the pill it replaces (`114:24396`: 181px), so opening and closing the
- *  field does not shuffle the icons to its right. */
+/** The width the frame gives the widened pill (`114:24396`). It replaces the pill
+ *  *and* the pencil, which rest at 204px together, so opening the field pulls the
+ *  icons right of it in by 7px — visible only if you are looking for it, and the
+ *  alternative is padding the field to a number no frame asks for. */
 const customVersion: React.CSSProperties = {
   width: 181,
   height: 26,
