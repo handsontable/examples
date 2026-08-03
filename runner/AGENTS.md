@@ -17,8 +17,8 @@ cd examples/runner
 pnpm install          # pnpm monorepo; Node 20+
 ```
 
-Work happens on a feature branch off `master`, opened as a PR against `handsontable/examples`
-(current WIP branch: `runner-live-demos`, PR #37). Cursor **Bugbot** auto-reviews each PR push.
+Work happens on a feature branch off `master`, opened as a PR against `handsontable/examples`.
+Cursor **Bugbot** auto-reviews each PR push.
 
 ## Layout
 
