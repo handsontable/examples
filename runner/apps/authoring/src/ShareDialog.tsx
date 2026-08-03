@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { theme } from "@handsontable/demo-editor-shell";
 import type { FilesMap } from "@handsontable/demo-runtime";
+import { reportError } from "./sentry.js";
 
 export interface ShareResult {
   id: string;
@@ -64,6 +65,9 @@ export function ShareDialog(props: ShareDialogProps) {
       setResult(r);
       props.onResult(r);
     } catch (e) {
+      // POST /api/demos also runs the real framework build in the builder
+      // container, so this covers share-build failures, not just network errors.
+      reportError(e, "demo-share");
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);

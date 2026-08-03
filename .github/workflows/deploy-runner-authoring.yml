@@ -58,7 +58,15 @@ jobs:
       # Build workspace packages, then the authoring app. VITE_API_BASE comes
       # from apps/authoring/.env.production (committed) so it targets prod.
       - run: pnpm build
+      # SENTRY_* are only set here, on the deploying build. The `test` job reuses
+      # ci.yml, which gets no token, so PR builds neither emit source maps nor
+      # upload a release — see apps/authoring/vite.config.ts.
       - run: pnpm --filter @handsontable/demo-authoring build
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          GITHUB_SHA: ${{ github.sha }}
 
       - name: Deploy authoring worker
         working-directory: runner/apps/authoring

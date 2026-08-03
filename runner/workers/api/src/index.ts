@@ -7,6 +7,7 @@
 // Sharing endpoints (POST/GET/PATCH/DELETE /api/demos) land in Deliverable 5.
 
 import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/sandbox";
+import * as Sentry from "@sentry/cloudflare";
 import { mintSessionId, pickLatestNextVersion } from "@handsontable/demo-runtime";
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
@@ -27,10 +28,62 @@ import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, upd
 // abandoned sessions exhaust the pool. Disk is ephemeral, so a slept container
 // cold-boots on return — the point is to avoid that mid-session, not to make
 // wake cheap.
-export class Sandbox extends SandboxBase {
+/** The one production host. Doubles as the "am I deployed?" signal below. */
+const PRODUCTION_HOST = "demos.handsontable.com";
+
+/**
+ * Sentry init options, shared by the fetch handler and both Durable Objects so
+ * every event carries the same release and environment. Errors only — no
+ * tracing, no profiling. See docs/run-and-deploy.md.
+ *
+ * Reporting is enabled only on the deployed Worker. `PREVIEW_HOST` is the
+ * discriminator: it is `demos.handsontable.com` in the committed
+ * `wrangler.jsonc` vars and is overridden to `localhost:8787` by
+ * `workers/api/.dev.vars` for local runs — the same prod-vs-local switch the
+ * Tier-2 preview URLs already depend on. Without the gate, `wrangler dev` would
+ * file local experiments as `api-production` issues. The browser SDK gates on
+ * `window.location.hostname` for the same reason.
+ *
+ * The DSN var is deliberately NOT named `SENTRY_DSN`: the SDK's own
+ * `getFinalOptions` falls back to `env.SENTRY_DSN` whenever the options object
+ * omits a dsn, which would initialise the client straight from env and silently
+ * defeat the gate. Under a different key that fallback finds nothing, so the only
+ * path a DSN can take is the explicit line below. For the same reason the gate is
+ * expressed as `dsn: undefined` (an inert client that never sends) rather than by
+ * returning `undefined` — the SDK reads that as an empty options object and then
+ * env-falls-back anyway.
+ *
+ * `CF_VERSION_METADATA` is optional-chained: local `wrangler dev` supplies a
+ * throwaway id, and a missing release must never throw at init.
+ */
+const sentryOptions = (env: Env): Sentry.CloudflareOptions => ({
+  dsn: env.PREVIEW_HOST === PRODUCTION_HOST ? env.ERROR_REPORTING_DSN : undefined,
+  environment: "api-production",
+  release: env.CF_VERSION_METADATA?.id,
+  tracesSampleRate: 0,
+});
+
+class SandboxBaseWithSleep extends SandboxBase {
   sleepAfter = "5m";
 }
-export class BuilderSandbox extends SandboxBase {}
+
+// Both DO classes are Sentry-instrumented: Tier-2 session orchestration and the
+// share-build snapshotter run inside them, so a failure there never passes
+// through the fetch handler's own error path. The export name `Sandbox` is
+// load-bearing — proxyToSandbox() resolves the live-preview namespace by that
+// literal name — so the wrapper is assigned to it rather than aliased.
+// The `as unknown as typeof X` casts mirror the proxyToSandbox() cast below:
+// the Sandbox SDK's recursive RPC generic hits TS2589 (deep instantiation) when
+// a wrapper re-infers it.
+export const Sandbox = Sentry.instrumentDurableObjectWithSentry(
+  sentryOptions,
+  SandboxBaseWithSleep as unknown as new (state: DurableObjectState, env: Env) => never,
+) as unknown as typeof SandboxBaseWithSleep;
+
+export const BuilderSandbox = Sentry.instrumentDurableObjectWithSentry(
+  sentryOptions,
+  SandboxBase as unknown as new (state: DurableObjectState, env: Env) => never,
+) as unknown as typeof SandboxBase;
 
 const CONTAINER_ROOT = "/app";
 const BOOT_LOG = "/tmp/boot.log";
@@ -176,7 +229,7 @@ async function writeFiles(sandbox: SandboxLike, files: Record<string, string>) {
   }
 }
 
-export default {
+export default Sentry.withSentry(sentryOptions, {
   async fetch(request: Request, env: Env): Promise<Response> {
     // 1) Preview-URL traffic (and its HMR WebSocket) is proxied to the container.
     // Cast to keep TS from instantiating the SDK's deep generic over Env (TS2589).
@@ -521,6 +574,9 @@ export default {
           await env.CACHE.put(cacheKey, JSON.stringify(payload), { expirationTtl: payload.exists ? 3600 : 300 });
           return cors(cacheableJson(payload));
         } catch (e) {
+          // The registry being unreachable silently re-pins docs examples onto a
+          // version that may not exist — actionable, so report it.
+          Sentry.captureException(e, { tags: { upstream: "npm-registry", probe: "version-exists" } });
           return json({ error: e instanceof Error ? e.message : String(e) }, 502);
         }
       }
@@ -556,6 +612,8 @@ export default {
           await env.CACHE.put("versions", JSON.stringify(payload), { expirationTtl: 3600 });
           return cors(cacheableJson(payload));
         } catch (e) {
+          // Version picker falls back to a stale list when this fails.
+          Sentry.captureException(e, { tags: { upstream: "npm-registry", probe: "versions" } });
           return json({ error: e instanceof Error ? e.message : String(e) }, 502);
         }
       }
@@ -569,9 +627,13 @@ export default {
 
       return cors(new Response("Not found", { status: 404 }));
     } catch (err) {
+      // Client input validation (a 400) is not a fault — never reported.
       if (err instanceof InvalidFilePathError) return json({ error: err.message }, 400);
+      // This catch turns every unexpected throw into a 500 body, so withSentry()
+      // never sees it. Report here or the error is invisible.
+      Sentry.captureException(err);
       return json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
   },
-};
+});
 
