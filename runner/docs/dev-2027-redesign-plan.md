@@ -737,7 +737,7 @@ subtask that surfaced it and what evidence exists.
 | 10 | The active tab's left border in the frame is a light-mode `text` colour | design decision | T4 |
 | 11 | GitHub Dark's own background is a step darker than `editorBg` | design decision | T4 |
 | 12 | The universal `button:hover` rollover now dims the active tab | design decision | T4 |
-| 13 | The example pill's 20×20 Handsontable mark has no asset in the repo | asset gap | T2 |
+| 13 | ~~The example pill's 20×20 Handsontable mark has no asset in the repo~~ **closed by T13** — asset landed in T3, wired in T13 (DEV-2170) at 3 of 4 pill sites; `114:26625` ("My Demos") draws none | asset gap | T2 → T13 |
 |  | ↳ **favicon half closed by T9** — reused the docs site's shipped `favicon.png` / `favicon-dark.png`. The *pill* mark is still open. | | |
 | 14 | Tier-1 has no preview URL to put in the row-2 address field | design decision | T2 |
 | 15 | The version warning has no home in a 36px bar | design decision | T2 |
@@ -766,9 +766,9 @@ subtask that surfaced it and what evidence exists.
 | 41 | ~~Sidebar file CRUD follows **login**, not mode~~ **closed by T11** — the gate is `!!user && !isShare` (DEV-2168) | **decided** (ADR-0025) | audit → T11 |
 | 42 | Multi-file tabs move into scope; per-file `dirty` is the data-model change | **decided** (ADR-0025) | audit → T12 |
 | 43 | The tab glyph is a dirty dot at rest, the ✕ on hover | **decided** (ADR-0025) | audit → T12 |
-| 44 | The embed URL's `?theme=` is inert and gets dropped | **decided** (ADR-0025) | audit → T13 |
+| 44 | ~~The embed URL's `?theme=` is inert and gets dropped~~ **closed by T13** — dropped (DEV-2170); orphaned `themeMode` and the `useTheme` import went with it | **decided** (ADR-0025) | audit → T13 |
 | 45 | Frame-index omissions and two stale "not rendered" rows | doc fix | audit → T14 |
-| 46 | The designed dialog card is 360px, not 356 | cosmetic | audit → T13 |
+| 46 | ~~The designed dialog card is 360px, not 356~~ **closed by T13** — `Dialog.tsx` defaults to 360 (DEV-2170); re-measured `114:24365` / `114:24747` as 360 wide with 312px content | cosmetic | audit → T13 |
 | 47 | A signed-in `play` user's added file is lost on an example switch | design decision | T11 |
 | 48 | `Download` stays unconditional — the top bar's mode slot holds `Fork` / `Save` only | deviation | T10 |
 | 49 | The version pencil sits after the pill's chevron, not before it | deviation | T10 |
@@ -939,7 +939,30 @@ a faithful trace, not the source file. Wiring it into the pill is T2/T9's call, 
 
 **Neither T2 nor T9 wired it — assigned to T13.** `markUrl` is consumed only by `BoxInfo.tsx`, while
 `App.tsx`'s pill still carries T2's comment justifying the omission by an asset gap T3 had already
-closed. Every After Login frame draws the mark in the pill. One import, plus deleting the stale comment.
+closed. One import, plus deleting the stale comment.
+
+**Closed by T13** (DEV-2170) — but for **three of the four pill sites, not "every After Login frame"**,
+which is what this item said before and is false. Read against the frames:
+
+| Site | Frame | Mark |
+| --- | --- | --- |
+| `App.tsx` edit/share demo title, `examplePill(false)` | `48:6580` | yes |
+| `App.tsx` play-mode cascader, `examplePill(true)` | `72:15859` | yes |
+| `App.tsx` FullMode `"Shared demo"`, `examplePill(false)` | `65:21387` | yes |
+| `MyDemos.tsx` `"My Demos"`, `examplePill(false)` | `114:26625` | **no** |
+
+The first three each hold a 20×20 rounded-rectangle at `x 0` with the label at `x 28`. `114:26625`
+has no such child, its label sits at `x 0`, and the pill is 85px wide (`8 + 69 + 8`) — a mark would
+make it 105. So the mark is not a property of either *form* (My Demos uses the same `false` form as
+the demo title); it marks a pill that **names a Handsontable example**, and "My Demos" is a page
+label. Wiring by form would have put a mark on the one pill the design leaves bare.
+
+The 20/20/2 style is now `shellStyles.examplePillMark` (`styles.ts`), since the shell already owns
+`examplePill`. `alt=""` at every site: unlike BOX INFO's badge no "Handsontable" text follows, so a
+real `alt` would only prepend noise to the pill's accessible name. In the cascader form the `<img>`
+is a **sibling** of `<DocsCascader>`, never inside its trigger, or it would join the trigger's
+accessible name — and the pill stays 480px, because mark + 8px gap leave exactly the 420px label
+region `72:15859` draws, which the trigger's existing `flex: 1` absorbs.
 
 ### 14. Tier 1 has no preview URL for the row-2 address field (design decision)
 

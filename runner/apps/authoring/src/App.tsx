@@ -2,13 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   EditorShell,
   FullBar,
+  markUrl,
   PreviewStatusBar,
   shellStyles,
   Spinner,
   theme,
   TopBar,
   useLogoUrl,
-  useTheme,
   type PreviewStatus,
 } from "@handsontable/demo-editor-shell";
 import {
@@ -335,6 +335,7 @@ function FullMode({ id }: { id: string }) {
       <TopBar
         examplePill={
           <div style={shellStyles.examplePill(false)}>
+            <img src={markUrl} alt="" style={shellStyles.examplePillMark} />
             <span style={pillLabel}>{title || "Shared demo"}</span>
           </div>
         }
@@ -437,7 +438,6 @@ function Authoring({
   // `+` / `folder-plus` *and* the per-row ✎ / ✕ on it, so the three handlers have to
   // appear and disappear together or the sidebar contradicts itself.
   const canEditFiles = !!user && !isShare;
-  const { mode: themeMode } = useTheme();
 
   // Initial example/version come from the URL so the playground is deep-linkable.
   // `?docs=<content-path>` opens a documentation-guide example (lazy-loaded);
@@ -1165,9 +1165,10 @@ function Authoring({
   }, []);
 
   const clientUrl = linksId ? `${location.origin}/share/${linksId}` : "";
-  // The embed carries the shell's mode as a *preferred* theme hint. Whether and how
-  // /embed/:id acts on it is out of scope for DEV-2027 (ADR-0022).
-  const embedUrl = linksId ? `${API_BASE}/embed/${linksId}?theme=${themeMode}` : "";
+  // No `?theme=`: `serveDemoAsset` takes `(env, id, subpath, { embed })` and never sees
+  // a query string, so the hint we used to send was provably inert (ADR-0025). Embed
+  // theming stays deferred — the example owns its own theme (ADR-0022).
+  const embedUrl = linksId ? `${API_BASE}/embed/${linksId}` : "";
 
   // Same string the top bar's pill shows: a saved demo's title, otherwise the
   // example's display name.
@@ -1278,15 +1279,20 @@ function Authoring({
         // ---- chrome (T2) --------------------------------------------------
         examplePill={
           isShare || route.mode === "edit" ? (
-            // No leading mark: the frames put a 20×20 Handsontable *square*
-            // there (`48:6582`), and the repo has only the 145×22 wordmark —
-            // scaled to 20px tall it swamps the pill. Logged as an open item;
-            // the same asset gap blocks the favicon (T9).
+            // `alt=""`: the mark is branding, not information, and unlike BOX INFO's
+            // badge no "Handsontable" text follows it here — a real `alt` would just
+            // prepend noise to every pill's accessible name.
             <div style={shellStyles.examplePill(false)} title={description || undefined}>
+              <img src={markUrl} alt="" style={shellStyles.examplePillMark} />
               <span style={pillLabel}>{title || (isShare ? "Shared demo" : "Untitled demo")}</span>
             </div>
           ) : (
+            // The mark is a *sibling* of the cascader, never inside its trigger —
+            // inside, the <img> would join the trigger's accessible name. The pill
+            // stays 480px: mark + 8px gap leave the 420px label region `72:15859`
+            // draws, which the trigger's `flex: 1` absorbs.
             <div style={shellStyles.examplePill(true)}>
+              <img src={markUrl} alt="" style={shellStyles.examplePillMark} />
               <DocsCascader
                 manifestItems={docsItems}
                 starters={catalog.examples.map((e) => ({ framework: e.framework, displayName: e.displayName }))}
