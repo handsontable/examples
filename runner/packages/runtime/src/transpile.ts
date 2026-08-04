@@ -120,12 +120,48 @@ export async function transpileFilesForParcel(files: FilesMap): Promise<FilesMap
     out[jsPath] = compiled;
   }
 
+  const renamedMap = new Map(renamed);
+
   for (const [path, code] of Object.entries(out)) {
-    if (!path.toLowerCase().endsWith(".html")) continue;
-    out[path] = rewriteHtml(code, new Map(renamed), out);
+    const lower = path.toLowerCase();
+    if (lower.endsWith(".html")) out[path] = rewriteHtml(code, renamedMap, out);
+    else if (lower.endsWith(".js")) out[path] = rewriteSpecifiers(path, code, renamedMap);
   }
 
   return out;
+}
+
+// Import/export specifier positions: `from "…"`, bare `import "…"`, dynamic
+// `import("…")` and `require("…")`. The bare form is the one the vanilla-TS docs
+// wrapper emits, so a `from`-only pattern would miss the actual breakage.
+const SPECIFIER_RE = /(\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(["'])(\.{1,2}\/[^"']+)\2/g;
+
+/** Resolve a relative specifier against the importing file to a files-map key. */
+function resolveSpecifier(fromPath: string, spec: string): string {
+  const segments: string[] = [];
+  for (const seg of [...fromPath.split("/").slice(0, -1), ...spec.split("/")]) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") { segments.pop(); continue; }
+    segments.push(seg);
+  }
+  return "/" + segments.join("/");
+}
+
+/**
+ * Repoint relative specifiers that name a renamed source by its authored
+ * extension (`import "../index.ts"` — what wrap-docs-example.mjs emits for the
+ * TypeScript variant) at the compiled `.js` file. Renaming the file without
+ * this makes the parcel resolver hard-fail the sandbox with "Could not find
+ * module in path: '../index.ts' relative to '/src/main.js'" (DEV-2175).
+ * Specifiers not in `renamed` — bare packages, CSS, already-`.js` targets —
+ * are left exactly as authored.
+ */
+function rewriteSpecifiers(path: string, code: string, renamed: Map<string, string>): string {
+  return code.replace(SPECIFIER_RE, (full, prefix: string, quote: string, spec: string) => {
+    if (!SOURCE_RE.test(spec)) return full;
+    if (!renamed.has(resolveSpecifier(path, spec))) return full;
+    return `${prefix}${quote}${spec.replace(SOURCE_RE, ".js")}${quote}`;
+  });
 }
 
 /** Normalize an HTML src/href value to a files-map key ("/…"), or null if external. */
