@@ -449,6 +449,24 @@ test("live: a JavaScript example renders a Handsontable grid", async ({ page }) 
   await expect(preview.getByText("Hodkiewicz - Hintz").first()).toBeVisible({ timeout: 90_000 });
 });
 
+// DEV-2175: the TypeScript variant has its own wrapper output (`src/main.ts`
+// importing `../index.ts`), and the client-side transpile renames both files to
+// `.js`. Every TS docs example died on "Could not find module in path:
+// '../index.ts'" while the `.js` sibling above rendered fine — so the JS test
+// alone does not cover this path.
+test("live: a TypeScript example renders a Handsontable grid", async ({ page }) => {
+  test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  test.setTimeout(120_000);
+  const moduleErrors: string[] = [];
+  page.on("console", (m) => {
+    if (/Could not find module|ModuleNotFound/i.test(m.text())) moduleErrors.push(m.text());
+  });
+  await page.goto("/?docs=guides/accessibility/accessibility/javascript/example1.ts");
+  const preview = page.frameLocator("iframe").first();
+  await expect(preview.getByText("Hodkiewicz - Hintz").first()).toBeVisible({ timeout: 90_000 });
+  expect(moduleErrors, "no unresolved module specifiers after the .ts → .js rename").toHaveLength(0);
+});
+
 // DEV-2129: vanilla-JS/TS examples using ES2020 optional chaining (`?.`) / nullish
 // (`??`) must render. They parse-failed under the old `parcel` Sandpack env
 // (babel-standalone 6.26); the fix routes them through `create-react-app-typescript`

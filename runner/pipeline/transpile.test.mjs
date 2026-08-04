@@ -148,6 +148,63 @@ test("compiles .ts to .js", async () => {
   assert.ok(out["/src/main.js"].includes("const n = 1"));
 });
 
+// DEV-2175: renaming a TS/JSX source to `.js` invalidates any specifier that
+// spells the old extension out. The vanilla-TS docs wrapper emits exactly that
+// (`src/main.ts` → `import "../index.ts"`), so every TypeScript docs example
+// died on "Could not find module in path: '../index.ts'".
+test("rewrites JS import specifiers pointing at renamed sources", async () => {
+  const out = await transpileFilesForParcel({
+    "/index.ts": "export const n: number = 1;\n",
+    "/src/main.ts": 'import "../styles.css";\nimport "../index.ts";\n',
+    "/styles.css": "body {}",
+  });
+  const code = out["/src/main.js"];
+  assert.match(code, /import "\.\.\/index\.js"/, "bare sibling import repointed");
+  assert.ok(!code.includes("index.ts"), "no stale .ts specifier left");
+  assert.ok(code.includes("../styles.css"), "non-renamed specifier untouched");
+});
+
+test("rewrites from-, export-from and dynamic-import specifiers", async () => {
+  const out = await transpileFilesForParcel({
+    "/src/a.tsx": "export const a = 1;\n",
+    "/src/b.ts": "export const b = 2;\n",
+    "/src/c.ts": "export const c = 3;\n",
+    "/src/main.ts":
+      "import { a } from './a.tsx';\n" +
+      "export { b } from './b.ts';\n" +
+      "export const load = () => import('./c.ts');\n" +
+      "export const used = a;\n",
+  });
+  const code = out["/src/main.js"];
+  assert.match(code, /from ["']\.\/a\.js["']/);
+  assert.match(code, /from ["']\.\/b\.js["']/);
+  assert.match(code, /import\(["']\.\/c\.js["']\)/);
+  assert.ok(!/\.tsx?["']/.test(code), "no stale TS specifiers left");
+});
+
+// Static assertions let a broken resolution ship once already (the "React is
+// not defined" regression): execute the rewritten graph off disk, where Node's
+// ESM resolver is as extension-strict as parcel's.
+test("rewritten sibling import actually resolves and executes", async () => {
+  const out = await transpileFilesForParcel({
+    "/index.ts": "export const value: string = 'ok';\n",
+    "/src/main.ts": "import { value } from '../index.ts';\nexport const got = value;\n",
+  });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "transpile-graph-"));
+  try {
+    for (const [p, code] of Object.entries(out)) {
+      const full = path.join(root, p);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, code);
+    }
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+    const mod = await import(pathToFileURL(path.join(root, "src", "main.js")).href);
+    assert.equal(mod.got, "ok");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("rewrites HTML script references to the compiled .js entry", async () => {
   const out = await transpileFilesForParcel({
     "/index.html": '<script type="module" src="/src/main.tsx"></script>',
