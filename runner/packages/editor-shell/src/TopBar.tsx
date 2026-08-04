@@ -127,7 +127,10 @@ const actionButton: React.CSSProperties = {
   height: 36,
   padding: `0 ${theme.space(3)}`,
   flex: "0 0 auto",
-  border: `1px solid ${theme.color.border}`,
+  // `controlBorder`, not `border`: dark `border` *is* `surfaceRaised` (#222222),
+  // so on this bar the outline vanished and Fork / Save / Download / Sign in
+  // rendered as bare text. `72:15648` draws it at horizon/palette/600.
+  border: `1px solid ${theme.color.controlBorder}`,
   borderRadius: theme.radius.md,
   // Transparent, not `surface`: the secondary button is outline-only in the
   // frames. Light hid the difference (surface == surfaceRaised == #ffffff);
