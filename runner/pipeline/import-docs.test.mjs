@@ -155,6 +155,51 @@ test("fails and skips the artifact when generated files miss the module entry", 
   assert.equal(written.some((f) => f.includes("react__example1.jsx")), false);
 });
 
+// DEV-2182: the docs Pikaday recipe moves from the `@handsontable/pikaday` fork
+// (bundled typings) to upstream `pikaday` (none). Angular is the only variant
+// that type-checks, so the importer must resolve `@types/pikaday` alongside it —
+// otherwise `ng serve` fails on TS7016 and the demo renders blank.
+test("resolves @types/pikaday for an Angular example importing upstream pikaday", async (t) => {
+  const { docsDir, outDir } = makeFixture(t);
+  const angularDir = path.join(docsDir, "content", "guides", "example", "angular");
+  fs.mkdirSync(angularDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(docsDir, "content", "guides", "example", "index.md"),
+    "---\ntitle: Example guide\n---\n\n## Standard\n::: example #example1\n@[code](@/content/guides/example/angular/example1.ts)\n:::\n",
+  );
+  fs.writeFileSync(
+    path.join(angularDir, "example1.ts"),
+    "/* file: app.component.ts */\nimport { Component } from '@angular/core';\nimport moment from 'moment';\nimport Pikaday from 'pikaday';\nimport 'pikaday/css/pikaday.css';\n@Component({ selector: 'app-root', template: '' })\nexport class AppComponent { picker = Pikaday; now = moment(); }\n/* end-file */",
+  );
+
+  const versions = {
+    pikaday: "1.8.2",
+    "%40types%2Fpikaday": "1.7.10",
+    moment: "2.30.1",
+    "%40types%2Fmoment": "2.13.0",
+  };
+
+  await importDocs({
+    docsDir,
+    docsBranch: "prod-docs/18.0",
+    outDir,
+    fetchImpl: async (url) => {
+      const latest = versions[url.split("/").pop()];
+      if (!latest) throw new Error(`unexpected registry request ${url}`);
+      return { ok: true, json: async () => ({ "dist-tags": { latest } }) };
+    },
+  });
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(outDir, "18.0", "manifest.json"), "utf8"));
+  const artifact = JSON.parse(
+    fs.readFileSync(path.join(outDir, "18.0", manifest.examples[0].file), "utf8"),
+  );
+  const pkg = JSON.parse(artifact.files["/package.json"]);
+
+  assert.equal(pkg.dependencies.pikaday, "1.8.2");
+  assert.equal(pkg.devDependencies["@types/pikaday"], "1.7.10");
+});
+
 test("fails before writing an imported package with no concrete npm version", async (t) => {
   const { docsDir, outDir } = makeFixture(t);
   fs.writeFileSync(

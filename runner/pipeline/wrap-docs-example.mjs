@@ -379,6 +379,9 @@ function buildAngularProject(hotVersion, exampleId, userFiles, extraDeps, extraD
       {},
       extraDeps['papaparse'] ? { '@types/papaparse': extraDevDeps['@types/papaparse'] } : {},
       extraDeps['moment'] ? { '@types/moment': extraDevDeps['@types/moment'] } : {},
+      // Upstream `pikaday` ships no typings (the `@handsontable/pikaday` fork
+      // did) — without the stub `ng serve` fails on TS7016. DEV-2182.
+      extraDeps['pikaday'] ? { '@types/pikaday': extraDevDeps['@types/pikaday'] } : {},
     ),
   }, null, 2);
 

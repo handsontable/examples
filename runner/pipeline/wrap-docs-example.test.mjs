@@ -83,3 +83,43 @@ test("uses resolved Angular type dependency versions", () => {
   assert.equal(pkg.devDependencies["@types/papaparse"], "5.3.16");
   assert.equal(Object.values(pkg.devDependencies).includes("latest"), false);
 });
+
+// DEV-2182: upstream `pikaday` ships no typings, so the Angular project (the
+// only type-checked variant) must carry the stub or `ng serve` fails on TS7016
+// and the demo renders blank. The `@handsontable/pikaday` fork bundles its own
+// `pikaday.d.ts` and must NOT get one.
+test("adds the pikaday typings stub for upstream pikaday only", () => {
+  const angularSource = (specifier) =>
+    `/* file: app.component.ts */\nimport { Component } from '@angular/core';\nimport Pikaday from '${specifier}';\nimport '${specifier}/css/pikaday.css';\n@Component({ selector: 'app-root', template: '' })\nexport class AppComponent { picker = Pikaday; }\n/* end-file */`;
+
+  const upstream = JSON.parse(
+    wrapDocsExample({
+      framework: "angular",
+      hotVersion: "18.0.0",
+      exampleId: "example1",
+      userFiles: { "example1.ts": angularSource("pikaday"), "example1.html": "<app-root></app-root>" },
+      extraDeps: { pikaday: "1.8.2", moment: "2.30.1" },
+      extraDevDeps: { "@types/pikaday": "1.7.10", "@types/moment": "2.13.0" },
+    })["package.json"],
+  );
+
+  assert.equal(upstream.dependencies.pikaday, "1.8.2");
+  assert.equal(upstream.devDependencies["@types/pikaday"], "1.7.10");
+
+  const fork = JSON.parse(
+    wrapDocsExample({
+      framework: "angular",
+      hotVersion: "18.0.0",
+      exampleId: "example1",
+      userFiles: {
+        "example1.ts": angularSource("@handsontable/pikaday"),
+        "example1.html": "<app-root></app-root>",
+      },
+      extraDeps: { "@handsontable/pikaday": "1.0.0", moment: "2.30.1" },
+      extraDevDeps: { "@types/moment": "2.13.0" },
+    })["package.json"],
+  );
+
+  assert.equal(fork.dependencies["@handsontable/pikaday"], "1.0.0");
+  assert.equal("@types/pikaday" in fork.devDependencies, false);
+});
