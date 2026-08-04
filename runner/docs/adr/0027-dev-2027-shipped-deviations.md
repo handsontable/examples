@@ -129,8 +129,11 @@ Delete/Backspace closes the focused tab instead.
     page.
   - **DEV-2175** — TypeScript docs examples boot with a `/src/main.js` entry against a `.ts` file.
     Same shape as DEV-2130.
-  - **DEV-2176** — Tier-1's refresh may not recompile at all; `updateSandbox(setup, true)` goes
-    unanswered, and if it no-ops with an unchanged file set then the refresh button does nothing.
+  - **DEV-2176** — Tier-1's refresh did not recompile at all. Resolved: the bundler drops every
+    `compile` carrying `isInitializationCompile: true` after the first one, and
+    `loadSandpackClient` spends that allowance itself, so `updateSandbox(setup, true)` was
+    discarded in silence. The flag suppresses re-compiles rather than requesting one, and the
+    file set never enters that decision. `reload()` now pushes an ordinary compile.
 - Cosmetic observations that only ever wanted a line from design were dropped with the working
   document: the `ejs` icon on two file rows, the active tab's left border, GitHub Dark sitting a step
   darker than `editorBg`, the category column's scrollbar, and the loading frame drawing chrome above
