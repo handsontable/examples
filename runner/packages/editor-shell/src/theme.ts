@@ -50,6 +50,15 @@ const LIGHT_COLORS = {
   surfaceMuted: "#f7f7f9", // content panes: editor, status bars
   surfaceRaised: "#ffffff", // top bar, popovers, dialogs, drawers
   border: "#e7e7e9", // horizon/palette/100
+  // Outline of a transparent control (top-bar buttons) — *not* `border`. Dark's
+  // `border` is #222222, which is `surfaceRaised`: an outline-only button drawn
+  // on the 72px bar disappeared entirely and read as bare text. The dark frames
+  // draw that outline one step up the ramp, horizon/palette/600 (sampled on the
+  // Download button, `72:15648`, over the #222222 bar). Light deliberately keeps
+  // `border`'s value: #e7e7e9 on #ffffff already reads, and it is the shipped
+  // palette/100. The light frame `48:6560` samples the outline at #f7f7f9 —
+  // fainter than what we ship, considered and not adopted.
+  controlBorder: "#e7e7e9", // horizon/palette/100
   text: "#262624", // horizon/palette/700
   textMuted: "#727272",
   hover: "rgba(120, 130, 150, 0.16)", // neutral row/button rollover
@@ -87,6 +96,7 @@ const DARK_COLORS: Record<ColorToken, string> = {
   surfaceMuted: "#19191c", // horizon/palette/900
   surfaceRaised: "#222222", // horizon/palette/800
   border: "#222222",
+  controlBorder: "#353535", // horizon/palette/600 — see the light note above
   text: "#d1d1d4",
   // The Figma variable is #727272, which lands at ~3.9:1 on #070604 — under AA.
   // Lightened deliberately; flag at design review.
