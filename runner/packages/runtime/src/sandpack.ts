@@ -89,6 +89,12 @@ function ensureSandpackDeps(files: FilesMap): FilesMap {
     if (!deps.moment) deps.moment = "^2.30.1";
     if (!deps.jquery) deps.jquery = "^3.7.1";
   }
+  // Upstream pikaday (what docs examples import after DEV-2180) resolves moment
+  // through `try { require('moment') }` in its UMD wrapper. Today's examples
+  // import moment themselves; this only covers a picker-only example.
+  else if (deps.pikaday && !deps.moment) {
+    deps.moment = "^2.30.1";
+  }
   return { ...files, "/package.json": JSON.stringify({ ...pkg, dependencies: deps }, null, 2) + "\n" };
 }
 

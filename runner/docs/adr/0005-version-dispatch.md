@@ -10,7 +10,8 @@ rewrote every dependency whose name contains `handsontable` (except
 ## Decision
 Port that logic to `applyHandsontableVersion(files, version)`: pin core
 `handsontable` and its framework wrapper in lockstep; never touch
-`@handsontable/pikaday`. Accept semver (incl. npm partials), a bare pkg.pr.new id,
+`@handsontable/pikaday` (upstream `pikaday`, which docs examples migrate to,
+falls outside the rule anyway). Accept semver (incl. npm partials), a bare pkg.pr.new id,
 or a `pkg.pr.new` URL. Cap major at `HANDSONTABLE_MAX_MAJOR` (default 19).
 Supported wrapper range: majors 15–19 (pre-15 used different wrapper package
 names — out of scope).
