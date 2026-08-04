@@ -254,34 +254,28 @@ export class SandpackRuntime implements DemoRuntime {
     this.pushUpdate();
   }
 
-  /** Re-run the sandbox from the current sources. `isInitializationCompile`
-   *  makes the bundler treat it as a first compile rather than an incremental
-   *  update, which is what the refresh button means. No new client, no reload
-   *  of the bundler itself.
+  /** Re-run the sandbox from the current sources — the refresh button. No new client, no
+   *  reload of the bundler itself; an ordinary compile push does the whole job.
    *
-   *  Resolves on the bundler's next `done` (or `show-error`) — not on the ready path,
-   *  which is one-shot. Known approximation: `reload()` shares `updateSeq` with
-   *  `writeFile`, so typing during a refresh means the compile that settles this is the
-   *  newer edit's rather than the refresh's, and the refresh's own transpile may never
-   *  be published at all. The observable outcome is still right — the preview did
-   *  rebuild, from newer sources — but the promise means "the preview recompiled", not
-   *  "your refresh recompiled". */
-  /** Settles once our transpile is done and the update has been handed to the bundler.
+   *  It must **not** ask for an initialization compile (DEV-2176). The bundler drops every
+   *  `compile` carrying `isInitializationCompile: true` after the first one, and
+   *  `loadSandpackClient` spends that single allowance itself when it replays the setup on
+   *  the bundler's `initialized` message — so a refresh that set the flag was discarded in
+   *  silence: no `start`, no `done`, no error, and the preview never re-ran. The flag
+   *  suppresses re-compiles rather than requesting one. A plain push is the real thing:
+   *  measured against the live bundler, a non-initial compile with byte-identical sources
+   *  re-transpiles, resets the sandbox document and re-evaluates the entry, leaving one
+   *  grid with its plugins registered.
    *
-   *  It deliberately does **not** wait for a `done` message. Measured in a browser: after
-   *  `updateSandbox(setup, true)` no `done` ever arrives — the parent sees no messages at
-   *  all in the following 11s — while a `done` on mount arrives fine and drives
-   *  `emitReady()`, so the listener is not at fault. A refresh-completion promise built on
-   *  `done` therefore never resolves early and always rides the timeout out: the shell's
-   *  spinner sat over a blanked pane for a full 10s on **every** Tier-1 refresh.
-   *
-   *  Whether `updateSandbox` with an unchanged file set recompiles at all is the open
-   *  question behind that (see DEV-2176); either way, waiting on a message that does
-   *  not come is worse than reporting what we do know. The transpile is real work we
-   *  perform and can time, so that is what the promise covers. */
+   *  Settles once our transpile is done and the update has been handed to the bundler, not
+   *  on the bundler's `done`. `done` is available again now that the compile actually runs,
+   *  but claiming it here would need a waiter keyed to *this* push, and `reload()` shares
+   *  `updateSeq` with `writeFile` on purpose (see `pushUpdate`), so a refresh overtaken by
+   *  a keystroke has no `done` of its own to wait for. The transpile-and-dispatch edge is
+   *  work we perform and can time (48–62ms on a warm React starter). */
   reload(): Promise<void> {
     if (!this.client) return Promise.resolve();
-    return this.pushUpdate(true);
+    return this.pushUpdate();
   }
 
   /** Remove a file and recompile (file-tree delete/rename). */
@@ -300,24 +294,25 @@ export class SandpackRuntime implements DemoRuntime {
    * transiently missing entry (mid-rename) keeps the last good sandbox
    * instead of surfacing an error for every keystroke.
    *
-   * `initial` marks the push as a first compile rather than an incremental
-   * update — what `reload()` means. It shares this path rather than having its
-   * own so the sequence guard covers it too: claiming the sequence *before* the
-   * await is the whole point, and a refresh that claimed it afterwards could
-   * publish its own pre-keystroke transpile over a newer edit and then make
-   * that edit's result look stale.
+   * `reload()` shares this path rather than having its own so the sequence guard covers it
+   * too: claiming the sequence *before* the await is the whole point, and a refresh that
+   * claimed it afterwards could publish its own pre-keystroke transpile over a newer edit
+   * and then make that edit's result look stale.
+   *
+   * Every push goes out as a non-initial compile. The bundler ignores initialization
+   * compiles after its first (DEV-2176, see `reload()`), and a plain compile re-evaluates
+   * the sandbox anyway.
    *
    * Returns a promise that settles once the push has been *dispatched* — or dropped as
-   * superseded, or failed to transpile. `reload()` needs that edge: it must not start
-   * listening for a `done` until its own update is on the wire.
+   * superseded, or failed to transpile. `reload()` reports that edge as its completion.
    */
   private updateSeq = 0;
-  private pushUpdate(initial = false): Promise<void> {
+  private pushUpdate(): Promise<void> {
     const seq = ++this.updateSeq;
     return Promise.resolve(this.sandboxFiles())
       .then((files) => {
         if (!this.client || seq !== this.updateSeq) return;
-        this.client.updateSandbox(this.setupFrom(files), initial);
+        this.client.updateSandbox(this.setupFrom(files), false);
       })
       .catch(() => {
         /* mid-edit parse error — the user is still typing */
