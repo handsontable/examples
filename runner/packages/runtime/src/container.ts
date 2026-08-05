@@ -34,6 +34,13 @@ export class SessionStartError extends Error {
  *  Generous: a container that is merely slow should still resolve on the real event. */
 const RELOAD_TIMEOUT_MS = 10_000;
 
+/** Polling cadence and budget *after* the boot script has reported a nonzero exit.
+ *  Slower than the boot cadence (2.5s) and bounded: the point is to notice a dev
+ *  server that comes up in spite of the exit marker, not to keep probing a container
+ *  that is never going to answer. 10s × 12 ≈ two minutes. */
+const FAILED_POLL_INTERVAL_MS = 10_000;
+const FAILED_POLLS_MAX = 12;
+
 /** The live-session API accepts only relative POSIX paths. */
 function relativeFiles(files: FilesMap): FilesMap {
   return Object.fromEntries(
@@ -88,6 +95,11 @@ export class ContainerRuntime implements DemoRuntime {
    *  out rather than leaving the shell's refresh spinner up on a torn-down preview. */
   private readonly reloadSettlers = new Set<() => void>();
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  /** How many failed-state polls have gone out since the boot script reported a nonzero
+   *  exit. Kept because polling continues past that report (see `poll()`) and has to
+   *  stop eventually — a dead dev server never comes back on its own, and each poll
+   *  costs two `exec`s in the container. */
+  private failedPolls = 0;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   // Tear the session down when the page goes away (tab close, navigation) —
   // otherwise the container squats one of the few live-preview instance slots
@@ -224,14 +236,30 @@ export class ContainerRuntime implements DemoRuntime {
           const { ready, log, failed } = (await r.json()) as { ready: boolean; log: string; failed?: boolean };
           if (log && !this.pointed) this.emitProgress(log);
           if (failed && !this.disposed && !this.pointed) {
-            const detail = log
-              .replace(/\x1b\[[0-9;]*m/g, "")
-              .split("\n")
-              .map((l) => l.trimEnd())
-              .filter(Boolean)
-              .slice(-40)
-              .join("\n");
-            this.emitError(new ContainerBootFailure(detail || "Container failed to install dependencies or start."));
+            // Report once, then keep polling rather than returning. Returning made the
+            // failure a one-way door: the shell stopped asking the container anything,
+            // so a dev server that did come up afterwards could never be picked up, and
+            // the error card outlived its cause with no way back but a remount. Reporting
+            // once matters as much as continuing — `onError` is wired to Sentry, and
+            // re-emitting on every poll would file the same boot failure every few
+            // seconds for as long as the tab stayed open.
+            if (this.failedPolls === 0) {
+              const detail = log
+                .replace(/\x1b\[[0-9;]*m/g, "")
+                .split("\n")
+                .map((l) => l.trimEnd())
+                .filter(Boolean)
+                .slice(-40)
+                .join("\n");
+              this.emitError(new ContainerBootFailure(detail || "Container failed to install dependencies or start."));
+            }
+            this.failedPolls += 1;
+            // The boot script has exited, so this is a long shot, not the recovery path —
+            // "Restart preview" in the error card is. Poll on slowly for a short window in
+            // case the port opens anyway, then stop instead of probing a dead container
+            // for the life of the tab.
+            if (this.failedPolls > FAILED_POLLS_MAX) return;
+            this.pollTimer = setTimeout(() => this.poll(), FAILED_POLL_INTERVAL_MS);
             return;
           }
           if (ready && !this.disposed && !this.pointed) {

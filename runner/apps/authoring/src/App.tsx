@@ -531,6 +531,15 @@ function Authoring({
   // Bumped whenever the whole workspace is replaced (example switch or fork) so
   // the runtime remounts even when the framework is unchanged.
   const [mountGen, setMountGen] = useState(0);
+  // Bumped by the error card's "Restart preview". Its own counter rather than `mountGen`:
+  // that one doubles as `EditorShell`'s `workspaceKey`, and a retry is not a new
+  // workspace — sharing it would close the user's open tabs to fix the preview.
+  const [retryGen, setRetryGen] = useState(0);
+  // Whether the current failure is one a remount could clear. False for the refusals the
+  // mount effect makes *before* building a runtime — an unsupported version, a starter
+  // below its core floor. Those depend on the version picker, not on the preview, and
+  // offering to restart them would promise something the button cannot deliver.
+  const [retryable, setRetryable] = useState(true);
 
   const [iframeEl, setIframeEl] = useState<HTMLIFrameElement | null>(null);
   // Where the running preview lives, as reported by mount(). Tier 2 gives the
@@ -963,6 +972,7 @@ function Authoring({
     if (!v.ok) {
       setStatus("error");
       setErrorMessage(v.message);
+      setRetryable(false);
       return;
     }
     // Per-starter floor: these starters were authored against a core API that
@@ -980,8 +990,10 @@ function Authoring({
       setErrorMessage(
         `Could not load this example for Handsontable ${version}. Try another version.`,
       );
+      setRetryable(false);
       return;
     }
+    setRetryable(true);
     setStatus("booting");
     setBootLog("");
     setSyncing(false);
@@ -1031,8 +1043,22 @@ function Authoring({
       runtime.dispose();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
-    // mountGen forces a remount when files are replaced (example switch or fork/edit load).
-  }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, versionPending, docsPath]);
+    // mountGen forces a remount when files are replaced (example switch or fork/edit load);
+    // retryGen when the user asks for one from the error card.
+  }, [iframeEl, entry, version, mountGen, retryGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, versionPending, docsPath]);
+
+  /** "Restart preview" — mount a fresh runtime from the current (edited) sources.
+   *
+   *  The way out of a failure the code has already outlived. Tier 1 recovers on its own
+   *  now (the bundler's next clean compile re-emits ready), but Tier 2 cannot: a boot
+   *  failure exits the container's dev server, and streaming the fixed file into a
+   *  container with no dev server changes nothing. Only a new session re-runs it. */
+  const retryPreview = useCallback(() => {
+    setStatus("booting");
+    setErrorMessage(null);
+    setBootLog("");
+    setRetryGen((g) => g + 1);
+  }, []);
 
   const onEdit = useCallback(
     (path: string, contents: string) => {
@@ -1358,6 +1384,10 @@ function Authoring({
         errorMessage={errorMessage}
         bootLog={bootLog}
         containerBoot={entry.engine === "container"}
+        // Withheld while a docs bucket/path is unresolved (the mount effect refuses to run
+        // at all in that state) and for pre-mount version refusals: in both cases the
+        // button would restart nothing.
+        onRetry={docsRuntimeBlocked || !retryable ? undefined : retryPreview}
         syncing={syncing}
         refreshing={refreshing}
         version={version}

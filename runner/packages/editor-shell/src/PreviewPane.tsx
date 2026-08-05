@@ -22,6 +22,14 @@ export interface PreviewPaneProps {
    *  pool is full — the window where the explanation matters most is the window where
    *  there is no log to infer it from. */
   containerBoot?: boolean;
+  /** Re-run the preview from the current sources. Rendered as the error card's only
+   *  action, so it is the way out of a failure the sources themselves have already
+   *  fixed — a Tier-2 boot failure kills the container's dev server outright, and no
+   *  amount of editing restarts it (`container.ts`, the `failed` branch).
+   *
+   *  Optional: omitted when a remount cannot help, which is every failure the mount
+   *  effect refuses to run at all (an unresolvable docs bucket or path).  */
+  onRetry?: () => void;
   /** A container rebuild is in flight after an edit. */
   syncing?: boolean;
   /** A row-2 refresh is in flight (`72:26445`). */
@@ -65,6 +73,7 @@ export function PreviewPane({
   errorMessage,
   bootLog,
   containerBoot,
+  onRetry,
   syncing,
   refreshing,
 }: PreviewPaneProps) {
@@ -109,6 +118,11 @@ export function PreviewPane({
           <div style={errorCard}>
             <p style={errorTitle}>The preview could not start</p>
             <pre style={errorBody}>{errorMessage}</pre>
+            {onRetry && (
+              <button type="button" style={retryButton} onClick={onRetry}>
+                Restart preview
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -284,6 +298,25 @@ const errorTitle: CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
   color: theme.color.danger,
+};
+
+/** Accent-filled, matching the dialogs' primary action (`EditInfoDialog`): the card
+ *  has one action and it is the one the user wants. `alignSelf` keeps it to its own
+ *  width instead of stretching across the card's column layout. */
+const retryButton: CSSProperties = {
+  alignSelf: "flex-start",
+  display: "inline-flex",
+  alignItems: "center",
+  height: 32,
+  padding: `0 ${theme.space(3)}`,
+  border: `1px solid ${theme.color.accent}`,
+  borderRadius: theme.radius.md,
+  background: theme.color.accent,
+  color: theme.color.accentContrast,
+  fontFamily: theme.font.ui,
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
 };
 
 const errorBody: CSSProperties = {
