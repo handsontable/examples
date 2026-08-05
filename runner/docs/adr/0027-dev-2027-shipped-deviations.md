@@ -134,7 +134,7 @@ its subject differs by mode, which is the part that does depart from the frames:
   stays the cheap path: no bundler, no container, nothing to boot. It therefore shows the last
   *build*, not unsaved edits.
 - **`play`** — there is no artifact, only the live preview already running, so `EditorShell` takes a
-  `fullMode` flag: sidebar, editor column and splitter unmount, `FullBar` replaces `PreviewBar`, and
+  `fullMode` flag: sidebar, editor column and splitter are hidden, `FullBar` replaces `PreviewBar`, and
   the top bar keeps theme toggle + `Download` (`65:20458`). The example pill goes static, matching
   `65:21391`'s hidden chevron.
 
@@ -143,6 +143,15 @@ boot a second runtime, and for Tier 2 that is a second container session per cli
 that already exhausts. The URL stays shareable, and the session, its container and every unsaved edit
 survive the toggle. The deep link works only because `play` state lives in the
 URL (`?docs=` / `?example=` / `?v=`); moving it anywhere else breaks `?mode=full`.
+
+**Hidden, not unmounted**, and the distinction is the whole point of a toggle. The editor side sits
+under one `display: contents` wrapper that flips to `display: none` — `contents` because the sidebar,
+the editor column and the splitter are grid items of `s.body`, which a real box would collapse into a
+single track. Unmounting was the first cut, and it discarded everything DEV-2169 keeps every tab
+mounted *for*: each pane's undo history, scroll offset and caret. Bugbot on #117 caught the visible
+half — the status bar kept its pre-toggle `Ln, Col` while the remounted panes sat at the document
+origin. The one cost is that `display: none` leaves CodeMirror with no layout, so the caret effect
+re-measures on the way back; that call was already there as a precaution and is now load-bearing.
 
 Covered by `e2e/full-mode.spec.ts`, which did not exist before — nothing in `e2e/` touched this
 button or the route, which is why a control missing from an entire mode shipped unnoticed.

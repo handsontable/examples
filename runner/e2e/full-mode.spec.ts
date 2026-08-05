@@ -50,12 +50,15 @@ test("full mode drops the editor and keeps the running preview", async ({ page }
 
   await page.getByRole("button", { name: MAXIMIZE }).click();
 
-  // The editor side is gone: no splitter, no editor pane, no file sidebar.
-  await expect(page.locator(SPLITTER)).toHaveCount(0);
-  await expect(page.locator("[data-pane-active]")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /sidebar/i })).toHaveCount(0);
+  // The editor side is put away: splitter, editor pane and sidebar toggle all gone from
+  // the page. `not.toBeVisible`, not `toHaveCount(0)` — the editor side is hidden rather
+  // than unmounted, deliberately, so that undo and scroll survive (see the trip test
+  // below). Asserting absence here would forbid the fix.
+  await expect(page.locator(SPLITTER)).not.toBeVisible();
+  await expect(page.locator("[data-pane-active]")).not.toBeVisible();
+  await expect(page.getByRole("button", { name: /sidebar/i })).not.toBeVisible();
 
-  // `FullBar` replaces `PreviewBar`: minimize in, version pill out.
+  // `FullBar` replaces `PreviewBar` — that one *is* a swap, so the pill is really gone.
   await expect(page.getByRole("button", { name: MINIMIZE })).toBeVisible();
   await expect(page.getByRole("button", { name: "Handsontable version" })).toHaveCount(0);
 
@@ -79,11 +82,36 @@ test("minimize restores the editor and drops the param", async ({ page }) => {
   expect(await previewIsSameElement(page)).toBe(true);
 });
 
+// Bugbot on #117 reported the symptom — `EditorStatusBar` keeping its pre-toggle
+// `Ln, Col` — but the cause is that the panes were unmounted and came back fresh,
+// which also throws away the per-tab undo history DEV-2169 exists to keep. Undo is
+// what this asserts: a stale readout is invisible to a test (the stale value and the
+// correct one are the same number), an empty history is not.
+test("the editor survives a trip through full mode", async ({ page }) => {
+  await openPlayground(page);
+  const content = () => page.locator("[data-pane-active] .cm-content");
+  await content().click();
+  await page.keyboard.type("zzmarkerzz");
+  await expect(content()).toContainText("zzmarkerzz");
+
+  await page.getByRole("button", { name: MAXIMIZE }).click();
+  await expect(page.getByRole("button", { name: MINIMIZE })).toBeVisible();
+  await page.getByRole("button", { name: MINIMIZE }).click();
+  await expect(page.locator(SPLITTER)).toBeVisible();
+
+  // Undo needs focus, which leaving the editor put away costs either way. Clicking
+  // back in moves the caret but does not touch the history — that is the difference
+  // between a hidden pane and a re-mounted one.
+  await content().click();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(content()).not.toContainText("zzmarkerzz");
+});
+
 test("a pasted ?mode=full link boots straight into full mode", async ({ page }) => {
   await openPlayground(page, "?example=react&mode=full");
 
   await expect(page.getByRole("button", { name: MINIMIZE })).toBeVisible();
-  await expect(page.locator(SPLITTER)).toHaveCount(0);
+  await expect(page.locator(SPLITTER)).not.toBeVisible();
 
   // And it is still the live workspace, so minimize has an editor to return to.
   await page.getByRole("button", { name: MINIMIZE }).click();

@@ -280,9 +280,14 @@ export function EditorShell(props: EditorShellProps) {
   // T4 reset the readout to Ln 1, Col 1 here, correctly: `CodeEditor` was re-keyed per
   // file, and a fresh mount starts at position 0 and emits no update event. With panes
   // kept alive that reset would *lie* — a tab returns with its caret where it was — so
-  // the live selection is read back instead. `requestMeasure` is the belt-and-braces
-  // half: the pane was `visibility: hidden`, which keeps its box (hence not
-  // `display: none`), but a re-measure costs nothing and rules out stale gutters.
+  // the live selection is read back instead.
+  //
+  // `requestMeasure` was the belt-and-braces half of that, since a `visibility: hidden`
+  // pane keeps its box. Full mode makes it load-bearing: the whole editor side goes
+  // `display: none`, so every view comes back with no layout at all and CodeMirror has
+  // to be told to measure again. Hence `props.fullMode` in the deps — the readout is
+  // already right on the way back (nothing re-mounted, nothing moved the caret); it is
+  // the gutters and the active-line highlight that need the pass.
   useEffect(() => {
     const view = viewsRef.current.get(active);
     if (!view) {
@@ -293,7 +298,7 @@ export function EditorShell(props: EditorShellProps) {
     const line = view.state.doc.lineAt(head);
     setCursor({ line: line.number, col: head - line.from + 1 });
     view.requestMeasure();
-  }, [active, openPaths]);
+  }, [active, openPaths, props.fullMode]);
 
   // Keep the activated tab visible when the strip has overflowed (see `EditorTabs`).
   useEffect(() => {
@@ -372,9 +377,24 @@ export function EditorShell(props: EditorShellProps) {
       />
 
       <div ref={split.bodyRef} style={{ ...s.body(sidebarOpen, props.fullMode), ...split.bodyStyle }}>
+        {/* The editor side, put away in full mode — hidden, never unmounted. Unmounting
+            it is what an earlier cut of this did, and it threw away everything DEV-2169
+            mounts every tab to keep: each pane's undo history, its scroll offset and its
+            caret. Coming back from full mode is a toggle, so it must cost none of that.
+            (Bugbot on #117 caught the visible half — the status bar kept its pre-toggle
+            `Ln, Col` while the remounted panes sat at the document origin.)
+
+            `display: contents` rather than a plain wrapper: the sidebar, the editor column
+            and the splitter are grid items of `s.body`, and a real box would collapse them
+            into one track. `none` then takes the whole subtree out of layout, which is why
+            `s.body`'s full-mode form can be a single track — and why the caret effect
+            above re-measures on the way back.
+
+            Wrapped rather than re-indented, so the wrapper is the whole diff. */}
+        <div style={{ display: props.fullMode ? "none" : "contents" }}>
         {/* Unmounted, not zero-width: a 0px track still paints the sidebar's right
             border, and `65:19433` has nothing at the left edge. */}
-        {!props.fullMode && sidebarOpen && (
+        {sidebarOpen && (
           <Sidebar
             title={props.title ?? props.frameworkLabel}
             description={props.description}
@@ -395,12 +415,6 @@ export function EditorShell(props: EditorShellProps) {
           />
         )}
 
-        {/* The editor side, gone in full mode. Wrapped rather than re-indented so the
-            guard is the whole diff; the block below is unchanged. Unmounting matters
-            beyond the layout: a hidden `CodeEditor` still holds a CodeMirror view per
-            open tab, and `s.body`'s single track has no cell to put them in. */}
-        {!props.fullMode && (
-        <>
         <div style={s.column()}>
           <EditorBar
             sidebarOpen={sidebarOpen}
@@ -472,8 +486,7 @@ export function EditorShell(props: EditorShellProps) {
         </div>
 
         <SplitHandle split={split} />
-        </>
-        )}
+        </div>
 
         <div style={s.column()}>
           {props.fullMode && props.onMinimize ? (
