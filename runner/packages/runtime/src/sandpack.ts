@@ -132,8 +132,17 @@ export class SandpackRuntime implements DemoRuntime {
     this.errorCbs.add(cb);
   }
 
+  /** Fires on *every* clean compile, not just the first.
+   *
+   *  A `done` without `compilatonError` is the bundler saying the current sources
+   *  compiled and evaluated — which is exactly the signal that a preview the user
+   *  broke is working again. Suppressing repeats made the error state a one-way
+   *  door: `show-error` set it, and no later success could clear it (the only exits
+   *  were an example switch or a version change, both of which remount).
+   *
+   *  `didReady` stays, but only for what it is actually needed for — replaying
+   *  readiness to a callback that subscribed after the first compile. */
   private emitReady() {
-    if (this.didReady) return;
     this.didReady = true;
     for (const cb of this.readyCbs) cb();
   }
