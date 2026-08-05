@@ -113,11 +113,57 @@ neither interceptable by a page. Hijacking the first would also be hostile — a
 close the browser tab and loses the keystroke to the editor has no way to tell what happened.
 Delete/Backspace closes the focused tab instead.
 
+**13. `window-maximize` is shown in every mode, and means two different things.** This entry
+corrects a deviation rather than defending one. The button was gated on `savedId`, so it never
+appeared in `play` — no docs example, no starter, no anonymous visitor — on the reasoning that
+`?mode=full` renders the prebuilt `/d/:id/` artifact and a playground has none. The frames disagree:
+`72:15697`'s preview bar draws book + github + window-maximize, and `repoUrl` is `play`-only
+(`App.tsx`), so that is a play-mode bar ending in maximize; `65:20432` "Mode Full" is drawn over
+`Drag to scroll - Standard example`, a docs example, which is always `play`. Neither the frame names
+nor the URL text settle it — "before login" is not "no id" (`savedId` is set in `share` too), and the
+placeholder `…/share/14z4151i1l` appears identically in a starter frame and a docs frame. The
+play-only icons are the evidence. *Open question for design:* both bars are auto-named
+`Frame 48112801`, so "one bar component reused across frames" is a live alternative reading; the plain
+reading is taken here because the icon is drawn in two independent `play` frames.
+
+So the button now renders unconditionally, and full mode means *the view without the editor* — but
+its subject differs by mode, which is the part that does depart from the frames:
+
+- **`edit` / `share`** — unchanged. `fullModeId` still routes to `FullMode`, which iframes
+  `/d/:id/` in a new tab. That is what the frames show and what the share dialog hands out, and it
+  stays the cheap path: no bundler, no container, nothing to boot. It therefore shows the last
+  *build*, not unsaved edits.
+- **`play`** — there is no artifact, only the live preview already running, so `EditorShell` takes a
+  `fullMode` flag: sidebar, editor column and splitter are hidden, `FullBar` replaces `PreviewBar`, and
+  the top bar keeps theme toggle + `Download` (`65:20458`). The example pill goes static, matching
+  `65:21391`'s hidden chevron.
+
+Entering it in `play` is `history.replaceState` plus state, not a navigation — `window.open` would
+boot a second runtime, and for Tier 2 that is a second container session per click against a pool
+that already exhausts. The URL stays shareable, and the session, its container and every unsaved edit
+survive the toggle. The deep link works only because `play` state lives in the
+URL (`?docs=` / `?example=` / `?v=`); moving it anywhere else breaks `?mode=full`.
+
+**Hidden, not unmounted**, and the distinction is the whole point of a toggle. The editor side sits
+under one `display: contents` wrapper that flips to `display: none` — `contents` because the sidebar,
+the editor column and the splitter are grid items of `s.body`, which a real box would collapse into a
+single track. Unmounting was the first cut, and it discarded everything DEV-2169 keeps every tab
+mounted *for*: each pane's undo history, scroll offset and caret. Bugbot on #117 caught the visible
+half — the status bar kept its pre-toggle `Ln, Col` while the remounted panes sat at the document
+origin. The one cost is that `display: none` leaves CodeMirror with no layout, so the caret effect
+re-measures on the way back; that call was already there as a precaution and is now load-bearing.
+
+Covered by `e2e/full-mode.spec.ts`, which did not exist before — nothing in `e2e/` touched this
+button or the route, which is why a control missing from an entire mode shipped unnoticed.
+
 ## Consequences
-- The frames and the app differ in twelve known places. A future comparison should start here rather
-  than filing each as a defect.
+- The frames and the app differ in twelve known places, and item 13 records a thirteenth where the
+  app now follows them. A future comparison should start here rather than filing each as a defect.
 - Items 1, 2, 4, 7 and 10 are each a one-line change if design decides the frame should be followed
   literally. They are logged rather than guessed for that reason.
+- Item 13 leaves one question for design: whether full mode over a saved demo should also show the
+  live workspace rather than the last build. Answering "yes" would collapse the two behaviours into
+  one, at the cost of the share dialog's full-window link becoming a cold boot for the recipient.
 - Unresolved questions from the same working document became tasks rather than entries here, since
   an ADR records a decision made:
   - **DEV-2173** — design reconciliation. Dark `textMuted`, the four-step surface ramp against three

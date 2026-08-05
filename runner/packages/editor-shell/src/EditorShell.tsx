@@ -13,6 +13,7 @@ import { CodeEditor, type CursorPosition } from "./CodeEditor.js";
 import { EditorBar } from "./EditorBar.js";
 import { TAB_STRIP_ID, tabId, tabPanelId } from "./EditorTabs.js";
 import { EditorStatusBar } from "./EditorStatusBar.js";
+import { FullBar } from "./FullBar.js";
 import { PreviewBar, type FrameworkChoice } from "./PreviewBar.js";
 import { Sidebar } from "./Sidebar.js";
 import { PreviewPane, type PreviewStatus } from "./PreviewPane.js";
@@ -125,6 +126,15 @@ export interface EditorShellProps {
   previewUrl?: string;
   onRefreshPreview?: () => void;
   onMaximize?: () => void;
+  /** Full mode: the same live workspace with the editor side put away (`65:20432`,
+   *  ADR-0027 §13). The sidebar, editor column and splitter unmount, `FullBar` replaces
+   *  `PreviewBar`, and the top bar keeps only the theme toggle and `Download`.
+   *
+   *  Both props, not one: full mode has to offer a way back, and the shell cannot invent
+   *  it — leaving is a URL change only the app knows how to make. `fullMode` alone would
+   *  render a view with no exit. */
+  fullMode?: boolean;
+  onMinimize?: () => void;
   onDownload?: () => void;
   onSignIn?: () => void;
   /** Framework variants of the current docs example. Empty for starters. */
@@ -270,9 +280,14 @@ export function EditorShell(props: EditorShellProps) {
   // T4 reset the readout to Ln 1, Col 1 here, correctly: `CodeEditor` was re-keyed per
   // file, and a fresh mount starts at position 0 and emits no update event. With panes
   // kept alive that reset would *lie* — a tab returns with its caret where it was — so
-  // the live selection is read back instead. `requestMeasure` is the belt-and-braces
-  // half: the pane was `visibility: hidden`, which keeps its box (hence not
-  // `display: none`), but a re-measure costs nothing and rules out stale gutters.
+  // the live selection is read back instead.
+  //
+  // `requestMeasure` was the belt-and-braces half of that, since a `visibility: hidden`
+  // pane keeps its box. Full mode makes it load-bearing: the whole editor side goes
+  // `display: none`, so every view comes back with no layout at all and CodeMirror has
+  // to be told to measure again. Hence `props.fullMode` in the deps — the readout is
+  // already right on the way back (nothing re-mounted, nothing moved the caret); it is
+  // the gutters and the active-line highlight that need the pass.
   useEffect(() => {
     const view = viewsRef.current.get(active);
     if (!view) {
@@ -283,7 +298,7 @@ export function EditorShell(props: EditorShellProps) {
     const line = view.state.doc.lineAt(head);
     setCursor({ line: line.number, col: head - line.from + 1 });
     view.requestMeasure();
-  }, [active, openPaths]);
+  }, [active, openPaths, props.fullMode]);
 
   // Keep the activated tab visible when the strip has overflowed (see `EditorTabs`).
   useEffect(() => {
@@ -337,26 +352,46 @@ export function EditorShell(props: EditorShellProps) {
 
   return (
     <div style={s.shell}>
+      {/* Full mode's top-right is theme toggle + `Download`, and that is the whole of
+          `65:20458` — no mode action, no `Sign in`, no account menu. Not a functionality
+          cut under ADR-0023 rule 1: minimize is right there, and every control returns
+          with the editor. The artifact full mode has always rendered this way
+          (`FullMode` passes no `accountEmail` and no `onSignIn`). */}
       <TopBar
         examplePill={props.examplePill}
         onDownload={props.onDownload}
-        onSignIn={props.onSignIn}
-        accountEmail={props.accountEmail}
-        onMyDemos={props.onMyDemos}
-        onLogout={props.onLogout}
+        onSignIn={props.fullMode ? undefined : props.onSignIn}
+        accountEmail={props.fullMode ? undefined : props.accountEmail}
+        onMyDemos={props.fullMode ? undefined : props.onMyDemos}
+        onLogout={props.fullMode ? undefined : props.onLogout}
         // The mode action is resolved here, not in `TopBar`, and off `authed`
         // rather than off `accountEmail`. The two disagree on exactly one route:
         // a signed-in visitor to `/share/:id` has an `accountEmail` (so they keep
         // their account menu, T9) but `authed: false` (the demo is not theirs).
         // Keying the slot off the identity would hand them a Fork button.
-        onFork={props.authed && mode === "play" ? props.onFork : undefined}
+        onFork={!props.fullMode && props.authed && mode === "play" ? props.onFork : undefined}
         forking={props.forking}
-        onSave={props.authed && mode === "edit" ? props.onSave : undefined}
+        onSave={!props.fullMode && props.authed && mode === "edit" ? props.onSave : undefined}
         saving={props.saving}
         dirty={props.dirty}
       />
 
-      <div ref={split.bodyRef} style={{ ...s.body(sidebarOpen), ...split.bodyStyle }}>
+      <div ref={split.bodyRef} style={{ ...s.body(sidebarOpen, props.fullMode), ...split.bodyStyle }}>
+        {/* The editor side, put away in full mode — hidden, never unmounted. Unmounting
+            it is what an earlier cut of this did, and it threw away everything DEV-2169
+            mounts every tab to keep: each pane's undo history, its scroll offset and its
+            caret. Coming back from full mode is a toggle, so it must cost none of that.
+            (Bugbot on #117 caught the visible half — the status bar kept its pre-toggle
+            `Ln, Col` while the remounted panes sat at the document origin.)
+
+            `display: contents` rather than a plain wrapper: the sidebar, the editor column
+            and the splitter are grid items of `s.body`, and a real box would collapse them
+            into one track. `none` then takes the whole subtree out of layout, which is why
+            `s.body`'s full-mode form can be a single track — and why the caret effect
+            above re-measures on the way back.
+
+            Wrapped rather than re-indented, so the wrapper is the whole diff. */}
+        <div style={{ display: props.fullMode ? "none" : "contents" }}>
         {/* Unmounted, not zero-width: a 0px track still paints the sidebar's right
             border, and `65:19433` has nothing at the left edge. */}
         {sidebarOpen && (
@@ -451,8 +486,16 @@ export function EditorShell(props: EditorShellProps) {
         </div>
 
         <SplitHandle split={split} />
+        </div>
 
         <div style={s.column()}>
+          {props.fullMode && props.onMinimize ? (
+            <FullBar
+              url={props.publicUrl || props.previewUrl || ""}
+              onRefresh={props.onRefreshPreview}
+              onMinimize={props.onMinimize}
+            />
+          ) : (
           <PreviewBar
             publicUrl={props.publicUrl}
             previewUrl={props.previewUrl}
@@ -474,6 +517,7 @@ export function EditorShell(props: EditorShellProps) {
             repoUrl={props.repoUrl}
             repoLabel={props.repoLabel}
           />
+          )}
 
           <PreviewPane
             iframeRef={props.iframeRef}
