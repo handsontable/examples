@@ -312,10 +312,16 @@ test("renaming an open file moves its tab; deleting one closes it", async ({ pag
   await expect(tab(page, "/src/constants.ts")).toHaveCount(0);
   await expect(tabs(page)).toHaveCount(2);
 
-  // Delete: the tab goes with the file.
+  // Delete: the tab goes with the file. Deleting is confirmed now, so the tab strip is
+  // only asserted after the dialog is answered — the trash control on its own is a
+  // question, not a deletion.
   const renamed = rowOf(page, "/src/renamed.ts");
   await renamed.hover();
   await renamed.getByRole("button", { name: "Delete" }).click();
+  await page
+    .getByRole("dialog", { name: "Delete this file?" })
+    .getByRole("button", { name: "Delete file" })
+    .click();
   await expect(tab(page, "/src/renamed.ts")).toHaveCount(0);
   await expect(tab(page, "/src/index.tsx")).toHaveAttribute("aria-selected", "true");
 });
