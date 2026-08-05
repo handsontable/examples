@@ -50,6 +50,8 @@ export interface EditorShellProps {
   bootLog?: string;
   /** Tier 2: the boot overlay explains the tens-of-seconds wait and carries the log. */
   containerBoot?: boolean;
+  /** Re-run the preview from the current sources; the error card's only action. */
+  onRetry?: () => void;
   /** A container rebuild is in flight after an edit (shows "Applying changes…"). */
   syncing?: boolean;
   /** A row-2 refresh is in flight — blanks the pane behind a spinner (`72:26445`). */
@@ -479,6 +481,7 @@ export function EditorShell(props: EditorShellProps) {
             errorMessage={props.errorMessage}
             bootLog={props.bootLog}
             containerBoot={props.containerBoot}
+            onRetry={props.onRetry}
             syncing={props.syncing}
             refreshing={props.refreshing}
           />

@@ -13,7 +13,7 @@ import { loadSandpackClient } from "@codesandbox/sandpack-client";
 import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
 import { transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
-import { resolveSandboxEntry } from "./sandbox-entry.js";
+import { resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 // Derive Sandpack's option/setup types straight from the loader signature so we
@@ -99,6 +99,17 @@ function ensureSandpackDeps(files: FilesMap): FilesMap {
  */
 const IFRAME_OWNER = new WeakMap<HTMLIFrameElement, object>();
 
+/** Same paths, same contents. Compared key by key rather than by serialising both maps:
+ *  this runs on every keystroke, and a sandbox carries the compiled sources *and* the
+ *  dependency shims — hundreds of KB it would be pointless to stringify to learn that one
+ *  character changed. */
+function sameFiles(a: FilesMap, b: FilesMap | null): boolean {
+  if (b === null) return false;
+  const paths = Object.keys(a);
+  if (paths.length !== Object.keys(b).length) return false;
+  return paths.every((path) => a[path] === b[path]);
+}
+
 export class SandpackRuntime implements DemoRuntime {
   private readonly entry: CatalogEntry;
   private readonly opts: SandpackRuntimeOptions;
@@ -132,8 +143,17 @@ export class SandpackRuntime implements DemoRuntime {
     this.errorCbs.add(cb);
   }
 
+  /** Fires on *every* clean compile, not just the first.
+   *
+   *  A `done` without `compilatonError` is the bundler saying the current sources
+   *  compiled and evaluated — which is exactly the signal that a preview the user
+   *  broke is working again. Suppressing repeats made the error state a one-way
+   *  door: `show-error` set it, and no later success could clear it (the only exits
+   *  were an example switch or a version change, both of which remount).
+   *
+   *  `didReady` stays, but only for what it is actually needed for — replaying
+   *  readiness to a callback that subscribed after the first compile. */
   private emitReady() {
-    if (this.didReady) return;
     this.didReady = true;
     for (const cb of this.readyCbs) cb();
   }
@@ -150,7 +170,10 @@ export class SandpackRuntime implements DemoRuntime {
     // `this.files` always holds the authored sources; parcel's compiled view is
     // derived from it on every (re)build and never fed back into the editor.
     this.files = sanitizeHtml(ensureSandpackDeps(pinned));
-    return this.setupFrom(await this.sandboxFiles());
+    const sandbox = await this.sandboxFiles();
+    // What the bundler is about to hold, for `pushUpdate`'s no-op check.
+    this.published = sandbox;
+    return this.setupFrom(sandbox);
   }
 
   private get env(): string | undefined {
@@ -254,6 +277,47 @@ export class SandpackRuntime implements DemoRuntime {
     this.pushUpdate();
   }
 
+  /**
+   * Append a changing comment to the sandbox entry, so a compile the bundler would
+   * otherwise see as "no module changed" carries a real diff.
+   *
+   * The bundler's no-change path resets the preview document without re-evaluating
+   * anything: a blank frame, reported `done` with no compile error, and nothing in the
+   * console. That is what a refresh asks for and never got. One line on the entry is
+   * enough to put it back on the path that re-evaluates.
+   *
+   * A comment, so it cannot change behaviour, and matched to the file's language: a
+   * parcel/static sandbox boots from HTML, where `//` would render as text.
+   *
+   * Both the sandbox entry *and* the example's own module are stamped. A parcel sandbox
+   * boots from `index.html`, and a changed HTML shell alone does not get the module
+   * re-evaluated (measured: refresh still blanked). The script it loads is what has to
+   * look different.
+   */
+  private compileStamp = 0;
+  private stampEntry(files: FilesMap): FilesMap {
+    const paths = new Set<string>();
+    try {
+      paths.add(resolveSandboxEntry(this.env, this.entry.entry, this.entry.htmlEntry, files));
+    } catch {
+      // A missing entry is setupFrom()'s error to raise, with its own message.
+      return files;
+    }
+    const modulePath = this.env === "parcel" ? toParcelEntry(this.entry.entry) : this.entry.entry;
+    if (files[modulePath] !== undefined) paths.add(modulePath);
+
+    const stamp = ++this.compileStamp;
+    const out = { ...files };
+    for (const path of paths) {
+      out[path] =
+        out[path] +
+        (path.toLowerCase().endsWith(".html")
+          ? `\n<!-- hot-runner-compile ${stamp} -->\n`
+          : `\n// hot-runner-compile ${stamp}\n`);
+    }
+    return out;
+  }
+
   /** Re-run the sandbox from the current sources — the refresh button. No new client, no
    *  reload of the bundler itself; an ordinary compile push does the whole job.
    *
@@ -262,10 +326,15 @@ export class SandpackRuntime implements DemoRuntime {
    *  `loadSandpackClient` spends that single allowance itself when it replays the setup on
    *  the bundler's `initialized` message — so a refresh that set the flag was discarded in
    *  silence: no `start`, no `done`, no error, and the preview never re-ran. The flag
-   *  suppresses re-compiles rather than requesting one. A plain push is the real thing:
-   *  measured against the live bundler, a non-initial compile with byte-identical sources
-   *  re-transpiles, resets the sandbox document and re-evaluates the entry, leaving one
-   *  grid with its plugins registered.
+   *  suppresses re-compiles rather than requesting one, so a plain push it is.
+   *
+   *  A plain push is not sufficient on its own, though — that part of the DEV-2176 note was
+   *  wrong. A non-initial compile with byte-identical sources does compile (`start` …
+   *  `success`, `done` with no error) but re-evaluates nothing: the preview document is
+   *  reset and left blank, with not even the Handsontable banner in the console. Refresh
+   *  blanked the pane for exactly that reason. `force` is what fixes it: `pushUpdate` stamps
+   *  the entry and the example module (see `stampEntry`) so the bundler has a real diff, and
+   *  skips the no-op check it applies to ordinary edits.
    *
    *  Settles once our transpile is done and the update has been handed to the bundler, not
    *  on the bundler's `done`. `done` is available again now that the compile actually runs,
@@ -275,7 +344,7 @@ export class SandpackRuntime implements DemoRuntime {
    *  work we perform and can time (48–62ms on a warm React starter). */
   reload(): Promise<void> {
     if (!this.client) return Promise.resolve();
-    return this.pushUpdate();
+    return this.pushUpdate({ force: true });
   }
 
   /** Remove a file and recompile (file-tree delete/rename). */
@@ -307,12 +376,35 @@ export class SandpackRuntime implements DemoRuntime {
    * superseded, or failed to transpile. `reload()` reports that edge as its completion.
    */
   private updateSeq = 0;
-  private pushUpdate(): Promise<void> {
+  /** The sandbox the bundler currently holds, as published. Compared against the next
+   *  candidate so a no-op compile is never sent — see `pushUpdate`. */
+  private published: FilesMap | null = null;
+  private pushUpdate(opts: { force?: boolean } = {}): Promise<void> {
     const seq = ++this.updateSeq;
     return Promise.resolve(this.sandboxFiles())
       .then((files) => {
         if (!this.client || seq !== this.updateSeq) return;
-        this.client.updateSandbox(this.setupFrom(files), false);
+        const candidate = opts.force ? this.stampEntry(files) : files;
+        // Skipping a byte-identical update is not an optimisation, it is the fix for a
+        // blank preview. Break a source file and the transpile below throws, so nothing
+        // reaches the bundler and the last good render stays on screen (correct). Undo
+        // the break and the recomputed sandbox is identical to what the bundler already
+        // has — and *that* compile blanks the preview, because the bundler's no-change
+        // path resets the document without re-evaluating any module. Not sending it
+        // leaves the render that is already correct exactly where it is.
+        //
+        // `reload()` passes `force`, and its stamp guarantees a diff, so the refresh
+        // button still re-runs the sandbox rather than being skipped here.
+        if (!opts.force && sameFiles(candidate, this.published)) return;
+        // Recorded *after* the push, never before. `setupFrom` throws when the resolved
+        // entry is transiently missing (mid-rename, the DEV-2130 guard), and a `published`
+        // set ahead of that throw would claim the bundler holds a sandbox it never
+        // received. Restoring those sources would then read as a real diff and send the
+        // byte-identical compile this skip exists to prevent — the blank preview, back
+        // again, on the rename path.
+        const setup = this.setupFrom(candidate);
+        this.client.updateSandbox(setup, false);
+        this.published = candidate;
       })
       .catch(() => {
         /* mid-edit parse error — the user is still typing */
