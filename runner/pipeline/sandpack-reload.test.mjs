@@ -80,6 +80,9 @@ function mounted() {
   const client = fakeClient();
   runtime.client = client;
   runtime.files = { ...FILES };
+  // What mount() records in buildSetup: the sandbox the bundler now holds. Without it the
+  // no-op check has no baseline to compare against, and every push looks like a change.
+  runtime.published = { ...FILES };
   return { runtime, client };
 }
 
@@ -155,6 +158,23 @@ test("an edit that changes nothing is not pushed at all", async () => {
   runtime.writeFile("/src/main.js", "console.log('edited');");
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(client.pushes.length, 1, "a byte-identical sandbox must not be published");
+});
+
+test("a push that fails to build a setup does not count as published", async () => {
+  const { runtime, client } = mounted();
+
+  // Delete the entry: `setupFrom` refuses a sandbox whose entry is missing (DEV-2130),
+  // which is what a mid-rename keystroke produces. Nothing reaches the bundler.
+  runtime.deleteFile("/src/main.js");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(client.pushes.length, 0, "a sandbox with no entry must not be published");
+
+  // Finish the rename / undo it. The bundler still holds the original sources, so this
+  // recomputed sandbox is byte-identical to what it has — and must not be pushed. It
+  // would be if the failed push above had recorded itself as published.
+  runtime.writeFile("/src/main.js", "console.log('demo');");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(client.pushes.length, 0, "restoring the sources the bundler already has must not compile");
 });
 
 test("reload() before mount() is a no-op", async () => {

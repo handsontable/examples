@@ -396,8 +396,15 @@ export class SandpackRuntime implements DemoRuntime {
         // `reload()` passes `force`, and its stamp guarantees a diff, so the refresh
         // button still re-runs the sandbox rather than being skipped here.
         if (!opts.force && sameFiles(candidate, this.published)) return;
+        // Recorded *after* the push, never before. `setupFrom` throws when the resolved
+        // entry is transiently missing (mid-rename, the DEV-2130 guard), and a `published`
+        // set ahead of that throw would claim the bundler holds a sandbox it never
+        // received. Restoring those sources would then read as a real diff and send the
+        // byte-identical compile this skip exists to prevent — the blank preview, back
+        // again, on the rename path.
+        const setup = this.setupFrom(candidate);
+        this.client.updateSandbox(setup, false);
         this.published = candidate;
-        this.client.updateSandbox(this.setupFrom(candidate), false);
       })
       .catch(() => {
         /* mid-edit parse error — the user is still typing */
