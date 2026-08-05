@@ -47,10 +47,16 @@ export const s = {
    *
    * The 1px track between the two panes is the splitter, which paints the
    * editor/preview boundary the editor column used to carry as a `borderRight`.
+   *
+   * `fullMode` drops to a single track: the preview is the whole body (`65:20479`).
+   * The sidebar and editor tracks go with it rather than being sized to 0, for the
+   * same reason the collapsed sidebar does — a 0px track still paints its border.
    */
-  body: (sidebarOpen: boolean): CSSProperties => ({
+  body: (sidebarOpen: boolean, fullMode = false): CSSProperties => ({
     display: "grid",
-    gridTemplateColumns: `${sidebarOpen ? `${SIDEBAR_WIDTH}px ` : ""}minmax(0, 1fr) 1px var(${SPLIT_VAR}, 50%)`,
+    gridTemplateColumns: fullMode
+      ? "minmax(0, 1fr)"
+      : `${sidebarOpen ? `${SIDEBAR_WIDTH}px ` : ""}minmax(0, 1fr) 1px var(${SPLIT_VAR}, 50%)`,
     minHeight: 0,
     height: "100%",
   }),

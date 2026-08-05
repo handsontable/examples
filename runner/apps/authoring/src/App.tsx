@@ -540,6 +540,16 @@ function Authoring({
   // below its core floor. Those depend on the version picker, not on the preview, and
   // offering to restart them would promise something the button cannot deliver.
   const [retryable, setRetryable] = useState(true);
+  /** Full mode as a layout, not a route (ADR-0027 §13). Seeded from the URL so a pasted
+   *  `?mode=full` link opens in it, then owned as state so entering and leaving cost no
+   *  navigation — see `openFullWindow`.
+   *
+   *  `play` only by construction: `App` dispatches `?mode=full` on a saved demo to
+   *  `FullMode` before `Authoring` renders at all, so a `full` here can only be a
+   *  playground. The route check says so rather than relying on that ordering. */
+  const [full, setFull] = useState(
+    () => route.mode === "play" && new URLSearchParams(location.search).get("mode") === "full",
+  );
 
   const [iframeEl, setIframeEl] = useState<HTMLIFrameElement | null>(null);
   // Where the running preview lives, as reported by mount(). Tier 2 gives the
@@ -1308,13 +1318,36 @@ function Authoring({
     });
   }, []);
 
-  /** `window-maximize` (`72:15715`). Opens `?mode=full` — the preview-only view of the
-   *  demo's built output (`FullMode`, `65:20432`). Saved demos only: the button is
-   *  withheld in `play`, which has no id and so no `/d/:id/` build to show. */
+  /** `window-maximize` (`72:15715`) — the preview without the editor (`65:20432`).
+   *
+   *  Two mechanics behind one button, because the two modes show different things
+   *  (ADR-0027 §13). A saved demo has a prebuilt `/d/:id/` artifact, which is what the
+   *  frames' full mode shows and what the share dialog hands out; that opens in a new
+   *  tab, unchanged. A `play` workspace has no artifact — only the live preview already
+   *  running in this tab — so full mode there is a layout change on the spot.
+   *
+   *  In place rather than `window.open` for `play`: a new tab would boot a second runtime,
+   *  and for Tier 2 that means a second container session per click against a pool that
+   *  already runs out. `replaceState` keeps the URL shareable without a navigation, so the
+   *  session, its container and every unsaved edit survive the toggle. */
   const openFullWindow = useCallback(() => {
     const url = new URL(location.href);
     url.searchParams.set("mode", "full");
-    window.open(url.toString(), "_blank", "noopener");
+    if (route.mode !== "play") {
+      window.open(url.toString(), "_blank", "noopener");
+      return;
+    }
+    history.replaceState(null, "", url.pathname + url.search + url.hash);
+    setFull(true);
+  }, [route.mode]);
+
+  /** `window-minimize` (`65:20496`) for the in-place form. `FullMode` has its own, which
+   *  navigates because it *is* a route. */
+  const leaveFullWindow = useCallback(() => {
+    const url = new URL(location.href);
+    url.searchParams.delete("mode");
+    history.replaceState(null, "", url.pathname + url.search + url.hash);
+    setFull(false);
   }, []);
 
   const clientUrl = linksId ? `${location.origin}/share/${linksId}` : "";
@@ -1344,6 +1377,13 @@ function Authoring({
     label: FW_LABEL[f.framework] ?? f.displayName,
     active: f.docsPath === docsPath,
   }));
+
+  // What the pill calls the open workspace. The cascader's trigger label, hoisted
+  // because full mode shows the same string without the cascader — `65:21390` reads
+  // "Drag to scroll - Standard example", a docs example's own name.
+  const exampleLabel = currentDocsMeta
+    ? `${currentDocsMeta.breadcrumb.join(" ▸ ")} · ${currentDocsMeta.exampleTitle}`
+    : entry.displayName;
 
   // The public address for the row-2 field. Always `/share/:id`, never
   // `/edit/:id`, even while editing: the field is click-to-copy, and `/edit`
@@ -1444,13 +1484,21 @@ function Authoring({
         versionWarning={versionWarning}
         // ---- chrome (T2) --------------------------------------------------
         examplePill={
-          isShare || route.mode === "edit" ? (
+          // `full` joins the static branch: `65:21391` draws the pill's chevron
+          // `hidden`, so the cascader is present but not openable. Switching example
+          // from a view with no editor would replace a workspace you cannot see.
+          full || isShare || route.mode === "edit" ? (
             // `alt=""`: the mark is branding, not information, and unlike BOX INFO's
             // badge no "Handsontable" text follows it here — a real `alt` would just
             // prepend noise to every pill's accessible name.
             <div style={shellStyles.examplePill(false)} title={description || undefined}>
               <img src={markUrl} alt="" style={shellStyles.examplePillMark} />
-              <span style={pillLabel}>{title || (isShare ? "Shared demo" : "Untitled demo")}</span>
+              {/* A saved demo has a title; a playground in full mode has only the
+                  example it opened, and "Untitled demo" would be a worse answer than
+                  the name the cascader was showing a moment ago. */}
+              <span style={pillLabel}>
+                {title || (isShare ? "Shared demo" : full ? exampleLabel : "Untitled demo")}
+              </span>
             </div>
           ) : (
             // The mark is a *sibling* of the cascader, never inside its trigger —
@@ -1462,11 +1510,7 @@ function Authoring({
               <DocsCascader
                 manifestItems={docsItems}
                 starters={catalog.examples.map((e) => ({ framework: e.framework, displayName: e.displayName }))}
-                currentLabel={
-                  currentDocsMeta
-                    ? `${currentDocsMeta.breadcrumb.join(" ▸ ")} · ${currentDocsMeta.exampleTitle}`
-                    : entry.displayName
-                }
+                currentLabel={exampleLabel}
                 selectedKey={
                   currentDocsMeta
                     ? `${currentDocsMeta.guide}|${currentDocsMeta.exampleId}`
@@ -1489,10 +1533,13 @@ function Authoring({
         publicUrl={publicUrl}
         previewUrl={previewUrl}
         onRefreshPreview={refreshPreview}
-        // Saved demos only. `?mode=full` renders the prebuilt `/d/:id/` artifact, which a
-        // `play` workspace does not have — before T8 the button there opened a duplicate
-        // of the full app in a new tab.
-        onMaximize={savedId ? openFullWindow : undefined}
+        // Every mode, as `72:15706` and `65:20432` both draw it — the latter over a docs
+        // example, which is always `play`. It was withheld in `play` until ADR-0027 §13,
+        // on the reasoning that there is no `/d/:id/` build to show there; the answer is
+        // that full mode shows the live preview instead, not that the button goes away.
+        onMaximize={openFullWindow}
+        fullMode={full}
+        onMinimize={full ? leaveFullWindow : undefined}
         // Not gated on auth: share mode has always offered Download to anonymous
         // visitors, and no frame shows an anonymous share view (ADR-0023 rule 1).
         // `72:15697` (anonymous `play`) does draw `Sign in` alone — kept anyway, per the

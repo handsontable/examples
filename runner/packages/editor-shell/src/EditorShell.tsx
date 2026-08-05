@@ -13,6 +13,7 @@ import { CodeEditor, type CursorPosition } from "./CodeEditor.js";
 import { EditorBar } from "./EditorBar.js";
 import { TAB_STRIP_ID, tabId, tabPanelId } from "./EditorTabs.js";
 import { EditorStatusBar } from "./EditorStatusBar.js";
+import { FullBar } from "./FullBar.js";
 import { PreviewBar, type FrameworkChoice } from "./PreviewBar.js";
 import { Sidebar } from "./Sidebar.js";
 import { PreviewPane, type PreviewStatus } from "./PreviewPane.js";
@@ -125,6 +126,15 @@ export interface EditorShellProps {
   previewUrl?: string;
   onRefreshPreview?: () => void;
   onMaximize?: () => void;
+  /** Full mode: the same live workspace with the editor side put away (`65:20432`,
+   *  ADR-0027 §13). The sidebar, editor column and splitter unmount, `FullBar` replaces
+   *  `PreviewBar`, and the top bar keeps only the theme toggle and `Download`.
+   *
+   *  Both props, not one: full mode has to offer a way back, and the shell cannot invent
+   *  it — leaving is a URL change only the app knows how to make. `fullMode` alone would
+   *  render a view with no exit. */
+  fullMode?: boolean;
+  onMinimize?: () => void;
   onDownload?: () => void;
   onSignIn?: () => void;
   /** Framework variants of the current docs example. Empty for starters. */
@@ -337,29 +347,34 @@ export function EditorShell(props: EditorShellProps) {
 
   return (
     <div style={s.shell}>
+      {/* Full mode's top-right is theme toggle + `Download`, and that is the whole of
+          `65:20458` — no mode action, no `Sign in`, no account menu. Not a functionality
+          cut under ADR-0023 rule 1: minimize is right there, and every control returns
+          with the editor. The artifact full mode has always rendered this way
+          (`FullMode` passes no `accountEmail` and no `onSignIn`). */}
       <TopBar
         examplePill={props.examplePill}
         onDownload={props.onDownload}
-        onSignIn={props.onSignIn}
-        accountEmail={props.accountEmail}
-        onMyDemos={props.onMyDemos}
-        onLogout={props.onLogout}
+        onSignIn={props.fullMode ? undefined : props.onSignIn}
+        accountEmail={props.fullMode ? undefined : props.accountEmail}
+        onMyDemos={props.fullMode ? undefined : props.onMyDemos}
+        onLogout={props.fullMode ? undefined : props.onLogout}
         // The mode action is resolved here, not in `TopBar`, and off `authed`
         // rather than off `accountEmail`. The two disagree on exactly one route:
         // a signed-in visitor to `/share/:id` has an `accountEmail` (so they keep
         // their account menu, T9) but `authed: false` (the demo is not theirs).
         // Keying the slot off the identity would hand them a Fork button.
-        onFork={props.authed && mode === "play" ? props.onFork : undefined}
+        onFork={!props.fullMode && props.authed && mode === "play" ? props.onFork : undefined}
         forking={props.forking}
-        onSave={props.authed && mode === "edit" ? props.onSave : undefined}
+        onSave={!props.fullMode && props.authed && mode === "edit" ? props.onSave : undefined}
         saving={props.saving}
         dirty={props.dirty}
       />
 
-      <div ref={split.bodyRef} style={{ ...s.body(sidebarOpen), ...split.bodyStyle }}>
+      <div ref={split.bodyRef} style={{ ...s.body(sidebarOpen, props.fullMode), ...split.bodyStyle }}>
         {/* Unmounted, not zero-width: a 0px track still paints the sidebar's right
             border, and `65:19433` has nothing at the left edge. */}
-        {sidebarOpen && (
+        {!props.fullMode && sidebarOpen && (
           <Sidebar
             title={props.title ?? props.frameworkLabel}
             description={props.description}
@@ -380,6 +395,12 @@ export function EditorShell(props: EditorShellProps) {
           />
         )}
 
+        {/* The editor side, gone in full mode. Wrapped rather than re-indented so the
+            guard is the whole diff; the block below is unchanged. Unmounting matters
+            beyond the layout: a hidden `CodeEditor` still holds a CodeMirror view per
+            open tab, and `s.body`'s single track has no cell to put them in. */}
+        {!props.fullMode && (
+        <>
         <div style={s.column()}>
           <EditorBar
             sidebarOpen={sidebarOpen}
@@ -451,8 +472,17 @@ export function EditorShell(props: EditorShellProps) {
         </div>
 
         <SplitHandle split={split} />
+        </>
+        )}
 
         <div style={s.column()}>
+          {props.fullMode && props.onMinimize ? (
+            <FullBar
+              url={props.publicUrl || props.previewUrl || ""}
+              onRefresh={props.onRefreshPreview}
+              onMinimize={props.onMinimize}
+            />
+          ) : (
           <PreviewBar
             publicUrl={props.publicUrl}
             previewUrl={props.previewUrl}
@@ -474,6 +504,7 @@ export function EditorShell(props: EditorShellProps) {
             repoUrl={props.repoUrl}
             repoLabel={props.repoLabel}
           />
+          )}
 
           <PreviewPane
             iframeRef={props.iframeRef}
