@@ -80,6 +80,14 @@ const fileRow = (page: Page, path: string) => filesPanel(page).locator(`button[t
 const rowOf = (page: Page, path: string) =>
   filesPanel(page).locator(`.hot-file-row:has(> button[title="${path}"])`);
 
+/** `FileTree`'s delete confirmation. Its confirm control is labelled "Delete file"
+ *  rather than "Delete" so it does not duplicate a row's trash control — but these
+ *  locators still go through the dialog, because Playwright matches accessible names
+ *  by substring: an unscoped `{ name: "Delete" }` would see both while it is open. */
+const confirmDialog = (page: Page) => page.getByRole("dialog", { name: "Delete this file?" });
+const confirmDeleteButton = (page: Page) =>
+  confirmDialog(page).getByRole("button", { name: "Delete file" });
+
 /** The only top-bar control that proves the app resolved a *null* user. */
 const signInButton = (page: Page) => page.getByRole("button", { name: "Sign in" });
 /** …and the one that proves it resolved a real one (`AccountMenu`'s avatar). */
@@ -136,12 +144,44 @@ test("signed-in play can add, rename and delete files", async ({ page }) => {
   const renamedRow = rowOf(page, "/renamed.ts");
   await renamedRow.hover();
   await renamedRow.getByRole("button", { name: "Delete" }).click();
+  // The trash control only asks: the row has to survive until the dialog is confirmed,
+  // or the confirmation is decorative.
+  await expect(fileRow(page, "/renamed.ts")).toBeVisible();
+  await confirmDeleteButton(page).click();
   await expect(fileRow(page, "/renamed.ts")).toHaveCount(0);
+  await expect(confirmDialog(page)).toHaveCount(0);
 
   // `/package.json` is PROTECTED — the gate opening must not open that row.
   const protectedRow = rowOf(page, "/package.json");
   await protectedRow.hover();
   await expect(protectedRow.getByRole("button", { name: "Delete" })).toHaveCount(0);
+});
+
+test("the delete confirmation can be dismissed without losing the file", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await page.goto("/?example=react");
+
+  const row = rowOf(page, "/src/index.tsx");
+  await row.hover();
+  await row.getByRole("button", { name: "Delete" }).click();
+
+  // Focus has to land on Cancel, not on the confirm control: the destructive button is
+  // first in the DOM, so without `data-autofocus` the Space below would delete the file
+  // the dialog exists to ask about. Pressing it proves both halves at once.
+  const cancel = confirmDialog(page).getByRole("button", { name: "Cancel" });
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(confirmDialog(page)).toHaveCount(0);
+  await expect(fileRow(page, "/src/index.tsx")).toBeVisible();
+
+  // Escape is `Dialog`'s other dismissal, and it must not delete either.
+  await row.hover();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(confirmDialog(page)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(confirmDialog(page)).toHaveCount(0);
+  await expect(fileRow(page, "/src/index.tsx")).toBeVisible();
 });
 
 test("signed-in edit keeps its file CRUD", async ({ page }) => {

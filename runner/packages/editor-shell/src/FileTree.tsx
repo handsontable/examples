@@ -1,5 +1,6 @@
 // The FILES section: a real folder tree over the flat `FilesMap` key set (`31:6438`).
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { Dialog } from "./Dialog.js";
 import {
   FileIcon,
   FolderIcon,
@@ -115,8 +116,24 @@ export function FileTree({
   const [newName, setNewName] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState("");
+  // Deletion is confirmed, not immediate: the trash icon sits 8px from Rename on a
+  // 24px row that only reveals its actions on hover, and the delete it fires is
+  // unrecoverable from inside the app — `onDeleteFile` drops the file from the
+  // workspace and there is no undo.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
   const rows = useMemo(() => flatten(tree, (p) => shutDirs.has(p)), [tree, shutDirs]);
+
+  // Derived, not the raw state: `paths` is replaced wholesale on an example switch,
+  // which would otherwise leave the dialog asking about a file that is no longer here.
+  const confirming = pendingDelete && paths.includes(pendingDelete) ? pendingDelete : null;
+
+  // …and the state itself has to go, not just its rendering. A path that leaves and
+  // *comes back* — switch example away and back, or re-add the same name — would
+  // otherwise re-open this dialog unprompted, asking about a delete nobody started.
+  useEffect(() => {
+    if (pendingDelete && !paths.includes(pendingDelete)) setPendingDelete(null);
+  }, [paths, pendingDelete]);
 
   function toggleDir(path: string) {
     setShutDirs((prev) => {
@@ -292,7 +309,11 @@ export function FileTree({
                       type="button"
                       style={{ ...iconBtn, color: theme.color.danger }}
                       title="Delete"
-                      onClick={() => onDeleteFile?.(node.path)}
+                      onClick={() => {
+                        setPendingDelete(node.path);
+                        setAdding(null);
+                        setRenaming(null);
+                      }}
                     >
                       <IconTrashX />
                     </button>
@@ -302,6 +323,47 @@ export function FileTree({
             ),
           )}
         </div>
+      )}
+
+      {/* Outside the `!collapsed` branch on purpose: collapsing the section while the
+          dialog is open must not strand a modal whose owner stopped rendering.
+
+          No busy state and no in-flight guard, unlike the demo-delete confirm in
+          `MyDemos`: `onDeleteFile` is a synchronous in-memory splice of the workspace,
+          not a network revocation, so there is nothing to be mid-flight. */}
+      {confirming && (
+        <Dialog title="Delete this file?" onClose={() => setPendingDelete(null)}>
+          <p style={confirmBody}>
+            <strong>{confirming}</strong> and any unsaved edits in it will be removed from
+            this workspace. Nothing is persisted until you save or fork.
+          </p>
+          <div style={confirmFooter}>
+            {/* "Delete file", not "Delete": the row's trash control is already named
+                "Delete" by its `title`, and two same-named buttons make every
+                unscoped test locator ambiguous while this dialog is open. */}
+            <button
+              type="button"
+              style={dangerButton}
+              onClick={() => {
+                onDeleteFile?.(confirming);
+                setPendingDelete(null);
+              }}
+            >
+              Delete file
+            </button>
+            {/* Focus lands here, not on Delete file — see `Dialog`'s `data-autofocus`
+                note: the destructive control is first in the DOM, so focusing it would
+                let Space or Enter carry out the delete this dialog exists to ask about. */}
+            <button
+              type="button"
+              data-autofocus
+              style={ghostButton}
+              onClick={() => setPendingDelete(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </Dialog>
       )}
     </section>
   );
@@ -381,6 +443,42 @@ const rowActions: CSSProperties = {
   gap: theme.space(2),
   paddingLeft: theme.space(2),
   flexShrink: 0,
+};
+
+const confirmBody: CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: theme.color.textMuted,
+};
+
+const confirmFooter: CSSProperties = {
+  display: "flex",
+  gap: theme.space(2),
+  marginTop: theme.space(5),
+};
+
+const ghostButton: CSSProperties = {
+  height: 32,
+  padding: `0 ${theme.space(3)}`,
+  // `controlBorder`, not `border`: dark's `border` is #222222, the same value as the
+  // `surfaceRaised` dialog card, so an outline-only button drawn with it has no
+  // visible edge at all. Same trap as the top-bar buttons (d1cfb172).
+  border: `1px solid ${theme.color.controlBorder}`,
+  borderRadius: theme.radius.md,
+  background: "transparent",
+  color: theme.color.text,
+  fontFamily: theme.font.ui,
+  fontSize: 13,
+  cursor: "pointer",
+};
+
+const dangerButton: CSSProperties = {
+  ...ghostButton,
+  border: `1px solid ${theme.color.danger}`,
+  background: theme.color.danger,
+  color: theme.color.accentContrast,
+  fontWeight: 600,
 };
 
 const editInput: CSSProperties = {
