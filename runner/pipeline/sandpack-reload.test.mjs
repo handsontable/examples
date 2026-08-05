@@ -16,8 +16,15 @@ import { SandpackRuntime } from "../packages/runtime/dist/sandpack.js";
 // on the bundler's `initialized` message, so a refresh that asks for another
 // initialization compile is silently discarded: no `start`, no `done`, no error,
 // and the preview never re-runs. Every push — refresh included — must therefore
-// go out as an ordinary (non-initial) compile, which does re-transpile, reset the
-// sandbox document and re-evaluate the entry.
+// go out as an ordinary (non-initial) compile.
+//
+// A non-initial compile is necessary but not sufficient, which is what the rest of
+// this file now covers. Measured against the live bundler: a compile whose module
+// contents are byte-identical to what it already holds resets the preview document
+// and re-evaluates nothing — `start` … `success`, `done` with no compile error, and
+// a blank frame. So `reload()` stamps the entry to guarantee a diff, and ordinary
+// edits skip the push entirely when nothing changed (the render on screen is
+// already the right one).
 
 /** A catalog entry the runtime will hand to the bundler as-is (no parcel pre-transpile). */
 const ENTRY = {
@@ -108,8 +115,46 @@ test("reload() publishes the current sources", async () => {
   await runtime.reload();
 
   const last = client.pushes.at(-1).setup;
-  assert.equal(last.files["/src/main.js"].code, "console.log('edited');");
+  // Starts with, not equals: `reload()` appends a stamp comment (see below). The
+  // authored source has to be there in full and unaltered ahead of it.
+  assert.ok(
+    last.files["/src/main.js"].code.startsWith("console.log('edited');"),
+    `expected the edited source to be published, got: ${last.files["/src/main.js"].code}`,
+  );
   assert.equal(last.entry, "/src/main.js");
+});
+
+test("reload() stamps the entry, so the bundler always has a diff to act on", async () => {
+  const { runtime, client } = mounted();
+
+  await runtime.reload();
+  await runtime.reload();
+
+  const [first, second] = client.pushes.map((p) => p.setup.files["/src/main.js"].code);
+  assert.notEqual(
+    first,
+    second,
+    "two refreshes must not publish identical entry code — the bundler treats a no-change compile as nothing to do and blanks the preview",
+  );
+  for (const code of [first, second]) {
+    // A comment, so the stamp can never change what the module does.
+    assert.match(code, /^console\.log\('demo'\);\n\/\/ hot-runner-compile \d+\n$/);
+  }
+});
+
+test("an edit that changes nothing is not pushed at all", async () => {
+  const { runtime, client } = mounted();
+
+  runtime.writeFile("/src/main.js", "console.log('edited');");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(client.pushes.length, 1, "the edit itself must reach the bundler");
+
+  // What break-then-undo produces: the broken push dies in the transpile, so undoing
+  // it recomputes a sandbox identical to the one the bundler already has. Pushing that
+  // blanks a preview that is currently correct, so it must not be pushed.
+  runtime.writeFile("/src/main.js", "console.log('edited');");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(client.pushes.length, 1, "a byte-identical sandbox must not be published");
 });
 
 test("reload() before mount() is a no-op", async () => {

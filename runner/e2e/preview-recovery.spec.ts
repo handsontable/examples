@@ -115,6 +115,69 @@ test("a version the runner refuses gets no restart button", async ({ page }) => 
   await expect(page.getByRole("button", { name: "Restart preview" })).toHaveCount(0);
 });
 
+// A compile the bundler sees as "no module changed" resets the preview document without
+// re-evaluating anything: a blank frame, `done` with no error, nothing in the console.
+// Two paths hit it. This is the one reachable by typing: break a line (the transpile
+// throws, so nothing is pushed and the good render stays), then undo the break — the
+// recomputed sandbox is byte-identical to what the bundler already has, and pushing it
+// blanked a preview that was correct. Not pushing is the fix.
+test("live: breaking and un-breaking a line leaves the grid alone", async ({ page }) => {
+  test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  test.setTimeout(180_000);
+
+  const grid = page.frameLocator("iframe").first().locator(".handsontable td").first();
+  await page.goto("/?example=react");
+  await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "ready", {
+    timeout: 120_000,
+  });
+  await expect(grid).toBeVisible({ timeout: 90_000 });
+
+  // Drop the comma after a `colHeaders` entry: a syntax error, so the transpile fails and
+  // the bundler is never told. The grid on screen is the last good render.
+  const commaAt = await page.evaluate(`(() => {
+    const view = document.querySelector('.cm-content').cmTile.view;
+    const at = view.state.doc.toString().indexOf("'Company name',") + "'Company name'".length;
+    view.dispatch({ changes: { from: at, to: at + 1, insert: "" } });
+    return at;
+  })()`);
+  await page.waitForTimeout(4000);
+  await expect(grid).toBeVisible();
+
+  // Put it back. The file is now byte-identical to the one that rendered.
+  await page.evaluate(
+    `document.querySelector('.cm-content').cmTile.view.dispatch({ changes: { from: ${commaAt}, insert: "," } })`,
+  );
+  await page.waitForTimeout(8000);
+  await expect(grid).toBeVisible();
+  await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "ready");
+});
+
+// The other path to the same no-change compile: the row-2 refresh button pushes the
+// current sources unchanged, which blanked the preview outright. `reload()` now stamps the
+// entry *and* the example module so the bundler has a real diff to act on — stamping the
+// HTML shell alone was measured to leave it blank, since a parcel sandbox boots from HTML
+// but the module is what has to re-evaluate.
+test("live: the refresh button re-runs the sandbox instead of blanking it", async ({ page }) => {
+  test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  test.setTimeout(180_000);
+
+  const preview = page.frameLocator("iframe").first();
+  await page.goto("/?example=react");
+  await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "ready", {
+    timeout: 120_000,
+  });
+  await expect(preview.locator(".handsontable td").first()).toBeVisible({ timeout: 90_000 });
+
+  await page.getByRole("button", { name: "Reload the preview" }).click();
+  await expect(preview.locator(".handsontable td").first()).toBeVisible({ timeout: 60_000 });
+  // Re-evaluating the entry must not stack a second grid on the page (the DEV-2129 class),
+  // and the plugin registry has to survive it — `getPlugin()` returning undefined after a
+  // refresh is exactly how that bug presented, with a grid still on screen.
+  await expect(preview.locator(".ht-root-wrapper")).toHaveCount(1);
+  await preview.locator(".handsontable td").first().click({ button: "right" });
+  await expect(preview.locator(".htContextMenu").first()).toBeVisible({ timeout: 15_000 });
+});
+
 // The reported Vue case (`VueCompilerError` with a template code frame). It reads like a
 // second engine but is not: `vue` is a sandpack starter, so this is the same swallowed-
 // `done` bug — through a *compile* error rather than a runtime one. Worth its own test
