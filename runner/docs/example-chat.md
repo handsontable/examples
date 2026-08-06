@@ -68,7 +68,10 @@ intentions. The layers, in order:
    contents.
 5. **Rate limiting** — 8 questions/minute and 120/day per IP, in KV. The route
    is public and every call costs money, so it needs a gate that reacts faster
-   than the monthly ceiling can.
+   than the monthly ceiling can. `POST /api/chat/event` has its own, looser
+   bucket (60/min, 600/day): it costs one counter row, and sharing the chat
+   bucket would let Apply/Undo spend a user's question quota — or let anyone
+   exhaust an IP's paid budget through the free route.
 6. **The budget ceiling** — chat answers to the same tiers as containers
    (DEV-2030): sign-in required at the `anon_blocked` tier, refused at
    `new_blocked` and above.
