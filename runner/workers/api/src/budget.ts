@@ -241,6 +241,22 @@ export async function meterSession(
   sessionId: string,
   opts: { final?: boolean } = {},
 ): Promise<void> {
+  // Metering is telemetry, and telemetry must never be the reason a request
+  // fails. The teardown path in particular: a throw here would skip the
+  // `sandbox.destroy()` that follows it and leave a container billing until
+  // its idle window lapses — the exact cost this file exists to prevent.
+  try {
+    await meterSessionUnsafe(env, sessionId, opts);
+  } catch (err) {
+    console.warn("[budget] session metering failed:", err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function meterSessionUnsafe(
+  env: Env,
+  sessionId: string,
+  opts: { final?: boolean },
+): Promise<void> {
   const key = meterKey(sessionId);
   const meter = (await env.CACHE.get(key, "json").catch(() => null)) as SessionMeter | null;
   if (!meter) return;
