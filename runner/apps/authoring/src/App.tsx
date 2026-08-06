@@ -11,7 +11,7 @@ import {
   type FilesMap,
 } from "@handsontable/demo-runtime";
 import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
-import { ContainerRuntime, ContainerBootFailure, SessionStartError } from "@handsontable/demo-runtime/container";
+import { ContainerRuntime, ContainerBootFailure, SessionStartError, isBudgetRefusal } from "@handsontable/demo-runtime/container";
 import { zipSync, strToU8 } from "fflate";
 import { catalog, getEntry, fetchVersions, checkVersionExists, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
 import {
@@ -23,6 +23,7 @@ import {
 import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
 import { MyDemos } from "./MyDemos.js";
+import { AdminPanel } from "./Admin.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { reportError, reportingEnabled, Sentry } from "./sentry.js";
 
@@ -80,6 +81,10 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
   // heuristic below, which would otherwise misfire on words like "fetching"
   // that pnpm's own error output happens to contain.
   if (e instanceof ContainerBootFailure) return e.message;
+  // A cost-guardrail refusal (DEV-2030) is a deliberate product state, and the
+  // server already phrased it for users — never rewrite it as a connectivity
+  // problem, which is what the heuristic below would do with a 503.
+  if (isBudgetRefusal(e)) return e.message;
   const msg = e instanceof Error ? e.message : String(e);
   if (engine === "container" && /failed to fetch|networkerror|load failed|session start failed|fetch/i.test(msg)) {
     return "This example runs on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
@@ -116,6 +121,10 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
  */
 function reportRuntimeError(e: unknown, engine: string): void {
   if (!reportingEnabled || engine !== "container") return;
+  // The budget guardrail refusing a session is the guardrail working. It would
+  // otherwise arrive as a flood of identical 503s at exactly the moment the
+  // team is already dealing with the spend.
+  if (isBudgetRefusal(e)) return;
   if (e instanceof SessionStartError) {
     if (e.status === 410) return;
     Sentry.captureException(e, {
@@ -164,7 +173,30 @@ function parseRoute(): EditorRoute {
   return { mode: "play" };
 }
 
+/**
+ * Tell the API a page was viewed.
+ *
+ * The authoring app is served by its own static Worker, so its views are
+ * invisible to the API's analytics unless we say so. Only the path is sent —
+ * never the query string, which can carry a `?docs=` deep link or anything
+ * else a user pasted — and the server normalises even that into a fixed label
+ * set. No id is generated or stored on the client; see workers/api/src/
+ * analytics.ts for what the server does and does not keep.
+ */
+function beacon(path: string): void {
+  void fetch(`${API_BASE}/api/beacon`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+    keepalive: true,
+  }).catch(() => { /* analytics must never surface to a user */ });
+}
+
 export function App() {
+  // /admin — the internal usage + cost panel (DEV-2030). Sits outside the
+  // editor routes entirely: it renders no runtime and boots no container.
+  if (location.pathname.replace(/\/+$/, "") === "/admin") return <AdminGate />;
+
   const route = parseRoute();
   // The share page is a public, read-only playground — no auth needed.
   if (route.mode === "share") {
@@ -203,6 +235,18 @@ function Gate({ route }: { route: { mode: "play" } | { mode: "edit"; id: string 
   if (user === undefined) return <Splash text="Loading…" />;
   if (user === null && route.mode === "edit") return <Splash text="Sign in to edit this demo…" />;
   return <Authoring user={user} route={route} />;
+}
+
+/** Login gate for /admin. Same broker identity as the edit page — the panel
+ *  shows internal spend, so it is not for anonymous visitors. */
+function AdminGate() {
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  useEffect(() => { currentUser().then(setUser); }, []);
+  useEffect(() => { if (user === null) login(); }, [user]);
+
+  if (user === undefined) return <Splash text="Loading…" />;
+  if (user === null) return <Splash text="Sign in to view usage…" />;
+  return <AdminPanel apiBase={API_BASE} token={getToken()} />;
 }
 
 function Splash({ text }: { text: string }) {
@@ -270,6 +314,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [status, setStatus] = useState<PreviewStatus>("booting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [versionWarning, setVersionWarning] = useState<string | null>(null);
+  // Cost-guardrail notice (DEV-2030): non-null once spend crosses the warn
+  // threshold, so a user learns live sessions are about to get restricted
+  // *before* one is refused. Null whenever the guardrail is observe-only.
+  const [budgetNotice, setBudgetNotice] = useState<string | null>(null);
   const [bootLog, setBootLog] = useState<string>("");
   const [dirty, setDirty] = useState(false);
   const [syncing, setSyncing] = useState(false); // container rebuild in flight
@@ -365,6 +413,24 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     })();
     return () => { cancelled = true; };
   }, [savedId, isShare, loadWorkspace]);
+
+  // One anonymous page view per mount (the editor is a single-page app, so
+  // this is its equivalent of a page load).
+  useEffect(() => { beacon(location.pathname); }, []);
+
+  // Cost guardrail state. Cheap (KV-cached server side) and read once per page
+  // load: the tier only moves on the scale of hours. Failures are silent — an
+  // unreachable budget endpoint must never put a warning in front of a user.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/api/budget`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((state: { notice?: string | null } | null) => {
+        if (!cancelled && state?.notice) setBudgetNotice(state.notice);
+      })
+      .catch(() => { /* no notice is the right fallback */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // Load real published versions from the API (npm-backed); default to latest
   // unless a version was deep-linked (or pinned by the demo being edited/shared).
@@ -671,7 +737,14 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     let cancelled = false;
     const runtime =
       entry.engine === "container"
-        ? new ContainerRuntime(entry, { iframe: iframeEl, apiBase: API_BASE, version: v.value })
+        ? new ContainerRuntime(entry, {
+            iframe: iframeEl,
+            apiBase: API_BASE,
+            version: v.value,
+            // Identifies the caller to the cost guardrail: at >=80% of the
+            // monthly budget live sessions are signed-in-only (DEV-2030).
+            authToken: getToken(),
+          })
         : new SandpackRuntime(entry, { iframe: iframeEl, bundlerURL: SANDPACK_BUNDLER_URL, version: v.value });
     if (entry.engine === "container") {
       (runtime as ContainerRuntime).onProgress((log) => !cancelled && setBootLog(log));
@@ -991,7 +1064,21 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         {!isShare && user && (
           <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
         )}
+        {!isShare && user && (
+          <a
+            style={{ ...ghostBtn, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+            href="/admin"
+            title="Usage and cost of the demo runner"
+          >
+            Usage
+          </a>
+        )}
         <div style={{ flex: 1 }} />
+        {budgetNotice && (
+          <span style={{ color: theme.color.warning, fontSize: 12, maxWidth: 380 }} title={budgetNotice}>
+            {budgetNotice}
+          </span>
+        )}
         {versionWarning && (
           <span style={{ color: theme.color.warning, fontSize: 12, maxWidth: 380 }} title={versionWarning}>
             {versionWarning}

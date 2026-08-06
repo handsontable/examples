@@ -40,6 +40,7 @@ Work happens on a feature branch off `master`, opened as a PR against `handsonta
 - `/share/:id` — **public, read-only-persistence** playground: browse/edit files on the fly + **Download** (.zip of current edits), but **no Save and version is locked**.
 - `/d/:id` — the built static demo (served from R2, framed by `/share`).
 - `/embed/:id` — docs-only embed, frame-locked to `handsontable.com`.
+- `/admin` — **login-gated** internal usage + cost panel (`docs/cost-guardrails.md`).
 
 ## Where to make UI/UX changes
 
@@ -117,5 +118,7 @@ GitHub App). Production branch `master`; per-worker root dir `runner/apps/author
 - **No secrets in git.** Auth is the Handsontable Google login broker (per-user token, sessionStorage). Dev bypasses live only in gitignored `.env.local` / `.dev.vars`.
 - Use **wrangler + the main CF account id** above for any Cloudflare resource (D1 `DB`, KV `CACHE`, R2 `ARTIFACTS`).
 - Keep the CodeSandbox **hosted** Sandpack bundler (self-hosting it stack-overflows on HOT v18).
-- Tier-2 containers stay warm while a tab is open (client keepalive + `sleepAfter=15m`); disk is ephemeral, so a slept container cold-boots on return. Live-editing containers are a cost surface — see the cost-guardrail task (DEV-2030).
+- Tier-2 containers stay warm while a tab is open (client keepalive + `sleepAfter=5m`); disk is ephemeral, so a slept container cold-boots on return.
+- **Cost guardrails** (DEV-2030, ADR-0022): `max_instances` 5/3 is the container cap — don't raise it without redoing the arithmetic in `docs/cost-guardrails.md`. Spend degrades live sessions in stages while static shares keep serving. The dollar thresholds and the enforcement switch are **editable at runtime in `/admin`** (stored in `runner_settings`); the `BUDGET_*` vars are only defaults.
+- **Analytics are anonymous by construction** — no cookies, no IPs, no user agents, no query strings, no per-request rows; unique visitors use a daily-rotating salted hash. Keep it that way when touching `workers/api/src/analytics.ts`.
 - No manual `handsontable/dist/*.css` imports in examples (not needed since 17.1; use `handsontable/styles/*`).
