@@ -14,6 +14,20 @@ import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate } from "./auth.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, updateDemo, type DemoRow } from "./share.js";
+import {
+  budgetEnforced,
+  countEgress,
+  flushTraffic,
+  getBudgetState,
+  meterSession,
+  noteTraffic,
+  publicBudget,
+  sessionDenial,
+  startSessionMeter,
+} from "./budget.js";
+import { gcRevokedArtifacts, reconcileBilling } from "./reconcile.js";
+import { flushUsage, noteView, recordUsageEvent } from "./usage.js";
+import { adminUsage } from "./admin.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
 // so live-preview sessions all use ONE class backed by one generic image that
@@ -67,6 +81,14 @@ class SandboxBaseWithSleep extends SandboxBase {
   sleepAfter = "5m";
 }
 
+/** The builder is destroyed in runBuild's `finally`, so this window only ever
+ *  covers the case where that never runs (Worker evicted or killed mid-build).
+ *  Long enough not to cut a slow install short, short enough that a stranded
+ *  builder cannot squat a pool slot — or bill — for long. */
+class BuilderSandboxWithSleep extends SandboxBase {
+  sleepAfter = "10m";
+}
+
 // Both DO classes are Sentry-instrumented: Tier-2 session orchestration and the
 // share-build snapshotter run inside them, so a failure there never passes
 // through the fetch handler's own error path. The export name `Sandbox` is
@@ -82,8 +104,8 @@ export const Sandbox = Sentry.instrumentDurableObjectWithSentry(
 
 export const BuilderSandbox = Sentry.instrumentDurableObjectWithSentry(
   sentryOptions,
-  SandboxBase as unknown as new (state: DurableObjectState, env: Env) => never,
-) as unknown as typeof SandboxBase;
+  BuilderSandboxWithSleep as unknown as new (state: DurableObjectState, env: Env) => never,
+) as unknown as typeof BuilderSandboxWithSleep;
 
 const CONTAINER_ROOT = "/app";
 const BOOT_LOG = "/tmp/boot.log";
@@ -170,6 +192,89 @@ const json = (data: unknown, status = 200) =>
 
 const nowIso = () => new Date().toISOString();
 
+/** Write out whatever the in-memory meters have accumulated (bytes, requests,
+ *  share views). Batched deliberately: one D1 write per asset served would
+ *  cost more than the asset does. */
+const flushMeters = (env: Env): Promise<void> =>
+  Promise.all([flushTraffic(env), flushUsage(env)]).then(() => undefined);
+
+/**
+ * Budget gate for the two paths that boot a container: starting a Tier-2 live
+ * session, and running a share build. Returns a response to send back, or null
+ * to proceed.
+ *
+ * Two deliberate escape hatches. `BUDGET_ENFORCE != "1"` logs what it *would*
+ * have refused and lets the request through — that is the observation week.
+ * And a ledger read that throws (D1 hiccup, migration not applied yet) also
+ * lets the request through: a broken meter must degrade to "no ceiling", never
+ * to "nothing works".
+ *
+ * `isAuthenticated` is a thunk, not a boolean, because resolving an identity
+ * means a round trip to the login broker. Only the `anon_blocked` tier cares
+ * who the caller is, so every other tier skips that latency entirely.
+ */
+async function budgetGate(
+  env: Env,
+  opts: { isAuthenticated: () => Promise<boolean>; what: string },
+): Promise<Response | null> {
+  let denial: ReturnType<typeof sessionDenial> = null;
+  let tier = "ok";
+  let pct = 0;
+  try {
+    const state = await getBudgetState(env);
+    tier = state.tier;
+    pct = state.pct;
+    denial = sessionDenial(state, state.tier === "anon_blocked" ? await opts.isAuthenticated() : false);
+  } catch (err) {
+    console.warn("[budget] state unavailable, allowing:", err instanceof Error ? err.message : String(err));
+    return null;
+  }
+  if (!denial) return null;
+  const detail = `${opts.what}: tier=${tier} pct=${pct.toFixed(3)}`;
+  if (!budgetEnforced(env)) {
+    console.log(`[budget] would deny ${detail} (observe-only)`);
+    return null;
+  }
+  console.log(`[budget] denied ${detail}`);
+  return json(denial.body, denial.status);
+}
+
+/**
+ * At the `closed` tier, tear down a live session on its next keepalive ping.
+ * Returns the 410 to send back, or null when the session may keep running.
+ *
+ * Reuses the existing tombstone machinery, so the client's own 410 handling
+ * (stop polling, stop pinging, show the message) already covers this case.
+ */
+async function closeSessionIfOverBudget(env: Env, sessionId: string): Promise<Response | null> {
+  if (!budgetEnforced(env)) return null;
+  let tier = "ok";
+  try {
+    tier = (await getBudgetState(env)).tier;
+  } catch {
+    return null; // A ledger read that fails must not kill running sessions.
+  }
+  if (tier !== "closed") return null;
+
+  await meterSession(env, sessionId, { final: true });
+  try {
+    await env.CACHE.put(`session-tombstone:${sessionId}`, "1", { expirationTtl: 600 });
+  } catch { /* the destroy below is the primary action */ }
+  try {
+    await liveSbx(env, sessionId).destroy();
+  } catch { /* best effort */ }
+  console.log(`[budget] closed live session ${sessionId}: over the monthly ceiling`);
+  return json(
+    {
+      error: "budget_exhausted",
+      message:
+        "Live editing is paused until the next billing cycle. Shared demos and embeds still work.",
+      tier: "closed",
+    },
+    410,
+  );
+}
+
 const ROOT_HTML = `<!doctype html><meta charset="utf-8"><title>Handsontable Demos API</title>
 <style>body{font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;max-width:640px;margin:12vh auto;padding:0 20px;color:#1f2933}
 a{color:#1a8f5a}code{background:#f4f6f8;padding:1px 5px;border-radius:4px}h1{font-size:20px}</style>
@@ -230,12 +335,19 @@ async function writeFiles(sandbox: SandboxLike, files: Record<string, string>) {
 }
 
 export default Sentry.withSentry(sentryOptions, {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // Meter this request against the Workers-requests sku. Counting is batched
+    // in isolate memory (see budget.ts), so this is free until a flush is due.
+    if (noteTraffic(0, 1)) ctx.waitUntil(flushMeters(env));
+
     // 1) Preview-URL traffic (and its HMR WebSocket) is proxied to the container.
     // Cast to keep TS from instantiating the SDK's deep generic over Env (TS2589).
     const proxy = proxyToSandbox as unknown as (r: Request, e: Env) => Promise<Response | null>;
     const proxied = await proxy(request, env);
-    if (proxied) return proxied;
+    // Preview responses are the one unbounded egress path we own — every asset
+    // and dev-server payload of a live session leaves through here. Count the
+    // bytes on the way out (WebSocket upgrades pass through unmeasured).
+    if (proxied) return countEgress(proxied);
 
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
 
@@ -256,6 +368,19 @@ export default Sentry.withSentry(sentryOptions, {
         const cfg = BUILD_CONFIG[body.framework];
         if (!dev || !cfg) return json({ error: `Tier-2 not wired for framework: ${body.framework}` }, 400);
         const files = validateFiles(body.files);
+
+        // Cost ceiling, before anything that can boot a container (every
+        // sandbox RPC does). `POST /api/session` is public; the identity check
+        // is what the `anon_blocked` tier degrades to — at >=80% of budget a
+        // live session costs you a Handsontable login.
+        const denied = await budgetGate(env, {
+          isAuthenticated: async () => (await authenticate(request, env)) !== null,
+          what: `session ${body.framework}`,
+        });
+        if (denied) {
+          await recordUsageEvent(env, "session_denied", body.framework);
+          return denied;
+        }
 
         const sessionId = body.sessionId?.trim() || mintSessionId(body.framework);
         const sandbox = liveSbx(env, sessionId);
@@ -283,6 +408,11 @@ export default Sentry.withSentry(sentryOptions, {
         // UUID suffix) — recreating a deleted id within the tombstone TTL
         // would be torn down by the end-of-create check.
         try {
+          // Billing starts at the first sandbox RPC, so the awake-window meter
+          // starts here rather than after a successful boot — a create that
+          // throws half-way still ran a container.
+          await startSessionMeter(env, sessionId);
+          await recordUsageEvent(env, "session_started", body.framework);
           await writeFiles(sandbox, files);
           // Boot asynchronously (returns immediately; UI polls /status for live
           // progress). Default boot seeds immutable baked dependencies, then runs
@@ -395,7 +525,18 @@ export default Sentry.withSentry(sentryOptions, {
 
       // GET /api/session/:id/status?port=NNNN -> { ready, log } (boot progress)
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "session" && parts[3] === "status") {
-        const sandbox = liveSbx(env, parts[2]!);
+        const sessionId = parts[2]!;
+        // This route doubles as the client keepalive (a ping every 60s while
+        // the tab is visible), which makes it both the meter's tick and the
+        // only place a *running* session can be reached. At `closed` that is
+        // how live sessions get torn down: within one ping of crossing 100%,
+        // every open session is destroyed and the product falls back to static
+        // shares, which cost nothing to serve.
+        const closure = await closeSessionIfOverBudget(env, sessionId);
+        if (closure) return closure;
+        ctx.waitUntil(meterSession(env, sessionId));
+
+        const sandbox = liveSbx(env, sessionId);
         const port = Number(url.searchParams.get("port")) || 0;
         let ready = false;
         if (port) {
@@ -428,6 +569,9 @@ export default Sentry.withSentry(sentryOptions, {
         try {
           await env.CACHE.put(`session-tombstone:${sessionId}`, "1", { expirationTtl: 600 });
         } catch { /* tombstone is defense-in-depth only */ }
+        // Close the awake window before the container goes away: this is the
+        // one teardown path that knows the session is over for good.
+        await meterSession(env, sessionId, { final: true });
         const sandbox = liveSbx(env, sessionId);
         await sandbox.destroy();
         return cors(new Response(null, { status: 204 }));
@@ -452,6 +596,13 @@ export default Sentry.withSentry(sentryOptions, {
         if (!body.title?.trim()) return json({ error: "title is required" }, 400);
         if (!body.files || !body.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
 
+        // A build is a container boot too, so it answers to the same ceiling.
+        // The caller is authenticated by definition here, so only the
+        // new_blocked/closed tiers can refuse it.
+        const buildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `build ${body.framework}` });
+        if (buildDenied) return buildDenied;
+        await recordUsageEvent(env, "build", body.framework);
+
         const created = await createDemo(env, {
           entry: { framework: body.framework, ...cfg },
           files: body.files,
@@ -462,6 +613,7 @@ export default Sentry.withSentry(sentryOptions, {
           forkedFrom: body.forkedFrom ?? `catalog:${body.framework}`,
           now: nowIso(),
         });
+        await recordUsageEvent(env, "share_created", body.framework);
         return json({ id: created.id, url: `/d/${created.id}`, embedUrl: `/embed/${created.id}` }, 201);
       }
 
@@ -509,6 +661,10 @@ export default Sentry.withSentry(sentryOptions, {
           if (!patch.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
           const cfg = BUILD_CONFIG[row.framework];
           if (!cfg) return json({ error: `unknown framework: ${row.framework}` }, 400);
+          // Same ceiling as a first build — a re-save boots a builder container.
+          const rebuildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `rebuild ${row.framework}` });
+          if (rebuildDenied) return rebuildDenied;
+          await recordUsageEvent(env, "build", row.framework);
           await updateDemo(env, {
             id: demoId,
             entry: { framework: row.framework, ...cfg },
@@ -552,7 +708,13 @@ export default Sentry.withSentry(sentryOptions, {
         if (sub === "" && !url.pathname.endsWith("/")) {
           return Response.redirect(`${url.origin}${url.pathname}/${url.search}`, 308);
         }
-        return await serveDemoAsset(env, demoId, sub, { embed });
+        const asset = await serveDemoAsset(env, demoId, sub, { embed });
+        // Count the page load only, and only when it resolved to a real demo:
+        // counting unresolved ids would let a crawler write arbitrary rows.
+        if (sub === "" && asset.status === 200 && noteView(embed ? "embed_view" : "share_view", demoId)) {
+          ctx.waitUntil(flushMeters(env));
+        }
+        return asset;
       }
 
       // GET /api/versions/exists?v=<version> (public) — does npm have this exact
@@ -618,6 +780,33 @@ export default Sentry.withSentry(sentryOptions, {
         }
       }
 
+      // GET /api/budget (public) — the degradation tier the client should
+      // reflect. Dollar figures only for a signed-in Handsontable identity;
+      // anonymous callers get the tier and the user-facing notice, which is
+      // all the UI needs to explain why live editing is restricted.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "budget" && parts.length === 2) {
+        const identity = await authenticate(request, env);
+        try {
+          const state = await getBudgetState(env);
+          return json(publicBudget(state, { detailed: identity !== null, enforced: budgetEnforced(env) }));
+        } catch {
+          // Never let a ledger read failure show the UI a scary banner.
+          return json({ tier: "ok", pct: 0, enforced: budgetEnforced(env), notice: null });
+        }
+      }
+
+      // GET /api/admin/usage?days=30 (auth) — internal cost + usage dashboard.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "admin" && parts[2] === "usage") {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+        const requested = Number(url.searchParams.get("days"));
+        const days = Math.min(90, Math.max(1, Number.isFinite(requested) ? requested : 30));
+        // Flush the in-memory counters first so the panel is not systematically
+        // missing the current batch of views.
+        await flushMeters(env);
+        return json(await adminUsage(env, days));
+      }
+
       if (parts[0] === "api" && parts[1] === "health") return json({ ok: true });
 
       // Friendly root (this is the API/orchestration worker, not a site).
@@ -634,6 +823,22 @@ export default Sentry.withSentry(sentryOptions, {
       Sentry.captureException(err);
       return json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
+  },
+
+  /**
+   * Nightly (04:17 UTC, see `triggers.crons`): replace yesterday's estimated
+   * ledger rows with Cloudflare's own figures, flush anything the in-memory
+   * meters were still holding, and — when explicitly enabled — purge the R2
+   * artifacts of long-revoked demos.
+   */
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      (async () => {
+        await flushMeters(env);
+        await reconcileBilling(env);
+        await gcRevokedArtifacts(env);
+      })(),
+    );
   },
 });
 

@@ -59,6 +59,7 @@ export CLOUDFLARE_ACCOUNT_ID=15111272c53ed0aaf84a908f0c9c7f8b
 cd workers/api
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0001_init.sql -y
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0002_buildkey_nonunique.sql -y
+npx wrangler d1 execute handsontable-demos --remote --file=migrations/0003_cost_ledger.sql -y
 pnpm run deploy   # wrangler deploy --routes … (attaches the demos.handsontable.com routes)
 # -> https://handsontable-demos-api.handsoncode.workers.dev
 
@@ -82,6 +83,21 @@ ADR-0011):
    `wrangler.jsonc`; see "Run locally" above).
 
 Static shares (`/d/:id`) and docs embeds (`/embed/:id`) do **not** need this.
+
+## Cost guardrails (one-time)
+
+```bash
+cd workers/api
+# Read-only token for the nightly reconciliation:
+#   Account -> Account Analytics -> Read.  Nothing else.
+npx wrangler secret put CF_ANALYTICS_TOKEN
+```
+
+Then create the three Budget alerts ($200/$500/$800) in the dashboard —
+Manage Account → Billing → Billable Usage → *Set Budget Alert*. They are
+informational; the enforced ceiling is the Worker's own (`BUDGET_ENFORCE`,
+shipped as `0` = observe-only). Full detail in
+[cost-guardrails.md](cost-guardrails.md).
 
 ## Continuous deployment
 
