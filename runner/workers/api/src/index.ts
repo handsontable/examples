@@ -264,20 +264,22 @@ async function sessionSubrouteGuard(env: Env, sessionId: string): Promise<Respon
   // Every `/api/session/:id/*` route reaches the sandbox, and every sandbox RPC
   // boots a container if one isn't running. Gating only `POST /api/session`
   // would leave the ceiling trivially bypassable: an unauthenticated caller
-  // could write a file to any id and get a container out of it. So at
-  // `new_blocked` a subroute is allowed only for a session we already created
-  // (it has a meter); an unknown id is refused rather than booted.
-  if (state.tier === "new_blocked") {
+  // could write a file to an invented id and get a container out of it —
+  // sidestepping both the sign-in requirement at `anon_blocked` and the freeze
+  // at `new_blocked`.
+  //
+  // So from `anon_blocked` upward a subroute is allowed only for a session we
+  // actually created (it has a meter). An unknown id *is* a session creation
+  // in disguise, so it gets the same answer `POST /api/session` would give an
+  // anonymous caller — 401 "sign in" at `anon_blocked`, 503 at `new_blocked`.
+  if (state.tier === "anon_blocked" || state.tier === "new_blocked") {
     if (await hasSessionMeter(env, sessionId)) return null;
-    console.log(`[budget] refused subroute for unknown session ${sessionId}: tier=new_blocked`);
-    return json(
-      {
-        error: "budget_exhausted",
-        message: budgetPausedMessage,
-        tier: state.tier,
-      },
-      503,
-    );
+    const denial = sessionDenial(state, false);
+    if (denial) {
+      console.log(`[budget] refused subroute for unknown session ${sessionId}: tier=${state.tier}`);
+      return json(denial.body, denial.status);
+    }
+    return null;
   }
 
   if (state.tier !== "closed") return null;
