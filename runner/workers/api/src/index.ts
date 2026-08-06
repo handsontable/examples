@@ -15,9 +15,11 @@ import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate } from "./auth.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, updateDemo, type DemoRow } from "./share.js";
 import {
+  budgetPausedMessage,
   countEgress,
   flushTraffic,
   getBudgetState,
+  hasSessionMeter,
   invalidateBudgetState,
   meterSession,
   noteTraffic,
@@ -250,14 +252,35 @@ async function budgetGate(
  * Reuses the existing tombstone machinery, so the client's own 410 handling
  * (stop polling, stop pinging, show the message) already covers this case.
  */
-async function closeSessionIfOverBudget(env: Env, sessionId: string): Promise<Response | null> {
+async function sessionSubrouteGuard(env: Env, sessionId: string): Promise<Response | null> {
   let state;
   try {
     state = await getBudgetState(env);
   } catch {
     return null; // A ledger read that fails must not kill running sessions.
   }
-  if (!state.enforced || state.tier !== "closed") return null;
+  if (!state.enforced) return null;
+
+  // Every `/api/session/:id/*` route reaches the sandbox, and every sandbox RPC
+  // boots a container if one isn't running. Gating only `POST /api/session`
+  // would leave the ceiling trivially bypassable: an unauthenticated caller
+  // could write a file to any id and get a container out of it. So at
+  // `new_blocked` a subroute is allowed only for a session we already created
+  // (it has a meter); an unknown id is refused rather than booted.
+  if (state.tier === "new_blocked") {
+    if (await hasSessionMeter(env, sessionId)) return null;
+    console.log(`[budget] refused subroute for unknown session ${sessionId}: tier=new_blocked`);
+    return json(
+      {
+        error: "budget_exhausted",
+        message: budgetPausedMessage,
+        tier: state.tier,
+      },
+      503,
+    );
+  }
+
+  if (state.tier !== "closed") return null;
 
   await meterSession(env, sessionId, { final: true });
   try {
@@ -267,15 +290,7 @@ async function closeSessionIfOverBudget(env: Env, sessionId: string): Promise<Re
     await liveSbx(env, sessionId).destroy();
   } catch { /* best effort */ }
   console.log(`[budget] closed live session ${sessionId}: over the monthly ceiling`);
-  return json(
-    {
-      error: "budget_exhausted",
-      message:
-        "Live editing is paused until the next billing cycle. Shared demos and embeds still work.",
-      tier: "closed",
-    },
-    410,
-  );
+  return json({ error: "budget_exhausted", message: budgetPausedMessage, tier: "closed" }, 410);
 }
 
 const ROOT_HTML = `<!doctype html><meta charset="utf-8"><title>Handsontable Demos API</title>
@@ -493,14 +508,21 @@ export default Sentry.withSentry(sentryOptions, {
       // auto-boots the destroyed container. Create (length 2) and the session
       // DELETE itself (length 3) stay outside the gate. New subroutes are
       // covered by default instead of each hand-copying the check.
-      if (parts[0] === "api" && parts[1] === "session" && parts.length >= 4
-        && await isTombstoned(env, parts[2]!)) {
-        // A file delete against a torn-down session is a satisfied no-op;
-        // everything else reports the session gone.
-        if (request.method === "DELETE" && parts[3] === "file") {
-          return cors(new Response(null, { status: 204 }));
+      if (parts[0] === "api" && parts[1] === "session" && parts.length >= 4) {
+        const sessionId = parts[2]!;
+        if (await isTombstoned(env, sessionId)) {
+          // A file delete against a torn-down session is a satisfied no-op;
+          // everything else reports the session gone.
+          if (request.method === "DELETE" && parts[3] === "file") {
+            return cors(new Response(null, { status: 204 }));
+          }
+          return json({ error: "session closed" }, 410);
         }
-        return json({ error: "session closed" }, 410);
+        // The cost ceiling belongs here too, for the same reason the tombstone
+        // check does: every subroute below reaches the sandbox, and every
+        // sandbox RPC boots a container.
+        const overBudget = await sessionSubrouteGuard(env, sessionId);
+        if (overBudget) return overBudget;
       }
 
       // POST /api/session/:id/file  { path, contents } -> 204   (streams an edit; HMR picks it up)
@@ -530,13 +552,9 @@ export default Sentry.withSentry(sentryOptions, {
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "session" && parts[3] === "status") {
         const sessionId = parts[2]!;
         // This route doubles as the client keepalive (a ping every 60s while
-        // the tab is visible), which makes it both the meter's tick and the
-        // only place a *running* session can be reached. At `closed` that is
-        // how live sessions get torn down: within one ping of crossing 100%,
-        // every open session is destroyed and the product falls back to static
-        // shares, which cost nothing to serve.
-        const closure = await closeSessionIfOverBudget(env, sessionId);
-        if (closure) return closure;
+        // the tab is visible), which makes it the meter's tick. The budget
+        // guard that tears sessions down at `closed` already ran above, for
+        // this and every other subroute.
         ctx.waitUntil(meterSession(env, sessionId));
 
         const sandbox = liveSbx(env, sessionId);
@@ -714,13 +732,17 @@ export default Sentry.withSentry(sentryOptions, {
         const asset = await serveDemoAsset(env, demoId, sub, { embed });
         // Count the page load only, and only when it resolved to a real demo:
         // counting unresolved ids would let a crawler write arbitrary rows.
+        //
+        // Off the response path deliberately. This is the static degradation
+        // path that has to stay cheap at every budget tier, and the visitor
+        // hash costs a KV read plus a SHA-256 — none of which the reader
+        // should wait for.
         if (sub === "" && asset.status === 200) {
-          const due = noteView(embed ? "embed_view" : "share_view", demoId);
-          const analyticsDue = await notePageView(env, request, {
-            page: normalisePage(url.pathname),
-            demoId,
-          });
-          if (due || analyticsDue) ctx.waitUntil(flushMeters(env));
+          const countDue = noteView(embed ? "embed_view" : "share_view", demoId);
+          ctx.waitUntil(
+            notePageView(env, request, { page: normalisePage(url.pathname), demoId })
+              .then((analyticsDue) => (countDue || analyticsDue ? flushMeters(env) : undefined)),
+          );
         }
         return asset;
       }
@@ -798,9 +820,10 @@ export default Sentry.withSentry(sentryOptions, {
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "beacon" && parts.length === 2) {
         const body = await request.json().catch(() => null) as { path?: unknown } | null;
         const path = typeof body?.path === "string" ? body.path : "/";
-        if (await notePageView(env, request, { page: normalisePage(path) })) {
-          ctx.waitUntil(flushMeters(env));
-        }
+        ctx.waitUntil(
+          notePageView(env, request, { page: normalisePage(path) })
+            .then((due) => (due ? flushMeters(env) : undefined)),
+        );
         return cors(new Response(null, { status: 204 }));
       }
 

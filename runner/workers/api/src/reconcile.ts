@@ -65,17 +65,23 @@ function sumOf<T>(groups: T[] | undefined, pick: (g: T) => number | undefined): 
 }
 
 async function queryUsage(env: Env, day: string): Promise<AccountUsage | null> {
+  // Every dataset is filtered down to *this* Worker and *this* bucket. The
+  // account is shared with a dozen other Workers, and an unfiltered query would
+  // write whole-account usage into rows that outrank our own estimates — the
+  // ceiling would then track everyone else's traffic. Scoping is not an
+  // optimisation here, it is the difference between measuring the runner and
+  // measuring the company.
   const query = `
-    query RunnerUsage($account: String!, $day: Date!) {
+    query RunnerUsage($account: String!, $day: Date!, $script: string!, $bucket: string!) {
       viewer {
         accounts(filter: { accountTag: $account }) {
-          workersInvocationsAdaptive(limit: 10000, filter: { date: $day }) {
+          workersInvocationsAdaptive(limit: 10000, filter: { date: $day, scriptName: $script }) {
             sum { requests }
           }
-          durableObjectsInvocationsAdaptiveGroups(limit: 10000, filter: { date: $day }) {
+          durableObjectsInvocationsAdaptiveGroups(limit: 10000, filter: { date: $day, scriptName: $script }) {
             sum { requests responseBodySize }
           }
-          r2StorageAdaptiveGroups(limit: 100, filter: { date: $day }) {
+          r2StorageAdaptiveGroups(limit: 100, filter: { date: $day, bucketName: $bucket }) {
             max { payloadSize metadataSize }
           }
         }
@@ -88,7 +94,15 @@ async function queryUsage(env: Env, day: string): Promise<AccountUsage | null> {
       Authorization: `Bearer ${env.CF_ANALYTICS_TOKEN}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ query, variables: { account: env.CF_ACCOUNT_ID, day } }),
+    body: JSON.stringify({
+      query,
+      variables: {
+        account: env.CF_ACCOUNT_ID,
+        day,
+        script: env.CF_SCRIPT_NAME ?? "handsontable-demos-api",
+        bucket: env.R2_BUCKET_NAME ?? "handsontable-demos",
+      },
+    }),
   });
   if (!res.ok) throw new Error(`analytics query failed: ${res.status} ${await res.text()}`);
 
@@ -100,6 +114,9 @@ async function queryUsage(env: Env, day: string): Promise<AccountUsage | null> {
   // did come back. Field names differ per dataset version; the observe week is
   // when we find out which ones this account exposes.
   if (payload.errors?.length) {
+    // Includes the case where a dataset does not accept the scope filter we
+    // sent. That must degrade to "no billing row for that sku" — writing an
+    // unscoped, account-wide figure would be worse than keeping the estimate.
     console.warn("[budget] analytics query returned errors:", payload.errors.map((e) => e.message).join("; "));
   }
   return payload.data?.viewer?.accounts?.[0] ?? null;

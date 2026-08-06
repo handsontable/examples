@@ -28,9 +28,18 @@ export interface UsageRow {
   count: number;
 }
 
-/** A live Tier-2 session, derived from the awake-window meters in KV. */
+/**
+ * A live Tier-2 session, derived from the awake-window meters in KV.
+ *
+ * `ref` is a one-way digest of the session id, never the id itself. Session
+ * ids are bearer capabilities — `/api/session/:id/*` is unauthenticated by
+ * design, so anyone holding an id can write files into that container or tear
+ * it down. Handing them to every signed-in viewer of this panel would let one
+ * colleague interfere with another's live session. The digest is enough to
+ * tell two rows apart, which is all the panel needs.
+ */
 interface LiveSession {
-  sessionId: string;
+  ref: string;
   framework: string;
   startedAt: number;
   awakeSeconds: number;
@@ -38,6 +47,12 @@ interface LiveSession {
 }
 
 const dayAgo = (days: number): string => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+
+/** Short, non-reversible stand-in for a session id (see LiveSession.ref). */
+async function digest(value: string): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(hash)].slice(0, 4).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 /** Session ids are `<framework-slug>-<8 random chars>` (see mintSessionId). */
 const frameworkOf = (sessionId: string): string => {
@@ -63,7 +78,7 @@ async function liveSessions(env: Env): Promise<LiveSession[]> {
     const sessionId = key.name.slice("session-meter:".length);
     const awakeSeconds = Math.max(0, (now - meter.startedAt) / 1000);
     out.push({
-      sessionId,
+      ref: await digest(sessionId),
       framework: frameworkOf(sessionId),
       startedAt: meter.startedAt,
       awakeSeconds,

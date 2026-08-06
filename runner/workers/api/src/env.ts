@@ -45,6 +45,11 @@ export interface Env {
   BUDGET_R2_GC_DAYS?: string;
   /** Account tag for the GraphQL Analytics API (same id as wrangler.jsonc). */
   CF_ACCOUNT_ID?: string;
+  /** This Worker's script name + its R2 bucket. The nightly reconciliation
+   *  scopes every analytics query to them, so a shared account's other
+   *  Workers can never be counted as this runner's spend. */
+  CF_SCRIPT_NAME?: string;
+  R2_BUCKET_NAME?: string;
   /** Read-only analytics token (`wrangler secret put CF_ANALYTICS_TOKEN`).
    *  Absent -> the nightly reconciliation is skipped, estimates stand. */
   CF_ANALYTICS_TOKEN?: string;

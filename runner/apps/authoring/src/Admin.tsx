@@ -1,11 +1,13 @@
 // Internal usage + cost panel (/admin), added with the DEV-2030 guardrails.
 //
 // Everything it renders comes from one authenticated call to
-// `GET /api/admin/usage` — daily cost ledger rows, daily usage counters, demo
-// inventory and the live-session meters. Read-only by design: this page exists
-// to answer "what is the runner costing and who is using it", not to change
-// anything. Enforcement thresholds are configuration (wrangler.jsonc vars), so
-// they are shown here but not editable.
+// `GET /api/admin/usage` — the cost ledger, usage counters, anonymous audience
+// aggregates, demo inventory and the live-session meters. The one thing it can
+// change is the guardrail settings (ceiling, tiers, alerts, enforcement), via
+// `PUT /api/admin/settings`; the wrangler.jsonc vars are only defaults.
+//
+// Session ids are never rendered — they are bearer capabilities for the
+// unauthenticated `/api/session/:id/*` routes, so the server sends a digest.
 //
 // Charts are plain divs. A chart library would be a new dependency in the
 // authoring bundle for six bar charts on an internal page.
@@ -17,7 +19,9 @@ import { reportError } from "./sentry.js";
 interface LedgerRow { day: string; sku: string; source: string; units: number; usd: number }
 interface UsageRow { day: string; metric: string; dimension: string; count: number }
 interface LiveSession {
-  sessionId: string;
+  /** A one-way digest, not the session id: ids are bearer capabilities for the
+   *  unauthenticated /api/session/:id/* routes and must not be handed out. */
+  ref: string;
   framework: string;
   startedAt: number;
   awakeSeconds: number;
@@ -264,8 +268,8 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
                 </thead>
                 <tbody>
                   {report.liveSessions.map((s) => (
-                    <tr key={s.sessionId}>
-                      <Td mono>{s.sessionId}</Td>
+                    <tr key={s.ref}>
+                      <Td mono>{s.ref}</Td>
                       <Td>{s.framework}</Td>
                       <Td align="right">{duration(s.awakeSeconds)}</Td>
                       <Td align="right">{usd(s.estimatedUsd)}</Td>

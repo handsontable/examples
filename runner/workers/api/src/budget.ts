@@ -221,6 +221,19 @@ interface SessionMeter {
 
 const meterKey = (sessionId: string) => `${KV_METER_PREFIX}${sessionId}`;
 
+/**
+ * Does this session id belong to a session we actually created?
+ *
+ * The meter key exists from the first sandbox RPC until teardown, which makes
+ * it the cheapest available answer to "is this a live session, or an id
+ * someone invented?". Used by the subroute gate: at `new_blocked` a write to
+ * an unknown id would boot a brand-new container, which is precisely what that
+ * tier exists to stop. A KV failure answers "yes" — refusing real sessions on
+ * a KV hiccup is worse than letting one through.
+ */
+export const hasSessionMeter = async (env: Env, sessionId: string): Promise<boolean> =>
+  (await env.CACHE.get(meterKey(sessionId)).catch(() => "1")) !== null;
+
 export async function startSessionMeter(
   env: Env,
   sessionId: string,
@@ -341,6 +354,18 @@ export function countEgress(response: Response): Response {
 
 // ---- Gates -------------------------------------------------------------------
 
+/**
+ * The one user-facing sentence for a paused live session.
+ *
+ * It says "monthly budget", not "billing cycle": the ledger and
+ * `retryAfterSeconds` below both roll on the UTC calendar month, while
+ * Cloudflare's billing cycle starts mid-month. Naming the wrong boundary would
+ * point users at a date that is days away from when editing actually returns.
+ */
+export const budgetPausedMessage =
+  "Live editing is paused until the monthly budget resets at the start of next month (UTC). "
+  + "Shared demos and embeds still work — they are static builds and cost nothing to serve.";
+
 /** Seconds until the ledger's month rolls over (what a client should wait). */
 function retryAfterMonthEnd(): number {
   const now = new Date();
@@ -364,9 +389,7 @@ export function sessionDenial(state: BudgetState, isAuthenticated: boolean): Bud
       status: 503,
       body: {
         error: "budget_exhausted",
-        message:
-          "Live editing is paused until the next billing cycle. Shared demos and embeds still "
-          + "work — they are static builds and cost nothing to serve.",
+        message: budgetPausedMessage,
         tier: state.tier,
         retryAfterSeconds: retryAfterMonthEnd(),
       },
@@ -394,7 +417,9 @@ export function publicBudget(state: BudgetState, opts: { detailed: boolean }) {
       : state.tier === "anon_blocked"
         ? "Live editing currently requires a Handsontable sign-in (budget guardrail)."
         : state.tier === "new_blocked" || state.tier === "closed"
-          ? "Live editing is paused until the next billing cycle. Shared demos still work."
+          // Same boundary as retryAfterSeconds: the UTC calendar month, not
+          // Cloudflare's billing cycle.
+          ? "Live editing is paused until the monthly budget resets. Shared demos still work."
           : null;
   return {
     tier: state.tier,

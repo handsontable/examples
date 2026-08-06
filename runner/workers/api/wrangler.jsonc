@@ -71,8 +71,12 @@
     // Purge R2 artifacts of demos revoked longer ago than this many days.
     // 0 = disabled; turn on deliberately, it deletes bytes.
     "BUDGET_R2_GC_DAYS": "0",
-    // Account tag for the GraphQL Analytics API used by the nightly job.
-    "CF_ACCOUNT_ID": "15111272c53ed0aaf84a908f0c9c7f8b"
+    // Account tag for the GraphQL Analytics API used by the nightly job, plus
+    // the scope it filters on — the account is shared with a dozen other
+    // Workers, so an unscoped query would bill their traffic to this runner.
+    "CF_ACCOUNT_ID": "15111272c53ed0aaf84a908f0c9c7f8b",
+    "CF_SCRIPT_NAME": "handsontable-demos-api",
+    "R2_BUCKET_NAME": "handsontable-demos"
   },
 
   // Routes on demos.handsontable.com are deliberately NOT declared here — they
