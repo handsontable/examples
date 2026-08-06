@@ -39,6 +39,11 @@ interface Turn {
 
 export interface ChatPanelProps {
   apiBase: string;
+  /** Broker token of the signed-in user, when there is one. Sent so the budget
+   *  guard can recognise them: at its `anon_blocked` tier the assistant is
+   *  signed-in-only, and without this header a signed-in user is refused
+   *  exactly when the tier is meant to keep them working. */
+  token: string | null;
   framework: string;
   htVersion: string;
   docsPath: string | null;
@@ -62,6 +67,7 @@ const toEditorPath = (path: string) => (path.startsWith("/") ? path : `/${path}`
 
 export function ChatPanel({
   apiBase,
+  token,
   framework,
   htVersion,
   docsPath,
@@ -74,6 +80,13 @@ export function ChatPanel({
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // `busy` state lags a fast second click by a render; this ref does not.
+  const busyRef = useRef(false);
+  // A mirror of `turns` that is safe to read inside async code. Reading state
+  // through a stale closure is what made Apply's undo map disappear when a
+  // follow-up answer landed.
+  const turnsRef = useRef<Turn[]>([]);
+  useEffect(() => { turnsRef.current = turns; }, [turns]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -81,11 +94,15 @@ export function ChatPanel({
 
   async function send(question: string) {
     const text = question.trim();
-    if (!text || busy) return;
+    if (!text || busyRef.current) return;
+    busyRef.current = true;
     setInput("");
     setBusy(true);
-    const history = [...turns, { role: "user" as const, content: text }];
-    setTurns(history);
+    // Every state update below appends to whatever is current rather than
+    // replacing a snapshot: an Apply that happens while this request is in
+    // flight must not be overwritten when the answer arrives.
+    const history = [...turnsRef.current, { role: "user" as const, content: text }];
+    setTurns((prev) => [...prev, { role: "user", content: text }]);
 
     try {
       // Grounding first, in the browser (see docsSearch.ts for why it cannot
@@ -101,7 +118,10 @@ export function ChatPanel({
 
       const res = await fetch(`${apiBase}/api/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           messages: history.map(({ role, content }) => ({ role, content })),
           framework,
@@ -123,7 +143,7 @@ export function ChatPanel({
       if (!res.ok) {
         // The server phrases refusals (rate limit, budget, misconfiguration)
         // for users already — show them rather than a status code.
-        setTurns([...history, {
+        setTurns((prev) => [...prev, {
           role: "assistant",
           content: body.message ?? `The assistant is unavailable (${res.status}).`,
           error: true,
@@ -131,7 +151,7 @@ export function ChatPanel({
         return;
       }
 
-      setTurns([...history, {
+      setTurns((prev) => [...prev, {
         role: "assistant",
         content: body.message ?? "",
         edits: body.edits ?? [],
@@ -140,40 +160,44 @@ export function ChatPanel({
       }]);
     } catch (err) {
       reportError(err, "example-chat");
-      setTurns([...history, {
+      setTurns((prev) => [...prev, {
         role: "assistant",
         content: "Couldn’t reach the assistant. Check your connection and try again.",
         error: true,
       }]);
     } finally {
+      busyRef.current = false;
       setBusy(false);
       setStatus(null);
     }
   }
 
+  // Both of these write files and then record the result. The writes happen
+  // OUTSIDE the state updater on purpose: React invokes updaters twice under
+  // StrictMode, and a second pass would snapshot the just-written contents as
+  // the "previous" ones — Undo would then restore the assistant's version.
+
   /** Apply every edit in a turn, remembering what was there before. */
   function apply(index: number) {
-    setTurns((current) => current.map((turn, i) => {
-      if (i !== index || !turn.edits?.length || turn.undo) return turn;
-      const files = getFiles();
-      const undo: FilesMap = {};
-      for (const edit of turn.edits) {
-        const path = toEditorPath(edit.path);
-        // A file the example doesn't have yet is recorded as an empty string,
-        // so Undo blanks it rather than leaving the assistant's version behind.
-        undo[path] = files[path] ?? "";
-        applyEdit(path, edit.contents);
-      }
-      return { ...turn, undo };
-    }));
+    const turn = turnsRef.current[index];
+    if (!turn?.edits?.length || turn.undo) return;
+    const files = getFiles();
+    const undo: FilesMap = {};
+    for (const edit of turn.edits) {
+      const path = toEditorPath(edit.path);
+      // A file the example doesn't have yet is recorded as an empty string,
+      // so Undo blanks it rather than leaving the assistant's version behind.
+      undo[path] = files[path] ?? "";
+      applyEdit(path, edit.contents);
+    }
+    setTurns((current) => current.map((t, i) => (i === index ? { ...t, undo } : t)));
   }
 
   function undo(index: number) {
-    setTurns((current) => current.map((turn, i) => {
-      if (i !== index || !turn.undo) return turn;
-      for (const [path, contents] of Object.entries(turn.undo)) applyEdit(path, contents);
-      return { ...turn, undo: undefined };
-    }));
+    const turn = turnsRef.current[index];
+    if (!turn?.undo) return;
+    for (const [path, contents] of Object.entries(turn.undo)) applyEdit(path, contents);
+    setTurns((current) => current.map((t, i) => (i === index ? { ...t, undo: undefined } : t)));
   }
 
   return (
@@ -193,7 +217,15 @@ export function ChatPanel({
             </p>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {SUGGESTIONS.map((s) => (
-                <button key={s} type="button" style={suggestion} onClick={() => void send(s)}>{s}</button>
+                <button
+                  key={s}
+                  type="button"
+                  style={{ ...suggestion, opacity: busy ? 0.5 : 1 }}
+                  disabled={busy}
+                  onClick={() => void send(s)}
+                >
+                  {s}
+                </button>
               ))}
             </div>
           </div>

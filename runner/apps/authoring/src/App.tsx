@@ -1151,6 +1151,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       {chatOpen && (
         <ChatPanel
           apiBase={API_BASE}
+          token={getToken()}
           framework={framework}
           htVersion={version}
           docsPath={docsPath}

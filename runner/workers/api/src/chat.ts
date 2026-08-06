@@ -27,6 +27,13 @@
 import type { Env } from "./env.js";
 
 const MAX_MESSAGE_CHARS = 800;
+/** Assistant turns are echoed back by the client, so they are caller-controlled
+ *  too: without a cap, a public caller inflates the prompt (and its cost) by
+ *  claiming the assistant said something enormous. Larger than the user cap
+ *  because our own answers legitimately are. */
+const MAX_ASSISTANT_CHARS = 8_000;
+/** Belt and braces over both: total conversation size, whoever "said" it. */
+const MAX_HISTORY_CHARS = 40_000;
 const MAX_HISTORY_TURNS = 10;
 /** The whole example is sent as context; these bound what "the whole example" can be. */
 const MAX_FILES = 30;
@@ -112,6 +119,7 @@ export function validateChatRequest(body: unknown): Validated<ChatRequest> {
   }
 
   const messages: ChatMessage[] = [];
+  let historyChars = 0;
   for (const entry of raw.messages) {
     if (typeof entry !== "object" || entry === null) return { ok: false, error: "each message must be an object" };
     const { role, content } = entry as Record<string, unknown>;
@@ -125,7 +133,11 @@ export function validateChatRequest(body: unknown): Validated<ChatRequest> {
       if (INJECTION_PATTERNS.some((p) => p.test(content))) {
         return { ok: false, error: "message contains disallowed content" };
       }
+    } else if (content.length > MAX_ASSISTANT_CHARS) {
+      return { ok: false, error: "conversation history is too large" };
     }
+    historyChars += content.length;
+    if (historyChars > MAX_HISTORY_CHARS) return { ok: false, error: "conversation history is too large" };
     messages.push({ role, content });
   }
 
@@ -204,7 +216,12 @@ export function isHandsontableDocsUrl(url: string): boolean {
  * so it needs its own gate independent of the monthly budget ceiling — by the
  * time the ceiling notices, the spend has happened.
  *
- * Fails open: a KV problem must not take the assistant down.
+ * Fails CLOSED, unlike the other KV-backed guards in this Worker. Those
+ * protect availability, where a KV hiccup should not take a feature down. This
+ * one protects a shared budget: if the counter is unreadable we cannot know
+ * how much has been spent, and an unmetered public LLM endpoint is a worse
+ * outcome than a chat panel that is briefly unavailable. Everything else in
+ * the runner keeps working.
  */
 export async function checkChatRateLimit(env: Env, ip: string): Promise<{ ok: true } | { ok: false; retryAfter: number }> {
   if (!ip) return { ok: true };
@@ -222,8 +239,9 @@ export async function checkChatRateLimit(env: Env, ip: string): Promise<{ ok: tr
       env.CACHE.put(dayKey, String(day + 1), { expirationTtl: 86_400 }),
     ]);
     return { ok: true };
-  } catch {
-    return { ok: true };
+  } catch (err) {
+    console.warn("[chat] rate-limit store unavailable, refusing:", err instanceof Error ? err.message : String(err));
+    return { ok: false, retryAfter: 30 };
   }
 }
 
@@ -406,11 +424,15 @@ export async function requestAnswer(env: Env, req: ChatRequest, pages: DocPage[]
   });
 
   if (!res.ok) {
-    const detail = (await res.text()).slice(0, 300);
+    // Deliberately NOT logging the response body. Gateway errors quote the
+    // request back, and this request contains the user's question and their
+    // example's source — none of which belongs in Workers Logs. The status
+    // and the gateway's own request id are enough to chase it upstream.
+    const requestId = res.headers.get("x-litellm-call-id") ?? res.headers.get("x-request-id") ?? "none";
     // 401/403 here means the virtual key is wrong or revoked — an operator
     // problem, not a user one, so it must be loud in the logs and vague to
     // the caller.
-    console.error(`[chat] gateway ${res.status}: ${detail}`);
+    console.error(`[chat] gateway ${res.status} (request id: ${requestId})`);
     throw new ChatUnavailableError(
       res.status === 401 || res.status === 403 ? "chat is not configured" : "the assistant is unavailable",
     );
