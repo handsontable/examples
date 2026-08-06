@@ -24,6 +24,7 @@ import {
   meterSession,
   noteTraffic,
   publicBudget,
+  recordLlmUsage,
   sessionDenial,
   startSessionMeter,
 } from "./budget.js";
@@ -31,6 +32,13 @@ import { checkCostAlerts, gcRevokedArtifacts, reconcileBilling } from "./reconci
 import { flushUsage, noteView, recordUsageEvent } from "./usage.js";
 import { flushAnalytics, normalisePage, notePageView, pruneAnalytics } from "./analytics.js";
 import { adminUsage } from "./admin.js";
+import {
+  ChatUnavailableError,
+  checkChatRateLimit,
+  requestAnswer,
+  searchDocPages,
+  validateChatRequest,
+} from "./chat.js";
 import { loadSettings, resetSettings, saveSettings, validateSettings } from "./settings.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
@@ -809,6 +817,57 @@ export default Sentry.withSentry(sentryOptions, {
           // Version picker falls back to a stale list when this fails.
           Sentry.captureException(e, { tags: { upstream: "npm-registry", probe: "versions" } });
           return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+        }
+      }
+
+      // POST /api/chat (public, rate-limited) — "talk with this example".
+      // The browser sends the question, the example's files, and the doc
+      // chunks it retrieved from the docs-assistant; this Worker adds Algolia
+      // page hits and asks the model, holding the LiteLLM key server-side.
+      // See src/chat.ts for why retrieval is split that way.
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "chat" && parts.length === 2) {
+        const ip = request.headers.get("cf-connecting-ip") ?? "";
+        const limit = await checkChatRateLimit(env, ip);
+        if (!limit.ok) {
+          return cors(new Response(
+            JSON.stringify({ error: "rate_limited", message: "Too many questions — give it a minute." }),
+            { status: 429, headers: { "Content-Type": "application/json", "Retry-After": String(limit.retryAfter) } },
+          ));
+        }
+
+        // Answers cost money, so they answer to the same ceiling as containers:
+        // sign-in required at `anon_blocked`, nothing new at `new_blocked`.
+        const chatDenied = await budgetGate(env, {
+          isAuthenticated: async () => (await authenticate(request, env)) !== null,
+          what: "chat",
+        });
+        if (chatDenied) return chatDenied;
+
+        const parsed = validateChatRequest(await request.json().catch(() => null));
+        if (!parsed.ok) return json({ error: "invalid_request", message: parsed.error }, 400);
+
+        const question = [...parsed.value.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+        const pages = await searchDocPages(env, question, parsed.value.framework);
+        try {
+          const answer = await requestAnswer(env, parsed.value, pages);
+          ctx.waitUntil(Promise.all([
+            recordLlmUsage(env, answer.usd),
+            recordUsageEvent(env, "chat_message", parsed.value.framework),
+            answer.edits.length ? recordUsageEvent(env, "chat_edit", parsed.value.framework) : Promise.resolve(),
+          ]).then(() => undefined));
+          return json({
+            message: answer.message,
+            edits: answer.edits,
+            references: answer.references,
+            pages,
+          });
+        } catch (err) {
+          if (err instanceof ChatUnavailableError) {
+            // Configuration and upstream faults are already logged in chat.ts;
+            // the caller gets a sentence, not a stack trace.
+            return json({ error: "chat_unavailable", message: err.message }, 503);
+          }
+          throw err;
         }
       }
 

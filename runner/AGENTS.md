@@ -27,7 +27,7 @@ Work happens on a feature branch off `master`, opened as a PR against `handsonta
 | `apps/authoring/` | The web app (Vite + React 19). SPA served as Cloudflare Workers Assets → worker `handsontable-demos-authoring`. |
 | `packages/editor-shell/` | Framework-agnostic editor UI: toolbar, file tree, code editor, preview pane, theme. **Most UI/UX lives here.** |
 | `packages/runtime/` | The `DemoRuntime` engines: `sandpack.ts` (Tier-1, in-browser bundler) and `container.ts` (Tier-2, live Cloudflare Sandbox container). Plus `version.ts` (HOT version dispatch). |
-| `workers/api/` | Orchestration + sharing worker `handsontable-demos-api` (sessions, `/api/demos`, `/d`, `/embed`, build snapshotter). |
+| `workers/api/` | Orchestration + sharing worker `handsontable-demos-api` (sessions, `/api/demos`, `/d`, `/embed`, build snapshotter, `/api/chat`). |
 | `config/frameworks.json` | Single source of truth per example (tier, engine, wrappers, entry). `pipeline/import.mjs` → `catalog.json`. |
 | `apps/authoring/public/docs-examples/` | Generated documentation-guide examples (manifest + one CatalogEntry JSON each). `pipeline/import-docs.mjs` + `wrap-docs-example.mjs`. |
 | `containers/`, `scripts/` | Live/builder Dockerfiles + baked deps; `prepare-container.mjs`, `warm.ts`. |
@@ -120,5 +120,6 @@ GitHub App). Production branch `master`; per-worker root dir `runner/apps/author
 - Keep the CodeSandbox **hosted** Sandpack bundler (self-hosting it stack-overflows on HOT v18).
 - Tier-2 containers stay warm while a tab is open (client keepalive + `sleepAfter=5m`); disk is ephemeral, so a slept container cold-boots on return.
 - **Cost guardrails** (DEV-2030, ADR-0022): `max_instances` 5/3 is the container cap — don't raise it without redoing the arithmetic in `docs/cost-guardrails.md`. Spend degrades live sessions in stages while static shares keep serving. The dollar thresholds and the enforcement switch are **editable at runtime in `/admin`** (stored in `runner_settings`); the `BUDGET_*` vars are only defaults.
+- **Ask AI** (DEV-2047, `docs/example-chat.md`): chat panel scoped to the open example; docs chunks are retrieved **in the browser** (Cloudflare blocks Worker→workers.dev, error 1042), the Worker adds Algolia page links and calls LiteLLM. Model edits are proposed, never auto-applied, and every answer is metered into the cost ledger.
 - **Analytics are anonymous by construction** — no cookies, no IPs, no user agents, no query strings, no per-request rows; unique visitors use a daily-rotating salted hash. Keep it that way when touching `workers/api/src/analytics.ts`.
 - No manual `handsontable/dist/*.css` imports in examples (not needed since 17.1; use `handsontable/styles/*`).

@@ -105,6 +105,7 @@ const SKU_LABEL: Record<string, string> = {
   egress: "Egress",
   workers: "Workers requests",
   r2: "R2 storage",
+  llm: "AI assistant",
 };
 
 const METRIC_LABEL: Record<string, string> = {
@@ -114,6 +115,8 @@ const METRIC_LABEL: Record<string, string> = {
   share_created: "Shares created",
   share_view: "Share views",
   embed_view: "Embed views",
+  chat_message: "Assistant questions",
+  chat_edit: "Assistant code edits",
 };
 
 export interface AdminPanelProps {
@@ -246,7 +249,7 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
           </Section>
 
           <Section title={`Daily activity (${report.windowDays}d)`}>
-            {["session_started", "build", "share_view", "embed_view", "session_denied"].map((metric) => {
+            {["session_started", "build", "share_view", "embed_view", "chat_message", "chat_edit", "session_denied"].map((metric) => {
               const rows = dailyMetric(report.usage, metric);
               if (!rows.length) return null;
               return (

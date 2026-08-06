@@ -94,6 +94,10 @@ cd workers/api
 # Read-only token for the nightly reconciliation:
 #   Account -> Account Analytics -> Read.  Nothing else.
 npx wrangler secret put CF_ANALYTICS_TOKEN
+
+# Example chat (DEV-2047) — see docs/example-chat.md:
+npx wrangler secret put LITELLM_API_KEY   # LiteLLM virtual key; absent -> /api/chat 503s
+npx wrangler secret put ALGOLIA_API_KEY   # Algolia search key; absent -> no doc page links
 ```
 
 The three Budget alerts ($200/$500/$800) were created in the dashboard on

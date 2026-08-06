@@ -1,0 +1,349 @@
+// "Ask about this example" — the playground chat panel (DEV-2047).
+//
+// The panel is scoped to whatever is open in the editor: it sends the current
+// files with every question, so the assistant answers about *this* code rather
+// than Handsontable in general, and can hand back edits to it.
+//
+// Edits are never applied on their own. The user sees which files would change
+// and presses Apply; one press of Undo puts the previous contents back. An
+// assistant that silently rewrites the file you are looking at is not a
+// feature, it is a data-loss bug with good intentions.
+
+import { useEffect, useRef, useState } from "react";
+import { theme } from "@handsontable/demo-editor-shell";
+import type { FilesMap } from "@handsontable/demo-runtime";
+import { searchDocs } from "./docsSearch.js";
+import { reportError } from "./sentry.js";
+
+interface Edit {
+  path: string;
+  contents: string;
+  why?: string;
+}
+
+interface DocLink {
+  title: string;
+  url: string;
+}
+
+interface Turn {
+  role: "user" | "assistant";
+  content: string;
+  edits?: Edit[];
+  references?: string[];
+  pages?: DocLink[];
+  /** Contents replaced by an applied edit, kept so Undo can restore them. */
+  undo?: FilesMap;
+  error?: boolean;
+}
+
+export interface ChatPanelProps {
+  apiBase: string;
+  framework: string;
+  htVersion: string;
+  docsPath: string | null;
+  /** Read the editor's live files at send time, not at mount time. */
+  getFiles: () => FilesMap;
+  /** Write a file back into the editor + running preview. */
+  applyEdit: (path: string, contents: string) => void;
+  onClose: () => void;
+}
+
+const SUGGESTIONS = [
+  "What does this example do?",
+  "Explain the Handsontable options used here",
+  "Add a column with a checkbox renderer",
+  "Make the first two columns frozen",
+];
+
+/** The runner keeps file paths with a leading slash; the API takes them without. */
+const toApiPath = (path: string) => (path.startsWith("/") ? path.slice(1) : path);
+const toEditorPath = (path: string) => (path.startsWith("/") ? path : `/${path}`);
+
+export function ChatPanel({
+  apiBase,
+  framework,
+  htVersion,
+  docsPath,
+  getFiles,
+  applyEdit,
+  onClose,
+}: ChatPanelProps) {
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+  }, [turns, busy]);
+
+  async function send(question: string) {
+    const text = question.trim();
+    if (!text || busy) return;
+    setInput("");
+    setBusy(true);
+    const history = [...turns, { role: "user" as const, content: text }];
+    setTurns(history);
+
+    try {
+      // Grounding first, in the browser (see docsSearch.ts for why it cannot
+      // happen server-side). A failure here is silent: the answer is then
+      // ungrounded, which is worse than grounded but far better than nothing.
+      setStatus("Searching the documentation…");
+      const snippets = await searchDocs(text, framework);
+
+      setStatus(snippets.length ? `Thinking (${snippets.length} doc sources)…` : "Thinking…");
+      const files = Object.fromEntries(
+        Object.entries(getFiles()).map(([path, contents]) => [toApiPath(path), contents]),
+      );
+
+      const res = await fetch(`${apiBase}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: history.map(({ role, content }) => ({ role, content })),
+          framework,
+          htVersion,
+          docsPath: docsPath ?? undefined,
+          files,
+          snippets: snippets.map((s) => ({ title: s.title, content: s.content, url: s.url })),
+        }),
+      });
+
+      const body = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        edits?: Edit[];
+        references?: string[];
+        pages?: DocLink[];
+        error?: string;
+      };
+
+      if (!res.ok) {
+        // The server phrases refusals (rate limit, budget, misconfiguration)
+        // for users already — show them rather than a status code.
+        setTurns([...history, {
+          role: "assistant",
+          content: body.message ?? `The assistant is unavailable (${res.status}).`,
+          error: true,
+        }]);
+        return;
+      }
+
+      setTurns([...history, {
+        role: "assistant",
+        content: body.message ?? "",
+        edits: body.edits ?? [],
+        references: body.references ?? [],
+        pages: body.pages ?? [],
+      }]);
+    } catch (err) {
+      reportError(err, "example-chat");
+      setTurns([...history, {
+        role: "assistant",
+        content: "Couldn’t reach the assistant. Check your connection and try again.",
+        error: true,
+      }]);
+    } finally {
+      setBusy(false);
+      setStatus(null);
+    }
+  }
+
+  /** Apply every edit in a turn, remembering what was there before. */
+  function apply(index: number) {
+    setTurns((current) => current.map((turn, i) => {
+      if (i !== index || !turn.edits?.length || turn.undo) return turn;
+      const files = getFiles();
+      const undo: FilesMap = {};
+      for (const edit of turn.edits) {
+        const path = toEditorPath(edit.path);
+        // A file the example doesn't have yet is recorded as an empty string,
+        // so Undo blanks it rather than leaving the assistant's version behind.
+        undo[path] = files[path] ?? "";
+        applyEdit(path, edit.contents);
+      }
+      return { ...turn, undo };
+    }));
+  }
+
+  function undo(index: number) {
+    setTurns((current) => current.map((turn, i) => {
+      if (i !== index || !turn.undo) return turn;
+      for (const [path, contents] of Object.entries(turn.undo)) applyEdit(path, contents);
+      return { ...turn, undo: undefined };
+    }));
+  }
+
+  return (
+    <aside style={panel} aria-label="Ask about this example">
+      <header style={head}>
+        <strong style={{ fontFamily: theme.font.ui, fontSize: 14 }}>Ask about this example</strong>
+        <button style={closeBtn} onClick={onClose} aria-label="Close chat">✕</button>
+      </header>
+
+      <div ref={listRef} style={list}>
+        {turns.length === 0 && (
+          <div style={{ padding: "4px 2px" }}>
+            <p style={{ ...muted, marginTop: 0 }}>
+              Ask what this example does, what an option means, or ask for a change —
+              answers are grounded in the Handsontable documentation, and any code change is
+              shown for you to apply.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {SUGGESTIONS.map((s) => (
+                <button key={s} type="button" style={suggestion} onClick={() => void send(s)}>{s}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {turns.map((turn, i) => (
+          <div key={i} style={turn.role === "user" ? userBubble : assistantBubble}>
+            <Markdownish text={turn.content} error={turn.error} />
+
+            {turn.edits && turn.edits.length > 0 && (
+              <div style={editBox}>
+                <div style={{ fontSize: 11.5, color: theme.color.textMuted, marginBottom: 6 }}>
+                  {turn.undo ? "Applied to" : "Proposed changes to"} {turn.edits.length} file
+                  {turn.edits.length > 1 ? "s" : ""}
+                </div>
+                {turn.edits.map((edit) => (
+                  <div key={edit.path} style={{ marginBottom: 4 }}>
+                    <code style={pathChip}>{edit.path}</code>
+                    {edit.why && <span style={{ ...muted, fontSize: 11.5, marginLeft: 6 }}>{edit.why}</span>}
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  {turn.undo
+                    ? <button type="button" style={ghost} onClick={() => undo(i)}>Undo</button>
+                    : <button type="button" style={primary} onClick={() => apply(i)}>Apply</button>}
+                </div>
+              </div>
+            )}
+
+            {(turn.references?.length || turn.pages?.length) ? (
+              <div style={{ marginTop: 8, fontSize: 11.5 }}>
+                <div style={{ color: theme.color.textMuted, marginBottom: 2 }}>Documentation</div>
+                {[...new Set([...(turn.references ?? []), ...(turn.pages ?? []).map((p) => p.url)])]
+                  .slice(0, 6)
+                  .map((url) => (
+                    <a key={url} href={url} target="_blank" rel="noreferrer" style={docLink}>
+                      {(turn.pages ?? []).find((p) => p.url === url)?.title ?? prettyUrl(url)}
+                    </a>
+                  ))}
+              </div>
+            ) : null}
+          </div>
+        ))}
+
+        {busy && <div style={{ ...assistantBubble, ...muted }}>{status ?? "Thinking…"}</div>}
+      </div>
+
+      <form
+        style={composer}
+        onSubmit={(e) => { e.preventDefault(); void send(input); }}
+      >
+        <textarea
+          style={textarea}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(input); }
+          }}
+          placeholder="Ask about this example…"
+          rows={2}
+          maxLength={800}
+          disabled={busy}
+          aria-label="Your question"
+        />
+        <button type="submit" style={{ ...primary, opacity: busy || !input.trim() ? 0.5 : 1 }} disabled={busy || !input.trim()}>
+          Send
+        </button>
+      </form>
+      <p style={{ ...muted, fontSize: 11, margin: "0 12px 10px" }}>
+        Answers can be wrong — check the code before you rely on it.
+      </p>
+    </aside>
+  );
+}
+
+/**
+ * The smallest renderer that makes an answer readable: fenced code blocks and
+ * paragraphs, nothing else. A Markdown library would be a new dependency in
+ * the authoring bundle and a new HTML-injection surface for model output; the
+ * server already strips tags, and this never sets innerHTML.
+ */
+function Markdownish({ text, error }: { text: string; error?: boolean }) {
+  const parts = text.split(/```(?:[a-zA-Z0-9]*)\n?/);
+  return (
+    <div style={{ color: error ? theme.color.danger : undefined }}>
+      {parts.map((part, i) =>
+        i % 2 === 1
+          ? <pre key={i} style={codeBlock}><code>{part.replace(/\n$/, "")}</code></pre>
+          : part.split(/\n{2,}/).filter(Boolean).map((para, j) => (
+              <p key={`${i}-${j}`} style={{ margin: "0 0 8px", whiteSpace: "pre-wrap" }}>{para}</p>
+            )),
+      )}
+    </div>
+  );
+}
+
+const prettyUrl = (url: string) => url.replace(/^https:\/\/handsontable\.com\/docs\//, "").replace(/\/$/, "");
+
+// ---- Styles ------------------------------------------------------------------
+
+const panel: React.CSSProperties = {
+  position: "fixed", top: 0, right: 0, height: "100%", width: 400, maxWidth: "95vw",
+  background: "#fff", borderLeft: `1px solid ${theme.color.border}`,
+  boxShadow: "-8px 0 24px rgba(0,0,0,0.08)", zIndex: 900,
+  display: "flex", flexDirection: "column", fontFamily: theme.font.ui, color: theme.color.text,
+};
+const head: React.CSSProperties = {
+  display: "flex", alignItems: "center", justifyContent: "space-between",
+  padding: "12px 14px", borderBottom: `1px solid ${theme.color.border}`,
+};
+const closeBtn: React.CSSProperties = {
+  border: "none", background: "none", cursor: "pointer", fontSize: 16, color: theme.color.textMuted,
+};
+const list: React.CSSProperties = { flex: 1, overflowY: "auto", padding: "12px 14px", fontSize: 13 };
+const muted: React.CSSProperties = { color: theme.color.textMuted };
+const userBubble: React.CSSProperties = {
+  background: theme.color.surfaceMuted, borderRadius: theme.radius.md,
+  padding: "8px 10px", margin: "0 0 10px auto", maxWidth: "90%", width: "fit-content",
+};
+const assistantBubble: React.CSSProperties = { padding: "2px 0 10px", maxWidth: "100%" };
+const editBox: React.CSSProperties = {
+  border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.md,
+  padding: 10, marginTop: 8, background: theme.color.surfaceMuted,
+};
+const pathChip: React.CSSProperties = {
+  fontFamily: theme.font.mono, fontSize: 11.5, background: "#fff",
+  border: `1px solid ${theme.color.border}`, borderRadius: 4, padding: "1px 5px",
+};
+const codeBlock: React.CSSProperties = {
+  background: theme.color.editorBg, color: theme.color.editorText, borderRadius: theme.radius.md,
+  padding: 10, overflowX: "auto", fontFamily: theme.font.mono, fontSize: 11.5, margin: "0 0 8px",
+};
+const docLink: React.CSSProperties = {
+  display: "block", color: theme.color.accent, textDecoration: "none", padding: "1px 0",
+};
+const composer: React.CSSProperties = {
+  display: "flex", gap: 6, padding: "10px 12px 6px", borderTop: `1px solid ${theme.color.border}`,
+};
+const textarea: React.CSSProperties = {
+  flex: 1, resize: "none", fontFamily: theme.font.ui, fontSize: 13, padding: "6px 8px",
+  border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.md, color: theme.color.text,
+};
+const primary: React.CSSProperties = {
+  fontFamily: theme.font.ui, fontSize: 12.5, background: theme.color.accent,
+  color: theme.color.accentContrast, border: "none", borderRadius: 6, padding: "6px 12px", cursor: "pointer",
+};
+const ghost: React.CSSProperties = {
+  fontFamily: theme.font.ui, fontSize: 12.5, background: "#fff", color: theme.color.text,
+  border: `1px solid ${theme.color.border}`, borderRadius: 6, padding: "6px 12px", cursor: "pointer",
+};
+const suggestion: React.CSSProperties = {
+  ...ghost, textAlign: "left", fontSize: 12, color: theme.color.accent, cursor: "pointer",
+};
