@@ -19,7 +19,11 @@ export type UsageMetric =
   | "share_view"
   | "embed_view"
   | "chat_message"
-  | "chat_edit";
+  | "chat_edit"
+  | "chat_edit_applied"
+  | "chat_edit_undone"
+  | "chat_denied"
+  | "chat_error";
 
 const utcDay = (): string => new Date().toISOString().slice(0, 10);
 

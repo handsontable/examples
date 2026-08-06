@@ -61,6 +61,18 @@ const SUGGESTIONS = [
   "Make the first two columns frozen",
 ];
 
+/** Report whether a proposed edit was taken. Fire-and-forget: the panel must
+ *  never make the user wait on analytics, and a lost count is not worth a
+ *  retry. Only the event name and the framework are sent. */
+function reportChatEvent(apiBase: string, event: "edit_applied" | "edit_undone", framework: string): void {
+  void fetch(`${apiBase}/api/chat/event`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event, framework }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 /** The runner keeps file paths with a leading slash; the API takes them without. */
 const toApiPath = (path: string) => (path.startsWith("/") ? path.slice(1) : path);
 const toEditorPath = (path: string) => (path.startsWith("/") ? path : `/${path}`);
@@ -191,6 +203,7 @@ export function ChatPanel({
       applyEdit(path, edit.contents);
     }
     setTurns((current) => current.map((t, i) => (i === index ? { ...t, undo } : t)));
+    reportChatEvent(apiBase, "edit_applied", framework);
   }
 
   function undo(index: number) {
@@ -198,6 +211,7 @@ export function ChatPanel({
     if (!turn?.undo) return;
     for (const [path, contents] of Object.entries(turn.undo)) applyEdit(path, contents);
     setTurns((current) => current.map((t, i) => (i === index ? { ...t, undo: undefined } : t)));
+    reportChatEvent(apiBase, "edit_undone", framework);
   }
 
   return (

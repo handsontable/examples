@@ -829,6 +829,7 @@ export default Sentry.withSentry(sentryOptions, {
         const ip = request.headers.get("cf-connecting-ip") ?? "";
         const limit = await checkChatRateLimit(env, ip);
         if (!limit.ok) {
+          ctx.waitUntil(recordUsageEvent(env, "chat_denied", "rate_limit"));
           return cors(new Response(
             JSON.stringify({ error: "rate_limited", message: "Too many questions — give it a minute." }),
             { status: 429, headers: { "Content-Type": "application/json", "Retry-After": String(limit.retryAfter) } },
@@ -841,7 +842,10 @@ export default Sentry.withSentry(sentryOptions, {
           isAuthenticated: async () => (await authenticate(request, env)) !== null,
           what: "chat",
         });
-        if (chatDenied) return chatDenied;
+        if (chatDenied) {
+          ctx.waitUntil(recordUsageEvent(env, "chat_denied", "budget"));
+          return chatDenied;
+        }
 
         const parsed = validateChatRequest(await request.json().catch(() => null));
         if (!parsed.ok) return json({ error: "invalid_request", message: parsed.error }, 400);
@@ -863,12 +867,29 @@ export default Sentry.withSentry(sentryOptions, {
           });
         } catch (err) {
           if (err instanceof ChatUnavailableError) {
+            ctx.waitUntil(recordUsageEvent(env, "chat_error", parsed.value.framework));
             // Configuration and upstream faults are already logged in chat.ts;
             // the caller gets a sentence, not a stack trace.
             return json({ error: "chat_unavailable", message: err.message }, 503);
           }
           throw err;
         }
+      }
+
+      // POST /api/chat/event  { event, framework } -> 204 (public)
+      // Whether a proposed edit was actually applied is only knowable in the
+      // browser, and it is the number that says whether the assistant is
+      // useful rather than merely used. Aggregated like every other counter —
+      // no per-request rows, nothing identifying.
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "chat" && parts[2] === "event") {
+        const body = await request.json().catch(() => null) as { event?: unknown; framework?: unknown } | null;
+        const event = body?.event;
+        if (event !== "edit_applied" && event !== "edit_undone") {
+          return json({ error: "unknown event" }, 400);
+        }
+        const framework = typeof body?.framework === "string" ? body.framework.slice(0, 64) : "";
+        ctx.waitUntil(recordUsageEvent(env, event === "edit_applied" ? "chat_edit_applied" : "chat_edit_undone", framework));
+        return cors(new Response(null, { status: 204 }));
       }
 
       // POST /api/beacon  { path } -> 204 (public, no body echoed)

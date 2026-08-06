@@ -116,7 +116,11 @@ const METRIC_LABEL: Record<string, string> = {
   share_view: "Share views",
   embed_view: "Embed views",
   chat_message: "Assistant questions",
-  chat_edit: "Assistant code edits",
+  chat_edit: "Assistant answers with code",
+  chat_edit_applied: "Assistant edits applied",
+  chat_edit_undone: "Assistant edits undone",
+  chat_denied: "Assistant requests refused",
+  chat_error: "Assistant failures",
 };
 
 export interface AdminPanelProps {
@@ -209,6 +213,8 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
               hint="How often the guardrail turned someone away"
             />
           </section>
+
+          <AssistantSection report={report} />
 
           <AudienceSection audience={report.audience} days={report.windowDays} />
 
@@ -547,6 +553,91 @@ function SettingsForm({
 }
 
 /**
+ * The AI assistant (DEV-2047): how much it is used, whether its edits are
+ * actually taken, what it costs, and how often it refuses or fails.
+ *
+ * "Edits applied" is the number that matters. Questions asked says the button
+ * is discoverable; edits applied says the answers were good enough to keep.
+ */
+function AssistantSection({ report }: { report: UsageReport }) {
+  const usage = report.usage;
+  const questions = sumMetric(usage, "chat_message");
+  const withCode = sumMetric(usage, "chat_edit");
+  const applied = sumMetric(usage, "chat_edit_applied");
+  const undone = sumMetric(usage, "chat_edit_undone");
+  const denied = sumMetric(usage, "chat_denied");
+  const errors = sumMetric(usage, "chat_error");
+  const spend = report.spendBySku.llm;
+  const spendUsd = (spend?.billing || 0) + (spend?.estimate || 0);
+
+  if (questions + denied + errors === 0) {
+    return (
+      <Section title="AI assistant">
+        <p style={note}>
+          Nobody has asked the assistant anything in this window. (Answers need the
+          <code> LITELLM_API_KEY</code> secret — without it every question returns 503 and lands
+          in “refused”.)
+        </p>
+      </Section>
+    );
+  }
+
+  return (
+    <Section title={`AI assistant (${report.windowDays}d)`}>
+      <section style={grid}>
+        <Stat label="Questions asked" value={int(questions)} />
+        <Stat
+          label="Answers with code"
+          value={`${int(withCode)}${questions ? ` (${Math.round((withCode / questions) * 100)}%)` : ""}`}
+          hint="Answers that proposed at least one file edit"
+        />
+        <Stat
+          label="Edits applied"
+          value={`${int(applied)}${withCode ? ` (${Math.round((applied / withCode) * 100)}%)` : ""}`}
+          hint="Proposals the user actually accepted — the quality signal"
+        />
+        <Stat label="Edits undone" value={int(undone)} hint="Applied, then reverted" />
+        <Stat label="Spend (month to date)" value={usd(spendUsd)} />
+        <Stat
+          label="Cost per answer"
+          value={questions ? usd(spendUsd / questions) : "—"}
+          hint="Month-to-date LLM spend over questions in this window"
+        />
+        <Stat label="Refused" value={int(denied)} hint="Rate limit or budget tier" />
+        <Stat label="Failures" value={int(errors)} hint="Gateway unavailable or misconfigured" />
+      </section>
+
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 18 }}>
+        <div style={{ minWidth: 280, flex: "1 1 280px" }}>
+          <div style={subhead}>Questions per day</div>
+          <Bars rows={dailyMetric(usage, "chat_message")} format={int} emptyText="—" />
+        </div>
+        <div style={{ minWidth: 280, flex: "1 1 280px" }}>
+          <div style={subhead}>Edits applied per day</div>
+          <Bars rows={dailyMetric(usage, "chat_edit_applied")} format={int} emptyText="—" />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 18 }}>
+        <div style={{ minWidth: 240, flex: "1 1 240px" }}>
+          <div style={subhead}>Examples asked about</div>
+          <Bars rows={byDimension(usage, "chat_message")} format={int} emptyText="—" />
+        </div>
+        <div style={{ minWidth: 240, flex: "1 1 240px" }}>
+          <div style={subhead}>Refusals by reason</div>
+          <Bars rows={byDimension(usage, "chat_denied")} format={int} emptyText="None — nothing was turned away." />
+        </div>
+      </div>
+
+      <p style={note}>
+        Counted the same way as everything else here: daily aggregates only. Questions are never
+        stored — only that one was asked, and for which example.
+      </p>
+    </Section>
+  );
+}
+
+/**
  * Audience: what a simplified analytics product would show, from data that
  * cannot identify anyone.
  *
@@ -720,6 +811,17 @@ function dailySpend(rows: LedgerRow[]): { label: string; value: number }[] {
   return [...perDay.entries()]
     .sort((a, b) => (a[0] < b[0] ? 1 : -1))
     .map(([label, value]) => ({ label, value }));
+}
+
+/** Totals per `dimension` for one metric (framework, refusal reason, …). */
+function byDimension(rows: UsageRow[], metric: string): { label: string; value: number }[] {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    if (row.metric !== metric) continue;
+    const label = row.dimension || "(unspecified)";
+    totals.set(label, (totals.get(label) ?? 0) + row.count);
+  }
+  return [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value }));
 }
 
 function dailyMetric(rows: UsageRow[], metric: string): { label: string; value: number }[] {

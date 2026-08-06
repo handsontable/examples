@@ -81,8 +81,38 @@ untrusted input.
 
 Each answer is metered into `cost_ledger` under the `llm` SKU, using the
 `x-litellm-response-cost` header the gateway returns — a real figure rather
-than an estimate. It shows up in `/admin` next to the container and egress
-lines, and counts toward the monthly ceiling like everything else.
+than an estimate. It counts toward the monthly ceiling like everything else.
+
+Measured on the first real answers: **roughly $0.01 per question** (Sonnet, a
+small example, ~5 doc chunks). The per-IP cap of 120/day therefore bounds one
+abusive client at about **$1.20/day**, and the budget tiers bound everyone
+together.
+
+## Analytics
+
+`/admin` has an **AI assistant** section (`{days}` window, same as the rest of
+the panel):
+
+| Shown | From |
+|---|---|
+| Questions asked | `chat_message`, per framework |
+| Answers with code | `chat_edit` — share of answers that proposed an edit |
+| **Edits applied** | `chat_edit_applied`, reported by the panel |
+| Edits undone | `chat_edit_undone` |
+| Spend + cost per answer | `llm` SKU in the cost ledger |
+| Refused | `chat_denied`, split by `rate_limit` vs `budget` |
+| Failures | `chat_error` — gateway unavailable or misconfigured |
+
+**Edits applied is the number worth watching.** Questions asked only says the
+button is discoverable; edits applied says the answers were good enough to
+keep. Applied-then-undone is the sharper negative signal — the answer looked
+right until it ran.
+
+Whether an edit was accepted is only knowable in the browser, so the panel
+reports it through `POST /api/chat/event` with the event name and framework —
+fire-and-forget, nothing identifying, aggregated per day like every other
+counter. Questions themselves are never stored: only that one was asked, and
+for which example.
 
 ## Configuration
 

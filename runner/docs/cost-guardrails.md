@@ -225,7 +225,8 @@ One authenticated call to `GET /api/admin/usage?days=N` renders:
   and the enforcement switch, saved through `PUT /api/admin/settings`;
 - spend per SKU, split estimate vs reconciled, so it is obvious which numbers
   are still guesses;
-- **audience analytics** (below);
+- **audience analytics** (below), and an **AI assistant** section covering the
+  chat feature's usage, acceptance rate and spend (see `example-chat.md`);
 - daily spend and daily activity (sessions started, builds, share/embed views,
   sessions refused by the guardrail);
 - live sessions with their awake time and running cost;
