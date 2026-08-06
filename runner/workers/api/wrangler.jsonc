@@ -76,7 +76,18 @@
     // Workers, so an unscoped query would bill their traffic to this runner.
     "CF_ACCOUNT_ID": "15111272c53ed0aaf84a908f0c9c7f8b",
     "CF_SCRIPT_NAME": "handsontable-demos-api",
-    "R2_BUCKET_NAME": "handsontable-demos"
+    "R2_BUCKET_NAME": "handsontable-demos",
+
+    // ---- Example chat (DEV-2047) ----------------------------------------
+    // Non-secret config only. The virtual key (LITELLM_API_KEY) and the
+    // Algolia search key (ALGOLIA_API_KEY) are `wrangler secret`s — without
+    // the former, /api/chat answers 503 and nothing else changes.
+    "LITELLM_API_BASE": "https://litellm.handsontable.com",
+    "LITELLM_MODEL": "claude-sonnet-4-6",
+    // DocSearch app id + index for the docs page lookup. The app id is public
+    // by construction — DocSearch ships it in every docs page bundle.
+    "ALGOLIA_APP_ID": "MMN6OTJMGX",
+    "ALGOLIA_INDEX": "handsontable"
   },
 
   // Routes on demos.handsontable.com are deliberately NOT declared here — they

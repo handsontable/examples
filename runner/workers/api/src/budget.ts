@@ -190,6 +190,20 @@ export async function recordContainerUsage(
   await invalidateBudgetState(env);
 }
 
+/**
+ * Meter one assistant answer (DEV-2047).
+ *
+ * The LiteLLM gateway reports what each call cost in a response header, so
+ * unlike the other SKUs this one is a real figure rather than an estimate —
+ * but it is still written as `estimate`, because no nightly reconciliation
+ * covers it and a `billing` row must always mean "Cloudflare said so".
+ */
+export async function recordLlmUsage(env: Env, usd: number): Promise<void> {
+  if (!(usd > 0)) return;
+  await upsertEstimate(env, utcDay(), "llm", 1, usd).run();
+  await invalidateBudgetState(env);
+}
+
 /** Meter proxied preview traffic + Worker requests (see the accumulator below). */
 export async function recordTraffic(env: Env, egressBytes: number, requests: number): Promise<void> {
   const day = utcDay();

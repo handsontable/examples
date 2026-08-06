@@ -105,6 +105,7 @@ const SKU_LABEL: Record<string, string> = {
   egress: "Egress",
   workers: "Workers requests",
   r2: "R2 storage",
+  llm: "AI assistant",
 };
 
 const METRIC_LABEL: Record<string, string> = {
@@ -114,6 +115,12 @@ const METRIC_LABEL: Record<string, string> = {
   share_created: "Shares created",
   share_view: "Share views",
   embed_view: "Embed views",
+  chat_message: "Assistant questions",
+  chat_edit: "Assistant answers with code",
+  chat_edit_applied: "Assistant edits applied",
+  chat_edit_undone: "Assistant edits undone",
+  chat_denied: "Assistant requests refused",
+  chat_error: "Assistant failures",
 };
 
 export interface AdminPanelProps {
@@ -207,6 +214,8 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
             />
           </section>
 
+          <AssistantSection report={report} />
+
           <AudienceSection audience={report.audience} days={report.windowDays} />
 
           <Section title="Month-to-date spend by SKU">
@@ -246,7 +255,7 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
           </Section>
 
           <Section title={`Daily activity (${report.windowDays}d)`}>
-            {["session_started", "build", "share_view", "embed_view", "session_denied"].map((metric) => {
+            {["session_started", "build", "share_view", "embed_view", "chat_message", "chat_edit", "session_denied"].map((metric) => {
               const rows = dailyMetric(report.usage, metric);
               if (!rows.length) return null;
               return (
@@ -544,6 +553,93 @@ function SettingsForm({
 }
 
 /**
+ * The AI assistant (DEV-2047): how much it is used, whether its edits are
+ * actually taken, what it costs, and how often it refuses or fails.
+ *
+ * "Edits applied" is the number that matters. Questions asked says the button
+ * is discoverable; edits applied says the answers were good enough to keep.
+ */
+function AssistantSection({ report }: { report: UsageReport }) {
+  const usage = report.usage;
+  const questions = sumMetric(usage, "chat_message");
+  const withCode = sumMetric(usage, "chat_edit");
+  const applied = sumMetric(usage, "chat_edit_applied");
+  const undone = sumMetric(usage, "chat_edit_undone");
+  const denied = sumMetric(usage, "chat_denied");
+  const errors = sumMetric(usage, "chat_error");
+  // Windowed, not month-to-date: dividing MTD spend by a 7- or 90-day question
+  // count only agrees by coincidence, and silently misreports the rest of the
+  // time. The ledger rows are already filtered to the selected window.
+  const spendUsd = windowedSpend(report.ledger, "llm");
+
+  if (questions + denied + errors === 0) {
+    return (
+      <Section title="AI assistant">
+        <p style={note}>
+          Nobody has asked the assistant anything in this window. If questions <em>are</em> being
+          asked and this stays empty, check that the <code>LITELLM_API_KEY</code> secret is set —
+          without it every question returns 503 and is counted under Failures.
+        </p>
+      </Section>
+    );
+  }
+
+  return (
+    <Section title={`AI assistant (${report.windowDays}d)`}>
+      <section style={grid}>
+        <Stat label="Questions asked" value={int(questions)} />
+        <Stat
+          label="Answers with code"
+          value={`${int(withCode)}${questions ? ` (${Math.round((withCode / questions) * 100)}%)` : ""}`}
+          hint="Answers that proposed at least one file edit"
+        />
+        <Stat
+          label="Edits applied"
+          value={`${int(applied)}${withCode ? ` (${Math.round((applied / withCode) * 100)}%)` : ""}`}
+          hint="Proposals the user actually accepted — the quality signal"
+        />
+        <Stat label="Edits undone" value={int(undone)} hint="Applied, then reverted" />
+        <Stat label={`Spend (${report.windowDays}d)`} value={usd(spendUsd)} />
+        <Stat
+          label="Cost per answer"
+          value={questions ? usd(spendUsd / questions) : "—"}
+          hint="Assistant spend over questions asked, both in this window"
+        />
+        <Stat label="Refused" value={int(denied)} hint="Rate limit or budget tier" />
+        <Stat label="Failures" value={int(errors)} hint="Gateway unavailable or misconfigured" />
+      </section>
+
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 18 }}>
+        <div style={{ minWidth: 280, flex: "1 1 280px" }}>
+          <div style={subhead}>Questions per day</div>
+          <Bars rows={dailyMetric(usage, "chat_message")} format={int} emptyText="—" />
+        </div>
+        <div style={{ minWidth: 280, flex: "1 1 280px" }}>
+          <div style={subhead}>Edits applied per day</div>
+          <Bars rows={dailyMetric(usage, "chat_edit_applied")} format={int} emptyText="—" />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 18 }}>
+        <div style={{ minWidth: 240, flex: "1 1 240px" }}>
+          <div style={subhead}>Frameworks asked about</div>
+          <Bars rows={byDimension(usage, "chat_message")} format={int} emptyText="—" />
+        </div>
+        <div style={{ minWidth: 240, flex: "1 1 240px" }}>
+          <div style={subhead}>Refusals by reason</div>
+          <Bars rows={byDimension(usage, "chat_denied")} format={int} emptyText="None — nothing was turned away." />
+        </div>
+      </div>
+
+      <p style={note}>
+        Counted the same way as everything else here: daily aggregates only. Question text is
+        never stored — only that a question was asked, and against which framework.
+      </p>
+    </Section>
+  );
+}
+
+/**
  * Audience: what a simplified analytics product would show, from data that
  * cannot identify anyone.
  *
@@ -717,6 +813,31 @@ function dailySpend(rows: LedgerRow[]): { label: string; value: number }[] {
   return [...perDay.entries()]
     .sort((a, b) => (a[0] < b[0] ? 1 : -1))
     .map(([label, value]) => ({ label, value }));
+}
+
+/** Spend on one SKU inside the report window, preferring reconciled figures
+ *  per day exactly as the ceiling's own arithmetic does. */
+function windowedSpend(rows: LedgerRow[], sku: string): number {
+  const perDay = new Map<string, { estimate: number; billing: number }>();
+  for (const row of rows) {
+    if (row.sku !== sku) continue;
+    const cur = perDay.get(row.day) ?? { estimate: 0, billing: 0 };
+    if (row.source === "billing") cur.billing += row.usd;
+    else cur.estimate += row.usd;
+    perDay.set(row.day, cur);
+  }
+  return [...perDay.values()].reduce((sum, v) => sum + (v.billing > 0 ? v.billing : v.estimate), 0);
+}
+
+/** Totals per `dimension` for one metric (framework, refusal reason, …). */
+function byDimension(rows: UsageRow[], metric: string): { label: string; value: number }[] {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    if (row.metric !== metric) continue;
+    const label = row.dimension || "(unspecified)";
+    totals.set(label, (totals.get(label) ?? 0) + row.count);
+  }
+  return [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value }));
 }
 
 function dailyMetric(rows: UsageRow[], metric: string): { label: string; value: number }[] {

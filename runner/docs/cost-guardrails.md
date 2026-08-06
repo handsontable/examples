@@ -169,6 +169,10 @@ Known gaps, by design:
 
 - Container compute has no public per-account analytics dataset, so `container`
   stays an estimate — it is also the SKU Cloudflare already caps.
+- The `llm` SKU (the Ask AI assistant, DEV-2047) is metered from the
+  `x-litellm-response-cost` header the gateway returns, so it is a real figure
+  rather than an estimate — but it is still written as `estimate`, because a
+  `billing` row must always mean "Cloudflare said so".
 - Egress counted in-Worker excludes WebSocket/HMR frames; the nightly job's
   `responseBodySize` figure covers them.
 - A session abandoned without a clean teardown under-counts by at most one idle
@@ -221,7 +225,8 @@ One authenticated call to `GET /api/admin/usage?days=N` renders:
   and the enforcement switch, saved through `PUT /api/admin/settings`;
 - spend per SKU, split estimate vs reconciled, so it is obvious which numbers
   are still guesses;
-- **audience analytics** (below);
+- **audience analytics** (below), and an **AI assistant** section covering the
+  chat feature's usage, acceptance rate and spend (see `example-chat.md`);
 - daily spend and daily activity (sessions started, builds, share/embed views,
   sessions refused by the guardrail);
 - live sessions with their awake time and running cost;

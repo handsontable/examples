@@ -24,6 +24,7 @@ import {
   meterSession,
   noteTraffic,
   publicBudget,
+  recordLlmUsage,
   sessionDenial,
   startSessionMeter,
 } from "./budget.js";
@@ -31,6 +32,13 @@ import { checkCostAlerts, gcRevokedArtifacts, reconcileBilling } from "./reconci
 import { flushUsage, noteView, recordUsageEvent } from "./usage.js";
 import { flushAnalytics, normalisePage, notePageView, pruneAnalytics } from "./analytics.js";
 import { adminUsage } from "./admin.js";
+import {
+  ChatUnavailableError,
+  checkChatRateLimit,
+  requestAnswer,
+  searchDocPages,
+  validateChatRequest,
+} from "./chat.js";
 import { loadSettings, resetSettings, saveSettings, validateSettings } from "./settings.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
@@ -199,6 +207,21 @@ const nowIso = () => new Date().toISOString();
 /** Write out whatever the in-memory meters have accumulated (bytes, requests,
  *  share views). Batched deliberately: one D1 write per asset served would
  *  cost more than the asset does. */
+/**
+ * Fold a caller-supplied framework into a known label.
+ *
+ * Anything that reaches `usage_daily` as a dimension has to come from a fixed
+ * set, or a public endpoint becomes a way to grow the table one invented label
+ * at a time. The catalog keys plus the four documentation flavours cover every
+ * real value; everything else is "other".
+ */
+const KNOWN_DOC_FLAVOURS = new Set(["javascript", "react", "angular", "vue"]);
+const knownFramework = (value: unknown): string => {
+  if (typeof value !== "string") return "other";
+  if (Object.prototype.hasOwnProperty.call(BUILD_CONFIG, value)) return value;
+  return KNOWN_DOC_FLAVOURS.has(value) ? value : "other";
+};
+
 const flushMeters = (env: Env): Promise<void> =>
   Promise.all([flushTraffic(env), flushUsage(env), flushAnalytics(env)]).then(() => undefined);
 
@@ -810,6 +833,87 @@ export default Sentry.withSentry(sentryOptions, {
           Sentry.captureException(e, { tags: { upstream: "npm-registry", probe: "versions" } });
           return json({ error: e instanceof Error ? e.message : String(e) }, 502);
         }
+      }
+
+      // POST /api/chat (public, rate-limited) — "talk with this example".
+      // The browser sends the question, the example's files, and the doc
+      // chunks it retrieved from the docs-assistant; this Worker adds Algolia
+      // page hits and asks the model, holding the LiteLLM key server-side.
+      // See src/chat.ts for why retrieval is split that way.
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "chat" && parts.length === 2) {
+        const ip = request.headers.get("cf-connecting-ip") ?? "";
+        const limit = await checkChatRateLimit(env, ip);
+        if (!limit.ok) {
+          ctx.waitUntil(recordUsageEvent(env, "chat_denied", "rate_limit"));
+          return cors(new Response(
+            JSON.stringify({ error: "rate_limited", message: "Too many questions — give it a minute." }),
+            { status: 429, headers: { "Content-Type": "application/json", "Retry-After": String(limit.retryAfter) } },
+          ));
+        }
+
+        // Answers cost money, so they answer to the same ceiling as containers:
+        // sign-in required at `anon_blocked`, nothing new at `new_blocked`.
+        const chatDenied = await budgetGate(env, {
+          isAuthenticated: async () => (await authenticate(request, env)) !== null,
+          what: "chat",
+        });
+        if (chatDenied) {
+          ctx.waitUntil(recordUsageEvent(env, "chat_denied", "budget"));
+          return chatDenied;
+        }
+
+        const parsed = validateChatRequest(await request.json().catch(() => null));
+        if (!parsed.ok) return json({ error: "invalid_request", message: parsed.error }, 400);
+
+        const question = [...parsed.value.messages].reverse().find((m) => m.role === "user")?.content ?? "";
+        const pages = await searchDocPages(env, question, parsed.value.framework);
+        try {
+          const answer = await requestAnswer(env, parsed.value, pages);
+          ctx.waitUntil(Promise.all([
+            recordLlmUsage(env, answer.usd),
+            recordUsageEvent(env, "chat_message", knownFramework(parsed.value.framework)),
+            answer.edits.length
+              ? recordUsageEvent(env, "chat_edit", knownFramework(parsed.value.framework))
+              : Promise.resolve(),
+          ]).then(() => undefined));
+          return json({
+            message: answer.message,
+            edits: answer.edits,
+            references: answer.references,
+            pages,
+          });
+        } catch (err) {
+          if (err instanceof ChatUnavailableError) {
+            ctx.waitUntil(recordUsageEvent(env, "chat_error", knownFramework(parsed.value.framework)));
+            // Configuration and upstream faults are already logged in chat.ts;
+            // the caller gets a sentence, not a stack trace.
+            return json({ error: "chat_unavailable", message: err.message }, 503);
+          }
+          throw err;
+        }
+      }
+
+      // POST /api/chat/event  { event, framework } -> 204 (public)
+      // Whether a proposed edit was actually applied is only knowable in the
+      // browser, and it is the number that says whether the assistant is
+      // useful rather than merely used. Aggregated like every other counter —
+      // no per-request rows, nothing identifying.
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "chat" && parts[2] === "event") {
+        const body = await request.json().catch(() => null) as { event?: unknown; framework?: unknown } | null;
+        const event = body?.event;
+        if (event !== "edit_applied" && event !== "edit_undone") {
+          return json({ error: "unknown event" }, 400);
+        }
+        // Same per-IP budget as the chat route: this one costs nothing to
+        // serve, but it writes counter rows, and a public writer needs a cap.
+        const eventLimit = await checkChatRateLimit(env, request.headers.get("cf-connecting-ip") ?? "");
+        if (!eventLimit.ok) return cors(new Response(null, { status: 429 }));
+        ctx.waitUntil(recordUsageEvent(
+          env,
+          event === "edit_applied" ? "chat_edit_applied" : "chat_edit_undone",
+          knownFramework(body?.framework),
+        ));
+        return cors(new Response(null, { status: 204 }));
       }
 
       // POST /api/beacon  { path } -> 204 (public, no body echoed)

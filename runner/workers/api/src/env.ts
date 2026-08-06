@@ -54,6 +54,20 @@ export interface Env {
    *  Absent -> the nightly reconciliation is skipped, estimates stand. */
   CF_ANALYTICS_TOKEN?: string;
 
+  // Example chat (DEV-2047). See src/chat.ts and docs/example-chat.md.
+  /** LiteLLM gateway base URL (no trailing slash needed). */
+  LITELLM_API_BASE?: string;
+  /** Model id as configured on the gateway. */
+  LITELLM_MODEL?: string;
+  /** Virtual key for the gateway (`wrangler secret put LITELLM_API_KEY`).
+   *  Absent -> /api/chat answers 503; nothing else is affected. */
+  LITELLM_API_KEY?: string;
+  /** Algolia DocSearch credentials for the docs page lookup. The app id and
+   *  index are public config; the search key is a secret only by convention. */
+  ALGOLIA_APP_ID?: string;
+  ALGOLIA_INDEX?: string;
+  ALGOLIA_API_KEY?: string;
+
   // Index signature so we can look up a binding by generated name.
   [key: string]: unknown;
 }

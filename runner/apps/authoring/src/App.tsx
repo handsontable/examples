@@ -24,6 +24,7 @@ import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
 import { MyDemos } from "./MyDemos.js";
 import { AdminPanel } from "./Admin.js";
+import { ChatPanel } from "./Chat.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { reportError, reportingEnabled, Sentry } from "./sentry.js";
 
@@ -347,6 +348,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [linksId, setLinksId] = useState<string | null>(null);
   const [forkedFrom, setForkedFrom] = useState<string | null>(`catalog:${framework}`);
   const [myDemosOpen, setMyDemosOpen] = useState(false);
+  // "Ask about this example" (DEV-2047). Available on every route, including
+  // the public /share view — explaining a demo is exactly what a shared link
+  // is for.
+  const [chatOpen, setChatOpen] = useState(false);
   const docsPathRef = useRef<string | null>(docsPath);
   const dirtyRef = useRef(dirty);
   const sourceLoadedRef = useRef(sourceLoaded);
@@ -1061,6 +1066,14 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
             </a>
           </>
         )}
+        <button
+          style={{ ...ghostBtn, color: theme.color.accent, borderColor: theme.color.accent }}
+          onClick={() => setChatOpen((v) => !v)}
+          title="Ask questions about this example, or ask for a change"
+          aria-pressed={chatOpen}
+        >
+          Ask AI
+        </button>
         {!isShare && user && (
           <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
         )}
@@ -1135,6 +1148,18 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         <ShareLinks clientUrl={clientUrl} embedUrl={embedUrl} onClose={() => setShareLinksOpen(false)} />
       )}
 
+      {chatOpen && (
+        <ChatPanel
+          apiBase={API_BASE}
+          token={getToken()}
+          framework={framework}
+          htVersion={version}
+          docsPath={docsPath}
+          getFiles={() => filesRef.current}
+          applyEdit={onEdit}
+          onClose={() => setChatOpen(false)}
+        />
+      )}
       {myDemosOpen && (
         <MyDemos apiBase={API_BASE} token={getToken()} onClose={() => setMyDemosOpen(false)} />
       )}
