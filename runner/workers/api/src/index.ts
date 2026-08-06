@@ -207,6 +207,21 @@ const nowIso = () => new Date().toISOString();
 /** Write out whatever the in-memory meters have accumulated (bytes, requests,
  *  share views). Batched deliberately: one D1 write per asset served would
  *  cost more than the asset does. */
+/**
+ * Fold a caller-supplied framework into a known label.
+ *
+ * Anything that reaches `usage_daily` as a dimension has to come from a fixed
+ * set, or a public endpoint becomes a way to grow the table one invented label
+ * at a time. The catalog keys plus the four documentation flavours cover every
+ * real value; everything else is "other".
+ */
+const KNOWN_DOC_FLAVOURS = new Set(["javascript", "react", "angular", "vue"]);
+const knownFramework = (value: unknown): string => {
+  if (typeof value !== "string") return "other";
+  if (Object.prototype.hasOwnProperty.call(BUILD_CONFIG, value)) return value;
+  return KNOWN_DOC_FLAVOURS.has(value) ? value : "other";
+};
+
 const flushMeters = (env: Env): Promise<void> =>
   Promise.all([flushTraffic(env), flushUsage(env), flushAnalytics(env)]).then(() => undefined);
 
@@ -856,8 +871,10 @@ export default Sentry.withSentry(sentryOptions, {
           const answer = await requestAnswer(env, parsed.value, pages);
           ctx.waitUntil(Promise.all([
             recordLlmUsage(env, answer.usd),
-            recordUsageEvent(env, "chat_message", parsed.value.framework),
-            answer.edits.length ? recordUsageEvent(env, "chat_edit", parsed.value.framework) : Promise.resolve(),
+            recordUsageEvent(env, "chat_message", knownFramework(parsed.value.framework)),
+            answer.edits.length
+              ? recordUsageEvent(env, "chat_edit", knownFramework(parsed.value.framework))
+              : Promise.resolve(),
           ]).then(() => undefined));
           return json({
             message: answer.message,
@@ -867,7 +884,7 @@ export default Sentry.withSentry(sentryOptions, {
           });
         } catch (err) {
           if (err instanceof ChatUnavailableError) {
-            ctx.waitUntil(recordUsageEvent(env, "chat_error", parsed.value.framework));
+            ctx.waitUntil(recordUsageEvent(env, "chat_error", knownFramework(parsed.value.framework)));
             // Configuration and upstream faults are already logged in chat.ts;
             // the caller gets a sentence, not a stack trace.
             return json({ error: "chat_unavailable", message: err.message }, 503);
@@ -887,8 +904,15 @@ export default Sentry.withSentry(sentryOptions, {
         if (event !== "edit_applied" && event !== "edit_undone") {
           return json({ error: "unknown event" }, 400);
         }
-        const framework = typeof body?.framework === "string" ? body.framework.slice(0, 64) : "";
-        ctx.waitUntil(recordUsageEvent(env, event === "edit_applied" ? "chat_edit_applied" : "chat_edit_undone", framework));
+        // Same per-IP budget as the chat route: this one costs nothing to
+        // serve, but it writes counter rows, and a public writer needs a cap.
+        const eventLimit = await checkChatRateLimit(env, request.headers.get("cf-connecting-ip") ?? "");
+        if (!eventLimit.ok) return cors(new Response(null, { status: 429 }));
+        ctx.waitUntil(recordUsageEvent(
+          env,
+          event === "edit_applied" ? "chat_edit_applied" : "chat_edit_undone",
+          knownFramework(body?.framework),
+        ));
         return cors(new Response(null, { status: 204 }));
       }
 

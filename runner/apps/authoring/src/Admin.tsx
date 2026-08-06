@@ -567,16 +567,18 @@ function AssistantSection({ report }: { report: UsageReport }) {
   const undone = sumMetric(usage, "chat_edit_undone");
   const denied = sumMetric(usage, "chat_denied");
   const errors = sumMetric(usage, "chat_error");
-  const spend = report.spendBySku.llm;
-  const spendUsd = (spend?.billing || 0) + (spend?.estimate || 0);
+  // Windowed, not month-to-date: dividing MTD spend by a 7- or 90-day question
+  // count only agrees by coincidence, and silently misreports the rest of the
+  // time. The ledger rows are already filtered to the selected window.
+  const spendUsd = windowedSpend(report.ledger, "llm");
 
   if (questions + denied + errors === 0) {
     return (
       <Section title="AI assistant">
         <p style={note}>
-          Nobody has asked the assistant anything in this window. (Answers need the
-          <code> LITELLM_API_KEY</code> secret — without it every question returns 503 and lands
-          in “refused”.)
+          Nobody has asked the assistant anything in this window. If questions <em>are</em> being
+          asked and this stays empty, check that the <code>LITELLM_API_KEY</code> secret is set —
+          without it every question returns 503 and is counted under Failures.
         </p>
       </Section>
     );
@@ -597,11 +599,11 @@ function AssistantSection({ report }: { report: UsageReport }) {
           hint="Proposals the user actually accepted — the quality signal"
         />
         <Stat label="Edits undone" value={int(undone)} hint="Applied, then reverted" />
-        <Stat label="Spend (month to date)" value={usd(spendUsd)} />
+        <Stat label={`Spend (${report.windowDays}d)`} value={usd(spendUsd)} />
         <Stat
           label="Cost per answer"
           value={questions ? usd(spendUsd / questions) : "—"}
-          hint="Month-to-date LLM spend over questions in this window"
+          hint="Assistant spend over questions asked, both in this window"
         />
         <Stat label="Refused" value={int(denied)} hint="Rate limit or budget tier" />
         <Stat label="Failures" value={int(errors)} hint="Gateway unavailable or misconfigured" />
@@ -620,7 +622,7 @@ function AssistantSection({ report }: { report: UsageReport }) {
 
       <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 18 }}>
         <div style={{ minWidth: 240, flex: "1 1 240px" }}>
-          <div style={subhead}>Examples asked about</div>
+          <div style={subhead}>Frameworks asked about</div>
           <Bars rows={byDimension(usage, "chat_message")} format={int} emptyText="—" />
         </div>
         <div style={{ minWidth: 240, flex: "1 1 240px" }}>
@@ -630,8 +632,8 @@ function AssistantSection({ report }: { report: UsageReport }) {
       </div>
 
       <p style={note}>
-        Counted the same way as everything else here: daily aggregates only. Questions are never
-        stored — only that one was asked, and for which example.
+        Counted the same way as everything else here: daily aggregates only. Question text is
+        never stored — only that a question was asked, and against which framework.
       </p>
     </Section>
   );
@@ -811,6 +813,20 @@ function dailySpend(rows: LedgerRow[]): { label: string; value: number }[] {
   return [...perDay.entries()]
     .sort((a, b) => (a[0] < b[0] ? 1 : -1))
     .map(([label, value]) => ({ label, value }));
+}
+
+/** Spend on one SKU inside the report window, preferring reconciled figures
+ *  per day exactly as the ceiling's own arithmetic does. */
+function windowedSpend(rows: LedgerRow[], sku: string): number {
+  const perDay = new Map<string, { estimate: number; billing: number }>();
+  for (const row of rows) {
+    if (row.sku !== sku) continue;
+    const cur = perDay.get(row.day) ?? { estimate: 0, billing: 0 };
+    if (row.source === "billing") cur.billing += row.usd;
+    else cur.estimate += row.usd;
+    perDay.set(row.day, cur);
+  }
+  return [...perDay.values()].reduce((sum, v) => sum + (v.billing > 0 ? v.billing : v.estimate), 0);
 }
 
 /** Totals per `dimension` for one metric (framework, refusal reason, …). */

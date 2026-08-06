@@ -111,8 +111,9 @@ right until it ran.
 Whether an edit was accepted is only knowable in the browser, so the panel
 reports it through `POST /api/chat/event` with the event name and framework —
 fire-and-forget, nothing identifying, aggregated per day like every other
-counter. Questions themselves are never stored: only that one was asked, and
-for which example.
+counter. Question text is never stored — only that a question was asked and
+which framework it was about, and that framework is folded into a fixed label
+set server-side so a public caller cannot invent new ones.
 
 ## Configuration
 
