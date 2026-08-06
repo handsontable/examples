@@ -49,18 +49,53 @@ Ranked by what is actually unbounded:
 3. **R2 growth** — slow burn, not a spike. $0.015/GB-month.
 4. **Containers** — already capped, see above.
 
-## Layer 1 — Cloudflare Budget alerts (manual, dashboard only)
+### Measured baseline (2026-08-06)
 
-**Manage Account → Billing → Billable Usage → Set Budget Alert.** Create three,
-at `200`, `500`, `800`. (Or **Notifications → Add → Budget Alert**.) There is no
-API for this in the Cloudflare MCP surface, so it is a manual step.
+From **Billing → Billable usage**, cycle Aug 4 – Sep 3 2026, 3 days observed:
+
+| | |
+|---|---|
+| Total cost so far | **$1.27** |
+| Projected cycle cost | **$13.11** |
+| Average daily | $0.42 |
+
+The entire billable amount is *our* containers (memory $1.24, disk $0.03).
+Everything else on the account — including the other ~13 Workers — sat inside
+its included allowances and contributed **$0**. Two things worth carrying
+forward:
+
+- **Container CPU is ~8% utilised**, not the 35% the estimator assumes
+  (5.69k vCPU-seconds against ~146k awake container-seconds). The estimator is
+  therefore conservative by roughly 4.5× on the CPU term — which is the safe
+  direction, and CPU is a small part of the bill anyway.
+- **Workers requests are the next line to cross**: 2.06M of the 10M included in
+  3 days, i.e. ~21M projected for the cycle, so ~$3/month of overage will start
+  appearing. Which is exactly why the meter counts requests.
+
+## Layer 1 — Cloudflare Budget alerts (dashboard only)
+
+**Manage Account → Billing → Billable Usage → Set Budget Alert.** There is no
+API for this in the Cloudflare MCP surface, so it is a dashboard action.
+
+**Already created on account `15111272…` (2026-08-06):**
+
+| Alert | Threshold | Recipient |
+|---|---|---|
+| Usage alert $200 (20% of $1000 ceiling) | $200 | `invoices@handsontable.com` |
+| Usage alert $500 (50% of $1000 ceiling) | $500 | `invoices@handsontable.com` |
+| Usage alert $800 (80% of $1000 ceiling) | $800 | `invoices@handsontable.com` |
+
+⚠️ A **"Default budget alert (auto-created)" at $10** also exists and was left
+alone. Projected spend is $13.11, so **it will fire this cycle**. Delete or
+retune it, or it becomes the alert everyone learns to ignore.
 
 What they do and don't do:
 
 - **Informational only. They cap nothing.** That is why layer 3 exists.
 - **Account-level**: everything billing to `15111272…` counts toward the same
-  $200. Check the current Billable Usage baseline first — if the account already
-  runs at ~$150/mo of unrelated usage, a $200 alert is noise on day one.
+  $200. Measured, that turns out not to matter — the rest of the account
+  currently contributes $0 of usage-based spend, so in practice these behave
+  like runner alerts. Re-check the baseline if that changes.
 - Fire on **projected** monthly spend, recomputed **daily**, once per billing
   cycle per threshold. Usage is a day in arrears, so expect ~24h lag.
 - Exclude the $5 Workers Paid subscription fee; usage-based spend only.
@@ -94,13 +129,23 @@ Cloudflare offers no hard spend cap, so the $1000 line is ours to hold.
 
 ### Tiers
 
+Thresholds are **absolute dollars** and **editable from the admin panel** — no
+deploy needed. The `BUDGET_*` vars in `wrangler.jsonc` are only the defaults
+that apply until someone saves an override.
+
 | Tier | Default | Behaviour |
 |---|---|---|
-| `ok` | <60% | Normal. |
-| `warn` | ≥60% | Notice in the authoring UI. Everything still works. |
-| `anon_blocked` | ≥80% | Live sessions require a Handsontable sign-in. |
-| `new_blocked` | ≥95% | No new live sessions and no builds. Running sessions finish. |
-| `closed` | ≥100% | Running sessions are destroyed on their next keepalive. |
+| `ok` | <$600 | Normal. |
+| `warn` | ≥$600 | Notice in the authoring UI. Everything still works. |
+| `anon_blocked` | ≥$800 | Live sessions require a Handsontable sign-in. |
+| `new_blocked` | ≥$950 | No new live sessions and no builds. Running sessions finish. |
+| `closed` | ≥$1000 | Running sessions are destroyed on their next keepalive. |
+
+The server rejects a save whose tiers are out of order (notice ≤ sign-in ≤
+no-new ≤ close) or above the ceiling, because an unreachable tier is a
+guardrail that silently does less than the panel says it does. Overrides are
+stored in `runner_settings` with who changed them and when; **Reset to
+defaults** drops back to the committed config.
 
 **Static shares (`/d/:id`, `/embed/:id`) and R2 artifact reads are never gated.**
 They are the degradation path and must survive `closed`.
@@ -133,13 +178,9 @@ Known gaps, by design:
 
 `BUDGET_ENFORCE` is `"0"` on merge: tiers are computed and logged
 (`[budget] would deny …`) but nothing is refused. Compare the metered figures
-against the Billable Usage dashboard for a week, then set it to `"1"`.
-
-```bash
-# after the observation week
-cd runner/workers/api
-npx wrangler deploy --var BUDGET_ENFORCE:1   # or edit wrangler.jsonc and deploy
-```
+against the Billable Usage dashboard for a week, then turn enforcement on with
+the checkbox in **/admin → Guardrail settings** (no deploy). Changing the
+committed default instead means editing `wrangler.jsonc` and deploying.
 
 ### Nightly job
 
@@ -162,29 +203,77 @@ bytes.
 > demos are the only thing in the bucket that is safe to expire, which is why
 > the GC targets exactly those rather than a bucket lifecycle rule.
 
+### In-app spend alerts
+
+Separate from Cloudflare's. `alertsUsd` (default `200,500,800`, editable in the
+panel) fires on **this runner's metered spend**, once per threshold per month,
+via Sentry and the Worker log. On a shared account that is the difference
+between "the account is spending money" and "the runner is".
+
 ## The admin panel
 
 `/admin` on the authoring app (login-gated, same broker identity as `/edit`).
-One authenticated call to `GET /api/admin/usage?days=30` renders:
+One authenticated call to `GET /api/admin/usage?days=N` renders:
 
 - month-to-date spend against the ceiling, current tier, and whether the
   guardrail is enforcing or observing;
+- **the guardrail settings form** — ceiling, all four tiers, alert thresholds
+  and the enforcement switch, saved through `PUT /api/admin/settings`;
 - spend per SKU, split estimate vs reconciled, so it is obvious which numbers
   are still guesses;
+- **audience analytics** (below);
 - daily spend and daily activity (sessions started, builds, share/embed views,
   sessions refused by the guardrail);
 - live sessions with their awake time and running cost;
 - demo inventory by framework and the most-viewed shares.
 
-Usage counters are daily aggregates written on the hot paths
-(`usage_daily`); no per-request rows, IPs or user agents are stored.
+## Audience analytics — what is and isn't collected
+
+A simplified analytics view: views, unique visitors, top pages and demos,
+referrers, countries, devices, browsers, languages. Built to be useful for
+capacity and product decisions and useless for tracking anyone.
+
+**Collected** (all bucketed at write time into `analytics_daily`, one row per
+day/dimension/value):
+
+| Dimension | Value |
+|---|---|
+| `views` | count of page views |
+| `page` | normalised path — `/d/:id`, `/embed/:id`, `/edit/:id`, `/share/:id`, `/`, `/admin`, `/other` |
+| `demo` | demo id, for shared/embedded demos |
+| `referrer` | referring **hostname** only, or `direct` / `internal` |
+| `country` | two-letter code from the Cloudflare edge |
+| `device` / `browser` / `os` | three to six coarse buckets each |
+| `language` | primary subtag (`en`, `pl`, …) |
+| `bot` | requests identified as bots, excluded from every other bucket |
+
+**Never stored:** cookies or any client-side id, IP addresses, user-agent
+strings, full URLs or query strings, per-request rows of any kind.
+
+**Unique visitors** come from `SHA-256(daily random salt + IP + user agent)`,
+truncated, stored in `analytics_visitors` as one row per (day, hash). The salt
+lives in KV for ~48h and is then gone, so the hashes cannot be re-derived from
+a known IP afterwards and cannot be joined across days. A returning visitor
+therefore counts once per day and is unrecognisable tomorrow — that is the
+intended trade, not a limitation to fix. Visitor rows are deleted after
+`ANALYTICS_RETENTION_DAYS` (180).
+
+The authoring app is a separate Worker, so its views arrive via
+`POST /api/beacon` with a path and nothing else; the server normalises even
+that into the label set above. The nightly job folds one-hit referrer
+hostnames into `other`, so a crawler inventing `Referer` headers cannot grow
+the table.
 
 ## Endpoints
 
 | Route | Auth | Purpose |
 |---|---|---|
 | `GET /api/budget` | public (details for signed-in) | Tier + user-facing notice; drives the UI banner. |
+| `POST /api/beacon` | public | One anonymous page view from the authoring app. |
 | `GET /api/admin/usage?days=N` | broker token | Everything the panel renders. |
+| `GET /api/admin/settings` | broker token | Effective thresholds + whether they are an override. |
+| `PUT /api/admin/settings` | broker token | Change ceiling / tiers / alerts / enforcement. |
+| `DELETE /api/admin/settings` | broker token | Revert to the `wrangler.jsonc` defaults. |
 
 ## Open decisions
 

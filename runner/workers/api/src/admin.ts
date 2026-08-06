@@ -10,7 +10,8 @@
 // @handsontable.com identity. Spend figures are internal, not secret.
 
 import type { Env } from "./env.js";
-import { computeBudgetState, budgetEnforced, containerUsdPerSecond, SESSION_INSTANCE_TYPE } from "./budget.js";
+import { computeBudgetState, containerUsdPerSecond, SESSION_INSTANCE_TYPE } from "./budget.js";
+import { analyticsReport } from "./analytics.js";
 
 export interface LedgerRow {
   day: string;
@@ -76,7 +77,7 @@ export async function adminUsage(env: Env, days: number) {
   const since = dayAgo(days);
   const monthPrefix = new Date().toISOString().slice(0, 7);
 
-  const [ledger, usage, demoTotals, demosByFramework, topDemos, budget, sessions] = await Promise.all([
+  const [ledger, usage, demoTotals, demosByFramework, topDemos, budget, sessions, audience] = await Promise.all([
     env.DB.prepare(
       `SELECT day, sku, source, units, usd FROM cost_ledger WHERE day >= ?1 ORDER BY day DESC, sku`,
     ).bind(since).all<LedgerRow>(),
@@ -112,6 +113,8 @@ export async function adminUsage(env: Env, days: number) {
     computeBudgetState(env),
 
     liveSessions(env),
+
+    analyticsReport(env, days),
   ]);
 
   const ledgerRows = ledger.results ?? [];
@@ -132,14 +135,11 @@ export async function adminUsage(env: Env, days: number) {
       spendUsd: budget.spendUsd,
       limitUsd: budget.limitUsd,
       reconciled: budget.reconciled,
-      enforced: budgetEnforced(env),
-      thresholds: {
-        warn: Number(env.BUDGET_WARN_PCT ?? 0.6),
-        anonBlocked: Number(env.BUDGET_ANON_BLOCK_PCT ?? 0.8),
-        newBlocked: Number(env.BUDGET_NEW_BLOCK_PCT ?? 0.95),
-        closed: Number(env.BUDGET_CLOSED_PCT ?? 1),
-      },
+      enforced: budget.enforced,
     },
+    // The editable thresholds, so the panel's form starts from what is
+    // actually in force rather than from a copy of the defaults.
+    settings: budget.settings,
     // Month-to-date, split so it is obvious which SKUs are still guesses.
     spendBySku,
     ledger: ledgerRows,
@@ -152,5 +152,6 @@ export async function adminUsage(env: Env, days: number) {
       topViewed: topDemos.results ?? [],
     },
     liveSessions: sessions,
+    audience,
   };
 }

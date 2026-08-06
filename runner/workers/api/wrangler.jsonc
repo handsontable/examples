@@ -61,6 +61,13 @@
     // Observe-only until the metered spend has been compared against the
     // Billable Usage dashboard for a week. Flip to "1" to start refusing.
     "BUDGET_ENFORCE": "0",
+    // In-app spend alerts (Sentry + logs) on *this runner's* metered spend —
+    // Cloudflare's own budget alerts are account-wide and cannot tell the
+    // runner apart from everything else billing to the account.
+    "BUDGET_ALERTS_USD": "200,500,800",
+    // Anonymous audience data retention. Visitor hashes are dropped after
+    // this many days; the daily aggregates behind them carry no identity.
+    "ANALYTICS_RETENTION_DAYS": "180",
     // Purge R2 artifacts of demos revoked longer ago than this many days.
     // 0 = disabled; turn on deliberately, it deletes bytes.
     "BUDGET_R2_GC_DAYS": "0",

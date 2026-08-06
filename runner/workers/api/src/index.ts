@@ -15,19 +15,21 @@ import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate } from "./auth.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, updateDemo, type DemoRow } from "./share.js";
 import {
-  budgetEnforced,
   countEgress,
   flushTraffic,
   getBudgetState,
+  invalidateBudgetState,
   meterSession,
   noteTraffic,
   publicBudget,
   sessionDenial,
   startSessionMeter,
 } from "./budget.js";
-import { gcRevokedArtifacts, reconcileBilling } from "./reconcile.js";
+import { checkCostAlerts, gcRevokedArtifacts, reconcileBilling } from "./reconcile.js";
 import { flushUsage, noteView, recordUsageEvent } from "./usage.js";
+import { flushAnalytics, normalisePage, notePageView, pruneAnalytics } from "./analytics.js";
 import { adminUsage } from "./admin.js";
+import { loadSettings, resetSettings, saveSettings, validateSettings } from "./settings.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
 // so live-preview sessions all use ONE class backed by one generic image that
@@ -196,7 +198,7 @@ const nowIso = () => new Date().toISOString();
  *  share views). Batched deliberately: one D1 write per asset served would
  *  cost more than the asset does. */
 const flushMeters = (env: Env): Promise<void> =>
-  Promise.all([flushTraffic(env), flushUsage(env)]).then(() => undefined);
+  Promise.all([flushTraffic(env), flushUsage(env), flushAnalytics(env)]).then(() => undefined);
 
 /**
  * Budget gate for the two paths that boot a container: starting a Tier-2 live
@@ -220,10 +222,12 @@ async function budgetGate(
   let denial: ReturnType<typeof sessionDenial> = null;
   let tier = "ok";
   let pct = 0;
+  let enforced = false;
   try {
     const state = await getBudgetState(env);
     tier = state.tier;
     pct = state.pct;
+    enforced = state.enforced;
     denial = sessionDenial(state, state.tier === "anon_blocked" ? await opts.isAuthenticated() : false);
   } catch (err) {
     console.warn("[budget] state unavailable, allowing:", err instanceof Error ? err.message : String(err));
@@ -231,7 +235,7 @@ async function budgetGate(
   }
   if (!denial) return null;
   const detail = `${opts.what}: tier=${tier} pct=${pct.toFixed(3)}`;
-  if (!budgetEnforced(env)) {
+  if (!enforced) {
     console.log(`[budget] would deny ${detail} (observe-only)`);
     return null;
   }
@@ -247,14 +251,13 @@ async function budgetGate(
  * (stop polling, stop pinging, show the message) already covers this case.
  */
 async function closeSessionIfOverBudget(env: Env, sessionId: string): Promise<Response | null> {
-  if (!budgetEnforced(env)) return null;
-  let tier = "ok";
+  let state;
   try {
-    tier = (await getBudgetState(env)).tier;
+    state = await getBudgetState(env);
   } catch {
     return null; // A ledger read that fails must not kill running sessions.
   }
-  if (tier !== "closed") return null;
+  if (!state.enforced || state.tier !== "closed") return null;
 
   await meterSession(env, sessionId, { final: true });
   try {
@@ -711,8 +714,13 @@ export default Sentry.withSentry(sentryOptions, {
         const asset = await serveDemoAsset(env, demoId, sub, { embed });
         // Count the page load only, and only when it resolved to a real demo:
         // counting unresolved ids would let a crawler write arbitrary rows.
-        if (sub === "" && asset.status === 200 && noteView(embed ? "embed_view" : "share_view", demoId)) {
-          ctx.waitUntil(flushMeters(env));
+        if (sub === "" && asset.status === 200) {
+          const due = noteView(embed ? "embed_view" : "share_view", demoId);
+          const analyticsDue = await notePageView(env, request, {
+            page: normalisePage(url.pathname),
+            demoId,
+          });
+          if (due || analyticsDue) ctx.waitUntil(flushMeters(env));
         }
         return asset;
       }
@@ -780,6 +788,22 @@ export default Sentry.withSentry(sentryOptions, {
         }
       }
 
+      // POST /api/beacon  { path } -> 204 (public, no body echoed)
+      // The authoring app is a separate Worker serving static assets, so its
+      // page views never reach this Worker on their own. One beacon per view
+      // closes that gap. Nothing identifying is accepted from the client: the
+      // path is normalised to a fixed label set here, and everything else
+      // (country, device, referrer, the anonymous visitor hash) is derived
+      // from the request itself. See analytics.ts for the privacy rules.
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "beacon" && parts.length === 2) {
+        const body = await request.json().catch(() => null) as { path?: unknown } | null;
+        const path = typeof body?.path === "string" ? body.path : "/";
+        if (await notePageView(env, request, { page: normalisePage(path) })) {
+          ctx.waitUntil(flushMeters(env));
+        }
+        return cors(new Response(null, { status: 204 }));
+      }
+
       // GET /api/budget (public) — the degradation tier the client should
       // reflect. Dollar figures only for a signed-in Handsontable identity;
       // anonymous callers get the tier and the user-facing notice, which is
@@ -788,11 +812,48 @@ export default Sentry.withSentry(sentryOptions, {
         const identity = await authenticate(request, env);
         try {
           const state = await getBudgetState(env);
-          return json(publicBudget(state, { detailed: identity !== null, enforced: budgetEnforced(env) }));
+          return json(publicBudget(state, { detailed: identity !== null }));
         } catch {
           // Never let a ledger read failure show the UI a scary banner.
-          return json({ tier: "ok", pct: 0, enforced: budgetEnforced(env), notice: null });
+          return json({ tier: "ok", pct: 0, enforced: false, notice: null });
         }
+      }
+
+      // GET /api/admin/settings (auth) — the effective guardrail settings,
+      // and whether they come from the panel or from wrangler.jsonc.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "admin" && parts[2] === "settings") {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+        return json(await loadSettings(env));
+      }
+
+      // PUT /api/admin/settings (auth) — change the ceiling, the tiers, the
+      // alert thresholds or the enforcement switch, without a deploy.
+      // DELETE reverts to the wrangler.jsonc defaults.
+      if ((request.method === "PUT" || request.method === "DELETE")
+        && parts[0] === "api" && parts[1] === "admin" && parts[2] === "settings") {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+
+        if (request.method === "DELETE") {
+          const defaults = await resetSettings(env);
+          await invalidateBudgetState(env);
+          console.log(`[budget] settings reset to defaults by ${identity.email}`);
+          return json(defaults);
+        }
+
+        const parsed = validateSettings(await request.json().catch(() => null));
+        if (!parsed.ok) return json({ error: parsed.error }, 400);
+        const saved = await saveSettings(env, parsed.value, identity.email);
+        // The cached state embeds the old thresholds; drop it so the new ones
+        // take effect on the very next request rather than in five minutes.
+        await invalidateBudgetState(env);
+        console.log(
+          `[budget] settings updated by ${identity.email}: limit=$${saved.limitUsd} `
+          + `warn=$${saved.warnUsd} signin=$${saved.anonBlockUsd} nonew=$${saved.newBlockUsd} `
+          + `closed=$${saved.closedUsd} enforce=${saved.enforce}`,
+        );
+        return json(saved);
       }
 
       // GET /api/admin/usage?days=30 (auth) — internal cost + usage dashboard.
@@ -836,7 +897,11 @@ export default Sentry.withSentry(sentryOptions, {
       (async () => {
         await flushMeters(env);
         await reconcileBilling(env);
+        // Alerts run after reconciliation so they fire on the best numbers
+        // available, not on last night's estimate.
+        await checkCostAlerts(env);
         await gcRevokedArtifacts(env);
+        await pruneAnalytics(env, Number(env.ANALYTICS_RETENTION_DAYS ?? 180));
       })(),
     );
   },

@@ -173,6 +173,25 @@ function parseRoute(): EditorRoute {
   return { mode: "play" };
 }
 
+/**
+ * Tell the API a page was viewed.
+ *
+ * The authoring app is served by its own static Worker, so its views are
+ * invisible to the API's analytics unless we say so. Only the path is sent —
+ * never the query string, which can carry a `?docs=` deep link or anything
+ * else a user pasted — and the server normalises even that into a fixed label
+ * set. No id is generated or stored on the client; see workers/api/src/
+ * analytics.ts for what the server does and does not keep.
+ */
+function beacon(path: string): void {
+  void fetch(`${API_BASE}/api/beacon`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+    keepalive: true,
+  }).catch(() => { /* analytics must never surface to a user */ });
+}
+
 export function App() {
   // /admin — the internal usage + cost panel (DEV-2030). Sits outside the
   // editor routes entirely: it renders no runtime and boots no container.
@@ -394,6 +413,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     })();
     return () => { cancelled = true; };
   }, [savedId, isShare, loadWorkspace]);
+
+  // One anonymous page view per mount (the editor is a single-page app, so
+  // this is its equivalent of a page load).
+  useEffect(() => { beacon(location.pathname); }, []);
 
   // Cost guardrail state. Cheap (KV-cached server side) and read once per page
   // load: the tier only moves on the scale of hours. Failures are silent — an

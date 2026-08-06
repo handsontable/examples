@@ -46,9 +46,16 @@ All three resources are provisioned in account `15111272…`.
 
 ## Billing + cost guardrails
 
-- **Budget alerts** at **$200 / $500 / $800** — Manage Account → Billing →
-  Billable Usage → *Set Budget Alert*. Manual, dashboard-only, account-wide, and
-  informational: they email on projected spend and cap nothing.
+- **Budget alerts** at **$200 / $500 / $800** — created 2026-08-06, recipient
+  `invoices@handsontable.com`. Manage Account → Billing → Billable Usage →
+  *Set Budget Alert*. Account-wide and informational: they email on projected
+  spend and cap nothing.
+- A **"Default budget alert (auto-created)" at $10** also exists. Projected
+  spend for the Aug 4 – Sep 3 cycle is $13.11, so it fires every cycle — delete
+  or retune it.
+- **Baseline measured 2026-08-06:** $1.27 over 3 days, $13.11 projected for the
+  cycle, effectively all of it this runner's containers; every other product on
+  the account is inside its included allowance.
 - The enforced ceiling lives in the API Worker (`BUDGET_*` vars, D1
   `cost_ledger`, nightly cron). See [cost-guardrails.md](cost-guardrails.md) and
   ADR-0022.

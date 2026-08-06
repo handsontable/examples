@@ -37,6 +37,10 @@ export interface Env {
   BUDGET_CLOSED_PCT?: string;
   /** "1" enforces the tiers; anything else observes and logs only. */
   BUDGET_ENFORCE?: string;
+  /** Comma-separated dollar figures for the in-app spend alerts. */
+  BUDGET_ALERTS_USD?: string;
+  /** Days of anonymous audience data to keep (visitor hashes). */
+  ANALYTICS_RETENTION_DAYS?: string;
   /** Days after revocation before a demo's R2 artifacts are purged. 0 = off. */
   BUDGET_R2_GC_DAYS?: string;
   /** Account tag for the GraphQL Analytics API (same id as wrangler.jsonc). */

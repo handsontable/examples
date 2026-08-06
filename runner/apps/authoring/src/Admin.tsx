@@ -24,6 +24,34 @@ interface LiveSession {
   estimatedUsd: number;
 }
 
+/** The editable guardrail settings (dollars, not fractions — see settings.ts). */
+export interface BudgetSettings {
+  limitUsd: number;
+  warnUsd: number;
+  anonBlockUsd: number;
+  newBlockUsd: number;
+  closedUsd: number;
+  enforce: boolean;
+  alertsUsd: number[];
+  source?: "defaults" | "override";
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+}
+
+interface Bucket { value: string; views: number }
+
+interface Audience {
+  totals: { views: number; visitors: number; bots: number };
+  daily: { day: string; views: number; visitors: number }[];
+  pages: Bucket[];
+  demos: Bucket[];
+  referrers: Bucket[];
+  countries: Bucket[];
+  devices: Bucket[];
+  browsers: Bucket[];
+  languages: Bucket[];
+}
+
 interface UsageReport {
   generatedAt: number;
   windowDays: number;
@@ -34,8 +62,9 @@ interface UsageReport {
     limitUsd: number;
     reconciled: boolean;
     enforced: boolean;
-    thresholds: { warn: number; anonBlocked: number; newBlocked: number; closed: number };
   };
+  settings: BudgetSettings;
+  audience: Audience;
   spendBySku: Record<string, { estimate: number; billing: number }>;
   ledger: LedgerRow[];
   usage: UsageRow[];
@@ -145,6 +174,13 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
         <>
           <BudgetCard report={report} />
 
+          <SettingsForm
+            apiBase={apiBase}
+            token={token}
+            settings={report.settings}
+            onSaved={() => load(days)}
+          />
+
           <section style={grid}>
             <Stat label="Live sessions now" value={int(report.liveSessions.length)} />
             <Stat
@@ -166,6 +202,8 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
               hint="How often the guardrail turned someone away"
             />
           </section>
+
+          <AudienceSection audience={report.audience} days={report.windowDays} />
 
           <Section title="Month-to-date spend by SKU">
             <table style={table}>
@@ -291,13 +329,14 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
 /** Budget headline: where spend sits against the ceiling, and what each
  *  threshold will do when it is crossed. */
 function BudgetCard({ report }: { report: UsageReport }) {
-  const { budget } = report;
+  const { budget, settings } = report;
   const tier = TIERS[budget.tier] ?? { label: budget.tier, color: theme.color.text };
   const pct = Math.max(0, Math.min(1, budget.pct));
+  const limit = settings.limitUsd || 1;
   const marks: [string, number][] = [
-    ["warn", budget.thresholds.warn],
-    ["sign-in", budget.thresholds.anonBlocked],
-    ["no new", budget.thresholds.newBlocked],
+    ["warn", settings.warnUsd / limit],
+    ["sign-in", settings.anonBlockUsd / limit],
+    ["no new", settings.newBlockUsd / limit],
   ];
 
   return (
@@ -327,10 +366,251 @@ function BudgetCard({ report }: { report: UsageReport }) {
 
       <p style={note}>
         {budget.enforced
-          ? "Enforcing: at 80% live sessions require a Handsontable sign-in, at 95% no new sessions or builds start, at 100% running sessions are torn down. Shared demos and embeds keep working at every tier."
-          : "Observe-only: tiers are computed and logged but nothing is refused. Flip BUDGET_ENFORCE to 1 once these figures track the Cloudflare Billable Usage dashboard."}
+          ? `Enforcing: sign-in required from ${usd(settings.anonBlockUsd)}, no new sessions or builds from `
+            + `${usd(settings.newBlockUsd)}, running sessions torn down at ${usd(settings.closedUsd)}. `
+            + "Shared demos and embeds keep working at every tier."
+          : "Observe-only: tiers are computed and logged but nothing is refused. Turn enforcement on below "
+            + "once these figures track the Cloudflare Billable Usage dashboard."}
       </p>
     </section>
+  );
+}
+
+/**
+ * The guardrail settings, editable here rather than in wrangler.jsonc.
+ *
+ * The moment you actually need to move a threshold — a spike, a demo day, a
+ * bill that surprised someone — is the moment you least want to be waiting on
+ * a deploy. Saving writes an override (with who changed it and when); Reset
+ * drops it back to the values committed in the Worker config.
+ */
+function SettingsForm({
+  apiBase,
+  token,
+  settings,
+  onSaved,
+}: {
+  apiBase: string;
+  token: string | null;
+  settings: BudgetSettings;
+  onSaved: () => void;
+}) {
+  const [draft, setDraft] = useState<BudgetSettings>(settings);
+  const [alertsText, setAlertsText] = useState(settings.alertsUsd.join(", "));
+  const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  // Re-sync when the parent reloads (another tab may have changed them).
+  useEffect(() => {
+    setDraft(settings);
+    setAlertsText(settings.alertsUsd.join(", "));
+  }, [settings]);
+
+  const field = (key: keyof BudgetSettings, label: string, hint: string) => (
+    <label style={{ display: "block", marginBottom: 10 }}>
+      <div style={{ fontSize: 12, marginBottom: 3 }}>{label}</div>
+      <input
+        type="number"
+        min={0}
+        step="1"
+        value={String(draft[key] ?? "")}
+        onChange={(e) => setDraft({ ...draft, [key]: Number(e.target.value) })}
+        style={input}
+      />
+      <div style={{ fontSize: 11, color: theme.color.textMuted, marginTop: 2 }}>{hint}</div>
+    </label>
+  );
+
+  async function submit(method: "PUT" | "DELETE") {
+    setState("saving");
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/admin/settings`, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: method === "PUT"
+          ? JSON.stringify({
+              ...draft,
+              alertsUsd: alertsText
+                .split(",")
+                .map((s) => Number(s.trim()))
+                .filter((n) => Number.isFinite(n) && n > 0),
+            })
+          : undefined,
+      });
+      const body = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(body.error ?? `request failed (${res.status})`);
+      setState("saved");
+      onSaved();
+    } catch (e: unknown) {
+      reportError(e, "admin-settings-save");
+      setError(e instanceof Error ? e.message : String(e));
+      setState("idle");
+    }
+  }
+
+  const pctOf = (v: number) => (draft.limitUsd > 0 ? `${Math.round((v / draft.limitUsd) * 100)}% of the ceiling` : "");
+
+  return (
+    <section style={{ marginTop: 18 }}>
+      <button type="button" style={chip} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        {open ? "▾" : "▸"} Guardrail settings
+        <span style={{ color: theme.color.textMuted, marginLeft: 8 }}>
+          {settings.source === "override"
+            ? `overridden${settings.updatedBy ? ` by ${settings.updatedBy}` : ""}`
+            : "using wrangler.jsonc defaults"}
+        </span>
+      </button>
+
+      {open && (
+        <div style={{ ...card, background: theme.color.surface, borderLeftWidth: 1, marginTop: 10 }}>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+            <div style={{ minWidth: 200, flex: "1 1 200px" }}>
+              {field("limitUsd", "Monthly ceiling ($)", "The number everything else is measured against.")}
+              {field("warnUsd", "Notice ($)", `${pctOf(draft.warnUsd)} — banner in the editor.`)}
+            </div>
+            <div style={{ minWidth: 200, flex: "1 1 200px" }}>
+              {field("anonBlockUsd", "Sign-in required ($)", `${pctOf(draft.anonBlockUsd)} — anonymous live editing stops.`)}
+              {field("newBlockUsd", "No new sessions ($)", `${pctOf(draft.newBlockUsd)} — running ones finish.`)}
+            </div>
+            <div style={{ minWidth: 200, flex: "1 1 200px" }}>
+              {field("closedUsd", "Close live editing ($)", `${pctOf(draft.closedUsd)} — running sessions torn down.`)}
+              <label style={{ display: "block", marginBottom: 10 }}>
+                <div style={{ fontSize: 12, marginBottom: 3 }}>Alert thresholds ($)</div>
+                <input
+                  type="text"
+                  value={alertsText}
+                  onChange={(e) => setAlertsText(e.target.value)}
+                  placeholder="200, 500, 800"
+                  style={input}
+                />
+                <div style={{ fontSize: 11, color: theme.color.textMuted, marginTop: 2 }}>
+                  Notify once per month per threshold, on this runner’s own spend.
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 12px" }}>
+            <input
+              type="checkbox"
+              checked={draft.enforce}
+              onChange={(e) => setDraft({ ...draft, enforce: e.target.checked })}
+            />
+            <span style={{ fontSize: 13 }}>
+              Enforce the tiers. <span style={{ color: theme.color.textMuted }}>
+                Off = observe and log only; nothing is ever refused.
+              </span>
+            </span>
+          </label>
+
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              style={{ ...chip, ...chipActive }}
+              disabled={state === "saving"}
+              onClick={() => void submit("PUT")}
+            >
+              {state === "saving" ? "Saving…" : "Save"}
+            </button>
+            <button type="button" style={chip} onClick={() => void submit("DELETE")}>
+              Reset to defaults
+            </button>
+            {state === "saved" && <span style={{ fontSize: 12, color: "#1a8f5a" }}>Saved.</span>}
+            {error && <span style={{ fontSize: 12, color: theme.color.danger }}>{error}</span>}
+            {settings.updatedAt && (
+              <span style={{ fontSize: 11.5, color: theme.color.textMuted }}>
+                Last changed {new Date(settings.updatedAt).toLocaleString()}
+              </span>
+            )}
+          </div>
+
+          <p style={note}>
+            Tiers must stay in order (notice ≤ sign-in ≤ no new ≤ close) and none may exceed the ceiling;
+            the server rejects anything else. Changes take effect within a minute across all locations.
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Audience: what a simplified analytics product would show, from data that
+ * cannot identify anyone.
+ *
+ * No cookies and no client-side id are involved. Unique visitors come from a
+ * one-way hash of a daily rotating salt with the IP and user agent, which is
+ * why a returning visitor counts once per day and cannot be followed across
+ * days — the salt that made yesterday's hashes is deleted.
+ */
+function AudienceSection({ audience, days }: { audience: Audience; days: number }) {
+  const { totals } = audience;
+  const dailyViews = audience.daily.map((d) => ({ label: d.day, value: d.views }));
+  const dailyVisitors = audience.daily.map((d) => ({ label: d.day, value: d.visitors }));
+
+  return (
+    <Section title={`Audience (${days}d, anonymous)`}>
+      <section style={grid}>
+        <Stat label="Page views" value={int(totals.views)} />
+        <Stat
+          label="Unique visitors"
+          value={int(totals.visitors)}
+          hint="Counted per day; a returning visitor counts once per day, by design"
+        />
+        <Stat label="Bot requests" value={int(totals.bots)} hint="Excluded from every other number here" />
+        <Stat
+          label="Views per visitor"
+          value={totals.visitors ? (totals.views / totals.visitors).toFixed(1) : "—"}
+        />
+      </section>
+
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 16 }}>
+        <div style={{ minWidth: 280, flex: "1 1 280px" }}>
+          <div style={subhead}>Views per day</div>
+          <Bars rows={dailyViews} format={int} emptyText="Nothing recorded yet." />
+        </div>
+        <div style={{ minWidth: 280, flex: "1 1 280px" }}>
+          <div style={subhead}>Unique visitors per day</div>
+          <Bars rows={dailyVisitors} format={int} emptyText="" />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 18 }}>
+        <TopList title="Pages" rows={audience.pages} />
+        <TopList title="Demos" rows={audience.demos} />
+        <TopList title="Referrers" rows={audience.referrers} />
+      </div>
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 18 }}>
+        <TopList title="Countries" rows={audience.countries} upper />
+        <TopList title="Devices" rows={audience.devices} />
+        <TopList title="Browsers" rows={audience.browsers} />
+        <TopList title="Languages" rows={audience.languages} upper />
+      </div>
+
+      <p style={note}>
+        No cookies, no IP addresses, no user agents and no URLs with query strings are stored — only these
+        daily counts. Unique visitors use a salted hash that is rotated (and then deleted) every day, so the
+        same person on two days cannot be recognised as the same person.
+      </p>
+    </Section>
+  );
+}
+
+function TopList({ title, rows, upper }: { title: string; rows: Bucket[]; upper?: boolean }) {
+  return (
+    <div style={{ minWidth: 200, flex: "1 1 200px" }}>
+      <div style={subhead}>{title}</div>
+      <Bars
+        rows={rows.map((r) => ({ label: upper ? r.value.toUpperCase() : r.value, value: r.views }))}
+        format={int}
+        emptyText="—"
+      />
+    </div>
   );
 }
 
@@ -487,6 +767,10 @@ const grid: React.CSSProperties = {
 };
 const statCard: React.CSSProperties = {
   border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.md, padding: "10px 12px",
+};
+const input: React.CSSProperties = {
+  width: "100%", boxSizing: "border-box", fontFamily: theme.font.ui, fontSize: 13,
+  padding: "5px 8px", border: `1px solid ${theme.color.border}`, borderRadius: 6, color: theme.color.text,
 };
 const table: React.CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
 const th: React.CSSProperties = {

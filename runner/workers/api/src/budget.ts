@@ -16,6 +16,7 @@
 // reconciliation (reconcile.ts) replaces guesses with Cloudflare's own numbers.
 
 import type { Env } from "./env.js";
+import { loadSettings, type ResolvedBudgetSettings } from "./settings.js";
 
 /** Cloudflare Containers rates, USD. https://developers.cloudflare.com/workers/platform/pricing/#containers
  *  Memory and disk bill on *provisioned* size for every second the instance is
@@ -62,6 +63,11 @@ export interface BudgetState {
   /** True when every ledger row behind `spendUsd` came from reconciled billing
    *  data rather than our own estimator. */
   reconciled: boolean;
+  /** Whether the tier above is actually being acted on, or only observed.
+   *  Carried on the state so a gate needs exactly one read to decide. */
+  enforced: boolean;
+  /** The dollar thresholds this tier was computed against (panel-editable). */
+  settings: ResolvedBudgetSettings;
   asOf: number;
 }
 
@@ -79,11 +85,6 @@ const METER_FLUSH_SECONDS = 60;
  *  gap. Must stay >= the `sleepAfter` in index.ts. */
 const MAX_UNSEEN_AWAKE_SECONDS = 300;
 
-const num = (v: unknown, fallback: number): number => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-};
-
 /**
  * Cost of one awake container-second.
  *
@@ -97,27 +98,21 @@ export function containerUsdPerSecond(type: InstanceType, cpuUtilisation = 0.35)
   return i.mem * RATE.memGiBSec + i.disk * RATE.diskGBSec + i.vcpu * cpuUtilisation * RATE.vcpuSec;
 }
 
-export function tierFor(pct: number, env: Env): BudgetTier {
-  if (pct >= num(env.BUDGET_CLOSED_PCT, 1.0)) return "closed";
-  if (pct >= num(env.BUDGET_NEW_BLOCK_PCT, 0.95)) return "new_blocked";
-  if (pct >= num(env.BUDGET_ANON_BLOCK_PCT, 0.8)) return "anon_blocked";
-  if (pct >= num(env.BUDGET_WARN_PCT, 0.6)) return "warn";
+/** Which tier a month-to-date dollar figure falls into. Thresholds come from
+ *  the panel-editable settings, so this is pure arithmetic on dollars. */
+export function tierFor(spendUsd: number, s: ResolvedBudgetSettings): BudgetTier {
+  if (spendUsd >= s.closedUsd) return "closed";
+  if (spendUsd >= s.newBlockUsd) return "new_blocked";
+  if (spendUsd >= s.anonBlockUsd) return "anon_blocked";
+  if (spendUsd >= s.warnUsd) return "warn";
   return "ok";
 }
 
-/**
- * Is the ceiling allowed to refuse traffic yet?
- *
- * `BUDGET_ENFORCE=0` (the rollout default) computes and reports the tier but
- * never denies: one observation week confirms the estimator tracks the
- * Billable Usage dashboard *before* it is allowed to turn users away. Flip to
- * `1` to enforce.
- */
-export const budgetEnforced = (env: Env): boolean => String(env.BUDGET_ENFORCE ?? "0") === "1";
-
 const utcDay = (at = Date.now()): string => new Date(at).toISOString().slice(0, 10);
 
-/** Hot path: KV-cached, so `POST /api/session` never pays for a D1 aggregate. */
+/** Hot path: KV-cached, so `POST /api/session` never pays for a D1 aggregate.
+ *  The cached copy embeds the thresholds it was computed with, which is why
+ *  saving settings in the admin panel invalidates it explicitly. */
 export async function getBudgetState(env: Env): Promise<BudgetState> {
   const cached = await env.CACHE.get(KV_STATE_KEY, "json").catch(() => null);
   if (cached) return cached as BudgetState;
@@ -139,9 +134,10 @@ export const invalidateBudgetState = (env: Env): Promise<void> =>
  * That is a deliberate simplification: this ceiling is a backstop, and a
  * calendar month is the one boundary a Worker can compute without an API call.
  */
-export async function computeBudgetState(env: Env): Promise<BudgetState> {
+export async function computeBudgetState(env: Env, preloaded?: ResolvedBudgetSettings): Promise<BudgetState> {
   const monthPrefix = new Date().toISOString().slice(0, 7); // YYYY-MM
-  const limitUsd = num(env.BUDGET_MONTHLY_USD, 1000);
+  const settings = preloaded ?? (await loadSettings(env));
+  const limitUsd = settings.limitUsd;
 
   // One row per (day, sku): the 'billing' figure when the cron has reconciled
   // that day, else our own 'estimate'.
@@ -159,11 +155,13 @@ export async function computeBudgetState(env: Env): Promise<BudgetState> {
   const pct = limitUsd > 0 ? spendUsd / limitUsd : 0;
 
   return {
-    tier: tierFor(pct, env),
+    tier: tierFor(spendUsd, settings),
     spendUsd,
     limitUsd,
     pct,
     reconciled: rows.length > 0 && rows.every((r) => r.reconciled === 1),
+    enforced: settings.enforce,
+    settings,
     asOf: Date.now(),
   };
 }
@@ -373,7 +371,7 @@ export function sessionDenial(state: BudgetState, isAuthenticated: boolean): Bud
 }
 
 /** The public shape of the budget state (no dollar figures for anonymous callers). */
-export function publicBudget(state: BudgetState, opts: { detailed: boolean; enforced: boolean }) {
+export function publicBudget(state: BudgetState, opts: { detailed: boolean }) {
   const notice =
     state.tier === "warn"
       ? "Live-session budget is running high; sessions may soon require sign-in."
@@ -387,8 +385,8 @@ export function publicBudget(state: BudgetState, opts: { detailed: boolean; enfo
     pct: Math.round(state.pct * 1000) / 1000,
     // Observe-only deployments report a tier but never act on it; the UI must
     // not tell users sessions are restricted when nothing is being refused.
-    enforced: opts.enforced,
-    notice: opts.enforced ? notice : null,
+    enforced: state.enforced,
+    notice: state.enforced ? notice : null,
     ...(opts.detailed
       ? {
           spendUsd: Math.round(state.spendUsd * 100) / 100,

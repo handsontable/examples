@@ -26,8 +26,11 @@ volume, Workers requests, and R2 growth.
 
 Three layers, in order of how much we trust them.
 
-1. **Cloudflare Budget alerts** at $200/$500/$800 — dashboard-only, manual, and
-   informational. They are the human early-warning system, not the cap.
+1. **Cloudflare Budget alerts** at $200/$500/$800 — dashboard-only and
+   informational (created 2026-08-06). They are the human early-warning system,
+   not the cap. The Worker fires its own alerts on the same thresholds, because
+   Cloudflare's are account-wide and cannot tell the runner apart from anything
+   else billing to the account.
 2. **Configuration that bounds the unbounded**: `observability.head_sampling_rate
    = 0.1` (logs are a spike amplifier), `limits.cpu_ms`, and `max_instances` left
    at 5/3 — that pair *is* the container ceiling and raising it is the single
@@ -43,11 +46,18 @@ The design constraint on that last layer is **graceful degradation**: static
 shares (`/d/:id`, `/embed/:id`) are R2 reads, cost effectively nothing, and keep
 working at every tier. Only the container paths are switched off.
 
+The thresholds are **absolute dollars stored in D1 and editable from the admin
+panel**, with the `BUDGET_*` vars as defaults. A ceiling you can only change by
+deploying is a ceiling nobody adjusts during the incident that needs it.
+
 ## Consequences
 
 - The ceiling is only as good as our meter, so it ships observe-only
   (`BUDGET_ENFORCE=0`) and is compared against the Billable Usage dashboard for
   a week before it is allowed to refuse anything.
+- Anything that can turn the guardrail off from a web page needs an audit
+  trail, so overrides record who saved them and when, and every change is
+  logged.
 - Estimates round against us on purpose; the nightly reconciliation is what
   keeps that from compounding, and a `billing` row always beats an `estimate`
   row for the same day.

@@ -28,6 +28,8 @@ pnpm --filter @handsontable/demo-authoring dev        # http://localhost:5173
 cd workers/api && printf 'DEV_AUTH_EMAIL="dev@handsontable.com"\nPREVIEW_HOST="localhost:8787"\n' > .dev.vars
 npx wrangler d1 execute handsontable-demos --local --file=migrations/0001_init.sql -y
 npx wrangler d1 execute handsontable-demos --local --file=migrations/0002_buildkey_nonunique.sql -y
+npx wrangler d1 execute handsontable-demos --local --file=migrations/0003_cost_ledger.sql -y
+npx wrangler d1 execute handsontable-demos --local --file=migrations/0004_settings_and_analytics.sql -y
 npx wrangler dev --port 8787                          # builds the container images
 # then run the authoring app pointing at it:
 cd ../../apps/authoring
@@ -60,6 +62,7 @@ cd workers/api
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0001_init.sql -y
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0002_buildkey_nonunique.sql -y
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0003_cost_ledger.sql -y
+npx wrangler d1 execute handsontable-demos --remote --file=migrations/0004_settings_and_analytics.sql -y
 pnpm run deploy   # wrangler deploy --routes … (attaches the demos.handsontable.com routes)
 # -> https://handsontable-demos-api.handsoncode.workers.dev
 
@@ -93,11 +96,14 @@ cd workers/api
 npx wrangler secret put CF_ANALYTICS_TOKEN
 ```
 
-Then create the three Budget alerts ($200/$500/$800) in the dashboard —
-Manage Account → Billing → Billable Usage → *Set Budget Alert*. They are
-informational; the enforced ceiling is the Worker's own (`BUDGET_ENFORCE`,
-shipped as `0` = observe-only). Full detail in
-[cost-guardrails.md](cost-guardrails.md).
+The three Budget alerts ($200/$500/$800) were created in the dashboard on
+2026-08-06 (Manage Account → Billing → Billable Usage → *Set Budget Alert*).
+They are informational; the enforced ceiling is the Worker's own, shipped as
+observe-only and switched on from **/admin → Guardrail settings**. Full detail
+in [cost-guardrails.md](cost-guardrails.md).
+
+`wrangler dev --test-scheduled` + `curl localhost:8787/__scheduled` runs the
+nightly job (reconciliation, spend alerts, GC, analytics prune) on demand.
 
 ## Continuous deployment
 

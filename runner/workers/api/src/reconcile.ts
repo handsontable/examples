@@ -20,6 +20,8 @@
 
 import * as Sentry from "@sentry/cloudflare";
 import type { Env } from "./env.js";
+import { computeBudgetState } from "./budget.js";
+import { loadSettings } from "./settings.js";
 
 const GRAPHQL_ENDPOINT = "https://api.cloudflare.com/client/v4/graphql";
 
@@ -170,6 +172,47 @@ export async function reconcileBilling(env: Env): Promise<void> {
   try {
     await env.DB.prepare("DELETE FROM cost_ledger WHERE day < ?1").bind(utcDayAgo(LEDGER_RETENTION_DAYS)).run();
   } catch { /* pruning is housekeeping, not correctness */ }
+}
+
+/**
+ * Fire the panel-configured spend alerts, once per threshold per month.
+ *
+ * These are *our* alerts on *our* metered spend, which is the difference that
+ * matters: Cloudflare's budget alerts are account-wide, so on a shared account
+ * they answer "is the account spending a lot", not "is the runner". Sentry is
+ * the delivery channel because it is the one alerting path this Worker already
+ * has wired up.
+ */
+export async function checkCostAlerts(env: Env): Promise<void> {
+  try {
+    const settings = await loadSettings(env);
+    if (!settings.alertsUsd.length) return;
+    const state = await computeBudgetState(env, settings);
+    const month = new Date().toISOString().slice(0, 7);
+
+    for (const threshold of settings.alertsUsd) {
+      if (state.spendUsd < threshold) continue;
+      // The PK makes this a no-op when the threshold already fired this month,
+      // so `meta.changes` is the "is this news?" test — no read needed.
+      const result = await env.DB.prepare(
+        `INSERT OR IGNORE INTO cost_alerts (month, threshold, spend_usd, fired_at)
+              VALUES (?1, ?2, ?3, ?4)`,
+      ).bind(month, threshold, state.spendUsd, new Date().toISOString()).run();
+      if (!result.meta?.changes) continue;
+
+      const message =
+        `[budget] month-to-date spend $${state.spendUsd.toFixed(2)} crossed the $${threshold} alert `
+        + `(ceiling $${settings.limitUsd}, tier ${state.tier}, enforcement ${settings.enforce ? "on" : "off"})`;
+      console.warn(message);
+      Sentry.captureMessage(message, {
+        level: threshold >= settings.limitUsd * 0.8 ? "error" : "warning",
+        tags: { context: "budget-alert", threshold: String(threshold) },
+        fingerprint: ["budget-alert", String(threshold), month],
+      });
+    }
+  } catch (err) {
+    Sentry.captureException(err, { tags: { context: "budget-alert-check" } });
+  }
 }
 
 /**
