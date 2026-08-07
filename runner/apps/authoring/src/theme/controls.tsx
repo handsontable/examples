@@ -99,7 +99,10 @@ function UnitControl({ token, resolved, onChange }: {
         step={token.params?.step ?? "1"}
         min={token.params?.min}
         max={token.params?.max}
-        onChange={(e) => onChange(`${e.target.value}${unit}`)}
+        // An emptied field means "no override", so send an empty string rather
+        // than a bare unit: `"%"` is not empty, so it would be stored and
+        // emitted as a value the grid cannot use.
+        onChange={(e) => onChange(e.target.value === "" ? "" : `${e.target.value}${unit}`)}
       />
       {unit && <span style={unitTag}>{unit}</span>}
     </span>

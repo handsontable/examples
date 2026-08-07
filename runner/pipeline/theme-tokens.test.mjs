@@ -73,6 +73,21 @@ test("the panel writes linked tokens, not just the edited one", () => {
   assert.match(panel, /resetParam\(token\.key, token\.linkedTokens\)/);
 });
 
+test("clearing a numeric field stores nothing, not a bare unit", () => {
+  // `${value}${unit}` on an emptied field yields "%" or "s", which is not empty
+  // by any string check, so it was stored and emitted as a value the grid
+  // cannot use.
+  const controls = readFileSync(join(root, "apps/authoring/src/theme/controls.tsx"), "utf8");
+  assert.match(controls, /e\.target\.value === "" \? "" : `\$\{e\.target\.value\}\$\{unit\}`/);
+});
+
+test("the density editor opens on the restored theme's variant", () => {
+  // Starting on DEFAULT_THEME.density meant reloading a compact theme opened
+  // the editor on `default`, warning the sizes wouldn't show.
+  const panel = readFileSync(join(root, "apps/authoring/src/StylePanel.tsx"), "utf8");
+  assert.match(panel, /useState<ThemeState\["density"\]>\(\(\) => state\.density\)/);
+});
+
 test("every token declares a type the panel can render", () => {
   const types = new Set([...catalogue.matchAll(/^\s+type: "([^"]+)",$/gm)].map((m) => m[1]));
   assert.deepEqual([...types].sort(), ["color", "numeric", "select", "size"]);

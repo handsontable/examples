@@ -81,8 +81,11 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
   /** The component whose sub-panel is open, e.g. "Buttons". */
   const [component, setComponent] = useState<string | null>(null);
   const [openGroup, setOpenGroup] = useState<string>("");
-  /** Which density variant the sizes editor is pointed at. */
-  const [densityVariant, setDensityVariant] = useState<ThemeState["density"]>(DEFAULT_THEME.density);
+  /** Which density variant the sizes editor is pointed at. Starts on the
+   *  restored theme's own variant, not the default — otherwise reloading a
+   *  compact theme opens the editor on `default`, warning that the sizes won't
+   *  show, while the sizes it should be showing sit one click away. */
+  const [densityVariant, setDensityVariant] = useState<ThemeState["density"]>(() => state.density);
   const [showCode, setShowCode] = useState(false);
   const [applied, setApplied] = useState<{ linked: boolean } | null>(null);
 
