@@ -31,12 +31,12 @@ import {
   googleFontFamily,
   ICONS_PRESETS,
   isPristine,
+  ALL_SECTIONS,
   NEUTRAL_STEPS,
   PRIMARY_STEPS,
-  TOKEN_GROUPS,
   TOKENS_PRESETS,
   type ThemeState,
-  type TokenDef,
+  type Token,
 } from "./theme/vocabulary.js";
 
 const STORAGE_KEY = "hot-runner-theme";
@@ -67,7 +67,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
   const [prompt, setPrompt] = useState("");
   const [thinking, setThinking] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
-  const [openGroup, setOpenGroup] = useState<string>(TOKEN_GROUPS[0]?.title ?? "");
+  const [openGroup, setOpenGroup] = useState<string>(ALL_SECTIONS[0]?.label ?? "");
   const [showCode, setShowCode] = useState(false);
   const [applied, setApplied] = useState<{ linked: boolean } | null>(null);
 
@@ -276,29 +276,39 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
           </div>
         </Section>
 
-        {TOKEN_GROUPS.map((group) => {
-          const open = openGroup === group.title;
-          const set = group.tokens.filter((t) => state.params[t.name]).length;
+        {ALL_SECTIONS.map((section) => {
+          const open = openGroup === section.label;
+          const set = section.groups
+            .flatMap((g) => g.tokens)
+            .filter((t) => state.params[t.key]).length;
           return (
-            <section key={group.title} style={{ borderTop: `1px solid ${ui.color.border}` }}>
+            <section key={`${section.area}:${section.label}`} style={{ borderTop: `1px solid ${ui.color.border}` }}>
               <button
                 type="button"
                 style={groupHeader}
-                onClick={() => setOpenGroup(open ? "" : group.title)}
+                onClick={() => setOpenGroup(open ? "" : section.label)}
                 aria-expanded={open}
               >
-                <span>{open ? "▾" : "▸"} {group.title}</span>
+                <span>{open ? "▾" : "▸"} {section.label}</span>
                 {set > 0 && <span style={badge}>{set}</span>}
               </button>
               {open && (
                 <div style={{ padding: "0 14px 12px" }}>
-                  {group.tokens.map((token) => (
-                    <TokenField
-                      key={token.name}
-                      token={token}
-                      value={state.params[token.name] ?? ""}
-                      onChange={(v) => setParam(token.name, v)}
-                    />
+                  {section.groups.map((group) => (
+                    <div key={group.label}>
+                      {/* Sub-groups only exist on components, where a bare list of 59
+                          button tokens would be unreadable. Common sections have one
+                          unnamed group and render flat, as before. */}
+                      {group.label && <div style={subGroup}>{group.label}</div>}
+                      {group.tokens.map((token) => (
+                        <TokenField
+                          key={token.key}
+                          token={token}
+                          value={state.params[token.key] ?? ""}
+                          onChange={(v) => setParam(token.key, v)}
+                        />
+                      ))}
+                    </div>
                   ))}
                 </div>
               )}
@@ -344,7 +354,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
               {["white", "black"].map((key) => (
                 <TokenField
                   key={key}
-                  token={{ name: key, label: key[0]!.toUpperCase() + key.slice(1), kind: "color" }}
+                  token={{ key, label: key[0]!.toUpperCase() + key.slice(1), type: "color", description: "" }}
                   value={state.palette[key] ?? ""}
                   onChange={(v) => setPalette(key, v)}
                 />
@@ -373,10 +383,10 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
               </p>
               {DENSITY_SIZES.map((token) => (
                 <TokenField
-                  key={token.name}
+                  key={token.key}
                   token={token}
-                  value={state.densitySizes[token.name] ?? ""}
-                  onChange={(v) => setDensitySize(token.name, v)}
+                  value={state.densitySizes[token.key] ?? ""}
+                  onChange={(v) => setDensitySize(token.key, v)}
                 />
               ))}
             </div>
@@ -502,16 +512,16 @@ function TokenField({
   value,
   onChange,
 }: {
-  token: TokenDef;
+  token: Token;
   value: string;
   onChange: (value: string) => void;
 }) {
   return (
     <div style={{ marginBottom: 8 }}>
       <label style={row}>
-        <span style={rowLabel} title={token.name}>{token.label}</span>
+        <span style={rowLabel} title={token.key}>{token.label}</span>
         <span style={{ display: "flex", gap: 4, flex: 1 }}>
-          {token.kind === "color" && (
+          {token.type === "color" && (
             <input
               type="color"
               aria-label={`${token.label} colour picker`}
@@ -529,7 +539,7 @@ function TokenField({
           />
         </span>
       </label>
-      {token.hint && <div style={hint}>{token.hint}</div>}
+      {token.description && <div style={hint}>{token.description}</div>}
     </div>
   );
 }
@@ -594,6 +604,10 @@ const swatch: React.CSSProperties = {
   border: `1px solid ${ui.color.border}`, borderRadius: 6, background: "#fff", cursor: "pointer",
 };
 const hint: React.CSSProperties = { fontSize: 11, color: ui.color.textMuted, marginLeft: 138 };
+const subGroup: React.CSSProperties = {
+  fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4,
+  color: ui.color.textMuted, margin: "10px 0 6px",
+};
 const note: React.CSSProperties = { fontSize: 11.5, color: ui.color.textMuted, margin: "0 0 10px" };
 const code: React.CSSProperties = {
   fontFamily: ui.font.mono, fontSize: "0.92em", background: "#fff",

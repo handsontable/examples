@@ -36,6 +36,11 @@ const MARKER = "handsontable-theme";
  * evaluates, so a backslash or a line terminator that escapes the literal is
  * script injection into a demo other people open. The server whitelists these
  * values too; this is the second lock on the same door.
+ *
+ * Keys go through it as well, not just values (DEV-2199). They look trustworthy
+ * — they come from the token catalogue — but a theme restored from localStorage
+ * or arriving in a shared link carries whatever keys it likes, and an unquoted
+ * one closes the object literal just as effectively as an unquoted value.
  */
 const lit = (v: string) => JSON.stringify(v);
 
@@ -52,11 +57,13 @@ function paletteSource(entries: [string, string][], presetVar: string): string {
 
   const lines = [`    ...${presetVar},`];
   for (const [ramp, steps] of Object.entries(ramps)) {
-    lines.push(`    ${ramp}: {`, `      ...${presetVar}.${ramp},`);
+    // Bracket notation for the spread, because a ramp name is data too: a dotted
+    // key like `foo.bar` would otherwise be pasted straight into member access.
+    lines.push(`    ${lit(ramp)}: {`, `      ...${presetVar}[${lit(ramp)}],`);
     for (const [step, value] of Object.entries(steps)) lines.push(`      ${lit(step)}: ${lit(value)},`);
     lines.push("    },");
   }
-  for (const [key, value] of Object.entries(scalars)) lines.push(`    ${key}: ${lit(value)},`);
+  for (const [key, value] of Object.entries(scalars)) lines.push(`    ${lit(key)}: ${lit(value)},`);
   return lines.join("\n");
 }
 
@@ -92,7 +99,7 @@ export function buildThemeModule(state: ThemeState, typescript: boolean): string
     "  icons: iconsPreset,",
     density.length
       ? `  density: {\n    type: ${lit(state.density)},\n    sizes: {\n${
-        density.map(([k, v]) => `      ${k}: ${lit(v)},`).join("\n")
+        density.map(([k, v]) => `      ${lit(k)}: ${lit(v)},`).join("\n")
       }\n    },\n  },`
       : `  density: ${lit(state.density)},`,
     `  colorScheme: ${lit(state.colorScheme)},`,
@@ -112,7 +119,7 @@ export function buildThemeModule(state: ThemeState, typescript: boolean): string
     lines.push(
       "export const customTheme = getTheme(THEME_NAME).params({",
       "  tokens: {",
-      ...tokens.map(([k, v]) => `    ${k}: ${lit(v)},`),
+      ...tokens.map(([k, v]) => `    ${lit(k)}: ${lit(v)},`),
       "  },",
       "});",
     );
