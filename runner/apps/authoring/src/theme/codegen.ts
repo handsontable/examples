@@ -186,15 +186,22 @@ function wireTheme(files: Record<string, string>): WireTarget | null {
     // 1. JSX/Vue wrapper element. Replace an existing theme prop rather than
     //    adding a second one — several starters already set their own.
     if (/<(HotTable|hot-table)\b/.test(source)) {
-      next = /\btheme=\{[^}]*\}/.test(source)
+      const withTheme = /\btheme=\{[^}]*\}/.test(source)
         ? source.replace(/\btheme=\{[^}]*\}/, "theme={customTheme}")
         : source.replace(/<(HotTable|hot-table)\b/, "<$1 theme={customTheme}");
+      // `theme` and `themeName` are aliases and Handsontable refuses to take
+      // both — it warns and drops themeName. Leaving the dead prop behind
+      // means every themed demo logs a warning it cannot act on, so the one
+      // being replaced goes.
+      next = stripThemeName(withTheme);
     } else if (/new Handsontable\(\s*[A-Za-z_$][\w$]*\s*,\s*\{/.test(source)) {
       // 2. Vanilla settings object.
-      next = source.replace(/(new Handsontable\(\s*[A-Za-z_$][\w$]*\s*,\s*\{)/, "$1\n  theme: customTheme,");
+      next = stripThemeName(
+        source.replace(/(new Handsontable\(\s*[A-Za-z_$][\w$]*\s*,\s*\{)/, "$1\n  theme: customTheme,"),
+      );
     } else if (/gridSettings[^=]*=\s*\{/.test(source)) {
       // 3. Angular's settings object.
-      next = source.replace(/(gridSettings[^=]*=\s*\{)/, "$1\n    theme: customTheme,");
+      next = stripThemeName(source.replace(/(gridSettings[^=]*=\s*\{)/, "$1\n    theme: customTheme,"));
     }
 
     if (!next) continue;
@@ -206,6 +213,14 @@ function wireTheme(files: Record<string, string>): WireTarget | null {
   }
 
   return null;
+}
+
+/** Remove a `themeName` prop or setting: it is an alias of `theme`, and
+ *  Handsontable warns and ignores it when both are present. */
+function stripThemeName(source: string): string {
+  return source
+    .replace(/\n?[^\n]*\bthemeName\s*=\s*["'][^"']*["'][^\n]*/g, "")
+    .replace(/\n?[^\n]*\bthemeName\s*:\s*["'][^"']*["'],?[^\n]*/g, "");
 }
 
 /** Does the example look like TypeScript? Decides the module's extension. */
