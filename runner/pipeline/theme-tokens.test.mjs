@@ -52,6 +52,52 @@ test("the tokens the old hand-written list got wrong stay gone", () => {
   }
 });
 
+test("linked tokens point at tokens that exist", () => {
+  // `linkedTokens` pairs a column-header token with its row-header counterpart;
+  // the panel writes and resets them together. A typo here would silently write
+  // a token nothing reads.
+  const linked = [...catalogue.matchAll(/linkedTokens: \[([^\]]*)\]/g)]
+    .flatMap((m) => [...m[1].matchAll(/"([^"]+)"/g)].map((t) => t[1]));
+  assert.ok(linked.length > 0, "expected the catalogue to declare linked tokens");
+  for (const key of linked) {
+    assert.ok(catalogueKeys.includes(key), `linkedTokens references unknown token ${key}`);
+  }
+});
+
+test("the panel writes linked tokens, not just the edited one", () => {
+  // Bugbot caught this: the controls were ported but the write path only
+  // touched the edited key, so a restyled column header left the row header
+  // stock.
+  const panel = readFileSync(join(root, "apps/authoring/src/StylePanel.tsx"), "utf8");
+  assert.match(panel, /setParam\(token\.key, v, token\.linkedTokens\)/);
+  assert.match(panel, /resetParam\(token\.key, token\.linkedTokens\)/);
+});
+
+test("clearing a numeric field stores nothing, not a bare unit", () => {
+  // `${value}${unit}` on an emptied field yields "%" or "s", which is not empty
+  // by any string check, so it was stored and emitted as a value the grid
+  // cannot use.
+  const controls = readFileSync(join(root, "apps/authoring/src/theme/controls.tsx"), "utf8");
+  assert.match(controls, /e\.target\.value === "" \? "" : `\$\{e\.target\.value\}\$\{unit\}`/);
+});
+
+test("the density editor tracks the theme's variant on load and on reset", () => {
+  // `densityVariant` is the panel's only piece of local state derived from the
+  // theme, so it is the only one that can go stale against it. It went wrong
+  // twice: starting on DEFAULT_THEME.density (a restored compact theme opened
+  // on `default`), then surviving Reset (a pristine theme kept warning about a
+  // mismatch that no longer existed).
+  const panel = readFileSync(join(root, "apps/authoring/src/StylePanel.tsx"), "utf8");
+  assert.match(panel, /useState<ThemeState\["density"\]>\(\(\) => state\.density\)/);
+
+  const resetBody = panel.slice(panel.indexOf("function reset()"));
+  assert.match(
+    resetBody.slice(0, resetBody.indexOf("\n  }")),
+    /setDensityVariant\(DEFAULT_THEME\.density\)/,
+    "reset() must bring the density editor back too",
+  );
+});
+
 test("every token declares a type the panel can render", () => {
   const types = new Set([...catalogue.matchAll(/^\s+type: "([^"]+)",$/gm)].map((m) => m[1]));
   assert.deepEqual([...types].sort(), ["color", "numeric", "select", "size"]);

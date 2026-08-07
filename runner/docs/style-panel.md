@@ -39,10 +39,80 @@ That list had drifted: `wrapperBorderRadius` and `wrapperBorderColor` are not
 Handsontable tokens (the real names are `borderRadius` and `borderColor`), so
 those two controls silently did nothing.
 
-The panel still renders every token as a text box with a swatch for colours —
-the typed controls (`select` → dropdown, `size` → density-aware, `numeric` →
-unit input) and the Foundation/Common/Component tabs are the next step of
-DEV-2199, and this port is what unblocks them.
+## Tabs and typed controls
+
+The panel splits the way Theme Builder's does — **Foundation** (preset stack,
+palette ramps, density sizes), **Common** (the five shared sections),
+**Component** (18 components, each drilling into its own sub-panel), **AI ✨**.
+
+Foundation picks the **token mapping** and **icon set** as image tiles rather
+than dropdowns — the presets differ in how the grid *looks*, which a thumbnail
+conveys and the word "horizon" does not. The five PNGs are vendored from
+theme-builder's `public/` into `apps/authoring/public/theme-tiles/`; their blob
+SHAs are in the commit that added them.
+
+Each token renders the control its `type` asks for (`theme/controls.tsx`, ported
+from `panel/tabs/components/TokenItem.tsx`):
+
+| `type` | Control |
+|---|---|
+| `select` | dropdown from `token.options` |
+| `size` | pick from the sizing scale, follow a density slot, or type a value — trigger shows the resolved size |
+| `color` | common colours, base/primary/palette swatches, or a raw colour |
+| `numeric` | stepper carrying the token's own `unit`/`step`/`min`/`max` |
+| *(other)* | text |
+
+Every row carries its label and description, and a **Reset that appears only
+once the token is overridden**.
+
+Two behaviours worth knowing:
+
+* **Values resolve.** `borderRadius` is `"sizing.size_1"`, which is `4px`;
+  `cellHorizontalPadding` is `"density.cellHorizontal"` → `"sizing.size_2"` →
+  `8px`. `theme/resolve.ts` follows those chains so a control shows the value
+  rather than the reference. It resolves against the Handsontable version *this
+  app* is built with, not the one in the version dropdown.
+* **Colours are `[light, dark]` pairs.** Picking a raw colour writes only the
+  half matching the scheme you're looking at, so styling in light mode doesn't
+  silently rewrite dark mode. Picking a *common* colour (`tokens.accentColor`)
+  writes a reference instead, which brings both variants along.
+* **Linked tokens move together.** The catalogue pairs each column-header token
+  with its row-header counterpart (`headerForegroundColor` →
+  `headerRowForegroundColor`, plus the highlighted and active variants). Setting
+  *or resetting* one writes all of them — a grid with a restyled column header
+  and a stock row header just looks broken.
+
+## Density sizes are per variant
+
+`density.sizes` is keyed by density variant, and all three are editable —
+`{ comfortable: { cellVertical: "sizing.size_5" } }` — so a theme still behaves
+when the grid is switched between compact, default and comfortable. The editor
+has its own variant switcher, independent of the variant the grid is on, and
+says so when the two differ.
+
+All fifteen `DensitySizeKey`s are exposed, grouped as theme-builder's density
+modal groups them. `cellVertical` and `cellHorizontal` — cell padding, the ones
+people actually reach for — were missing entirely before DEV-2199.
+
+A theme saved under the old flat shape is migrated on load
+(`migrateThemeState`): a flat object is read as belonging to the variant the
+theme was saved with, which is the only reading that can be right.
+
+## Reset returns the demo to how it arrived
+
+Wiring takes over a demo's existing `themeName` — `theme` and `themeName` are
+aliases and Handsontable warns and ignores one when both are set. The displaced
+value rides along in the marker comment on the generated import, so **Reset puts
+it back**, in place. Before DEV-2199 it was simply dropped and a reset demo came
+back *unthemed* instead of on `ht-theme-main`.
+
+Wiring also swaps in place rather than deleting the line it found. The earlier
+version removed the whole *line* containing `themeName`, which erased
+single-line elements outright — `<HotTable data={data} themeName="…" />` lost
+its grid.
+
+`pipeline/theme-wiring.test.mjs` runs the real codegen over all four wiring
+shapes (plus single-line variants) and asserts apply-then-reset is byte-identical.
 
 ## Generated source is a script-injection surface
 
