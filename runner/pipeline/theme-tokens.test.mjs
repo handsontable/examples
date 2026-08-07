@@ -81,11 +81,21 @@ test("clearing a numeric field stores nothing, not a bare unit", () => {
   assert.match(controls, /e\.target\.value === "" \? "" : `\$\{e\.target\.value\}\$\{unit\}`/);
 });
 
-test("the density editor opens on the restored theme's variant", () => {
-  // Starting on DEFAULT_THEME.density meant reloading a compact theme opened
-  // the editor on `default`, warning the sizes wouldn't show.
+test("the density editor tracks the theme's variant on load and on reset", () => {
+  // `densityVariant` is the panel's only piece of local state derived from the
+  // theme, so it is the only one that can go stale against it. It went wrong
+  // twice: starting on DEFAULT_THEME.density (a restored compact theme opened
+  // on `default`), then surviving Reset (a pristine theme kept warning about a
+  // mismatch that no longer existed).
   const panel = readFileSync(join(root, "apps/authoring/src/StylePanel.tsx"), "utf8");
   assert.match(panel, /useState<ThemeState\["density"\]>\(\(\) => state\.density\)/);
+
+  const resetBody = panel.slice(panel.indexOf("function reset()"));
+  assert.match(
+    resetBody.slice(0, resetBody.indexOf("\n  }")),
+    /setDensityVariant\(DEFAULT_THEME\.density\)/,
+    "reset() must bring the density editor back too",
+  );
 });
 
 test("every token declares a type the panel can render", () => {

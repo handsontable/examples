@@ -264,6 +264,10 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
   function reset() {
     for (const change of buildResetChanges(getFiles())) applyEdit(change.path, change.contents);
     setState(DEFAULT_THEME);
+    // The density editor holds its own variant, so a pristine theme has to
+    // bring it back too — otherwise Reset leaves it pointed at the old variant,
+    // warning about a mismatch that no longer exists.
+    setDensityVariant(DEFAULT_THEME.density);
     setApplied(null);
     setAiNote(null);
     try {
