@@ -962,6 +962,12 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         .sort((a, b) => FW_PREF.indexOf(a.framework) - FW_PREF.indexOf(b.framework))
     : [];
 
+  // True when the user has changed something that nothing is going to save:
+  // the playground and the public share view both keep edits in memory only.
+  // The edit page has a Save button, so it is excluded — there the work has
+  // somewhere to go.
+  const unsavedWork = dirty && route.mode !== "edit";
+
   if (docsNotFound) return <NotFound path={initialDocs} transient={docsNotFoundTransient} />;
   if (savedId && !sourceLoaded) return <Splash text="Loading demo…" />;
 
@@ -1090,15 +1096,29 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
             {versionWarning}
           </span>
         )}
+        {/* Download is available on every route, not just /share. Most people
+            here are anonymous, nothing persists their edits, and a refresh
+            takes the work with it — so the one way out of the playground with
+            your changes has to be present before you need it, not discovered
+            afterwards. It highlights once there is something to lose. */}
+        <button
+          style={{
+            ...ghostBtn,
+            ...(unsavedWork ? { color: theme.color.accent, borderColor: theme.color.accent } : null),
+          }}
+          onClick={downloadZip}
+          title={
+            unsavedWork
+              ? "Your edits are not saved anywhere — download the example with your changes as a .zip"
+              : "Download this example (including any edits) as a .zip"
+          }
+        >
+          Download{unsavedWork ? " •" : ""}
+        </button>
         {isShare ? (
-          <>
-            <button style={ghostBtn} onClick={downloadZip} title="Download this example (including your edits) as a .zip">
-              Download
-            </button>
-            <span style={{ color: theme.color.textMuted, fontSize: 12, fontFamily: theme.font.mono, whiteSpace: "nowrap" }}>
-              {entry.displayName} · HOT {version}
-            </span>
-          </>
+          <span style={{ color: theme.color.textMuted, fontSize: 12, fontFamily: theme.font.mono, whiteSpace: "nowrap" }}>
+            {entry.displayName} · HOT {version}
+          </span>
         ) : user ? (
           <>
             <span style={{ color: theme.color.textMuted, fontSize: 12 }}>{user.email}</span>
