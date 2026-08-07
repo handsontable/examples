@@ -52,6 +52,27 @@ test("the tokens the old hand-written list got wrong stay gone", () => {
   }
 });
 
+test("linked tokens point at tokens that exist", () => {
+  // `linkedTokens` pairs a column-header token with its row-header counterpart;
+  // the panel writes and resets them together. A typo here would silently write
+  // a token nothing reads.
+  const linked = [...catalogue.matchAll(/linkedTokens: \[([^\]]*)\]/g)]
+    .flatMap((m) => [...m[1].matchAll(/"([^"]+)"/g)].map((t) => t[1]));
+  assert.ok(linked.length > 0, "expected the catalogue to declare linked tokens");
+  for (const key of linked) {
+    assert.ok(catalogueKeys.includes(key), `linkedTokens references unknown token ${key}`);
+  }
+});
+
+test("the panel writes linked tokens, not just the edited one", () => {
+  // Bugbot caught this: the controls were ported but the write path only
+  // touched the edited key, so a restyled column header left the row header
+  // stock.
+  const panel = readFileSync(join(root, "apps/authoring/src/StylePanel.tsx"), "utf8");
+  assert.match(panel, /setParam\(token\.key, v, token\.linkedTokens\)/);
+  assert.match(panel, /resetParam\(token\.key, token\.linkedTokens\)/);
+});
+
 test("every token declares a type the panel can render", () => {
   const types = new Set([...catalogue.matchAll(/^\s+type: "([^"]+)",$/gm)].map((m) => m[1]));
   assert.deepEqual([...types].sort(), ["color", "numeric", "select", "size"]);

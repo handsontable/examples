@@ -83,7 +83,10 @@ function paletteSource(entries: [string, string][], presetVar: string): string {
 export function buildThemeModule(state: ThemeState, typescript: boolean): string {
   const palette = nonEmpty(state.palette);
   const tokens = nonEmpty(state.params);
-  const density = nonEmpty(state.densitySizes);
+  // [variant, [[size, value], …]] for every variant that has any override.
+  const density = Object.entries(state.densitySizes ?? {})
+    .map(([variant, sizes]) => [variant, nonEmpty(sizes ?? {})] as const)
+    .filter(([, sizes]) => sizes.length > 0);
   const font = googleFontFamily(state.params.fontFamily);
 
   const lines = [
@@ -103,11 +106,16 @@ export function buildThemeModule(state: ThemeState, typescript: boolean): string
     // `sizes` is keyed by density variant, not by size name — see
     // ThemeDensitySizes in handsontable/themes. Emitting the sizes flat put
     // them a level too high and Handsontable ignored them silently, so density
-    // overrides never reached the grid at all (DEV-2199).
+    // overrides never reached the grid at all (DEV-2199). Every variant that
+    // has overrides is written, not only the selected one, so switching the
+    // grid to comfortable still finds the sizes tuned for it.
     density.length
-      ? `  density: {\n    type: ${lit(state.density)},\n    sizes: {\n      ${lit(state.density)}: {\n${
-        density.map(([k, v]) => `        ${lit(k)}: ${lit(v)},`).join("\n")
-      }\n      },\n    },\n  },`
+      ? `  density: {\n    type: ${lit(state.density)},\n    sizes: {\n${
+        density.map(([variant, sizes]) =>
+          `      ${lit(variant)}: {\n${
+            sizes.map(([k, v]) => `        ${lit(k)}: ${lit(v)},`).join("\n")
+          }\n      },`).join("\n")
+      }\n    },\n  },`
       : `  density: ${lit(state.density)},`,
     `  colorScheme: ${lit(state.colorScheme)},`,
     "};",

@@ -26,11 +26,13 @@ import {
   COLORS_PRESETS,
   COLOR_SCHEMES,
   DEFAULT_THEME,
-  DENSITY_SIZES,
+  DENSITY_GROUPS,
   DENSITY_VARIANTS,
   googleFontFamily,
   ICONS_PRESETS,
   isPristine,
+  densitySizeCount,
+  migrateThemeState,
   COMMON_SECTIONS,
   COMPONENT_SECTIONS,
   NEUTRAL_STEPS,
@@ -67,7 +69,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
   const [state, setState] = useState<ThemeState>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      return saved ? { ...DEFAULT_THEME, ...(JSON.parse(saved) as ThemeState) } : DEFAULT_THEME;
+      return saved ? migrateThemeState(JSON.parse(saved)) : DEFAULT_THEME;
     } catch {
       return DEFAULT_THEME;
     }
@@ -79,6 +81,8 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
   /** The component whose sub-panel is open, e.g. "Buttons". */
   const [component, setComponent] = useState<string | null>(null);
   const [openGroup, setOpenGroup] = useState<string>("");
+  /** Which density variant the sizes editor is pointed at. */
+  const [densityVariant, setDensityVariant] = useState<ThemeState["density"]>(DEFAULT_THEME.density);
   const [showCode, setShowCode] = useState(false);
   const [applied, setApplied] = useState<{ linked: boolean } | null>(null);
 
@@ -100,7 +104,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
   const ctx: ControlContext = useMemo(() => ({
     tokens: effectiveTokens(presetTokens(state.tokens), state.params),
     colors: effectiveColors(presetColors(state.colors), state.palette),
-    density: effectiveDensity(presetDensity(state.density), state.densitySizes),
+    density: effectiveDensity(presetDensity(state.density), state.densitySizes[state.density] ?? {}),
     colorScheme: state.colorScheme,
   }), [state]);
 
@@ -111,8 +115,8 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
       token={token}
       ctx={ctx}
       value={state.params[token.key]}
-      onChange={(v) => setParam(token.key, v)}
-      onReset={() => resetParam(token.key)}
+      onChange={(v) => setParam(token.key, v, token.linkedTokens)}
+      onReset={() => resetParam(token.key, token.linkedTokens)}
     />
   );
 
@@ -178,19 +182,33 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
     }
   }
 
-  function setParam(name: string, value: TokenValue) {
+  /**
+   * Set a token, and every token it is linked to.
+   *
+   * `linkedTokens` in the catalogue pairs a column-header token with its
+   * row-header counterpart (`headerForegroundColor` ->
+   * `headerRowForegroundColor`, and the highlighted and active variants). They
+   * are meant to move together — theme-builder's `TokenItem` writes all of them
+   * — because a grid with a restyled column header and a stock row header just
+   * looks broken.
+   */
+  function setParam(name: string, value: TokenValue, linked: string[] = []) {
     const params = { ...state.params };
     const empty = Array.isArray(value)
       ? value.every((v) => !String(v).trim())
       : !String(value).trim();
-    if (empty) delete params[name];
-    else params[name] = value;
+    for (const key of [name, ...linked]) {
+      if (empty) delete params[key];
+      else params[key] = value;
+    }
     update({ params });
   }
 
-  function resetParam(name: string) {
+  /** Reset clears the linked tokens too, or they keep a value the control that
+   *  set them no longer shows. */
+  function resetParam(name: string, linked: string[] = []) {
     const params = { ...state.params };
-    delete params[name];
+    for (const key of [name, ...linked]) delete params[key];
     update({ params });
   }
 
@@ -201,10 +219,16 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
     update({ palette });
   }
 
-  function setDensitySize(name: string, value: string) {
+  /** Density sizes are per variant, so an edit names the variant it belongs to
+   *  — you can tune `comfortable` while looking at `compact`. */
+  function setDensitySize(variant: ThemeState["density"], name: string, value: string) {
+    const forVariant = { ...(state.densitySizes[variant] ?? {}) };
+    if (value.trim()) forVariant[name] = value;
+    else delete forVariant[name];
+
     const densitySizes = { ...state.densitySizes };
-    if (value.trim()) densitySizes[name] = value;
-    else delete densitySizes[name];
+    if (Object.keys(forVariant).length > 0) densitySizes[variant] = forVariant;
+    else delete densitySizes[variant];
     update({ densitySizes });
   }
 
@@ -423,23 +447,50 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
             aria-expanded={openGroup === "Density sizes"}
           >
             <span>{openGroup === "Density sizes" ? "▾" : "▸"} Density sizes</span>
-            {Object.keys(state.densitySizes).length > 0 && (
-              <span style={badge}>{Object.keys(state.densitySizes).length}</span>
-            )}
+            {densitySizeCount(state) > 0 && <span style={badge}>{densitySizeCount(state)}</span>}
           </button>
           {openGroup === "Density sizes" && (
             <div style={{ padding: "0 14px 12px" }}>
               <p style={{ ...note, marginTop: 0 }}>
-                Fine-tune the <code style={code}>{state.density}</code> preset one measurement at a
-                time. Blank means "whatever the preset says".
+                Fine-tune a density preset one measurement at a time. Blank means "whatever
+                the preset says". All three variants are editable, so a theme still behaves
+                when the grid is switched between them.
               </p>
-              {DENSITY_SIZES.map((token) => (
-                <TokenField
-                  key={token.key}
-                  token={token}
-                  value={state.densitySizes[token.key] ?? ""}
-                  onChange={(v) => setDensitySize(token.key, v)}
-                />
+              {/* Which variant is being edited — independent of the one the grid is
+                  set to, exactly as theme-builder's density modal allows. */}
+              <div style={segmentedRow}>
+                {DENSITY_VARIANTS.map((v) => {
+                  const n = Object.keys(state.densitySizes[v] ?? {}).length;
+                  return (
+                    <button
+                      key={v}
+                      type="button"
+                      style={segmentBtn(densityVariant === v)}
+                      onClick={() => setDensityVariant(v)}
+                    >
+                      {v}{n > 0 ? ` (${n})` : ""}
+                    </button>
+                  );
+                })}
+              </div>
+              {densityVariant !== state.density && (
+                <div style={{ ...hint, marginLeft: 0, marginBottom: 8 }}>
+                  Editing <strong>{densityVariant}</strong>; the grid is currently on{" "}
+                  <strong>{state.density}</strong>, so these won't show in the preview yet.
+                </div>
+              )}
+              {DENSITY_GROUPS.map((group) => (
+                <div key={group.label}>
+                  <div style={subGroup}>{group.label}</div>
+                  {group.tokens.map((token) => (
+                    <TokenField
+                      key={token.key}
+                      token={token}
+                      value={state.densitySizes[densityVariant]?.[token.key] ?? ""}
+                      onChange={(v) => setDensitySize(densityVariant, token.key, v)}
+                    />
+                  ))}
+                </div>
               ))}
             </div>
           )}
@@ -758,6 +809,13 @@ const swatch: React.CSSProperties = {
   border: `1px solid ${ui.color.border}`, borderRadius: 6, background: "#fff", cursor: "pointer",
 };
 const hint: React.CSSProperties = { fontSize: 11, color: ui.color.textMuted, marginLeft: 138 };
+const segmentedRow: React.CSSProperties = { display: "flex", gap: 4, marginBottom: 10 };
+const segmentBtn = (on: boolean): React.CSSProperties => ({
+  flex: 1, fontSize: 11.5, padding: "4px 0", cursor: "pointer", borderRadius: 5,
+  textTransform: "capitalize", fontFamily: ui.font.ui,
+  border: `1px solid ${on ? ui.color.accent : ui.color.border}`,
+  background: on ? ui.color.accent : "#fff", color: on ? "#fff" : ui.color.text,
+});
 const tileRow: React.CSSProperties = { display: "flex", gap: 8, justifyContent: "space-between" };
 const tile: React.CSSProperties = {
   flex: 1, minWidth: 0, padding: 5, borderRadius: 8, cursor: "pointer",

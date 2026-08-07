@@ -76,7 +76,27 @@ Two behaviours worth knowing:
   half matching the scheme you're looking at, so styling in light mode doesn't
   silently rewrite dark mode. Picking a *common* colour (`tokens.accentColor`)
   writes a reference instead, which brings both variants along.
-  `linkedTokens` get the same value.
+* **Linked tokens move together.** The catalogue pairs each column-header token
+  with its row-header counterpart (`headerForegroundColor` →
+  `headerRowForegroundColor`, plus the highlighted and active variants). Setting
+  *or resetting* one writes all of them — a grid with a restyled column header
+  and a stock row header just looks broken.
+
+## Density sizes are per variant
+
+`density.sizes` is keyed by density variant, and all three are editable —
+`{ comfortable: { cellVertical: "sizing.size_5" } }` — so a theme still behaves
+when the grid is switched between compact, default and comfortable. The editor
+has its own variant switcher, independent of the variant the grid is on, and
+says so when the two differ.
+
+All fifteen `DensitySizeKey`s are exposed, grouped as theme-builder's density
+modal groups them. `cellVertical` and `cellHorizontal` — cell padding, the ones
+people actually reach for — were missing entirely before DEV-2199.
+
+A theme saved under the old flat shape is migrated on load
+(`migrateThemeState`): a flat object is read as belonging to the variant the
+theme was saved with, which is the only reading that can be right.
 
 ## Reset returns the demo to how it arrived
 

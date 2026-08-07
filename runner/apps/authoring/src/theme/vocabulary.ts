@@ -55,9 +55,17 @@ export interface ThemeState {
   /** The colour ramps the tokens are derived from (theme-builder's
    *  `themePalette`): brand ramp, neutral scale, and the two base colours. */
   palette: Record<string, string>;
-  /** Per-size density overrides on top of the preset, keyed by the density
-   *  token's short name (`gap`, `barsHorizontal`, `menuItemVertical`, …). */
-  densitySizes: Record<string, string>;
+  /**
+   * Per-size density overrides on top of the preset, keyed **by density
+   * variant** and then by the size's short name:
+   * `{ compact: { gap: "sizing.size_1" } }`.
+   *
+   * Keyed by variant because that is the shape Handsontable's
+   * `ThemeDensitySizes` takes, and because theme-builder lets you tune all
+   * three variants, not only the one currently selected — so a theme still
+   * behaves when someone switches the grid to comfortable.
+   */
+  densitySizes: Partial<Record<DensityVariant, Record<string, string>>>;
 }
 
 export const DEFAULT_THEME: ThemeState = {
@@ -84,28 +92,49 @@ export const PRIMARY_STEPS = ["100", "200", "300", "400", "500", "600"] as const
 export const NEUTRAL_STEPS = ["50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"] as const;
 
 /**
- * Density tokens. Choosing a preset sets them all; these let one be nudged
- * afterwards, and they ride along in the theme module's `params({ tokens })`.
+ * Density sizes, grouped as theme-builder's `DensityModal` groups them.
  *
- * These are not part of TOKENS_MAPPING — theme-builder keeps the density sizes
- * in its own store, keyed by short name rather than by token key — so they stay
- * hand-written. They borrow the `Token` shape so one control renders both.
+ * Not part of TOKENS_MAPPING — Handsontable keeps these in `density.sizes`,
+ * keyed by short name rather than by token key — so the list is hand-written
+ * against `DensitySizeKey` in `handsontable/themes`. All fifteen of them:
+ * `cellVertical` and `cellHorizontal` were missing before DEV-2199, which meant
+ * cell padding, the density setting people actually reach for, wasn't editable.
+ *
+ * They borrow the `Token` shape so the same size control renders them.
  */
-export const DENSITY_SIZES: Token[] = [
-  { key: "gap", label: "Gap", type: "size", description: "Space between the grid's parts" },
-  { key: "barsHorizontal", label: "Bars — horizontal", type: "size", description: "" },
-  { key: "barsVertical", label: "Bars — vertical", type: "size", description: "" },
-  { key: "buttonHorizontal", label: "Button — horizontal", type: "size", description: "" },
-  { key: "buttonVertical", label: "Button — vertical", type: "size", description: "" },
-  { key: "inputHorizontal", label: "Input — horizontal", type: "size", description: "" },
-  { key: "inputVertical", label: "Input — vertical", type: "size", description: "" },
-  { key: "menuHorizontal", label: "Menu — horizontal", type: "size", description: "" },
-  { key: "menuVertical", label: "Menu — vertical", type: "size", description: "" },
-  { key: "menuItemHorizontal", label: "Menu item — horizontal", type: "size", description: "" },
-  { key: "menuItemVertical", label: "Menu item — vertical", type: "size", description: "" },
-  { key: "dialogHorizontal", label: "Dialog — horizontal", type: "size", description: "" },
-  { key: "dialogVertical", label: "Dialog — vertical", type: "size", description: "" },
+export const DENSITY_GROUPS: { label: string; tokens: Token[] }[] = [
+  { label: "Layout", tokens: [
+    { key: "gap", label: "Gap", type: "size", description: "Space between the grid's parts" },
+  ] },
+  { label: "Cell", tokens: [
+    { key: "cellVertical", label: "Vertical", type: "size", description: "Cell padding, top and bottom" },
+    { key: "cellHorizontal", label: "Horizontal", type: "size", description: "Cell padding, left and right" },
+  ] },
+  { label: "Bars", tokens: [
+    { key: "barsHorizontal", label: "Horizontal", type: "size", description: "" },
+    { key: "barsVertical", label: "Vertical", type: "size", description: "" },
+  ] },
+  { label: "Button", tokens: [
+    { key: "buttonHorizontal", label: "Horizontal", type: "size", description: "" },
+    { key: "buttonVertical", label: "Vertical", type: "size", description: "" },
+  ] },
+  { label: "Dialog", tokens: [
+    { key: "dialogHorizontal", label: "Horizontal", type: "size", description: "" },
+    { key: "dialogVertical", label: "Vertical", type: "size", description: "" },
+  ] },
+  { label: "Input", tokens: [
+    { key: "inputHorizontal", label: "Horizontal", type: "size", description: "" },
+    { key: "inputVertical", label: "Vertical", type: "size", description: "" },
+  ] },
+  { label: "Menu", tokens: [
+    { key: "menuVertical", label: "Vertical", type: "size", description: "" },
+    { key: "menuHorizontal", label: "Horizontal", type: "size", description: "" },
+    { key: "menuItemVertical", label: "Item vertical", type: "size", description: "" },
+    { key: "menuItemHorizontal", label: "Item horizontal", type: "size", description: "" },
+  ] },
 ];
+
+export const DENSITY_SIZE_KEYS: string[] = DENSITY_GROUPS.flatMap((g) => g.tokens.map((t) => t.key));
 
 /**
  * A bare Google Font family name, as opposed to a CSS font stack.
@@ -182,6 +211,41 @@ export function isPristine(state: ThemeState): boolean {
     && state.density === DEFAULT_THEME.density
     && Object.keys(state.params).length === 0
     && Object.keys(state.palette).length === 0
-    && Object.keys(state.densitySizes).length === 0
+    && densitySizeCount(state) === 0
   );
+}
+
+/** How many density sizes are overridden, across every variant. */
+export function densitySizeCount(state: ThemeState): number {
+  return Object.values(state.densitySizes ?? {})
+    .reduce((n, sizes) => n + Object.keys(sizes ?? {}).length, 0);
+}
+
+/**
+ * Bring a stored theme up to the current shape.
+ *
+ * `densitySizes` used to be flat (`{ gap: … }`), which was both the wrong shape
+ * for Handsontable and ambiguous about which variant it meant. A flat object is
+ * read as belonging to the variant the theme was saved with — the only reading
+ * that can be right — and anything unrecognised is dropped rather than carried
+ * forward to fail somewhere less obvious.
+ */
+export function migrateThemeState(saved: unknown): ThemeState {
+  const state = { ...DEFAULT_THEME, ...(saved as Partial<ThemeState> ?? {}) };
+  const sizes = state.densitySizes as unknown;
+
+  if (sizes && typeof sizes === "object") {
+    const entries = Object.entries(sizes as Record<string, unknown>);
+    const flat = entries.some(([, v]) => typeof v === "string");
+    if (flat) {
+      const variant = DENSITY_VARIANTS.includes(state.density) ? state.density : DEFAULT_THEME.density;
+      state.densitySizes = {
+        [variant]: Object.fromEntries(entries.filter(([, v]) => typeof v === "string")),
+      } as ThemeState["densitySizes"];
+    }
+  } else {
+    state.densitySizes = {};
+  }
+
+  return state;
 }

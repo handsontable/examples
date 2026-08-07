@@ -78,7 +78,15 @@ for (const [name, original] of Object.entries(cases)) {
   };
 }
 out.__density = buildThemeModule(
-  { ...DEFAULT_THEME, density: "compact", densitySizes: { gap: "sizing.size_2" } },
+  {
+    ...DEFAULT_THEME,
+    density: "compact",
+    // Two variants, one of them not the selected type: both must be written.
+    densitySizes: {
+      compact: { gap: "sizing.size_2" },
+      comfortable: { cellVertical: "sizing.size_5" },
+    },
+  },
   true,
 );
 console.log(JSON.stringify(out));
@@ -107,6 +115,14 @@ test("density sizes are nested under the density variant", { skip }, () => {
   const mod = results.__density;
   assert.match(mod, /sizes: \{\s*"compact": \{\s*"gap": "sizing\.size_2",/);
   assert.doesNotMatch(mod, /sizes: \{\s*"gap"/, "sizes must not be keyed by size name");
+});
+
+test("every tuned density variant is written, not just the selected one", { skip }, () => {
+  // Otherwise switching the grid to comfortable finds none of the sizes that
+  // were tuned for it.
+  const mod = results.__density;
+  assert.match(mod, /"comfortable": \{\s*"cellVertical": "sizing\.size_5",/);
+  assert.match(mod, /type: "compact"/, "the selected variant is still the type");
 });
 
 test("`themeName` never coexists with `theme` — they are aliases", { skip }, () => {
