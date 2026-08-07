@@ -29,6 +29,9 @@ importers:
       fflate:
         specifier: ^0.8.2
         version: 0.8.3
+      handsontable:
+        specifier: 18.0.0
+        version: 18.0.0
       react:
         specifier: ^19.0.0
         version: 19.2.7
@@ -1361,6 +1364,9 @@ packages:
   glob@13.0.6:
     resolution: {integrity: sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==}
     engines: {node: 18 || 20 || >=22}
+
+  handsontable@18.0.0:
+    resolution: {integrity: sha512-U4H6gDrwGTfjahSyoGHhFHZvOZWB7ReQ3iBvJUIcZPdqdppdZ+FSYNovw+3MH1guJfGgRIhoLYnbSm8Gd6Ft8w==}
 
   hono@4.12.28:
     resolution: {integrity: sha512-YwUvVpSF7m1yOblFPrU3Hbo8XhPheBoiyfGuII6z19LnOr6JpDnyyp7LFNrfV56wS8tpvtBFGRISHN02pDdLOA==}
@@ -2778,6 +2784,8 @@ snapshots:
       minimatch: 10.2.5
       minipass: 7.1.3
       path-scurry: 2.0.2
+
+  handsontable@18.0.0: {}
 
   hono@4.12.28: {}
 

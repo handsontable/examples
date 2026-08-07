@@ -31,13 +31,21 @@ import {
   googleFontFamily,
   ICONS_PRESETS,
   isPristine,
-  ALL_SECTIONS,
+  COMMON_SECTIONS,
+  COMPONENT_SECTIONS,
   NEUTRAL_STEPS,
   PRIMARY_STEPS,
   TOKENS_PRESETS,
   type ThemeState,
   type Token,
+  type TokenValue,
 } from "./theme/vocabulary.js";
+import { densitySizes as presetDensity, presetColors, presetTokens } from "./theme/presets.js";
+import { effectiveColors, effectiveDensity, effectiveTokens } from "./theme/resolve.js";
+import { TokenControl, type ControlContext } from "./theme/controls.js";
+
+/** Foundation / Common / Component / AI ✨, as theme-builder splits its panel. */
+type Tab = "foundation" | "common" | "component" | "ai";
 
 const STORAGE_KEY = "hot-runner-theme";
 
@@ -67,7 +75,10 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
   const [prompt, setPrompt] = useState("");
   const [thinking, setThinking] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
-  const [openGroup, setOpenGroup] = useState<string>(ALL_SECTIONS[0]?.label ?? "");
+  const [tab, setTab] = useState<Tab>("foundation");
+  /** The component whose sub-panel is open, e.g. "Buttons". */
+  const [component, setComponent] = useState<string | null>(null);
+  const [openGroup, setOpenGroup] = useState<string>("");
   const [showCode, setShowCode] = useState(false);
   const [applied, setApplied] = useState<{ linked: boolean } | null>(null);
 
@@ -82,6 +93,30 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
 
   const snippet = useMemo(() => buildThemeSnippet(state), [state]);
   const pristine = isPristine(state);
+
+  /** What the controls resolve against: the chosen presets with this panel's
+   *  overrides layered on. Recomputed per edit so a resolved value never lags
+   *  behind the grid it is describing. */
+  const ctx: ControlContext = useMemo(() => ({
+    tokens: effectiveTokens(presetTokens(state.tokens), state.params),
+    colors: effectiveColors(presetColors(state.colors), state.palette),
+    density: effectiveDensity(presetDensity(state.density), state.densitySizes),
+    colorScheme: state.colorScheme,
+  }), [state]);
+
+  /** One token row, wired to the panel's state. */
+  const tokenRow = (token: Token) => (
+    <TokenControl
+      key={token.key}
+      token={token}
+      ctx={ctx}
+      value={state.params[token.key]}
+      onChange={(v) => setParam(token.key, v)}
+      onReset={() => resetParam(token.key)}
+    />
+  );
+
+  const overrideCount = (tokens: Token[]) => tokens.filter((t) => state.params[t.key] !== undefined).length;
 
   /** Write the theme into the demo. Every change goes through the editor's own
    *  applyEdit, so the file shows up in the file tree and in a download. */
@@ -143,10 +178,19 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
     }
   }
 
-  function setParam(name: string, value: string) {
+  function setParam(name: string, value: TokenValue) {
     const params = { ...state.params };
-    if (value.trim()) params[name] = value;
-    else delete params[name];
+    const empty = Array.isArray(value)
+      ? value.every((v) => !String(v).trim())
+      : !String(value).trim();
+    if (empty) delete params[name];
+    else params[name] = value;
+    update({ params });
+  }
+
+  function resetParam(name: string) {
+    const params = { ...state.params };
+    delete params[name];
     update({ params });
   }
 
@@ -207,6 +251,26 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
         <button style={closeBtn} onClick={onClose} aria-label="Close styling panel">✕</button>
       </header>
 
+      <nav style={tabBar} role="tablist" aria-label="Style panel sections">
+        {([
+          ["foundation", "Foundation"],
+          ["common", "Common"],
+          ["component", "Component"],
+          ["ai", "AI ✨"],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={tab === key}
+            style={tabBtn(tab === key)}
+            onClick={() => { setTab(key); if (key !== "component") setComponent(null); }}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
       <div style={body}>
         <p style={note}>
           The same theme controls as{" "}
@@ -218,6 +282,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
           travels with a download or a share.
         </p>
 
+        {tab === "ai" && (
         <Section title="Describe a style">
           <form
             style={{ display: "flex", gap: 6 }}
@@ -238,8 +303,14 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
             </button>
           </form>
           {aiNote && <div style={{ ...hint, marginLeft: 0, marginTop: 6 }}>{aiNote}</div>}
+          <p style={{ ...note, marginTop: 10, marginBottom: 0 }}>
+            Describes the whole theme at once — presets, ramps and tokens. Everything it
+            sets shows up in the other tabs, where you can nudge it by hand.
+          </p>
         </Section>
+        )}
 
+        {tab === "foundation" && (<>
         <Section title="Preset">
           <Select
             label="Tokens"
@@ -276,45 +347,6 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
           </div>
         </Section>
 
-        {ALL_SECTIONS.map((section) => {
-          const open = openGroup === section.label;
-          const set = section.groups
-            .flatMap((g) => g.tokens)
-            .filter((t) => state.params[t.key]).length;
-          return (
-            <section key={`${section.area}:${section.label}`} style={{ borderTop: `1px solid ${ui.color.border}` }}>
-              <button
-                type="button"
-                style={groupHeader}
-                onClick={() => setOpenGroup(open ? "" : section.label)}
-                aria-expanded={open}
-              >
-                <span>{open ? "▾" : "▸"} {section.label}</span>
-                {set > 0 && <span style={badge}>{set}</span>}
-              </button>
-              {open && (
-                <div style={{ padding: "0 14px 12px" }}>
-                  {section.groups.map((group) => (
-                    <div key={group.label}>
-                      {/* Sub-groups only exist on components, where a bare list of 59
-                          button tokens would be unreadable. Common sections have one
-                          unnamed group and render flat, as before. */}
-                      {group.label && <div style={subGroup}>{group.label}</div>}
-                      {group.tokens.map((token) => (
-                        <TokenField
-                          key={token.key}
-                          token={token}
-                          value={state.params[token.key] ?? ""}
-                          onChange={(v) => setParam(token.key, v)}
-                        />
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          );
-        })}
         <section style={{ borderTop: `1px solid ${ui.color.border}` }}>
           <button
             type="button"
@@ -392,6 +424,71 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
             </div>
           )}
         </section>
+        </>)}
+
+        {tab === "common" && (
+          <div style={{ padding: "0 14px 12px" }}>
+            <p style={{ ...note, marginTop: 0 }}>
+              The tokens the whole grid is built from — change one here and it carries
+              everywhere the components reference it.
+            </p>
+            {COMMON_SECTIONS.map((section) => (
+              <div key={section.label}>
+                <div style={sectionTitle}>{section.label}</div>
+                {section.groups.flatMap((g) => g.tokens).map(tokenRow)}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tab === "component" && (
+          component === null ? (
+            /* The component list. A flat list of 243 tokens would be unusable, so
+               picking a component opens its own sub-panel — theme-builder's second
+               column, stacked instead of side-by-side because 420px has no room
+               for two. */
+            <div style={{ padding: "0 14px 12px" }}>
+              <p style={{ ...note, marginTop: 0 }}>
+                Per-component tokens. Pick a part of the grid to style it on its own.
+              </p>
+              {COMPONENT_SECTIONS.map((section) => {
+                const set = overrideCount(section.groups.flatMap((g) => g.tokens));
+                return (
+                  <button
+                    key={section.label}
+                    type="button"
+                    style={componentRow}
+                    onClick={() => setComponent(section.label)}
+                  >
+                    <span>{section.label}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {set > 0 && <span style={badge}>{set}</span>}
+                      <span style={{ opacity: 0.5 }}>›</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ padding: "0 14px 12px" }}>
+              <button type="button" style={backBtn} onClick={() => setComponent(null)}>
+                ‹ All components
+              </button>
+              {COMPONENT_SECTIONS.filter((s) => s.label === component).map((section) => (
+                <div key={section.label}>
+                  <div style={sectionTitle}>{section.label}</div>
+                  {section.description && <p style={{ ...note, marginTop: 0 }}>{section.description}</p>}
+                  {section.groups.map((group) => (
+                    <div key={group.label}>
+                      {group.label && <div style={subGroup}>{group.label}</div>}
+                      {group.tokens.map(tokenRow)}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )
+        )}
       </div>
 
       <footer style={foot}>
@@ -604,6 +701,25 @@ const swatch: React.CSSProperties = {
   border: `1px solid ${ui.color.border}`, borderRadius: 6, background: "#fff", cursor: "pointer",
 };
 const hint: React.CSSProperties = { fontSize: 11, color: ui.color.textMuted, marginLeft: 138 };
+const tabBar: React.CSSProperties = {
+  display: "flex", borderBottom: `1px solid ${ui.color.border}`, flex: "0 0 auto", padding: "0 6px",
+};
+const tabBtn = (on: boolean): React.CSSProperties => ({
+  flex: 1, padding: "8px 4px", fontSize: 12, cursor: "pointer", background: "none",
+  border: "none", borderBottom: `2px solid ${on ? ui.color.accent : "transparent"}`,
+  color: on ? ui.color.accent : ui.color.textMuted, fontWeight: on ? 600 : 400,
+  fontFamily: ui.font.ui,
+});
+const componentRow: React.CSSProperties = {
+  display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
+  padding: "9px 4px", fontSize: 12.5, cursor: "pointer", background: "none",
+  border: "none", borderBottom: `1px solid ${ui.color.border}`,
+  color: ui.color.text, fontFamily: ui.font.ui, textAlign: "left",
+};
+const backBtn: React.CSSProperties = {
+  border: "none", background: "none", color: ui.color.accent, fontSize: 12,
+  cursor: "pointer", padding: "6px 0", fontFamily: ui.font.ui,
+};
 const subGroup: React.CSSProperties = {
   fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4,
   color: ui.color.textMuted, margin: "10px 0 6px",

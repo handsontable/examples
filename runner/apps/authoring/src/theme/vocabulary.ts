@@ -31,6 +31,15 @@ export type IconsPreset = (typeof ICONS_PRESETS)[number];
 export type ColorScheme = (typeof COLOR_SCHEMES)[number];
 export type DensityVariant = (typeof DENSITY_VARIANTS)[number];
 
+/**
+ * A token's value.
+ *
+ * Not just a string: a colour token carries a `[light, dark]` pair so the two
+ * schemes can differ, and either side may be a `colors.` / `tokens.` /
+ * `sizing.` / `density.` reference rather than a literal. See ./resolve.ts.
+ */
+export type TokenValue = string | string[];
+
 /** What the panel is currently describing. Mirrors theme-builder's store:
  *  a preset config, per-token overrides, the colour ramps underneath them, and
  *  optional per-size density values. */
@@ -40,8 +49,9 @@ export interface ThemeState {
   icons: IconsPreset;
   colorScheme: ColorScheme;
   density: DensityVariant;
-  /** JS-style token name -> value, e.g. { accentColor: "#1A42E8" }. */
-  params: Record<string, string>;
+  /** JS-style token name -> value, e.g. { accentColor: "#1A42E8" } or
+   *  { accentColor: ["colors.primary.500", "colors.primary.300"] }. */
+  params: Record<string, TokenValue>;
   /** The colour ramps the tokens are derived from (theme-builder's
    *  `themePalette`): brand ramp, neutral scale, and the two base colours. */
   palette: Record<string, string>;
@@ -103,8 +113,8 @@ export const DENSITY_SIZES: Token[] = [
  * Theme-builder loads the font for you when you type "VT323"; a stack like
  * `Inter, sans-serif` is the user supplying their own and must not be fetched.
  */
-export function googleFontFamily(value: string | undefined): string | null {
-  const family = (value ?? "").trim().replace(/^['"]|['"]$/g, "");
+export function googleFontFamily(value: TokenValue | undefined): string | null {
+  const family = (typeof value === "string" ? value : "").trim().replace(/^['"]|['"]$/g, "");
   if (!family || family.includes(",") || family.length > 60) return null;
   return /^[A-Za-z0-9][A-Za-z0-9 ]*$/.test(family) ? family : null;
 }

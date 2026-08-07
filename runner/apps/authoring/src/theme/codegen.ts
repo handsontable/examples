@@ -16,13 +16,16 @@
 // `.setColorScheme("light")`), which is a good sign the generated code reads
 // like something a person would have written.
 
-import { googleFontFamily, isPristine, type ThemeState } from "./vocabulary.js";
+import { googleFontFamily, isPristine, type ThemeState, type TokenValue } from "./vocabulary.js";
 
 
 /** Files a demo may use as its HTML entry, most specific first. */
 
-const nonEmpty = (record: Record<string, string>) =>
-  Object.entries(record).filter(([, v]) => v.trim().length > 0);
+/** Drop cleared entries. A `[light, dark]` pair counts as set when either half
+ *  is — clearing only one scheme still leaves an override to write. */
+const nonEmpty = <T extends TokenValue>(record: Record<string, T>): [string, T][] =>
+  Object.entries(record).filter(([, v]) =>
+    Array.isArray(v) ? v.some((s) => String(s).trim().length > 0) : String(v).trim().length > 0);
 
 /** The generated theme module, at a fixed path so regenerating replaces it. */
 export const THEME_MODULE_BASENAME = "handsontable-theme";
@@ -42,7 +45,7 @@ const MARKER = "handsontable-theme";
  * or arriving in a shared link carries whatever keys it likes, and an unquoted
  * one closes the object literal just as effectively as an unquoted value.
  */
-const lit = (v: string) => JSON.stringify(v);
+const lit = (v: TokenValue) => JSON.stringify(v);
 
 /** Dotted palette keys -> a nested object, deep-merged over the preset so
  *  editing one step never drops the ten the preset supplied. */
@@ -164,7 +167,34 @@ interface WireTarget {
   contents: string;
 }
 
-const IMPORT_LINE = (dir: string) => `import { customTheme } from '${dir}${THEME_MODULE_BASENAME}'; // ${MARKER}`;
+/**
+ * The import we add, tagged so we can find our own work later.
+ *
+ * When wiring displaced a `themeName`, the marker carries it along so **Reset**
+ * can put it back (DEV-2199). Without that, apply-then-reset silently left the
+ * demo unthemed instead of returning it to `ht-theme-main` — the original was
+ * gone and nothing remembered it. Keeping it in the file rather than in panel
+ * state means it survives Download, Share and a reload, exactly like the rest
+ * of the wiring.
+ *
+ * JSON.stringify keeps the payload on one line and quoted; never hand-roll it.
+ */
+const IMPORT_LINE = (dir: string, displaced?: string) =>
+  `import { customTheme } from '${dir}${THEME_MODULE_BASENAME}'; // ${MARKER}`
+  + (displaced ? ` restore:${JSON.stringify(displaced)}` : "");
+
+/** The `themeName` a previous apply displaced, if any. */
+function displacedThemeName(source: string): string | null {
+  const marker = source.split("\n").find((line) => line.includes(MARKER));
+  const payload = marker?.match(/\brestore:("(?:[^"\\]|\\.)*")/)?.[1];
+  if (!payload) return null;
+  try {
+    const value = JSON.parse(payload) as unknown;
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Attach the theme where the grid is constructed.
@@ -188,27 +218,29 @@ function wireTheme(files: Record<string, string>): WireTarget | null {
     // telling the user to add a line that is sitting in the file.
     if (source.includes(MARKER)) return { path, contents: source };
 
-    let next: string | null = null;
+    let next: { source: string; displaced: string | null } | null = null;
 
-    // 1. JSX/Vue wrapper element. Replace an existing theme prop rather than
-    //    adding a second one — several starters already set their own.
+    // 1. JSX/Vue wrapper element. Take over an existing `themeName`/`theme`
+    //    prop rather than adding a second one — several starters set their own.
     if (/<(HotTable|hot-table)\b/.test(source)) {
-      const withTheme = /\btheme=\{[^}]*\}/.test(source)
-        ? source.replace(/\btheme=\{[^}]*\}/, "theme={customTheme}")
-        : source.replace(/<(HotTable|hot-table)\b/, "<$1 theme={customTheme}");
-      // `theme` and `themeName` are aliases and Handsontable refuses to take
-      // both — it warns and drops themeName. Leaving the dead prop behind
-      // means every themed demo logs a warning it cannot act on, so the one
-      // being replaced goes.
-      next = stripThemeName(withTheme);
+      next = swapInPlace(source, THEME_NAME_ATTR, "theme={customTheme}")
+        ?? swapInPlace(source, /\btheme=\{[^}]*\}/, "theme={customTheme}")
+        ?? { source: source.replace(/<(HotTable|hot-table)\b/, "<$1 theme={customTheme}"), displaced: null };
     } else if (/new Handsontable\(\s*[A-Za-z_$][\w$]*\s*,\s*\{/.test(source)) {
       // 2. Vanilla settings object.
-      next = stripThemeName(
-        source.replace(/(new Handsontable\(\s*[A-Za-z_$][\w$]*\s*,\s*\{)/, "$1\n  theme: customTheme,"),
-      );
+      next = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,")
+        ?? {
+          source: source.replace(
+            /(new Handsontable\(\s*[A-Za-z_$][\w$]*\s*,\s*\{)/, "$1\n  theme: customTheme,"),
+          displaced: null,
+        };
     } else if (/gridSettings[^=]*=\s*\{/.test(source)) {
       // 3. Angular's settings object.
-      next = stripThemeName(source.replace(/(gridSettings[^=]*=\s*\{)/, "$1\n    theme: customTheme,"));
+      next = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,")
+        ?? {
+          source: source.replace(/(gridSettings[^=]*=\s*\{)/, "$1\n    theme: customTheme,"),
+          displaced: null,
+        };
     }
 
     if (!next) continue;
@@ -216,18 +248,35 @@ function wireTheme(files: Record<string, string>): WireTarget | null {
     // Relative path from the edited file back to the module at the root.
     const depth = path.split("/").filter(Boolean).length - 1;
     const dir = depth > 0 ? "../".repeat(depth) : "./";
-    return { path, contents: `${IMPORT_LINE(dir)}\n${next}` };
+    return { path, contents: `${IMPORT_LINE(dir, next.displaced ?? undefined)}\n${next.source}` };
   }
 
   return null;
 }
 
-/** Remove a `themeName` prop or setting: it is an alias of `theme`, and
- *  Handsontable warns and ignores it when both are present. */
-function stripThemeName(source: string): string {
-  return source
-    .replace(/\n?[^\n]*\bthemeName\s*=\s*["'][^"']*["'][^\n]*/g, "")
-    .replace(/\n?[^\n]*\bthemeName\s*:\s*["'][^"']*["'],?[^\n]*/g, "");
+/** A `themeName` prop, e.g. `themeName="ht-theme-main"`. */
+const THEME_NAME_ATTR = /\bthemeName\s*=\s*["'][^"']*["']/;
+/** A `themeName` setting, e.g. `themeName: 'ht-theme-main',`. */
+const THEME_NAME_SETTING = /\bthemeName\s*:\s*["'][^"']*["'],?/;
+
+/**
+ * Put `theme` where `themeName` was.
+ *
+ * They're aliases — Handsontable warns and ignores `themeName` when both are
+ * set — so the old one has to go. Swapping **in place** rather than deleting it
+ * and inserting elsewhere buys two things (DEV-2199):
+ *
+ *   * Reset swaps back and the file is byte-identical to how it arrived.
+ *   * It doesn't destroy single-line elements. The previous version deleted the
+ *     whole *line* containing `themeName`, so `<HotTable data={data}
+ *     themeName="ht-theme-main" />` — all one line — was erased outright,
+ *     taking the grid with it.
+ */
+function swapInPlace(source: string, pattern: RegExp, replacement: string) {
+  const found = source.match(pattern)?.[0];
+  if (!found) return null;
+  // String search, so the match is treated literally on both legs.
+  return { source: source.replace(found, replacement), displaced: found };
 }
 
 /** Does the example look like TypeScript? Decides the module's extension. */
@@ -256,19 +305,38 @@ export function buildThemeChanges(
   return { changes, linked: Boolean(wired) };
 }
 
-/** Remove the theme again: an inert module, and the wiring taken back out. */
+/**
+ * Remove the theme again: an inert module, and the wiring taken back out.
+ *
+ * Where wiring displaced a `themeName`, put it back in the same spot rather
+ * than just deleting `theme={customTheme}` — otherwise Reset returns the demo
+ * to *unthemed* instead of to how it arrived (DEV-2199).
+ */
 export function buildResetChanges(files: Record<string, string>): ThemeFileChange[] {
   const changes: ThemeFileChange[] = [];
   for (const [path, source] of Object.entries(files)) {
     if (typeof source !== "string" || !source.includes(MARKER)) continue;
+
+    const restore = displacedThemeName(source);
+    // `themeName="x"` went in as an attribute, `themeName: 'x',` as a setting;
+    // each swaps back into the slot its replacement occupies.
+    const isAttr = restore !== null && /=/.test(restore);
+
     changes.push({
       path,
       contents: source
         .split("\n")
         .filter((line) => !line.includes(MARKER))
         .join("\n")
-        .replace(/\s*theme=\{customTheme\}/g, "")
-        .replace(/\n\s*theme: customTheme,/g, ""),
+        // Function replacers, not `$1…` strings: a `$` inside the restored
+        // value would otherwise be read as a substitution pattern.
+        // `\s*` rather than `\n\s*`: a settings object written on one line
+        // still has to be un-wired, and it would otherwise keep a
+        // `theme: customTheme` referring to an import that has just gone.
+        .replace(/(\s*)theme=\{customTheme\}/g, (_m, ws: string) =>
+          (restore && isAttr ? ws + restore : ""))
+        .replace(/(\s*)theme: customTheme,/g, (_m, ws: string) =>
+          (restore && !isAttr ? ws + restore : "")),
     });
   }
   changes.push({
