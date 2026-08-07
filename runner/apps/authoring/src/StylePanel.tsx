@@ -12,13 +12,14 @@
 
 import { useMemo, useState } from "react";
 import { theme as ui } from "@handsontable/demo-editor-shell";
+import { reportError } from "./sentry.js";
 import type { FilesMap } from "@handsontable/demo-runtime";
 import {
   buildResetChanges,
   buildThemeChanges,
   buildThemeSnippet,
   manualImportHint,
-  THEME_CSS_PATH,
+  themeModulePath,
 } from "./theme/codegen.js";
 import {
   ALL_TOKENS,
@@ -38,15 +39,30 @@ import {
   type TokenDef,
 } from "./theme/vocabulary.js";
 
+const STORAGE_KEY = "hot-runner-theme";
+
 export interface StylePanelProps {
+  apiBase: string;
   getFiles: () => FilesMap;
   /** Write a file into the editor + running preview. */
   applyEdit: (path: string, contents: string) => void;
   onClose: () => void;
 }
 
-export function StylePanel({ getFiles, applyEdit, onClose }: StylePanelProps) {
-  const [state, setState] = useState<ThemeState>(DEFAULT_THEME);
+export function StylePanel({ apiBase, getFiles, applyEdit, onClose }: StylePanelProps) {
+  // Restored across reloads, as theme-builder does — a theme is worth several
+  // minutes of fiddling and losing it to a refresh is its own small tragedy.
+  const [state, setState] = useState<ThemeState>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ? { ...DEFAULT_THEME, ...(JSON.parse(saved) as ThemeState) } : DEFAULT_THEME;
+    } catch {
+      return DEFAULT_THEME;
+    }
+  });
+  const [prompt, setPrompt] = useState("");
+  const [thinking, setThinking] = useState(false);
+  const [aiNote, setAiNote] = useState<string | null>(null);
   const [openGroup, setOpenGroup] = useState<string>(TOKEN_GROUPS[0]?.title ?? "");
   const [showCode, setShowCode] = useState(false);
   const [applied, setApplied] = useState<{ linked: boolean } | null>(null);
@@ -66,6 +82,49 @@ export function StylePanel({ getFiles, applyEdit, onClose }: StylePanelProps) {
     const next = { ...state, ...patch };
     setState(next);
     apply(next);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    } catch { /* private browsing; the theme just will not survive a reload */ }
+  }
+
+  /** "Describe a style" — theme-builder's headline feature. The server returns
+   *  whitelisted theme values, which are merged on top of what is already set
+   *  so a follow-up ("now make the header darker") refines rather than resets. */
+  async function describe(text: string) {
+    const request = text.trim();
+    if (!request || thinking) return;
+    setThinking(true);
+    setAiNote(null);
+    try {
+      const res = await fetch(`${apiBase}/api/theme`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: request, current: state }),
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        tokens?: Record<string, string>;
+        palette?: Record<string, string>;
+        config?: Partial<ThemeState>;
+        error?: string;
+      };
+      if (!res.ok) {
+        setAiNote(body.message ?? `Unavailable (${res.status}).`);
+        return;
+      }
+      update({
+        ...(body.config ?? {}),
+        params: { ...state.params, ...(body.tokens ?? {}) },
+        palette: { ...state.palette, ...(body.palette ?? {}) },
+      });
+      setAiNote(body.message ?? null);
+      setPrompt("");
+    } catch (err) {
+      reportError(err, "theme-ai");
+      setAiNote("Couldn’t reach the styling assistant.");
+    } finally {
+      setThinking(false);
+    }
   }
 
   function setParam(name: string, value: string) {
@@ -119,6 +178,10 @@ export function StylePanel({ getFiles, applyEdit, onClose }: StylePanelProps) {
     for (const change of buildResetChanges(getFiles())) applyEdit(change.path, change.contents);
     setState(DEFAULT_THEME);
     setApplied(null);
+    setAiNote(null);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch { /* nothing to clear */ }
   }
 
   return (
@@ -134,9 +197,32 @@ export function StylePanel({ getFiles, applyEdit, onClose }: StylePanelProps) {
           <a href="https://theme-builder.handsontable.com/" target="_blank" rel="noreferrer" style={{ color: ui.color.accent }}>
             Theme Builder
           </a>
-          , applied to the example you have open. Changes are written to{" "}
-          <code style={code}>{THEME_CSS_PATH}</code> in the demo, so they travel with a download or a share.
+          , applied to the example you have open. The theme is written into the demo as{" "}
+          <code style={code}>{themeModulePath(getFiles())}</code> and handed to the grid, so it
+          travels with a download or a share.
         </p>
+
+        <Section title="Describe a style">
+          <form
+            style={{ display: "flex", gap: 6 }}
+            onSubmit={(e) => { e.preventDefault(); void describe(prompt); }}
+          >
+            <input
+              type="text"
+              style={control}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="retro terminal, corporate blue, dark and compact…"
+              maxLength={300}
+              disabled={thinking}
+              aria-label="Describe the style you want"
+            />
+            <button type="submit" style={{ ...ghost, opacity: thinking || !prompt.trim() ? 0.5 : 1 }} disabled={thinking || !prompt.trim()}>
+              {thinking ? "…" : "Style"}
+            </button>
+          </form>
+          {aiNote && <div style={{ ...hint, marginLeft: 0, marginTop: 6 }}>{aiNote}</div>}
+        </Section>
 
         <Section title="Preset">
           <Select
@@ -285,14 +371,15 @@ export function StylePanel({ getFiles, applyEdit, onClose }: StylePanelProps) {
       <footer style={foot}>
         {applied && !applied.linked && (
           <p style={{ ...note, marginTop: 0 }}>
-            This example has no HTML entry to link the stylesheet from, so add this one line to its
-            entry file: <code style={code}>{manualImportHint(state)}</code>
+            The theme module is written, but this example builds its grid in a shape the panel does
+            not recognise — add it by hand:{" "}
+            <code style={code}>{manualImportHint(getFiles())}</code>
           </p>
         )}
         {googleFontFamily(state.params.fontFamily) && (
           <p style={{ ...note, marginTop: 0 }}>
             Loading <strong>{googleFontFamily(state.params.fontFamily)}</strong> from Google Fonts —
-            the stylesheet carries the <code style={code}>@import</code>, so it travels with the demo.
+            the theme module adds the stylesheet link, so the font travels with the demo.
           </p>
         )}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
