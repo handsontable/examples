@@ -7,10 +7,9 @@
 //     reference" docs page, which lists every token in both forms:
 //     `CSS: --ht-accent-color` / `JS: accentColor`
 //
-// That dual form is why this file exists in one place: the panel edits JS-style
-// names because that is what theme-builder and the AI assistant speak, and the
-// generated stylesheet needs the CSS ones. Deriving one from the other by rule
-// (camelCase → kebab-case, prefixed) keeps them from drifting apart.
+// The panel and the generated module both speak the JS names — the same ones
+// theme-builder and the AI assistant use — so nothing here translates into CSS.
+// The reference's `CSS:` column is only useful for reading the docs.
 
 export const TOKENS_PRESETS = ["main", "horizon", "classic"] as const;
 export const COLORS_PRESETS = ["main", "horizon", "classic", "ant", "shadcn", "material"] as const;
@@ -66,14 +65,9 @@ export const DEFAULT_THEME: ThemeState = {
 export const PRIMARY_STEPS = ["100", "200", "300", "400", "500", "600"] as const;
 export const NEUTRAL_STEPS = ["50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"] as const;
 
-/** `primary.500` -> `--ht-colors-primary-500`; `white` -> `--ht-colors-white`. */
-export function paletteVariable(key: string): string {
-  return `--ht-colors-${key.replace(/\./g, "-")}`;
-}
-
 /**
- * Density tokens, which the reference groups under `--ht-density-*`.
- * Choosing a preset sets them all; these let one be nudged afterwards.
+ * Density tokens. Choosing a preset sets them all; these let one be nudged
+ * afterwards, and they ride along in the theme module's `params({ tokens })`.
  */
 export const DENSITY_SIZES: TokenDef[] = [
   { name: "gap", label: "Gap", kind: "size" },
@@ -90,11 +84,6 @@ export const DENSITY_SIZES: TokenDef[] = [
   { name: "dialogHorizontal", label: "Dialog — horizontal", kind: "size" },
   { name: "dialogVertical", label: "Dialog — vertical", kind: "size" },
 ];
-
-/** `barsHorizontal` -> `--ht-density-bars-horizontal`. */
-export function densityVariable(name: string): string {
-  return `--ht-density-${name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase()}`;
-}
 
 /**
  * A bare Google Font family name, as opposed to a CSS font stack.
@@ -208,12 +197,6 @@ export const TOKEN_GROUPS: TokenGroup[] = [
 ];
 
 export const ALL_TOKENS: TokenDef[] = TOKEN_GROUPS.flatMap((g) => g.tokens);
-
-/** `accentColor` -> `--ht-accent-color`, the mapping the docs' variables
- *  reference prints beside every token. */
-export function cssVariable(jsName: string): string {
-  return `--ht-${jsName.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase()}`;
-}
 
 /** The class Handsontable puts a themed instance in, per tokens preset. */
 export function themeClass(state: ThemeState): string {

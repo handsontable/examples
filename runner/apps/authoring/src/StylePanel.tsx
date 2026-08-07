@@ -10,7 +10,7 @@
 // it lands in the running preview through the same file-write path the editor
 // uses. Styling a demo is editing the demo.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { theme as ui } from "@handsontable/demo-editor-shell";
 import { reportError } from "./sentry.js";
 import type { FilesMap } from "@handsontable/demo-runtime";
@@ -43,13 +43,17 @@ const STORAGE_KEY = "hot-runner-theme";
 
 export interface StylePanelProps {
   apiBase: string;
+  /** Broker token of the signed-in user. /api/theme runs the same budget gate
+   *  as the chat route, so without this a signed-in user is refused at the
+   *  `anon_blocked` tier — exactly when the tier means to keep them working. */
+  token: string | null;
   getFiles: () => FilesMap;
   /** Write a file into the editor + running preview. */
   applyEdit: (path: string, contents: string) => void;
   onClose: () => void;
 }
 
-export function StylePanel({ apiBase, getFiles, applyEdit, onClose }: StylePanelProps) {
+export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: StylePanelProps) {
   // Restored across reloads, as theme-builder does — a theme is worth several
   // minutes of fiddling and losing it to a refresh is its own small tragedy.
   const [state, setState] = useState<ThemeState>(() => {
@@ -66,6 +70,15 @@ export function StylePanel({ apiBase, getFiles, applyEdit, onClose }: StylePanel
   const [openGroup, setOpenGroup] = useState<string>(TOKEN_GROUPS[0]?.title ?? "");
   const [showCode, setShowCode] = useState(false);
   const [applied, setApplied] = useState<{ linked: boolean } | null>(null);
+
+  // A theme restored from a previous session describes files this demo may not
+  // have — reopening the panel, or opening a different example, must reconcile
+  // the two rather than wait for the next edit to notice.
+  useEffect(() => {
+    if (!isPristine(state)) apply(state);
+    // Mount only: later changes go through update(), which applies as it goes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const snippet = useMemo(() => buildThemeSnippet(state), [state]);
   const pristine = isPristine(state);
@@ -98,7 +111,10 @@ export function StylePanel({ apiBase, getFiles, applyEdit, onClose }: StylePanel
     try {
       const res = await fetch(`${apiBase}/api/theme`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ prompt: request, current: state }),
       });
       const body = (await res.json().catch(() => ({}))) as {

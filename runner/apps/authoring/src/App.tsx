@@ -1150,6 +1150,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       {styleOpen && (
         <StylePanel
           apiBase={API_BASE}
+          token={getToken()}
           getFiles={() => filesRef.current}
           applyEdit={onEdit}
           onClose={() => setStyleOpen(false)}
