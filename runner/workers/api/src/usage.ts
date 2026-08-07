@@ -23,7 +23,8 @@ export type UsageMetric =
   | "chat_edit_applied"
   | "chat_edit_undone"
   | "chat_denied"
-  | "chat_error";
+  | "chat_error"
+  | "theme_prompt";
 
 const utcDay = (): string => new Date().toISOString().slice(0, 10);
 

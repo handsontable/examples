@@ -25,6 +25,7 @@ import { currentUser, login, logout, getToken, type User } from "./auth.js";
 import { MyDemos } from "./MyDemos.js";
 import { AdminPanel } from "./Admin.js";
 import { AskAiButton, ChatPanel } from "./Chat.js";
+import { StyleButton, StylePanel } from "./StylePanel.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { reportError, reportingEnabled, Sentry } from "./sentry.js";
 
@@ -352,6 +353,10 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   // the public /share view — explaining a demo is exactly what a shared link
   // is for.
   const [chatOpen, setChatOpen] = useState(false);
+  // "Style this demo" — the Theme Builder controls, applied to the open
+  // example. Mutually exclusive with the chat panel: they occupy the same edge
+  // of the screen, and both are secondary to the code.
+  const [styleOpen, setStyleOpen] = useState(false);
   const docsPathRef = useRef<string | null>(docsPath);
   const dirtyRef = useRef(dirty);
   const sourceLoadedRef = useRef(sourceLoaded);
@@ -1072,7 +1077,8 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
             </a>
           </>
         )}
-        <AskAiButton open={chatOpen} onToggle={() => setChatOpen((v) => !v)} />
+        <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />
+        <StyleButton open={styleOpen} onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }} />
         {!isShare && user && (
           <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
         )}
@@ -1161,6 +1167,15 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         <ShareLinks clientUrl={clientUrl} embedUrl={embedUrl} onClose={() => setShareLinksOpen(false)} />
       )}
 
+      {styleOpen && (
+        <StylePanel
+          apiBase={API_BASE}
+          token={getToken()}
+          getFiles={() => filesRef.current}
+          applyEdit={onEdit}
+          onClose={() => setStyleOpen(false)}
+        />
+      )}
       {chatOpen && (
         <ChatPanel
           apiBase={API_BASE}

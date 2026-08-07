@@ -40,6 +40,7 @@ import {
   validateChatRequest,
 } from "./chat.js";
 import { loadSettings, resetSettings, saveSettings, validateSettings } from "./settings.js";
+import { requestTheme, validateStylePrompt } from "./theme-ai.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
 // so live-preview sessions all use ONE class backed by one generic image that
@@ -887,6 +888,48 @@ export default Sentry.withSentry(sentryOptions, {
             ctx.waitUntil(recordUsageEvent(env, "chat_error", knownFramework(parsed.value.framework)));
             // Configuration and upstream faults are already logged in chat.ts;
             // the caller gets a sentence, not a stack trace.
+            return json({ error: "chat_unavailable", message: err.message }, 503);
+          }
+          throw err;
+        }
+      }
+
+      // POST /api/theme  { prompt, current } -> a theme (public, rate-limited)
+      // "Describe a style" in the theme panel. Same guards as /api/chat — it
+      // is the same gateway and the same money — but its own tool and its own
+      // whitelist, so a styling request can never return file edits.
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "theme" && parts.length === 2) {
+        const limit = await checkChatRateLimit(env, request.headers.get("cf-connecting-ip") ?? "");
+        if (!limit.ok) {
+          ctx.waitUntil(recordUsageEvent(env, "chat_denied", "rate_limit"));
+          return cors(new Response(
+            JSON.stringify({ error: "rate_limited", message: "Too many requests — give it a minute." }),
+            { status: 429, headers: { "Content-Type": "application/json", "Retry-After": String(limit.retryAfter) } },
+          ));
+        }
+        const themeDenied = await budgetGate(env, {
+          isAuthenticated: async () => (await authenticate(request, env)) !== null,
+          what: "theme",
+        });
+        if (themeDenied) {
+          ctx.waitUntil(recordUsageEvent(env, "chat_denied", "budget"));
+          return themeDenied;
+        }
+
+        const body = await request.json().catch(() => null) as { prompt?: unknown; current?: unknown } | null;
+        const parsed = validateStylePrompt(body);
+        if (!parsed.ok) return json({ error: "invalid_request", message: parsed.error }, 400);
+
+        try {
+          const { suggestion, usd } = await requestTheme(env, parsed.prompt, body?.current ?? {});
+          ctx.waitUntil(Promise.all([
+            recordLlmUsage(env, usd),
+            recordUsageEvent(env, "theme_prompt", ""),
+          ]).then(() => undefined));
+          return json(suggestion);
+        } catch (err) {
+          if (err instanceof ChatUnavailableError) {
+            ctx.waitUntil(recordUsageEvent(env, "chat_error", "theme"));
             return json({ error: "chat_unavailable", message: err.message }, 503);
           }
           throw err;
