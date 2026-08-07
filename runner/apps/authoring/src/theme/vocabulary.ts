@@ -25,7 +25,8 @@ export type ColorScheme = (typeof COLOR_SCHEMES)[number];
 export type DensityVariant = (typeof DENSITY_VARIANTS)[number];
 
 /** What the panel is currently describing. Mirrors theme-builder's store:
- *  a preset config plus per-token overrides on top of it. */
+ *  a preset config, per-token overrides, the colour ramps underneath them, and
+ *  optional per-size density values. */
 export interface ThemeState {
   tokens: TokensPreset;
   colors: ColorsPreset;
@@ -34,6 +35,12 @@ export interface ThemeState {
   density: DensityVariant;
   /** JS-style token name -> value, e.g. { accentColor: "#1A42E8" }. */
   params: Record<string, string>;
+  /** The colour ramps the tokens are derived from (theme-builder's
+   *  `themePalette`): brand ramp, neutral scale, and the two base colours. */
+  palette: Record<string, string>;
+  /** Per-size density overrides on top of the preset, keyed by the density
+   *  token's short name (`gap`, `barsHorizontal`, `menuItemVertical`, …). */
+  densitySizes: Record<string, string>;
 }
 
 export const DEFAULT_THEME: ThemeState = {
@@ -43,7 +50,63 @@ export const DEFAULT_THEME: ThemeState = {
   colorScheme: "light",
   density: "default",
   params: {},
+  palette: {},
+  densitySizes: {},
 };
+
+/**
+ * The colour ramps, named as the docs' variables reference does.
+ *
+ * These sit a layer below the tokens: `accentColor` derives from
+ * `colors.primary.500`, so recolouring the brand is one edit here rather than
+ * a dozen token overrides. Theme-builder makes the same distinction, and its
+ * assistant is told to set the whole primary ramp for "make it purple" and a
+ * single token for "make the header red".
+ */
+export const PRIMARY_STEPS = ["100", "200", "300", "400", "500", "600"] as const;
+export const NEUTRAL_STEPS = ["50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"] as const;
+
+/** `primary.500` -> `--ht-colors-primary-500`; `white` -> `--ht-colors-white`. */
+export function paletteVariable(key: string): string {
+  return `--ht-colors-${key.replace(/\./g, "-")}`;
+}
+
+/**
+ * Density tokens, which the reference groups under `--ht-density-*`.
+ * Choosing a preset sets them all; these let one be nudged afterwards.
+ */
+export const DENSITY_SIZES: TokenDef[] = [
+  { name: "gap", label: "Gap", kind: "size" },
+  { name: "barsHorizontal", label: "Bars — horizontal", kind: "size" },
+  { name: "barsVertical", label: "Bars — vertical", kind: "size" },
+  { name: "buttonHorizontal", label: "Button — horizontal", kind: "size" },
+  { name: "buttonVertical", label: "Button — vertical", kind: "size" },
+  { name: "inputHorizontal", label: "Input — horizontal", kind: "size" },
+  { name: "inputVertical", label: "Input — vertical", kind: "size" },
+  { name: "menuHorizontal", label: "Menu — horizontal", kind: "size" },
+  { name: "menuVertical", label: "Menu — vertical", kind: "size" },
+  { name: "menuItemHorizontal", label: "Menu item — horizontal", kind: "size" },
+  { name: "menuItemVertical", label: "Menu item — vertical", kind: "size" },
+  { name: "dialogHorizontal", label: "Dialog — horizontal", kind: "size" },
+  { name: "dialogVertical", label: "Dialog — vertical", kind: "size" },
+];
+
+/** `barsHorizontal` -> `--ht-density-bars-horizontal`. */
+export function densityVariable(name: string): string {
+  return `--ht-density-${name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase()}`;
+}
+
+/**
+ * A bare Google Font family name, as opposed to a CSS font stack.
+ *
+ * Theme-builder loads the font for you when you type "VT323"; a stack like
+ * `Inter, sans-serif` is the user supplying their own and must not be fetched.
+ */
+export function googleFontFamily(value: string | undefined): string | null {
+  const family = (value ?? "").trim().replace(/^['"]|['"]$/g, "");
+  if (!family || family.includes(",") || family.length > 60) return null;
+  return /^[A-Za-z0-9][A-Za-z0-9 ]*$/.test(family) ? family : null;
+}
 
 export type TokenKind = "color" | "size" | "text" | "weight";
 
@@ -166,5 +229,7 @@ export function isPristine(state: ThemeState): boolean {
     && state.colorScheme === DEFAULT_THEME.colorScheme
     && state.density === DEFAULT_THEME.density
     && Object.keys(state.params).length === 0
+    && Object.keys(state.palette).length === 0
+    && Object.keys(state.densitySizes).length === 0
   );
 }

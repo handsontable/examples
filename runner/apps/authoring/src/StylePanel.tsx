@@ -25,9 +25,13 @@ import {
   COLORS_PRESETS,
   COLOR_SCHEMES,
   DEFAULT_THEME,
+  DENSITY_SIZES,
   DENSITY_VARIANTS,
+  googleFontFamily,
   ICONS_PRESETS,
   isPristine,
+  NEUTRAL_STEPS,
+  PRIMARY_STEPS,
   TOKEN_GROUPS,
   TOKENS_PRESETS,
   type ThemeState,
@@ -69,6 +73,46 @@ export function StylePanel({ getFiles, applyEdit, onClose }: StylePanelProps) {
     if (value.trim()) params[name] = value;
     else delete params[name];
     update({ params });
+  }
+
+  function setPalette(key: string, value: string) {
+    const palette = { ...state.palette };
+    if (value.trim()) palette[key] = value;
+    else delete palette[key];
+    update({ palette });
+  }
+
+  function setDensitySize(name: string, value: string) {
+    const densitySizes = { ...state.densitySizes };
+    if (value.trim()) densitySizes[name] = value;
+    else delete densitySizes[name];
+    update({ densitySizes });
+  }
+
+  /** Spread one colour across the brand ramp, lightest to darkest.
+   *  Theme-builder's assistant is told to always set all six steps for a
+   *  recolour, because a single step against five stale ones reads as a bug
+   *  rather than a new brand colour. */
+  function rampFrom(hex: string) {
+    const base = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+    if (!base) return;
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(base[1]!.slice(i, i + 2), 16));
+    const mix = (amount: number) => {
+      // Positive mixes toward white, negative toward black.
+      const blend = (c: number) => Math.round(amount >= 0 ? c + (255 - c) * amount : c * (1 + amount));
+      return `#${[r!, g!, b!].map((c) => blend(c).toString(16).padStart(2, "0")).join("")}`;
+    };
+    update({
+      palette: {
+        ...state.palette,
+        "primary.100": mix(0.8),
+        "primary.200": mix(0.6),
+        "primary.300": mix(0.35),
+        "primary.400": mix(0.15),
+        "primary.500": hex,
+        "primary.600": mix(-0.2),
+      },
+    });
   }
 
   function reset() {
@@ -125,6 +169,9 @@ export function StylePanel({ getFiles, applyEdit, onClose }: StylePanelProps) {
             options={DENSITY_VARIANTS}
             onChange={(v) => update({ density: v as ThemeState["density"] })}
           />
+          <div style={hint}>
+            Icons change the grid's arrows, menu and sort marks — watch the preview.
+          </div>
         </Section>
 
         {TOKEN_GROUPS.map((group) => {
@@ -156,6 +203,83 @@ export function StylePanel({ getFiles, applyEdit, onClose }: StylePanelProps) {
             </section>
           );
         })}
+        <section style={{ borderTop: `1px solid ${ui.color.border}` }}>
+          <button
+            type="button"
+            style={groupHeader}
+            onClick={() => setOpenGroup(openGroup === "Palette" ? "" : "Palette")}
+            aria-expanded={openGroup === "Palette"}
+          >
+            <span>{openGroup === "Palette" ? "▾" : "▸"} Palette</span>
+            {Object.keys(state.palette).length > 0 && <span style={badge}>{Object.keys(state.palette).length}</span>}
+          </button>
+          {openGroup === "Palette" && (
+            <div style={{ padding: "0 14px 12px" }}>
+              <p style={{ ...note, marginTop: 0 }}>
+                The ramps the tokens derive from. Recolouring the brand here beats overriding a
+                dozen tokens one at a time.
+              </p>
+              <label style={row}>
+                <span style={rowLabel}>Brand colour</span>
+                <span style={{ display: "flex", gap: 4, flex: 1 }}>
+                  <input
+                    type="color"
+                    aria-label="Generate the brand ramp from this colour"
+                    value={state.palette["primary.500"] ?? "#1a42e8"}
+                    onChange={(e) => rampFrom(e.target.value)}
+                    style={swatch}
+                  />
+                  <button type="button" style={{ ...ghost, flex: 1 }} onClick={() => rampFrom(state.palette["primary.500"] ?? "#1a42e8")}>
+                    Generate all six steps
+                  </button>
+                </span>
+              </label>
+              <div style={sectionTitle}>Primary</div>
+              <Ramp steps={PRIMARY_STEPS} prefix="primary" state={state} onChange={setPalette} />
+              <div style={sectionTitle}>Neutral</div>
+              <Ramp steps={NEUTRAL_STEPS} prefix="palette" state={state} onChange={setPalette} />
+              <div style={sectionTitle}>Base</div>
+              {["white", "black"].map((key) => (
+                <TokenField
+                  key={key}
+                  token={{ name: key, label: key[0]!.toUpperCase() + key.slice(1), kind: "color" }}
+                  value={state.palette[key] ?? ""}
+                  onChange={(v) => setPalette(key, v)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section style={{ borderTop: `1px solid ${ui.color.border}` }}>
+          <button
+            type="button"
+            style={groupHeader}
+            onClick={() => setOpenGroup(openGroup === "Density sizes" ? "" : "Density sizes")}
+            aria-expanded={openGroup === "Density sizes"}
+          >
+            <span>{openGroup === "Density sizes" ? "▾" : "▸"} Density sizes</span>
+            {Object.keys(state.densitySizes).length > 0 && (
+              <span style={badge}>{Object.keys(state.densitySizes).length}</span>
+            )}
+          </button>
+          {openGroup === "Density sizes" && (
+            <div style={{ padding: "0 14px 12px" }}>
+              <p style={{ ...note, marginTop: 0 }}>
+                Fine-tune the <code style={code}>{state.density}</code> preset one measurement at a
+                time. Blank means "whatever the preset says".
+              </p>
+              {DENSITY_SIZES.map((token) => (
+                <TokenField
+                  key={token.name}
+                  token={token}
+                  value={state.densitySizes[token.name] ?? ""}
+                  onChange={(v) => setDensitySize(token.name, v)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
       </div>
 
       <footer style={foot}>
@@ -163,6 +287,12 @@ export function StylePanel({ getFiles, applyEdit, onClose }: StylePanelProps) {
           <p style={{ ...note, marginTop: 0 }}>
             This example has no HTML entry to link the stylesheet from, so add this one line to its
             entry file: <code style={code}>{manualImportHint(state)}</code>
+          </p>
+        )}
+        {googleFontFamily(state.params.fontFamily) && (
+          <p style={{ ...note, marginTop: 0 }}>
+            Loading <strong>{googleFontFamily(state.params.fontFamily)}</strong> from Google Fonts —
+            the stylesheet carries the <code style={code}>@import</code>, so it travels with the demo.
           </p>
         )}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -191,6 +321,41 @@ export function StylePanel({ getFiles, applyEdit, onClose }: StylePanelProps) {
         )}
       </footer>
     </aside>
+  );
+}
+
+/** A colour ramp as a row of swatches — the shape of the ramp is the thing
+ *  worth seeing, and eleven stacked text fields hide it. */
+function Ramp({
+  steps,
+  prefix,
+  state,
+  onChange,
+}: {
+  steps: readonly string[];
+  prefix: string;
+  state: ThemeState;
+  onChange: (key: string, value: string) => void;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 3, marginBottom: 10, flexWrap: "wrap" }}>
+      {steps.map((step) => {
+        const key = `${prefix}.${step}`;
+        const value = state.palette[key] ?? "";
+        return (
+          <label key={key} style={{ textAlign: "center" }} title={`${key}${value ? ` — ${value}` : " (theme default)"}`}>
+            <input
+              type="color"
+              aria-label={key}
+              value={/^#[0-9a-f]{6}$/i.test(value) ? value : "#ffffff"}
+              onChange={(e) => onChange(key, e.target.value)}
+              style={{ ...swatch, width: 26, flex: "0 0 26px", opacity: value ? 1 : 0.35 }}
+            />
+            <div style={{ fontSize: 9.5, color: ui.color.textMuted }}>{step}</div>
+          </label>
+        );
+      })}
+    </div>
   );
 }
 
