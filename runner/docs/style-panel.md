@@ -9,7 +9,7 @@ The **Style** panel restyles the example you have open with the same controls as
 |---|---|
 | Preset stack | tokens (main/horizon/classic), colors (main/horizon/classic/ant/shadcn/material), icons, colour scheme, density |
 | Palette | brand ramp `primary.100–600`, neutral `palette.50–950`, white/black, with a brand picker that generates all six primary steps |
-| Tokens | typography, colours, header, cells, frame, shadow |
+| Tokens | the full catalogue — 272 tokens across 5 common sections and 18 components |
 | Density sizes | per-measurement overrides on top of the preset |
 | Fonts | a bare family name is fetched from Google Fonts by the generated module |
 | Describe a style | natural language → theme, the Theme Builder feature |
@@ -17,6 +17,41 @@ The **Style** panel restyles the example you have open with the same controls as
 | Reset | removes the module and the wiring |
 
 The theme survives a reload (`localStorage`), and **Reset** clears it.
+
+## The token catalogue
+
+`apps/authoring/src/theme/tokens.ts` is Theme Builder's `src/utils/tokens.ts`
+**vendored verbatim** (DEV-2199) — 272 tokens with the label, description,
+`type`, select `options`, numeric `params` and `linkedTokens` each one carries.
+Don't hand-edit it; re-copy it and update the blob SHA in its header.
+
+Everything else derives from it:
+
+| | |
+|---|---|
+| `theme/vocabulary.ts` | normalises it into `COMMON_SECTIONS` / `COMPONENT_SECTIONS`, plus `ALL_TOKENS`, `TOKENS_BY_KEY` and `TOKEN_KEYS` |
+| `workers/api/src/theme-tokens.generated.ts` | the whitelist `/api/theme` filters the model's answer through — regenerate with `node --experimental-strip-types scripts/gen-theme-tokens.mjs` |
+
+`pipeline/theme-tokens.test.mjs` fails if the two drift.
+
+It replaced a hand-written list of ~40 tokens with an invented three-way kind.
+That list had drifted: `wrapperBorderRadius` and `wrapperBorderColor` are not
+Handsontable tokens (the real names are `borderRadius` and `borderColor`), so
+those two controls silently did nothing.
+
+The panel still renders every token as a text box with a swatch for colours —
+the typed controls (`select` → dropdown, `size` → density-aware, `numeric` →
+unit input) and the Foundation/Common/Component tabs are the next step of
+DEV-2199, and this port is what unblocks them.
+
+## Generated source is a script-injection surface
+
+The theme module is written into the demo and evaluated there, so **every**
+interpolated key and value goes through `lit()` (`JSON.stringify`) — keys
+included. Keys look trustworthy because they come from the catalogue, but a
+theme restored from `localStorage` or arriving in a shared link carries whatever
+keys it likes, and an unquoted one closes the object literal just as effectively
+as an unquoted value. `pipeline/theme-codegen.test.mjs` enforces it.
 
 ## How a theme reaches the grid
 

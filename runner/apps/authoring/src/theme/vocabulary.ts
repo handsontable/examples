@@ -1,15 +1,23 @@
-// The Handsontable theming vocabulary, mirrored from theme-builder (DEV-2047).
+// The Handsontable theming vocabulary (DEV-2047, DEV-2199).
 //
-// Sources, so this stays checkable against them:
-//   * preset names — theme-builder `src/utils/themes.ts` (TOKENS / COLORS /
-//     ICONS / COLOR_SCHEMES / DENSITY_VARIANTS)
-//   * token names — Handsontable's own "Theme customization → Variables
-//     reference" docs page, which lists every token in both forms:
-//     `CSS: --ht-accent-color` / `JS: accentColor`
+// The token catalogue itself is NOT written here — it is vendored verbatim in
+// ./tokens.ts from theme-builder's `src/utils/tokens.ts`, and this module only
+// derives the shapes the panel wants from it. That split is deliberate: the
+// previous version of this file hand-listed ~40 tokens with an invented
+// three-way kind, and it had drifted from the real catalogue (see the header of
+// ./tokens.ts). Deriving means it cannot drift again.
 //
-// The panel and the generated module both speak the JS names — the same ones
-// theme-builder and the AI assistant use — so nothing here translates into CSS.
-// The reference's `CSS:` column is only useful for reading the docs.
+// What stays hand-written here is everything theme-builder keeps *outside*
+// TOKENS_MAPPING: the preset stacks, the colour ramps, and the density sizes.
+//
+// The panel and the generated module both speak the JS token names — the same
+// ones theme-builder and the AI assistant use — so nothing here translates into
+// CSS. The docs' `CSS: --ht-accent-color` column is only useful for reading.
+
+import { TOKENS_MAPPING, type Token, type TokenGroup, type TokenType } from "./tokens.js";
+
+export { TOKENS_MAPPING };
+export type { Token, TokenGroup, TokenType };
 
 export const TOKENS_PRESETS = ["main", "horizon", "classic"] as const;
 export const COLORS_PRESETS = ["main", "horizon", "classic", "ant", "shadcn", "material"] as const;
@@ -68,21 +76,25 @@ export const NEUTRAL_STEPS = ["50", "100", "200", "300", "400", "500", "600", "7
 /**
  * Density tokens. Choosing a preset sets them all; these let one be nudged
  * afterwards, and they ride along in the theme module's `params({ tokens })`.
+ *
+ * These are not part of TOKENS_MAPPING — theme-builder keeps the density sizes
+ * in its own store, keyed by short name rather than by token key — so they stay
+ * hand-written. They borrow the `Token` shape so one control renders both.
  */
-export const DENSITY_SIZES: TokenDef[] = [
-  { name: "gap", label: "Gap", kind: "size" },
-  { name: "barsHorizontal", label: "Bars — horizontal", kind: "size" },
-  { name: "barsVertical", label: "Bars — vertical", kind: "size" },
-  { name: "buttonHorizontal", label: "Button — horizontal", kind: "size" },
-  { name: "buttonVertical", label: "Button — vertical", kind: "size" },
-  { name: "inputHorizontal", label: "Input — horizontal", kind: "size" },
-  { name: "inputVertical", label: "Input — vertical", kind: "size" },
-  { name: "menuHorizontal", label: "Menu — horizontal", kind: "size" },
-  { name: "menuVertical", label: "Menu — vertical", kind: "size" },
-  { name: "menuItemHorizontal", label: "Menu item — horizontal", kind: "size" },
-  { name: "menuItemVertical", label: "Menu item — vertical", kind: "size" },
-  { name: "dialogHorizontal", label: "Dialog — horizontal", kind: "size" },
-  { name: "dialogVertical", label: "Dialog — vertical", kind: "size" },
+export const DENSITY_SIZES: Token[] = [
+  { key: "gap", label: "Gap", type: "size", description: "Space between the grid's parts" },
+  { key: "barsHorizontal", label: "Bars — horizontal", type: "size", description: "" },
+  { key: "barsVertical", label: "Bars — vertical", type: "size", description: "" },
+  { key: "buttonHorizontal", label: "Button — horizontal", type: "size", description: "" },
+  { key: "buttonVertical", label: "Button — vertical", type: "size", description: "" },
+  { key: "inputHorizontal", label: "Input — horizontal", type: "size", description: "" },
+  { key: "inputVertical", label: "Input — vertical", type: "size", description: "" },
+  { key: "menuHorizontal", label: "Menu — horizontal", type: "size", description: "" },
+  { key: "menuVertical", label: "Menu — vertical", type: "size", description: "" },
+  { key: "menuItemHorizontal", label: "Menu item — horizontal", type: "size", description: "" },
+  { key: "menuItemVertical", label: "Menu item — vertical", type: "size", description: "" },
+  { key: "dialogHorizontal", label: "Dialog — horizontal", type: "size", description: "" },
+  { key: "dialogVertical", label: "Dialog — vertical", type: "size", description: "" },
 ];
 
 /**
@@ -97,106 +109,53 @@ export function googleFontFamily(value: string | undefined): string | null {
   return /^[A-Za-z0-9][A-Za-z0-9 ]*$/.test(family) ? family : null;
 }
 
-export type TokenKind = "color" | "size" | "text" | "weight";
+// ---- Derived from TOKENS_MAPPING ---------------------------------------------
 
-export interface TokenDef {
-  /** JS name, as used by theme params and by the AI assistant's tool schema. */
-  name: string;
-  label: string;
-  kind: TokenKind;
-  /** Shown under the control when the token is not self-explanatory. */
-  hint?: string;
-}
-
-export interface TokenGroup {
-  title: string;
-  tokens: TokenDef[];
-}
+/** The two halves of the catalogue, which become the panel's Common and
+ *  Component tabs. */
+export type TokenArea = "common" | "components";
 
 /**
- * The tokens the panel exposes.
+ * One section of the catalogue, normalised.
  *
- * Not every token in the reference — that page lists well over a hundred, most
- * of which nobody reaches for. This is theme-builder's own vetted set: the
- * `COMMON_COLORS_KEYS` from its themes module plus the tokens its AI assistant
- * is allowed to write, which is the list its team decided was worth surfacing.
- * Anything outside it is still reachable by editing the generated stylesheet,
- * which is a real file in the example.
+ * TOKENS_MAPPING says a section holds *either* a flat `tokens` array (all of
+ * `common` does) *or* a `groups` array (all of `components` does). Consumers
+ * shouldn't have to branch on that, so a flat section becomes a single unnamed
+ * group and every section ends up with the same shape.
  */
-export const TOKEN_GROUPS: TokenGroup[] = [
-  {
-    title: "Typography",
-    tokens: [
-      { name: "fontFamily", label: "Font family", kind: "text", hint: "Any Google Font name, or a CSS font stack" },
-      { name: "fontSize", label: "Font size", kind: "size" },
-      { name: "fontWeight", label: "Font weight", kind: "weight" },
-      { name: "lineHeight", label: "Line height", kind: "size" },
-      { name: "fontSizeSmall", label: "Small font size", kind: "size" },
-      { name: "lineHeightSmall", label: "Small line height", kind: "size" },
-      { name: "letterSpacing", label: "Letter spacing", kind: "size" },
-    ],
-  },
-  {
-    title: "Colors",
-    tokens: [
-      { name: "accentColor", label: "Accent", kind: "color", hint: "Selection, focus and active states" },
-      { name: "foregroundColor", label: "Foreground", kind: "color" },
-      { name: "backgroundColor", label: "Background", kind: "color" },
-      { name: "borderColor", label: "Border", kind: "color" },
-      { name: "foregroundSecondaryColor", label: "Foreground (secondary)", kind: "color" },
-      { name: "backgroundSecondaryColor", label: "Background (secondary)", kind: "color" },
-      { name: "placeholderColor", label: "Placeholder", kind: "color" },
-      { name: "readOnlyColor", label: "Read-only", kind: "color" },
-      { name: "disabledColor", label: "Disabled", kind: "color" },
-    ],
-  },
-  {
-    title: "Header",
-    tokens: [
-      { name: "headerBackgroundColor", label: "Background", kind: "color" },
-      { name: "headerForegroundColor", label: "Foreground", kind: "color" },
-      { name: "headerFontWeight", label: "Font weight", kind: "weight" },
-      { name: "headerHighlightedBackgroundColor", label: "Highlighted background", kind: "color" },
-      { name: "headerHighlightedForegroundColor", label: "Highlighted foreground", kind: "color" },
-      { name: "headerActiveBackgroundColor", label: "Active background", kind: "color" },
-      { name: "headerActiveForegroundColor", label: "Active foreground", kind: "color" },
-      { name: "headerActiveBorderColor", label: "Active border", kind: "color" },
-    ],
-  },
-  {
-    title: "Cells",
-    tokens: [
-      { name: "cellHorizontalPadding", label: "Horizontal padding", kind: "size" },
-      { name: "cellVerticalPadding", label: "Vertical padding", kind: "size" },
-      { name: "cellHorizontalBorderColor", label: "Horizontal border", kind: "color" },
-      { name: "cellVerticalBorderColor", label: "Vertical border", kind: "color" },
-      { name: "cellSelectionBorderColor", label: "Selection border", kind: "color" },
-      { name: "cellSelectionBackgroundColor", label: "Selection background", kind: "color" },
-    ],
-  },
-  {
-    title: "Frame",
-    tokens: [
-      { name: "wrapperBorderRadius", label: "Corner radius", kind: "size" },
-      { name: "wrapperBorderColor", label: "Wrapper border", kind: "color" },
-      { name: "gapSize", label: "Gap", kind: "size" },
-      { name: "iconSize", label: "Icon size", kind: "size" },
-      { name: "tableTransition", label: "Transition", kind: "text", hint: "e.g. 0.15s ease" },
-    ],
-  },
-  {
-    title: "Shadow",
-    tokens: [
-      { name: "shadowColor", label: "Colour", kind: "color" },
-      { name: "shadowOpacity", label: "Opacity", kind: "text" },
-      { name: "shadowBlur", label: "Blur", kind: "size" },
-      { name: "shadowX", label: "Offset X", kind: "size" },
-      { name: "shadowY", label: "Offset Y", kind: "size" },
-    ],
-  },
-];
+export interface TokenSection {
+  area: TokenArea;
+  label: string;
+  description: string;
+  groups: TokenGroup[];
+}
 
-export const ALL_TOKENS: TokenDef[] = TOKEN_GROUPS.flatMap((g) => g.tokens);
+function sections(area: TokenArea): TokenSection[] {
+  return (TOKENS_MAPPING[area] ?? []).map((entry) => ({
+    area,
+    label: entry.label,
+    description: entry.description,
+    groups: entry.groups ?? [{ label: "", description: entry.description, tokens: entry.tokens ?? [] }],
+  }));
+}
+
+/** Typography, Colors, Base, Bar, Shadow. */
+export const COMMON_SECTIONS: TokenSection[] = sections("common");
+
+/** Cell, Header, Rows, Buttons, … — one per component, each with sub-groups. */
+export const COMPONENT_SECTIONS: TokenSection[] = sections("components");
+
+export const ALL_SECTIONS: TokenSection[] = [...COMMON_SECTIONS, ...COMPONENT_SECTIONS];
+
+/** Every token in the catalogue, in catalogue order. */
+export const ALL_TOKENS: Token[] = ALL_SECTIONS.flatMap((s) => s.groups.flatMap((g) => g.tokens));
+
+/** Lookup for the codegen and for resolving `linkedTokens` references. */
+export const TOKENS_BY_KEY: ReadonlyMap<string, Token> = new Map(ALL_TOKENS.map((t) => [t.key, t]));
+
+/** The set the AI assistant is allowed to write. Kept as a plain array so the
+ *  worker's generated copy can be diffed against it. */
+export const TOKEN_KEYS: string[] = ALL_TOKENS.map((t) => t.key);
 
 /** The class Handsontable puts a themed instance in, per tokens preset. */
 export function themeClass(state: ThemeState): string {

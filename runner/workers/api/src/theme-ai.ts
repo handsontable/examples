@@ -13,23 +13,16 @@
 
 import type { Env } from "./env.js";
 import { ChatUnavailableError } from "./chat.js";
+// The tokens the model may set — Handsontable's full catalogue, generated from
+// the same TOKENS_MAPPING the panel renders (DEV-2199). Anything outside it is
+// dropped, not passed through.
+//
+// The keys are never sent to the model: the tool schema takes `tokens` as a free
+// string map, so widening this from 40 to 272 costs no prompt budget and only
+// stops the model's correct answers from being thrown away.
+import { TOKEN_KEYS } from "./theme-tokens.generated.js";
 
 const MAX_PROMPT_CHARS = 300;
-
-/** The tokens the model may set — theme-builder's vetted list, which is also
- *  what the panel exposes. Anything outside it is dropped, not passed through. */
-const TOKEN_KEYS = new Set([
-  "fontFamily", "fontSize", "fontWeight", "lineHeight", "fontSizeSmall", "lineHeightSmall", "letterSpacing",
-  "accentColor", "foregroundColor", "backgroundColor", "borderColor",
-  "foregroundSecondaryColor", "backgroundSecondaryColor", "placeholderColor", "readOnlyColor", "disabledColor",
-  "headerBackgroundColor", "headerForegroundColor", "headerFontWeight",
-  "headerHighlightedBackgroundColor", "headerHighlightedForegroundColor",
-  "headerActiveBackgroundColor", "headerActiveForegroundColor", "headerActiveBorderColor",
-  "cellHorizontalPadding", "cellVerticalPadding", "cellHorizontalBorderColor", "cellVerticalBorderColor",
-  "cellSelectionBorderColor", "cellSelectionBackgroundColor",
-  "wrapperBorderRadius", "wrapperBorderColor", "gapSize", "iconSize", "tableTransition",
-  "shadowColor", "shadowOpacity", "shadowBlur", "shadowX", "shadowY",
-]);
 
 const PRIMARY_STEPS = new Set(["100", "200", "300", "400", "500", "600"]);
 const NEUTRAL_STEPS = new Set(["50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"]);
