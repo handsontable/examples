@@ -164,8 +164,14 @@ function SizeControl({ value, resolved, density, onChange }: {
             </div>
           )}
           {mode === "custom" && (
-            <input type="text" style={{ ...control, width: "100%" }} defaultValue={raw.includes("px") ? raw : ""}
-              placeholder="e.g. 12px" onBlur={(e) => e.target.value && onChange(e.target.value)} />
+            // Seeded with anything that isn't a scale reference, not just `px`:
+            // `1rem`, `50%` and unitless numbers are all valid sizes, and
+            // reopening the editor blank while the trigger showed the real value
+            // made the next edit a guess.
+            <input type="text" style={{ ...control, width: "100%" }}
+              defaultValue={/^(sizing|density)\./.test(raw) ? "" : raw}
+              placeholder="e.g. 12px, 1rem, 50%"
+              onBlur={(e) => e.target.value && onChange(e.target.value)} />
           )}
         </div>
       )}

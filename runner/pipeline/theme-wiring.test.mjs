@@ -77,6 +77,17 @@ for (const [name, original] of Object.entries(cases)) {
     roundTrips: files["/src/index.tsx"].trim() === original.trim(),
   };
 }
+// U+2028 is a JavaScript line terminator that JSON.stringify does NOT escape.
+// The restore payload lives in a \`//\` comment, so a themeName carrying one
+// ended the comment early and made whatever followed executable.
+{
+  const SEP = String.fromCharCode(0x2028);
+  const payload = "ht" + SEP + "globalThis.PWNED = 1;//";
+  const src = '<HotTable data={data} themeName="' + payload + '" />';
+  const { changes } = buildThemeChanges({ "/src/index.tsx": src }, DEFAULT_THEME);
+  out.__u2028 = changes.find((c) => c.path === "/src/index.tsx").contents;
+}
+
 out.__density = buildThemeModule(
   {
     ...DEFAULT_THEME,
@@ -106,6 +117,18 @@ test("the theme is wired into every shape we claim to support", { skip }, () => 
   for (const [name, r] of wiringCases()) {
     assert.ok(r.wired, `${name}: theme was not handed to the grid`);
   }
+});
+
+test("a Unicode line separator cannot break out of the marker comment", { skip }, () => {
+  // U+2028/U+2029 are line terminators to JavaScript but are left untouched by
+  // JSON.stringify. The displaced `themeName` rides in a `//` comment, so one
+  // ended the comment and turned the rest of the value into executable code in
+  // a module every viewer of that demo evaluates.
+  const wired = results.__u2028;
+  const separator = String.fromCharCode(0x2028);
+  assert.ok(!wired.includes(separator), "U+2028 must be escaped, not passed through");
+  assert.match(wired, /\\u2028/, "it should appear as an escape instead");
+  assert.doesNotMatch(wired, /^\s*globalThis\.PWNED/m, "the payload must stay inert string data");
 });
 
 test("density sizes are nested under the density variant", { skip }, () => {

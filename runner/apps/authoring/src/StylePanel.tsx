@@ -756,18 +756,55 @@ function TokenField({
   );
 }
 
-/** Exported for the toolbar so the button and the panel stay together. */
+/**
+ * The toolbar entry point, with the same hover CTA as "Ask AI".
+ *
+ * "Style" alone reads like a formatting toggle. The tooltip is the only place
+ * someone learns before clicking that this is the whole of Theme Builder, that
+ * it writes a real module into the demo rather than a throwaway preview, and
+ * that a sentence of English is a valid way to drive it.
+ */
 export function StyleButton({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  const [hint, setHint] = useState(false);
+  // Not over the panel it opens: once that is up the tooltip only repeats what
+  // the user can already read.
+  const show = hint && !open;
+
   return (
-    <button
-      type="button"
-      style={styleBtn}
-      onClick={onToggle}
-      aria-pressed={open}
-      title="Restyle this example with the Theme Builder controls — presets, colours, density and per-token overrides"
+    <span
+      style={{ position: "relative", display: "inline-flex" }}
+      onMouseEnter={() => setHint(true)}
+      onMouseLeave={() => setHint(false)}
     >
-      🎨 Style
-    </button>
+      <button
+        type="button"
+        style={styleBtn}
+        onClick={onToggle}
+        onFocus={() => setHint(true)}
+        onBlur={() => setHint(false)}
+        onKeyDown={(e) => { if (e.key === "Escape") setHint(false); }}
+        aria-pressed={open}
+        aria-describedby={show ? "style-hint" : undefined}
+      >
+        🎨 Style
+      </button>
+
+      {show && (
+        <span id="style-hint" role="tooltip" style={tooltip}>
+          <strong style={{ display: "block", marginBottom: 4 }}>Restyle this example</strong>
+          <span style={{ display: "block", color: ui.color.textMuted, marginBottom: 6 }}>
+            Everything Theme Builder does, applied to the demo you have open.
+          </span>
+          <span style={tooltipItem}>🎨 272 tokens — colours, sizes, typography, per component</span>
+          <span style={tooltipItem}>✨ “Retro amber terminal” — describe it and the grid becomes it</span>
+          <span style={tooltipItem}>🌗 Presets, brand ramp, light/dark and density</span>
+          <span style={{ display: "block", marginTop: 6, color: ui.color.textMuted, fontSize: 11 }}>
+            Written into the demo as a real module, so it survives Download and Share — and
+            Reset puts everything back.
+          </span>
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -816,6 +853,15 @@ const swatch: React.CSSProperties = {
   border: `1px solid ${ui.color.border}`, borderRadius: 6, background: "#fff", cursor: "pointer",
 };
 const hint: React.CSSProperties = { fontSize: 11, color: ui.color.textMuted, marginLeft: 138 };
+/** Matches the "Ask AI" tooltip so the two toolbar CTAs read as a pair. */
+const tooltip: React.CSSProperties = {
+  position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 950, width: 320,
+  background: "#fff", border: `1px solid ${ui.color.border}`, borderRadius: ui.radius.md,
+  boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: "10px 12px",
+  fontFamily: ui.font.ui, fontSize: 12, color: ui.color.text,
+  textAlign: "left", whiteSpace: "normal", cursor: "default",
+};
+const tooltipItem: React.CSSProperties = { display: "block", padding: "2px 0" };
 const segmentedRow: React.CSSProperties = { display: "flex", gap: 4, marginBottom: 10 };
 const segmentBtn = (on: boolean): React.CSSProperties => ({
   flex: 1, fontSize: 11.5, padding: "4px 0", cursor: "pointer", borderRadius: 5,

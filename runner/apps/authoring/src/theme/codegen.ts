@@ -44,8 +44,16 @@ const MARKER = "handsontable-theme";
  * — they come from the token catalogue — but a theme restored from localStorage
  * or arriving in a shared link carries whatever keys it likes, and an unquoted
  * one closes the object literal just as effectively as an unquoted value.
+ *
+ * U+2028 and U+2029 are escaped by hand because `JSON.stringify` does not touch
+ * them and JavaScript treats them as line terminators. That is only cosmetic
+ * inside a string literal, but fatal inside the `//` comment the marker uses:
+ * the comment ends early and whatever follows becomes executable code.
  */
-const lit = (v: TokenValue) => JSON.stringify(v);
+const jsSafe = (json: string) =>
+  json.replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+
+const lit = (v: TokenValue) => jsSafe(JSON.stringify(v));
 
 /** Dotted palette keys -> a nested object, deep-merged over the preset so
  *  editing one step never drops the ten the preset supplied. */
@@ -193,7 +201,7 @@ interface WireTarget {
  */
 const IMPORT_LINE = (dir: string, displaced?: string) =>
   `import { customTheme } from '${dir}${THEME_MODULE_BASENAME}'; // ${MARKER}`
-  + (displaced ? ` restore:${JSON.stringify(displaced)}` : "");
+  + (displaced ? ` restore:${jsSafe(JSON.stringify(displaced))}` : "");
 
 /** The `themeName` a previous apply displaced, if any. */
 function displacedThemeName(source: string): string | null {
