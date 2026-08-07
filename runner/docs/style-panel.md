@@ -45,6 +45,12 @@ The panel splits the way Theme Builder's does — **Foundation** (preset stack,
 palette ramps, density sizes), **Common** (the five shared sections),
 **Component** (18 components, each drilling into its own sub-panel), **AI ✨**.
 
+Foundation picks the **token mapping** and **icon set** as image tiles rather
+than dropdowns — the presets differ in how the grid *looks*, which a thumbnail
+conveys and the word "horizon" does not. The five PNGs are vendored from
+theme-builder's `public/` into `apps/authoring/public/theme-tiles/`; their blob
+SHAs are in the commit that added them.
+
 Each token renders the control its `type` asks for (`theme/controls.tsx`, ported
 from `panel/tabs/components/TokenItem.tsx`):
 

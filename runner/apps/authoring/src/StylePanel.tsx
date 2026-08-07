@@ -311,24 +311,47 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
         )}
 
         {tab === "foundation" && (<>
+        <Section title="Token mapping">
+          {/* Tiles, not a dropdown: the three token presets differ in how the
+              grid *looks*, which a thumbnail conveys and the word "horizon"
+              does not. Same call theme-builder's FoundationTab makes. */}
+          <div style={tileRow}>
+            {TOKENS_PRESETS.map((preset) => (
+              <Tile
+                key={preset}
+                label={preset}
+                image={`/theme-tiles/tokens/${preset}.png`}
+                active={state.tokens === preset}
+                onClick={() => update({ tokens: preset })}
+              />
+            ))}
+          </div>
+        </Section>
+
+        <Section title="Icons set">
+          <div style={{ ...tileRow, justifyContent: "flex-start" }}>
+            {ICONS_PRESETS.map((preset) => (
+              <Tile
+                key={preset}
+                label={preset}
+                image={`/theme-tiles/icons/${preset}.png`}
+                active={state.icons === preset}
+                onClick={() => update({ icons: preset })}
+                maxWidth={90}
+              />
+            ))}
+          </div>
+          <div style={hint}>
+            Icons change the grid's arrows, menu and sort marks — watch the preview.
+          </div>
+        </Section>
+
         <Section title="Preset">
-          <Select
-            label="Tokens"
-            value={state.tokens}
-            options={TOKENS_PRESETS}
-            onChange={(v) => update({ tokens: v as ThemeState["tokens"] })}
-          />
           <Select
             label="Colors"
             value={state.colors}
             options={COLORS_PRESETS}
             onChange={(v) => update({ colors: v as ThemeState["colors"] })}
-          />
-          <Select
-            label="Icons"
-            value={state.icons}
-            options={ICONS_PRESETS}
-            onChange={(v) => update({ icons: v as ThemeState["icons"] })}
           />
           <Select
             label="Colour scheme"
@@ -342,9 +365,6 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
             options={DENSITY_VARIANTS}
             onChange={(v) => update({ density: v as ThemeState["density"] })}
           />
-          <div style={hint}>
-            Icons change the grid's arrows, menu and sort marks — watch the preview.
-          </div>
         </Section>
 
         <section style={{ borderTop: `1px solid ${ui.color.border}` }}>
@@ -534,6 +554,43 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
   );
 }
 
+/** A preset as a picture. Ported from theme-builder's `ButtonBox`: the tiles
+ *  are thumbnails of what the preset does to a grid, which is the only honest
+ *  way to choose between "main" and "horizon" without applying both. */
+function Tile({
+  label,
+  image,
+  active,
+  onClick,
+  maxWidth,
+}: {
+  label: string;
+  image: string;
+  active: boolean;
+  onClick: () => void;
+  maxWidth?: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={label}
+      style={{
+        ...tile,
+        ...(maxWidth ? { maxWidth } : {}),
+        borderColor: active ? ui.color.accent : ui.color.border,
+        boxShadow: active ? `0 0 0 1px ${ui.color.accent}` : "none",
+      }}
+    >
+      <img src={image} alt="" style={tileImg} />
+      <span style={{ ...tileLabel, color: active ? ui.color.accent : ui.color.textMuted }}>
+        {label}
+      </span>
+    </button>
+  );
+}
+
 /** A colour ramp as a row of swatches — the shape of the ramp is the thing
  *  worth seeing, and eleven stacked text fields hide it. */
 function Ramp({
@@ -701,6 +758,17 @@ const swatch: React.CSSProperties = {
   border: `1px solid ${ui.color.border}`, borderRadius: 6, background: "#fff", cursor: "pointer",
 };
 const hint: React.CSSProperties = { fontSize: 11, color: ui.color.textMuted, marginLeft: 138 };
+const tileRow: React.CSSProperties = { display: "flex", gap: 8, justifyContent: "space-between" };
+const tile: React.CSSProperties = {
+  flex: 1, minWidth: 0, padding: 5, borderRadius: 8, cursor: "pointer",
+  border: `1px solid ${ui.color.border}`, background: "#fff",
+  display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+  fontFamily: ui.font.ui,
+};
+const tileImg: React.CSSProperties = {
+  width: "100%", height: "auto", display: "block", borderRadius: 4,
+};
+const tileLabel: React.CSSProperties = { fontSize: 11, textTransform: "capitalize" };
 const tabBar: React.CSSProperties = {
   display: "flex", borderBottom: `1px solid ${ui.color.border}`, flex: "0 0 auto", padding: "0 6px",
 };
