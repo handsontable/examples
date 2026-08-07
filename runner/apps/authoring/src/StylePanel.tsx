@@ -303,7 +303,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
       </nav>
 
       <div style={body}>
-        <p style={note}>
+        <p style={intro}>
           The same theme controls as{" "}
           <a href="https://theme-builder.handsontable.com/" target="_blank" rel="noreferrer" style={{ color: ui.color.accent }}>
             Theme Builder
@@ -904,6 +904,10 @@ const subGroup: React.CSSProperties = {
   color: ui.color.textMuted, margin: "10px 0 6px",
 };
 const note: React.CSSProperties = { fontSize: 11.5, color: ui.color.textMuted, margin: "0 0 10px" };
+/** The panel's opening blurb. It sits directly in the scroll body rather than
+ *  inside a Section, so it has to bring its own padding — without it the text
+ *  runs edge to edge while everything below it is inset by 14px. */
+const intro: React.CSSProperties = { ...note, padding: "12px 14px 0", margin: "0 0 4px" };
 const code: React.CSSProperties = {
   fontFamily: ui.font.mono, fontSize: "0.92em", background: "#fff",
   border: `1px solid ${ui.color.border}`, borderRadius: 4, padding: "0 4px",
