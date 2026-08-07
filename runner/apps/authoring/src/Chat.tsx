@@ -421,9 +421,12 @@ const suggestion: React.CSSProperties = {
   ...ghost, textAlign: "left", fontSize: 12, color: theme.color.accent, cursor: "pointer",
 };
 
+// Deliberately the same neutral treatment as every other toolbar button: this
+// used to carry the accent border and text, which read as the primary action on
+// a bar where it is one option among several.
 const askBtn: React.CSSProperties = {
-  fontFamily: theme.font.ui, fontSize: 12.5, background: "#fff", color: theme.color.accent,
-  border: `1px solid ${theme.color.accent}`, borderRadius: 6, padding: "5px 11px",
+  fontFamily: theme.font.ui, fontSize: 12.5, background: "#fff", color: theme.color.text,
+  border: `1px solid ${theme.color.border}`, borderRadius: 6, padding: "5px 11px",
   cursor: "pointer", whiteSpace: "nowrap",
 };
 const tooltip: React.CSSProperties = {
