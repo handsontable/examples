@@ -24,7 +24,7 @@ import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
 import { MyDemos } from "./MyDemos.js";
 import { AdminPanel } from "./Admin.js";
-import { ChatPanel } from "./Chat.js";
+import { AskAiButton, ChatPanel } from "./Chat.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { reportError, reportingEnabled, Sentry } from "./sentry.js";
 
@@ -1066,14 +1066,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
             </a>
           </>
         )}
-        <button
-          style={{ ...ghostBtn, color: theme.color.accent, borderColor: theme.color.accent }}
-          onClick={() => setChatOpen((v) => !v)}
-          title="Ask questions about this example, or ask for a change"
-          aria-pressed={chatOpen}
-        >
-          Ask AI
-        </button>
+        <AskAiButton open={chatOpen} onToggle={() => setChatOpen((v) => !v)} />
         {!isShare && user && (
           <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
         )}

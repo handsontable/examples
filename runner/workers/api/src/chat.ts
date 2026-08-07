@@ -43,9 +43,16 @@ const MAX_TOTAL_FILE_CHARS = 120_000;
 const MAX_EDITS = 6;
 const MAX_EDIT_CHARS = 40_000;
 const MAX_ANSWER_CHARS = 6_000;
-/** Per-IP budget for a public, unauthenticated LLM endpoint. */
-const RATE_PER_MINUTE = 8;
-const RATE_PER_DAY = 120;
+/** Per-IP budgets. Two buckets, because the two public routes cost wildly
+ *  different amounts: an answer is an LLM call, an apply/undo report is one
+ *  counter row. Sharing one bucket would let the free route eat the paid
+ *  route's quota — and let anyone exhaust an IP's questions for free. */
+const RATE_LIMITS = {
+  chat: { perMinute: 8, perDay: 120 },
+  event: { perMinute: 60, perDay: 600 },
+} as const;
+
+export type RateBucket = keyof typeof RATE_LIMITS;
 
 /** Phrases whose only purpose is to peel the assistant off its instructions.
  *  Not a security boundary on their own — the tool schema and the output
@@ -223,17 +230,22 @@ export function isHandsontableDocsUrl(url: string): boolean {
  * outcome than a chat panel that is briefly unavailable. Everything else in
  * the runner keeps working.
  */
-export async function checkChatRateLimit(env: Env, ip: string): Promise<{ ok: true } | { ok: false; retryAfter: number }> {
+export async function checkChatRateLimit(
+  env: Env,
+  ip: string,
+  bucket: RateBucket = "chat",
+): Promise<{ ok: true } | { ok: false; retryAfter: number }> {
   if (!ip) return { ok: true };
+  const limits = RATE_LIMITS[bucket];
   const now = new Date();
-  const minuteKey = `chat-rl:m:${ip}:${now.toISOString().slice(0, 16)}`;
-  const dayKey = `chat-rl:d:${ip}:${now.toISOString().slice(0, 10)}`;
+  const minuteKey = `chat-rl:${bucket}:m:${ip}:${now.toISOString().slice(0, 16)}`;
+  const dayKey = `chat-rl:${bucket}:d:${ip}:${now.toISOString().slice(0, 10)}`;
   try {
     const [minuteRaw, dayRaw] = await Promise.all([env.CACHE.get(minuteKey), env.CACHE.get(dayKey)]);
     const minute = Number(minuteRaw ?? 0);
     const day = Number(dayRaw ?? 0);
-    if (minute >= RATE_PER_MINUTE) return { ok: false, retryAfter: 60 };
-    if (day >= RATE_PER_DAY) return { ok: false, retryAfter: 3600 };
+    if (minute >= limits.perMinute) return { ok: false, retryAfter: 60 };
+    if (day >= limits.perDay) return { ok: false, retryAfter: 3600 };
     await Promise.all([
       env.CACHE.put(minuteKey, String(minute + 1), { expirationTtl: 120 }),
       env.CACHE.put(dayKey, String(day + 1), { expirationTtl: 86_400 }),

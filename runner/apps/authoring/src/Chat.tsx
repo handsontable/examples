@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { theme } from "@handsontable/demo-editor-shell";
 import type { FilesMap } from "@handsontable/demo-runtime";
 import { searchDocs } from "./docsSearch.js";
+import { Markdown } from "./markdown.js";
 import { reportError } from "./sentry.js";
 
 interface Edit {
@@ -247,7 +248,7 @@ export function ChatPanel({
 
         {turns.map((turn, i) => (
           <div key={i} style={turn.role === "user" ? userBubble : assistantBubble}>
-            <Markdownish text={turn.content} error={turn.error} />
+            <Markdown text={turn.content} error={turn.error} />
 
             {turn.edits && turn.edits.length > 0 && (
               <div style={editBox}>
@@ -316,23 +317,53 @@ export function ChatPanel({
 }
 
 /**
- * The smallest renderer that makes an answer readable: fenced code blocks and
- * paragraphs, nothing else. A Markdown library would be a new dependency in
- * the authoring bundle and a new HTML-injection surface for model output; the
- * server already strips tags, and this never sets innerHTML.
+ * The toolbar entry point, with a tooltip that says what the thing can do.
+ *
+ * "Ask AI" alone is a label, not an invitation — nobody clicks a chat button
+ * to find out whether it can edit their code. The tooltip is the only place a
+ * first-time user learns that answers are grounded in the docs and that a
+ * change arrives as an edit they can apply, so it earns its space.
  */
-function Markdownish({ text, error }: { text: string; error?: boolean }) {
-  const parts = text.split(/```(?:[a-zA-Z0-9]*)\n?/);
+export function AskAiButton({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  const [hint, setHint] = useState(false);
+  // Never over the top of the panel it opens: once the panel is up, the
+  // tooltip is repeating what the user can already read.
+  const show = hint && !open;
+
   return (
-    <div style={{ color: error ? theme.color.danger : undefined }}>
-      {parts.map((part, i) =>
-        i % 2 === 1
-          ? <pre key={i} style={codeBlock}><code>{part.replace(/\n$/, "")}</code></pre>
-          : part.split(/\n{2,}/).filter(Boolean).map((para, j) => (
-              <p key={`${i}-${j}`} style={{ margin: "0 0 8px", whiteSpace: "pre-wrap" }}>{para}</p>
-            )),
+    <span
+      style={{ position: "relative", display: "inline-flex" }}
+      onMouseEnter={() => setHint(true)}
+      onMouseLeave={() => setHint(false)}
+    >
+      <button
+        type="button"
+        style={askBtn}
+        onClick={onToggle}
+        onFocus={() => setHint(true)}
+        onBlur={() => setHint(false)}
+        onKeyDown={(e) => { if (e.key === "Escape") setHint(false); }}
+        aria-pressed={open}
+        aria-describedby={show ? "ask-ai-hint" : undefined}
+      >
+        ✨ Ask AI
+      </button>
+
+      {show && (
+        <span id="ask-ai-hint" role="tooltip" style={tooltip}>
+          <strong style={{ display: "block", marginBottom: 4 }}>Ask about this example</strong>
+          <span style={{ display: "block", color: theme.color.textMuted, marginBottom: 6 }}>
+            Scoped to the code you have open — not Handsontable in general.
+          </span>
+          <span style={tooltipItem}>💬 “What does this example do?”</span>
+          <span style={tooltipItem}>🔧 “Make the first two columns frozen” — the edit arrives ready to apply</span>
+          <span style={tooltipItem}>📚 Grounded in the Handsontable docs, with links</span>
+          <span style={{ display: "block", marginTop: 6, color: theme.color.textMuted, fontSize: 11 }}>
+            Changes are never applied without you — Apply, then Undo if you don’t like it.
+          </span>
+        </span>
       )}
-    </div>
+    </span>
   );
 }
 
@@ -368,10 +399,6 @@ const pathChip: React.CSSProperties = {
   fontFamily: theme.font.mono, fontSize: 11.5, background: "#fff",
   border: `1px solid ${theme.color.border}`, borderRadius: 4, padding: "1px 5px",
 };
-const codeBlock: React.CSSProperties = {
-  background: theme.color.editorBg, color: theme.color.editorText, borderRadius: theme.radius.md,
-  padding: 10, overflowX: "auto", fontFamily: theme.font.mono, fontSize: 11.5, margin: "0 0 8px",
-};
 const docLink: React.CSSProperties = {
   display: "block", color: theme.color.accent, textDecoration: "none", padding: "1px 0",
 };
@@ -393,3 +420,17 @@ const ghost: React.CSSProperties = {
 const suggestion: React.CSSProperties = {
   ...ghost, textAlign: "left", fontSize: 12, color: theme.color.accent, cursor: "pointer",
 };
+
+const askBtn: React.CSSProperties = {
+  fontFamily: theme.font.ui, fontSize: 12.5, background: "#fff", color: theme.color.accent,
+  border: `1px solid ${theme.color.accent}`, borderRadius: 6, padding: "5px 11px",
+  cursor: "pointer", whiteSpace: "nowrap",
+};
+const tooltip: React.CSSProperties = {
+  position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 950, width: 320,
+  background: "#fff", border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.md,
+  boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: "10px 12px",
+  fontFamily: theme.font.ui, fontSize: 12, color: theme.color.text,
+  textAlign: "left", whiteSpace: "normal", cursor: "default",
+};
+const tooltipItem: React.CSSProperties = { display: "block", padding: "2px 0" };

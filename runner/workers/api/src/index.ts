@@ -904,9 +904,10 @@ export default Sentry.withSentry(sentryOptions, {
         if (event !== "edit_applied" && event !== "edit_undone") {
           return json({ error: "unknown event" }, 400);
         }
-        // Same per-IP budget as the chat route: this one costs nothing to
-        // serve, but it writes counter rows, and a public writer needs a cap.
-        const eventLimit = await checkChatRateLimit(env, request.headers.get("cf-connecting-ip") ?? "");
+        // Its own bucket, deliberately: sharing the chat counters would make
+        // Apply/Undo spend the user's question quota, and would let anyone
+        // exhaust an IP's paid budget through this free route.
+        const eventLimit = await checkChatRateLimit(env, request.headers.get("cf-connecting-ip") ?? "", "event");
         if (!eventLimit.ok) return cors(new Response(null, { status: 429 }));
         ctx.waitUntil(recordUsageEvent(
           env,
