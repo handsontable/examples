@@ -100,10 +100,14 @@ export function buildThemeModule(state: ThemeState, typescript: boolean): string
     "  tokens: tokensPreset,",
     palette.length ? `  colors: {\n${paletteSource(palette, "colorsPreset")}\n  },` : "  colors: colorsPreset,",
     "  icons: iconsPreset,",
+    // `sizes` is keyed by density variant, not by size name — see
+    // ThemeDensitySizes in handsontable/themes. Emitting the sizes flat put
+    // them a level too high and Handsontable ignored them silently, so density
+    // overrides never reached the grid at all (DEV-2199).
     density.length
-      ? `  density: {\n    type: ${lit(state.density)},\n    sizes: {\n${
-        density.map(([k, v]) => `      ${lit(k)}: ${lit(v)},`).join("\n")
-      }\n    },\n  },`
+      ? `  density: {\n    type: ${lit(state.density)},\n    sizes: {\n      ${lit(state.density)}: {\n${
+        density.map(([k, v]) => `        ${lit(k)}: ${lit(v)},`).join("\n")
+      }\n      },\n    },\n  },`
       : `  density: ${lit(state.density)},`,
     `  colorScheme: ${lit(state.colorScheme)},`,
     "};",

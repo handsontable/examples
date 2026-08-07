@@ -59,7 +59,7 @@ const CASES = {
 };
 
 const SCRIPT = `
-const { buildThemeChanges, buildResetChanges } = await import("./theme/codegen.ts");
+const { buildThemeChanges, buildResetChanges, buildThemeModule } = await import("./theme/codegen.ts");
 const { DEFAULT_THEME } = await import("./theme/vocabulary.ts");
 const cases = ${JSON.stringify(CASES)};
 const out = {};
@@ -77,6 +77,10 @@ for (const [name, original] of Object.entries(cases)) {
     roundTrips: files["/src/index.tsx"].trim() === original.trim(),
   };
 }
+out.__density = buildThemeModule(
+  { ...DEFAULT_THEME, density: "compact", densitySizes: { gap: "sizing.size_2" } },
+  true,
+);
 console.log(JSON.stringify(out));
 `;
 
@@ -88,26 +92,37 @@ try {
   skip = `codegen could not be executed here: ${err.message.split("\n")[0]}`;
 }
 
+const wiringCases = () => Object.entries(results).filter(([name]) => !name.startsWith("__"));
+
 test("the theme is wired into every shape we claim to support", { skip }, () => {
-  for (const [name, r] of Object.entries(results)) {
+  for (const [name, r] of wiringCases()) {
     assert.ok(r.wired, `${name}: theme was not handed to the grid`);
   }
 });
 
+test("density sizes are nested under the density variant", { skip }, () => {
+  // ThemeDensitySizes is `{ [variant]: { [size]: value } }`. Emitting the sizes
+  // flat put them a level too high and Handsontable ignored them in silence, so
+  // density overrides never reached the grid.
+  const mod = results.__density;
+  assert.match(mod, /sizes: \{\s*"compact": \{\s*"gap": "sizing\.size_2",/);
+  assert.doesNotMatch(mod, /sizes: \{\s*"gap"/, "sizes must not be keyed by size name");
+});
+
 test("`themeName` never coexists with `theme` — they are aliases", { skip }, () => {
-  for (const [name, r] of Object.entries(results)) {
+  for (const [name, r] of wiringCases()) {
     assert.ok(!r.clash, `${name}: left a themeName behind, which Handsontable warns about and ignores`);
   }
 });
 
 test("wiring never eats the grid it is wiring", { skip }, () => {
-  for (const [name, r] of Object.entries(results)) {
+  for (const [name, r] of wiringCases()) {
     assert.ok(r.gridIntact, `${name}: the element lost its other props`);
   }
 });
 
 test("apply then reset returns the file to exactly how it arrived", { skip }, () => {
-  for (const [name, r] of Object.entries(results)) {
+  for (const [name, r] of wiringCases()) {
     assert.ok(r.roundTrips, `${name}: reset did not restore the original (a displaced themeName is lost)`);
   }
 });
