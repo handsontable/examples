@@ -39,7 +39,10 @@ test("strips the legacy CSS link at majors >= 17, in root and src/index.html", (
 // NEWEST core as legacy-era and re-pins the dead URL onto it — and `next` is the
 // larger docs bucket, so that would be the majority of saved demos.
 test("strips the legacy CSS link for -next builds, whose semver major is a misleading 0", () => {
-  for (const ref of ["0.0.0-next-232ad3d-20260810", "19.0.0-next.2"]) {
+  // `17.0.0-rc15` is here to pin the other half of the prerelease rule: an rc is
+  // a normal release candidate, so its real major (17) decides, and it strips.
+  // Loosening the -next regex to prereleases generally would flip it to rewrite.
+  for (const ref of ["0.0.0-next-232ad3d-20260810", "19.0.0-next.2", "17.0.0-rc15"]) {
     const result = applyHandsontableCss(
       { "/index.html": `<head>\n${cssLink("18.0.0")}</head>` },
       { ref, pkgPrNew: false },
@@ -49,7 +52,7 @@ test("strips the legacy CSS link for -next builds, whose semver major is a misle
 });
 
 test("rewrites the version segment at majors <= 16, where the legacy file still exists", () => {
-  for (const ref of ["16.2.0", "15.0.0"]) {
+  for (const ref of ["16.2.0", "15.0.0", "16.2.0-rc1"]) {
     const result = applyHandsontableCss(
       { "/index.html": `<head>\n${cssLink("18.0.0")}</head>` },
       { ref, pkgPrNew: false },
