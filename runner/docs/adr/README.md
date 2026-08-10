@@ -27,9 +27,10 @@ once Accepted.
 | [0019](0019-docs-guide-examples-and-render-ms-removal.md) | Documentation-guide examples in the runner; remove render-ms | Accepted |
 | [0020](0020-routes-in-deploy-command-not-config.md) | Worker routes live in the deploy command, not wrangler.jsonc | Accepted |
 | [0021](0021-versioned-docs-examples-and-version-switch-correctness.md) | Versioned docs-example snapshots and version-switch correctness | Accepted |
-| [0022](0022-shell-theming-via-css-custom-properties.md) | Shell theming via CSS custom properties; the example owns its own theme | Accepted (embed theme hint dropped, ADR-0025) |
+| [0022](0022-self-enforced-spend-ceiling.md) | The spend ceiling is enforced by the Worker, not by Cloudflare | Accepted |
 | [0023](0023-redesign-scope-and-shipping.md) | DEV-2027 redesign — scope rules, deferred gaps, and shipping | Accepted (three applied decisions superseded by 0025) |
 | [0024](0024-icon-system.md) | Icon system — tabler-icons as a dependency, seti-ui generated from source | Accepted |
 | [0025](0025-redesign-scope-corrections-after-login-frames.md) | DEV-2027 redesign — scope corrections after the After Login frames | Accepted |
 | [0026](0026-shell-styling-inline-vs-stylesheet.md) | Shell styling — inline component styles, interaction states in the global stylesheet | Accepted |
 | [0027](0027-dev-2027-shipped-deviations.md) | DEV-2027 — where the shipped UI deliberately departs from the frames | Accepted |
+| [0028](0028-shell-theming-via-css-custom-properties.md) | Shell theming via CSS custom properties; the example owns its own theme | Accepted (embed theme hint dropped, ADR-0025) |

@@ -1,0 +1,293 @@
+- generic [ref=e4]:
+  - banner [ref=e5]:
+    - img "Handsontable" [ref=e6]
+    - button "React (Vite, TS)" [ref=e9] [cursor=pointer]
+    - button "✨ Ask AI" [ref=e15] [cursor=pointer]
+    - button "🎨 Style" [ref=e17] [cursor=pointer]
+    - button "Fork" [ref=e18] [cursor=pointer]
+    - button "Switch to dark theme" [ref=e19] [cursor=pointer]
+    - button "Download" [ref=e22] [cursor=pointer]
+    - 'button "Account: dev@handsontable.com" [ref=e27] [cursor=pointer]':
+      - generic [ref=e28]: D
+  - generic [ref=e29]:
+    - generic [ref=e30]:
+      - navigation "Demo sidebar" [ref=e31]:
+        - generic [ref=e32]:
+          - region "Box info" [ref=e33]:
+            - generic [ref=e34]:
+              - generic [ref=e35]: Box info
+              - button "Collapse Box info" [expanded] [ref=e37] [cursor=pointer]
+            - generic [ref=e40]:
+              - paragraph [ref=e42]: React (Vite, TS)
+              - generic [ref=e43]: Handsontable
+          - region "Files" [ref=e45]:
+            - generic [ref=e46]:
+              - generic [ref=e47]: Files
+              - generic [ref=e48]:
+                - button "Download this workspace (including your edits) as a .zip" [ref=e49] [cursor=pointer]
+                - button "New file in a new folder" [ref=e53] [cursor=pointer]
+                - button "New file" [ref=e56] [cursor=pointer]
+                - button "Collapse Files" [expanded] [ref=e58] [cursor=pointer]
+            - generic [ref=e61]:
+              - button "src" [expanded] [ref=e63] [cursor=pointer]
+              - generic [ref=e70]:
+                - button "constants.ts" [ref=e71] [cursor=pointer]
+                - generic [ref=e75]:
+                  - button "Rename" [ref=e76] [cursor=pointer]
+                  - button "Delete" [ref=e80] [cursor=pointer]
+              - generic [ref=e85]:
+                - button "hooksCallbacks.ts" [ref=e86] [cursor=pointer]
+                - generic [ref=e90]:
+                  - button "Rename" [ref=e91] [cursor=pointer]
+                  - button "Delete" [ref=e95] [cursor=pointer]
+              - generic [ref=e100]:
+                - button "index.tsx" [ref=e101] [cursor=pointer]
+                - generic [ref=e105]:
+                  - button "Rename" [ref=e106] [cursor=pointer]
+                  - button "Delete" [ref=e110] [cursor=pointer]
+              - generic [ref=e115]:
+                - button "styles.css" [ref=e116] [cursor=pointer]
+                - generic [ref=e120]:
+                  - button "Rename" [ref=e121] [cursor=pointer]
+                  - button "Delete" [ref=e125] [cursor=pointer]
+              - generic [ref=e130]:
+                - button ".gitignore" [ref=e131] [cursor=pointer]
+                - generic [ref=e135]:
+                  - button "Rename" [ref=e136] [cursor=pointer]
+                  - button "Delete" [ref=e140] [cursor=pointer]
+              - generic [ref=e145]:
+                - button ".npmrc" [ref=e146] [cursor=pointer]
+                - generic [ref=e150]:
+                  - button "Rename" [ref=e151] [cursor=pointer]
+                  - button "Delete" [ref=e155] [cursor=pointer]
+              - generic [ref=e160]:
+                - button "eslint.config.js" [ref=e161] [cursor=pointer]
+                - generic [ref=e165]:
+                  - button "Rename" [ref=e166] [cursor=pointer]
+                  - button "Delete" [ref=e170] [cursor=pointer]
+              - generic [ref=e175]:
+                - button "index.html" [ref=e176] [cursor=pointer]
+                - generic [ref=e180]:
+                  - button "Rename" [ref=e181] [cursor=pointer]
+                  - button "Delete" [ref=e185] [cursor=pointer]
+              - button "package.json" [ref=e191] [cursor=pointer]
+              - generic [ref=e195]:
+                - button "pnpm-lock.yaml" [ref=e196] [cursor=pointer]
+                - generic [ref=e200]:
+                  - button "Rename" [ref=e201] [cursor=pointer]
+                  - button "Delete" [ref=e205] [cursor=pointer]
+              - generic [ref=e210]:
+                - button "README.md" [ref=e211] [cursor=pointer]
+                - generic [ref=e216]:
+                  - button "Rename" [ref=e217] [cursor=pointer]
+                  - button "Delete" [ref=e221] [cursor=pointer]
+              - generic [ref=e226]:
+                - button "tsconfig.app.json" [ref=e227] [cursor=pointer]
+                - generic [ref=e231]:
+                  - button "Rename" [ref=e232] [cursor=pointer]
+                  - button "Delete" [ref=e236] [cursor=pointer]
+              - generic [ref=e241]:
+                - button "tsconfig.json" [ref=e242] [cursor=pointer]
+                - generic [ref=e246]:
+                  - button "Rename" [ref=e247] [cursor=pointer]
+                  - button "Delete" [ref=e251] [cursor=pointer]
+              - generic [ref=e256]:
+                - button "tsconfig.node.json" [ref=e257] [cursor=pointer]
+                - generic [ref=e261]:
+                  - button "Rename" [ref=e262] [cursor=pointer]
+                  - button "Delete" [ref=e266] [cursor=pointer]
+              - generic [ref=e271]:
+                - button "vite.config.ts" [ref=e272] [cursor=pointer]
+                - generic [ref=e276]:
+                  - button "Rename" [ref=e277] [cursor=pointer]
+                  - button "Delete" [ref=e281] [cursor=pointer]
+        - region "Dependencies" [ref=e286]:
+          - generic [ref=e287]:
+            - generic [ref=e288]: Dependencies
+            - button "Collapse Dependencies" [expanded] [ref=e290] [cursor=pointer]
+          - generic [ref=e293]:
+            - generic [ref=e294]:
+              - link "@handsontable/react-wrapper" [ref=e295] [cursor=pointer]:
+                - /url: https://www.npmjs.com/package/@handsontable/react-wrapper
+              - generic [ref=e296]: https://www.npmjs.com/package/@handsontable/react-wrapper
+              - link "@handsontable/react-wrapper on npm" [ref=e297] [cursor=pointer]:
+                - /url: https://www.npmjs.com/package/@handsontable/react-wrapper
+            - generic [ref=e302]:
+              - link "handsontable" [ref=e303] [cursor=pointer]:
+                - /url: https://www.npmjs.com/package/handsontable
+              - generic [ref=e304]: https://www.npmjs.com/package/handsontable
+              - link "handsontable on npm" [ref=e305] [cursor=pointer]:
+                - /url: https://www.npmjs.com/package/handsontable
+            - generic [ref=e310]:
+              - link "react" [ref=e311] [cursor=pointer]:
+                - /url: https://www.npmjs.com/package/react
+              - generic [ref=e312]: https://www.npmjs.com/package/react
+              - link "react on npm" [ref=e313] [cursor=pointer]:
+                - /url: https://www.npmjs.com/package/react
+            - generic [ref=e318]:
+              - link "react-dom" [ref=e319] [cursor=pointer]:
+                - /url: https://www.npmjs.com/package/react-dom
+              - generic [ref=e320]: https://www.npmjs.com/package/react-dom
+              - link "react-dom on npm" [ref=e321] [cursor=pointer]:
+                - /url: https://www.npmjs.com/package/react-dom
+      - generic [ref=e326]:
+        - generic [ref=e327]:
+          - button "Hide the files sidebar" [pressed] [ref=e328] [cursor=pointer]
+          - tablist "Open files" [ref=e332]:
+            - tab "index.tsx Close index.tsx" [selected] [ref=e333] [cursor=pointer]:
+              - generic [ref=e336]: index.tsx
+              - button "Close index.tsx" [ref=e337]
+        - tabpanel "index.tsx Close index.tsx" [ref=e343]:
+          - generic [ref=e346]:
+            - generic [ref=e347]:
+              - generic [ref=e348]:
+                - generic [ref=e349]: "1"
+                - generic [ref=e350]: "2"
+                - generic [ref=e351]: "3"
+                - generic [ref=e352]: "4"
+                - generic [ref=e353]: "5"
+                - generic [ref=e354]: "6"
+                - generic [ref=e355]: "7"
+                - generic [ref=e356]: "8"
+                - generic [ref=e357]: "9"
+                - generic [ref=e358]: "10"
+                - generic [ref=e359]: "11"
+                - generic [ref=e360]: "12"
+                - generic [ref=e361]: "13"
+                - generic [ref=e362]: "14"
+                - generic [ref=e363]: "15"
+                - generic [ref=e364]: "16"
+                - generic [ref=e365]: "17"
+                - generic [ref=e366]: "18"
+                - generic [ref=e367]: "19"
+                - generic [ref=e368]: "20"
+                - generic [ref=e369]: "21"
+                - generic [ref=e370]: "22"
+                - generic [ref=e371]: "23"
+                - generic [ref=e372]: "24"
+                - generic [ref=e373]: "25"
+                - generic [ref=e374]: "26"
+                - generic [ref=e375]: "27"
+                - generic [ref=e376]: "28"
+                - generic [ref=e377]: "29"
+                - generic [ref=e378]: "30"
+                - generic [ref=e379]: "31"
+                - generic [ref=e380]: "32"
+                - generic [ref=e381]: "33"
+                - generic [ref=e382]: "34"
+                - generic [ref=e383]: "35"
+                - generic [ref=e384]: "36"
+                - generic [ref=e385]: "37"
+                - generic [ref=e386]: "38"
+                - generic [ref=e387]: "39"
+                - generic [ref=e388]: "40"
+                - generic [ref=e389]: "41"
+                - generic [ref=e390]: "42"
+                - generic [ref=e391]: "43"
+                - generic [ref=e392]: "44"
+                - generic [ref=e393]: "45"
+                - generic [ref=e394]: "46"
+                - generic [ref=e395]: "47"
+                - generic [ref=e396]: "48"
+                - generic [ref=e397]: "49"
+                - generic [ref=e398]: "50"
+                - generic [ref=e399]: "51"
+                - generic [ref=e400]: "52"
+                - generic [ref=e401]: "53"
+                - generic [ref=e402]: "54"
+                - generic [ref=e403]: "55"
+                - generic [ref=e404]: "56"
+                - generic [ref=e405]: "57"
+                - generic [ref=e406]: "58"
+                - generic [ref=e407]: "59"
+                - generic [ref=e408]: "60"
+                - generic [ref=e409]: "61"
+              - generic [ref=e410]:
+                - generic [ref=e412]: ⌄
+                - generic [ref=e413]: ⌄
+                - generic [ref=e414]: ⌄
+                - generic [ref=e415]: ⌄
+                - generic [ref=e416]: ⌄
+            - textbox [ref=e417]:
+              - generic [ref=e418]: import React from 'react';
+              - generic [ref=e419]: "import { createRoot } from 'react-dom/client';"
+              - generic [ref=e420]: import './styles.css';
+              - generic [ref=e421]: import Handsontable from 'handsontable';
+              - generic [ref=e422]: "import { HotTable, HotColumn } from '@handsontable/react-wrapper';"
+              - generic [ref=e423]: "import { data } from './constants';"
+              - generic [ref=e425]: "import { addClassesToRows, alignHeaders } from './hooksCallbacks';"
+              - generic [ref=e427]: import 'handsontable/styles/handsontable.min.css';
+              - generic [ref=e428]: import 'handsontable/styles/ht-theme-main.min.css';
+              - generic [ref=e430]: "const App = () => {"
+              - generic [ref=e431]: return (
+              - generic [ref=e432]: <HotTable
+              - generic [ref=e433]: "data={data}"
+              - generic [ref=e434]: "height={450}"
+              - generic [ref=e435]: "colWidths={[170, 222, 130, 120, 120, 130, 156]}"
+              - generic [ref=e436]: "colHeaders={["
+              - generic [ref=e437]: "'Company name',"
+              - generic [ref=e438]: "'Name',"
+              - generic [ref=e439]: "'Sell date',"
+              - generic [ref=e440]: "'In stock',"
+              - generic [ref=e441]: "'Qty',"
+              - generic [ref=e442]: "'Order ID',"
+              - generic [ref=e443]: "'Country',"
+              - generic [ref=e444]: "]}"
+              - generic [ref=e445]: "dropdownMenu={true}"
+              - generic [ref=e446]: "hiddenColumns={{"
+              - generic [ref=e447]: "indicators: true,"
+              - generic [ref=e448]: "}}"
+              - generic [ref=e449]: "contextMenu={true}"
+              - generic [ref=e450]: "multiColumnSorting={true}"
+              - generic [ref=e451]: "filters={true}"
+              - generic [ref=e452]: "rowHeaders={true}"
+              - generic [ref=e453]: "afterGetColHeader={alignHeaders}"
+              - generic [ref=e454]: "beforeRenderer={addClassesToRows}"
+              - generic [ref=e455]: "manualRowMove={true}"
+              - generic [ref=e456]: "autoWrapRow={true}"
+              - generic [ref=e457]: "navigableHeaders={true}"
+              - generic [ref=e458]: themeName="ht-theme-main"
+              - generic [ref=e459]: licenseKey="non-commercial-and-evaluation"
+              - generic [ref=e460]: ">"
+              - generic [ref=e461]: "<HotColumn data={1} />"
+              - generic [ref=e462]: "<HotColumn data={3} />"
+              - generic [ref=e463]: "<HotColumn data={4} type=\"date\" allowInvalid={false} />"
+              - generic [ref=e464]: "<HotColumn data={6} type=\"checkbox\" className=\"htCenter\" />"
+              - generic [ref=e465]: "<HotColumn data={7} type=\"numeric\" />"
+              - generic [ref=e466]: "<HotColumn data={5} />"
+              - generic [ref=e467]: "<HotColumn data={2} />"
+              - generic [ref=e468]: </HotTable>
+              - generic [ref=e469]: );
+              - generic [ref=e470]: "};"
+              - generic [ref=e472]: const rootElement = document.getElementById('root');
+              - generic [ref=e474]: createRoot(rootElement as HTMLElement).render(<App />);
+              - generic [ref=e476]: console.log(
+              - generic [ref=e477]: "`Handsontable: v${Handsontable.version} (${Handsontable.buildDate}) Wrapper: v${HotTable.version} React: v${React.version}`"
+              - generic [ref=e478]: );
+        - generic "Editor status" [ref=e479]:
+          - generic [ref=e480]: Ln 1, Col 1
+          - generic [ref=e481]: "Spaces: 2"
+          - generic [ref=e482]: UTF-8
+          - generic [ref=e483]: "Layout: U.S."
+      - separator "Resize the editor and preview" [ref=e484]
+    - generic [ref=e486]:
+      - generic [ref=e487]:
+        - button "Reload the preview" [ref=e488] [cursor=pointer]
+        - button "Live preview" [disabled] [ref=e492]
+        - button "Handsontable version" [ref=e495] [cursor=pointer]:
+          - generic [ref=e496]: Handsontable
+          - generic [ref=e497]: 18.0.0
+        - button "Set a custom Handsontable version" [ref=e500] [cursor=pointer]
+        - button "Share this demo" [ref=e504] [cursor=pointer]
+        - link "Fork this starter on GitHub" [ref=e511] [cursor=pointer]:
+          - /url: https://github.com/handsontable/examples/tree/master/examples/react
+        - button "Open the preview full-window" [ref=e514] [cursor=pointer]
+      - region "Preview" [ref=e520]:
+        - paragraph [ref=e523]: Loading data …
+        - iframe [ref=e524]:
+          
+      - generic "Preview status" [ref=e525]:
+        - generic [ref=e526]: booting
+        - generic [ref=e528]:
+          - generic [ref=e529]: React (Vite, TS)
+          - generic [ref=e530]: Handsontable 18.0.0

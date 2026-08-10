@@ -3,7 +3,7 @@
 //
 // This stays a frozen module-level object even though the shell is now two-mode:
 // every `t.color.*` is a `var(--hot-…)` reference, so the browser re-resolves it
-// when the root attribute flips. Nothing here needs to be recomputed (ADR-0022).
+// when the root attribute flips. Nothing here needs to be recomputed (ADR-0028).
 import type { CSSProperties } from "react";
 import { theme } from "./theme.js";
 

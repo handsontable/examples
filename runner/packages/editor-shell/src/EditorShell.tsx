@@ -62,6 +62,10 @@ export interface EditorShellProps {
   versionOptions: string[];
   onVersionChange: (v: string) => void;
   versionWarning?: string | null;
+  /** The cost guardrail's message to the user (DEV-2030) — a deliberate product
+   *  state, not a fault. Rendered beside `versionWarning`, which is the only other
+   *  string of its kind the chrome carries. */
+  budgetNotice?: string | null;
 
   /** BOX INFO. `title` falls back to the example's display name for unsaved workspaces;
    *  `description` / `createdAt` only exist for a saved demo and their rows self-hide. */
@@ -98,6 +102,8 @@ export interface EditorShellProps {
   /** Signed-in identity for the top bar's account menu (`114:21480`). */
   accountEmail?: string;
   onMyDemos?: () => void;
+  /** `/admin`, the internal usage + cost panel. Reaches the account menu. */
+  onUsage?: () => void;
   onLogout?: () => void;
   /** "play" (playground -> Fork), "edit" (saved demo -> Save/Share), or
    *  "share" (read-only public playground). */
@@ -120,6 +126,9 @@ export interface EditorShellProps {
   // ---- chrome (T2) --------------------------------------------------------
   /** Centred top-bar pill: the app's example cascader, or the demo title. */
   examplePill?: ReactNode;
+  /** App-owned top-bar buttons (Ask AI, Style). Withheld in full mode with the
+   *  rest of the bar's controls — see the `TopBar` call. */
+  secondaryActions?: ReactNode;
   /** Public demo URL for the row-2 address field, when the demo has one. */
   publicUrl?: string;
   /** Where the preview iframe is actually pointed (Tier 2 only). */
@@ -136,6 +145,8 @@ export interface EditorShellProps {
   fullMode?: boolean;
   onMinimize?: () => void;
   onDownload?: () => void;
+  /** Highlight Download — the workspace has edits nothing will persist. */
+  downloadHighlight?: boolean;
   onSignIn?: () => void;
   /** Framework variants of the current docs example. Empty for starters. */
   frameworks?: FrameworkChoice[];
@@ -359,10 +370,16 @@ export function EditorShell(props: EditorShellProps) {
           (`FullMode` passes no `accountEmail` and no `onSignIn`). */}
       <TopBar
         examplePill={props.examplePill}
+        // Withheld in full mode with everything else the bar drops: the panels
+        // these open are 340px drawers over a view whose entire point is the
+        // preview at full width.
+        secondaryActions={props.fullMode ? undefined : props.secondaryActions}
         onDownload={props.onDownload}
+        downloadHighlight={props.downloadHighlight}
         onSignIn={props.fullMode ? undefined : props.onSignIn}
         accountEmail={props.fullMode ? undefined : props.accountEmail}
         onMyDemos={props.fullMode ? undefined : props.onMyDemos}
+        onUsage={props.fullMode ? undefined : props.onUsage}
         onLogout={props.fullMode ? undefined : props.onLogout}
         // The mode action is resolved here, not in `TopBar`, and off `authed`
         // rather than off `accountEmail`. The two disagree on exactly one route:
@@ -506,6 +523,7 @@ export function EditorShell(props: EditorShellProps) {
             onVersionChange={props.onVersionChange}
             versionLocked={mode === "share"}
             versionWarning={props.versionWarning}
+            budgetNotice={props.budgetNotice}
             // Both signed-in only, and both excluded from `share` — where the
             // version is pinned and the demo is someone else's to share.
             versionEditable={props.authed && mode !== "share"}

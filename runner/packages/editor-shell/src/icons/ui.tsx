@@ -23,6 +23,13 @@
 //                                 rendered glyph, not a layer name: the dialog's
 //                                 button is an unnamed frame.
 //
+// And one that appears in no frame at all, added when master's `/admin` panel
+// (DEV-2030) merged into the redesigned chrome:
+//   `IconChartBar`              — the account menu's `Usage` row. The panel is an
+//                                 internal tool the design never covered; the row
+//                                 exists because the pre-redesign bar had a loose
+//                                 `Usage` link that would otherwise have no home.
+//
 // And one from the same section, added by DEV-2169 / T12:
 //   `IconCircleFilled`          — the unsaved-changes dot on a tab (`114:26604`,
 //                                 ADR-0025 §3). The layer is named
@@ -39,6 +46,7 @@ import {
   IconBook as TablerBook,
   IconBrandGithub as TablerBrandGithub,
   IconBrandReactNative as TablerBrandReactNative,
+  IconChartBar as TablerChartBar,
   IconChevronDown as TablerChevronDown,
   IconChevronRight as TablerChevronRight,
   IconCircleFilled as TablerCircleFilled,
@@ -84,6 +92,7 @@ function ui(displayName: string, Base: TablerIcon) {
 export const IconBook = ui("IconBook", TablerBook);
 export const IconBrandGithub = ui("IconBrandGithub", TablerBrandGithub);
 export const IconBrandReactNative = ui("IconBrandReactNative", TablerBrandReactNative);
+export const IconChartBar = ui("IconChartBar", TablerChartBar);
 export const IconChevronDown = ui("IconChevronDown", TablerChevronDown);
 export const IconChevronRight = ui("IconChevronRight", TablerChevronRight);
 export const IconCircleFilled = ui("IconCircleFilled", TablerCircleFilled);

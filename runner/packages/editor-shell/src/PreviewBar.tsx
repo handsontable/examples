@@ -47,6 +47,11 @@ export interface PreviewBarProps {
   /** Read-only version, no picker — the share playground pins its version. */
   versionLocked?: boolean;
   versionWarning?: string | null;
+  /** The cost guardrail's message (DEV-2030). Same treatment as `versionWarning`
+   *  — the bar has room for one clamped line and both strings are ~90 characters,
+   *  so they share the style and the `title` fallback. Placement here rather than
+   *  in the top bar is the same call DEV-2173 tracks for the version warning. */
+  budgetNotice?: string | null;
   /** Show the pencil that swaps the pill for a free-text version field
    *  (`114:24396`). Signed-in only, so `EditorShell` resolves it. */
   versionEditable?: boolean;
@@ -76,6 +81,7 @@ export function PreviewBar({
   onVersionChange,
   versionLocked,
   versionWarning,
+  budgetNotice,
   versionEditable,
   frameworks,
   onFrameworkChange,
@@ -112,23 +118,8 @@ export function PreviewBar({
           bar and over whatever is below. The full text stays reachable through
           `title`. The design budgets no room for a warning here at all; the
           placement question is DEV-2173. */}
-      {versionWarning && (
-        <span
-          style={{
-            color: theme.color.warning,
-            fontSize: 12,
-            flex: "0 1 auto",
-            minWidth: 0,
-            maxWidth: 320,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-          title={versionWarning}
-        >
-          {versionWarning}
-        </span>
-      )}
+      {budgetNotice && <Notice text={budgetNotice} />}
+      {versionWarning && <Notice text={versionWarning} />}
 
       {versionLocked ? (
         <span style={{ ...s.menuButton, cursor: "default", color: theme.color.textMuted }}>
@@ -265,6 +256,27 @@ export function PreviewBar({
  *  *and* the pencil, which rest at 204px together, so opening the field pulls the
  *  icons right of it in by 7px — visible only if you are looking for it, and the
  *  alternative is padding the field to a number no frame asks for. */
+/** A warning string clamped to the bar's one line, full text in `title`. */
+function Notice({ text }: { text: string }) {
+  return (
+    <span
+      style={{
+        color: theme.color.warning,
+        fontSize: 12,
+        flex: "0 1 auto",
+        minWidth: 0,
+        maxWidth: 320,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }}
+      title={text}
+    >
+      {text}
+    </span>
+  );
+}
+
 const customVersion: React.CSSProperties = {
   width: 181,
   height: 26,

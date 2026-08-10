@@ -2,7 +2,7 @@
 // White-label: our tokens only — no CodeSandbox marks anywhere in the UI.
 // (Sandpack is Apache-2.0; its license notice lives in source, never in the UI.)
 //
-// Two modes, emitted as CSS custom properties on the root element (ADR-0022).
+// Two modes, emitted as CSS custom properties on the root element (ADR-0028).
 // `theme.color.*` and `theme.shadow.*` are `var(--hot-…)` *references*, not literal
 // values — the browser resolves them at paint time, so a frozen style object built
 // from them still flips when the mode changes. That is what lets `styles.ts` stay a

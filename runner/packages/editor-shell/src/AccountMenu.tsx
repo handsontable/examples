@@ -11,17 +11,21 @@
 // takes no dependency on the external login broker growing either.
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { IconListDetails, IconLogin2, IconSettings2 } from "./icons/index.js";
+import { IconChartBar, IconListDetails, IconLogin2, IconSettings2 } from "./icons/index.js";
 import { theme } from "./theme.js";
 
 export interface AccountMenuProps {
   /** The signed-in identity. The avatar's letter and the menu's label come from it. */
   email: string;
   onMyDemos: () => void;
+  /** `/admin`, the internal usage + cost panel (DEV-2030). Optional: it is an
+   *  internal tool, and the frames model no row for it — see the comment on the
+   *  row itself. */
+  onUsage?: () => void;
   onLogout: () => void;
 }
 
-export function AccountMenu({ email, onMyDemos, onLogout }: AccountMenuProps) {
+export function AccountMenu({ email, onMyDemos, onUsage, onLogout }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -61,6 +65,18 @@ export function AccountMenu({ email, onMyDemos, onLogout }: AccountMenuProps) {
       {open && (
         <div style={popover} role="menu" aria-label="Account">
           <MenuRow icon={<IconListDetails />} label="My demos" onClick={() => { setOpen(false); onMyDemos(); }} />
+          {/* `/admin` (DEV-2030). Undesigned — the pre-redesign bar carried it as a
+              loose `Usage` link next to `My demos`, and the frames model neither
+              button, so ADR-0023 rule 1 keeps the working control and it follows
+              `My demos` into the menu it moved to. */}
+          {onUsage && (
+            <MenuRow
+              icon={<IconChartBar />}
+              label="Usage"
+              title="Usage and cost of the demo runner"
+              onClick={() => { setOpen(false); onUsage(); }}
+            />
+          )}
           <MenuRow
             icon={<IconSettings2 />}
             label="Settings"

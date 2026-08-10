@@ -11,7 +11,7 @@
 // handful of values below are duplicated literals, in the same spirit as the
 // pre-paint script in `apps/authoring/index.html`. Keep them in sync with
 // `packages/editor-shell/src/theme.ts`; this file is the fourth sanctioned
-// exception to "no colour literal outside theme.ts" (ADR-0022).
+// exception to "no colour literal outside theme.ts" (ADR-0028).
 //
 // Self-contained by necessity: one inline <style>, one inline SVG, no fetches.
 // `prefers-color-scheme` rather than `data-hot-theme`, because there is no app

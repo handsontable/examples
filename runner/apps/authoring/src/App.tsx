@@ -22,7 +22,7 @@ import {
   type FilesMap,
 } from "@handsontable/demo-runtime";
 import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
-import { ContainerRuntime, ContainerBootFailure, SessionStartError } from "@handsontable/demo-runtime/container";
+import { ContainerRuntime, ContainerBootFailure, SessionStartError, isBudgetRefusal } from "@handsontable/demo-runtime/container";
 import { zipSync, strToU8 } from "fflate";
 import { catalog, getEntry, fetchVersions, checkVersionExists, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
 import {
@@ -33,6 +33,9 @@ import {
 } from "./docs-catalog.js";
 import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
+import { AdminPanel } from "./Admin.js";
+import { AskAiButton, ChatPanel } from "./Chat.js";
+import { StyleButton, StylePanel } from "./StylePanel.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
 import { MyDemosPage } from "./MyDemos.js";
@@ -92,6 +95,10 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
   // heuristic below, which would otherwise misfire on words like "fetching"
   // that pnpm's own error output happens to contain.
   if (e instanceof ContainerBootFailure) return e.message;
+  // A cost-guardrail refusal (DEV-2030) is a deliberate product state, and the
+  // server already phrased it for users — never rewrite it as a connectivity
+  // problem, which is what the heuristic below would do with a 503.
+  if (isBudgetRefusal(e)) return e.message;
   const msg = e instanceof Error ? e.message : String(e);
   if (engine === "container" && /failed to fetch|networkerror|load failed|session start failed|fetch/i.test(msg)) {
     return "This example runs on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
@@ -128,6 +135,10 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
  */
 function reportRuntimeError(e: unknown, engine: string): void {
   if (!reportingEnabled || engine !== "container") return;
+  // The budget guardrail refusing a session is the guardrail working. It would
+  // otherwise arrive as a flood of identical 503s at exactly the moment the
+  // team is already dealing with the spend.
+  if (isBudgetRefusal(e)) return;
   if (e instanceof SessionStartError) {
     if (e.status === 410) return;
     Sentry.captureException(e, {
@@ -200,6 +211,25 @@ function parseRoute(): AppRoute {
 }
 
 /**
+ * Tell the API a page was viewed.
+ *
+ * The authoring app is served by its own static Worker, so its views are
+ * invisible to the API's analytics unless we say so. Only the path is sent —
+ * never the query string, which can carry a `?docs=` deep link or anything
+ * else a user pasted — and the server normalises even that into a fixed label
+ * set. No id is generated or stored on the client; see workers/api/src/
+ * analytics.ts for what the server does and does not keep.
+ */
+function beacon(path: string): void {
+  void fetch(`${API_BASE}/api/beacon`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+    keepalive: true,
+  }).catch(() => { /* analytics must never surface to a user */ });
+}
+
+/**
  * `?mode=full` resolves for a *saved* demo only — full mode shows the prebuilt
  * `/d/:id/` artifact, and `play` has no id and therefore no artifact. `window-maximize`
  * is withheld in `play` for the same reason, so the param cannot be reached from the UI
@@ -232,6 +262,10 @@ function useDocumentTitle(name?: string | null) {
 }
 
 export function App() {
+  // /admin — the internal usage + cost panel (DEV-2030). Sits outside the
+  // editor routes entirely: it renders no runtime and boots no container.
+  if (location.pathname.replace(/\/+$/, "") === "/admin") return <AdminGate />;
+
   const route = parseRoute();
   const fullId = fullModeId(route);
   if (fullId) return <FullMode id={fullId} />;
@@ -423,6 +457,18 @@ function Gate({ route }: { route: { mode: "play" } | { mode: "edit"; id: string 
   return <Authoring user={user} route={route} />;
 }
 
+/** Login gate for /admin. Same broker identity as the edit page — the panel
+ *  shows internal spend, so it is not for anonymous visitors. */
+function AdminGate() {
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  useEffect(() => { currentUser().then(setUser); }, []);
+  useEffect(() => { if (user === null) login(); }, [user]);
+
+  if (user === undefined) return <Splash text="Loading…" />;
+  if (user === null) return <Splash text="Sign in to view usage…" />;
+  return <AdminPanel apiBase={API_BASE} token={getToken()} />;
+}
+
 /** `72:14610`: a spinner and one line, nothing else. The frame draws the top bar above
  *  it, which this cannot — the splash renders precisely because the shell's state (user,
  *  example, version) hasn't resolved yet, so there is no chrome to draw. Either the
@@ -513,6 +559,10 @@ function Authoring({
   const [status, setStatus] = useState<PreviewStatus>("booting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [versionWarning, setVersionWarning] = useState<string | null>(null);
+  // Cost-guardrail notice (DEV-2030): non-null once spend crosses the warn
+  // threshold, so a user learns live sessions are about to get restricted
+  // *before* one is refused. Null whenever the guardrail is observe-only.
+  const [budgetNotice, setBudgetNotice] = useState<string | null>(null);
   const [bootLog, setBootLog] = useState<string>("");
   const [dirty, setDirty] = useState(false);
   // Which *files* are unsaved, for the per-tab dot in the editor strip (T12, ADR-0025
@@ -576,6 +626,14 @@ function Authoring({
   const [shareLinksOpen, setShareLinksOpen] = useState(false);
   const [linksId, setLinksId] = useState<string | null>(null);
   const [forkedFrom, setForkedFrom] = useState<string | null>(`catalog:${framework}`);
+  // "Ask about this example" (DEV-2047). Available on every route, including
+  // the public /share view — explaining a demo is exactly what a shared link
+  // is for.
+  const [chatOpen, setChatOpen] = useState(false);
+  // "Style this demo" — the Theme Builder controls, applied to the open
+  // example. Mutually exclusive with the chat panel: they occupy the same edge
+  // of the screen, and both are secondary to the code.
+  const [styleOpen, setStyleOpen] = useState(false);
   /** Edit info (`114:24410`), opened from the BOX INFO pencil. Replaces the two
    *  bare inputs T2 had to park in the authed action bar for want of a frame.
    *
@@ -702,6 +760,24 @@ function Authoring({
     })();
     return () => { cancelled = true; };
   }, [savedId, isShare, loadWorkspace]);
+
+  // One anonymous page view per mount (the editor is a single-page app, so
+  // this is its equivalent of a page load).
+  useEffect(() => { beacon(location.pathname); }, []);
+
+  // Cost guardrail state. Cheap (KV-cached server side) and read once per page
+  // load: the tier only moves on the scale of hours. Failures are silent — an
+  // unreachable budget endpoint must never put a warning in front of a user.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/api/budget`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((state: { notice?: string | null } | null) => {
+        if (!cancelled && state?.notice) setBudgetNotice(state.notice);
+      })
+      .catch(() => { /* no notice is the right fallback */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // Load real published versions from the API (npm-backed); default to latest
   // unless a version was deep-linked (or pinned by the demo being edited/shared).
@@ -1015,7 +1091,14 @@ function Authoring({
     let cancelled = false;
     const runtime =
       entry.engine === "container"
-        ? new ContainerRuntime(entry, { iframe: iframeEl, apiBase: API_BASE, version: v.value })
+        ? new ContainerRuntime(entry, {
+            iframe: iframeEl,
+            apiBase: API_BASE,
+            version: v.value,
+            // Identifies the caller to the cost guardrail: at >=80% of the
+            // monthly budget live sessions are signed-in-only (DEV-2030).
+            authToken: getToken(),
+          })
         : new SandpackRuntime(entry, { iframe: iframeEl, bundlerURL: SANDPACK_BUNDLER_URL, version: v.value });
     if (entry.engine === "container") {
       (runtime as ContainerRuntime).onProgress((log) => !cancelled && setBootLog(log));
@@ -1353,7 +1436,7 @@ function Authoring({
   const clientUrl = linksId ? `${location.origin}/share/${linksId}` : "";
   // No `?theme=`: `serveDemoAsset` takes `(env, id, subpath, { embed })` and never sees
   // a query string, so the hint we used to send was provably inert (ADR-0025). Embed
-  // theming stays deferred — the example owns its own theme (ADR-0022).
+  // theming stays deferred — the example owns its own theme (ADR-0028).
   const embedUrl = linksId ? `${API_BASE}/embed/${linksId}` : "";
 
   // Same string the top bar's pill shows: a saved demo's title, otherwise the
@@ -1403,6 +1486,12 @@ function Authoring({
   const frameworkName =
     catalog.examples.find((x) => x.framework === entry.framework)?.displayName ??
     entry.displayName;
+
+  // True when the user has changed something that nothing is going to save:
+  // the playground and the public share view both keep edits in memory only.
+  // The edit page has a Save button, so it is excluded — there the work has
+  // somewhere to go.
+  const unsavedWork = dirty && route.mode !== "edit";
 
   if (docsNotFound) return <NotFound path={initialDocs} transient={docsNotFoundTransient} />;
   if (savedId && !sourceLoaded) return <Splash text="Loading data …" />;
@@ -1466,6 +1555,9 @@ function Authoring({
         // survives `/share/:id` — see `ShareRoute`.
         accountEmail={accountUser?.email}
         onMyDemos={() => { location.href = "/my-demos"; }}
+        // The internal usage + cost panel. Signed-in only by construction — the
+        // account menu that holds it renders only for an identified user.
+        onUsage={() => { location.href = "/admin"; }}
         // `edit` is auth-gated — `Gate` answers a null user with `login()`, so a
         // plain reload would bounce straight back to the broker. `play` and
         // `share` render fine anonymously and keep their example.
@@ -1482,6 +1574,17 @@ function Authoring({
         dirty={dirty}
         dirtyPaths={dirtyPaths}
         versionWarning={versionWarning}
+        budgetNotice={budgetNotice}
+        // Ask AI and Style, both from DEV-2047. Available on every route — the
+        // public `/share` view included, since explaining or restyling a demo is
+        // exactly what a shared link invites. Mutually exclusive: they are the
+        // same 340px edge of the screen.
+        secondaryActions={
+          <>
+            <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />
+            <StyleButton open={styleOpen} onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }} />
+          </>
+        }
         // ---- chrome (T2) --------------------------------------------------
         examplePill={
           // `full` joins the static branch: `65:21391` draws the pill's chevron
@@ -1545,6 +1648,7 @@ function Authoring({
         // `72:15697` (anonymous `play`) does draw `Sign in` alone — kept anyway, per the
         // same rule, rather than dropping a working control. See ADR-0027 §2.
         onDownload={downloadZip}
+        downloadHighlight={unsavedWork}
         // Withheld while the identity is still resolving, which is the only thing
         // that makes the top bar render `Sign in`. Offering it to someone who turns
         // out to be signed in — and who could click it — is worse than a bar that
@@ -1589,6 +1693,28 @@ function Authoring({
             markDirty();
             closeEditInfo();
           }}
+        />
+      )}
+
+      {styleOpen && (
+        <StylePanel
+          apiBase={API_BASE}
+          token={getToken()}
+          getFiles={() => filesRef.current}
+          applyEdit={onEdit}
+          onClose={() => setStyleOpen(false)}
+        />
+      )}
+      {chatOpen && (
+        <ChatPanel
+          apiBase={API_BASE}
+          token={getToken()}
+          framework={framework}
+          htVersion={version}
+          docsPath={docsPath}
+          getFiles={() => filesRef.current}
+          applyEdit={onEdit}
+          onClose={() => setChatOpen(false)}
         />
       )}
     </div>

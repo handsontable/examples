@@ -1,6 +1,6 @@
 # ADR-0025: DEV-2027 redesign — scope corrections after the After Login frames
 
-**Status:** Accepted (supersedes parts of ADR-0023; narrows one bullet of ADR-0022)
+**Status:** Accepted (supersedes parts of ADR-0023; narrows one bullet of ADR-0028)
 
 ## Context
 
@@ -71,7 +71,7 @@ per-file dirty tracking. Tab overflow, the last-tab-closed empty state, per-file
 (`CodeEditor` is keyed on `active`, so switching remounts CodeMirror) and open-set persistence are
 all undesigned; rule 1 applies to each.
 
-**4. The embed URL stops carrying an inert `?theme=`.** This narrows ADR-0022's last decision
+**4. The embed URL stops carrying an inert `?theme=`.** This narrows ADR-0028's last decision
 bullet, which had the app append a *preferred* theme to the embed URL while leaving the embed's
 response out of scope. The app does emit it (`App.tsx`), and `workers/api/src/share.ts` — which
 serves `/embed/:id` — never reads `theme`. Handing users a URL carrying a setting that provably has
@@ -79,9 +79,9 @@ no effect is worse than not offering one, so **the parameter is dropped**.
 
 Embed *theming* stays deferred, and ADR-0023's "frames `72:11913` / `72:13670` need no work" stands:
 the two frames are structurally identical (118 descendants each) and differ only in colour, so they
-read as a light example and a dark example — which is ADR-0022's position that the example owns its
+read as a light example and a dark example — which is ADR-0028's position that the example owns its
 own theme, the same argument that settles mixed frame `65:21451`. Re-theming an embed on demand
-remains a separate decision, as ADR-0022 already says.
+remains a separate decision, as ADR-0028 already says.
 
 ## Consequences
 

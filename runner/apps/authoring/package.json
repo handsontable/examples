@@ -14,6 +14,7 @@
     "@handsontable/demo-runtime": "workspace:*",
     "@sentry/react": "^10.68.0",
     "fflate": "^0.8.2",
+    "handsontable": "18.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

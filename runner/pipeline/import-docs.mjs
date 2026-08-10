@@ -291,10 +291,18 @@ async function resolveExtraDeps(packageNames, { fetchImpl, versionCache }) {
   return deps;
 }
 
+/**
+ * Angular is the only variant that type-checks (Tier-2 runs `ng serve` against
+ * a `strict: true` tsconfig; Tier-1 is transpile-only), so untyped packages
+ * need their DefinitelyTyped stubs or the build fails with TS7016 and the demo
+ * renders blank. `@handsontable/pikaday` ships its own `pikaday.d.ts`; upstream
+ * `pikaday` ships none — DEV-2182.
+ */
 async function resolveAngularTypeDeps(extraDeps, options) {
   const typePackages = [];
   if (extraDeps.papaparse) typePackages.push("@types/papaparse");
   if (extraDeps.moment) typePackages.push("@types/moment");
+  if (extraDeps.pikaday) typePackages.push("@types/pikaday");
   return resolveExtraDeps(Object.fromEntries(typePackages.map((packageName) => [packageName, true])), options);
 }
 

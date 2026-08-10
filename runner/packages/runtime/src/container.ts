@@ -23,11 +23,33 @@ export class ContainerBootFailure extends Error {}
 
 /** POST /api/session failed. `status` distinguishes the server's 410
  * "closed while being created" (session already destroyed server-side; a
- * follow-up DELETE would only re-extend its tombstone) from other failures. */
+ * follow-up DELETE would only re-extend its tombstone) from other failures.
+ * `code` carries the server's machine-readable reason when it sent one —
+ * `budget_exhausted` / `budget_login_required` are cost-guardrail refusals
+ * (DEV-2030): a deliberate product state with a message written for users, not
+ * a fault to retry or report. */
 export class SessionStartError extends Error {
-  constructor(public readonly status: number, message: string) {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly code?: string,
+  ) {
     super(message);
   }
+}
+
+/** True for the guardrail refusals above — "the system said no on purpose". */
+export const isBudgetRefusal = (e: unknown): e is SessionStartError =>
+  e instanceof SessionStartError && typeof e.code === "string" && e.code.startsWith("budget_");
+
+/** Read a `{ error, message }` body if the server sent one, else the raw text. */
+async function readFailure(res: Response): Promise<{ code?: string; message: string }> {
+  const text = await res.text().catch(() => res.statusText);
+  try {
+    const body = JSON.parse(text) as { error?: string; message?: string };
+    if (body?.error) return { code: body.error, message: body.message ?? body.error };
+  } catch { /* not JSON — fall through to the raw text */ }
+  return { message: text };
 }
 
 /** How long `reload()` waits for the reloaded page's `load` before settling anyway.
@@ -69,6 +91,10 @@ export interface ContainerRuntimeOptions {
   renderGraceMs?: number;
   /** Keepalive ping interval to keep the container warm while open (ms). */
   keepaliveMs?: number;
+  /** Broker token of the signed-in user, when there is one. Sent with the
+   *  session request so the cost guardrail's `anon_blocked` tier (live editing
+   *  restricted to signed-in users at >=80% of budget) can recognise them. */
+  authToken?: string | null;
 }
 
 export class ContainerRuntime implements DemoRuntime {
@@ -168,7 +194,10 @@ export class ContainerRuntime implements DemoRuntime {
     try {
       const res = await fetch(`${this.opts.apiBase}/api/session`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(this.opts.authToken ? { Authorization: `Bearer ${this.opts.authToken}` } : {}),
+        },
         body: JSON.stringify({
           framework: this.entry.framework,
           files: relativeFiles(this.files),
@@ -177,8 +206,17 @@ export class ContainerRuntime implements DemoRuntime {
         }),
       });
       if (!res.ok) {
-        const msg = await res.text().catch(() => res.statusText);
-        throw new SessionStartError(res.status, `session start failed (${res.status}): ${msg}`);
+        const failure = await readFailure(res);
+        // A guardrail refusal already reads as a sentence aimed at the user;
+        // wrapping it in "session start failed (503): …" would bury it (and
+        // would trip the app's generic connectivity heuristic).
+        throw new SessionStartError(
+          res.status,
+          failure.code?.startsWith("budget_")
+            ? failure.message
+            : `session start failed (${res.status}): ${failure.message}`,
+          failure.code,
+        );
       }
       ({ previewUrl, port } = (await res.json()) as { previewUrl: string; port: number });
     } catch (err) {
@@ -229,7 +267,16 @@ export class ContainerRuntime implements DemoRuntime {
         // 410 = the session was tombstoned (closed elsewhere); it can never
         // become ready, so stop polling instead of rescheduling forever.
         if (r.status === 410) {
-          if (!this.disposed && !this.pointed) this.emitError(new Error("The session was closed."));
+          const failure = await readFailure(r);
+          if (this.disposed || this.pointed) return;
+          // The cost guardrail closing sessions at 100% of budget arrives here
+          // too, and it has a real explanation to show instead of the generic
+          // "closed" (which the app deliberately swallows as normal teardown).
+          this.emitError(
+            failure.code?.startsWith("budget_")
+              ? new SessionStartError(410, failure.message, failure.code)
+              : new Error("The session was closed."),
+          );
           return;
         }
         if (r.ok) {
@@ -361,12 +408,20 @@ export class ContainerRuntime implements DemoRuntime {
       if (this.disposed || !this.sessionId) return;
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       void fetch(`${this.opts.apiBase}/api/session/${this.sessionId}/status?port=${this.port}`)
-        .then((r) => {
+        .then(async (r) => {
           // Session tombstoned elsewhere — pinging it forever is pointless.
-          if (r.status === 410 && this.keepaliveTimer) {
+          if (r.status !== 410) return;
+          if (this.keepaliveTimer) {
             clearInterval(this.keepaliveTimer);
             this.keepaliveTimer = null;
           }
+          // The keepalive is also how a *running* session learns the cost
+          // ceiling closed it (the server destroys the container on this
+          // request). Without this the preview would just quietly go stale.
+          const failure = await readFailure(r);
+          if (this.disposed || !failure.code?.startsWith("budget_")) return;
+          if (this.pointed) this.opts.iframe.src = "about:blank";
+          this.emitError(new SessionStartError(410, failure.message, failure.code));
         })
         .catch(() => {});
     }, intervalMs);

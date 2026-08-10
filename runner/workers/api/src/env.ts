@@ -26,6 +26,48 @@ export interface Env {
   // "demos.handsontable.com"). Empty -> use the request host (local dev).
   PREVIEW_HOST?: string;
 
+  // Cost guardrails (DEV-2030). All optional with safe defaults in budget.ts,
+  // so a missing var can never be the reason a session is refused.
+  /** Self-enforced monthly ceiling in USD. Cloudflare has no hard spend cap. */
+  BUDGET_MONTHLY_USD?: string;
+  /** Fractions of the ceiling at which each degradation tier starts. */
+  BUDGET_WARN_PCT?: string;
+  BUDGET_ANON_BLOCK_PCT?: string;
+  BUDGET_NEW_BLOCK_PCT?: string;
+  BUDGET_CLOSED_PCT?: string;
+  /** "1" enforces the tiers; anything else observes and logs only. */
+  BUDGET_ENFORCE?: string;
+  /** Comma-separated dollar figures for the in-app spend alerts. */
+  BUDGET_ALERTS_USD?: string;
+  /** Days of anonymous audience data to keep (visitor hashes). */
+  ANALYTICS_RETENTION_DAYS?: string;
+  /** Days after revocation before a demo's R2 artifacts are purged. 0 = off. */
+  BUDGET_R2_GC_DAYS?: string;
+  /** Account tag for the GraphQL Analytics API (same id as wrangler.jsonc). */
+  CF_ACCOUNT_ID?: string;
+  /** This Worker's script name + its R2 bucket. The nightly reconciliation
+   *  scopes every analytics query to them, so a shared account's other
+   *  Workers can never be counted as this runner's spend. */
+  CF_SCRIPT_NAME?: string;
+  R2_BUCKET_NAME?: string;
+  /** Read-only analytics token (`wrangler secret put CF_ANALYTICS_TOKEN`).
+   *  Absent -> the nightly reconciliation is skipped, estimates stand. */
+  CF_ANALYTICS_TOKEN?: string;
+
+  // Example chat (DEV-2047). See src/chat.ts and docs/example-chat.md.
+  /** LiteLLM gateway base URL (no trailing slash needed). */
+  LITELLM_API_BASE?: string;
+  /** Model id as configured on the gateway. */
+  LITELLM_MODEL?: string;
+  /** Virtual key for the gateway (`wrangler secret put LITELLM_API_KEY`).
+   *  Absent -> /api/chat answers 503; nothing else is affected. */
+  LITELLM_API_KEY?: string;
+  /** Algolia DocSearch credentials for the docs page lookup. The app id and
+   *  index are public config; the search key is a secret only by convention. */
+  ALGOLIA_APP_ID?: string;
+  ALGOLIA_INDEX?: string;
+  ALGOLIA_API_KEY?: string;
+
   // Index signature so we can look up a binding by generated name.
   [key: string]: unknown;
 }

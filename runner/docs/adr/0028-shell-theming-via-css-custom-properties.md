@@ -1,4 +1,4 @@
-# ADR-0022: Shell theming via CSS custom properties; the example owns its own theme
+# ADR-0028: Shell theming via CSS custom properties; the example owns its own theme
 
 **Status:** Accepted (embed theme *hint* dropped by
 [ADR-0025](0025-redesign-scope-corrections-after-login-frames.md); everything else stands)

@@ -7,7 +7,20 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
+  // Head sampling bounds Workers Logs volume (billed per event, 20M/month
+  // included). Full fidelity is a spike *amplifier*: the traffic surge you most
+  // want to survive cheaply is exactly when logging costs the most. 10% keeps
+  // errors visible in aggregate; Sentry, not Workers Logs, is the fault channel.
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+
+  // Backstop for a runaway Worker invocation (default is 30s on Paid; stated
+  // here so it is a decision rather than a default).
+  "limits": { "cpu_ms": 30000 },
+
+  // Nightly cost reconciliation + revoked-artifact GC (src/reconcile.ts).
+  // 04:17 UTC: after Cloudflare's day-in-arrears usage processing, off the hour
+  // so it does not queue behind every other cron on the platform.
+  "triggers": { "crons": ["17 4 * * *"] },
   // Keep the workers.dev URL enabled alongside the custom-domain routes
   // (attached at deploy time — see the `deploy` script and the routes note below).
   "workers_dev": true,
@@ -34,7 +47,47 @@
     "EMBED_ALLOWED_ANCESTORS": "https://handsontable.com https://*.handsontable.com https://*.handsontable-docs-staging.pages.dev http://localhost:*",
     // Wildcard base host for Tier-2 container preview URLs
     // (<port>-<sandboxId>-<token>.demos.handsontable.com).
-    "PREVIEW_HOST": "demos.handsontable.com"
+    "PREVIEW_HOST": "demos.handsontable.com",
+
+    // ---- Cost guardrails (DEV-2030) -------------------------------------
+    // Cloudflare's own Budget alerts ($200/$500/$800, configured in the
+    // dashboard) only email; they cap nothing. This is the enforced ceiling.
+    // See docs/cost-guardrails.md for the arithmetic behind the tiers.
+    "BUDGET_MONTHLY_USD": "1000",
+    "BUDGET_WARN_PCT": "0.60",        // notice in the authoring UI
+    "BUDGET_ANON_BLOCK_PCT": "0.80",  // live sessions require a login
+    "BUDGET_NEW_BLOCK_PCT": "0.95",   // no new sessions or builds
+    "BUDGET_CLOSED_PCT": "1.00",      // tear down live sessions, static only
+    // Observe-only until the metered spend has been compared against the
+    // Billable Usage dashboard for a week. Flip to "1" to start refusing.
+    "BUDGET_ENFORCE": "0",
+    // In-app spend alerts (Sentry + logs) on *this runner's* metered spend —
+    // Cloudflare's own budget alerts are account-wide and cannot tell the
+    // runner apart from everything else billing to the account.
+    "BUDGET_ALERTS_USD": "200,500,800",
+    // Anonymous audience data retention. Visitor hashes are dropped after
+    // this many days; the daily aggregates behind them carry no identity.
+    "ANALYTICS_RETENTION_DAYS": "180",
+    // Purge R2 artifacts of demos revoked longer ago than this many days.
+    // 0 = disabled; turn on deliberately, it deletes bytes.
+    "BUDGET_R2_GC_DAYS": "0",
+    // Account tag for the GraphQL Analytics API used by the nightly job, plus
+    // the scope it filters on — the account is shared with a dozen other
+    // Workers, so an unscoped query would bill their traffic to this runner.
+    "CF_ACCOUNT_ID": "15111272c53ed0aaf84a908f0c9c7f8b",
+    "CF_SCRIPT_NAME": "handsontable-demos-api",
+    "R2_BUCKET_NAME": "handsontable-demos",
+
+    // ---- Example chat (DEV-2047) ----------------------------------------
+    // Non-secret config only. The virtual key (LITELLM_API_KEY) and the
+    // Algolia search key (ALGOLIA_API_KEY) are `wrangler secret`s — without
+    // the former, /api/chat answers 503 and nothing else changes.
+    "LITELLM_API_BASE": "https://litellm.handsontable.com",
+    "LITELLM_MODEL": "claude-sonnet-4-6",
+    // DocSearch app id + index for the docs page lookup. The app id is public
+    // by construction — DocSearch ships it in every docs page bundle.
+    "ALGOLIA_APP_ID": "MMN6OTJMGX",
+    "ALGOLIA_INDEX": "handsontable"
   },
 
   // Routes on demos.handsontable.com are deliberately NOT declared here — they

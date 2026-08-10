@@ -57,7 +57,7 @@ the generator.
   the repo has no DOM test runner, so `tsc --noEmit` plus these assertions are T1's whole gate.
 
 **Colour-literal rule.** The generated palette is a third documented exception to "only
-`theme.ts` may hold a colour literal" (ADR-0022), alongside the logo SVGs and the pre-paint
+`theme.ts` may hold a colour literal" (ADR-0028), alongside the logo SVGs and the pre-paint
 background. These are upstream brand values, identical in light and dark — frames `48:6560` and
 `31:6438` show the same colours in both modes.
 

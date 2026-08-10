@@ -40,7 +40,8 @@ DemoRuntime
 `applyHandsontableVersion(files, version)` (`packages/runtime/src/version.ts`)
 rewrites `package.json` so `handsontable` and its framework wrapper are pinned in
 lockstep to the requested version — before mount (Tier 1) or build (Tier 2).
-`@handsontable/pikaday` is never rewritten. Inputs accepted (ported from
+`@handsontable/pikaday` is never rewritten (nor is upstream `pikaday`, which the
+docs Pikaday recipe moved to — its name does not match the rule). Inputs accepted (ported from
 `render-ms`): semver (incl. npm-style partials like `17.0`), a bare pkg.pr.new
 numeric id, or a `https://pkg.pr.new/...` URL. Major capped at
 `HANDSONTABLE_MAX_MAJOR` (default 19). Supported wrapper range: majors 15–19

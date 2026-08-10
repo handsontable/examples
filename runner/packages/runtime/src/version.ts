@@ -6,6 +6,12 @@
 // contains "handsontable" EXCEPT `@handsontable/pikaday` to the requested
 // version (or a pkg.pr.new URL). This pins core `handsontable` and its framework
 // wrapper in lockstep. Supported Handsontable major range: 15-19.
+//
+// Upstream `pikaday` — which the docs Pikaday recipe uses on every docs branch
+// after DEV-2180 — needs no entry here: its name does not contain "handsontable",
+// so it is left alone by the rule above. The fork entry only has to outlive the
+// docs-examples buckets that still import it, i.e. until every bucket has been
+// re-imported from a branch carrying that change.
 
 import semver from "semver";
 import type { FilesMap, HandsontableVersionRef } from "./types.js";
@@ -24,7 +30,12 @@ const MIN_BARE_NUMERIC_PKG_PR_NEW_REF = 1000;
 // check below rather than being rejected as "major must be at least 15".
 const NEXT_PRERELEASE_RE = /^0\.0\.0-next-[0-9a-f]+-\d{8}$/i;
 
-/** Dependency never rewritten: an independently versioned Handsontable plugin. */
+/**
+ * Dependency never rewritten: an independently versioned Handsontable plugin.
+ * Legacy — docs examples moved to upstream `pikaday`, which needs no exemption.
+ * Removable once no bucket under apps/authoring/public/docs-examples/ imports
+ * the fork (`grep -rl "@handsontable/pikaday"` there).
+ */
 const NEVER_REWRITE = new Set(["@handsontable/pikaday"]);
 
 export function pkgPrNewDependencyUrl(packageName: string, buildRef: string): string {

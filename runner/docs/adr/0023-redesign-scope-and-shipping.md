@@ -65,7 +65,7 @@ users see mid-redesign.
        meant building `EditorTabs` twice. T4's bet held — both tab states were already styled, and the
        change was state (`openPaths` + per-file dirty), not a restyle. This leaves *embed theme
        handling* as the only deferred gap. See plan open items 42 / 43. -->
-- **Embed theme handling** — see ADR-0022.
+- **Embed theme handling** — see ADR-0028.
 
 **Shipping.** One integration branch `feat/DEV-2027-redesign` off `master`. Every subtask is
 its own branch, PR'd into it. The redesign reaches production in a single deploy from the
@@ -74,7 +74,7 @@ integration branch.
 ## Consequences
 - Subtask PRs stay small and reviewable while users never see a half-redesigned app.
 - The integration branch is long-lived and will need rebasing against `master`.
-- Theming (ADR-0022) must land first and alone; every other subtask rebases on it.
+- Theming (ADR-0028) must land first and alone; every other subtask rebases on it.
 - The authed action bar is an intentional departure from the frames, and needs design sign-off
   at review.
   <!-- Moot per ADR-0025 §1: there is no departure left to sign off — the bar is deleted (T10,

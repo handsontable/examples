@@ -156,9 +156,40 @@ re-measures on the way back; that call was already there as a precaution and is 
 Covered by `e2e/full-mode.spec.ts`, which did not exist before — nothing in `e2e/` touched this
 button or the route, which is why a control missing from an entire mode shipped unnoticed.
 
+**14. Master's `Ask AI`, `Style` and `Usage` controls were rehoused, not redrawn.** Merging master
+into the redesign deleted the bar those three lived in — they were inline children of the
+pre-redesign top bar, which the frames replace wholesale. None of the three appears in any frame:
+`Ask AI` and `Style` (DEV-2047) and the `/admin` usage panel (DEV-2030) all landed after the section
+`18.1` frames were drawn. ADR-0023 rule 1 says a working control is not dropped for want of a frame,
+so each was given the nearest home the new chrome offers:
+
+* `Ask AI` and `Style` go through a new `TopBar` `secondaryActions` slot, rendered as a group left of
+  the mode action. A slot rather than props: both own their popover *and* an explanatory tooltip that
+  sells what the feature does, and neither is shell chrome. They keep master's emoji glyphs rather
+  than gaining tabler icons — the icon set is read off Figma layers (ADR-0024) and there is no layer
+  to read. Both were retuned to the bar's own `actionButton` metrics (36px, `radius.md`, 13/600) —
+  master drew them 26px, which reads as a leftover beside 36px neighbours — and their
+  `background: "#fff"` / `border` pair became transparent + `controlBorder`: on this bar the first
+  is a white block in dark mode and the second is invisible, because dark `border` *is*
+  `surfaceRaised`. The same swap runs through both panel bodies and `/admin`: those surfaces were
+  correct on master, which had no dark mode, and are a white slab over `surface` here. Two values
+  stay literal on purpose — the colour input's `#ffffff` fallback is data, not chrome.
+* `Usage` becomes a row in the account menu, behind `onUsage`. It was a loose link beside `My demos`
+  in the old bar, and `My demos` is now a menu row — following it there keeps the pairing. This is
+  the one place the merge adds an icon with no Figma layer behind it (`IconChartBar`), noted as such
+  in `icons/ui.tsx`.
+* The cost guardrail's `budgetNotice` joins `versionWarning` in the preview bar, sharing its clamp
+  and its `title` fallback. Placement is the same open question DEV-2173 already tracks for the
+  version warning.
+* `Download` regains master's unsaved-work highlight through `downloadHighlight` — in `play` and
+  `share` nothing persists an edit, so the one way out with your changes has to advertise itself
+  before a refresh takes them.
+
+All four are withheld in full mode, with the rest of the bar's controls.
+
 ## Consequences
-- The frames and the app differ in twelve known places, and item 13 records a thirteenth where the
-  app now follows them. A future comparison should start here rather than filing each as a defect.
+- The frames and the app differ in thirteen known places (items 1–12 and 14), and item 13 records
+  one where the app now follows them. A future comparison should start here rather than filing each as a defect.
 - Items 1, 2, 4, 7 and 10 are each a one-line change if design decides the frame should be followed
   literally. They are logged rather than guessed for that reason.
 - Item 13 leaves one question for design: whether full mode over a saved demo should also show the

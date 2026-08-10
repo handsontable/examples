@@ -16,8 +16,20 @@ import { useLogoUrl } from "./useLogoUrl.js";
 export interface TopBarProps {
   /** Centred pill contents — cascader trigger, or the demo title. */
   examplePill?: ReactNode;
+  /** App-owned buttons, rendered as a group left of the mode action.
+   *
+   *  A slot rather than props, because what goes here is not shell chrome: the
+   *  authoring app puts its **Ask AI** and **Style** triggers here, and both own
+   *  their popovers and their explanatory tooltips. The old pre-redesign bar
+   *  held them inline; the frames model neither, so ADR-0023 rule 1 keeps the
+   *  working controls and this is where they fit. See ADR-0027. */
+  secondaryActions?: ReactNode;
   /** Download the current files as a .zip. Hidden when absent. */
   onDownload?: () => void;
+  /** Highlight Download because the open workspace has edits that nothing is
+   *  going to persist (`play` and `share` keep them in memory only). The one way
+   *  out with your changes has to be visible *before* a refresh takes them. */
+  downloadHighlight?: boolean;
   /** Start the sign-in flow. Rendered only when anonymous. */
   onSignIn?: () => void;
   /** Signed-in identity for the account menu (`114:21480`), and what the bar now
@@ -26,6 +38,10 @@ export interface TopBarProps {
    *  may well have a session, and offering them "Sign in" then is wrong. */
   accountEmail?: string;
   onMyDemos?: () => void;
+  /** The internal usage + cost panel (`/admin`, DEV-2030). Signed-in only, and
+   *  in the account menu rather than the bar: the pre-redesign bar had it as a
+   *  loose `Usage` link beside `My demos`, and My demos is now a menu row. */
+  onUsage?: () => void;
   onLogout?: () => void;
 
   /** The mode action, left of the theme toggle (`114:24402` and its three
@@ -42,10 +58,13 @@ export interface TopBarProps {
 
 export function TopBar({
   examplePill,
+  secondaryActions,
   onDownload,
+  downloadHighlight,
   onSignIn,
   accountEmail,
   onMyDemos,
+  onUsage,
   onLogout,
   onFork,
   forking,
@@ -61,6 +80,8 @@ export function TopBar({
       {examplePill}
 
       <div style={s.spacer} />
+
+      {secondaryActions}
 
       {/* Fork in `play`, Save in `edit` — one slot, keyed by mode upstream. The
           frames draw it here, left of the toggle, in all four After Login
@@ -99,9 +120,22 @@ export function TopBar({
           but Download has always worked for anonymous visitors, so ADR-0023 rule 1
           keeps it and the anonymous view shows both. See ADR-0027 §2. */}
       {onDownload && (
-        <button type="button" style={actionButton} onClick={onDownload} title="Download this example (including your edits) as a .zip">
+        <button
+          type="button"
+          style={
+            downloadHighlight
+              ? { ...actionButton, color: theme.color.accent, borderColor: theme.color.accent }
+              : actionButton
+          }
+          onClick={onDownload}
+          title={
+            downloadHighlight
+              ? "Your edits are not saved anywhere — download the example with your changes as a .zip"
+              : "Download this example (including your edits) as a .zip"
+          }
+        >
           <IconDownload />
-          Download
+          Download{downloadHighlight ? " •" : ""}
         </button>
       )}
 
@@ -114,7 +148,7 @@ export function TopBar({
       )}
 
       {accountEmail && onMyDemos && onLogout && (
-        <AccountMenu email={accountEmail} onMyDemos={onMyDemos} onLogout={onLogout} />
+        <AccountMenu email={accountEmail} onMyDemos={onMyDemos} onUsage={onUsage} onLogout={onLogout} />
       )}
     </header>
   );
