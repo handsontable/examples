@@ -59,6 +59,18 @@ test("escaped pipes stay inside their cell", () => {
   assert.equal(t.rows[0].length, 2);
 });
 
+test("a block starter containing a pipe ends the table body", () => {
+  const blocks = parseMarkdown("| A | B |\n|---|---|\n| 1 | 2 |\n- use `a | b` here\n### Next | section");
+  assert.deepEqual(blocks.map((b) => b.kind), ["table", "list", "heading"]);
+  assert.equal(blocks[0].rows.length, 1);
+});
+
+test("a second table right after the first opens its own block", () => {
+  const blocks = parseMarkdown("| A | B |\n|---|---|\n| 1 | 2 |\n| C | D |\n|---|---|\n| 3 | 4 |");
+  assert.deepEqual(blocks.map((b) => b.kind), ["table", "table"]);
+  assert.deepEqual(blocks[1].header.map(text), ["C", "D"]);
+});
+
 test("table inside a fenced code block stays literal", () => {
   const blocks = parseMarkdown("```\n| A |\n|---|\n```");
   assert.deepEqual(blocks.map((b) => b.kind), ["code"]);

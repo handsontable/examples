@@ -156,7 +156,15 @@ function parseLines(text: string): Block[] {
       const header = splitRow(line);
       i += 2; // header + delimiter
       const rows: Inline[][][] = [];
-      while (i < lines.length && (lines[i] ?? "").includes("|") && (lines[i] ?? "").trim()) {
+      // A pipe alone does not make a row: a bullet, heading or new table that
+      // happens to contain one ends the body, exactly as it would end a
+      // paragraph. Without this the block after the table gets eaten as rows.
+      while (
+        i < lines.length
+        && (lines[i] ?? "").includes("|")
+        && (lines[i] ?? "").trim()
+        && !startsBlock(lines, i)
+      ) {
         const cells = splitRow(lines[i] ?? "");
         // Ragged rows render as a broken grid, so square them off against the header.
         while (cells.length < header.length) cells.push("");
