@@ -6,3 +6,6 @@ dist
 .DS_Store
 .angular
 .claude/
+# playwright e2e output, when a run is launched from the repo root rather than runner/
+test-results/
+playwright-report/

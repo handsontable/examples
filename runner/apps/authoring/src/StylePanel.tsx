@@ -772,7 +772,7 @@ export function StyleButton({ open, onToggle }: { open: boolean; onToggle: () =>
 
   return (
     <span
-      style={{ position: "relative", display: "inline-flex" }}
+      style={{ position: "relative", display: "inline-flex", flex: "0 0 auto" }}
       onMouseEnter={() => setHint(true)}
       onMouseLeave={() => setHint(false)}
     >
@@ -812,9 +812,12 @@ export const STYLE_PANEL_TOKENS = ALL_TOKENS.length;
 
 // ---- Styles ------------------------------------------------------------------
 
+// The panel is a fixed drawer over the editor, and since the redesign the editor has a
+// dark mode. `#fff` was correct on master, where it did not; here it is a white slab
+// over `surface`. Surfaces below are the shell's tokens for the same reason.
 const panel: React.CSSProperties = {
   position: "fixed", top: 0, right: 0, height: "100%", width: 380, maxWidth: "95vw",
-  background: "#fff", borderLeft: `1px solid ${ui.color.border}`,
+  background: ui.color.surfaceRaised, borderLeft: `1px solid ${ui.color.border}`,
   boxShadow: "-8px 0 24px rgba(0,0,0,0.08)", zIndex: 900,
   display: "flex", flexDirection: "column", fontFamily: ui.font.ui, color: ui.color.text,
 };
@@ -839,24 +842,24 @@ const groupHeader: React.CSSProperties = {
   fontFamily: ui.font.ui, fontSize: 13, color: ui.color.text, textAlign: "left",
 };
 const badge: React.CSSProperties = {
-  background: ui.color.accent, color: "#fff", borderRadius: 999,
+  background: ui.color.accent, color: ui.color.accentContrast, borderRadius: 999,
   fontSize: 10.5, padding: "1px 6px", fontWeight: 600,
 };
 const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 };
 const rowLabel: React.CSSProperties = { width: 130, flex: "0 0 130px", fontSize: 12.5 };
 const control: React.CSSProperties = {
   flex: 1, minWidth: 0, fontFamily: ui.font.ui, fontSize: 12.5, padding: "4px 6px",
-  border: `1px solid ${ui.color.border}`, borderRadius: 6, color: ui.color.text, background: "#fff",
+  border: `1px solid ${ui.color.border}`, borderRadius: 6, color: ui.color.text, background: ui.color.surface,
 };
 const swatch: React.CSSProperties = {
   width: 30, flex: "0 0 30px", padding: 0, height: 26,
-  border: `1px solid ${ui.color.border}`, borderRadius: 6, background: "#fff", cursor: "pointer",
+  border: `1px solid ${ui.color.border}`, borderRadius: 6, background: ui.color.surface, cursor: "pointer",
 };
 const hint: React.CSSProperties = { fontSize: 11, color: ui.color.textMuted, marginLeft: 138 };
 /** Matches the "Ask AI" tooltip so the two toolbar CTAs read as a pair. */
 const tooltip: React.CSSProperties = {
   position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 950, width: 320,
-  background: "#fff", border: `1px solid ${ui.color.border}`, borderRadius: ui.radius.md,
+  background: ui.color.surfaceRaised, border: `1px solid ${ui.color.border}`, borderRadius: ui.radius.md,
   boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: "10px 12px",
   fontFamily: ui.font.ui, fontSize: 12, color: ui.color.text,
   textAlign: "left", whiteSpace: "normal", cursor: "default",
@@ -867,12 +870,12 @@ const segmentBtn = (on: boolean): React.CSSProperties => ({
   flex: 1, fontSize: 11.5, padding: "4px 0", cursor: "pointer", borderRadius: 5,
   textTransform: "capitalize", fontFamily: ui.font.ui,
   border: `1px solid ${on ? ui.color.accent : ui.color.border}`,
-  background: on ? ui.color.accent : "#fff", color: on ? "#fff" : ui.color.text,
+  background: on ? ui.color.accent : ui.color.surface, color: on ? ui.color.accentContrast : ui.color.text,
 });
 const tileRow: React.CSSProperties = { display: "flex", gap: 8, justifyContent: "space-between" };
 const tile: React.CSSProperties = {
   flex: 1, minWidth: 0, padding: 5, borderRadius: 8, cursor: "pointer",
-  border: `1px solid ${ui.color.border}`, background: "#fff",
+  border: `1px solid ${ui.color.border}`, background: ui.color.surface,
   display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
   fontFamily: ui.font.ui,
 };
@@ -909,20 +912,31 @@ const note: React.CSSProperties = { fontSize: 11.5, color: ui.color.textMuted, m
  *  runs edge to edge while everything below it is inset by 14px. */
 const intro: React.CSSProperties = { ...note, padding: "12px 14px 0", margin: "0 0 4px" };
 const code: React.CSSProperties = {
-  fontFamily: ui.font.mono, fontSize: "0.92em", background: "#fff",
+  fontFamily: ui.font.mono, fontSize: "0.92em", background: ui.color.surface,
   border: `1px solid ${ui.color.border}`, borderRadius: 4, padding: "0 4px",
 };
 const pre: React.CSSProperties = {
-  background: ui.color.editorBg, color: ui.color.editorText, borderRadius: ui.radius.md,
+  background: ui.color.editorBg, color: ui.color.text, borderRadius: ui.radius.md,
   padding: 10, overflowX: "auto", fontFamily: ui.font.mono, fontSize: 11, margin: "0 0 8px",
   maxHeight: 220,
 };
 const ghost: React.CSSProperties = {
-  fontFamily: ui.font.ui, fontSize: 12.5, background: "#fff", color: ui.color.text,
+  fontFamily: ui.font.ui, fontSize: 12.5, background: ui.color.surface, color: ui.color.text,
   border: `1px solid ${ui.color.border}`, borderRadius: 6, padding: "5px 11px", cursor: "pointer",
 };
+// The two live in the redesigned 72px top bar, which is `surfaceRaised` and has a
+// dark mode. `#fff` and `border` were both fine on the pre-redesign bar; on this one
+// `#fff` is a white block in dark, and dark `border` *is* `surfaceRaised`, so the
+// outline disappears. Transparent + `controlBorder` is the bar's own idiom (ADR-0028).
 const styleBtn: React.CSSProperties = {
-  fontFamily: ui.font.ui, fontSize: 12.5, background: "#fff", color: ui.color.text,
-  border: `1px solid ${ui.color.border}`, borderRadius: 6, padding: "5px 11px",
+  // Metrics match the bar's own `actionButton` (36px, `radius.md`, 13/600): these sit
+  // between the mode action and the theme toggle, and the old bar's 26px pill read as
+  // a leftover beside them. The glyph stays — the icon set is read off Figma layers
+  // (ADR-0024) and neither feature has one.
+  display: "inline-flex", alignItems: "center", gap: ui.space(2),
+  height: 36, padding: `0 ${ui.space(3)}`, flex: "0 0 auto",
+  fontFamily: ui.font.ui, fontSize: 13, fontWeight: 600,
+  background: "transparent", color: ui.color.text,
+  border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.md,
   cursor: "pointer", whiteSpace: "nowrap",
 };

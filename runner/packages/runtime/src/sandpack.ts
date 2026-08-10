@@ -13,7 +13,7 @@ import { loadSandpackClient } from "@codesandbox/sandpack-client";
 import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
 import { transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
-import { resolveSandboxEntry } from "./sandbox-entry.js";
+import { resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 // Derive Sandpack's option/setup types straight from the loader signature so we
@@ -98,6 +98,24 @@ function ensureSandpackDeps(files: FilesMap): FilesMap {
   return { ...files, "/package.json": JSON.stringify({ ...pkg, dependencies: deps }, null, 2) + "\n" };
 }
 
+/**
+ * Which runtime instance last pointed a given iframe. The mount effect disposes the old
+ * runtime and mounts a new one on the *same* iframe, so "am I disposed?" is not enough to
+ * decide whether blanking is safe — the successor may already own the frame.
+ */
+const IFRAME_OWNER = new WeakMap<HTMLIFrameElement, object>();
+
+/** Same paths, same contents. Compared key by key rather than by serialising both maps:
+ *  this runs on every keystroke, and a sandbox carries the compiled sources *and* the
+ *  dependency shims — hundreds of KB it would be pointless to stringify to learn that one
+ *  character changed. */
+function sameFiles(a: FilesMap, b: FilesMap | null): boolean {
+  if (b === null) return false;
+  const paths = Object.keys(a);
+  if (paths.length !== Object.keys(b).length) return false;
+  return paths.every((path) => a[path] === b[path]);
+}
+
 export class SandpackRuntime implements DemoRuntime {
   private readonly entry: CatalogEntry;
   private readonly opts: SandpackRuntimeOptions;
@@ -107,6 +125,12 @@ export class SandpackRuntime implements DemoRuntime {
   private readonly errorCbs = new Set<(e: Error) => void>();
   private unlisten: (() => void) | null = null;
   private didReady = false;
+  /** Set by `dispose()`. `loadSandpackClient` points the iframe at the bundler itself,
+   *  so a mount still in flight when we are disposed would resurrect a torn-down
+   *  preview after the caller had already blanked it. */
+  private disposed = false;
+  /** Our claim on the iframe, registered in `mount()` before the first await. */
+  private claim: object | null = null;
 
   constructor(entry: CatalogEntry, opts: SandpackRuntimeOptions) {
     if (entry.engine !== "sandpack") {
@@ -125,8 +149,17 @@ export class SandpackRuntime implements DemoRuntime {
     this.errorCbs.add(cb);
   }
 
+  /** Fires on *every* clean compile, not just the first.
+   *
+   *  A `done` without `compilatonError` is the bundler saying the current sources
+   *  compiled and evaluated — which is exactly the signal that a preview the user
+   *  broke is working again. Suppressing repeats made the error state a one-way
+   *  door: `show-error` set it, and no later success could clear it (the only exits
+   *  were an example switch or a version change, both of which remount).
+   *
+   *  `didReady` stays, but only for what it is actually needed for — replaying
+   *  readiness to a callback that subscribed after the first compile. */
   private emitReady() {
-    if (this.didReady) return;
     this.didReady = true;
     for (const cb of this.readyCbs) cb();
   }
@@ -143,7 +176,10 @@ export class SandpackRuntime implements DemoRuntime {
     // `this.files` always holds the authored sources; parcel's compiled view is
     // derived from it on every (re)build and never fed back into the editor.
     this.files = sanitizeHtml(ensureSandpackDeps(pinned));
-    return this.setupFrom(await this.sandboxFiles());
+    const sandbox = await this.sandboxFiles();
+    // What the bundler is about to hold, for `pushUpdate`'s no-op check.
+    this.published = sandbox;
+    return this.setupFrom(sandbox);
   }
 
   private get env(): string | undefined {
@@ -194,9 +230,28 @@ export class SandpackRuntime implements DemoRuntime {
   }
 
   async mount(files: FilesMap): Promise<{ previewUrl: string }> {
-    const setup = await this.buildSetup(files);
-    this.client = await loadSandpackClient(this.opts.iframe, setup, this.clientOptions());
+    // Claim the iframe before the first await, so a successor mounting on the same frame
+    // takes ownership synchronously and this instance can tell it has been superseded.
+    const claim = {};
+    this.claim = claim;
+    IFRAME_OWNER.set(this.opts.iframe, claim);
 
+    const setup = await this.buildSetup(files);
+    const client = await loadSandpackClient(this.opts.iframe, setup, this.clientOptions());
+
+    // Both awaits above can outlive a `dispose()`. `loadSandpackClient` has by now pointed
+    // the iframe at the bundler origin, so returning quietly is not enough — undo it, or a
+    // preview the caller deliberately stopped comes back to life.
+    if (this.disposed) {
+      client.destroy?.();
+      // Only if nobody else has claimed the frame since. The mount effect disposes the old
+      // runtime and immediately mounts a new one on this same iframe, and blanking there
+      // would kill the successor's live preview instead of our own dead one.
+      if (IFRAME_OWNER.get(this.opts.iframe) === claim) this.opts.iframe.src = "about:blank";
+      return { previewUrl: "" };
+    }
+
+    this.client = client;
     this.unlisten = this.client.listen((msg: unknown) => this.onMessage(msg));
     return { previewUrl: this.opts.iframe.src };
   }
@@ -205,6 +260,7 @@ export class SandpackRuntime implements DemoRuntime {
     const m = msg as { type?: string; action?: string; compilatonError?: boolean; message?: string };
     switch (m.type) {
       case "done":
+        // (`compilatonError` is misspelled in the upstream payload. Leave it.)
         if (m.compilatonError) return; // error surfaced via its own message
         this.emitReady();
         break;
@@ -227,6 +283,76 @@ export class SandpackRuntime implements DemoRuntime {
     this.pushUpdate();
   }
 
+  /**
+   * Append a changing comment to the sandbox entry, so a compile the bundler would
+   * otherwise see as "no module changed" carries a real diff.
+   *
+   * The bundler's no-change path resets the preview document without re-evaluating
+   * anything: a blank frame, reported `done` with no compile error, and nothing in the
+   * console. That is what a refresh asks for and never got. One line on the entry is
+   * enough to put it back on the path that re-evaluates.
+   *
+   * A comment, so it cannot change behaviour, and matched to the file's language: a
+   * parcel/static sandbox boots from HTML, where `//` would render as text.
+   *
+   * Both the sandbox entry *and* the example's own module are stamped. A parcel sandbox
+   * boots from `index.html`, and a changed HTML shell alone does not get the module
+   * re-evaluated (measured: refresh still blanked). The script it loads is what has to
+   * look different.
+   */
+  private compileStamp = 0;
+  private stampEntry(files: FilesMap): FilesMap {
+    const paths = new Set<string>();
+    try {
+      paths.add(resolveSandboxEntry(this.env, this.entry.entry, this.entry.htmlEntry, files));
+    } catch {
+      // A missing entry is setupFrom()'s error to raise, with its own message.
+      return files;
+    }
+    const modulePath = this.env === "parcel" ? toParcelEntry(this.entry.entry) : this.entry.entry;
+    if (files[modulePath] !== undefined) paths.add(modulePath);
+
+    const stamp = ++this.compileStamp;
+    const out = { ...files };
+    for (const path of paths) {
+      out[path] =
+        out[path] +
+        (path.toLowerCase().endsWith(".html")
+          ? `\n<!-- hot-runner-compile ${stamp} -->\n`
+          : `\n// hot-runner-compile ${stamp}\n`);
+    }
+    return out;
+  }
+
+  /** Re-run the sandbox from the current sources — the refresh button. No new client, no
+   *  reload of the bundler itself; an ordinary compile push does the whole job.
+   *
+   *  It must **not** ask for an initialization compile (DEV-2176). The bundler drops every
+   *  `compile` carrying `isInitializationCompile: true` after the first one, and
+   *  `loadSandpackClient` spends that single allowance itself when it replays the setup on
+   *  the bundler's `initialized` message — so a refresh that set the flag was discarded in
+   *  silence: no `start`, no `done`, no error, and the preview never re-ran. The flag
+   *  suppresses re-compiles rather than requesting one, so a plain push it is.
+   *
+   *  A plain push is not sufficient on its own, though — that part of the DEV-2176 note was
+   *  wrong. A non-initial compile with byte-identical sources does compile (`start` …
+   *  `success`, `done` with no error) but re-evaluates nothing: the preview document is
+   *  reset and left blank, with not even the Handsontable banner in the console. Refresh
+   *  blanked the pane for exactly that reason. `force` is what fixes it: `pushUpdate` stamps
+   *  the entry and the example module (see `stampEntry`) so the bundler has a real diff, and
+   *  skips the no-op check it applies to ordinary edits.
+   *
+   *  Settles once our transpile is done and the update has been handed to the bundler, not
+   *  on the bundler's `done`. `done` is available again now that the compile actually runs,
+   *  but claiming it here would need a waiter keyed to *this* push, and `reload()` shares
+   *  `updateSeq` with `writeFile` on purpose (see `pushUpdate`), so a refresh overtaken by
+   *  a keystroke has no `done` of its own to wait for. The transpile-and-dispatch edge is
+   *  work we perform and can time (48–62ms on a warm React starter). */
+  reload(): Promise<void> {
+    if (!this.client) return Promise.resolve();
+    return this.pushUpdate({ force: true });
+  }
+
   /** Remove a file and recompile (file-tree delete/rename). */
   deleteFile(path: string): void {
     if (!this.client) return;
@@ -242,14 +368,49 @@ export class SandpackRuntime implements DemoRuntime {
    * results are dropped. A transpile failure (half-typed code) or a
    * transiently missing entry (mid-rename) keeps the last good sandbox
    * instead of surfacing an error for every keystroke.
+   *
+   * `reload()` shares this path rather than having its own so the sequence guard covers it
+   * too: claiming the sequence *before* the await is the whole point, and a refresh that
+   * claimed it afterwards could publish its own pre-keystroke transpile over a newer edit
+   * and then make that edit's result look stale.
+   *
+   * Every push goes out as a non-initial compile. The bundler ignores initialization
+   * compiles after its first (DEV-2176, see `reload()`), and a plain compile re-evaluates
+   * the sandbox anyway.
+   *
+   * Returns a promise that settles once the push has been *dispatched* — or dropped as
+   * superseded, or failed to transpile. `reload()` reports that edge as its completion.
    */
   private updateSeq = 0;
-  private pushUpdate(): void {
+  /** The sandbox the bundler currently holds, as published. Compared against the next
+   *  candidate so a no-op compile is never sent — see `pushUpdate`. */
+  private published: FilesMap | null = null;
+  private pushUpdate(opts: { force?: boolean } = {}): Promise<void> {
     const seq = ++this.updateSeq;
-    Promise.resolve(this.sandboxFiles())
+    return Promise.resolve(this.sandboxFiles())
       .then((files) => {
         if (!this.client || seq !== this.updateSeq) return;
-        this.client.updateSandbox(this.setupFrom(files));
+        const candidate = opts.force ? this.stampEntry(files) : files;
+        // Skipping a byte-identical update is not an optimisation, it is the fix for a
+        // blank preview. Break a source file and the transpile below throws, so nothing
+        // reaches the bundler and the last good render stays on screen (correct). Undo
+        // the break and the recomputed sandbox is identical to what the bundler already
+        // has — and *that* compile blanks the preview, because the bundler's no-change
+        // path resets the document without re-evaluating any module. Not sending it
+        // leaves the render that is already correct exactly where it is.
+        //
+        // `reload()` passes `force`, and its stamp guarantees a diff, so the refresh
+        // button still re-runs the sandbox rather than being skipped here.
+        if (!opts.force && sameFiles(candidate, this.published)) return;
+        // Recorded *after* the push, never before. `setupFrom` throws when the resolved
+        // entry is transiently missing (mid-rename, the DEV-2130 guard), and a `published`
+        // set ahead of that throw would claim the bundler holds a sandbox it never
+        // received. Restoring those sources would then read as a real diff and send the
+        // byte-identical compile this skip exists to prevent — the blank preview, back
+        // again, on the rename path.
+        const setup = this.setupFrom(candidate);
+        this.client.updateSandbox(setup, false);
+        this.published = candidate;
       })
       .catch(() => {
         /* mid-edit parse error — the user is still typing */
@@ -257,6 +418,7 @@ export class SandpackRuntime implements DemoRuntime {
   }
 
   dispose(): void {
+    this.disposed = true;
     try {
       this.unlisten?.();
     } finally {
@@ -265,6 +427,9 @@ export class SandpackRuntime implements DemoRuntime {
       this.client = null;
       this.readyCbs.clear();
       this.errorCbs.clear();
+      // No reload bookkeeping to drain: `reload()` settles on its own transpile, and
+      // `pushUpdate` always settles (it catches), so a dispose mid-refresh cannot leave a
+      // promise hanging.
     }
   }
 }

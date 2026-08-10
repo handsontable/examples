@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { EditorShell, theme, logoUrl, type PreviewStatus } from "@handsontable/demo-editor-shell";
+import {
+  EditorShell,
+  FullBar,
+  markUrl,
+  PreviewStatusBar,
+  shellStyles,
+  Spinner,
+  theme,
+  TopBar,
+  useLogoUrl,
+  type PreviewStatus,
+} from "@handsontable/demo-editor-shell";
 import {
   applyHandsontableCss,
   applyHandsontableVersion,
@@ -22,11 +33,12 @@ import {
 } from "./docs-catalog.js";
 import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
-import { MyDemos } from "./MyDemos.js";
 import { AdminPanel } from "./Admin.js";
 import { AskAiButton, ChatPanel } from "./Chat.js";
 import { StyleButton, StylePanel } from "./StylePanel.js";
 import { ShareLinks } from "./ShareLinks.js";
+import { EditInfoDialog } from "./EditInfoDialog.js";
+import { MyDemosPage } from "./MyDemos.js";
 import { reportError, reportingEnabled, Sentry } from "./sentry.js";
 
 const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefined;
@@ -164,12 +176,35 @@ function isMissingDocsResource(error: unknown): boolean {
   return error instanceof Error && /\b404\b/.test(error.message);
 }
 
+/** Zip a file map and hand it to the browser. Module-level because two callers need
+ *  it: the shell's `Download` (live, possibly-edited workspace) and full mode, which
+ *  has no workspace — only the files it fetched from the source snapshot. */
+function downloadWorkspaceZip(files: FilesMap, name: string): void {
+  const entries: Record<string, Uint8Array> = {};
+  for (const [p, c] of Object.entries(files)) entries[p.replace(/^\//, "")] = strToU8(c);
+  const bytes = zipSync(entries, { level: 6 });
+  const base = (name || "handsontable-demo")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "handsontable-demo";
+  const blob = new Blob([bytes as BlobPart], { type: "application/zip" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${base}.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 type EditorRoute =
   | { mode: "play" }
   | { mode: "edit"; id: string }
   | { mode: "share"; id: string };
 
-function parseRoute(): EditorRoute {
+/** Routes that are not the editor at all. Kept out of `EditorRoute` so every
+ *  `route.mode` switch inside `Authoring` stays exhaustive over editor modes. */
+type AppRoute = EditorRoute | { mode: "myDemos" };
+
+function parseRoute(): AppRoute {
+  if (/^\/my-demos\/?$/.test(location.pathname)) return { mode: "myDemos" };
   const m = location.pathname.match(/^\/(edit|share)\/([A-Za-z0-9_-]+)\/?$/);
   if (m) return { mode: m[1] as "edit" | "share", id: m[2]! };
   return { mode: "play" };
@@ -194,33 +229,214 @@ function beacon(path: string): void {
   }).catch(() => { /* analytics must never surface to a user */ });
 }
 
+/**
+ * `?mode=full` resolves for a *saved* demo only — full mode shows the prebuilt
+ * `/d/:id/` artifact, and `play` has no id and therefore no artifact. `window-maximize`
+ * is withheld in `play` for the same reason, so the param cannot be reached from the UI
+ * there either.
+ *
+ * `edit` resolves it as well as `share`: `/edit/:id` is auth-gated, but the build full
+ * mode renders is the one `/share/:id` already serves publicly, so this exposes nothing
+ * new — and the maximize button has to work from the editor, which is where it lives.
+ */
+function fullModeId(route: AppRoute): string | null {
+  if (route.mode === "play" || route.mode === "myDemos") return null;
+  return new URLSearchParams(location.search).get("mode") === "full" ? route.id : null;
+}
+
+const SITE_TITLE = "Handsontable Demos";
+
+/**
+ * Sets `document.title`. Before T9 there was one static title — "Handsontable
+ * Demos — Authoring" — which was wrong on `/share/:id` (public, not authoring)
+ * and uninformative in a tab strip full of demos.
+ *
+ * A hook rather than a render-time assignment: the demo's own title arrives
+ * asynchronously, and writing during render would make the effect order decide
+ * what a browser tab says.
+ */
+function useDocumentTitle(name?: string | null) {
+  useEffect(() => {
+    document.title = name ? `${name} — ${SITE_TITLE}` : SITE_TITLE;
+  }, [name]);
+}
+
 export function App() {
   // /admin — the internal usage + cost panel (DEV-2030). Sits outside the
   // editor routes entirely: it renders no runtime and boots no container.
   if (location.pathname.replace(/\/+$/, "") === "/admin") return <AdminGate />;
 
   const route = parseRoute();
+  const fullId = fullModeId(route);
+  if (fullId) return <FullMode id={fullId} />;
+  // Before `Gate`/`Authoring`, which boot a container session this page has no
+  // use for. It is auth-gated all the same — the listing is per-user.
+  if (route.mode === "myDemos") return <MyDemosRoute />;
   // The share page is a public, read-only playground — no auth needed.
-  if (route.mode === "share") {
-    // ?mode=full → chrome-less, example-only, full-window (for iframe embedding).
-    const full = new URLSearchParams(location.search).get("mode") === "full";
-    return full ? <FullEmbed id={route.id} /> : <Authoring user={null} route={route} />;
-  }
+  if (route.mode === "share") return <ShareRoute route={route} />;
   return <Gate route={route} />;
 }
 
-/** Chrome-less full-window view of a saved demo's built output — the whole
- *  window is just the running example, so `/share/:id?mode=full` drops cleanly
- *  into an <iframe> on any site. Wraps the static /d/:id/ build (cheap, instant,
- *  no live container); the outer SPA page carries no frame restrictions. */
-function FullEmbed({ id }: { id: string }) {
+/** `/my-demos`. Same login-on-anonymous contract as `/edit/:id`: the listing is
+ *  `WHERE created_by = <caller>`, so there is nothing to show a stranger. */
+function MyDemosRoute() {
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  useEffect(() => {
+    currentUser().then(setUser);
+  }, []);
+  useEffect(() => {
+    if (user === null) login(); // return_to preserves /my-demos
+  }, [user]);
+  useDocumentTitle("My demos");
+
+  if (user === undefined) return <Splash text="Loading data …" />;
+  if (user === null) return <Splash text="Sign in to see your demos…" />;
+  return <MyDemosPage apiBase={API_BASE} user={user} />;
+}
+
+/**
+ * `/share/:id` — public and read-only, so the workspace is always anonymous
+ * (`user={null}`: no action bar, no file CRUD, no save).
+ *
+ * The *account menu* is a separate question. Before T9 the top bar keyed off the
+ * same `user`, so a signed-in visitor opening someone's share link was offered
+ * "Sign in". The identity is resolved here and handed to the top bar alone —
+ * never rendered as a gate, so nothing waits on it and the page paints as fast
+ * as it always did.
+ *
+ * `undefined` while that resolve is in flight, and it is a real wait: `currentUser()`
+ * round-trips the external broker. Seeding `null` instead would mean "anonymous,
+ * confirmed" for those few hundred milliseconds and the bar would offer a signed-in
+ * visitor **Sign in** — reintroducing the exact thing this split exists to remove,
+ * clickable. Pending renders neither control.
+ */
+function ShareRoute({ route }: { route: { mode: "share"; id: string } }) {
+  const [accountUser, setAccountUser] = useState<User | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    currentUser().then((u) => { if (live) setAccountUser(u); });
+    return () => { live = false; };
+  }, []);
   return (
-    <iframe
-      title="Handsontable demo"
-      src={`${API_BASE}/d/${id}/`}
-      style={{ position: "fixed", inset: 0, width: "100%", height: "100%", border: "none", display: "block" }}
-      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+    <Authoring
+      user={null}
+      accountUser={accountUser ?? null}
+      accountPending={accountUser === undefined}
+      route={route}
     />
+  );
+}
+
+/**
+ * `65:20432` — a saved demo's built output, full window, under the design's chrome:
+ * top bar, URL bar, preview, status bar. No editor, no sidebar, no authed action bar.
+ *
+ * Wraps the static `/d/:id/` build, so this stays the cheap path — no Sandpack, no
+ * container, nothing to boot. The chrome renders on the first paint (the iframe starts
+ * loading immediately) and the metadata fills in behind it; a `Splash` here would delay
+ * the demo itself to wait on a title.
+ *
+ * Nothing in this view needs auth: the build it shows is what `/share/:id` already
+ * serves publicly. Hence no `Sign in` — the frame draws none either.
+ */
+function FullMode({ id }: { id: string }) {
+  const [title, setTitle] = useState("");
+  const [version, setVersion] = useState(DEFAULT_VERSION);
+  const [frameworkName, setFrameworkName] = useState<string | undefined>(undefined);
+  const [files, setFiles] = useState<FilesMap | null>(null);
+  const [status, setStatus] = useState<PreviewStatus>("booting");
+  // Bumped by refresh; re-keys the iframe (which re-requests the build) and re-probes.
+  const [reloadGen, setReloadGen] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/api/demos/${id}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((meta: { title?: string; ht_version?: string } | null) => {
+        if (cancelled || !meta) return;
+        setTitle(meta.title ?? "");
+        if (meta.ht_version) setVersion(meta.ht_version);
+      })
+      .catch(() => { /* the status dot reports the build; a missing title is not an error state */ });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  useDocumentTitle(title || null);
+
+  // `framework` and the files only exist on the source snapshot. The files are what
+  // `Download` zips; without them the button hides rather than handing over an empty zip.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/api/demos/${id}/source`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((src: { framework: string; files: FilesMap } | null) => {
+        if (cancelled || !src) return;
+        setFiles(src.files);
+        // The design's short label ("React (Vite, TS)") comes from the starter catalog,
+        // same resolution the shell's status bar uses in every other mode.
+        setFrameworkName(catalog.examples.find((x) => x.framework === src.framework)?.displayName);
+      })
+      .catch(() => { /* Download stays hidden */ });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  // The dot cannot come from the iframe's `load` event: that fires for a 404 page too,
+  // and `/d/:id/` only exists if `runBuild` succeeded at fork time — a demo without a
+  // build would report `ready` over the worker's "Not found". The frame is cross-origin,
+  // so it cannot be introspected either. Probe the same URL instead: `GET`, because the
+  // route is gated on it (`workers/api/src/index.ts`), and the HTML entry is served
+  // `max-age=0, must-revalidate`, so this is one conditional request rather than a
+  // second download. 404 (no demo / no artifact) and 410 (revoked) both fail `ok`.
+  useEffect(() => {
+    let cancelled = false;
+    setStatus("booting");
+    fetch(`${API_BASE}/d/${id}/`)
+      .then((res) => { if (!cancelled) setStatus(res.ok ? "ready" : "error"); })
+      .catch(() => { if (!cancelled) setStatus("error"); });
+    return () => { cancelled = true; };
+  }, [id, reloadGen]);
+
+  /** Leaving full mode is a navigation, not `window.close()`: `close()` only works for
+   *  a window the script opened, so it silently does nothing on a pasted link. */
+  const leaveFullWindow = useCallback(() => {
+    const url = new URL(location.href);
+    url.searchParams.delete("mode");
+    location.assign(url.toString());
+  }, []);
+
+  return (
+    <div style={{ ...shellStyles.shell, gridTemplateRows: "auto 1fr" }}>
+      {/* No `accountEmail`: `65:20432` draws no account control, and full mode had
+          no Sign in either — it was already passing `authed={false}` with no
+          `onSignIn`, so the top-right has always been theme toggle + Download. */}
+      <TopBar
+        examplePill={
+          <div style={shellStyles.examplePill(false)}>
+            <img src={markUrl} alt="" style={shellStyles.examplePillMark} />
+            <span style={pillLabel}>{title || "Shared demo"}</span>
+          </div>
+        }
+        onDownload={files ? () => downloadWorkspaceZip(files, title) : undefined}
+      />
+
+      <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto", minHeight: 0 }}>
+        <FullBar
+          url={`${location.origin}/share/${id}`}
+          onRefresh={() => setReloadGen((g) => g + 1)}
+          onMinimize={leaveFullWindow}
+        />
+
+        <iframe
+          key={reloadGen}
+          title="Handsontable demo"
+          src={`${API_BASE}/d/${id}/`}
+          style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+        />
+
+        <PreviewStatusBar status={status} frameworkName={frameworkName} version={version} />
+      </div>
+    </div>
   );
 }
 
@@ -234,7 +450,9 @@ function Gate({ route }: { route: { mode: "play" } | { mode: "edit"; id: string 
     if (user === null && route.mode === "edit") login(); // return_to preserves /edit/:id
   }, [user, route.mode]);
 
-  if (user === undefined) return <Splash text="Loading…" />;
+  // The frame gives the loading screen one string, so both load states use it. The
+  // sign-in line below is a different message, not a load state, and keeps its own.
+  if (user === undefined) return <Splash text="Loading data …" />;
   if (user === null && route.mode === "edit") return <Splash text="Sign in to edit this demo…" />;
   return <Authoring user={user} route={route} />;
 }
@@ -251,11 +469,16 @@ function AdminGate() {
   return <AdminPanel apiBase={API_BASE} token={getToken()} />;
 }
 
+/** `72:14610`: a spinner and one line, nothing else. The frame draws the top bar above
+ *  it, which this cannot — the splash renders precisely because the shell's state (user,
+ *  example, version) hasn't resolved yet, so there is no chrome to draw. Either the
+ *  frame is a composite (chrome drawn for context, not specified for this state), or
+ *  the app wants a real skeleton top bar during load — a bigger change than a splash. */
 function Splash({ text }: { text: string }) {
   return (
     <div style={centered}>
-      <Logo size={40} />
-      <p style={{ color: theme.color.textMuted, fontFamily: theme.font.ui }}>{text}</p>
+      <Spinner size={20} />
+      <p style={{ color: theme.color.textMuted, fontFamily: theme.font.ui, margin: 0 }}>{text}</p>
     </div>
   );
 }
@@ -282,9 +505,29 @@ function NotFound({ path, transient = false }: { path: string | null; transient?
   );
 }
 
-function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
+function Authoring({
+  user,
+  route,
+  // Defaults to `user`: in `play` and `edit` the workspace identity *is* the
+  // account identity. Only `ShareRoute` passes them apart.
+  accountUser = user,
+  // Only `ShareRoute` sets this. `Gate` resolves the user before it renders
+  // `Authoring` at all, so there is never an unresolved window there.
+  accountPending = false,
+}: {
+  user: User | null;
+  route: EditorRoute;
+  accountUser?: User | null;
+  accountPending?: boolean;
+}) {
   const savedId = route.mode === "edit" || route.mode === "share" ? route.id : null;
   const isShare = route.mode === "share";
+  // Changing the *file set* follows being signed in (ADR-0025), not the mode — see the
+  // `onAddFile` props below. One flag, not the expression three times: `EditorShell`
+  // derives its `editable` switch from `!!onAddFile` and `FileTree` gates the header
+  // `+` / `folder-plus` *and* the per-row ✎ / ✕ on it, so the three handlers have to
+  // appear and disappear together or the sidebar contradicts itself.
+  const canEditFiles = !!user && !isShare;
 
   // Initial example/version come from the URL so the playground is deep-linkable.
   // `?docs=<content-path>` opens a documentation-guide example (lazy-loaded);
@@ -322,14 +565,47 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [budgetNotice, setBudgetNotice] = useState<string | null>(null);
   const [bootLog, setBootLog] = useState<string>("");
   const [dirty, setDirty] = useState(false);
+  // Which *files* are unsaved, for the per-tab dot in the editor strip (T12, ADR-0025
+  // §3). Not derivable from `dirty`, and `dirty` is not derivable from it either: the
+  // Edit info dialog marks the workspace dirty with no file path at all (see its
+  // `onSave` below), and `dirty` is what `Save •` and the docs-switch guard read. Two
+  // facts, two pieces of state.
+  const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(() => new Set());
   const [syncing, setSyncing] = useState(false); // container rebuild in flight
+  const [refreshing, setRefreshing] = useState(false); // row-2 refresh in flight
+  // Guards the refresh promise's own completion: a second click, an example switch or a
+  // version change can land mid-flight, and a stale settle must not clear a newer spinner.
+  const refreshSeqRef = useRef(0);
   const containerModeRef = useRef(false);
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Bumped whenever the whole workspace is replaced (example switch or fork) so
   // the runtime remounts even when the framework is unchanged.
   const [mountGen, setMountGen] = useState(0);
+  // Bumped by the error card's "Restart preview". Its own counter rather than `mountGen`:
+  // that one doubles as `EditorShell`'s `workspaceKey`, and a retry is not a new
+  // workspace — sharing it would close the user's open tabs to fix the preview.
+  const [retryGen, setRetryGen] = useState(0);
+  // Whether the current failure is one a remount could clear. False for the refusals the
+  // mount effect makes *before* building a runtime — an unsupported version, a starter
+  // below its core floor. Those depend on the version picker, not on the preview, and
+  // offering to restart them would promise something the button cannot deliver.
+  const [retryable, setRetryable] = useState(true);
+  /** Full mode as a layout, not a route (ADR-0027 §13). Seeded from the URL so a pasted
+   *  `?mode=full` link opens in it, then owned as state so entering and leaving cost no
+   *  navigation — see `openFullWindow`.
+   *
+   *  `play` only by construction: `App` dispatches `?mode=full` on a saved demo to
+   *  `FullMode` before `Authoring` renders at all, so a `full` here can only be a
+   *  playground. The route check says so rather than relying on that ordering. */
+  const [full, setFull] = useState(
+    () => route.mode === "play" && new URLSearchParams(location.search).get("mode") === "full",
+  );
 
   const [iframeEl, setIframeEl] = useState<HTMLIFrameElement | null>(null);
+  // Where the running preview lives, as reported by mount(). Tier 2 gives the
+  // container's preview origin; Tier 1 has none to give (Sandpack renders into
+  // the iframe without navigating), so the row-2 field falls back.
+  const [previewUrl, setPreviewUrl] = useState("");
   const runtimeRef = useRef<DemoRuntime | null>(null);
   const filesRef = useRef<FilesMap>(files);
   filesRef.current = files;
@@ -342,13 +618,14 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const [docsRuntimeBlocked, setDocsRuntimeBlocked] = useState(!!initialDocs);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  /** Saved demos only — the sidebar's BOX INFO drops the row when it's empty. */
+  const [createdAt, setCreatedAt] = useState("");
   const [saving, setSaving] = useState(false);
   const [forking, setForking] = useState(false);
   const [embedding, setEmbedding] = useState(false);
   const [shareLinksOpen, setShareLinksOpen] = useState(false);
   const [linksId, setLinksId] = useState<string | null>(null);
   const [forkedFrom, setForkedFrom] = useState<string | null>(`catalog:${framework}`);
-  const [myDemosOpen, setMyDemosOpen] = useState(false);
   // "Ask about this example" (DEV-2047). Available on every route, including
   // the public /share view — explaining a demo is exactly what a shared link
   // is for.
@@ -357,6 +634,30 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   // example. Mutually exclusive with the chat panel: they occupy the same edge
   // of the screen, and both are secondary to the code.
   const [styleOpen, setStyleOpen] = useState(false);
+  /** Edit info (`114:24410`), opened from the BOX INFO pencil. Replaces the two
+   *  bare inputs T2 had to park in the authed action bar for want of a frame.
+   *
+   *  Seeded from `?edit=info`, which is what My Demos' **Rename** navigates to —
+   *  without it Rename and Open would be the same link. Read once, at mount:
+   *  after that the dialog is the user's to open and close. */
+  const [editInfoOpen, setEditInfoOpen] = useState(
+    () => route.mode === "edit" && new URLSearchParams(location.search).get("edit") === "info",
+  );
+
+  /** Close the dialog *and* drop `?edit=info`.
+   *
+   *  The param is a one-shot instruction from My Demos' Rename, not state. Left
+   *  in the URL it outlives the thing it opened: a reload — or anything else
+   *  that remounts — reopens the dialog the user already dismissed or saved, and
+   *  the link is wrong if copied. `replaceState` so it doesn't add history. */
+  const closeEditInfo = useCallback(() => {
+    setEditInfoOpen(false);
+    const url = new URL(location.href);
+    if (url.searchParams.has("edit")) {
+      url.searchParams.delete("edit");
+      history.replaceState(null, "", url.pathname + url.search + url.hash);
+    }
+  }, []);
   const docsPathRef = useRef<string | null>(docsPath);
   const dirtyRef = useRef(dirty);
   const sourceLoadedRef = useRef(sourceLoaded);
@@ -369,18 +670,48 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   activeDocsBucketRef.current = activeDocsBucket;
   activeDocsManifestRef.current = activeDocsManifest;
 
-  /** Replace the whole workspace (entry + files + lineage) and remount. */
-  const loadWorkspace = useCallback((nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
-    filesRef.current = nextFiles; // ensure the mount effect reads the new files
-    setEntry(nextEntry);
-    setFramework(nextEntry.framework);
-    setFiles(nextFiles);
-    setForkedFrom(lineage);
+  /** Mark the workspace unsaved, and the named files with it.
+   *
+   *  Every mutation below goes through this rather than setting `dirty` alone, so the
+   *  two can't drift — a dot that outlives its edit, or an edit with no dot, both read
+   *  as bugs in the indicator rather than in the caller that forgot a line.
+   *
+   *  Called with no paths for a metadata-only change (the Edit info dialog). */
+  const markDirty = useCallback((...touched: string[]) => {
+    setDirty(true);
+    dirtyRef.current = true;
+    if (!touched.length) return;
+    setDirtyPaths((prev) => {
+      const next = new Set(prev);
+      for (const p of touched) next.add(p);
+      return next;
+    });
+  }, []);
+
+  /** Saved or replaced — nothing is outstanding. */
+  const clearDirty = useCallback(() => {
     setDirty(false);
     dirtyRef.current = false;
-    setErrorMessage(null);
-    setMountGen((g) => g + 1);
+    setDirtyPaths((prev) => (prev.size ? new Set() : prev));
   }, []);
+
+  /** Replace the whole workspace (entry + files + lineage) and remount. */
+  const loadWorkspace = useCallback(
+    (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
+      filesRef.current = nextFiles; // ensure the mount effect reads the new files
+      setEntry(nextEntry);
+      setFramework(nextEntry.framework);
+      setFiles(nextFiles);
+      setForkedFrom(lineage);
+      clearDirty();
+      setErrorMessage(null);
+      // Also what tells `EditorShell` to discard its open tabs: this counter is passed
+      // down as `workspaceKey`, and it is the only truthful "this is a different
+      // workspace now" signal the app has.
+      setMountGen((g) => g + 1);
+    },
+    [clearDirty],
+  );
 
   // Edit/share mode: load the saved demo's source + metadata into the workspace.
   useEffect(() => {
@@ -404,9 +735,15 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         }
         const src = (await srcRes.json()) as { framework: string; files: FilesMap };
         if (metaRes.ok) {
-          const meta = (await metaRes.json()) as { title: string; description: string | null; ht_version: string };
+          const meta = (await metaRes.json()) as {
+            title: string;
+            description: string | null;
+            ht_version: string;
+            created_at: string | null;
+          };
           setTitle(meta.title ?? "");
           setDescription(meta.description ?? "");
+          setCreatedAt(meta.created_at ?? "");
           if (meta.ht_version) {
             hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
             setVersion(meta.ht_version);
@@ -721,6 +1058,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     if (!v.ok) {
       setStatus("error");
       setErrorMessage(v.message);
+      setRetryable(false);
       return;
     }
     // Per-starter floor: these starters were authored against a core API that
@@ -738,11 +1076,17 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       setErrorMessage(
         `Could not load this example for Handsontable ${version}. Try another version.`,
       );
+      setRetryable(false);
       return;
     }
+    setRetryable(true);
     setStatus("booting");
     setBootLog("");
     setSyncing(false);
+    // A remount supersedes any refresh. Bump the sequence as well as clearing the flag,
+    // so the superseded promise's own settle can't turn the spinner back off later.
+    refreshSeqRef.current += 1;
+    setRefreshing(false);
     containerModeRef.current = entry.engine === "container";
     let cancelled = false;
     const runtime =
@@ -767,94 +1111,134 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
       reportRuntimeError(e, entry.engine);
     });
     runtimeRef.current = runtime;
-    runtime.mount(filesRef.current).catch((e: unknown) => {
-      if (!cancelled) {
-        setStatus("error");
-        setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
-      }
-      // Reported even when cancelled: a session the pool refused still failed,
-      // and the unmount that set `cancelled` is often the user giving up on it.
-      reportRuntimeError(e, entry.engine);
-    });
+    setPreviewUrl("");
+    runtime
+      .mount(filesRef.current)
+      .then(({ previewUrl: url }) => {
+        // Container only. Tier 1 hands back whatever `iframe.src` happens to be
+        // at mount time, which is Sandpack's *bundler* origin — not an address
+        // the user could act on, and a CodeSandbox mark we don't surface
+        // (ADR-0001, white-label). The row-2 field falls back instead.
+        const own = entry.engine === "container" && /^https?:\/\//.test(url);
+        if (!cancelled) setPreviewUrl(own ? url : "");
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setStatus("error");
+          setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
+        }
+        // Reported even when cancelled: a session the pool refused still failed,
+        // and the unmount that set `cancelled` is often the user giving up on it.
+        reportRuntimeError(e, entry.engine);
+      });
     return () => {
       cancelled = true;
       runtime.dispose();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
-    // mountGen forces a remount when files are replaced (example switch or fork/edit load).
-  }, [iframeEl, entry, version, mountGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, versionPending, docsPath]);
+    // mountGen forces a remount when files are replaced (example switch or fork/edit load);
+    // retryGen when the user asks for one from the error card.
+  }, [iframeEl, entry, version, mountGen, retryGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, versionPending, docsPath]);
 
-  const onEdit = useCallback((path: string, contents: string) => {
-    const next = { ...filesRef.current, [path]: contents };
-    filesRef.current = next;
-    setFiles(next);
-    setDirty(true);
-    dirtyRef.current = true;
-    try {
-      runtimeRef.current?.writeFile(path, contents);
-    } catch {
-      /* not mounted */
-    }
-    // Container frameworks rebuild server-side (a few seconds); show feedback.
-    if (containerModeRef.current) {
-      setSyncing(true);
-      if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
-      syncTimerRef.current = setTimeout(() => setSyncing(false), 4000);
-    }
+  /** "Restart preview" — mount a fresh runtime from the current (edited) sources.
+   *
+   *  The way out of a failure the code has already outlived. Tier 1 recovers on its own
+   *  now (the bundler's next clean compile re-emits ready), but Tier 2 cannot: a boot
+   *  failure exits the container's dev server, and streaming the fixed file into a
+   *  container with no dev server changes nothing. Only a new session re-runs it. */
+  const retryPreview = useCallback(() => {
+    setStatus("booting");
+    setErrorMessage(null);
+    setBootLog("");
+    setRetryGen((g) => g + 1);
   }, []);
+
+  const onEdit = useCallback(
+    (path: string, contents: string) => {
+      const next = { ...filesRef.current, [path]: contents };
+      filesRef.current = next;
+      setFiles(next);
+      markDirty(path);
+      try {
+        runtimeRef.current?.writeFile(path, contents);
+      } catch {
+        /* not mounted */
+      }
+      // Container frameworks rebuild server-side (a few seconds); show feedback.
+      if (containerModeRef.current) {
+        setSyncing(true);
+        if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = setTimeout(() => setSyncing(false), 4000);
+      }
+    },
+    [markDirty],
+  );
 
   // ---- File-tree CRUD (CodeSandbox-style). Edits the in-memory workspace and
   // the live preview; only Save (edit mode, owner) persists them. ----
-  const addFile = useCallback((path: string) => {
-    if (filesRef.current[path] !== undefined) return;
-    const next = { ...filesRef.current, [path]: "" };
-    filesRef.current = next;
-    setFiles(next);
-    setDirty(true);
-    dirtyRef.current = true;
-    try { runtimeRef.current?.writeFile(path, ""); } catch { /* not mounted */ }
-  }, []);
+  const addFile = useCallback(
+    (path: string) => {
+      if (filesRef.current[path] !== undefined) return;
+      const next = { ...filesRef.current, [path]: "" };
+      filesRef.current = next;
+      setFiles(next);
+      markDirty(path);
+      try { runtimeRef.current?.writeFile(path, ""); } catch { /* not mounted */ }
+    },
+    [markDirty],
+  );
 
-  const deleteFile = useCallback((path: string) => {
-    if (filesRef.current[path] === undefined) return;
-    const next = { ...filesRef.current };
-    delete next[path];
-    filesRef.current = next;
-    setFiles(next);
-    setDirty(true);
-    dirtyRef.current = true;
-    try { runtimeRef.current?.deleteFile?.(path); } catch { /* not mounted */ }
-  }, []);
+  const deleteFile = useCallback(
+    (path: string) => {
+      if (filesRef.current[path] === undefined) return;
+      const next = { ...filesRef.current };
+      delete next[path];
+      filesRef.current = next;
+      setFiles(next);
+      // The workspace stays dirty — a deletion is unsaved work — but the *path* stops
+      // being dirty, because there is no longer a file or a tab to dot.
+      markDirty();
+      setDirtyPaths((prev) => {
+        if (!prev.has(path)) return prev;
+        const rest = new Set(prev);
+        rest.delete(path);
+        return rest;
+      });
+      try { runtimeRef.current?.deleteFile?.(path); } catch { /* not mounted */ }
+    },
+    [markDirty],
+  );
 
-  const renameFile = useCallback((oldPath: string, newPath: string) => {
-    const content = filesRef.current[oldPath] ?? "";
-    const next = { ...filesRef.current };
-    delete next[oldPath];
-    next[newPath] = content;
-    filesRef.current = next;
-    setFiles(next);
-    setDirty(true);
-    dirtyRef.current = true;
-    try {
-      runtimeRef.current?.writeFile(newPath, content);
-      runtimeRef.current?.deleteFile?.(oldPath);
-    } catch { /* not mounted */ }
-  }, []);
+  const renameFile = useCallback(
+    (oldPath: string, newPath: string) => {
+      const content = filesRef.current[oldPath] ?? "";
+      const next = { ...filesRef.current };
+      delete next[oldPath];
+      next[newPath] = content;
+      filesRef.current = next;
+      setFiles(next);
+      // The rename itself is unsaved work, so the new path is dirty either way; the
+      // old one has to go, or its dot would outlive the file it described. The tab
+      // follows the rename — `EditorShell` remaps it (that wrapper is why renaming an
+      // open file no longer closes its tab).
+      markDirty(newPath);
+      setDirtyPaths((prev) => {
+        if (!prev.has(oldPath)) return prev;
+        const rest = new Set(prev);
+        rest.delete(oldPath);
+        return rest;
+      });
+      try {
+        runtimeRef.current?.writeFile(newPath, content);
+        runtimeRef.current?.deleteFile?.(oldPath);
+      } catch { /* not mounted */ }
+    },
+    [markDirty],
+  );
 
   /** Download the current (possibly-edited) workspace as a .zip. */
   const downloadZip = useCallback(() => {
-    const entries: Record<string, Uint8Array> = {};
-    for (const [p, c] of Object.entries(filesRef.current)) entries[p.replace(/^\//, "")] = strToU8(c);
-    const bytes = zipSync(entries, { level: 6 });
-    const base = (title || entry.displayName || "handsontable-demo")
-      .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "handsontable-demo";
-    const blob = new Blob([bytes as BlobPart], { type: "application/zip" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${base}.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadWorkspaceZip(filesRef.current, title || entry.displayName);
   }, [title, entry.displayName]);
 
   /** Create an embeddable (docs-only) version from the current playground code
@@ -943,8 +1327,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || `save failed (${res.status})`);
       }
-      setDirty(false);
-      dirtyRef.current = false;
+      clearDirty();
     } catch (e) {
       // Losing a save is the worst outcome in the app — the user's edits are only
       // in this tab's memory until the PATCH lands.
@@ -953,10 +1336,112 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
     } finally {
       setSaving(false);
     }
-  }, [savedId, isShare, title, description, version]);
+  }, [savedId, isShare, title, description, version, clearDirty]);
+
+  /**
+   * The preview bar's share icon, mode-aware (ADR-0025). `edit` has a saved demo
+   * already, so it just opens the dialog; `play` has nothing to link to yet, so it
+   * mints one first — which is precisely what the retired `Embed` button did, down
+   * to the dialog it opened. Embed keeps no button of its own because that dialog's
+   * third row already *is* the docs embed URL.
+   *
+   * `onFork` is deliberately not folded in with it: it posts the same body, but it
+   * navigates to `/edit/:id` afterwards, and losing the playground is the difference
+   * users actually care about.
+   */
+  const onShare = useCallback(() => {
+    if (route.mode === "play") return void onEmbed();
+    setLinksId(savedId);
+    setShareLinksOpen(true);
+  }, [route.mode, onEmbed, savedId]);
+
+  /**
+   * `Cmd/Ctrl+S`. The top bar's Save is the only authed action the design never
+   * framed (ADR-0025), so it gets the shortcut every editor has trained people to
+   * expect. Gated exactly as the button is, and `preventDefault` regardless of the
+   * gate — offering the browser's "save this page" dialog inside an editor is
+   * worse than doing nothing.
+   */
+  useEffect(() => {
+    if (!user || route.mode !== "edit") return;
+    const onKey = (e: KeyboardEvent) => {
+      // Case-folded, because Caps Lock makes `e.key` "S" with `shiftKey` false —
+      // which a bare `!== "s"` rejects, skipping the save *and* letting the
+      // browser dialog through. `shiftKey` is still excluded on its own, so
+      // Shift+Cmd+S stays free for whatever the browser does with it.
+      if (e.key.toLowerCase() !== "s" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      e.preventDefault();
+      // A modal owns the keyboard while it is up, and `Dialog` traps Tab and
+      // Escape but knows nothing about this. `EditInfoDialog` matters most: it
+      // holds title and description as *drafts* and lifts them only on its own
+      // Save, so saving the workspace from under it would persist the old
+      // metadata while the dialog still shows the new — which reads, from the
+      // outside, exactly like the dialog having saved. Swallowed rather than
+      // passed through, so the browser's own dialog stays shut either way.
+      if (editInfoOpen || shareLinksOpen) return;
+      if (!saving) void onSave();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [user, route.mode, saving, onSave, editInfoOpen, shareLinksOpen]);
+
+  /** Row-2 refresh (`72:15708`). Reloads the running preview in place — never a
+   *  remount, which for Tier 2 would mint a fresh container session per click.
+   *
+   *  `reload()`'s promise settles when the refresh has landed (or timed out, or the
+   *  runtime went away); it never rejects, so there is no failure branch here —
+   *  `onError` already owns that. */
+  const refreshPreview = useCallback(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime?.reload) return;
+    const seq = ++refreshSeqRef.current;
+    setRefreshing(true);
+    void Promise.resolve(runtime.reload()).then(() => {
+      if (seq === refreshSeqRef.current) setRefreshing(false);
+    });
+  }, []);
+
+  /** `window-maximize` (`72:15715`) — the preview without the editor (`65:20432`).
+   *
+   *  Two mechanics behind one button, because the two modes show different things
+   *  (ADR-0027 §13). A saved demo has a prebuilt `/d/:id/` artifact, which is what the
+   *  frames' full mode shows and what the share dialog hands out; that opens in a new
+   *  tab, unchanged. A `play` workspace has no artifact — only the live preview already
+   *  running in this tab — so full mode there is a layout change on the spot.
+   *
+   *  In place rather than `window.open` for `play`: a new tab would boot a second runtime,
+   *  and for Tier 2 that means a second container session per click against a pool that
+   *  already runs out. `replaceState` keeps the URL shareable without a navigation, so the
+   *  session, its container and every unsaved edit survive the toggle. */
+  const openFullWindow = useCallback(() => {
+    const url = new URL(location.href);
+    url.searchParams.set("mode", "full");
+    if (route.mode !== "play") {
+      window.open(url.toString(), "_blank", "noopener");
+      return;
+    }
+    history.replaceState(null, "", url.pathname + url.search + url.hash);
+    setFull(true);
+  }, [route.mode]);
+
+  /** `window-minimize` (`65:20496`) for the in-place form. `FullMode` has its own, which
+   *  navigates because it *is* a route. */
+  const leaveFullWindow = useCallback(() => {
+    const url = new URL(location.href);
+    url.searchParams.delete("mode");
+    history.replaceState(null, "", url.pathname + url.search + url.hash);
+    setFull(false);
+  }, []);
 
   const clientUrl = linksId ? `${location.origin}/share/${linksId}` : "";
+  // No `?theme=`: `serveDemoAsset` takes `(env, id, subpath, { embed })` and never sees
+  // a query string, so the hint we used to send was provably inert (ADR-0025). Embed
+  // theming stays deferred — the example owns its own theme (ADR-0028).
   const embedUrl = linksId ? `${API_BASE}/embed/${linksId}` : "";
+
+  // Same string the top bar's pill shows: a saved demo's title, otherwise the
+  // example's display name.
+  useDocumentTitle(title || entry.displayName);
 
   // The framework variants available for the currently-open docs example — drive
   // the separate framework picker shown next to the example Cascader.
@@ -967,6 +1452,41 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
         .sort((a, b) => FW_PREF.indexOf(a.framework) - FW_PREF.indexOf(b.framework))
     : [];
 
+  // Row 2's framework pill (`72:16741`) — same data and same show/hide rule as
+  // the button group it replaces: only docs examples have variants, starters are
+  // picked through the cascader instead (ADR-0023).
+  const frameworks = currentFrameworks.map((f) => ({
+    key: f.docsPath,
+    label: FW_LABEL[f.framework] ?? f.displayName,
+    active: f.docsPath === docsPath,
+  }));
+
+  // What the pill calls the open workspace. The cascader's trigger label, hoisted
+  // because full mode shows the same string without the cascader — `65:21390` reads
+  // "Drag to scroll - Standard example", a docs example's own name.
+  const exampleLabel = currentDocsMeta
+    ? `${currentDocsMeta.breadcrumb.join(" ▸ ")} · ${currentDocsMeta.exampleTitle}`
+    : entry.displayName;
+
+  // The public address for the row-2 field. Always `/share/:id`, never
+  // `/edit/:id`, even while editing: the field is click-to-copy, and `/edit`
+  // is auth-gated (`Gate` sends a signed-out visitor to the login broker, which
+  // only accepts @handsontable.com). `/share/:id` is the same demo, served
+  // without auth — the link `ShareLinks` hands out. A docs example or an unsaved
+  // playground has neither, and falls back to `previewUrl`.
+  const publicUrl = savedId ? `${location.origin}/share/${savedId}` : "";
+
+  // The short project label for the preview status bar (`48:6706`). `entry.displayName`
+  // is only usable for a starter; for a docs example it is the long
+  // `"Columns ▸ … · Standard example · React (TS)"` string that `import-docs.mjs` builds,
+  // which overwrites the short name irrecoverably. Resolving through the starter catalog
+  // by framework key gives the design's exact wording ("React (Vite, TS)") and describes
+  // the authored project, which is the same thing it describes for a starter. `.find`,
+  // not `getEntry` — that throws on an unknown key.
+  const frameworkName =
+    catalog.examples.find((x) => x.framework === entry.framework)?.displayName ??
+    entry.displayName;
+
   // True when the user has changed something that nothing is going to save:
   // the playground and the public share view both keep edits in memory only.
   // The edit page has a Save button, so it is excluded — there the work has
@@ -974,197 +1494,206 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
   const unsavedWork = dirty && route.mode !== "edit";
 
   if (docsNotFound) return <NotFound path={initialDocs} transient={docsNotFoundTransient} />;
-  if (savedId && !sourceLoaded) return <Splash text="Loading demo…" />;
+  if (savedId && !sourceLoaded) return <Splash text="Loading data …" />;
 
   return (
-    <div style={{ height: "100%", display: "grid", gridTemplateRows: "auto 1fr" }}>
-      <div style={topBar}>
-        {route.mode === "share" ? (
-          <>
-            <Logo size={22} />
-            <div style={{ minWidth: 0 }}>
-              <div style={sharedTitle}>{title || "Shared demo"}</div>
-              {description && <div style={sharedDesc}>{description}</div>}
-            </div>
-          </>
-        ) : route.mode === "edit" ? (
-          <>
-            <span style={{ color: theme.color.textMuted }}>Editing</span>
-            <input
-              style={{ ...selectStyle, fontFamily: theme.font.ui, width: 220 }}
-              value={title}
-              onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
-              placeholder="Demo title"
-              aria-label="Demo title"
-            />
-            <input
-              style={{ ...selectStyle, fontFamily: theme.font.ui, width: 300 }}
-              value={description}
-              onChange={(e) => { setDescription(e.target.value); setDirty(true); }}
-              placeholder="Description (optional)"
-              aria-label="Demo description"
-            />
-          </>
-        ) : (
-          <>
-            <span style={{ color: theme.color.textMuted }}>Example</span>
-            <DocsCascader
-              manifestItems={docsItems}
-              starters={catalog.examples.map((e) => ({ framework: e.framework, displayName: e.displayName }))}
-              currentLabel={
-                currentDocsMeta
-                  ? `${currentDocsMeta.breadcrumb.join(" ▸ ")} · ${currentDocsMeta.exampleTitle}`
-                  : entry.displayName
-              }
-              selectedKey={
-                currentDocsMeta
-                  ? `${currentDocsMeta.guide}|${currentDocsMeta.exampleId}`
-                  : docsPath
-                    ? undefined
-                    : `starter:${framework}`
-              }
-              onSelect={(leaf: CascaderLeaf) => {
-                if (leaf.kind === "starter") { selectExample(leaf.framework); return; }
-                const pick =
-                  leaf.frameworks.find((f) => f.framework === framework) ??
-                  FW_PREF.map((p) => leaf.frameworks.find((f) => f.framework === p)).find(Boolean) ??
-                  leaf.frameworks[0];
-                if (pick) void selectDocs(pick.docsPath);
-              }}
-            />
-            {currentFrameworks.length > 0 && (
-              <div style={{ display: "flex", gap: 4 }} role="group" aria-label="Framework">
-                {currentFrameworks.map((f) => {
-                  const active = f.docsPath === docsPath;
-                  return (
-                    <button
-                      key={f.framework}
-                      type="button"
-                      onClick={() => void selectDocs(f.docsPath)}
-                      style={{ ...fwBtn, ...(active ? fwBtnActive : null) }}
-                      title={f.displayName}
-                      aria-pressed={active}
-                    >
-                      {FW_LABEL[f.framework] ?? f.displayName}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {currentDocsMeta && (
-              <a
-                style={githubLink}
-                href={docsPageUrl(framework, currentDocsMeta.docPermalink)}
-                target="_blank"
-                rel="noreferrer"
-                title="Open the documentation page for this example"
-              >
-                See in documentation ↗
-              </a>
-            )}
-            <a
-              style={githubLink}
-              href={
-                docsPath
-                  ? `https://github.com/handsontable/handsontable/tree/develop/docs/content/${docsPath.split("/").slice(0, -1).join("/")}`
-                  : `https://github.com/handsontable/examples/tree/master/examples/${framework}`
-              }
-              target="_blank"
-              rel="noreferrer"
-              title="View this example's source on GitHub"
-            >
-              {docsPath ? "See on GitHub ↗" : "Fork on GitHub ↗"}
-            </a>
-          </>
-        )}
-        <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />
-        <StyleButton open={styleOpen} onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }} />
-        {!isShare && user && (
-          <button style={ghostBtn} onClick={() => setMyDemosOpen((v) => !v)}>My demos</button>
-        )}
-        {!isShare && user && (
-          <a
-            style={{ ...ghostBtn, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
-            href="/admin"
-            title="Usage and cost of the demo runner"
-          >
-            Usage
-          </a>
-        )}
-        <div style={{ flex: 1 }} />
-        {budgetNotice && (
-          <span style={{ color: theme.color.warning, fontSize: 12, maxWidth: 380 }} title={budgetNotice}>
-            {budgetNotice}
-          </span>
-        )}
-        {versionWarning && (
-          <span style={{ color: theme.color.warning, fontSize: 12, maxWidth: 380 }} title={versionWarning}>
-            {versionWarning}
-          </span>
-        )}
-        {/* Download is available on every route, not just /share. Most people
-            here are anonymous, nothing persists their edits, and a refresh
-            takes the work with it — so the one way out of the playground with
-            your changes has to be present before you need it, not discovered
-            afterwards. It highlights once there is something to lose. */}
-        <button
-          style={{
-            ...ghostBtn,
-            ...(unsavedWork ? { color: theme.color.accent, borderColor: theme.color.accent } : null),
-          }}
-          onClick={downloadZip}
-          title={
-            unsavedWork
-              ? "Your edits are not saved anywhere — download the example with your changes as a .zip"
-              : "Download this example (including any edits) as a .zip"
-          }
-        >
-          Download{unsavedWork ? " •" : ""}
-        </button>
-        {isShare ? (
-          <span style={{ color: theme.color.textMuted, fontSize: 12, fontFamily: theme.font.mono, whiteSpace: "nowrap" }}>
-            {entry.displayName} · HOT {version}
-          </span>
-        ) : user ? (
-          <>
-            <span style={{ color: theme.color.textMuted, fontSize: 12 }}>{user.email}</span>
-            <button style={ghostBtn} onClick={logout}>Log out</button>
-          </>
-        ) : (
-          <button style={ghostBtn} onClick={login}>Sign in with Handsontable</button>
-        )}
-      </div>
-
+    <div style={{ height: "100%", minHeight: 0 }}>
       <EditorShell
         frameworkLabel={entry.displayName}
+        frameworkName={frameworkName}
         files={files}
         entry={entry.entry}
+        // Tells the shell to discard its open tabs. `files` alone can't: it is replaced
+        // on every keystroke as well as on every example switch, and two workspaces
+        // routinely share path names. `mountGen` changes only in `loadWorkspace`, which
+        // is exactly the "different workspace now" moment (T12).
+        workspaceKey={mountGen}
         iframeRef={setIframeEl}
         status={status}
         errorMessage={errorMessage}
         bootLog={bootLog}
+        containerBoot={entry.engine === "container"}
+        // Withheld while a docs bucket/path is unresolved (the mount effect refuses to run
+        // at all in that state) and for pre-mount version refusals: in both cases the
+        // button would restart nothing.
+        onRetry={docsRuntimeBlocked || !retryable ? undefined : retryPreview}
         syncing={syncing}
+        refreshing={refreshing}
         version={version}
         versionOptions={docsPath ? versionOptions : versionsForEntry(versionOptions, entry.minCoreMajor)}
         onVersionChange={changeVersion}
         onEdit={onEdit}
-        onAddFile={addFile}
-        onRenameFile={renameFile}
-        onDeleteFile={deleteFile}
+        title={title || entry.displayName}
+        description={description}
+        createdAt={createdAt}
+        // `edit` only — and no longer the same gate as the file CRUD below, which
+        // follows sign-in (ADR-0025). Title and description belong to a *saved* demo
+        // row; a `play` workspace has no record to edit, so being signed in there
+        // gives the pencil nothing to open.
+        onEditInfo={route.mode === "edit" ? () => setEditInfoOpen(true) : undefined}
+        onDownloadAll={downloadZip}
+        // Changing the *file set* follows being **signed in** (ADR-0025), not the mode.
+        // Sticky `114:26599` states it — "CRUD w sidebar po zalogowaniu" — and the `hidden`
+        // flag on `folder-plus` / `plus` is bimodal across the file: hidden in all 7 Before
+        // Login frames, visible in all 4 After Login ones. So sticky `72:14532`'s "fork/view
+        // mode" means *not signed in*, which is the reading ADR-0023 got wrong.
+        //
+        // `share` stays excluded: the design's only axis is Before / After Login and it never
+        // models ownership, so letting a signed-in visitor mutate someone else's file set
+        // would be a behaviour change rather than a restyle. (`ShareRoute` passes `user={null}`,
+        // so `!!user` already excludes it — `isShare` says so out loud and survives that
+        // changing.) Editing file *contents* is unaffected in all three modes, and nothing
+        // persists here without `onSave`.
+        onAddFile={canEditFiles ? addFile : undefined}
+        onRenameFile={canEditFiles ? renameFile : undefined}
+        onDeleteFile={canEditFiles ? deleteFile : undefined}
         onSave={onSave}
-        onShare={() => { setLinksId(savedId); setShareLinksOpen(true); }}
+        onShare={onShare}
         onFork={onFork}
-        onEmbed={onEmbed}
-        embedding={embedding}
         authed={!!user}
+        // Account menu (`114:21480`). Keyed off `accountUser`, not `user`, so it
+        // survives `/share/:id` — see `ShareRoute`.
+        accountEmail={accountUser?.email}
+        onMyDemos={() => { location.href = "/my-demos"; }}
+        // The internal usage + cost panel. Signed-in only by construction — the
+        // account menu that holds it renders only for an identified user.
+        onUsage={() => { location.href = "/admin"; }}
+        // `edit` is auth-gated — `Gate` answers a null user with `login()`, so a
+        // plain reload would bounce straight back to the broker. `play` and
+        // `share` render fine anonymously and keep their example.
+        onLogout={route.mode === "edit" ? () => logout("/") : () => logout()}
         mode={route.mode}
-        sharing={forking}
+        forking={forking}
+        // Only `play` mints, so only `play` is ever pending — `edit` opens the
+        // dialog straight off `savedId`.
+        sharing={embedding}
         saving={saving}
+        // Two facts, not one: `dirty` is the workspace (the top bar's `Save •`, which
+        // an Edit-info change must light up even though it touched no file), and
+        // `dirtyPaths` is which files carry the per-tab dot (T12).
         dirty={dirty}
+        dirtyPaths={dirtyPaths}
+        versionWarning={versionWarning}
+        budgetNotice={budgetNotice}
+        // Ask AI and Style, both from DEV-2047. Available on every route — the
+        // public `/share` view included, since explaining or restyling a demo is
+        // exactly what a shared link invites. Mutually exclusive: they are the
+        // same 340px edge of the screen.
+        secondaryActions={
+          <>
+            <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />
+            <StyleButton open={styleOpen} onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }} />
+          </>
+        }
+        // ---- chrome (T2) --------------------------------------------------
+        examplePill={
+          // `full` joins the static branch: `65:21391` draws the pill's chevron
+          // `hidden`, so the cascader is present but not openable. Switching example
+          // from a view with no editor would replace a workspace you cannot see.
+          full || isShare || route.mode === "edit" ? (
+            // `alt=""`: the mark is branding, not information, and unlike BOX INFO's
+            // badge no "Handsontable" text follows it here — a real `alt` would just
+            // prepend noise to every pill's accessible name.
+            <div style={shellStyles.examplePill(false)} title={description || undefined}>
+              <img src={markUrl} alt="" style={shellStyles.examplePillMark} />
+              {/* A saved demo has a title; a playground in full mode has only the
+                  example it opened, and "Untitled demo" would be a worse answer than
+                  the name the cascader was showing a moment ago. */}
+              <span style={pillLabel}>
+                {title || (isShare ? "Shared demo" : full ? exampleLabel : "Untitled demo")}
+              </span>
+            </div>
+          ) : (
+            // The mark is a *sibling* of the cascader, never inside its trigger —
+            // inside, the <img> would join the trigger's accessible name. The pill
+            // stays 480px: mark + 8px gap leave the 420px label region `72:15859`
+            // draws, which the trigger's `flex: 1` absorbs.
+            <div style={shellStyles.examplePill(true)}>
+              <img src={markUrl} alt="" style={shellStyles.examplePillMark} />
+              <DocsCascader
+                manifestItems={docsItems}
+                starters={catalog.examples.map((e) => ({ framework: e.framework, displayName: e.displayName }))}
+                currentLabel={exampleLabel}
+                selectedKey={
+                  currentDocsMeta
+                    ? `${currentDocsMeta.guide}|${currentDocsMeta.exampleId}`
+                    : docsPath
+                      ? undefined
+                      : `starter:${framework}`
+                }
+                onSelect={(leaf: CascaderLeaf) => {
+                  if (leaf.kind === "starter") { selectExample(leaf.framework); return; }
+                  const pick =
+                    leaf.frameworks.find((f) => f.framework === framework) ??
+                    FW_PREF.map((p) => leaf.frameworks.find((f) => f.framework === p)).find(Boolean) ??
+                    leaf.frameworks[0];
+                  if (pick) void selectDocs(pick.docsPath);
+                }}
+              />
+            </div>
+          )
+        }
+        publicUrl={publicUrl}
+        previewUrl={previewUrl}
+        onRefreshPreview={refreshPreview}
+        // Every mode, as `72:15706` and `65:20432` both draw it — the latter over a docs
+        // example, which is always `play`. It was withheld in `play` until ADR-0027 §13,
+        // on the reasoning that there is no `/d/:id/` build to show there; the answer is
+        // that full mode shows the live preview instead, not that the button goes away.
+        onMaximize={openFullWindow}
+        fullMode={full}
+        onMinimize={full ? leaveFullWindow : undefined}
+        // Not gated on auth: share mode has always offered Download to anonymous
+        // visitors, and no frame shows an anonymous share view (ADR-0023 rule 1).
+        // `72:15697` (anonymous `play`) does draw `Sign in` alone — kept anyway, per the
+        // same rule, rather than dropping a working control. See ADR-0027 §2.
+        onDownload={downloadZip}
+        downloadHighlight={unsavedWork}
+        // Withheld while the identity is still resolving, which is the only thing
+        // that makes the top bar render `Sign in`. Offering it to someone who turns
+        // out to be signed in — and who could click it — is worse than a bar that
+        // is briefly one control short.
+        onSignIn={accountPending ? undefined : login}
+        frameworks={frameworks}
+        onFrameworkChange={(docsPathKey) => void selectDocs(docsPathKey)}
+        docsUrl={currentDocsMeta ? docsPageUrl(framework, currentDocsMeta.docPermalink) : undefined}
+        // Play only, as before. A saved demo's source is the demo itself, not
+        // the starter it was forked from, so pointing at the starter repo there
+        // would be wrong — and `48:6560`, the one edit-mode frame, ends its bar
+        // at `window-maximize`.
+        repoUrl={
+          route.mode !== "play"
+            ? undefined
+            : docsPath
+              ? `https://github.com/handsontable/handsontable/tree/develop/docs/content/${docsPath.split("/").slice(0, -1).join("/")}`
+              : `https://github.com/handsontable/examples/tree/master/examples/${framework}`
+        }
+        repoLabel={docsPath ? "See this example on GitHub" : "Fork this starter on GitHub"}
       />
 
       {shareLinksOpen && linksId && (
         <ShareLinks clientUrl={clientUrl} embedUrl={embedUrl} onClose={() => setShareLinksOpen(false)} />
+      )}
+
+      {editInfoOpen && (
+        <EditInfoDialog
+          title={title}
+          description={description}
+          onClose={closeEditInfo}
+          // Marks the workspace dirty rather than PATCHing on its own: the code and
+          // the metadata are one snapshot, and `onSave` sends both in a single
+          // rebuilding PATCH. Saving here too would rebuild twice.
+          //
+          // `markDirty()` with no path, deliberately: the title and description belong
+          // to no file, so this must not dot a tab. It is also the reason `dirty` can't
+          // just be `dirtyPaths.size > 0` (T12).
+          onSave={(next) => {
+            setTitle(next.title);
+            setDescription(next.description);
+            markDirty();
+            closeEditInfo();
+          }}
+        />
       )}
 
       {styleOpen && (
@@ -1188,9 +1717,6 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
           onClose={() => setChatOpen(false)}
         />
       )}
-      {myDemosOpen && (
-        <MyDemos apiBase={API_BASE} token={getToken()} onClose={() => setMyDemosOpen(false)} />
-      )}
     </div>
   );
 }
@@ -1198,6 +1724,7 @@ function Authoring({ user, route }: { user: User | null; route: EditorRoute }) {
 // ---- small shared UI bits --------------------------------------------------
 
 function Logo({ size = 24 }: { size?: number }) {
+  const logoUrl = useLogoUrl();
   return <img src={logoUrl} alt="Handsontable" style={{ height: size, display: "block" }} />;
 }
 
@@ -1210,66 +1737,13 @@ const centered: React.CSSProperties = {
   gap: 12,
   background: theme.color.surface,
 };
-const topBar: React.CSSProperties = {
-  display: "flex",
-  gap: 10,
-  alignItems: "center",
-  padding: "6px 16px",
-  borderBottom: `1px solid ${theme.color.border}`,
-  fontFamily: theme.font.ui,
-  fontSize: 13,
-  background: theme.color.surfaceMuted,
-};
-const selectStyle: React.CSSProperties = {
-  fontFamily: theme.font.mono,
-  fontSize: 13,
-  padding: "4px 8px",
-  borderRadius: 8,
-  border: `1px solid ${theme.color.border}`,
-  boxSizing: "border-box",
-};
-const ghostBtn: React.CSSProperties = {
-  fontFamily: theme.font.ui,
-  fontSize: 12.5,
-  border: `1px solid ${theme.color.border}`,
-  background: theme.color.surface,
-  borderRadius: 8,
-  padding: "5px 10px",
-  cursor: "pointer",
-};
-const fwBtn: React.CSSProperties = {
-  fontFamily: theme.font.ui,
-  fontSize: 12,
-  border: `1px solid ${theme.color.border}`,
-  background: theme.color.surface,
-  color: theme.color.textMuted,
-  borderRadius: 7,
-  padding: "4px 9px",
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-};
-const fwBtnActive: React.CSSProperties = {
-  background: theme.color.accent,
-  color: "#fff",
-  borderColor: theme.color.accent,
-  fontWeight: 600,
-};
-const githubLink: React.CSSProperties = {
-  fontFamily: theme.font.ui,
-  fontSize: 12.5,
-  color: theme.color.text,
-  textDecoration: "none",
-  border: `1px solid ${theme.color.border}`,
-  background: theme.color.surface,
-  borderRadius: 8,
-  padding: "5px 10px",
-  whiteSpace: "nowrap",
-};
-const sharedTitle: React.CSSProperties = {
-  fontSize: 14, fontWeight: 600, color: theme.color.text,
-  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-};
-const sharedDesc: React.CSSProperties = {
-  fontSize: 12, color: theme.color.textMuted,
+// `selectStyle` and `ghostBtn` lived here for the unframed authed-extras row —
+// the title/description inputs and the My demos / Log out buttons. T9 moved all
+// of that into the Edit info dialog and the account menu, both of which style
+// themselves from the token set, so the two locals had no callers left.
+
+/** The demo title inside the centred pill (`48:6583`). */
+const pillLabel: React.CSSProperties = {
+  fontSize: 13, fontWeight: 500, color: theme.color.text,
   whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
 };

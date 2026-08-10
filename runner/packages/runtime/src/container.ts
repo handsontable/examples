@@ -52,6 +52,17 @@ async function readFailure(res: Response): Promise<{ code?: string; message: str
   return { message: text };
 }
 
+/** How long `reload()` waits for the reloaded page's `load` before settling anyway.
+ *  Generous: a container that is merely slow should still resolve on the real event. */
+const RELOAD_TIMEOUT_MS = 10_000;
+
+/** Polling cadence and budget *after* the boot script has reported a nonzero exit.
+ *  Slower than the boot cadence (2.5s) and bounded: the point is to notice a dev
+ *  server that comes up in spite of the exit marker, not to keep probing a container
+ *  that is never going to answer. 10s × 12 ≈ two minutes. */
+const FAILED_POLL_INTERVAL_MS = 10_000;
+const FAILED_POLLS_MAX = 12;
+
 /** The live-session API accepts only relative POSIX paths. */
 function relativeFiles(files: FilesMap): FilesMap {
   return Object.fromEntries(
@@ -106,7 +117,15 @@ export class ContainerRuntime implements DemoRuntime {
   private previewUrl = "";
   private port = 0;
   private pointed = false;
+  /** Settle callbacks for in-flight `reload()` promises, so `dispose()` can close them
+   *  out rather than leaving the shell's refresh spinner up on a torn-down preview. */
+  private readonly reloadSettlers = new Set<() => void>();
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  /** How many failed-state polls have gone out since the boot script reported a nonzero
+   *  exit. Kept because polling continues past that report (see `poll()`) and has to
+   *  stop eventually — a dead dev server never comes back on its own, and each poll
+   *  costs two `exec`s in the container. */
+  private failedPolls = 0;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   // Tear the session down when the page goes away (tab close, navigation) —
   // otherwise the container squats one of the few live-preview instance slots
@@ -264,14 +283,30 @@ export class ContainerRuntime implements DemoRuntime {
           const { ready, log, failed } = (await r.json()) as { ready: boolean; log: string; failed?: boolean };
           if (log && !this.pointed) this.emitProgress(log);
           if (failed && !this.disposed && !this.pointed) {
-            const detail = log
-              .replace(/\x1b\[[0-9;]*m/g, "")
-              .split("\n")
-              .map((l) => l.trimEnd())
-              .filter(Boolean)
-              .slice(-40)
-              .join("\n");
-            this.emitError(new ContainerBootFailure(detail || "Container failed to install dependencies or start."));
+            // Report once, then keep polling rather than returning. Returning made the
+            // failure a one-way door: the shell stopped asking the container anything,
+            // so a dev server that did come up afterwards could never be picked up, and
+            // the error card outlived its cause with no way back but a remount. Reporting
+            // once matters as much as continuing — `onError` is wired to Sentry, and
+            // re-emitting on every poll would file the same boot failure every few
+            // seconds for as long as the tab stayed open.
+            if (this.failedPolls === 0) {
+              const detail = log
+                .replace(/\x1b\[[0-9;]*m/g, "")
+                .split("\n")
+                .map((l) => l.trimEnd())
+                .filter(Boolean)
+                .slice(-40)
+                .join("\n");
+              this.emitError(new ContainerBootFailure(detail || "Container failed to install dependencies or start."));
+            }
+            this.failedPolls += 1;
+            // The boot script has exited, so this is a long shot, not the recovery path —
+            // "Restart preview" in the error card is. Poll on slowly for a short window in
+            // case the port opens anyway, then stop instead of probing a dead container
+            // for the life of the tab.
+            if (this.failedPolls > FAILED_POLLS_MAX) return;
+            this.pollTimer = setTimeout(() => this.poll(), FAILED_POLL_INTERVAL_MS);
             return;
           }
           if (ready && !this.disposed && !this.pointed) {
@@ -313,6 +348,37 @@ export class ContainerRuntime implements DemoRuntime {
     this.pending.set(path, contents);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = setTimeout(() => void this.flush(), this.opts.writeDebounceMs ?? 250);
+  }
+
+  /** Re-navigate the iframe to the same preview URL. The session, the container
+   *  and the dev server are all left alone — only the page reloads. Before the
+   *  iframe has been pointed at the preview (still booting) there is nothing to
+   *  reload.
+   *
+   *  Resolves on the reloaded page's `load`, which is the honest completion signal
+   *  here: `src` navigation is exactly what a refresh does. Cross-origin is no
+   *  obstacle — `load` fires on the frame element regardless of what it loaded. */
+  reload(): Promise<void> {
+    if (this.disposed || !this.pointed || !this.previewUrl) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const iframe = this.opts.iframe;
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        iframe.removeEventListener("load", settle);
+        this.reloadSettlers.delete(settle);
+        resolve();
+      };
+      // A container whose dev server died never navigates, and an unresolved promise
+      // would leave the shell's spinner up forever. The promise reports "no longer in
+      // flight", not success, so resolving on timeout is the correct outcome.
+      const timer = setTimeout(settle, RELOAD_TIMEOUT_MS);
+      this.reloadSettlers.add(settle);
+      iframe.addEventListener("load", settle, { once: true });
+      iframe.src = this.previewUrl;
+    });
   }
 
   /** Remove a file from the running container (file-tree delete/rename). */
@@ -404,6 +470,9 @@ export class ContainerRuntime implements DemoRuntime {
     // its Vite HMR WebSocket reconnect loop — would resurrect the container
     // this dispose just destroyed.
     if (this.pointed) this.opts.iframe.src = "about:blank";
+    // On the `pointed` path that `about:blank` fires its own `load` and would settle
+    // these anyway; doing it here too costs a line and drops the ordering assumption.
+    for (const settle of [...this.reloadSettlers]) settle();
     this.progressCbs.clear();
     const id = this.sessionId;
     this.sessionId = null;

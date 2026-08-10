@@ -147,8 +147,26 @@ async function installRouteFixtures(
   });
 }
 
+/** The *visible* editor.
+ *
+ *  Scoped to the shown pane since T12 (DEV-2169): every open tab keeps its own
+ *  CodeMirror instance mounted so switching files preserves undo history, so a bare
+ *  `.cm-content` matches one element per open tab and trips strict mode as soon as a
+ *  test opens a second file. */
 function editor(page: import("@playwright/test").Page) {
-  return page.locator(".cm-content");
+  return page.locator('[data-pane-active="true"] .cm-content');
+}
+
+// Since T2 (DEV-2156) the version and framework pickers are custom listboxes in
+// the preview bar, not a native <select> and a button group — `selectOption`
+// and `aria-pressed` no longer apply. Open the trigger, click the option.
+async function pickFromMenu(
+  page: import("@playwright/test").Page,
+  menu: "Handsontable version" | "Framework",
+  option: string,
+) {
+  await page.getByRole("button", { name: menu, exact: true }).click();
+  await page.getByRole("option", { name: option, exact: true }).click();
 }
 
 test("opens a docs example: breadcrumb, framework picker, docs link", async ({ page }) => {
@@ -159,16 +177,22 @@ test("opens a docs example: breadcrumb, framework picker, docs link", async ({ p
   const trigger = page.getByRole("button", { name: /Adding and removing columns/ });
   await expect(trigger).toBeVisible();
 
-  // Separate framework picker with the active one pressed.
-  const react = page.getByRole("button", { name: "React", exact: true });
-  await expect(react).toBeVisible();
-  await expect(react).toHaveAttribute("aria-pressed", "true");
+  // Framework picker: the active variant labels the trigger, the rest sit in its
+  // menu with the active one selected.
+  const framework = page.getByRole("button", { name: "Framework", exact: true });
+  await expect(framework).toContainText("React");
+  await framework.click();
+  await expect(page.getByRole("option", { name: "React", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   for (const fw of ["TypeScript", "JavaScript", "Vue", "Angular"]) {
-    await expect(page.getByRole("button", { name: fw, exact: true })).toBeVisible();
+    await expect(page.getByRole("option", { name: fw, exact: true })).toBeVisible();
   }
+  await page.keyboard.press("Escape");
 
-  // "See in documentation" points at the correct framework-specific docs page.
-  const docsLink = page.getByRole("link", { name: /See in documentation/ });
+  // The docs link is an icon button now; its label carries the meaning.
+  const docsLink = page.getByRole("link", { name: /documentation page/i });
   await expect(docsLink).toHaveAttribute(
     "href",
     "https://handsontable.com/docs/react-data-grid/column-adding/",
@@ -184,19 +208,132 @@ test("cascader drills down and highlights the current selection", async ({ page 
   await expect(page.getByPlaceholder("Search examples…")).toBeVisible();
   await expect(page.getByText("Starter templates", { exact: true })).toBeVisible();
 
-  // The currently-open example is highlighted (✓) and expanded to (the leaf
-  // label is an exact match; the trigger/banner show a longer truncated string).
-  await expect(page.getByText("Add and remove columns from the context menu", { exact: true })).toBeVisible();
+  // Opening reveals the current selection: its category is active and its group
+  // is forced open, so the row is on screen and marked selected. (The leaf label
+  // is an exact match; the trigger/banner show a longer truncated string.)
+  const current = page.getByText("Add and remove columns from the context menu", { exact: true });
+  await expect(current).toBeVisible();
+  await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(1);
 
   // Search narrows results.
   await page.getByPlaceholder("Search examples…").fill("context menu");
   await expect(page.getByText(/Adding and removing columns ▸ Add and remove columns/).first()).toBeVisible();
 });
 
+// The popover is positioned against the *pill*, not the trigger's wrapper, and
+// the design sizes it to the pill (`72:18028`). That holds only while nothing
+// between the two is positioned — so it survives on a `position` nobody thinks
+// to check. DEV-2170 broke it by putting the mark beside the cascader while the
+// wrapper was still `relative`: the popover slid 28px right and lost 28px, and
+// `top: calc(100% + 4px)` had been resolving against the wrapper's 16px trigger
+// height all along, overlapping the pill by 6px. Geometry, because that is the
+// only thing that catches it.
+test("the cascader popover stays aligned to the example pill", async ({ page }) => {
+  await installRouteFixtures(page);
+  await page.goto(REACT_EXAMPLE);
+
+  const trigger = page.getByRole("button", { name: /Adding and removing columns/ });
+  await trigger.click();
+  const popover = page.getByRole("dialog", { name: "Choose an example" });
+  await expect(popover).toBeVisible();
+
+  const geo = await page.evaluate(() => {
+    const pop = document.querySelector('[role="dialog"][aria-label="Choose an example"]')!;
+    // The pill is the 36px-high absolutely-positioned box holding the trigger.
+    let pill = pop.parentElement!;
+    while (pill && Math.round(pill.getBoundingClientRect().height) !== 36) pill = pill.parentElement!;
+    const p = pop.getBoundingClientRect();
+    const l = pill.getBoundingClientRect();
+    return {
+      dx: Math.round(p.left - l.left),
+      dWidth: Math.round(p.width - l.width),
+      gapBelowPill: Math.round(p.top - l.bottom),
+    };
+  });
+
+  // 1px each side is the pill's border: the popover fills its padding box.
+  expect(Math.abs(geo.dx)).toBeLessThanOrEqual(2);
+  expect(Math.abs(geo.dWidth)).toBeLessThanOrEqual(4);
+  // Below the pill, not overlapping it.
+  expect(geo.gapBelowPill).toBeGreaterThan(0);
+  expect(geo.gapBelowPill).toBeLessThanOrEqual(8);
+});
+
+test("cascader section headers collapse and re-expand", async ({ page }) => {
+  await installRouteFixtures(page);
+  await page.goto(REACT_EXAMPLE);
+  await page.getByRole("button", { name: /Adding and removing columns/ }).click();
+
+  // The focusable `treeitem` wraps the whole node (ARIA requires it to contain the
+  // group it expands), so `aria-expanded` is asserted there but the click has to go
+  // to the visible header row — the node's own centre is over an example.
+  const node = page.getByRole("treeitem", { name: "Adding and removing columns" });
+  const toggle = node.locator(".hot-casc-header");
+  const group = page.getByRole("group", { name: "Adding and removing columns" });
+  await expect(node).toHaveAttribute("aria-expanded", "true");
+  await expect(group).toBeVisible();
+
+  await toggle.click();
+  await expect(node).toHaveAttribute("aria-expanded", "false");
+  await expect(group).toHaveCount(0);
+
+  await toggle.click();
+  await expect(group).toBeVisible();
+});
+
+test("cascader is keyboard navigable", async ({ page }) => {
+  await installRouteFixtures(page);
+  await page.goto("/?example=react"); // start on a starter
+  await page.getByRole("button", { name: /React/ }).first().click();
+
+  // The search input takes focus on open; ArrowDown walks into the category
+  // column, ArrowRight crosses into the examples, Enter selects.
+  await expect(page.getByPlaceholder("Search examples…")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("option", { name: "Starter templates" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("option", { name: "Columns" })).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("treeitem", { name: "Adding and removing columns" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+
+  await expect(page).toHaveURL(/docs=guides%2Fcolumns%2Fcolumn-adding%2F.+example1/);
+});
+
+test("hovering a category keeps the example column keyboard-navigable", async ({ page }) => {
+  await installRouteFixtures(page);
+  await page.goto("/?example=react");
+  await page.getByRole("button", { name: /React/ }).first().click();
+
+  // Wait for the open to settle before typing, as the test above does. The
+  // cascader focuses its search input from a `setTimeout(…, 0)`
+  // (`DocsCascader.tsx:131`), so arrow keys pressed before that lands are either
+  // swallowed or undone by it — a race that only shows up under load.
+  await expect(page.getByPlaceholder("Search examples…")).toBeFocused();
+
+  // Walk into the example column, then hover a *different* category. That swaps
+  // the column out and unmounts the focused row — focus used to fall to <body>
+  // and every further arrow key was swallowed.
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("treeitem", { name: "Adding and removing columns" })).toBeFocused();
+
+  await page.getByRole("option", { name: "Starter templates" }).hover();
+
+  // Focus survived the swap — it sits on the rebuilt column's first row...
+  const rows = page.getByRole("treeitem");
+  await expect(rows.first()).toBeFocused();
+  // ...and arrow keys still move it, which is what the bug swallowed.
+  await page.keyboard.press("ArrowDown");
+  await expect(rows.nth(1)).toBeFocused();
+});
+
 test("switching framework updates the URL", async ({ page }) => {
   await installRouteFixtures(page);
   await page.goto(REACT_EXAMPLE);
-  await page.getByRole("button", { name: "Vue", exact: true }).click();
+  await pickFromMenu(page, "Framework", "Vue");
   await expect(page).toHaveURL(/docs=guides%2Fcolumns%2Fcolumn-adding%2Fvue%2Fexample2\.vue/);
 });
 
@@ -205,8 +342,13 @@ test("selecting an example from the cascader loads it", async ({ page }) => {
   await page.goto("/?example=react"); // start on a starter
   await page.getByRole("button", { name: /React/ }).first().click(); // open picker
   await page.getByText("Columns", { exact: true }).click();
-  await page.getByText("Adding and removing columns", { exact: true }).click();
-  await page.getByText("Standard example", { exact: true }).click();
+  // Scoped to the group rather than the whole popover: every group under a
+  // category renders at once now, and "Standard example" is the commonest title
+  // in the manifest — unscoped, it is a strict-mode violation, not a miss.
+  await page
+    .getByRole("group", { name: "Adding and removing columns" })
+    .getByText("Standard example", { exact: true })
+    .click();
   await expect(page).toHaveURL(/docs=guides%2Fcolumns%2Fcolumn-adding%2F.+example1/);
 });
 
@@ -229,7 +371,7 @@ test("clean version switch replaces docs source from the target bucket", async (
   await page.goto(`/?docs=${DOCS_PATH}&v=18.0.0`);
   await expect(editor(page)).toContainText(`18.0:${DOCS_PATH}`);
 
-  await page.getByLabel("Handsontable version", { exact: true }).selectOption(NEXT_VERSION);
+  await pickFromMenu(page, "Handsontable version", NEXT_VERSION);
 
   await expect(editor(page)).toContainText(`next:${DOCS_PATH}`);
   expect(requests).toContain(`/docs-examples/18.0/${DOCS_PATH.replace(/\//g, "__")}.json`);
@@ -242,7 +384,7 @@ test("dirty version switch preserves edits, re-pins, and warns", async ({ page }
   await expect(editor(page)).toContainText(`18.0:${DOCS_PATH}`);
   await editor(page).fill("export const userEdit = true;");
 
-  await page.getByLabel("Handsontable version", { exact: true }).selectOption(NEXT_VERSION);
+  await pickFromMenu(page, "Handsontable version", NEXT_VERSION);
 
   await expect(editor(page)).toContainText("export const userEdit = true;");
   await expect(page.getByText(/content may not match the selected version API/i)).toBeVisible();
@@ -256,7 +398,7 @@ test("same docs path uses isolated next and release cache entries", async ({ pag
   await page.goto(`/?docs=${DOCS_PATH}&v=${NEXT_VERSION}`);
   await expect(editor(page)).toContainText(`next:${DOCS_PATH}`);
 
-  await page.getByLabel("Handsontable version", { exact: true }).selectOption("18.0.0");
+  await pickFromMenu(page, "Handsontable version", "18.0.0");
 
   await expect(editor(page)).toContainText(`18.0:${DOCS_PATH}`);
   expect(requests.filter((path) => path.endsWith(`${DOCS_PATH.replace(/\//g, "__")}.json`))).toEqual([
@@ -281,15 +423,18 @@ test("an open docs example with no target bucket stops preview and remains recov
   await page.goto(`/?docs=${DOCS_PATH}&v=18.0.0`);
   await expect(editor(page)).toContainText(`18.0:${DOCS_PATH}`);
 
-  await page.getByLabel("Handsontable version", { exact: true }).selectOption("17.1.0");
+  await pickFromMenu(page, "Handsontable version", "17.1.0");
 
   await expect(page.getByText(/No documentation examples are available for Handsontable 17\.1\.0/).first()).toBeVisible();
   await expect(page.locator("section[aria-label='Preview'] iframe")).toHaveAttribute("src", "about:blank");
   await page.getByRole("button", { name: /React/ }).first().click();
   await expect(page.getByText("Starter templates", { exact: true })).toBeVisible();
   await page.getByText("Starter templates", { exact: true }).click();
-  const reactStarter = page.locator(".hot-casc-row").filter({ hasText: "React (Vite, TS)" });
-  await expect(reactStarter).not.toContainText("✓");
+  // The stranded docs example must not leave a starter looking like the current
+  // selection. Asserted on `aria-selected` — the design has no checkmark glyph,
+  // so a text assertion would now pass no matter what the picker highlighted.
+  const reactStarter = page.getByRole("treeitem", { name: "React (Vite, TS)" });
+  await expect(reactStarter).toHaveAttribute("aria-selected", "false");
 });
 
 // Live render — needs the external Sandpack bundler; opt-in via E2E_LIVE=1.
@@ -302,6 +447,24 @@ test("live: a JavaScript example renders a Handsontable grid", async ({ page }) 
   // Sandpack renders the preview into a nested iframe; find the grid inside it.
   const preview = page.frameLocator("iframe").first();
   await expect(preview.getByText("Hodkiewicz - Hintz").first()).toBeVisible({ timeout: 90_000 });
+});
+
+// DEV-2175: the TypeScript variant has its own wrapper output (`src/main.ts`
+// importing `../index.ts`), and the client-side transpile renames both files to
+// `.js`. Every TS docs example died on "Could not find module in path:
+// '../index.ts'" while the `.js` sibling above rendered fine — so the JS test
+// alone does not cover this path.
+test("live: a TypeScript example renders a Handsontable grid", async ({ page }) => {
+  test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  test.setTimeout(120_000);
+  const moduleErrors: string[] = [];
+  page.on("console", (m) => {
+    if (/Could not find module|ModuleNotFound/i.test(m.text())) moduleErrors.push(m.text());
+  });
+  await page.goto("/?docs=guides/accessibility/accessibility/javascript/example1.ts");
+  const preview = page.frameLocator("iframe").first();
+  await expect(preview.getByText("Hodkiewicz - Hintz").first()).toBeVisible({ timeout: 90_000 });
+  expect(moduleErrors, "no unresolved module specifiers after the .ts → .js rename").toHaveLength(0);
 });
 
 // DEV-2129: vanilla-JS/TS examples using ES2020 optional chaining (`?.`) / nullish

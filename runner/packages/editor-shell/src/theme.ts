@@ -1,37 +1,154 @@
 // Single source of branding tokens for the authoring shell and the public viewer.
 // White-label: our tokens only — no CodeSandbox marks anywhere in the UI.
 // (Sandpack is Apache-2.0; its license notice lives in source, never in the UI.)
-// Refined against the Handsontable brand guide during the design pass.
+//
+// Two modes, emitted as CSS custom properties on the root element (ADR-0028).
+// `theme.color.*` and `theme.shadow.*` are `var(--hot-…)` *references*, not literal
+// values — the browser resolves them at paint time, so a frozen style object built
+// from them still flips when the mode changes. That is what lets `styles.ts` stay a
+// module-level `const` instead of becoming a hook.
+//
+// This file is the only place a colour literal may appear. The three exceptions
+// outside it are the SVG logo assets, the pre-paint `html`/`body` background in
+// `apps/authoring/index.html` (which runs before these variables exist), and the
+// generated seti-ui file-icon palette in `src/icons/generated/` — upstream brand
+// colours, identical in both modes, regenerated from source (ADR-0024).
+
+export type ThemeMode = "light" | "dark";
+
+/** Attribute on `<html>` that selects the mode. Set pre-paint by an inline script. */
+export const THEME_ATTR = "data-hot-theme";
+/** `localStorage` key holding an explicit user choice. Absent ⇒ follow the OS. */
+export const THEME_STORAGE_KEY = "hot-theme";
+/** `localStorage` key holding the editor/preview split as a 0–1 fraction of the
+ *  body width. Absent ⇒ the designed 50%. */
+export const SPLIT_STORAGE_KEY = "hot-split";
+
+// ---------------------------------------------------------------------------
+// Palettes. Neutrals are the Handsontable `horizon` ramp, read off the Figma
+// variables on frames 48:6560 (light) and 31:6438 (dark).
+// ---------------------------------------------------------------------------
+
+const LIGHT_COLORS = {
+  accent: "#1A42E8", // Handsontable blue — brand, mode-invariant
+  accentHover: "#1233bf",
+  accentContrast: "#ffffff", // text/icons drawn *on* accent
+  accentContrastSoft: "rgba(255, 255, 255, 0.4)", // dimmed, on accent (spinner track)
+  accentSoft: "#1A42E814", // tinted fill (was `${accent}14`)
+  accentBorder: "#1A42E833", // tinted border (was `${accent}33`)
+  accentSelection: "#1A42E844",
+  // The editor/preview seam while hovered or dragged (85:11001). Sampled off the
+  // two drag frames: light is plain `accent`, dark is *lifted* — #4669F6, which is
+  // neither `accent` nor dark `accentHover` (#3b5cf0). Hence its own pair.
+  splitterActive: "#1A42E8",
+
+  // Four elevation steps, sampled off the dark frame 31:6438 — which is the only
+  // one that separates them, since light collapses onto #ffffff / #f7f7f9:
+  //   sunken #000000  <  surface #070604  <  muted #19191c  <  raised #222222
+  surface: "#ffffff", // app ground: row-2 bar, preview surround
+  surfaceSunken: "#f7f7f9", // recessed: the left sidebar
+  surfaceMuted: "#f7f7f9", // content panes: editor, status bars
+  surfaceRaised: "#ffffff", // top bar, popovers, dialogs, drawers
+  border: "#e7e7e9", // horizon/palette/100
+  // Outline of a transparent control (top-bar buttons) — *not* `border`. Dark's
+  // `border` is #222222, which is `surfaceRaised`: an outline-only button drawn
+  // on the 72px bar disappeared entirely and read as bare text. The dark frames
+  // draw that outline one step up the ramp, horizon/palette/600 (sampled on the
+  // Download button, `72:15648`, over the #222222 bar). Light deliberately keeps
+  // `border`'s value: #e7e7e9 on #ffffff already reads, and it is the shipped
+  // palette/100. The light frame `48:6560` samples the outline at #f7f7f9 —
+  // fainter than what we ship, considered and not adopted.
+  controlBorder: "#e7e7e9", // horizon/palette/100
+  text: "#262624", // horizon/palette/700
+  textMuted: "#727272",
+  hover: "rgba(120, 130, 150, 0.16)", // neutral row/button rollover
+
+  // Panes that wrap third-party surfaces. `editorBg` sits behind CodeMirror,
+  // `previewBg` behind the demo iframe — both must track the shell, because
+  // PreviewPane's boot/error overlays paint with `surface` on top of them.
+  editorBg: "#ffffff",
+  previewBg: "#ffffff",
+
+  danger: "#d1242f",
+  dangerBorder: "#f3c2c2",
+  warning: "#bf8700",
+  success: "#37bc6c",
+
+  scrim: "rgba(15, 23, 32, 0.45)", // modal backdrop
+} as const;
+
+type ColorToken = keyof typeof LIGHT_COLORS;
+
+// `Record<ColorToken, string>` makes a missing dark value a type error, so the two
+// palettes cannot drift apart.
+const DARK_COLORS: Record<ColorToken, string> = {
+  accent: "#1A42E8",
+  accentHover: "#3b5cf0",
+  accentContrast: "#ffffff",
+  accentContrastSoft: "rgba(255, 255, 255, 0.4)",
+  accentSoft: "#1A42E829",
+  accentBorder: "#1A42E84d",
+  accentSelection: "#1A42E855",
+  splitterActive: "#4669F6", // measured on 85:9970 — brand blue lifted off the dark ground
+
+  surface: "#070604", // horizon/palette/950
+  surfaceSunken: "#000000", // horizon/black
+  surfaceMuted: "#19191c", // horizon/palette/900
+  surfaceRaised: "#222222", // horizon/palette/800
+  border: "#222222",
+  controlBorder: "#353535", // horizon/palette/600 — see the light note above
+  text: "#d1d1d4",
+  // The Figma variable is #727272, which lands at ~3.9:1 on #070604 — under AA.
+  // Lightened deliberately; flag at design review.
+  textMuted: "#8f8f94",
+  hover: "rgba(255, 255, 255, 0.08)",
+
+  editorBg: "#19191c", // matches the editor pane in 31:6438
+  previewBg: "#070604",
+
+  danger: "#f0616b",
+  dangerBorder: "#5c2226",
+  warning: "#e3b341",
+  success: "#37bc6c",
+
+  scrim: "rgba(0, 0, 0, 0.6)",
+};
+
+const LIGHT_SHADOWS = {
+  sm: "0 2px 8px rgba(0, 0, 0, 0.18)", // floating pill / badge
+  popover: "0 12px 32px rgba(0, 0, 0, 0.18)",
+  dialog: "0 20px 60px rgba(0, 0, 0, 0.25)",
+  panel: "-8px 0 24px rgba(0, 0, 0, 0.08)", // right-hand drawer
+} as const;
+
+type ShadowToken = keyof typeof LIGHT_SHADOWS;
+
+const DARK_SHADOWS: Record<ShadowToken, string> = {
+  sm: "0 2px 8px rgba(0, 0, 0, 0.5)",
+  popover: "0 12px 32px rgba(0, 0, 0, 0.55)",
+  dialog: "0 20px 60px rgba(0, 0, 0, 0.65)",
+  panel: "-8px 0 24px rgba(0, 0, 0, 0.45)",
+};
+
+// ---------------------------------------------------------------------------
+// Variable references
+// ---------------------------------------------------------------------------
+
+const kebab = (s: string) => s.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+const varName = (group: string, key: string) => `--hot-${group}-${kebab(key)}`;
+
+/** Turn a palette into an identically-keyed map of `var()` references. */
+function refs<T extends Record<string, string>>(group: string, src: T): { [K in keyof T]: string } {
+  const out = {} as { [K in keyof T]: string };
+  for (const key of Object.keys(src) as (keyof T & string)[]) {
+    out[key] = `var(${varName(group, key)})`;
+  }
+  return out;
+}
 
 export const theme = {
-  color: {
-    accent: "#1A42E8", // Handsontable blue
-    accentHover: "#1233bf",
-    accentContrast: "#ffffff",
-
-    surface: "#ffffff",
-    surfaceMuted: "#f3f5fb",
-    border: "#e0e4f0",
-    text: "#101828",
-    textMuted: "#5b6472",
-
-    // Editor / code surfaces (dark).
-    editorBg: "#0f1424",
-    editorGutter: "#0b1020",
-    editorText: "#e6ebf5",
-    editorSelection: "#1A42E844",
-
-    // Syntax (blue-leaning family; the editor uses CodeMirror's own theme).
-    synKeyword: "#8ab4ff",
-    synString: "#a5c8ff",
-    synNumber: "#7fd0ff",
-    synComment: "#8b93a7",
-    synFunction: "#b6a8ff",
-    synVariable: "#e6ebf5",
-
-    danger: "#d1242f",
-    warning: "#bf8700",
-  },
+  color: refs("color", LIGHT_COLORS),
+  shadow: refs("shadow", LIGHT_SHADOWS),
   font: {
     ui: `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`,
     mono: `"JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace`,
@@ -41,3 +158,54 @@ export const theme = {
 } as const;
 
 export type Theme = typeof theme;
+
+// ---------------------------------------------------------------------------
+// Stylesheet
+// ---------------------------------------------------------------------------
+
+function block(
+  selector: string,
+  mode: ThemeMode,
+  colors: Record<string, string>,
+  shadows: Record<string, string>,
+) {
+  const decls = [
+    // Tells the UA to render native chrome — scrollbars, <select> popups, focus
+    // rings, form-control defaults — for this mode. Without it a dark shell keeps
+    // light scrollbars, which no token can reach.
+    `color-scheme:${mode}`,
+    ...Object.entries(colors).map(([k, v]) => `${varName("color", k)}:${v}`),
+    ...Object.entries(shadows).map(([k, v]) => `${varName("shadow", k)}:${v}`),
+  ];
+  return `${selector}{${decls.join(";")}}`;
+}
+
+/** The shell's one animation. It lives here rather than in a `<style>` inside
+ *  `Spinner` because T5 renders spinners in four places (boot overlay, refresh
+ *  overlay, syncing pill, the app's splash) and a per-instance `<style>` duplicates
+ *  the rule once per mount. It cannot live in the consuming app's global block
+ *  either — `editor-shell` has to stay self-contained. */
+const KEYFRAMES = `@keyframes hot-spin{to{transform:rotate(360deg)}}`;
+
+/** Light lives on bare `:root` so it is also the fallback if the attribute is
+ *  missing (e.g. the inline pre-paint script threw). */
+export const THEME_CSS = [
+  block(":root", "light", LIGHT_COLORS, LIGHT_SHADOWS),
+  block(`:root[${THEME_ATTR}="dark"]`, "dark", DARK_COLORS, DARK_SHADOWS),
+  KEYFRAMES,
+].join("\n");
+
+const STYLE_ID = "hot-theme-vars";
+
+/** Inject `THEME_CSS` once. Called at module scope below, so the variables exist
+ *  before React's first paint regardless of which module pulled `theme.ts` in. */
+export function installThemeCss(): void {
+  if (typeof document === "undefined") return;
+  if (document.getElementById(STYLE_ID)) return;
+  const el = document.createElement("style");
+  el.id = STYLE_ID;
+  el.textContent = THEME_CSS;
+  document.head.appendChild(el);
+}
+
+installThemeCss();

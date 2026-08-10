@@ -135,14 +135,13 @@ for (const entry of catalog.examples) {
         await page.goto(`/?example=${encodeURIComponent(entry.framework)}&v=${version}`);
 
         const preview = page.locator('section[aria-label="Preview"]');
-        // The status bar is the first direct child <div> of the preview
-        // section (PreviewPane.tsx) — scope to it directly rather than
-        // getByText scanning the whole section, which also matches the live
-        // boot-log <pre> when a container's dev-server error text happens to
-        // start with "Error:" (seen with mui: strict-mode violation, two
-        // elements matched).
-        const statusBar = preview.locator(":scope > div").first();
-        await expect(statusBar).toHaveText("Live", {
+        // Readiness comes off `data-preview-status` on the preview section
+        // (PreviewPane.tsx), not off any visible text. It used to be the "Live"
+        // label in a status strip that T2 removed — and before that, scoping to
+        // that strip was itself a fix for `getByText` also matching the live
+        // boot-log <pre> when a container's error text started with "Error:"
+        // (mui, strict-mode violation). An attribute has neither failure mode.
+        await expect(preview).toHaveAttribute("data-preview-status", "ready", {
           timeout: entry.engine === "container" ? 240_000 : 120_000,
         });
 

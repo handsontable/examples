@@ -865,7 +865,7 @@ const h1: React.CSSProperties = { fontSize: 17, margin: 0, fontWeight: 600 };
 const h2: React.CSSProperties = { fontSize: 14, margin: "0 0 10px", fontWeight: 600 };
 const subhead: React.CSSProperties = { fontSize: 12, color: theme.color.textMuted, margin: "0 0 6px" };
 const chip: React.CSSProperties = {
-  fontFamily: theme.font.ui, fontSize: 12, color: theme.color.text, background: "#fff",
+  fontFamily: theme.font.ui, fontSize: 12, color: theme.color.text, background: theme.color.surfaceRaised,
   border: `1px solid ${theme.color.border}`, borderRadius: 6, padding: "4px 9px", cursor: "pointer",
 };
 const chipActive: React.CSSProperties = {
@@ -876,10 +876,10 @@ const card: React.CSSProperties = {
   borderLeftWidth: 4, borderRadius: theme.radius.md, background: theme.color.surfaceMuted,
 };
 const pill: React.CSSProperties = {
-  color: "#fff", borderRadius: 999, padding: "2px 9px", fontSize: 11.5, fontWeight: 600,
+  color: theme.color.accentContrast, borderRadius: 999, padding: "2px 9px", fontSize: 11.5, fontWeight: 600,
 };
 const meter: React.CSSProperties = {
-  position: "relative", height: 10, borderRadius: 999, background: "#fff",
+  position: "relative", height: 10, borderRadius: 999, background: theme.color.surfaceMuted,
   border: `1px solid ${theme.color.border}`, margin: "14px 0 10px", overflow: "hidden",
 };
 const meterFill: React.CSSProperties = { position: "absolute", inset: 0, borderRadius: 999 };

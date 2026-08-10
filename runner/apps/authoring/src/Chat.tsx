@@ -332,7 +332,7 @@ export function AskAiButton({ open, onToggle }: { open: boolean; onToggle: () =>
 
   return (
     <span
-      style={{ position: "relative", display: "inline-flex" }}
+      style={{ position: "relative", display: "inline-flex", flex: "0 0 auto" }}
       onMouseEnter={() => setHint(true)}
       onMouseLeave={() => setHint(false)}
     >
@@ -371,9 +371,12 @@ const prettyUrl = (url: string) => url.replace(/^https:\/\/handsontable\.com\/do
 
 // ---- Styles ------------------------------------------------------------------
 
+// The panel is a fixed drawer over the editor, and since the redesign the editor has a
+// dark mode. `#fff` was correct on master, where it did not; here it is a white slab
+// over `surface`. Surfaces below are the shell's tokens for the same reason.
 const panel: React.CSSProperties = {
   position: "fixed", top: 0, right: 0, height: "100%", width: 400, maxWidth: "95vw",
-  background: "#fff", borderLeft: `1px solid ${theme.color.border}`,
+  background: theme.color.surfaceRaised, borderLeft: `1px solid ${theme.color.border}`,
   boxShadow: "-8px 0 24px rgba(0,0,0,0.08)", zIndex: 900,
   display: "flex", flexDirection: "column", fontFamily: theme.font.ui, color: theme.color.text,
 };
@@ -396,7 +399,7 @@ const editBox: React.CSSProperties = {
   padding: 10, marginTop: 8, background: theme.color.surfaceMuted,
 };
 const pathChip: React.CSSProperties = {
-  fontFamily: theme.font.mono, fontSize: 11.5, background: "#fff",
+  fontFamily: theme.font.mono, fontSize: 11.5, background: theme.color.surface,
   border: `1px solid ${theme.color.border}`, borderRadius: 4, padding: "1px 5px",
 };
 const docLink: React.CSSProperties = {
@@ -414,7 +417,7 @@ const primary: React.CSSProperties = {
   color: theme.color.accentContrast, border: "none", borderRadius: 6, padding: "6px 12px", cursor: "pointer",
 };
 const ghost: React.CSSProperties = {
-  fontFamily: theme.font.ui, fontSize: 12.5, background: "#fff", color: theme.color.text,
+  fontFamily: theme.font.ui, fontSize: 12.5, background: theme.color.surface, color: theme.color.text,
   border: `1px solid ${theme.color.border}`, borderRadius: 6, padding: "6px 12px", cursor: "pointer",
 };
 const suggestion: React.CSSProperties = {
@@ -424,14 +427,25 @@ const suggestion: React.CSSProperties = {
 // Deliberately the same neutral treatment as every other toolbar button: this
 // used to carry the accent border and text, which read as the primary action on
 // a bar where it is one option among several.
+// The two live in the redesigned 72px top bar, which is `surfaceRaised` and has a
+// dark mode. `#fff` and `border` were both fine on the pre-redesign bar; on this one
+// `#fff` is a white block in dark, and dark `border` *is* `surfaceRaised`, so the
+// outline disappears. Transparent + `controlBorder` is the bar's own idiom (ADR-0028).
 const askBtn: React.CSSProperties = {
-  fontFamily: theme.font.ui, fontSize: 12.5, background: "#fff", color: theme.color.text,
-  border: `1px solid ${theme.color.border}`, borderRadius: 6, padding: "5px 11px",
+  // Metrics match the bar's own `actionButton` (36px, `radius.md`, 13/600): these sit
+  // between the mode action and the theme toggle, and the old bar's 26px pill read as
+  // a leftover beside them. The glyph stays — the icon set is read off Figma layers
+  // (ADR-0024) and neither feature has one.
+  display: "inline-flex", alignItems: "center", gap: theme.space(2),
+  height: 36, padding: `0 ${theme.space(3)}`, flex: "0 0 auto",
+  fontFamily: theme.font.ui, fontSize: 13, fontWeight: 600,
+  background: "transparent", color: theme.color.text,
+  border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.md,
   cursor: "pointer", whiteSpace: "nowrap",
 };
 const tooltip: React.CSSProperties = {
   position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 950, width: 320,
-  background: "#fff", border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.md,
+  background: theme.color.surfaceRaised, border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.md,
   boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: "10px 12px",
   fontFamily: theme.font.ui, fontSize: 12, color: theme.color.text,
   textAlign: "left", whiteSpace: "normal", cursor: "default",

@@ -3,10 +3,67 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Handsontable Demos — Authoring</title>
+    <!-- "Authoring" was the only title, on every route including the public
+         /share/:id. The SPA now rewrites it per route (`documentTitle` in
+         App.tsx); this is the pre-hydration default and the /404 fallback. -->
+    <title>Handsontable Demos</title>
+    <meta
+      name="description"
+      content="Live, editable Handsontable examples across JavaScript, React, Angular and Vue. Fork one, edit it in the browser, and share a link."
+    />
+    <!-- The mark is transparent-background with a black or white H, so it needs
+         both. Same asset and the same media-query pairing as the documentation
+         site (handsontable/handsontable, docs/src/components/Head.astro). -->
+    <link rel="icon" media="(prefers-color-scheme: light)" href="/favicon.png" />
+    <link rel="icon" media="(prefers-color-scheme: dark)" href="/favicon-dark.png" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
+    <!-- Mirrors --hot-color-surface, like the pre-paint background below. -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#070604" />
+    <!-- og:url and og:image must be absolute — a crawler has no page context to
+         resolve a path against, so a relative one yields no card at all. Hardcoded
+         to the production origin rather than derived at runtime: the crawlers that
+         read these don't run the SPA's JavaScript. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Handsontable Demos" />
+    <meta property="og:title" content="Handsontable Demos" />
+    <meta
+      property="og:description"
+      content="Live, editable Handsontable examples across JavaScript, React, Angular and Vue."
+    />
+    <meta property="og:url" content="https://demos.handsontable.com/" />
+    <meta
+      property="og:image"
+      content="https://demos.handsontable.com/handsontable-banner-og.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <!-- Theme mode must be on <html> before the first paint, or a dark-mode reload
+         flashes light. Runs synchronously ahead of the module script; React reads
+         this attribute rather than re-deriving the mode. Keep in sync with
+         THEME_ATTR / THEME_STORAGE_KEY in packages/editor-shell/src/theme.ts. -->
+    <script>
+      (function () {
+        var m = null;
+        // Reading storage throws outright when it is disabled (Safari private mode,
+        // blocked cookies). Guard it alone, so losing it doesn't also lose the OS
+        // preference — the whole point of the fallback.
+        try { m = localStorage.getItem("hot-theme"); } catch (e) {}
+        if (m !== "light" && m !== "dark") {
+          try {
+            m = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          } catch (e) { m = "light"; }
+        }
+        document.documentElement.setAttribute("data-hot-theme", m);
+      })();
+    </script>
     <style>
       html, body, #root { height: 100%; margin: 0; }
       * { box-sizing: border-box; }
+      /* The only colour literals outside theme.ts (besides the logo SVGs): the
+         custom properties don't exist yet this early, and this is what fills the
+         viewport before React mounts. Mirrors --hot-color-surface. */
+      html, body { background: #ffffff; }
+      html[data-hot-theme="dark"], html[data-hot-theme="dark"] body { background: #070604; }
       /* Universal rollover for every button and link (works over inline styles
          since `filter` isn't set inline). */
       button, a { transition: filter 0.12s ease, background-color 0.12s ease; }
@@ -15,7 +72,104 @@
       /* Cascader rows get a subtle hover background (inline-selected rows keep
          their accent via !important-free specificity — selected wins visually). */
       .hot-casc-row { transition: background-color 0.12s ease; }
-      .hot-casc-row:hover { background: rgba(120, 130, 150, 0.16); }
+      .hot-casc-row:hover { background: var(--hot-color-hover); }
+      .hot-casc-header { transition: background-color 0.12s ease; }
+      .hot-casc-header:hover { background: var(--hot-color-hover); }
+      /* The cascader's rows are divs carrying a roving tabindex (T7), so they get
+         no UA focus ring of their own. :focus-visible keeps it off mouse clicks. */
+      .hot-casc-row:focus-visible { outline: 2px solid var(--hot-color-accent); }
+      /* A section header's focusable node wraps its whole subtree, because an ARIA
+         treeitem must contain the group it expands. So the ring goes on the header
+         row inside the node — on the node itself it would box in every example. */
+      .hot-casc-node:focus-visible { outline: none; }
+      .hot-casc-node:focus-visible > .hot-casc-header {
+        outline: 2px solid var(--hot-color-accent);
+      }
+      /* Borderless square icon buttons (theme toggle today; the row-2 icons in T2).
+         Needs a class because :hover can't be expressed inline. */
+      /* Transparent base, for the same reason as .hot-menu-row below: callers that
+         don't set `background` inline would otherwise get the UA's `buttonface`.
+         (The T2/T3 bar buttons do set it inline via `s.iconButton`, so for those
+         this rule and the :hover are both inert — the universal brightness filter
+         is their rollover.) */
+      .hot-icon-btn { background: transparent; }
+      .hot-icon-btn:hover { background: var(--hot-color-hover); }
+      /* Sidebar rows (T3). The row actions and the npm external-link are drawn at
+         opacity 0 and revealed on hover (72:17018, 72:17074) — inline styles can't
+         express either the hover or the descendant selector. :focus-within is not
+         optional: an opacity-0 button is still tabbable, so without it keyboard focus
+         lands on something invisible. */
+      .hot-file-row { transition: background-color 0.12s ease; }
+      /* Both fills live here rather than inline: an inline background outranks a
+         stylesheet :hover rule, so an inline one would kill the hover entirely. Equal
+         specificity, so source order decides — hover last, and it wins on the active
+         row too. */
+      .hot-file-row[data-active="true"] { background: var(--hot-color-surface-muted); }
+      .hot-file-row:hover { background: var(--hot-color-hover); }
+      /* Popover rows: the account menu (T9) and the demo card's kebab. Same reason
+         as .hot-file-row — the fill can't be inline or it would outrank :hover. */
+      /* The base fill has to live here too, not inline: a <button> without one
+         falls back to the UA's `buttonface`, which paints a grey slab in both
+         modes. Same equal-specificity/source-order trick as .hot-file-row —
+         transparent first, hover second, hover wins. */
+      .hot-menu-row { background: transparent; transition: background-color 0.12s ease; }
+      .hot-menu-row:hover { background: var(--hot-color-hover); }
+      .hot-menu-row[data-active="true"] { background: var(--hot-color-hover); }
+      /* The destructive row's *text* colour belongs here too, for exactly the
+         reason its background does: the hover inverts both, and an inline colour
+         would leave red text sitting on the red fill. */
+      .hot-menu-row[data-danger="true"] { color: var(--hot-color-danger); }
+      .hot-menu-row[data-danger="true"]:hover {
+        background: var(--hot-color-danger);
+        color: var(--hot-color-accent-contrast);
+      }
+      /* Demo cards (T9, 114:26635). The resting border lives here, not inline: an
+         inline `border` shorthand carries border-color and would outrank the
+         hover. Revoked cards don't take the class — they have nothing to click. */
+      .hot-demo-card { border: 1px solid var(--hot-color-border); transition: border-color 0.12s ease; }
+      .hot-demo-card:hover { border-color: var(--hot-color-accent-border); }
+      .hot-row-actions, .hot-dep-link { opacity: 0; transition: opacity 0.12s ease; }
+      .hot-file-row:hover .hot-row-actions,
+      .hot-file-row:focus-within .hot-row-actions,
+      .hot-dep-row:hover .hot-dep-link,
+      .hot-dep-row:focus-within .hot-dep-link { opacity: 1; }
+      /* Editor file tabs (T12, DEV-2169). Same reason as .hot-file-row: both fills
+         live here, base first and hover second, because an inline background would
+         outrank the :hover — and a tab that set none would fall through to the UA's
+         buttonface (ADR-0026). */
+      .hot-tab { background: transparent; transition: background-color 0.12s ease; }
+      .hot-tab:hover { background: var(--hot-color-hover); }
+      /* Active goes *last* here — the opposite order to .hot-file-row above, and
+         deliberately so. Both selectors are (0,2,0), so source order decides: on a
+         file row the hover is meant to win even on the active row, but on a tab the
+         raised fill *is* the "this is the open file" signal, and dropping it on hover
+         — including on the way to the ✕ — makes the active tab read as inactive.
+         T4 got this for free by setting the fill inline, which no :hover could reach;
+         moving it into the stylesheet is what put it at risk. */
+      .hot-tab[data-active="true"],
+      .hot-tab[data-active="true"]:hover { background: var(--hot-color-surface-raised); }
+      /* The tab is a div carrying a roving tabindex, so it has no UA ring of its own. */
+      .hot-tab:focus-visible { outline: 2px solid var(--hot-color-accent); }
+      /* The glyph swap (ADR-0025 §3): ✕ at rest, the unsaved-changes dot in
+         its place while that file is dirty, and the ✕ back on hover or focus so the
+         close action is never unreachable. Both glyphs are always in the DOM and the
+         slot is a fixed 16px square, so the tab does not change width either way —
+         which is also why `display` must not be set inline on them. */
+      .hot-tab-x { display: flex; }
+      .hot-tab-dot { display: none; }
+      .hot-tab[data-dirty="true"] .hot-tab-x { display: none; }
+      .hot-tab[data-dirty="true"] .hot-tab-dot { display: flex; }
+      .hot-tab[data-dirty="true"]:hover .hot-tab-x,
+      .hot-tab[data-dirty="true"]:focus-within .hot-tab-x { display: flex; }
+      .hot-tab[data-dirty="true"]:hover .hot-tab-dot,
+      .hot-tab[data-dirty="true"]:focus-within .hot-tab-dot { display: none; }
+      .hot-tab-close { background: transparent; }
+      .hot-tab-close:hover { background: var(--hot-color-hover); }
+      /* The strip scrolls when the open files outgrow it. Both properties: the WebKit
+         pseudo-element alone still leaves a scrollbar in Firefox, and a 36px bar has
+         no room for one — it would sit on the strip's inset hairline. */
+      .hot-tab-strip { scrollbar-width: none; }
+      .hot-tab-strip::-webkit-scrollbar { display: none; }
     </style>
   </head>
   <body>

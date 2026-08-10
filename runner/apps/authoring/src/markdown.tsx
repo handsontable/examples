@@ -76,7 +76,7 @@ const codeStyle: React.CSSProperties = {
   border: `1px solid ${theme.color.border}`, borderRadius: 4, padding: "0 4px",
 };
 const preStyle: React.CSSProperties = {
-  background: theme.color.editorBg, color: theme.color.editorText, borderRadius: theme.radius.md,
+  background: theme.color.editorBg, color: theme.color.text, borderRadius: theme.radius.md,
   padding: 10, overflowX: "auto", fontFamily: theme.font.mono, fontSize: 11.5, margin: "0 0 8px",
 };
 const linkStyle: React.CSSProperties = { color: theme.color.accent };

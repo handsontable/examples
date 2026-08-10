@@ -17,8 +17,8 @@ cd examples/runner
 pnpm install          # pnpm monorepo; Node 20+
 ```
 
-Work happens on a feature branch off `master`, opened as a PR against `handsontable/examples`
-(current WIP branch: `runner-live-demos`, PR #37). Cursor **Bugbot** auto-reviews each PR push.
+Work happens on a feature branch off `master`, opened as a PR against `handsontable/examples`.
+Cursor **Bugbot** auto-reviews each PR push.
 
 ## Layout
 
@@ -68,10 +68,22 @@ npx wrangler dev            # http://localhost:8787
 
 ```bash
 cd apps/authoring
-# .env.local (gitignored):  VITE_API_BASE=http://localhost:8787
+# .env.local (gitignored):  VITE_API_BASE=http://localhost:5173   # this dev server, not :8787
 #                           VITE_DEV_USER=you@handsontable.com   # bypasses broker login locally
 pnpm --filter @handsontable/demo-authoring dev   # http://localhost:5173
 ```
+
+Two traps in that setup:
+
+- **`?mode=full` needs the SPA and the worker on one origin.** `serveDemoAsset` sends
+  `frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` for `/d/:id` and is not wrapped in
+  `cors()`. Production is same-origin so it works there; point `VITE_API_BASE` straight at `:8787`
+  and the iframe is refused ("localhost refused to connect") *and* the status probe fails CORS,
+  which renders as `● error` on a demo that is fine. `vite.config.ts` proxies `/api`, `/d` and
+  `/embed` to the worker for exactly this reason — keep `VITE_API_BASE` on the dev server's own
+  origin. An **empty** value does not work: `App.tsx` falls back to `:8787` on any falsy value.
+- **`VITE_DEV_USER` short-circuits `currentUser()` before the fetch.** Any test of the real broker
+  path has to override it (`VITE_DEV_USER= pnpm dev`) or it silently exercises the bypass instead.
 
 ## Verify before pushing
 
@@ -81,6 +93,22 @@ pnpm --filter @handsontable/demo-editor-shell typecheck
 pnpm --filter @handsontable/demo-authoring typecheck
 ( cd workers/api && npx wrangler deploy --dry-run )   # typechecks the worker + builds the image
 ```
+
+The `demo-runtime build` is first on purpose: `apps/authoring` typechecks against
+`packages/runtime/dist`, not its source, so a stale `dist` fails on symbols the source has.
+
+What a green E2E run does and does not prove:
+
+- **The specs that actually mount Sandpack are gated behind `E2E_LIVE=1`.** A default
+  `playwright test` skips every one, so a green default run proves nothing about preview
+  mount/teardown.
+- **A persistence bug is invisible to a within-page test.** It only shows up in a spec that reloads
+  and re-measures. Watch for an `addInitScript` that clears the storage key — it runs on
+  `page.reload()` too, silently defeating the assertion it was meant to isolate. Each test already
+  gets a fresh context, so no reset is needed.
+- **Interaction states need a real pointer and `getComputedStyle`** — see
+  [ADR-0026](docs/adr/0026-shell-styling-inline-vs-stylesheet.md). A synthetic `mouseover` does not
+  fire CSS `:hover`, and a screenshot cannot tell a subtle live hover from a dead one.
 
 ## Build & deploy
 
@@ -98,12 +126,18 @@ cd apps/authoring && pnpm --filter @handsontable/demo-authoring build && npx wra
 - `apps/authoring/.env.production` (**committed**, no secrets) → `VITE_API_BASE=https://demos.handsontable.com`.
 - `apps/authoring/.env.local` (**gitignored**) holds the dev bypass (`VITE_DEV_USER`) + local API base.
 
-**Always build prod with `.env.local` absent** or the dev-login bypass and `localhost:8787` leak
-into the bundle. After building, sanity-check:
+**Always build prod with `.env.local` absent** or the dev-login bypass leaks into the bundle.
+After building, sanity-check:
 
 ```bash
 grep -rl "localhost:8787\|VITE_DEV_USER\|dev@handsontable.com" apps/authoring/dist && echo BAD || echo OK
 ```
+
+`VITE_API_BASE` itself is not the risk — `.env.production` is mode-specific, so it outranks
+`.env.local` and the base compiles to `demos.handsontable.com` either way. `dev@handsontable.com`
+is what catches a leaked `.env.local`; `localhost:8787` catches a missing `.env.production`
+(the `|| "http://localhost:8787"` fallback in `App.tsx` surviving into the bundle). Don't widen
+that term to a bare `localhost:` — catalog README text mentions dev-server ports and it false-fires.
 
 ## CI/CD
 

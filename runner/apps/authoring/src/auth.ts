@@ -60,7 +60,21 @@ export function login(): void {
   location.href = `${BROKER}/broker/login?return_to=${encodeURIComponent(returnTo)}`;
 }
 
-export function logout(): void {
+/**
+ * Drop the session.
+ *
+ * `returnTo` matters on the auth-gated routes. Reloading in place is correct on
+ * `/` and `/share/:id`, which work fine anonymously — the visitor keeps the
+ * example they were looking at. But `/edit/:id` and `/my-demos` answer a null
+ * user by calling `login()`, so a reload there sends the person who just logged
+ * out straight back to the broker with `return_to` pointing at the page they
+ * were trying to leave. Those callers pass a public surface instead.
+ */
+export function logout(returnTo?: string): void {
   sessionStorage.removeItem(TOKEN_KEY);
+  if (returnTo) {
+    location.href = returnTo;
+    return;
+  }
   location.reload();
 }

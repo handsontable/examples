@@ -13,6 +13,7 @@ import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate } from "./auth.js";
+import { errorPageResponse } from "./error-page.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, updateDemo, type DemoRow } from "./share.js";
 import {
   budgetPausedMessage,
@@ -718,14 +719,24 @@ export default Sentry.withSentry(sentryOptions, {
             files: patch.files,
             htVersion: patch.htVersion ?? row.ht_version,
             title: patch.title?.trim() || row.title,
-            description: patch.description ?? row.description,
+            // `??` here meant a description could be set but never cleared: the client
+            // sends `null` for an emptied field, and `null ?? row.description` restored
+            // the old text. Absent (`undefined`) means "leave alone"; `null` means clear.
+            description: patch.description !== undefined ? patch.description : row.description,
             now: nowIso(),
           });
           return json({ ok: true });
         }
         // Metadata-only update (title / description / visibility).
         await env.DB.prepare("UPDATE demos SET title=?, description=?, visibility=?, updated_at=? WHERE id=?")
-          .bind(patch.title ?? row.title, patch.description ?? row.description, patch.visibility ?? row.visibility, nowIso(), demoId)
+          .bind(
+            patch.title ?? row.title,
+            // See the rebuild branch above: `undefined` leaves it, `null` clears it.
+            patch.description !== undefined ? patch.description : row.description,
+            patch.visibility ?? row.visibility,
+            nowIso(),
+            demoId,
+          )
           .run();
         await invalidateDemo(env, demoId);
         return json({ ok: true });
@@ -1048,7 +1059,18 @@ export default Sentry.withSentry(sentryOptions, {
         return new Response(ROOT_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
       }
 
-      return cors(new Response("Not found", { status: 404 }));
+      // Unmatched. `/api/*` is machine traffic and keeps its JSON body; anything
+      // else reached this worker from a browser address bar, so it gets the page
+      // (T9 / DEV-2163 — same 404, branded body).
+      if (parts[0] === "api") return json({ error: "not found" }, 404);
+      return cors(
+        errorPageResponse({
+          status: 404,
+          title: "Page not found",
+          body: "There's nothing at this address.",
+          homeUrl: "/",
+        }),
+      );
     } catch (err) {
       // Client input validation (a 400) is not a fault — never reported.
       if (err instanceof InvalidFilePathError) return json({ error: err.message }, 400);

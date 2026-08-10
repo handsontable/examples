@@ -3,10 +3,14 @@
 import { Sentry } from "./sentry.js";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { ThemeProvider } from "@handsontable/demo-editor-shell";
 import { App } from "./App.js";
 
 // A render crash in the editor shell used to leave a blank page and no record of
-// why. The boundary keeps the failure visible to the user and reports it.
+// why. The boundary keeps the failure visible to the user and reports it. It sits
+// outside ThemeProvider so a crash there is caught too; ThemeProvider wraps the
+// rest: CodeEditor reads the mode from deep inside EditorShell, and App has early
+// returns (NotFound / Splash) above its main tree.
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <Sentry.ErrorBoundary
@@ -19,7 +23,9 @@ createRoot(document.getElementById("root")!).render(
         </div>
       }
     >
-      <App />
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
     </Sentry.ErrorBoundary>
   </StrictMode>,
 );

@@ -57,6 +57,23 @@ export interface DemoRuntime {
   writeFile(path: string, contents: string): void;
   /** Remove a file from the running preview (file-tree delete/rename). */
   deleteFile?(path: string): void;
+  /**
+   * Re-run the current preview without re-creating the session (the row-2
+   * refresh button, `72:15708`). Deliberately *not* a remount: for Tier 2 that
+   * would mint a fresh container against a five-slot pool on every click.
+   * A no-op before mount.
+   *
+   * The returned promise settles when the refresh has landed, which is what drives
+   * T5's in-flight spinner. It **never rejects** and it does not report success: a
+   * failed refresh settles like any other, because failure already has its own
+   * channel in `onError`. What "landed" means differs by tier, because only one of
+   * them gets a real completion event: Tier 2 re-navigates the iframe and settles on
+   * its `load` (or a timeout, or `dispose()`), while Tier 1 settles once the compile
+   * has been handed to the bundler. Either way a dead preview cannot pin a spinner on
+   * screen. The union with `void` keeps the method optional for any implementation
+   * that has nothing to await.
+   */
+  reload?(): Promise<void> | void;
   onReady(cb: () => void): void;
   onError(cb: (e: Error) => void): void;
   dispose(): void;
