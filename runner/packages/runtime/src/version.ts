@@ -203,8 +203,44 @@ export function applyHandsontableVersion(
 }
 
 /**
- * Return a new FilesMap with the baked Handsontable CDN CSS URL pinned to `version`.
- * Pure: does not mutate the input. pkg.pr.new builds are not available on unpkg.
+ * Major of a concrete Handsontable release, or null when the ref is not one.
+ *
+ * `-next` builds are the reason this exists: `0.0.0-next-<hash>-<date>` parses
+ * as major 0 under plain semver while actually being a post-18 nightly, so any
+ * `major <= N` comparison silently classifies the newest core as the oldest.
+ * Null means "not a release we can compare" — callers must not treat it as 0.
+ * Mirrors the App-side `releaseMajor` helper.
+ */
+function releaseMajor(ref: string): number | null {
+  const trimmed = ref.trim();
+  if (ANY_NEXT_VERSION_RE.test(trimmed)) return null;
+  const expanded = /^\d+$/.test(trimmed) ? `${trimmed}.0.0` : expandPartialNumericSemver(trimmed);
+  const normalized = semver.valid(trimmed, { loose: true })
+    ?? (expanded ? semver.valid(expanded, { loose: true }) : null);
+  return normalized ? semver.major(normalized) : null;
+}
+
+/** The whole `<link>` tag, with its indentation and trailing newline when it owns a line. */
+const LEGACY_CSS_LINK_RE = /[ \t]*<link\b[^>]*handsontable\.full\.min\.css[^>]*>[ \t]*\r?\n?/gi;
+/** Just the version segment of that URL, for the <=16 rewrite path. */
+const LEGACY_CSS_VERSION_RE = /(unpkg\.com\/handsontable@)[^/]+(\/dist\/handsontable\.full\.min\.css)/g;
+/** Last major that published `dist/handsontable.full.min.css`; 17.0 removed it. */
+const LEGACY_CSS_MAX_MAJOR = 16;
+
+/**
+ * Migration shim for artifacts generated before DEV-2207 — nothing emits a
+ * Handsontable stylesheet any more, so this is dead weight on fresh artifacts
+ * and only fires on saved demos, whose files are replayed verbatim from R2.
+ *
+ * Those artifacts baked `unpkg.com/handsontable@<v>/dist/handsontable.full.min.css`
+ * into their HTML. That path was removed at 17.0.0, and from 17.0.0 core injects
+ * its own core stylesheet and applies `mainTheme` when `theme` is undefined, so
+ * the link is both dead and unnecessary there — drop it. At <=16 there is no
+ * auto-injection and no `ht-theme-*` class for the modern class-scoped
+ * stylesheets to attach to, and the legacy file is still published, so it stays
+ * as the only thing that styles the grid: rewrite its version segment instead.
+ *
+ * Pure: does not mutate the input. pkg.pr.new builds are not on unpkg at all.
  */
 export function applyHandsontableCss(
   files: FilesMap,
@@ -221,9 +257,17 @@ export function applyHandsontableCss(
 
   const raw = files[htmlPath];
   if (raw === undefined) return files;
-  const next = raw.replace(
-    /(unpkg\.com\/handsontable@)[^/]+(\/dist\/handsontable\.full\.min\.css)/g,
-    (_, prefix: string, suffix: string) => `${prefix}${version.ref}${suffix}`,
-  );
+
+  const major = releaseMajor(version.ref);
+  // `major === null` (a -next nightly) takes the removal path: those builds are
+  // post-18, never legacy-CSS-era. Falling through to the rewrite would re-pin
+  // the dead URL onto the newest core.
+  const next = major !== null && major <= LEGACY_CSS_MAX_MAJOR
+    ? raw.replace(
+      LEGACY_CSS_VERSION_RE,
+      (_, prefix: string, suffix: string) => `${prefix}${version.ref}${suffix}`,
+    )
+    : raw.replace(LEGACY_CSS_LINK_RE, "");
+
   return next === raw ? files : { ...files, [htmlPath]: next };
 }

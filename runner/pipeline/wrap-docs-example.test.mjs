@@ -57,9 +57,26 @@ for (const c of cases) {
     if (c.wrapper) assert.ok(pkg.dependencies[c.wrapper], `pins ${c.wrapper}`);
     assert.ok(files[c.entry] !== undefined, `emits entry ${c.entry}`);
     // index.html present for every framework (Angular uses src/index.html).
-    assert.ok(
-      files["index.html"] !== undefined || files["src/index.html"] !== undefined,
-      "emits an index.html",
+    const html = files["index.html"] ?? files["src/index.html"];
+    assert.ok(html !== undefined, "emits an index.html");
+
+    // DEV-2207: the wrapper emits NO Handsontable stylesheet, and this asserts
+    // it against real wrapper output rather than a hand-written URL literal —
+    // the independent literals in version.test.mjs are how the previous shape
+    // (`dist/handsontable.full.min.css`, removed from the package at 17.0.0)
+    // kept passing tests for 2723 artifacts that were all 404ing.
+    for (const dead of [
+      "handsontable.full.min.css",
+      "handsontable/styles",
+      "styles/handsontable",
+      "ht-theme-",
+    ]) {
+      assert.equal(html.includes(dead), false, `emits no ${dead} reference`);
+    }
+    assert.equal(
+      /<link\b[^>]*handsontable[^>]*\.css/i.test(html),
+      false,
+      "emits no Handsontable stylesheet <link> of any shape",
     );
   });
 }

@@ -59,7 +59,11 @@ test("regenerating a release bucket preserves a sibling next bucket", async (t) 
   // Modern syntax/TSX is handled by client-side pre-transpilation, not the env.
   assert.equal(artifact.sandpackEnvironment, "parcel");
   assert.equal(JSON.parse(artifact.files["/package.json"]).dependencies.handsontable, "18.0.3");
-  assert.match(artifact.files["/index.html"], /handsontable@18\.0\.3/);
+  // DEV-2207: the bucket version reaches the artifact through package.json only
+  // (asserted above). The generated HTML carries no Handsontable stylesheet at
+  // all — this used to assert a baked `dist/handsontable.full.min.css` CDN link,
+  // a path removed from the package at 17.0.0, so it was asserting a 404.
+  assert.equal(/handsontable[^"]*\.css/i.test(artifact.files["/index.html"]), false);
 });
 
 test("develop writes the next bucket with the newest npm -next version by publish date", async (t) => {

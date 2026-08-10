@@ -79,7 +79,10 @@ function fixtureEntry(bucket: string, path: string, generatedVersion: string) {
     lang: "tsx",
     files: {
       "/src/App.tsx": source,
-      "/index.html": `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/handsontable@${generatedVersion}/styles/handsontable.min.css"><div id="root"></div>`,
+      // No Handsontable stylesheet — matches what the wrapper emits since
+      // DEV-2207 (core self-injects and applies `mainTheme` from 17.0.0). This
+      // fixture used to invent a third CSS URL shape the pipeline never produced.
+      "/index.html": `<div id="root"></div>`,
       "/package.json": JSON.stringify({
         dependencies: {
           handsontable: generatedVersion,
