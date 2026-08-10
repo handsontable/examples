@@ -49,6 +49,29 @@ export function Markdown({ text, error }: { text: string; error?: boolean }) {
                 {renderInline(block.children, key)}
               </div>
             );
+          case "table":
+            return (
+              <div key={key} style={tableWrapStyle}>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      {block.header.map((cell, j) => (
+                        <th key={j} style={thStyle}>{renderInline(cell, `${key}-h${j}`)}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {block.rows.map((row, j) => (
+                      <tr key={j}>
+                        {row.map((cell, k) => (
+                          <td key={k} style={tdStyle}>{renderInline(cell, `${key}-${j}-${k}`)}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
           case "list": {
             const List = block.ordered ? "ol" : "ul";
             return (
@@ -79,6 +102,22 @@ const preStyle: React.CSSProperties = {
   background: theme.color.editorBg, color: theme.color.text, borderRadius: theme.radius.md,
   padding: 10, overflowX: "auto", fontFamily: theme.font.mono, fontSize: 11.5, margin: "0 0 8px",
 };
+// The chat panel is ~380px, so a table is expected to overflow: scroll it in
+// its own box rather than widening the column. `controlBorder`, not `border` —
+// dark's `border` is `surfaceRaised`, so cell rules would disappear there.
+const tableWrapStyle: React.CSSProperties = { overflowX: "auto", margin: "0 0 8px", maxWidth: "100%" };
+const tableStyle: React.CSSProperties = {
+  borderCollapse: "collapse", fontSize: 11.5, width: "100%",
+  border: `1px solid ${theme.color.controlBorder}`,
+};
+const cellStyle: React.CSSProperties = {
+  border: `1px solid ${theme.color.controlBorder}`, padding: "4px 8px",
+  textAlign: "left", verticalAlign: "top",
+};
+const thStyle: React.CSSProperties = {
+  ...cellStyle, fontWeight: 600, background: theme.color.surfaceMuted, whiteSpace: "nowrap",
+};
+const tdStyle: React.CSSProperties = cellStyle;
 const linkStyle: React.CSSProperties = { color: theme.color.accent };
 const headingStyle: React.CSSProperties = { fontWeight: 600, margin: "12px 0 4px" };
 const listStyle: React.CSSProperties = { margin: "0 0 8px", paddingLeft: 20 };

@@ -264,6 +264,36 @@ export interface DocPage {
   url: string;
 }
 
+const NAMED_ENTITIES: Record<string, string> = {
+  // `nbsp` maps to U+00A0, deliberately — not a plain space. A title is model
+  // input too (`buildSystemPrompt` lists the links), and collapsing it would
+  // drop the one thing the entity encodes.
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
+};
+
+/**
+ * DocSearch stores each heading as it appeared in the HTML, so a page titled
+ * "Accessibility & UX" is indexed as "Accessibility &amp; UX" and reaches the
+ * chat panel with the entity intact — the panel renders text, never markup.
+ *
+ * One pass, not entity-by-entity replacement: `&amp;lt;` is the escaping of the
+ * literal text "&lt;" and must decode to that, which a second pass would turn
+ * into "<". Anything unrecognised is left exactly as written.
+ */
+export function decodeEntities(text: string): string {
+  return text.replace(/&(#\d+|#[xX][0-9a-fA-F]+|[a-zA-Z]+);/g, (whole, body: string) => {
+    if (body.startsWith("#")) {
+      const code = body[1] === "x" || body[1] === "X"
+        ? Number.parseInt(body.slice(2), 16)
+        : Number.parseInt(body.slice(1), 10);
+      // Surrogates and out-of-range code points make `fromCodePoint` throw.
+      if (!Number.isFinite(code) || code < 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return whole;
+      return String.fromCodePoint(code);
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? whole;
+  });
+}
+
 /**
  * Page-level hits from the docs DocSearch index.
  *
@@ -307,7 +337,8 @@ export async function searchDocPages(env: Env, query: string, framework: string)
       seen.add(url);
       const levels = [0, 1, 2, 3]
         .map((i) => hit.hierarchy?.[`lvl${i}`])
-        .filter((v): v is string => Boolean(v));
+        .filter((v): v is string => Boolean(v))
+        .map(decodeEntities);
       pages.push({ title: levels.join(" › ") || url, url });
       if (pages.length >= 5) break;
     }
