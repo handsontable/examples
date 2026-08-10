@@ -27,6 +27,7 @@ export type Block =
   | { kind: "heading"; level: number; children: Inline[] }
   | { kind: "paragraph"; children: Inline[] }
   | { kind: "list"; ordered: boolean; items: Inline[][] }
+  | { kind: "table"; header: Inline[][]; rows: Inline[][][] }
   | { kind: "code"; text: string };
 
 const BULLET = /^\s*[-*+]\s+/;
@@ -34,11 +35,55 @@ const ORDERED = /^\s*\d+[.)]\s+/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 /** A wrapped continuation of the previous list item, not a new one. */
 const INDENTED = /^\s{2,}\S/;
+/** `|---|:--:|` — the row that makes the line above it a table header. */
+const TABLE_DELIMITER = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
 
 const isBullet = (l: string) => BULLET.test(l);
 const isOrdered = (l: string) => ORDERED.test(l);
 const isHeading = (l: string) => HEADING.test(l);
-const startsBlock = (l: string) => isHeading(l) || isBullet(l) || isOrdered(l);
+
+/**
+ * A table starts only where a pipe line is followed by a delimiter row with the
+ * same number of cells. Both halves matter: without the lookahead, prose like
+ * "use `a | b`" becomes a one-row table; without the cell count, that same
+ * prose followed by a `---` section break does — `---` is a valid one-cell
+ * delimiter, and models emit those separators constantly.
+ */
+const isTableStart = (lines: string[], i: number) => {
+  const header = lines[i] ?? "";
+  const delimiter = lines[i + 1] ?? "";
+  if (!header.includes("|") || !TABLE_DELIMITER.test(delimiter)) return false;
+  return splitRow(delimiter).length === splitRow(header).length;
+};
+
+const startsBlock = (lines: string[], i: number) => {
+  const line = lines[i] ?? "";
+  return isHeading(line) || isBullet(line) || isOrdered(line) || isTableStart(lines, i);
+};
+
+/**
+ * `| a | b |` → `["a", "b"]`. One outer pipe on each side is optional, and a
+ * `\|` is a literal pipe inside a cell — the only way to write a union like
+ * `'left' \| 'center'`, which is exactly what a config table is full of.
+ */
+function splitRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "");
+  // A trailing `\|` is content, not the closing pipe.
+  const body = trimmed.endsWith("|") && !trimmed.endsWith("\\|") ? trimmed.slice(0, -1) : trimmed;
+  const cells: string[] = [""];
+  for (let i = 0; i < body.length; i++) {
+    const char = body[i]!;
+    if (char === "\\" && body[i + 1] === "|") {
+      cells[cells.length - 1] += "|";
+      i++;
+    } else if (char === "|") {
+      cells.push("");
+    } else {
+      cells[cells.length - 1] += char;
+    }
+  }
+  return cells.map((cell) => cell.trim());
+}
 
 /** Only absolute http(s) links survive; `javascript:` and friends stay text. */
 export function safeHref(url: string): string | null {
@@ -107,6 +152,29 @@ function parseLines(text: string): Block[] {
       continue;
     }
 
+    if (isTableStart(lines, i)) {
+      const header = splitRow(line);
+      i += 2; // header + delimiter
+      const rows: Inline[][][] = [];
+      // A pipe alone does not make a row: a bullet, heading or new table that
+      // happens to contain one ends the body, exactly as it would end a
+      // paragraph. Without this the block after the table gets eaten as rows.
+      while (
+        i < lines.length
+        && (lines[i] ?? "").includes("|")
+        && (lines[i] ?? "").trim()
+        && !startsBlock(lines, i)
+      ) {
+        const cells = splitRow(lines[i] ?? "");
+        // Ragged rows render as a broken grid, so square them off against the header.
+        while (cells.length < header.length) cells.push("");
+        rows.push(cells.slice(0, header.length).map(parseInline));
+        i++;
+      }
+      blocks.push({ kind: "table", header: header.map(parseInline), rows });
+      continue;
+    }
+
     if (isBullet(line) || isOrdered(line)) {
       const ordered = isOrdered(line);
       const items: string[] = [];
@@ -118,7 +186,7 @@ function parseLines(text: string): Block[] {
         if (matchesKind) {
           items.push(current.replace(ordered ? ORDERED : BULLET, ""));
           i++;
-        } else if (items.length > 0 && current.trim() && INDENTED.test(current) && !startsBlock(current)) {
+        } else if (items.length > 0 && current.trim() && INDENTED.test(current) && !startsBlock(lines, i)) {
           items[items.length - 1] += ` ${current.trim()}`;
           i++;
         } else {
@@ -131,7 +199,7 @@ function parseLines(text: string): Block[] {
 
     // Everything up to the next blank line or block starter is one paragraph.
     const paragraph: string[] = [];
-    while (i < lines.length && (lines[i] ?? "").trim() && !startsBlock(lines[i] ?? "")) {
+    while (i < lines.length && (lines[i] ?? "").trim() && !startsBlock(lines, i)) {
       paragraph.push(lines[i] ?? "");
       i++;
     }
