@@ -2,30 +2,60 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { applyHandsontableCss, pickLatestNextVersion, validateHandsontableVersion } from "../packages/runtime/dist/version.js";
 
+// DEV-2207: `dist/handsontable.full.min.css` was removed from the package at
+// 17.0.0, so every pre-DEV-2207 artifact 404s at >=17 — where core injects its
+// own core stylesheet and applies `mainTheme` anyway, making the link both dead
+// and unnecessary. The wrapper no longer emits it; applyHandsontableCss is now
+// only a migration shim for demos already saved with it baked in: strip at >=17
+// (and for -next builds), rewrite the version segment at <=16, where the file is
+// still published and is the only thing that styles a class-less grid.
 const cssUrl = (version) =>
   `https://unpkg.com/handsontable@${version}/dist/handsontable.full.min.css`;
+const cssLink = (version) => `  <link rel="stylesheet" href="${cssUrl(version)}" />\n`;
 
-test("rewrites the baked CSS URL in root index.html", () => {
+test("strips the legacy CSS link at majors >= 17, in root and src/index.html", () => {
   const files = {
-    "/index.html": `<link rel="stylesheet" href="${cssUrl("18.0.0")}" />`,
+    "/index.html": `<head>\n${cssLink("18.0.0")}  <title>x</title>\n</head>`,
     "/src/main.ts": "console.log('unchanged');",
   };
 
   const result = applyHandsontableCss(files, { ref: "17.1.0", pkgPrNew: false });
 
   assert.notStrictEqual(result, files);
-  assert.equal(result["/index.html"], `<link rel="stylesheet" href="${cssUrl("17.1.0")}" />`);
+  // The whole line goes, indentation and newline included — no blank line left.
+  assert.equal(result["/index.html"], "<head>\n  <title>x</title>\n</head>");
   assert.equal(result["/src/main.ts"], files["/src/main.ts"]);
+
+  // Angular's HTML lives at src/index.html; same treatment.
+  const angular = applyHandsontableCss(
+    { "/src/index.html": `<head>\n${cssLink("18.0.0")}</head>` },
+    { ref: "18.0.0", pkgPrNew: false },
+  );
+  assert.equal(angular["/src/index.html"], "<head>\n</head>");
 });
 
-test("rewrites the baked CSS URL in src/index.html", () => {
-  const files = {
-    "/src/index.html": `<link rel="stylesheet" href="${cssUrl("18.0.0")}" />`,
-  };
+// The trap this test exists for: a nightly is `0.0.0-next-<hash>-<date>`, whose
+// plain-semver major is 0. A naive `major <= 16` check therefore classifies the
+// NEWEST core as legacy-era and re-pins the dead URL onto it — and `next` is the
+// larger docs bucket, so that would be the majority of saved demos.
+test("strips the legacy CSS link for -next builds, whose semver major is a misleading 0", () => {
+  for (const ref of ["0.0.0-next-232ad3d-20260810", "19.0.0-next.2"]) {
+    const result = applyHandsontableCss(
+      { "/index.html": `<head>\n${cssLink("18.0.0")}</head>` },
+      { ref, pkgPrNew: false },
+    );
+    assert.equal(result["/index.html"], "<head>\n</head>", `${ref} should strip, not rewrite`);
+  }
+});
 
-  const result = applyHandsontableCss(files, { ref: "17.1.0", pkgPrNew: false });
-
-  assert.equal(result["/src/index.html"], `<link rel="stylesheet" href="${cssUrl("17.1.0")}" />`);
+test("rewrites the version segment at majors <= 16, where the legacy file still exists", () => {
+  for (const ref of ["16.2.0", "15.0.0"]) {
+    const result = applyHandsontableCss(
+      { "/index.html": `<head>\n${cssLink("18.0.0")}</head>` },
+      { ref, pkgPrNew: false },
+    );
+    assert.equal(result["/index.html"], `<head>\n${cssLink(ref)}</head>`);
+  }
 });
 
 test("leaves files unchanged without a matching HTML entry or for pkg.pr.new versions", () => {
@@ -42,6 +72,13 @@ test("leaves files unchanged without a matching HTML entry or for pkg.pr.new ver
     applyHandsontableCss(pkgPrNewFiles, { ref: "1234", pkgPrNew: true }),
     pkgPrNewFiles,
   );
+
+  // Post-DEV-2207 artifacts carry no Handsontable stylesheet, so the shim is a
+  // no-op on them at every version — including the identity of the files map.
+  const freshFiles = { "/index.html": "<head>\n  <title>x</title>\n</head>" };
+  for (const ref of ["18.0.0", "16.2.0", "0.0.0-next-232ad3d-20260810"]) {
+    assert.strictEqual(applyHandsontableCss(freshFiles, { ref, pkgPrNew: false }), freshFiles);
+  }
 });
 
 // DEV-2102 / ADR-0021 decision 10: majors below 15 were never empirically

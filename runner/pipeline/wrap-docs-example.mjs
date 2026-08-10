@@ -4,10 +4,14 @@
 // that live under handsontable/docs/content/guides/**/example*.*) into a full,
 // minimal, runnable project — one per framework, with the fewest files possible.
 //
-// This is a dependency-free Node port of `buildProjectFiles` (+ helpers) from
-// handsontable/docs/public/example-tabs.js — the exact wrapper the docs site
-// already uses for its "Edit on StackBlitz" button. Kept in lockstep with that
-// file so a docs example runs identically in StackBlitz and in the demo runner.
+// This began as a dependency-free Node port of `buildProjectFiles` (+ helpers)
+// from handsontable/docs/public/example-tabs.js, the wrapper behind the docs
+// site's old "Edit on StackBlitz" button. **There is nothing upstream left to
+// mirror** (DEV-2207): `buildProjectFiles` and the StackBlitz builder are gone
+// from that file on both publish branches (`prod-docs/18.0` and `develop`, which
+// are byte-identical for it); only unpublished `master` still carries them. This
+// file is now the sole owner of the wrapping rules — change it here, and do not
+// re-sync it with anything.
 //
 // Adaptations vs. the browser original:
 //   - ES module exporting `wrapDocsExample()`; no DOM glue.
@@ -18,8 +22,6 @@
 //
 // Output file keys have NO leading slash (StackBlitz convention, e.g.
 // "src/main.js"); the importer re-keys them to "/src/main.js" for the runner.
-
-const CDN_CSS = (v) => `https://unpkg.com/handsontable@${v}/dist/handsontable.full.min.css`;
 
 /** Returns the first filename in `files` that ends with `ext`, or null. */
 function findFile(files, ext) {
@@ -97,8 +99,18 @@ function buildJsProject(hotVersion, exampleId, userFiles, extraDeps) {
 
   const cssFile = findFile(userFiles, '.css');
 
-  // Entry re-exports the example code. Handsontable CSS is loaded via a CDN
-  // <link> in index.html to avoid strict exports-field CSS resolution.
+  // Entry re-exports the example code. No Handsontable stylesheet is emitted
+  // anywhere in this file, by any builder (DEV-2207): from 17.0.0 core injects
+  // <style id="handsontable-core-styles"> itself and applies `mainTheme` when
+  // `theme` is undefined, so a docs example is fully themed with zero CSS. The
+  // link we used to bake (`dist/handsontable.full.min.css`) was removed from the
+  // package at that same 17.0.0 and had been 404ing ever since.
+  //
+  // Below 17 that leaves the grid unstyled — deliberately. Nothing applies an
+  // `ht-theme-*` class there, so the modern class-scoped `styles/*.css` files
+  // would be inert, and a docs bucket only exists for the major it was imported
+  // from. `applyHandsontableCss` in packages/runtime/src/version.ts keeps the
+  // legacy link alive for <=16 in already-saved demos; new artifacts have none.
   const mainCode = [
     cssFile ? 'import "../styles.css";' : '',
     `import "../index.${ext}";`,
@@ -111,7 +123,6 @@ function buildJsProject(hotVersion, exampleId, userFiles, extraDeps) {
     '  <meta charset="UTF-8" />',
     '  <meta name="viewport" content="width=device-width, initial-scale=1.0" />',
     '  <title>Handsontable Example</title>',
-    `  <link rel="stylesheet" href="${CDN_CSS(hotVersion)}" />`,
     '  <style>body { padding: 1rem; font-family: sans-serif; }</style>',
   ];
 
@@ -195,7 +206,6 @@ function buildReactProject(hotVersion, exampleId, userFiles, extraDeps) {
     '  <meta charset="UTF-8" />',
     '  <meta name="viewport" content="width=device-width, initial-scale=1.0" />',
     '  <title>Handsontable React Example</title>',
-    `  <link rel="stylesheet" href="${CDN_CSS(hotVersion)}" />`,
     '  <style>body { padding: 1rem; font-family: system-ui, -apple-system, sans-serif; }</style>',
   ];
 
@@ -272,7 +282,6 @@ function buildVueProject(hotVersion, exampleId, userFiles, extraDeps) {
     '  <meta charset="UTF-8" />',
     '  <meta name="viewport" content="width=device-width, initial-scale=1.0" />',
     '  <title>Handsontable Vue Example</title>',
-    `  <link rel="stylesheet" href="${CDN_CSS(hotVersion)}" />`,
   ];
 
   const bodyInner = mergeCompanionHtml(indexParts, userFiles, `  <div id="${exampleId}"></div>`);
@@ -456,7 +465,6 @@ function buildAngularProject(hotVersion, exampleId, userFiles, extraDeps, extraD
     '  <meta charset="utf-8">',
     '  <title>Handsontable Angular Example</title>',
     '  <base href="/">',
-    `  <link rel="stylesheet" href="${CDN_CSS(hotVersion)}" />`,
     '  <style>body { padding: 1rem; font-family: system-ui, -apple-system, sans-serif; }</style>',
   ];
 

@@ -176,3 +176,26 @@ Investigation while scoping this work also surfaced:
   unversioned `pipeline/import.mjs`).
 - The committed-snapshot layout has a known numeric ceiling; revisiting
   storage (R2) is expected within the life of this feature, not hypothetical.
+
+## Superseded in part: decision 7 (CSS follows the package pin) — DEV-2207
+
+The baked `<link>` is gone. `pipeline/wrap-docs-example.mjs` no longer emits any
+Handsontable stylesheet, because from **17.0.0** core injects
+`<style id="handsontable-core-styles">` itself and applies `mainTheme` whenever
+`theme` is undefined — browser-probed at 17.0.0 and 18.0.0 with zero CSS loaded:
+`ht-theme-main` on the root wrapper, `--ht-line-height` resolving, borders and
+header background painted, and an example's own `.override-theme` block still
+winning. The URL this ADR recorded, `dist/handsontable.full.min.css`, was removed
+from the package at that same 17.0.0, so every artifact generated under decision 7
+was requesting a 404. Emitting `styles/handsontable.min.css` instead would not
+have helped: redundant at >=17 (a `<link>` never suppresses `#injectCoreStyles`,
+which only checks for an existing `<style>` with that id) and with nothing to
+attach to below 17, where no `ht-theme-*` class is applied at all.
+
+`applyHandsontableCss` survives as a **migration shim only**, since saved demos
+replay their files verbatim from R2: it strips the legacy link at >=17 and for
+`-next` builds, and rewrites just the version segment at <=16, where the legacy
+file is still published and is the only stylesheet that styles a class-less grid.
+Fresh artifacts have no link, so it is a no-op on them.
+
+Decision 6 (version-switch semantics) and the rest of this ADR stand unchanged.
