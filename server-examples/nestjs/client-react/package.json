@@ -10,8 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@handsontable/react-wrapper": "experimental",
-    "handsontable": "experimental",
+    "@handsontable/react-wrapper": "^18.0.0",
+    "handsontable": "^18.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

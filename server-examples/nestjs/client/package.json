@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@handsontable/pikaday": "^1.0.0",
-    "handsontable": "experimental"
+    "handsontable": "^18.0.0"
   },
   "devDependencies": {
     "vite": "^6.0.0"
