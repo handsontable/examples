@@ -1,1 +1,10 @@
 /* You can add global styles to this file, and also import other style files */
+
+/* `addClassesToRows` (see src/app/utils/hooks-callbacks.ts) marks every other
+   row with `odd`; this is the rule that stripes them. The tint is mixed from the
+   active theme's own colours, so the striping stays readable in any colour
+   scheme — a literal here would outrank the theme and leave these rows light
+   while the rest of the grid goes dark. */
+table.htCore tr.odd td {
+  background: color-mix(in srgb, var(--ht-foreground-color) 4%, var(--ht-background-color));
+}

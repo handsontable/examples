@@ -44,10 +44,8 @@ body {
   box-shadow: 0 4px 12px rgba(17, 24, 39, 0.18) !important;
 }
 
-.htCore tbody tr:nth-child(even) td {
-  background: #f7f7f8;
-}
-
-.htCore tbody tr:nth-child(odd) td {
-  background: #ffffff;
-}
+/* Row striping is not done here on purpose. The theme's own
+   `rowCellOddBackgroundColor` / `rowCellEvenBackgroundColor` tokens (see
+   src/App.tsx) already stripe the grid, and stating the same two colours again
+   in CSS would outrank whatever theme the grid is given — leaving these rows
+   light if the theme is swapped for a dark one. */

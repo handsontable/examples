@@ -80,8 +80,11 @@ export default defineComponent({
   A stylesheet customizing app (custom renderers)
 */
 
+/* Mixed from the active theme's own colours, so the striping stays readable in
+   any colour scheme. A literal here would outrank the theme and leave these
+   rows light while the rest of the grid goes dark. */
 table.htCore tr.odd td {
-  background: #fafbff;
+  background: color-mix(in srgb, var(--ht-foreground-color) 4%, var(--ht-background-color));
 }
 
 /*
