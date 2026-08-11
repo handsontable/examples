@@ -62,7 +62,7 @@ const CURATED_NAMES = [
 ];
 
 // `.icon-partial(…)` keys — upstream matches these as a substring of the
-// filename, and that matters: every starter ships `LICENSE.txt`, which exact
+// filename, and that matters for a file such as `LICENSE.txt`, which exact
 // matching would send to `.txt` -> `default` instead of the license glyph.
 // Checked after exact names and before suffixes, mirroring upstream's ordering
 // (the partial rules are emitted later in mapping.less, so they win over the

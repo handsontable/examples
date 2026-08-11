@@ -4,8 +4,8 @@
 
 ## Context
 
-DEV-2030 asks for a $1000/month cap with alerts at $200 / $500 / $800 on the main
-Handsontable Cloudflare account (`15111272c53ed0aaf84a908f0c9c7f8b`).
+DEV-2030 asks for a fixed monthly cap on the main Handsontable Cloudflare
+account, with alerts at 20% / 50% / 80% of it.
 
 Two facts shape the answer:
 
@@ -64,7 +64,7 @@ deploying is a ceiling nobody adjusts during the incident that needs it.
 - The `anon_blocked` tier assumes live editing may require a login. If anonymous
   live editing becomes a hard product requirement, that tier collapses into
   `new_blocked` and the ceiling gets blunter.
-- Budget alerts are account-wide, so anything else billing to account
-  `15111272…` counts toward the same $200. Either offset the thresholds by the
+- Budget alerts are account-wide, so anything else billing to the same account
+  counts toward the same threshold. Either offset the thresholds by the
   account's existing baseline, or move the runner to its own account — the
   latter is a bigger call than DEV-2030.

@@ -1,6 +1,5 @@
 -- D1 schema for the demo runner. Applied to database `handsontable-demos`
--- (uuid 5fc0854f-d348-487f-9531-2c44cc86d182, region EEUR) in the main
--- Handsontable account 15111272c53ed0aaf84a908f0c9c7f8b on 2026-07-08.
+-- (region EEUR) in the main Handsontable account on 2026-07-08.
 --
 -- demos: one row per shared, prebuilt-static demo (short id -> R2 artifact).
 -- Internal per-user ownership via created_by (verified @handsontable.com email).

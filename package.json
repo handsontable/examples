@@ -1,18 +1,16 @@
 {
-  "name": "examples-poc",
+  "name": "handsontable-examples",
   "version": "1.0.0",
-  "main": "index.js",
-  "directories": {
-    "example": "examples"
+  "private": true,
+  "description": "Client- and server-side code examples for Handsontable, plus the self-hosted demo runner that renders them live.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/handsontable/examples.git"
   },
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "homepage": "https://github.com/handsontable/examples#readme",
+  "bugs": {
+    "url": "https://github.com/handsontable/examples/issues"
   },
-  "author": "",
-  "license": "ISC",
-  "description": "",
-  "dependencies": {
-    "octokit": "^5.0.3"
-  },
+  "license": "MIT",
   "packageManager": "pnpm@10.34.5"
 }

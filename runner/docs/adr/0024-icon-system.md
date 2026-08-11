@@ -45,8 +45,8 @@ the generator.
   entry, so it borrows its own fill.
 - **Both of upstream's match kinds are kept.** `.icon-set` keys become exact-name or
   suffix lookups; `.icon-partial` keys stay substring matches, checked between the two. That
-  ordering is load-bearing: every starter ships `LICENSE.txt`, and `.txt` is a curated suffix, so
-  exact-only matching would draw it with the generic `default` glyph.
+  ordering is load-bearing: a starter or a user's own demo may contain `LICENSE.txt`, and `.txt`
+  is a curated suffix, so exact-only matching would draw it with the generic `default` glyph.
 - **Coverage is curated** to file types the runner can contain: 38 suffixes, 5 exact filenames,
   1 substring rule, 29 icons, ~22KB. `catalog.json`'s 124 example filenames use 17 extensions; the starters add
   angular/astro/nuxt shapes. Nothing in the runner produces `bsl` or `coldfusion`.

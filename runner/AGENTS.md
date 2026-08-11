@@ -7,7 +7,8 @@ example (opened via `?docs=` URLs — see `docs/docs-examples.md`). Replaces
 CodeSandbox/StackBlitz and the former `render-ms` microservice (removed). Lives in
 the `runner/` folder of `handsontable/examples`.
 
-Production: **https://demos.handsontable.com** (Cloudflare account `15111272c53ed0aaf84a908f0c9c7f8b`).
+Production: **https://demos.handsontable.com**, on the main Handsontable Cloudflare
+account (not the sandbox). `wrangler whoami` tells you which account you are pointed at.
 
 ## Get the code
 
@@ -60,7 +61,7 @@ Two processes. **API worker** (Tier-2 live containers need Docker running):
 
 ```bash
 cd workers/api
-# .dev.vars (gitignored):  DEV_AUTH_EMAIL=you@handsontable.com
+# .dev.vars (gitignored) holds the local login stand-in — see src/auth.ts.
 npx wrangler dev            # http://localhost:8787
 ```
 
@@ -112,7 +113,8 @@ What a green E2E run does and does not prove:
 
 ## Build & deploy
 
-Deploys are currently **manual** (no CI yet — see "CI/CD" below). Deploy from each dir:
+Merging to `master` deploys automatically (see "CI/CD" below). To deploy by hand from
+each dir:
 
 ```bash
 # API worker
@@ -141,16 +143,25 @@ that term to a bare `localhost:` — catalog README text mentions dev-server por
 
 ## CI/CD
 
-There is no `.github/workflows` and **no GitHub Actions by design** (we don't want API tokens in
-the repo). To get auto-deploy-on-merge + PR preview URLs, connect **Cloudflare Workers Builds**
-(dashboard → Workers & Pages → each worker → Settings → Build → Connect to Git, via the Cloudflare
-GitHub App). Production branch `master`; per-worker root dir `runner/apps/authoring` and
-`runner/workers/api`. Non-production branches get preview URLs posted to the PR.
+Six workflows live in `.github/workflows/` at the repo root:
+
+| Workflow | Trigger | What it does |
+|----------|---------|--------------|
+| `ci.yml` | every PR + push to `master` | build, typecheck, unit + catalog-smoke tests, authoring build, Playwright e2e. Also `workflow_call`able, so the deploy workflows gate on it. |
+| `deploy-runner-api.yml` | push to `master` touching `workers/api`, `containers`, `scripts`, `config`, `packages` (or manual) | deploys `workers/api`. |
+| `deploy-runner-authoring.yml` | push to `master` touching `apps/authoring`, `packages`, `config`, **`catalog.json`** (or manual) | builds + deploys `apps/authoring`. |
+| `e2e-live.yml` | manual | the `E2E_LIVE=1` specs that mount a real preview. |
+| `e2e-starter-matrix.yml` | manual | every starter through a live session; serialized against the global container cap. |
+| `import-docs.yml` | manual, or `repository_dispatch: docs-examples-sync` from the docs repo | re-imports the documentation-guide examples. |
+
+The two deploy workflows authenticate with a repository secret (`CLOUDFLARE_API_TOKEN`);
+no credential is committed. CI reads the pnpm version from `runner/package.json` so it
+does not pick up the repo-root manifest.
 
 ## Conventions / guardrails
 
 - **No secrets in git.** Auth is the Handsontable Google login broker (per-user token, sessionStorage). Dev bypasses live only in gitignored `.env.local` / `.dev.vars`.
-- Use **wrangler + the main CF account id** above for any Cloudflare resource (D1 `DB`, KV `CACHE`, R2 `ARTIFACTS`).
+- Use **wrangler against the main CF account** for any Cloudflare resource (D1 `DB`, KV `CACHE`, R2 `ARTIFACTS`).
 - Keep the CodeSandbox **hosted** Sandpack bundler (self-hosting it stack-overflows on HOT v18).
 - Tier-2 containers stay warm while a tab is open (client keepalive + `sleepAfter=5m`); disk is ephemeral, so a slept container cold-boots on return.
 - **Cost guardrails** (DEV-2030, ADR-0022): `max_instances` 5/3 is the container cap — don't raise it without redoing the arithmetic in `docs/cost-guardrails.md`. Spend degrades live sessions in stages while static shares keep serving. The dollar thresholds and the enforcement switch are **editable at runtime in `/admin`** (stored in `runner_settings`); the `BUDGET_*` vars are only defaults.

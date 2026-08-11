@@ -10,13 +10,39 @@ export interface Identity {
 }
 
 /**
+ * `wrangler dev` serves on loopback; every deployed origin is a real hostname.
+ *
+ * `*.localhost` has to count too — a local Tier-2 session hands the browser a
+ * preview URL shaped `<port>-<sessionId>-<token>.localhost:8787`, and those
+ * requests come back through this Worker. `.localhost` is reserved for loopback
+ * (RFC 6761), so it can never be a deployed origin.
+ */
+function isLocalRequest(request: Request): boolean {
+  try {
+    const { hostname } = new URL(request.url);
+    return (
+      hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      hostname === "127.0.0.1" ||
+      hostname === "[::1]"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Validate the caller's broker token and return their identity, or null.
- * Local dev bypass: if DEV_AUTH_EMAIL is set (via .dev.vars), trust it — never
- * set this in production.
+ *
+ * Local dev bypass: DEV_AUTH_EMAIL (set in the gitignored `.dev.vars`) stands in
+ * for a broker login. It is honoured **only** for requests to a loopback host, so
+ * the variable reaching a deployed Worker cannot turn into an auth bypass — the
+ * "never set this in production" comment this replaced was the only thing
+ * enforcing that before.
  */
 export async function authenticate(request: Request, env: Env): Promise<Identity | null> {
   const devEmail = (env as { DEV_AUTH_EMAIL?: string }).DEV_AUTH_EMAIL;
-  if (devEmail) return { email: devEmail };
+  if (devEmail && isLocalRequest(request)) return { email: devEmail };
 
   const auth = request.headers.get("Authorization");
   if (!auth?.startsWith("Bearer ")) return null;

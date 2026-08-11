@@ -5,8 +5,8 @@
 - Node ≥ 22, `pnpm` 10.
 - Docker running (for Tier-2 containers + the build snapshotter, locally via
   `wrangler dev`).
-- `wrangler` authenticated for the main Handsontable account
-  (`CLOUDFLARE_ACCOUNT_ID=15111272c53ed0aaf84a908f0c9c7f8b`).
+- `wrangler` authenticated for the main Handsontable account. Set
+  `CLOUDFLARE_ACCOUNT_ID` to its id — `wrangler whoami` prints it.
 
 ## Install & catalog
 
@@ -64,7 +64,7 @@ move them back into `wrangler.jsonc`.
 ## Deploy (main Handsontable account)
 
 ```bash
-export CLOUDFLARE_ACCOUNT_ID=15111272c53ed0aaf84a908f0c9c7f8b
+export CLOUDFLARE_ACCOUNT_ID="$(npx wrangler whoami --json | jq -r '.account_id')"
 
 # API + orchestration + sharing worker (builds & pushes 7 container images):
 cd workers/api
@@ -74,13 +74,13 @@ npx wrangler d1 execute handsontable-demos --remote --file=migrations/0003_cost_
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0004_settings_and_analytics.sql -y
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0005_profiles.sql -y
 pnpm run deploy   # wrangler deploy --routes … (attaches the demos.handsontable.com routes)
-# -> https://handsontable-demos-api.handsoncode.workers.dev
+# -> https://demos.handsontable.com (plus the account's own *.workers.dev URL)
 
 # Authoring app (static SPA worker):
 cd ../../apps/authoring
-VITE_API_BASE=https://handsontable-demos-api.handsoncode.workers.dev pnpm build
+pnpm build        # VITE_API_BASE comes from the committed .env.production
 npx wrangler deploy
-# -> https://handsontable-demos-authoring.handsoncode.workers.dev
+# -> https://demos.handsontable.com
 ```
 
 ## Live Tier-2 in production — wildcard domain (one-time)
@@ -173,9 +173,8 @@ Auth: repo secret **`CLOUDFLARE_API_TOKEN`** (account id is read from
 `wrangler.jsonc`). Create it once:
 
 1. Cloudflare dashboard → **My Profile → API Tokens → Create Token** → start from
-   **"Edit Cloudflare Workers"**, scoped to the **Handsontable Account**
-   (`15111272c53ed0aaf84a908f0c9c7f8b`); ensure **Workers Scripts: Edit** and the
-   Containers/registry push permission.
+   **"Edit Cloudflare Workers"**, scoped to the **Handsontable Account**; ensure
+   **Workers Scripts: Edit** and the Containers/registry push permission.
 2. GitHub → repo **Settings → Secrets and variables → Actions → New repository
    secret**: name `CLOUDFLARE_API_TOKEN`, value = the token. (Never commit it.)
 
@@ -263,6 +262,6 @@ still runs on failure, so a failed upload never publishes `.map` files.
 
 Authoring uses the Handsontable Google login broker (see
 `docs/adr/0007-auth-google-login-broker.md`). The broker must allow the app's
-`return_to` host — `handsoncode.workers.dev` was added to its allowlist in the
-`hot-mcp` repo (branch `broker-allow-handsoncode-workers-dev`); the broker must be
-redeployed for real logins from this account's `workers.dev` apps.
+`return_to` host. Adding a new host means changing the broker's allowlist and
+redeploying it — the broker lives in its own repository, under separate
+ownership, so budget for a round trip.

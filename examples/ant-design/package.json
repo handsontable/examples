@@ -13,7 +13,7 @@
     "url": "https://github.com/handsontable/handsontable/issues"
   },
   "author": "Handsoncode <hello@handsontable.com>",
-  "license": "SEE LICENSE IN LICENSE.txt",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "start": "vite",

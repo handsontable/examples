@@ -25,5 +25,5 @@
   "devDependencies": {
     "vite": "^8.1.1"
   },
-  "license": "SEE LICENSE IN LICENSE.txt"
+  "license": "MIT"
 }

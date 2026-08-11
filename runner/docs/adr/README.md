@@ -23,7 +23,6 @@ once Accepted.
 | [0015](0015-pnpm-monorepo-layout.md) | pnpm monorepo under `runner/` | Accepted |
 | [0016](0016-codemirror-editor.md) | CodeMirror 6 as the code editor | Accepted |
 | [0017](0017-keep-render-ms-until-replaced.md) | Keep render-ms running; compat shim; remove later | Superseded by 0019 |
-| [0018](0018-no-ai-attribution.md) | No AI attribution in history or code | Accepted |
 | [0019](0019-docs-guide-examples-and-render-ms-removal.md) | Documentation-guide examples in the runner; remove render-ms | Accepted |
 | [0020](0020-routes-in-deploy-command-not-config.md) | Worker routes live in the deploy command, not wrangler.jsonc | Accepted |
 | [0021](0021-versioned-docs-examples-and-version-switch-correctness.md) | Versioned docs-example snapshots and version-switch correctness | Accepted |
