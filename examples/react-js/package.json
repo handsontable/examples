@@ -27,7 +27,7 @@
     "@vitejs/plugin-react": "^6.0.3",
     "vite": "^8.1.1"
   },
-  "license": "SEE LICENSE IN LICENSE.txt",
+  "license": "MIT",
   "browserslist": {
     "production": [
       ">0.2%",
