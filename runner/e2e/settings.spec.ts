@@ -24,9 +24,12 @@ type ProfileView = {
   initial: string;
 };
 
+/** What the server returns for a user with no row: the name derived from the
+ *  address (ADR-0007 — `dev@` has no `name.surname` to read, so it capitalises),
+ *  no stored name, and no avatar. */
 const emptyProfile: ProfileView = {
   email: EMAIL,
-  display_name: "dev",
+  display_name: "Dev",
   saved_name: null,
   description: null,
   avatar_url: null,
@@ -81,7 +84,8 @@ async function stubProfileApi(page: Page, initial: ProfileView = emptyProfile) {
       };
       state.saved_name = body.display_name;
       state.description = body.description;
-      state.display_name = body.display_name ?? "dev";
+      // Cleared -> back to the derived default, which is what the real server does.
+      state.display_name = body.display_name ?? initial.display_name;
       state.initial = (state.display_name[0] ?? "?").toUpperCase();
     }
     await route.fulfill({ json: state });
@@ -128,14 +132,34 @@ test.describe("/settings", () => {
     await expect(removeButton(page)).toBeVisible();
   });
 
-  test("an empty profile shows the email-derived default as a placeholder, not a value", async ({ page }) => {
+  test("an empty profile shows the address-derived default as a placeholder, not a value", async ({ page }) => {
     await signIn(page);
     await stubProfileApi(page);
     await page.goto("/settings");
 
     // Pre-filling the derived name would make an unsaved default look stored.
     await expect(nameField(page)).toHaveValue("");
-    await expect(nameField(page)).toHaveAttribute("placeholder", "dev");
+    await expect(nameField(page)).toHaveAttribute("placeholder", "Dev");
+  });
+
+  test("the derived name is the address's name.surname, capitalised", async ({ page }) => {
+    // The rule the whole team's addresses go through (ADR-0007). Asserted
+    // through the *client's* copy of the derivation — the placeholder is drawn
+    // before `GET /api/profile` answers — so this is what catches the client and
+    // the worker drifting apart in the browser rather than in a unit test.
+    const person = "anna-maria.kowalska@handsontable.com";
+    await page.addInitScript(() => sessionStorage.setItem("hot_token", "e2e-token"));
+    await page.route("**/broker/userinfo", (route) => route.fulfill({ json: { email: person } }));
+    await page.route("**/broker/login**", (route) => route.abort());
+    await stubProfileApi(page, {
+      ...emptyProfile,
+      email: person,
+      display_name: "Anna-Maria Kowalska",
+      initial: "A",
+    });
+
+    await page.goto("/settings");
+    await expect(nameField(page)).toHaveAttribute("placeholder", "Anna-Maria Kowalska");
   });
 
   test("a save round-trips and survives a reload", async ({ page }) => {

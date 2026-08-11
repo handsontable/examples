@@ -8,10 +8,11 @@
 // not exist; DEV-2166 built it, so the row is live whenever a consumer supplies
 // `onSettings` (the shell has no router of its own to navigate with).
 //
-// The avatar is the first letter of the email unless the profile supplies a
-// picture. This component stays presentational: it takes a resolved
-// `avatarUrl`, and the app owns fetching it — the broker still returns nothing
-// but an email (`scope=openid email`), so the picture is ours, not Google's.
+// The avatar is a monogram unless the user uploaded a picture — there is no
+// third source, since the broker returns nothing but an email
+// (`scope=openid email`) and no default picture exists (ADR-0007). This
+// component stays presentational: it takes a resolved `avatarUrl` and a resolved
+// `displayName`, and the app owns fetching both.
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { IconChartBar, IconListDetails, IconLogin2, IconSettings2 } from "./icons/index.js";

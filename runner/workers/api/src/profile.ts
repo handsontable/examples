@@ -69,27 +69,50 @@ export function checkAvatarSize(byteLength: number): { ok: true } | { ok: false;
 
 export interface ProfileDefaults {
   displayName: string;
-  avatarUrl: string | null;
   initial: string;
+}
+
+const capitalize = (word: string): string =>
+  // The tail is lower-cased so an ALL-CAPS address doesn't shout on every card.
+  word ? word[0]!.toUpperCase() + word.slice(1).toLowerCase() : word;
+
+/**
+ * A display name from the address itself (ADR-0007).
+ *
+ * Only `@handsontable.com` accounts ever reach this — the broker rejects
+ * everything else — and those are issued as `name.surname`, so the address
+ * carries the name Google refuses to hand over: the broker's authorize redirect
+ * requests `scope=openid email`, with no `profile` scope, so there is no `name`
+ * claim to be had.
+ *
+ * Structural, not a lookup, so it degrades quietly. An address that doesn't
+ * follow the convention (`dev`, `qa-bot`, a role alias) simply capitalises,
+ * which is no worse than the raw local part it replaced.
+ */
+export function displayNameFromEmail(email: string): string {
+  const localPart = (email.split("@")[0] ?? "").trim();
+  if (!localPart) return email.trim();
+  const words = localPart
+    .split(".")
+    .filter(Boolean)
+    // Double-barrelled given names survive the round trip: `anna-maria.kowalska`
+    // is `Anna-Maria Kowalska`, not `Anna-maria`.
+    .map((token) => token.split("-").map(capitalize).join("-"));
+  return words.length ? words.join(" ") : localPart;
 }
 
 /**
  * What to show for a user with no stored profile.
  *
- * `name` and `picture` are Google's OIDC `profile`-scope claims. The broker
- * currently requests `scope=openid email` only, so both are always absent today
- * — this is the seam, not a live path. If the broker ever widens its scope the
- * claims flow through with no further change here.
+ * There is no default picture, by decision: the monogram *is* the no-avatar
+ * state, and the only other source would have been Google's `picture` claim,
+ * which the broker's scope does not include.
  */
-export function deriveDefaults(identity: { email: string; name?: string; picture?: string }): ProfileDefaults {
-  const email = identity.email;
-  const localPart = email.split("@")[0] || email;
-  const claimed = identity.name?.trim();
-  const displayName = claimed || localPart;
+export function deriveDefaults(identity: { email: string }): ProfileDefaults {
+  const displayName = displayNameFromEmail(identity.email);
   return {
     displayName,
-    avatarUrl: identity.picture?.trim() || null,
-    initial: (displayName.trim()[0] ?? email.trim()[0] ?? "?").toUpperCase(),
+    initial: (displayName.trim()[0] ?? identity.email.trim()[0] ?? "?").toUpperCase(),
   };
 }
 

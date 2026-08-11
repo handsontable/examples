@@ -13,9 +13,14 @@ import {
   avatarUrlFor,
   checkAvatarSize,
   deriveDefaults,
+  displayNameFromEmail,
   normalizeProfileInput,
   sniffImage,
 } from "../workers/api/src/profile.ts";
+import {
+  displayNameFromEmail as clientDisplayNameFromEmail,
+  initialFromEmail as clientInitialFromEmail,
+} from "../apps/authoring/src/displayName.ts";
 
 const bytes = (...values) => new Uint8Array(values);
 const PNG = bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d);
@@ -88,28 +93,61 @@ test("normalizeProfileInput rejects non-object bodies and non-string fields", ()
   assert.equal(normalizeProfileInput({ display_name: 42 }).ok, false);
 });
 
-test("deriveDefaults falls back to the email's local part and its initial", () => {
+/** The shape team addresses are issued in, plus the ones that are not. Shared by
+ *  the derivation tests and by the client/server drift check below. */
+const NAME_CASES = [
+  ["artur.medrygal@handsontable.com", "Artur Medrygal"],
+  ["artur.mędrygał@handsontable.com", "Artur Mędrygał"],
+  // Double-barrelled given names keep their hyphen and both capitals.
+  ["anna-maria.kowalska@handsontable.com", "Anna-Maria Kowalska"],
+  // Three segments: middle names are not special-cased away.
+  ["anna.maria.kowalska@handsontable.com", "Anna Maria Kowalska"],
+  // An ALL-CAPS address should not shout on every card.
+  ["ARTUR.MEDRYGAL@handsontable.com", "Artur Medrygal"],
+  // Addresses that don't follow the convention degrade to a capitalised word
+  // rather than to something wrong.
+  ["dev@handsontable.com", "Dev"],
+  ["qa-bot@handsontable.com", "Qa-Bot"],
+  // Defensive: empty segments must not become empty words.
+  ["a..b@handsontable.com", "A B"],
+  // No local part at all — return something rather than "".
+  ["@handsontable.com", "@handsontable.com"],
+];
+
+test("displayNameFromEmail reads name.surname out of the address", () => {
+  for (const [email, expected] of NAME_CASES) {
+    assert.equal(displayNameFromEmail(email), expected, email);
+  }
+});
+
+test("deriveDefaults uses the address-derived name and its initial", () => {
   const d = deriveDefaults({ email: "artur.medrygal@handsontable.com" });
-  assert.equal(d.displayName, "artur.medrygal");
+  assert.equal(d.displayName, "Artur Medrygal");
   assert.equal(d.initial, "A");
-  assert.equal(d.avatarUrl, null, "no SSO picture today — the client draws the monogram");
+  // There is no default picture, by decision (ADR-0007) — the monogram is the
+  // no-avatar state, not a placeholder for one.
+  assert.equal(d.avatarUrl, undefined);
+  assert.deepEqual(Object.keys(d).sort(), ["displayName", "initial"]);
 });
 
-test("deriveDefaults prefers SSO claims when the broker ever supplies them", () => {
-  const d = deriveDefaults({
-    email: "artur.medrygal@handsontable.com",
-    name: "Artur Mędrygał",
-    picture: "https://lh3.googleusercontent.com/a/x",
-  });
-  assert.equal(d.displayName, "Artur Mędrygał");
-  assert.equal(d.initial, "A");
-  assert.equal(d.avatarUrl, "https://lh3.googleusercontent.com/a/x");
+test("the client's copy of the derivation agrees with the worker's", () => {
+  // `apps/authoring/src/displayName.ts` exists so the top bar can paint before
+  // `GET /api/profile` answers. If the two ever disagree, the name visibly
+  // changes under the reader when the fetch lands.
+  for (const [email, expected] of NAME_CASES) {
+    assert.equal(clientDisplayNameFromEmail(email), expected, email);
+    assert.equal(
+      clientDisplayNameFromEmail(email),
+      displayNameFromEmail(email),
+      `client and worker disagree on ${email}`,
+    );
+  }
 });
 
-test("deriveDefaults ignores blank claims rather than showing an empty name", () => {
-  const d = deriveDefaults({ email: "dev@handsontable.com", name: "   ", picture: "  " });
-  assert.equal(d.displayName, "dev");
-  assert.equal(d.avatarUrl, null);
+test("the client's monogram matches the worker's initial", () => {
+  for (const [email] of NAME_CASES) {
+    assert.equal(clientInitialFromEmail(email), deriveDefaults({ email }).initial, email);
+  }
 });
 
 test("avatarUrlFor is same-origin and keyed on the opaque id, never the email", () => {

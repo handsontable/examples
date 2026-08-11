@@ -28,6 +28,7 @@ import {
   theme,
 } from "@handsontable/demo-editor-shell";
 import { logout, type User } from "./auth.js";
+import { displayNameFromEmail } from "./displayName.js";
 import {
   removeAvatar,
   saveProfile,
@@ -81,8 +82,11 @@ export function SettingsPage({ apiBase, user }: SettingsPageProps) {
   const dirty = draft !== null
     && (draft.name !== (profile?.saved_name ?? "") || draft.description !== (profile?.description ?? ""));
 
-  const fallbackName = user.email.split("@")[0] ?? user.email;
-  const initial = profile?.initial ?? (name.trim()[0] ?? user.email.trim()[0] ?? "?").toUpperCase();
+  // What the placeholder promises and what the monogram draws when the field is
+  // empty — the same rule the server applies, so clearing the name shows exactly
+  // what saving it will store nothing for.
+  const fallbackName = displayNameFromEmail(user.email);
+  const initial = (name.trim()[0] ?? fallbackName[0] ?? "?").toUpperCase();
 
   function settle(next: Profile, message: string) {
     setSaved(next);

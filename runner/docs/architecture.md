@@ -148,9 +148,12 @@ no cross-user surface to guard.
 
 There is no user table to key on: the broker's `sub` is fetched but never stored,
 so email is the only stable identifier the system holds. `NULL` means "never set,
-or cleared" — the reader derives the default (the email's local part, and its
-first letter as a monogram) rather than storing one, so clearing a field reverts
-to it instead of showing a blank.
+or cleared" — the reader derives the default rather than storing one, so clearing
+a field reverts to it instead of showing a blank.
+
+The derived name comes from the address itself: team accounts are issued as
+`name.surname@handsontable.com`, so `artur.medrygal` reads as `Artur Medrygal`
+(ADR-0007). There is no derived *picture* — an uploaded avatar or the monogram.
 
 Avatars live in the existing `ARTIFACTS` bucket under `avatars/<key>`, alongside
 but never colliding with `demos/<id>/`. The key is a random uuid rather than the
@@ -163,9 +166,9 @@ request's `Content-Type` — what the sniff returns is what gets stored as
 `httpMetadata` and echoed back to a browser.
 
 Defaults from Google SSO are *not* available: the broker requests
-`scope=openid email`, so `/broker/userinfo` returns no `name` or `picture`.
-`authenticate()` parses both anyway, so widening the broker's scope (a change in
-`mcp-auth-proxy`, a different repo) would be the whole of it.
+`scope=openid email`, so `/broker/userinfo` returns no `name` or `picture` — the
+claims are never requested, so there is nothing to parse. Names come from the
+address's own structure instead; see ADR-0007.
 
 ## Auth — Handsontable accounts only (login broker)
 
@@ -181,8 +184,9 @@ supersedes the original spec's Cloudflare Access.
   `sessionStorage`, resolves identity via `GET /broker/userinfo` →
   `{ email, sub, exp }`, and shows the signed-in email + a **Log out** control.
   The broker's authorize redirect requests `scope=openid email` only, so there is
-  no `name` or `picture` claim to be had — display names and avatars come from
-  the `profiles` table instead.
+  no `name` or `picture` claim to be had — display names are derived from the
+  address's `name.surname` shape and avatars come from the `profiles` table
+  (ADR-0007).
 - `return_to` must be on an allowed host (`*.workers.dev`, `handsontable.com`,
   localhost) — satisfied by deploying on the main Handsontable account's
   `*.workers.dev` subdomain (account `15111272c53ed0aaf84a908f0c9c7f8b`, **not**

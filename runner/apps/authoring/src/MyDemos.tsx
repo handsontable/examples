@@ -37,6 +37,7 @@ import {
 } from "@handsontable/demo-editor-shell";
 import { getEntry } from "./catalog.js";
 import { getToken, logout, type User } from "./auth.js";
+import { displayNameFromEmail, initialFromEmail } from "./displayName.js";
 import { useProfile } from "./useProfile.js";
 import { reportError } from "./sentry.js";
 
@@ -173,12 +174,12 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
   }
 
   // The author line's name and monogram. The profile supplies both once it
-  // resolves (DEV-2166); until then — and for a user who never saved one — this
-  // is still the email's local part and its first letter, which is what the
-  // server would derive anyway.
+  // resolves (DEV-2166); until then — and for a user who never saved one — the
+  // address itself does, by the same rule the server applies, so the line does
+  // not visibly change under the reader when the fetch lands.
   const profile = useProfile(apiBase, user.email);
-  const ownerName = profile?.display_name ?? user.email.split("@")[0] ?? user.email;
-  const ownerInitial = profile?.initial ?? (user.email.trim()[0] ?? "?").toUpperCase();
+  const ownerName = profile?.display_name ?? displayNameFromEmail(user.email);
+  const ownerInitial = profile?.initial ?? initialFromEmail(user.email);
   const ownerAvatar = profile?.avatar_url ?? null;
 
   async function copyLink(demo: DemoListItem) {

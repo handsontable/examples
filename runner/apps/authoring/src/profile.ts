@@ -21,7 +21,8 @@ import { reportError } from "./sentry.js";
 /** Mirrors `ProfileView` in `workers/api/src/profile-store.ts`. */
 export interface Profile {
   email: string;
-  /** Always populated — the stored name, else the email's local part. */
+  /** Always populated — the stored name, else derived from the address
+   *  (`name.surname` -> `Name Surname`, ADR-0007). */
   display_name: string;
   /** What is actually in the row. `null` means "not set", which is what the
    *  Settings form shows as an empty field rather than pre-filling the default

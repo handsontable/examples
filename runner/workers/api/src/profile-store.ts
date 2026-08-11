@@ -57,9 +57,9 @@ export function toView(identity: Identity, row: ProfileRow | null): ProfileView 
     display_name: displayName,
     saved_name: row?.display_name ?? null,
     description: row?.description ?? null,
-    // A stored avatar wins over the SSO picture; with neither, the client draws
-    // the monogram from `initial`.
-    avatar_url: row?.avatar_key ? avatarUrlFor(row.avatar_key) : defaults.avatarUrl,
+    // No default picture exists — an uploaded avatar or nothing, in which case
+    // the client draws the monogram from `initial` (ADR-0007).
+    avatar_url: row?.avatar_key ? avatarUrlFor(row.avatar_key) : null,
     initial: (displayName.trim()[0] ?? "?").toUpperCase(),
   };
 }
