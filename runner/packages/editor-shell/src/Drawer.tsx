@@ -56,12 +56,32 @@ export function Drawer({
   footer,
   width = DRAWER_WIDTH,
 }: DrawerProps) {
-  // Read once, on mount: by the time we restore, the trigger may be the only
-  // sensible target and focus may well be inside the panel.
-  const returnTo = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    returnTo.current = document.activeElement as HTMLElement | null;
-    return () => returnTo.current?.focus?.();
+  const panelRef = useRef<HTMLElement | null>(null);
+
+  /**
+   * Who had focus when this drawer opened — captured **during the first render**,
+   * not in a mount effect, and restored only if focus is still ours to give back.
+   *
+   * Both halves are about swapping one drawer for the other in a single commit
+   * (`App.tsx` closes one panel as it opens the other):
+   *
+   *  - React runs a deleted subtree's effect cleanups *before* the new subtree's
+   *    mount effects, so reading `activeElement` on mount saw whatever the closing
+   *    drawer had just focused — its own trigger — and every later Escape sent
+   *    focus to the wrong button. Render happens before that cleanup, so this
+   *    initialiser sees the trigger the user actually clicked.
+   *  - And the closing drawer must not focus its trigger at all here: focus has
+   *    already moved to the other panel's button, taking it back both stole it and
+   *    fired that trigger's `onFocus`, so the closed panel's tooltip appeared over
+   *    the open one.
+   */
+  const returnTo = useRef<HTMLElement | null>(
+    typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null),
+  );
+  useEffect(() => () => {
+    const active = document.activeElement;
+    const ours = !active || active === document.body || !!panelRef.current?.contains(active);
+    if (ours) returnTo.current?.focus?.();
   }, []);
 
   useEffect(() => {
@@ -85,7 +105,7 @@ export function Drawer({
   }, [onClose]);
 
   return (
-    <aside style={{ ...panel, width }} aria-label={label ?? title}>
+    <aside ref={panelRef} style={{ ...panel, width }} aria-label={label ?? title}>
       <header style={titleRow}>
         <h2 style={heading}>{title}</h2>
         <button

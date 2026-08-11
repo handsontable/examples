@@ -68,6 +68,28 @@ test.describe("drawer chrome", () => {
     await expect(page.locator(CHAT)).toHaveCount(0);
   });
 
+  test("swapping drawers leaves focus on the trigger that was clicked", async ({ page }) => {
+    await openPlayground(page, "light");
+    const askAi = page.getByRole("button", { name: "Ask AI", exact: true });
+    const style = page.getByRole("button", { name: "Style", exact: true });
+
+    await askAi.click();
+    await style.click();
+    await expect(page.locator(STYLE)).toBeVisible();
+
+    // The closing drawer used to focus *its* trigger on unmount — which happens
+    // before the opening drawer records where focus was — so focus landed on
+    // `Ask AI`, its `onFocus` fired, and the closed panel's tooltip appeared over
+    // the open one.
+    await expect(style).toBeFocused();
+    await expect(page.locator("#ask-ai-hint")).toHaveCount(0);
+
+    // And the drawer that is open now must return focus to its own trigger.
+    await page.keyboard.press("Escape");
+    await expect(page.locator(STYLE)).toHaveCount(0);
+    await expect(style).toBeFocused();
+  });
+
   test("Escape closes the drawer and hands focus back to its trigger", async ({ page }) => {
     await openPlayground(page, "light");
     const trigger = page.getByRole("button", { name: "Ask AI", exact: true });
