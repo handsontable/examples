@@ -43,6 +43,8 @@ export function Markdown({ text, error }: { text: string; error?: boolean }) {
         switch (block.kind) {
           case "code":
             return <pre key={key} style={preStyle}><code>{block.text}</code></pre>;
+          case "rule":
+            return <hr key={key} style={ruleStyle} />;
           case "heading":
             return (
               <div key={key} style={headingStyle}>
@@ -104,6 +106,12 @@ const codeStyle: React.CSSProperties = {
 const preStyle: React.CSSProperties = {
   background: theme.color.editorBg, color: theme.color.text, borderRadius: theme.radius.md,
   padding: 10, overflowX: "auto", fontFamily: theme.font.mono, fontSize: 12, margin: "0 0 8px",
+};
+// A section divider, not a box edge: one hairline, no default 3D border, and
+// `controlBorder` rather than `border` — dark's `border` is `surfaceRaised`, the
+// drawer's own fill, so the rule would be invisible exactly where it is needed.
+const ruleStyle: React.CSSProperties = {
+  border: 0, borderTop: `1px solid ${theme.color.controlBorder}`, margin: "12px 0",
 };
 // The chat panel is ~380px, so a table is expected to overflow: scroll it in
 // its own box rather than widening the column. `controlBorder`, not `border` —

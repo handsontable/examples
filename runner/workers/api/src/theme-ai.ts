@@ -241,8 +241,11 @@ export function sanitiseSuggestion(raw: unknown): ThemeSuggestion {
   pick("colorScheme", COLOR_SCHEMES);
   pick("density", DENSITIES);
 
+  // Not stripped of `<…>`, for the reason `sanitiseAnswer` gives (DEV-2217):
+  // the panel renders this as a plain React text child, which escapes it, and
+  // the strip only ever deleted the technical tokens worth reading.
   const message = typeof input.message === "string"
-    ? input.message.replace(/<[^>]*>/g, "").slice(0, 300)
+    ? input.message.slice(0, 300)
     : "Done.";
 
   return { message, tokens, palette, config };

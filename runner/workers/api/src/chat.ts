@@ -509,14 +509,21 @@ export class ChatUnavailableError extends Error {}
  *
  * The model's output reaches a user's editor and browser, so nothing is
  * trusted: paths are re-validated against the files that were actually sent,
- * contents are size-capped, citations must be handsontable.com, and HTML is
- * stripped from the prose (it is rendered as Markdown).
+ * contents are size-capped, and citations must be handsontable.com.
+ *
+ * The prose is **not** stripped of `<…>` (DEV-2217). It used to be, and that
+ * deleted `<HotTable>` and `<HotColumn>` from every answer about a React grid —
+ * backticks included, so a sentence arrived as "added it to the `` component".
+ * The strip protected nothing: `apps/authoring/src/markdown.tsx` builds React
+ * elements and never touches `innerHTML`, and `why` below is a plain text child.
+ * Escaping belongs at the sink, and the sink already does it — so `<script>`
+ * now reaches the reader as the visible text `<script>`, which is correct.
  */
 export function sanitiseAnswer(raw: unknown, req: ChatRequest, usd: number): ChatAnswer {
   const input = (raw ?? {}) as Record<string, unknown>;
 
   const message = typeof input.message === "string"
-    ? input.message.replace(/<[^>]*>/g, "").slice(0, MAX_ANSWER_CHARS)
+    ? input.message.slice(0, MAX_ANSWER_CHARS)
     : "Done.";
 
   const edits: ChatEdit[] = [];
@@ -536,7 +543,7 @@ export function sanitiseAnswer(raw: unknown, req: ChatRequest, usd: number): Cha
       edits.push({
         path,
         contents,
-        why: typeof edit.why === "string" ? edit.why.replace(/<[^>]*>/g, "").slice(0, 200) : undefined,
+        why: typeof edit.why === "string" ? edit.why.slice(0, 200) : undefined,
       });
     }
   }
