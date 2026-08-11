@@ -2,10 +2,11 @@
 
 ## Goal
 
-Replace CodeSandbox (too expensive) and the `render-ms` redirect microservice
+Replace the third-party sandbox service and the `render-ms` redirect microservice
 with a self-hosted system that (a) renders every example live at any Handsontable
-version, (b) lets internal team members edit code on the fly, and (c) produces a
-clean, permanent client URL to share.
+version, (b) lets an author edit code on the fly, and (c) produces a clean,
+permanent URL to share. Self-hosting also puts per-view cost, version coverage
+and the look of the editor under our own control.
 
 ## One UX, two engines behind an adapter
 
@@ -176,21 +177,20 @@ Authoring and all write endpoints are **internal-team only**, gated by the share
 Handsontable **Google login broker** (per the `publish-app` skill). This
 supersedes the original spec's Cloudflare Access.
 
-- Broker base URL (public, hardcoded — not a secret):
-  `https://mcp-auth-proxy-j0tb.onrender.com`.
-- Frontend redirects to `GET /broker/login?return_to=<app url>`; the broker
-  authenticates via Google, **rejects any non-`@handsontable.com` account**, and
-  redirects back with `#token=<JWT>`. The app stores the token in
-  `sessionStorage`, resolves identity via `GET /broker/userinfo` →
-  `{ email, sub, exp }`, and shows the signed-in email + a **Log out** control.
+- The broker base URL is deployment config (`LOGIN_BROKER_URL`), not a secret.
+- The frontend hands off to the broker, which authenticates via Google,
+  **rejects any non-`@handsontable.com` account**, and redirects back with a JWT.
+  The app keeps that token in `sessionStorage`, resolves identity from it, and
+  shows the signed-in email plus a **Log out** control. The exact endpoints and
+  parameters live in `apps/authoring/src/auth.ts`.
   The broker's authorize redirect requests `scope=openid email` only, so there is
   no `name` or `picture` claim to be had — display names are derived from the
   address's `name.surname` shape and avatars come from the `profiles` table
   (ADR-0007).
 - `return_to` must be on an allowed host (`*.workers.dev`, `handsontable.com`,
   localhost) — satisfied by deploying on the main Handsontable account's
-  `*.workers.dev` subdomain (account `15111272c53ed0aaf84a908f0c9c7f8b`, **not**
-  the sandbox). See `docs/cloudflare-resources.md`.
+  `*.workers.dev` subdomain (**not** the sandbox). See
+  `docs/cloudflare-resources.md`.
 - **Server-side:** the `workers/api` write endpoints (`POST`/`PATCH`/`DELETE
   /api/demos`) require `Authorization: Bearer <token>`, re-validate it against
   `/broker/userinfo`, and set/enforce `created_by` from the verified email. No
@@ -261,7 +261,7 @@ Vue 3 `<script setup>` or modern Angular. See `docs/docs-examples.md`.
 
 ## Deliverables
 
-1. ✅ Monorepo scaffold + catalog importer + migration of all 15 examples.
+1. ✅ Monorepo scaffold + catalog importer + migration of all 16 examples.
 2. ✅ `packages/runtime`: `SandpackRuntime` (Tier 1) for all 7 client-side frameworks.
 3. ✅ `packages/editor-shell` + `apps/authoring`: unified editor (Tier-1 live). *(auth
    broker + fork/title/description UI wired in with the sharing API, D5.)*
@@ -279,8 +279,8 @@ Vue 3 `<script setup>` or modern Angular. See `docs/docs-examples.md`.
 10. ✅ Documentation-guide examples: `import-docs.mjs` + `wrap-docs-example.mjs`
     → `docs-examples/`, opened via `?docs=`.
 
-Deployed: API `handsontable-demos-api.handsoncode.workers.dev`, authoring
-`handsontable-demos-authoring.handsoncode.workers.dev`. Pending: wildcard domain
-for live Tier-2 (ADR-0011), broker redeploy for `handsoncode.workers.dev`
-logins, `scripts/warm.ts`.
+Deployed: API `handsontable-demos-api`, authoring
+`handsontable-demos-authoring`, both on demos.handsontable.com. Pending:
+wildcard domain for live Tier-2 (ADR-0011), broker allowlist entry for the
+account's `workers.dev` logins, `scripts/warm.ts`.
 ```

@@ -3,8 +3,12 @@
 How the demo runner is stopped from running up a surprise Cloudflare bill
 (DEV-2030). Decision record: [ADR-0022](adr/0022-self-enforced-spend-ceiling.md).
 
-Everything below applies to the main Handsontable account
-`15111272c53ed0aaf84a908f0c9c7f8b`.
+Everything below applies to the main Handsontable Cloudflare account.
+
+Dollar amounts here are Cloudflare's published unit prices and worked examples
+against a nominal **$1,000/month ceiling**; the ceiling and its tiers that this
+deployment actually runs with are configuration (`BUDGET_*`, overridable in
+`/admin`), not part of this document.
 
 ## What was already bounded, and what was not
 
@@ -36,73 +40,54 @@ Worst case — every slot awake 24/7 for a 730-hour month:
 | **Ceiling** | | **~$250 – $460/mo** |
 
 So `max_instances` is a real, Cloudflare-enforced cap sitting at roughly 25–45%
-of the $1000 line. **Leave it at 5/3** — raising it is the one change that
+of a $1,000 ceiling. **Leave it at 5/3** — raising it is the one change that
 invalidates this table.
 
 Ranked by what is actually unbounded:
 
 1. **Container egress** — every dev-server asset and HMR frame of a Tier-2
-   preview is proxied out of the container, and `POST /api/session` is public.
-   1 TB included, then $0.025/GB; $1000 is 40 TB.
+   preview is proxied out of the container, so egress scales with live-session
+   traffic rather than with the container count.
+   1 TB included, then $0.025/GB; $1,000 is 40 TB.
 2. **Workers Logs** — full-fidelity logging during exactly the traffic spike you
    want to survive cheaply. 20M events included, then $0.60/M.
 3. **R2 growth** — slow burn, not a spike. $0.015/GB-month.
 4. **Containers** — already capped, see above.
 
-### Measured baseline (2026-08-06)
+### Calibrating the estimator
 
-From **Billing → Billable usage**, cycle Aug 4 – Sep 3 2026, 3 days observed:
+The estimator was checked against **Billing → Billable usage** after the first
+few days of real traffic, and two things came out of that comparison — both
+still worth re-checking whenever the traffic shape changes:
 
-| | |
-|---|---|
-| Total cost so far | **$1.27** |
-| Projected cycle cost | **$13.11** |
-| Average daily | $0.42 |
-
-The entire billable amount is *our* containers (memory $1.24, disk $0.03).
-Everything else on the account — including the other ~13 Workers — sat inside
-its included allowances and contributed **$0**. Two things worth carrying
-forward:
-
-- **Container CPU is ~8% utilised**, not the 35% the estimator assumes
-  (5.69k vCPU-seconds against ~146k awake container-seconds). The estimator is
-  therefore conservative by roughly 4.5× on the CPU term — which is the safe
-  direction, and CPU is a small part of the bill anyway.
-- **Workers requests are the next line to cross**: 2.06M of the 10M included in
-  3 days, i.e. ~21M projected for the cycle, so ~$3/month of overage will start
-  appearing. Which is exactly why the meter counts requests.
+- **Container CPU runs far below the 35% utilisation the estimator assumes**, so
+  the CPU term is conservative by several multiples. That is the safe direction,
+  and CPU is a small part of the bill anyway.
+- **Workers requests are the next allowance to cross**, ahead of egress. Which is
+  exactly why the meter counts requests.
 
 ## Layer 1 — Cloudflare Budget alerts (dashboard only)
 
 **Manage Account → Billing → Billable Usage → Set Budget Alert.** There is no
-API for this in the Cloudflare MCP surface, so it is a dashboard action.
-
-**Already created on account `15111272…` (2026-08-06):**
-
-| Alert | Threshold | Recipient |
-|---|---|---|
-| Usage alert $200 (20% of $1000 ceiling) | $200 | `invoices@handsontable.com` |
-| Usage alert $500 (50% of $1000 ceiling) | $500 | `invoices@handsontable.com` |
-| Usage alert $800 (80% of $1000 ceiling) | $800 | `invoices@handsontable.com` |
-
-⚠️ A **"Default budget alert (auto-created)" at $10** also exists and was left
-alone. Projected spend is $13.11, so **it will fire this cycle**. Delete or
-retune it, or it becomes the alert everyone learns to ignore.
+API for this in the Cloudflare MCP surface, so it is a dashboard action. Alerts
+are set at a few fractions of the ceiling (20% / 50% / 80%) and mail a role
+address, not an individual.
 
 What they do and don't do:
 
 - **Informational only. They cap nothing.** That is why layer 3 exists.
-- **Account-level**: everything billing to `15111272…` counts toward the same
-  $200. Measured, that turns out not to matter — the rest of the account
-  currently contributes $0 of usage-based spend, so in practice these behave
-  like runner alerts. Re-check the baseline if that changes.
+- **Account-level**: everything billing to the account counts toward the same
+  threshold, not just the runner. In practice the rest of the account
+  contributes almost no usage-based spend, so they behave like runner alerts —
+  worth re-checking if that changes.
 - Fire on **projected** monthly spend, recomputed **daily**, once per billing
   cycle per threshold. Usage is a day in arrears, so expect ~24h lag.
-- Exclude the $5 Workers Paid subscription fee; usage-based spend only.
+- Exclude the Workers Paid subscription fee; usage-based spend only.
 - Aligned to the **billing cycle**, not the calendar month (the in-app ledger
   uses the calendar month — they can disagree for a few days around the
   boundary).
-- Delete or retune any auto-created default $10 alert.
+- Delete or retune Cloudflare's auto-created default $10 alert, or it fires every
+  cycle and becomes the alert everyone learns to ignore.
 
 Worth adding alongside: per-product usage notifications for Workers and R2,
 which fire on unit thresholds and so react faster than the daily rollup.
@@ -125,21 +110,22 @@ a UX decision, not a cost lever.
 
 ## Layer 3 — the ceiling the Worker enforces itself
 
-Cloudflare offers no hard spend cap, so the $1000 line is ours to hold.
+Cloudflare offers no hard spend cap, so the ceiling is ours to hold.
 
 ### Tiers
 
 Thresholds are **absolute dollars** and **editable from the admin panel** — no
 deploy needed. The `BUDGET_*` vars in `wrangler.jsonc` are only the defaults
-that apply until someone saves an override.
+that apply until someone saves an override. Expressed as a fraction of the
+ceiling:
 
 | Tier | Default | Behaviour |
 |---|---|---|
-| `ok` | <$600 | Normal. |
-| `warn` | ≥$600 | Notice in the authoring UI. Everything still works. |
-| `anon_blocked` | ≥$800 | Live sessions require a Handsontable sign-in. |
-| `new_blocked` | ≥$950 | No new live sessions and no builds. Running sessions finish. |
-| `closed` | ≥$1000 | Running sessions are destroyed on their next keepalive. |
+| `ok` | <60% | Normal. |
+| `warn` | ≥60% | Notice in the authoring UI. Everything still works. |
+| `anon_blocked` | ≥80% | Live sessions require a Handsontable sign-in. |
+| `new_blocked` | ≥95% | No new live sessions and no builds. Running sessions finish. |
+| `closed` | ≥100% | Running sessions are destroyed on their next keepalive. |
 
 The server rejects a save whose tiers are out of order (notice ≤ sign-in ≤
 no-new ≤ close) or above the ceiling, because an unreachable tier is a

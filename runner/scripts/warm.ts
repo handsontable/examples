@@ -7,7 +7,7 @@
 //
 // Usage:
 //   node scripts/warm.ts
-//   WARM_API_BASE=https://handsontable-demos-api.handsoncode.workers.dev \
+//   WARM_API_BASE=https://demos.handsontable.com \
 //   WARM_VERSIONS=3 WARM_EXAMPLES=react,vue,remix WARM_CONCURRENCY=3 \
 //   WARM_TIER2_CONTAINERS=1 node scripts/warm.ts
 
@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER_DIR = path.resolve(__dirname, "..");
 
-const API_BASE = process.env.WARM_API_BASE || "https://handsontable-demos-api.handsoncode.workers.dev";
+const API_BASE = process.env.WARM_API_BASE || "https://demos.handsontable.com";
 const N = Math.max(1, Number.parseInt(process.env.WARM_VERSIONS || "3", 10) || 3);
 const CONCURRENCY = Math.max(1, Number.parseInt(process.env.WARM_CONCURRENCY || "3", 10) || 3);
 const MIN_MAJOR = 15;

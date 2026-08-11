@@ -4,8 +4,7 @@
 
 ## Context
 The `publish-app` skill defaults to the sandbox account, but this is a production
-internal tool. The team directed all resources to the main account
-`15111272c53ed0aaf84a908f0c9c7f8b`.
+tool. The team directed all resources to the main Handsontable account.
 
 ## Decision
 Provision and deploy in the main Handsontable account. Manage resources with

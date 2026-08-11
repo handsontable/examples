@@ -1,9 +1,12 @@
 # Handsontable Demo Runner
 
 Self-hosted system that renders every Handsontable example — including every
-documentation-guide example — live at any Handsontable version, lets internal team
-members edit code on the fly, and produces clean, permanent client URLs to share.
-Replaces CodeSandbox and the former `render-ms` redirect microservice (removed).
+documentation-guide example — live at any Handsontable version, lets you edit the
+code on the fly, and produces clean, permanent URLs to share. It runs the demos on
+Handsontable's own infrastructure instead of a third-party sandbox service, and
+replaced the former `render-ms` redirect microservice (removed).
+
+Live at **https://demos.handsontable.com**.
 
 > See `docs/architecture.md` for the full design and
 > [`docs/docs-examples.md`](docs/docs-examples.md) for how the documentation-guide
@@ -45,5 +48,7 @@ node pipeline/import-docs.mjs   # reads ../../handsontable/docs, writes apps/aut
 
 ## Constraints
 
-No Nodebox / WebContainers. White-label (no CodeSandbox marks). Secrets in env
-only. Private repo under `handsontable`. See `docs/architecture.md`.
+No Nodebox / WebContainers. White-label — the Tier-1 engine uses the open-source
+[Sandpack](https://sandpack.codesandbox.io/) bundler, with no third-party branding
+in the UI. Secrets live in environment variables and Cloudflare secrets, never in
+the repo. See `docs/architecture.md`.

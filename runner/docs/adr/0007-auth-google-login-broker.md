@@ -7,12 +7,11 @@ Authoring is internal-team-only. The `publish-app` skill prescribes a shared
 Google login broker (Handsontable accounts only, no passwords) for org apps.
 
 ## Decision
-Gate authoring + all write endpoints behind the broker
-(`https://mcp-auth-proxy-j0tb.onrender.com`). Frontend redirects to
-`/broker/login?return_to=…`, receives a JWT, resolves identity via
-`/broker/userinfo` (`@handsontable.com` only). The Worker re-validates the token
-server-side and sets `created_by` from the verified email. Deploy on a
-`*.workers.dev` host (an allowed return host).
+Gate authoring + all write endpoints behind the broker, whose URL is deployment
+config (`LOGIN_BROKER_URL`). The frontend hands off to it, receives a JWT, and
+resolves identity from the broker (`@handsontable.com` only). The Worker
+re-validates the token server-side and sets `created_by` from the verified email.
+Deploy on a `*.workers.dev` host (an allowed return host).
 
 ## Scope of the gate (amended)
 The authoring editor/playground (browse examples, edit, live preview, version
@@ -28,9 +27,9 @@ who has not set one. DEV-2166's acceptance criteria specified taking both from
 Google — name from the SSO display name, picture from the SSO picture — with the
 email's local part and a monogram only as a fallback.
 
-**Those claims do not exist for us.** The broker's `/broker/login` redirects to
-Google with `scope=openid email`. `name` and `picture` are `profile`-scope
-claims, so Google never returns them and `/broker/userinfo` never carries them.
+**Those claims do not exist for us.** The broker redirects to Google with
+`scope=openid email`. `name` and `picture` are `profile`-scope claims, so Google
+never returns them and the userinfo response never carries them.
 This is not a parsing gap in `auth.ts` — the data is never requested. Obtaining
 it would mean changing the scope list in `mcp-auth-proxy`, a separate repository
 under separate ownership, and re-consenting every user.

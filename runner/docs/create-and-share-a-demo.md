@@ -4,7 +4,7 @@ A short, non-technical guide for the Handsontable team.
 
 ## 1. Open the authoring app
 
-Go to **https://handsontable-demos-authoring.handsoncode.workers.dev**. Browsing
+Go to **https://demos.handsontable.com**. Browsing
 and editing are **open** — no sign-in needed to play with examples. You only
 **Sign in with Handsontable** (top-right, `@handsontable.com` only) when you want
 to **create a shareable client link** or see **My demos**.
