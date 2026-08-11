@@ -13,6 +13,8 @@ dist
 # local environment
 .env
 .env.local
+# Symfony ships a committed .env of non-secret defaults; secrets go in .env.local
+!server-examples/symfony/symfony/.env
 *.log
 
 # playwright e2e output, when a run is launched from the repo root rather than runner/

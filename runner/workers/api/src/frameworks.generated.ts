@@ -9,11 +9,11 @@ export interface FrameworkDev {
 }
 
 export const FRAMEWORK_DEV: Record<string, FrameworkDev> = {
-  "react-js": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "react-js", sourceDependencyFingerprint: "57fc7330e0928861ce64acbe42fcafbdf64c3d128e456cabddf665d4e9a2f51a" },
-  "ant-design": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "ant-design", sourceDependencyFingerprint: "76dce642115f5ff343bd158a752bf18581dcf5a0bb8d5275f449f3825dcf103d" },
-  "mui": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "mui", sourceDependencyFingerprint: "b56259f2464ae1c94c5e78da99014acde3b264bf623fde9ea29953f90082aea4" },
-  "base-web": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "base-web", sourceDependencyFingerprint: "798976bd62bad06d90d848ab6a35ad5325ff218ae9eb750c99371b55a104e78c" },
-  "fluent-ui": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "fluent-ui", sourceDependencyFingerprint: "c31b0e3bdd946c237c820927b0ea48ad5a44e5c8d9e4c0cd426bcf2eeaaca462" },
+  "react-js": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "react-js", sourceDependencyFingerprint: "a87d83a44bc1b934452d699649571112d3ae5bb2961bfca2c64d5ed1f1482bbc" },
+  "ant-design": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "ant-design", sourceDependencyFingerprint: "ad90420a4ac002b7b861e2f7d481295e74f8561121ef5f08f941e68dd2c01e89" },
+  "mui": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "mui", sourceDependencyFingerprint: "abd37fcbd5402ffeb984bd78dddfdc515d91ff9aca9e71b37e72175f6d5a5520" },
+  "base-web": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "base-web", sourceDependencyFingerprint: "27e32c25c6419d2328b7e3b9b23b861819d2fe0c758d71432038485c77708d4c" },
+  "fluent-ui": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "fluent-ui", sourceDependencyFingerprint: "30622653164317234eb709613c65f2569a19cb930d3829ebe71535df0590215f" },
   "angular": { cmd: "pnpm exec ng serve --host 0.0.0.0 --port 4200 --disable-host-check", port: 4200, bakedKey: "angular", sourceDependencyFingerprint: "bf76be0cf2f33fa52f4782a999a7d030e41c9c155a65689e6eddd85e860ba87f" },
   "next.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001, bakedKey: "next-js", sourceDependencyFingerprint: "26606865cfe16d812803c8e74f02fd97317d1294cf3e5d7921eeed7fff23cb38" },
   "next-shadcn.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001, bakedKey: "next-shadcn-js", sourceDependencyFingerprint: "2c69b3df78e8e25b65af044e1fb9ccdc2f94ad96fff9e5c3d1963ac3fe3dc998" },
