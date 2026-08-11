@@ -26,6 +26,7 @@ import {
   buildResetChanges,
   buildThemeChanges,
   buildThemeSnippet,
+  isTypescript,
   manualImportHint,
   themeModulePath,
 } from "./theme/codegen.js";
@@ -106,7 +107,14 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const snippet = useMemo(() => buildThemeSnippet(state), [state]);
+  // The snippet has to be in the demo's own language (DEV-2216), which is a
+  // property of the files it sits next to — and those can be replaced while
+  // this panel stays mounted, because picking another starter swaps the whole
+  // workspace in place. So the language is read on every render and is a
+  // dependency of the snippet; `getFiles` itself cannot be one, since it is an
+  // inline arrow at the call site and would defeat the memo outright.
+  const typescript = isTypescript(getFiles());
+  const snippet = useMemo(() => buildThemeSnippet(state, typescript), [state, typescript]);
   const pristine = isPristine(state);
 
   /** What the controls resolve against: the chosen presets with this panel's

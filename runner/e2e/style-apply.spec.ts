@@ -39,16 +39,15 @@ const SHAPES = [
   { example: "vue", shape: "<HotTable …> in an SFC" },
   { example: "javascript", shape: "new Handsontable(el, {…})" },
   { example: "astro", shape: "new Handsontable(el, {…}) in a client script" },
-  // Angular's wiring is correct — `pipeline/theme-wiring.test.mjs` runs the real
-  // codegen over its `gridSettings` shape — but it cannot be observed here, and
-  // the reason is not the theme: **no** edit reaches the Angular preview. A bare
-  // `<p>` typed into `data-grid.component.html` was still absent after 90s,
-  // while the same probe on `react-js` and `astro` (both Tier 2, both container
-  // starters) shows up in about ten seconds. Until the Angular container
-  // rebuilds on a file write, every panel that edits files — the editor, the AI
-  // assistant, this one — is invisible there. DEV-2216; un-`fixme` this case
-  // when it lands, and it should pass unchanged.
-  { example: "angular", shape: "gridSettings = {…}", blocked: "the Angular container never rebuilds on a file write" },
+  // Angular is the case worth having: its dev server is the only one that
+  // type-checks, so it is the only starter where a type error in the generated
+  // module is fatal — and fatal *silently*, since a failed build just keeps
+  // serving the last good bundle (DEV-2216). It read as "no edit ever reaches
+  // the Angular preview" because the broken module stays on disk and swallows
+  // every later edit too. `pipeline/theme-typecheck.test.mjs` now compiles the
+  // generated module against Handsontable's types; this case is what proves the
+  // compiled result also renders.
+  { example: "angular", shape: "gridSettings = {…}" },
 ] as const;
 
 const preview = (page: Page): FrameLocator => page.frameLocator("iframe").first();
@@ -97,12 +96,9 @@ async function expectThemeModuleWritten(page: Page) {
   await expect(page.locator(STYLE).getByText("Applied to the preview")).toBeVisible();
 }
 
-for (const { example, shape, blocked } of SHAPES.map((s) => ({ blocked: undefined, ...s }))) {
+for (const { example, shape } of SHAPES) {
   test.describe(`${example} — ${shape}`, () => {
     test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
-    // `fixme`, not deletion: these assertions are right and the product is not.
-    // Removing them would lose the only executable record of what is broken.
-    if (blocked) test.fixme(true, blocked);
     test.describe.configure({ timeout: 300_000 });
 
     test("a theme applies to the grid, and Reset takes it back off", async ({ page }) => {
