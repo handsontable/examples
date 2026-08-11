@@ -27,16 +27,26 @@ async function openPlayground(page: Page, mode: "light" | "dark") {
 }
 
 /** `backgroundColor`, `color` and the four border colours of one element, plus
- *  its parent's fill — the pairing both defects are visible in. */
+ *  the fill actually behind it — the pairing both defects are visible in.
+ *
+ *  "Actually behind" means the nearest ancestor that paints something, not the
+ *  immediate parent. Most parents here are layout wrappers with no background
+ *  of their own, and comparing a border against `rgba(0, 0, 0, 0)` can never
+ *  fail — which made the check it exists for pass on the very colour it was
+ *  written to catch. */
 async function paint(page: Page, selector: string) {
   return page.locator(selector).first().evaluate((el) => {
     const c = getComputedStyle(el);
-    const parent = el.parentElement ? getComputedStyle(el.parentElement).backgroundColor : null;
+    let behind: string | null = null;
+    for (let n = el.parentElement; n; n = n.parentElement) {
+      const fill = getComputedStyle(n).backgroundColor;
+      if (fill && fill !== "rgba(0, 0, 0, 0)" && fill !== "transparent") { behind = fill; break; }
+    }
     return {
       background: c.backgroundColor,
       color: c.color,
       borderColor: c.borderTopColor,
-      parentBackground: parent,
+      parentBackground: behind,
     };
   });
 }
@@ -269,10 +279,11 @@ test.describe("chat transcript", () => {
 
     // A section divider is one hairline, and a divider the same colour as the
     // surface behind it is the ADR-0026 §5 defect in its purest form — there is
-    // nothing else to the element to give it away.
-    const rule = page.locator(`${CHAT} hr`);
-    await expect(rule).toHaveCount(1);
+    // nothing else to the element to give it away. Its own parent paints
+    // nothing, so this has to measure against the drawer's fill underneath.
+    await expect(page.locator(`${CHAT} hr`)).toHaveCount(1);
     const drawn = await paint(page, `${CHAT} hr`);
+    expect(drawn.parentBackground, "nothing behind the rule paints").not.toBeNull();
     expect(drawn.borderColor).not.toBe(drawn.parentBackground);
   });
 
