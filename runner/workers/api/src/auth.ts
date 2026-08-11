@@ -7,6 +7,13 @@ import type { Env } from "./env.js";
 export interface Identity {
   email: string;
   sub?: string;
+  /** Google's OIDC `profile`-scope claims, used as the initial values for a
+   *  user's profile (DEV-2166). Always absent today: the broker's authorize
+   *  redirect requests `scope=openid email`, so Google returns neither. Parsed
+   *  anyway so that widening the broker's scope is the whole change — verified
+   *  by reading the broker's own 302 to accounts.google.com. */
+  name?: string;
+  picture?: string;
 }
 
 /**
@@ -26,9 +33,9 @@ export async function authenticate(request: Request, env: Env): Promise<Identity
       headers: { Authorization: auth },
     });
     if (!res.ok) return null;
-    const info = (await res.json()) as { email?: string; sub?: string };
+    const info = (await res.json()) as { email?: string; sub?: string; name?: string; picture?: string };
     if (!info.email || !info.email.endsWith("@handsontable.com")) return null;
-    return { email: info.email, sub: info.sub };
+    return { email: info.email, sub: info.sub, name: info.name, picture: info.picture };
   } catch {
     return null;
   }

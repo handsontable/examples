@@ -30,12 +30,21 @@ npx wrangler d1 execute handsontable-demos --local --file=migrations/0001_init.s
 npx wrangler d1 execute handsontable-demos --local --file=migrations/0002_buildkey_nonunique.sql -y
 npx wrangler d1 execute handsontable-demos --local --file=migrations/0003_cost_ledger.sql -y
 npx wrangler d1 execute handsontable-demos --local --file=migrations/0004_settings_and_analytics.sql -y
+npx wrangler d1 execute handsontable-demos --local --file=migrations/0005_profiles.sql -y
 npx wrangler dev --port 8787                          # builds the container images
 # then run the authoring app pointing at it:
 cd ../../apps/authoring
 printf 'VITE_DEV_USER=dev@handsontable.com\nVITE_API_BASE=http://localhost:8787\n' > .env.local
 npx vite --port 5173
 ```
+
+Migrations are listed one file at a time on purpose. Do **not** substitute
+`wrangler d1 migrations apply --local`: local bookkeeping starts empty, so an
+apply re-runs every file, and `0003_cost_ledger.sql` ends in a bare
+`ALTER TABLE demos ADD COLUMN artifacts_purged_at` with no `IF NOT EXISTS` —
+which fails the second time. (Remote is a different story: CI has applied
+migrations through the framework since before `0003` landed, so its bookkeeping
+is populated and `deploy-runner-api.yml` applies new files automatically.)
 
 `.dev.vars` and `.env.local` are gitignored dev-only bypasses — never used in prod.
 `PREVIEW_HOST="localhost:8787"` overrides the `wrangler.jsonc` default
@@ -63,6 +72,7 @@ npx wrangler d1 execute handsontable-demos --remote --file=migrations/0001_init.
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0002_buildkey_nonunique.sql -y
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0003_cost_ledger.sql -y
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0004_settings_and_analytics.sql -y
+npx wrangler d1 execute handsontable-demos --remote --file=migrations/0005_profiles.sql -y
 pnpm run deploy   # wrangler deploy --routes … (attaches the demos.handsontable.com routes)
 # -> https://handsontable-demos-api.handsoncode.workers.dev
 

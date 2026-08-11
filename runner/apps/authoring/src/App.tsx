@@ -39,6 +39,8 @@ import { StyleButton, StylePanel } from "./StylePanel.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
 import { MyDemosPage } from "./MyDemos.js";
+import { SettingsPage } from "./Settings.js";
+import { useProfile } from "./useProfile.js";
 import { reportError, reportingEnabled, Sentry } from "./sentry.js";
 
 const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefined;
@@ -201,10 +203,15 @@ type EditorRoute =
 
 /** Routes that are not the editor at all. Kept out of `EditorRoute` so every
  *  `route.mode` switch inside `Authoring` stays exhaustive over editor modes. */
-type AppRoute = EditorRoute | { mode: "myDemos" };
+type AppRoute = EditorRoute | { mode: "myDemos" } | { mode: "settings" };
 
 function parseRoute(): AppRoute {
   if (/^\/my-demos\/?$/.test(location.pathname)) return { mode: "myDemos" };
+  // `/settings` (DEV-2166). Before this line the fallthrough below matched it and
+  // the profile page silently rendered the playground — the static Worker already
+  // serves index.html for it (`not_found_handling: "single-page-application"`),
+  // so it never 404'd, it just showed the wrong thing.
+  if (/^\/settings\/?$/.test(location.pathname)) return { mode: "settings" };
   const m = location.pathname.match(/^\/(edit|share)\/([A-Za-z0-9_-]+)\/?$/);
   if (m) return { mode: m[1] as "edit" | "share", id: m[2]! };
   return { mode: "play" };
@@ -240,7 +247,7 @@ function beacon(path: string): void {
  * new — and the maximize button has to work from the editor, which is where it lives.
  */
 function fullModeId(route: AppRoute): string | null {
-  if (route.mode === "play" || route.mode === "myDemos") return null;
+  if (route.mode === "play" || route.mode === "myDemos" || route.mode === "settings") return null;
   return new URLSearchParams(location.search).get("mode") === "full" ? route.id : null;
 }
 
@@ -272,6 +279,8 @@ export function App() {
   // Before `Gate`/`Authoring`, which boot a container session this page has no
   // use for. It is auth-gated all the same — the listing is per-user.
   if (route.mode === "myDemos") return <MyDemosRoute />;
+  // Same story as My demos: auth-gated, renders no runtime, boots no container.
+  if (route.mode === "settings") return <SettingsRoute />;
   // The share page is a public, read-only playground — no auth needed.
   if (route.mode === "share") return <ShareRoute route={route} />;
   return <Gate route={route} />;
@@ -292,6 +301,23 @@ function MyDemosRoute() {
   if (user === undefined) return <Splash text="Loading data …" />;
   if (user === null) return <Splash text="Sign in to see your demos…" />;
   return <MyDemosPage apiBase={API_BASE} user={user} />;
+}
+
+/** `/settings` (DEV-2166). A profile is per-user by definition, so the same
+ *  login-on-anonymous contract as `/my-demos`. */
+function SettingsRoute() {
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  useEffect(() => {
+    currentUser().then(setUser);
+  }, []);
+  useEffect(() => {
+    if (user === null) login(); // return_to preserves /settings
+  }, [user]);
+  useDocumentTitle("Settings");
+
+  if (user === undefined) return <Splash text="Loading data …" />;
+  if (user === null) return <Splash text="Sign in to change your profile…" />;
+  return <SettingsPage apiBase={API_BASE} user={user} />;
 }
 
 /**
@@ -528,6 +554,10 @@ function Authoring({
   // `+` / `folder-plus` *and* the per-row ✎ / ✕ on it, so the three handlers have to
   // appear and disappear together or the sidebar contradicts itself.
   const canEditFiles = !!user && !isShare;
+
+  // The account menu's avatar. Keyed off `accountUser` for the same reason the
+  // menu itself is: a signed-in visitor on `/share/:id` still has one.
+  const profile = useProfile(API_BASE, !!accountUser);
 
   // Initial example/version come from the URL so the playground is deep-linkable.
   // `?docs=<content-path>` opens a documentation-guide example (lazy-loaded);
@@ -1554,10 +1584,16 @@ function Authoring({
         // Account menu (`114:21480`). Keyed off `accountUser`, not `user`, so it
         // survives `/share/:id` — see `ShareRoute`.
         accountEmail={accountUser?.email}
+        // The profile behind the avatar (DEV-2166). Fetched here too, not only on
+        // the pages that edit it: this is the bar the user spends their time on,
+        // and an avatar that only appeared on `/my-demos` would read as a bug.
+        accountDisplayName={profile?.display_name}
+        accountAvatarUrl={profile?.avatar_url}
         onMyDemos={() => { location.href = "/my-demos"; }}
         // The internal usage + cost panel. Signed-in only by construction — the
         // account menu that holds it renders only for an identified user.
         onUsage={() => { location.href = "/admin"; }}
+        onSettings={() => { location.href = "/settings"; }}
         // `edit` is auth-gated — `Gate` answers a null user with `login()`, so a
         // plain reload would bounce straight back to the broker. `play` and
         // `share` render fine anonymously and keep their example.
@@ -1743,8 +1779,10 @@ const centered: React.CSSProperties = {
 // of that into the Edit info dialog and the account menu, both of which style
 // themselves from the token set, so the two locals had no callers left.
 
-/** The demo title inside the centred pill (`48:6583`). */
+/** The demo title inside the centred pill (`48:6583`). The shell's `pillLabel` is
+ *  the shared type; a *title* can be arbitrarily long, so this one adds the
+ *  ellipsis the static labels don't need. */
 const pillLabel: React.CSSProperties = {
-  fontSize: 13, fontWeight: 500, color: theme.color.text,
+  ...shellStyles.pillLabel,
   whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
 };

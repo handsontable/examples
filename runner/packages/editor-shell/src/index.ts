@@ -55,6 +55,9 @@ export { Drawer, DRAWER_WIDTH } from "./Drawer.js";
 export type { DrawerProps } from "./Drawer.js";
 export { AccountMenu } from "./AccountMenu.js";
 export type { AccountMenuProps } from "./AccountMenu.js";
+// The account pages' left column, shared by /my-demos and /settings (DEV-2166).
+export { SideNav, SIDE_NAV_WIDTH } from "./SideNav.js";
+export type { SideNavProps } from "./SideNav.js";
 export { s as shellStyles, SIDEBAR_WIDTH } from "./styles.js";
 export { logoUrl, markUrl, useLogoUrl } from "./useLogoUrl.js";
 // Icons — tabler for UI, seti-ui for file types. See src/icons/index.ts.

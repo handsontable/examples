@@ -1,0 +1,270 @@
+import { test, expect, type Page } from "@playwright/test";
+
+// The Settings page (DEV-2166, frame `114:26833`) — the profile page behind the
+// row T9 drew greyed out.
+//
+// Deterministic — no `E2E_LIVE=1`: the page renders no example, so nothing here
+// needs the bundler.
+//
+// Sign-in is faked at the *token* layer for the reason `sidebar-crud.spec.ts`
+// sets out at length: a build-layer `VITE_DEV_USER` bypass leaks into production
+// builds through `.env.local`, which would make the anonymous case below pass
+// while proving nothing.
+
+const EMAIL = "dev@handsontable.com";
+
+/** The server's shape for `GET /api/profile` — always a full view, defaults
+ *  included, so the client never derives anything the server wouldn't. */
+type ProfileView = {
+  email: string;
+  display_name: string;
+  saved_name: string | null;
+  description: string | null;
+  avatar_url: string | null;
+  initial: string;
+};
+
+const emptyProfile: ProfileView = {
+  email: EMAIL,
+  display_name: "dev",
+  saved_name: null,
+  description: null,
+  avatar_url: null,
+  initial: "D",
+};
+
+async function signIn(page: Page) {
+  await page.addInitScript(() => sessionStorage.setItem("hot_token", "e2e-token"));
+  await page.route("**/broker/userinfo", (route) => route.fulfill({ json: { email: EMAIL } }));
+  await page.route("**/broker/login**", (route) => route.abort());
+}
+
+/**
+ * A profile server held in the browser-side route handler, so a save is actually
+ * read back on the next load rather than asserted against the response the page
+ * already has in hand. That distinction is the whole of "survives a reload".
+ */
+async function stubProfileApi(page: Page, initial: ProfileView = emptyProfile) {
+  const state = { ...initial };
+  const calls: string[] = [];
+
+  // The avatar image itself: a 1×1 PNG, so a rendered <img> has something to load
+  // and does not sit broken.
+  await page.route("**/api/profile/avatar/*", (route) =>
+    route.fulfill({
+      contentType: "image/png",
+      body: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    }),
+  );
+
+  await page.route("**/api/profile/avatar", async (route) => {
+    const method = route.request().method();
+    calls.push(`${method} avatar`);
+    if (method === "POST") {
+      state.avatar_url = "/api/profile/avatar/e2e-avatar-key";
+    } else if (method === "DELETE") {
+      state.avatar_url = null;
+    }
+    await route.fulfill({ json: state });
+  });
+
+  await page.route("**/api/profile", async (route) => {
+    const method = route.request().method();
+    calls.push(`${method} profile`);
+    if (method === "PUT") {
+      const body = JSON.parse(route.request().postData() ?? "{}") as {
+        display_name: string | null;
+        description: string | null;
+      };
+      state.saved_name = body.display_name;
+      state.description = body.description;
+      state.display_name = body.display_name ?? "dev";
+      state.initial = (state.display_name[0] ?? "?").toUpperCase();
+    }
+    await route.fulfill({ json: state });
+  });
+
+  return { state, calls };
+}
+
+const nameField = (page: Page) => page.getByLabel("Name");
+const descriptionField = (page: Page) => page.getByLabel("Description");
+const saveButton = (page: Page) => page.getByRole("button", { name: "Save", exact: true });
+const cancelButton = (page: Page) => page.getByRole("button", { name: "Cancel", exact: true });
+const uploadButton = (page: Page) => page.getByRole("button", { name: "Upload", exact: true });
+const removeButton = (page: Page) => page.getByRole("button", { name: "Remove", exact: true });
+
+const PNG_1x1 = {
+  name: "avatar.png",
+  mimeType: "image/png",
+  buffer: Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  ),
+};
+
+test.describe("/settings", () => {
+  test("renders the frame's chrome, nav and card", async ({ page }) => {
+    await signIn(page);
+    await stubProfileApi(page);
+    await page.goto("/settings");
+
+    // The static pill (`114:26884`, the chevron, is hidden in the frame — this is
+    // a label, not a trigger).
+    await expect(page.getByText("Settings", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+
+    // The same left nav as My Demos, with Settings the current page.
+    const nav = page.getByRole("navigation", { name: "Account" });
+    await expect(nav.getByRole("link", { name: "My demos" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
+
+    await expect(nameField(page)).toBeVisible();
+    await expect(descriptionField(page)).toBeVisible();
+    await expect(uploadButton(page)).toBeVisible();
+    await expect(removeButton(page)).toBeVisible();
+  });
+
+  test("an empty profile shows the email-derived default as a placeholder, not a value", async ({ page }) => {
+    await signIn(page);
+    await stubProfileApi(page);
+    await page.goto("/settings");
+
+    // Pre-filling the derived name would make an unsaved default look stored.
+    await expect(nameField(page)).toHaveValue("");
+    await expect(nameField(page)).toHaveAttribute("placeholder", "dev");
+  });
+
+  test("a save round-trips and survives a reload", async ({ page }) => {
+    await signIn(page);
+    await stubProfileApi(page);
+    await page.goto("/settings");
+
+    // Save is inert until something actually changed.
+    await expect(saveButton(page)).toBeDisabled();
+
+    await nameField(page).fill("Ada Lovelace");
+    await descriptionField(page).fill("Builds spreadsheets.");
+    await expect(saveButton(page)).toBeEnabled();
+    await saveButton(page).click();
+
+    await expect(page.getByRole("status")).toHaveText("Saved.");
+    await expect(saveButton(page)).toBeDisabled();
+
+    // Drop the sessionStorage cache first, or the reload would re-read the value
+    // this page just put there and the assertion would hold with a broken GET.
+    await page.evaluate(() => sessionStorage.removeItem("hot_profile"));
+    await page.reload();
+    await expect(nameField(page)).toHaveValue("Ada Lovelace");
+    await expect(descriptionField(page)).toHaveValue("Builds spreadsheets.");
+  });
+
+  test("Cancel discards the draft without writing", async ({ page }) => {
+    await signIn(page);
+    const { calls } = await stubProfileApi(page);
+    await page.goto("/settings");
+
+    await nameField(page).fill("Discarded");
+    await cancelButton(page).click();
+
+    await expect(nameField(page)).toHaveValue("");
+    expect(calls.filter((c) => c === "PUT profile")).toHaveLength(0);
+  });
+
+  test("upload then remove restores the monogram", async ({ page }) => {
+    await signIn(page);
+    await stubProfileApi(page);
+    await page.goto("/settings");
+
+    // Nothing to remove yet.
+    await expect(removeButton(page)).toBeDisabled();
+    const avatar = page.locator("main img").first();
+    await expect(avatar).toHaveCount(0);
+
+    await page.setInputFiles('input[type="file"]', PNG_1x1);
+    await expect(avatar).toBeVisible();
+    await expect(removeButton(page)).toBeEnabled();
+
+    await removeButton(page).click();
+    await expect(page.locator("main img")).toHaveCount(0);
+    // The monogram is back — the initial of the derived name.
+    await expect(page.getByRole("main").getByText("D", { exact: true })).toBeVisible();
+  });
+
+  test("a rejected upload surfaces the server's reason", async ({ page }) => {
+    await signIn(page);
+    await stubProfileApi(page);
+    // Whatever the client thinks it is sending, the server sniffs the bytes.
+    await page.unroute("**/api/profile/avatar");
+    await page.route("**/api/profile/avatar", (route) =>
+      route.fulfill({ status: 415, json: { error: "avatar must be a PNG, JPEG or WebP image" } }),
+    );
+    await page.goto("/settings");
+
+    await page.setInputFiles('input[type="file"]', PNG_1x1);
+    await expect(page.getByRole("alert")).toContainText("PNG, JPEG or WebP");
+  });
+
+  test("the saved name and avatar reach the top bar", async ({ page }) => {
+    await signIn(page);
+    await stubProfileApi(page, {
+      ...emptyProfile,
+      display_name: "Ada Lovelace",
+      saved_name: "Ada Lovelace",
+      initial: "A",
+      avatar_url: "/api/profile/avatar/e2e-avatar-key",
+    });
+    await page.goto("/settings");
+
+    const account = page.getByRole("button", { name: `Account: ${EMAIL}` });
+    await expect(account.locator("img")).toBeVisible();
+  });
+
+  test("the account menu's Settings row is live and navigates", async ({ page }) => {
+    await signIn(page);
+    await stubProfileApi(page);
+    await page.route("**/api/demos", (route) => route.fulfill({ json: { demos: [] } }));
+    await page.goto("/my-demos");
+
+    await page.getByRole("button", { name: `Account: ${EMAIL}` }).click();
+    const row = page.getByRole("menuitem", { name: "Settings" });
+    await expect(row).toBeEnabled();
+    await row.click();
+
+    await expect(page).toHaveURL(/\/settings$/);
+    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  });
+
+  test("an anonymous visitor is sent to the broker with /settings preserved", async ({ page }) => {
+    // No `signIn` — no token, and the broker answers 401 as it would for a stranger.
+    await page.route("**/broker/userinfo", (route) => route.fulfill({ status: 401, json: {} }));
+    const brokerUrls: string[] = [];
+    await page.route("**/broker/login**", (route) => {
+      brokerUrls.push(route.request().url());
+      return route.abort();
+    });
+
+    await page.goto("/settings");
+
+    await expect.poll(() => brokerUrls.length).toBeGreaterThan(0);
+    expect(decodeURIComponent(brokerUrls[0]!)).toContain("return_to=");
+    expect(decodeURIComponent(brokerUrls[0]!)).toContain("/settings");
+  });
+
+  test("a hard load of /settings resolves to the settings page, not the playground", async ({ page }) => {
+    // The static Worker has always served index.html here
+    // (`not_found_handling: "single-page-application"`), so this never 404'd —
+    // it silently rendered the playground until `parseRoute()` learned the path.
+    await signIn(page);
+    await stubProfileApi(page);
+    const response = await page.goto("/settings");
+
+    expect(response?.status()).toBe(200);
+    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+    // The playground's pill would be the example cascader.
+    await expect(page.getByRole("button", { name: /Choose an example/i })).toHaveCount(0);
+  });
+});

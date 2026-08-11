@@ -41,6 +41,8 @@ import {
   validateChatRequest,
 } from "./chat.js";
 import { loadSettings, resetSettings, saveSettings, validateSettings } from "./settings.js";
+import { checkAvatarSize, normalizeProfileInput, sniffImage, MAX_AVATAR_BYTES } from "./profile.js";
+import { putAvatar, readProfile, removeAvatar, saveProfile, serveAvatar } from "./profile-store.js";
 import { requestTheme, validateStylePrompt } from "./theme-ai.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
@@ -196,7 +198,10 @@ const isTombstoned = async (env: Env, sessionId: string): Promise<boolean> =>
 function cors(resp: Response): Response {
   const h = new Headers(resp.headers);
   h.set("Access-Control-Allow-Origin", "*");
-  h.set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+  // PUT is here for `/api/profile` and `/api/admin/settings`. Prod and the vite
+  // dev proxy are both same-origin, so its absence never surfaced — but a dev
+  // pointing VITE_API_BASE straight at :8787 fails preflight without it.
+  h.set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   h.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
   return new Response(resp.body, { status: resp.status, headers: h });
 }
@@ -986,6 +991,71 @@ export default Sentry.withSentry(sentryOptions, {
             .then((due) => (due ? flushMeters(env) : undefined)),
         );
         return cors(new Response(null, { status: 204 }));
+      }
+
+      // ---- profile (DEV-2166) ------------------------------------------------
+      //
+      // The caller's own row and nothing else: none of these routes takes an
+      // email, so there is no "other user's profile" for them to reach. The one
+      // public route serves an image by opaque key.
+
+      // GET /api/profile (auth) — the caller's profile, or the derived defaults
+      // if they have never saved one.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "profile" && parts.length === 2) {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+        return json(await readProfile(env, identity));
+      }
+
+      // PUT /api/profile (auth) — name + description. The avatar is not touched
+      // here; it has its own endpoints and its own immediate save.
+      if (request.method === "PUT" && parts[0] === "api" && parts[1] === "profile" && parts.length === 2) {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+        const parsed = normalizeProfileInput(await request.json().catch(() => null));
+        if (!parsed.ok) return json({ error: parsed.error }, 400);
+        return json(await saveProfile(env, identity, parsed.value, nowIso()));
+      }
+
+      // POST /api/profile/avatar (auth) — raw image body.
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "profile"
+        && parts[2] === "avatar" && parts.length === 3) {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+
+        // Cheap refusal first, so a multi-megabyte body is never buffered. The
+        // header is advisory — absent, or a lie — hence the real check below.
+        const declared = Number(request.headers.get("Content-Length"));
+        if (Number.isFinite(declared) && declared > MAX_AVATAR_BYTES) {
+          return json({ error: `image is larger than ${Math.floor(MAX_AVATAR_BYTES / 1024)} KB` }, 413);
+        }
+
+        const bytes = await request.arrayBuffer();
+        const size = checkAvatarSize(bytes.byteLength);
+        if (!size.ok) return json({ error: size.error }, size.error === "empty upload" ? 400 : 413);
+
+        // Magic bytes, not the request's Content-Type: whatever this returns is
+        // what we store and later echo back to a browser.
+        const contentType = sniffImage(new Uint8Array(bytes.slice(0, 16)));
+        if (!contentType) return json({ error: "avatar must be a PNG, JPEG or WebP image" }, 415);
+
+        return json(await putAvatar(env, identity, bytes, contentType, nowIso()));
+      }
+
+      // DELETE /api/profile/avatar (auth) — back to the monogram.
+      if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "profile"
+        && parts[2] === "avatar" && parts.length === 3) {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+        return json(await removeAvatar(env, identity, nowIso()));
+      }
+
+      // GET /api/profile/avatar/:key (public) — the image itself. Public because
+      // it is an <img src> on pages that carry no token; safe because the key is
+      // an opaque uuid, so the URL space cannot be walked back to an email.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "profile"
+        && parts[2] === "avatar" && parts.length === 4) {
+        return cors(await serveAvatar(env, parts[3]!));
       }
 
       // GET /api/budget (public) — the degradation tier the client should

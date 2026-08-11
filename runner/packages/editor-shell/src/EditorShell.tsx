@@ -101,9 +101,15 @@ export interface EditorShellProps {
   authed: boolean;
   /** Signed-in identity for the top bar's account menu (`114:21480`). */
   accountEmail?: string;
+  /** The signed-in user's profile (DEV-2166), once it resolves — the avatar in
+   *  the account menu is the same one the profile page edits. */
+  accountDisplayName?: string;
+  accountAvatarUrl?: string | null;
   onMyDemos?: () => void;
   /** `/admin`, the internal usage + cost panel. Reaches the account menu. */
   onUsage?: () => void;
+  /** `/settings`, the profile page. Reaches the account menu. */
+  onSettings?: () => void;
   onLogout?: () => void;
   /** "play" (playground -> Fork), "edit" (saved demo -> Save/Share), or
    *  "share" (read-only public playground). */
@@ -378,8 +384,11 @@ export function EditorShell(props: EditorShellProps) {
         downloadHighlight={props.downloadHighlight}
         onSignIn={props.fullMode ? undefined : props.onSignIn}
         accountEmail={props.fullMode ? undefined : props.accountEmail}
+        accountDisplayName={props.fullMode ? undefined : props.accountDisplayName}
+        accountAvatarUrl={props.fullMode ? undefined : props.accountAvatarUrl}
         onMyDemos={props.fullMode ? undefined : props.onMyDemos}
         onUsage={props.fullMode ? undefined : props.onUsage}
+        onSettings={props.fullMode ? undefined : props.onSettings}
         onLogout={props.fullMode ? undefined : props.onLogout}
         // The mode action is resolved here, not in `TopBar`, and off `authed`
         // rather than off `accountEmail`. The two disagree on exactly one route:
