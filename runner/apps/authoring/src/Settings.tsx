@@ -56,6 +56,10 @@ export interface SettingsPageProps {
   user: User;
 }
 
+/** Edits made on this page, per field. An absent key means "not edited" — see
+ *  the state comment below for why that is not the same as `""`. */
+type Draft = { name?: string; description?: string };
+
 export function SettingsPage({ apiBase, user }: SettingsPageProps) {
   const loaded = useProfile(apiBase, user.email);
   // Only this page's own writes. Seeding it from the cache would pin the form to
@@ -65,22 +69,29 @@ export function SettingsPage({ apiBase, user }: SettingsPageProps) {
   const [saved, setSaved] = useState<Profile | null>(null);
   const profile = saved ?? loaded;
 
-  const [draft, setDraft] = useState<{ name: string; description: string } | null>(null);
+  // Per *field*, not a snapshot of the form. The profile arrives asynchronously,
+  // so a draft that captured both fields would freeze the untouched one at ""
+  // whenever the user started typing before the fetch landed — and Save would
+  // then send `null` for it and clear whatever the server already had. A field
+  // with no entry here has not been edited, and falls through to the stored
+  // value however late that arrives.
+  const [draft, setDraft] = useState<Draft>({});
   const [busy, setBusy] = useState<null | "save" | "upload" | "remove">(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  // The draft is null until the user types: the profile arrives asynchronously,
-  // and seeding state from it on mount would either show empty fields until the
-  // fetch landed or clobber typing that started before it did.
-  const name = draft?.name ?? profile?.saved_name ?? "";
-  const description = draft?.description ?? profile?.description ?? "";
-  const edit = (patch: Partial<{ name: string; description: string }>) =>
-    setDraft({ name, description, ...patch });
+  const savedName = profile?.saved_name ?? "";
+  const savedDescription = profile?.description ?? "";
+  const name = draft.name ?? savedName;
+  const description = draft.description ?? savedDescription;
+  const edit = (patch: Draft) => setDraft((current) => ({ ...current, ...patch }));
 
-  const dirty = draft !== null
-    && (draft.name !== (profile?.saved_name ?? "") || draft.description !== (profile?.description ?? ""));
+  // Only fields the user actually touched count, and only while they still
+  // differ from what is stored — typing a character and deleting it again leaves
+  // Save inert, as it was before the edit.
+  const dirty = (draft.name !== undefined && draft.name !== savedName)
+    || (draft.description !== undefined && draft.description !== savedDescription);
 
   // What the placeholder promises and what the monogram draws when the field is
   // empty — the same rule the server applies, so clearing the name shows exactly
@@ -88,9 +99,17 @@ export function SettingsPage({ apiBase, user }: SettingsPageProps) {
   const fallbackName = displayNameFromEmail(user.email);
   const initial = (name.trim()[0] ?? fallbackName[0] ?? "?").toUpperCase();
 
-  function settle(next: Profile, message: string) {
+  /**
+   * Accept a server response as the new truth.
+   *
+   * `keepDraft` is what makes Upload and Remove genuinely independent of the
+   * Save/Cancel form: they settle a *different* field of the same row, and
+   * clearing the draft here would silently discard a half-typed name the moment
+   * someone changed their picture.
+   */
+  function settle(next: Profile, message: string, { keepDraft = false } = {}) {
     setSaved(next);
-    setDraft(null);
+    if (!keepDraft) setDraft({});
     setStatus(message);
   }
 
@@ -132,7 +151,7 @@ export function SettingsPage({ apiBase, user }: SettingsPageProps) {
     setError(null);
     setStatus(null);
     try {
-      settle(await uploadAvatar(apiBase, file), "Avatar updated.");
+      settle(await uploadAvatar(apiBase, file), "Avatar updated.", { keepDraft: true });
     } catch (err) {
       fail(err, "profile-avatar-upload");
     } finally {
@@ -145,7 +164,7 @@ export function SettingsPage({ apiBase, user }: SettingsPageProps) {
     setError(null);
     setStatus(null);
     try {
-      settle(await removeAvatar(apiBase), "Avatar removed.");
+      settle(await removeAvatar(apiBase), "Avatar removed.", { keepDraft: true });
     } catch (err) {
       fail(err, "profile-avatar-remove");
     } finally {
@@ -248,7 +267,7 @@ export function SettingsPage({ apiBase, user }: SettingsPageProps) {
               <button
                 type="button"
                 style={ghost}
-                onClick={() => { setDraft(null); setError(null); setStatus(null); }}
+                onClick={() => { setDraft({}); setError(null); setStatus(null); }}
                 disabled={busy !== null || !dirty}
               >
                 Cancel

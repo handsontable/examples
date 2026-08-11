@@ -16,11 +16,16 @@ export const fieldLabel: React.CSSProperties = {
   color: theme.color.text,
 };
 
+// `controlBorder`, not `border`. In dark, `border` *is* `surfaceRaised`
+// (#222222), so a field outlined with it disappears completely inside a `Dialog`
+// and is barely there on the Settings card (#19191c) — the same failure DEV-2209
+// fixed on the top bar. `controlBorder` (#353535) is the token for anything the
+// user is meant to see the edge of.
 export const fieldInput: React.CSSProperties = {
   width: "100%",
   height: 36,
   padding: `0 ${theme.space(3)}`,
-  border: `1px solid ${theme.color.border}`,
+  border: `1px solid ${theme.color.controlBorder}`,
   borderRadius: theme.radius.md,
   background: theme.color.surfaceSunken,
   color: theme.color.text,
@@ -48,7 +53,10 @@ export const formFooter: React.CSSProperties = {
 export const ghostButton: React.CSSProperties = {
   height: 32,
   padding: `0 ${theme.space(3)}`,
-  border: `1px solid ${theme.color.border}`,
+  // `controlBorder` for the reason above, and most acutely here: the button is
+  // transparent, so the outline is the entire control. With `border` in dark,
+  // Cancel / Upload / Remove render as bare floating text.
+  border: `1px solid ${theme.color.controlBorder}`,
   borderRadius: theme.radius.md,
   // Outline-only per the frames — `surface` painted a black block on the
   // `surfaceRaised` card in dark, invisible in light where the two collapse.

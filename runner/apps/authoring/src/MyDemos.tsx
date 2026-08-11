@@ -38,6 +38,7 @@ import {
 import { getEntry } from "./catalog.js";
 import { getToken, logout, type User } from "./auth.js";
 import { displayNameFromEmail, initialFromEmail } from "./displayName.js";
+import { ghostButton } from "./formStyles.js";
 import { useProfile } from "./useProfile.js";
 import { reportError } from "./sentry.js";
 
@@ -736,20 +737,9 @@ const confirmFooter: CSSProperties = {
   marginTop: theme.space(5),
 };
 
-const ghostButton: CSSProperties = {
-  height: 32,
-  padding: `0 ${theme.space(3)}`,
-  border: `1px solid ${theme.color.border}`,
-  borderRadius: theme.radius.md,
-  // Outline-only per the frames — `surface` painted a black block on the
-  // `surfaceRaised` card in dark, invisible in light where the two collapse.
-  background: "transparent",
-  color: theme.color.text,
-  fontFamily: theme.font.ui,
-  fontSize: 13,
-  cursor: "pointer",
-};
-
+// The delete confirmation's buttons are the shared pair — it is the same dialog
+// footer as Edit info, and its local copy still outlined with `border`, which in
+// dark is `surfaceRaised`: Cancel rendered as bare text inside the dialog.
 const dangerButton: CSSProperties = {
   ...ghostButton,
   border: `1px solid ${theme.color.danger}`,

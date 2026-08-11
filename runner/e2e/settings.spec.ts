@@ -259,6 +259,102 @@ test.describe("/settings", () => {
     expect(await page.evaluate(() => sessionStorage.getItem("hot_profile"))).toBeNull();
   });
 
+  test("typing before the profile loads does not wipe the field left untouched", async ({ page }) => {
+    // The form renders immediately while `GET /api/profile` is still in flight —
+    // it costs the Worker a broker round trip — so someone can start typing
+    // against empty fields. A draft that snapshotted *both* fields would freeze
+    // the untouched one at "" and Save would then clear the stored value.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await signIn(page);
+    const { calls, state } = await stubProfileApi(page, {
+      ...emptyProfile,
+      saved_name: "Ada Lovelace",
+      display_name: "Ada Lovelace",
+      description: "Builds spreadsheets.",
+      initial: "A",
+    });
+    await page.route("**/api/profile", async (route) => {
+      // Hold only the initial GET; the PUT must go straight through.
+      if (route.request().method() === "GET") await held;
+      await route.fallback();
+    });
+
+    await page.goto("/settings");
+    await nameField(page).fill("Ada L.");
+    release();
+
+    // The description arrives late and must win, because nothing was typed into it.
+    await expect(descriptionField(page)).toHaveValue("Builds spreadsheets.");
+    // And the late fetch must not clobber what was typed, either.
+    await expect(nameField(page)).toHaveValue("Ada L.");
+
+    await saveButton(page).click();
+    await expect(page.getByRole("status")).toHaveText("Saved.");
+    expect(calls).toContain("PUT profile");
+    expect(state.description).toBe("Builds spreadsheets.");
+    expect(state.saved_name).toBe("Ada L.");
+  });
+
+  test("changing the avatar keeps an in-progress text edit", async ({ page }) => {
+    // Upload and Remove are documented as independent of the Save/Cancel form.
+    // Independent has to mean both ways: they must not discard a half-typed name.
+    await signIn(page);
+    await stubProfileApi(page);
+    await page.goto("/settings");
+
+    await nameField(page).fill("Half typed");
+    await page.setInputFiles('input[type="file"]', PNG_1x1);
+    await expect(page.getByRole("status")).toHaveText("Avatar updated.");
+
+    await expect(nameField(page)).toHaveValue("Half typed");
+    await expect(saveButton(page)).toBeEnabled();
+  });
+
+  test("form controls stay visible in dark mode", async ({ page }) => {
+    // `border` and `surfaceRaised` are the same colour in dark (#222222), so an
+    // outline-only control drawn with `border` vanishes — the DEV-2209 failure.
+    // Asserted as "the outline differs from what is behind it" rather than
+    // against a literal, so it survives a palette change.
+    await signIn(page);
+    await stubProfileApi(page);
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.goto("/settings");
+
+    // Or the whole assertion below passes vacuously against the light palette,
+    // where `border` and the surfaces do differ.
+    await expect(page.locator("html")).toHaveAttribute("data-hot-theme", "dark");
+
+    const contrasts = await page.evaluate(() => {
+      const results: Array<{ label: string; border: string; behind: string }> = [];
+      const behindOf = (el: Element) => {
+        let node: Element | null = el.parentElement;
+        while (node) {
+          const bg = getComputedStyle(node).backgroundColor;
+          if (bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") return bg;
+          node = node.parentElement;
+        }
+        return "";
+      };
+      for (const el of document.querySelectorAll("main input, main textarea, main button")) {
+        const style = getComputedStyle(el);
+        if (style.borderTopStyle === "none") continue;
+        results.push({
+          label: el.textContent?.trim() || (el as HTMLElement).id || el.tagName,
+          border: style.borderTopColor,
+          behind: behindOf(el),
+        });
+      }
+      return results;
+    });
+
+    expect(contrasts.length).toBeGreaterThan(0);
+    for (const control of contrasts) {
+      expect(control.border, `${control.label} outline is invisible against its surface`)
+        .not.toBe(control.behind);
+    }
+  });
+
   test("Cancel discards the draft without writing", async ({ page }) => {
     await signIn(page);
     const { calls } = await stubProfileApi(page);
