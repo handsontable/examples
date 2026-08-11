@@ -404,7 +404,7 @@ const pathChip: React.CSSProperties = {
   padding: `1px ${theme.space(1)}`,
 };
 const docLink: React.CSSProperties = {
-  display: "block", color: theme.color.accent, textDecoration: "none", padding: "1px 0",
+  display: "block", color: theme.color.accentText, textDecoration: "none", padding: "1px 0",
 };
 const composer: React.CSSProperties = { display: "flex", gap: theme.space(2) };
 const textarea: React.CSSProperties = {
@@ -429,7 +429,7 @@ const ghost: React.CSSProperties = {
 /** No `background`: `.hot-panel-suggestion` owns the fill and its rollover, and
  *  an inline one — `ghost`'s `surface` included — would outrank it (ADR-0026). */
 const suggestion: React.CSSProperties = {
-  ...ghost, background: undefined, textAlign: "left", color: theme.color.accent,
+  ...ghost, background: undefined, textAlign: "left", color: theme.color.accentText,
 };
 
 // Deliberately the same neutral treatment as every other toolbar button: this

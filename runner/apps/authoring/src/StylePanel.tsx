@@ -363,7 +363,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
       <div>
         <p style={intro}>
           The same theme controls as{" "}
-          <a href="https://theme-builder.handsontable.com/" target="_blank" rel="noreferrer" style={{ color: ui.color.accent }}>
+          <a href="https://theme-builder.handsontable.com/" target="_blank" rel="noreferrer" style={{ color: ui.color.accentText }}>
             Theme Builder
           </a>
           , applied to the example you have open. The theme is written into the demo as{" "}
@@ -665,7 +665,7 @@ function Tile({
       style={{ ...tile, ...(maxWidth ? { maxWidth } : {}) }}
     >
       <img src={image} alt="" style={tileImg} />
-      <span style={{ ...tileLabel, color: active ? ui.color.accent : ui.color.textMuted }}>
+      <span style={{ ...tileLabel, color: active ? ui.color.accentText : ui.color.textMuted }}>
         {label}
       </span>
     </button>
@@ -938,7 +938,7 @@ const tabBar: React.CSSProperties = {
 const tabBtn = (on: boolean): React.CSSProperties => ({
   flex: 1, padding: `${ui.space(2)} ${ui.space(1)}`, fontSize: 13, cursor: "pointer",
   border: "none", borderBottom: `2px solid ${on ? ui.color.accent : "transparent"}`,
-  color: on ? ui.color.accent : ui.color.textMuted, fontWeight: on ? 600 : 400,
+  color: on ? ui.color.accentText : ui.color.textMuted, fontWeight: on ? 600 : 400,
   fontFamily: ui.font.ui,
 });
 // Same split as `groupHeader`: the fill and its rollover live in `.hot-panel-row`.
@@ -950,7 +950,7 @@ const componentRow: React.CSSProperties = {
 };
 const backBtn: React.CSSProperties = {
   display: "inline-flex", alignItems: "center", gap: ui.space(1),
-  border: "none", background: "none", color: ui.color.accent, fontSize: 13,
+  border: "none", background: "none", color: ui.color.accentText, fontSize: 13,
   cursor: "pointer", padding: `${ui.space(2)} 0`, fontFamily: ui.font.ui,
 };
 const subGroup: React.CSSProperties = { ...headerLabel, display: "block", margin: `${ui.space(3)} 0 ${ui.space(2)}` };

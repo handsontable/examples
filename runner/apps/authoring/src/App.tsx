@@ -498,7 +498,7 @@ function NotFound({ path, transient = false }: { path: string | null; transient?
       {path && (
         <code style={{ color: theme.color.textMuted, fontSize: 12 }}>{path}</code>
       )}
-      <a href="/" style={{ color: theme.color.accent, fontFamily: theme.font.ui }}>
+      <a href="/" style={{ color: theme.color.accentText, fontFamily: theme.font.ui }}>
         Back to the playground
       </a>
     </div>

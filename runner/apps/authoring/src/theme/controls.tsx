@@ -352,7 +352,7 @@ const trigger: React.CSSProperties = {
   gap: ui.space(2), cursor: "pointer", textAlign: "left",
 };
 const resetBtn: React.CSSProperties = {
-  border: "none", background: "none", color: ui.color.accent, fontSize: 12,
+  border: "none", background: "none", color: ui.color.accentText, fontSize: 12,
   cursor: "pointer", padding: `0 ${ui.space(1)}`, flex: "0 0 auto",
 };
 const popover: React.CSSProperties = {

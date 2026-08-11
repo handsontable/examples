@@ -97,7 +97,52 @@ test.describe("drawer chrome", () => {
   });
 });
 
+/** WCAG 2.1 contrast ratio of one element's text against its own background,
+ *  walking up for the first non-transparent ancestor fill — which is what a
+ *  transparent button on a drawer actually renders against. */
+async function contrast(page: Page, selector: string): Promise<number> {
+  return page.locator(selector).first().evaluate((el) => {
+    const parse = (v: string) => (v.match(/[\d.]+/g) ?? []).map(Number);
+    const lum = ([r, g, b]: number[]) => {
+      const ch = [r, g, b].map((c) => {
+        const s = (c ?? 0) / 255;
+        return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * ch[0]! + 0.7152 * ch[1]! + 0.0722 * ch[2]!;
+    };
+    let node: HTMLElement | null = el as HTMLElement;
+    let background = "rgba(0, 0, 0, 0)";
+    while (node) {
+      const bg = getComputedStyle(node).backgroundColor;
+      const parts = parse(bg);
+      if (parts.length < 4 || parts[3] !== 0) { background = bg; break; }
+      node = node.parentElement;
+    }
+    const a = lum(parse(getComputedStyle(el).color));
+    const b = lum(parse(background));
+    const [hi, lo] = a > b ? [a, b] : [b, a];
+    return (hi + 0.05) / (lo + 0.05);
+  });
+}
+
 test.describe("dark mode legibility", () => {
+  test("accent text clears AA on the drawer's surface", async ({ page }) => {
+    await openPlayground(page, "dark");
+    await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+
+    // Plain `accent` (#1A42E8) is 2.3:1 on `surfaceRaised` — these four buttons are
+    // the first thing an empty chat panel offers and they read as disabled.
+    // `accentText` is the lifted pair.
+    const suggestion = await contrast(page, `${CHAT} .hot-panel-suggestion`);
+    expect(suggestion).toBeGreaterThanOrEqual(4.5);
+
+    await page.locator(CHAT).getByRole("button", { name: /^Close/ }).click();
+    await page.getByRole("button", { name: "Style", exact: true }).click();
+    // Same token, as a selected tab label and a link inside body copy.
+    expect(await contrast(page, `${STYLE} [role=tab][aria-selected=true]`)).toBeGreaterThanOrEqual(4.5);
+    expect(await contrast(page, `${STYLE} a`)).toBeGreaterThanOrEqual(4.5);
+  });
+
   test("no control in either drawer is painted white", async ({ page }) => {
     await openPlayground(page, "dark");
 

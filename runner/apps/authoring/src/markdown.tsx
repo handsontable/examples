@@ -121,7 +121,7 @@ const thStyle: React.CSSProperties = {
   ...cellStyle, fontWeight: 600, background: theme.color.surfaceMuted, whiteSpace: "nowrap",
 };
 const tdStyle: React.CSSProperties = cellStyle;
-const linkStyle: React.CSSProperties = { color: theme.color.accent };
+const linkStyle: React.CSSProperties = { color: theme.color.accentText };
 /** Every heading level at the body size, weight carrying the hierarchy. The
  *  levels used to be sized 15.5 / 14.5 / 13.5 / 12.5 — four steps, none of them on
  *  the shell's scale, inside a 400px drawer where two of them are a fraction of a

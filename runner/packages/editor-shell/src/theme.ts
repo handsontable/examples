@@ -34,6 +34,13 @@ const LIGHT_COLORS = {
   accentHover: "#1233bf",
   accentContrast: "#ffffff", // text/icons drawn *on* accent
   accentContrastSoft: "rgba(255, 255, 255, 0.4)", // dimmed, on accent (spinner track)
+  // Brand blue as *text* (links, selected labels) and as a thin mark on a neutral
+  // ground — the inverse of `accentContrast`. Identical to `accent` in light, where
+  // #1A42E8 on #ffffff is 6.5:1; the dark half exists because `accent` there is
+  // 2.3:1 on `surfaceRaised`, which is what made the chat panel's suggestions read
+  // as disabled. Fills, rings and the tab underline keep plain `accent`: they carry
+  // `accentContrast` text or no text at all.
+  accentText: "#1A42E8",
   accentSoft: "#1A42E814", // tinted fill (was `${accent}14`)
   accentBorder: "#1A42E833", // tinted border (was `${accent}33`)
   accentSelection: "#1A42E844",
@@ -86,6 +93,13 @@ const DARK_COLORS: Record<ColorToken, string> = {
   accentHover: "#3b5cf0",
   accentContrast: "#ffffff",
   accentContrastSoft: "rgba(255, 255, 255, 0.4)",
+  // `accent` lifted until it clears AA as body text on the raised surfaces the
+  // panels and dialogs are painted with. Measured: 5.1:1 on `surfaceRaised`
+  // (#222222), 6.4:1 on `surface` (#070604), 5.3:1 on `surfaceMuted` (#19191c).
+  // #4669F6 (`splitterActive`) was tried first and reaches only 3.5:1 — fine for a
+  // 3px seam, short of text. Like dark `textMuted`, this is a value the design has
+  // not ruled on; flag it at design review (DEV-2173).
+  accentText: "#6E8CFA",
   accentSoft: "#1A42E829",
   accentBorder: "#1A42E84d",
   accentSelection: "#1A42E855",
