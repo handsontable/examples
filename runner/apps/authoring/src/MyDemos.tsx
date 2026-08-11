@@ -176,7 +176,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
   // resolves (DEV-2166); until then — and for a user who never saved one — this
   // is still the email's local part and its first letter, which is what the
   // server would derive anyway.
-  const profile = useProfile(apiBase, true);
+  const profile = useProfile(apiBase, user.email);
   const ownerName = profile?.display_name ?? user.email.split("@")[0] ?? user.email;
   const ownerInitial = profile?.initial ?? (user.email.trim()[0] ?? "?").toUpperCase();
   const ownerAvatar = profile?.avatar_url ?? null;

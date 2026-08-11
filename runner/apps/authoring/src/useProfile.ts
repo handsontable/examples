@@ -9,13 +9,21 @@
 import { useEffect, useState } from "react";
 import { cachedProfile, loadProfileInBackground, type Profile } from "./profile.js";
 
-export function useProfile(apiBase: string, enabled: boolean): Profile | null {
-  const [profile, setProfile] = useState<Profile | null>(() => (enabled ? cachedProfile() : null));
+/** `email` doubles as the enable switch and as the cache's owner check — a
+ *  cached row from a previous sign-in in this tab must not paint. Pass
+ *  null/undefined for an anonymous view and nothing is fetched. */
+export function useProfile(apiBase: string, email: string | null | undefined): Profile | null {
+  const [profile, setProfile] = useState<Profile | null>(() => (email ? cachedProfile(email) : null));
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!email) {
+      setProfile(null);
+      return;
+    }
+    // Re-seed on an identity change: the state initialiser only ran once.
+    setProfile(cachedProfile(email));
     return loadProfileInBackground(apiBase, setProfile);
-  }, [apiBase, enabled]);
+  }, [apiBase, email]);
 
   return profile;
 }

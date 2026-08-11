@@ -8,12 +8,14 @@
 // on the editor's critical path for every click. Cached, the monogram or the
 // last-known avatar paints immediately and the network answer only corrects it.
 //
-// The cache is keyed to the session token's lifetime: `logout()` clears
-// sessionStorage, so signing out drops the profile with the token, and a
-// different browser starts cold. It is not a security boundary — the server is
-// the only thing that decides whose row this is.
+// Two things keep the cache from ever showing one user another's name: `logout()`
+// drops this key along with the token, and every read is checked against the
+// email it was stored for — a token swap that never went through `logout()`
+// (the broker redirect hash sets one directly) would otherwise leave the
+// previous user's avatar painted until the network answered. It is not a
+// security boundary either way: the server decides whose row this is.
 
-import { getToken } from "./auth.js";
+import { getToken, PROFILE_CACHE_KEY } from "./auth.js";
 import { reportError } from "./sentry.js";
 
 /** Mirrors `ProfileView` in `workers/api/src/profile-store.ts`. */
@@ -30,17 +32,21 @@ export interface Profile {
   initial: string;
 }
 
-const CACHE_KEY = "hot_profile";
+const CACHE_KEY = PROFILE_CACHE_KEY;
 
 function authHeaders(): Record<string, string> {
   const token = getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-export function cachedProfile(): Profile | null {
+/** The cached profile, but only if it belongs to `email`. A stale row from a
+ *  previous sign-in in the same tab is discarded rather than painted. */
+export function cachedProfile(email: string): Profile | null {
   try {
     const raw = sessionStorage.getItem(CACHE_KEY);
-    return raw ? (JSON.parse(raw) as Profile) : null;
+    if (!raw) return null;
+    const profile = JSON.parse(raw) as Profile;
+    return profile.email === email ? profile : null;
   } catch {
     // Corrupt or unavailable storage is not worth an error path — the fetch
     // below is authoritative either way.

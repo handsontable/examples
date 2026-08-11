@@ -162,6 +162,79 @@ test.describe("/settings", () => {
     await expect(descriptionField(page)).toHaveValue("Builds spreadsheets.");
   });
 
+  test("a stale cache is corrected by the server, not shown instead of it", async ({ page }) => {
+    // The cache exists so the avatar paints on the first frame; it must never
+    // become the value the page settles on. Seed one, serve a different profile,
+    // and the server's has to win.
+    await signIn(page);
+    await page.addInitScript(() => {
+      sessionStorage.setItem(
+        "hot_profile",
+        JSON.stringify({
+          email: "dev@handsontable.com",
+          display_name: "Stale Name",
+          saved_name: "Stale Name",
+          description: "Stale description",
+          avatar_url: null,
+          initial: "S",
+        }),
+      );
+    });
+    await stubProfileApi(page, {
+      ...emptyProfile,
+      display_name: "Fresh Name",
+      saved_name: "Fresh Name",
+      description: "Fresh description",
+      initial: "F",
+    });
+
+    await page.goto("/settings");
+    await expect(nameField(page)).toHaveValue("Fresh Name");
+    await expect(descriptionField(page)).toHaveValue("Fresh description");
+  });
+
+  test("a cache belonging to someone else is never painted", async ({ page }) => {
+    // A token swap does not have to go through `logout()` — the broker redirect
+    // sets one directly — so the owner check, not just the logout path, is what
+    // keeps one user's name off another's screen.
+    await signIn(page);
+    await page.addInitScript(() => {
+      sessionStorage.setItem(
+        "hot_profile",
+        JSON.stringify({
+          email: "someone.else@handsontable.com",
+          display_name: "Someone Else",
+          saved_name: "Someone Else",
+          description: null,
+          avatar_url: "/api/profile/avatar/not-yours",
+          initial: "S",
+        }),
+      );
+    });
+    await stubProfileApi(page);
+
+    await page.goto("/settings");
+    await expect(page.getByText("Someone Else")).toHaveCount(0);
+    await expect(nameField(page)).toHaveValue("");
+  });
+
+  test("logging out drops the cached profile with the token", async ({ page }) => {
+    await signIn(page);
+    await stubProfileApi(page, { ...emptyProfile, saved_name: "Ada Lovelace", display_name: "Ada Lovelace" });
+    await page.goto("/settings");
+    await expect(nameField(page)).toHaveValue("Ada Lovelace");
+    await expect.poll(() => page.evaluate(() => sessionStorage.getItem("hot_profile"))).not.toBeNull();
+
+    // `logout("/")` navigates to a public page, so read the storage there.
+    await page.getByRole("navigation", { name: "Account" }).getByRole("button", { name: "Log out" }).click();
+    await page.waitForURL((url) => !url.pathname.startsWith("/settings"));
+    // Only the profile key is asserted: `signIn`'s init script re-seeds
+    // `hot_token` on every navigation, so checking it here would be checking the
+    // harness. That the token is dropped is `auth.ts`'s long-standing behaviour;
+    // what is new is that the profile goes with it.
+    expect(await page.evaluate(() => sessionStorage.getItem("hot_profile"))).toBeNull();
+  });
+
   test("Cancel discards the draft without writing", async ({ page }) => {
     await signIn(page);
     const { calls } = await stubProfileApi(page);

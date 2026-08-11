@@ -6,6 +6,10 @@ import { reportError } from "./sentry.js";
 
 const BROKER = import.meta.env.VITE_LOGIN_BROKER_URL || "https://mcp-auth-proxy-j0tb.onrender.com";
 const TOKEN_KEY = "hot_token";
+/** The cached profile (DEV-2166). Declared beside the token because it shares
+ *  the token's lifetime, and because `logout()` has to know to drop it — see
+ *  `profile.ts` for why the cache exists at all. */
+export const PROFILE_CACHE_KEY = "hot_profile";
 
 export interface User {
   email: string;
@@ -72,6 +76,11 @@ export function login(): void {
  */
 export function logout(returnTo?: string): void {
   sessionStorage.removeItem(TOKEN_KEY);
+  // The cached profile (DEV-2166) goes with the token, or the next person to
+  // sign in on this tab sees the previous one's name and avatar until the
+  // network corrects it. Removed by name rather than `sessionStorage.clear()`:
+  // this key is ours, the rest of the origin's storage is not.
+  sessionStorage.removeItem(PROFILE_CACHE_KEY);
   if (returnTo) {
     location.href = returnTo;
     return;

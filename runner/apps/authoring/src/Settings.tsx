@@ -29,7 +29,6 @@ import {
 } from "@handsontable/demo-editor-shell";
 import { logout, type User } from "./auth.js";
 import {
-  cachedProfile,
   removeAvatar,
   saveProfile,
   uploadAvatar,
@@ -49,10 +48,12 @@ export interface SettingsPageProps {
 }
 
 export function SettingsPage({ apiBase, user }: SettingsPageProps) {
-  const loaded = useProfile(apiBase, true);
-  // Local overrides from this page's own writes. `useProfile` refetches in the
-  // background and would otherwise hand back a stale value over a fresh save.
-  const [saved, setSaved] = useState<Profile | null>(() => cachedProfile());
+  const loaded = useProfile(apiBase, user.email);
+  // Only this page's own writes. Seeding it from the cache would pin the form to
+  // the cached row for the lifetime of the page — `loaded` would never be shown
+  // — and `useProfile` already seeds itself from the same cache, so first paint
+  // is instant either way.
+  const [saved, setSaved] = useState<Profile | null>(null);
   const profile = saved ?? loaded;
 
   const [draft, setDraft] = useState<{ name: string; description: string } | null>(null);

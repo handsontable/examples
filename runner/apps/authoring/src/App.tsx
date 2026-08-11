@@ -557,7 +557,7 @@ function Authoring({
 
   // The account menu's avatar. Keyed off `accountUser` for the same reason the
   // menu itself is: a signed-in visitor on `/share/:id` still has one.
-  const profile = useProfile(API_BASE, !!accountUser);
+  const profile = useProfile(API_BASE, accountUser?.email);
 
   // Initial example/version come from the URL so the playground is deep-linkable.
   // `?docs=<content-path>` opens a documentation-guide example (lazy-loaded);
