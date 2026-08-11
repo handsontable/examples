@@ -8,7 +8,7 @@
 
 import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/sandbox";
 import * as Sentry from "@sentry/cloudflare";
-import { mintSessionId, pickLatestNextVersion } from "@handsontable/demo-runtime";
+import { DEFAULT_MAX_MAJOR, DEFAULT_MIN_MAJOR, mintSessionId, pickLatestNextVersion } from "@handsontable/demo-runtime";
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
@@ -839,7 +839,7 @@ export default Sentry.withSentry(sentryOptions, {
           };
           const versions = Object.keys(j.versions ?? {})
             .filter((v) => /^\d+\.\d+\.\d+$/.test(v))
-            .filter((v) => { const m = Number(v.split(".")[0]); return m >= 15 && m <= 19; })
+            .filter((v) => { const m = Number(v.split(".")[0]); return m >= DEFAULT_MIN_MAJOR && m <= DEFAULT_MAX_MAJOR; })
             .sort(cmp)
             .slice(0, 15);
           const payload = { latest, next, versions };

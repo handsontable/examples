@@ -48,6 +48,39 @@ export interface Catalog {
 }
 
 /**
+ * A catalog.json row once starters are bucketized (DEV-2213): everything the
+ * picker, the version dropdown, and BUILD_CONFIG need, without the inlined
+ * files. Full entries live per bucket under public/starter-examples/ and are
+ * lazy-fetched on select. `htCoreRange` is dropped too — it is per-bucket
+ * (the bucket's pinned hotVersion), not a property of the framework.
+ */
+export type CatalogIndexEntry = Omit<
+  CatalogEntry,
+  "files" | "fileCount" | "assets" | "skipped" | "htCoreRange"
+>;
+
+/** One row of a starter bucket's manifest.json — picker metadata only. */
+export interface StarterBucketManifestEntry {
+  framework: string;
+  displayName: string;
+  tier: Tier;
+  engine: "sandpack" | "container";
+  minCoreMajor: number | null;
+}
+
+/** manifest.json of one public/starter-examples/<bucket>/ directory. */
+export interface StarterBucketManifest {
+  bucket: string;
+  /** Git ref the bucket was generated from (prod-examples/<major> or master). */
+  sourceRef: string;
+  generatedFrom: string;
+  /** Concrete Handsontable version pinned into every artifact of the bucket. */
+  hotVersion: string;
+  count: number;
+  examples: StarterBucketManifestEntry[];
+}
+
+/**
  * The single interface both engines implement. `mount` boots the preview and
  * returns the URL to point the iframe at; `writeFile` streams edits (on save or
  * keystroke); lifecycle callbacks drive the shell's ready/error UI.

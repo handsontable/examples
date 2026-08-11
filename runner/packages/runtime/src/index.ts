@@ -2,7 +2,10 @@ export type {
   FilesMap,
   Tier,
   CatalogEntry,
+  CatalogIndexEntry,
   Catalog,
+  StarterBucketManifest,
+  StarterBucketManifestEntry,
   DemoRuntime,
   HandsontableVersionRef,
 } from "./types.js";
@@ -17,14 +20,17 @@ export {
   pkgPrNewDependencyUrl,
   parsePkgPrNewFromUrl,
   DEFAULT_MAX_MAJOR,
+  DEFAULT_MIN_MAJOR,
 } from "./version.js";
 export type { ValidationResult } from "./version.js";
 
 export {
   deriveDocsBucketCandidate,
   resolveDocsBucket,
+  deriveStarterBucketCandidate,
+  resolveStarterBucket,
 } from "./docs-bucket.js";
-export type { DocsBucketResolution } from "./docs-bucket.js";
+export type { DocsBucketResolution, StarterBucketResolution } from "./docs-bucket.js";
 
 export { mintSessionId } from "./session.js";
 
