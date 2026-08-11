@@ -126,10 +126,15 @@ It exists because everything else here reads generated *text*, and text was gree
 throughout the whole time Vue was being handed JSX and five starters were
 discarding the theme over a CSS class. Two rules it encodes:
 
-* **Colour is not a theme signal.** Several starters ship
-  `table.htCore tr.odd td { background: #fafbff }`, which outranks the theme's
-  tokens — a themed grid and an unthemed one read the same. Assert on the
-  `ht-theme-*` class and on row height instead.
+* **Colour is not a theme signal.** Several starters stripe their own rows, and a
+  starter stylesheet outranks the theme's `:where()`-wrapped tokens — so what a
+  cell reads is the starter's arithmetic, not the theme's. Those rules used to
+  pin `background: #fafbff`, which made a themed grid and an unthemed one read
+  the same; they now mix the tint out of `--ht-foreground-color` and
+  `--ht-background-color` so it follows the theme (DEV-2197), but they still
+  decide the pixel. Assert on the `ht-theme-*` class and on row height instead.
+  `e2e/row-striping.spec.ts` is the one place colour *is* read, and only as a
+  relationship between two rows — never as a value.
 * **Density is settled by row height.** A wrongly-keyed `density.sizes` is
   ignored in silence, so the generated source cannot distinguish the two
   readings and the rendered cell can.
