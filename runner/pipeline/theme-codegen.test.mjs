@@ -32,9 +32,13 @@ test("every interpolated object key in generated source goes through lit()", () 
 test("preset ramps are spread by bracket notation, not member access", () => {
   // `...colorsPreset.primary` pastes a ramp name into member access; a dotted
   // palette key would break out of it.
+  //
+  // Matched on the ramp expression rather than the whole spread: a TypeScript
+  // demo wraps it in a cast (DEV-2216), so the `...` and the subscript are no
+  // longer adjacent in the source. The property under test is the subscript.
   assert.ok(
-    !/\.\.\.\$\{presetVar\}\.\$\{/.test(codegen),
-    "use ...${presetVar}[${lit(ramp)}] so the ramp name stays data",
+    !/\$\{presetVar\}\.\$\{/.test(codegen),
+    "use ${presetVar}[${lit(ramp)}] so the ramp name stays data",
   );
-  assert.match(codegen, /\.\.\.\$\{presetVar\}\[\$\{lit\(ramp\)\}\]/);
+  assert.match(codegen, /\$\{presetVar\}\[\$\{lit\(ramp\)\}\]/);
 });

@@ -26,6 +26,7 @@ import {
   buildResetChanges,
   buildThemeChanges,
   buildThemeSnippet,
+  isTypescript,
   manualImportHint,
   themeModulePath,
 } from "./theme/codegen.js";
@@ -106,7 +107,10 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const snippet = useMemo(() => buildThemeSnippet(state), [state]);
+  // Read through getFiles() rather than a prop: the snippet has to be in the
+  // demo's own language, and that is a property of the files it is sitting next
+  // to (DEV-2216).
+  const snippet = useMemo(() => buildThemeSnippet(state, isTypescript(getFiles())), [state, getFiles]);
   const pristine = isPristine(state);
 
   /** What the controls resolve against: the chosen presets with this panel's
