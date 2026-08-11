@@ -71,7 +71,14 @@ export function Drawer({
     // here would still fire and one Escape would close both a dialog and the
     // drawer beneath it. On bubble, `Dialog` swallows the key first.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // Blur first, then close. Several fields inside the style panel commit
+      // `onBlur` rather than per keystroke (a hex or a `1.5rem` is only a value
+      // once it is finished), and React fires no blur on unmount — so closing
+      // straight from a focused field would drop what was typed. Clicking ✕ moves
+      // focus and commits on its own; Escape is the path that needed this.
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

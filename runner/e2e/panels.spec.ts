@@ -139,6 +139,79 @@ test.describe("dark mode legibility", () => {
   });
 });
 
+test.describe("chat transcript", () => {
+  /** One canned answer carrying every surface the transcript can paint: a table,
+   *  an inline code span, a fenced block, a proposed edit and a doc link. Live
+   *  browsing cannot reach any of them — they exist only after a turn — which is
+   *  exactly why they went unmeasured until now. */
+  async function stubOneAnswer(page: Page) {
+    await page.route("**/api/search", (route) => route.fulfill({ json: { results: [] } }));
+    await page.route("**/api/chat/event", (route) => route.fulfill({ json: {} }));
+    await page.route("**/api/chat", (route) =>
+      route.fulfill({
+        json: {
+          message: [
+            "## Column widths",
+            "",
+            "Set `colWidths` on the grid.",
+            "",
+            "| Option | Type |",
+            "| --- | --- |",
+            "| `colWidths` | number |",
+            "",
+            "```js",
+            "colWidths: [100, 200]",
+            "```",
+          ].join("\n"),
+          edits: [{ path: "src/index.tsx", contents: "// changed\n", why: "sets the widths" }],
+          references: ["https://handsontable.com/docs/column-width/"],
+          pages: [],
+        },
+      }),
+    );
+  }
+
+  test("every surface an answer paints is legible in dark", async ({ page }) => {
+    await openPlayground(page, "dark");
+    await stubOneAnswer(page);
+
+    await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+    await page.locator(`${CHAT} textarea`).fill("How do I set column widths?");
+    await page.locator(CHAT).getByRole("button", { name: "Send" }).click();
+    await expect(page.locator(CHAT).getByText("Proposed changes to")).toBeVisible();
+
+    for (const selector of [
+      `${CHAT} table`,          // markdown.tsx tableStyle
+      `${CHAT} th`,             // thStyle
+      `${CHAT} pre`,            // preStyle
+      `${CHAT} p code`,         // codeStyle — the inline span
+    ]) {
+      const el = await paint(page, selector);
+      expect(el.background, selector).not.toBe("rgb(255, 255, 255)");
+      expect(el.borderColor, selector).not.toBe(el.parentBackground);
+    }
+
+    // The edit box and its path chip: `controlBorder`, or they dissolve into the
+    // `surfaceMuted` panel they sit on.
+    const chip = await paint(page, `${CHAT} code`);
+    expect(chip.borderColor).toBe("rgb(53, 53, 53)");
+  });
+
+  test("Apply writes the file and Undo puts it back", async ({ page }) => {
+    await openPlayground(page, "dark");
+    await stubOneAnswer(page);
+
+    await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+    await page.locator(`${CHAT} textarea`).fill("How do I set column widths?");
+    await page.locator(CHAT).getByRole("button", { name: "Send" }).click();
+
+    await page.locator(CHAT).getByRole("button", { name: "Apply" }).click();
+    await expect(page.locator(CHAT).getByText("Applied to")).toBeVisible();
+    await page.locator(CHAT).getByRole("button", { name: "Undo" }).click();
+    await expect(page.locator(CHAT).getByText("Proposed changes to")).toBeVisible();
+  });
+});
+
 test.describe("interaction states", () => {
   // ADR-0026 §5: a synthetic event does not trigger `:hover`, and these carry a
   // 120ms `background-color` transition — read too early and a live rollover
