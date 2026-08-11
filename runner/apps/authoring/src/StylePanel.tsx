@@ -391,7 +391,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
               {thinking ? "…" : "Style"}
             </button>
           </form>
-          {aiNote && <div style={{ ...hint, marginLeft: 0, marginTop: ui.space(2) }}>{aiNote}</div>}
+          {aiNote && <div style={sectionNote}>{aiNote}</div>}
           <p style={{ ...note, marginTop: ui.space(3), marginBottom: 0 }}>
             Describes the whole theme at once — presets, ramps and tokens. Everything it
             sets shows up in the other tabs, where you can nudge it by hand.
@@ -430,7 +430,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
               />
             ))}
           </div>
-          <div style={hint}>
+          <div style={sectionNote}>
             Icons change the grid's arrows, menu and sort marks — watch the preview.
           </div>
         </Section>
@@ -541,7 +541,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
                 })}
               </div>
               {densityVariant !== state.density && (
-                <div style={{ ...hint, marginLeft: 0, marginBottom: ui.space(2) }}>
+                <div style={{ ...sectionNote, marginBottom: ui.space(2) }}>
                   Editing <strong>{densityVariant}</strong>; the grid is currently on{" "}
                   <strong>{state.density}</strong>, so these won't show in the preview yet.
                 </div>
@@ -893,6 +893,13 @@ const swatch: React.CSSProperties = {
 /** Sits under a control, so it indents past the label column to line up with it. */
 const hint: React.CSSProperties = {
   fontSize: 12, color: ui.color.textMuted, marginLeft: ROW_LABEL_WIDTH + 8,
+};
+/** The same muted line, but explaining a *section* rather than one control — so no
+ *  label column to clear, and a real gap above it. Three call sites used to reach
+ *  for `hint` and cancel its indent by hand; the one under the icon tiles didn't,
+ *  which left the sentence indented under nothing and 4px off the tiles. */
+const sectionNote: React.CSSProperties = {
+  fontSize: 12, color: ui.color.textMuted, marginTop: ui.space(2),
 };
 /** Matches the "Ask AI" tooltip so the two toolbar CTAs read as a pair. */
 const tooltip: React.CSSProperties = {
