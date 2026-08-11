@@ -50,8 +50,8 @@
     "PREVIEW_HOST": "demos.handsontable.com",
 
     // ---- Cost guardrails (DEV-2030) -------------------------------------
-    // Cloudflare's own Budget alerts ($200/$500/$800, configured in the
-    // dashboard) only email; they cap nothing. This is the enforced ceiling.
+    // Cloudflare's own Budget alerts (configured in the dashboard) only email;
+    // they cap nothing. This is the enforced ceiling.
     // See docs/cost-guardrails.md for the arithmetic behind the tiers.
     "BUDGET_MONTHLY_USD": "1000",
     "BUDGET_WARN_PCT": "0.60",        // notice in the authoring UI
