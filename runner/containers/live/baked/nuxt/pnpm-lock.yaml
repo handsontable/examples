@@ -9,10 +9,10 @@ importers:
   .:
     dependencies:
       '@handsontable/vue3':
-        specifier: latest
+        specifier: 18.0.0
         version: 18.0.0(handsontable@18.0.0)(vue@3.5.39)
       handsontable:
-        specifier: latest
+        specifier: 18.0.0
         version: 18.0.0
       nuxt:
         specifier: ^3.21.8

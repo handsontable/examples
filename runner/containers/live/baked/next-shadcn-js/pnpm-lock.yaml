@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       '@handsontable/react-wrapper':
-        specifier: latest
+        specifier: 18.0.0
         version: 18.0.0(handsontable@18.0.0)
       '@tailwindcss/postcss':
         specifier: ^4.3.2
@@ -21,7 +21,7 @@ importers:
         specifier: ^2.1.1
         version: 2.1.1
       handsontable:
-        specifier: latest
+        specifier: 18.0.0
         version: 18.0.0
       lucide-react:
         specifier: ^1.24.0

@@ -12,7 +12,7 @@ importers:
         specifier: ^7.0.9
         version: 7.0.9(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(rollup@4.57.1)
       handsontable:
-        specifier: latest
+        specifier: 18.0.0
         version: 18.0.0
 
 packages:

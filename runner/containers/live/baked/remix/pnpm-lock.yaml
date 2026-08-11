@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       '@handsontable/react-wrapper':
-        specifier: latest
+        specifier: 18.0.0
         version: 18.0.0(handsontable@18.0.0)
       '@remix-run/node':
         specifier: 2.17.5
@@ -21,7 +21,7 @@ importers:
         specifier: 2.17.5
         version: 2.17.5(typescript@5.9.3)
       handsontable:
-        specifier: latest
+        specifier: 18.0.0
         version: 18.0.0
       isbot:
         specifier: 5.2.0

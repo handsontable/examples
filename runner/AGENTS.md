@@ -29,8 +29,9 @@ Cursor **Bugbot** auto-reviews each PR push.
 | `packages/editor-shell/` | Framework-agnostic editor UI: toolbar, file tree, code editor, preview pane, theme. **Most UI/UX lives here.** |
 | `packages/runtime/` | The `DemoRuntime` engines: `sandpack.ts` (Tier-1, in-browser bundler) and `container.ts` (Tier-2, live Cloudflare Sandbox container). Plus `version.ts` (HOT version dispatch). |
 | `workers/api/` | Orchestration + sharing worker `handsontable-demos-api` (sessions, `/api/demos`, `/d`, `/embed`, build snapshotter, `/api/chat`). |
-| `config/frameworks.json` | Single source of truth per example (tier, engine, wrappers, entry). `pipeline/import.mjs` → `catalog.json`. |
+| `config/frameworks.json` | Single source of truth per example (tier, engine, wrappers, entry). `pipeline/import.mjs` → starter buckets + the `catalog.json` index. |
 | `apps/authoring/public/docs-examples/` | Generated documentation-guide examples (manifest + one CatalogEntry JSON each). `pipeline/import-docs.mjs` + `wrap-docs-example.mjs`. |
+| `apps/authoring/public/starter-examples/` | Generated starter buckets, one per Handsontable major plus `next` (DEV-2213), each pinned to a concrete version. `pipeline/import.mjs`; `catalog.json` is only the files-free index. |
 | `containers/`, `scripts/` | Live/builder Dockerfiles + baked deps; `prepare-container.mjs`, `warm.ts`. |
 | `docs/` | Architecture, ADRs, run/deploy notes. |
 

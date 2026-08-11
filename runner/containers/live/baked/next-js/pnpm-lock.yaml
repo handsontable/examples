@@ -9,13 +9,13 @@ importers:
   .:
     dependencies:
       '@handsontable/react-wrapper':
-        specifier: latest
+        specifier: 18.0.0
         version: 18.0.0(handsontable@18.0.0)
       '@tailwindcss/postcss':
         specifier: ^4.3.2
         version: 4.3.2
       handsontable:
-        specifier: latest
+        specifier: 18.0.0
         version: 18.0.0
       next:
         specifier: 16.2.10

@@ -9,7 +9,12 @@
 // needs one `Sandbox` namespace). At session start the Worker hardlink-copies
 // the baked node_modules into /app, then runs fast frozen pnpm reconciliation.
 //
-// Usage: node scripts/prepare-container.mjs
+// Usage: node scripts/prepare-container.mjs [--bucket=18]
+//
+// Starter sources come from the versioned bucket snapshot (DEV-2213):
+// apps/authoring/public/starter-examples/<bucket>/<framework>.json. The baked
+// contexts therefore pin that bucket's concrete Handsontable version, which is
+// what lets a session at the bucket version take the frozen install path.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -54,7 +59,8 @@ const DEV = {
 // Container frameworks that are NOT catalog starters but must still be baked
 // into the shared image (used only by the documentation-guide examples). Vue's
 // starter is Tier-1 (Sandpack), but its docs examples need a real Vite server.
-const EXTRA_CONTAINER = [
+// Pinned to the baked bucket's hotVersion, like every real starter context.
+const extraContainer = (hotVersion) => [
   {
     framework: "vue",
     tier: 1,
@@ -70,8 +76,8 @@ const EXTRA_CONTAINER = [
           private: true,
           packageManager: `pnpm@${PNPM_VERSION}`,
           dependencies: {
-            handsontable: "18.0.0",
-            "@handsontable/vue3": "18.0.0",
+            handsontable: hotVersion,
+            "@handsontable/vue3": hotVersion,
             vue: "3.x",
             vite: "^5.4.0",
             "@vitejs/plugin-vue": "^5.0.0",
@@ -86,17 +92,31 @@ const EXTRA_CONTAINER = [
 ];
 const EXPOSE_PORTS = [...new Set(Object.values(DEV).map((d) => d.port))].sort();
 
+// The default bucket to bake: the current major's snapshot. Sessions on other
+// versions reconcile with `pnpm install --no-frozen-lockfile` at boot.
+const BAKE_BUCKET = process.argv.find((a) => a.startsWith("--bucket="))?.slice("--bucket=".length) ?? "18";
+const STARTER_EXAMPLES_DIR = path.join(RUNNER_DIR, "apps", "authoring", "public", "starter-examples");
+
+// catalog.json is the files-free index; full starter artifacts (with files)
+// come from the bucket snapshot.
 const catalog = JSON.parse(fs.readFileSync(path.join(RUNNER_DIR, "catalog.json"), "utf8"));
+const bucketManifest = JSON.parse(
+  fs.readFileSync(path.join(STARTER_EXAMPLES_DIR, BAKE_BUCKET, "manifest.json"), "utf8"),
+);
+const loadBucketArtifact = (framework) =>
+  JSON.parse(fs.readFileSync(path.join(STARTER_EXAMPLES_DIR, BAKE_BUCKET, `${framework}.json`), "utf8"));
 const bakedKey = (framework) => framework.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 const dependencyMetadataFingerprint = ({ packageJson, pnpmLock }) => {
   const part = (name, value) => value === undefined ? `${name}:missing\n` : `${name}:${value.length}:${value}\n`;
   return createHash("sha256").update(`${part("package.json", packageJson)}${part("pnpm-lock.yaml", pnpmLock)}`).digest("hex");
 };
 
-const containerExamples = catalog.examples.filter((e) => e.engine === "container");
+const containerExamples = catalog.examples
+  .filter((e) => e.engine === "container")
+  .map((e) => loadBucketArtifact(e.framework));
 // Everything baked into the image + given a dev command: catalog container
 // examples plus the docs-only extras (e.g. Vue).
-const bakeExamples = [...containerExamples, ...EXTRA_CONTAINER];
+const bakeExamples = [...containerExamples, ...extraContainer(bucketManifest.hotVersion)];
 
 function writeExtraLock(dir) {
   execFileSync(

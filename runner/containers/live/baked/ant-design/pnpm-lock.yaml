@@ -9,13 +9,13 @@ importers:
   .:
     dependencies:
       '@handsontable/react-wrapper':
-        specifier: latest
+        specifier: 18.0.0
         version: 18.0.0(handsontable@18.0.0)
       antd:
         specifier: ^6.5.1
         version: 6.5.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       handsontable:
-        specifier: latest
+        specifier: 18.0.0
         version: 18.0.0
       react:
         specifier: ^19.2.7

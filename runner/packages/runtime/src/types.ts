@@ -40,24 +40,25 @@ export interface CatalogEntry {
   files: FilesMap;
 }
 
-export interface Catalog {
-  generatedFrom: string;
-  supportedHandsontableMajors: number[];
-  tiers: Record<string, string>;
-  examples: CatalogEntry[];
-}
-
 /**
- * A catalog.json row once starters are bucketized (DEV-2213): everything the
- * picker, the version dropdown, and BUILD_CONFIG need, without the inlined
- * files. Full entries live per bucket under public/starter-examples/ and are
- * lazy-fetched on select. `htCoreRange` is dropped too — it is per-bucket
- * (the bucket's pinned hotVersion), not a property of the framework.
+ * A catalog.json row (DEV-2213): everything the picker, the version dropdown,
+ * and BUILD_CONFIG need, without the inlined files. Full entries live per
+ * bucket under public/starter-examples/ and are lazy-fetched on select.
+ * `htCoreRange` is dropped too — it is per-bucket (the bucket's pinned
+ * hotVersion), not a property of the framework.
  */
 export type CatalogIndexEntry = Omit<
   CatalogEntry,
   "files" | "fileCount" | "assets" | "skipped" | "htCoreRange"
 >;
+
+/** The catalog.json index: bucket list + files-free starter rows. */
+export interface Catalog {
+  generatedFrom: string;
+  buckets: string[];
+  tiers: Record<string, string>;
+  examples: CatalogIndexEntry[];
+}
 
 /** One row of a starter bucket's manifest.json — picker metadata only. */
 export interface StarterBucketManifestEntry {
