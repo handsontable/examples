@@ -1,5 +1,13 @@
 import { useState } from "react";
 import { Dialog, theme } from "@handsontable/demo-editor-shell";
+import {
+  fieldInput as input,
+  fieldLabel as label,
+  fieldTextarea as textarea,
+  formFooter as footer,
+  ghostButton as ghost,
+  primaryButton as primary,
+} from "./formStyles.js";
 
 /** Title + description editor for a saved demo, built to `114:24410`.
  *
@@ -72,60 +80,6 @@ export function EditInfoDialog({
   );
 }
 
-const label: React.CSSProperties = {
-  display: "block",
-  marginBottom: theme.space(2),
-  fontSize: 13,
-  color: theme.color.text,
-};
-
-const input: React.CSSProperties = {
-  width: "100%",
-  height: 36,
-  padding: `0 ${theme.space(3)}`,
-  border: `1px solid ${theme.color.border}`,
-  borderRadius: theme.radius.md,
-  background: theme.color.surfaceSunken,
-  color: theme.color.text,
-  fontFamily: theme.font.ui,
-  fontSize: 13,
-};
-
-const textarea: React.CSSProperties = {
-  ...input,
-  height: "auto",
-  minHeight: 88,
-  padding: theme.space(3),
-  resize: "vertical",
-  lineHeight: 1.5,
-};
-
-// Save then Cancel, left-aligned — the frame's order, which is not the ordering
-// the old dialog used (right-aligned, Done last).
-const footer: React.CSSProperties = {
-  display: "flex",
-  gap: theme.space(2),
-  marginTop: theme.space(5),
-};
-
-const ghost: React.CSSProperties = {
-  height: 32,
-  padding: `0 ${theme.space(3)}`,
-  border: `1px solid ${theme.color.border}`,
-  borderRadius: theme.radius.md,
-  // Outline-only per the frames — `surface` painted a black block on the
-  // `surfaceRaised` card in dark, invisible in light where the two collapse.
-  background: "transparent",
-  color: theme.color.text,
-  fontFamily: theme.font.ui,
-  fontSize: 13,
-  cursor: "pointer",
-};
-
-const primary: React.CSSProperties = {
-  ...ghost,
-  border: `1px solid ${theme.color.accent}`,
-  background: theme.color.accent,
-  color: theme.color.accentContrast,
-  fontWeight: 600,
-};
+// The field and button styles live in `formStyles.ts` — the Settings page
+// (DEV-2166) is the second surface to want them, and a second copy is how the
+// two start disagreeing.

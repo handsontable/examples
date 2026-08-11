@@ -35,6 +35,14 @@ import {
   type Profile,
 } from "./profile.js";
 import { useProfile } from "./useProfile.js";
+import {
+  fieldInput,
+  fieldLabel as label,
+  fieldTextarea,
+  formFooter as footer,
+  ghostButton,
+  primaryButton,
+} from "./formStyles.js";
 import { reportError } from "./sentry.js";
 
 /** What the server accepts. Mirrored here only to stop the form sending
@@ -250,9 +258,9 @@ export function SettingsPage({ apiBase, user }: SettingsPageProps) {
 }
 
 // ---- styles ----------------------------------------------------------------
-// The field styles are `EditInfoDialog`'s, which is the app's one established
-// form look. Kept as a copy rather than a shared module for now: the dialog's
-// live inside a `Dialog` and these inside a card, and there are exactly two.
+// Fields and buttons come from `formStyles.ts` — the Edit info dialog's look,
+// which is the app's one established form look. Only the differences this page
+// needs are spelled out below.
 
 const body: CSSProperties = {
   display: "grid",
@@ -282,35 +290,13 @@ const card: CSSProperties = {
   background: theme.color.surfaceMuted,
 };
 
-const label: CSSProperties = {
-  display: "block",
-  marginBottom: theme.space(2),
-  fontFamily: theme.font.ui,
-  fontSize: 13,
-  color: theme.color.text,
-};
+// `border-box` on top of the shared field: these sit in a padded card rather
+// than a dialog, where `width: 100%` plus horizontal padding would overflow it.
+const input: CSSProperties = { ...fieldInput, boxSizing: "border-box" };
 
-const input: CSSProperties = {
-  width: "100%",
-  height: 36,
-  padding: `0 ${theme.space(3)}`,
-  boxSizing: "border-box",
-  border: `1px solid ${theme.color.border}`,
-  borderRadius: theme.radius.md,
-  background: theme.color.surfaceSunken,
-  color: theme.color.text,
-  fontFamily: theme.font.ui,
-  fontSize: 13,
-};
-
-const textarea: CSSProperties = {
-  ...input,
-  height: "auto",
-  minHeight: 72,
-  padding: theme.space(3),
-  resize: "vertical",
-  lineHeight: 1.5,
-};
+// Shorter than the dialog's 88px — the frame's card is 252px and has an avatar
+// row to fit under this.
+const textarea: CSSProperties = { ...fieldTextarea, boxSizing: "border-box", minHeight: 72 };
 
 const avatarRow: CSSProperties = {
   display: "flex",
@@ -345,37 +331,18 @@ const avatarImage: CSSProperties = {
   display: "block",
 };
 
-const footer: CSSProperties = {
-  display: "flex",
-  gap: theme.space(2),
-  marginTop: theme.space(5),
-};
-
-const ghost: CSSProperties = {
+// Every button here can swap its label for a spinner mid-request, so they are
+// centred flex boxes with a floor width — otherwise Save and Upload visibly
+// shrink the moment they are pressed.
+const pending: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
   minWidth: 72,
-  height: 32,
-  padding: `0 ${theme.space(3)}`,
-  border: `1px solid ${theme.color.border}`,
-  borderRadius: theme.radius.md,
-  // Outline-only, as everywhere else: `surface` is a black block on a raised
-  // card in dark and invisible in light.
-  background: "transparent",
-  color: theme.color.text,
-  fontFamily: theme.font.ui,
-  fontSize: 13,
-  cursor: "pointer",
 };
 
-const primary: CSSProperties = {
-  ...ghost,
-  border: `1px solid ${theme.color.accent}`,
-  background: theme.color.accent,
-  color: theme.color.accentContrast,
-  fontWeight: 600,
-};
+const ghost: CSSProperties = { ...ghostButton, ...pending };
+const primary: CSSProperties = { ...primaryButton, ...pending };
 
 const errorText: CSSProperties = {
   margin: `0 0 ${theme.space(3)}`,

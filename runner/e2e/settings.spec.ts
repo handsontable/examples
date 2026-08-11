@@ -311,6 +311,25 @@ test.describe("/settings", () => {
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   });
 
+  test("the My Demos left-nav Settings row is live and navigates", async ({ page }) => {
+    // The other half of AC1, and the row that was a `<button disabled>` before
+    // this change. On `/settings` it is the current page, so it has to be
+    // asserted from `/my-demos` to prove it is a working link at all.
+    await signIn(page);
+    await stubProfileApi(page);
+    await page.route("**/api/demos", (route) => route.fulfill({ json: { demos: [] } }));
+    await page.goto("/my-demos");
+
+    const nav = page.getByRole("navigation", { name: "Account" });
+    const row = nav.getByRole("link", { name: "Settings" });
+    await expect(row).toBeVisible();
+    await expect(row).not.toHaveAttribute("aria-current", "page");
+    await row.click();
+
+    await expect(page).toHaveURL(/\/settings$/);
+    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  });
+
   test("an anonymous visitor is sent to the broker with /settings preserved", async ({ page }) => {
     // No `signIn` — no token, and the broker answers 401 as it would for a stranger.
     await page.route("**/broker/userinfo", (route) => route.fulfill({ status: 401, json: {} }));
