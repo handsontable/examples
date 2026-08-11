@@ -107,10 +107,12 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Read through getFiles() rather than a prop: the snippet has to be in the
-  // demo's own language, and that is a property of the files it is sitting next
-  // to (DEV-2216).
-  const snippet = useMemo(() => buildThemeSnippet(state, isTypescript(getFiles())), [state, getFiles]);
+  // The snippet has to be in the demo's own language (DEV-2216), which is a
+  // property of the files it sits next to. Not a dependency: `getFiles` is an
+  // inline arrow at the call site, so listing it would recompute this on every
+  // render, and a mounted panel's demo cannot change language underneath it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const snippet = useMemo(() => buildThemeSnippet(state, isTypescript(getFiles())), [state]);
   const pristine = isPristine(state);
 
   /** What the controls resolve against: the chosen presets with this panel's
