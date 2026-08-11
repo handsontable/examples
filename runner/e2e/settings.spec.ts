@@ -311,47 +311,55 @@ test.describe("/settings", () => {
     await expect(saveButton(page)).toBeEnabled();
   });
 
-  test("form controls stay visible in dark mode", async ({ page }) => {
-    // `border` and `surfaceRaised` are the same colour in dark (#222222), so an
-    // outline-only control drawn with `border` vanishes — the DEV-2209 failure.
-    // Asserted as "the outline differs from what is behind it" rather than
-    // against a literal, so it survives a palette change.
+  test("form controls outline with controlBorder, not border", async ({ page }) => {
+    // In dark, `border` *is* `surfaceRaised` (#222222), so an outline-only
+    // control drawn with it vanishes — the DEV-2209 failure, and `controlBorder`
+    // is the token that exists to fix it.
+    //
+    // Asserted against the resolved tokens rather than against literal colours
+    // or a contrast ratio: both palettes are read from the page at runtime, so
+    // this survives a palette change, and the two dark values differ by so
+    // little in absolute terms (#222222 vs #353535) that any ratio threshold
+    // would be a magic number rather than a statement of the rule.
     await signIn(page);
     await stubProfileApi(page);
     await page.emulateMedia({ colorScheme: "dark" });
     await page.goto("/settings");
 
-    // Or the whole assertion below passes vacuously against the light palette,
-    // where `border` and the surfaces do differ.
+    // Or the assertion runs against the light palette, where the two tokens are
+    // the same colour and nothing could ever fail.
     await expect(page.locator("html")).toHaveAttribute("data-hot-theme", "dark");
 
-    const contrasts = await page.evaluate(() => {
-      const results: Array<{ label: string; border: string; behind: string }> = [];
-      const behindOf = (el: Element) => {
-        let node: Element | null = el.parentElement;
-        while (node) {
-          const bg = getComputedStyle(node).backgroundColor;
-          if (bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") return bg;
-          node = node.parentElement;
-        }
-        return "";
+    const audit = await page.evaluate(() => {
+      // Resolve both tokens through a throwaway element, so the comparison uses
+      // the same `rgb(...)` serialisation `getComputedStyle` returns.
+      const resolve = (token: string) => {
+        const probe = document.createElement("span");
+        probe.style.color = `var(${token})`;
+        document.body.appendChild(probe);
+        const value = getComputedStyle(probe).color;
+        probe.remove();
+        return value;
       };
+      const controls: Array<{ label: string; border: string }> = [];
       for (const el of document.querySelectorAll("main input, main textarea, main button")) {
         const style = getComputedStyle(el);
         if (style.borderTopStyle === "none") continue;
-        results.push({
+        controls.push({
           label: el.textContent?.trim() || (el as HTMLElement).id || el.tagName,
           border: style.borderTopColor,
-          behind: behindOf(el),
         });
       }
-      return results;
+      return { controls, border: resolve("--hot-color-border"), controlBorder: resolve("--hot-color-control-border") };
     });
 
-    expect(contrasts.length).toBeGreaterThan(0);
-    for (const control of contrasts) {
-      expect(control.border, `${control.label} outline is invisible against its surface`)
-        .not.toBe(control.behind);
+    expect(audit.border).not.toBe(audit.controlBorder, "the dark palette must distinguish the two");
+    expect(audit.controls.length).toBeGreaterThan(0);
+    for (const control of audit.controls) {
+      // Stated as a prohibition rather than "must be `controlBorder`": Save is an
+      // accent-filled button and correctly outlines with `accent`. What no
+      // control may do is outline with the token that is the surface behind it.
+      expect(control.border, `${control.label} outlines with the invisible token`).not.toBe(audit.border);
     }
   });
 
