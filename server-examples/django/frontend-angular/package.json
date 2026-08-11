@@ -17,8 +17,8 @@
     "@angular/platform-browser": "^21.1.0",
     "@angular/platform-browser-dynamic": "^21.1.0",
     "@angular/router": "^21.1.0",
-    "@handsontable/angular-wrapper": "experimental",
-    "handsontable": "experimental",
+    "@handsontable/angular-wrapper": "^18.0.0",
+    "handsontable": "^18.0.0",
     "rxjs": "~7.8.0",
     "tslib": "^2.6.2",
     "zone.js": "~0.15.0"

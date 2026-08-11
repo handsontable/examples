@@ -1,8 +1,8 @@
 # Self-hosting the Sandpack classic bundler (Phase 2, optional)
 
 Tier-1 live editing uses the Sandpack **classic** in-browser bundler
-(ADR-0013). Phase 1 uses Sandpack's public hosted bundler — already free and
-CodeSandbox-cost-free, with a built-in service worker cache. Phase 2 (optional
+(ADR-0013). Phase 1 uses Sandpack's public hosted bundler — free, with a
+built-in service worker cache. Phase 2 (optional
 hardening) self-hosts that bundler so nothing at runtime depends on a
 third-party host.
 

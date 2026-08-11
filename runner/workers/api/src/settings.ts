@@ -6,8 +6,8 @@
 // moment you actually need to move a threshold is the moment you least want to
 // be waiting on a build.
 //
-// Thresholds are absolute dollars, not fractions. "Sign-in required at $800"
-// is a sentence a person can check against an invoice; "0.8" is not.
+// Thresholds are absolute dollars, not fractions. "Sign-in required at $N" is a
+// sentence a person can check against an invoice; "0.8" is not.
 
 import type { Env } from "./env.js";
 

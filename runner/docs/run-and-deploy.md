@@ -34,7 +34,9 @@ npx wrangler d1 execute handsontable-demos --local --file=migrations/0005_profil
 npx wrangler dev --port 8787                          # builds the container images
 # then run the authoring app pointing at it:
 cd ../../apps/authoring
-printf 'VITE_DEV_USER=dev@handsontable.com\nVITE_API_BASE=http://localhost:8787\n' > .env.local
+# VITE_API_BASE points at this dev server, NOT at :8787 — vite.config.ts proxies
+# /api, /d and /embed to the worker, and `?mode=full` needs one origin (AGENTS.md).
+printf 'VITE_DEV_USER=dev@handsontable.com\nVITE_API_BASE=http://localhost:5173\n' > .env.local
 npx vite --port 5173
 ```
 
@@ -110,9 +112,9 @@ npx wrangler secret put LITELLM_API_KEY   # LiteLLM virtual key; absent -> /api/
 npx wrangler secret put ALGOLIA_API_KEY   # Algolia search key; absent -> no doc page links
 ```
 
-The three Budget alerts ($200/$500/$800) were created in the dashboard on
-2026-08-06 (Manage Account → Billing → Billable Usage → *Set Budget Alert*).
-They are informational; the enforced ceiling is the Worker's own, shipped as
+Cloudflare's own Budget alerts are created in the dashboard (Manage Account →
+Billing → Billable Usage → *Set Budget Alert*), at a few fractions of the
+ceiling. They are informational; the enforced ceiling is the Worker's own, shipped as
 observe-only and switched on from **/admin → Guardrail settings**. Full detail
 in [cost-guardrails.md](cost-guardrails.md).
 

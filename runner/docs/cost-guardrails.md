@@ -195,8 +195,8 @@ bytes.
 
 ### In-app spend alerts
 
-Separate from Cloudflare's. `alertsUsd` (default `200,500,800`, editable in the
-panel) fires on **this runner's metered spend**, once per threshold per month,
+Separate from Cloudflare's. `alertsUsd` (defaults in `BUDGET_ALERTS_USD`,
+editable in the panel) fires on **this runner's metered spend**, once per threshold per month,
 via Sentry and the Worker log. On a shared account that is the difference
 between "the account is spending money" and "the runner is".
 
@@ -268,8 +268,8 @@ the table.
 
 ## Open decisions
 
-- **Account placement.** The runner shares the main account, so the $200 alert
-  is diluted by everything else billing there. Moving it to the PoC Sandbox
+- **Account placement.** The runner shares the main account, so the first alert
+  threshold is diluted by everything else billing there. Moving it to the PoC Sandbox
   account would make both the alerts and the blast radius clean, but that is a
   migration and a bigger call than DEV-2030.
 - **Anonymous live editing.** `anon_blocked` assumes signing in is an acceptable

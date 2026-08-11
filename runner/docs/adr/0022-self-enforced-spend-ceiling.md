@@ -26,8 +26,8 @@ volume, Workers requests, and R2 growth.
 
 Three layers, in order of how much we trust them.
 
-1. **Cloudflare Budget alerts** at $200/$500/$800 — dashboard-only and
-   informational (created 2026-08-06). They are the human early-warning system,
+1. **Cloudflare Budget alerts** at 20% / 50% / 80% of the ceiling —
+   dashboard-only and informational. They are the human early-warning system,
    not the cap. The Worker fires its own alerts on the same thresholds, because
    Cloudflare's are account-wide and cannot tell the runner apart from anything
    else billing to the account.
