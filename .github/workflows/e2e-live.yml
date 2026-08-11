@@ -45,11 +45,19 @@ on:
 permissions:
   contents: read
 
-# Live tests hold no server-side sessions (unlike the starter matrix), so
-# cancelling a superseded run is safe.
+# Cancelling is safe in local mode only. That premise used to hold for the whole
+# workflow — Tier-1 render checks hold nothing server-side — but the deployed
+# Style panel step boots Tier-2 containers, and the spec has no teardown: its
+# sessions are left to expire. Killing a run mid-flight therefore strands them in
+# the global `Sandbox` pool of 5 and starves live previews, which is why
+# `e2e-starter-matrix.yml` disables cancellation outright.
+#
+# The group is keyed by mode as well as by ref. Sharing one group would let a new
+# *local* run — which is cancellable — cancel an in-flight *deployed* run, and
+# that is precisely the leak this avoids.
 concurrency:
-  group: e2e-live-${{ github.ref }}
-  cancel-in-progress: true
+  group: e2e-live-${{ github.ref }}-${{ inputs.base_url != '' && 'deployed' || 'local' }}
+  cancel-in-progress: ${{ inputs.base_url == '' }}
 
 jobs:
   live:
