@@ -2,10 +2,24 @@ node_modules
 deno.lock
 dist
 .cache
-.vscode
 .DS_Store
 .angular
+
+# editors / tooling
+.vscode
+.idea/
 .claude/
+
+# local environment
+.env
+.env.local
+*.log
+
 # playwright e2e output, when a run is launched from the repo root rather than runner/
 test-results/
 playwright-report/
+.playwright-mcp/
+
+# Angular build output served by the symfony example's vite middleware; the real
+# one lives in server-examples/symfony/frontend-angular/dist/ (covered by `dist`)
+angular-assets/
