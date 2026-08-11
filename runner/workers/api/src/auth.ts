@@ -9,11 +9,23 @@ export interface Identity {
   sub?: string;
 }
 
-/** `wrangler dev` serves on loopback; every deployed origin is a real hostname. */
+/**
+ * `wrangler dev` serves on loopback; every deployed origin is a real hostname.
+ *
+ * `*.localhost` has to count too — a local Tier-2 session hands the browser a
+ * preview URL shaped `<port>-<sessionId>-<token>.localhost:8787`, and those
+ * requests come back through this Worker. `.localhost` is reserved for loopback
+ * (RFC 6761), so it can never be a deployed origin.
+ */
 function isLocalRequest(request: Request): boolean {
   try {
     const { hostname } = new URL(request.url);
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+    return (
+      hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      hostname === "127.0.0.1" ||
+      hostname === "[::1]"
+    );
   } catch {
     return false;
   }

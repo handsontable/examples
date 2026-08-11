@@ -64,9 +64,10 @@ pnpm install
 pnpm dev                       # then open the URL it prints
 ```
 
-`pnpm build` produces a production bundle and `pnpm preview` serves it. Check the
-example's own README for anything specific to it — Angular, for instance, uses
-`pnpm start` and serves on a different port.
+Every example has `dev` and `build`; most also have `preview` to serve the built
+output. Run `pnpm run` in an example folder to see its own scripts, and check its
+README for anything specific — Angular, for instance, also answers to `pnpm start`
+and serves on a different port.
 
 ## Copying an example to a separate repo
 
