@@ -10,22 +10,22 @@ Install all necessary dependencies with `pnpm install`.
 
 ## Development
 
-To start local development server use `pnpm dev`. You can then visit http://localhost:5173 to view the project.
+To start the local development server use `pnpm dev`. You can then visit http://localhost:8080 to view the project.
 
-## Testing
-
-To run tests for this project, first launch the development server with `pnpm dev`. Once the server is running, execute `pnpm test` to run the test specs.
+Build a production bundle with `pnpm build`, and preview it with `pnpm preview`.
 
 ## Forking
 
-There are two ways to fork this project in Handsontable's monorepo:
+There are two ways to start from this example:
 
-1. Fork the entire repository.
-2. Copy the example to a new repository. Detailed instructions are available [here](../../../../README.md#copying-an-example-to-a-separate-repo) in the section _Copying an example to a separate repo_.
+1. Fork the whole [handsontable/examples](https://github.com/handsontable/examples) repository.
+2. Copy just this example into a repository of your own — see [Copying an example to a separate repo](../../README.md#copying-an-example-to-a-separate-repo).
 
 ## License
 
-Handsontable is a commercial software with two licenses available:
+The example code in this repository is MIT-licensed; see the [LICENSE](../../LICENSE) file.
+
+Handsontable itself is commercial software with two licenses available:
 
 - Free for non-commercial purposes such as teaching, academic research, and evaluation. [Read it here](https://github.com/handsontable/handsontable/blob/master/handsontable-non-commercial-license.pdf).
 - Commercial license with support and maintenance included. See [pricing plans](https://handsontable.com/pricing).
