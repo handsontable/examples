@@ -1,12 +1,19 @@
 name: E2E — live render (Sandpack bundler)
 
-# Runs the E2E_LIVE=1 checks in runner/e2e/docs-examples.spec.ts — the tests
-# that need the external hosted Sandpack bundler and therefore stay out of the
-# deterministic PR suite (ci.yml). These are the ONLY tests that exercise what
-# actually renders inside a Tier-1 sandbox: grid boots, plugins work
-# (context menu opens, getPlugin() calls succeed), compiled JSX executes.
-# Both DEV-2129 regressions (dead plugins, "React is not defined") were
-# invisible to PR CI and would have been caught here.
+# Runs the E2E_LIVE=1 checks — the tests that need the external hosted Sandpack
+# bundler (or a real Tier-2 container) and therefore stay out of the
+# deterministic PR suite (ci.yml):
+#
+#   - docs-examples.spec.ts   what actually renders inside a Tier-1 sandbox:
+#                             grid boots, plugins work (context menu opens,
+#                             getPlugin() succeeds), compiled JSX executes.
+#                             Both DEV-2129 regressions (dead plugins, "React is
+#                             not defined") were invisible to PR CI.
+#   - style-apply.spec.ts     whether a generated theme module reaches the grid,
+#                             one case per wiring shape (DEV-2197). The only
+#                             suite that *executes* generated theme source; the
+#                             node tests read it as text, and every defect it
+#                             found was green under those.
 #
 # Manual only (not a merge gate — owner decision): depends on an external
 # service, so a bundler outage would block merges. Run it:
@@ -20,6 +27,12 @@ name: E2E — live render (Sandpack bundler)
 #     validates YOUR CODE against the live bundler before it ships.
 #   - base_url set (e.g. https://demos.handsontable.com): tests the deployed
 #     app directly — post-deploy smoke; no build needed.
+#
+# Only the deployed mode can cover the whole Style panel suite. Its `astro` and
+# `angular` cases are Tier 2: they need the API worker reachable on the *same
+# origin*, and local mode serves the app with `vite preview`, whose config has no
+# API proxy (the proxy lives under `server:`). Locally those two are skipped
+# rather than left to fail on a preview stuck at `booting`.
 
 on:
   workflow_dispatch:
@@ -42,8 +55,9 @@ jobs:
   live:
     runs-on: ubuntu-latest
     # Local live run takes seconds once built; leave headroom for a cold
-    # hosted-bundler transpile of the heavier examples.
-    timeout-minutes: 30
+    # hosted-bundler transpile of the heavier examples. The deployed run also
+    # boots four real containers for the Style panel suite, one at a time.
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: runner
@@ -76,6 +90,25 @@ jobs:
           E2E_LIVE: '1'
           E2E_BASE_URL: ${{ inputs.base_url }}
         run: pnpm e2e e2e/docs-examples.spec.ts
+
+      # A separate step, and `--workers=1`: the Tier-2 cases each hold a
+      # live-preview container, prod caps those at 5 concurrently *globally*
+      # (Sandbox max_instances), and sessions are not torn down between tests. In
+      # parallel the second one fails with the preview stuck on `booting`, which
+      # reads as a product failure and is not one.
+      - name: E2E — Style panel reaches the grid (deployed, all wiring shapes)
+        if: inputs.base_url != ''
+        env:
+          E2E_LIVE: '1'
+          E2E_BASE_URL: ${{ inputs.base_url }}
+        run: pnpm e2e e2e/style-apply.spec.ts --workers=1
+
+      # Local mode: Tier-1 shapes only — see the note at the top of this file.
+      - name: E2E — Style panel reaches the grid (local build, Tier 1 only)
+        if: inputs.base_url == ''
+        env:
+          E2E_LIVE: '1'
+        run: pnpm e2e e2e/style-apply.spec.ts --workers=1 -g "react|vue|javascript|switching"
 
       - name: Upload Playwright report on failure
         if: failure()
