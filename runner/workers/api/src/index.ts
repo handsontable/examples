@@ -468,11 +468,20 @@ export default Sentry.withSentry(sentryOptions, {
           // progress). Default boot seeds immutable baked dependencies, then runs
           // fast frozen pnpm reconciliation. Keep submitted starters frozen; only
           // custom package or lock metadata may update the lockfile.
+          //
+          // The fingerprint doubles as a content-addressed bucket selector
+          // (DEV-2213): each baked (framework, bucket) context carries the hash
+          // of its exact package.json+lock, so a session mounting a bucket's
+          // pristine starter seeds that bucket's node_modules and stays frozen.
           const dependencyFingerprint = await dependencyMetadataFingerprint({
             packageJson: files["package.json"],
             pnpmLock: files["pnpm-lock.yaml"],
           });
-          const metadataDiffersFromStarter = dependencyFingerprint !== dev.sourceDependencyFingerprint;
+          const bakedContext = dev.contexts.find(
+            (c) => c.sourceDependencyFingerprint === dependencyFingerprint,
+          );
+          const bakedKey = bakedContext?.bakedKey ?? dev.defaultBakedKey;
+          const metadataDiffersFromStarter = bakedContext === undefined;
           const installDependencies = files["pnpm-lock.yaml"] !== undefined
             ? [
                 `if ! pnpm install --frozen-lockfile; then`,
@@ -489,7 +498,7 @@ export default Sentry.withSentry(sentryOptions, {
             `cd ${CONTAINER_ROOT}`,
             `echo '::seeding immutable baked dependencies::'`,
             `rm -rf ./node_modules`,
-            `cp -al /baked/${dev.bakedKey}/node_modules ./node_modules`,
+            `cp -al /baked/${bakedKey}/node_modules ./node_modules`,
             `echo '::reconciling dependencies with pnpm::'`,
             ...installDependencies,
             `echo '::starting dev server::'`,
