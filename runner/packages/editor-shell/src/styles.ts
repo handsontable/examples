@@ -107,6 +107,15 @@ export const s = {
     fontSize: 13,
   }),
 
+  /** The pill's text. Every call site drew its own identical copy of this — the
+   *  editor's, My Demos', and now Settings' — so it lives here once. */
+  pillLabel: {
+    fontFamily: t.font.ui,
+    fontSize: 13,
+    fontWeight: 500,
+    color: t.color.text,
+  } satisfies CSSProperties,
+
   /** The pill's leading 20×20 Handsontable mark (`48:6582`). The 2px radius is the
    *  consumer's, as the frame does — `mark.svg` itself has square corners. Only the
    *  pills that name an *example* carry it; the My Demos page label (`114:26625`)

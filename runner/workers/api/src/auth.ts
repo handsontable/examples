@@ -26,6 +26,9 @@ export async function authenticate(request: Request, env: Env): Promise<Identity
       headers: { Authorization: auth },
     });
     if (!res.ok) return null;
+    // Email and `sub` are all there is: the broker's authorize redirect asks for
+    // `scope=openid email`, so no `name` or `picture` claim exists to read. Display
+    // names come from the address's own `name.surname` shape instead — ADR-0007.
     const info = (await res.json()) as { email?: string; sub?: string };
     if (!info.email || !info.email.endsWith("@handsontable.com")) return null;
     return { email: info.email, sub: info.sub };

@@ -2,30 +2,51 @@
 //
 // Frame: a 36×36 circular avatar at the right end of row 1, opening a 120px
 // popover with My demos / Settings / a rule / Log out, each 32px tall with a
-// 16px icon. Settings is drawn greyed — the Settings page (`114:26833`) is a
-// separate feature (new profile table + endpoints + avatar storage), split out
-// of T9, so the row is present and disabled rather than absent.
+// 16px icon.
 //
-// The avatar is the first letter of the email. `auth.ts` carries `{ email, sub,
-// exp }` and nothing else — no display name, no picture — and this deliberately
-// takes no dependency on the external login broker growing either.
+// The Settings row was drawn greyed through T9 because the page behind it did
+// not exist; DEV-2166 built it, so the row is live whenever a consumer supplies
+// `onSettings` (the shell has no router of its own to navigate with).
+//
+// The avatar is a monogram unless the user uploaded a picture — there is no
+// third source, since the broker returns nothing but an email
+// (`scope=openid email`) and no default picture exists (ADR-0007). This
+// component stays presentational: it takes a resolved `avatarUrl` and a resolved
+// `displayName`, and the app owns fetching both.
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { IconChartBar, IconListDetails, IconLogin2, IconSettings2 } from "./icons/index.js";
 import { theme } from "./theme.js";
 
 export interface AccountMenuProps {
-  /** The signed-in identity. The avatar's letter and the menu's label come from it. */
+  /** The signed-in identity. Labels the control, and supplies the monogram when
+   *  the profile has neither a name nor a picture. */
   email: string;
+  /** The profile's display name, when one has resolved. Only affects the letter
+   *  and the tooltip — the frame draws no name in the popover. */
+  displayName?: string;
+  /** The profile's avatar, when one has resolved. Absent -> monogram. */
+  avatarUrl?: string | null;
   onMyDemos: () => void;
   /** `/admin`, the internal usage + cost panel (DEV-2030). Optional: it is an
    *  internal tool, and the frames model no row for it — see the comment on the
    *  row itself. */
   onUsage?: () => void;
+  /** `/settings` (DEV-2166). Optional for the same reason `onMyDemos` is a
+   *  callback at all: this package does no navigation. */
+  onSettings?: () => void;
   onLogout: () => void;
 }
 
-export function AccountMenu({ email, onMyDemos, onUsage, onLogout }: AccountMenuProps) {
+export function AccountMenu({
+  email,
+  displayName,
+  avatarUrl,
+  onMyDemos,
+  onUsage,
+  onSettings,
+  onLogout,
+}: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -46,12 +67,16 @@ export function AccountMenu({ email, onMyDemos, onUsage, onLogout }: AccountMenu
     };
   }, [open]);
 
-  const initial = (email.trim()[0] ?? "?").toUpperCase();
+  const label = displayName?.trim() || email;
+  const initial = (label.trim()[0] ?? "?").toUpperCase();
 
   return (
     <div ref={wrapRef} style={{ position: "relative", flex: "0 0 auto" }}>
       <button
         type="button"
+        // The uploaded image fills the circle, so the accent background would
+        // only show through a transparent PNG's holes — keep it as the backdrop
+        // and drop the padding that would letterbox a non-square upload.
         style={avatarButton}
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="menu"
@@ -59,7 +84,11 @@ export function AccountMenu({ email, onMyDemos, onUsage, onLogout }: AccountMenu
         aria-label={`Account: ${email}`}
         title={email}
       >
-        <span aria-hidden="true">{initial}</span>
+        {avatarUrl
+          // No crop UI (`114:26833` draws none): centre-crop on render instead,
+          // which is the only way a non-square upload stays a circle.
+          ? <img src={avatarUrl} alt="" style={avatarImage} />
+          : <span aria-hidden="true">{initial}</span>}
       </button>
 
       {open && (
@@ -80,8 +109,9 @@ export function AccountMenu({ email, onMyDemos, onUsage, onLogout }: AccountMenu
           <MenuRow
             icon={<IconSettings2 />}
             label="Settings"
-            disabled
-            title="Profile settings are not built yet"
+            onClick={onSettings ? () => { setOpen(false); onSettings(); } : undefined}
+            disabled={!onSettings}
+            title={onSettings ? "Your name, description and avatar" : "Profile settings are not available here"}
           />
           <div style={rule} role="separator" />
           <MenuRow icon={<IconLogin2 />} label="Log out" onClick={() => { setOpen(false); onLogout(); }} />
@@ -139,6 +169,14 @@ const avatarButton: CSSProperties = {
   fontWeight: 600,
   lineHeight: 1,
   cursor: "pointer",
+  overflow: "hidden",
+};
+
+const avatarImage: CSSProperties = {
+  width: "100%",
+  height: "100%",
+  objectFit: "cover",
+  display: "block",
 };
 
 const popover: CSSProperties = {

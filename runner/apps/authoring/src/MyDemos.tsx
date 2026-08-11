@@ -25,13 +25,10 @@ import {
   type CSSProperties,
 } from "react";
 import {
-  AccountMenu,
   Dialog,
   IconDotsVertical,
-  IconListDetails,
-  IconLogin2,
   IconPlus,
-  IconSettings2,
+  SideNav,
   Spinner,
   TopBar,
   formatCreated,
@@ -40,6 +37,9 @@ import {
 } from "@handsontable/demo-editor-shell";
 import { getEntry } from "./catalog.js";
 import { getToken, logout, type User } from "./auth.js";
+import { displayNameFromEmail, initialFromEmail } from "./displayName.js";
+import { ghostButton } from "./formStyles.js";
+import { useProfile } from "./useProfile.js";
 import { reportError } from "./sentry.js";
 
 /** Mirrors the `GET /api/demos` projection. The pre-T9 drawer declared a narrower
@@ -174,10 +174,14 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
     // would flash the card back to idle mid-navigation.
   }
 
-  // No display name exists anywhere in the stack, so the local part of the email
-  // stands in for one on every card's author line.
-  const ownerName = user.email.split("@")[0] ?? user.email;
-  const ownerInitial = (user.email.trim()[0] ?? "?").toUpperCase();
+  // The author line's name and monogram. The profile supplies both once it
+  // resolves (DEV-2166); until then — and for a user who never saved one — the
+  // address itself does, by the same rule the server applies, so the line does
+  // not visibly change under the reader when the fetch lands.
+  const profile = useProfile(apiBase, user.email);
+  const ownerName = profile?.display_name ?? displayNameFromEmail(user.email);
+  const ownerInitial = profile?.initial ?? initialFromEmail(user.email);
+  const ownerAvatar = profile?.avatar_url ?? null;
 
   async function copyLink(demo: DemoListItem) {
     try {
@@ -192,18 +196,21 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
       <TopBar
         examplePill={
           <div style={shellStyles.examplePill(false)}>
-            <span style={pillLabel}>My Demos</span>
+            <span style={shellStyles.pillLabel}>My Demos</span>
           </div>
         }
         accountEmail={user.email}
+        accountDisplayName={profile?.display_name}
+        accountAvatarUrl={ownerAvatar}
         onMyDemos={() => { location.href = "/my-demos"; }}
+        onSettings={() => { location.href = "/settings"; }}
         // Never a bare reload here: `/my-demos` answers a null user with
         // `login()`, so logging out in place would re-enter the broker.
         onLogout={() => logout("/")}
       />
 
       <div style={body}>
-        <SideNav />
+        <SideNav active="myDemos" onLogout={() => logout("/")} />
 
         <main style={content}>
           {error && <p style={errorText} role="alert">{error}</p>}
@@ -218,6 +225,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
                   demo={d}
                   ownerName={ownerName}
                   ownerInitial={ownerInitial}
+                  ownerAvatar={ownerAvatar}
                   busy={busy[d.id] ?? null}
                   onCopyLink={() => void copyLink(d)}
                   onFork={() => void fork(d)}
@@ -286,32 +294,11 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
   );
 }
 
-/** Left column (`114:26608`). Mirrors the account menu's three entries — same
- *  icons, same order, same disabled Settings. */
-function SideNav() {
-  return (
-    <nav style={sideNav} aria-label="Account">
-      <a href="/my-demos" className="hot-menu-row" data-active="true" style={navRow()} aria-current="page">
-        <IconListDetails />
-        My demos
-      </a>
-      <button type="button" style={navRow(true)} disabled title="Profile settings are not built yet">
-        <IconSettings2 />
-        Settings
-      </button>
-      <div style={navRule} role="separator" />
-      <button type="button" className="hot-menu-row" style={navRow()} onClick={() => logout("/")}>
-        <IconLogin2 />
-        Log out
-      </button>
-    </nav>
-  );
-}
-
 function DemoCard({
   demo,
   ownerName,
   ownerInitial,
+  ownerAvatar,
   busy,
   onCopyLink,
   onFork,
@@ -320,6 +307,7 @@ function DemoCard({
   demo: DemoListItem;
   ownerName: string;
   ownerInitial: string;
+  ownerAvatar: string | null;
   busy: "fork" | "delete" | null;
   onCopyLink: () => void;
   onFork: () => void;
@@ -371,10 +359,14 @@ function DemoCard({
             `GET /api/demos` is hardcoded `WHERE created_by = <caller>` — so the
             owner is known without the API returning one, which it doesn't:
             `created_by` is an email and `publicView` strips it. Name and picture
-            don't exist anywhere, hence the local part and the same monogram the
-            account menu draws. */}
+            now come from the caller's own profile (DEV-2166), falling back to
+            the email's local part and the same monogram the account menu draws.
+            Note this is still the *caller*, not the demo's author: on a shared
+            demo page there is no shell code to render one at all. */}
         <span style={author}>
-          <span style={authorMark} aria-hidden="true">{ownerInitial}</span>
+          <span style={authorMark} aria-hidden="true">
+            {ownerAvatar ? <img src={ownerAvatar} alt="" style={authorImage} /> : ownerInitial}
+          </span>
           {ownerName}
         </span>
         {created && <span style={createdText}>Created {created}</span>}
@@ -511,38 +503,8 @@ const body: CSSProperties = {
   overflow: "hidden",
 };
 
-const sideNav: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 2,
-  padding: theme.space(2),
-  borderRight: `1px solid ${theme.color.border}`,
-  background: theme.color.surfaceSunken,
-  overflowY: "auto",
-};
-
-// Enabled rows set no `background` at all: `.hot-menu-row` supplies both the
-// transparent base and the hover, and an inline value would outrank the hover
-// (ADR-0026). The disabled row isn't hoverable, so it can carry its own —
-// and it must, or the UA's `buttonface` paints a grey slab.
-const navRow = (disabled = false): CSSProperties => ({
-  display: "flex",
-  alignItems: "center",
-  gap: theme.space(3),
-  height: 44,
-  padding: `0 ${theme.space(4)}`,
-  border: "none",
-  borderRadius: theme.radius.md,
-  ...(disabled ? { background: "transparent" } : {}),
-  color: disabled ? theme.color.textMuted : theme.color.text,
-  opacity: disabled ? 0.5 : 1,
-  fontFamily: theme.font.ui,
-  fontSize: 13,
-  textAlign: "left",
-  textDecoration: "none",
-  cursor: disabled ? "default" : "pointer",
-});
-
+/** The card menu's separator. Same rule the shared `SideNav` draws — it was one
+ *  constant when the nav lived here, and both are one line. */
 const navRule: CSSProperties = {
   height: 1,
   margin: `${theme.space(2)} ${theme.space(2)}`,
@@ -705,6 +667,16 @@ const authorMark: CSSProperties = {
   fontSize: 11,
   fontWeight: 600,
   lineHeight: 1,
+  overflow: "hidden",
+};
+
+const authorImage: CSSProperties = {
+  width: "100%",
+  height: "100%",
+  // Centre-crop: there is no crop UI, so a non-square upload has to be made
+  // circular on render or it stretches.
+  objectFit: "cover",
+  display: "block",
 };
 
 const createdText: CSSProperties = { whiteSpace: "nowrap" };
@@ -751,13 +723,6 @@ const errorText: CSSProperties = {
   color: theme.color.danger,
 };
 
-const pillLabel: CSSProperties = {
-  fontFamily: theme.font.ui,
-  fontSize: 13,
-  fontWeight: 500,
-  color: theme.color.text,
-};
-
 const confirmBody: CSSProperties = {
   margin: 0,
   fontFamily: theme.font.ui,
@@ -772,20 +737,9 @@ const confirmFooter: CSSProperties = {
   marginTop: theme.space(5),
 };
 
-const ghostButton: CSSProperties = {
-  height: 32,
-  padding: `0 ${theme.space(3)}`,
-  border: `1px solid ${theme.color.border}`,
-  borderRadius: theme.radius.md,
-  // Outline-only per the frames — `surface` painted a black block on the
-  // `surfaceRaised` card in dark, invisible in light where the two collapse.
-  background: "transparent",
-  color: theme.color.text,
-  fontFamily: theme.font.ui,
-  fontSize: 13,
-  cursor: "pointer",
-};
-
+// The delete confirmation's buttons are the shared pair — it is the same dialog
+// footer as Edit info, and its local copy still outlined with `border`, which in
+// dark is `surfaceRaised`: Cancel rendered as bare text inside the dialog.
 const dangerButton: CSSProperties = {
   ...ghostButton,
   border: `1px solid ${theme.color.danger}`,

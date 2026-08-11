@@ -94,8 +94,8 @@ forever.
 
 ## Storage
 
-- **D1** — demo metadata + short ids (see schema below).
-- **R2** — source snapshots + built artifacts.
+- **D1** — demo metadata + short ids, and user profiles (see schema below).
+- **R2** — source snapshots + built artifacts, and profile avatars.
 - **KV** — edge read-cache for demo JSON (`stale-while-revalidate`).
 
 ### D1 schema
@@ -128,7 +128,47 @@ CREATE TABLE build_cache (
   r2_prefix  TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE profiles (                            -- DEV-2166, migration 0005
+  email        TEXT PRIMARY KEY,                   -- same key space as demos.created_by
+  display_name TEXT,                               -- NULL -> derive from the email
+  description  TEXT,
+  avatar_key   TEXT,                               -- opaque uuid -> R2 avatars/<key>
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
 ```
+
+### Profiles (`/settings`)
+
+The signed-in user's name, description and avatar, behind
+`GET`/`PUT /api/profile` and `POST`/`DELETE /api/profile/avatar`. Every statement
+binds the caller's verified email and no route accepts one as input, so there is
+no cross-user surface to guard.
+
+There is no user table to key on: the broker's `sub` is fetched but never stored,
+so email is the only stable identifier the system holds. `NULL` means "never set,
+or cleared" — the reader derives the default rather than storing one, so clearing
+a field reverts to it instead of showing a blank.
+
+The derived name comes from the address itself: team accounts are issued as
+`name.surname@handsontable.com`, so `artur.medrygal` reads as `Artur Medrygal`
+(ADR-0007). There is no derived *picture* — an uploaded avatar or the monogram.
+
+Avatars live in the existing `ARTIFACTS` bucket under `avatars/<key>`, alongside
+but never colliding with `demos/<id>/`. The key is a random uuid rather than the
+email: the read route (`GET /api/profile/avatar/:key`) is public because it is an
+`<img src>` on pages that carry no token, and an email-keyed URL space would
+enumerate the team. A fresh key per upload also makes the image immutably
+cacheable; the previous object is deleted on re-upload, since nothing sweeps that
+prefix. Uploads are accepted on **magic bytes** (PNG/JPEG/WebP), never on the
+request's `Content-Type` — what the sniff returns is what gets stored as
+`httpMetadata` and echoed back to a browser.
+
+Defaults from Google SSO are *not* available: the broker requests
+`scope=openid email`, so `/broker/userinfo` returns no `name` or `picture` — the
+claims are never requested, so there is nothing to parse. Names come from the
+address's own structure instead; see ADR-0007.
 
 ## Auth — Handsontable accounts only (login broker)
 
@@ -143,6 +183,10 @@ supersedes the original spec's Cloudflare Access.
   redirects back with `#token=<JWT>`. The app stores the token in
   `sessionStorage`, resolves identity via `GET /broker/userinfo` →
   `{ email, sub, exp }`, and shows the signed-in email + a **Log out** control.
+  The broker's authorize redirect requests `scope=openid email` only, so there is
+  no `name` or `picture` claim to be had — display names are derived from the
+  address's `name.surname` shape and avatars come from the `profiles` table
+  (ADR-0007).
 - `return_to` must be on an allowed host (`*.workers.dev`, `handsontable.com`,
   localhost) — satisfied by deploying on the main Handsontable account's
   `*.workers.dev` subdomain (account `15111272c53ed0aaf84a908f0c9c7f8b`, **not**

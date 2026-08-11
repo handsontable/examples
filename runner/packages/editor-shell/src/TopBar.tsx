@@ -37,11 +37,19 @@ export interface TopBarProps {
    *  renders the editor as anonymous (read-only, no action bar) but the visitor
    *  may well have a session, and offering them "Sign in" then is wrong. */
   accountEmail?: string;
+  /** The signed-in user's profile (DEV-2166), when it has resolved. Both are
+   *  optional and arrive late: the bar renders the monogram immediately and
+   *  swaps the picture in, rather than blocking the chrome on a fetch. */
+  accountDisplayName?: string;
+  accountAvatarUrl?: string | null;
   onMyDemos?: () => void;
   /** The internal usage + cost panel (`/admin`, DEV-2030). Signed-in only, and
    *  in the account menu rather than the bar: the pre-redesign bar had it as a
    *  loose `Usage` link beside `My demos`, and My demos is now a menu row. */
   onUsage?: () => void;
+  /** `/settings` — the profile page (DEV-2166). Absent leaves the menu row
+   *  disabled, which is what the anonymous-adjacent surfaces want. */
+  onSettings?: () => void;
   onLogout?: () => void;
 
   /** The mode action, left of the theme toggle (`114:24402` and its three
@@ -63,8 +71,11 @@ export function TopBar({
   downloadHighlight,
   onSignIn,
   accountEmail,
+  accountDisplayName,
+  accountAvatarUrl,
   onMyDemos,
   onUsage,
+  onSettings,
   onLogout,
   onFork,
   forking,
@@ -151,7 +162,15 @@ export function TopBar({
       )}
 
       {accountEmail && onMyDemos && onLogout && (
-        <AccountMenu email={accountEmail} onMyDemos={onMyDemos} onUsage={onUsage} onLogout={onLogout} />
+        <AccountMenu
+          email={accountEmail}
+          displayName={accountDisplayName}
+          avatarUrl={accountAvatarUrl}
+          onMyDemos={onMyDemos}
+          onUsage={onUsage}
+          onSettings={onSettings}
+          onLogout={onLogout}
+        />
       )}
     </header>
   );
