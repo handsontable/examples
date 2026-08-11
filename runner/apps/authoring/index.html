@@ -165,6 +165,55 @@
       .hot-tab[data-dirty="true"]:focus-within .hot-tab-dot { display: none; }
       .hot-tab-close { background: transparent; }
       .hot-tab-close:hover { background: var(--hot-color-hover); }
+      /* Ask AI / Style drawer rows (DEV-2209). Neither panel had a hover of its own
+         before — they rode the universal brightness filter above, which on a
+         transparent row changes nothing at all. Same rule as .hot-file-row: the
+         base fill lives here, not inline, or it would outrank the :hover. */
+      .hot-panel-row,
+      .hot-panel-suggestion,
+      .hot-panel-tab,
+      .hot-panel-list-item {
+        background: transparent;
+        transition: background-color 0.12s ease;
+      }
+      .hot-panel-row:hover,
+      .hot-panel-suggestion:hover,
+      .hot-panel-tab:hover,
+      .hot-panel-list-item:hover { background: var(--hot-color-hover); }
+      /* Active *after* the hover, as .hot-tab does and unlike .hot-file-row: the
+         accent tint is "this scale entry is the one in use", and losing it on the
+         way past reads as a deselection. */
+      .hot-panel-list-item { border-color: transparent; }
+      .hot-panel-list-item[data-active="true"],
+      .hot-panel-list-item[data-active="true"]:hover {
+        background: var(--hot-color-accent-soft);
+        border-color: var(--hot-color-accent);
+      }
+      /* Colour swatches and preset tiles. border-color only — the width and style
+         stay inline so nothing reflows, and the shorthand is exactly what killed
+         .hot-demo-card's hover before (ADR-0026 §2). Two classes because they rest
+         differently: a colour chip is a bare swatch until you point at it, while a
+         preset tile is a framed thumbnail and needs its box at rest. */
+      .hot-swatch-btn, .hot-panel-tile { transition: border-color 0.12s ease; }
+      .hot-swatch-btn { border-color: transparent; }
+      .hot-panel-tile { border-color: var(--hot-color-control-border); }
+      .hot-swatch-btn:hover,
+      .hot-panel-tile:hover { border-color: var(--hot-color-accent-border); }
+      .hot-swatch-btn[data-active="true"],
+      .hot-swatch-btn[data-active="true"]:hover,
+      .hot-panel-tile[data-active="true"],
+      .hot-panel-tile[data-active="true"]:hover { border-color: var(--hot-color-accent); }
+      /* The rows above are <button>s, so they do get a UA ring — but it is the
+         platform's, not ours, and on the tinted active row it disappears. */
+      .hot-panel-row:focus-visible,
+      .hot-panel-suggestion:focus-visible,
+      .hot-panel-tab:focus-visible,
+      .hot-panel-list-item:focus-visible,
+      .hot-swatch-btn:focus-visible,
+      .hot-panel-tile:focus-visible {
+        outline: 2px solid var(--hot-color-accent);
+        outline-offset: 1px;
+      }
       /* The strip scrolls when the open files outgrow it. Both properties: the WebKit
          pseudo-element alone still leaves a scrollbar in Firefox, and a 36px bar has
          no room for one — it would sit on the strip's inset hairline. */

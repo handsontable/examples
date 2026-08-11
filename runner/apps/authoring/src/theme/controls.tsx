@@ -14,7 +14,12 @@
 // behaves better in a 420px side panel than anything that needs positioning.
 
 import { useState } from "react";
-import { theme as ui } from "@handsontable/demo-editor-shell";
+import {
+  headerLabel,
+  IconChevronDown,
+  IconChevronUp,
+  theme as ui,
+} from "@handsontable/demo-editor-shell";
 import type { ColorsMap, TokenMap } from "./presets.js";
 import { COMMON_COLORS_KEYS, SIZING } from "./presets.js";
 import {
@@ -40,6 +45,14 @@ export interface TokenControlProps {
   value: TokenValue | undefined;
   onChange: (value: TokenValue) => void;
   onReset: () => void;
+}
+
+/** An inline disclosure's state marker. `textMuted` rather than the old glyph's
+ *  `opacity: 0.6` — an opacity on the arrow also dimmed nothing else, and the
+ *  muted token is what every other secondary mark in the shell uses. */
+function Chevron({ open }: { open: boolean }) {
+  const Glyph = open ? IconChevronUp : IconChevronDown;
+  return <Glyph size={14} style={{ color: ui.color.textMuted, flex: "0 0 auto" }} />;
 }
 
 /** Label, description, the control, and a Reset that appears only when the
@@ -130,8 +143,8 @@ function SizeControl({ value, resolved, density, onChange }: {
   return (
     <div>
       <button type="button" style={trigger} onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span>{resolved || "theme default"}</span>
-        <span style={{ opacity: 0.6 }}>{open ? "▴" : "▾"}</span>
+        <span style={ellipsis}>{resolved || "theme default"}</span>
+        <Chevron open={open} />
       </button>
       {open && (
         <div style={popover}>
@@ -145,9 +158,10 @@ function SizeControl({ value, resolved, density, onChange }: {
               {Object.entries(SIZING)
                 .sort((a, b) => parseInt(a[1], 10) - parseInt(b[1], 10))
                 .map(([k, v]) => (
-                  <button key={k} type="button" style={listItem(raw === `sizing.${k}`)}
+                  <button key={k} type="button" className="hot-panel-list-item" style={listItem}
+                    data-active={raw === `sizing.${k}`}
                     onClick={() => onChange(`sizing.${k}`)}>
-                    <span>{k}</span><span style={{ opacity: 0.6 }}>{v}</span>
+                    <span>{k}</span><span style={listItemValue}>{v}</span>
                   </button>
                 ))}
             </div>
@@ -155,10 +169,11 @@ function SizeControl({ value, resolved, density, onChange }: {
           {mode === "density" && (
             <div style={scrollList}>
               {Object.keys(density).map((k) => (
-                <button key={k} type="button" style={listItem(raw === `density.${k}`)}
+                <button key={k} type="button" className="hot-panel-list-item" style={listItem}
+                  data-active={raw === `density.${k}`}
                   onClick={() => onChange(`density.${k}`)}>
                   <span>{k.replace(/([A-Z])/g, " $1").replace(/^\w/, (c) => c.toUpperCase())}</span>
-                  <span style={{ opacity: 0.6 }}>{density[k]}</span>
+                  <span style={listItemValue}>{density[k]}</span>
                 </button>
               ))}
             </div>
@@ -214,7 +229,7 @@ function ColorControl({ token, value, ctx, resolved, onChange }: {
           <span style={{ ...swatch, background: resolved || "transparent" }} />
           <span style={ellipsis}>{tokenValueLabel(effective, colorScheme) || "theme default"}</span>
         </span>
-        <span style={{ opacity: 0.6 }}>{open ? "▴" : "▾"}</span>
+        <Chevron open={open} />
       </button>
       {open && (
         <div style={popover}>
@@ -224,7 +239,8 @@ function ColorControl({ token, value, ctx, resolved, onChange }: {
               <div style={swatchRow}>
                 {COMMON_COLORS_KEYS.map((key) => (
                   <button key={key} type="button" title={key}
-                    style={swatchBtn(currentRef === `tokens.${key}`)}
+                    className="hot-swatch-btn" style={swatchBtn}
+                    data-active={currentRef === `tokens.${key}`}
                     onClick={() => onChange(`tokens.${key}`)}>
                     <span style={{
                       ...swatch,
@@ -239,7 +255,8 @@ function ColorControl({ token, value, ctx, resolved, onChange }: {
           <div style={groupLabel}>Base</div>
           <div style={swatchRow}>
             {base.map(([k, v]) => (
-              <button key={k} type="button" title={k} style={swatchBtn(currentRef === `colors.${k}`)}
+              <button key={k} type="button" title={k} className="hot-swatch-btn" style={swatchBtn}
+                data-active={currentRef === `colors.${k}`}
                 onClick={() => pick(`colors.${k}`)}>
                 <span style={{ ...swatch, background: v }} />
               </button>
@@ -251,7 +268,8 @@ function ColorControl({ token, value, ctx, resolved, onChange }: {
               <div style={swatchRow}>
                 {ramp(name).map(([step, v]) => (
                   <button key={step} type="button" title={`${name}.${step}`}
-                    style={swatchBtn(currentRef === `colors.${name}.${step}`)}
+                    className="hot-swatch-btn" style={swatchBtn}
+                    data-active={currentRef === `colors.${name}.${step}`}
                     onClick={() => pick(`colors.${name}.${step}`)}>
                     <span style={{ ...swatch, background: v }} />
                   </button>
@@ -304,58 +322,79 @@ export function TokenControl({ token, ctx, value, onChange, onReset }: TokenCont
 }
 
 // ---- Styles ------------------------------------------------------------------
+//
+// Every colour here is a shell token (DEV-2209). This file used to carry six
+// literals — `#fff` on the control, the trigger, the segmented control and the
+// colour input, `#fbfbfd` on the popover, `#eef2ff` on a selected row — which
+// were correct on master, where the panel had no dark mode. Measured on the
+// shipped dark shell, the trigger rendered `#ffffff` behind `#d1d1d4` text:
+// ~1.4:1, unreadable, on the control every one of the 272 tokens is edited with.
+//
+// `controlBorder`, not `border`, on anything meant to read as an outline: the
+// panel is `surfaceRaised`, and dark `border` *is* `surfaceRaised` (theme.ts).
 
-const rowWrap: React.CSSProperties = { marginBottom: 10 };
+const rowWrap: React.CSSProperties = { marginBottom: ui.space(3) };
 const rowHead: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 3,
+  display: "flex", alignItems: "center", justifyContent: "space-between",
+  gap: ui.space(2), marginBottom: ui.space(1),
 };
-const rowLabel: React.CSSProperties = { fontSize: 12.5, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const rowLabel: React.CSSProperties = { fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-const hint: React.CSSProperties = { fontSize: 11, color: ui.color.textMuted, marginTop: 3 };
+const hint: React.CSSProperties = { fontSize: 12, color: ui.color.textMuted, marginTop: ui.space(1) };
 const control: React.CSSProperties = {
-  flex: 1, minWidth: 0, width: "100%", fontFamily: ui.font.ui, fontSize: 12.5, padding: "4px 6px",
-  border: `1px solid ${ui.color.border}`, borderRadius: 6, color: ui.color.text, background: "#fff",
+  flex: 1, minWidth: 0, width: "100%", fontFamily: ui.font.ui, fontSize: 13,
+  padding: `${ui.space(1)} ${ui.space(2)}`,
+  border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.sm,
+  color: ui.color.text, background: ui.color.surface,
 };
 const trigger: React.CSSProperties = {
   ...control, display: "flex", alignItems: "center", justifyContent: "space-between",
-  gap: 6, cursor: "pointer", textAlign: "left",
+  gap: ui.space(2), cursor: "pointer", textAlign: "left",
 };
 const resetBtn: React.CSSProperties = {
-  border: "none", background: "none", color: ui.color.accent, fontSize: 11,
-  cursor: "pointer", padding: "0 2px", flex: "0 0 auto",
+  border: "none", background: "none", color: ui.color.accent, fontSize: 12,
+  cursor: "pointer", padding: `0 ${ui.space(1)}`, flex: "0 0 auto",
 };
 const popover: React.CSSProperties = {
-  marginTop: 6, padding: 8, border: `1px solid ${ui.color.border}`, borderRadius: 8,
-  background: "#fbfbfd",
+  marginTop: ui.space(2), padding: ui.space(2),
+  border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.md,
+  background: ui.color.surfaceMuted,
 };
-const segmented: React.CSSProperties = { display: "flex", gap: 4, marginBottom: 8 };
+const segmented: React.CSSProperties = { display: "flex", gap: ui.space(1), marginBottom: ui.space(2) };
 const segment = (on: boolean): React.CSSProperties => ({
-  flex: 1, fontSize: 11.5, padding: "3px 0", cursor: "pointer", borderRadius: 5,
-  border: `1px solid ${on ? ui.color.accent : ui.color.border}`,
-  background: on ? ui.color.accent : "#fff", color: on ? "#fff" : ui.color.text,
+  flex: 1, fontSize: 12, padding: `${ui.space(1)} 0`, cursor: "pointer", borderRadius: ui.radius.sm,
+  border: `1px solid ${on ? ui.color.accent : ui.color.controlBorder}`,
+  background: on ? ui.color.accent : ui.color.surface,
+  color: on ? ui.color.accentContrast : ui.color.text,
 });
 const scrollList: React.CSSProperties = { maxHeight: 190, overflowY: "auto" };
-const listItem = (on: boolean): React.CSSProperties => ({
-  display: "flex", justifyContent: "space-between", width: "100%", fontSize: 12,
-  padding: "4px 6px", cursor: "pointer", borderRadius: 5, textAlign: "left",
-  border: `1px solid ${on ? ui.color.accent : "transparent"}`,
-  background: on ? "#eef2ff" : "transparent", color: ui.color.text,
-});
-const groupLabel: React.CSSProperties = {
-  fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4,
-  color: ui.color.textMuted, margin: "8px 0 4px",
+/** The resolved value trailing a scale entry. `textMuted`, not the old
+ *  `opacity: 0.6` — it has to stay legible on the hover fill. */
+const listItemValue: React.CSSProperties = { color: ui.color.textMuted };
+/** No `background` and no `border-color`: `.hot-panel-list-item` owns both,
+ *  base then hover then `[data-active]`, or an inline fill would outrank the
+ *  rollover (ADR-0026). Width and style stay here so nothing reflows. */
+const listItem: React.CSSProperties = {
+  display: "flex", justifyContent: "space-between", width: "100%", fontSize: 13,
+  padding: `${ui.space(1)} ${ui.space(2)}`, cursor: "pointer", borderRadius: ui.radius.sm,
+  textAlign: "left", borderWidth: 1, borderStyle: "solid", color: ui.color.text,
 };
-const swatchRow: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 4 };
+/** The shell's own small-caps section type (`SectionHeader.headerLabel`), rather
+ *  than a fourth hand-rolled copy of it. */
+const groupLabel: React.CSSProperties = { ...headerLabel, display: "block", margin: `${ui.space(2)} 0 ${ui.space(1)}` };
+const swatchRow: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: ui.space(1) };
 const swatch: React.CSSProperties = {
-  width: 16, height: 16, borderRadius: 4, flex: "0 0 16px",
-  border: "1px solid rgba(0,0,0,0.15)", display: "inline-block",
+  width: 16, height: 16, borderRadius: ui.radius.sm, flex: "0 0 16px",
+  border: `1px solid ${ui.color.controlBorder}`, display: "inline-block",
 };
-const swatchBtn = (on: boolean): React.CSSProperties => ({
-  padding: 2, borderRadius: 5, cursor: "pointer", lineHeight: 0,
-  border: `2px solid ${on ? ui.color.accent : "transparent"}`, background: "none",
-});
+/** Same split as `listItem` — `.hot-swatch-btn` carries the border colour. */
+const swatchBtn: React.CSSProperties = {
+  padding: 2, borderRadius: ui.radius.sm, cursor: "pointer", lineHeight: 0,
+  borderWidth: 2, borderStyle: "solid", background: "none",
+};
 const swatchInput: React.CSSProperties = {
   width: 30, flex: "0 0 30px", padding: 0, height: 26,
-  border: `1px solid ${ui.color.border}`, borderRadius: 6, background: "#fff", cursor: "pointer",
+  border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.sm,
+  background: ui.color.surface, cursor: "pointer",
 };
-const unitTag: React.CSSProperties = { fontSize: 11, color: ui.color.textMuted };
+const unitTag: React.CSSProperties = { fontSize: 12, color: ui.color.textMuted };

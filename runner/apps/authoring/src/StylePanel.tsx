@@ -11,7 +11,15 @@
 // uses. Styling a demo is editing the demo.
 
 import { useEffect, useMemo, useState } from "react";
-import { theme as ui } from "@handsontable/demo-editor-shell";
+import {
+  Drawer,
+  headerLabel,
+  IconChevronDown,
+  IconChevronLeft,
+  IconChevronRight,
+  IconPalette,
+  theme as ui,
+} from "@handsontable/demo-editor-shell";
 import { reportError } from "./sentry.js";
 import type { FilesMap } from "@handsontable/demo-runtime";
 import {
@@ -275,34 +283,84 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
     } catch { /* nothing to clear */ }
   }
 
-  return (
-    <aside style={panel} aria-label="Style this demo">
-      <header style={head}>
-        <strong style={{ fontFamily: ui.font.ui, fontSize: 14 }}>Style this demo</strong>
-        <button style={closeBtn} onClick={onClose} aria-label="Close styling panel">✕</button>
-      </header>
-
-      <nav style={tabBar} role="tablist" aria-label="Style panel sections">
-        {([
-          ["foundation", "Foundation"],
-          ["common", "Common"],
-          ["component", "Component"],
-          ["ai", "AI ✨"],
-        ] as const).map(([key, label]) => (
+  /** Pinned under the scroll body by `Drawer` — the panel's own actions, plus
+   *  whatever the last apply had to say about it. */
+  const footer = (
+    <>
+      {applied && !applied.linked && (
+        <p style={{ ...note, marginTop: 0 }}>
+          The theme module is written, but this example builds its grid in a shape the panel does
+          not recognise — add it by hand:{" "}
+          <code style={code}>{manualImportHint(getFiles())}</code>
+        </p>
+      )}
+      {googleFontFamily(state.params.fontFamily) && (
+        <p style={{ ...note, marginTop: 0 }}>
+          Loading <strong>{googleFontFamily(state.params.fontFamily)}</strong> from Google Fonts —
+          the theme module adds the stylesheet link, so the font travels with the demo.
+        </p>
+      )}
+      <div style={{ display: "flex", gap: ui.space(2), flexWrap: "wrap" }}>
+        <button type="button" style={ghost} onClick={() => setShowCode((v) => !v)}>
+          {showCode ? "Hide code" : "Copy for my app"}
+        </button>
+        <button type="button" style={ghost} onClick={reset} disabled={pristine}>
+          Reset
+        </button>
+        {/* `textMuted`, not `success`. The literal `#1a8f5a` this replaced was a
+            colour no token carries, and the obvious swap is wrong: `success`
+            (#37bc6c) lands at ~2.3:1 on light `surfaceMuted`, worse than the
+            literal and well under AA for 12px text. This line is status, not a
+            warning — muted is what the rest of the panel's meta uses. */}
+        {applied && <span style={{ ...note, margin: 0, alignSelf: "center" }}>Applied to the preview</span>}
+      </div>
+      {showCode && (
+        <>
+          <p style={{ ...note, marginTop: ui.space(2), marginBottom: ui.space(1) }}>
+            In a real application, register the theme rather than overriding CSS:
+          </p>
+          <pre style={pre}><code>{snippet}</code></pre>
           <button
-            key={key}
             type="button"
-            role="tab"
-            aria-selected={tab === key}
-            style={tabBtn(tab === key)}
-            onClick={() => { setTab(key); if (key !== "component") setComponent(null); }}
+            style={ghost}
+            onClick={() => void navigator.clipboard?.writeText(snippet)}
           >
-            {label}
+            Copy snippet
           </button>
-        ))}
-      </nav>
+        </>
+      )}
+    </>
+  );
 
-      <div style={body}>
+  return (
+    <Drawer
+      title="Style this demo"
+      onClose={onClose}
+      subheader={
+        <nav style={tabBar} role="tablist" aria-label="Style panel sections">
+          {([
+            ["foundation", "Foundation"],
+            ["common", "Common"],
+            ["component", "Component"],
+            ["ai", "AI"],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              className="hot-panel-tab"
+              aria-selected={tab === key}
+              style={tabBtn(tab === key)}
+              onClick={() => { setTab(key); if (key !== "component") setComponent(null); }}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+      }
+      footer={footer}
+    >
+      <div>
         <p style={intro}>
           The same theme controls as{" "}
           <a href="https://theme-builder.handsontable.com/" target="_blank" rel="noreferrer" style={{ color: ui.color.accent }}>
@@ -316,7 +374,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
         {tab === "ai" && (
         <Section title="Describe a style">
           <form
-            style={{ display: "flex", gap: 6 }}
+            style={{ display: "flex", gap: ui.space(2) }}
             onSubmit={(e) => { e.preventDefault(); void describe(prompt); }}
           >
             <input
@@ -333,8 +391,8 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
               {thinking ? "…" : "Style"}
             </button>
           </form>
-          {aiNote && <div style={{ ...hint, marginLeft: 0, marginTop: 6 }}>{aiNote}</div>}
-          <p style={{ ...note, marginTop: 10, marginBottom: 0 }}>
+          {aiNote && <div style={{ ...hint, marginLeft: 0, marginTop: ui.space(2) }}>{aiNote}</div>}
+          <p style={{ ...note, marginTop: ui.space(3), marginBottom: 0 }}>
             Describes the whole theme at once — presets, ramps and tokens. Everything it
             sets shows up in the other tabs, where you can nudge it by hand.
           </p>
@@ -401,22 +459,23 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
         <section style={{ borderTop: `1px solid ${ui.color.border}` }}>
           <button
             type="button"
+            className="hot-panel-row"
             style={groupHeader}
             onClick={() => setOpenGroup(openGroup === "Palette" ? "" : "Palette")}
             aria-expanded={openGroup === "Palette"}
           >
-            <span>{openGroup === "Palette" ? "▾" : "▸"} Palette</span>
+            <GroupLabel label="Palette" open={openGroup === "Palette"} />
             {Object.keys(state.palette).length > 0 && <span style={badge}>{Object.keys(state.palette).length}</span>}
           </button>
           {openGroup === "Palette" && (
-            <div style={{ padding: "0 14px 12px" }}>
+            <div style={{ padding: BODY_PAD }}>
               <p style={{ ...note, marginTop: 0 }}>
                 The ramps the tokens derive from. Recolouring the brand here beats overriding a
                 dozen tokens one at a time.
               </p>
               <label style={row}>
                 <span style={rowLabel}>Brand colour</span>
-                <span style={{ display: "flex", gap: 4, flex: 1 }}>
+                <span style={{ display: "flex", gap: ui.space(1), flex: 1 }}>
                   <input
                     type="color"
                     aria-label="Generate the brand ramp from this colour"
@@ -449,15 +508,16 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
         <section style={{ borderTop: `1px solid ${ui.color.border}` }}>
           <button
             type="button"
+            className="hot-panel-row"
             style={groupHeader}
             onClick={() => setOpenGroup(openGroup === "Density sizes" ? "" : "Density sizes")}
             aria-expanded={openGroup === "Density sizes"}
           >
-            <span>{openGroup === "Density sizes" ? "▾" : "▸"} Density sizes</span>
+            <GroupLabel label="Density sizes" open={openGroup === "Density sizes"} />
             {densitySizeCount(state) > 0 && <span style={badge}>{densitySizeCount(state)}</span>}
           </button>
           {openGroup === "Density sizes" && (
-            <div style={{ padding: "0 14px 12px" }}>
+            <div style={{ padding: BODY_PAD }}>
               <p style={{ ...note, marginTop: 0 }}>
                 Fine-tune a density preset one measurement at a time. Blank means "whatever
                 the preset says". All three variants are editable, so a theme still behaves
@@ -481,7 +541,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
                 })}
               </div>
               {densityVariant !== state.density && (
-                <div style={{ ...hint, marginLeft: 0, marginBottom: 8 }}>
+                <div style={{ ...hint, marginLeft: 0, marginBottom: ui.space(2) }}>
                   Editing <strong>{densityVariant}</strong>; the grid is currently on{" "}
                   <strong>{state.density}</strong>, so these won't show in the preview yet.
                 </div>
@@ -505,7 +565,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
         </>)}
 
         {tab === "common" && (
-          <div style={{ padding: "0 14px 12px" }}>
+          <div style={{ padding: BODY_PAD }}>
             <p style={{ ...note, marginTop: 0 }}>
               The tokens the whole grid is built from — change one here and it carries
               everywhere the components reference it.
@@ -525,7 +585,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
                picking a component opens its own sub-panel — theme-builder's second
                column, stacked instead of side-by-side because 420px has no room
                for two. */
-            <div style={{ padding: "0 14px 12px" }}>
+            <div style={{ padding: BODY_PAD }}>
               <p style={{ ...note, marginTop: 0 }}>
                 Per-component tokens. Pick a part of the grid to style it on its own.
               </p>
@@ -535,22 +595,24 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
                   <button
                     key={section.label}
                     type="button"
+                    className="hot-panel-row"
                     style={componentRow}
                     onClick={() => setComponent(section.label)}
                   >
                     <span>{section.label}</span>
-                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: ui.space(2) }}>
                       {set > 0 && <span style={badge}>{set}</span>}
-                      <span style={{ opacity: 0.5 }}>›</span>
+                      <IconChevronRight size={14} style={{ color: ui.color.textMuted }} />
                     </span>
                   </button>
                 );
               })}
             </div>
           ) : (
-            <div style={{ padding: "0 14px 12px" }}>
+            <div style={{ padding: BODY_PAD }}>
               <button type="button" style={backBtn} onClick={() => setComponent(null)}>
-                ‹ All components
+                <IconChevronLeft size={14} />
+                All components
               </button>
               {COMPONENT_SECTIONS.filter((s) => s.label === component).map((section) => (
                 <div key={section.label}>
@@ -568,47 +630,7 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
           )
         )}
       </div>
-
-      <footer style={foot}>
-        {applied && !applied.linked && (
-          <p style={{ ...note, marginTop: 0 }}>
-            The theme module is written, but this example builds its grid in a shape the panel does
-            not recognise — add it by hand:{" "}
-            <code style={code}>{manualImportHint(getFiles())}</code>
-          </p>
-        )}
-        {googleFontFamily(state.params.fontFamily) && (
-          <p style={{ ...note, marginTop: 0 }}>
-            Loading <strong>{googleFontFamily(state.params.fontFamily)}</strong> from Google Fonts —
-            the theme module adds the stylesheet link, so the font travels with the demo.
-          </p>
-        )}
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <button type="button" style={ghost} onClick={() => setShowCode((v) => !v)}>
-            {showCode ? "Hide code" : "Copy for my app"}
-          </button>
-          <button type="button" style={ghost} onClick={reset} disabled={pristine}>
-            Reset
-          </button>
-          {applied && <span style={{ fontSize: 11.5, color: "#1a8f5a", alignSelf: "center" }}>Applied to the preview</span>}
-        </div>
-        {showCode && (
-          <>
-            <p style={{ ...note, marginBottom: 4 }}>
-              In a real application, register the theme rather than overriding CSS:
-            </p>
-            <pre style={pre}><code>{snippet}</code></pre>
-            <button
-              type="button"
-              style={ghost}
-              onClick={() => void navigator.clipboard?.writeText(snippet)}
-            >
-              Copy snippet
-            </button>
-          </>
-        )}
-      </footer>
-    </aside>
+    </Drawer>
   );
 }
 
@@ -634,18 +656,31 @@ function Tile({
       onClick={onClick}
       aria-pressed={active}
       title={label}
-      style={{
-        ...tile,
-        ...(maxWidth ? { maxWidth } : {}),
-        borderColor: active ? ui.color.accent : ui.color.border,
-        boxShadow: active ? `0 0 0 1px ${ui.color.accent}` : "none",
-      }}
+      // The selection ring used to be an accent `borderColor` *and* a 1px accent
+      // `boxShadow` on top of it — the same line drawn twice, and neither on the
+      // shell's shadow scale. The border alone is the signal now, and it lives in
+      // `.hot-swatch-btn` so the hover can reach it (ADR-0026).
+      className="hot-panel-tile"
+      data-active={active}
+      style={{ ...tile, ...(maxWidth ? { maxWidth } : {}) }}
     >
       <img src={image} alt="" style={tileImg} />
       <span style={{ ...tileLabel, color: active ? ui.color.accent : ui.color.textMuted }}>
         {label}
       </span>
     </button>
+  );
+}
+
+/** A collapsible group's header text: the shell's small-caps section type with
+ *  the disclosure chevron leading it, in place of the old `▾`/`▸` glyphs. */
+function GroupLabel({ label, open }: { label: string; open: boolean }) {
+  const Chevron = open ? IconChevronDown : IconChevronRight;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: ui.space(2) }}>
+      <Chevron size={14} style={{ color: ui.color.textMuted }} />
+      {label}
+    </span>
   );
 }
 
@@ -663,7 +698,7 @@ function Ramp({
   onChange: (key: string, value: string) => void;
 }) {
   return (
-    <div style={{ display: "flex", gap: 3, marginBottom: 10, flexWrap: "wrap" }}>
+    <div style={{ display: "flex", gap: ui.space(1), marginBottom: ui.space(3), flexWrap: "wrap" }}>
       {steps.map((step) => {
         const key = `${prefix}.${step}`;
         const value = state.palette[key] ?? "";
@@ -676,7 +711,7 @@ function Ramp({
               onChange={(e) => onChange(key, e.target.value)}
               style={{ ...swatch, width: 26, flex: "0 0 26px", opacity: value ? 1 : 0.35 }}
             />
-            <div style={{ fontSize: 9.5, color: ui.color.textMuted }}>{step}</div>
+            <div style={{ fontSize: 10, color: ui.color.textMuted }}>{step}</div>
           </label>
         );
       })}
@@ -686,7 +721,7 @@ function Ramp({
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section style={{ padding: "10px 14px 12px" }}>
+    <section style={{ padding: `${ui.space(2)} ${ui.space(4)} ${ui.space(3)}` }}>
       <div style={sectionTitle}>{title}</div>
       {children}
     </section>
@@ -729,10 +764,10 @@ function TokenField({
   onChange: (value: string) => void;
 }) {
   return (
-    <div style={{ marginBottom: 8 }}>
+    <div style={{ marginBottom: ui.space(2) }}>
       <label style={row}>
         <span style={rowLabel} title={token.key}>{token.label}</span>
-        <span style={{ display: "flex", gap: 4, flex: 1 }}>
+        <span style={{ display: "flex", gap: ui.space(1), flex: 1 }}>
           {token.type === "color" && (
             <input
               type="color"
@@ -786,19 +821,20 @@ export function StyleButton({ open, onToggle }: { open: boolean; onToggle: () =>
         aria-pressed={open}
         aria-describedby={show ? "style-hint" : undefined}
       >
-        🎨 Style
+        <IconPalette />
+        Style
       </button>
 
       {show && (
         <span id="style-hint" role="tooltip" style={tooltip}>
-          <strong style={{ display: "block", marginBottom: 4 }}>Restyle this example</strong>
-          <span style={{ display: "block", color: ui.color.textMuted, marginBottom: 6 }}>
+          <strong style={{ display: "block", marginBottom: ui.space(1) }}>Restyle this example</strong>
+          <span style={{ display: "block", color: ui.color.textMuted, marginBottom: ui.space(2) }}>
             Everything Theme Builder does, applied to the demo you have open.
           </span>
-          <span style={tooltipItem}>🎨 272 tokens — colours, sizes, typography, per component</span>
-          <span style={tooltipItem}>✨ “Retro amber terminal” — describe it and the grid becomes it</span>
-          <span style={tooltipItem}>🌗 Presets, brand ramp, light/dark and density</span>
-          <span style={{ display: "block", marginTop: 6, color: ui.color.textMuted, fontSize: 11 }}>
+          <span style={tooltipItem}>272 tokens — colours, sizes, typography, per component</span>
+          <span style={tooltipItem}>“Retro amber terminal” — describe it and the grid becomes it</span>
+          <span style={tooltipItem}>Presets, brand ramp, light/dark and density</span>
+          <span style={{ display: "block", marginTop: ui.space(2), color: ui.color.textMuted }}>
             Written into the demo as a real module, so it survives Download and Share — and
             Reset puts everything back.
           </span>
@@ -811,118 +847,135 @@ export function StyleButton({ open, onToggle }: { open: boolean; onToggle: () =>
 export const STYLE_PANEL_TOKENS = ALL_TOKENS.length;
 
 // ---- Styles ------------------------------------------------------------------
+//
+// The panel chrome — fixed drawer, header, close button, footer band — is gone
+// from here: it is `Drawer` in the shell now, shared with the chat panel
+// (DEV-2209). What is left is this panel's own contents, on the shell's scales:
+// `space(n)` for padding, `radius.sm|md|lg` (there is no 5 or 6), and 18/13/12/10
+// for type. `controlBorder` on anything that has to read as a control outline —
+// dark `border` *is* `surfaceRaised`, which is what the drawer is painted with.
 
-// The panel is a fixed drawer over the editor, and since the redesign the editor has a
-// dark mode. `#fff` was correct on master, where it did not; here it is a white slab
-// over `surface`. Surfaces below are the shell's tokens for the same reason.
-const panel: React.CSSProperties = {
-  position: "fixed", top: 0, right: 0, height: "100%", width: 380, maxWidth: "95vw",
-  background: ui.color.surfaceRaised, borderLeft: `1px solid ${ui.color.border}`,
-  boxShadow: "-8px 0 24px rgba(0,0,0,0.08)", zIndex: 900,
-  display: "flex", flexDirection: "column", fontFamily: ui.font.ui, color: ui.color.text,
-};
-const head: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "space-between",
-  padding: "12px 14px", borderBottom: `1px solid ${ui.color.border}`,
-};
-const body: React.CSSProperties = { flex: 1, overflowY: "auto" };
-const foot: React.CSSProperties = {
-  borderTop: `1px solid ${ui.color.border}`, padding: "10px 14px", background: ui.color.surfaceMuted,
-};
-const closeBtn: React.CSSProperties = {
-  border: "none", background: "none", cursor: "pointer", fontSize: 16, color: ui.color.textMuted,
-};
-const sectionTitle: React.CSSProperties = {
-  fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4,
-  color: ui.color.textMuted, fontWeight: 600, marginBottom: 8,
-};
+/** The label column of a `row`, and the indent its hint has to match. One
+ *  constant, because they were 130 and 138 by hand and could drift apart. */
+const ROW_LABEL_WIDTH = 130;
+
+/** The inset every section in the body shares. */
+const BODY_PAD = `0 ${ui.space(4)} ${ui.space(3)}`;
+
+const sectionTitle: React.CSSProperties = { ...headerLabel, display: "block", marginBottom: ui.space(2) };
+// No inline `background` — `.hot-panel-row` owns the fill and its rollover (ADR-0026).
 const groupHeader: React.CSSProperties = {
   display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
-  background: "none", border: "none", cursor: "pointer", padding: "10px 14px",
+  border: "none", cursor: "pointer", padding: `${ui.space(2)} ${ui.space(4)}`,
   fontFamily: ui.font.ui, fontSize: 13, color: ui.color.text, textAlign: "left",
 };
 const badge: React.CSSProperties = {
   background: ui.color.accent, color: ui.color.accentContrast, borderRadius: 999,
-  fontSize: 10.5, padding: "1px 6px", fontWeight: 600,
+  fontSize: 10, lineHeight: "16px", padding: `0 ${ui.space(2)}`, fontWeight: 600,
 };
-const row: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 };
-const rowLabel: React.CSSProperties = { width: 130, flex: "0 0 130px", fontSize: 12.5 };
+const row: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: ui.space(2), marginBottom: ui.space(2),
+};
+const rowLabel: React.CSSProperties = {
+  width: ROW_LABEL_WIDTH, flex: `0 0 ${ROW_LABEL_WIDTH}px`, fontSize: 13,
+};
 const control: React.CSSProperties = {
-  flex: 1, minWidth: 0, fontFamily: ui.font.ui, fontSize: 12.5, padding: "4px 6px",
-  border: `1px solid ${ui.color.border}`, borderRadius: 6, color: ui.color.text, background: ui.color.surface,
+  flex: 1, minWidth: 0, fontFamily: ui.font.ui, fontSize: 13,
+  padding: `${ui.space(1)} ${ui.space(2)}`,
+  border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.sm,
+  color: ui.color.text, background: ui.color.surface,
 };
 const swatch: React.CSSProperties = {
   width: 30, flex: "0 0 30px", padding: 0, height: 26,
-  border: `1px solid ${ui.color.border}`, borderRadius: 6, background: ui.color.surface, cursor: "pointer",
+  border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.sm,
+  background: ui.color.surface, cursor: "pointer",
 };
-const hint: React.CSSProperties = { fontSize: 11, color: ui.color.textMuted, marginLeft: 138 };
+/** Sits under a control, so it indents past the label column to line up with it. */
+const hint: React.CSSProperties = {
+  fontSize: 12, color: ui.color.textMuted, marginLeft: ROW_LABEL_WIDTH + 8,
+};
 /** Matches the "Ask AI" tooltip so the two toolbar CTAs read as a pair. */
 const tooltip: React.CSSProperties = {
-  position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 950, width: 320,
-  background: ui.color.surfaceRaised, border: `1px solid ${ui.color.border}`, borderRadius: ui.radius.md,
-  boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: "10px 12px",
+  position: "absolute", top: `calc(100% + ${ui.space(2)})`, left: 0, zIndex: 950, width: 320,
+  background: ui.color.surfaceRaised, border: `1px solid ${ui.color.controlBorder}`,
+  borderRadius: ui.radius.md, boxShadow: ui.shadow.popover,
+  padding: `${ui.space(2)} ${ui.space(3)}`,
   fontFamily: ui.font.ui, fontSize: 12, color: ui.color.text,
   textAlign: "left", whiteSpace: "normal", cursor: "default",
 };
-const tooltipItem: React.CSSProperties = { display: "block", padding: "2px 0" };
-const segmentedRow: React.CSSProperties = { display: "flex", gap: 4, marginBottom: 10 };
+const tooltipItem: React.CSSProperties = { display: "block", padding: `${ui.space(1)} 0` };
+const segmentedRow: React.CSSProperties = { display: "flex", gap: ui.space(1), marginBottom: ui.space(2) };
 const segmentBtn = (on: boolean): React.CSSProperties => ({
-  flex: 1, fontSize: 11.5, padding: "4px 0", cursor: "pointer", borderRadius: 5,
+  flex: 1, fontSize: 12, padding: `${ui.space(1)} 0`, cursor: "pointer", borderRadius: ui.radius.sm,
   textTransform: "capitalize", fontFamily: ui.font.ui,
-  border: `1px solid ${on ? ui.color.accent : ui.color.border}`,
+  border: `1px solid ${on ? ui.color.accent : ui.color.controlBorder}`,
   background: on ? ui.color.accent : ui.color.surface, color: on ? ui.color.accentContrast : ui.color.text,
 });
-const tileRow: React.CSSProperties = { display: "flex", gap: 8, justifyContent: "space-between" };
+const tileRow: React.CSSProperties = { display: "flex", gap: ui.space(2), justifyContent: "space-between" };
+/** No `border-color`: `.hot-panel-tile` carries resting, hover and selected, or
+ *  an inline colour would outrank the rollover (ADR-0026 §2 — the shorthand
+ *  counts too, hence width and style being set on their own here). It rests on
+ *  `controlBorder`, unlike the colour chips' `.hot-swatch-btn`: a framed thumbnail
+ *  without its frame reads as a floating image. */
 const tile: React.CSSProperties = {
-  flex: 1, minWidth: 0, padding: 5, borderRadius: 8, cursor: "pointer",
-  border: `1px solid ${ui.color.border}`, background: ui.color.surface,
-  display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
-  fontFamily: ui.font.ui,
+  flex: 1, minWidth: 0, padding: ui.space(1), borderRadius: ui.radius.md, cursor: "pointer",
+  borderWidth: 1, borderStyle: "solid", background: ui.color.surface,
+  display: "flex", flexDirection: "column", alignItems: "center", gap: ui.space(1),
+  // A `<button>` with no `color` takes the UA's `buttontext` — black in both
+  // modes, which is the same class of miss as the `buttonface` fill in ADR-0026 §3.
+  fontFamily: ui.font.ui, color: ui.color.text,
 };
 const tileImg: React.CSSProperties = {
-  width: "100%", height: "auto", display: "block", borderRadius: 4,
+  width: "100%", height: "auto", display: "block", borderRadius: ui.radius.sm,
 };
-const tileLabel: React.CSSProperties = { fontSize: 11, textTransform: "capitalize" };
+const tileLabel: React.CSSProperties = { fontSize: 12, textTransform: "capitalize" };
 const tabBar: React.CSSProperties = {
-  display: "flex", borderBottom: `1px solid ${ui.color.border}`, flex: "0 0 auto", padding: "0 6px",
+  display: "flex", borderBottom: `1px solid ${ui.color.border}`, flex: "0 0 auto",
+  padding: `0 ${ui.space(2)}`, background: ui.color.surfaceRaised,
 };
+// No inline `background` — `.hot-panel-tab` owns it. The accent underline stays
+// here: no rule touches `border-bottom-color`, so it cannot be outranked.
 const tabBtn = (on: boolean): React.CSSProperties => ({
-  flex: 1, padding: "8px 4px", fontSize: 12, cursor: "pointer", background: "none",
+  flex: 1, padding: `${ui.space(2)} ${ui.space(1)}`, fontSize: 13, cursor: "pointer",
   border: "none", borderBottom: `2px solid ${on ? ui.color.accent : "transparent"}`,
   color: on ? ui.color.accent : ui.color.textMuted, fontWeight: on ? 600 : 400,
   fontFamily: ui.font.ui,
 });
+// Same split as `groupHeader`: the fill and its rollover live in `.hot-panel-row`.
 const componentRow: React.CSSProperties = {
   display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
-  padding: "9px 4px", fontSize: 12.5, cursor: "pointer", background: "none",
+  padding: `${ui.space(2)} ${ui.space(1)}`, fontSize: 13, cursor: "pointer",
   border: "none", borderBottom: `1px solid ${ui.color.border}`,
   color: ui.color.text, fontFamily: ui.font.ui, textAlign: "left",
 };
 const backBtn: React.CSSProperties = {
-  border: "none", background: "none", color: ui.color.accent, fontSize: 12,
-  cursor: "pointer", padding: "6px 0", fontFamily: ui.font.ui,
+  display: "inline-flex", alignItems: "center", gap: ui.space(1),
+  border: "none", background: "none", color: ui.color.accent, fontSize: 13,
+  cursor: "pointer", padding: `${ui.space(2)} 0`, fontFamily: ui.font.ui,
 };
-const subGroup: React.CSSProperties = {
-  fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4,
-  color: ui.color.textMuted, margin: "10px 0 6px",
-};
-const note: React.CSSProperties = { fontSize: 11.5, color: ui.color.textMuted, margin: "0 0 10px" };
+const subGroup: React.CSSProperties = { ...headerLabel, display: "block", margin: `${ui.space(3)} 0 ${ui.space(2)}` };
+const note: React.CSSProperties = { fontSize: 12, color: ui.color.textMuted, margin: `0 0 ${ui.space(3)}` };
 /** The panel's opening blurb. It sits directly in the scroll body rather than
  *  inside a Section, so it has to bring its own padding — without it the text
- *  runs edge to edge while everything below it is inset by 14px. */
-const intro: React.CSSProperties = { ...note, padding: "12px 14px 0", margin: "0 0 4px" };
+ *  runs edge to edge while everything below it is inset. */
+const intro: React.CSSProperties = {
+  ...note, padding: `${ui.space(3)} ${ui.space(4)} 0`, margin: `0 0 ${ui.space(1)}`,
+};
 const code: React.CSSProperties = {
   fontFamily: ui.font.mono, fontSize: "0.92em", background: ui.color.surface,
-  border: `1px solid ${ui.color.border}`, borderRadius: 4, padding: "0 4px",
+  border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.sm,
+  padding: `0 ${ui.space(1)}`,
 };
 const pre: React.CSSProperties = {
   background: ui.color.editorBg, color: ui.color.text, borderRadius: ui.radius.md,
-  padding: 10, overflowX: "auto", fontFamily: ui.font.mono, fontSize: 11, margin: "0 0 8px",
-  maxHeight: 220,
+  padding: ui.space(2), overflowX: "auto", fontFamily: ui.font.mono, fontSize: 12,
+  margin: `0 0 ${ui.space(2)}`, maxHeight: 220,
+  border: `1px solid ${ui.color.controlBorder}`,
 };
 const ghost: React.CSSProperties = {
-  fontFamily: ui.font.ui, fontSize: 12.5, background: ui.color.surface, color: ui.color.text,
-  border: `1px solid ${ui.color.border}`, borderRadius: 6, padding: "5px 11px", cursor: "pointer",
+  fontFamily: ui.font.ui, fontSize: 13, background: ui.color.surface, color: ui.color.text,
+  border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.sm,
+  padding: `${ui.space(1)} ${ui.space(3)}`, cursor: "pointer",
 };
 // The two live in the redesigned 72px top bar, which is `surfaceRaised` and has a
 // dark mode. `#fff` and `border` were both fine on the pre-redesign bar; on this one
@@ -931,8 +984,9 @@ const ghost: React.CSSProperties = {
 const styleBtn: React.CSSProperties = {
   // Metrics match the bar's own `actionButton` (36px, `radius.md`, 13/600): these sit
   // between the mode action and the theme toggle, and the old bar's 26px pill read as
-  // a leftover beside them. The glyph stays — the icon set is read off Figma layers
-  // (ADR-0024) and neither feature has one.
+  // a leftover beside them. The `🎨` this used to lead with is now `IconPalette`
+  // (DEV-2209): an emoji renders in the OS's own colour and weight, so it was the one
+  // mark on the bar that could not follow the theme.
   display: "inline-flex", alignItems: "center", gap: ui.space(2),
   height: 36, padding: `0 ${ui.space(3)}`, flex: "0 0 auto",
   fontFamily: ui.font.ui, fontSize: 13, fontWeight: 600,

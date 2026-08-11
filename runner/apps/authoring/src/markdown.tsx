@@ -45,7 +45,7 @@ export function Markdown({ text, error }: { text: string; error?: boolean }) {
             return <pre key={key} style={preStyle}><code>{block.text}</code></pre>;
           case "heading":
             return (
-              <div key={key} style={{ ...headingStyle, fontSize: Math.max(12.5, 16 - block.level) }}>
+              <div key={key} style={{ ...headingStyle, fontSize: Math.max(13, 17 - block.level) }}>
                 {renderInline(block.children, key)}
               </div>
             );
@@ -94,20 +94,23 @@ export function Markdown({ text, error }: { text: string; error?: boolean }) {
   );
 }
 
+// `controlBorder`, for the same reason the table below gives: the chat drawer is
+// `surfaceRaised`, which dark `border` *is*, so this outline would vanish there.
 const codeStyle: React.CSSProperties = {
   fontFamily: theme.font.mono, fontSize: "0.92em", background: theme.color.surfaceMuted,
-  border: `1px solid ${theme.color.border}`, borderRadius: 4, padding: "0 4px",
+  border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.sm,
+  padding: `0 ${theme.space(1)}`,
 };
 const preStyle: React.CSSProperties = {
   background: theme.color.editorBg, color: theme.color.text, borderRadius: theme.radius.md,
-  padding: 10, overflowX: "auto", fontFamily: theme.font.mono, fontSize: 11.5, margin: "0 0 8px",
+  padding: 10, overflowX: "auto", fontFamily: theme.font.mono, fontSize: 12, margin: "0 0 8px",
 };
 // The chat panel is ~380px, so a table is expected to overflow: scroll it in
 // its own box rather than widening the column. `controlBorder`, not `border` —
 // dark's `border` is `surfaceRaised`, so cell rules would disappear there.
 const tableWrapStyle: React.CSSProperties = { overflowX: "auto", margin: "0 0 8px", maxWidth: "100%" };
 const tableStyle: React.CSSProperties = {
-  borderCollapse: "collapse", fontSize: 11.5, width: "100%",
+  borderCollapse: "collapse", fontSize: 12, width: "100%",
   border: `1px solid ${theme.color.controlBorder}`,
 };
 const cellStyle: React.CSSProperties = {

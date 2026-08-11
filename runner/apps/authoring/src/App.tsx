@@ -1577,8 +1577,9 @@ function Authoring({
         budgetNotice={budgetNotice}
         // Ask AI and Style, both from DEV-2047. Available on every route — the
         // public `/share` view included, since explaining or restyling a demo is
-        // exactly what a shared link invites. Mutually exclusive: they are the
-        // same 340px edge of the screen.
+        // exactly what a shared link invites. Mutually exclusive: since DEV-2209
+        // they are literally the same surface — one `Drawer`, one `DRAWER_WIDTH`
+        // (400) — on the same edge of the screen.
         secondaryActions={
           <>
             <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />
