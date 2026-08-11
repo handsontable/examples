@@ -124,7 +124,10 @@ export function TopBar({
           type="button"
           style={
             downloadHighlight
-              ? { ...actionButton, color: theme.color.accent, borderColor: theme.color.accent }
+              // `accentText`, not `accent`: this bar is `surfaceRaised`, where plain
+              // `accent` is 2.3:1 — the one state that is supposed to *catch the eye*
+              // was the hardest thing on the bar to read (DEV-2209).
+              ? { ...actionButton, color: theme.color.accentText, borderColor: theme.color.accentText }
               : actionButton
           }
           onClick={onDownload}

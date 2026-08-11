@@ -38,6 +38,34 @@ into the iframe document.
        example owns its own theme) is unchanged. See plan open item 44. -->
 
 
+## Addendum (DEV-2209): the app's own drawers were outside the sweep
+
+The two DEV-2047 panels — **Ask AI** and **Style** — predate the redesign and were never brought
+onto this token set. Three findings worth keeping, because each is a rule this ADR states that a
+surface outside `editor-shell` still managed to miss:
+
+1. **A colour literal survived in `apps/authoring/src/theme/controls.tsx`.** Six of them: `#fff` on
+   the token control, its trigger, the segmented control and the colour input, `#fbfbfd` on the
+   inline popover, `#eef2ff` on a selected scale entry. Measured on the shipped dark shell, the
+   trigger painted `#ffffff` behind `#d1d1d4` text — about 1.4:1, on the one control all 272 tokens
+   are edited through. The "no hard-coded colour outside `theme.ts`" consequence above is not
+   scoped to the shell package; it holds for every surface the app paints.
+2. **Correct tokens are not sufficient — `border` on a `surfaceRaised` surface is invisible in
+   dark**, because dark `border` *is* `surfaceRaised` (#222222). Both drawers are raised, so every
+   control outline inside them disappeared. The rule, already used by `TopBar` and now applied
+   here: a **control outline** that has to read takes `controlBorder`; a **divider** between two
+   same-tone regions keeps `border`, which is why the drawer's header, footer and row rules were
+   left alone.
+3. **The drawer chrome is now one component**, `packages/editor-shell/src/Drawer.tsx` — the
+   non-modal counterpart of `Dialog`, sharing its title treatment and close button but with no
+   scrim, no focus trap, and its Escape handler on the **bubble** phase so a `Dialog` opened above
+   a drawer still consumes the key alone.
+
+Also from the same pass: the `✨`/`🎨` glyphs on the two triggers became `IconSparkles` /
+`IconPalette` (ADR-0024's documented-exception list). An emoji renders in the OS's own colour and
+weight — no token can reach it, which made them the only marks on the top bar that stayed light
+when the bar went dark.
+
 ## Consequences
 - Every visual subtask in the redesign depends on this landing first; it is a refactor with a
   wide blast radius and no user-visible payload of its own.

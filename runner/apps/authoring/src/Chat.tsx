@@ -10,7 +10,7 @@
 // feature, it is a data-loss bug with good intentions.
 
 import { useEffect, useRef, useState } from "react";
-import { theme } from "@handsontable/demo-editor-shell";
+import { Drawer, IconSparkles, theme } from "@handsontable/demo-editor-shell";
 import type { FilesMap } from "@handsontable/demo-runtime";
 import { searchDocs } from "./docsSearch.js";
 import { Markdown } from "./markdown.js";
@@ -215,79 +215,9 @@ export function ChatPanel({
     reportChatEvent(apiBase, "edit_undone", framework);
   }
 
-  return (
-    <aside style={panel} aria-label="Ask about this example">
-      <header style={head}>
-        <strong style={{ fontFamily: theme.font.ui, fontSize: 14 }}>Ask about this example</strong>
-        <button style={closeBtn} onClick={onClose} aria-label="Close chat">✕</button>
-      </header>
-
-      <div ref={listRef} style={list}>
-        {turns.length === 0 && (
-          <div style={{ padding: "4px 2px" }}>
-            <p style={{ ...muted, marginTop: 0 }}>
-              Ask what this example does, what an option means, or ask for a change —
-              answers are grounded in the Handsontable documentation, and any code change is
-              shown for you to apply.
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  style={{ ...suggestion, opacity: busy ? 0.5 : 1 }}
-                  disabled={busy}
-                  onClick={() => void send(s)}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {turns.map((turn, i) => (
-          <div key={i} style={turn.role === "user" ? userBubble : assistantBubble}>
-            <Markdown text={turn.content} error={turn.error} />
-
-            {turn.edits && turn.edits.length > 0 && (
-              <div style={editBox}>
-                <div style={{ fontSize: 11.5, color: theme.color.textMuted, marginBottom: 6 }}>
-                  {turn.undo ? "Applied to" : "Proposed changes to"} {turn.edits.length} file
-                  {turn.edits.length > 1 ? "s" : ""}
-                </div>
-                {turn.edits.map((edit) => (
-                  <div key={edit.path} style={{ marginBottom: 4 }}>
-                    <code style={pathChip}>{edit.path}</code>
-                    {edit.why && <span style={{ ...muted, fontSize: 11.5, marginLeft: 6 }}>{edit.why}</span>}
-                  </div>
-                ))}
-                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                  {turn.undo
-                    ? <button type="button" style={ghost} onClick={() => undo(i)}>Undo</button>
-                    : <button type="button" style={primary} onClick={() => apply(i)}>Apply</button>}
-                </div>
-              </div>
-            )}
-
-            {(turn.references?.length || turn.pages?.length) ? (
-              <div style={{ marginTop: 8, fontSize: 11.5 }}>
-                <div style={{ color: theme.color.textMuted, marginBottom: 2 }}>Documentation</div>
-                {[...new Set([...(turn.references ?? []), ...(turn.pages ?? []).map((p) => p.url)])]
-                  .slice(0, 6)
-                  .map((url) => (
-                    <a key={url} href={url} target="_blank" rel="noreferrer" style={docLink}>
-                      {(turn.pages ?? []).find((p) => p.url === url)?.title ?? prettyUrl(url)}
-                    </a>
-                  ))}
-              </div>
-            ) : null}
-          </div>
-        ))}
-
-        {busy && <div style={{ ...assistantBubble, ...muted }}>{status ?? "Thinking…"}</div>}
-      </div>
-
+  /** The composer, pinned under the scrolling transcript by `Drawer`. */
+  const footer = (
+    <>
       <form
         style={composer}
         onSubmit={(e) => { e.preventDefault(); void send(input); }}
@@ -309,10 +239,81 @@ export function ChatPanel({
           Send
         </button>
       </form>
-      <p style={{ ...muted, fontSize: 11, margin: "0 12px 10px" }}>
+      <p style={{ ...muted, fontSize: 12, margin: `${theme.space(2)} 0 0` }}>
         Answers can be wrong — check the code before you rely on it.
       </p>
-    </aside>
+    </>
+  );
+
+  return (
+    <Drawer title="Ask about this example" onClose={onClose} footer={footer}>
+      <div ref={listRef} style={list}>
+        {turns.length === 0 && (
+          <div style={{ padding: `${theme.space(1)} 0` }}>
+            <p style={{ ...muted, marginTop: 0 }}>
+              Ask what this example does, what an option means, or ask for a change —
+              answers are grounded in the Handsontable documentation, and any code change is
+              shown for you to apply.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: theme.space(2) }}>
+              {SUGGESTIONS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className="hot-panel-suggestion"
+                  style={{ ...suggestion, opacity: busy ? 0.5 : 1 }}
+                  disabled={busy}
+                  onClick={() => void send(s)}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {turns.map((turn, i) => (
+          <div key={i} style={turn.role === "user" ? userBubble : assistantBubble}>
+            <Markdown text={turn.content} error={turn.error} />
+
+            {turn.edits && turn.edits.length > 0 && (
+              <div style={editBox}>
+                <div style={{ fontSize: 12, color: theme.color.textMuted, marginBottom: theme.space(2) }}>
+                  {turn.undo ? "Applied to" : "Proposed changes to"} {turn.edits.length} file
+                  {turn.edits.length > 1 ? "s" : ""}
+                </div>
+                {turn.edits.map((edit) => (
+                  <div key={edit.path} style={{ marginBottom: theme.space(1) }}>
+                    <code style={pathChip}>{edit.path}</code>
+                    {edit.why && <span style={{ ...muted, fontSize: 12, marginLeft: theme.space(2) }}>{edit.why}</span>}
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: theme.space(2), marginTop: theme.space(2) }}>
+                  {turn.undo
+                    ? <button type="button" style={ghost} onClick={() => undo(i)}>Undo</button>
+                    : <button type="button" style={primary} onClick={() => apply(i)}>Apply</button>}
+                </div>
+              </div>
+            )}
+
+            {(turn.references?.length || turn.pages?.length) ? (
+              <div style={{ marginTop: theme.space(2), fontSize: 12 }}>
+                <div style={{ color: theme.color.textMuted, marginBottom: 2 }}>Documentation</div>
+                {[...new Set([...(turn.references ?? []), ...(turn.pages ?? []).map((p) => p.url)])]
+                  .slice(0, 6)
+                  .map((url) => (
+                    <a key={url} href={url} target="_blank" rel="noreferrer" style={docLink}>
+                      {(turn.pages ?? []).find((p) => p.url === url)?.title ?? prettyUrl(url)}
+                    </a>
+                  ))}
+              </div>
+            ) : null}
+          </div>
+        ))}
+
+        {busy && <div style={{ ...assistantBubble, ...muted }}>{status ?? "Thinking…"}</div>}
+      </div>
+    </Drawer>
   );
 }
 
@@ -346,19 +347,20 @@ export function AskAiButton({ open, onToggle }: { open: boolean; onToggle: () =>
         aria-pressed={open}
         aria-describedby={show ? "ask-ai-hint" : undefined}
       >
-        ✨ Ask AI
+        <IconSparkles />
+        Ask AI
       </button>
 
       {show && (
         <span id="ask-ai-hint" role="tooltip" style={tooltip}>
-          <strong style={{ display: "block", marginBottom: 4 }}>Ask about this example</strong>
-          <span style={{ display: "block", color: theme.color.textMuted, marginBottom: 6 }}>
+          <strong style={{ display: "block", marginBottom: theme.space(1) }}>Ask about this example</strong>
+          <span style={{ display: "block", color: theme.color.textMuted, marginBottom: theme.space(2) }}>
             Scoped to the code you have open — not Handsontable in general.
           </span>
-          <span style={tooltipItem}>💬 “What does this example do?”</span>
-          <span style={tooltipItem}>🔧 “Make the first two columns frozen” — the edit arrives ready to apply</span>
-          <span style={tooltipItem}>📚 Grounded in the Handsontable docs, with links</span>
-          <span style={{ display: "block", marginTop: 6, color: theme.color.textMuted, fontSize: 11 }}>
+          <span style={tooltipItem}>“What does this example do?”</span>
+          <span style={tooltipItem}>“Make the first two columns frozen” — the edit arrives ready to apply</span>
+          <span style={tooltipItem}>Grounded in the Handsontable docs, with links</span>
+          <span style={{ display: "block", marginTop: theme.space(2), color: theme.color.textMuted }}>
             Changes are never applied without you — Apply, then Undo if you don’t like it.
           </span>
         </span>
@@ -370,58 +372,64 @@ export function AskAiButton({ open, onToggle }: { open: boolean; onToggle: () =>
 const prettyUrl = (url: string) => url.replace(/^https:\/\/handsontable\.com\/docs\//, "").replace(/\/$/, "");
 
 // ---- Styles ------------------------------------------------------------------
+//
+// The drawer itself — fixed panel, header, close button, composer band — is
+// `Drawer` in the shell now, shared with the style panel (DEV-2209). What is left
+// is the transcript, on the shell's scales: `space(n)` padding, `radius.sm|md`,
+// and 13/12 type. `controlBorder` on control outlines, because the drawer is
+// painted `surfaceRaised` and dark `border` *is* `surfaceRaised`.
 
-// The panel is a fixed drawer over the editor, and since the redesign the editor has a
-// dark mode. `#fff` was correct on master, where it did not; here it is a white slab
-// over `surface`. Surfaces below are the shell's tokens for the same reason.
-const panel: React.CSSProperties = {
-  position: "fixed", top: 0, right: 0, height: "100%", width: 400, maxWidth: "95vw",
-  background: theme.color.surfaceRaised, borderLeft: `1px solid ${theme.color.border}`,
-  boxShadow: "-8px 0 24px rgba(0,0,0,0.08)", zIndex: 900,
-  display: "flex", flexDirection: "column", fontFamily: theme.font.ui, color: theme.color.text,
+/** The transcript is the scroller, not `Drawer`'s body: `listRef.scrollTo` has
+ *  to reach the element that actually overflows. A definite `height: 100%`
+ *  inside the body's flex track plus its own `overflow` keeps the scroll here
+ *  and leaves the body with nothing to scroll. */
+const list: React.CSSProperties = {
+  height: "100%", overflowY: "auto",
+  padding: `${theme.space(3)} ${theme.space(4)}`, fontSize: 13,
 };
-const head: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "space-between",
-  padding: "12px 14px", borderBottom: `1px solid ${theme.color.border}`,
-};
-const closeBtn: React.CSSProperties = {
-  border: "none", background: "none", cursor: "pointer", fontSize: 16, color: theme.color.textMuted,
-};
-const list: React.CSSProperties = { flex: 1, overflowY: "auto", padding: "12px 14px", fontSize: 13 };
 const muted: React.CSSProperties = { color: theme.color.textMuted };
 const userBubble: React.CSSProperties = {
   background: theme.color.surfaceMuted, borderRadius: theme.radius.md,
-  padding: "8px 10px", margin: "0 0 10px auto", maxWidth: "90%", width: "fit-content",
+  padding: `${theme.space(2)} ${theme.space(3)}`, margin: `0 0 ${theme.space(3)} auto`,
+  maxWidth: "90%", width: "fit-content",
 };
-const assistantBubble: React.CSSProperties = { padding: "2px 0 10px", maxWidth: "100%" };
+const assistantBubble: React.CSSProperties = { padding: `0 0 ${theme.space(3)}`, maxWidth: "100%" };
 const editBox: React.CSSProperties = {
-  border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.md,
-  padding: 10, marginTop: 8, background: theme.color.surfaceMuted,
+  border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.md,
+  padding: theme.space(3), marginTop: theme.space(2), background: theme.color.surfaceMuted,
 };
 const pathChip: React.CSSProperties = {
-  fontFamily: theme.font.mono, fontSize: 11.5, background: theme.color.surface,
-  border: `1px solid ${theme.color.border}`, borderRadius: 4, padding: "1px 5px",
+  fontFamily: theme.font.mono, fontSize: 12, background: theme.color.surface,
+  border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.sm,
+  padding: `1px ${theme.space(1)}`,
 };
 const docLink: React.CSSProperties = {
-  display: "block", color: theme.color.accent, textDecoration: "none", padding: "1px 0",
+  display: "block", color: theme.color.accentText, textDecoration: "none", padding: "1px 0",
 };
-const composer: React.CSSProperties = {
-  display: "flex", gap: 6, padding: "10px 12px 6px", borderTop: `1px solid ${theme.color.border}`,
-};
+const composer: React.CSSProperties = { display: "flex", gap: theme.space(2) };
 const textarea: React.CSSProperties = {
-  flex: 1, resize: "none", fontFamily: theme.font.ui, fontSize: 13, padding: "6px 8px",
-  border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.md, color: theme.color.text,
+  flex: 1, resize: "none", fontFamily: theme.font.ui, fontSize: 13,
+  padding: `${theme.space(2)} ${theme.space(2)}`,
+  border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.md,
+  // Explicit, not the UA's `field` default via `color-scheme`: every other
+  // control in the two panels is painted `surface`, and one that is not looks
+  // like a different control in dark.
+  background: theme.color.surface, color: theme.color.text,
 };
 const primary: React.CSSProperties = {
-  fontFamily: theme.font.ui, fontSize: 12.5, background: theme.color.accent,
-  color: theme.color.accentContrast, border: "none", borderRadius: 6, padding: "6px 12px", cursor: "pointer",
+  fontFamily: theme.font.ui, fontSize: 13, background: theme.color.accent,
+  color: theme.color.accentContrast, border: "none", borderRadius: theme.radius.sm,
+  padding: `${theme.space(2)} ${theme.space(3)}`, cursor: "pointer",
 };
 const ghost: React.CSSProperties = {
-  fontFamily: theme.font.ui, fontSize: 12.5, background: theme.color.surface, color: theme.color.text,
-  border: `1px solid ${theme.color.border}`, borderRadius: 6, padding: "6px 12px", cursor: "pointer",
+  fontFamily: theme.font.ui, fontSize: 13, background: theme.color.surface, color: theme.color.text,
+  border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.sm,
+  padding: `${theme.space(2)} ${theme.space(3)}`, cursor: "pointer",
 };
+/** No `background`: `.hot-panel-suggestion` owns the fill and its rollover, and
+ *  an inline one — `ghost`'s `surface` included — would outrank it (ADR-0026). */
 const suggestion: React.CSSProperties = {
-  ...ghost, textAlign: "left", fontSize: 12, color: theme.color.accent, cursor: "pointer",
+  ...ghost, background: undefined, textAlign: "left", color: theme.color.accentText,
 };
 
 // Deliberately the same neutral treatment as every other toolbar button: this
@@ -434,8 +442,9 @@ const suggestion: React.CSSProperties = {
 const askBtn: React.CSSProperties = {
   // Metrics match the bar's own `actionButton` (36px, `radius.md`, 13/600): these sit
   // between the mode action and the theme toggle, and the old bar's 26px pill read as
-  // a leftover beside them. The glyph stays — the icon set is read off Figma layers
-  // (ADR-0024) and neither feature has one.
+  // a leftover beside them. The `✨` this used to lead with is now `IconSparkles`
+  // (DEV-2209): an emoji renders in the OS's own colour and weight, so it was the one
+  // mark on the bar that could not follow the theme.
   display: "inline-flex", alignItems: "center", gap: theme.space(2),
   height: 36, padding: `0 ${theme.space(3)}`, flex: "0 0 auto",
   fontFamily: theme.font.ui, fontSize: 13, fontWeight: 600,
@@ -444,10 +453,11 @@ const askBtn: React.CSSProperties = {
   cursor: "pointer", whiteSpace: "nowrap",
 };
 const tooltip: React.CSSProperties = {
-  position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 950, width: 320,
-  background: theme.color.surfaceRaised, border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.md,
-  boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: "10px 12px",
+  position: "absolute", top: `calc(100% + ${theme.space(2)})`, left: 0, zIndex: 950, width: 320,
+  background: theme.color.surfaceRaised, border: `1px solid ${theme.color.controlBorder}`,
+  borderRadius: theme.radius.md, boxShadow: theme.shadow.popover,
+  padding: `${theme.space(2)} ${theme.space(3)}`,
   fontFamily: theme.font.ui, fontSize: 12, color: theme.color.text,
   textAlign: "left", whiteSpace: "normal", cursor: "default",
 };
-const tooltipItem: React.CSSProperties = { display: "block", padding: "2px 0" };
+const tooltipItem: React.CSSProperties = { display: "block", padding: `${theme.space(1)} 0` };

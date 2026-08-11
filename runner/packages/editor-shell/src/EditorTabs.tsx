@@ -181,7 +181,7 @@ export function EditorTabs({ paths, active, onSelect, onClose, dirtyPaths }: Edi
               <span className="hot-tab-x" style={glyph}>
                 <IconX />
               </span>
-              <span className="hot-tab-dot" style={{ ...glyph, color: theme.color.accent }}>
+              <span className="hot-tab-dot" style={{ ...glyph, color: theme.color.accentText }}>
                 <IconCircleFilled size={DOT_SIZE} />
               </span>
             </button>

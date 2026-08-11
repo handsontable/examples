@@ -314,7 +314,7 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
                       {report.demos.topViewed.map((d) => (
                         <tr key={d.id}>
                           <Td>
-                            <a style={{ color: theme.color.accent }} href={`/share/${d.id}`} target="_blank" rel="noreferrer">
+                            <a style={{ color: theme.color.accentText }} href={`/share/${d.id}`} target="_blank" rel="noreferrer">
                               {d.title}
                             </a>
                           </Td>

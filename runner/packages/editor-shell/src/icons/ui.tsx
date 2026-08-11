@@ -30,6 +30,17 @@
 //                                 exists because the pre-redesign bar had a loose
 //                                 `Usage` link that would otherwise have no home.
 //
+// And four that appear in no frame either, added by DEV-2209 when the Ask AI and
+// Style drawers were brought onto the design system:
+//   `IconSparkles`     — the `Ask AI` trigger, replacing a `✨`
+//   `IconPalette`      — the `Style` trigger, replacing a `🎨`
+//   `IconChevronLeft`  — the style panel's "back to all components" row
+//   `IconChevronUp`    — the collapsed counterpart of an open inline popover
+// Both features postdate the frames, so there is nothing to read them off. The
+// emoji they replace could not follow the theme: a glyph renders in the OS's own
+// colour and weight, which no token reaches — it was the one thing on the top bar
+// that stayed light while the bar went dark.
+//
 // And one from the same section, added by DEV-2169 / T12:
 //   `IconCircleFilled`          — the unsaved-changes dot on a tab (`114:26604`,
 //                                 ADR-0025 §3). The layer is named
@@ -48,7 +59,9 @@ import {
   IconBrandReactNative as TablerBrandReactNative,
   IconChartBar as TablerChartBar,
   IconChevronDown as TablerChevronDown,
+  IconChevronLeft as TablerChevronLeft,
   IconChevronRight as TablerChevronRight,
+  IconChevronUp as TablerChevronUp,
   IconCircleFilled as TablerCircleFilled,
   IconCopy as TablerCopy,
   IconDotsVertical as TablerDotsVertical,
@@ -60,12 +73,14 @@ import {
   IconListDetails as TablerListDetails,
   IconLogin2 as TablerLogin2,
   IconMoon as TablerMoon,
+  IconPalette as TablerPalette,
   IconPencil as TablerPencil,
   IconPlus as TablerPlus,
   IconRefresh as TablerRefresh,
   IconSearch as TablerSearch,
   IconSettings2 as TablerSettings2,
   IconShare as TablerShare,
+  IconSparkles as TablerSparkles,
   IconSun as TablerSun,
   IconTrashX as TablerTrashX,
   IconWindowMaximize as TablerWindowMaximize,
@@ -94,7 +109,9 @@ export const IconBrandGithub = ui("IconBrandGithub", TablerBrandGithub);
 export const IconBrandReactNative = ui("IconBrandReactNative", TablerBrandReactNative);
 export const IconChartBar = ui("IconChartBar", TablerChartBar);
 export const IconChevronDown = ui("IconChevronDown", TablerChevronDown);
+export const IconChevronLeft = ui("IconChevronLeft", TablerChevronLeft);
 export const IconChevronRight = ui("IconChevronRight", TablerChevronRight);
+export const IconChevronUp = ui("IconChevronUp", TablerChevronUp);
 export const IconCircleFilled = ui("IconCircleFilled", TablerCircleFilled);
 export const IconCopy = ui("IconCopy", TablerCopy);
 export const IconDotsVertical = ui("IconDotsVertical", TablerDotsVertical);
@@ -112,12 +129,14 @@ export const IconLayoutSidebarLeftExpand = ui(
 export const IconListDetails = ui("IconListDetails", TablerListDetails);
 export const IconLogin2 = ui("IconLogin2", TablerLogin2);
 export const IconMoon = ui("IconMoon", TablerMoon);
+export const IconPalette = ui("IconPalette", TablerPalette);
 export const IconPencil = ui("IconPencil", TablerPencil);
 export const IconPlus = ui("IconPlus", TablerPlus);
 export const IconRefresh = ui("IconRefresh", TablerRefresh);
 export const IconSearch = ui("IconSearch", TablerSearch);
 export const IconSettings2 = ui("IconSettings2", TablerSettings2);
 export const IconShare = ui("IconShare", TablerShare);
+export const IconSparkles = ui("IconSparkles", TablerSparkles);
 export const IconSun = ui("IconSun", TablerSun);
 export const IconTrashX = ui("IconTrashX", TablerTrashX);
 export const IconWindowMaximize = ui("IconWindowMaximize", TablerWindowMaximize);

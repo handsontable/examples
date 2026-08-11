@@ -498,7 +498,7 @@ function NotFound({ path, transient = false }: { path: string | null; transient?
       {path && (
         <code style={{ color: theme.color.textMuted, fontSize: 12 }}>{path}</code>
       )}
-      <a href="/" style={{ color: theme.color.accent, fontFamily: theme.font.ui }}>
+      <a href="/" style={{ color: theme.color.accentText, fontFamily: theme.font.ui }}>
         Back to the playground
       </a>
     </div>
@@ -1577,8 +1577,9 @@ function Authoring({
         budgetNotice={budgetNotice}
         // Ask AI and Style, both from DEV-2047. Available on every route — the
         // public `/share` view included, since explaining or restyling a demo is
-        // exactly what a shared link invites. Mutually exclusive: they are the
-        // same 340px edge of the screen.
+        // exactly what a shared link invites. Mutually exclusive: since DEV-2209
+        // they are literally the same surface — one `Drawer`, one `DRAWER_WIDTH`
+        // (400) — on the same edge of the screen.
         secondaryActions={
           <>
             <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />

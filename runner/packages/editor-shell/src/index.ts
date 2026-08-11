@@ -49,6 +49,10 @@ export type { MenuOption } from "./MenuButton.js";
 // dialog frames share; `AccountMenu` is the avatar popover from `114:21480`.
 export { Dialog } from "./Dialog.js";
 export type { DialogProps } from "./Dialog.js";
+// The non-modal counterpart of `Dialog`: the right-hand drawer the app's Ask AI
+// and Style panels share (DEV-2209). No frame draws it — see `Drawer.tsx`.
+export { Drawer, DRAWER_WIDTH } from "./Drawer.js";
+export type { DrawerProps } from "./Drawer.js";
 export { AccountMenu } from "./AccountMenu.js";
 export type { AccountMenuProps } from "./AccountMenu.js";
 export { s as shellStyles, SIDEBAR_WIDTH } from "./styles.js";
