@@ -226,6 +226,10 @@ test.describe("chat transcript", () => {
             "| --- | --- |",
             "| `colWidths` | number |",
             "",
+            // A section divider, which models put between every part of a long
+            // answer. It used to render as literal dashes (DEV-2197).
+            "---",
+            "",
             "```js",
             "colWidths: [100, 200]",
             "```",
@@ -262,6 +266,30 @@ test.describe("chat transcript", () => {
     // `surfaceMuted` panel they sit on.
     const chip = await paint(page, `${CHAT} code`);
     expect(chip.borderColor).toBe("rgb(53, 53, 53)");
+
+    // A section divider is one hairline, and a divider the same colour as the
+    // surface behind it is the ADR-0026 §5 defect in its purest form — there is
+    // nothing else to the element to give it away.
+    const rule = page.locator(`${CHAT} hr`);
+    await expect(rule).toHaveCount(1);
+    const drawn = await paint(page, `${CHAT} hr`);
+    expect(drawn.borderColor).not.toBe(drawn.parentBackground);
+  });
+
+  test("a --- between sections draws a rule, not literal dashes", async ({ page }) => {
+    await openPlayground(page, "light");
+    await stubOneAnswer(page);
+
+    await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+    await page.locator(`${CHAT} textarea`).fill("How do I set column widths?");
+    await page.locator(CHAT).getByRole("button", { name: "Send" }).click();
+    await expect(page.locator(CHAT).getByText("Proposed changes to")).toBeVisible();
+
+    await expect(page.locator(`${CHAT} hr`)).toHaveCount(1);
+    // The old behaviour, and the one a reader actually notices: the divider
+    // arriving as three dashes on a line of its own.
+    const transcript = await page.locator(CHAT).innerText();
+    expect(transcript).not.toMatch(/^\s*---\s*$/m);
   });
 
   test("Apply writes the file and Undo puts it back", async ({ page }) => {

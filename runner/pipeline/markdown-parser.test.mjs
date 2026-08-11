@@ -42,10 +42,11 @@ test("aligned delimiter and no outer pipes", () => {
 });
 
 test("a pipe line above a `---` section break is not a table", () => {
-  // The `---` joins the paragraph — thematic breaks have never been a block
-  // here. What matters is that it does not turn the line above into a table.
+  // The `---` is its own rule since DEV-2197; what this guards is unchanged —
+  // it must not turn the prose above it into a one-cell table.
   const blocks = parseMarkdown("Options: `stretchH: 'all' | 'last'`\n---\n### Next section");
-  assert.deepEqual(blocks.map((b) => b.kind), ["paragraph", "heading"]);
+  assert.deepEqual(blocks.map((b) => b.kind), ["paragraph", "rule", "heading"]);
+  assert.equal(text(blocks[0].children), "Options: stretchH: 'all' | 'last'");
 });
 
 test("delimiter cell count must match the header", () => {
@@ -79,4 +80,44 @@ test("table inside a fenced code block stays literal", () => {
 test("list still parses and terminates at a table", () => {
   const blocks = parseMarkdown("- one\n- two\n| A | B |\n|---|---|\n| 1 | 2 |");
   assert.deepEqual(blocks.map((b) => b.kind), ["list", "table"]);
+});
+
+// `---` between sections is the divider models reach for constantly, and it was
+// falling through to a paragraph and rendering as literal dashes (DEV-2197,
+// spotted in a blog screenshot of the panel).
+test("a --- between sections is a rule, not literal text", () => {
+  const blocks = parseMarkdown("Data & Layout\n\n---\n\nColumns & Headers");
+  assert.deepEqual(blocks.map((b) => b.kind), ["paragraph", "rule", "paragraph"]);
+});
+
+test("a rule ends the paragraph above it without a blank line", () => {
+  const blocks = parseMarkdown("Here is the breakdown:\n---\nNext section");
+  assert.deepEqual(blocks.map((b) => b.kind), ["paragraph", "rule", "paragraph"]);
+  assert.equal(text(blocks[0].children), "Here is the breakdown:");
+});
+
+test("*** and ___ are rules too", () => {
+  assert.deepEqual(parseMarkdown("a\n\n***\n\nb").map((b) => b.kind), ["paragraph", "rule", "paragraph"]);
+  assert.deepEqual(parseMarkdown("a\n\n___\n\nb").map((b) => b.kind), ["paragraph", "rule", "paragraph"]);
+});
+
+test("a table's delimiter row is never mistaken for a rule", () => {
+  // The delimiter is consumed with the header, so the rule check never sees it.
+  // Single-column tables are the case that would break if it did.
+  const blocks = parseMarkdown("| Option |\n| --- |\n| data |");
+  assert.deepEqual(blocks.map((b) => b.kind), ["table"]);
+  const wide = parseMarkdown("| A | B |\n|---|---|\n| 1 | 2 |");
+  assert.deepEqual(wide.map((b) => b.kind), ["table"]);
+});
+
+test("dashes inside a fenced code block stay code", () => {
+  const blocks = parseMarkdown("```\n---\n```");
+  assert.deepEqual(blocks.map((b) => b.kind), ["code"]);
+  assert.equal(blocks[0].text, "---");
+});
+
+test("a bullet is still a bullet, not a rule", () => {
+  assert.deepEqual(parseMarkdown("- one\n- two").map((b) => b.kind), ["list"]);
+  // Two dashes is not enough for a rule, and there is no space, so it is prose.
+  assert.deepEqual(parseMarkdown("a -- b").map((b) => b.kind), ["paragraph"]);
 });

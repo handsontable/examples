@@ -28,6 +28,7 @@ export type Block =
   | { kind: "paragraph"; children: Inline[] }
   | { kind: "list"; ordered: boolean; items: Inline[][] }
   | { kind: "table"; header: Inline[][]; rows: Inline[][][] }
+  | { kind: "rule" }
   | { kind: "code"; text: string };
 
 const BULLET = /^\s*[-*+]\s+/;
@@ -37,6 +38,21 @@ const HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 const INDENTED = /^\s{2,}\S/;
 /** `|---|:--:|` — the row that makes the line above it a table header. */
 const TABLE_DELIMITER = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
+/**
+ * `---` on its own line: the section divider models put between every part of a
+ * long answer. It was falling through to a paragraph and rendering as literal
+ * dashes (DEV-2197).
+ *
+ * Three or more, which is what keeps `a -- b` prose. A table's delimiter row
+ * never reaches this test: it is consumed with the header line above it, which
+ * matters because a single-column table's delimiter *is* a bare `---`.
+ *
+ * CommonMark would read `text` immediately above `---` as a setext heading
+ * rather than a break. Not implemented on purpose: an assistant that writes
+ * `##` headings — which this one does — only ever means a divider by it, and
+ * guessing the other way turns a divider into a heading of the sentence before.
+ */
+const THEMATIC_BREAK = /^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/;
 
 const isBullet = (l: string) => BULLET.test(l);
 const isOrdered = (l: string) => ORDERED.test(l);
@@ -58,7 +74,8 @@ const isTableStart = (lines: string[], i: number) => {
 
 const startsBlock = (lines: string[], i: number) => {
   const line = lines[i] ?? "";
-  return isHeading(line) || isBullet(line) || isOrdered(line) || isTableStart(lines, i);
+  return isHeading(line) || isBullet(line) || isOrdered(line)
+    || THEMATIC_BREAK.test(line) || isTableStart(lines, i);
 };
 
 /**
@@ -148,6 +165,14 @@ function parseLines(text: string): Block[] {
     const heading = HEADING.exec(line);
     if (heading) {
       blocks.push({ kind: "heading", level: heading[1]!.length, children: parseInline(heading[2] ?? "") });
+      i++;
+      continue;
+    }
+
+    // Before the table check by position, not by precedence: a table's own
+    // delimiter row is consumed with its header, so it never arrives here.
+    if (THEMATIC_BREAK.test(line)) {
+      blocks.push({ kind: "rule" });
       i++;
       continue;
     }
