@@ -199,14 +199,28 @@ interface WireTarget {
  *
  * JSON.stringify keeps the payload on one line and quoted; never hand-roll it.
  */
-const IMPORT_LINE = (dir: string, displaced?: string) =>
+const IMPORT_LINE = (dir: string, displaced?: string, displacedClass?: string | null) =>
   `import { customTheme } from '${dir}${THEME_MODULE_BASENAME}'; // ${MARKER}`
-  + (displaced ? ` restore:${jsSafe(JSON.stringify(displaced))}` : "");
+  + (displaced ? ` restore:${jsSafe(JSON.stringify(displaced))}` : "")
+  + (displacedClass ? ` class:${jsSafe(JSON.stringify(displacedClass))}` : "");
 
 /** The `themeName` a previous apply displaced, if any. */
 function displacedThemeName(source: string): string | null {
-  const marker = source.split("\n").find((line) => line.includes(MARKER));
-  const payload = marker?.match(/\brestore:("(?:[^"\\]|\\.)*")/)?.[1];
+  return markerPayload(source, "restore");
+}
+
+/** The container theme class a previous apply took off, if any. */
+function displacedThemeClass(source: string): string | null {
+  return markerPayload(source, "class");
+}
+
+/** One `key:"…"` payload from the marker comment. Keyed lookup rather than
+ *  "the first marked line", because a Vue apply writes a second marked line
+ *  (the `setup` shim) and file order must not decide the answer. */
+function markerPayload(source: string, key: "restore" | "class"): string | null {
+  const pattern = new RegExp(`\\b${key}:("(?:[^"\\\\]|\\\\.)*")`);
+  const marker = source.split("\n").find((line) => line.includes(MARKER) && pattern.test(line));
+  const payload = marker?.match(pattern)?.[1];
   if (!payload) return null;
   try {
     const value = JSON.parse(payload) as unknown;
@@ -219,10 +233,18 @@ function displacedThemeName(source: string): string | null {
 /**
  * Attach the theme where the grid is constructed.
  *
- * Three shapes cover every starter in the catalog:
+ * Three construction shapes cover every starter in the catalog:
  *   `<HotTable …>`                     — React and Vue wrappers, add a prop
  *   `new Handsontable(el, { … })`      — vanilla JS/TS and Astro, add a setting
  *   `const gridSettings … = { … }`     — Angular, add a setting
+ *
+ * The prop's *syntax* is not shared: a Vue SFC takes `:theme="customTheme"`,
+ * and JSX in an SFC template is a literal string attribute.
+ *
+ * But *where the import goes* is a second question, and the answer is per file
+ * type (DEV-2197). A plain module takes it at the top; a `.vue` SFC and a
+ * `.astro` component both reject an import written above their blocks. So the
+ * dispatch below is by extension first, construction shape second.
  *
  * Anything else is left alone. A theme that fails to apply is a puzzle; a
  * component file mangled by an over-eager regex is a lost afternoon.
@@ -238,40 +260,253 @@ function wireTheme(files: Record<string, string>): WireTarget | null {
     // telling the user to add a line that is sitting in the file.
     if (source.includes(MARKER)) return { path, contents: source };
 
-    let next: { source: string; displaced: string | null } | null = null;
-
-    // 1. JSX/Vue wrapper element. Take over an existing `themeName`/`theme`
-    //    prop rather than adding a second one — several starters set their own.
-    if (/<(HotTable|hot-table)\b/.test(source)) {
-      next = swapInPlace(source, THEME_NAME_ATTR, "theme={customTheme}")
-        ?? swapInPlace(source, /\btheme=\{[^}]*\}/, "theme={customTheme}")
-        ?? { source: source.replace(/<(HotTable|hot-table)\b/, "<$1 theme={customTheme}"), displaced: null };
-    } else if (/new Handsontable\(\s*[A-Za-z_$][\w$]*\s*,\s*\{/.test(source)) {
-      // 2. Vanilla settings object.
-      next = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,")
-        ?? {
-          source: source.replace(
-            /(new Handsontable\(\s*[A-Za-z_$][\w$]*\s*,\s*\{)/, "$1\n  theme: customTheme,"),
-          displaced: null,
-        };
-    } else if (/gridSettings[^=]*=\s*\{/.test(source)) {
-      // 3. Angular's settings object.
-      next = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,")
-        ?? {
-          source: source.replace(/(gridSettings[^=]*=\s*\{)/, "$1\n    theme: customTheme,"),
-          displaced: null,
-        };
-    }
-
-    if (!next) continue;
-
     // Relative path from the edited file back to the module at the root.
     const depth = path.split("/").filter(Boolean).length - 1;
     const dir = depth > 0 ? "../".repeat(depth) : "./";
-    return { path, contents: `${IMPORT_LINE(dir, next.displaced ?? undefined)}\n${next.source}` };
+
+    // The container's CSS theme comes off first: it out-ranks the theme object
+    // silently, and in every starter that has one it sits in this same file.
+    const unthemed = stripThemeClass(source);
+    const base = unthemed?.source ?? source;
+    const displacedClass = unthemed?.displaced ?? null;
+
+    const contents = path.endsWith(".vue")
+      ? wireVue(base, dir, displacedClass)
+      : path.endsWith(".astro")
+        ? wireAstro(base, dir, displacedClass)
+        : wireModule(base, dir, displacedClass);
+
+    if (contents) return { path, contents };
   }
 
   return null;
+}
+
+/** A plain JS/TS module: the import goes on the first line. */
+function wireModule(source: string, dir: string, displacedClass: string | null): string | null {
+  let next: { source: string; displaced: string | null } | null = null;
+
+  // 1. JSX wrapper element. Take over an existing `themeName`/`theme` prop
+  //    rather than adding a second one — several starters set their own.
+  if (/<(HotTable|hot-table)\b/.test(source)) {
+    next = swapInPlace(source, THEME_NAME_ATTR, "theme={customTheme}")
+      ?? swapInPlace(source, /\btheme=\{[^}]*\}/, "theme={customTheme}")
+      ?? { source: source.replace(/<(HotTable|hot-table)\b/, "<$1 theme={customTheme}"), displaced: null };
+  } else if (findVanillaSettings(source)) {
+    // 2. Vanilla settings object.
+    next = wireVanilla(source, "  ");
+  } else if (/gridSettings[^=]*=\s*\{/.test(source)) {
+    // 3. Angular's settings object.
+    next = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,")
+      ?? {
+        source: source.replace(/(gridSettings[^=]*=\s*\{)/, "$1\n    theme: customTheme,"),
+        displaced: null,
+      };
+  }
+
+  if (!next) return null;
+  return `${IMPORT_LINE(dir, next.displaced ?? undefined, displacedClass)}\n${next.source}`;
+}
+
+/**
+ * A Vue single-file component.
+ *
+ * Three things are different from a plain module, and the old code got all
+ * three wrong by treating an SFC as JSX (DEV-2197):
+ *
+ *   * The binding is `:theme="customTheme"`. `theme={customTheme}` in a Vue
+ *     template is a literal string attribute, so the grid received the
+ *     characters `{customTheme}` and rendered unthemed.
+ *   * The import belongs *inside* the `<script>` block. Above it, the file is
+ *     not a valid SFC at all — the whole demo stops compiling.
+ *   * Only `<script setup>` exposes its imports to the template. Under the
+ *     Options API a top-level `customTheme` is invisible there, so the binding
+ *     resolves to undefined; it needs a `setup()` that returns it. Every docs
+ *     example is `<script setup>`, but the catalog's Vue starter is not.
+ */
+function wireVue(source: string, dir: string, displacedClass: string | null): string | null {
+  if (!/<(HotTable|hot-table)\b/.test(source)) return null;
+
+  const next = swapInPlace(source, VUE_THEME_NAME_BIND, ':theme="customTheme"')
+    ?? swapInPlace(source, THEME_NAME_ATTR, ':theme="customTheme"')
+    ?? swapInPlace(source, /:theme="[^"]*"/, ':theme="customTheme"')
+    ?? {
+      source: source.replace(/<(HotTable|hot-table)\b/, '<$1 :theme="customTheme"'),
+      displaced: null,
+    };
+
+  // Re-locate on the edited source rather than the original: the binding above
+  // may sit before the script block, which would shift every later offset.
+  const script = /<script\b[^>]*>/.exec(next.source);
+  if (!script) return null;
+
+  const inserts = [{
+    at: script.index + script[0].length,
+    text: `\n${IMPORT_LINE(dir, next.displaced ?? undefined, displacedClass)}`,
+  }];
+
+  if (!/<script\b[^>]*\bsetup\b/.test(next.source)) {
+    // Options API: the import alone is invisible to the template. Carry the
+    // marker so Reset takes this line back out along with the import.
+    const opener = /(?:defineComponent\(|export default )\{/.exec(next.source);
+    if (!opener) return null;
+    inserts.push({
+      at: opener.index + opener[0].length,
+      text: `\n  setup() { return { customTheme }; }, // ${MARKER}`,
+    });
+  }
+
+  return insertAll(next.source, inserts);
+}
+
+/** Splice several insertions in one pass, back to front so earlier offsets
+ *  stay valid. */
+function insertAll(source: string, inserts: { at: number; text: string }[]): string {
+  return [...inserts]
+    .sort((a, b) => b.at - a.at)
+    .reduce((acc, { at, text }) => acc.slice(0, at) + text + acc.slice(at), source);
+}
+
+/**
+ * An Astro component.
+ *
+ * The grid is built in a client `<script>` block, and that is where the import
+ * has to go: `.astro` frontmatter runs on the server, so a binding declared
+ * between the `---` fences never reaches the browser. Written above the markup
+ * — where the old code put it — the import is not code at all, just text in the
+ * template.
+ */
+function wireAstro(source: string, dir: string, displacedClass: string | null): string | null {
+  const next = wireVanilla(source, "    ");
+  if (!next) return null;
+
+  // Re-locate on the edited source: the settings edit sits inside the block
+  // whose opening tag we are about to write after.
+  const call = next.source.indexOf("new Handsontable(");
+  const open = [...next.source.matchAll(/<script\b[^>]*>/g)]
+    .filter((m) => m.index < call).pop();
+  if (!open) return null;
+
+  const at = open.index + open[0].length;
+  return insertAll(next.source, [{ at, text: `\n${IMPORT_LINE(dir, next.displaced ?? undefined, displacedClass)}` }]);
+}
+
+/** A Vue `themeName` binding, e.g. `:themeName="themeName"`. */
+const VUE_THEME_NAME_BIND = /:themeName="[^"]*"/;
+
+/**
+ * A CSS theme on the grid's container, e.g. `class="ht-theme-main"`.
+ *
+ * The third alias for the same thing, and the one that silently wins. A theme
+ * *object* is only honoured when the container carries no theme class:
+ *
+ *   } else if (isRootInstance(instance) && !rootContainerThemeClassName
+ *              && isObject(settings.theme)) {          // core.js
+ *
+ * — no warning, unlike the `theme`/`themeName` pair. Five starters (vue,
+ * next.js, astro, nuxt, remix) wrap their grid in `<div class="ht-theme-main">`,
+ * and every one of them ignored the panel outright until DEV-2197. Passing the
+ * theme by *name* instead is not a way out: `StylesHandler.useTheme` demands an
+ * `ht-theme-*` name and reads stylesheet variables, never the JS registry, so a
+ * registered theme handed over as a string is a class with no CSS behind it.
+ */
+const THEME_CLASS_ATTR = /\bclass(?:Name)?=(["'])[^"']*\bht-theme-[\w-]+[^"']*\1/;
+
+/** The same attribute with the theme token taken out, and nothing else. Both
+ *  directions go through this, so apply and Reset cannot disagree. */
+function withoutThemeClass(attribute: string): string {
+  return attribute.replace(/(["'])([^"']*)\1/, (_m, quote: string, value: string) => {
+    const kept = value.split(/\s+/).filter((name) => name && !/^ht-theme-[\w-]+$/.test(name));
+    return `${quote}${kept.join(" ")}${quote}`;
+  });
+}
+
+/** Take the CSS theme off the container so the theme object can be seen. */
+function stripThemeClass(source: string): { source: string; displaced: string } | null {
+  const found = THEME_CLASS_ATTR.exec(source)?.[0];
+  if (!found) return null;
+  const stripped = withoutThemeClass(found);
+  if (stripped === found) return null;
+  // String search, so the match is treated literally on both legs.
+  return { source: source.replace(found, () => stripped), displaced: found };
+}
+
+/** How far past `new Handsontable(` the element argument may run before we give
+ *  up. It is an expression, not a novel; a longer scan is a lost scan. */
+const ELEMENT_ARG_BUDGET = 200;
+
+/**
+ * Where a vanilla `new Handsontable(el, settings)` keeps its settings.
+ *
+ * Hand-scanned rather than matched, because the two shapes a regex missed are
+ * both ordinary (DEV-2197, found by `scripts/theme-wiring-census.mjs`):
+ *
+ *   `new Handsontable(document.getElementById('x'), { … })`  — 3 docs examples
+ *   `new Handsontable(container, hotOptions)`                — 13 docs examples
+ *
+ * The first needs an arbitrary expression before the comma, and a regex wide
+ * enough for that is wide enough to swallow a comma inside it. So: walk to the
+ * top-level comma, then look at what follows.
+ */
+function findVanillaSettings(source: string): { at: number } | { name: string } | null {
+  const call = source.indexOf("new Handsontable(");
+  if (call === -1) return null;
+
+  const start = call + "new Handsontable(".length;
+  const limit = Math.min(source.length, start + ELEMENT_ARG_BUDGET);
+  let depth = 0;
+  let i = start;
+
+  for (; i < limit; i += 1) {
+    const c = source[i]!;
+    if (c === "'" || c === '"' || c === "`") i = endOfString(source, i);
+    else if (c === "(" || c === "[" || c === "{") depth += 1;
+    else if (c === ")" || c === "]" || c === "}") {
+      if (depth === 0) return null; // the call closed with a single argument
+      depth -= 1;
+    } else if (c === "," && depth === 0) break;
+  }
+  if (i >= limit) return null;
+
+  let at = i + 1;
+  while (at < source.length && /\s/.test(source[at]!)) at += 1;
+  if (source[at] === "{") return { at: at + 1 };
+
+  const name = /^[A-Za-z_$][\w$]*/.exec(source.slice(at))?.[0];
+  return name ? { name } : null;
+}
+
+/** The closing quote of the string opening at `at`, or the end of the source. */
+function endOfString(source: string, at: number): number {
+  const quote = source[at];
+  for (let i = at + 1; i < source.length; i += 1) {
+    if (source[i] === "\\") i += 1;
+    else if (source[i] === quote) return i;
+  }
+  return source.length;
+}
+
+/** Add `theme` to a vanilla settings object, wherever it is written. */
+function wireVanilla(source: string, indent: string): { source: string; displaced: string | null } | null {
+  const target = findVanillaSettings(source);
+  if (!target) return null;
+
+  const swapped = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,");
+  if (swapped) return swapped;
+
+  // Settings passed by name: wire the literal they were declared from. Without
+  // a literal to attach to — a settings object built by a function, say — leave
+  // the file alone rather than guess.
+  const at = "at" in target
+    ? target.at
+    : (() => {
+      const name = target.name.replace(/\$/g, "\\$");
+      const decl = new RegExp(`(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=\\s*\\{`).exec(source);
+      return decl ? decl.index + decl[0].length : null;
+    })();
+
+  if (at === null) return null;
+  return { source: `${source.slice(0, at)}\n${indent}theme: customTheme,${source.slice(at)}`, displaced: null };
 }
 
 /** A `themeName` prop, e.g. `themeName="ht-theme-main"`. */
@@ -341,23 +576,35 @@ export function buildResetChanges(files: Record<string, string>): ThemeFileChang
     // `themeName="x"` went in as an attribute, `themeName: 'x',` as a setting;
     // each swaps back into the slot its replacement occupies.
     const isAttr = restore !== null && /=/.test(restore);
+    const restoreClass = displacedThemeClass(source);
 
-    changes.push({
-      path,
-      contents: source
-        .split("\n")
-        .filter((line) => !line.includes(MARKER))
-        .join("\n")
-        // Function replacers, not `$1…` strings: a `$` inside the restored
-        // value would otherwise be read as a substitution pattern.
-        // `\s*` rather than `\n\s*`: a settings object written on one line
-        // still has to be un-wired, and it would otherwise keep a
-        // `theme: customTheme` referring to an import that has just gone.
-        .replace(/(\s*)theme=\{customTheme\}/g, (_m, ws: string) =>
-          (restore && isAttr ? ws + restore : ""))
-        .replace(/(\s*)theme: customTheme,/g, (_m, ws: string) =>
-          (restore && !isAttr ? ws + restore : "")),
-    });
+    const unwired = source
+      .split("\n")
+      .filter((line) => !line.includes(MARKER))
+      .join("\n")
+      // Function replacers, not `$1…` strings: a `$` inside the restored
+      // value would otherwise be read as a substitution pattern.
+      // `\s*` rather than `\n\s*`: a settings object written on one line
+      // still has to be un-wired, and it would otherwise keep a
+      // `theme: customTheme` referring to an import that has just gone.
+      // The Vue binding first: `:theme="customTheme"` also ends in the
+      // characters the settings rule looks for, and a partial match would
+      // leave a dangling `:theme=` behind.
+      .replace(/(\s*):theme="customTheme"/g, (_m, ws: string) =>
+        (restore && isAttr ? ws + restore : ""))
+      .replace(/(\s*)theme=\{customTheme\}/g, (_m, ws: string) =>
+        (restore && isAttr ? ws + restore : ""))
+      .replace(/(\s*)theme: customTheme,/g, (_m, ws: string) =>
+        (restore && !isAttr ? ws + restore : ""));
+
+    // The container's CSS theme goes back exactly as it was. Both legs run the
+    // attribute through `withoutThemeClass`, so the text Reset looks for is by
+    // construction the text apply left behind.
+    const contents = restoreClass
+      ? unwired.replace(withoutThemeClass(restoreClass), () => restoreClass)
+      : unwired;
+
+    changes.push({ path, contents });
   }
   changes.push({
     path: themeModulePath(files),
@@ -366,9 +613,12 @@ export function buildResetChanges(files: Record<string, string>): ThemeFileChang
   return changes;
 }
 
-/** Shown when no grid construction was recognised. */
+/** Shown when no grid construction was recognised. The binding differs by
+ *  framework, and a React hint on a Vue demo is a hint that does not work. */
 export function manualImportHint(files: Record<string, string>): string {
-  return `import { customTheme } from '.${themeModulePath(files).replace(/\.(t|j)s$/, "")}';  →  theme={customTheme}`;
+  const specifier = `import { customTheme } from '.${themeModulePath(files).replace(/\.(t|j)s$/, "")}';`;
+  const vue = Object.keys(files).some((p) => p.endsWith(".vue"));
+  return `${specifier}  →  ${vue ? ':theme="customTheme"' : "theme={customTheme}"}`;
 }
 
 export { isPristine };

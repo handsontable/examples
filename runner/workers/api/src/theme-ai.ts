@@ -21,11 +21,12 @@ import { ChatUnavailableError } from "./chat.js";
 // string map, so widening this from 40 to 272 costs no prompt budget and only
 // stops the model's correct answers from being thrown away.
 import { TOKEN_KEYS } from "./theme-tokens.generated.js";
+import { completeRamp, NEUTRAL_RAMP, PRIMARY_RAMP } from "./theme-ramp.js";
 
 const MAX_PROMPT_CHARS = 300;
 
-const PRIMARY_STEPS = new Set(["100", "200", "300", "400", "500", "600"]);
-const NEUTRAL_STEPS = new Set(["50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"]);
+const PRIMARY_STEPS = new Set<string>(PRIMARY_RAMP);
+const NEUTRAL_STEPS = new Set<string>(NEUTRAL_RAMP);
 const TOKENS_PRESETS = new Set(["main", "horizon", "classic"]);
 const COLORS_PRESETS = new Set(["main", "horizon", "classic", "ant", "shadcn", "material"]);
 const ICONS_PRESETS = new Set(["main", "horizon"]);
@@ -171,6 +172,19 @@ export async function requestTheme(
   return { suggestion: sanitiseSuggestion(parsed), usd: Number.isFinite(usd) ? usd : 0 };
 }
 
+/** Complete one ramp in place. The palette is flat and dotted (`primary.500`);
+ *  `completeRamp` works in bare steps, so unprefix on the way in and back. */
+function fillRamp(palette: Record<string, string>, prefix: string, steps: readonly string[]): void {
+  const supplied: Record<string, string> = {};
+  for (const step of steps) {
+    const value = palette[`${prefix}${step}`];
+    if (value) supplied[step] = value;
+  }
+  for (const [step, value] of Object.entries(completeRamp(supplied, steps))) {
+    palette[`${prefix}${step}`] = value;
+  }
+}
+
 /**
  * Whitelist everything. The output drives generated source in someone's
  * example, so an unknown token name or an inventive "value" is dropped rather
@@ -207,6 +221,13 @@ export function sanitiseSuggestion(raw: unknown): ThemeSuggestion {
     const clean = value(v, true);
     if (clean) palette[key] = clean;
   }
+
+  // Fill any gaps the model — or the whitelist above — left in a ramp. A ramp
+  // that is nearly complete deep-merges its missing steps from the preset, so
+  // one stale rung survives in the middle of a new brand colour and reads as a
+  // rendering bug rather than a missing value (DEV-2197).
+  fillRamp(palette, "primary.", PRIMARY_RAMP);
+  fillRamp(palette, "palette.", NEUTRAL_RAMP);
 
   const rawConfig = (input.config ?? {}) as Record<string, unknown>;
   const config: ThemeSuggestion["config"] = {};

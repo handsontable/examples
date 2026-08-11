@@ -111,8 +111,39 @@ version removed the whole *line* containing `themeName`, which erased
 single-line elements outright — `<HotTable data={data} themeName="…" />` lost
 its grid.
 
-`pipeline/theme-wiring.test.mjs` runs the real codegen over all four wiring
-shapes (plus single-line variants) and asserts apply-then-reset is byte-identical.
+`pipeline/theme-wiring.test.mjs` runs the real codegen over every wiring shape
+(plus single-line variants, SFCs and Astro) and asserts apply-then-reset is
+byte-identical.
+
+## What only a browser can tell you
+
+`e2e/style-apply.spec.ts` (opt-in, `E2E_LIVE=1`) is the one test that **executes**
+a generated theme module: it drives the panel, then reads the theme class
+Handsontable put on the root wrapper and the rendered row height, one case per
+wiring shape.
+
+It exists because everything else here reads generated *text*, and text was green
+throughout the whole time Vue was being handed JSX and five starters were
+discarding the theme over a CSS class. Two rules it encodes:
+
+* **Colour is not a theme signal.** Several starters ship
+  `table.htCore tr.odd td { background: #fafbff }`, which outranks the theme's
+  tokens — a themed grid and an unthemed one read the same. Assert on the
+  `ht-theme-*` class and on row height instead.
+* **Density is settled by row height.** A wrongly-keyed `density.sizes` is
+  ignored in silence, so the generated source cannot distinguish the two
+  readings and the rendered cell can.
+
+`?example=angular` is `test.fixme`: its wiring is correct, but **no** edit
+reaches the Angular preview — a bare `<p>` typed into its template was still
+absent after 90 seconds, while the same probe on `react-js` and `astro` (also
+Tier 2) appears in about ten. That blocks the editor and the AI assistant there
+too, so it is a container defect rather than a theming one — DEV-2216.
+
+Run it with **`--workers=1`** whenever `astro` or `angular` is selected. Those
+are the Tier-2 cases; the pool holds five container slots and sessions are not
+torn down between tests, so a parallel run leaves the second preview stuck on
+`booting` — a failure that looks like the product and is not.
 
 ## Generated source is a script-injection surface
 
@@ -130,13 +161,22 @@ uses and the one the [Theme customization](https://handsontable.com/docs/javascr
 docs document:
 
 ```js
-import { mainTheme, registerTheme } from 'handsontable/themes';
+import { getTheme, hasTheme, registerTheme, reinitTheme } from 'handsontable/themes';
+import tokensPreset from 'handsontable/themes/static/variables/tokens/main';
 
-export const customTheme = registerTheme(mainTheme);
-customTheme.params({ colors: { primary: { 500: '#7e22ce' } }, tokens: { fontSize: '13px' } });
-customTheme.setColorScheme('dark');
-customTheme.setDensityType('compact');
+const THEME_NAME = 'custom-theme';
+const config = { tokens: tokensPreset, colors: { … }, icons: { … }, density: 'compact', colorScheme: 'dark' };
+
+// Re-initialise rather than register twice: the module is re-evaluated on every hot reload.
+if (hasTheme(THEME_NAME)) reinitTheme(THEME_NAME, config);
+else registerTheme(THEME_NAME, config);
+
+export const customTheme = getTheme(THEME_NAME).params({ tokens: { fontSize: '13px' } });
 ```
+
+The colour scheme and the density variant live **in the config**, not behind
+`setColorScheme`/`setDensityType` calls: presets, `icons` and the density
+`sizes` are only accepted there.
 
 That module is written into the example as `/handsontable-theme.(ts|js)` through
 the same file-write path the editor and the AI assistant use — so it appears in
@@ -150,9 +190,48 @@ differently. Three shapes cover the whole catalog:
 
 | Shape | Seen in | Edit |
 |---|---|---|
-| `<HotTable …>` / `<hot-table …>` | React, Vue wrappers | add or replace `theme={customTheme}` |
+| `<HotTable …>` | React | add or replace `theme={customTheme}` |
+| `<HotTable …>` in an SFC | Vue, Nuxt | add or replace `:theme="customTheme"` |
 | `new Handsontable(el, { … })` | JavaScript, TypeScript, Astro | add `theme: customTheme` |
 | `gridSettings = { … }` | Angular | add `theme: customTheme` |
+
+**Where the import goes is a second question, answered per file type** (DEV-2197).
+A plain module takes it on the first line. A `.vue` SFC does not: an import above
+the blocks is not a valid SFC at all, so it goes inside `<script>` — and under
+the Options API it also needs a `setup()` returning `customTheme`, because only
+`<script setup>` exposes its imports to the template. A `.astro` component keeps
+the import in the client `<script>` that builds the grid; frontmatter runs on the
+server and never reaches the browser.
+
+The vanilla shape is found by scanning to the call's top-level comma rather than
+by regex, because both of these are ordinary and a regex wide enough for the
+first is wide enough to swallow the wrong comma:
+
+```js
+new Handsontable(document.getElementById('x'), { … })   // an expression, not an identifier
+new Handsontable(container, hotOptions)                  // settings by name, wired at their declaration
+```
+
+### The container's CSS theme has to come off
+
+A theme *object* is honoured **only when the container carries no `ht-theme-*`
+class** — and unlike the `theme`/`themeName` pair, Handsontable says nothing when
+it does:
+
+```js
+} else if (isRootInstance(instance) && !rootContainerThemeClassName && isObject(theme)) {
+  initializeThemeManager(theme);   // core.js
+```
+
+Five starters wrap their grid in `<div class="ht-theme-main">` — vue, next.js,
+astro, nuxt, remix — and every one of them ignored the panel outright until
+DEV-2197. So wiring takes the class off and the marker comment carries it back
+for **Reset**, exactly as it already does for a displaced `themeName`.
+
+Passing the theme by *name* instead is not a way out: `StylesHandler.useTheme`
+requires an `ht-theme-*` name and reads stylesheet variables, never the JS
+registry, so a registered theme handed over as a string is a class with no CSS
+behind it.
 
 Several starters already set a theme by hand (`theme={antTableTheme}`), and
 those are replaced rather than duplicated. Anything unrecognised is **left
@@ -179,6 +258,15 @@ metering (see [cost-guardrails.md](cost-guardrails.md)).
 
 Requests are asked to set **all six** primary steps for a recolour — one step
 against five stale ones reads as a bug rather than a new brand colour.
+
+Asking is not enough, so a ramp that arrives incomplete is completed before it
+is returned (`workers/api/src/theme-ramp.ts`, DEV-2197). The missing steps
+otherwise deep-merge from the preset, leaving one preset-blue rung in the middle
+of a navy ramp — and the whitelist above can produce the same symptom on its own
+by dropping a single malformed value, which no prompt wording protects against.
+Gaps are interpolated in sRGB, matching the panel's own brand-ramp generator
+(`StylePanel.tsx` `rampFrom`); a ramp with fewer than two steps is left alone,
+because one step is a deliberate single-colour change.
 
 ## Configuration
 
