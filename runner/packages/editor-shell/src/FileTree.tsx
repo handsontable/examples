@@ -222,6 +222,13 @@ export function FileTree({
           if (!isFileDrag(event)) return;
           event.preventDefault();
           event.dataTransfer.dropEffect = "copy";
+          // Resolved from what is under the pointer *now*, on the section rather
+          // than per row. Row-level `dragenter` handlers could set a target but
+          // never unset it: moving from a row onto the header, or onto empty
+          // space below the tree, left the last row as the target, so the hint
+          // named a directory the pointer had left and the drop landed there.
+          const next = targetPathFrom(event);
+          setDropTargetPath((current) => (current === next ? current : next));
         },
         onDragLeave: () => {
           dragDepth.current -= 1;
@@ -350,6 +357,19 @@ export function FileTree({
         }
       />
 
+      {/* Pinned over the section, not inserted into the file list: in the flow it
+          added a row's worth of height the instant a drag entered, which shifted
+          every row under a stationary pointer — retargeting the drop, or landing
+          the pointer on the hint itself. `pointerEvents: none` keeps it out of the
+          drag entirely, and the section's outline is what marks the target.
+          Named for the e2e locator: a screenshot cannot tell a live drop target
+          from a dead one. */}
+      {dropping && (
+        <p style={dropHint} data-testid="files-drop-hint">
+          {`Drop into ${dropTargetDir(dropTargetPath, dropTargetPath !== null && !paths.includes(dropTargetPath)) || "the project root"}`}
+        </p>
+      )}
+
       {/* Outside `!collapsed`: a drop that expands the section renders its note in
           the same pass, and a collapsed section is where a wrong-file-type
           message is most needed (nothing else moved). */}
@@ -361,15 +381,6 @@ export function FileTree({
 
       {!collapsed && (
         <div style={body}>
-          {/* Only while a drag is over the section — the resting sidebar keeps its
-              density (T3 rows are 24px; a permanent hint line is a fifth of a
-              screenful). Named for the e2e locator: a screenshot cannot tell a
-              live drop target from a dead one. */}
-          {dropping && (
-            <p style={dropHint} data-testid="files-drop-hint">
-              {`Drop into ${dropTargetDir(dropTargetPath, dropTargetPath !== null && !paths.includes(dropTargetPath)) || "the project root"}`}
-            </p>
-          )}
           {adding && (
             <input
               autoFocus
@@ -412,10 +423,11 @@ export function FileTree({
                 key={node.path}
                 className="hot-file-row"
                 data-drop-target={dropping && dropTargetPath === node.path ? "true" : undefined}
+                // Read by `targetPathFrom` on the section's dragover. The row sets
+                // no handler of its own: only the section can tell that the
+                // pointer has *left* a row.
+                data-drop-path={canDrop ? node.path : undefined}
                 style={row}
-                // `dragenter` on the row, not `dragover`: dragover fires continuously
-                // and would re-render the tree on every mouse move across a folder.
-                onDragEnter={canDrop ? () => setDropTargetPath(node.path) : undefined}
               >
                 <button
                   type="button"
@@ -438,9 +450,10 @@ export function FileTree({
                 className="hot-file-row"
                 data-active={node.path === active ? "true" : undefined}
                 data-drop-target={dropping && dropTargetPath === node.path ? "true" : undefined}
+                // A file row targets the file's own directory — "drop it next to
+                // this" — resolved in `dropTargetDir`.
+                data-drop-path={canDrop ? node.path : undefined}
                 style={row}
-                // A file row targets the file's own directory — "drop it next to this".
-                onDragEnter={canDrop ? () => setDropTargetPath(node.path) : undefined}
               >
                 <button
                   type="button"
@@ -580,6 +593,19 @@ export function FileTree({
 }
 
 /**
+ * The row under the pointer, as a workspace path — or null for the header, the
+ * empty space below the tree, and anything else that is not a row.
+ *
+ * `closest` rather than the event target itself: a row is a `div` wrapping a
+ * `button` wrapping an icon and a label, so the target is usually a descendant.
+ */
+function targetPathFrom(event: DragEvent): string | null {
+  const node = event.target as Element | null;
+  const row = node && typeof node.closest === "function" ? node.closest("[data-drop-path]") : null;
+  return row?.getAttribute("data-drop-path") ?? null;
+}
+
+/**
  * Is this drag carrying files, rather than a text selection or an internal drag?
  *
  * Without the check, dragging a code selection out of the editor and across the
@@ -601,6 +627,9 @@ const section: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   minHeight: 0,
+  // The positioning context for the drop hint overlay (DEV-2500). Nothing else in
+  // this section is positioned, so this cannot disturb the sidebar's layout.
+  position: "relative",
 };
 
 const body: CSSProperties = {
@@ -667,12 +696,20 @@ const rowActions: CSSProperties = {
   flexShrink: 0,
 };
 
-/** The drop hint, drawn inside the body while a file drag is over the section. */
+/** The drop hint: an overlay over the section's lower edge while a file drag is
+ *  over it. Absolute (never in the flow) and pointer-transparent — see the note
+ *  at its render site. `surfaceRaised` rather than the accent tint, because it now
+ *  floats over rows rather than sitting between them. */
 const dropHint: CSSProperties = {
-  margin: `2px ${theme.space(3)}`,
+  position: "absolute",
+  left: theme.space(3),
+  right: theme.space(3),
+  bottom: 4,
+  margin: 0,
   padding: "4px 6px",
   borderRadius: theme.radius.sm,
-  background: theme.color.accentSoft,
+  border: `1px solid ${theme.color.accentBorder}`,
+  background: theme.color.surfaceRaised,
   color: theme.color.accentText,
   fontFamily: theme.font.ui,
   fontSize: 10,
@@ -680,6 +717,7 @@ const dropHint: CSSProperties = {
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
+  pointerEvents: "none",
 };
 
 /** What a drop refused. Sits under the header so it is visible collapsed too. */

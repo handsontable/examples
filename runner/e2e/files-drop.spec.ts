@@ -150,6 +150,56 @@ test("the drop target is live while a file drag is over the section", async ({ p
   await expect(panel).not.toHaveAttribute("data-dropping", "true");
 });
 
+test("the drop target follows the pointer off a row", async ({ page }) => {
+  // Bugbot: the target was set by per-row `dragenter` and only cleared when the
+  // drag ended, so moving from a row back onto the header left that row as the
+  // target — the hint named a directory the pointer had left, and the drop landed
+  // there instead of the root.
+  await stubShell(page);
+  await signIn(page);
+  await page.goto("/?example=react");
+  await expect(accountAvatar(page)).toBeVisible();
+  await expect(fileRow(page, "/src/index.tsx")).toBeVisible();
+
+  const panel = filesPanel(page);
+  const dataTransfer = await dataTransferOf(page, [{ name: "notes.md", contents: "x" }]);
+  await panel.dispatchEvent("dragenter", { dataTransfer });
+
+  // Over a file inside src/ → that directory.
+  await fileRow(page, "/src/index.tsx").dispatchEvent("dragover", { dataTransfer });
+  await expect(dropHint(page)).toHaveText("Drop into src");
+
+  // Back over the section header → the root, not the stale row.
+  await panel.getByText("Files", { exact: true }).dispatchEvent("dragover", { dataTransfer });
+  await expect(dropHint(page)).toHaveText("Drop into the project root");
+
+  // And the drop follows the hint.
+  await panel.dispatchEvent("drop", { dataTransfer });
+  await expect(fileRow(page, "/notes.md")).toBeVisible();
+  await expect(fileRow(page, "/src/notes.md")).toHaveCount(0);
+});
+
+test("the drop hint does not move the file rows", async ({ page }) => {
+  // The hint used to sit in the flow at the top of the list, so it pushed every
+  // row down by its own height the moment a drag entered — under a stationary
+  // pointer that silently retargeted the drop.
+  await stubShell(page);
+  await signIn(page);
+  await page.goto("/?example=react");
+  await expect(accountAvatar(page)).toBeVisible();
+  const row = fileRow(page, "/src/index.tsx");
+  await expect(row).toBeVisible();
+
+  const before = await row.boundingBox();
+  const dataTransfer = await dataTransferOf(page, [{ name: "notes.md", contents: "x" }]);
+  await filesPanel(page).dispatchEvent("dragenter", { dataTransfer });
+  await expect(dropHint(page)).toBeVisible();
+  const after = await row.boundingBox();
+
+  expect(before && after).toBeTruthy();
+  expect(after!.y).toBeCloseTo(before!.y, 0);
+});
+
 test("a dropped binary is refused by name, with a reason", async ({ page }) => {
   await stubShell(page);
   await signIn(page);
