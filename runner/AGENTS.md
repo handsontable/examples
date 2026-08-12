@@ -165,6 +165,12 @@ does not pick up the repo-root manifest.
 - **No secrets in git.** Auth is the Handsontable Google login broker (per-user token, sessionStorage). Dev bypasses live only in gitignored `.env.local` / `.dev.vars`.
 - Use **wrangler against the main CF account** for any Cloudflare resource (D1 `DB`, KV `CACHE`, R2 `ARTIFACTS`).
 - Keep the CodeSandbox **hosted** Sandpack bundler (self-hosting it stack-overflows on HOT v18).
+- **FILES drag & drop** (DEV-2500, ADR-0031) is **text-only** — a workspace is `Record<string,
+  string>` end to end, so a dropped image has nowhere to live. Refusals are reported, never silent;
+  `.env*` is never accepted. The traversal lives in `packages/editor-shell/src/dropFiles.ts` (no
+  React, no DOM types) so `pipeline/drop-files.test.mjs` can drive it with fakes — a scripted
+  `DataTransfer` returns `null` from `webkitGetAsEntry()`, so the e2e spec only reaches the
+  plain-`files` fallback.
 - Tier-2 containers stay warm while a tab is open (client keepalive + `sleepAfter=5m`); disk is ephemeral, so a slept container cold-boots on return.
 - **Cost guardrails** (DEV-2030, ADR-0022): `max_instances` 5/3 is the container cap — don't raise it without redoing the arithmetic in `docs/cost-guardrails.md`. Spend degrades live sessions in stages while static shares keep serving. The dollar thresholds and the enforcement switch are **editable at runtime in `/admin`** (stored in `runner_settings`); the `BUDGET_*` vars are only defaults.
 - **Ask AI** (DEV-2047, `docs/example-chat.md`): chat panel scoped to the open example; docs chunks are retrieved **in the browser** (Cloudflare blocks Worker→workers.dev, error 1042), the Worker adds Algolia page links and calls LiteLLM. Model edits are proposed, never auto-applied, and every answer is metered into the cost ledger.
