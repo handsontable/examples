@@ -1,7 +1,5 @@
 import { HotTable, HotColumn } from '@handsontable/react-wrapper';
 import { registerAllModules } from 'handsontable/registry';
-import 'handsontable/styles/handsontable.min.css';
-import 'handsontable/styles/ht-theme-horizon.min.css';
 
 import { fluentDataGridTheme } from '../theme/fluentDataGridTheme';
 

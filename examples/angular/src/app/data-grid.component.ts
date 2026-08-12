@@ -4,6 +4,7 @@ import {
   CUSTOM_ELEMENTS_SCHEMA,
 } from '@angular/core';
 import { PredefinedMenuItemKey } from 'handsontable/plugins/contextMenu';
+import { mainTheme } from 'handsontable/themes';
 import { HotTableModule } from '@handsontable/angular-wrapper';
 
 import { getData } from './utils/constants';
@@ -76,7 +77,7 @@ export class DataGridComponent {
       { data: 5 },
       { data: 2 },
     ],
-    themeName: 'ht-theme-main',
+    theme: mainTheme,
     licenseKey: 'non-commercial-and-evaluation',
   };
 }

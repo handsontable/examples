@@ -1,6 +1,5 @@
 import Handsontable from 'handsontable/base';
-import 'handsontable/styles/handsontable.min.css';
-import 'handsontable/styles/ht-theme-main.min.css';
+import { mainTheme } from 'handsontable/themes';
 
 import { generateExampleData, isArabicDemoEnabled } from './src/utils';
 import './src/styles.css';
@@ -59,7 +58,7 @@ const example = document.getElementById('example');
 
 new Handsontable(example, {
   data: generateExampleData(),
-  themeName: 'ht-theme-main',
+  theme: mainTheme,
   layoutDirection: isArabicDemoEnabled() ? 'rtl' : 'ltr',
   language: isArabicDemoEnabled() ? arAR.languageCode : 'en-US',
   height: 248,

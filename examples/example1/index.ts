@@ -1,7 +1,6 @@
 import Handsontable from "handsontable/base";
 import { registerAllModules } from "handsontable/registry";
-import "handsontable/styles/handsontable.min.css";
-import "handsontable/styles/ht-theme-main.min.css";
+import { mainTheme } from "handsontable/themes";
 
 // Register all available Handsontable modules
 registerAllModules();
@@ -356,7 +355,7 @@ const container = document.querySelector<HTMLElement>("#handsontable-grid")!;
 
 new Handsontable(container, {
   data,
-  themeName: "ht-theme-main",
+  theme: mainTheme,
   colHeaders: [
     "ID",
     "Item Name",

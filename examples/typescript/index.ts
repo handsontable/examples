@@ -1,6 +1,5 @@
 import Handsontable from 'handsontable';
-import 'handsontable/styles/handsontable.min.css';
-import 'handsontable/styles/ht-theme-main.min.css';
+import { mainTheme } from 'handsontable/themes';
 
 import { data } from './src/constants';
 
@@ -52,7 +51,7 @@ if (example) {
     rowHeaders: true,
     afterGetColHeader: alignHeaders,
     beforeRenderer: addClassesToRows,
-    themeName: 'ht-theme-main',
+    theme: mainTheme,
     licenseKey: 'non-commercial-and-evaluation',
   });
 

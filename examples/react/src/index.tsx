@@ -5,10 +5,9 @@ import Handsontable from 'handsontable';
 import { HotTable, HotColumn } from '@handsontable/react-wrapper';
 import { data } from './constants';
 
-import { addClassesToRows, alignHeaders } from './hooksCallbacks';
+import { mainTheme } from 'handsontable/themes';
 
-import 'handsontable/styles/handsontable.min.css';
-import 'handsontable/styles/ht-theme-main.min.css';
+import { addClassesToRows, alignHeaders } from './hooksCallbacks';
 
 const App = () => {
   return (
@@ -38,7 +37,7 @@ const App = () => {
       manualRowMove={true}
       autoWrapRow={true}
       navigableHeaders={true}
-      themeName="ht-theme-main"
+      theme={mainTheme}
       licenseKey="non-commercial-and-evaluation"
     >
       <HotColumn data={1} />
