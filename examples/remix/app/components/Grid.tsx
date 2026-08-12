@@ -15,9 +15,14 @@ import {
   registerCellType,
 } from "handsontable/cellTypes";
 import { HotTable, HotColumn } from "@handsontable/react-wrapper";
-import { mainTheme } from "handsontable/themes";
+import { getTheme, hasTheme, registerTheme, mainTheme } from "handsontable/themes";
 
 import { Data } from "../../app/data";
+
+// Handsontable 17.0.0 passes a plain theme-config object straight to
+// ThemeManager.update on the updateSettings path (normalization was added in
+// 17.1.0), so this branch hands over a registered ThemeBuilder instead.
+const dataGridTheme = hasTheme("main") ? getTheme("main") : registerTheme(mainTheme);
 
 registerCellType(CheckboxCellType);
 registerCellType(NumericCellType);
@@ -38,7 +43,7 @@ export default function Grid(props: GridProps) {
   return (
     <div>
       <HotTable
-        theme={mainTheme}
+        theme={dataGridTheme}
         data={props.data}
         colWidths={[140, 126, 192, 100, 100, 90, 90, 110, 97]}
         colHeaders={[
