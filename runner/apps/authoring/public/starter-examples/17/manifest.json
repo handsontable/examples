@@ -1,6 +1,6 @@
 {
   "bucket": "17",
-  "sourceRef": "master",
+  "sourceRef": "prod-examples/17",
   "generatedFrom": "handsontable/examples examples/",
   "hotVersion": "17.1.0",
   "count": 16,
