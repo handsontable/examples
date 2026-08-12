@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   EditorShell,
   FullBar,
@@ -567,6 +567,12 @@ function Authoring({
   const initialDocs = route.mode === "play"
     ? new URLSearchParams(location.search).get("docs")
     : null;
+  // `?import=<provider url>` pulls a JSFiddle/StackBlitz project in through
+  // `POST /api/import` (DEV-2504). A URL rather than dialog state so the import
+  // is shareable and survives a reload, the same way `?example=` and `?docs=` are.
+  const initialImport = route.mode === "play"
+    ? new URLSearchParams(location.search).get("import")
+    : null;
   const [framework, setFramework] = useState<string>(() => {
     const p = new URLSearchParams(location.search).get("example");
     return catalog.examples.some((e) => e.framework === p) ? (p as string) : "react";
@@ -579,6 +585,13 @@ function Authoring({
   const [entry, setEntry] = useState<CatalogEntry>(() => toPlaceholderEntry(getEntry(framework)));
   // Non-null when the current example is a documentation-guide example.
   const [docsPath, setDocsPath] = useState<string | null>(initialDocs);
+  /** `?import=` lifecycle: idle when there is nothing to import, loading while
+   *  the Worker fetches and parses the provider page, loaded once the workspace
+   *  is the imported one, failed with a message the user can act on. */
+  const [importPhase, setImportPhase] = useState<"idle" | "loading" | "loaded" | "failed">(
+    initialImport ? "loading" : "idle",
+  );
+  const [importSkipped, setImportSkipped] = useState<{ path: string; reason: string }[]>([]);
   // Docs examples for the currently-resolved version bucket.
   const [docsItems, setDocsItems] = useState<DocsManifestItem[]>([]);
   const [activeDocsBucket, setActiveDocsBucket] = useState<string | null>(null);
@@ -744,6 +757,15 @@ function Authoring({
   }, []);
 
   /** Replace the whole workspace (entry + files + lineage) and remount. */
+  /** One line naming what an import refused, or null when it took everything.
+   *  Built here rather than in the Worker so the wording lives with the UI. */
+  const importNotice = useMemo(() => {
+    if (!importSkipped.length) return null;
+    const shown = importSkipped.slice(0, 2).map((s) => `${s.path} (${s.reason})`);
+    const rest = importSkipped.length - shown.length;
+    return `Not imported: ${shown.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}.`;
+  }, [importSkipped]);
+
   const loadWorkspace = useCallback(
     (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
       filesRef.current = nextFiles; // ensure the mount effect reads the new files
@@ -760,6 +782,83 @@ function Authoring({
     },
     [clearDirty],
   );
+
+  // `?import=<url>`: hand the URL to the Worker, which fetches the provider page
+  // and returns a workspace (DEV-2504). Deliberately unsaved — the author reviews
+  // the imported files and Saves deliberately, exactly as after a fork.
+  useEffect(() => {
+    if (!initialImport) return;
+    let cancelled = false;
+    (async () => {
+      const token = getToken();
+      try {
+        const res = await fetch(`${API_BASE}/api/import`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ url: initialImport }),
+        });
+        const body = (await res.json().catch(() => ({}))) as {
+          framework?: string;
+          files?: FilesMap;
+          title?: string;
+          provider?: string;
+          skipped?: { path: string; reason: string }[];
+          error?: string;
+        };
+        if (cancelled) return;
+        if (!res.ok || !body.files || !body.framework) {
+          setImportPhase("failed");
+          setStatus("error");
+          setRetryable(false);
+          setErrorMessage(
+            body.error ??
+              (res.status === 401
+                ? "Sign in to import a project."
+                : "Could not import that URL."),
+          );
+          return;
+        }
+        // The framework has to exist in this catalog or `getEntry` throws and the
+        // whole route unmounts; the Worker resolves it from BUILD_CONFIG, so a
+        // mismatch means the two drifted.
+        let indexEntry;
+        try {
+          indexEntry = getEntry(body.framework);
+        } catch {
+          setImportPhase("failed");
+          setStatus("error");
+          setRetryable(false);
+          setErrorMessage(`The import resolved to an unknown framework (${body.framework}).`);
+          return;
+        }
+        loadWorkspace(toPlaceholderEntry(indexEntry), { ...body.files }, `import:${body.provider ?? "url"}`);
+        if (body.title) setTitle(body.title);
+        setImportSkipped(body.skipped ?? []);
+        setImportPhase("loaded");
+        // Release the mount gate the starter path owns: nothing else will, now
+        // that the starter fetch is skipped for an imported workspace.
+        setSourceLoaded(true);
+        sourceLoadedRef.current = true;
+        activeStarterBucketRef.current = null;
+        // Drop `?import=` once it has been consumed, so a reload does not re-run
+        // an import the user may since have edited on top of.
+        const url = new URL(location.href);
+        url.searchParams.delete("import");
+        history.replaceState(null, "", url.pathname + url.search);
+      } catch (error) {
+        if (cancelled) return;
+        reportError(error, "import-url");
+        setImportPhase("failed");
+        setStatus("error");
+        setRetryable(false);
+        setErrorMessage("Could not import that URL.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [initialImport, loadWorkspace]);
 
   // Edit/share mode: load the saved demo's source + metadata into the workspace.
   useEffect(() => {
@@ -994,6 +1093,10 @@ function Authoring({
   // message the mount guard uses.
   useEffect(() => {
     if (route.mode === "share" || savedId || docsPath) return;
+    // An import owns the workspace: without this the starter fetch below would
+    // race it and replace the imported files with a catalog snapshot (the effect
+    // re-runs on the `framework` the import itself just set).
+    if (importPhase === "loading" || importPhase === "loaded") return;
     // Only next-format versions need nextVersion to resolve a bucket; plain
     // releases are not held on /api/versions.
     if (isNextPrereleaseVersion(version) && !versionsResolved) return;
@@ -1741,6 +1844,7 @@ function Authoring({
         dirtyPaths={dirtyPaths}
         versionWarning={versionWarning}
         budgetNotice={budgetNotice}
+        importNotice={importNotice}
         // Ask AI and Style, both from DEV-2047. Available on every route — the
         // public `/share` view included, since explaining or restyling a demo is
         // exactly what a shared link invites. Mutually exclusive: since DEV-2209

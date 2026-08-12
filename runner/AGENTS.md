@@ -165,6 +165,13 @@ does not pick up the repo-root manifest.
 - **No secrets in git.** Auth is the Handsontable Google login broker (per-user token, sessionStorage). Dev bypasses live only in gitignored `.env.local` / `.dev.vars`.
 - Use **wrangler against the main CF account** for any Cloudflare resource (D1 `DB`, KV `CACHE`, R2 `ARTIFACTS`).
 - Keep the CodeSandbox **hosted** Sandpack bundler (self-hosting it stack-overflows on HOT v18).
+- **Imports are Handsontable-only** (DEV-2504, ADR-0032). `POST /api/import` pulls a workspace out
+  of a JSFiddle or StackBlitz URL by parsing the page each one serves — undocumented payloads, so
+  `pipeline/import-url.test.mjs` pins both against fixtures recorded from real projects; when a
+  provider changes its page **that test is what fails**. `resolveSource` is the SSRF gate (exact
+  hosts, https, rebuilt URL); `assertHandsontableProject` is the product gate and belongs on every
+  future whole-project entry point. CodeSandbox is refused on purpose: its API answers 403 behind a
+  bot challenge, and we do not work around that.
 - Tier-2 containers stay warm while a tab is open (client keepalive + `sleepAfter=5m`); disk is ephemeral, so a slept container cold-boots on return.
 - **Cost guardrails** (DEV-2030, ADR-0022): `max_instances` 5/3 is the container cap — don't raise it without redoing the arithmetic in `docs/cost-guardrails.md`. Spend degrades live sessions in stages while static shares keep serving. The dollar thresholds and the enforcement switch are **editable at runtime in `/admin`** (stored in `runner_settings`); the `BUDGET_*` vars are only defaults.
 - **Ask AI** (DEV-2047, `docs/example-chat.md`): chat panel scoped to the open example; docs chunks are retrieved **in the browser** (Cloudflare blocks Worker→workers.dev, error 1042), the Worker adds Algolia page links and calls LiteLLM. Model edits are proposed, never auto-applied, and every answer is metered into the cost ledger.

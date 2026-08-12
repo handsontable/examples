@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html><head><title>Handsontable example - JSFiddle - React, Tailwind, and code Playground</title></head>
+<body>
+  <form id="fiddle-form">
+    <input type="hidden" name="normalize_css" value="1">
+    <textarea name="code_html" id="textarea-code-html">
+  &lt;link rel=&quot;stylesheet&quot; href=&quot;https://cdn.jsdelivr.net/npm/handsontable/styles/handsontable.min.css&quot; /&gt;
+  &lt;link rel=&quot;stylesheet&quot; href=&quot;https://cdn.jsdelivr.net/npm/handsontable/styles/ht-theme-main.min.css&quot; /&gt;
+  &lt;link rel=&quot;stylesheet&quot; href=&quot;https://cdn.jsdelivr.net/npm/highlight.js@11/styles/atom-one-dark.min.css&quot; /&gt;
+  &lt;link rel=&quot;stylesheet&quot; href=&quot;style.css&quot; /&gt;
+  &lt;script&gt;
+    // Applied before first paint to avoid a light/dark flash on reload.
+    (function () {
+      var saved = localStorage.getItem(&#39;insight-grid-theme&#39;);
+      var theme = saved || (window.matchMedia(&#39;(prefers-color-scheme: dark)&#39;).matches ? &#39;dark&#39; : &#39;light&#39;);
+      document.documentElement.setAttribute(&#39;data-theme&#39;, theme);
+    })();</textarea>
+    <textarea name="code_css" id="textarea-code-css">:root {
+  --navy: #00204e;
+  --cobalt: #00338d;
+  --cobalt-light: #2f5fc4;
+  --accent-gold: #c9a24b;
+  --bg: #f4f6f8;
+  --card-bg: #ffffff;
+  --text-dark: #1c2733;
+  --text-muted: #5b6b7b;
+  --border: #e2e6ea;
+  --surface-muted: #f6f9fd;
+  --surface-input: #ffffff;</textarea>
+    <textarea name="code_js" id="textarea-code-js">const HEADERS = [
+  &#39;Client&#39;, &#39;Invoice No.&#39;, &#39;Currency&#39;, &#39;Net Amount&#39;, &#39;VAT Rate&#39;,
+  &#39;VAT Amount&#39;, &#39;Gross Amount&#39;, &#39;Due Date&#39;, &#39;Payment Status&#39;, &#39;Client Satisfaction&#39;,
+];
+const STATUSES = [&#39;Paid&#39;, &#39;Pending&#39;, &#39;Overdue&#39;];
+const CURRENCIES = [&#39;EUR&#39;, &#39;USD&#39;, &#39;GBP&#39;, &#39;PLN&#39;];
+const CURRENCY_SYMBOLS = { EUR: &#39;€&#39;, USD: &#39;$&#39;, GBP: &#39;£&#39;, PLN: &#39;zł&#39; };
+const PAGE_SIZE = 15;
+
+// column indexes: Net Amount=D(3), VAT Rate=E(4), VAT Amount=F(5), Gross Amount=G(6), Payment Status=I(8)
+// Gross Amount references the LATE_FEE_RATE named expression (see the `formulas` config below)
+// instead of a magic number, so overdue invoices carry a late-payment surcharge that can be</textarea>
+  </form>
+</body></html>
