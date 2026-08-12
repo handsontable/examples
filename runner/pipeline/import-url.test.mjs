@@ -190,6 +190,36 @@ test("a project with no package.json is refused with the reason", () => {
   assert.throws(() => parseStackBlitz(html), /no package\.json/);
 });
 
+test("a traversal path is refused, not normalized", () => {
+  // Security review: these keys reach the builder as CONTAINER_ROOT + path when a
+  // demo is saved, so `../../` must not survive the import. Refused rather than
+  // rewritten — a path that needs fixing to be safe is not one to import.
+  const store = JSON.stringify({
+    project: {
+      title: "Crafted",
+      appFiles: {
+        "package.json": { type: "file", contents: JSON.stringify({ dependencies: { handsontable: "18.0.0" } }), fullPath: "package.json" },
+        "ok.ts": { type: "file", contents: "import 'handsontable';", fullPath: "src/ok.ts" },
+        "escape": { type: "file", contents: "pwned", fullPath: "../../etc/passwd.ts" },
+        "dotdot": { type: "file", contents: "pwned", fullPath: "src/../../outside.ts" },
+        "windows": { type: "file", contents: "pwned", fullPath: "..\\..\\windows\\evil.ts" },
+      },
+    },
+  });
+  const result = parseStackBlitz(`<script type="application/json" data-redux-store="">${store}</script>`);
+  assert.deepEqual(Object.keys(result.files).sort(), ["/package.json", "/src/ok.ts"]);
+  assert.equal(
+    result.skipped.filter((entry) => entry.reason === "unsafe path").length,
+    3,
+    "every traversal path is reported",
+  );
+  // Nothing escaped, under any spelling.
+  for (const path of Object.keys(result.files)) {
+    assert.equal(path.includes(".."), false, path);
+    assert.match(path, /^\/[^/]/, path);
+  }
+});
+
 test("an .env file is skipped and said out loud", () => {
   const store = JSON.stringify({
     project: {

@@ -1105,13 +1105,19 @@ function Authoring({
   // message the mount guard uses.
   useEffect(() => {
     if (route.mode === "share" || savedId || docsPath) return;
-    // Only while the import is in flight. Blocking on "loaded" too (as this first
-    // did) left the effect permanently disabled: `selectExample` clears
-    // `sourceLoaded` and bumps `starterGen`, so picking another starter after an
-    // import would boot forever and never fetch, and a version change would never
-    // re-pin. Once the import has landed, `sourceLoadedRef` + `entry.framework`
-    // already take the re-pin path instead of re-fetching.
-    if (importPhase === "loading") return;
+    // An imported workspace owns its files the way a saved demo does (`savedId`
+    // above), so this effect stays out for as long as one is open.
+    //
+    // Narrowing this to "loading" was wrong in both directions, and each way was
+    // caught in review: leaving it at "loaded" forever meant `selectExample` —
+    // which clears `sourceLoaded` and bumps `starterGen` — could never fetch
+    // again; dropping "loaded" meant the effect re-ran on the `framework` the
+    // import had just set, and with `activeStarterBucketRef` null and the
+    // workspace clean it fell through *past* both early returns to the fetch and
+    // replaced the import. The fix is both halves: the gate holds while an import
+    // is open, and `selectExample`/`selectDocs` release it when the user leaves.
+    // Version changes for an import are handled by the re-pin effect below.
+    if (importPhase === "loading" || importPhase === "loaded") return;
     // Only next-format versions need nextVersion to resolve a bucket; plain
     // releases are not held on /api/versions.
     if (isNextPrereleaseVersion(version) && !versionsResolved) return;
@@ -1214,6 +1220,17 @@ function Authoring({
     loadWorkspace,
   ]);
 
+  // A version change on an imported workspace re-pins its Handsontable
+  // dependencies in place. The starter effect is gated off while an import is
+  // open, so without this the version picker would move the label and change
+  // nothing in the files.
+  useEffect(() => {
+    if (importPhase !== "loaded") return;
+    const pinned = pinHandsontableFiles(filesRef.current, version);
+    filesRef.current = pinned;
+    setFiles(pinned);
+  }, [importPhase, version]);
+
   // Keep the URL in sync with the selected example + version — playground only
   // (edit/share have their own /edit/:id, /share/:id paths). Docs examples use
   // `?docs=<content-path>`; starters use `?example=<framework>`.
@@ -1262,6 +1279,12 @@ function Authoring({
   /** Open a documentation-guide example (lazy-loaded by its docs content path). */
   const selectDocs = useCallback(
     async (dp: string) => {
+      // Same reset as `selectExample`: without it a docs example opened after an
+      // import kept the import's skipped-files notice and, worse, still minted
+      // Fork/Share names from the provider's title.
+      setImportPhase("idle");
+      setImportedTitle(null);
+      setImportSkipped([]);
       const bucket = activeDocsBucketRef.current;
       const manifest = activeDocsManifestRef.current;
       if (!bucket || !manifest || !manifest.examples.some((item) => item.docsPath === dp)) {

@@ -128,6 +128,28 @@ test("picking a starter after an import still loads it", async ({ page }) => {
   await expect(fileRow(page, "/src/main.ts")).toHaveCount(0);
 });
 
+test("an import survives a version change, re-pinned in place", async ({ page }) => {
+  // The starter effect is gated off while an import is open (it would otherwise
+  // fetch a catalog snapshot over the imported files), so the version picker only
+  // keeps working because of the dedicated re-pin effect.
+  await stubShell(page);
+  await signIn(page);
+  await page.route("**/api/import", (route) => route.fulfill({ json: IMPORTED }));
+  await page.goto("/?import=https%3A%2F%2Fstackblitz.com%2Fedit%2Fvitejs-vite-de8qy2bm");
+  await expect(fileRow(page, "/src/main.ts")).toBeVisible();
+
+  // Same two-step the docs specs use: the pill is named "Handsontable version"
+  // (exact — the pencil beside it is "Set a custom Handsontable version").
+  await page.getByRole("button", { name: "Handsontable version", exact: true }).click();
+  await page.getByRole("option", { name: "17.1.0", exact: true }).click();
+
+  // Still the imported workspace, now pinned to the chosen version.
+  await expect(fileRow(page, "/src/main.ts")).toBeVisible();
+  await expect(fileRow(page, "/src/index.tsx")).toHaveCount(0);
+  await fileRow(page, "/package.json").click();
+  await expect(page.locator('[data-pane-active="true"] .cm-content')).toContainText("17.1.0");
+});
+
 test("a refused import says why instead of hanging on a spinner", async ({ page }) => {
   await stubShell(page);
   await signIn(page);

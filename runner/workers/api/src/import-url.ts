@@ -83,9 +83,23 @@ function isTextPath(path: string): boolean {
   return TEXT_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
 }
 
-/** `/a/b.ts` -> normalized, leading-slash workspace key. */
-function workspacePath(raw: string): string {
-  return `/${raw.replace(/^\/+/, "")}`;
+/**
+ * `a/b.ts` -> `/a/b.ts`, or null if the provider handed us something that must
+ * not become a workspace key.
+ *
+ * The paths come from the imported project, and they end up composed with the
+ * builder container's root (`CONTAINER_ROOT + path` in share.ts) when a demo is
+ * saved. A crafted project carrying `../../etc/x` would write outside the project
+ * root, so traversal is rejected rather than normalized away — a path that needed
+ * rewriting to be safe is not a path we should be importing at all.
+ */
+function workspacePath(raw: string): string | null {
+  const segments = raw.replace(/\\/g, "/").split("/").filter(Boolean);
+  if (!segments.length) return null;
+  if (segments.some((segment) => segment === "." || segment === ".." )) return null;
+  // A drive letter or a UNC-ish leading segment has no meaning here either.
+  if (/^[A-Za-z]:$/.test(segments[0]!)) return null;
+  return `/${segments.join("/")}`;
 }
 
 /**
@@ -304,7 +318,13 @@ export function parseStackBlitz(html: string): Omit<ImportResult, "provider" | "
     if (entry?.type !== "file") continue; // folder rows carry no contents
     const raw = entry.fullPath ?? key;
     const path = workspacePath(raw);
-    const segments = raw.split("/");
+    if (path === null) {
+      // Reported, not silently dropped: a project whose paths cannot be trusted
+      // is something the author should hear about.
+      skipped.push({ path: raw, reason: "unsafe path" });
+      continue;
+    }
+    const segments = path.slice(1).split("/");
     const name = segments[segments.length - 1]!;
 
     if (segments.slice(0, -1).some((dir) => EXCLUDE_DIRS.has(dir))) continue;
