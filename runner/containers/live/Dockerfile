@@ -10,52 +10,100 @@ WORKDIR /app
 RUN node /usr/local/lib/node_modules/corepack/dist/corepack.js enable --install-directory /usr/local/bin \
   && node /usr/local/lib/node_modules/corepack/dist/corepack.js prepare pnpm@10.34.5 --activate
 
-# react-js
-COPY baked/react-js/package.json baked/react-js/pnpm-lock.yaml /baked/react-js/
-RUN cd /baked/react-js && pnpm install --frozen-lockfile
+# react-js (bucket 18)
+COPY baked/react-js-18/package.json baked/react-js-18/pnpm-lock.yaml /baked/react-js-18/
+RUN cd /baked/react-js-18 && pnpm install --frozen-lockfile
 
-# ant-design
-COPY baked/ant-design/package.json baked/ant-design/pnpm-lock.yaml /baked/ant-design/
-RUN cd /baked/ant-design && pnpm install --frozen-lockfile
+# ant-design (bucket 18)
+COPY baked/ant-design-18/package.json baked/ant-design-18/pnpm-lock.yaml /baked/ant-design-18/
+RUN cd /baked/ant-design-18 && pnpm install --frozen-lockfile
 
-# mui
-COPY baked/mui/package.json baked/mui/pnpm-lock.yaml /baked/mui/
-RUN cd /baked/mui && pnpm install --frozen-lockfile
+# mui (bucket 18)
+COPY baked/mui-18/package.json baked/mui-18/pnpm-lock.yaml /baked/mui-18/
+RUN cd /baked/mui-18 && pnpm install --frozen-lockfile
 
-# base-web
-COPY baked/base-web/package.json baked/base-web/pnpm-lock.yaml /baked/base-web/
-RUN cd /baked/base-web && pnpm install --frozen-lockfile
+# base-web (bucket 18)
+COPY baked/base-web-18/package.json baked/base-web-18/pnpm-lock.yaml /baked/base-web-18/
+RUN cd /baked/base-web-18 && pnpm install --frozen-lockfile
 
-# fluent-ui
-COPY baked/fluent-ui/package.json baked/fluent-ui/pnpm-lock.yaml /baked/fluent-ui/
-RUN cd /baked/fluent-ui && pnpm install --frozen-lockfile
+# fluent-ui (bucket 18)
+COPY baked/fluent-ui-18/package.json baked/fluent-ui-18/pnpm-lock.yaml /baked/fluent-ui-18/
+RUN cd /baked/fluent-ui-18 && pnpm install --frozen-lockfile
 
-# angular
-COPY baked/angular/package.json baked/angular/pnpm-lock.yaml /baked/angular/
-RUN cd /baked/angular && pnpm install --frozen-lockfile
+# angular (bucket 18)
+COPY baked/angular-18/package.json baked/angular-18/pnpm-lock.yaml /baked/angular-18/
+RUN cd /baked/angular-18 && pnpm install --frozen-lockfile
 
-# next.js
-COPY baked/next-js/package.json baked/next-js/pnpm-lock.yaml /baked/next-js/
-RUN cd /baked/next-js && pnpm install --frozen-lockfile
+# next.js (bucket 18)
+COPY baked/next-js-18/package.json baked/next-js-18/pnpm-lock.yaml /baked/next-js-18/
+RUN cd /baked/next-js-18 && pnpm install --frozen-lockfile
 
-# next-shadcn.js
-COPY baked/next-shadcn-js/package.json baked/next-shadcn-js/pnpm-lock.yaml /baked/next-shadcn-js/
-RUN cd /baked/next-shadcn-js && pnpm install --frozen-lockfile
+# next-shadcn.js (bucket 18)
+COPY baked/next-shadcn-js-18/package.json baked/next-shadcn-js-18/pnpm-lock.yaml /baked/next-shadcn-js-18/
+RUN cd /baked/next-shadcn-js-18 && pnpm install --frozen-lockfile
 
-# astro
-COPY baked/astro/package.json baked/astro/pnpm-lock.yaml /baked/astro/
-RUN cd /baked/astro && pnpm install --frozen-lockfile
+# astro (bucket 18)
+COPY baked/astro-18/package.json baked/astro-18/pnpm-lock.yaml /baked/astro-18/
+RUN cd /baked/astro-18 && pnpm install --frozen-lockfile
 
-# nuxt
-COPY baked/nuxt/package.json baked/nuxt/pnpm-lock.yaml /baked/nuxt/
-RUN cd /baked/nuxt && pnpm install --frozen-lockfile
+# nuxt (bucket 18)
+COPY baked/nuxt-18/package.json baked/nuxt-18/pnpm-lock.yaml /baked/nuxt-18/
+RUN cd /baked/nuxt-18 && pnpm install --frozen-lockfile
 
-# remix
-COPY baked/remix/package.json baked/remix/pnpm-lock.yaml /baked/remix/
-RUN cd /baked/remix && pnpm install --frozen-lockfile
+# remix (bucket 18)
+COPY baked/remix-18/package.json baked/remix-18/pnpm-lock.yaml /baked/remix-18/
+RUN cd /baked/remix-18 && pnpm install --frozen-lockfile
 
-# vue
-COPY baked/vue/package.json baked/vue/pnpm-lock.yaml /baked/vue/
-RUN cd /baked/vue && pnpm install --frozen-lockfile
+# vue (bucket 18)
+COPY baked/vue-18/package.json baked/vue-18/pnpm-lock.yaml /baked/vue-18/
+RUN cd /baked/vue-18 && pnpm install --frozen-lockfile
+
+# react-js (bucket next)
+COPY baked/react-js-next/package.json baked/react-js-next/pnpm-lock.yaml /baked/react-js-next/
+RUN cd /baked/react-js-next && pnpm install --frozen-lockfile
+
+# ant-design (bucket next)
+COPY baked/ant-design-next/package.json baked/ant-design-next/pnpm-lock.yaml /baked/ant-design-next/
+RUN cd /baked/ant-design-next && pnpm install --frozen-lockfile
+
+# mui (bucket next)
+COPY baked/mui-next/package.json baked/mui-next/pnpm-lock.yaml /baked/mui-next/
+RUN cd /baked/mui-next && pnpm install --frozen-lockfile
+
+# base-web (bucket next)
+COPY baked/base-web-next/package.json baked/base-web-next/pnpm-lock.yaml /baked/base-web-next/
+RUN cd /baked/base-web-next && pnpm install --frozen-lockfile
+
+# fluent-ui (bucket next)
+COPY baked/fluent-ui-next/package.json baked/fluent-ui-next/pnpm-lock.yaml /baked/fluent-ui-next/
+RUN cd /baked/fluent-ui-next && pnpm install --frozen-lockfile
+
+# angular (bucket next)
+COPY baked/angular-next/package.json baked/angular-next/pnpm-lock.yaml /baked/angular-next/
+RUN cd /baked/angular-next && pnpm install --frozen-lockfile
+
+# next.js (bucket next)
+COPY baked/next-js-next/package.json baked/next-js-next/pnpm-lock.yaml /baked/next-js-next/
+RUN cd /baked/next-js-next && pnpm install --frozen-lockfile
+
+# next-shadcn.js (bucket next)
+COPY baked/next-shadcn-js-next/package.json baked/next-shadcn-js-next/pnpm-lock.yaml /baked/next-shadcn-js-next/
+RUN cd /baked/next-shadcn-js-next && pnpm install --frozen-lockfile
+
+# astro (bucket next)
+COPY baked/astro-next/package.json baked/astro-next/pnpm-lock.yaml /baked/astro-next/
+RUN cd /baked/astro-next && pnpm install --frozen-lockfile
+
+# nuxt (bucket next)
+COPY baked/nuxt-next/package.json baked/nuxt-next/pnpm-lock.yaml /baked/nuxt-next/
+RUN cd /baked/nuxt-next && pnpm install --frozen-lockfile
+
+# remix (bucket next)
+COPY baked/remix-next/package.json baked/remix-next/pnpm-lock.yaml /baked/remix-next/
+RUN cd /baked/remix-next && pnpm install --frozen-lockfile
+
+# vue (bucket next)
+COPY baked/vue-next/package.json baked/vue-next/pnpm-lock.yaml /baked/vue-next/
+RUN cd /baked/vue-next && pnpm install --frozen-lockfile
 
 EXPOSE 3001 4200 4321 5173

@@ -9,12 +9,15 @@
 // needs one `Sandbox` namespace). At session start the Worker hardlink-copies
 // the baked node_modules into /app, then runs fast frozen pnpm reconciliation.
 //
-// Usage: node scripts/prepare-container.mjs [--bucket=18]
+// Usage: node scripts/prepare-container.mjs [--buckets=18,next]
 //
-// Starter sources come from the versioned bucket snapshot (DEV-2213):
-// apps/authoring/public/starter-examples/<bucket>/<framework>.json. The baked
-// contexts therefore pin that bucket's concrete Handsontable version, which is
-// what lets a session at the bucket version take the frozen install path.
+// Starter sources come from the versioned bucket snapshots (DEV-2213):
+// apps/authoring/public/starter-examples/<bucket>/<framework>.json. Each baked
+// bucket gets its own context per framework (key `<framework>-<bucket>`)
+// pinning that bucket's concrete Handsontable version; the Worker selects the
+// context whose dependency fingerprint matches the mounted files, which is
+// what lets a session at a baked bucket's version take the frozen install
+// path. The first bucket listed is the default for non-matching sessions.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -92,31 +95,48 @@ const extraContainer = (hotVersion) => [
 ];
 const EXPOSE_PORTS = [...new Set(Object.values(DEV).map((d) => d.port))].sort();
 
-// The default bucket to bake: the current major's snapshot. Sessions on other
-// versions reconcile with `pnpm install --no-frozen-lockfile` at boot.
-const BAKE_BUCKET = process.argv.find((a) => a.startsWith("--bucket="))?.slice("--bucket=".length) ?? "18";
+// Buckets to bake, first = default. 18 + next covers where the traffic is;
+// sessions on other majors reconcile with `pnpm install --no-frozen-lockfile`
+// at boot, exactly like any custom-dependency session.
+const BAKE_BUCKETS = (
+  process.argv.find((a) => a.startsWith("--buckets="))?.slice("--buckets=".length) ?? "18,next"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const DEFAULT_BUCKET = BAKE_BUCKETS[0];
 const STARTER_EXAMPLES_DIR = path.join(RUNNER_DIR, "apps", "authoring", "public", "starter-examples");
 
 // catalog.json is the files-free index; full starter artifacts (with files)
-// come from the bucket snapshot.
+// come from the bucket snapshots.
 const catalog = JSON.parse(fs.readFileSync(path.join(RUNNER_DIR, "catalog.json"), "utf8"));
-const bucketManifest = JSON.parse(
-  fs.readFileSync(path.join(STARTER_EXAMPLES_DIR, BAKE_BUCKET, "manifest.json"), "utf8"),
-);
-const loadBucketArtifact = (framework) =>
-  JSON.parse(fs.readFileSync(path.join(STARTER_EXAMPLES_DIR, BAKE_BUCKET, `${framework}.json`), "utf8"));
+const loadBucketManifest = (bucket) =>
+  JSON.parse(fs.readFileSync(path.join(STARTER_EXAMPLES_DIR, bucket, "manifest.json"), "utf8"));
+const loadBucketArtifact = (bucket, framework) =>
+  JSON.parse(fs.readFileSync(path.join(STARTER_EXAMPLES_DIR, bucket, `${framework}.json`), "utf8"));
 const bakedKey = (framework) => framework.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 const dependencyMetadataFingerprint = ({ packageJson, pnpmLock }) => {
   const part = (name, value) => value === undefined ? `${name}:missing\n` : `${name}:${value.length}:${value}\n`;
   return createHash("sha256").update(`${part("package.json", packageJson)}${part("pnpm-lock.yaml", pnpmLock)}`).digest("hex");
 };
 
-const containerExamples = catalog.examples
-  .filter((e) => e.engine === "container")
-  .map((e) => loadBucketArtifact(e.framework));
-// Everything baked into the image + given a dev command: catalog container
-// examples plus the docs-only extras (e.g. Vue).
-const bakeExamples = [...containerExamples, ...extraContainer(bucketManifest.hotVersion)];
+const containerFrameworks = catalog.examples.filter((e) => e.engine === "container");
+// Everything baked into the image + given a dev command: each baked bucket's
+// container starters plus the docs-only extras (e.g. Vue), one context per
+// (framework, bucket). A bucket without a framework (minCoreMajor floor)
+// simply contributes no context for it.
+const bakeEntries = [];
+for (const bucket of BAKE_BUCKETS) {
+  const manifest = loadBucketManifest(bucket);
+  const inBucket = new Set(manifest.examples.map((m) => m.framework));
+  const examples = [
+    ...containerFrameworks.filter((e) => inBucket.has(e.framework)).map((e) => loadBucketArtifact(bucket, e.framework)),
+    ...extraContainer(manifest.hotVersion),
+  ];
+  for (const e of examples) {
+    bakeEntries.push({ bucket, example: e, key: `${bakedKey(e.framework)}-${bucket}` });
+  }
+}
 
 function writeExtraLock(dir) {
   execFileSync(
@@ -133,16 +153,15 @@ function writeBakedContexts() {
   fs.rmSync(bakedRoot, { recursive: true, force: true });
 
   const steps = [];
-  for (const e of bakeExamples) {
+  for (const { bucket, example: e, key } of bakeEntries) {
     if (!DEV[e.framework]) throw new Error(`no DEV command for container framework: ${e.framework}`);
-    const key = bakedKey(e.framework);
     const dir = path.join(bakedRoot, key);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "package.json"), e.files["/package.json"]);
     const lock = e.files["/pnpm-lock.yaml"] ?? writeExtraLock(dir);
     fs.writeFileSync(path.join(dir, "pnpm-lock.yaml"), lock);
     steps.push(
-      `# ${e.framework}\nCOPY baked/${key}/package.json baked/${key}/pnpm-lock.yaml /baked/${key}/\nRUN cd /baked/${key} && ${e.installCommand}`,
+      `# ${e.framework} (bucket ${bucket})\nCOPY baked/${key}/package.json baked/${key}/pnpm-lock.yaml /baked/${key}/\nRUN cd /baked/${key} && ${e.installCommand}`,
     );
   }
 
@@ -163,18 +182,32 @@ ${steps.join("\n\n")}
 EXPOSE ${EXPOSE_PORTS.join(" ")}
 `;
   fs.writeFileSync(path.join(liveDir, "Dockerfile"), dockerfile);
-  console.log(`[prepare-container] baked ${bakeExamples.length} frameworks into containers/live/`);
+  console.log(
+    `[prepare-container] baked ${bakeEntries.length} contexts (buckets ${BAKE_BUCKETS.join(", ")}) into containers/live/`,
+  );
 }
 
 function writeGenerated() {
-  const devRows = bakeExamples.map((e) => {
-    const d = DEV[e.framework];
-    const bakedDir = path.join(RUNNER_DIR, "containers", "live", "baked", bakedKey(e.framework));
-    const sourceDependencyFingerprint = dependencyMetadataFingerprint({
-      packageJson: fs.readFileSync(path.join(bakedDir, "package.json"), "utf8"),
-      pnpmLock: fs.readFileSync(path.join(bakedDir, "pnpm-lock.yaml"), "utf8"),
+  const byFramework = new Map();
+  for (const be of bakeEntries) {
+    const list = byFramework.get(be.example.framework) ?? [];
+    list.push(be);
+    byFramework.set(be.example.framework, list);
+  }
+
+  const devRows = [...byFramework.entries()].map(([framework, entries]) => {
+    const d = DEV[framework];
+    const contexts = entries.map(({ key }) => {
+      const bakedDir = path.join(RUNNER_DIR, "containers", "live", "baked", key);
+      const sourceDependencyFingerprint = dependencyMetadataFingerprint({
+        packageJson: fs.readFileSync(path.join(bakedDir, "package.json"), "utf8"),
+        pnpmLock: fs.readFileSync(path.join(bakedDir, "pnpm-lock.yaml"), "utf8"),
+      });
+      return `{ bakedKey: ${JSON.stringify(key)}, sourceDependencyFingerprint: ${JSON.stringify(sourceDependencyFingerprint)} }`;
     });
-    return `  ${JSON.stringify(e.framework)}: { cmd: ${JSON.stringify(d.cmd)}, port: ${d.port}, bakedKey: ${JSON.stringify(bakedKey(e.framework))}, sourceDependencyFingerprint: ${JSON.stringify(sourceDependencyFingerprint)} },`;
+    const defaultBakedKey =
+      entries.find((be) => be.bucket === DEFAULT_BUCKET)?.key ?? entries[0].key;
+    return `  ${JSON.stringify(framework)}: { cmd: ${JSON.stringify(d.cmd)}, port: ${d.port}, defaultBakedKey: ${JSON.stringify(defaultBakedKey)}, contexts: [${contexts.join(", ")}] },`;
   });
   const buildRows = catalog.examples.map((e) =>
     `  ${JSON.stringify(e.framework)}: { tier: ${e.tier}, installCommand: ${JSON.stringify(e.installCommand)}, buildCommand: ${JSON.stringify(e.buildCommand)}, outputDir: ${JSON.stringify(e.outputDir)}, outputGlob: ${e.outputGlob ? JSON.stringify(e.outputGlob) : "null"} },`,
@@ -182,12 +215,19 @@ function writeGenerated() {
 
   const out = `// Generated by scripts/prepare-container.mjs — do not edit by hand.
 
-// Container-engine framework -> dev command, port, and baked-deps key.
+// One baked node_modules context per (framework, bucket) — the fingerprint
+// selects the context whose package.json+lock the session mounts verbatim.
+export interface FrameworkDevContext {
+  bakedKey: string;
+  sourceDependencyFingerprint: string;
+}
+
+// Container-engine framework -> dev command, port, and baked-deps contexts.
 export interface FrameworkDev {
   cmd: string;
   port: number;
-  bakedKey: string;
-  sourceDependencyFingerprint: string;
+  defaultBakedKey: string;
+  contexts: FrameworkDevContext[];
 }
 
 export const FRAMEWORK_DEV: Record<string, FrameworkDev> = {
@@ -214,4 +254,4 @@ ${buildRows.join("\n")}
 
 writeBakedContexts();
 writeGenerated();
-console.log(`[prepare-container] container examples: ${containerExamples.map((e) => e.framework).join(", ")}`);
+console.log(`[prepare-container] container examples: ${containerFrameworks.map((e) => e.framework).join(", ")}`);
