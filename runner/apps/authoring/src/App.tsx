@@ -597,6 +597,11 @@ function Authoring({
    *  from `entry.displayName`, which for an import is the *starter* the framework
    *  resolved to ("TypeScript (Vite)"), so "ToolBar Demo" would be lost on save. */
   const [importedTitle, setImportedTitle] = useState<string | null>(null);
+  /** `starterGen` as it stood when an import landed — see the starter-load gate.
+   *  A ref as well as the state, because the import effect reads it after an
+   *  await, where its own closure's copy would be the value from mount. */
+  const importStarterGenRef = useRef(0);
+  const starterGenRef = useRef(0);
   // Docs examples for the currently-resolved version bucket.
   const [docsItems, setDocsItems] = useState<DocsManifestItem[]>([]);
   const [activeDocsBucket, setActiveDocsBucket] = useState<string | null>(null);
@@ -773,6 +778,16 @@ function Authoring({
 
   const loadWorkspace = useCallback(
     (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
+      // Whatever workspace replaces an import is no longer the import's, so its
+      // title and its skipped-files notice are cleared here — at the moment the
+      // new files are installed, which a failed starter or docs load never
+      // reaches. Doing it in the pickers instead left a failed switch showing the
+      // previous import's notice and minting Fork/Share names from its title.
+      if (!lineage.startsWith("import:")) {
+        setImportPhase("idle");
+        setImportedTitle(null);
+        setImportSkipped([]);
+      }
       filesRef.current = nextFiles; // ensure the mount effect reads the new files
       setEntry(nextEntry);
       setFramework(nextEntry.framework);
@@ -843,6 +858,7 @@ function Authoring({
         // playground's default framework). Bumping the sequence makes its
         // response a no-op, so it cannot land on top of the import.
         starterRequestSeqRef.current += 1;
+        importStarterGenRef.current = starterGenRef.current;
         loadWorkspace(toPlaceholderEntry(indexEntry), { ...body.files }, `import:${body.provider ?? "url"}`);
         if (body.title) {
           setTitle(body.title);
@@ -1106,18 +1122,23 @@ function Authoring({
   useEffect(() => {
     if (route.mode === "share" || savedId || docsPath) return;
     // An imported workspace owns its files the way a saved demo does (`savedId`
-    // above), so this effect stays out for as long as one is open.
+    // above) — but only until the user asks for a starter, and *that* distinction
+    // is what two review rounds went around:
     //
-    // Narrowing this to "loading" was wrong in both directions, and each way was
-    // caught in review: leaving it at "loaded" forever meant `selectExample` —
-    // which clears `sourceLoaded` and bumps `starterGen` — could never fetch
-    // again; dropping "loaded" meant the effect re-ran on the `framework` the
-    // import had just set, and with `activeStarterBucketRef` null and the
-    // workspace clean it fell through *past* both early returns to the fetch and
-    // replaced the import. The fix is both halves: the gate holds while an import
-    // is open, and `selectExample`/`selectDocs` release it when the user leaves.
-    // Version changes for an import are handled by the re-pin effect below.
-    if (importPhase === "loading" || importPhase === "loaded") return;
+    //  - gate on "loading" only, and the effect re-runs on the `framework` the
+    //    import just set; `activeStarterBucketRef` is null and `loadWorkspace`
+    //    cleared dirty, so both inner branches fall through to the fetch and a
+    //    catalog starter replaces the import.
+    //  - gate on "loaded" forever, and picking a starter can never fetch again.
+    //  - release the gate inside `selectExample`/`selectDocs`, and a switch that
+    //    *fails* leaves the import open with its protection already dropped.
+    //
+    // `starterGen` separates them: only `selectExample` bumps it, so an unchanged
+    // generation means this run is the import's own re-render (or a version
+    // change, which the re-pin effect below handles), and a bumped one means the
+    // user picked something. Nothing has to be cleared early for it to hold.
+    if (importPhase === "loading") return;
+    if (importPhase === "loaded" && starterGen === importStarterGenRef.current) return;
     // Only next-format versions need nextVersion to resolve a bucket; plain
     // releases are not held on /api/versions.
     if (isNextPrereleaseVersion(version) && !versionsResolved) return;
@@ -1256,11 +1277,6 @@ function Authoring({
   const selectExample = useCallback(
     (fw: string) => {
       docsRequestSeqRef.current += 1;
-      // Picking a starter leaves the imported workspace behind — including its
-      // title, which must not follow the user onto an unrelated example.
-      setImportPhase("idle");
-      setImportedTitle(null);
-      setImportSkipped([]);
       setDocsPath(null);
       docsPathRef.current = null;
       setDocsRuntimeBlocked(false);
@@ -1271,7 +1287,8 @@ function Authoring({
       sourceLoadedRef.current = false;
       activeStarterBucketRef.current = null;
       setFramework(fw);
-      setStarterGen((g) => g + 1);
+      starterGenRef.current += 1;
+      setStarterGen(starterGenRef.current);
     },
     [],
   );
@@ -1279,12 +1296,6 @@ function Authoring({
   /** Open a documentation-guide example (lazy-loaded by its docs content path). */
   const selectDocs = useCallback(
     async (dp: string) => {
-      // Same reset as `selectExample`: without it a docs example opened after an
-      // import kept the import's skipped-files notice and, worse, still minted
-      // Fork/Share names from the provider's title.
-      setImportPhase("idle");
-      setImportedTitle(null);
-      setImportSkipped([]);
       const bucket = activeDocsBucketRef.current;
       const manifest = activeDocsManifestRef.current;
       if (!bucket || !manifest || !manifest.examples.some((item) => item.docsPath === dp)) {

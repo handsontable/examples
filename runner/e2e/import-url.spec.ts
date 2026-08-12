@@ -150,6 +150,27 @@ test("an import survives a version change, re-pinned in place", async ({ page })
   await expect(page.locator('[data-pane-active="true"] .cm-content')).toContainText("17.1.0");
 });
 
+test("a failed docs switch leaves the import — and its protection — in place", async ({ page }) => {
+  // Bugbot: clearing the import state inside the pickers dropped the starter-load
+  // gate before the new workspace existed, so a docs example that failed to load
+  // left the imported files open and unprotected — and a later version change
+  // fetched a catalog starter over them.
+  await stubShell(page);
+  await signIn(page);
+  await page.route("**/api/import", (route) => route.fulfill({ json: IMPORTED }));
+  // Every docs manifest 404s: the picker's docs half cannot resolve anything.
+  await page.route("**/docs-examples/**", (route) => route.fulfill({ status: 404, body: "" }));
+  await page.goto("/?import=https%3A%2F%2Fstackblitz.com%2Fedit%2Fvitejs-vite-de8qy2bm");
+  await expect(fileRow(page, "/src/main.ts")).toBeVisible();
+
+  // A version change is what used to overwrite the workspace afterwards.
+  await page.getByRole("button", { name: "Handsontable version", exact: true }).click();
+  await page.getByRole("option", { name: "17.1.0", exact: true }).click();
+
+  await expect(fileRow(page, "/src/main.ts")).toBeVisible();
+  await expect(fileRow(page, "/src/index.tsx")).toHaveCount(0);
+});
+
 test("a refused import says why instead of hanging on a spinner", async ({ page }) => {
   await stubShell(page);
   await signIn(page);
