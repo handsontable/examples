@@ -15,7 +15,7 @@
 // `displayName`, and the app owns fetching both.
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { IconChartBar, IconListDetails, IconLogin2, IconSettings2 } from "./icons/index.js";
+import { IconBook, IconChartBar, IconListDetails, IconLogin2, IconSettings2 } from "./icons/index.js";
 import { theme } from "./theme.js";
 
 export interface AccountMenuProps {
@@ -35,6 +35,9 @@ export interface AccountMenuProps {
   /** `/settings` (DEV-2166). Optional for the same reason `onMyDemos` is a
    *  callback at all: this package does no navigation. */
   onSettings?: () => void;
+  /** `/guide` (DEV-2503) — the in-app how-to. Optional for the same reason the two
+   *  above are: this package navigates nothing itself. */
+  onGuide?: () => void;
   onLogout: () => void;
 }
 
@@ -45,6 +48,7 @@ export function AccountMenu({
   onMyDemos,
   onUsage,
   onSettings,
+  onGuide,
   onLogout,
 }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
@@ -112,6 +116,16 @@ export function AccountMenu({
             onClick={onSettings ? () => { setOpen(false); onSettings(); } : undefined}
             disabled={!onSettings}
             title={onSettings ? "Your name, description and avatar" : "Profile settings are not available here"}
+          />
+          {/* `/guide` (DEV-2503). Last before the rule: it is the row you want on
+              your first day and never again, so it sits below the ones you use
+              daily rather than above them. */}
+          <MenuRow
+            icon={<IconBook />}
+            label="Guide"
+            onClick={onGuide ? () => { setOpen(false); onGuide(); } : undefined}
+            disabled={!onGuide}
+            title={onGuide ? "What you can do here, and how" : "The guide is not available here"}
           />
           <div style={rule} role="separator" />
           <MenuRow icon={<IconLogin2 />} label="Log out" onClick={() => { setOpen(false); onLogout(); }} />

@@ -50,6 +50,8 @@ export interface TopBarProps {
   /** `/settings` — the profile page (DEV-2166). Absent leaves the menu row
    *  disabled, which is what the anonymous-adjacent surfaces want. */
   onSettings?: () => void;
+  /** `/guide` (DEV-2503), reaching the account menu. */
+  onGuide?: () => void;
   onLogout?: () => void;
 
   /** The mode action, left of the theme toggle (`114:24402` and its three
@@ -76,6 +78,7 @@ export function TopBar({
   onMyDemos,
   onUsage,
   onSettings,
+  onGuide,
   onLogout,
   onFork,
   forking,
@@ -169,6 +172,7 @@ export function TopBar({
           onMyDemos={onMyDemos}
           onUsage={onUsage}
           onSettings={onSettings}
+          onGuide={onGuide}
           onLogout={onLogout}
         />
       )}

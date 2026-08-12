@@ -204,6 +204,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
         accountAvatarUrl={ownerAvatar}
         onMyDemos={() => { location.href = "/my-demos"; }}
         onSettings={() => { location.href = "/settings"; }}
+        onGuide={() => { location.href = "/guide"; }}
         // Never a bare reload here: `/my-demos` answers a null user with
         // `login()`, so logging out in place would re-enter the broker.
         onLogout={() => logout("/")}
@@ -240,7 +241,8 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
               no illustration. The tile is already the call to action. */}
           {demos && demos.length === 0 && !error && (
             <p style={emptyText}>
-              No demos yet. Open an example, edit it, and fork it to save your first one.
+              No demos yet. Open an example, edit it, and fork it to save your first one — the{" "}
+              <a href="/guide" style={{ color: theme.color.accentText }}>guide</a> walks through it.
             </p>
           )}
         </main>
