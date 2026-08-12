@@ -205,11 +205,16 @@ export function parseJsFiddle(html: string, sourceUrl: string): Omit<ImportResul
   }
 
   const title = pageTitle(html) ?? "Imported fiddle";
+  const hasCss = !!cssPanel?.trim();
+  const hasJs = !!jsPanel?.trim();
   const files: Record<string, string> = {
-    "/index.html": wrapFiddleHtml(htmlPanel ?? "", title, sourceUrl),
+    // Only reference the files that are actually written: a fiddle with an empty
+    // CSS or JS panel would otherwise get a <link>/<script> pointing at a file
+    // that does not exist, which the bundler reports as a failed module.
+    "/index.html": wrapFiddleHtml(htmlPanel ?? "", title, sourceUrl, { hasCss, hasJs }),
   };
-  if (cssPanel?.trim()) files["/style.css"] = cssPanel;
-  if (jsPanel?.trim()) files["/script.js"] = jsPanel;
+  if (hasCss) files["/style.css"] = cssPanel!;
+  if (hasJs) files["/script.js"] = jsPanel!;
   // No dependencies to install: a fiddle runs off CDN tags. The manifest exists
   // because every workspace needs one — `POST /api/demos` rejects a file set
   // without /package.json, and the builder installs from it.
@@ -229,8 +234,12 @@ export function parseJsFiddle(html: string, sourceUrl: string): Omit<ImportResul
 }
 
 /** Host the fiddle's HTML fragment in a real document. */
-function wrapFiddleHtml(fragment: string, title: string, sourceUrl: string): string {
-  const hasCss = true;
+function wrapFiddleHtml(
+  fragment: string,
+  title: string,
+  sourceUrl: string,
+  { hasCss, hasJs }: { hasCss: boolean; hasJs: boolean },
+): string {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -241,8 +250,7 @@ function wrapFiddleHtml(fragment: string, title: string, sourceUrl: string): str
 ${hasCss ? '    <link rel="stylesheet" href="./style.css" />\n' : ""}  </head>
   <body>
 ${fragment.replace(/^/gm, "    ").replace(/\s+$/, "")}
-    <script type="module" src="./script.js"></script>
-  </body>
+${hasJs ? '    <script type="module" src="./script.js"></script>\n' : ""}  </body>
 </html>
 `;
 }
@@ -445,23 +453,43 @@ export function detectFramework(files: Record<string, string>, known: Set<string
 
 // ---- the fetch --------------------------------------------------------------
 
+/** Providers normalize their own URLs (jsfiddle sends /:slug -> /:slug/1/), so
+ *  redirects have to be followed — but each hop is re-checked, not trusted. */
+const MAX_REDIRECTS = 3;
+
 async function fetchPage(url: string, fetchImpl: typeof fetch): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   let response: Response;
   try {
-    response = await fetchImpl(url, {
-      // `redirect: "manual"` would break jsfiddle's own /:slug -> /:slug/1/
-      // normalization; the allowlist is enforced on the request we build, and a
-      // provider redirecting off-host is their bug, not an SSRF vector we open.
-      headers: {
-        // Both pages serve a different (JS-only) shell to a bare bot UA.
-        "User-Agent": "Mozilla/5.0 (compatible; HandsontableDemos/1.0; +https://demos.handsontable.com)",
-        Accept: "text/html,application/xhtml+xml",
-      },
-      signal: controller.signal,
-    });
+    let target = url;
+    for (let hop = 0; ; hop++) {
+      response = await fetchImpl(target, {
+        // Manual, so the allowlist survives the hop. Letting fetch follow
+        // redirects implicitly would widen the SSRF boundary from
+        // "provider pages" to "wherever a provider points us", which is the
+        // whole boundary this module exists to hold.
+        redirect: "manual",
+        headers: {
+          // Both pages serve a different (JS-only) shell to a bare bot UA.
+          "User-Agent": "Mozilla/5.0 (compatible; HandsontableDemos/1.0; +https://demos.handsontable.com)",
+          Accept: "text/html,application/xhtml+xml",
+        },
+        signal: controller.signal,
+      });
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+      const location = response.headers.get("location");
+      if (!location) throw new ImportError("That page redirected to nowhere.", 502);
+      if (hop >= MAX_REDIRECTS) throw new ImportError("That page redirected too many times.", 502);
+      // Relative Locations are normal (jsfiddle's own normalization is one), so
+      // resolve against the current target and re-run the host gate on the
+      // result. `resolveSource` throws for anything off-allowlist.
+      const next = new URL(location, target).toString();
+      resolveSource(next);
+      target = next;
+    }
   } catch (error) {
+    if (error instanceof ImportError) throw error;
     const aborted = (error as Error)?.name === "AbortError";
     throw new ImportError(
       aborted ? "That page took too long to answer." : "Could not reach that URL.",

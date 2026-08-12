@@ -320,6 +320,79 @@ test("importFromUrl fetches the rewritten URL and returns a workspace", async ()
   assert.ok(result.files["/src/main.ts"]);
 });
 
+test("a fiddle with no CSS or JS panel links only what exists", () => {
+  // Bugbot: the wrapper used to hardcode both references, so a fiddle with an
+  // empty panel opened with a <link>/<script> pointing at a file that was never
+  // written — a failed module load in the preview.
+  const htmlOnly = `<textarea name="code_html" id="textarea-code-html">&lt;div id=&quot;example&quot;&gt;&lt;/div&gt;
+    &lt;script src=&quot;https://cdn.jsdelivr.net/npm/handsontable/dist/handsontable.full.min.js&quot;&gt;&lt;/script&gt;</textarea>
+    <textarea name="code_css" id="textarea-code-css"></textarea>
+    <textarea name="code_js" id="textarea-code-js"></textarea>`;
+  const result = parseJsFiddle(htmlOnly, "https://jsfiddle.net/x/1/");
+  assert.deepEqual(Object.keys(result.files).sort(), ["/index.html", "/package.json"]);
+  assert.equal(result.files["/index.html"].includes("style.css"), false);
+  assert.equal(result.files["/index.html"].includes("script.js"), false);
+
+  // …and the inverse: JS but no CSS keeps the script and drops the stylesheet.
+  const noCss = `<textarea name="code_html" id="textarea-code-html">&lt;div&gt;&lt;/div&gt;</textarea>
+    <textarea name="code_css" id="textarea-code-css"></textarea>
+    <textarea name="code_js" id="textarea-code-js">new Handsontable(document.body, {});</textarea>`;
+  const second = parseJsFiddle(noCss, "https://jsfiddle.net/x/1/");
+  assert.deepEqual(Object.keys(second.files).sort(), ["/index.html", "/package.json", "/script.js"]);
+  assert.match(second.files["/index.html"], /script\.js/);
+  assert.equal(second.files["/index.html"].includes("style.css"), false);
+});
+
+test("a redirect is followed only while it stays on the allowlist", async () => {
+  // Security review: implicit redirect-following would widen the SSRF boundary
+  // from "provider pages" to "wherever a provider points us". Providers do
+  // redirect (jsfiddle normalizes /:slug -> /:slug/1/), so hops are followed —
+  // and each one re-runs the host gate.
+  const seen = [];
+  const result = await importFromUrl("https://jsfiddle.net/1bw9tphk/", {
+    knownFrameworks: KNOWN,
+    fetchImpl: async (url) => {
+      seen.push(url);
+      // A relative Location, as jsfiddle's own normalization sends.
+      if (seen.length === 1) return new Response("", { status: 301, headers: { location: "/1bw9tphk/1/" } });
+      return new Response(JSFIDDLE, { status: 200 });
+    },
+  });
+  assert.deepEqual(seen, ["https://jsfiddle.net/1bw9tphk/", "https://jsfiddle.net/1bw9tphk/1/"]);
+  assert.equal(result.provider, "jsfiddle");
+});
+
+test("a redirect off the allowlist is refused, not followed", async () => {
+  const seen = [];
+  await assert.rejects(
+    importFromUrl("https://jsfiddle.net/1bw9tphk/1/", {
+      knownFrameworks: KNOWN,
+      fetchImpl: async (url) => {
+        seen.push(url);
+        return new Response("", { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data/" } });
+      },
+    }),
+    ImportError,
+  );
+  // The hop was never requested.
+  assert.deepEqual(seen, ["https://jsfiddle.net/1bw9tphk/1/"]);
+});
+
+test("a redirect loop stops at the hop limit", async () => {
+  let calls = 0;
+  await assert.rejects(
+    importFromUrl("https://stackblitz.com/edit/loop", {
+      knownFrameworks: KNOWN,
+      fetchImpl: async () => {
+        calls += 1;
+        return new Response("", { status: 302, headers: { location: "https://stackblitz.com/edit/loop2" } });
+      },
+    }),
+    /redirected too many times/,
+  );
+  assert.ok(calls <= 5, `stopped after ${calls} requests`);
+});
+
 test("a 404 from the provider is reported as private-or-missing", async () => {
   await assert.rejects(
     importFromUrl("https://jsfiddle.net/nope/1/", {

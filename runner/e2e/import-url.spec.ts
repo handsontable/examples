@@ -108,6 +108,26 @@ test("?import= opens the imported workspace, not the starter", async ({ page }) 
   expect(importCalls).toBe(1);
 });
 
+test("picking a starter after an import still loads it", async ({ page }) => {
+  // Bugbot: the starter-load effect was gated on `importPhase` staying "loaded",
+  // so an import disabled it for the rest of the session — `selectExample` cleared
+  // `sourceLoaded` and bumped `starterGen`, and nothing ever fetched again.
+  await stubShell(page);
+  await signIn(page);
+  await page.route("**/api/import", (route) => route.fulfill({ json: IMPORTED }));
+  await page.goto("/?import=https%3A%2F%2Fstackblitz.com%2Fedit%2Fvitejs-vite-de8qy2bm");
+  await expect(fileRow(page, "/src/main.ts")).toBeVisible();
+
+  // Switch to a catalog starter through the picker's own path.
+  await page.getByRole("button", { name: /ToolBar Demo|TypeScript|typescript/ }).first().click();
+  await page.getByRole("option", { name: "Starter templates" }).click();
+  await page.getByRole("treeitem", { name: "JavaScript (Vite)" }).click();
+
+  // The starter's files arrive, and the imported ones are gone.
+  await expect(fileRow(page, "/index.js")).toBeVisible();
+  await expect(fileRow(page, "/src/main.ts")).toHaveCount(0);
+});
+
 test("a refused import says why instead of hanging on a spinner", async ({ page }) => {
   await stubShell(page);
   await signIn(page);

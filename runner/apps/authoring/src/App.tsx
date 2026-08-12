@@ -592,6 +592,11 @@ function Authoring({
     initialImport ? "loading" : "idle",
   );
   const [importSkipped, setImportSkipped] = useState<{ path: string; reason: string }[]>([]);
+  /** The provider's own title for an imported workspace. Kept apart from `title`
+   *  because `title` is also the saved-demo field: Share and Fork mint their names
+   *  from `entry.displayName`, which for an import is the *starter* the framework
+   *  resolved to ("TypeScript (Vite)"), so "ToolBar Demo" would be lost on save. */
+  const [importedTitle, setImportedTitle] = useState<string | null>(null);
   // Docs examples for the currently-resolved version bucket.
   const [docsItems, setDocsItems] = useState<DocsManifestItem[]>([]);
   const [activeDocsBucket, setActiveDocsBucket] = useState<string | null>(null);
@@ -834,8 +839,15 @@ function Authoring({
           setErrorMessage(`The import resolved to an unknown framework (${body.framework}).`);
           return;
         }
+        // A starter fetch may already be in flight from the first render (the
+        // playground's default framework). Bumping the sequence makes its
+        // response a no-op, so it cannot land on top of the import.
+        starterRequestSeqRef.current += 1;
         loadWorkspace(toPlaceholderEntry(indexEntry), { ...body.files }, `import:${body.provider ?? "url"}`);
-        if (body.title) setTitle(body.title);
+        if (body.title) {
+          setTitle(body.title);
+          setImportedTitle(body.title);
+        }
         setImportSkipped(body.skipped ?? []);
         setImportPhase("loaded");
         // Release the mount gate the starter path owns: nothing else will, now
@@ -1093,10 +1105,13 @@ function Authoring({
   // message the mount guard uses.
   useEffect(() => {
     if (route.mode === "share" || savedId || docsPath) return;
-    // An import owns the workspace: without this the starter fetch below would
-    // race it and replace the imported files with a catalog snapshot (the effect
-    // re-runs on the `framework` the import itself just set).
-    if (importPhase === "loading" || importPhase === "loaded") return;
+    // Only while the import is in flight. Blocking on "loaded" too (as this first
+    // did) left the effect permanently disabled: `selectExample` clears
+    // `sourceLoaded` and bumps `starterGen`, so picking another starter after an
+    // import would boot forever and never fetch, and a version change would never
+    // re-pin. Once the import has landed, `sourceLoadedRef` + `entry.framework`
+    // already take the re-pin path instead of re-fetching.
+    if (importPhase === "loading") return;
     // Only next-format versions need nextVersion to resolve a bucket; plain
     // releases are not held on /api/versions.
     if (isNextPrereleaseVersion(version) && !versionsResolved) return;
@@ -1224,6 +1239,11 @@ function Authoring({
   const selectExample = useCallback(
     (fw: string) => {
       docsRequestSeqRef.current += 1;
+      // Picking a starter leaves the imported workspace behind — including its
+      // title, which must not follow the user onto an unrelated example.
+      setImportPhase("idle");
+      setImportedTitle(null);
+      setImportSkipped([]);
       setDocsPath(null);
       docsPathRef.current = null;
       setDocsRuntimeBlocked(false);
@@ -1518,7 +1538,7 @@ function Authoring({
         body: JSON.stringify({
           framework: entry.framework,
           files: filesRef.current,
-          title: `${entry.displayName} (embed)`,
+          title: importedTitle ? `${importedTitle} (embed)` : `${entry.displayName} (embed)`,
           htVersion: version,
           forkedFrom: forkedFrom ?? undefined,
         }),
@@ -1536,7 +1556,7 @@ function Authoring({
     } finally {
       setEmbedding(false);
     }
-  }, [user, entry, version, forkedFrom]);
+  }, [user, entry, version, forkedFrom, importedTitle]);
 
   /** Fork the current playground code into a new saved demo, then open its edit page. */
   const onFork = useCallback(async () => {
@@ -1551,7 +1571,9 @@ function Authoring({
         body: JSON.stringify({
           framework: entry.framework,
           files: filesRef.current,
-          title: `Fork of ${entry.displayName}`,
+          // An imported project keeps its own name: "Fork of TypeScript (Vite)"
+          // describes the starter its framework resolved to, not the demo.
+          title: importedTitle ?? `Fork of ${entry.displayName}`,
           htVersion: version,
           forkedFrom: forkedFrom ?? undefined,
         }),
@@ -1567,7 +1589,7 @@ function Authoring({
       setErrorMessage(e instanceof Error ? e.message : String(e));
       setForking(false);
     }
-  }, [user, entry, version, forkedFrom]);
+  }, [user, entry, version, forkedFrom, importedTitle]);
 
   /** Save the saved-demo edits: title/description + code (rebuilds the snapshot). */
   const onSave = useCallback(async () => {
