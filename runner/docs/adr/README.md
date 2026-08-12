@@ -33,3 +33,4 @@ once Accepted.
 | [0026](0026-shell-styling-inline-vs-stylesheet.md) | Shell styling — inline component styles, interaction states in the global stylesheet | Accepted |
 | [0027](0027-dev-2027-shipped-deviations.md) | DEV-2027 — where the shipped UI deliberately departs from the frames | Accepted |
 | [0028](0028-shell-theming-via-css-custom-properties.md) | Shell theming via CSS custom properties; the example owns its own theme | Accepted (embed theme hint dropped, ADR-0025) |
+| [0029](0029-starter-example-buckets-and-frozen-branch-backports.md) | Starter-example buckets, the single-seed image, and frozen-branch backports | Accepted (supersedes 0021 decision 10) |
