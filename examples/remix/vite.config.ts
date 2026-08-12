@@ -18,6 +18,7 @@ export default defineConfig({
     include: [
       "handsontable/plugins",
       "handsontable/cellTypes",
+      "handsontable/themes",
       "@handsontable/react-wrapper",
     ],
   },
