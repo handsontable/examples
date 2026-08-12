@@ -328,10 +328,11 @@ function wireModule(source: string, dir: string, displacedClass: string | null):
   } else if (/gridSettings[^=]*=\s*\{/.test(source)) {
     // 3. Angular's settings object.
     next = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,")
-      ?? {
+      ?? swapInPlace(source, THEME_SETTING, "theme: customTheme,")
+      ?? (ANY_THEME_SETTING.test(source) ? null : {
         source: source.replace(/(gridSettings[^=]*=\s*\{)/, "$1\n    theme: customTheme,"),
         displaced: null,
-      };
+      });
   }
 
   if (!next) return null;
@@ -360,10 +361,15 @@ function wireVue(source: string, dir: string, displacedClass: string | null): st
   const next = swapInPlace(source, VUE_THEME_NAME_BIND, ':theme="customTheme"')
     ?? swapInPlace(source, THEME_NAME_ATTR, ':theme="customTheme"')
     ?? swapInPlace(source, /:theme="[^"]*"/, ':theme="customTheme"')
-    ?? {
+    // A theme inside a `:settings` object (nuxt): a `:theme` prop cannot win
+    // there — the wrapper ignores every individual prop once `settings` is
+    // passed — so the setting itself has to be taken over.
+    ?? swapInPlace(source, THEME_SETTING, "theme: customTheme,")
+    ?? (ANY_THEME_SETTING.test(source) ? null : {
       source: source.replace(/<(HotTable|hot-table)\b/, '<$1 :theme="customTheme"'),
       displaced: null,
-    };
+    });
+  if (!next) return null;
 
   // Re-locate on the edited source rather than the original: the binding above
   // may sit before the script block, which would shift every later offset.
@@ -521,8 +527,10 @@ function wireVanilla(source: string, indent: string): { source: string; displace
   const target = findVanillaSettings(source);
   if (!target) return null;
 
-  const swapped = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,");
+  const swapped = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,")
+    ?? swapInPlace(source, THEME_SETTING, "theme: customTheme,");
   if (swapped) return swapped;
+  if (ANY_THEME_SETTING.test(source)) return null;
 
   // Settings passed by name: wire the literal they were declared from. Without
   // a literal to attach to — a settings object built by a function, say — leave
@@ -543,6 +551,19 @@ function wireVanilla(source: string, indent: string): { source: string; displace
 const THEME_NAME_ATTR = /\bthemeName\s*=\s*["'][^"']*["']/;
 /** A `themeName` setting, e.g. `themeName: 'ht-theme-main',`. */
 const THEME_NAME_SETTING = /\bthemeName\s*:\s*["'][^"']*["'],?/;
+/** A `theme` setting holding a theme object by name, e.g. `theme: mainTheme,`
+ *  (DEV-2200 moved every starter onto this form). The value must be a bare
+ *  identifier ending at a comma, `}` or line end: several docs examples write
+ *  `theme: getTheme('…')` / `theme: darkTheme.params({…})`, and matching just
+ *  the callee would swap it out and leave the arguments behind as broken
+ *  syntax. The `(?![\w$.])` guard stops backtracking from shortening the
+ *  identifier until the terminator check passes on a prefix. */
+const THEME_SETTING = /\btheme\s*:\s*[A-Za-z_$][\w$.]*(?![\w$.])[ \t]*(?:,|(?=[}\r\n]))/;
+/** Any `theme:` setting at all, including the forms the swap above must not
+ *  touch (calls, chains, ternaries). Their presence makes an insert fallback
+ *  wrong — the literal would carry two `theme` keys and the later one wins —
+ *  so wiring bails out and the panel shows the manual hint instead. */
+const ANY_THEME_SETTING = /\btheme\s*:/;
 
 /**
  * Put `theme` where `themeName` was.

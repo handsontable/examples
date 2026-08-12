@@ -15,9 +15,7 @@ import {
   registerCellType,
 } from "handsontable/cellTypes";
 import { HotTable, HotColumn } from "@handsontable/react-wrapper";
-
-import "handsontable/styles/handsontable.min.css";
-import "handsontable/styles/ht-theme-main.min.css";
+import { mainTheme } from "handsontable/themes";
 
 import { Data } from "../../app/data";
 
@@ -38,8 +36,9 @@ type GridProps = {
 
 export default function Grid(props: GridProps) {
   return (
-    <div className="ht-theme-main">
+    <div>
       <HotTable
+        theme={mainTheme}
         data={props.data}
         colWidths={[140, 126, 192, 100, 100, 90, 90, 110, 97]}
         colHeaders={[

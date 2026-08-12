@@ -2,8 +2,7 @@
 import { defineComponent } from 'vue';
 import { HotTable, HotColumn } from '@handsontable/vue3';
 import { registerAllModules } from 'handsontable/registry';
-import 'handsontable/styles/handsontable.min.css';
-import 'handsontable/styles/ht-theme-main.min.css';
+import { mainTheme } from 'handsontable/themes';
 
 import { data } from '../constants';
 
@@ -19,6 +18,10 @@ export default defineComponent({
     HotColumn,
   },
   computed: {
+    mainThemeProp() {
+      return mainTheme;
+    },
+
     alignHeadersProp() {
       return alignHeaders;
     },
@@ -35,8 +38,9 @@ export default defineComponent({
 </script>
 
 <template>
-  <div id="example" class="ht-theme-main">
+  <div id="example">
     <HotTable
+      :theme="mainThemeProp"
       :data="dataProp"
       :height="450"
       :colWidths="[170, 222, 130, 120, 120, 140, 156]"

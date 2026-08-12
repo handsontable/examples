@@ -1,6 +1,6 @@
 <template>
   <main>
-    <div class="ht-theme-main">
+    <div>
       <hot-table :settings="hotSettings"></hot-table>
     </div>
   </main>
@@ -23,8 +23,7 @@ import {
   NumericCellType,
   registerCellType,
 } from 'handsontable/cellTypes';
-import 'handsontable/styles/handsontable.min.css';
-import 'handsontable/styles/ht-theme-main.min.css';
+import { mainTheme } from 'handsontable/themes';
 
 registerCellType(CheckboxCellType);
 registerCellType(NumericCellType);
@@ -40,6 +39,7 @@ const props = defineProps(['tableData']);
 
 const hotSettings = computed(() => {
   return {
+    theme: mainTheme,
     data: props.tableData,
     colWidths: [140, 126, 192, 100, 100, 90, 90, 110, 97],
     colHeaders: [

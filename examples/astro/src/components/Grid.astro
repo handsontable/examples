@@ -1,4 +1,4 @@
-<div id="example" class="ht-theme-main"></div>
+<div id="example"></div>
 
 <script>
   import Handsontable from "handsontable/base";
@@ -17,8 +17,7 @@
     NumericCellType,
     registerCellType,
   } from 'handsontable/cellTypes';
-  import 'handsontable/styles/handsontable.min.css';
-  import 'handsontable/styles/ht-theme-main.min.css';
+  import { mainTheme } from 'handsontable/themes';
 
   registerCellType(CheckboxCellType);
   registerCellType(NumericCellType);
@@ -35,6 +34,7 @@
   const example = document.getElementById("example");
 
   new Handsontable(example, {
+    theme: mainTheme,
     data: data,
     colWidths: [140, 126, 192, 100, 100, 90, 90, 110, 97],
     colHeaders: [
