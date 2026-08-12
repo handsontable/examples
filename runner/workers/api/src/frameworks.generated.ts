@@ -43,9 +43,9 @@ export interface BuildConfig {
 }
 
 export const BUILD_CONFIG: Record<string, BuildConfig> = {
-  "blank": { tier: 1, installCommand: "pnpm install", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
-  "blank-ts": { tier: 1, installCommand: "pnpm install", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
-  "blank-react": { tier: 1, installCommand: "pnpm install", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
+  "blank": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
+  "blank-ts": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
+  "blank-react": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
   "example1": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc && vite build", outputDir: "dist", outputGlob: null },
   "javascript": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
   "typescript": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc && vite build", outputDir: "dist", outputGlob: null },
