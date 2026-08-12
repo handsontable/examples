@@ -17,7 +17,9 @@ node pipeline/import.mjs             # regenerate all starter buckets + the cata
                                      # (needs network: npm registry + pnpm lockfile resolution;
                                      #  --bucket=18 regenerates one bucket, --index only the index)
 node scripts/prepare-container.mjs   # regenerate container contexts + generated config
-                                     # (bakes the default bucket; --bucket=<key> overrides)
+                                     # (bakes one seed bucket; --seed-bucket=<key> overrides.
+                                     #  Fingerprints cover every bucket — non-seed sessions
+                                     #  frozen-reconcile the Handsontable delta at boot)
 ```
 
 Starters are snapshotted per Handsontable major (DEV-2213): one bucket per
