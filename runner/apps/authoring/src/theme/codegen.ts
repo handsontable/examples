@@ -328,6 +328,7 @@ function wireModule(source: string, dir: string, displacedClass: string | null):
   } else if (/gridSettings[^=]*=\s*\{/.test(source)) {
     // 3. Angular's settings object.
     next = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,")
+      ?? swapInPlace(source, THEME_SETTING, "theme: customTheme,")
       ?? {
         source: source.replace(/(gridSettings[^=]*=\s*\{)/, "$1\n    theme: customTheme,"),
         displaced: null,
@@ -360,6 +361,10 @@ function wireVue(source: string, dir: string, displacedClass: string | null): st
   const next = swapInPlace(source, VUE_THEME_NAME_BIND, ':theme="customTheme"')
     ?? swapInPlace(source, THEME_NAME_ATTR, ':theme="customTheme"')
     ?? swapInPlace(source, /:theme="[^"]*"/, ':theme="customTheme"')
+    // A theme inside a `:settings` object (nuxt): a `:theme` prop cannot win
+    // there — the wrapper ignores every individual prop once `settings` is
+    // passed — so the setting itself has to be taken over.
+    ?? swapInPlace(source, THEME_SETTING, "theme: customTheme,")
     ?? {
       source: source.replace(/<(HotTable|hot-table)\b/, '<$1 :theme="customTheme"'),
       displaced: null,
@@ -521,7 +526,8 @@ function wireVanilla(source: string, indent: string): { source: string; displace
   const target = findVanillaSettings(source);
   if (!target) return null;
 
-  const swapped = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,");
+  const swapped = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,")
+    ?? swapInPlace(source, THEME_SETTING, "theme: customTheme,");
   if (swapped) return swapped;
 
   // Settings passed by name: wire the literal they were declared from. Without
@@ -543,6 +549,10 @@ function wireVanilla(source: string, indent: string): { source: string; displace
 const THEME_NAME_ATTR = /\bthemeName\s*=\s*["'][^"']*["']/;
 /** A `themeName` setting, e.g. `themeName: 'ht-theme-main',`. */
 const THEME_NAME_SETTING = /\bthemeName\s*:\s*["'][^"']*["'],?/;
+/** A `theme` setting holding a theme object by name, e.g. `theme: mainTheme,`
+ *  (DEV-2200 moved every starter onto this form). The identifier-only value
+ *  keeps `themeName:` and computed expressions out of the match. */
+const THEME_SETTING = /\btheme\s*:\s*[A-Za-z_$][\w$.]*\s*,?/;
 
 /**
  * Put `theme` where `themeName` was.
