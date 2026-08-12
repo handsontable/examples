@@ -1314,6 +1314,14 @@ function Authoring({
     setRetryGen((g) => g + 1);
   }, []);
 
+  /** Container frameworks rebuild server-side (a few seconds); show feedback. */
+  const showSyncing = useCallback(() => {
+    if (!containerModeRef.current) return;
+    setSyncing(true);
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    syncTimerRef.current = setTimeout(() => setSyncing(false), 4000);
+  }, []);
+
   // `opts` is passed straight through to the runtime (`{ quiet: true }` for an edit
   // whose effect is already on screen — see StylePanel's live theme patch). The
   // workspace itself is updated the same way regardless: `filesRef` is what Save,
@@ -1330,16 +1338,12 @@ function Authoring({
       } catch {
         /* not mounted */
       }
-      // A quiet write reaches no dev server yet, so there is nothing to wait for.
+      // A quiet write reaches no dev server yet, so there is nothing to wait for. The
+      // rebuild it is eventually flushed by reports its own progress (`flushQuietEdits`).
       if (opts?.quiet) return;
-      // Container frameworks rebuild server-side (a few seconds); show feedback.
-      if (containerModeRef.current) {
-        setSyncing(true);
-        if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
-        syncTimerRef.current = setTimeout(() => setSyncing(false), 4000);
-      }
+      showSyncing();
     },
-    [markDirty],
+    [markDirty, showSyncing],
   );
 
   /** Send a message into the running preview (DEV-2496: the Style panel's live theme
@@ -1361,15 +1365,21 @@ function Authoring({
     return () => window.removeEventListener("message", listener);
   }, [iframeEl]);
 
-  /** Push whatever a `{ quiet: true }` write left pending. The Style panel's fallback
-   *  when a live patch did not land. */
+  /** Push whatever a `{ quiet: true }` write left pending — the Style panel's fallback
+   *  when a live patch did not land, and how a theme change that *must* rebuild (first
+   *  apply, a preset swap) reaches the preview.
+   *
+   *  Which is why this reports progress the same way an ordinary edit does: on Tier 2
+   *  that rebuild is a container round trip of several seconds, and it used to say so
+   *  when theme edits went out as ordinary writes. */
   const flushQuietEdits = useCallback(() => {
     try {
       runtimeRef.current?.flushQuiet?.();
+      showSyncing();
     } catch {
       /* not mounted */
     }
-  }, []);
+  }, [showSyncing]);
 
   // ---- File-tree CRUD (CodeSandbox-style). Edits the in-memory workspace and
   // the live preview; only Save (edit mode, owner) persists them. ----

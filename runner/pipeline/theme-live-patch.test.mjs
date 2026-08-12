@@ -188,6 +188,39 @@ test("a quiet write reaches neither the dev server nor the timer", async () => {
   }
 });
 
+test("the newest write to a path wins, whichever kind it was", async () => {
+  const fetchBefore = globalThis.fetch;
+  const { runtime, posts } = mountedContainer();
+  try {
+    // Hand-edit the theme module in the editor, then touch the panel inside the debounce
+    // window. Both writes are for the same path, and if each map kept an entry the
+    // container would end up with whichever `flush()` happened to send last — the older
+    // one — while the workspace and the live-patched preview hold the newer.
+    runtime.writeFile(THEME, "export const customTheme = 'typed by hand';");
+    runtime.writeFile(THEME, "export const customTheme = 'from the panel';", { quiet: true });
+    await runtime.flush();
+
+    assert.deepEqual(
+      posts.map((p) => p.contents),
+      ["export const customTheme = 'from the panel';"],
+      "the container must be left holding the newest contents, exactly once",
+    );
+
+    // And the other way round: the panel first, then a hand edit.
+    posts.length = 0;
+    runtime.writeFile(THEME, "export const customTheme = 'from the panel';", { quiet: true });
+    runtime.writeFile(THEME, "export const customTheme = 'typed by hand';");
+    await runtime.flush();
+
+    assert.deepEqual(
+      posts.map((p) => p.contents),
+      ["export const customTheme = 'typed by hand';"],
+    );
+  } finally {
+    globalThis.fetch = fetchBefore;
+  }
+});
+
 test("a quiet write made while the session is still being created is not lost", async () => {
   // The panel reconciles a theme restored from localStorage the moment it opens, and a
   // container takes tens of seconds to come up — so this window is ordinary, not exotic.

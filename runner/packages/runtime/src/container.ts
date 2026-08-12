@@ -367,6 +367,13 @@ export class ContainerRuntime implements DemoRuntime {
   writeFile(path: string, contents: string, opts: WriteFileOptions = {}): void {
     if (!this.sessionId) throw new Error("ContainerRuntime.writeFile called before mount()");
     this.files = { ...this.files, [path]: contents };
+    // A path lives in exactly one of the two maps: whichever kind of write came last
+    // holds the newest contents, and letting both keep an entry would make the answer
+    // depend on the order `flush()` happens to drain them in. Hand-edit the theme module
+    // and touch the panel inside the debounce window and that is a real disagreement —
+    // the container ends up serving the older of the two.
+    this.pending.delete(path);
+    this.quietPending.delete(path);
     if (opts.quiet) {
       this.quietPending.set(path, contents);
       return;
@@ -474,8 +481,9 @@ export class ContainerRuntime implements DemoRuntime {
     // Gated on `mounted`: a flush before the create POST succeeds would race
     // the create handler's writeFiles. Buffered edits are flushed by mount().
     if (!this.mounted || !this.sessionId || this.disposed) return;
-    // Quiet writes go out with whatever prompted this flush, ordered first so an
-    // ordinary edit to the same path (the user hand-editing the theme module) wins.
+    // Quiet writes go out with whatever prompted this flush. Order does not decide
+    // anything — `writeFile` keeps a path in one map only — so this is just "everything
+    // that is waiting".
     const batch = [...this.quietPending.entries(), ...this.pending.entries()];
     this.quietPending.clear();
     this.pending.clear();
