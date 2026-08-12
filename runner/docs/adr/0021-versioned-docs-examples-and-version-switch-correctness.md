@@ -199,3 +199,16 @@ file is still published and is the only stylesheet that styles a class-less grid
 Fresh artifacts have no link, so it is a no-op on them.
 
 Decision 6 (version-switch semantics) and the rest of this ADR stand unchanged.
+
+## Superseded: decision 10 (starter version support unrestricted) — ADR-0029
+
+The "separate empirical pass" decision 10 deferred to has run, and its answer
+is structural, not a per-scaffold tweak: starters are now snapshotted per
+major exactly like docs examples — generated buckets under
+`starter-examples/<major>`, sourced from frozen `prod-examples/<major>`
+branches (master while no branch exists), with `minCoreMajor` floors for the
+frameworks that cannot exist at old majors at all. See
+[ADR-0029](0029-starter-example-buckets-and-frozen-branch-backports.md)
+(DEV-2213/DEV-2222). The open question decision 10 carried — whether
+`version.ts` needs its own minimum-major guard — is resolved by bucket
+membership: a major below a starter's floor has no artifact to serve.
