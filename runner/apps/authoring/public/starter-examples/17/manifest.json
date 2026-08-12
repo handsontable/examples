@@ -1,0 +1,121 @@
+{
+  "bucket": "17",
+  "sourceRef": "master",
+  "generatedFrom": "handsontable/examples examples/",
+  "hotVersion": "17.1.0",
+  "count": 16,
+  "examples": [
+    {
+      "framework": "example1",
+      "displayName": "Vanilla (Vite, TS)",
+      "tier": 1,
+      "engine": "sandpack",
+      "minCoreMajor": null
+    },
+    {
+      "framework": "javascript",
+      "displayName": "JavaScript (Vite)",
+      "tier": 1,
+      "engine": "sandpack",
+      "minCoreMajor": null
+    },
+    {
+      "framework": "typescript",
+      "displayName": "TypeScript (Vite)",
+      "tier": 1,
+      "engine": "sandpack",
+      "minCoreMajor": null
+    },
+    {
+      "framework": "react",
+      "displayName": "React (Vite, TS)",
+      "tier": 1,
+      "engine": "sandpack",
+      "minCoreMajor": null
+    },
+    {
+      "framework": "react-js",
+      "displayName": "React (Vite, JS)",
+      "tier": 1,
+      "engine": "container",
+      "minCoreMajor": null
+    },
+    {
+      "framework": "ant-design",
+      "displayName": "Ant Design + React",
+      "tier": 1,
+      "engine": "container",
+      "minCoreMajor": 17
+    },
+    {
+      "framework": "mui",
+      "displayName": "MUI + React",
+      "tier": 1,
+      "engine": "container",
+      "minCoreMajor": 17
+    },
+    {
+      "framework": "base-web",
+      "displayName": "Base Web + React",
+      "tier": 1,
+      "engine": "container",
+      "minCoreMajor": 17
+    },
+    {
+      "framework": "fluent-ui",
+      "displayName": "Fluent UI + React",
+      "tier": 1,
+      "engine": "container",
+      "minCoreMajor": 17
+    },
+    {
+      "framework": "vue",
+      "displayName": "Vue 3 (Vite)",
+      "tier": 1,
+      "engine": "sandpack",
+      "minCoreMajor": null
+    },
+    {
+      "framework": "angular",
+      "displayName": "Angular",
+      "tier": 2,
+      "engine": "container",
+      "minCoreMajor": 16
+    },
+    {
+      "framework": "next.js",
+      "displayName": "Next.js (App Router)",
+      "tier": 2,
+      "engine": "container",
+      "minCoreMajor": null
+    },
+    {
+      "framework": "next-shadcn.js",
+      "displayName": "Next.js + shadcn/ui",
+      "tier": 2,
+      "engine": "container",
+      "minCoreMajor": 17
+    },
+    {
+      "framework": "astro",
+      "displayName": "Astro",
+      "tier": 2,
+      "engine": "container",
+      "minCoreMajor": null
+    },
+    {
+      "framework": "nuxt",
+      "displayName": "Nuxt 3",
+      "tier": 2,
+      "engine": "container",
+      "minCoreMajor": null
+    },
+    {
+      "framework": "remix",
+      "displayName": "Remix",
+      "tier": 2,
+      "engine": "container",
+      "minCoreMajor": null
+    }
+  ]
+}

@@ -8,7 +8,7 @@
 // `buildThemeChanges` already answers it: `linked: false` is the miss. This is
 // a report, not a gate — run it, read it, act on what it says.
 //
-// Usage: node scripts/theme-wiring-census.mjs [bucket]
+// Usage: node scripts/theme-wiring-census.mjs [docs-bucket] [starter-bucket]
 
 import { cpSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -19,6 +19,10 @@ import { dirname, join } from "node:path";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const bucket = process.argv[2] ?? "18.0";
 const artifacts = join(root, "apps/authoring/public/docs-examples", bucket);
+// Starter artifacts live in their own major-keyed buckets (DEV-2213); default
+// to the major of the docs bucket being surveyed.
+const starterBucket = process.argv[3] ?? bucket.split(".")[0];
+const starterArtifacts = join(root, "apps/authoring/public/starter-examples", starterBucket);
 
 // codegen.ts imports its siblings by `.js` specifier, which plain node will not
 // resolve from a `.ts` file — copy the directory and rewrite them, the same way
@@ -39,7 +43,7 @@ const { buildThemeChanges } = await import("./theme/codegen.ts");
 const { DEFAULT_THEME } = await import("./theme/vocabulary.ts");
 
 const artifacts = ${JSON.stringify(artifacts)};
-const catalog = JSON.parse(readFileSync(${JSON.stringify(join(root, "catalog.json"))}, "utf8"));
+const starterArtifacts = ${JSON.stringify(starterArtifacts)};
 
 const rows = [];
 const survey = (name, framework, files) => {
@@ -47,8 +51,10 @@ const survey = (name, framework, files) => {
   rows.push({ name, framework: framework ?? "?", linked });
 };
 
-for (const example of catalog.examples) {
-  survey("starter:" + example.framework, example.framework, example.files);
+for (const file of readdirSync(starterArtifacts)) {
+  if (!file.endsWith(".json") || file === "manifest.json") continue;
+  const starter = JSON.parse(readFileSync(join(starterArtifacts, file), "utf8"));
+  survey("starter:" + starter.framework, starter.framework, starter.files);
 }
 for (const file of readdirSync(artifacts)) {
   if (!file.endsWith(".json")) continue;

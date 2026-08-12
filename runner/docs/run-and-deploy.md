@@ -13,9 +13,17 @@
 ```bash
 cd runner
 pnpm install
-node pipeline/import.mjs                 # regenerate catalog.json from ../examples
-node scripts/prepare-container.mjs --all # regenerate container contexts + generated config
+node pipeline/import.mjs             # regenerate all starter buckets + the catalog.json index
+                                     # (needs network: npm registry + pnpm lockfile resolution;
+                                     #  --bucket=18 regenerates one bucket, --index only the index)
+node scripts/prepare-container.mjs   # regenerate container contexts + generated config
+                                     # (bakes the default bucket; --bucket=<key> overrides)
 ```
+
+Starters are snapshotted per Handsontable major (DEV-2213): one bucket per
+major plus `next` under `apps/authoring/public/starter-examples/`, each pinned
+to a concrete version. `catalog.json` is only the files-free index the app
+bundles; the UI lazy-fetches artifacts from the selected version's bucket.
 
 ## Run locally
 

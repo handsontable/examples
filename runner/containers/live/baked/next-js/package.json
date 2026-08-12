@@ -10,9 +10,9 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@handsontable/react-wrapper": "latest",
+    "@handsontable/react-wrapper": "18.0.0",
     "@tailwindcss/postcss": "^4.3.2",
-    "handsontable": "latest",
+    "handsontable": "18.0.0",
     "next": "16.2.10",
     "react": "19.2.7",
     "react-dom": "19.2.7",

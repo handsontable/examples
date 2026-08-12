@@ -16,6 +16,7 @@ import {
   applyHandsontableVersion,
   deriveDocsBucketCandidate,
   isNextPrereleaseVersion,
+  resolveStarterBucket,
   validateHandsontableVersion,
   type CatalogEntry,
   type DemoRuntime,
@@ -31,6 +32,7 @@ import {
   type DocsManifest,
   type DocsManifestItem,
 } from "./docs-catalog.js";
+import { loadStarterExample, toPlaceholderEntry } from "./starter-catalog.js";
 import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
 import { AdminPanel } from "./Admin.js";
@@ -570,8 +572,11 @@ function Authoring({
     return catalog.examples.some((e) => e.framework === p) ? (p as string) : "react";
   });
   const hadUrlVersion = useRef<boolean>(new URLSearchParams(location.search).has("v"));
-  // The active example entry — a starter template or a lazy-loaded docs example.
-  const [entry, setEntry] = useState<CatalogEntry>(() => getEntry(framework));
+  // The active example entry — a starter template or a docs example, both
+  // lazy-loaded per version bucket. Starts as a files-less placeholder built
+  // from the catalog index; the runtime-mount effect stays gated until a real
+  // artifact replaces it.
+  const [entry, setEntry] = useState<CatalogEntry>(() => toPlaceholderEntry(getEntry(framework)));
   // Non-null when the current example is a documentation-guide example.
   const [docsPath, setDocsPath] = useState<string | null>(initialDocs);
   // Docs examples for the currently-resolved version bucket.
@@ -640,12 +645,21 @@ function Authoring({
   const filesRef = useRef<FilesMap>(files);
   filesRef.current = files;
 
-  // Saved-demo state (edit + share modes). Also gates the first mount until a
-  // `?docs=` example has resolved, so we don't briefly boot the starter first.
-  const [sourceLoaded, setSourceLoaded] = useState(!savedId && !initialDocs);
+  // Gates the first mount until the workspace source has resolved: a saved
+  // demo's snapshot, a `?docs=` example, or (since starters are lazy-fetched
+  // per bucket, DEV-2213) the starter artifact itself.
+  const [sourceLoaded, setSourceLoaded] = useState(false);
   const [docsNotFound, setDocsNotFound] = useState(false);
   const [docsNotFoundTransient, setDocsNotFoundTransient] = useState(false);
   const [docsRuntimeBlocked, setDocsRuntimeBlocked] = useState(!!initialDocs);
+  // Starter analogue of docsRuntimeBlocked: set by the unified starter refusal
+  // (below-floor major, version with no bucket, artifact fetch failure) so the
+  // mount effect can't boot the placeholder or stale files. Only consulted
+  // while a starter is open (docsPath null).
+  const [starterRuntimeBlocked, setStarterRuntimeBlocked] = useState(false);
+  // Bumped by selectExample so re-picking the already-open starter still
+  // resets it to pristine files (the framework state alone wouldn't change).
+  const [starterGen, setStarterGen] = useState(0);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   /** Saved demos only — the sidebar's BOX INFO drops the row when it's empty. */
@@ -694,6 +708,10 @@ function Authoring({
   const activeDocsBucketRef = useRef<string | null>(activeDocsBucket);
   const activeDocsManifestRef = useRef<DocsManifest | null>(activeDocsManifest);
   const docsRequestSeqRef = useRef(0);
+  const starterRequestSeqRef = useRef(0);
+  // Bucket the open starter workspace was fetched from; a version change
+  // inside the same bucket only re-pins in place instead of refetching.
+  const activeStarterBucketRef = useRef<string | null>(null);
   docsPathRef.current = docsPath;
   dirtyRef.current = dirty;
   sourceLoadedRef.current = sourceLoaded;
@@ -779,7 +797,7 @@ function Authoring({
             setVersion(meta.ht_version);
           }
         }
-        loadWorkspace(getEntry(src.framework), src.files, savedId);
+        loadWorkspace(toPlaceholderEntry(getEntry(src.framework)), src.files, savedId);
         setSourceLoaded(true);
       } catch (error) {
         // A share/edit link that no longer resolves: missing D1 row, unreadable R2
@@ -968,14 +986,115 @@ function Authoring({
     return () => { cancelled = true; };
   }, [initialDocs, loadWorkspace, nextVersion, route.mode, version, versionsResolved]);
 
-  // Starters never load docs artifacts. Version changes only re-pin their
-  // existing package/CSS files and preserve any edits.
+  // Starter artifacts are lazy-fetched per version bucket (DEV-2213). Fetch on
+  // starter select and on bucket-crossing version changes; a same-bucket
+  // version change only re-pins the open files, preserving edits (the old
+  // single-catalog behaviour). Below-floor majors, versions with no bucket,
+  // and artifact fetch failures share one refusal — deliberately the same
+  // message the mount guard uses.
   useEffect(() => {
-    if (docsPath) return;
-    const pinned = pinHandsontableFiles(filesRef.current, version);
-    filesRef.current = pinned;
-    setFiles(pinned);
-  }, [docsPath, version]);
+    if (route.mode === "share" || savedId || docsPath) return;
+    // Only next-format versions need nextVersion to resolve a bucket; plain
+    // releases are not held on /api/versions.
+    if (isNextPrereleaseVersion(version) && !versionsResolved) return;
+    const requestSeq = ++starterRequestSeqRef.current;
+    const v = validateHandsontableVersion(version);
+    if (!v.ok) {
+      // The mount guard owns the invalid-version message — but it is gated on
+      // sourceLoaded, so release the gate or a deep-linked bad version shows
+      // an eternal boot spinner instead of the refusal.
+      setSourceLoaded(true);
+      sourceLoadedRef.current = true;
+      return;
+    }
+
+    const indexEntry = getEntry(framework);
+    const requestedMajor = releaseMajor(v.value.ref);
+    // pkg.pr.new refs are current-dev builds — they read the next bucket.
+    const bucket = v.value.pkgPrNew
+      ? "next"
+      : resolveStarterBucket({
+          selectedVersion: v.value.ref,
+          nextVersion,
+          bucketKeys: catalog.buckets,
+        });
+    const belowFloor =
+      indexEntry.minCoreMajor != null &&
+      requestedMajor != null &&
+      requestedMajor < indexEntry.minCoreMajor;
+
+    const refuseStarter = () => {
+      if (starterRequestSeqRef.current !== requestSeq) return;
+      setStarterRuntimeBlocked(true);
+      setStatus("error");
+      setErrorMessage(
+        `Could not load this example for Handsontable ${version}. Try another version.`,
+      );
+      setRetryable(false);
+      // Release the mount gate so the error card renders instead of a spinner.
+      setSourceLoaded(true);
+      sourceLoadedRef.current = true;
+    };
+
+    if (bucket == null || belowFloor) {
+      refuseStarter();
+      return;
+    }
+
+    if (sourceLoadedRef.current && entry.framework === framework) {
+      // Same bucket: re-pin the open workspace in place.
+      if (activeStarterBucketRef.current === bucket) {
+        const pinned = pinHandsontableFiles(filesRef.current, version);
+        filesRef.current = pinned;
+        setFiles(pinned);
+        return;
+      }
+      // Crossing buckets with unsaved edits: keep the edited files (re-pinned)
+      // rather than discarding work for a snapshot swap — the docs behaviour.
+      if (dirtyRef.current) {
+        const pinned = pinHandsontableFiles(filesRef.current, version);
+        filesRef.current = pinned;
+        setFiles(pinned);
+        setVersionWarning(
+          "This example has unsaved edits; its content may not match the selected version API.",
+        );
+        return;
+      }
+    }
+
+    let cancelled = false;
+    void loadStarterExample(bucket, framework)
+      .then((starter) => {
+        if (cancelled || starterRequestSeqRef.current !== requestSeq) return;
+        const nextFiles = starter.htCoreRange === v.value.ref
+          ? { ...starter.files }
+          : pinHandsontableFiles({ ...starter.files }, version);
+        activeStarterBucketRef.current = bucket;
+        setStarterRuntimeBlocked(false);
+        loadWorkspace(starter, nextFiles, `catalog:${framework}`);
+        setVersionWarning(null);
+        setSourceLoaded(true);
+        sourceLoadedRef.current = true;
+      })
+      .catch((error) => {
+        // A bucket that exists but lacks this framework (deep link below an
+        // old major's floor) or a transient fetch failure.
+        reportError(error, "starter-load");
+        refuseStarter();
+      });
+    return () => { cancelled = true; };
+  }, [
+    framework,
+    starterGen,
+    version,
+    nextVersion,
+    versionsResolved,
+    docsPath,
+    savedId,
+    route.mode,
+    entry.framework,
+    loadWorkspace,
+  ]);
 
   // Keep the URL in sync with the selected example + version — playground only
   // (edit/share have their own /edit/:id, /share/:id paths). Docs examples use
@@ -994,7 +1113,11 @@ function Authoring({
     history.replaceState(null, "", `${location.pathname}?${p.toString()}`);
   }, [framework, docsPath, version, route.mode]);
 
-  /** Pick a catalog starter template as a fresh starting template (playground). */
+  /** Pick a catalog starter template as a fresh starting template (playground).
+   *  Only points the starter-load effect at the framework; the effect resolves
+   *  the bucket and fetches the artifact. Dropping `sourceLoaded` is what makes
+   *  the reload pristine — with it down, the effect takes the fetch path even
+   *  for the already-open framework instead of re-pinning edited files. */
   const selectExample = useCallback(
     (fw: string) => {
       docsRequestSeqRef.current += 1;
@@ -1002,10 +1125,15 @@ function Authoring({
       docsPathRef.current = null;
       setDocsRuntimeBlocked(false);
       setVersionWarning(null);
-      const starter = getEntry(fw);
-      loadWorkspace(starter, pinHandsontableFiles({ ...starter.files }, version), `catalog:${fw}`);
+      setStatus("booting");
+      setErrorMessage(null);
+      setSourceLoaded(false);
+      sourceLoadedRef.current = false;
+      activeStarterBucketRef.current = null;
+      setFramework(fw);
+      setStarterGen((g) => g + 1);
     },
-    [loadWorkspace, version],
+    [],
   );
 
   /** Open a documentation-guide example (lazy-loaded by its docs content path). */
@@ -1062,18 +1190,20 @@ function Authoring({
     setVersion(next);
   }, []);
 
-  // Dispose and visibly clear a docs preview while its target bucket/path is
-  // unresolved or unavailable. The version picker and editor remain usable.
+  // Dispose and visibly clear a preview while its target bucket/artifact is
+  // unresolved or unavailable — docs or starter alike. The version picker and
+  // editor remain usable.
   useEffect(() => {
-    if (!iframeEl || !docsRuntimeBlocked) return;
+    if (!iframeEl || !(docsRuntimeBlocked || (!docsPath && starterRuntimeBlocked))) return;
     runtimeRef.current?.dispose();
     runtimeRef.current = null;
     iframeEl.removeAttribute("srcdoc");
     iframeEl.src = "about:blank";
-  }, [iframeEl, docsRuntimeBlocked]);
+  }, [iframeEl, docsRuntimeBlocked, docsPath, starterRuntimeBlocked]);
 
   useEffect(() => {
     if (!iframeEl || !sourceLoaded || docsNotFound || docsRuntimeBlocked) return;
+    if (!docsPath && starterRuntimeBlocked) return;
     if (versionPending) {
       // The previous run's cleanup (below) already disposed its runtime; put
       // the status back to booting so the UI doesn't keep showing "Live" (or
@@ -1168,7 +1298,7 @@ function Authoring({
     };
     // mountGen forces a remount when files are replaced (example switch or fork/edit load);
     // retryGen when the user asks for one from the error card.
-  }, [iframeEl, entry, version, mountGen, retryGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, versionPending, docsPath]);
+  }, [iframeEl, entry, version, mountGen, retryGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, starterRuntimeBlocked, versionPending, docsPath]);
 
   /** "Restart preview" — mount a fresh runtime from the current (edited) sources.
    *

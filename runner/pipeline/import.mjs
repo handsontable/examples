@@ -1,29 +1,58 @@
 // pipeline/import.mjs
 //
-// Reads the 13 example directories from the source repo's `examples/` folder and
-// emits `runner/catalog.json` — the starting-template catalog the authoring UI
-// browses. Each entry is normalized to { framework, tier, files, entry,
-// devCommand, buildCommand, ... } sourced from config/frameworks.json.
+// Reads the 16 example directories from `examples/` and emits versioned
+// starter buckets (DEV-2213) plus the catalog index:
 //
-// Run:  node runner/pipeline/import.mjs   (from repo root)
-//   or: node import.mjs                   (from runner/pipeline)
+//   apps/authoring/public/starter-examples/<bucket>/manifest.json
+//   apps/authoring/public/starter-examples/<bucket>/<framework>.json
+//   runner/catalog.json   — index only (no files); the authoring UI
+//                           lazy-fetches full artifacts per bucket on select.
 //
-// Deterministic and dependency-free (Node built-ins only). Build artifacts,
-// lockfiles, node_modules, CodeSandbox metadata, and binary assets are excluded;
-// binary assets are recorded (path only) so a later stage can copy them verbatim.
+// Bucket keys are major-only ("15".."18") plus "next", each pinned to a
+// concrete Handsontable version (npm latest stable of the major; newest -next
+// build for "next") with the pnpm lockfile re-resolved to match. Membership is
+// filtered by frameworks.json `minCoreMajor` — a below-floor starter is not
+// emitted rather than emitted broken.
+//
+// Run (from runner/):
+//   node pipeline/import.mjs                          all buckets from ../examples + index
+//   node pipeline/import.mjs --bucket=18              one bucket from ../examples
+//   node pipeline/import.mjs --bucket=15 --source=<dir> --ref=prod-examples/15
+//   node pipeline/import.mjs --index                  rebuild catalog.json from bucket dirs
+//
+// Needs network (npm registry + pnpm lockfile resolution). Build artifacts,
+// npm/Yarn lockfiles, node_modules, CodeSandbox metadata, and binary assets are
+// excluded; binary assets are recorded (path only) so a later stage can copy
+// them verbatim. pnpm locks are preserved, re-resolved against the pinned
+// version, and inlined so sessions at the bucket version get frozen installs.
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  assertStarterBucket,
+  resolveLatestStableMajor,
+  resolveStarterHotVersion,
+} from "./starter-import-config.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER_DIR = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(RUNNER_DIR, "..");
 const EXAMPLES_DIR = path.join(REPO_ROOT, "examples");
+const OUT_DIR = path.join(RUNNER_DIR, "apps", "authoring", "public", "starter-examples");
+const INDEX_PATH = path.join(RUNNER_DIR, "catalog.json");
 const CONFIG = JSON.parse(
   fs.readFileSync(path.join(RUNNER_DIR, "config", "frameworks.json"), "utf8"),
 );
 const FRAMEWORKS = CONFIG.frameworks;
+
+// Lowest major any bucket is generated for. Empirically verified range starts
+// at 15 (ADR-0021 decision 10); mirrors DEFAULT_MIN_MAJOR in
+// packages/runtime/src/version.ts — this script stays dependency-free, so the
+// constant cannot be imported from the (possibly unbuilt) runtime dist.
+const MIN_BUCKET_MAJOR = 15;
 
 // Directories never copied into a template.
 const EXCLUDE_DIRS = new Set([
@@ -46,7 +75,7 @@ const EXCLUDE_DIRS = new Set([
 ]);
 
 // npm and Yarn lockfiles are never copied. The catalog preserves pnpm locks so
-// default-version sessions can use deterministic frozen installs.
+// bucket-version sessions can use deterministic frozen installs.
 const EXCLUDE_FILES = new Set([
   "package-lock.json",
   "yarn.lock",
@@ -90,9 +119,63 @@ function normalizeEol(text) {
   return text.replace(/\r\n/g, "\n");
 }
 
-function importExample(framework) {
+// Mirrors isHandsontablePackage in packages/runtime/src/version.ts (this
+// script stays dependency-free). import.test.mjs pins the two implementations
+// together by asserting the runtime's applyHandsontableVersion is a byte-level
+// no-op on emitted artifacts.
+const NEVER_REWRITE = new Set(["@handsontable/pikaday"]);
+const isHandsontablePackage = (name) => name.includes("handsontable") && !NEVER_REWRITE.has(name);
+
+/**
+ * Pin every Handsontable dependency in /package.json to `hotVersion`,
+ * serialized byte-for-byte the way the runtime's applyHandsontableVersion
+ * would re-serialize it. That byte identity is load-bearing: the runtimes
+ * re-apply the rewrite unconditionally at mount, and the Tier-2 frozen-install
+ * fast path only opens when the mounted package.json still hashes to the baked
+ * sourceDependencyFingerprint.
+ */
+export function pinHandsontableDependencies(files, hotVersion) {
+  const raw = files["/package.json"];
+  if (raw === undefined) return files;
+  const pkg = JSON.parse(raw);
+  const rewrite = (deps) => {
+    if (!deps) return deps;
+    return Object.fromEntries(
+      Object.entries(deps).map(([name, range]) =>
+        isHandsontablePackage(name) ? [name, hotVersion] : [name, range],
+      ),
+    );
+  };
+  const next = { ...pkg, dependencies: rewrite(pkg.dependencies) };
+  return { ...files, "/package.json": JSON.stringify(next, null, 2) + "\n" };
+}
+
+/**
+ * Re-resolve the starter's pnpm lockfile against the pinned package.json so a
+ * frozen install at the bucket version succeeds. The committed lock (resolved
+ * from "latest" at some point in time) is used as the starting point to keep
+ * resolution incremental.
+ */
+function defaultRegenLockfile({ framework, files }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `starter-lock-${framework.replace(/[^a-z0-9]+/gi, "-")}-`));
+  try {
+    fs.writeFileSync(path.join(dir, "package.json"), files["/package.json"]);
+    if (files["/pnpm-lock.yaml"]) fs.writeFileSync(path.join(dir, "pnpm-lock.yaml"), files["/pnpm-lock.yaml"]);
+    if (files["/.npmrc"]) fs.writeFileSync(path.join(dir, ".npmrc"), files["/.npmrc"]);
+    execFileSync(
+      "corepack",
+      ["pnpm", "install", "--lockfile-only", "--ignore-scripts", "--ignore-workspace"],
+      { cwd: dir, stdio: "inherit" },
+    );
+    return fs.readFileSync(path.join(dir, "pnpm-lock.yaml"), "utf8");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function collectExample(framework, sourceDir) {
   const cfg = FRAMEWORKS[framework];
-  const dir = path.join(EXAMPLES_DIR, framework);
+  const dir = path.join(sourceDir, framework);
   if (!fs.existsSync(dir)) {
     throw new Error(`example directory not found: ${dir}`);
   }
@@ -119,17 +202,12 @@ function importExample(framework) {
     files[`/${rel}`] = normalizeEol(buf.toString("utf8"));
   }
 
-  const pkgKey = "/package.json";
-  let htCoreRange = null;
-  if (files[pkgKey]) {
-    try {
-      const deps = JSON.parse(files[pkgKey]).dependencies || {};
-      htCoreRange = deps.handsontable ?? null;
-    } catch {
-      /* leave null; surfaced via fileCount sanity check below */
-    }
-  }
+  return { cfg, files, assets, skipped };
+}
 
+/** frameworks.json-derived fields shared by bucket artifacts and the index. */
+function configEntry(framework) {
+  const cfg = FRAMEWORKS[framework];
   return {
     framework,
     displayName: cfg.displayName,
@@ -149,63 +227,165 @@ function importExample(framework) {
     spaMode: cfg.spaMode ?? false,
     port: cfg.port,
     installCommand: cfg.installCommand,
-    htCoreRange,
     minCoreMajor: cfg.minCoreMajor ?? null,
-    fileCount: Object.keys(files).length,
-    assets,
-    skipped,
-    files,
   };
 }
 
-function main() {
-  const frameworks = Object.keys(FRAMEWORKS);
-  const examples = frameworks.map(importExample);
+/** Frameworks that exist in a bucket: "next" carries all, majors respect the floor. */
+export function bucketFrameworks(bucket) {
+  return Object.keys(FRAMEWORKS).filter((framework) => {
+    if (bucket === "next") return true;
+    const floor = FRAMEWORKS[framework].minCoreMajor ?? 0;
+    return floor <= Number(bucket);
+  });
+}
 
-  // Sanity: every example must have package.json and its declared entry file.
+export async function importStarters({
+  sourceDir = EXAMPLES_DIR,
+  bucket,
+  ref = "master",
+  outDir = OUT_DIR,
+  hotVersion,
+  regenLockfile = defaultRegenLockfile,
+  fetchImpl,
+}) {
+  assertStarterBucket(bucket);
+  hotVersion = hotVersion ?? (await resolveStarterHotVersion({ bucket, fetchImpl }));
+  const frameworks = bucketFrameworks(bucket);
+  const bucketOutDir = path.join(outDir, bucket);
+  const manifest = [];
   const problems = [];
-  for (const ex of examples) {
-    if (!ex.files["/package.json"]) problems.push(`${ex.framework}: missing package.json`);
-    if (!ex.files[ex.entry] && !(ex.assets || []).includes(ex.entry.slice(1))) {
-      problems.push(`${ex.framework}: declared entry ${ex.entry} not found among files`);
+
+  // Reset only the selected bucket. Other version snapshots must survive.
+  fs.rmSync(bucketOutDir, { recursive: true, force: true });
+  fs.mkdirSync(bucketOutDir, { recursive: true });
+
+  for (const framework of frameworks) {
+    const { files: rawFiles, assets, skipped } = collectExample(framework, sourceDir);
+    let files = pinHandsontableDependencies(rawFiles, hotVersion);
+    if (files["/pnpm-lock.yaml"] !== undefined) {
+      files = { ...files, "/pnpm-lock.yaml": regenLockfile({ framework, files }) };
     }
-    if (ex.fileCount === 0) problems.push(`${ex.framework}: no files imported`);
+
+    const entry = {
+      ...configEntry(framework),
+      htCoreRange: hotVersion,
+      fileCount: Object.keys(files).length,
+      assets,
+      skipped,
+      files,
+    };
+
+    // Sanity: every artifact must have package.json and its declared entry file.
+    if (!files["/package.json"]) problems.push(`${framework}: missing package.json`);
+    if (!files[entry.entry] && !assets.includes(entry.entry.slice(1))) {
+      problems.push(`${framework}: declared entry ${entry.entry} not found among files`);
+    }
+    if (entry.fileCount === 0) problems.push(`${framework}: no files imported`);
+
+    fs.writeFileSync(path.join(bucketOutDir, `${framework}.json`), JSON.stringify(entry) + "\n");
+
+    manifest.push({
+      framework,
+      displayName: entry.displayName,
+      tier: entry.tier,
+      engine: entry.engine,
+      minCoreMajor: entry.minCoreMajor,
+    });
   }
+
+  fs.writeFileSync(
+    path.join(bucketOutDir, "manifest.json"),
+    JSON.stringify(
+      {
+        bucket,
+        sourceRef: ref,
+        generatedFrom: "handsontable/examples examples/",
+        hotVersion,
+        count: manifest.length,
+        examples: manifest,
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+
+  console.log(
+    `[import] bucket ${bucket} (${ref}, handsontable ${hotVersion}): ` +
+      `${manifest.length} starters → ${path.relative(REPO_ROOT, bucketOutDir)}`,
+  );
   if (problems.length) {
-    console.error("[import] catalog validation problems:\n  - " + problems.join("\n  - "));
-    process.exitCode = 1;
+    throw new Error(`[import] bucket ${bucket} validation problems:\n  - ` + problems.join("\n  - "));
+  }
+  return { bucket, hotVersion, count: manifest.length };
+}
+
+/** Sort bucket keys numerically with "next" last. */
+function compareBuckets(a, b) {
+  if (a === "next") return 1;
+  if (b === "next") return -1;
+  return Number(a) - Number(b);
+}
+
+/**
+ * Rebuild runner/catalog.json — the index the authoring UI bundles: bucket
+ * list plus the version-independent, files-free rows the picker, the version
+ * dropdown, and BUILD_CONFIG generation need. Deterministic from
+ * frameworks.json + the bucket directories, so the CI publish job can rebuild
+ * it after merging per-bucket artifacts.
+ */
+export function writeCatalogIndex({ outDir = OUT_DIR, indexPath = INDEX_PATH } = {}) {
+  const buckets = (fs.existsSync(outDir) ? fs.readdirSync(outDir) : [])
+    .filter((name) => fs.existsSync(path.join(outDir, name, "manifest.json")))
+    .sort(compareBuckets);
+  if (!buckets.length) {
+    throw new Error(`[import] no starter buckets found under ${outDir}; run a bucket import first`);
   }
 
   const catalog = {
     generatedFrom: "handsontable/examples examples/",
-    supportedHandsontableMajors: [15, 16, 17, 18, 19],
+    buckets,
     tiers: {
       "1": "client-side (Sandpack, in-browser bundler)",
       "2": "SSR/meta-framework (Cloudflare Sandbox container)",
     },
-    examples,
+    examples: Object.keys(FRAMEWORKS).map(configEntry),
   };
-
-  const out = path.join(RUNNER_DIR, "catalog.json");
-  fs.writeFileSync(out, JSON.stringify(catalog, null, 2) + "\n");
-
-  // Human-readable summary to stdout.
-  const t1 = examples.filter((e) => e.tier === 1).map((e) => e.framework);
-  const t2 = examples.filter((e) => e.tier === 2).map((e) => e.framework);
-  console.log(`[import] wrote ${path.relative(REPO_ROOT, out)}`);
-  console.log(`[import] ${examples.length} examples imported`);
-  console.log(`[import] Tier 1 (${t1.length}): ${t1.join(", ")}`);
-  console.log(`[import] Tier 2 (${t2.length}): ${t2.join(", ")}`);
-  console.table(
-    examples.map((e) => ({
-      framework: e.framework,
-      tier: e.tier,
-      files: e.fileCount,
-      assets: e.assets.length,
-      htCore: e.htCoreRange,
-      entry: e.entry,
-    })),
-  );
+  fs.writeFileSync(indexPath, JSON.stringify(catalog, null, 2) + "\n");
+  console.log(`[import] wrote ${path.relative(REPO_ROOT, indexPath)} (buckets: ${buckets.join(", ")})`);
+  return catalog;
 }
 
-main();
+async function main() {
+  const args = process.argv.slice(2);
+  const get = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+  const sourceDir = get("source") ?? EXAMPLES_DIR;
+  const ref = get("ref") ?? "master";
+  const bucket = get("bucket");
+
+  if (args.includes("--index")) {
+    writeCatalogIndex({});
+    return;
+  }
+  if (bucket) {
+    await importStarters({ sourceDir, bucket, ref });
+    return;
+  }
+
+  // Full local regeneration: every release bucket plus next, all synthesized
+  // from the checked-out examples/ tree. CI instead imports each bucket from
+  // its prod-examples/<major> branch when one exists.
+  const latestMajor = await resolveLatestStableMajor();
+  const buckets = [];
+  for (let major = MIN_BUCKET_MAJOR; major <= latestMajor; major++) buckets.push(String(major));
+  buckets.push("next");
+  for (const b of buckets) await importStarters({ sourceDir, bucket: b, ref });
+  writeCatalogIndex({});
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`[import] ${error.message}`);
+    process.exitCode = 1;
+  });
+}

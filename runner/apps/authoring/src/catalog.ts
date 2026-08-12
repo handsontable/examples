@@ -1,9 +1,11 @@
-import type { Catalog, CatalogEntry } from "@handsontable/demo-runtime";
+import type { Catalog, CatalogIndexEntry } from "@handsontable/demo-runtime";
 import catalogJson from "../../../catalog.json";
 
+// The index only (~15 KB): framework rows without files. Full starter
+// artifacts are lazy-fetched per version bucket — see starter-catalog.ts.
 export const catalog = catalogJson as unknown as Catalog;
 
-export function getEntry(framework: string): CatalogEntry {
+export function getEntry(framework: string): CatalogIndexEntry {
   const e = catalog.examples.find((x) => x.framework === framework);
   if (!e) throw new Error(`unknown framework: ${framework}`);
   return e;

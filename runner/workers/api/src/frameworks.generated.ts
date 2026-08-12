@@ -9,18 +9,18 @@ export interface FrameworkDev {
 }
 
 export const FRAMEWORK_DEV: Record<string, FrameworkDev> = {
-  "react-js": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "react-js", sourceDependencyFingerprint: "a87d83a44bc1b934452d699649571112d3ae5bb2961bfca2c64d5ed1f1482bbc" },
-  "ant-design": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "ant-design", sourceDependencyFingerprint: "ad90420a4ac002b7b861e2f7d481295e74f8561121ef5f08f941e68dd2c01e89" },
-  "mui": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "mui", sourceDependencyFingerprint: "abd37fcbd5402ffeb984bd78dddfdc515d91ff9aca9e71b37e72175f6d5a5520" },
-  "base-web": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "base-web", sourceDependencyFingerprint: "27e32c25c6419d2328b7e3b9b23b861819d2fe0c758d71432038485c77708d4c" },
-  "fluent-ui": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "fluent-ui", sourceDependencyFingerprint: "30622653164317234eb709613c65f2569a19cb930d3829ebe71535df0590215f" },
-  "angular": { cmd: "pnpm exec ng serve --host 0.0.0.0 --port 4200 --disable-host-check", port: 4200, bakedKey: "angular", sourceDependencyFingerprint: "bf76be0cf2f33fa52f4782a999a7d030e41c9c155a65689e6eddd85e860ba87f" },
-  "next.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001, bakedKey: "next-js", sourceDependencyFingerprint: "26606865cfe16d812803c8e74f02fd97317d1294cf3e5d7921eeed7fff23cb38" },
-  "next-shadcn.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001, bakedKey: "next-shadcn-js", sourceDependencyFingerprint: "2c69b3df78e8e25b65af044e1fb9ccdc2f94ad96fff9e5c3d1963ac3fe3dc998" },
-  "astro": { cmd: "pnpm exec astro dev --host 0.0.0.0 --port 4321", port: 4321, bakedKey: "astro", sourceDependencyFingerprint: "b4e8ba2c9560c45e93d9dc1ebc2e17e8f73a275d605ebdc078c3c2bbf16cd023" },
-  "nuxt": { cmd: "pnpm exec nuxt dev --host 0.0.0.0 --port 3001", port: 3001, bakedKey: "nuxt", sourceDependencyFingerprint: "9a5e8c0a55a8ba78c070d7db4c9b973dbd3c9d070f9ae3f59f0e3162998fb249" },
-  "remix": { cmd: "pnpm exec remix vite:dev --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "remix", sourceDependencyFingerprint: "4d1f8882937fb577b4cea8bcbb42b1d076662a66794465c23c6b8495205a573d" },
-  "vue": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "vue", sourceDependencyFingerprint: "af365d6cd0e4cc75fc19d8476d5253ddab6ea1c7b5087d30fda2a7acce9a73e0" },
+  "react-js": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "react-js", sourceDependencyFingerprint: "d9a895e262d4f51b318e457fd8917a64e48011b172f24ebebb6ec62be81c8117" },
+  "ant-design": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "ant-design", sourceDependencyFingerprint: "be5888c300009beb9708ae4faedf5d0c9773d2935c62d55759a7419e51eccbee" },
+  "mui": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "mui", sourceDependencyFingerprint: "793f72a3ca03eaa204a9ea2861dd2d6b43144e6b4bf604675f629fd32e25760b" },
+  "base-web": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "base-web", sourceDependencyFingerprint: "1d676eaf1ea26e1fc8079a3da540d80e7a694bdc9cb2ece4811e9dac71cca273" },
+  "fluent-ui": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "fluent-ui", sourceDependencyFingerprint: "b55bf6b0d4a0fd2afefa9eb83dd551fc4e05da105497f93b783caf89ba64b508" },
+  "angular": { cmd: "pnpm exec ng serve --host 0.0.0.0 --port 4200 --disable-host-check", port: 4200, bakedKey: "angular", sourceDependencyFingerprint: "b325b7a633eb610d2587d5982dbb90823f19770486437b1ad7b0ad1682663aed" },
+  "next.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001, bakedKey: "next-js", sourceDependencyFingerprint: "6481eb3ad836ccf5824a450451e536d7ab9c7fe96a32ad085205f20b9e892ec2" },
+  "next-shadcn.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001, bakedKey: "next-shadcn-js", sourceDependencyFingerprint: "763abb1f67def25624b3d342048cc6a740908bab1893cbea50a76c5ac35d129a" },
+  "astro": { cmd: "pnpm exec astro dev --host 0.0.0.0 --port 4321", port: 4321, bakedKey: "astro", sourceDependencyFingerprint: "8322d8fbec1365ec82acdde60e343a5a2f008a9dbaa666223f801073b8f06973" },
+  "nuxt": { cmd: "pnpm exec nuxt dev --host 0.0.0.0 --port 3001", port: 3001, bakedKey: "nuxt", sourceDependencyFingerprint: "bc93fcac054edc20ff7fdbb6319644f1560a1a3d54186e042fb817cfc9f0c76c" },
+  "remix": { cmd: "pnpm exec remix vite:dev --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "remix", sourceDependencyFingerprint: "aefc2ad8e3c6fafdd717dcd6d97ccd4f5c74c4e6922f736b08cf91d496d5fd38" },
+  "vue": { cmd: "pnpm exec vite --host 0.0.0.0 --port 5173", port: 5173, bakedKey: "vue", sourceDependencyFingerprint: "f126593d9b54d44376216b7aad01340baa3a711130a37a552bf37eee89c5ea3d" },
 };
 
 // Build config for the share snapshotter (all examples).

@@ -28,6 +28,17 @@ const catalog = JSON.parse(fs.readFileSync(path.join(RUNNER_DIR, "catalog.json")
 const allFrameworks: string[] = catalog.examples.map((e: { framework: string }) => e.framework);
 const tier2: string[] = catalog.examples.filter((e: { tier: number }) => e.tier === 2).map((e: { framework: string }) => e.framework);
 
+// catalog.json is the files-free index (DEV-2213); container warming posts the
+// starter's actual files, which live in the bucket snapshot.
+const WARM_BUCKET = process.env.WARM_BUCKET || "18";
+const starterFiles = (framework: string): Record<string, string> =>
+  JSON.parse(
+    fs.readFileSync(
+      path.join(RUNNER_DIR, "apps", "authoring", "public", "starter-examples", WARM_BUCKET, `${framework}.json`),
+      "utf8",
+    ),
+  ).files;
+
 const examples = process.env.WARM_EXAMPLES
   ? process.env.WARM_EXAMPLES.split(",").map((s) => s.trim()).filter(Boolean)
   : allFrameworks;
@@ -79,9 +90,8 @@ async function warmRender(framework: string, version: string) {
 }
 
 async function warmTier2Container(framework: string) {
-  const ex = catalog.examples.find((e: { framework: string }) => e.framework === framework);
   const files = Object.fromEntries(
-    Object.entries(ex.files).map(([path, contents]) => [path.startsWith("/") ? path.slice(1) : path, contents]),
+    Object.entries(starterFiles(framework)).map(([path, contents]) => [path.startsWith("/") ? path.slice(1) : path, contents]),
   );
   try {
     const res = await fetch(`${API_BASE}/api/session`, {
