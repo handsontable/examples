@@ -17,6 +17,12 @@ test("every FRAMEWORK_DEV row has resolvable baked contexts", () => {
       dev.contexts.some((c) => c.bakedKey === dev.defaultBakedKey),
       `${framework}: defaultBakedKey is one of its contexts`,
     );
+    // Single-seed image: every context must point at a bakedKey that exists in
+    // the image, and only the seed contexts are baked.
+    for (const c of dev.contexts) {
+      assert.equal(c.bakedKey, dev.defaultBakedKey, `${framework}/${c.bucket}: context seeds the framework's baked key`);
+      assert.equal(typeof c.bucket, "string");
+    }
     const fingerprints = dev.contexts.map((c) => c.sourceDependencyFingerprint);
     for (const fp of fingerprints) assert.match(fp, HEX_64, `${framework}: sha256 fingerprint`);
     assert.equal(
@@ -62,9 +68,11 @@ test("baked fingerprints match the bucket artifacts they were derived from", asy
     // prepare-container.mjs, not from a starter artifact — nothing to compare.
     if (!containerStarters.has(framework)) continue;
     for (const context of dev.contexts) {
-      const bucket = context.bakedKey.split("-").at(-1);
-      const artifactUrl = new URL(`${bucket}/${framework}.json`, bucketsDir);
-      if (!fs.existsSync(artifactUrl)) continue; // bucket without this framework (minCoreMajor floor)
+      const artifactUrl = new URL(`${context.bucket}/${framework}.json`, bucketsDir);
+      assert.ok(
+        fs.existsSync(artifactUrl),
+        `${framework}/${context.bucket}: context refers to a bucket artifact that does not exist`,
+      );
       const artifact = JSON.parse(fs.readFileSync(artifactUrl, "utf8"));
       assert.equal(
         context.sourceDependencyFingerprint,
@@ -72,10 +80,12 @@ test("baked fingerprints match the bucket artifacts they were derived from", asy
           packageJson: artifact.files["/package.json"],
           pnpmLock: artifact.files["/pnpm-lock.yaml"],
         }),
-        `${context.bakedKey}: baked fingerprint drifted from the bucket artifact — rerun scripts/prepare-container.mjs`,
+        `${framework}/${context.bucket}: fingerprint drifted from the bucket artifact — rerun scripts/prepare-container.mjs`,
       );
       checked += 1;
     }
   }
-  assert.ok(checked >= 20, `verified ${checked} contexts; expected the container starters of every baked bucket`);
+  // 11 container starters × their eligible buckets (5 unfloored, angular 4,
+  // the five 17-floored 3 each) = 44.
+  assert.ok(checked >= 40, `verified ${checked} contexts; expected every (container starter, bucket) pair`);
 });

@@ -9,15 +9,21 @@
 // needs one `Sandbox` namespace). At session start the Worker hardlink-copies
 // the baked node_modules into /app, then runs fast frozen pnpm reconciliation.
 //
-// Usage: node scripts/prepare-container.mjs [--buckets=18,next]
+// Usage: node scripts/prepare-container.mjs [--seed-bucket=18]
 //
 // Starter sources come from the versioned bucket snapshots (DEV-2213):
-// apps/authoring/public/starter-examples/<bucket>/<framework>.json. Each baked
-// bucket gets its own context per framework (key `<framework>-<bucket>`)
-// pinning that bucket's concrete Handsontable version; the Worker selects the
-// context whose dependency fingerprint matches the mounted files, which is
-// what lets a session at a baked bucket's version take the frozen install
-// path. The first bucket listed is the default for non-matching sessions.
+// apps/authoring/public/starter-examples/<bucket>/<framework>.json.
+//
+// One baked node_modules per framework (the seed bucket's), but a dependency
+// fingerprint per (framework, bucket) — every bucket's pristine session gets
+// the frozen install path while the image carries a single seed. This works
+// because the seed is only a warm cache: the boot script hardlink-copies it,
+// then `pnpm install --frozen-lockfile` reconciles node_modules to the
+// SUBMITTED package.json + lock, which every bucket artifact keeps
+// self-consistent by construction. Buckets differ only in the Handsontable
+// core + wrapper pins, so reconciliation downloads two or three packages, not
+// a tree. Baking every bucket instead (24+ contexts) doubled the image and
+// stalled `wrangler deploy` in the image-export phase — hence one seed.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -95,16 +101,11 @@ const extraContainer = (hotVersion) => [
 ];
 const EXPOSE_PORTS = [...new Set(Object.values(DEV).map((d) => d.port))].sort();
 
-// Buckets to bake, first = default. 18 + next covers where the traffic is;
-// sessions on other majors reconcile with `pnpm install --no-frozen-lockfile`
-// at boot, exactly like any custom-dependency session.
-const BAKE_BUCKETS = (
-  process.argv.find((a) => a.startsWith("--buckets="))?.slice("--buckets=".length) ?? "18,next"
-)
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-const DEFAULT_BUCKET = BAKE_BUCKETS[0];
+// The one bucket whose node_modules is baked into the image. Every other
+// bucket's pristine session seeds it and lets the frozen reconciliation fetch
+// the Handsontable delta.
+const SEED_BUCKET =
+  process.argv.find((a) => a.startsWith("--seed-bucket="))?.slice("--seed-bucket=".length) ?? "18";
 const STARTER_EXAMPLES_DIR = path.join(RUNNER_DIR, "apps", "authoring", "public", "starter-examples");
 
 // catalog.json is the files-free index; full starter artifacts (with files)
@@ -121,20 +122,48 @@ const dependencyMetadataFingerprint = ({ packageJson, pnpmLock }) => {
 };
 
 const containerFrameworks = catalog.examples.filter((e) => e.engine === "container");
-// Everything baked into the image + given a dev command: each baked bucket's
-// container starters plus the docs-only extras (e.g. Vue), one context per
-// (framework, bucket). A bucket without a framework (minCoreMajor floor)
-// simply contributes no context for it.
+// Everything baked into the image + given a dev command: the seed bucket's
+// container starters plus the docs-only extras (e.g. Vue).
+const seedManifest = loadBucketManifest(SEED_BUCKET);
+const seedFrameworks = new Set(seedManifest.examples.map((m) => m.framework));
 const bakeEntries = [];
-for (const bucket of BAKE_BUCKETS) {
-  const manifest = loadBucketManifest(bucket);
-  const inBucket = new Set(manifest.examples.map((m) => m.framework));
-  const examples = [
-    ...containerFrameworks.filter((e) => inBucket.has(e.framework)).map((e) => loadBucketArtifact(bucket, e.framework)),
-    ...extraContainer(manifest.hotVersion),
-  ];
-  for (const e of examples) {
-    bakeEntries.push({ bucket, example: e, key: `${bakedKey(e.framework)}-${bucket}` });
+for (const e of [
+  ...containerFrameworks
+    .filter((e) => seedFrameworks.has(e.framework))
+    .map((e) => loadBucketArtifact(SEED_BUCKET, e.framework)),
+  ...extraContainer(seedManifest.hotVersion),
+]) {
+  bakeEntries.push({ bucket: SEED_BUCKET, example: e, key: `${bakedKey(e.framework)}-${SEED_BUCKET}` });
+}
+for (const e of containerFrameworks) {
+  if (!seedFrameworks.has(e.framework)) {
+    throw new Error(`container framework ${e.framework} missing from seed bucket ${SEED_BUCKET}`);
+  }
+}
+
+// Frozen-install fingerprints, one per (framework, bucket) across EVERY bucket
+// on disk — all pointing at the framework's single seed context. Computed from
+// the bucket artifacts directly; no baked directory exists for non-seed
+// buckets.
+const bucketKeys = fs
+  .readdirSync(STARTER_EXAMPLES_DIR)
+  .filter((name) => fs.existsSync(path.join(STARTER_EXAMPLES_DIR, name, "manifest.json")));
+const starterContexts = new Map(); // framework -> [{bucket, bakedKey, fingerprint}]
+for (const bucket of bucketKeys) {
+  const inBucket = new Set(loadBucketManifest(bucket).examples.map((m) => m.framework));
+  for (const fw of containerFrameworks.map((e) => e.framework)) {
+    if (!inBucket.has(fw)) continue; // below the minCoreMajor floor in this bucket
+    const artifact = loadBucketArtifact(bucket, fw);
+    const list = starterContexts.get(fw) ?? [];
+    list.push({
+      bucket,
+      bakedKey: `${bakedKey(fw)}-${SEED_BUCKET}`,
+      fingerprint: dependencyMetadataFingerprint({
+        packageJson: artifact.files["/package.json"],
+        pnpmLock: artifact.files["/pnpm-lock.yaml"],
+      }),
+    });
+    starterContexts.set(fw, list);
   }
 }
 
@@ -183,31 +212,31 @@ EXPOSE ${EXPOSE_PORTS.join(" ")}
 `;
   fs.writeFileSync(path.join(liveDir, "Dockerfile"), dockerfile);
   console.log(
-    `[prepare-container] baked ${bakeEntries.length} contexts (buckets ${BAKE_BUCKETS.join(", ")}) into containers/live/`,
+    `[prepare-container] baked ${bakeEntries.length} seed contexts (bucket ${SEED_BUCKET}) into containers/live/`,
   );
 }
 
 function writeGenerated() {
-  const byFramework = new Map();
-  for (const be of bakeEntries) {
-    const list = byFramework.get(be.example.framework) ?? [];
-    list.push(be);
-    byFramework.set(be.example.framework, list);
-  }
-
-  const devRows = [...byFramework.entries()].map(([framework, entries]) => {
+  const devRows = [...new Set(bakeEntries.map((be) => be.example.framework))].map((framework) => {
     const d = DEV[framework];
-    const contexts = entries.map(({ key }) => {
-      const bakedDir = path.join(RUNNER_DIR, "containers", "live", "baked", key);
-      const sourceDependencyFingerprint = dependencyMetadataFingerprint({
+    const seedKey = `${bakedKey(framework)}-${SEED_BUCKET}`;
+    // Starter contexts span every bucket; docs-only extras (vue) have no
+    // bucket artifacts, so their single context hashes the baked files.
+    let contexts = (starterContexts.get(framework) ?? []).map(
+      ({ bucket, bakedKey: key, fingerprint }) =>
+        `{ bucket: ${JSON.stringify(bucket)}, bakedKey: ${JSON.stringify(key)}, sourceDependencyFingerprint: ${JSON.stringify(fingerprint)} }`,
+    );
+    if (!contexts.length) {
+      const bakedDir = path.join(RUNNER_DIR, "containers", "live", "baked", seedKey);
+      const fingerprint = dependencyMetadataFingerprint({
         packageJson: fs.readFileSync(path.join(bakedDir, "package.json"), "utf8"),
         pnpmLock: fs.readFileSync(path.join(bakedDir, "pnpm-lock.yaml"), "utf8"),
       });
-      return `{ bakedKey: ${JSON.stringify(key)}, sourceDependencyFingerprint: ${JSON.stringify(sourceDependencyFingerprint)} }`;
-    });
-    const defaultBakedKey =
-      entries.find((be) => be.bucket === DEFAULT_BUCKET)?.key ?? entries[0].key;
-    return `  ${JSON.stringify(framework)}: { cmd: ${JSON.stringify(d.cmd)}, port: ${d.port}, defaultBakedKey: ${JSON.stringify(defaultBakedKey)}, contexts: [${contexts.join(", ")}] },`;
+      contexts = [
+        `{ bucket: ${JSON.stringify(SEED_BUCKET)}, bakedKey: ${JSON.stringify(seedKey)}, sourceDependencyFingerprint: ${JSON.stringify(fingerprint)} }`,
+      ];
+    }
+    return `  ${JSON.stringify(framework)}: { cmd: ${JSON.stringify(d.cmd)}, port: ${d.port}, defaultBakedKey: ${JSON.stringify(seedKey)}, contexts: [${contexts.join(", ")}] },`;
   });
   const buildRows = catalog.examples.map((e) =>
     `  ${JSON.stringify(e.framework)}: { tier: ${e.tier}, installCommand: ${JSON.stringify(e.installCommand)}, buildCommand: ${JSON.stringify(e.buildCommand)}, outputDir: ${JSON.stringify(e.outputDir)}, outputGlob: ${e.outputGlob ? JSON.stringify(e.outputGlob) : "null"} },`,
@@ -215,9 +244,12 @@ function writeGenerated() {
 
   const out = `// Generated by scripts/prepare-container.mjs — do not edit by hand.
 
-// One baked node_modules context per (framework, bucket) — the fingerprint
-// selects the context whose package.json+lock the session mounts verbatim.
+// One frozen-install fingerprint per (framework, bucket), all pointing at the
+// framework's single seed context: the fingerprint proves the session mounts a
+// generator-produced package.json+lock verbatim, and the seeded node_modules
+// is only a warm cache the frozen reconciliation adjusts to that lock.
 export interface FrameworkDevContext {
+  bucket: string;
   bakedKey: string;
   sourceDependencyFingerprint: string;
 }
