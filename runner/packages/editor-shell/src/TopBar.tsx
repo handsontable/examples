@@ -1,5 +1,6 @@
 // Row 1 of the chrome (`72:15840`): logo · centred example pill · the mode action ·
-// theme toggle · Download / Sign in. 72px tall, `surfaceRaised`.
+// theme toggle · Download. 72px tall, `surfaceRaised`. (Sign in moved to the
+// preview status bar — DEV-2505.)
 //
 // The pill is a slot: in play mode the app puts its example cascader there, in
 // edit/share the demo title. Everything else is shell-owned.
@@ -30,8 +31,6 @@ export interface TopBarProps {
    *  going to persist (`play` and `share` keep them in memory only). The one way
    *  out with your changes has to be visible *before* a refresh takes them. */
   downloadHighlight?: boolean;
-  /** Start the sign-in flow. Rendered only when anonymous. */
-  onSignIn?: () => void;
   /** Signed-in identity for the account menu (`114:21480`), and what the bar now
    *  keys "signed in" off — not the shell's `authed`, deliberately. `/share/:id`
    *  renders the editor as anonymous (read-only, no action bar) but the visitor
@@ -69,7 +68,6 @@ export function TopBar({
   secondaryActions,
   onDownload,
   downloadHighlight,
-  onSignIn,
   accountEmail,
   accountDisplayName,
   accountAvatarUrl,
@@ -153,14 +151,12 @@ export function TopBar({
         </button>
       )}
 
-      {/* No icon: `72:15885` draws a download glyph here only because the frame
-          was duplicated from the Download button. */}
-      {!accountEmail && onSignIn && (
-        <button type="button" style={actionButton} onClick={onSignIn}>
-          Sign in
-        </button>
-      )}
-
+      {/* Sign in used to sit here, beside Download (`72:15697`). It moved to the
+          preview status bar in DEV-2505: signing in is `@handsontable.com`-only
+          and internal, while most visitors to this page are external (a client on
+          a share link, someone arriving from the docs), so a top-bar button read
+          as a call to action aimed at people who cannot use it. The account menu
+          below stays — it only renders for a resolved user. */}
       {accountEmail && onMyDemos && onLogout && (
         <AccountMenu
           email={accountEmail}

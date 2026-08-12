@@ -324,3 +324,20 @@ test("the version pencil commits a custom version on Enter and reverts on Escape
   await expect(versionInput(page)).toHaveCount(0);
   await expect(versionPill(page)).toContainText("0.0.0-next-07941cf-20260101");
 });
+
+// DEV-2505: `Sign in` is an internal, @handsontable.com-only affordance, so it
+// lives in the preview status bar rather than the top bar. Asserted by *place*,
+// not just by presence — the next redesign would otherwise put it back beside
+// Download without anything failing.
+test("Sign in sits in the status bar, not the top bar", async ({ page }) => {
+  await stubShell(page);
+  await page.goto("/?example=react");
+
+  const signIn = page.getByRole("button", { name: "Sign in" });
+  await expect(signIn).toBeVisible();
+
+  // Inside the preview status bar…
+  await expect(page.getByLabel("Preview status").getByRole("button", { name: "Sign in" })).toBeVisible();
+  // …and nowhere in the header.
+  await expect(page.locator("header").getByRole("button", { name: "Sign in" })).toHaveCount(0);
+});

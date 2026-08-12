@@ -370,7 +370,8 @@ export function EditorShell(props: EditorShellProps) {
   return (
     <div style={s.shell}>
       {/* Full mode's top-right is theme toggle + `Download`, and that is the whole of
-          `65:20458` — no mode action, no `Sign in`, no account menu. Not a functionality
+          `65:20458` — no mode action, no account menu (and no `Sign in`, which
+          since DEV-2505 lives in the preview status bar). Not a functionality
           cut under ADR-0023 rule 1: minimize is right there, and every control returns
           with the editor. The artifact full mode has always rendered this way
           (`FullMode` passes no `accountEmail` and no `onSignIn`). */}
@@ -382,7 +383,6 @@ export function EditorShell(props: EditorShellProps) {
         secondaryActions={props.fullMode ? undefined : props.secondaryActions}
         onDownload={props.onDownload}
         downloadHighlight={props.downloadHighlight}
-        onSignIn={props.fullMode ? undefined : props.onSignIn}
         accountEmail={props.fullMode ? undefined : props.accountEmail}
         accountDisplayName={props.fullMode ? undefined : props.accountDisplayName}
         accountAvatarUrl={props.fullMode ? undefined : props.accountAvatarUrl}
@@ -565,6 +565,11 @@ export function EditorShell(props: EditorShellProps) {
             status={props.status}
             frameworkName={props.frameworkName}
             version={props.version}
+            // Same two conditions the top bar applied before DEV-2505 moved this:
+            // never in full mode, and never to someone already signed in (on
+            // `/share/:id` a signed-in visitor keeps their account menu and must
+            // not be offered a login).
+            onSignIn={props.fullMode || props.accountEmail ? undefined : props.onSignIn}
           />
         </div>
       </div>
