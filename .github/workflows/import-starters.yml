@@ -1,0 +1,233 @@
+name: Import versioned starter examples
+
+# Regenerates the per-major starter buckets (DEV-2213). Each bucket is
+# imported from its prod-examples/<major> branch when one exists, else from
+# master (the launch seam: cutting a branch later redirects that bucket's
+# source with no workflow change). The weekly schedule re-pins bucket
+# hotVersions after Handsontable patch releases — a stale pin only degrades
+# Tier-2 sessions to the non-frozen install path, but freshness keeps the
+# frozen fast path aligned with npm `latest`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bucket:
+        description: "Single bucket to import (e.g. 18 or next); empty = all"
+        required: false
+        type: string
+  repository_dispatch:
+    types: [starter-examples-sync]
+  schedule:
+    - cron: "0 6 * * 1"
+  push:
+    branches:
+      - master
+      - "prod-examples/**"
+    paths:
+      - "examples/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: import-starter-examples
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: matrix
+        name: Build bucket matrix
+        env:
+          DISPATCH_BUCKET: ${{ github.event.client_payload.bucket }}
+          INPUT_BUCKET: ${{ github.event.inputs.bucket }}
+        run: |
+          BRANCH_HEADS=$(git ls-remote --heads origin 'prod-examples/*' | awk '{print $2}' | sed 's#refs/heads/##')
+          export BRANCH_HEADS
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          // Mirrors MIN_BUCKET_MAJOR in runner/pipeline/import.mjs.
+          const MIN_MAJOR = 15;
+
+          const response = await fetch("https://registry.npmjs.org/handsontable");
+          if (!response.ok) throw new Error(`Could not fetch npm dist-tags.latest: registry returned ${response.status}`);
+          const registry = await response.json();
+          const latest = registry?.["dist-tags"]?.latest;
+          const match = typeof latest === "string" && latest.match(/^(\d+)\.\d+\.\d+$/);
+          if (!match) throw new Error(`npm dist-tags.latest must be a stable semver version; got ${JSON.stringify(latest)}`);
+          const latestMajor = Number(match[1]);
+
+          const branches = new Set((process.env.BRANCH_HEADS ?? "").split("\n").filter(Boolean));
+          const refFor = (bucket) =>
+            bucket !== "next" && branches.has(`prod-examples/${bucket}`) ? `prod-examples/${bucket}` : "master";
+
+          let buckets = [];
+          for (let major = MIN_MAJOR; major <= latestMajor; major++) buckets.push(String(major));
+          buckets.push("next");
+
+          const only = process.env.DISPATCH_BUCKET || process.env.INPUT_BUCKET;
+          if (only) {
+            if (!buckets.includes(only)) throw new Error(`Unsupported bucket: ${JSON.stringify(only)} (known: ${buckets.join(", ")})`);
+            buckets = [only];
+          }
+
+          const matrix = buckets.map((bucket) => ({ bucket, ref: refFor(bucket) }));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(matrix)}\n`);
+          NODE
+
+  import:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      # Pipeline code always comes from master; matrix.ref only selects the
+      # examples/ source tree for the bucket.
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Check out starter sources at ${{ matrix.ref }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          path: starter-src
+          sparse-checkout: |
+            /examples/**
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable corepack (pnpm lockfile resolution)
+        run: corepack enable
+
+      - id: import
+        name: Import bucket ${{ matrix.bucket }} from ${{ matrix.ref }}
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node pipeline/import.mjs \
+            --source="$GITHUB_WORKSPACE/starter-src/examples" \
+            --bucket="${{ matrix.bucket }}" \
+            --ref="${{ matrix.ref }}" 2>&1 | tee import-starters.log
+
+      - name: Summarize bucket ${{ matrix.bucket }} import
+        if: always()
+        working-directory: .
+        env:
+          BUCKET: ${{ matrix.bucket }}
+          SOURCE_REF: ${{ matrix.ref }}
+          IMPORT_OUTCOME: ${{ steps.import.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+
+          const manifestPath = path.join(
+            "runner",
+            "apps",
+            "authoring",
+            "public",
+            "starter-examples",
+            process.env.BUCKET,
+            "manifest.json",
+          );
+          const lines = [
+            `## Starter examples: \`${process.env.BUCKET}\``,
+            "",
+            `- Source ref: \`${process.env.SOURCE_REF}\``,
+            `- Import result: **${process.env.IMPORT_OUTCOME}**`,
+          ];
+          if (fs.existsSync(manifestPath)) {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+            lines.push(`- Handsontable version: \`${manifest.hotVersion}\``);
+            lines.push(`- Starters: ${manifest.count}`);
+            lines.push(`- Frameworks: ${manifest.examples.map((e) => e.framework).join(", ")}`);
+          } else {
+            lines.push("- Manifest: not generated");
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n\n`);
+          NODE
+
+      - name: Fail when import failed
+        if: steps.import.outcome == 'failure'
+        run: exit 1
+
+      - name: Stage bucket ${{ matrix.bucket }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/starter-examples"
+          cp -R "apps/authoring/public/starter-examples/${{ matrix.bucket }}" "$RUNNER_TEMP/starter-examples/${{ matrix.bucket }}"
+
+      - name: Upload bucket ${{ matrix.bucket }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: starter-examples-${{ matrix.bucket }}
+          path: ${{ runner.temp }}/starter-examples
+          retention-days: 7
+
+  publish:
+    needs: [prepare, import]
+    if: needs.import.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Download generated buckets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: starter-examples-*
+          merge-multiple: true
+          path: runner/apps/authoring/public/starter-examples
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable corepack (container context locks)
+        run: corepack enable
+
+      # The index and the baked container contexts are both derived from the
+      # bucket snapshots — regenerate them so the PR is self-consistent and the
+      # existing deploy path gates pick everything up on merge.
+      - name: Rebuild catalog index + container contexts
+        working-directory: runner
+        run: |
+          node pipeline/import.mjs --index
+          node scripts/prepare-container.mjs
+
+      - name: Create or update generated-content pull request
+        # Pinned to an immutable SHA (v7.0.11): this job holds contents+PR
+        # write permissions, so a retargeted upstream tag must not be able to
+        # run new code here.
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
+        with:
+          branch: chore/starter-example-buckets
+          base: master
+          commit-message: "chore(runner): update versioned starter buckets"
+          title: "chore(runner): update versioned starter buckets"
+          body: |
+            Generated by the **Import versioned starter examples** workflow.
+
+            The workflow imported each starter bucket from its
+            `prod-examples/<major>` branch (or `master` where no branch exists),
+            pinned to concrete npm Handsontable versions, then rebuilt the
+            catalog index and the baked container contexts.
+          labels: automated

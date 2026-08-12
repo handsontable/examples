@@ -144,7 +144,7 @@ that term to a bare `localhost:` — catalog README text mentions dev-server por
 
 ## CI/CD
 
-Six workflows live in `.github/workflows/` at the repo root:
+Seven workflows live in `.github/workflows/` at the repo root:
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
@@ -154,6 +154,7 @@ Six workflows live in `.github/workflows/` at the repo root:
 | `e2e-live.yml` | manual | the `E2E_LIVE=1` specs that mount a real preview. |
 | `e2e-starter-matrix.yml` | manual | every starter through a live session; serialized against the global container cap. |
 | `import-docs.yml` | manual, or `repository_dispatch: docs-examples-sync` from the docs repo | re-imports the documentation-guide examples. |
+| `import-starters.yml` | manual, `repository_dispatch: starter-examples-sync`, weekly cron, or push touching `examples/**` | re-imports the versioned starter buckets (each from `prod-examples/<major>` when the branch exists, else `master`), rebuilds the catalog index + container contexts, opens a PR. |
 
 The two deploy workflows authenticate with a repository secret (`CLOUDFLARE_API_TOKEN`);
 no credential is committed. CI reads the pnpm version from `runner/package.json` so it
