@@ -4,11 +4,16 @@ import {
   CUSTOM_ELEMENTS_SCHEMA,
 } from '@angular/core';
 import { PredefinedMenuItemKey } from 'handsontable/plugins/contextMenu';
-import { mainTheme } from 'handsontable/themes';
+import { getTheme, hasTheme, registerTheme, mainTheme } from 'handsontable/themes';
 import { HotTableModule } from '@handsontable/angular-wrapper';
 
 import { getData } from './utils/constants';
 import { alignHeaders, addClassesToRows } from './utils/hooks-callbacks';
+
+// Handsontable 17.0.0 passes a plain theme-config object straight to
+// ThemeManager.update on the updateSettings path (normalization was added in
+// 17.1.0), so this branch hands over a registered ThemeBuilder instead.
+const dataGridTheme = hasTheme('main') ? getTheme('main') : registerTheme(mainTheme);
 
 @Component({
   encapsulation: ViewEncapsulation.None,
@@ -77,7 +82,7 @@ export class DataGridComponent {
       { data: 5 },
       { data: 2 },
     ],
-    theme: mainTheme,
+    theme: dataGridTheme,
     licenseKey: 'non-commercial-and-evaluation',
   };
 }
