@@ -163,7 +163,9 @@ jobs:
           path: runner/apps/authoring/public/docs-examples
 
       - name: Create or update generated-content pull request
-        uses: peter-evans/create-pull-request@v7
+        # SHA-pinned: this job holds contents+PR write permissions, so a retargeted
+        # upstream tag must not be able to run new code here.
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
         with:
           branch: chore/docs-example-buckets
           base: ${{ github.ref_name }}
