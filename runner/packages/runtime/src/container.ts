@@ -8,7 +8,13 @@
 // DOM-only: imported via the "@handsontable/demo-runtime/container" subpath so it
 // is never bundled into the (non-DOM) Worker itself.
 
-import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
+import type {
+  CatalogEntry,
+  DemoRuntime,
+  FilesMap,
+  HandsontableVersionRef,
+  WriteFileOptions,
+} from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
@@ -112,6 +118,10 @@ export class ContainerRuntime implements DemoRuntime {
   private didReady = false;
   private disposed = false;
   private pending = new Map<string, string>();
+  /** Writes deliberately kept out of the dev server for now — see `writeFile`'s
+   *  `quiet` option. Drained by `flush()` together with `pending`, so they are never
+   *  lost: only delayed until something is going over the wire anyway. */
+  private quietPending = new Map<string, string>();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly progressCbs = new Set<(log: string) => void>();
   private previewUrl = "";
@@ -247,8 +257,13 @@ export class ContainerRuntime implements DemoRuntime {
     // create was in flight (the create wrote the mount-time snapshot, so a
     // buffered edit is strictly newer — and flushing only from here on can
     // no longer race the create handler's writeFiles).
+    //
+    // Quiet writes count here too. They are held back from the *dev server*, not from
+    // the session: a theme applied while the container was still booting has no bridge
+    // to reach either (the demo has not run yet), so if this did not drain them they
+    // would sit unsent until the user happened to make an ordinary edit.
     this.mounted = true;
-    if (this.pending.size > 0) void this.flush();
+    if (this.pending.size > 0 || this.quietPending.size > 0) void this.flush();
 
     // The container boots asynchronously (install + dev server). Poll status for
     // progress; only point the iframe at the preview once the dev server is up.
@@ -341,13 +356,30 @@ export class ContainerRuntime implements DemoRuntime {
 
   /** Stream an edit; the container dev server HMRs it. Debounced per burst.
    *  An edit made while the create POST is still in flight is buffered
-   *  (flush() is gated on `mounted`) and streamed as soon as it succeeds. */
-  writeFile(path: string, contents: string): void {
+   *  (flush() is gated on `mounted`) and streamed as soon as it succeeds.
+   *
+   *  `quiet` holds the write back from the dev server (DEV-2496): the Style panel has
+   *  already patched the running theme over the bridge, and streaming the file would
+   *  buy nothing but a page reload — the worst version of this bug, since a reload
+   *  loses the grid's scroll and selection. The file is stored the same way, and
+   *  `quietPending` is drained by the next `flush()` (any edit, `reload()` or
+   *  `flushQuiet()`), so the container never serves a theme older than the panel's. */
+  writeFile(path: string, contents: string, opts: WriteFileOptions = {}): void {
     if (!this.sessionId) throw new Error("ContainerRuntime.writeFile called before mount()");
     this.files = { ...this.files, [path]: contents };
+    if (opts.quiet) {
+      this.quietPending.set(path, contents);
+      return;
+    }
     this.pending.set(path, contents);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = setTimeout(() => void this.flush(), this.opts.writeDebounceMs ?? 250);
+  }
+
+  /** Stream whatever the quiet writes have been holding, now. */
+  flushQuiet(): void {
+    if (this.quietPending.size === 0) return;
+    void this.flush();
   }
 
   /** Re-navigate the iframe to the same preview URL. The session, the container
@@ -358,8 +390,18 @@ export class ContainerRuntime implements DemoRuntime {
    *  Resolves on the reloaded page's `load`, which is the honest completion signal
    *  here: `src` navigation is exactly what a refresh does. Cross-origin is no
    *  obstacle — `load` fires on the frame element regardless of what it loaded. */
-  reload(): Promise<void> {
-    if (this.disposed || !this.pointed || !this.previewUrl) return Promise.resolve();
+  async reload(): Promise<void> {
+    if (this.disposed || !this.pointed || !this.previewUrl) return;
+    // Held-back writes have to reach the dev server *before* the navigation, or the
+    // reloaded page serves a theme older than the one the panel is showing. Guarded
+    // because this method must not reject: the shell's refresh spinner is cleared by
+    // this promise settling, and `flush()` throwing would leave it up for good.
+    if (this.quietPending.size > 0) {
+      try {
+        await this.flush();
+      } catch { /* a write that failed reports through onError, not through refresh */ }
+    }
+    if (this.disposed || !this.pointed || !this.previewUrl) return;
     return new Promise<void>((resolve) => {
       const iframe = this.opts.iframe;
       let settled = false;
@@ -385,6 +427,7 @@ export class ContainerRuntime implements DemoRuntime {
   deleteFile(path: string): void {
     if (!this.sessionId) return;
     this.pending.delete(path);
+    this.quietPending.delete(path);
     const next = { ...this.files };
     delete next[path];
     this.files = next;
@@ -431,7 +474,10 @@ export class ContainerRuntime implements DemoRuntime {
     // Gated on `mounted`: a flush before the create POST succeeds would race
     // the create handler's writeFiles. Buffered edits are flushed by mount().
     if (!this.mounted || !this.sessionId || this.disposed) return;
-    const batch = [...this.pending.entries()];
+    // Quiet writes go out with whatever prompted this flush, ordered first so an
+    // ordinary edit to the same path (the user hand-editing the theme module) wins.
+    const batch = [...this.quietPending.entries(), ...this.pending.entries()];
+    this.quietPending.clear();
     this.pending.clear();
     for (const [path, contents] of batch) {
       // Re-check per iteration: a dispose() during an earlier await must stop
