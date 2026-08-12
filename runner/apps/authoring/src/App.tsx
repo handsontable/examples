@@ -1518,7 +1518,17 @@ function Authoring({
     }
   }, [user, entry, version, forkedFrom]);
 
-  /** Save the saved-demo edits: title/description + code (rebuilds the snapshot). */
+  /** Save the saved-demo edits: the code, which rebuilds the snapshot.
+   *
+   *  Deliberately *not* the title and description. Since DEV-2495 the Edit info
+   *  dialog writes those itself, and sending them here as well gave the row two
+   *  writers racing on one field: this PATCH captures the metadata when the user
+   *  hits Save, but the server only writes it at the *end* of the rebuild
+   *  (`updateDemo`), so a rename committed while a rebuild is in flight is
+   *  overwritten by the pre-rename values seconds later. The UI keeps the new
+   *  title, so it surfaces as the rename not sticking — the exact bug this branch
+   *  exists to fix. Omitted keys leave the stored values alone (the endpoint falls
+   *  back to `row.title` / `row.description`), so metadata has one writer. */
   const onSave = useCallback(async () => {
     if (!savedId || isShare) return;
     setSaving(true);
@@ -1529,8 +1539,6 @@ function Authoring({
         method: "PATCH",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
-          title: title.trim() || "Untitled demo",
-          description: description.trim() || null,
           files: filesRef.current,
           htVersion: version,
         }),
@@ -1548,7 +1556,7 @@ function Authoring({
     } finally {
       setSaving(false);
     }
-  }, [savedId, isShare, title, description, version, clearDirty]);
+  }, [savedId, isShare, version, clearDirty]);
 
   /**
    * The preview bar's share icon, mode-aware (ADR-0025). `edit` has a saved demo

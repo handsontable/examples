@@ -53,6 +53,14 @@ export function EditInfoDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /** Every way out of the dialog, in-flight-aware. `Dialog` routes Escape, the
+   *  scrim and the X to one `onClose` with no notion of a pending request, so
+   *  without this the three of them could unmount the card mid-PATCH — a failure
+   *  would then have nowhere to report, and a late success would still apply to
+   *  the workspace after the user had asked to get out. Cancel is disabled while
+   *  busy for the same reason; this is the other three routes. */
+  const dismiss = () => { if (!busy) onClose(); };
+
   // The API rejects an empty title (400), and the frame shows no error state, so
   // the affordance is a disabled button rather than a message. A *failed write*
   // is a different thing and does get a message — see below.
@@ -97,7 +105,7 @@ export function EditInfoDialog({
   }
 
   return (
-    <Dialog title="Edit info" onClose={onClose}>
+    <Dialog title="Edit info" onClose={dismiss}>
       <form onSubmit={submit}>
         {error && <p style={errorText} role="alert">{error}</p>}
 
@@ -127,7 +135,7 @@ export function EditInfoDialog({
           <button type="submit" style={primary} disabled={!valid || busy}>
             {busy ? <Spinner size={14} /> : "Save"}
           </button>
-          <button type="button" style={ghost} onClick={onClose} disabled={busy}>
+          <button type="button" style={ghost} onClick={dismiss} disabled={busy}>
             Cancel
           </button>
         </div>
