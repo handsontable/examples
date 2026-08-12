@@ -286,6 +286,75 @@ test("Ctrl+S does not save the workspace from under an open dialog", async ({ pa
   expect(patches).toHaveLength(0);
 });
 
+/** Routes PATCH on the demo, recording the bodies. `fallback()` for everything
+ *  else so `stubSavedDemo`'s GET handler still answers the page load. */
+async function stubInfoPatch(page: Page, status = 200) {
+  const patches: Array<Record<string, unknown>> = [];
+  await page.route(`**/api/demos/${DEMO_ID}`, async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    patches.push(JSON.parse(route.request().postData() ?? "{}"));
+    return status === 200
+      ? route.fulfill({ json: { ok: true } })
+      : route.fulfill({ status, json: { error: "save failed" } });
+  });
+  return patches;
+}
+
+// DEV-2495. The dialog used to stage: Save lifted the drafts into the workspace
+// and marked it dirty, and the write waited on the top bar's Save. Closing the tab
+// in between dropped the edit, and My demos' Rename — which is this dialog behind
+// `?edit=info` — did nothing at all.
+test("the Edit info dialog saves the metadata itself", async ({ page }) => {
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await signIn(page);
+  const patches = await stubInfoPatch(page);
+
+  await page.goto(`/edit/${DEMO_ID}`);
+  // The before-shot. A freshly loaded demo is clean, so the after-shot alone
+  // would pass against the staging behaviour too — the pair is what proves the
+  // dialog stopped marking the workspace dirty.
+  await expect(saveButton(page)).toHaveText("Save");
+
+  // The BOX INFO pencil — the real path in, and the one Rename lands on.
+  await page.getByRole("button", { name: "Edit info" }).click();
+  const dialog = page.getByRole("dialog", { name: "Edit info" });
+  await dialog.getByLabel("Title").fill("Renamed in the dialog");
+  await dialog.getByLabel("Description").fill("  What it shows  ");
+  await dialog.getByRole("button", { name: "Save" }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]).toEqual({ title: "Renamed in the dialog", description: "What it shows" });
+  // No `files`: that key is what makes the endpoint rebuild the snapshot, and a
+  // rename has no code to rebuild.
+  expect(patches[0]).not.toHaveProperty("files");
+
+  // Nothing outstanding — the write already landed.
+  await expect(saveButton(page)).toHaveText("Save");
+  // And the parent took the new title — it is on the pill and in BOX INFO, hence
+  // `first()` rather than a strict-mode failure over the two.
+  await expect(page.getByText("Renamed in the dialog").first()).toBeVisible();
+});
+
+test("a failed Edit info save keeps the dialog open with the draft", async ({ page }) => {
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await signIn(page);
+  await stubInfoPatch(page, 500);
+
+  await page.goto(`/edit/${DEMO_ID}?edit=info`);
+  const dialog = page.getByRole("dialog", { name: "Edit info" });
+  await dialog.getByLabel("Title").fill("Never landed");
+  await dialog.getByRole("button", { name: "Save" }).click();
+
+  // Closing here would look exactly like the bug this dialog was fixed for:
+  // dismissed, nothing saved, no way to tell.
+  await expect(dialog.getByRole("alert")).toContainText("save failed");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("Title")).toHaveValue("Never landed");
+});
+
 test("a signed-in visitor gets no authed actions on someone else's share", async ({ page }) => {
   await stubShell(page);
   await stubSavedDemo(page);

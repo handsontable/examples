@@ -369,6 +369,7 @@ function ShareRoute({ route }: { route: { mode: "share"; id: string } }) {
  */
 function FullMode({ id }: { id: string }) {
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [version, setVersion] = useState(DEFAULT_VERSION);
   const [frameworkName, setFrameworkName] = useState<string | undefined>(undefined);
   const [files, setFiles] = useState<FilesMap | null>(null);
@@ -378,11 +379,17 @@ function FullMode({ id }: { id: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE}/api/demos/${id}`)
+    // `no-store` (DEV-2495): this endpoint answers `max-age=60,
+    // stale-while-revalidate=300` for the public share traffic it exists for, and
+    // `invalidateDemo` clears only the worker's KV copy — nothing reaches the
+    // browser cache. Without this, opening full mode right after an Edit info save
+    // shows the *old* title for up to a minute, which reads as the save not landing.
+    fetch(`${API_BASE}/api/demos/${id}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
-      .then((meta: { title?: string; ht_version?: string } | null) => {
+      .then((meta: { title?: string; description?: string | null; ht_version?: string } | null) => {
         if (cancelled || !meta) return;
         setTitle(meta.title ?? "");
+        setDescription(meta.description ?? "");
         if (meta.ht_version) setVersion(meta.ht_version);
       })
       .catch(() => { /* the status dot reports the build; a missing title is not an error state */ });
@@ -447,7 +454,31 @@ function FullMode({ id }: { id: string }) {
         onDownload={files ? () => downloadWorkspaceZip(files, title) : undefined}
       />
 
-      <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto", minHeight: 0 }}>
+      {/* The row track follows the caption: the iframe's `1fr` has to stay on the
+          row the iframe is actually in, and a conditional child shifts every row
+          after it. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateRows: description ? "auto auto 1fr auto" : "auto 1fr auto",
+          minHeight: 0,
+        }}
+      >
+        {/* The demo's description, which until DEV-2495 was fetched and thrown away.
+            Undesigned — `65:20432` draws no subtitle — so ADR-0023 rule 1: a muted
+            caption on the seam above the URL bar, the quietest place that is still
+            *shown* rather than a hover. Rendered only when there is one, so a demo
+            without a description keeps the frame exactly as drawn.
+
+            Local to this view rather than a `FullBar` prop: that component is shared
+            with full mode in `play`, where there is no saved row to describe. */}
+        {description && (
+          // The attribute is for the e2e that asserts the *absence* of this line:
+          // matching on text cannot tell "no caption" from "caption not filled in
+          // yet", and matching on `p` would catch whatever else the chrome renders.
+          <p data-demo-description style={fullDescription} title={description}>{description}</p>
+        )}
+
         <FullBar
           url={`${location.origin}/share/${id}`}
           onRefresh={() => setReloadGen((g) => g + 1)}
@@ -467,6 +498,21 @@ function FullMode({ id }: { id: string }) {
     </div>
   );
 }
+
+/** The full-mode description caption. Sized and coloured off the same tokens the
+ *  bar below it uses (`s.bar`: 36px tall, 13px UI text, one border seam), a step
+ *  quieter — it is context for the demo, not chrome you operate. One line: a
+ *  description can be a paragraph, and the demo is what the window is for. */
+const fullDescription: React.CSSProperties = {
+  margin: 0,
+  padding: `${theme.space(2)} ${theme.space(3)}`,
+  borderBottom: `1px solid ${theme.color.border}`,
+  background: theme.color.surface,
+  fontFamily: theme.font.ui,
+  fontSize: 13,
+  color: theme.color.textMuted,
+  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+};
 
 /** Resolves the signed-in user; sends the edit page to login when anonymous. */
 function Gate({ route }: { route: { mode: "play" } | { mode: "edit"; id: string } }) {
@@ -601,10 +647,11 @@ function Authoring({
   const [bootLog, setBootLog] = useState<string>("");
   const [dirty, setDirty] = useState(false);
   // Which *files* are unsaved, for the per-tab dot in the editor strip (T12, ADR-0025
-  // §3). Not derivable from `dirty`, and `dirty` is not derivable from it either: the
-  // Edit info dialog marks the workspace dirty with no file path at all (see its
-  // `onSave` below), and `dirty` is what `Save •` and the docs-switch guard read. Two
-  // facts, two pieces of state.
+  // §3). `dirty` is what `Save •` and the docs-switch guard read; this is what dots a
+  // tab. Kept as two pieces of state: every caller of `markDirty` names a path since
+  // DEV-2495 took the Edit info dialog off it, so the two happen to agree today, but
+  // collapsing `dirty` into `dirtyPaths.size > 0` is a refactor with its own blast
+  // radius (every mutation site) and no bug behind it.
   const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(() => new Set());
   const [syncing, setSyncing] = useState(false); // container rebuild in flight
   const [refreshing, setRefreshing] = useState(false); // row-2 refresh in flight
@@ -724,7 +771,9 @@ function Authoring({
    *  two can't drift — a dot that outlives its edit, or an edit with no dot, both read
    *  as bugs in the indicator rather than in the caller that forgot a line.
    *
-   *  Called with no paths for a metadata-only change (the Edit info dialog). */
+   *  The no-paths call is still accepted — it means "unsaved, but no tab to dot" —
+   *  but nothing uses it since DEV-2495: the Edit info dialog, its only caller, now
+   *  writes its own PATCH instead of staging an edit for the workspace save. */
   const markDirty = useCallback((...touched: string[]) => {
     setDirty(true);
     dirtyRef.current = true;
@@ -771,7 +820,10 @@ function Authoring({
       try {
         const [srcRes, metaRes] = await Promise.all([
           fetch(`${API_BASE}/api/demos/${savedId}/source`, { headers }),
-          fetch(`${API_BASE}/api/demos/${savedId}`),
+          // `no-store` for the same reason `FullMode` uses it (DEV-2495): the
+          // metadata endpoint is cached for a minute in the browser, and this is
+          // the page you land on straight after renaming the demo.
+          fetch(`${API_BASE}/api/demos/${savedId}`, { cache: "no-store" }),
         ]);
         if (cancelled) return;
         if (!srcRes.ok) {
@@ -1842,23 +1894,23 @@ function Authoring({
         <ShareLinks clientUrl={clientUrl} embedUrl={embedUrl} onClose={() => setShareLinksOpen(false)} />
       )}
 
-      {editInfoOpen && (
+      {/* `savedId` narrows the dialog's `demoId` — the pencil is `edit`-only, so it
+          is never null here, but the render guard is where that is provable. */}
+      {editInfoOpen && savedId && (
         <EditInfoDialog
+          apiBase={API_BASE}
+          demoId={savedId}
+          token={getToken()}
           title={title}
           description={description}
           onClose={closeEditInfo}
-          // Marks the workspace dirty rather than PATCHing on its own: the code and
-          // the metadata are one snapshot, and `onSave` sends both in a single
-          // rebuilding PATCH. Saving here too would rebuild twice.
-          //
-          // `markDirty()` with no path, deliberately: the title and description belong
-          // to no file, so this must not dot a tab. It is also the reason `dirty` can't
-          // just be `dirtyPaths.size > 0` (T12).
+          // The dialog PATCHes on its own (DEV-2495) and this runs once the server
+          // has taken it, so there is nothing outstanding to mark: no `markDirty()`.
+          // It used to call it with no path — which is what left a `Save •` over an
+          // edit that had, from the user's side, already been saved.
           onSave={(next) => {
             setTitle(next.title);
             setDescription(next.description);
-            markDirty();
-            closeEditInfo();
           }}
         />
       )}
