@@ -145,6 +145,39 @@ test("full mode draws no caption for a demo without a description", async ({ pag
   await expect(page.locator("[data-demo-description]")).toHaveCount(0);
 });
 
+/**
+ * A saved demo's maximize opens a *tab*, and a browser only copies `sessionStorage`
+ * into a tab that has an opener — which `window.open(…, "noopener")` withholds. The
+ * login token lives in `sessionStorage` (`auth.ts`), so with that flag the new tab is
+ * signed out: invisible in full mode, which needs no auth, until minimize navigates it
+ * to `/edit/:id` and the gate bounces an already-signed-in user through the broker.
+ *
+ * The token is seeded with `evaluate` rather than `addInitScript` on purpose: an init
+ * script would also run in the popup and set the value this test is trying to observe
+ * being *inherited*, which would pass with `noopener` restored.
+ */
+test("maximize opens a tab that inherits the session, so it is still signed in", async ({ page, context }) => {
+  await stubSavedFull(page, null);
+  await page.route("**/api/versions", (route) =>
+    route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0", "17.1.0"] } }),
+  );
+  await page.route("**/broker/userinfo", (route) => route.fulfill({ json: { email: "e2e@handsontable.com" } }));
+  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
+  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+
+  // `/share/:id` rather than `/edit/:id`: it reaches the same `onMaximize` (both are
+  // `route.mode !== "play"`) without an auth gate to satisfy first, so the test stays
+  // about the tab and not about signing in.
+  await page.goto(`/share/${SAVED_ID}`);
+  await page.evaluate(() => sessionStorage.setItem("hot_token", "e2e-token"));
+
+  const popup = context.waitForEvent("page");
+  await page.getByRole("button", { name: MAXIMIZE }).click();
+  const full = await popup;
+
+  await expect.poll(() => full.evaluate(() => sessionStorage.getItem("hot_token"))).toBe("e2e-token");
+});
+
 test("a pasted ?mode=full link boots straight into full mode", async ({ page }) => {
   await openPlayground(page, "?example=react&mode=full");
 
