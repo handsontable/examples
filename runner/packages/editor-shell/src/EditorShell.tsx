@@ -66,6 +66,8 @@ export interface EditorShellProps {
    *  state, not a fault. Rendered beside `versionWarning`, which is the only other
    *  string of its kind the chrome carries. */
   budgetNotice?: string | null;
+  /** What an import could not bring across (DEV-2504). */
+  importNotice?: string | null;
 
   /** BOX INFO. `title` falls back to the example's display name for unsaved workspaces;
    *  `description` / `createdAt` only exist for a saved demo and their rows self-hide. */
@@ -537,6 +539,7 @@ export function EditorShell(props: EditorShellProps) {
             versionLocked={mode === "share"}
             versionWarning={props.versionWarning}
             budgetNotice={props.budgetNotice}
+            importNotice={props.importNotice}
             // Both signed-in only, and both excluded from `share` — where the
             // version is pinned and the demo is someone else's to share.
             versionEditable={props.authed && mode !== "share"}

@@ -36,3 +36,4 @@ once Accepted.
 | [0029](0029-starter-example-buckets-and-frozen-branch-backports.md) | Starter-example buckets, the single-seed image, and frozen-branch backports | Accepted (supersedes 0021 decision 10) |
 | [0030](0030-blank-starter-templates.md) | Blank starter templates, synthesized per bucket | Accepted |
 | [0031](0031-files-drag-and-drop-is-text-only.md) | Drag & drop into FILES is text-only, and batched | Accepted |
+| [0032](0032-importing-from-jsfiddle-and-stackblitz.md) | Importing from JSFiddle and StackBlitz; the Handsontable-only rule | Accepted |

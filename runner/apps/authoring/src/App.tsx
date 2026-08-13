@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   EditorShell,
   FullBar,
@@ -614,6 +614,12 @@ function Authoring({
   const initialDocs = route.mode === "play"
     ? new URLSearchParams(location.search).get("docs")
     : null;
+  // `?import=<provider url>` pulls a JSFiddle/StackBlitz project in through
+  // `POST /api/import` (DEV-2504). A URL rather than dialog state so the import
+  // is shareable and survives a reload, the same way `?example=` and `?docs=` are.
+  const initialImport = route.mode === "play"
+    ? new URLSearchParams(location.search).get("import")
+    : null;
   const [framework, setFramework] = useState<string>(() => {
     const p = new URLSearchParams(location.search).get("example");
     return catalog.examples.some((e) => e.framework === p) ? (p as string) : "react";
@@ -626,6 +632,23 @@ function Authoring({
   const [entry, setEntry] = useState<CatalogEntry>(() => toPlaceholderEntry(getEntry(framework)));
   // Non-null when the current example is a documentation-guide example.
   const [docsPath, setDocsPath] = useState<string | null>(initialDocs);
+  /** `?import=` lifecycle: idle when there is nothing to import, loading while
+   *  the Worker fetches and parses the provider page, loaded once the workspace
+   *  is the imported one, failed with a message the user can act on. */
+  const [importPhase, setImportPhase] = useState<"idle" | "loading" | "loaded" | "failed">(
+    initialImport ? "loading" : "idle",
+  );
+  const [importSkipped, setImportSkipped] = useState<{ path: string; reason: string }[]>([]);
+  /** The provider's own title for an imported workspace. Kept apart from `title`
+   *  because `title` is also the saved-demo field: Share and Fork mint their names
+   *  from `entry.displayName`, which for an import is the *starter* the framework
+   *  resolved to ("TypeScript (Vite)"), so "ToolBar Demo" would be lost on save. */
+  const [importedTitle, setImportedTitle] = useState<string | null>(null);
+  /** `starterGen` as it stood when an import landed — see the starter-load gate.
+   *  A ref as well as the state, because the import effect reads it after an
+   *  await, where its own closure's copy would be the value from mount. */
+  const importStarterGenRef = useRef(0);
+  const starterGenRef = useRef(0);
   // Docs examples for the currently-resolved version bucket.
   const [docsItems, setDocsItems] = useState<DocsManifestItem[]>([]);
   const [activeDocsBucket, setActiveDocsBucket] = useState<string | null>(null);
@@ -794,8 +817,27 @@ function Authoring({
   }, []);
 
   /** Replace the whole workspace (entry + files + lineage) and remount. */
+  /** One line naming what an import refused, or null when it took everything.
+   *  Built here rather than in the Worker so the wording lives with the UI. */
+  const importNotice = useMemo(() => {
+    if (!importSkipped.length) return null;
+    const shown = importSkipped.slice(0, 2).map((s) => `${s.path} (${s.reason})`);
+    const rest = importSkipped.length - shown.length;
+    return `Not imported: ${shown.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}.`;
+  }, [importSkipped]);
+
   const loadWorkspace = useCallback(
     (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
+      // Whatever workspace replaces an import is no longer the import's, so its
+      // title and its skipped-files notice are cleared here — at the moment the
+      // new files are installed, which a failed starter or docs load never
+      // reaches. Doing it in the pickers instead left a failed switch showing the
+      // previous import's notice and minting Fork/Share names from its title.
+      if (!lineage.startsWith("import:")) {
+        setImportPhase("idle");
+        setImportedTitle(null);
+        setImportSkipped([]);
+      }
       filesRef.current = nextFiles; // ensure the mount effect reads the new files
       setEntry(nextEntry);
       setFramework(nextEntry.framework);
@@ -810,6 +852,91 @@ function Authoring({
     },
     [clearDirty],
   );
+
+  // `?import=<url>`: hand the URL to the Worker, which fetches the provider page
+  // and returns a workspace (DEV-2504). Deliberately unsaved — the author reviews
+  // the imported files and Saves deliberately, exactly as after a fork.
+  useEffect(() => {
+    if (!initialImport) return;
+    let cancelled = false;
+    (async () => {
+      const token = getToken();
+      try {
+        const res = await fetch(`${API_BASE}/api/import`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ url: initialImport }),
+        });
+        const body = (await res.json().catch(() => ({}))) as {
+          framework?: string;
+          files?: FilesMap;
+          title?: string;
+          provider?: string;
+          skipped?: { path: string; reason: string }[];
+          error?: string;
+        };
+        if (cancelled) return;
+        if (!res.ok || !body.files || !body.framework) {
+          setImportPhase("failed");
+          setStatus("error");
+          setRetryable(false);
+          setErrorMessage(
+            body.error ??
+              (res.status === 401
+                ? "Sign in to import a project."
+                : "Could not import that URL."),
+          );
+          return;
+        }
+        // The framework has to exist in this catalog or `getEntry` throws and the
+        // whole route unmounts; the Worker resolves it from BUILD_CONFIG, so a
+        // mismatch means the two drifted.
+        let indexEntry;
+        try {
+          indexEntry = getEntry(body.framework);
+        } catch {
+          setImportPhase("failed");
+          setStatus("error");
+          setRetryable(false);
+          setErrorMessage(`The import resolved to an unknown framework (${body.framework}).`);
+          return;
+        }
+        // A starter fetch may already be in flight from the first render (the
+        // playground's default framework). Bumping the sequence makes its
+        // response a no-op, so it cannot land on top of the import.
+        starterRequestSeqRef.current += 1;
+        importStarterGenRef.current = starterGenRef.current;
+        loadWorkspace(toPlaceholderEntry(indexEntry), { ...body.files }, `import:${body.provider ?? "url"}`);
+        if (body.title) {
+          setTitle(body.title);
+          setImportedTitle(body.title);
+        }
+        setImportSkipped(body.skipped ?? []);
+        setImportPhase("loaded");
+        // Release the mount gate the starter path owns: nothing else will, now
+        // that the starter fetch is skipped for an imported workspace.
+        setSourceLoaded(true);
+        sourceLoadedRef.current = true;
+        activeStarterBucketRef.current = null;
+        // Drop `?import=` once it has been consumed, so a reload does not re-run
+        // an import the user may since have edited on top of.
+        const url = new URL(location.href);
+        url.searchParams.delete("import");
+        history.replaceState(null, "", url.pathname + url.search);
+      } catch (error) {
+        if (cancelled) return;
+        reportError(error, "import-url");
+        setImportPhase("failed");
+        setStatus("error");
+        setRetryable(false);
+        setErrorMessage("Could not import that URL.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [initialImport, loadWorkspace]);
 
   // Edit/share mode: load the saved demo's source + metadata into the workspace.
   useEffect(() => {
@@ -1047,6 +1174,24 @@ function Authoring({
   // message the mount guard uses.
   useEffect(() => {
     if (route.mode === "share" || savedId || docsPath) return;
+    // An imported workspace owns its files the way a saved demo does (`savedId`
+    // above) — but only until the user asks for a starter, and *that* distinction
+    // is what two review rounds went around:
+    //
+    //  - gate on "loading" only, and the effect re-runs on the `framework` the
+    //    import just set; `activeStarterBucketRef` is null and `loadWorkspace`
+    //    cleared dirty, so both inner branches fall through to the fetch and a
+    //    catalog starter replaces the import.
+    //  - gate on "loaded" forever, and picking a starter can never fetch again.
+    //  - release the gate inside `selectExample`/`selectDocs`, and a switch that
+    //    *fails* leaves the import open with its protection already dropped.
+    //
+    // `starterGen` separates them: only `selectExample` bumps it, so an unchanged
+    // generation means this run is the import's own re-render (or a version
+    // change, which the re-pin effect below handles), and a bumped one means the
+    // user picked something. Nothing has to be cleared early for it to hold.
+    if (importPhase === "loading") return;
+    if (importPhase === "loaded" && starterGen === importStarterGenRef.current) return;
     // Only next-format versions need nextVersion to resolve a bucket; plain
     // releases are not held on /api/versions.
     if (isNextPrereleaseVersion(version) && !versionsResolved) return;
@@ -1149,6 +1294,17 @@ function Authoring({
     loadWorkspace,
   ]);
 
+  // A version change on an imported workspace re-pins its Handsontable
+  // dependencies in place. The starter effect is gated off while an import is
+  // open, so without this the version picker would move the label and change
+  // nothing in the files.
+  useEffect(() => {
+    if (importPhase !== "loaded") return;
+    const pinned = pinHandsontableFiles(filesRef.current, version);
+    filesRef.current = pinned;
+    setFiles(pinned);
+  }, [importPhase, version]);
+
   // Keep the URL in sync with the selected example + version — playground only
   // (edit/share have their own /edit/:id, /share/:id paths). Docs examples use
   // `?docs=<content-path>`; starters use `?example=<framework>`.
@@ -1184,7 +1340,8 @@ function Authoring({
       sourceLoadedRef.current = false;
       activeStarterBucketRef.current = null;
       setFramework(fw);
-      setStarterGen((g) => g + 1);
+      starterGenRef.current += 1;
+      setStarterGen(starterGenRef.current);
     },
     [],
   );
@@ -1541,7 +1698,7 @@ function Authoring({
         body: JSON.stringify({
           framework: entry.framework,
           files: filesRef.current,
-          title: `${entry.displayName} (embed)`,
+          title: importedTitle ? `${importedTitle} (embed)` : `${entry.displayName} (embed)`,
           htVersion: version,
           forkedFrom: forkedFrom ?? undefined,
         }),
@@ -1559,7 +1716,7 @@ function Authoring({
     } finally {
       setEmbedding(false);
     }
-  }, [user, entry, version, forkedFrom]);
+  }, [user, entry, version, forkedFrom, importedTitle]);
 
   /** Fork the current playground code into a new saved demo, then open its edit page. */
   const onFork = useCallback(async () => {
@@ -1574,7 +1731,9 @@ function Authoring({
         body: JSON.stringify({
           framework: entry.framework,
           files: filesRef.current,
-          title: `Fork of ${entry.displayName}`,
+          // An imported project keeps its own name: "Fork of TypeScript (Vite)"
+          // describes the starter its framework resolved to, not the demo.
+          title: importedTitle ?? `Fork of ${entry.displayName}`,
           htVersion: version,
           forkedFrom: forkedFrom ?? undefined,
         }),
@@ -1590,7 +1749,7 @@ function Authoring({
       setErrorMessage(e instanceof Error ? e.message : String(e));
       setForking(false);
     }
-  }, [user, entry, version, forkedFrom]);
+  }, [user, entry, version, forkedFrom, importedTitle]);
 
   /** Save the saved-demo edits: the code, which rebuilds the snapshot.
    *
@@ -1876,6 +2035,7 @@ function Authoring({
         dirtyPaths={dirtyPaths}
         versionWarning={versionWarning}
         budgetNotice={budgetNotice}
+        importNotice={importNotice}
         // Ask AI and Style, both from DEV-2047. Available on every route — the
         // public `/share` view included, since explaining or restyling a demo is
         // exactly what a shared link invites. Mutually exclusive: since DEV-2209

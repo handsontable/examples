@@ -24,7 +24,10 @@ export type UsageMetric =
   | "chat_edit_undone"
   | "chat_denied"
   | "chat_error"
-  | "theme_prompt";
+  | "theme_prompt"
+  /** An external project pulled in from a provider URL (DEV-2504); the dimension
+   *  is the provider, so /admin shows which one people actually use. */
+  | "import";
 
 const utcDay = (): string => new Date().toISOString().slice(0, 10);
 
