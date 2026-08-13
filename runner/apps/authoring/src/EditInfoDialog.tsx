@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { Dialog, theme } from "@handsontable/demo-editor-shell";
+import { MarkdownField, MAX_DESCRIPTION } from "./MarkdownField.js";
 import {
   fieldInput as input,
   fieldLabel as label,
-  fieldTextarea as textarea,
   formFooter as footer,
   ghostButton as ghost,
   primaryButton as primary,
 } from "./formStyles.js";
 
-/** Title + description editor for a saved demo, built to `114:24410`.
+/** Title + markdown description editor for a saved demo, built to `114:24410`.
  *
  *  Before T9 these were two bare inputs sitting in the authed action bar, always
  *  visible and saved implicitly with the rest of the workspace. The frame makes
@@ -32,9 +32,11 @@ export function EditInfoDialog({
   const [draftTitle, setDraftTitle] = useState(title);
   const [draftDescription, setDraftDescription] = useState(description);
 
-  // The API rejects an empty title (400), and the frame shows no error state, so
-  // the affordance is a disabled button rather than a message.
-  const valid = draftTitle.trim().length > 0;
+  // The API rejects an empty title and an over-long description (both 400), and
+  // the frame shows no error state, so the affordance is a disabled button. The
+  // description's length is reported by the field itself, which is where the
+  // number is useful.
+  const valid = draftTitle.trim().length > 0 && draftDescription.length <= MAX_DESCRIPTION;
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -56,16 +58,17 @@ export function EditInfoDialog({
           required
         />
 
-        <label style={{ ...label, marginTop: theme.space(4) }} htmlFor="hot-edit-description">
-          Description
-        </label>
-        <textarea
-          id="hot-edit-description"
-          style={textarea}
-          value={draftDescription}
-          onChange={(e) => setDraftDescription(e.target.value)}
-          rows={4}
-        />
+        {/* Markdown, several paragraphs if it wants to be (DEV-2507). The toolbar
+            is what makes typing the syntax unnecessary; the preview renders through
+            the same component the demo pages use. */}
+        <div style={{ marginTop: theme.space(4) }}>
+          <MarkdownField
+            id="hot-edit-description"
+            label="Description"
+            value={draftDescription}
+            onChange={setDraftDescription}
+          />
+        </div>
 
         <div style={footer}>
           <button type="submit" style={primary} disabled={!valid}>

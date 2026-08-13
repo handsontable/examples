@@ -36,6 +36,7 @@ import {
   theme,
 } from "@handsontable/demo-editor-shell";
 import { getEntry } from "./catalog.js";
+import { Markdown } from "./markdown.js";
 import { getToken, logout, type User } from "./auth.js";
 import { displayNameFromEmail, initialFromEmail } from "./displayName.js";
 import { ghostButton } from "./formStyles.js";
@@ -351,7 +352,14 @@ function DemoCard({
 
       <div style={cardBody}>
         <h2 style={cardTitle}>{demo.title}</h2>
-        {demo.description && <p style={cardDescription}>{demo.description}</p>}
+        {/* Markdown, clamped to the frame's three lines (DEV-2507). No expand
+            affordance here: the card is a link to the demo, and the sidebar there
+            shows the whole thing. */}
+        {demo.description && (
+          <div style={cardDescription}>
+            <Markdown text={demo.description} />
+          </div>
+        )}
       </div>
 
       <footer style={cardFoot}>

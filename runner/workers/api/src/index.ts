@@ -13,6 +13,7 @@ import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate } from "./auth.js";
+import { isValidationError, validateDescription, validateTitle } from "./demo-info.js";
 import { errorPageResponse } from "./error-page.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, updateDemo, type DemoRow } from "./share.js";
 import {
@@ -655,7 +656,11 @@ export default Sentry.withSentry(sentryOptions, {
         };
         const cfg = BUILD_CONFIG[body.framework];
         if (!cfg) return json({ error: `unknown framework: ${body.framework}` }, 400);
-        if (!body.title?.trim()) return json({ error: "title is required" }, 400);
+        const title = validateTitle(body.title);
+        if (isValidationError(title)) return json(title, 400);
+        // Markdown, kept verbatim (DEV-2507) — only the length is our business.
+        const description = validateDescription(body.description);
+        if (isValidationError(description)) return json(description, 400);
         if (!body.files || !body.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
 
         // A build is a container boot too, so it answers to the same ceiling.
@@ -669,8 +674,8 @@ export default Sentry.withSentry(sentryOptions, {
           entry: { framework: body.framework, ...cfg },
           files: body.files,
           htVersion: body.htVersion ?? "latest",
-          title: body.title.trim(),
-          description: body.description ?? null,
+          title,
+          description: description ?? null,
           createdBy: id.email,
           forkedFrom: body.forkedFrom ?? `catalog:${body.framework}`,
           now: nowIso(),
@@ -715,9 +720,16 @@ export default Sentry.withSentry(sentryOptions, {
         if (!row) return json({ error: "not found" }, 404);
         if (row.created_by !== id.email) return json({ error: "forbidden" }, 403);
         const patch = (await request.json()) as {
-          title?: string; description?: string; visibility?: string;
+          title?: string; description?: string | null; visibility?: string;
           files?: Record<string, string>; htVersion?: string;
         };
+        // Validated once for both branches below. `undefined` still means "leave
+        // it alone" and `null` "clear it" — the distinction the description edit
+        // depends on (DEV-2507).
+        const patchTitle = patch.title === undefined ? undefined : validateTitle(patch.title);
+        if (isValidationError(patchTitle)) return json(patchTitle, 400);
+        const patchDescription = validateDescription(patch.description);
+        if (isValidationError(patchDescription)) return json(patchDescription, 400);
         // Code change -> rebuild the snapshot in place (edit-page Save).
         if (patch.files) {
           if (!patch.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
@@ -732,11 +744,11 @@ export default Sentry.withSentry(sentryOptions, {
             entry: { framework: row.framework, ...cfg },
             files: patch.files,
             htVersion: patch.htVersion ?? row.ht_version,
-            title: patch.title?.trim() || row.title,
+            title: patchTitle ?? row.title,
             // `??` here meant a description could be set but never cleared: the client
             // sends `null` for an emptied field, and `null ?? row.description` restored
             // the old text. Absent (`undefined`) means "leave alone"; `null` means clear.
-            description: patch.description !== undefined ? patch.description : row.description,
+            description: patchDescription !== undefined ? patchDescription : row.description,
             now: nowIso(),
           });
           return json({ ok: true });
@@ -744,9 +756,9 @@ export default Sentry.withSentry(sentryOptions, {
         // Metadata-only update (title / description / visibility).
         await env.DB.prepare("UPDATE demos SET title=?, description=?, visibility=?, updated_at=? WHERE id=?")
           .bind(
-            patch.title ?? row.title,
+            patchTitle ?? row.title,
             // See the rebuild branch above: `undefined` leaves it, `null` clears it.
-            patch.description !== undefined ? patch.description : row.description,
+            patchDescription !== undefined ? patchDescription : row.description,
             patch.visibility ?? row.visibility,
             nowIso(),
             demoId,
