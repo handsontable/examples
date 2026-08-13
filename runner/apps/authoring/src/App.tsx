@@ -475,8 +475,10 @@ function FullMode({ id }: { id: string }) {
     return () => { cancelled = true; };
   }, [id, reloadGen]);
 
-  /** Leaving full mode is a navigation, not `window.close()`: `close()` only works for
-   *  a window the script opened, so it silently does nothing on a pasted link. */
+  /** Leaving full mode is a navigation, not `window.close()`. A tab the maximize button
+   *  opened could close itself — it has an opener — but a *pasted* `?mode=full` link is
+   *  a tab no script opened, where `close()` silently does nothing. One path that works
+   *  everywhere beats two, so both navigate. */
   const leaveFullWindow = useCallback(() => {
     const url = new URL(location.href);
     url.searchParams.delete("mode");
@@ -1957,7 +1959,14 @@ function Authoring({
     const url = new URL(location.href);
     url.searchParams.set("mode", "full");
     if (route.mode !== "play") {
-      window.open(url.toString(), "_blank", "noopener");
+      // No `noopener`: it opens the tab as a fresh top-level context, and the browser
+      // only clones `sessionStorage` into a tab that has an opener. The login token
+      // lives there (`auth.ts`), so a `noopener` tab is signed *out* — invisible in
+      // full mode, which needs no auth, until minimize navigates it to `/edit/:id`
+      // and the gate sends an already-signed-in user back through the broker. The
+      // target is this same origin with one param added, so there is nothing for an
+      // opener reference to abuse.
+      window.open(url.toString(), "_blank");
       return;
     }
     history.replaceState(null, "", url.pathname + url.search + url.hash);
