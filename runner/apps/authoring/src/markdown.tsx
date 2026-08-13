@@ -34,7 +34,24 @@ function renderInline(nodes: Inline[], keyPrefix: string): ReactNode[] {
   });
 }
 
-export function Markdown({ text, error }: { text: string; error?: boolean }) {
+/**
+ * `document` renders headings at their real level and as real `h1`–`h6` elements.
+ *
+ * The default is the chat panel this renderer was built for: a 400px drawer where
+ * every heading is one 13px weight-600 line, because a document scale inside a
+ * side panel is noise. A page of prose (`/guide`, DEV-2503) needs the opposite —
+ * without hierarchy the title, the section headings and the body all read as the
+ * same thing — and it needs the landmarks a screen reader navigates by.
+ */
+export function Markdown({
+  text,
+  error,
+  document: asDocument,
+}: {
+  text: string;
+  error?: boolean;
+  document?: boolean;
+}) {
   const blocks = parseMarkdown(text);
   return (
     <div style={{ color: error ? theme.color.danger : undefined }}>
@@ -45,12 +62,24 @@ export function Markdown({ text, error }: { text: string; error?: boolean }) {
             return <pre key={key} style={preStyle}><code>{block.text}</code></pre>;
           case "rule":
             return <hr key={key} style={ruleStyle} />;
-          case "heading":
+          case "heading": {
+            if (!asDocument) {
+              return (
+                <div key={key} style={headingStyle}>
+                  {renderInline(block.children, key)}
+                </div>
+              );
+            }
+            // `h1`–`h6`, clamped: the parser reports the `#` count, and a stray
+            // `#######` must not become an invalid tag name.
+            const level = Math.min(Math.max(block.level, 1), 6);
+            const Tag = `h${level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
             return (
-              <div key={key} style={headingStyle}>
+              <Tag key={key} style={documentHeadingStyle(level)}>
                 {renderInline(block.children, key)}
-              </div>
+              </Tag>
             );
+          }
           case "table":
             return (
               <div key={key} style={tableWrapStyle}>
@@ -137,4 +166,20 @@ const linkStyle: React.CSSProperties = { color: theme.color.accentText };
 const headingStyle: React.CSSProperties = {
   fontSize: 13, fontWeight: 600, margin: `${theme.space(3)} 0 ${theme.space(1)}`,
 };
+
+/** Document headings (`document` mode). Sizes step down and the space above each
+ *  one is what actually separates sections — a heading that hugs the paragraph
+ *  before it reads as part of it. */
+function documentHeadingStyle(level: number): React.CSSProperties {
+  const size = level === 1 ? 24 : level === 2 ? 18 : level === 3 ? 15 : 14;
+  return {
+    fontSize: size,
+    fontWeight: level === 1 ? 700 : 600,
+    lineHeight: 1.3,
+    // No top margin on the title: it is the first thing on the page.
+    margin: level === 1
+      ? `0 0 ${theme.space(4)}`
+      : `${theme.space(level === 2 ? 7 : 5)} 0 ${theme.space(2)}`,
+  };
+}
 const listStyle: React.CSSProperties = { margin: "0 0 8px", paddingLeft: 20 };

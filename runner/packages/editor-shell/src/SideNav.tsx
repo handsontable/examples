@@ -12,12 +12,12 @@
 // the stylesheet's hover and the rows would look dead.
 
 import type { CSSProperties } from "react";
-import { IconListDetails, IconLogin2, IconSettings2, IconUsers } from "./icons/index.js";
+import { IconBook, IconListDetails, IconLogin2, IconSettings2, IconUsers } from "./icons/index.js";
 import { theme } from "./theme.js";
 
 export interface SideNavProps {
   /** Which row is the current page. */
-  active: "myDemos" | "allDemos" | "settings";
+  active: "myDemos" | "allDemos" | "settings" | "guide";
   onLogout: () => void;
 }
 
@@ -30,6 +30,9 @@ export function SideNav({ active, onLogout }: SideNavProps) {
           `WHERE`, and `IconUsers` says "other people's" without a word. */}
       <NavLink href="/all-demos" active={active === "allDemos"} icon={<IconUsers />} label="All demos" />
       <NavLink href="/settings" active={active === "settings"} icon={<IconSettings2 />} label="Settings" />
+      {/* `/guide` (DEV-2503) — the in-app how-to. `IconBook` is already in the set
+          (it heads a README row elsewhere) and reads as documentation. */}
+      <NavLink href="/guide" active={active === "guide"} icon={<IconBook />} label="Guide" />
       <div style={navRule} role="separator" />
       <button type="button" className="hot-menu-row" style={navRow} onClick={onLogout}>
         <IconLogin2 />

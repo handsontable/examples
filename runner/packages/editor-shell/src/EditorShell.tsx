@@ -116,6 +116,8 @@ export interface EditorShellProps {
   onUsage?: () => void;
   /** `/settings`, the profile page. Reaches the account menu. */
   onSettings?: () => void;
+  /** `/guide` (DEV-2503) — reaches the account menu. */
+  onGuide?: () => void;
   onLogout?: () => void;
   /** "play" (playground -> Fork), "edit" (saved demo -> Save/Share), or
    *  "share" (read-only public playground). */
@@ -395,6 +397,7 @@ export function EditorShell(props: EditorShellProps) {
         onMyDemos={props.fullMode ? undefined : props.onMyDemos}
         onUsage={props.fullMode ? undefined : props.onUsage}
         onSettings={props.fullMode ? undefined : props.onSettings}
+        onGuide={props.fullMode ? undefined : props.onGuide}
         onLogout={props.fullMode ? undefined : props.onLogout}
         // The mode action is resolved here, not in `TopBar`, and off `authed`
         // rather than off `accountEmail`. The two disagree on exactly one route:

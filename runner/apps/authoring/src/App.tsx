@@ -41,6 +41,7 @@ import { AskAiButton, ChatPanel } from "./Chat.js";
 import { StyleButton, StylePanel } from "./StylePanel.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
+import { GuidePage } from "./Guide.js";
 import { Markdown } from "./markdown.js";
 import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
@@ -207,7 +208,12 @@ type EditorRoute =
 
 /** Routes that are not the editor at all. Kept out of `EditorRoute` so every
  *  `route.mode` switch inside `Authoring` stays exhaustive over editor modes. */
-type AppRoute = EditorRoute | { mode: "myDemos" } | { mode: "allDemos" } | { mode: "settings" };
+type AppRoute =
+  | EditorRoute
+  | { mode: "myDemos" }
+  | { mode: "allDemos" }
+  | { mode: "settings" }
+  | { mode: "guide" };
 
 function parseRoute(): AppRoute {
   if (/^\/my-demos\/?$/.test(location.pathname)) return { mode: "myDemos" };
@@ -218,6 +224,9 @@ function parseRoute(): AppRoute {
   // serves index.html for it (`not_found_handling: "single-page-application"`),
   // so it never 404'd, it just showed the wrong thing.
   if (/^\/settings\/?$/.test(location.pathname)) return { mode: "settings" };
+  // `/guide` (DEV-2503) — the in-app how-to. Same shape as the two above: matched
+  // before the editor fallthrough, which would otherwise read it as a demo id.
+  if (/^\/guide\/?$/.test(location.pathname)) return { mode: "guide" };
   const m = location.pathname.match(/^\/(edit|share)\/([A-Za-z0-9_-]+)\/?$/);
   if (m) return { mode: m[1] as "edit" | "share", id: m[2]! };
   return { mode: "play" };
@@ -253,7 +262,13 @@ function beacon(path: string): void {
  * new — and the maximize button has to work from the editor, which is where it lives.
  */
 function fullModeId(route: AppRoute): string | null {
-  if (route.mode === "play" || route.mode === "myDemos" || route.mode === "allDemos" || route.mode === "settings") return null;
+  if (
+    route.mode === "play" ||
+    route.mode === "myDemos" ||
+    route.mode === "allDemos" ||
+    route.mode === "settings" ||
+    route.mode === "guide"
+  ) return null;
   return new URLSearchParams(location.search).get("mode") === "full" ? route.id : null;
 }
 
@@ -288,6 +303,9 @@ export function App() {
   if (route.mode === "allDemos") return <MyDemosRoute scope="all" />;
   // Same story as My demos: auth-gated, renders no runtime, boots no container.
   if (route.mode === "settings") return <SettingsRoute />;
+  // Login-gated like the two above: the guide describes what signing in unlocks,
+  // and it is the account menu that offers it.
+  if (route.mode === "guide") return <GuideRoute />;
   // The share page is a public, read-only playground — no auth needed.
   if (route.mode === "share") return <ShareRoute route={route} />;
   return <Gate route={route} />;
@@ -329,6 +347,23 @@ function SettingsRoute() {
   if (user === undefined) return <Splash text="Loading data …" />;
   if (user === null) return <Splash text="Sign in to change your profile…" />;
   return <SettingsPage apiBase={API_BASE} user={user} />;
+}
+
+/** `/guide` (DEV-2503). The content is the same markdown as
+ *  `runner/docs/create-and-share-a-demo.md`; this route only gates and frames it. */
+function GuideRoute() {
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  useEffect(() => {
+    currentUser().then(setUser);
+  }, []);
+  useEffect(() => {
+    if (user === null) login(); // return_to preserves /guide
+  }, [user]);
+  useDocumentTitle("Guide");
+
+  if (user === undefined) return <Splash text="Loading data …" />;
+  if (user === null) return <Splash text="Sign in to read the guide…" />;
+  return <GuidePage apiBase={API_BASE} user={user} />;
 }
 
 /**
@@ -2072,6 +2107,7 @@ function Authoring({
         // account menu that holds it renders only for an identified user.
         onUsage={() => { location.href = "/admin"; }}
         onSettings={() => { location.href = "/settings"; }}
+        onGuide={() => { location.href = "/guide"; }}
         // `edit` is auth-gated — `Gate` answers a null user with `login()`, so a
         // plain reload would bounce straight back to the broker. `play` and
         // `share` render fine anonymously and keep their example.
