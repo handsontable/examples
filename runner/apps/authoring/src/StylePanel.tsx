@@ -10,7 +10,7 @@
 // it lands in the running preview through the same file-write path the editor
 // uses. Styling a demo is editing the demo.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Drawer,
   headerLabel,
@@ -21,13 +21,15 @@ import {
   theme as ui,
 } from "@handsontable/demo-editor-shell";
 import { reportError } from "./sentry.js";
-import type { FilesMap } from "@handsontable/demo-runtime";
+import type { FilesMap, WriteFileOptions } from "@handsontable/demo-runtime";
 import {
   buildResetChanges,
   buildThemeChanges,
+  buildThemeParams,
   buildThemeSnippet,
   isTypescript,
   manualImportHint,
+  THEME_BRIDGE_SOURCE,
   themeModulePath,
 } from "./theme/codegen.js";
 import {
@@ -51,6 +53,12 @@ import {
   type Token,
   type TokenValue,
 } from "./theme/vocabulary.js";
+import {
+  INTERACTION_ONLY_NOTE,
+  mergeSuggestion,
+  NOTHING_CHANGED_NOTE,
+  type ThemeAnswer,
+} from "./theme/suggestion.js";
 import { densitySizes as presetDensity, presetColors, presetTokens } from "./theme/presets.js";
 import { effectiveColors, effectiveDensity, effectiveTokens } from "./theme/resolve.js";
 import { TokenControl, type ControlContext } from "./theme/controls.js";
@@ -60,6 +68,44 @@ type Tab = "foundation" | "common" | "component" | "ai";
 
 const STORAGE_KEY = "hot-runner-theme";
 
+/**
+ * How long a live patch may take to be acknowledged before the panel gives up on
+ * the bridge and lets the change land by rebuild instead (DEV-2496).
+ *
+ * It is a round trip between two frames on the same machine — single-digit
+ * milliseconds — so this is not a latency budget, it is how long to wait before
+ * concluding there is nobody there: a demo that has not compiled since the theme
+ * was wired in, an example whose grid the panel could not find, a preview that has
+ * just been torn down.
+ */
+const BRIDGE_ACK_TIMEOUT_MS = 300;
+
+/** Trailing delay on the writes the bridge did not cover. Long enough to coalesce a
+ *  drag into one rebuild, short enough to read as immediate on a single click. */
+const FLUSH_DELAY_MS = 250;
+
+function writeStorage(state: ThemeState) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch { /* private browsing; the theme just will not survive a reload */ }
+}
+
+/**
+ * Changes the running theme object cannot absorb, so the demo has to be rebuilt.
+ *
+ * The three presets are `import`s in the generated module — a different tokens,
+ * colors or icons module is a different file, not a different value. A Google font
+ * is the same story from the other end: the module appends the stylesheet `<link>`
+ * that makes the family available, and `params()` setting `fontFamily` to a font the
+ * document never loaded renders in the fallback.
+ */
+function needsRebuild(prev: ThemeState, next: ThemeState): boolean {
+  return prev.tokens !== next.tokens
+    || prev.colors !== next.colors
+    || prev.icons !== next.icons
+    || googleFontFamily(prev.params.fontFamily) !== googleFontFamily(next.params.fontFamily);
+}
+
 export interface StylePanelProps {
   apiBase: string;
   /** Broker token of the signed-in user. /api/theme runs the same budget gate
@@ -67,12 +113,29 @@ export interface StylePanelProps {
    *  `anon_blocked` tier — exactly when the tier means to keep them working. */
   token: string | null;
   getFiles: () => FilesMap;
-  /** Write a file into the editor + running preview. */
-  applyEdit: (path: string, contents: string) => void;
+  /** Write a file into the editor + running preview. `{ quiet: true }` keeps the
+   *  file and skips the rebuild, for a change the bridge has already applied. */
+  applyEdit: (path: string, contents: string, opts?: WriteFileOptions) => void;
+  /** Send a message into the preview frame (the live theme patch). */
+  postToPreview: (message: unknown) => void;
+  /** Subscribe to messages coming back out of it; returns an unsubscribe. */
+  onPreviewMessage: (cb: (data: unknown) => void) => () => void;
+  /** Rebuild with whatever the quiet writes are holding — the fallback when a live
+   *  patch does not land. */
+  flushQuietEdits: () => void;
   onClose: () => void;
 }
 
-export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: StylePanelProps) {
+export function StylePanel({
+  apiBase,
+  token,
+  getFiles,
+  applyEdit,
+  postToPreview,
+  onPreviewMessage,
+  flushQuietEdits,
+  onClose,
+}: StylePanelProps) {
   // Restored across reloads, as theme-builder does — a theme is worth several
   // minutes of fiddling and losing it to a refresh is its own small tragedy.
   const [state, setState] = useState<ThemeState>(() => {
@@ -97,6 +160,51 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
   const [densityVariant, setDensityVariant] = useState<ThemeState["density"]>(() => state.density);
   const [showCode, setShowCode] = useState(false);
   const [applied, setApplied] = useState<{ linked: boolean } | null>(null);
+
+  /**
+   * Is there a live theme bridge in the preview right now? (DEV-2496)
+   *
+   * Set by the `ready` the generated module posts as it evaluates, and cleared by
+   * every write that rebuilds. Cleared, not kept: each evaluation of that module
+   * calls `reinitTheme`, which *replaces* the registered ThemeBuilder rather than
+   * notifying the old one's subscribers — so a bridge is only good until the next
+   * rebuild, and patching across one would go to an object no grid is listening to.
+   */
+  const bridgeReady = useRef(false);
+  /** The current theme, readable from the unmount cleanup — which runs after the last
+   *  render and so cannot see `state` through a stale closure. */
+  const stateRef = useRef(state);
+  /** Live patches in flight, by id, waiting for their `ack`. */
+  const acks = useRef(new Map<number, (ok: boolean) => void>());
+  const patchSeq = useRef(0);
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const storageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => onPreviewMessage((data) => {
+    const message = data as { source?: string; ready?: boolean; ack?: number; ok?: boolean } | null;
+    if (!message || message.source !== THEME_BRIDGE_SOURCE) return;
+    if (message.ready) {
+      bridgeReady.current = true;
+      return;
+    }
+    if (typeof message.ack === "number") acks.current.get(message.ack)?.(message.ok === true);
+  }), [onPreviewMessage]);
+
+  // Nothing here may outlive the panel: a pending rebuild would never be asked for
+  // again (the workspace has the theme, the preview would not), and a pending
+  // localStorage write is the theme this session spent its time on.
+  useEffect(() => () => {
+    if (flushTimer.current) {
+      clearTimeout(flushTimer.current);
+      flushQuietEdits();
+    }
+    if (storageTimer.current) {
+      clearTimeout(storageTimer.current);
+      writeStorage(stateRef.current);
+    }
+    // Mount/unmount only; the callbacks are stable for the panel's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // A theme restored from a previous session describes files this demo may not
   // have — reopening the panel, or opening a different example, must reconcile
@@ -141,26 +249,103 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
 
   const overrideCount = (tokens: Token[]) => tokens.filter((t) => state.params[t.key] !== undefined).length;
 
-  /** Write the theme into the demo. Every change goes through the editor's own
-   *  applyEdit, so the file shows up in the file tree and in a download. */
-  function apply(next: ThemeState) {
+  /** Rebuild the preview from the files, once, after the current burst of changes.
+   *  Trailing rather than immediate: a colour drag is thirty changes, and it deserves
+   *  one rebuild rather than thirty. */
+  function scheduleFlush() {
+    if (flushTimer.current) clearTimeout(flushTimer.current);
+    flushTimer.current = setTimeout(() => {
+      flushTimer.current = null;
+      flushQuietEdits();
+    }, FLUSH_DELAY_MS);
+  }
+
+  /** Hand the theme to the running grid, and report whether it got there — with the
+   *  id it was sent under, so a late answer can be recognised as stale. */
+  function patchLive(next: ThemeState): Promise<{ id: number; ok: boolean }> {
+    const id = ++patchSeq.current;
+    return new Promise<{ id: number; ok: boolean }>((resolve) => {
+      const settle = (ok: boolean) => {
+        clearTimeout(timer);
+        acks.current.delete(id);
+        resolve({ id, ok });
+      };
+      const timer = setTimeout(() => settle(false), BRIDGE_ACK_TIMEOUT_MS);
+      acks.current.set(id, settle);
+      postToPreview({ source: THEME_BRIDGE_SOURCE, id, params: buildThemeParams(next) });
+    });
+  }
+
+  /**
+   * Write the theme into the demo. Every change goes through the editor's own
+   * applyEdit, so the file shows up in the file tree and in a download.
+   *
+   * The write is always quiet, and what rebuilds the preview is decided afterwards
+   * (DEV-2496). With a bridge in the preview and nothing structural in the change,
+   * the running grid is patched instead and no rebuild happens at all — which is the
+   * whole point: a rebuild re-evaluates the demo, and dragging a colour picker
+   * through thirty of them is the "blink blink" this panel was reported for.
+   * Otherwise a single trailing rebuild lands the change the ordinary way.
+   *
+   * `prev === undefined` means the mount reconcile, which cannot be live: the theme
+   * has not been wired into this demo yet.
+   */
+  function apply(next: ThemeState, prev?: ThemeState) {
     const { changes, linked } = buildThemeChanges(getFiles(), next);
-    for (const change of changes) applyEdit(change.path, change.contents);
+    for (const change of changes) applyEdit(change.path, change.contents, { quiet: true });
     setApplied({ linked });
+
+    const live = linked && bridgeReady.current && prev !== undefined && !needsRebuild(prev, next);
+    if (!live) {
+      // The rebuild re-evaluates the module, so the bridge that comes back is a new
+      // one; it announces itself and sets this again.
+      bridgeReady.current = false;
+      scheduleFlush();
+      return;
+    }
+
+    void patchLive(next).then(({ id, ok }) => {
+      // Only the newest patch may decide. An earlier one settling late describes a
+      // theme two drag frames old, and would order a rebuild nobody needs.
+      if (ok || id !== patchSeq.current) return;
+      // Screen and files must not be allowed to disagree: if the patch was refused
+      // (a half-typed colour, a grid that never subscribed) the file is what has to
+      // land, so ask for the rebuild after all.
+      bridgeReady.current = false;
+      scheduleFlush();
+    });
+  }
+
+  /** localStorage on a trailing timer, for the same reason as the rebuild: a drag
+   *  would otherwise serialise the whole theme on every frame. */
+  function persist(next: ThemeState) {
+    if (storageTimer.current) clearTimeout(storageTimer.current);
+    storageTimer.current = setTimeout(() => {
+      storageTimer.current = null;
+      writeStorage(next);
+    }, FLUSH_DELAY_MS);
   }
 
   function update(patch: Partial<ThemeState>) {
     const next = { ...state, ...patch };
     setState(next);
-    apply(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch { /* private browsing; the theme just will not survive a reload */ }
+    stateRef.current = next;
+    apply(next, state);
+    persist(next);
   }
 
-  /** "Describe a style" — theme-builder's headline feature. The server returns
-   *  whitelisted theme values, which are merged on top of what is already set
-   *  so a follow-up ("now make the header darker") refines rather than resets. */
+  /**
+   * "Describe a style" — theme-builder's headline feature. The server returns
+   * whitelisted theme values, which are merged on top of what is already set so a
+   * follow-up ("now make the header darker") refines rather than resets.
+   *
+   * What comes back is *checked* rather than announced (DEV-2497). The model's
+   * message is a claim about what it did, and it was reported as a bug when the
+   * claim was true and the grid still looked identical: a brand ramp paints
+   * selection, focus and the active header, none of which is on screen until you
+   * touch the grid. `mergeSuggestion` says whether the theme moved and whether
+   * anything at rest moved with it, so the panel can say the same.
+   */
   async function describe(text: string) {
     const request = text.trim();
     if (!request || thinking) return;
@@ -175,23 +360,25 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
         },
         body: JSON.stringify({ prompt: request, current: state }),
       });
-      const body = (await res.json().catch(() => ({}))) as {
-        message?: string;
-        tokens?: Record<string, string>;
-        palette?: Record<string, string>;
-        config?: Partial<ThemeState>;
-        error?: string;
-      };
+      const body = (await res.json().catch(() => ({}))) as ThemeAnswer & { error?: string };
       if (!res.ok) {
         setAiNote(body.message ?? `Unavailable (${res.status}).`);
         return;
       }
-      update({
-        ...(body.config ?? {}),
-        params: { ...state.params, ...(body.tokens ?? {}) },
-        palette: { ...state.palette, ...(body.palette ?? {}) },
-      });
-      setAiNote(body.message ?? null);
+
+      const { next, effect } = mergeSuggestion(state, body);
+      if (effect === "none") {
+        // Nothing to apply, so nothing is applied: `update()` here would write the
+        // theme module and order a rebuild to land a theme identical to the one
+        // already running. The prompt is left in the box, because the next thing
+        // the user does is edit it.
+        setAiNote(NOTHING_CHANGED_NOTE);
+        return;
+      }
+
+      update(next);
+      const message = body.message ?? "Done.";
+      setAiNote(effect === "interactionOnly" ? `${message} ${INTERACTION_ONLY_NOTE}` : message);
       setPrompt("");
     } catch (err) {
       reportError(err, "theme-ai");
@@ -278,8 +465,21 @@ export function StylePanel({ apiBase, token, getFiles, applyEdit, onClose }: Sty
   }
 
   function reset() {
+    // Not quiet, and not scheduled: Reset takes the wiring back out of the demo, which
+    // only a rebuild can carry — and it takes the bridge with it, so the theme object
+    // the next patch would reach for is about to stop existing.
+    if (flushTimer.current) {
+      clearTimeout(flushTimer.current);
+      flushTimer.current = null;
+    }
+    if (storageTimer.current) {
+      clearTimeout(storageTimer.current);
+      storageTimer.current = null;
+    }
+    bridgeReady.current = false;
     for (const change of buildResetChanges(getFiles())) applyEdit(change.path, change.contents);
     setState(DEFAULT_THEME);
+    stateRef.current = DEFAULT_THEME;
     // The density editor holds its own variant, so a pristine theme has to
     // bring it back too — otherwise Reset leaves it pointed at the old variant,
     // warning about a mismatch that no longer exists.

@@ -1,6 +1,15 @@
 // The FILES section: a real folder tree over the flat `FilesMap` key set (`31:6438`).
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { Dialog } from "./Dialog.js";
+import {
+  collectDroppedEntries,
+  collectDroppedFiles,
+  dropTargetDir,
+  rejectionMessage,
+  uniquePath,
+  type DropEntryLike,
+  type DroppedFile,
+} from "./dropFiles.js";
 import {
   FileIcon,
   FolderIcon,
@@ -27,6 +36,10 @@ export interface FileTreeProps {
   /** When true, show add/rename/delete controls (CodeSandbox-style CRUD). */
   editable?: boolean;
   onAddFile?: (path: string) => void;
+  /** Drag & drop (DEV-2500). Batched on purpose: one call per drop, not per file
+   *  — N separate adds are N workspace re-renders and N pushes into a Tier-2
+   *  container's dev server. Absent = no drop target (the read-only modes). */
+  onAddFiles?: (files: { path: string; contents: string }[]) => void;
   onRenameFile?: (oldPath: string, newPath: string) => void;
   onDeleteFile?: (path: string) => void;
 }
@@ -103,6 +116,7 @@ export function FileTree({
   onDownloadAll,
   editable,
   onAddFile,
+  onAddFiles,
   onRenameFile,
   onDeleteFile,
 }: FileTreeProps) {
@@ -122,7 +136,107 @@ export function FileTree({
   // workspace and there is no undo.
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
+  // ---- drag & drop (DEV-2500) ---------------------------------------------
+  const canDrop = !!editable && !!onAddFiles;
+  // dragenter/dragleave fire for every descendant the pointer crosses, so a
+  // boolean would flicker off the moment the cursor entered a row. Depth counter,
+  // and it lives in a ref *and* in state: the ref is the truth (synchronous
+  // across the event pair), the state is what renders.
+  const dragDepth = useRef(0);
+  const [dropping, setDropping] = useState(false);
+  const [dropNote, setDropNote] = useState<string | null>(null);
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+  // A drop whose files collide with existing paths waits here for an answer.
+  // The whole batch waits, not just the colliding half: a partially-applied drop
+  // is impossible to reason about after the fact.
+  const [collision, setCollision] = useState<{ files: DroppedFile[]; clashes: string[] } | null>(null);
+
   const rows = useMemo(() => flatten(tree, (p) => shutDirs.has(p)), [tree, shutDirs]);
+
+  function endDrag() {
+    dragDepth.current = 0;
+    setDropping(false);
+    setDropTargetPath(null);
+  }
+
+  /** Commit a batch, renaming or replacing according to the collision answer. */
+  function commit(files: DroppedFile[], mode: "overwrite" | "keep-both") {
+    if (mode === "overwrite") {
+      onAddFiles?.(files);
+      onSelect(files[files.length - 1]!.path);
+      return;
+    }
+    // Freed paths accumulate across the batch, or two dropped files landing on
+    // the same taken name would both be renamed to `-1`.
+    const claimed = new Set(paths);
+    const renamed = files.map((file) => {
+      const path = uniquePath(file.path, (candidate) => claimed.has(candidate));
+      claimed.add(path);
+      return { ...file, path };
+    });
+    onAddFiles?.(renamed);
+    onSelect(renamed[renamed.length - 1]!.path);
+  }
+
+  async function onDrop(event: DragEvent) {
+    if (!canDrop) return;
+    event.preventDefault();
+    const targetDir = dropTargetPath
+      ? dropTargetDir(dropTargetPath, !paths.includes(dropTargetPath))
+      : "";
+    // Read the DataTransfer synchronously — it is emptied as soon as this
+    // handler returns, so anything read after the first await is gone.
+    const entries = [...event.dataTransfer.items]
+      .map((item) => (item.kind === "file" ? (item.webkitGetAsEntry() as DropEntryLike | null) : null))
+      .filter((entry): entry is DropEntryLike => entry !== null);
+    const plainFiles = entries.length ? [] : [...event.dataTransfer.files];
+    endDrag();
+    setDropNote(null);
+
+    const result = entries.length
+      ? await collectDroppedEntries(entries, targetDir)
+      : await collectDroppedFiles(plainFiles, targetDir);
+    setDropNote(rejectionMessage(result));
+    if (!result.files.length) return;
+    // Files are about to appear; a shut section would hide the whole result.
+    if (collapsed) onToggle();
+
+    const clashes = result.files.map((f) => f.path).filter((p) => paths.includes(p));
+    if (clashes.length) {
+      setCollision({ files: result.files, clashes });
+      return;
+    }
+    commit(result.files, "overwrite");
+  }
+
+  /** Drop-zone props, spread onto the section. Empty when dropping is not allowed
+   *  — without a `dragover` preventDefault the browser navigates to the file. */
+  const dropZone = canDrop
+    ? {
+        onDragEnter: (event: DragEvent) => {
+          if (!isFileDrag(event)) return;
+          dragDepth.current += 1;
+          setDropping(true);
+        },
+        onDragOver: (event: DragEvent) => {
+          if (!isFileDrag(event)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+          // Resolved from what is under the pointer *now*, on the section rather
+          // than per row. Row-level `dragenter` handlers could set a target but
+          // never unset it: moving from a row onto the header, or onto empty
+          // space below the tree, left the last row as the target, so the hint
+          // named a directory the pointer had left and the drop landed there.
+          const next = targetPathFrom(event);
+          setDropTargetPath((current) => (current === next ? current : next));
+        },
+        onDragLeave: () => {
+          dragDepth.current -= 1;
+          if (dragDepth.current <= 0) endDrag();
+        },
+        onDrop,
+      }
+    : {};
 
   // Derived, not the raw state: `paths` is replaced wholesale on an example switch,
   // which would otherwise leave the dialog asking about a file that is no longer here.
@@ -134,6 +248,23 @@ export function FileTree({
   useEffect(() => {
     if (pendingDelete && !paths.includes(pendingDelete)) setPendingDelete(null);
   }, [paths, pendingDelete]);
+
+  // An example switch replaces the file set wholesale, and a "skipped logo.png"
+  // note from the previous workspace has nothing to do with the new one.
+  //
+  // Keyed on paths *disappearing*, not on `paths` changing at all: a successful
+  // drop also changes `paths`, and a plain `[paths]` reset would wipe the note
+  // that had just reported which of the dropped files were refused. Only an
+  // example switch (or a delete) takes paths away.
+  const seenPaths = useRef(paths);
+  useEffect(() => {
+    const removed = seenPaths.current.some((path) => !paths.includes(path));
+    seenPaths.current = paths;
+    if (removed) {
+      setDropNote(null);
+      setCollision(null);
+    }
+  }, [paths]);
 
   function toggleDir(path: string) {
     setShutDirs((prev) => {
@@ -170,7 +301,17 @@ export function FileTree({
   }
 
   return (
-    <section style={section} aria-label="Files">
+    // The drop zone is the whole section, header included, so a drop still lands
+    // when FILES is collapsed — `onDrop` expands it rather than swallowing the
+    // files into a shut section. `data-dropping` drives the dashed target in the
+    // app stylesheet: an inline background or border here would outrank it
+    // (ADR-0026), which is what killed the demo-card hover before.
+    <section
+      style={section}
+      aria-label="Files"
+      data-dropping={dropping ? "true" : undefined}
+      {...dropZone}
+    >
       <SectionHeader
         label="Files"
         collapsed={collapsed}
@@ -216,6 +357,28 @@ export function FileTree({
         }
       />
 
+      {/* Pinned over the section, not inserted into the file list: in the flow it
+          added a row's worth of height the instant a drag entered, which shifted
+          every row under a stationary pointer — retargeting the drop, or landing
+          the pointer on the hint itself. `pointerEvents: none` keeps it out of the
+          drag entirely, and the section's outline is what marks the target.
+          Named for the e2e locator: a screenshot cannot tell a live drop target
+          from a dead one. */}
+      {dropping && (
+        <p style={dropHint} data-testid="files-drop-hint">
+          {`Drop into ${dropTargetDir(dropTargetPath, dropTargetPath !== null && !paths.includes(dropTargetPath)) || "the project root"}`}
+        </p>
+      )}
+
+      {/* Outside `!collapsed`: a drop that expands the section renders its note in
+          the same pass, and a collapsed section is where a wrong-file-type
+          message is most needed (nothing else moved). */}
+      {dropNote && (
+        <p style={noteText} role="status">
+          {dropNote}
+        </p>
+      )}
+
       {!collapsed && (
         <div style={body}>
           {adding && (
@@ -256,7 +419,16 @@ export function FileTree({
                 onBlur={() => commitRename(node.path)}
               />
             ) : node.kind === "dir" ? (
-              <div key={node.path} className="hot-file-row" style={row}>
+              <div
+                key={node.path}
+                className="hot-file-row"
+                data-drop-target={dropping && dropTargetPath === node.path ? "true" : undefined}
+                // Read by `targetPathFrom` on the section's dragover. The row sets
+                // no handler of its own: only the section can tell that the
+                // pointer has *left* a row.
+                data-drop-path={canDrop ? node.path : undefined}
+                style={row}
+              >
                 <button
                   type="button"
                   style={rowButton}
@@ -277,6 +449,10 @@ export function FileTree({
                 key={node.path}
                 className="hot-file-row"
                 data-active={node.path === active ? "true" : undefined}
+                data-drop-target={dropping && dropTargetPath === node.path ? "true" : undefined}
+                // A file row targets the file's own directory — "drop it next to
+                // this" — resolved in `dropTargetDir`.
+                data-drop-path={canDrop ? node.path : undefined}
                 style={row}
               >
                 <button
@@ -365,8 +541,80 @@ export function FileTree({
           </div>
         </Dialog>
       )}
+
+      {/* A drop that would land on paths already in the workspace. Overwriting is
+          offered but is not the default action, because the files it replaces may
+          hold unsaved edits and nothing here can undo that. */}
+      {collision && (
+        <Dialog title="Some of these files already exist" onClose={() => setCollision(null)}>
+          <p style={confirmBody}>
+            {collision.clashes.length === 1
+              ? `${collision.clashes[0]} is already in this workspace.`
+              : `${collision.clashes.length} of the ${collision.files.length} dropped files are already in this workspace:`}
+            {collision.clashes.length > 1 && (
+              <>
+                <br />
+                <strong>{collision.clashes.slice(0, 5).join(", ")}</strong>
+                {collision.clashes.length > 5 && ` and ${collision.clashes.length - 5} more`}
+              </>
+            )}
+          </p>
+          <div style={confirmFooter}>
+            <button
+              type="button"
+              style={dangerButton}
+              onClick={() => {
+                commit(collision.files, "overwrite");
+                setCollision(null);
+              }}
+            >
+              Replace
+            </button>
+            {/* Focus lands on the non-destructive option, as in the delete confirm. */}
+            <button
+              type="button"
+              data-autofocus
+              style={ghostButton}
+              onClick={() => {
+                commit(collision.files, "keep-both");
+                setCollision(null);
+              }}
+            >
+              Keep both
+            </button>
+            <button type="button" style={ghostButton} onClick={() => setCollision(null)}>
+              Cancel
+            </button>
+          </div>
+        </Dialog>
+      )}
     </section>
   );
+}
+
+/**
+ * The row under the pointer, as a workspace path — or null for the header, the
+ * empty space below the tree, and anything else that is not a row.
+ *
+ * `closest` rather than the event target itself: a row is a `div` wrapping a
+ * `button` wrapping an icon and a label, so the target is usually a descendant.
+ */
+function targetPathFrom(event: DragEvent): string | null {
+  const node = event.target as Element | null;
+  const row = node && typeof node.closest === "function" ? node.closest("[data-drop-path]") : null;
+  return row?.getAttribute("data-drop-path") ?? null;
+}
+
+/**
+ * Is this drag carrying files, rather than a text selection or an internal drag?
+ *
+ * Without the check, dragging a code selection out of the editor and across the
+ * sidebar would light up the drop target and then drop nothing — `items` for a
+ * text drag has `kind: "string"`. `types` is the only part of the DataTransfer
+ * readable during `dragover` (the protected mode hides the data itself).
+ */
+function isFileDrag(event: DragEvent): boolean {
+  return [...event.dataTransfer.types].includes("Files");
 }
 
 /** One 16px slot per level, gaps included — the design aligns rows on the chevron column. */
@@ -379,6 +627,9 @@ const section: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   minHeight: 0,
+  // The positioning context for the drop hint overlay (DEV-2500). Nothing else in
+  // this section is positioned, so this cannot disturb the sidebar's layout.
+  position: "relative",
 };
 
 const body: CSSProperties = {
@@ -443,6 +694,39 @@ const rowActions: CSSProperties = {
   gap: theme.space(2),
   paddingLeft: theme.space(2),
   flexShrink: 0,
+};
+
+/** The drop hint: an overlay over the section's lower edge while a file drag is
+ *  over it. Absolute (never in the flow) and pointer-transparent — see the note
+ *  at its render site. `surfaceRaised` rather than the accent tint, because it now
+ *  floats over rows rather than sitting between them. */
+const dropHint: CSSProperties = {
+  position: "absolute",
+  left: theme.space(3),
+  right: theme.space(3),
+  bottom: 4,
+  margin: 0,
+  padding: "4px 6px",
+  borderRadius: theme.radius.sm,
+  border: `1px solid ${theme.color.accentBorder}`,
+  background: theme.color.surfaceRaised,
+  color: theme.color.accentText,
+  fontFamily: theme.font.ui,
+  fontSize: 10,
+  lineHeight: "16px",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  pointerEvents: "none",
+};
+
+/** What a drop refused. Sits under the header so it is visible collapsed too. */
+const noteText: CSSProperties = {
+  margin: `2px ${theme.space(3)}`,
+  fontFamily: theme.font.ui,
+  fontSize: 10,
+  lineHeight: "14px",
+  color: theme.color.textMuted,
 };
 
 const confirmBody: CSSProperties = {

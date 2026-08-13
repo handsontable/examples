@@ -1,0 +1,71 @@
+# ADR-0031: Drag & drop into FILES is text-only, and batched
+
+**Status:** Accepted (DEV-2500, subtask of DEV-2498)
+
+> Numbered 0031, not 0030: DEV-2499 (the blank starter templates) takes 0030 on
+> its own branch and merges first.
+
+## Context
+
+The FILES section could only gain a file through its `+` control and a typed
+path. Marek asked for drag & drop — single and multiple files, with a visible
+drop target.
+
+The awkward part is not the drag plumbing, it is what a dropped file *is*. A
+workspace is `Record<string, string>` from the editor down to the builder:
+`pipeline/import.mjs` refuses binaries outright (`BINARY_EXT` records the path
+and drops the bytes), `POST /api/session/:id/file` takes `{ path, contents }` as
+text, and the R2 snapshot is written from that same string map. There is no
+representation for an image today, and "drop a file in" will read to anyone as
+"drop my logo in".
+
+## Decision
+
+**1. Text only, refused by name, with the reason shown.** An allowlist of
+extensions (plus a few extensionless text names), a 512 KB per-file cap matching
+the importer's `MAX_TEXT_BYTES`, and a 50-file ceiling per drop. A refused file
+produces a line under the FILES header — "Skipped logo.png (not a text file)" —
+rather than silence or a corrupted file in the editor. Build output, `.git`,
+`node_modules` and lockfiles inside a dropped directory are skipped without
+comment: nobody meant to drop those, so there is nothing to report.
+
+Image and font support is deliberately **not** in this change. It needs either
+base64 in the `FilesMap` or an R2 asset side-channel through the builder, and
+both are larger than this ticket.
+
+**2. `.env` files are never accepted**, whatever their suffix. A demo is a
+shareable artifact; a dropped `.env.local` would put real credentials one Save
+away from a public `/d/:id`.
+
+**3. One batched callback, `onAddFiles`, not `onAddFile` in a loop.** N separate
+adds are N workspace commits, and on a Tier-2 framework N dev-server rebuilds,
+each invalidating the last. The tree hands the whole drop over in one call.
+
+**4. A collision waits for an answer, and the whole batch waits with it.**
+Replace / Keep both / Cancel, with focus on Keep both — the files a replace would
+overwrite may hold unsaved edits and nothing in the app can undo that. Applying
+the non-colliding half immediately would leave a state nobody can reason about
+afterwards.
+
+**5. The drop target is styled from the app stylesheet, keyed off
+`data-dropping`** (and `data-drop-target` on the row a drop would land in), per
+ADR-0026: an inline `outline`/`background` on the section would outrank the row
+rules and the target would never light up.
+
+**6. Gated on the same switch as the rest of the file CRUD** (`editable` plus the
+presence of the callback), so `/share/:id` and anonymous play have no drop target
+at all.
+
+## Consequences
+
+- `packages/editor-shell/src/dropFiles.ts` holds the traversal and stays free of
+  React and DOM types, so `pipeline/drop-files.test.mjs` drives it with fakes.
+  That is where the cases a Playwright drop cannot reach live: nested
+  directories, excluded trees, and the `readEntries` batching contract (the real
+  reader returns ~100 entries per call and an empty array to finish — a
+  single-call implementation silently truncates a large folder).
+- A scripted `DataTransfer` returns `null` from `webkitGetAsEntry()`, so
+  `e2e/files-drop.spec.ts` exercises the plain-`files` fallback rather than the
+  entry traversal. Both paths exist for that reason, not only for old browsers.
+- The 50-file ceiling and every per-file refusal are reported. A silent cap would
+  read as "everything was added".

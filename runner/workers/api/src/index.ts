@@ -13,7 +13,9 @@ import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate } from "./auth.js";
+import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse } from "./error-page.js";
+import { ImportError, importFromUrl } from "./import-url.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, updateDemo, type DemoRow } from "./share.js";
 import {
   budgetPausedMessage,
@@ -679,14 +681,29 @@ export default Sentry.withSentry(sentryOptions, {
         return json({ id: created.id, url: `/d/${created.id}`, embedUrl: `/embed/${created.id}` }, 201);
       }
 
-      // GET /api/demos  (auth, ?mine=1) — list the caller's demos
+      // GET /api/demos  (auth) — the caller's demos, or `?scope=all` for the
+      // team's (DEV-2506). Visibility only: editing still answers to
+      // `created_by` in the PATCH/DELETE handlers below.
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts.length === 2) {
         const id = await authenticate(request, env);
         if (!id) return json({ error: "unauthorized" }, 401);
-        const rows = await env.DB.prepare(
-          "SELECT id,title,description,framework,tier,ht_version,forked_from,visibility,revoked,created_at,updated_at FROM demos WHERE created_by = ? ORDER BY updated_at DESC",
-        ).bind(id.email).all();
-        return json({ demos: rows.results });
+        const scope = parseDemoScope(url.searchParams.get("scope"));
+        const query = demoListQuery(scope, id.email);
+        const rows = await env.DB.prepare(query.sql).bind(...query.binds).all();
+        return json({ demos: rows.results, scope });
+      }
+
+      // GET /api/demos/:id/access  (auth) — may the caller edit this demo?
+      //
+      // Its own endpoint because `GET /api/demos/:id` is public *and* edge-cached
+      // (`cacheableJson`): adding an auth-dependent field there would hand one
+      // caller's answer to the next. One row, no cache, no body to speak of.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts[3] === "access" && parts.length === 4) {
+        const id = await authenticate(request, env);
+        if (!id) return json({ error: "unauthorized" }, 401);
+        const row = await getDemo(env, parts[2]!);
+        if (!row) return json({ error: "not found" }, 404);
+        return json({ owned: row.created_by === id.email, revoked: !!row.revoked });
       }
 
       // GET /api/demos/:id/source  (public) — source snapshot for the read-only
@@ -732,11 +749,16 @@ export default Sentry.withSentry(sentryOptions, {
             entry: { framework: row.framework, ...cfg },
             files: patch.files,
             htVersion: patch.htVersion ?? row.ht_version,
-            title: patch.title?.trim() || row.title,
-            // `??` here meant a description could be set but never cleared: the client
-            // sends `null` for an emptied field, and `null ?? row.description` restored
-            // the old text. Absent (`undefined`) means "leave alone"; `null` means clear.
-            description: patch.description !== undefined ? patch.description : row.description,
+            // Forwarded only when the request carried them, and `row` is never used
+            // as the fallback: a rebuild takes long enough for the Edit info dialog
+            // to commit a rename in the middle of one, and re-writing the row this
+            // handler read at the start would revert it (DEV-2495). Absent means the
+            // UPDATE leaves the column alone; `null` on description still clears it,
+            // which is the distinction the `!== undefined` check exists for. A
+            // supplied-but-blank title is dropped for the same reason — falling back
+            // to `row.title` would write a value that may already be stale.
+            ...(patch.title?.trim() ? { title: patch.title.trim() } : {}),
+            ...(patch.description !== undefined ? { description: patch.description } : {}),
             now: nowIso(),
           });
           return json({ ok: true });
@@ -821,6 +843,30 @@ export default Sentry.withSentry(sentryOptions, {
           // version that may not exist — actionable, so report it.
           Sentry.captureException(e, { tags: { upstream: "npm-registry", probe: "version-exists" } });
           return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+        }
+      }
+
+      // POST /api/import  (auth) — pull a workspace out of a JSFiddle or
+      // StackBlitz URL (DEV-2504). Auth'd because it makes the Worker fetch a
+      // user-supplied URL; `resolveSource` is the host gate.
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "import" && parts.length === 2) {
+        const id = await authenticate(request, env);
+        if (!id) return json({ error: "unauthorized" }, 401);
+        const body = (await request.json().catch(() => ({}))) as { url?: string };
+        if (!body.url?.trim()) return json({ error: "url is required" }, 400);
+        try {
+          const imported = await importFromUrl(body.url, {
+            knownFrameworks: new Set(Object.keys(BUILD_CONFIG)),
+          });
+          await recordUsageEvent(env, "import", imported.provider);
+          return json(imported);
+        } catch (error) {
+          // An ImportError is the user's problem to fix (wrong host, private
+          // project) or a provider format change; either way its message is
+          // written to be shown. Anything else is ours, and gets reported.
+          if (error instanceof ImportError) return json({ error: error.message }, error.status);
+          Sentry.captureException(error, { tags: { upstream: "import-url" } });
+          return json({ error: "import failed" }, 500);
         }
       }
 

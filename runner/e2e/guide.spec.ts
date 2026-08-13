@@ -33,8 +33,9 @@ test("the guide renders the doc as formatted text", async ({ page }) => {
   for (const section of [
     "1. Pick a starting point",
     "4. Import a demo from somewhere else",
-    "7. Save, fork, share, embed",
-    "9. Useful URLs",
+    "5. Publish a demo from your own machine",
+    "8. Save, fork, share, embed",
+    "10. Useful URLs",
   ]) {
     await expect(page.getByText(section, { exact: true })).toBeVisible();
   }

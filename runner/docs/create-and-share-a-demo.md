@@ -23,7 +23,7 @@ Use the **example picker** in the top bar. It holds three kinds of thing:
 
 - **Blank templates** — first in the list. An empty 5x5 grid and nothing else: no
   sample data, no plugins switched on. Start here when you want to build something
-  up deliberately.
+  up deliberately; the **Create** tile in My demos goes straight there.
 - **Framework starters** — JavaScript, TypeScript, React, Vue, Angular, Next.js,
   Nuxt, Astro, Remix, and the UI-library combinations (MUI, Ant Design, Fluent UI,
   Base Web). These are the full showcase examples.
@@ -78,7 +78,39 @@ Only projects that actually use Handsontable can be imported — this playground
 hosts Handsontable demos, and an import that has no `handsontable` dependency, no
 import of it and no CDN tag is refused with that explanation.
 
-## 5. Ask AI, and the Style panel
+## 5. Publish a demo from your own machine
+
+If the example already exists in a folder on your computer, the **publish-demo**
+Claude Code plugin does the fiddly half of this page for you: it works out which
+starter matches your project and which Handsontable version it pins, stages a
+clean copy of the files (leaving out `node_modules`, build output, lockfiles,
+binaries and anything called `.env`), opens the runner with the right starter and
+version already selected, and checks afterwards that the demo actually built.
+
+Install it once:
+
+```
+claude plugin marketplace add handsontable/claude-plugins
+claude plugin install publish-demo@handsontable
+```
+
+Then, in Claude Code, in the folder with your example:
+
+```
+publish this demo
+```
+
+…or `/publish-demo:publish-demo` to invoke it directly. It will hand you the
+prepared folder to drop onto **Files**, and the client link at the end.
+
+Two things worth knowing. It is **not** a one-command upload: signing in here is a
+Google login in the browser, so the drag step is real — the plugin removes
+everything around it, not the login itself. And there is a sibling plugin,
+**publish-app**, for a different job: an *application* with a backend, a login or
+its own storage gets its own Cloudflare Worker and belongs there. Examples — a
+grid, its data, and the code that configures it — belong here.
+
+## 6. Ask AI, and the Style panel
 
 - **Ask AI** answers questions about the open example, with links into the
   documentation. If it suggests a code change it *proposes* it — you apply it, or
@@ -88,7 +120,7 @@ import of it and no CDN tag is refused with that explanation.
   you share is the styling you see. You can also describe a look in words and let
   it generate the theme.
 
-## 6. Title and description
+## 7. Title and description
 
 The pencil in **Box info** (top of the sidebar) edits the demo's **title** and
 **description**.
@@ -106,7 +138,7 @@ with a **Show more** toggle, so a detailed one never pushes the file tree off th
 screen. The limit is 4,000 characters, and the field tells you when you are near
 it.
 
-## 7. Save, fork, share, embed
+## 8. Save, fork, share, embed
 
 - **Save** (on a demo you own) writes your edits and rebuilds the shared page.
 - **Fork** takes whatever is open — a starter, a docs example, someone else's
@@ -122,7 +154,7 @@ it.
   anyone with the link can read the code, try changes and download a `.zip`, but
   cannot save over it or change its version.
 
-## 8. My demos
+## 9. My demos
 
 **My demos** (account menu) lists everything you have created: open, copy the
 link, rename, fork, or delete. Deleting revokes the link — the client page starts
@@ -137,7 +169,7 @@ opens the read-only view instead. Revoked demos stay in your own list, with thei
 badge, so you can see what happened to a link you shared; they do not clutter
 anyone else's.
 
-## 9. Useful URLs
+## 10. Useful URLs
 
 Anything you can reach by clicking, you can also link to directly:
 
@@ -156,7 +188,7 @@ Anything you can reach by clicking, you can also link to directly:
 | `/my-demos`, `/all-demos` | your demos; everyone's |
 | `/settings`, `/guide` | your profile; this page |
 
-## 10. Settings and admin
+## 11. Settings and admin
 
 - **Settings** is your display name, a short bio and your avatar — what shows on
   your demo cards.

@@ -66,6 +66,8 @@ export interface EditorShellProps {
    *  state, not a fault. Rendered beside `versionWarning`, which is the only other
    *  string of its kind the chrome carries. */
   budgetNotice?: string | null;
+  /** What an import could not bring across (DEV-2504). */
+  importNotice?: string | null;
 
   /** BOX INFO. `title` falls back to the example's display name for unsaved workspaces;
    *  `description` / `createdAt` only exist for a saved demo and their rows self-hide. */
@@ -85,6 +87,9 @@ export interface EditorShellProps {
   onEdit: (path: string, contents: string) => void;
   /** File-tree CRUD (CodeSandbox-style). When omitted the tree is read-only-of-structure. */
   onAddFile?: (path: string) => void;
+  /** Drag & drop into the FILES section (DEV-2500). One call per drop; the tree
+   *  opens the last file itself through `onSelect`, so nothing is wrapped here. */
+  onAddFiles?: (files: { path: string; contents: string }[]) => void;
   onRenameFile?: (oldPath: string, newPath: string) => void;
   onDeleteFile?: (path: string) => void;
   /** Persist the saved demo. Surfaced as the top bar's mode action in `edit`. */
@@ -372,7 +377,8 @@ export function EditorShell(props: EditorShellProps) {
   return (
     <div style={s.shell}>
       {/* Full mode's top-right is theme toggle + `Download`, and that is the whole of
-          `65:20458` — no mode action, no `Sign in`, no account menu. Not a functionality
+          `65:20458` — no mode action, no account menu (and no `Sign in`, which
+          since DEV-2505 lives in the preview status bar). Not a functionality
           cut under ADR-0023 rule 1: minimize is right there, and every control returns
           with the editor. The artifact full mode has always rendered this way
           (`FullMode` passes no `accountEmail` and no `onSignIn`). */}
@@ -384,7 +390,6 @@ export function EditorShell(props: EditorShellProps) {
         secondaryActions={props.fullMode ? undefined : props.secondaryActions}
         onDownload={props.onDownload}
         downloadHighlight={props.downloadHighlight}
-        onSignIn={props.fullMode ? undefined : props.onSignIn}
         accountEmail={props.fullMode ? undefined : props.accountEmail}
         accountDisplayName={props.fullMode ? undefined : props.accountDisplayName}
         accountAvatarUrl={props.fullMode ? undefined : props.accountAvatarUrl}
@@ -439,6 +444,7 @@ export function EditorShell(props: EditorShellProps) {
             // The wrapped forms, not the raw props: they keep the tab strip in step
             // with what the tree just did to the file set.
             onAddFile={addFile}
+            onAddFiles={props.onAddFiles}
             onRenameFile={renameFile}
             onDeleteFile={deleteFile}
           />
@@ -536,6 +542,7 @@ export function EditorShell(props: EditorShellProps) {
             versionLocked={mode === "share"}
             versionWarning={props.versionWarning}
             budgetNotice={props.budgetNotice}
+            importNotice={props.importNotice}
             // Both signed-in only, and both excluded from `share` — where the
             // version is pinned and the demo is someone else's to share.
             versionEditable={props.authed && mode !== "share"}
@@ -568,6 +575,11 @@ export function EditorShell(props: EditorShellProps) {
             status={props.status}
             frameworkName={props.frameworkName}
             version={props.version}
+            // Same two conditions the top bar applied before DEV-2505 moved this:
+            // never in full mode, and never to someone already signed in (on
+            // `/share/:id` a signed-in visitor keeps their account menu and must
+            // not be offered a login).
+            onSignIn={props.fullMode || props.accountEmail ? undefined : props.onSignIn}
           />
         </div>
       </div>

@@ -115,3 +115,97 @@ test("a single palette step still reaches the panel alone", () => {
   const { palette } = sanitise({ message: "Redder header.", palette: { "primary.500": "#ff0000" } });
   assert.deepEqual(palette, { "primary.500": "#ff0000" });
 });
+
+// A brand recolour that nothing on screen shows (DEV-2497). The primary ramp
+// reaches 38 of the 279 tokens, and every one of them is an interaction state —
+// selection, focus, active header, checkbox. A resting grid paints primary
+// nowhere, so "corporate green" applied perfectly and looked like a no-op.
+test("a brand ramp alone tints the header, so the recolour is visible at rest", () => {
+  // Verbatim the reproduced payload: complete green ramp, empty `tokens`.
+  const { tokens } = sanitise({
+    message: "Applied a corporate green palette.",
+    tokens: {},
+    palette: {
+      "primary.100": "#e6f4ea",
+      "primary.200": "#b9dfc4",
+      "primary.300": "#7dbf90",
+      "primary.400": "#3d9e58",
+      "primary.500": "#1a7a38",
+      "primary.600": "#0d5225",
+    },
+  });
+
+  // A `[light, dark]` pair of ramp references, the shape the presets themselves
+  // use (`accentColor` is `["colors.primary.500","colors.primary.300"]`). A bare
+  // light hex would apply to both schemes, and a dark grid resolves its header
+  // foreground to `palette.200` — light grey on pale mint, about 1.7:1.
+  assert.deepEqual(
+    tokens.headerBackgroundColor,
+    ["colors.primary.100", "colors.primary.600"],
+    "the header follows the ramp, light end in light and dark end in dark",
+  );
+  assert.deepEqual(
+    tokens.headerRowBackgroundColor,
+    ["colors.primary.100", "colors.primary.600"],
+    "and so does its linked row-header pair",
+  );
+});
+
+test("a ramp the model half-supplied still earns the tint once it is completed", () => {
+  const { tokens } = sanitise({
+    message: "Navy.",
+    palette: {
+      "primary.100": "#e6ecf5",
+      "primary.300": "#8fa8cc",
+      "primary.400": "#4a6fa5",
+      "primary.500": "#1e3a5f",
+      "primary.600": "#12243c",
+    },
+  });
+
+  assert.deepEqual(tokens.headerBackgroundColor, ["colors.primary.100", "colors.primary.600"]);
+});
+
+test("a resting surface the model set itself is never overridden", () => {
+  const { tokens } = sanitise({
+    message: "Green, with a white header.",
+    tokens: { headerBackgroundColor: "#ffffff" },
+    palette: {
+      "primary.100": "#e6f4ea",
+      "primary.200": "#b9dfc4",
+      "primary.300": "#7dbf90",
+      "primary.400": "#3d9e58",
+      "primary.500": "#1a7a38",
+      "primary.600": "#0d5225",
+    },
+  });
+
+  assert.equal(tokens.headerBackgroundColor, "#ffffff");
+  assert.equal(tokens.headerRowBackgroundColor, undefined, "the pairing is the model's call, not ours");
+});
+
+test("a single step is a deliberate accent change, not a recolour", () => {
+  const { tokens } = sanitise({ message: "Green selection.", palette: { "primary.500": "#1a7a38" } });
+  assert.deepEqual(tokens, {});
+});
+
+// Where the two safety nets compose badly if the floor is not aimed carefully.
+// `completeRamp` fills from two supplied steps, so "darker green selection
+// border" — a legitimate two-step accent tweak — arrives at the floor as a
+// *complete* ramp. Tinting from it repaints the header in a mid-tone green
+// (`fillRamp` clamps step 100 to its nearest neighbour), which is not what was
+// asked for. The floor is for a model that meant all six and lost one.
+test("a two-step accent tweak completed into a ramp does not tint the header", () => {
+  const { tokens, palette } = sanitise({
+    message: "Darker green selection border.",
+    palette: { "primary.400": "#3d9e58", "primary.500": "#1a7a38" },
+  });
+
+  assert.deepEqual(tokens, {}, "an accent tweak must not repaint the header");
+  assert.equal(Object.keys(palette).length, 6, "the ramp is still completed, as DEV-2197 requires");
+});
+
+test("a token-only answer is left exactly as it came", () => {
+  const { tokens } = sanitise({ message: "Red header.", tokens: { headerBackgroundColor: "#ff0000" } });
+  assert.deepEqual(tokens, { headerBackgroundColor: "#ff0000" });
+});
