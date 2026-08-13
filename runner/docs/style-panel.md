@@ -262,7 +262,9 @@ rewrite code. It shares the rate limits, the budget tiers and the `llm` cost
 metering (see [cost-guardrails.md](cost-guardrails.md)).
 
 Requests are asked to set **all six** primary steps for a recolour — one step
-against five stale ones reads as a bug rather than a new brand colour.
+against five stale ones reads as a bug rather than a new brand colour — and,
+since the ramp alone is invisible on a grid nobody has clicked, the resting
+surfaces with them (see [below](#a-recolour-has-to-be-visible-dev-2497)).
 
 Asking is not enough, so a ramp that arrives incomplete is completed before it
 is returned (`workers/api/src/theme-ramp.ts`, DEV-2197). The missing steps

@@ -249,6 +249,13 @@ export function sanitiseSuggestion(raw: unknown): ThemeSuggestion {
     if (clean) palette[key] = clean;
   }
 
+  // How many brand steps the *model* supplied, counted before `fillRamp` invents
+  // the rest. The floor below needs this rather than the completed ramp: two
+  // supplied steps are enough for `completeRamp` to return all six, so a
+  // deliberate accent tweak ("darker green selection border") would otherwise
+  // reach the floor looking exactly like a full recolour.
+  const suppliedPrimary = PRIMARY_RAMP.filter((step) => palette[`primary.${step}`]).length;
+
   // Fill any gaps the model — or the whitelist above — left in a ramp. A ramp
   // that is nearly complete deep-merges its missing steps from the preset, so
   // one stale rung survives in the middle of a new brand colour and reads as a
@@ -267,9 +274,13 @@ export function sanitiseSuggestion(raw: unknown): ThemeSuggestion {
   // and its own token choices, and half a pair here would fight that. It only
   // fires when the answer set no resting surface at all, so it never overrides a
   // decision the model actually made.
-  const rampComplete = PRIMARY_RAMP.every((step) => palette[`primary.${step}`]);
+  // `>= PRIMARY_RAMP.length - 1`, not "complete": the whole ramp, or the whole
+  // ramp minus the one step the model forgot or the whitelist above dropped —
+  // which is the reported DEV-2197 shape and unmistakably a recolour. Anything
+  // less is a request about specific colours, and the header is not its business.
+  const isRecolour = suppliedPrimary >= PRIMARY_RAMP.length - 1;
   const touchesRest = Object.keys(tokens).some((key) => RESTING_SURFACE_TOKENS.has(key));
-  if (rampComplete && !touchesRest) {
+  if (isRecolour && !touchesRest) {
     const lightest = palette[`primary.${PRIMARY_RAMP[0]}`]!;
     tokens.headerBackgroundColor = lightest;
     // The pair the panel keeps together itself (`setParam`'s linkedTokens): a

@@ -177,6 +177,22 @@ test("a single step is a deliberate accent change, not a recolour", () => {
   assert.deepEqual(tokens, {});
 });
 
+// Where the two safety nets compose badly if the floor is not aimed carefully.
+// `completeRamp` fills from two supplied steps, so "darker green selection
+// border" — a legitimate two-step accent tweak — arrives at the floor as a
+// *complete* ramp. Tinting from it repaints the header in a mid-tone green
+// (`fillRamp` clamps step 100 to its nearest neighbour), which is not what was
+// asked for. The floor is for a model that meant all six and lost one.
+test("a two-step accent tweak completed into a ramp does not tint the header", () => {
+  const { tokens, palette } = sanitise({
+    message: "Darker green selection border.",
+    palette: { "primary.400": "#3d9e58", "primary.500": "#1a7a38" },
+  });
+
+  assert.deepEqual(tokens, {}, "an accent tweak must not repaint the header");
+  assert.equal(Object.keys(palette).length, 6, "the ramp is still completed, as DEV-2197 requires");
+});
+
 test("a token-only answer is left exactly as it came", () => {
   const { tokens } = sanitise({ message: "Red header.", tokens: { headerBackgroundColor: "#ff0000" } });
   assert.deepEqual(tokens, { headerBackgroundColor: "#ff0000" });
