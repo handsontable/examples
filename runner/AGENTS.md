@@ -185,6 +185,9 @@ does not pick up the repo-root manifest.
   hosts, https, rebuilt URL); `assertHandsontableProject` is the product gate and belongs on every
   future whole-project entry point. CodeSandbox is refused on purpose: its API answers 403 behind a
   bot challenge, and we do not work around that.
+  An import is a **conversion, not a copy** (DEV-2509): CDN `<script>` tags become npm dependencies
+  imported under the global's own identifier, and Handsontable's CDN CSS becomes an npm import so
+  the demo follows the version picker. Copying verbatim produced demos that could not run.
 - Tier-2 containers stay warm while a tab is open (client keepalive + `sleepAfter=5m`); disk is ephemeral, so a slept container cold-boots on return.
 - **Cost guardrails** (DEV-2030, ADR-0022): `max_instances` 5/3 is the container cap — don't raise it without redoing the arithmetic in `docs/cost-guardrails.md`. Spend degrades live sessions in stages while static shares keep serving. The dollar thresholds and the enforcement switch are **editable at runtime in `/admin`** (stored in `runner_settings`); the `BUDGET_*` vars are only defaults.
 - **Ask AI** (DEV-2047, `docs/example-chat.md`): chat panel scoped to the open example; docs chunks are retrieved **in the browser** (Cloudflare blocks Worker→workers.dev, error 1042), the Worker adds Algolia page links and calls LiteLLM. Model edits are proposed, never auto-applied, and every answer is metered into the cost ledger.
