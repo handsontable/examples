@@ -273,3 +273,158 @@ for (const example of ["react", "astro"] as const) {
       .toHaveAttribute("data-live-probe", "1");
   });
 }
+
+// ---- AI styling: what the panel claims it did (DEV-2497) ---------------------
+//
+// Reported as "the AI tab didn't produce a new palette for 'corporate green'".
+// It had produced one. `POST /api/theme` answered 200 with a complete, correct
+// green ramp and `tokens: {}`, the panel applied all six steps, and the grid
+// rendered pixel-identical — because the brand ramp reaches only interaction
+// states (selection, focus rings, the active header, checkbox and radio), none
+// of which is on screen until you touch the grid. The panel then forwarded the
+// model's own message, "Applied a corporate green palette", as confirmation.
+//
+// The AI tab had no coverage at all, which is how that shipped. These cases are
+// deterministic — `/api/theme` is stubbed with the payloads actually observed in
+// production, so no gateway, no spend, and no `E2E_LIVE` — because what is under
+// test is what the panel *says* about an answer, not what a model returns.
+
+/** The reproduced payload, verbatim off prod. */
+const GREEN_RAMP = {
+  "primary.100": "#e6f4ea",
+  "primary.200": "#b9dfc4",
+  "primary.300": "#7dbf90",
+  "primary.400": "#3d9e58",
+  "primary.500": "#1a7a38",
+  "primary.600": "#0d5225",
+} as const;
+
+/** The panel, with `/api/theme` answering `answer` and no bundler running. */
+async function openWithThemeApi(page: Page, answer: unknown) {
+  await page.route("**/api/versions", (route) =>
+    route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0", "17.1.0"] } }),
+  );
+  // The panel is chrome here; aborting the bundler is what keeps these fast and
+  // deterministic, the way e2e/panels.spec.ts does it.
+  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
+  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await page.route("**/api/theme", (route) => route.fulfill({ json: answer }));
+
+  await page.goto("/?example=react");
+  await expect(page.getByRole("button", { name: "Style", exact: true })).toBeVisible();
+  await openStylePanel(page);
+
+  const drawer = page.locator(STYLE);
+  await drawer.getByRole("tab", { name: "AI" }).click();
+  return drawer;
+}
+
+async function describeStyle(drawer: ReturnType<Page["locator"]>, prompt: string) {
+  await drawer.getByLabel("Describe the style you want").fill(prompt);
+  await drawer.getByRole("button", { name: "Style", exact: true }).click();
+}
+
+test.describe("AI styling", () => {
+  test("a brand ramp alone says where the colour actually shows", async ({ page }) => {
+    const drawer = await openWithThemeApi(page, {
+      message: "Applied a corporate green palette.",
+      tokens: {},
+      palette: GREEN_RAMP,
+      config: {},
+    });
+
+    await describeStyle(drawer, "corporate green");
+
+    // The claim still gets through — it is true, the ramp did apply.
+    await expect(drawer.getByText("Applied a corporate green palette.")).toBeVisible();
+    // …followed by the part that stops it reading as a broken feature.
+    await expect(drawer.getByText(/shows on selection, focus and active headers/)).toBeVisible();
+
+    // And the ramp really did land: the Foundation tab's swatch for the step the
+    // model set holds the colour it set.
+    await drawer.getByRole("tab", { name: "Foundation" }).click();
+    await drawer.getByRole("button", { name: /Palette/ }).click();
+    await expect(drawer.getByLabel("primary.500")).toHaveValue("#1a7a38");
+  });
+
+  test("an answer that changes nothing is not reported as success", async ({ page }) => {
+    // The forced tool call lets the model refuse with `message` alone, and the
+    // panel used to render that refusal in the same place, and the same voice, as
+    // a successful restyle.
+    const drawer = await openWithThemeApi(page, { message: "I only restyle grids." });
+
+    await describeStyle(drawer, "write me a poem");
+
+    await expect(drawer.getByText(/didn’t change the theme/)).toBeVisible();
+    // The prompt is kept, because editing it is the next thing that happens.
+    await expect(drawer.getByLabel("Describe the style you want")).toHaveValue("write me a poem");
+    // Nothing was applied, so nothing claims to have been.
+    await expect(drawer.getByText("Applied to the preview")).toHaveCount(0);
+  });
+
+  test("an answer that tints a resting surface is reported plainly", async ({ page }) => {
+    const drawer = await openWithThemeApi(page, {
+      message: "Applied a corporate green palette.",
+      // What the fixed endpoint returns for the same prompt: the ramp, plus the
+      // header pair tinted from its lightest step.
+      tokens: { headerBackgroundColor: "#e6f4ea", headerRowBackgroundColor: "#e6f4ea" },
+      palette: GREEN_RAMP,
+      config: {},
+    });
+
+    await describeStyle(drawer, "corporate green");
+
+    await expect(drawer.getByText("Applied a corporate green palette.")).toBeVisible();
+    await expect(drawer.getByText(/shows on selection, focus and active headers/)).toHaveCount(0);
+    await expect(drawer.getByLabel("Describe the style you want")).toHaveValue("");
+  });
+});
+
+test("a recolour reaches the header the grid is painting right now", async ({ page }) => {
+  test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  test.setTimeout(300_000);
+
+  // The pixel proof, and the one assertion that would have caught the original
+  // report: with the endpoint's floor in place, a brand recolour changes a colour
+  // an untouched grid is already showing. Column-header background, not a cell —
+  // starter stylesheets override `td`, never `th` (see `themeClass` above).
+  // The endpoint's own shape: a `[light, dark]` pair of ramp references, not a
+  // literal. So this also proves a real grid resolves the pair — the panel stores
+  // pairs for manual colour picks, but nothing had checked one arriving from
+  // /api/theme and surviving codegen into the running demo.
+  const tint = ["colors.primary.100", "colors.primary.600"];
+  await page.route("**/api/theme", (route) => route.fulfill({
+    json: {
+      message: "Applied a corporate green palette.",
+      tokens: { headerBackgroundColor: tint, headerRowBackgroundColor: tint },
+      palette: GREEN_RAMP,
+      config: {},
+    },
+  }));
+
+  await openExample(page, "react");
+  // `th:visible`, and a named column at that. Handsontable paints its column
+  // headers in the `ht_clone_top` overlay and leaves the master `thead` at
+  // `visibility: hidden` — which still has a bounding box and still answers
+  // `getComputedStyle`, so `locator("th").first()` reads a real colour off a cell
+  // nobody can see. An assertion on that measures the wrong element and passes.
+  const header = preview(page).locator("th:visible").filter({ hasText: "Company" }).first();
+  await expect(header).toBeVisible({ timeout: 120_000 });
+  const before = await header.evaluate((el) => getComputedStyle(el).backgroundColor);
+  // The preset's header is neutral (`palette.50`), which is the whole defect: the
+  // brand ramp this prompt sets does not appear in it.
+  expect(before).toEqual("rgb(247, 247, 249)");
+
+  await openStylePanel(page);
+  const drawer = page.locator(STYLE);
+  await drawer.getByRole("tab", { name: "AI" }).click();
+  await describeStyle(drawer, "corporate green");
+
+  await expectThemeModuleWritten(page);
+  await expect(async () => {
+    expect(
+      await header.evaluate((el) => getComputedStyle(el).backgroundColor),
+      "the recolour never reached anything the grid paints at rest",
+    ).toEqual("rgb(230, 244, 234)"); // #e6f4ea, the ramp's lightest step
+  }).toPass({ timeout: 60_000 });
+});
