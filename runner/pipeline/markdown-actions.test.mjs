@@ -92,6 +92,30 @@ test("a block action works from a caret inside a line, not just a selection", ()
   assert.equal(applyMarkdownAction("bulletList", state).value, "one\n- two\nthree");
 });
 
+test("a caret at the very start of a newline-led value does not duplicate it", () => {
+  // Review finding: `lastIndexOf("\n", 0)` searches backwards *from* 0, so a value
+  // beginning with a newline produced an inverted line range and the splice
+  // repeated the entire field.
+  for (const action of ["bulletList", "numberedList", "heading"]) {
+    const state = applyMarkdownAction(action, { value: "\nabc", selectionStart: 0, selectionEnd: 0 });
+    assert.equal(state.value.match(/abc/g)?.length, 1, `${action}: text kept once`);
+    assert.ok(state.selectionStart <= state.selectionEnd, `${action}: forward selection`);
+  }
+  assert.equal(
+    applyMarkdownAction("bulletList", { value: "\nabc", selectionStart: 0, selectionEnd: 0 }).value,
+    "- item\nabc",
+  );
+});
+
+test("block actions survive an empty value and a trailing newline", () => {
+  assert.equal(
+    applyMarkdownAction("bulletList", { value: "", selectionStart: 0, selectionEnd: 0 }).value,
+    "- item",
+  );
+  const trailing = applyMarkdownAction("bulletList", { value: "abc\n", selectionStart: 4, selectionEnd: 4 });
+  assert.equal(trailing.value.match(/abc/g).length, 1);
+});
+
 test("heading prefixes with ## and strips any existing level", () => {
   assert.equal(applyMarkdownAction("heading", field("[Title]")).value, "## Title");
   assert.equal(applyMarkdownAction("heading", field("[#### Title]")).value, "Title");

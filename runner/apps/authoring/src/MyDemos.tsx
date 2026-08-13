@@ -356,7 +356,7 @@ function DemoCard({
             affordance here: the card is a link to the demo, and the sidebar there
             shows the whole thing. */}
         {demo.description && (
-          <div style={cardDescription}>
+          <div style={cardDescription} data-testid="card-description">
             <Markdown text={demo.description} />
           </div>
         )}
@@ -635,16 +635,21 @@ const cardTitle: CSSProperties = {
   color: theme.color.text,
 };
 
+/** The frame gives the description exactly three lines.
+ *
+ *  Height, not `-webkit-line-clamp`: since DEV-2507 the description is *rendered
+ *  markdown*, so the box's children are blocks (`p`, `ul`, a heading). Line-clamp
+ *  only counts the line boxes of an inline formatting context — with block
+ *  children it clamps unreliably or not at all, which let a multi-paragraph
+ *  description stretch the card and with it the grid row. Three 20px lines is the
+ *  same three lines, and it holds whatever the content is. */
 const cardDescription: CSSProperties = {
   margin: `${theme.space(1)} 0 0`,
   fontFamily: theme.font.ui,
   fontSize: 12,
   lineHeight: "20px",
   color: theme.color.textMuted,
-  // The frame gives the description exactly three lines.
-  display: "-webkit-box",
-  WebkitLineClamp: 3,
-  WebkitBoxOrient: "vertical",
+  maxHeight: 60,
   overflow: "hidden",
 };
 

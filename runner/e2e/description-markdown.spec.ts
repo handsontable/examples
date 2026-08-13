@@ -132,6 +132,46 @@ test("a description over the cap cannot be saved", async ({ page }) => {
   await expect(save).toBeEnabled();
 });
 
+test("a multi-paragraph description cannot stretch a demo card", async ({ page }) => {
+  // Review finding: the card clamped with `-webkit-line-clamp`, which counts line
+  // boxes in an inline context — rendered markdown gives it block children, so the
+  // clamp did nothing and a long description stretched the whole grid row.
+  await stubShell(page);
+  await signIn(page);
+  const long = Array.from({ length: 8 }, (_, i) => `Paragraph ${i + 1} of the description.`).join("\n\n");
+  // `**/api/demos*` matches with or without a query: the `?scope=` parameter
+  // arrives with #163, and this branch is off master.
+  await page.route("**/api/demos*", (route) =>
+    route.fulfill({
+      json: {
+        demos: [
+          {
+            id: DEMO_ID, title: "Sales grid", description: long, framework: "react", tier: 1,
+            ht_version: "18.0.0", forked_from: null, visibility: "unlisted", revoked: 0,
+            created_at: "2026-08-01T10:00:00.000Z", updated_at: "2026-08-01T10:00:00.000Z",
+            created_by: EMAIL,
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto("/my-demos");
+
+  const card = page.locator("article").filter({ hasText: "Sales grid" });
+  await expect(card).toBeVisible();
+  // The clamp box itself, by testid: the rendered markdown nests its own divs, and
+  // measuring one of those measures the content rather than the box holding it.
+  const box = card.getByTestId("card-description");
+  const sizes = await box.evaluate((el) => ({ client: el.clientHeight, scroll: el.scrollHeight }));
+  // Clipped to the frame's three lines, and genuinely overflowing — which is what
+  // proves the clamp is doing something rather than the text being short.
+  expect(sizes.client).toBeLessThanOrEqual(60);
+  expect(sizes.scroll).toBeGreaterThan(sizes.client);
+  // …and the card itself stays the design's size rather than growing to fit.
+  const cardBox = await card.boundingBox();
+  expect(cardBox!.height).toBeLessThan(260);
+});
+
 test("a long description is clamped in the sidebar, with a way to read it", async ({ page }) => {
   await stubShell(page);
   await signIn(page);

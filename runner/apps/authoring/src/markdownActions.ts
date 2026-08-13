@@ -89,11 +89,21 @@ function wrapInline(state: FieldState, marker: string, placeholder: string): Fie
   return splice(state, `${marker}${text}${marker}`, [start, start + text.length]);
 }
 
-/** The line boundaries the selection touches — block actions work on whole lines. */
+/**
+ * The line boundaries the selection touches — block actions work on whole lines.
+ *
+ * The `from === 0` case is not defensive noise: `lastIndexOf("\n", 0)` searches
+ * *backwards from index 0*, so on a value that begins with a newline it returns 0
+ * and the start lands at 1 — past an end of 0. `prefixLines` then spliced with an
+ * inverted range and duplicated the whole field. Caught in review; the test below
+ * it is the one that would have.
+ */
 function lineRange(value: string, from: number, to: number): [number, number] {
-  const start = value.lastIndexOf("\n", Math.max(0, from - 1)) + 1;
+  const start = from === 0 ? 0 : value.lastIndexOf("\n", from - 1) + 1;
   const nextBreak = value.indexOf("\n", to);
-  return [start, nextBreak === -1 ? value.length : nextBreak];
+  const end = nextBreak === -1 ? value.length : nextBreak;
+  // A caret before a leading newline selects nothing, not a backwards slice.
+  return [start, Math.max(start, end)];
 }
 
 /**
