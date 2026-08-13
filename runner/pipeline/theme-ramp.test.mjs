@@ -115,3 +115,69 @@ test("a single palette step still reaches the panel alone", () => {
   const { palette } = sanitise({ message: "Redder header.", palette: { "primary.500": "#ff0000" } });
   assert.deepEqual(palette, { "primary.500": "#ff0000" });
 });
+
+// A brand recolour that nothing on screen shows (DEV-2497). The primary ramp
+// reaches 38 of the 279 tokens, and every one of them is an interaction state —
+// selection, focus, active header, checkbox. A resting grid paints primary
+// nowhere, so "corporate green" applied perfectly and looked like a no-op.
+test("a brand ramp alone tints the header, so the recolour is visible at rest", () => {
+  // Verbatim the reproduced payload: complete green ramp, empty `tokens`.
+  const { tokens } = sanitise({
+    message: "Applied a corporate green palette.",
+    tokens: {},
+    palette: {
+      "primary.100": "#e6f4ea",
+      "primary.200": "#b9dfc4",
+      "primary.300": "#7dbf90",
+      "primary.400": "#3d9e58",
+      "primary.500": "#1a7a38",
+      "primary.600": "#0d5225",
+    },
+  });
+
+  assert.equal(tokens.headerBackgroundColor, "#e6f4ea", "the lightest step tints the header");
+  assert.equal(tokens.headerRowBackgroundColor, "#e6f4ea", "and its linked row-header pair");
+});
+
+test("a ramp the model half-supplied still earns the tint once it is completed", () => {
+  const { tokens } = sanitise({
+    message: "Navy.",
+    palette: {
+      "primary.100": "#e6ecf5",
+      "primary.300": "#8fa8cc",
+      "primary.400": "#4a6fa5",
+      "primary.500": "#1e3a5f",
+      "primary.600": "#12243c",
+    },
+  });
+
+  assert.equal(tokens.headerBackgroundColor, "#e6ecf5");
+});
+
+test("a resting surface the model set itself is never overridden", () => {
+  const { tokens } = sanitise({
+    message: "Green, with a white header.",
+    tokens: { headerBackgroundColor: "#ffffff" },
+    palette: {
+      "primary.100": "#e6f4ea",
+      "primary.200": "#b9dfc4",
+      "primary.300": "#7dbf90",
+      "primary.400": "#3d9e58",
+      "primary.500": "#1a7a38",
+      "primary.600": "#0d5225",
+    },
+  });
+
+  assert.equal(tokens.headerBackgroundColor, "#ffffff");
+  assert.equal(tokens.headerRowBackgroundColor, undefined, "the pairing is the model's call, not ours");
+});
+
+test("a single step is a deliberate accent change, not a recolour", () => {
+  const { tokens } = sanitise({ message: "Green selection.", palette: { "primary.500": "#1a7a38" } });
+  assert.deepEqual(tokens, {});
+});
+
+test("a token-only answer is left exactly as it came", () => {
+  const { tokens } = sanitise({ message: "Red header.", tokens: { headerBackgroundColor: "#ff0000" } });
+  assert.deepEqual(tokens, { headerBackgroundColor: "#ff0000" });
+});
