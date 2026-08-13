@@ -93,11 +93,18 @@ import of it and no CDN tag is refused with that explanation.
 The pencil in **Box info** (top of the sidebar) edits the demo's **title** and
 **description**.
 
-The description is **markdown**, and it can be several paragraphs: use the small
-toolbar for bold, italic, links, code and lists rather than typing the syntax by
-hand. It renders as formatted text in the sidebar, on the demo card in My demos,
-and on the shared page — so it is the right place for "what this demo shows",
-caveats, or a link back to the ticket.
+The description is **markdown**, and it can be several paragraphs. You never have
+to type the syntax: the toolbar above the field does **bold**, _italic_, `code`,
+links, bullet and numbered lists and a heading, and ⌘B / ⌘I work as you would
+expect. **Preview** switches the field to the rendered result — the same rendering
+the demo pages use, so what you see there is what they will show.
+
+It renders as formatted text in the sidebar, on the demo card in My demos, and on
+the shared page, which makes it the right place for "what this demo shows",
+caveats, or a link back to the ticket. Long descriptions are clamped in the sidebar
+with a **Show more** toggle, so a detailed one never pushes the file tree off the
+screen. The limit is 4,000 characters, and the field tells you when you are near
+it.
 
 ## 7. Save, fork, share, embed
 
@@ -122,8 +129,13 @@ link, rename, fork, or delete. Deleting revokes the link — the client page sta
 answering "revoked" — and it cannot be undone.
 
 **All demos** shows the whole team's, so you can see what other people have built.
-Someone else's demo is read-only for you: open it, fork it, copy its link, but you
-cannot rename, delete or save over it.
+Someone else's demo is read-only for you: **Open** takes you to the read-only
+playground (read the code, try changes, download a `.zip`), and you can **Copy
+link** or **Fork** it — forking gives you your own copy to change. Rename, delete
+and save are the owner's alone, and an `/edit/` link to a demo that is not yours
+opens the read-only view instead. Revoked demos stay in your own list, with their
+badge, so you can see what happened to a link you shared; they do not clutter
+anyone else's.
 
 ## 9. Useful URLs
 
@@ -141,7 +153,8 @@ Anything you can reach by clicking, you can also link to directly:
 | `/d/ab12cd34/` | the built client page |
 | `/embed/ab12cd34/` | the docs embed |
 | `/?mode=full` | the preview alone, no editor chrome |
-| `/my-demos`, `/settings`, `/guide` | your demos, your profile, this page |
+| `/my-demos`, `/all-demos` | your demos; everyone's |
+| `/settings`, `/guide` | your profile; this page |
 
 ## 10. Settings and admin
 
