@@ -19,6 +19,7 @@ import {
   ImportError,
   assertHandsontableProject,
   detectFramework,
+  packageFromCdnUrl,
   importFromUrl,
   parseJsFiddle,
   parseStackBlitz,
@@ -30,6 +31,8 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => fs.readFileSync(path.join(dir, "fixtures", name), "utf8");
 const JSFIDDLE = fixture("jsfiddle-1bw9tphk.html");
 const STACKBLITZ = fixture("stackblitz-vitejs-vite-de8qy2bm.html");
+/** The fiddle from the DEV-2509 report: five CDN scripts, three globals. */
+const CDN_FIDDLE = fixture("jsfiddle-cdn-globals.html");
 
 /** The catalog's framework keys, as the Worker passes them in. */
 const KNOWN = new Set([
@@ -113,11 +116,12 @@ test("a fiddle becomes a runnable three-file workspace", () => {
 
 test("panel contents are HTML-unescaped, not carried as entities", () => {
   const result = parseJsFiddle(JSFIDDLE, "https://jsfiddle.net/1bw9tphk/1/");
-  // The real fiddle's HTML panel opens with Handsontable's CDN stylesheets.
-  assert.match(result.files["/index.html"], /<link rel="stylesheet" href="https:\/\/cdn\.jsdelivr\.net\/npm\/handsontable\/styles\/handsontable\.min\.css" \/>/);
+  // The panels arrive decoded — no `&lt;`, no `&quot;` — and the JS is the real
+  // source. The Handsontable CSS the fiddle linked from a CDN is *not* here any
+  // more: it became an npm import (DEV-2509, tested below), because a CDN URL with
+  // no version in it would ignore the version picker.
   assert.equal(result.files["/index.html"].includes("&lt;"), false);
   assert.equal(result.files["/index.html"].includes("&quot;"), false);
-  // …and its JS panel with the real source.
   assert.match(result.files["/script.js"], /const HEADERS = \[/);
   assert.match(result.files["/style.css"], /:root \{/);
 });
@@ -139,6 +143,112 @@ test("an empty fiddle is refused rather than imported blank", () => {
     <textarea name="code_css" id="textarea-code-css">  </textarea>
     <textarea name="code_js" id="textarea-code-js"></textarea>`;
   assert.throws(() => parseJsFiddle(html, "u"), /no HTML and no JavaScript/);
+});
+
+// ---- CDN globals -> npm imports (DEV-2509) ---------------------------------
+
+test("a CDN-based fiddle becomes a module the bundler can resolve", () => {
+  // The reported bug: this exact fiddle imported "successfully" and then died with
+  // `ReferenceError: Handsontable is not defined`, because its libraries were
+  // <script> tags and its code called them as globals.
+  const result = parseJsFiddle(CDN_FIDDLE, "https://jsfiddle.net/1bw9tphk/1/");
+  const html = result.files["/index.html"];
+  const js = result.files["/script.js"];
+  const pkg = JSON.parse(result.files["/package.json"]);
+
+  // Every recognized CDN script is gone from the markup…
+  for (const url of [
+    "cdn.jsdelivr.net/npm/handsontable/dist/handsontable.full.min.js",
+    "cdn.jsdelivr.net/npm/hyperformula/dist/hyperformula.full.min.js",
+    "cdn.jsdelivr.net/npm/highlight.js@11/lib/highlight.min.js",
+  ]) {
+    assert.equal(html.includes(url), false, url);
+  }
+  // …and back as imports under the identifiers the globals had, so the fiddle's
+  // own code needs no rewriting.
+  assert.match(js, /^\/\/ Imported from a CDN-based demo/m);
+  assert.match(js, /import Handsontable from 'handsontable';/);
+  assert.match(js, /import \{ HyperFormula \} from 'hyperformula';/);
+  assert.match(js, /import hljs from 'highlight\.js';/);
+  // Inline scripts in the HTML used the globals too, so they stay on globalThis.
+  assert.match(js, /globalThis\.Handsontable = Handsontable;/);
+  // The body survived, unedited.
+  assert.match(js, /const DATA = \[/);
+  assert.match(js, /hljs\.highlightAll\(\);/);
+
+  // Dependencies, with the version the CDN URL pinned where it pinned one.
+  assert.equal(pkg.dependencies.handsontable, "latest"); // unversioned CDN URL
+  assert.equal(pkg.dependencies["highlight.js"], "^11");
+  assert.equal(pkg.dependencies["hyperformula"], "latest");
+  // The fiddle also loads xlsx and chart.js and never calls them, so they are
+  // dropped rather than depended on — the same branch the dedicated test covers.
+  assert.equal(pkg.dependencies.xlsx, undefined);
+  assert.equal(pkg.dependencies["chart.js"], undefined);
+  // Deterministic order, so re-importing the same fiddle gives the same manifest.
+  assert.deepEqual(Object.keys(pkg.dependencies), [...Object.keys(pkg.dependencies)].sort());
+});
+
+test("Handsontable's CSS follows the selected version, not the CDN's latest", () => {
+  const result = parseJsFiddle(CDN_FIDDLE, "u");
+  assert.equal(result.files["/index.html"].includes("npm/handsontable/styles/"), false);
+  assert.match(result.files["/script.js"], /import 'handsontable\/styles\/handsontable\.min\.css';/);
+  assert.match(result.files["/script.js"], /import 'handsontable\/styles\/ht-theme-main\.min\.css';/);
+  // A third-party stylesheet is left alone: it loads fine and pins nothing we care
+  // about.
+  assert.match(result.files["/index.html"], /highlight\.js@11\/styles\/atom-one-dark\.min\.css/);
+});
+
+test("an unrecognized CDN script keeps its tag and is reported", () => {
+  const html = `<textarea name="code_html" id="textarea-code-html">&lt;script src=&quot;https://cdn.jsdelivr.net/npm/some-unknown-lib@2/dist/x.min.js&quot;&gt;&lt;/script&gt;
+    &lt;div id=&quot;grid&quot;&gt;&lt;/div&gt;</textarea>
+    <textarea name="code_js" id="textarea-code-js">new Handsontable(document.getElementById('grid'), {});</textarea>`;
+  const result = parseJsFiddle(html, "u");
+  // Dropping someone's library silently would be worse than saying it may not run.
+  assert.match(result.files["/index.html"], /some-unknown-lib@2/);
+  assert.equal(
+    result.skipped.some((s) => /may not run in the preview/.test(s.reason)),
+    true,
+  );
+});
+
+test("a CDN script whose global is never used is dropped, not depended on", () => {
+  const html = `<textarea name="code_html" id="textarea-code-html">&lt;script src=&quot;https://cdn.jsdelivr.net/npm/jquery@3/dist/jquery.min.js&quot;&gt;&lt;/script&gt;
+    &lt;script src=&quot;https://cdn.jsdelivr.net/npm/handsontable/dist/handsontable.full.min.js&quot;&gt;&lt;/script&gt;</textarea>
+    <textarea name="code_js" id="textarea-code-js">new Handsontable(document.body, {});</textarea>`;
+  const result = parseJsFiddle(html, "u");
+  const pkg = JSON.parse(result.files["/package.json"]);
+  assert.equal(pkg.dependencies.jquery, undefined, "no dependency for an unused global");
+  assert.equal(pkg.dependencies.handsontable, "latest");
+  assert.equal(result.skipped.some((s) => /never referenced/.test(s.reason)), true);
+});
+
+test("a fiddle that already uses imports gets no preamble", () => {
+  const html = `<textarea name="code_html" id="textarea-code-html">&lt;div id=&quot;grid&quot;&gt;&lt;/div&gt;</textarea>
+    <textarea name="code_js" id="textarea-code-js">import Handsontable from 'handsontable';
+new Handsontable(document.getElementById('grid'), {});</textarea>`;
+  const result = parseJsFiddle(html, "u");
+  assert.equal(result.files["/script.js"].includes("Imported from a CDN-based demo"), false);
+  assert.equal((result.files["/script.js"].match(/import Handsontable/g) ?? []).length, 1);
+});
+
+test("the CDN URL shapes we actually see all resolve to a package", () => {
+  const cases = [
+    ["https://cdn.jsdelivr.net/npm/handsontable/dist/handsontable.full.min.js", "handsontable", null],
+    ["https://cdn.jsdelivr.net/npm/highlight.js@11/lib/highlight.min.js", "highlight.js", "11"],
+    ["https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js", "xlsx", "0.18.5"],
+    ["https://cdn.jsdelivr.net/npm/@handsontable/pikaday@1.0.0/dist/pikaday.js", "@handsontable/pikaday", "1.0.0"],
+    ["https://unpkg.com/hyperformula@3.4.0/dist/hyperformula.full.min.js", "hyperformula", "3.4.0"],
+    ["https://unpkg.com/@handsontable/pikaday/dist/pikaday.js", "@handsontable/pikaday", null],
+    ["https://cdnjs.cloudflare.com/ajax/libs/handsontable/14.0.0/handsontable.min.js", "handsontable", "14.0.0"],
+  ];
+  for (const [url, name, range] of cases) {
+    const found = packageFromCdnUrl(url);
+    assert.equal(found?.name, name, url);
+    assert.equal(found?.range ?? null, range, url);
+  }
+  // Not a CDN we read packages from.
+  assert.equal(packageFromCdnUrl("https://example.com/lib.js"), null);
+  assert.equal(packageFromCdnUrl("not a url"), null);
 });
 
 // ---- StackBlitz ------------------------------------------------------------

@@ -221,14 +221,20 @@ export function parseJsFiddle(html: string, sourceUrl: string): Omit<ImportResul
   const title = pageTitle(html) ?? "Imported fiddle";
   const hasCss = !!cssPanel?.trim();
   const hasJs = !!jsPanel?.trim();
+
+  // A fiddle's libraries arrive as CDN <script> tags and its code calls them as
+  // globals, which a module bundler cannot resolve (DEV-2509). Convert before
+  // wrapping, so the tags are gone from the HTML and the imports are in the JS.
+  const normalized = normalizeCdnGlobals(htmlPanel ?? "", jsPanel ?? "");
+
   const files: Record<string, string> = {
     // Only reference the files that are actually written: a fiddle with an empty
     // CSS or JS panel would otherwise get a <link>/<script> pointing at a file
     // that does not exist, which the bundler reports as a failed module.
-    "/index.html": wrapFiddleHtml(htmlPanel ?? "", title, sourceUrl, { hasCss, hasJs }),
+    "/index.html": wrapFiddleHtml(normalized.html, title, sourceUrl, { hasCss, hasJs }),
   };
   if (hasCss) files["/style.css"] = cssPanel!;
-  if (hasJs) files["/script.js"] = jsPanel!;
+  if (hasJs) files["/script.js"] = normalized.js;
   // No dependencies to install: a fiddle runs off CDN tags. The manifest exists
   // because every workspace needs one — `POST /api/demos` rejects a file set
   // without /package.json, and the builder installs from it.
@@ -238,13 +244,19 @@ export function parseJsFiddle(html: string, sourceUrl: string): Omit<ImportResul
       private: true,
       version: "0.0.0",
       scripts: { dev: "vite --port 8080", build: "vite build", preview: "vite preview" },
+      // What the CDN tags became. `handsontable` is re-pinned to the selected
+      // version at mount (`applyHandsontableVersion`), which is the point of
+      // converting the unversioned CDN URL in the first place.
+      ...(Object.keys(normalized.dependencies).length
+        ? { dependencies: sortedDependencies(normalized.dependencies) }
+        : {}),
       devDependencies: { vite: "^8.1.1" },
     },
     null,
     2,
   )}\n`;
 
-  return { title, files, skipped: [] };
+  return { title, files, skipped: normalized.skipped };
 }
 
 /** Host the fiddle's HTML fragment in a real document. */
@@ -359,7 +371,270 @@ export function parseStackBlitz(html: string): Omit<ImportResult, "provider" | "
     );
   }
 
+  // Usually a no-op — a StackBlitz project imports from npm already — but one that
+  // pulls Handsontable from a CDN tag in index.html breaks the same way a fiddle
+  // does, so it gets the same conversion (DEV-2509).
+  normalizeStackBlitzEntry(files, skipped);
+
   return { title: store.project?.title?.trim() || "Imported StackBlitz project", files, skipped };
+}
+
+// ---- CDN globals -> npm imports (DEV-2509) ----------------------------------
+//
+// A fiddle gets its libraries from `<script src="https://cdn…">` and calls them as
+// globals. The Tier-1 preview is a module bundler: it resolves `import` against
+// package.json, and a CDN tag in the HTML body never defines a global in the
+// bundled module scope. Copying the panels verbatim produced a workspace that
+// could not run — `ReferenceError: Handsontable is not defined`.
+//
+// So the import converts: drop the tag, add the dependency, and import the package
+// under the same identifier the global had, so the author's code is untouched.
+//
+// This lives in this file rather than its own module on purpose: the pipeline
+// tests load it through `--experimental-strip-types`, which cannot resolve a
+// sibling `./x.js` specifier — the same constraint that keeps `profile.ts` and
+// `demos-list.ts` dependency-free.
+
+/** How a package that used to be a global is imported. */
+interface CdnPackage {
+  /** npm package name, as it goes into `dependencies`. */
+  pkg: string;
+  /** What to import — usually the package, sometimes a subpath entry. */
+  specifier?: string;
+  /** The identifier the UMD build put on `window`. */
+  global: string;
+  /** `default` -> `import X from`, `named` -> `import { X } from`,
+   *  `namespace` -> `import * as X from`. */
+  kind: "default" | "named" | "namespace";
+}
+
+/**
+ * The libraries fiddles actually load next to Handsontable. Keyed by npm package
+ * name, which is what both jsDelivr and unpkg put in the path.
+ *
+ * `chart.js/auto` rather than `chart.js`: the UMD build auto-registers every
+ * controller, and the bare npm entry does not — importing that would give a chart
+ * that throws about an unregistered type, which is a worse outcome than the tag we
+ * removed.
+ */
+const CDN_PACKAGES: Record<string, CdnPackage> = {
+  handsontable: { pkg: "handsontable", global: "Handsontable", kind: "default" },
+  "@handsontable/pikaday": { pkg: "@handsontable/pikaday", global: "Pikaday", kind: "default" },
+  hyperformula: { pkg: "hyperformula", global: "HyperFormula", kind: "named" },
+  "highlight.js": { pkg: "highlight.js", global: "hljs", kind: "default" },
+  xlsx: { pkg: "xlsx", global: "XLSX", kind: "namespace" },
+  "chart.js": { pkg: "chart.js", specifier: "chart.js/auto", global: "Chart", kind: "default" },
+  moment: { pkg: "moment", global: "moment", kind: "default" },
+  pikaday: { pkg: "pikaday", global: "Pikaday", kind: "default" },
+  papaparse: { pkg: "papaparse", global: "Papa", kind: "default" },
+  jquery: { pkg: "jquery", global: "$", kind: "default" },
+  luxon: { pkg: "luxon", global: "luxon", kind: "namespace" },
+};
+
+export interface NormalizedImport {
+  html: string;
+  js: string;
+  /** Added to `package.json` dependencies. */
+  dependencies: Record<string, string>;
+  /** What could not be converted, in the shape the import result reports. */
+  skipped: { path: string; reason: string }[];
+}
+
+/** `https://cdn.jsdelivr.net/npm/pkg@1.2/dist/x.js` -> `{ pkg, range }`. */
+export function packageFromCdnUrl(url: string): { name: string; range: string | null } | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const segments = parsed.pathname.split("/").filter(Boolean);
+
+  let spec: string | null = null;
+  if (host === "cdn.jsdelivr.net" && segments[0] === "npm") {
+    spec = segments[1] ?? null;
+    // A scoped package spans two segments: /npm/@scope/name@1.2/…
+    if (spec?.startsWith("@") && segments[2]) spec = `${spec}/${segments[2]}`;
+  } else if (host === "unpkg.com") {
+    spec = segments[0] ?? null;
+    if (spec?.startsWith("@") && segments[1]) spec = `${spec}/${segments[1]}`;
+  } else if (host === "cdnjs.cloudflare.com" && segments[0] === "ajax" && segments[1] === "libs") {
+    // /ajax/libs/<name>/<version>/…  — the library name here is cdnjs's, which
+    // matches npm for everything in the table above.
+    return segments[2] ? { name: segments[2], range: segments[3] ?? null } : null;
+  } else if (host === "cdn.skypack.dev" || host === "esm.sh") {
+    spec = segments[0] ?? null;
+    if (spec?.startsWith("@") && segments[1]) spec = `${spec}/${segments[1]}`;
+  }
+  if (!spec) return null;
+
+  // Split the version off the last segment, leaving a leading @scope alone.
+  const at = spec.lastIndexOf("@");
+  if (at > 0) return { name: spec.slice(0, at), range: spec.slice(at + 1) || null };
+  return { name: spec, range: null };
+}
+
+/** A CDN range -> something npm can install. `11` -> `^11`; `0.18.5` stays exact. */
+function dependencyRange(range: string | null): string {
+  if (!range) return "latest";
+  if (/^\d+$/.test(range) || /^\d+\.\d+$/.test(range)) return `^${range}`;
+  return range;
+}
+
+function importLine(entry: CdnPackage): string {
+  const from = entry.specifier ?? entry.pkg;
+  switch (entry.kind) {
+    case "named":
+      return `import { ${entry.global} } from '${from}';`;
+    case "namespace":
+      return `import * as ${entry.global} from '${from}';`;
+    default:
+      return `import ${entry.global} from '${from}';`;
+  }
+}
+
+/** Every `<script src="…">` / `<link href="…">` with an absolute URL. */
+const TAG_RE = /<(script|link)\b[^>]*?\b(?:src|href)="(https?:\/\/[^"]+)"[^>]*>(?:\s*<\/script>)?/gi;
+
+/** Handsontable's own stylesheets, which become npm imports so the demo follows
+ *  the selected version instead of `latest`. */
+const HOT_CSS_RE = /\/(handsontable(?:@[^/]+)?)\/styles\/([A-Za-z0-9.-]+\.css)/;
+
+/**
+ * Convert an imported HTML + JS pair into something the runner can actually run.
+ *
+ * `usedIdentifier` decides whether an import is worth adding: a fiddle that loads
+ * jQuery and never calls it should not gain a dependency, and an unused import of
+ * a UMD-only package is a bundler error waiting to happen.
+ */
+export function normalizeCdnGlobals(html: string, js: string): NormalizedImport {
+  const dependencies: Record<string, string> = {};
+  const skipped: { path: string; reason: string }[] = [];
+  const imports: string[] = [];
+  const globals: string[] = [];
+  const cssImports: string[] = [];
+
+  const usedIdentifier = (name: string): boolean => {
+    // Word-boundary on both sides, so `$` and `moment` do not match inside
+    // `$element` or `momentum`. `$` needs its own test: `\b` means nothing next
+    // to a symbol.
+    const pattern = name === "$"
+      ? /(^|[^A-Za-z0-9_$])\$\s*\(/
+      : new RegExp(`(^|[^A-Za-z0-9_$.])${name}\\b`);
+    return pattern.test(js) || pattern.test(html);
+  };
+
+  const nextHtml = html.replace(TAG_RE, (tag, kind: string, url: string) => {
+    const isScript = kind.toLowerCase() === "script";
+
+    // Handsontable CSS -> an npm import of the same file.
+    const hotCss = !isScript && HOT_CSS_RE.exec(url);
+    if (hotCss) {
+      cssImports.push(`import 'handsontable/styles/${hotCss[2]}';`);
+      return "";
+    }
+    // Any other stylesheet is left alone: a CDN <link> loads fine and pins
+    // nothing that the version picker cares about.
+    if (!isScript) return tag;
+
+    const found = packageFromCdnUrl(url);
+    const entry = found ? CDN_PACKAGES[found.name] : undefined;
+    if (!found || !entry) {
+      skipped.push({
+        path: url,
+        reason: "external script kept as-is; it may not run in the preview",
+      });
+      return tag;
+    }
+    if (!usedIdentifier(entry.global)) {
+      // Loaded but never called. Drop the tag and say so rather than adding a
+      // dependency nothing imports.
+      skipped.push({ path: url, reason: `unused (${entry.global} is never referenced)` });
+      return "";
+    }
+    dependencies[entry.pkg] = dependencyRange(found.range);
+    imports.push(importLine(entry));
+    globals.push(entry.global);
+    return "";
+  });
+
+  if (!imports.length && !cssImports.length) return { html, js, dependencies, skipped };
+
+  // Already a module? Then the author wrote imports themselves and a preamble
+  // would duplicate them.
+  const alreadyModule = /^\s*import\s.+from\s/m.test(js);
+  const preamble = alreadyModule
+    ? ""
+    : [
+        "// Imported from a CDN-based demo: the <script> tags became real imports so",
+        "// the bundler can resolve them, and the globals stay available to any inline",
+        "// script in index.html (DEV-2509).",
+        ...imports,
+        ...cssImports,
+        ...globals.map((name) => `globalThis.${name} = ${name};`),
+        "",
+        "",
+      ].join("\n");
+
+  return {
+    html: tidyBlankLines(nextHtml),
+    js: preamble + js,
+    dependencies,
+    skipped,
+  };
+}
+
+/** Removing tags leaves runs of blank lines where they were. */
+function tidyBlankLines(html: string): string {
+  return html.replace(/([ \t]*\n){3,}/g, "\n\n");
+}
+
+
+/** Deterministic dependency order, so two imports of the same fiddle produce the
+ *  same package.json (and the same fingerprint downstream). */
+function sortedDependencies(deps: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(deps).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/**
+ * Convert CDN tags inside a StackBlitz project's HTML entry, merging whatever
+ * dependencies that produces into its existing package.json.
+ *
+ * Mutates `files` because that is what the caller holds; the alternative is
+ * rebuilding the whole map to change two entries.
+ */
+function normalizeStackBlitzEntry(
+  files: Record<string, string>,
+  skipped: { path: string; reason: string }[],
+): void {
+  const htmlPath = Object.keys(files).find((path) => /(^|\/)index\.html$/.test(path));
+  if (!htmlPath) return;
+
+  // The module the HTML entry points at — that is where a preamble belongs. With
+  // no obvious entry there is nothing to convert into, so the tags stay.
+  const entryMatch = /<script[^>]*\bsrc="([^"]+\.(?:m?[jt]sx?))"/i.exec(files[htmlPath]!);
+  const entryPath = entryMatch
+    ? Object.keys(files).find((path) => path.endsWith(entryMatch[1]!.replace(/^\.?\//, "")))
+    : undefined;
+  if (!entryPath) return;
+
+  const normalized = normalizeCdnGlobals(files[htmlPath]!, files[entryPath]!);
+  if (!Object.keys(normalized.dependencies).length && normalized.html === files[htmlPath]) return;
+
+  files[htmlPath] = normalized.html;
+  files[entryPath] = normalized.js;
+  skipped.push(...normalized.skipped);
+
+  try {
+    const pkg = JSON.parse(files["/package.json"]!) as { dependencies?: Record<string, string> };
+    // The project's own pins win: it declared them deliberately, and the CDN URL's
+    // range is a guess derived from a path.
+    pkg.dependencies = sortedDependencies({ ...normalized.dependencies, ...pkg.dependencies });
+    files["/package.json"] = `${JSON.stringify(pkg, null, 2)}\n`;
+  } catch {
+    // A manifest we cannot parse is one we must not rewrite.
+  }
 }
 
 // ---- the Handsontable-only rule ---------------------------------------------

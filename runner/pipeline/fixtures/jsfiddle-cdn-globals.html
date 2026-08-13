@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html><head><title>Handsontable example - JSFiddle - Code Playground</title></head>
+<body>
+  <form>
+    <textarea name="code_html" id="textarea-code-html">
+  &lt;link rel=&quot;stylesheet&quot; href=&quot;https://cdn.jsdelivr.net/npm/handsontable/styles/handsontable.min.css&quot; /&gt;
+  &lt;link rel=&quot;stylesheet&quot; href=&quot;https://cdn.jsdelivr.net/npm/handsontable/styles/ht-theme-main.min.css&quot; /&gt;
+  &lt;link rel=&quot;stylesheet&quot; href=&quot;https://cdn.jsdelivr.net/npm/highlight.js@11/styles/atom-one-dark.min.css&quot; /&gt;
+  &lt;link rel=&quot;stylesheet&quot; href=&quot;style.css&quot; /&gt;
+  &lt;script&gt;
+    // Applied before first paint to avoid a light/dark flash on reload.
+    (function () {
+      var saved = localStorage.getItem(&#39;insight-grid-theme&#39;);
+      var theme = saved || (window.matchMedia(&#39;(prefers-color-scheme: dark)&#39;).matches ? &#39;dark&#39; : &#39;light&#39;);
+      document.documentElement.setAttribute(&#39;data-theme&#39;, theme);
+    })();
+  &lt;/script&gt;
+  &lt;script src=&quot;https://cdn.jsdelivr.net/npm/handsontable/dist/handsontable.full.min.js&quot;&gt;&lt;/script&gt;
+  &lt;script src=&quot;https://cdn.jsdelivr.net/npm/hyperformula/dist/hyperformula.full.min.js&quot;&gt;&lt;/script&gt;
+  &lt;script src=&quot;https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js&quot;&gt;&lt;/script&gt;
+  &lt;script src=&quot;https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js&quot;&gt;&lt;/script&gt;
+  &lt;script src=&quot;https://cdn.jsdelivr.net/npm/highlight.js@11/lib/highlight.min.js&quot;&gt;&lt;/script&gt;
+
+  &lt;header class=&quot;topbar&quot;&gt;
+    &lt;div class=&quot;topbar__inner&quot;&gt;
+      &lt;div class=&quot;brand&quot;&gt;
+        &lt;span class=&quot;brand__mark&quot;&gt;IG&lt;/span&gt;
+        &lt;span class=&quot;brand__name&quot;&gt;Insight Grid&lt;/span&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;topbar__actions&quot;&gt;
+        &lt;button id=&quot;btn-real-data&quot; class=&quot;pill-btn pill-btn--realdata&quot; type=&quot;button&quot; title=&quot;Simulate a live feed pushing new invoices into the grid&quot;&gt;
+          &lt;span class=&quot;pill-btn__icon&quot;&gt;◉&lt;/span&gt;
+          &lt;span&gt;Real data&lt;/span&gt;
+        &lt;/button&gt;
+        &lt;label class=&quot;pill-btn pill-btn--import&quot; data-demo=&quot;import&quot;&gt;
+          &lt;span class=&quot;pill-btn__icon&quot;&gt;⇧&lt;/span&gt;
+          &lt;span&gt;Import .xlsx&lt;/span&gt;
+          &lt;input id=&quot;import-file&quot; type=&quot;file&quot;
+            accept=&quot;.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet&quot; hidden /&gt;
+        &lt;/label&gt;
+        &lt;button id=&quot;btn-export&quot; class=&quot;pill-btn pill-btn--export&quot; type=&quot;button&quot; data-demo=&quot;export&quot;&gt;
+          &lt;span class=&quot;pill-btn__icon&quot;&gt;⇩&lt;/span&gt;
+          &lt;span&gt;Export .xlsx&lt;/span&gt;
+        &lt;/button&gt;
+        &lt;button id=&quot;btn-demo-mode&quot; class=&quot;pill-btn demo-toggle&quot; type=&quot;button&quot; title=&quot;Show which Handsontable API each feature uses&quot;&gt;
+          &lt;span class=&quot;pill-btn__icon&quot;&gt;🧪&lt;/span&gt;
+          &lt;span&gt;Demo mode&lt;/span&gt;
+        &lt;/button&gt;
+        &lt;label class=&quot;theme-switch&quot; title=&quot;Toggle light/dark mode&quot;&gt;
+          &lt;span class=&quot;theme-switch__icon&quot;&gt;☀️&lt;/span&gt;
+          &lt;button id=&quot;btn-theme-toggle&quot; class=&quot;theme-switch__track&quot; type=&quot;button&quot; data-demo=&quot;themeToggle&quot; role=&quot;switch&quot; aria-checked=&quot;false&quot;&gt;
+            &lt;span class=&quot;theme-switch__thumb&quot;&gt;&lt;/span&gt;
+          &lt;/button&gt;
+          &lt;span class=&quot;theme-switch__icon&quot;&gt;🌙&lt;/span&gt;
+        &lt;/label&gt;
+        &lt;a class=&quot;claude-badge&quot; href=&quot;https://github.com/handsontable/handsontable-skills&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot; title=&quot;Built using the Handsontable Skills for Claude&quot;&gt;
+          &lt;span class=&quot;claude-badge__mark&quot;&gt;✦&lt;/span&gt;
+        &lt;/a&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;topbar__accent&quot;&gt;&lt;/div&gt;
+  &lt;/header&gt;
+
+  &lt;div id=&quot;demo-popup&quot; class=&quot;demo-popup&quot; hidden&gt;
+    &lt;div class=&quot;demo-popup__title&quot; id=&quot;demo-popup-title&quot;&gt;&lt;/div&gt;
+    &lt;div class=&quot;demo-popup__desc&quot; id=&quot;demo-popup-desc&quot;&gt;&lt;/div&gt;
+    &lt;code class=&quot;demo-popup__code&quot; id=&quot;demo-popup-code&quot;&gt;&lt;/code&gt;
+    &lt;div class=&quot;demo-popup__actions&quot;&gt;
+      &lt;a id=&quot;demo-popup-link&quot; class=&quot;demo-popup__link&quot; href=&quot;#&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;View in Handsontable docs →&lt;/a&gt;
+      &lt;button id=&quot;demo-popup-renderer-btn&quot; class=&quot;demo-popup__renderer-btn&quot; type=&quot;button&quot; hidden&gt;View source&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+
+  &lt;div id=&quot;renderer-modal&quot; class=&quot;renderer-modal&quot; hidden&gt;
+    &lt;div class=&quot;renderer-modal__panel&quot;&gt;
+      &lt;div class=&quot;renderer-modal__header&quot;&gt;
+        &lt;span id=&quot;renderer-modal-title&quot; class=&quot;renderer-modal__title&quot;&gt;&lt;/span&gt;
+        &lt;button id=&quot;renderer-modal-close&quot; class=&quot;renderer-modal__close&quot; type=&quot;button&quot; aria-label=&quot;Close&quot;&gt;✕&lt;/button&gt;
+      &lt;/div&gt;
+      &lt;pre class=&quot;renderer-modal__code&quot;&gt;&lt;code id=&quot;renderer-modal-code&quot;&gt;&lt;/code&gt;&lt;/pre&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;layout&quot;&gt;
+    &lt;main class=&quot;page&quot;&gt;
+      &lt;div class=&quot;page__intro&quot;&gt;
+        &lt;h1&gt;VAT invoice reconciliation&lt;/h1&gt;
+        &lt;p&gt;Import an Excel file exported by your accounting tool — VAT and gross amounts are calculated live with formulas.&lt;/p&gt;
+      &lt;/div&gt;
+
+      &lt;div id=&quot;import-error&quot; class=&quot;import-msg&quot; hidden&gt;&lt;/div&gt;
+
+      &lt;section class=&quot;card chart-card&quot; data-demo=&quot;chart&quot;&gt;
+        &lt;h2 class=&quot;chart-card__title&quot;&gt;Invoices by payment status&lt;/h2&gt;
+        &lt;div class=&quot;chart-card__canvas-wrap&quot;&gt;
+          &lt;canvas id=&quot;status-chart&quot;&gt;&lt;/canvas&gt;
+        &lt;/div&gt;
+      &lt;/section&gt;
+
+      &lt;section class=&quot;card&quot;&gt;
+        &lt;div class=&quot;toolbar&quot;&gt;
+          &lt;button id=&quot;btn-add-row&quot; class=&quot;toolbar__btn&quot; type=&quot;button&quot; title=&quot;Add row&quot; data-demo=&quot;addRow&quot;&gt;
+            &lt;img src=&quot;https://cdn.jsdelivr.net/npm/@handsontable/spreadsheet-icons@2.0.0/svgs/original/plus.svg&quot; alt=&quot;&quot; /&gt;
+            &lt;span&gt;Add row&lt;/span&gt;
+          &lt;/button&gt;
+          &lt;button id=&quot;btn-remove-row&quot; class=&quot;toolbar__btn&quot; type=&quot;button&quot; title=&quot;Remove selected row&quot; data-demo=&quot;removeRow&quot;&gt;
+            &lt;img src=&quot;https://cdn.jsdelivr.net/npm/@handsontable/spreadsheet-icons@2.0.0/svgs/original/bin.svg&quot; alt=&quot;&quot; /&gt;
+            &lt;span&gt;Remove row&lt;/span&gt;
+          &lt;/button&gt;
+          &lt;span class=&quot;toolbar__divider&quot;&gt;&lt;/span&gt;
+          &lt;button id=&quot;btn-toggle-filters&quot; class=&quot;toolbar__btn&quot; type=&quot;button&quot; title=&quot;Toggle filters&quot; data-demo=&quot;filters&quot;&gt;
+            &lt;img src=&quot;https://cdn.jsdelivr.net/npm/@handsontable/spreadsheet-icons@2.0.0/svgs/original/filter.svg&quot; alt=&quot;&quot; /&gt;
+            &lt;span&gt;Filters&lt;/span&gt;
+          &lt;/button&gt;
+          &lt;span class=&quot;toolbar__divider&quot;&gt;&lt;/span&gt;
+          &lt;div class=&quot;search-box&quot; data-demo=&quot;search&quot;&gt;
+            &lt;input id=&quot;search-input&quot; type=&quot;search&quot; placeholder=&quot;Search invoices…&quot; /&gt;
+            &lt;span id=&quot;search-count&quot; class=&quot;search-box__count&quot;&gt;&lt;/span&gt;
+          &lt;/div&gt;
+        &lt;/div&gt;
+
+        &lt;div class=&quot;formula-bar&quot; data-demo=&quot;formulaBar&quot;&gt;
+          &lt;span id=&quot;formula-bar-ref&quot; class=&quot;formula-bar__ref&quot;&gt;&lt;/span&gt;
+          &lt;span class=&quot;formula-bar__fx&quot;&gt;fx&lt;/span&gt;
+          &lt;span id=&quot;formula-bar-content&quot; class=&quot;formula-bar__content&quot;&gt;&lt;/span&gt;
+        &lt;/div&gt;
+        &lt;div id=&quot;grid&quot;&gt;&lt;/div&gt;
+
+        &lt;div class=&quot;summary-row&quot; id=&quot;summary-row&quot; data-demo=&quot;summary&quot;&gt;&lt;/div&gt;
+      &lt;/section&gt;
+    &lt;/main&gt;
+
+    &lt;aside class=&quot;hook-log&quot; id=&quot;hook-log&quot;&gt;
+      &lt;div class=&quot;hook-log__header&quot;&gt;
+        &lt;h2 class=&quot;hook-log__title&quot;&gt;Hook log&lt;/h2&gt;
+        &lt;button id=&quot;hook-log-clear&quot; class=&quot;hook-log__clear&quot; type=&quot;button&quot;&gt;Clear&lt;/button&gt;
+      &lt;/div&gt;
+      &lt;p class=&quot;hook-log__hint&quot;&gt;Data-changing Handsontable hooks fire here as you interact with the grid.&lt;/p&gt;
+      &lt;ol id=&quot;hook-log-list&quot; class=&quot;hook-log__list&quot;&gt;&lt;/ol&gt;
+    &lt;/aside&gt;
+  &lt;/div&gt;
+      </textarea>
+    <textarea name="code_css" id="textarea-code-css">:root {
+  --navy: #00204e;
+  --cobalt: #00338d;
+  --cobalt-light: #2f5fc4;
+  --accent-gold: #c9a24b;
+  --bg: #f4f6f8;
+  --card-bg: #ffffff;
+  --text-dark: #1c2733;</textarea>
+    <textarea name="code_js" id="textarea-code-js">const DATA = [
+  [&#x27;Client&#x27;, &#x27;Status&#x27;, &#x27;Net&#x27;],
+  [&#x27;Helvetia Precision&#x27;, &#x27;Paid&#x27;, 1200],
+  [&#x27;Danube Chemicals&#x27;, &#x27;Pending&#x27;, 800],
+];
+
+const container = document.createElement(&#x27;div&#x27;);
+container.id = &#x27;grid&#x27;;
+document.body.appendChild(container);
+
+const hot = new Handsontable(container, {
+  data: DATA,
+  rowHeaders: true,
+  colHeaders: true,
+  formulas: { engine: HyperFormula },
+  themeName: &#x27;ht-theme-main&#x27;,
+  licenseKey: &#x27;non-commercial-and-evaluation&#x27;,
+});
+
+hljs.highlightAll();
+console.log(&#x27;rows:&#x27;, hot.countRows());
+</textarea>
+  </form>
+</body></html>

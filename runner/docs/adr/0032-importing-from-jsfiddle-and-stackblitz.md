@@ -83,3 +83,45 @@ fork — the author reviews before Save.
 - `usage_daily` gains an `import` metric with the provider as its dimension, so
   /admin shows which provider people actually use — and whether CodeSandbox keeps
   being pasted, which is what would justify revisiting decision 2.
+
+## Follow-up (DEV-2509): an import is a conversion, not a copy
+
+The first version copied the panels across as they were. That produced a workspace
+that looked right and could not run — reported against
+[jsfiddle.net/1bw9tphk/1](https://jsfiddle.net/1bw9tphk/1/) as
+`ReferenceError: Handsontable is not defined`.
+
+The reason is structural rather than a slip: a fiddle loads its libraries from CDN
+`<script>` tags and calls them as globals, while the Tier-1 preview is a module
+bundler that resolves `import` against `package.json`. A CDN tag in the HTML body
+never defines a global in the bundled module scope. That fiddle carried five such
+tags and used three of the globals; its imported `package.json` had no
+`handsontable` dependency at all.
+
+So the import now **converts**:
+
+- every recognized CDN `<script>` is dropped, its package added to `dependencies`,
+  and imported **under the identifier the global had** (`Handsontable`,
+  `HyperFormula`, `hljs`, …), with a `globalThis` assignment so an inline script in
+  the HTML still sees it. The author's code is not rewritten.
+- **Handsontable's own CSS links** become npm imports of the same files. Second
+  reason, independent of the bundler: those CDN URLs are unversioned, so a demo
+  built from one ignored the version picker and loaded whatever `latest` was.
+- **versions come from the URL** where it pins one (`highlight.js@11` → `^11`,
+  `xlsx@0.18.5` → exact); `handsontable` is re-pinned at mount as always.
+- a **library that is loaded but never called** is dropped without becoming a
+  dependency, and said so — an unused UMD-only import is a bundler error waiting
+  to happen.
+- an **unrecognized** CDN script keeps its tag and is reported as "may not run in
+  the preview". Silently dropping someone's library is worse than telling them.
+- StackBlitz gets the same pass. Those projects are npm-based already, so it is
+  usually a no-op — but one with a CDN tag in `index.html` fails identically.
+
+The conversion lives in `import-url.ts` rather than its own module because the
+pipeline tests load that file through `--experimental-strip-types`, which cannot
+resolve a sibling `./x.js` specifier — the same constraint that keeps `profile.ts`
+and `demos-list.ts` dependency-free.
+
+`e2e/import-live.spec.ts` (E2E_LIVE=1) runs the real parser over the recorded
+fixture and boots the result, because the unit tests can only pin what the
+conversion *produces*; the bug was that what it produced did not run.

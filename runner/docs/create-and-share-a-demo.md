@@ -67,7 +67,10 @@ Nothing is persisted until you **Save** (an existing demo) or **Fork** (a new on
 as an editable workspace, unsaved, for you to review and save.
 
 - JSFiddle: its HTML, CSS and JS panels become `index.html`, `style.css` and
-  `script.js`.
+  `script.js` — and the libraries it loaded from a CDN are converted into real
+  dependencies, so the demo follows the version picker and runs in the preview
+  instead of relying on script tags the bundler cannot see. If it used something we
+  do not recognize, the import says so rather than dropping it quietly.
 - StackBlitz: the project's files come across as they are, minus build output,
   lockfiles and binaries.
 - **CodeSandbox cannot be imported.** It blocks automated reads of its projects.
