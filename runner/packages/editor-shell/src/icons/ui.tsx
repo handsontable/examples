@@ -83,6 +83,7 @@ import {
   IconSparkles as TablerSparkles,
   IconSun as TablerSun,
   IconTrashX as TablerTrashX,
+  IconUsers as TablerUsers,
   IconWindowMaximize as TablerWindowMaximize,
   IconWindowMinimize as TablerWindowMinimize,
   IconX as TablerX,
@@ -127,6 +128,9 @@ export const IconLayoutSidebarLeftExpand = ui(
   TablerLayoutSidebarLeftExpand,
 );
 export const IconListDetails = ui("IconListDetails", TablerListDetails);
+// `tabler-icon-users` — the All demos nav row (DEV-2506). In no frame: the team
+// listing postdates the After Login section, and this row is its only surface.
+export const IconUsers = ui("IconUsers", TablerUsers);
 export const IconLogin2 = ui("IconLogin2", TablerLogin2);
 export const IconMoon = ui("IconMoon", TablerMoon);
 export const IconPalette = ui("IconPalette", TablerPalette);

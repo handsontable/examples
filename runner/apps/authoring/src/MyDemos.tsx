@@ -57,6 +57,9 @@ interface DemoListItem {
   revoked: number;
   created_at: string;
   updated_at: string;
+  /** Whose demo this is (DEV-2506). Present in both scopes; on `all` it is what
+   *  decides whether a card is editable. */
+  created_by: string;
 }
 
 /** In-flight action **per demo id**, not one global slot.
@@ -70,9 +73,13 @@ type BusyMap = Record<string, "fork" | "delete">;
 export interface MyDemosPageProps {
   apiBase: string;
   user: User;
+  /** `mine` (the default) or `all` — the team's demos, read-only except your own
+   *  (DEV-2506). One page for both: the grid, the cards and every action are the
+   *  same, and a second page would be the copy that drifts. */
+  scope?: "mine" | "all";
 }
 
-export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
+export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps) {
   const [demos, setDemos] = useState<DemoListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<BusyMap>({});
@@ -93,10 +100,16 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
     setError(null);
     const token = getToken();
     try {
-      const res = await fetch(`${apiBase}/api/demos`, {
+      const res = await fetch(`${apiBase}/api/demos?scope=${scope}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (!res.ok) throw new Error(`Couldn't load your demos (${res.status}).`);
+      if (!res.ok) {
+        throw new Error(
+          scope === "all"
+            ? `Couldn't load the team's demos (${res.status}).`
+            : `Couldn't load your demos (${res.status}).`,
+        );
+      }
       const data = (await res.json()) as { demos: DemoListItem[] };
       setDemos(data.demos);
     } catch (e) {
@@ -104,7 +117,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
       setDemos([]);
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [apiBase]);
+  }, [apiBase, scope]);
 
   useEffect(() => {
     void load();
@@ -199,7 +212,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
       <TopBar
         examplePill={
           <div style={shellStyles.examplePill(false)}>
-            <span style={shellStyles.pillLabel}>My Demos</span>
+            <span style={shellStyles.pillLabel}>{scope === "all" ? "All demos" : "My Demos"}</span>
           </div>
         }
         accountEmail={user.email}
@@ -213,7 +226,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
       />
 
       <div style={body}>
-        <SideNav active="myDemos" onLogout={() => logout("/")} />
+        <SideNav active={scope === "all" ? "allDemos" : "myDemos"} onLogout={() => logout("/")} />
 
         <main style={content}>
           {error && <p style={errorText} role="alert">{error}</p>}
@@ -222,31 +235,51 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
 
           {demos && (
             <div style={grid}>
-              {demos.map((d) => (
-                <DemoCard
-                  key={d.id}
-                  demo={d}
-                  ownerName={ownerName}
-                  ownerInitial={ownerInitial}
-                  ownerAvatar={ownerAvatar}
-                  busy={busy[d.id] ?? null}
-                  onCopyLink={() => void copyLink(d)}
-                  onFork={() => void fork(d)}
-                  onDelete={() => setConfirming(d)}
-                />
-              ))}
-              <CreateTile />
-              <ImportTile onClick={() => setImporting(true)} />
+              {demos.map((d) => {
+                // Ownership is compared here, not trusted from the scope: the
+                // team list contains your own demos too, and those stay editable.
+                const mine = d.created_by === user.email;
+                return (
+                  <DemoCard
+                    key={d.id}
+                    demo={d}
+                    mine={mine}
+                    // Your own profile only names your own demos. Someone else's
+                    // card falls back to their address (`displayNameFromEmail`) —
+                    // fetching a profile per card would be a request per row for a
+                    // name that is already derivable.
+                    ownerName={mine ? ownerName : displayNameFromEmail(d.created_by)}
+                    ownerInitial={mine ? ownerInitial : initialFromEmail(d.created_by)}
+                    ownerAvatar={mine ? ownerAvatar : null}
+                    busy={busy[d.id] ?? null}
+                    onCopyLink={() => void copyLink(d)}
+                    onFork={() => void fork(d)}
+                    onDelete={() => setConfirming(d)}
+                  />
+                );
+              })}
+              {/* Only on your own list: Create and Import belong where your demos
+                  are; the team list is for looking at what exists. */}
+              {scope === "mine" && (
+                <>
+                  <CreateTile />
+                  <ImportTile onClick={() => setImporting(true)} />
+                </>
+              )}
             </div>
           )}
 
           {/* Simple, per the DEV-2163 decision: one line beside the Create tile,
               no illustration. The tile is already the call to action. */}
           {demos && demos.length === 0 && !error && (
-            <p style={emptyText}>
-              No demos yet. Open an example, edit it, and fork it to save your first one — or
-              import one from JSFiddle or StackBlitz.
-            </p>
+            scope === "all" ? (
+              <p style={emptyText}>Nobody has saved a demo yet.</p>
+            ) : (
+              <p style={emptyText}>
+                No demos yet. Open an example, edit it, and fork it to save your first one — or
+                import one from JSFiddle or StackBlitz.
+              </p>
+            )
           )}
         </main>
       </div>
@@ -303,6 +336,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
 
 function DemoCard({
   demo,
+  mine,
   ownerName,
   ownerInitial,
   ownerAvatar,
@@ -312,6 +346,8 @@ function DemoCard({
   onDelete,
 }: {
   demo: DemoListItem;
+  /** Owned by the signed-in user? Read-only when false (DEV-2506). */
+  mine: boolean;
   ownerName: string;
   ownerInitial: string;
   ownerAvatar: string | null;
@@ -348,6 +384,7 @@ function DemoCard({
         {!revoked && (
           <CardMenu
             demo={demo}
+            mine={mine}
             busy={busy}
             onCopyLink={onCopyLink}
             onFork={onFork}
@@ -390,12 +427,14 @@ function DemoCard({
  *  duplicate of Open: it opens the same page with the dialog already up. */
 function CardMenu({
   demo,
+  mine,
   busy,
   onCopyLink,
   onFork,
   onDelete,
 }: {
   demo: DemoListItem;
+  mine: boolean;
   busy: "fork" | "delete" | null;
   onCopyLink: () => void;
   onFork: () => void;
@@ -461,29 +500,46 @@ function CardMenu({
 
       {open && (
         <div ref={popRef} style={cardPopover(dropUp)} role="menu">
-          <a href={`/edit/${demo.id}`} role="menuitem" className="hot-menu-row" style={cardMenuRow()}>
+          {/* Someone else's demo opens in the read-only playground: browse the
+              code, try changes, download a zip — but no Save, and no version
+              change. `/edit/:id` would offer a Save the API refuses (403). */}
+          <a
+            href={mine ? `/edit/${demo.id}` : `/share/${demo.id}`}
+            role="menuitem"
+            className="hot-menu-row"
+            style={cardMenuRow()}
+          >
             Open
           </a>
           <button type="button" role="menuitem" className="hot-menu-row" style={cardMenuRow()} onClick={act(onCopyLink)}>
             Copy link
           </button>
+          {/* Fork stays on every card, and is the *point* of seeing other
+              people's: it mints a demo owned by you. */}
           <button type="button" role="menuitem" className="hot-menu-row" style={cardMenuRow()} onClick={act(onFork)}>
             Fork
           </button>
-          <a href={`/edit/${demo.id}?edit=info`} role="menuitem" className="hot-menu-row" style={cardMenuRow()}>
-            Rename
-          </a>
-          <div style={navRule} role="separator" />
-          <button
-            type="button"
-            role="menuitem"
-            className="hot-menu-row"
-            data-danger="true"
-            style={cardMenuRow(true)}
-            onClick={act(onDelete)}
-          >
-            Delete
-          </button>
+          {/* Rename and Delete are the owner's alone. Rendering them disabled was
+              the alternative; a menu of two dead rows explains nothing that their
+              absence doesn't. */}
+          {mine && (
+            <>
+              <a href={`/edit/${demo.id}?edit=info`} role="menuitem" className="hot-menu-row" style={cardMenuRow()}>
+                Rename
+              </a>
+              <div style={navRule} role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                className="hot-menu-row"
+                data-danger="true"
+                style={cardMenuRow(true)}
+                onClick={act(onDelete)}
+              >
+                Delete
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
