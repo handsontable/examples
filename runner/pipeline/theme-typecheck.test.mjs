@@ -60,7 +60,15 @@ const states = {
 
 const out = {};
 for (const [name, state] of Object.entries(states)) {
-  out[name] = { ts: buildThemeModule(state, true), js: buildThemeModule(state, false) };
+  out[name] = {
+    ts: buildThemeModule(state, true),
+    js: buildThemeModule(state, false),
+    // The demo's own copy carries the live-patch bridge (DEV-2496), and that block
+    // is type-checked too: it calls '.params()' on 'getTheme()', which is exactly
+    // the 'ThemeBuilder | undefined' error that broke the Angular build before.
+    tsBridge: buildThemeModule(state, true, { bridge: true }),
+    jsBridge: buildThemeModule(state, false, { bridge: true }),
+  };
 }
 console.log(JSON.stringify(out));
 `;
@@ -69,6 +77,10 @@ function runCodegen(script) {
   const dir = mkdtempSync(join(tmpdir(), "hot-theme-tc-"));
   try {
     cpSync(join(root, "apps/authoring/src/theme"), join(dir, "theme"), { recursive: true });
+    // `presets.ts` imports Handsontable's static preset JSON, so the copied tree needs
+    // the real package to resolve. Without it the import throws and every test in this
+    // file reports as skipped — a green-looking run that checked nothing.
+    symlinkSync(modules, join(dir, "node_modules"), "dir");
     for (const file of readdirSync(join(dir, "theme"))) {
       if (!file.endsWith(".ts")) continue;
       const path = join(dir, "theme", file);
@@ -129,7 +141,10 @@ function typecheck(sources) {
 
 test("the generated TypeScript module compiles against Handsontable's types", { skip }, () => {
   const errors = typecheck(Object.fromEntries(
-    Object.entries(modules_).map(([name, { ts }]) => [name, ts]),
+    Object.entries(modules_).flatMap(([name, { ts, tsBridge }]) => [
+      [name, ts],
+      [`${name}-bridge`, tsBridge],
+    ]),
   ));
   assert.equal(
     errors,
@@ -143,19 +158,51 @@ test("the generated TypeScript module compiles against Handsontable's types", { 
 test("the JavaScript module carries no TypeScript-only syntax", { skip }, () => {
   // The same generator writes `handsontable-theme.js` for the JS starters, and
   // an annotation or an `as` cast there is a syntax error before anything runs.
-  for (const [name, { js }] of Object.entries(modules_)) {
-    assert.doesNotMatch(js, /\bimport type\b/, `${name}: a type import cannot appear in a .js module`);
-    assert.doesNotMatch(js, /\bas Record</, `${name}: a cast cannot appear in a .js module`);
-    assert.doesNotMatch(js, /^const config:/m, `${name}: an annotation cannot appear in a .js module`);
-    assert.doesNotMatch(js, /getTheme\(THEME_NAME\)!/, `${name}: a non-null assertion cannot appear in a .js module`);
+  for (const [state, variants] of Object.entries(modules_)) {
+    // The bridge variant included: it is the copy the demo actually evaluates, and it
+    // is the one carrying an annotated parameter and a cast under TypeScript.
+    for (const key of ["js", "jsBridge"]) {
+      const js = variants[key];
+      const name = `${state}/${key}`;
+      assert.doesNotMatch(js, /\bimport type\b/, `${name}: a type import cannot appear in a .js module`);
+      assert.doesNotMatch(js, /\bas Record</, `${name}: a cast cannot appear in a .js module`);
+      assert.doesNotMatch(js, /^const config:/m, `${name}: an annotation cannot appear in a .js module`);
+      assert.doesNotMatch(js, /getTheme\(THEME_NAME\)!/, `${name}: a non-null assertion cannot appear in a .js module`);
+      assert.doesNotMatch(js, /\bevent: MessageEvent\b/, `${name}: an annotation cannot appear in a .js module`);
+      assert.doesNotMatch(js, /\bas Window\b/, `${name}: a cast cannot appear in a .js module`);
 
-    const dir = mkdtempSync(join(tmpdir(), "hot-theme-js-"));
-    try {
-      const file = join(dir, `${name}.mjs`);
-      writeFileSync(file, js);
-      execFileSync(process.execPath, ["--check", file], { stdio: ["ignore", "pipe", "pipe"] });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+      const dir = mkdtempSync(join(tmpdir(), "hot-theme-js-"));
+      try {
+        const file = join(dir, "module.mjs");
+        writeFileSync(file, js);
+        execFileSync(process.execPath, ["--check", file], { stdio: ["ignore", "pipe", "pipe"] });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
+  }
+});
+
+test("the bridge is in the demo's module and out of the copy-for-my-app snippet", { skip }, () => {
+  for (const [state, variants] of Object.entries(modules_)) {
+    assert.match(
+      variants.jsBridge,
+      /addEventListener\('message'/,
+      `${state}: the demo's copy needs the live-patch listener, or every theme edit rebuilds`,
+    );
+    assert.doesNotMatch(
+      variants.js,
+      /addEventListener\('message'/,
+      `${state}: the snippet is what a user pastes into their app — no playground plumbing in it`,
+    );
+    // Guarded, so a downloaded demo (and Astro's server render) never runs it.
+    assert.match(variants.jsBridge, /typeof window !== 'undefined' && window\.parent !== window/);
+    // Not window.top: the runner itself is framed in embed mode.
+    assert.doesNotMatch(variants.jsBridge, /window\.top/);
+    // A rejected patch must be reported, not thrown — the listener has to survive a
+    // half-typed colour or the panel is left waiting on a bridge that is already dead.
+    assert.match(variants.jsBridge, /try \{[\s\S]*\.params\(data\.params\);[\s\S]*\} catch \{/);
+    // Answered to the sender, which is right whatever the frame nesting turns out to be.
+    assert.match(variants.jsBridge, /event\.source\?\.postMessage\(\{ source: "hot-runner-theme", ack: data\.id, ok \}/);
   }
 });

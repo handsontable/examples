@@ -128,6 +128,20 @@
          hover. Revoked cards don't take the class — they have nothing to click. */
       .hot-demo-card { border: 1px solid var(--hot-color-border); transition: border-color 0.12s ease; }
       .hot-demo-card:hover { border-color: var(--hot-color-accent-border); }
+      /* FILES drag & drop (DEV-2500). Here, not inline on the section: an inline
+         `outline`/`background` would outrank these and the target would never
+         light up (ADR-0026). `outline` rather than `border` so the 1px frame does
+         not reflow the tree the moment a drag enters. */
+      section[data-dropping="true"] {
+        outline: 1px dashed var(--hot-color-accent);
+        outline-offset: -1px;
+        background: var(--hot-color-accent-soft);
+      }
+      /* The row a drop would land in. Last of the .hot-file-row fills so it wins
+         over both the active row and the hover — during a drag it is the only
+         thing that answers "where is this going?". */
+      .hot-file-row[data-drop-target="true"],
+      .hot-file-row[data-drop-target="true"]:hover { background: var(--hot-color-accent-soft); }
       .hot-row-actions, .hot-dep-link { opacity: 0; transition: opacity 0.12s ease; }
       .hot-file-row:hover .hot-row-actions,
       .hot-file-row:focus-within .hot-row-actions,

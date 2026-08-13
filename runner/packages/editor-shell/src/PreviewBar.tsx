@@ -52,6 +52,10 @@ export interface PreviewBarProps {
    *  so they share the style and the `title` fallback. Placement here rather than
    *  in the top bar is the same call DEV-2173 tracks for the version warning. */
   budgetNotice?: string | null;
+  /** What an import left behind (DEV-2504) — binaries, `.env` files, anything over
+   *  the size cap. Same treatment as the two above: a `Notice`, not an error,
+   *  because the import succeeded; the author just needs to know what is missing. */
+  importNotice?: string | null;
   /** Show the pencil that swaps the pill for a free-text version field
    *  (`114:24396`). Signed-in only, so `EditorShell` resolves it. */
   versionEditable?: boolean;
@@ -82,6 +86,7 @@ export function PreviewBar({
   versionLocked,
   versionWarning,
   budgetNotice,
+  importNotice,
   versionEditable,
   frameworks,
   onFrameworkChange,
@@ -120,6 +125,7 @@ export function PreviewBar({
           placement question is DEV-2173. */}
       {budgetNotice && <Notice text={budgetNotice} />}
       {versionWarning && <Notice text={versionWarning} />}
+      {importNotice && <Notice text={importNotice} />}
 
       {versionLocked ? (
         <span style={{ ...s.menuButton, cursor: "default", color: theme.color.textMuted }}>
