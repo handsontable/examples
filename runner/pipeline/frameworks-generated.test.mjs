@@ -43,6 +43,29 @@ test("BUILD_CONFIG covers every catalog framework", async () => {
   }
 });
 
+test("BUILD_CONFIG matches catalog.json field for field", async () => {
+  // Coverage alone let a stale regeneration through: the blank starters shipped
+  // with `pnpm install` in this map while catalog.json (and frameworks.json) said
+  // `--frozen-lockfile`, so their snapshot builds silently skipped the frozen
+  // install the templates ship a lockfile to enforce. The generator's output has
+  // to equal its source, not merely mention the same keys.
+  const fs = await import("node:fs");
+  const catalog = JSON.parse(fs.readFileSync(new URL("../catalog.json", import.meta.url), "utf8"));
+  for (const e of catalog.examples) {
+    assert.deepEqual(
+      BUILD_CONFIG[e.framework],
+      {
+        tier: e.tier,
+        installCommand: e.installCommand,
+        buildCommand: e.buildCommand,
+        outputDir: e.outputDir,
+        outputGlob: e.outputGlob ?? null,
+      },
+      `${e.framework}: drifted from catalog.json — rerun scripts/prepare-container.mjs`,
+    );
+  }
+});
+
 test("baked fingerprints match the bucket artifacts they were derived from", async () => {
   // The frozen fast path only opens when the client's mounted files hash to a
   // baked fingerprint — and on a match the boot script hard-fails instead of
