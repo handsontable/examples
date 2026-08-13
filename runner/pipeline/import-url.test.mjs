@@ -251,6 +251,90 @@ test("the CDN URL shapes we actually see all resolve to a package", () => {
   assert.equal(packageFromCdnUrl("not a url"), null);
 });
 
+// ---- what review found in the conversion (DEV-2509) ------------------------
+
+test("a version taken from a URL cannot become an npm alias or a protocol", () => {
+  // HIGH: the range lands in a package.json a builder container installs, and npm
+  // accepts `npm:other-pkg`, `file:`, `git+ssh://` and tarball URLs there. A
+  // crafted CDN URL would have installed an attacker's package inside our build.
+  const fiddle = (spec) => `<textarea name="code_html" id="textarea-code-html">&lt;script src=&quot;https://cdn.jsdelivr.net/npm/handsontable@${spec}/dist/handsontable.full.min.js&quot;&gt;&lt;/script&gt;</textarea>
+    <textarea name="code_js" id="textarea-code-js">new Handsontable(document.body, {});</textarea>`;
+  for (const hostile of [
+    "npm:evil-pkg",
+    "file:../../etc",
+    "git+ssh://git@example.com/evil.git",
+    "https://example.com/evil.tgz",
+    "*",
+    ">=0",
+    "latest||npm:evil",
+  ]) {
+    const pkg = JSON.parse(parseJsFiddle(fiddle(hostile), "u").files["/package.json"]);
+    const range = pkg.dependencies?.handsontable;
+    // The property, not one shape: some of these do not parse as a package at all
+    // (the `file:` path breaks the URL into different segments and the script is
+    // reported as unrecognized instead), and either outcome is safe. What must
+    // never happen is the hostile string reaching the manifest.
+    assert.ok(range === undefined || range === "latest", `${hostile} -> ${range}`);
+    assert.equal(JSON.stringify(pkg).includes(hostile), false, `${hostile} must not reach package.json`);
+  }
+  // …while real versions still come through.
+  for (const [spec, expected] of [["11", "^11"], ["11.9", "^11.9"], ["0.18.5", "0.18.5"], ["v2.1.0", "2.1.0"], ["18.0.0-next.1", "18.0.0-next.1"]]) {
+    const pkg = JSON.parse(parseJsFiddle(fiddle(spec), "u").files["/package.json"]);
+    assert.equal(pkg.dependencies.handsontable, expected, spec);
+  }
+});
+
+test("a fiddle that already imports something still gets the rest converted", () => {
+  // HIGH: skipping the whole preamble when *any* import was present dropped the
+  // Handsontable CSS and every other global, while the tags were stripped anyway.
+  const html = `<textarea name="code_html" id="textarea-code-html">&lt;link rel=&quot;stylesheet&quot; href=&quot;https://cdn.jsdelivr.net/npm/handsontable/styles/handsontable.min.css&quot; /&gt;
+    &lt;script src=&quot;https://cdn.jsdelivr.net/npm/handsontable/dist/handsontable.full.min.js&quot;&gt;&lt;/script&gt;
+    &lt;script src=&quot;https://cdn.jsdelivr.net/npm/hyperformula/dist/hyperformula.full.min.js&quot;&gt;&lt;/script&gt;</textarea>
+    <textarea name="code_js" id="textarea-code-js">import { HyperFormula } from 'hyperformula';
+new Handsontable(document.body, { formulas: { engine: HyperFormula } });</textarea>`;
+  const js = parseJsFiddle(html, "u").files["/script.js"];
+  // The one it already had is not duplicated…
+  assert.equal((js.match(/from 'hyperformula'/g) ?? []).length, 1);
+  // …and the ones it did not are there.
+  assert.match(js, /import Handsontable from 'handsontable';/);
+  assert.match(js, /import 'handsontable\/styles\/handsontable\.min\.css';/);
+});
+
+test("an HTML-only fiddle gets the module its converted tags now need", () => {
+  // HIGH: `hasJs` came from the original panel, so this produced an index.html with
+  // the CDN tags stripped and no script at all — nothing loaded Handsontable.
+  const html = `<textarea name="code_html" id="textarea-code-html">&lt;link rel=&quot;stylesheet&quot; href=&quot;https://cdn.jsdelivr.net/npm/handsontable/styles/handsontable.min.css&quot; /&gt;
+    &lt;script src=&quot;https://cdn.jsdelivr.net/npm/handsontable/dist/handsontable.full.min.js&quot;&gt;&lt;/script&gt;
+    &lt;div id=&quot;grid&quot;&gt;&lt;/div&gt;
+    &lt;script&gt;new Handsontable(document.getElementById('grid'), {});&lt;/script&gt;</textarea>
+    <textarea name="code_js" id="textarea-code-js"></textarea>`;
+  const result = parseJsFiddle(html, "u");
+  assert.ok(result.files["/script.js"], "a module was written");
+  assert.match(result.files["/script.js"], /import Handsontable from 'handsontable';/);
+  assert.match(result.files["/index.html"], /<script type="module" src="\.\/script\.js"><\/script>/);
+});
+
+test("an inline script that uses a converted global is warned about", () => {
+  // MEDIUM: a classic inline script runs while the page parses, before the deferred
+  // module — so the globalThis assignments cannot reach it, and the comment that
+  // said they could was wrong.
+  const html = `<textarea name="code_html" id="textarea-code-html">&lt;script src=&quot;https://cdn.jsdelivr.net/npm/handsontable/dist/handsontable.full.min.js&quot;&gt;&lt;/script&gt;
+    &lt;script&gt;new Handsontable(document.body, {});&lt;/script&gt;</textarea>
+    <textarea name="code_js" id="textarea-code-js">console.log(Handsontable.version);</textarea>`;
+  const result = parseJsFiddle(html, "u");
+  assert.equal(
+    result.skipped.some((s) => /inline script/.test(s.reason) && s.path.includes("Handsontable")),
+    true,
+  );
+});
+
+test("the reported fiddle's own inline script raises no warning", () => {
+  // It only reads localStorage and sets a data attribute, so nothing to report —
+  // the warning has to be specific or it is noise on every import.
+  const result = parseJsFiddle(CDN_FIDDLE, "u");
+  assert.equal(result.skipped.some((s) => /inline script/.test(s.reason)), false);
+});
+
 // ---- StackBlitz ------------------------------------------------------------
 
 test("a StackBlitz project becomes its own file set", () => {

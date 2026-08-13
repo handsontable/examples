@@ -220,12 +220,17 @@ export function parseJsFiddle(html: string, sourceUrl: string): Omit<ImportResul
 
   const title = pageTitle(html) ?? "Imported fiddle";
   const hasCss = !!cssPanel?.trim();
-  const hasJs = !!jsPanel?.trim();
 
   // A fiddle's libraries arrive as CDN <script> tags and its code calls them as
   // globals, which a module bundler cannot resolve (DEV-2509). Convert before
   // wrapping, so the tags are gone from the HTML and the imports are in the JS.
   const normalized = normalizeCdnGlobals(htmlPanel ?? "", jsPanel ?? "");
+
+  // Not `!!jsPanel?.trim()` (found in review, HIGH): an HTML-only fiddle whose
+  // libraries came from CDN tags now *needs* a module — the tags are gone and the
+  // preamble that replaced them is the only thing that loads them. Without this it
+  // got neither.
+  const hasJs = !!normalized.js.trim();
 
   const files: Record<string, string> = {
     // Only reference the files that are actually written: a fiddle with an empty
@@ -475,11 +480,25 @@ export function packageFromCdnUrl(url: string): { name: string; range: string | 
   return { name: spec, range: null };
 }
 
-/** A CDN range -> something npm can install. `11` -> `^11`; `0.18.5` stays exact. */
+/**
+ * A CDN range -> something npm can install. `11` -> `^11`; `0.18.5` stays exact.
+ *
+ * Allowlisted, not sanitized: this string comes out of a URL path the importer was
+ * handed, and it lands in a `package.json` that a builder container runs
+ * `pnpm install` against. npm accepts far more than a version there —
+ * `npm:other-pkg`, `file:…`, `git+ssh://…`, a tarball URL — so a crafted
+ * `…/npm/handsontable@npm:evil-pkg/dist/x.js` would have installed an attacker's
+ * package inside our build (found in review, HIGH). Anything that is not plainly a
+ * semver fragment degrades to `latest`, which is what an unversioned URL gets
+ * anyway.
+ */
+const SEMVER_FRAGMENT_RE = /^v?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$/;
+
 function dependencyRange(range: string | null): string {
-  if (!range) return "latest";
-  if (/^\d+$/.test(range) || /^\d+\.\d+$/.test(range)) return `^${range}`;
-  return range;
+  if (!range || !SEMVER_FRAGMENT_RE.test(range)) return "latest";
+  const version = range.replace(/^v/, "");
+  // A partial version is a range; a full one is a pin.
+  return /^\d+(\.\d+)?$/.test(version) ? `^${version}` : version;
 }
 
 function importLine(entry: CdnPackage): string {
@@ -561,21 +580,40 @@ export function normalizeCdnGlobals(html: string, js: string): NormalizedImport 
 
   if (!imports.length && !cssImports.length) return { html, js, dependencies, skipped };
 
-  // Already a module? Then the author wrote imports themselves and a preamble
-  // would duplicate them.
-  const alreadyModule = /^\s*import\s.+from\s/m.test(js);
-  const preamble = alreadyModule
-    ? ""
-    : [
-        "// Imported from a CDN-based demo: the <script> tags became real imports so",
-        "// the bundler can resolve them, and the globals stay available to any inline",
-        "// script in index.html (DEV-2509).",
-        ...imports,
-        ...cssImports,
-        ...globals.map((name) => `globalThis.${name} = ${name};`),
-        "",
-        "",
-      ].join("\n");
+  // Skip only what the source *already* imports, line by line.
+  //
+  // The first version skipped the entire preamble whenever the JS contained any
+  // `import` at all (found in review, HIGH): the CDN tags were still stripped from
+  // the HTML, so a fiddle with one import of its own lost the Handsontable CSS and
+  // every converted global — the exact failure this change exists to fix,
+  // reintroduced for a subset of fiddles.
+  const newImports = imports.filter((line) => !alreadyImports(js, line));
+  const newCss = cssImports.filter((line) => !alreadyImports(js, line));
+
+  // An inline `<script>` (no `type="module"`) runs while the document parses; the
+  // entry module is deferred, so these assignments land *after* it. They are here
+  // for code that runs later — an inline handler, a timeout — and the note below
+  // covers the case they cannot help.
+  for (const name of globals.filter((global) => inlineScriptUses(html, global))) {
+    skipped.push({
+      path: `inline <script> using ${name}`,
+      reason:
+        `${name} is a module import now, so an inline script in the HTML cannot see it ` +
+        "— move that code into the JS panel",
+    });
+  }
+
+  const preamble = [
+    "// Imported from a CDN-based demo (DEV-2509): the <script> tags became real",
+    "// imports so the bundler can resolve them. The globalThis assignments expose",
+    "// the same names to code that runs after this module — an inline handler, a",
+    "// timeout — but not to an inline script that runs while the page parses.",
+    ...newImports,
+    ...newCss,
+    ...globals.map((name) => `globalThis.${name} = ${name};`),
+    "",
+    "",
+  ].join("\n");
 
   return {
     html: tidyBlankLines(nextHtml),
@@ -583,6 +621,32 @@ export function normalizeCdnGlobals(html: string, js: string): NormalizedImport 
     dependencies,
     skipped,
   };
+}
+
+function escapeForRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Is this import line's specifier already imported by the source? */
+function alreadyImports(js: string, line: string): boolean {
+  const found = /from '([^']+)'|^import '([^']+)'/.exec(line);
+  const specifier = found?.[1] ?? found?.[2];
+  if (!specifier) return false;
+  const quoted = escapeForRegExp(specifier);
+  return new RegExp(`(?:from|import)\\s*['"]${quoted}['"]`).test(js);
+}
+
+/** Does a *classic* inline script reference this identifier? Those run while the
+ *  document parses, before the deferred entry module, so a converted global
+ *  cannot reach them. */
+function inlineScriptUses(html: string, name: string): boolean {
+  const pattern = name === "$"
+    ? /(^|[^A-Za-z0-9_$])\$\s*\(/
+    : new RegExp(`(^|[^A-Za-z0-9_$.])${escapeForRegExp(name)}\\b`);
+  for (const match of html.matchAll(/<script(?![^>]*\btype="module")[^>]*>([\s\S]*?)<\/script>/gi)) {
+    if (pattern.test(match[1] ?? "")) return true;
+  }
+  return false;
 }
 
 /** Removing tags leaves runs of blank lines where they were. */
@@ -613,7 +677,13 @@ function normalizeStackBlitzEntry(
 
   // The module the HTML entry points at — that is where a preamble belongs. With
   // no obvious entry there is nothing to convert into, so the tags stay.
-  const entryMatch = /<script[^>]*\bsrc="([^"]+\.(?:m?[jt]sx?))"/i.exec(files[htmlPath]!);
+  // A *local* module only: `src="https://cdn…/handsontable.full.min.js"` also ends
+  // in `.js`, and matching it first made the lookup below fail and the whole
+  // conversion bail — with the CDN tags left in place (found in review). Libraries
+  // usually come before the app entry, so this was the common case, not the corner.
+  const entryMatch = /<script[^>]*\bsrc="(?!https?:|\/\/)([^"]+\.(?:m?[jt]sx?))"/i.exec(
+    files[htmlPath]!,
+  );
   const entryPath = entryMatch
     ? Object.keys(files).find((path) => path.endsWith(entryMatch[1]!.replace(/^\.?\//, "")))
     : undefined;
