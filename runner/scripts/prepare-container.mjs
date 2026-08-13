@@ -9,7 +9,12 @@
 // needs one `Sandbox` namespace). At session start the Worker hardlink-copies
 // the baked node_modules into /app, then runs fast frozen pnpm reconciliation.
 //
-// Usage: node scripts/prepare-container.mjs [--seed-bucket=18]
+// Usage: node scripts/prepare-container.mjs [--seed-bucket=18] [--generated-only]
+//
+// `--generated-only` rewrites frameworks.generated.ts and leaves the committed
+// baked contexts + Dockerfile untouched. Adding a Tier-1 starter (e.g. the blank
+// templates, DEV-2499) changes BUILD_CONFIG but nothing about the image, and a
+// full run would re-resolve the docs-only Vue lockfile over the network.
 //
 // Starter sources come from the versioned bucket snapshots (DEV-2213):
 // apps/authoring/public/starter-examples/<bucket>/<framework>.json.
@@ -284,6 +289,11 @@ ${buildRows.join("\n")}
   console.log(`[prepare-container] wrote ${path.relative(RUNNER_DIR, outPath)}`);
 }
 
-writeBakedContexts();
+const generatedOnly = process.argv.includes("--generated-only");
+if (!generatedOnly) writeBakedContexts();
 writeGenerated();
-console.log(`[prepare-container] container examples: ${containerFrameworks.map((e) => e.framework).join(", ")}`);
+console.log(
+  generatedOnly
+    ? "[prepare-container] --generated-only: baked contexts and Dockerfile left untouched"
+    : `[prepare-container] container examples: ${containerFrameworks.map((e) => e.framework).join(", ")}`,
+);
