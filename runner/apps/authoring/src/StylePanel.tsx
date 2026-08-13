@@ -53,6 +53,12 @@ import {
   type Token,
   type TokenValue,
 } from "./theme/vocabulary.js";
+import {
+  INTERACTION_ONLY_NOTE,
+  mergeSuggestion,
+  NOTHING_CHANGED_NOTE,
+  type ThemeAnswer,
+} from "./theme/suggestion.js";
 import { densitySizes as presetDensity, presetColors, presetTokens } from "./theme/presets.js";
 import { effectiveColors, effectiveDensity, effectiveTokens } from "./theme/resolve.js";
 import { TokenControl, type ControlContext } from "./theme/controls.js";
@@ -328,9 +334,18 @@ export function StylePanel({
     persist(next);
   }
 
-  /** "Describe a style" — theme-builder's headline feature. The server returns
-   *  whitelisted theme values, which are merged on top of what is already set
-   *  so a follow-up ("now make the header darker") refines rather than resets. */
+  /**
+   * "Describe a style" — theme-builder's headline feature. The server returns
+   * whitelisted theme values, which are merged on top of what is already set so a
+   * follow-up ("now make the header darker") refines rather than resets.
+   *
+   * What comes back is *checked* rather than announced (DEV-2497). The model's
+   * message is a claim about what it did, and it was reported as a bug when the
+   * claim was true and the grid still looked identical: a brand ramp paints
+   * selection, focus and the active header, none of which is on screen until you
+   * touch the grid. `mergeSuggestion` says whether the theme moved and whether
+   * anything at rest moved with it, so the panel can say the same.
+   */
   async function describe(text: string) {
     const request = text.trim();
     if (!request || thinking) return;
@@ -345,23 +360,25 @@ export function StylePanel({
         },
         body: JSON.stringify({ prompt: request, current: state }),
       });
-      const body = (await res.json().catch(() => ({}))) as {
-        message?: string;
-        tokens?: Record<string, string>;
-        palette?: Record<string, string>;
-        config?: Partial<ThemeState>;
-        error?: string;
-      };
+      const body = (await res.json().catch(() => ({}))) as ThemeAnswer & { error?: string };
       if (!res.ok) {
         setAiNote(body.message ?? `Unavailable (${res.status}).`);
         return;
       }
-      update({
-        ...(body.config ?? {}),
-        params: { ...state.params, ...(body.tokens ?? {}) },
-        palette: { ...state.palette, ...(body.palette ?? {}) },
-      });
-      setAiNote(body.message ?? null);
+
+      const { next, effect } = mergeSuggestion(state, body);
+      if (effect === "none") {
+        // Nothing to apply, so nothing is applied: `update()` here would write the
+        // theme module and order a rebuild to land a theme identical to the one
+        // already running. The prompt is left in the box, because the next thing
+        // the user does is edit it.
+        setAiNote(NOTHING_CHANGED_NOTE);
+        return;
+      }
+
+      update(next);
+      const message = body.message ?? "Done.";
+      setAiNote(effect === "interactionOnly" ? `${message} ${INTERACTION_ONLY_NOTE}` : message);
       setPrompt("");
     } catch (err) {
       reportError(err, "theme-ai");

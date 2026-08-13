@@ -273,6 +273,28 @@ Gaps are interpolated in sRGB, matching the panel's own brand-ramp generator
 (`StylePanel.tsx` `rampFrom`); a ramp with fewer than two steps is left alone,
 because one step is a deliberate single-colour change.
 
+### A recolour has to be visible (DEV-2497)
+
+The brand ramp reaches 38 of the 279 tokens, and every one of them is an
+interaction state: selection, focus rings, the active header, checkbox and radio,
+links. **A grid nobody has clicked paints none of it.** "corporate green" was
+reported as producing no result; it had produced a complete, correct green ramp,
+and the grid was pixel-identical because the header is neutral (`palette.50`) and
+stayed that way.
+
+So the prompt asks a recolour to tint the resting surfaces too, and — because
+asking is not enough here either — a complete primary ramp that arrives with no
+resting-surface token set gets `headerBackgroundColor` and its linked
+`headerRowBackgroundColor` tinted from the ramp's lightest step
+(`RESTING_SURFACE_TOKENS` in `theme-ai.ts`). It never overrides a surface the
+model chose itself.
+
+The panel checks rather than announces (`theme/suggestion.ts`). The model's
+message is a claim about what it did, and it was being forwarded as confirmation.
+`mergeSuggestion` reports whether the theme moved at all and whether anything a
+resting grid paints moved with it, so an answer that changed nothing says so, and
+one that is real but invisible until you touch the grid says that instead.
+
 ## Configuration
 
 None of its own: it uses the same `LITELLM_API_KEY` as the assistant. Without
