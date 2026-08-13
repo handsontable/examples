@@ -210,3 +210,66 @@ test("switching examples does not carry one demo's theme into the next", async (
     ).toEqual(enabled);
   }).toPass({ timeout: 60_000 });
 });
+
+/**
+ * A theme edit must not rebuild the demo (DEV-2496).
+ *
+ * Reported as "picking any new value in the colour picker refreshes the whole table —
+ * blink blink". Every theme edit went out as an ordinary file write, which on Tier 1 is
+ * a full bundler compile (per drag frame) and on Tier 2 a dev-server reload. Both
+ * re-run the demo from the top, so the grid was thrown away and built again.
+ *
+ * What this watches is the grid's own root element, stamped before the edit. A rebuild
+ * cannot preserve it — the element is created by the demo's own code — so the stamp
+ * surviving *is* "the table did not blink", on either tier and without depending on
+ * bundler internals. That the edit also took effect is read from the row height, so a
+ * live patch that quietly did nothing cannot pass either.
+ *
+ * One example per tier: react drives the in-browser bundler, astro a real container.
+ */
+for (const example of ["react", "astro"] as const) {
+  test(`${example} — a theme edit patches the running grid instead of rebuilding it`, async ({ page }) => {
+    test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+    test.setTimeout(300_000);
+
+    await openExample(page, example);
+    await openStylePanel(page);
+    const drawer = page.locator(STYLE);
+
+    // The first apply is the one edit that *has* to rebuild: it wires the theme into
+    // the demo, and the module it writes is what carries the live-patch bridge. So
+    // wait for the grid to come back on the generated theme before measuring anything
+    // — until then there is nothing in the preview to patch.
+    await drawer.getByLabel("Colour scheme").selectOption("dark");
+    await expectThemeModuleWritten(page);
+    await expect(async () => {
+      expect(await themeClass(page), "the grid is not on the generated theme yet")
+        .toEqual("ht-theme-custom-theme");
+    }).toPass({ timeout: 60_000 });
+
+    const before = await cellHeight(page);
+    await preview(page).locator(".handsontable").first()
+      .evaluate((el) => el.setAttribute("data-live-probe", "1"));
+
+    // A density size, for the same reason the suite already uses one: row height is a
+    // signal no starter stylesheet can outrank.
+    await drawer.getByRole("button", { name: /Density sizes/ }).click();
+    const row = drawer.locator("label").filter({ has: page.locator('span[title="cellVertical"]') });
+    await row.locator('input[type="text"]').fill("28px");
+
+    await expect(async () => {
+      expect(await cellHeight(page), "the edit never reached the grid").toBeGreaterThan(before);
+    }).toPass({ timeout: 60_000 });
+
+    // The assertion this test exists for. Before the fix the stamp is gone here: the
+    // demo was re-evaluated and built a new grid.
+    await expect(preview(page).locator(".handsontable").first())
+      .toHaveAttribute("data-live-probe", "1");
+
+    // And it stays gone-free while the edit settles — a rebuild scheduled a beat later
+    // would be just as visible to the user as an immediate one.
+    await page.waitForTimeout(2000);
+    await expect(preview(page).locator(".handsontable").first())
+      .toHaveAttribute("data-live-probe", "1");
+  });
+}

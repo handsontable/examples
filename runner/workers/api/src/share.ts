@@ -288,7 +288,13 @@ export interface UpdateArgs {
   entry: BuildEntry;
   files: Record<string, string>;   // already version-injected
   htVersion: string;
-  title: string;
+  /** Metadata, only when the request actually carried it. Absent means "leave the
+   *  stored value alone", and that distinction is load-bearing (DEV-2495): a
+   *  rebuild runs a container and takes seconds to minutes, so its caller read the
+   *  row long before this writes. Passing that stale row's title back in — which is
+   *  what a required field forces — reverts any rename committed in the meantime,
+   *  the metadata-writer race one level down from the client. */
+  title?: string;
   description?: string | null;
   now: string;
 }
@@ -329,9 +335,13 @@ export async function updateDemo(env: Env, args: UpdateArgs): Promise<void> {
     { httpMetadata: { contentType: "application/json" } },
   );
 
-  await env.DB.prepare(
-    "UPDATE demos SET title=?, description=?, ht_version=?, files_hash=?, updated_at=? WHERE id=?",
-  ).bind(args.title, args.description ?? null, args.htVersion, hash, args.now, args.id).run();
+  // Built column by column so an absent title or description is *not written*,
+  // rather than written back as whatever the row held when the rebuild started.
+  const sets = ["ht_version=?", "files_hash=?", "updated_at=?"];
+  const binds: unknown[] = [args.htVersion, hash, args.now];
+  if (args.title !== undefined) { sets.push("title=?"); binds.push(args.title); }
+  if (args.description !== undefined) { sets.push("description=?"); binds.push(args.description ?? null); }
+  await env.DB.prepare(`UPDATE demos SET ${sets.join(", ")} WHERE id=?`).bind(...binds, args.id).run();
   await invalidateDemo(env, args.id);
 }
 

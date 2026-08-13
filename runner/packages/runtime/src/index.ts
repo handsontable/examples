@@ -8,6 +8,7 @@ export type {
   StarterBucketManifestEntry,
   DemoRuntime,
   HandsontableVersionRef,
+  WriteFileOptions,
 } from "./types.js";
 
 export {
