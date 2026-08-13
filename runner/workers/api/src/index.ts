@@ -13,6 +13,7 @@ import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate } from "./auth.js";
+import { isValidationError, validateDescription, validateTitle } from "./demo-info.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse } from "./error-page.js";
 import { ImportError, importFromUrl } from "./import-url.js";
@@ -657,7 +658,11 @@ export default Sentry.withSentry(sentryOptions, {
         };
         const cfg = BUILD_CONFIG[body.framework];
         if (!cfg) return json({ error: `unknown framework: ${body.framework}` }, 400);
-        if (!body.title?.trim()) return json({ error: "title is required" }, 400);
+        const title = validateTitle(body.title);
+        if (isValidationError(title)) return json(title, 400);
+        // Markdown, kept verbatim (DEV-2507) — only the length is our business.
+        const description = validateDescription(body.description);
+        if (isValidationError(description)) return json(description, 400);
         if (!body.files || !body.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
 
         // A build is a container boot too, so it answers to the same ceiling.
@@ -671,8 +676,8 @@ export default Sentry.withSentry(sentryOptions, {
           entry: { framework: body.framework, ...cfg },
           files: body.files,
           htVersion: body.htVersion ?? "latest",
-          title: body.title.trim(),
-          description: body.description ?? null,
+          title,
+          description: description ?? null,
           createdBy: id.email,
           forkedFrom: body.forkedFrom ?? `catalog:${body.framework}`,
           now: nowIso(),
@@ -732,9 +737,20 @@ export default Sentry.withSentry(sentryOptions, {
         if (!row) return json({ error: "not found" }, 404);
         if (row.created_by !== id.email) return json({ error: "forbidden" }, 403);
         const patch = (await request.json()) as {
-          title?: string; description?: string; visibility?: string;
+          title?: string; description?: string | null; visibility?: string;
           files?: Record<string, string>; htVersion?: string;
         };
+        // Validated once for both branches below. `undefined` still means "leave
+        // it alone" and `null` "clear it" — the distinction the description edit
+        // depends on (DEV-2507).
+        // A blank title is dropped, not refused: master's rebuild branch treats
+        // "supplied but empty" as "leave the column alone" (DEV-2495), and a 400
+        // here would break that without protecting anything — the length cap and
+        // the type check still apply to a real one.
+        const patchTitle = patch.title?.trim() ? validateTitle(patch.title) : undefined;
+        if (isValidationError(patchTitle)) return json(patchTitle, 400);
+        const patchDescription = validateDescription(patch.description);
+        if (isValidationError(patchDescription)) return json(patchDescription, 400);
         // Code change -> rebuild the snapshot in place (edit-page Save).
         if (patch.files) {
           if (!patch.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
@@ -754,11 +770,12 @@ export default Sentry.withSentry(sentryOptions, {
             // to commit a rename in the middle of one, and re-writing the row this
             // handler read at the start would revert it (DEV-2495). Absent means the
             // UPDATE leaves the column alone; `null` on description still clears it,
-            // which is the distinction the `!== undefined` check exists for. A
-            // supplied-but-blank title is dropped for the same reason — falling back
-            // to `row.title` would write a value that may already be stale.
-            ...(patch.title?.trim() ? { title: patch.title.trim() } : {}),
-            ...(patch.description !== undefined ? { description: patch.description } : {}),
+            // which is the distinction the `!== undefined` check exists for.
+            //
+            // The values are the validated ones (DEV-2507): length-capped, CRLF
+            // normalized, and — for the description — markdown kept verbatim.
+            ...(patchTitle ? { title: patchTitle } : {}),
+            ...(patchDescription !== undefined ? { description: patchDescription } : {}),
             now: nowIso(),
           });
           return json({ ok: true });
@@ -766,9 +783,9 @@ export default Sentry.withSentry(sentryOptions, {
         // Metadata-only update (title / description / visibility).
         await env.DB.prepare("UPDATE demos SET title=?, description=?, visibility=?, updated_at=? WHERE id=?")
           .bind(
-            patch.title ?? row.title,
+            patchTitle ?? row.title,
             // See the rebuild branch above: `undefined` leaves it, `null` clears it.
-            patch.description !== undefined ? patch.description : row.description,
+            patchDescription !== undefined ? patchDescription : row.description,
             patch.visibility ?? row.visibility,
             nowIso(),
             demoId,

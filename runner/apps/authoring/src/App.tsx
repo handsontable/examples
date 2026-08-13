@@ -42,6 +42,7 @@ import { StyleButton, StylePanel } from "./StylePanel.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
 import { GuidePage } from "./Guide.js";
+import { Markdown } from "./markdown.js";
 import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
 import { useProfile } from "./useProfile.js";
@@ -2063,7 +2064,9 @@ function Authoring({
         onVersionChange={changeVersion}
         onEdit={onEdit}
         title={title || entry.displayName}
-        description={description}
+        // Rendered here rather than in the shell (DEV-2507): the parser lives in the
+        // app, and this is the same renderer the demo card and the guide use.
+        description={description ? <Markdown text={description} /> : undefined}
         createdAt={createdAt}
         // `edit` only — and no longer the same gate as the file CRUD below, which
         // follows sign-in (ADR-0025). Title and description belong to a *saved* demo
