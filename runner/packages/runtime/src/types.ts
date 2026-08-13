@@ -86,9 +86,30 @@ export interface StarterBucketManifest {
  * returns the URL to point the iframe at; `writeFile` streams edits (on save or
  * keystroke); lifecycle callbacks drive the shell's ready/error UI.
  */
+export interface WriteFileOptions {
+  /**
+   * Keep the file, skip the rebuild (DEV-2496).
+   *
+   * For an edit whose visible effect has already been delivered another way — the
+   * Style panel patches the running theme over postMessage — where a rebuild would
+   * be pure cost: a bundler recompile that remounts the grid, or a dev-server
+   * reload, once per frame of a colour drag.
+   *
+   * The file itself is *not* optional. It is stored exactly as an ordinary write
+   * stores it, so Download, Share, Save and Refresh all see the current theme; only
+   * the push to the engine waits. Whatever lands next — an ordinary edit, a
+   * refresh, `flushQuiet()` — carries it.
+   */
+  quiet?: boolean;
+}
+
 export interface DemoRuntime {
   mount(files: FilesMap): Promise<{ previewUrl: string }>;
-  writeFile(path: string, contents: string): void;
+  writeFile(path: string, contents: string, opts?: WriteFileOptions): void;
+  /** Push whatever `writeFile(..., { quiet: true })` has been holding back. The
+   *  caller's fallback for a live update that did not land: nothing to flush is a
+   *  no-op, so it is always safe to call. */
+  flushQuiet?(): void;
   /** Remove a file from the running preview (file-tree delete/rename). */
   deleteFile?(path: string): void;
   /**

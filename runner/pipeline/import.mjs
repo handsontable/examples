@@ -1,6 +1,7 @@
 // pipeline/import.mjs
 //
-// Reads the 16 example directories from `examples/` and emits versioned
+// Reads the 16 example directories from `examples/`, generates the synthetic
+// blank templates (DEV-2499, see blank-starters.mjs), and emits versioned
 // starter buckets (DEV-2213) plus the catalog index:
 //
 //   apps/authoring/public/starter-examples/<bucket>/manifest.json
@@ -19,8 +20,12 @@
 //   node pipeline/import.mjs --bucket=18              one bucket from ../examples
 //   node pipeline/import.mjs --bucket=15 --source=<dir> --ref=prod-examples/15
 //   node pipeline/import.mjs --index                  rebuild catalog.json from bucket dirs
+//   node pipeline/import.mjs --synthetic              regenerate ONLY the blank templates,
+//                                                     in every bucket already on disk
 //
-// Needs network (npm registry + pnpm lockfile resolution). Build artifacts,
+// Needs network (npm registry + pnpm lockfile resolution); `--synthetic` needs it
+// only for its three small lockfiles, taking each bucket's pinned Handsontable
+// version from the manifest already on disk. Build artifacts,
 // npm/Yarn lockfiles, node_modules, CodeSandbox metadata, and binary assets are
 // excluded; binary assets are recorded (path only) so a later stage can copy
 // them verbatim. pnpm locks are preserved, re-resolved against the pinned
@@ -31,6 +36,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { blankStarterFiles } from "./blank-starters.mjs";
 import {
   assertStarterBucket,
   resolveLatestStableMajor,
@@ -261,10 +267,21 @@ export async function importStarters({
   fs.mkdirSync(bucketOutDir, { recursive: true });
 
   for (const framework of frameworks) {
-    const { files: rawFiles, assets, skipped } = collectExample(framework, sourceDir);
+    // A synthetic starter (the blank templates, DEV-2499) has no directory under
+    // examples/ — its files are generated per bucket, because the pre-17 styling
+    // idiom differs from 17+ (see blank-starters.mjs). Everything below this
+    // line treats both sources identically.
+    const { files: rawFiles, assets, skipped } = FRAMEWORKS[framework].synthetic
+      ? { files: blankStarterFiles(framework, { bucket }), assets: [], skipped: [] }
+      : collectExample(framework, sourceDir);
     let files = pinHandsontableDependencies(rawFiles, hotVersion);
-    if (files["/pnpm-lock.yaml"] !== undefined) {
-      files = { ...files, "/pnpm-lock.yaml": regenLockfile({ framework, files }) };
+    // Synthetic starters ship no lockfile of their own, but they still get one
+    // resolved here: without it the snapshot builder's frozen install fails and
+    // falls back to a fresh resolve, so a demo saved a year from now would build
+    // against whatever vite/react resolve to then.
+    if (files["/pnpm-lock.yaml"] !== undefined || FRAMEWORKS[framework].synthetic) {
+      const lock = regenLockfile({ framework, files });
+      if (lock !== undefined) files = { ...files, "/pnpm-lock.yaml": lock };
     }
 
     const entry = {
@@ -320,6 +337,94 @@ export async function importStarters({
   return { bucket, hotVersion, count: manifest.length };
 }
 
+/** Bucket keys that have a manifest on disk. */
+function bucketsOnDisk(outDir) {
+  return (fs.existsSync(outDir) ? fs.readdirSync(outDir) : [])
+    .filter((name) => fs.existsSync(path.join(outDir, name, "manifest.json")))
+    .sort(compareBuckets);
+}
+
+/**
+ * Regenerate ONLY the synthetic starters, into the buckets already on disk.
+ *
+ * A full `importStarters` run re-collects all 16 real starters and re-resolves
+ * all 16 pnpm lockfiles, which takes several minutes and a warm pnpm store.
+ * Changing a blank template needs none of that: each bucket manifest already
+ * records the version to pin to, and only three small lockfiles have to be
+ * resolved. So this patches the synthetic artifacts in place and rewrites the
+ * manifest rows, leaving every real starter artifact byte-identical.
+ *
+ * CI still regenerates everything through `importStarters`; this is the local
+ * path for iterating on the templates themselves.
+ */
+export function importSyntheticStarters({ outDir = OUT_DIR, regenLockfile = defaultRegenLockfile } = {}) {
+  const synthetic = Object.keys(FRAMEWORKS).filter((f) => FRAMEWORKS[f].synthetic);
+  if (!synthetic.length) throw new Error("[import] no synthetic frameworks configured");
+
+  const buckets = bucketsOnDisk(outDir);
+  if (!buckets.length) {
+    throw new Error(`[import] no starter buckets found under ${outDir}; run a full import first`);
+  }
+
+  for (const bucket of buckets) {
+    const manifestPath = path.join(outDir, bucket, "manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const hotVersion = manifest.hotVersion;
+    if (!hotVersion) throw new Error(`[import] bucket ${bucket}: manifest has no hotVersion`);
+
+    const existing = new Map(manifest.examples.map((row) => [row.framework, row]));
+    const rows = [];
+
+    // Rebuild the row list in frameworks.json order rather than appending, so a
+    // synthetic-only run leaves the manifest in the same order a full import
+    // would produce.
+    for (const framework of bucketFrameworks(bucket)) {
+      if (!FRAMEWORKS[framework].synthetic) {
+        const row = existing.get(framework);
+        if (row) rows.push(row);
+        continue;
+      }
+
+      let files = pinHandsontableDependencies(
+        blankStarterFiles(framework, { bucket }),
+        hotVersion,
+      );
+      const lock = regenLockfile({ framework, files });
+      if (lock !== undefined) files = { ...files, "/pnpm-lock.yaml": lock };
+      const entry = {
+        ...configEntry(framework),
+        htCoreRange: hotVersion,
+        fileCount: Object.keys(files).length,
+        assets: [],
+        skipped: [],
+        files,
+      };
+      if (!files[entry.entry]) {
+        throw new Error(`[import] ${framework}: declared entry ${entry.entry} not generated`);
+      }
+      fs.writeFileSync(path.join(outDir, bucket, `${framework}.json`), JSON.stringify(entry) + "\n");
+      rows.push({
+        framework,
+        displayName: entry.displayName,
+        tier: entry.tier,
+        engine: entry.engine,
+        minCoreMajor: entry.minCoreMajor,
+      });
+    }
+
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({ ...manifest, count: rows.length, examples: rows }, null, 2) + "\n",
+    );
+    console.log(
+      `[import] bucket ${bucket} (handsontable ${hotVersion}): ` +
+        `${synthetic.length} synthetic starters regenerated`,
+    );
+  }
+
+  return { buckets, synthetic };
+}
+
 /** Sort bucket keys numerically with "next" last. */
 function compareBuckets(a, b) {
   if (a === "next") return 1;
@@ -335,9 +440,7 @@ function compareBuckets(a, b) {
  * it after merging per-bucket artifacts.
  */
 export function writeCatalogIndex({ outDir = OUT_DIR, indexPath = INDEX_PATH } = {}) {
-  const buckets = (fs.existsSync(outDir) ? fs.readdirSync(outDir) : [])
-    .filter((name) => fs.existsSync(path.join(outDir, name, "manifest.json")))
-    .sort(compareBuckets);
+  const buckets = bucketsOnDisk(outDir);
   if (!buckets.length) {
     throw new Error(`[import] no starter buckets found under ${outDir}; run a bucket import first`);
   }
@@ -364,6 +467,11 @@ async function main() {
   const bucket = get("bucket");
 
   if (args.includes("--index")) {
+    writeCatalogIndex({});
+    return;
+  }
+  if (args.includes("--synthetic")) {
+    importSyntheticStarters({});
     writeCatalogIndex({});
     return;
   }

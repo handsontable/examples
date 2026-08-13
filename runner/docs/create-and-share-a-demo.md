@@ -15,6 +15,11 @@ Use the **Example** dropdown (top-left) to choose a framework — React, Vue,
 Angular, Next.js, Astro, Nuxt, Remix, and more. The demo appears live on the
 right. This is your starting template (a "fork").
 
+Want to build something up from nothing instead? The first three entries in that
+dropdown — **Blank (JavaScript)**, **Blank (TypeScript)** and **Blank (React)** —
+are an empty 5×5 grid and nothing else: no sample data, no plugins switched on.
+The **Create** tile in **My demos** goes straight there.
+
 You can also open one of your saved demos from **My demos** and fork it.
 
 ## 3. Choose a Handsontable version

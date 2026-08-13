@@ -107,6 +107,44 @@ test("the editor survives a trip through full mode", async ({ page }) => {
   await expect(content()).not.toContainText("zzmarkerzz");
 });
 
+// ---- full mode over a *saved* demo (`/share/:id?mode=full`) -----------------
+// A different component from everything above: `App` dispatches a saved demo's
+// `?mode=full` to `FullMode`, which wraps the built `/d/:id/` output and boots no
+// runtime at all. DEV-2495 — it fetched the demo's metadata and rendered only the
+// title, dropping the description the API had already sent.
+
+const SAVED_ID = "e2efull001";
+
+async function stubSavedFull(page: Page, description: string | null) {
+  await page.route(`**/api/demos/${SAVED_ID}`, (route) =>
+    route.fulfill({ json: { id: SAVED_ID, title: "A saved demo", description, ht_version: "18.0.0" } }),
+  );
+  await page.route(`**/api/demos/${SAVED_ID}/source`, (route) =>
+    route.fulfill({ json: { framework: "react", files: { "/package.json": "{}" } } }),
+  );
+  // The built demo the view frames, and the probe behind the status dot.
+  await page.route(`**/d/${SAVED_ID}/**`, (route) => route.fulfill({ body: "<p>demo</p>", contentType: "text/html" }));
+}
+
+test("full mode on a saved demo shows its title and description", async ({ page }) => {
+  await stubSavedFull(page, "Row striping across a frozen column");
+  await page.goto(`/share/${SAVED_ID}?mode=full`);
+
+  await expect(page.getByText("A saved demo")).toBeVisible();
+  await expect(page.locator("[data-demo-description]")).toHaveText("Row striping across a frozen column");
+});
+
+test("full mode draws no caption for a demo without a description", async ({ page }) => {
+  await stubSavedFull(page, null);
+  await page.goto(`/share/${SAVED_ID}?mode=full`);
+
+  // The title is the precondition: it proves the metadata landed, so an absent
+  // caption is a choice rather than a fetch that never resolved.
+  await expect(page.getByText("A saved demo")).toBeVisible();
+  await expect(page.getByRole("button", { name: MINIMIZE })).toBeVisible();
+  await expect(page.locator("[data-demo-description]")).toHaveCount(0);
+});
+
 test("a pasted ?mode=full link boots straight into full mode", async ({ page }) => {
   await openPlayground(page, "?example=react&mode=full");
 

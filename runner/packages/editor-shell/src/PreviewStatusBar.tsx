@@ -31,9 +31,15 @@ export interface PreviewStatusBarProps {
   frameworkName?: string;
   /** Bare version; the `Handsontable` prefix belongs to this bar (`48:6707`). */
   version: string;
+  /** Start the sign-in flow (DEV-2505). It lives here, not in the top bar, because
+   *  the login is `@handsontable.com`-only: most visitors to this page cannot use
+   *  it, and a top-bar button read as a call to action aimed at them. Passed only
+   *  when nobody is signed in — `EditorShell` withholds it otherwise, and in full
+   *  mode entirely. */
+  onSignIn?: () => void;
 }
 
-export function PreviewStatusBar({ status, frameworkName, version }: PreviewStatusBarProps) {
+export function PreviewStatusBar({ status, frameworkName, version, onSignIn }: PreviewStatusBarProps) {
   return (
     // Not `role="status"`/`aria-live`: booting → ready fires on every example switch and
     // every version change, and announcing each one is noise. The machine-readable
@@ -47,6 +53,15 @@ export function PreviewStatusBar({ status, frameworkName, version }: PreviewStat
       <span style={right}>
         {frameworkName && <span style={clamp}>{frameworkName}</span>}
         <span style={{ flex: "0 0 auto" }}>Handsontable {version}</span>
+        {/* Last, and styled as bar text rather than as a control: findable by
+            anyone looking for it, invisible to anyone who is not. It keeps the
+            accessible name "Sign in" — every anonymous-state precondition in the
+            e2e suite is written against it. */}
+        {onSignIn && (
+          <button type="button" style={signIn} onClick={onSignIn} title="Sign in (Handsontable team)">
+            Sign in
+          </button>
+        )}
       </span>
     </div>
   );
@@ -70,3 +85,18 @@ const right: CSSProperties = {
 /** A long framework name yields to the version rather than shoving it out of the bar —
  *  the same clamp T2 needed for the version warning (DEV-2173). */
 const clamp: CSSProperties = { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" };
+
+/** Inherits the bar's 11px muted type; only the underline says it is clickable.
+ *  `background: none` matters — a bare <button> otherwise paints the UA's
+ *  `buttonface` slab across the bar in both themes (the same trap ADR-0026
+ *  documents for .hot-menu-row). */
+const signIn: CSSProperties = {
+  flex: "0 0 auto",
+  border: "none",
+  background: "none",
+  padding: 0,
+  font: "inherit",
+  color: theme.color.textMuted,
+  textDecoration: "underline",
+  cursor: "pointer",
+};

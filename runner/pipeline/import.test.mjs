@@ -132,9 +132,15 @@ test("refuses a malformed bucket key", async () => {
 });
 
 // EXAMPLES_DIR is the default source; assert it holds every configured starter
-// so a renamed directory fails here rather than mid-import.
-test("every configured framework has a source directory", () => {
-  for (const framework of Object.keys(FRAMEWORKS)) {
-    assert.equal(fs.existsSync(path.join(EXAMPLES_DIR, framework)), true, framework);
+// so a renamed directory fails here rather than mid-import. Synthetic starters
+// (the blank templates) are generated, so they must NOT have one — a directory
+// appearing under that name would be silently ignored by the importer.
+test("every configured framework has a source directory, and no synthetic one does", () => {
+  for (const [framework, cfg] of Object.entries(FRAMEWORKS)) {
+    assert.equal(
+      fs.existsSync(path.join(EXAMPLES_DIR, framework)),
+      !cfg.synthetic,
+      framework,
+    );
   }
 });
