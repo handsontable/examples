@@ -262,7 +262,9 @@ rewrite code. It shares the rate limits, the budget tiers and the `llm` cost
 metering (see [cost-guardrails.md](cost-guardrails.md)).
 
 Requests are asked to set **all six** primary steps for a recolour — one step
-against five stale ones reads as a bug rather than a new brand colour.
+against five stale ones reads as a bug rather than a new brand colour — and,
+since the ramp alone is invisible on a grid nobody has clicked, the resting
+surfaces with them (see [below](#a-recolour-has-to-be-visible-dev-2497)).
 
 Asking is not enough, so a ramp that arrives incomplete is completed before it
 is returned (`workers/api/src/theme-ramp.ts`, DEV-2197). The missing steps
@@ -272,6 +274,40 @@ by dropping a single malformed value, which no prompt wording protects against.
 Gaps are interpolated in sRGB, matching the panel's own brand-ramp generator
 (`StylePanel.tsx` `rampFrom`); a ramp with fewer than two steps is left alone,
 because one step is a deliberate single-colour change.
+
+### A recolour has to be visible (DEV-2497)
+
+The brand ramp reaches 38 of the 279 tokens, and every one of them is an
+interaction state: selection, focus rings, the active header, checkbox and radio,
+links. **A grid nobody has clicked paints none of it.** "corporate green" was
+reported as producing no result; it had produced a complete, correct green ramp,
+and the grid was pixel-identical because the header is neutral (`palette.50`) and
+stayed that way.
+
+So a recolour that arrives with no resting-surface token set gets
+`headerBackgroundColor` and its linked `headerRowBackgroundColor` tinted from the
+ramp (`RESTING_SURFACE_TOKENS` in `theme-ai.ts`). It never overrides a surface the
+model chose itself, and it is gated on the steps the *model* supplied — counted
+before the ramp completion above, since two steps are enough for `completeRamp` to
+return all six, and a two-step accent tweak is not a recolour.
+
+The tint is a `[light, dark]` pair of ramp *references*, the shape the presets
+themselves use (`accentColor` is `["colors.primary.500","colors.primary.300"]`).
+Both halves matter: a single colour applies to both schemes, and a dark grid
+resolves its header foreground to `palette.200`, so one light tint means light grey
+on pale mint — about 1.7:1. References rather than literals keep the header
+following the ramp when the brand is recoloured again by hand. It is a floor, not
+a contrast guarantee: a ramp whose dark end is itself pale can still land under AA
+in dark mode, and a specific header colour belongs in the Common tab.
+
+The model is told *not* to tint the header itself, for the same reason — it can
+only answer in single strings, so anything it picks there applies to both schemes.
+
+The panel checks rather than announces (`theme/suggestion.ts`). The model's
+message is a claim about what it did, and it was being forwarded as confirmation.
+`mergeSuggestion` reports whether the theme moved at all and whether anything a
+resting grid paints moved with it, so an answer that changed nothing says so, and
+one that is real but invisible until you touch the grid says that instead.
 
 ## Configuration
 

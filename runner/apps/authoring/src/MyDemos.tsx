@@ -490,11 +490,13 @@ function CardMenu({
   );
 }
 
-/** `114:26723`. There is no blank-demo flow — creating one means forking a
- *  catalog example — so the tile goes to the playground. */
+/** `114:26723`. Points at the blank starter (DEV-2499), not the playground's
+ *  default: "Create" means starting from nothing, and the playground opens the
+ *  React *showcase* — sample data, ten plugins, two helper modules. The
+ *  playground is still one pick away for anyone who wanted that instead. */
 function CreateTile() {
   return (
-    <a href="/" style={createTile}>
+    <a href="/?example=blank" style={createTile}>
       <IconPlus size={24} />
       <span style={createLabel}>Create</span>
     </a>

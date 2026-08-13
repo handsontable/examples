@@ -733,11 +733,16 @@ export default Sentry.withSentry(sentryOptions, {
             entry: { framework: row.framework, ...cfg },
             files: patch.files,
             htVersion: patch.htVersion ?? row.ht_version,
-            title: patch.title?.trim() || row.title,
-            // `??` here meant a description could be set but never cleared: the client
-            // sends `null` for an emptied field, and `null ?? row.description` restored
-            // the old text. Absent (`undefined`) means "leave alone"; `null` means clear.
-            description: patch.description !== undefined ? patch.description : row.description,
+            // Forwarded only when the request carried them, and `row` is never used
+            // as the fallback: a rebuild takes long enough for the Edit info dialog
+            // to commit a rename in the middle of one, and re-writing the row this
+            // handler read at the start would revert it (DEV-2495). Absent means the
+            // UPDATE leaves the column alone; `null` on description still clears it,
+            // which is the distinction the `!== undefined` check exists for. A
+            // supplied-but-blank title is dropped for the same reason — falling back
+            // to `row.title` would write a value that may already be stale.
+            ...(patch.title?.trim() ? { title: patch.title.trim() } : {}),
+            ...(patch.description !== undefined ? { description: patch.description } : {}),
             now: nowIso(),
           });
           return json({ ok: true });

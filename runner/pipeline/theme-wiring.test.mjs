@@ -18,7 +18,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -30,6 +30,11 @@ function runCodegen(script) {
   const dir = mkdtempSync(join(tmpdir(), "hot-theme-"));
   try {
     cpSync(join(root, "apps/authoring/src/theme"), join(dir, "theme"), { recursive: true });
+    // The tree reaches out of itself: `presets.ts` imports Handsontable's static
+    // preset JSON. Symlinked rather than copied — it is a large tree — and required
+    // rather than optional, because without it every import of `presets.ts` throws
+    // and each test here reports as *skipped*, which reads like a green run.
+    symlinkSync(join(root, "apps/authoring/node_modules"), join(dir, "node_modules"), "dir");
     for (const file of readdirSync(join(dir, "theme"))) {
       if (!file.endsWith(".ts")) continue;
       const path = join(dir, "theme", file);

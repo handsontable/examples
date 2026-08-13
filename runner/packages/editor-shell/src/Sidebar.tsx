@@ -13,7 +13,15 @@ export interface SidebarProps
   extends Pick<BoxInfoProps, "title" | "description" | "createdAt" | "onEdit">,
     Pick<
       FileTreeProps,
-      "paths" | "active" | "onSelect" | "onDownloadAll" | "editable" | "onAddFile" | "onRenameFile" | "onDeleteFile"
+      | "paths"
+      | "active"
+      | "onSelect"
+      | "onDownloadAll"
+      | "editable"
+      | "onAddFile"
+      | "onAddFiles"
+      | "onRenameFile"
+      | "onDeleteFile"
     > {
   /** Raw `/package.json` contents, for the DEPENDENCIES list. */
   packageJson?: string;
@@ -31,6 +39,7 @@ export function Sidebar({
   onDownloadAll,
   editable,
   onAddFile,
+  onAddFiles,
   onRenameFile,
   onDeleteFile,
 }: SidebarProps) {
@@ -65,6 +74,7 @@ export function Sidebar({
           onDownloadAll={onDownloadAll}
           editable={editable}
           onAddFile={onAddFile}
+          onAddFiles={onAddFiles}
           onRenameFile={onRenameFile}
           onDeleteFile={onDeleteFile}
         />

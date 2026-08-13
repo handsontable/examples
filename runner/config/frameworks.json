@@ -1,7 +1,52 @@
 {
   "$schema": "./frameworks.schema.json",
-  "_comment": "Single source of truth for the 16 Handsontable examples. Consumed by pipeline/import.mjs (catalog generation), packages/runtime (applyHandsontableVersion + resolveRuntime), workers/api (build orchestration), and containers/* (Tier-2 images). tier 1 = client-side (Sandpack, in-browser bundler); tier 2 = SSR/meta-framework (Cloudflare Sandbox container running the real dev server). htWrappers lists the Handsontable framework wrapper packages that must be pinned in lockstep with core `handsontable`; `@handsontable/pikaday` is intentionally NEVER bumped, and upstream `pikaday` (which docs examples migrate to) is outside the rewrite rule. Supported Handsontable major range: 15-19.",
+  "_comment": "Single source of truth for the 16 Handsontable examples plus the 3 synthetic blank templates. Consumed by pipeline/import.mjs (catalog generation), packages/runtime (applyHandsontableVersion + resolveRuntime), workers/api (build orchestration), and containers/* (Tier-2 images). tier 1 = client-side (Sandpack, in-browser bundler); tier 2 = SSR/meta-framework (Cloudflare Sandbox container running the real dev server). htWrappers lists the Handsontable framework wrapper packages that must be pinned in lockstep with core `handsontable`; `@handsontable/pikaday` is intentionally NEVER bumped, and upstream `pikaday` (which docs examples migrate to) is outside the rewrite rule. `synthetic: true` means the starter has no directory under examples/ — pipeline/blank-starters.mjs generates its files per bucket (DEV-2499). Key order is picker order, which is why the blank templates come first. Supported Handsontable major range: 15-19.",
   "frameworks": {
+    "blank": {
+      "tier": 1,
+      "synthetic": true,
+      "displayName": "Blank (JavaScript)",
+      "sandpackTemplate": "vanilla",
+      "sandpackEnvironment": "parcel",
+      "htWrappers": [],
+      "entry": "index.js",
+      "htmlEntry": "index.html",
+      "devCommand": null,
+      "buildCommand": "vite build",
+      "outputDir": "dist",
+      "port": null,
+      "installCommand": "pnpm install --frozen-lockfile"
+    },
+    "blank-ts": {
+      "tier": 1,
+      "synthetic": true,
+      "displayName": "Blank (TypeScript)",
+      "sandpackTemplate": "vanilla-ts",
+      "sandpackEnvironment": "parcel",
+      "htWrappers": [],
+      "entry": "index.ts",
+      "htmlEntry": "index.html",
+      "devCommand": null,
+      "buildCommand": "vite build",
+      "outputDir": "dist",
+      "port": null,
+      "installCommand": "pnpm install --frozen-lockfile"
+    },
+    "blank-react": {
+      "tier": 1,
+      "synthetic": true,
+      "displayName": "Blank (React)",
+      "sandpackTemplate": "react-ts",
+      "sandpackEnvironment": "create-react-app-typescript",
+      "htWrappers": ["@handsontable/react-wrapper"],
+      "entry": "src/index.tsx",
+      "htmlEntry": "index.html",
+      "devCommand": null,
+      "buildCommand": "vite build",
+      "outputDir": "dist",
+      "port": null,
+      "installCommand": "pnpm install --frozen-lockfile"
+    },
     "example1": {
       "tier": 1,
       "displayName": "Vanilla (Vite, TS)",
