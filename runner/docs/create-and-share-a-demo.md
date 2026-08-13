@@ -157,6 +157,36 @@ it.
   anyone with the link can read the code, try changes and download a `.zip`, but
   cannot save over it or change its version.
 
+### Putting the embed on a page
+
+The embed URL goes in an `iframe` on a `handsontable.com` page:
+
+```html
+<iframe
+  src="https://demos.handsontable.com/embed/ab12cd34/"
+  title="Sorting a large dataset"
+  width="100%"
+  height="520"
+  style="border: 1px solid #e5e7eb; border-radius: 6px"
+  loading="lazy"
+></iframe>
+```
+
+Three things to know about the size. **You choose the height** — an `iframe` has
+no natural one, and the demo does not tell the page how tall it wants to be, so
+whatever height you set is the height you get. **Around 500px is a sensible
+start** for a demo that is one grid: the grid brings its own height from the
+example's code, and the page around it adds about a centimetre of padding.
+**Width is safe to leave at `100%`**; the demos are laid out for whatever width
+they are given. If the demo ends up with its own scrollbar, the frame is shorter
+than the grid — raise the height rather than changing the demo.
+
+The embed only renders inside `handsontable.com` (and the docs' staging site, and
+`localhost` while you are working). Anywhere else the browser refuses to draw it
+and the frame stays blank — that is the frame lock doing its job, not a broken
+demo. The **client link** cannot be framed at all, on any site: if you need
+something embedded, use the embed URL.
+
 ## 9. My demos
 
 **My demos** (account menu) lists everything you have created: open, copy the
@@ -199,6 +229,44 @@ Anything you can reach by clicking, you can also link to directly:
   and the AI features are costing, and the spend thresholds that throttle them. If
   a live preview refuses to start with a budget message, that is where the limits
   live.
+
+## 12. When something looks wrong
+
+**The preview sits on "Starting the live dev server…" for a while.** Expected on
+Angular, Next, Nuxt, Astro and Remix: a real dev server is starting in a
+container, and the first load installs the dependencies. The line under the
+message is the live log, and **Details** shows the tail if you want to watch it.
+A minute is normal. Much longer usually means the containers are all busy —
+leaving the tab and coming back is the fix.
+
+**"Live editing is paused until the monthly budget resets…"** The live containers
+and the AI features cost money per use, so they stop when the month's ceiling is
+reached rather than running up a bill. Saved demos, client links and embeds are
+unaffected — they are static builds, and saving or forking still works. The
+in-browser examples (the blank templates, JavaScript, TypeScript, React, Vue)
+keep working too. What pauses is everything that runs in a container: Angular,
+Next, Nuxt, Astro and Remix, and also the UI-library starters — MUI, Ant Design,
+Fluent UI, Base Web — which look instant but are running a real dev server.
+
+**"This example is unavailable for Handsontable *x.y.z*."** The example does not
+exist for the version you picked — documentation examples come from that
+version's own documentation, and a starter can require a newer core than the one
+selected. Pick another version, or open a different example at this one. The same
+applies to *"No documentation examples are available for…"*, which means the
+whole set is missing for that version rather than the one you opened.
+
+**The preview goes blank after an edit.** Look at the message under the preview
+first: a compile error is reported there. If there is no error, the demo has
+thrown at runtime — your browser's console (inside the preview frame) has it.
+
+**A shared link says the demo has been revoked.** Someone deleted it. That is
+permanent and cannot be undone; the demo has to be rebuilt and shared again, with
+a new link.
+
+**An embed is blank on a page.** Check the page it is on: embeds only render on
+`handsontable.com`. If the URL in the `iframe` is a client link (`/d/…`) rather
+than an embed link (`/embed/…`), that will be blank everywhere — client links are
+deliberately not framable.
 
 ## Good to know
 
