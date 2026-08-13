@@ -284,12 +284,24 @@ reported as producing no result; it had produced a complete, correct green ramp,
 and the grid was pixel-identical because the header is neutral (`palette.50`) and
 stayed that way.
 
-So the prompt asks a recolour to tint the resting surfaces too, and — because
-asking is not enough here either — a complete primary ramp that arrives with no
-resting-surface token set gets `headerBackgroundColor` and its linked
-`headerRowBackgroundColor` tinted from the ramp's lightest step
-(`RESTING_SURFACE_TOKENS` in `theme-ai.ts`). It never overrides a surface the
-model chose itself.
+So a recolour that arrives with no resting-surface token set gets
+`headerBackgroundColor` and its linked `headerRowBackgroundColor` tinted from the
+ramp (`RESTING_SURFACE_TOKENS` in `theme-ai.ts`). It never overrides a surface the
+model chose itself, and it is gated on the steps the *model* supplied — counted
+before the ramp completion above, since two steps are enough for `completeRamp` to
+return all six, and a two-step accent tweak is not a recolour.
+
+The tint is a `[light, dark]` pair of ramp *references*, the shape the presets
+themselves use (`accentColor` is `["colors.primary.500","colors.primary.300"]`).
+Both halves matter: a single colour applies to both schemes, and a dark grid
+resolves its header foreground to `palette.200`, so one light tint means light grey
+on pale mint — about 1.7:1. References rather than literals keep the header
+following the ramp when the brand is recoloured again by hand. It is a floor, not
+a contrast guarantee: a ramp whose dark end is itself pale can still land under AA
+in dark mode, and a specific header colour belongs in the Common tab.
+
+The model is told *not* to tint the header itself, for the same reason — it can
+only answer in single strings, so anything it picks there applies to both schemes.
 
 The panel checks rather than announces (`theme/suggestion.ts`). The model's
 message is a claim about what it did, and it was being forwarded as confirmation.

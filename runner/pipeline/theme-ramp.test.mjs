@@ -135,8 +135,20 @@ test("a brand ramp alone tints the header, so the recolour is visible at rest", 
     },
   });
 
-  assert.equal(tokens.headerBackgroundColor, "#e6f4ea", "the lightest step tints the header");
-  assert.equal(tokens.headerRowBackgroundColor, "#e6f4ea", "and its linked row-header pair");
+  // A `[light, dark]` pair of ramp references, the shape the presets themselves
+  // use (`accentColor` is `["colors.primary.500","colors.primary.300"]`). A bare
+  // light hex would apply to both schemes, and a dark grid resolves its header
+  // foreground to `palette.200` — light grey on pale mint, about 1.7:1.
+  assert.deepEqual(
+    tokens.headerBackgroundColor,
+    ["colors.primary.100", "colors.primary.600"],
+    "the header follows the ramp, light end in light and dark end in dark",
+  );
+  assert.deepEqual(
+    tokens.headerRowBackgroundColor,
+    ["colors.primary.100", "colors.primary.600"],
+    "and so does its linked row-header pair",
+  );
 });
 
 test("a ramp the model half-supplied still earns the tint once it is completed", () => {
@@ -151,7 +163,7 @@ test("a ramp the model half-supplied still earns the tint once it is completed",
     },
   });
 
-  assert.equal(tokens.headerBackgroundColor, "#e6ecf5");
+  assert.deepEqual(tokens.headerBackgroundColor, ["colors.primary.100", "colors.primary.600"]);
 });
 
 test("a resting surface the model set itself is never overridden", () => {

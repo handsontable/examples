@@ -388,10 +388,15 @@ test("a recolour reaches the header the grid is painting right now", async ({ pa
   // report: with the endpoint's floor in place, a brand recolour changes a colour
   // an untouched grid is already showing. Column-header background, not a cell —
   // starter stylesheets override `td`, never `th` (see `themeClass` above).
+  // The endpoint's own shape: a `[light, dark]` pair of ramp references, not a
+  // literal. So this also proves a real grid resolves the pair — the panel stores
+  // pairs for manual colour picks, but nothing had checked one arriving from
+  // /api/theme and surviving codegen into the running demo.
+  const tint = ["colors.primary.100", "colors.primary.600"];
   await page.route("**/api/theme", (route) => route.fulfill({
     json: {
       message: "Applied a corporate green palette.",
-      tokens: { headerBackgroundColor: "#e6f4ea", headerRowBackgroundColor: "#e6f4ea" },
+      tokens: { headerBackgroundColor: tint, headerRowBackgroundColor: tint },
       palette: GREEN_RAMP,
       config: {},
     },

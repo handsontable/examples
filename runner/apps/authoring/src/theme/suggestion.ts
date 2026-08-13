@@ -22,7 +22,9 @@ import type { ThemeState, TokenValue } from "./vocabulary.js";
 /** The server's answer, as the panel receives it over the wire. */
 export interface ThemeAnswer {
   message?: string;
-  tokens?: Record<string, string>;
+  /** Single colours as the model answers them, or the `[light, dark]` pair the
+   *  endpoint's resting-surface tint emits — the same shape as `params`. */
+  tokens?: Record<string, TokenValue>;
   palette?: Record<string, string>;
   config?: Partial<ThemeState>;
 }

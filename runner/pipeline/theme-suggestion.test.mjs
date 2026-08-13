@@ -66,7 +66,27 @@ const RESULTS = inTheme(`
     return { effect, params: next.params, palette: next.palette, colors: next.colors };
   };
 
+  // What the endpoint's resting-surface tint resolves to, in both schemes. The
+  // tint is a pair of ramp references precisely so these differ.
+  import { effectiveColors, effectiveTokens, resolveTokenValue } from "./theme/resolve.ts";
+  import { presetColors, presetTokens, densitySizes } from "./theme/presets.ts";
+  const TINT = ["colors.primary.100", "colors.primary.600"];
+  const headerIn = (scheme) => {
+    const state = {
+      ...DEFAULT_THEME,
+      colorScheme: scheme,
+      palette: GREEN_RAMP,
+      params: { headerBackgroundColor: TINT, headerRowBackgroundColor: TINT },
+    };
+    const tokens = effectiveTokens(presetTokens(state.tokens), state.params);
+    const colors = effectiveColors(presetColors(state.colors), state.palette);
+    const at = (key) => resolveTokenValue(tokens[key], colors, tokens, densitySizes("default"), scheme);
+    return { background: at("headerBackgroundColor"), foreground: at("headerForegroundColor") };
+  };
+
   console.log(JSON.stringify({
+    headerLight: headerIn("light"),
+    headerDark: headerIn("dark"),
     refusal: run({ message: "I only restyle grids." }),
     rampOnly: run({ message: "Green.", tokens: {}, palette: GREEN_RAMP }),
     rampWithHeader: run({
@@ -86,6 +106,34 @@ const RESULTS = inTheme(`
     ),
   }));
 `);
+
+/** WCAG relative luminance, for the one assertion that has to be about legibility
+ *  rather than about which string came back. */
+function contrast(a, b) {
+  const luminance = (hex) => {
+    const [r, g, b_] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const channel = (c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b_);
+  };
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+// The header tint is a `[light, dark]` pair of ramp references, not one colour,
+// and this is why. A dark grid resolves `headerForegroundColor` to `palette.200`
+// — light grey — so a single light tint would put light text on pale mint.
+test("the header tint stays readable in both colour schemes", () => {
+  const { headerLight, headerDark } = RESULTS;
+
+  assert.equal(headerLight.background, "#e6f4ea", "light scheme takes the ramp's light end");
+  assert.equal(headerDark.background, "#0d5225", "dark scheme takes its dark end");
+  assert.notEqual(headerLight.background, headerDark.background);
+
+  for (const [scheme, header] of [["light", headerLight], ["dark", headerDark]]) {
+    const ratio = contrast(header.background, header.foreground);
+    assert.ok(ratio >= 4.5, `${scheme} header text is ${ratio.toFixed(2)}:1, under AA`);
+  }
+});
 
 test("a refusal that sets nothing is reported as nothing", () => {
   assert.equal(RESULTS.refusal.effect, "none");
