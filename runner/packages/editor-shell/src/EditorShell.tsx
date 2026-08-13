@@ -85,6 +85,9 @@ export interface EditorShellProps {
   onEdit: (path: string, contents: string) => void;
   /** File-tree CRUD (CodeSandbox-style). When omitted the tree is read-only-of-structure. */
   onAddFile?: (path: string) => void;
+  /** Drag & drop into the FILES section (DEV-2500). One call per drop; the tree
+   *  opens the last file itself through `onSelect`, so nothing is wrapped here. */
+  onAddFiles?: (files: { path: string; contents: string }[]) => void;
   onRenameFile?: (oldPath: string, newPath: string) => void;
   onDeleteFile?: (path: string) => void;
   /** Persist the saved demo. Surfaced as the top bar's mode action in `edit`. */
@@ -436,6 +439,7 @@ export function EditorShell(props: EditorShellProps) {
             // The wrapped forms, not the raw props: they keep the tab strip in step
             // with what the tree just did to the file set.
             onAddFile={addFile}
+            onAddFiles={props.onAddFiles}
             onRenameFile={renameFile}
             onDeleteFile={deleteFile}
           />

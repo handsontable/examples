@@ -35,3 +35,4 @@ once Accepted.
 | [0028](0028-shell-theming-via-css-custom-properties.md) | Shell theming via CSS custom properties; the example owns its own theme | Accepted (embed theme hint dropped, ADR-0025) |
 | [0029](0029-starter-example-buckets-and-frozen-branch-backports.md) | Starter-example buckets, the single-seed image, and frozen-branch backports | Accepted (supersedes 0021 decision 10) |
 | [0030](0030-blank-starter-templates.md) | Blank starter templates, synthesized per bucket | Accepted |
+| [0031](0031-files-drag-and-drop-is-text-only.md) | Drag & drop into FILES is text-only, and batched | Accepted |

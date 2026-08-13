@@ -1447,6 +1447,33 @@ function Authoring({
     [markDirty],
   );
 
+  /** One drag & drop (DEV-2500), committed as a single change.
+   *
+   *  Not `addFile` in a loop: that would be one `setFiles` per file — and on a
+   *  Tier-2 framework one dev-server rebuild per file, each invalidating the
+   *  last. One state commit, one dirty-set update, then stream the files. */
+  const addFiles = useCallback(
+    (dropped: { path: string; contents: string }[]) => {
+      if (!dropped.length) return;
+      const next = { ...filesRef.current };
+      for (const { path, contents } of dropped) next[path] = contents;
+      filesRef.current = next;
+      setFiles(next);
+      // Variadic on purpose (see its definition): one call dots every dropped tab.
+      markDirty(...dropped.map((file) => file.path));
+      for (const { path, contents } of dropped) {
+        try { runtimeRef.current?.writeFile(path, contents); } catch { /* not mounted */ }
+      }
+      // Container frameworks rebuild server-side; same feedback an edit gets.
+      if (containerModeRef.current) {
+        setSyncing(true);
+        if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = setTimeout(() => setSyncing(false), 4000);
+      }
+    },
+    [markDirty],
+  );
+
   const deleteFile = useCallback(
     (path: string) => {
       if (filesRef.current[path] === undefined) return;
@@ -1812,6 +1839,7 @@ function Authoring({
         // changing.) Editing file *contents* is unaffected in all three modes, and nothing
         // persists here without `onSave`.
         onAddFile={canEditFiles ? addFile : undefined}
+        onAddFiles={canEditFiles ? addFiles : undefined}
         onRenameFile={canEditFiles ? renameFile : undefined}
         onDeleteFile={canEditFiles ? deleteFile : undefined}
         onSave={onSave}
