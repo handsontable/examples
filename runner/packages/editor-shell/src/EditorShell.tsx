@@ -72,7 +72,8 @@ export interface EditorShellProps {
   /** BOX INFO. `title` falls back to the example's display name for unsaved workspaces;
    *  `description` / `createdAt` only exist for a saved demo and their rows self-hide. */
   title?: string;
-  description?: string;
+  /** Rendered markdown, not text (DEV-2507) — see `BoxInfoProps.description`. */
+  description?: ReactNode;
   createdAt?: string;
   /** Opens the Edit info dialog from the BOX INFO pencil (`114:21684`). Named
    *  `onEditInfo`, not `onEdit`, because `onEdit` below is the file-content one. */
