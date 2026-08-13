@@ -38,7 +38,7 @@ import {
 import { getEntry } from "./catalog.js";
 import { getToken, logout, type User } from "./auth.js";
 import { displayNameFromEmail, initialFromEmail } from "./displayName.js";
-import { ghostButton } from "./formStyles.js";
+import { fieldInput, fieldLabel, formFooter, ghostButton, primaryButton } from "./formStyles.js";
 import { useProfile } from "./useProfile.js";
 import { reportError } from "./sentry.js";
 
@@ -77,6 +77,9 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<BusyMap>({});
   const [confirming, setConfirming] = useState<DemoListItem | null>(null);
+  /** The Import dialog (DEV-2504) — a URL prompt, nothing more: the fetch itself
+   *  happens once, in the playground, off the `?import=` param. */
+  const [importing, setImporting] = useState(false);
 
   const markBusy = (id: string, what: "fork" | "delete") =>
     setBusy((b) => ({ ...b, [id]: what }));
@@ -233,6 +236,7 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
                 />
               ))}
               <CreateTile />
+              <ImportTile onClick={() => setImporting(true)} />
             </div>
           )}
 
@@ -240,7 +244,8 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
               no illustration. The tile is already the call to action. */}
           {demos && demos.length === 0 && !error && (
             <p style={emptyText}>
-              No demos yet. Open an example, edit it, and fork it to save your first one.
+              No demos yet. Open an example, edit it, and fork it to save your first one — or
+              import one from JSFiddle or StackBlitz.
             </p>
           )}
         </main>
@@ -254,6 +259,8 @@ export function MyDemosPage({ apiBase, user }: MyDemosPageProps) {
           the client listening for the answer. A Cancel that left the demo revoked
           would be a worse lie than a button that briefly refuses. It settles in
           one round trip and the label says what is happening. */}
+      {importing && <ImportDialog onClose={() => setImporting(false)} />}
+
       {confirming && (
         <Dialog
           title="Delete this demo?"
@@ -483,15 +490,84 @@ function CardMenu({
   );
 }
 
-/** `114:26723`. There is no blank-demo flow — creating one means forking a
- *  catalog example — so the tile goes to the playground. */
+/** `114:26723`. Points at the blank starter (DEV-2499), not the playground's
+ *  default: "Create" means starting from nothing, and the playground opens the
+ *  React *showcase* — sample data, ten plugins, two helper modules. The
+ *  playground is still one pick away for anyone who wanted that instead. */
 function CreateTile() {
   return (
-    <a href="/" style={createTile}>
+    <a href="/?example=blank" style={createTile}>
       <IconPlus size={24} />
       <span style={createLabel}>Create</span>
     </a>
   );
+}
+
+/** Beside Create: the other way to get a workspace that is not a fork. */
+function ImportTile({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} style={{ ...createTile, border: "none" }}>
+      <IconPlus size={24} />
+      <span style={createLabel}>Import</span>
+    </button>
+  );
+}
+
+/**
+ * Paste a JSFiddle or StackBlitz URL. This does not import anything itself — it
+ * hands the URL to the playground as `?import=`, which is where the workspace
+ * lives and where the one `POST /api/import` happens. One fetch, one code path,
+ * and the result is a shareable URL rather than dialog state.
+ */
+function ImportDialog({ onClose }: { onClose: () => void }) {
+  const [url, setUrl] = useState("");
+  const trimmed = url.trim();
+  // Client-side host check only, and only to keep the obvious mistake from
+  // costing a round trip — the Worker's `resolveSource` is the real gate.
+  const looksSupported = /^https:\/\/(www\.)?(jsfiddle\.net|stackblitz\.com)\//i.test(trimmed);
+  const isCodeSandbox = /^https:\/\/(www\.)?codesandbox\.io\//i.test(trimmed);
+
+  return (
+    <Dialog title="Import a project" onClose={onClose}>
+      <label htmlFor="import-url" style={fieldLabel}>
+        JSFiddle or StackBlitz URL
+      </label>
+      <input
+        id="import-url"
+        data-autofocus
+        style={fieldInput}
+        placeholder="https://jsfiddle.net/1bw9tphk/1/"
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && looksSupported) go(trimmed);
+        }}
+      />
+      <p style={importHint}>
+        {isCodeSandbox
+          ? "CodeSandbox blocks automated reads. Export the sandbox to a .zip there, then drag its files onto the FILES panel."
+          : "The project opens as an unsaved workspace — review it, then Save to keep it."}
+      </p>
+      <div style={formFooter}>
+        <button
+          type="button"
+          style={primaryButton}
+          disabled={!looksSupported}
+          onClick={() => go(trimmed)}
+        >
+          Import
+        </button>
+        <button type="button" style={ghostButton} onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
+/** A full navigation, not a router push: the playground reads `?import=` on mount. */
+function go(url: string) {
+  location.href = `/?import=${encodeURIComponent(url)}`;
 }
 
 // ---- styles ----------------------------------------------------------------
@@ -680,6 +756,14 @@ const authorImage: CSSProperties = {
 };
 
 const createdText: CSSProperties = { whiteSpace: "nowrap" };
+
+const importHint: CSSProperties = {
+  margin: `${theme.space(2)} 0 0`,
+  fontFamily: theme.font.ui,
+  fontSize: 12,
+  lineHeight: 1.5,
+  color: theme.color.textMuted,
+};
 
 const createTile: CSSProperties = {
   display: "flex",

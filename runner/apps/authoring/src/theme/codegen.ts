@@ -16,7 +16,15 @@
 // `.setColorScheme("light")`), which is a good sign the generated code reads
 // like something a person would have written.
 
-import { googleFontFamily, isPristine, type ThemeState, type TokenValue } from "./vocabulary.js";
+import {
+  DENSITY_VARIANTS,
+  googleFontFamily,
+  isPristine,
+  type ThemeState,
+  type TokenValue,
+} from "./vocabulary.js";
+import { densitySizes, presetColors, presetTokens } from "./presets.js";
+import { effectiveColors, effectiveDensity, effectiveTokens } from "./resolve.js";
 
 
 /** Files a demo may use as its HTML entry, most specific first. */
@@ -98,7 +106,11 @@ function paletteSource(entries: [string, string][], presetVar: string, typescrip
  * `.params()` because that is the only place `icons` and the density `sizes`
  * are accepted.
  */
-export function buildThemeModule(state: ThemeState, typescript: boolean): string {
+export function buildThemeModule(
+  state: ThemeState,
+  typescript: boolean,
+  opts: { bridge?: boolean } = {},
+): string {
   const palette = nonEmpty(state.palette);
   const tokens = nonEmpty(state.params);
   // [variant, [[size, value], …]] for every variant that has any override.
@@ -188,7 +200,112 @@ export function buildThemeModule(state: ThemeState, typescript: boolean): string
     );
   }
 
+  if (opts.bridge) lines.push("", ...bridgeSource(theme, typescript));
+
   return `${lines.join("\n")}\n`;
+}
+
+/** The message every live patch and every reply carries, so neither side acts on
+ *  somebody else's postMessage — the preview frame is full of them (the bundler
+ *  protocol, Vite's HMR client). */
+export const THEME_BRIDGE_SOURCE = "hot-runner-theme";
+
+/**
+ * The same theme, as the argument for a live `params()` call (DEV-2496).
+ *
+ * **Every key present, always** — full effective objects, not the overrides. That
+ * is not tidiness, it is what makes a live patch reversible: `params()` deep-merges
+ * its argument onto the config the module *registered*, and that config already
+ * contains whatever overrides were current when the file was written. Send only
+ * the overrides and clearing one has no effect — the merge keeps the old value,
+ * the control reads "theme default", and the grid stays the colour you just
+ * cleared.
+ *
+ * `icons` is absent on purpose: the icon set is an imported preset module, so
+ * changing it is a file change that recompiles anyway (as is swapping the token
+ * or colour preset — after which this payload is rebuilt from the new preset).
+ *
+ * Sizes are emitted for every density variant, not just the selected one, for the
+ * same reversibility reason and to match the module (DEV-2199).
+ */
+export function buildThemeParams(state: ThemeState): {
+  tokens: Record<string, TokenValue>;
+  colors: Record<string, unknown>;
+  density: { type: ThemeState["density"]; sizes: Record<string, Record<string, string>> };
+  colorScheme: ThemeState["colorScheme"];
+} {
+  const sizes: Record<string, Record<string, string>> = {};
+  for (const variant of DENSITY_VARIANTS) {
+    sizes[variant] = effectiveDensity(densitySizes(variant), state.densitySizes?.[variant] ?? {});
+  }
+
+  return {
+    tokens: effectiveTokens(presetTokens(state.tokens), state.params),
+    colors: effectiveColors(presetColors(state.colors), state.palette),
+    density: { type: state.density, sizes },
+    colorScheme: state.colorScheme,
+  };
+}
+
+/**
+ * The live-patch listener (DEV-2496).
+ *
+ * Written into the demo, not into the snippet: it is how the Style panel avoids
+ * rebuilding the whole example for every frame of a colour drag. `params()`
+ * notifies the ThemeBuilder's subscribers, and a mounted grid's ThemeManager is
+ * one of them — it rewrites its own `<style>` element and re-renders, so nothing
+ * remounts and the grid keeps its scroll and selection.
+ *
+ * Three details that are not decoration:
+ *
+ *   * `window.parent !== window` — not `window.top`, because the runner itself is
+ *     framed in embed mode. The block is inert in a downloaded demo, and never
+ *     runs at all during Astro's server render (`typeof window`).
+ *   * The `try/catch` is load-bearing. `params()` validates, and the panel's hex
+ *     field can hand it a half-typed value; a throw here would take the listener
+ *     down with it, so the failure is reported as `ok: false` and the panel falls
+ *     back to writing the file.
+ *   * The reply goes to `event.source`, not `window.parent`, so it is right
+ *     whatever the frame nesting turns out to be.
+ *
+ * `getTheme(THEME_NAME)` is re-read on every message rather than captured: a
+ * recompile re-evaluates this module and `reinitTheme` *replaces* the registered
+ * ThemeBuilder (it does not notify the old one), so a captured reference would
+ * patch an instance no grid is listening to.
+ */
+function bridgeSource(theme: string, typescript: boolean): string[] {
+  const event = typescript ? "(event: MessageEvent)" : "(event)";
+  const data = typescript
+    ? "const data = event.data as { source?: string; id?: number; params?: ThemeParams } | null;"
+    : "const data = event.data;";
+  // `event.source` is `Window | MessagePort | ServiceWorker | null`, and calling
+  // `postMessage` on that union does not type-check (the signatures disagree on
+  // the second argument). The frame that sent this is a window.
+  const source = typescript ? "(event.source as Window | null)" : "event.source";
+
+  return [
+    "// The demo runner's Style panel patches this theme live while a control is",
+    "// dragged, instead of rebuilding the demo on every change. Inert outside the",
+    "// playground — nothing else sends this message.",
+    "if (typeof window !== 'undefined' && window.parent !== window) {",
+    `  window.addEventListener('message', ${event} => {`,
+    `    ${data}`,
+    `    if (!data || data.source !== ${lit(THEME_BRIDGE_SOURCE)} || !data.params) {`,
+    "      return;",
+    "    }",
+    "    let ok = true;",
+    "    try {",
+    `      ${theme}.params(data.params);`,
+    // No binding: an unused one is a lint error in some starters, and there is
+    // nothing to report — a refused patch is answered, not logged.
+    "    } catch {",
+    "      ok = false;",
+    "    }",
+    `    ${source}?.postMessage({ source: ${lit(THEME_BRIDGE_SOURCE)}, ack: data.id, ok }, '*');`,
+    "  });",
+    `  window.parent.postMessage({ source: ${lit(THEME_BRIDGE_SOURCE)}, ready: true }, '*');`,
+    "}",
+  ];
 }
 
 /**
@@ -604,7 +721,14 @@ export function buildThemeChanges(
   state: ThemeState,
 ): { changes: ThemeFileChange[]; linked: boolean } {
   const changes: ThemeFileChange[] = [
-    { path: themeModulePath(files), contents: buildThemeModule(state, isTypescript(files)) },
+    {
+      path: themeModulePath(files),
+      // `bridge` only in the demo's own copy. `buildThemeSnippet` — the code the
+      // user pastes into a real app — leaves it out: the panel's live-patch
+      // plumbing is not part of "what you paste", and this module claims to be
+      // exactly that (see `buildThemeSnippet`).
+      contents: buildThemeModule(state, isTypescript(files), { bridge: true }),
+    },
   ];
 
   const wired = wireTheme(files);

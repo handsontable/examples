@@ -10,7 +10,13 @@
 // is never bundled into the (non-DOM) sharing Worker.
 
 import { loadSandpackClient } from "@codesandbox/sandpack-client";
-import type { CatalogEntry, DemoRuntime, FilesMap, HandsontableVersionRef } from "./types.js";
+import type {
+  CatalogEntry,
+  DemoRuntime,
+  FilesMap,
+  HandsontableVersionRef,
+  WriteFileOptions,
+} from "./types.js";
 import { transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
 import { resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
@@ -223,7 +229,16 @@ export class SandpackRuntime implements DemoRuntime {
     const options: Record<string, unknown> = {
       showOpenInCodeSandbox: false,
       showErrorScreen: true,
-      showLoadingScreen: true,
+      // Off (DEV-2496). The flag rides every compile message the client sends, not just
+      // the first, so the bundler threw its loading overlay over the preview on every
+      // recompile — one more thing flashing on each keystroke. The client's own default
+      // is `false`, and nothing here is left uncovered: the shell holds its own overlay
+      // over the frame until `onReady`, which is the boot experience this stood in for.
+      //
+      // It was not the whole of the reported blink, though: measured on the react
+      // starter, a theme edit rebuilt the grid element itself (see the base-commit run
+      // of the DEV-2496 case in e2e/style-apply.spec.ts). This is the flash on top.
+      showLoadingScreen: false,
     };
     if (this.opts.bundlerURL) options.bundlerURL = this.opts.bundlerURL;
     return options as ClientOptions;
@@ -276,11 +291,27 @@ export class SandpackRuntime implements DemoRuntime {
     }
   }
 
-  /** Stream a single edit. Sandpack recompiles incrementally. */
-  writeFile(path: string, contents: string): void {
+  /** Stream a single edit. Sandpack recompiles incrementally.
+   *
+   *  `quiet` keeps the file and skips the compile (DEV-2496) — for the Style panel,
+   *  which has already put the change on screen through the theme bridge. Nothing
+   *  else changes: `this.files` is the authored workspace either way, so the next
+   *  ordinary edit, `reload()` or `flushQuiet()` carries the held-back file along.
+   *  Only `published` lags, which is exactly what makes that next push a real diff
+   *  rather than the no-op `pushUpdate` skips. */
+  writeFile(path: string, contents: string, opts: WriteFileOptions = {}): void {
     if (!this.client) throw new Error("SandpackRuntime.writeFile called before mount()");
     this.files = { ...this.files, [path]: contents };
+    if (opts.quiet) return;
     this.pushUpdate();
+  }
+
+  /** Compile whatever the quiet writes have accumulated. `pushUpdate` compares against
+   *  `published`, so with nothing held back this is a no-op push rather than a
+   *  preview-blanking byte-identical compile. */
+  flushQuiet(): void {
+    if (!this.client) return;
+    void this.pushUpdate();
   }
 
   /**

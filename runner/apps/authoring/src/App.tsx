@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   EditorShell,
   FullBar,
@@ -21,6 +21,7 @@ import {
   type CatalogEntry,
   type DemoRuntime,
   type FilesMap,
+  type WriteFileOptions,
 } from "@handsontable/demo-runtime";
 import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
 import { ContainerRuntime, ContainerBootFailure, SessionStartError, isBudgetRefusal } from "@handsontable/demo-runtime/container";
@@ -369,6 +370,7 @@ function ShareRoute({ route }: { route: { mode: "share"; id: string } }) {
  */
 function FullMode({ id }: { id: string }) {
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [version, setVersion] = useState(DEFAULT_VERSION);
   const [frameworkName, setFrameworkName] = useState<string | undefined>(undefined);
   const [files, setFiles] = useState<FilesMap | null>(null);
@@ -378,11 +380,17 @@ function FullMode({ id }: { id: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE}/api/demos/${id}`)
+    // `no-store` (DEV-2495): this endpoint answers `max-age=60,
+    // stale-while-revalidate=300` for the public share traffic it exists for, and
+    // `invalidateDemo` clears only the worker's KV copy — nothing reaches the
+    // browser cache. Without this, opening full mode right after an Edit info save
+    // shows the *old* title for up to a minute, which reads as the save not landing.
+    fetch(`${API_BASE}/api/demos/${id}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
-      .then((meta: { title?: string; ht_version?: string } | null) => {
+      .then((meta: { title?: string; description?: string | null; ht_version?: string } | null) => {
         if (cancelled || !meta) return;
         setTitle(meta.title ?? "");
+        setDescription(meta.description ?? "");
         if (meta.ht_version) setVersion(meta.ht_version);
       })
       .catch(() => { /* the status dot reports the build; a missing title is not an error state */ });
@@ -447,7 +455,31 @@ function FullMode({ id }: { id: string }) {
         onDownload={files ? () => downloadWorkspaceZip(files, title) : undefined}
       />
 
-      <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto", minHeight: 0 }}>
+      {/* The row track follows the caption: the iframe's `1fr` has to stay on the
+          row the iframe is actually in, and a conditional child shifts every row
+          after it. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateRows: description ? "auto auto 1fr auto" : "auto 1fr auto",
+          minHeight: 0,
+        }}
+      >
+        {/* The demo's description, which until DEV-2495 was fetched and thrown away.
+            Undesigned — `65:20432` draws no subtitle — so ADR-0023 rule 1: a muted
+            caption on the seam above the URL bar, the quietest place that is still
+            *shown* rather than a hover. Rendered only when there is one, so a demo
+            without a description keeps the frame exactly as drawn.
+
+            Local to this view rather than a `FullBar` prop: that component is shared
+            with full mode in `play`, where there is no saved row to describe. */}
+        {description && (
+          // The attribute is for the e2e that asserts the *absence* of this line:
+          // matching on text cannot tell "no caption" from "caption not filled in
+          // yet", and matching on `p` would catch whatever else the chrome renders.
+          <p data-demo-description style={fullDescription} title={description}>{description}</p>
+        )}
+
         <FullBar
           url={`${location.origin}/share/${id}`}
           onRefresh={() => setReloadGen((g) => g + 1)}
@@ -467,6 +499,21 @@ function FullMode({ id }: { id: string }) {
     </div>
   );
 }
+
+/** The full-mode description caption. Sized and coloured off the same tokens the
+ *  bar below it uses (`s.bar`: 36px tall, 13px UI text, one border seam), a step
+ *  quieter — it is context for the demo, not chrome you operate. One line: a
+ *  description can be a paragraph, and the demo is what the window is for. */
+const fullDescription: React.CSSProperties = {
+  margin: 0,
+  padding: `${theme.space(2)} ${theme.space(3)}`,
+  borderBottom: `1px solid ${theme.color.border}`,
+  background: theme.color.surface,
+  fontFamily: theme.font.ui,
+  fontSize: 13,
+  color: theme.color.textMuted,
+  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+};
 
 /** Resolves the signed-in user; sends the edit page to login when anonymous. */
 function Gate({ route }: { route: { mode: "play" } | { mode: "edit"; id: string } }) {
@@ -567,6 +614,12 @@ function Authoring({
   const initialDocs = route.mode === "play"
     ? new URLSearchParams(location.search).get("docs")
     : null;
+  // `?import=<provider url>` pulls a JSFiddle/StackBlitz project in through
+  // `POST /api/import` (DEV-2504). A URL rather than dialog state so the import
+  // is shareable and survives a reload, the same way `?example=` and `?docs=` are.
+  const initialImport = route.mode === "play"
+    ? new URLSearchParams(location.search).get("import")
+    : null;
   const [framework, setFramework] = useState<string>(() => {
     const p = new URLSearchParams(location.search).get("example");
     return catalog.examples.some((e) => e.framework === p) ? (p as string) : "react";
@@ -579,6 +632,23 @@ function Authoring({
   const [entry, setEntry] = useState<CatalogEntry>(() => toPlaceholderEntry(getEntry(framework)));
   // Non-null when the current example is a documentation-guide example.
   const [docsPath, setDocsPath] = useState<string | null>(initialDocs);
+  /** `?import=` lifecycle: idle when there is nothing to import, loading while
+   *  the Worker fetches and parses the provider page, loaded once the workspace
+   *  is the imported one, failed with a message the user can act on. */
+  const [importPhase, setImportPhase] = useState<"idle" | "loading" | "loaded" | "failed">(
+    initialImport ? "loading" : "idle",
+  );
+  const [importSkipped, setImportSkipped] = useState<{ path: string; reason: string }[]>([]);
+  /** The provider's own title for an imported workspace. Kept apart from `title`
+   *  because `title` is also the saved-demo field: Share and Fork mint their names
+   *  from `entry.displayName`, which for an import is the *starter* the framework
+   *  resolved to ("TypeScript (Vite)"), so "ToolBar Demo" would be lost on save. */
+  const [importedTitle, setImportedTitle] = useState<string | null>(null);
+  /** `starterGen` as it stood when an import landed — see the starter-load gate.
+   *  A ref as well as the state, because the import effect reads it after an
+   *  await, where its own closure's copy would be the value from mount. */
+  const importStarterGenRef = useRef(0);
+  const starterGenRef = useRef(0);
   // Docs examples for the currently-resolved version bucket.
   const [docsItems, setDocsItems] = useState<DocsManifestItem[]>([]);
   const [activeDocsBucket, setActiveDocsBucket] = useState<string | null>(null);
@@ -601,10 +671,11 @@ function Authoring({
   const [bootLog, setBootLog] = useState<string>("");
   const [dirty, setDirty] = useState(false);
   // Which *files* are unsaved, for the per-tab dot in the editor strip (T12, ADR-0025
-  // §3). Not derivable from `dirty`, and `dirty` is not derivable from it either: the
-  // Edit info dialog marks the workspace dirty with no file path at all (see its
-  // `onSave` below), and `dirty` is what `Save •` and the docs-switch guard read. Two
-  // facts, two pieces of state.
+  // §3). `dirty` is what `Save •` and the docs-switch guard read; this is what dots a
+  // tab. Kept as two pieces of state: every caller of `markDirty` names a path since
+  // DEV-2495 took the Edit info dialog off it, so the two happen to agree today, but
+  // collapsing `dirty` into `dirtyPaths.size > 0` is a refactor with its own blast
+  // radius (every mutation site) and no bug behind it.
   const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(() => new Set());
   const [syncing, setSyncing] = useState(false); // container rebuild in flight
   const [refreshing, setRefreshing] = useState(false); // row-2 refresh in flight
@@ -724,7 +795,9 @@ function Authoring({
    *  two can't drift — a dot that outlives its edit, or an edit with no dot, both read
    *  as bugs in the indicator rather than in the caller that forgot a line.
    *
-   *  Called with no paths for a metadata-only change (the Edit info dialog). */
+   *  The no-paths call is still accepted — it means "unsaved, but no tab to dot" —
+   *  but nothing uses it since DEV-2495: the Edit info dialog, its only caller, now
+   *  writes its own PATCH instead of staging an edit for the workspace save. */
   const markDirty = useCallback((...touched: string[]) => {
     setDirty(true);
     dirtyRef.current = true;
@@ -744,8 +817,27 @@ function Authoring({
   }, []);
 
   /** Replace the whole workspace (entry + files + lineage) and remount. */
+  /** One line naming what an import refused, or null when it took everything.
+   *  Built here rather than in the Worker so the wording lives with the UI. */
+  const importNotice = useMemo(() => {
+    if (!importSkipped.length) return null;
+    const shown = importSkipped.slice(0, 2).map((s) => `${s.path} (${s.reason})`);
+    const rest = importSkipped.length - shown.length;
+    return `Not imported: ${shown.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}.`;
+  }, [importSkipped]);
+
   const loadWorkspace = useCallback(
     (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
+      // Whatever workspace replaces an import is no longer the import's, so its
+      // title and its skipped-files notice are cleared here — at the moment the
+      // new files are installed, which a failed starter or docs load never
+      // reaches. Doing it in the pickers instead left a failed switch showing the
+      // previous import's notice and minting Fork/Share names from its title.
+      if (!lineage.startsWith("import:")) {
+        setImportPhase("idle");
+        setImportedTitle(null);
+        setImportSkipped([]);
+      }
       filesRef.current = nextFiles; // ensure the mount effect reads the new files
       setEntry(nextEntry);
       setFramework(nextEntry.framework);
@@ -761,6 +853,91 @@ function Authoring({
     [clearDirty],
   );
 
+  // `?import=<url>`: hand the URL to the Worker, which fetches the provider page
+  // and returns a workspace (DEV-2504). Deliberately unsaved — the author reviews
+  // the imported files and Saves deliberately, exactly as after a fork.
+  useEffect(() => {
+    if (!initialImport) return;
+    let cancelled = false;
+    (async () => {
+      const token = getToken();
+      try {
+        const res = await fetch(`${API_BASE}/api/import`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ url: initialImport }),
+        });
+        const body = (await res.json().catch(() => ({}))) as {
+          framework?: string;
+          files?: FilesMap;
+          title?: string;
+          provider?: string;
+          skipped?: { path: string; reason: string }[];
+          error?: string;
+        };
+        if (cancelled) return;
+        if (!res.ok || !body.files || !body.framework) {
+          setImportPhase("failed");
+          setStatus("error");
+          setRetryable(false);
+          setErrorMessage(
+            body.error ??
+              (res.status === 401
+                ? "Sign in to import a project."
+                : "Could not import that URL."),
+          );
+          return;
+        }
+        // The framework has to exist in this catalog or `getEntry` throws and the
+        // whole route unmounts; the Worker resolves it from BUILD_CONFIG, so a
+        // mismatch means the two drifted.
+        let indexEntry;
+        try {
+          indexEntry = getEntry(body.framework);
+        } catch {
+          setImportPhase("failed");
+          setStatus("error");
+          setRetryable(false);
+          setErrorMessage(`The import resolved to an unknown framework (${body.framework}).`);
+          return;
+        }
+        // A starter fetch may already be in flight from the first render (the
+        // playground's default framework). Bumping the sequence makes its
+        // response a no-op, so it cannot land on top of the import.
+        starterRequestSeqRef.current += 1;
+        importStarterGenRef.current = starterGenRef.current;
+        loadWorkspace(toPlaceholderEntry(indexEntry), { ...body.files }, `import:${body.provider ?? "url"}`);
+        if (body.title) {
+          setTitle(body.title);
+          setImportedTitle(body.title);
+        }
+        setImportSkipped(body.skipped ?? []);
+        setImportPhase("loaded");
+        // Release the mount gate the starter path owns: nothing else will, now
+        // that the starter fetch is skipped for an imported workspace.
+        setSourceLoaded(true);
+        sourceLoadedRef.current = true;
+        activeStarterBucketRef.current = null;
+        // Drop `?import=` once it has been consumed, so a reload does not re-run
+        // an import the user may since have edited on top of.
+        const url = new URL(location.href);
+        url.searchParams.delete("import");
+        history.replaceState(null, "", url.pathname + url.search);
+      } catch (error) {
+        if (cancelled) return;
+        reportError(error, "import-url");
+        setImportPhase("failed");
+        setStatus("error");
+        setRetryable(false);
+        setErrorMessage("Could not import that URL.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [initialImport, loadWorkspace]);
+
   // Edit/share mode: load the saved demo's source + metadata into the workspace.
   useEffect(() => {
     if (!savedId) return;
@@ -771,7 +948,10 @@ function Authoring({
       try {
         const [srcRes, metaRes] = await Promise.all([
           fetch(`${API_BASE}/api/demos/${savedId}/source`, { headers }),
-          fetch(`${API_BASE}/api/demos/${savedId}`),
+          // `no-store` for the same reason `FullMode` uses it (DEV-2495): the
+          // metadata endpoint is cached for a minute in the browser, and this is
+          // the page you land on straight after renaming the demo.
+          fetch(`${API_BASE}/api/demos/${savedId}`, { cache: "no-store" }),
         ]);
         if (cancelled) return;
         if (!srcRes.ok) {
@@ -994,6 +1174,24 @@ function Authoring({
   // message the mount guard uses.
   useEffect(() => {
     if (route.mode === "share" || savedId || docsPath) return;
+    // An imported workspace owns its files the way a saved demo does (`savedId`
+    // above) — but only until the user asks for a starter, and *that* distinction
+    // is what two review rounds went around:
+    //
+    //  - gate on "loading" only, and the effect re-runs on the `framework` the
+    //    import just set; `activeStarterBucketRef` is null and `loadWorkspace`
+    //    cleared dirty, so both inner branches fall through to the fetch and a
+    //    catalog starter replaces the import.
+    //  - gate on "loaded" forever, and picking a starter can never fetch again.
+    //  - release the gate inside `selectExample`/`selectDocs`, and a switch that
+    //    *fails* leaves the import open with its protection already dropped.
+    //
+    // `starterGen` separates them: only `selectExample` bumps it, so an unchanged
+    // generation means this run is the import's own re-render (or a version
+    // change, which the re-pin effect below handles), and a bumped one means the
+    // user picked something. Nothing has to be cleared early for it to hold.
+    if (importPhase === "loading") return;
+    if (importPhase === "loaded" && starterGen === importStarterGenRef.current) return;
     // Only next-format versions need nextVersion to resolve a bucket; plain
     // releases are not held on /api/versions.
     if (isNextPrereleaseVersion(version) && !versionsResolved) return;
@@ -1096,6 +1294,17 @@ function Authoring({
     loadWorkspace,
   ]);
 
+  // A version change on an imported workspace re-pins its Handsontable
+  // dependencies in place. The starter effect is gated off while an import is
+  // open, so without this the version picker would move the label and change
+  // nothing in the files.
+  useEffect(() => {
+    if (importPhase !== "loaded") return;
+    const pinned = pinHandsontableFiles(filesRef.current, version);
+    filesRef.current = pinned;
+    setFiles(pinned);
+  }, [importPhase, version]);
+
   // Keep the URL in sync with the selected example + version — playground only
   // (edit/share have their own /edit/:id, /share/:id paths). Docs examples use
   // `?docs=<content-path>`; starters use `?example=<framework>`.
@@ -1131,7 +1340,8 @@ function Authoring({
       sourceLoadedRef.current = false;
       activeStarterBucketRef.current = null;
       setFramework(fw);
-      setStarterGen((g) => g + 1);
+      starterGenRef.current += 1;
+      setStarterGen(starterGenRef.current);
     },
     [],
   );
@@ -1313,26 +1523,72 @@ function Authoring({
     setRetryGen((g) => g + 1);
   }, []);
 
+  /** Container frameworks rebuild server-side (a few seconds); show feedback. */
+  const showSyncing = useCallback(() => {
+    if (!containerModeRef.current) return;
+    setSyncing(true);
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    syncTimerRef.current = setTimeout(() => setSyncing(false), 4000);
+  }, []);
+
+  // `opts` is passed straight through to the runtime (`{ quiet: true }` for an edit
+  // whose effect is already on screen — see StylePanel's live theme patch). The
+  // workspace itself is updated the same way regardless: `filesRef` is what Save,
+  // Download, Share and the next example switch read, so nothing may ever sit
+  // between an edit and this assignment.
   const onEdit = useCallback(
-    (path: string, contents: string) => {
+    (path: string, contents: string, opts?: WriteFileOptions) => {
       const next = { ...filesRef.current, [path]: contents };
       filesRef.current = next;
       setFiles(next);
       markDirty(path);
       try {
-        runtimeRef.current?.writeFile(path, contents);
+        runtimeRef.current?.writeFile(path, contents, opts);
       } catch {
         /* not mounted */
       }
-      // Container frameworks rebuild server-side (a few seconds); show feedback.
-      if (containerModeRef.current) {
-        setSyncing(true);
-        if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
-        syncTimerRef.current = setTimeout(() => setSyncing(false), 4000);
-      }
+      // A quiet write reaches no dev server yet, so there is nothing to wait for. The
+      // rebuild it is eventually flushed by reports its own progress (`flushQuietEdits`).
+      if (opts?.quiet) return;
+      showSyncing();
     },
-    [markDirty],
+    [markDirty, showSyncing],
   );
+
+  /** Send a message into the running preview (DEV-2496: the Style panel's live theme
+   *  patch). Cross-origin on both tiers — the bundler's origin for Tier 1, the
+   *  container's for Tier 2 — which postMessage is fine with. */
+  const postToPreview = useCallback((message: unknown) => {
+    iframeEl?.contentWindow?.postMessage(message, "*");
+  }, [iframeEl]);
+
+  /** The other direction. Filtered by `event.source`, never by origin: the origin
+   *  differs per tier and per session, but "did this come from the preview frame"
+   *  is exactly the question being asked. */
+  const onPreviewMessage = useCallback((cb: (data: unknown) => void) => {
+    const listener = (event: MessageEvent) => {
+      if (!iframeEl || event.source !== iframeEl.contentWindow) return;
+      cb(event.data);
+    };
+    window.addEventListener("message", listener);
+    return () => window.removeEventListener("message", listener);
+  }, [iframeEl]);
+
+  /** Push whatever a `{ quiet: true }` write left pending — the Style panel's fallback
+   *  when a live patch did not land, and how a theme change that *must* rebuild (first
+   *  apply, a preset swap) reaches the preview.
+   *
+   *  Which is why this reports progress the same way an ordinary edit does: on Tier 2
+   *  that rebuild is a container round trip of several seconds, and it used to say so
+   *  when theme edits went out as ordinary writes. */
+  const flushQuietEdits = useCallback(() => {
+    try {
+      runtimeRef.current?.flushQuiet?.();
+      showSyncing();
+    } catch {
+      /* not mounted */
+    }
+  }, [showSyncing]);
 
   // ---- File-tree CRUD (CodeSandbox-style). Edits the in-memory workspace and
   // the live preview; only Save (edit mode, owner) persists them. ----
@@ -1344,6 +1600,33 @@ function Authoring({
       setFiles(next);
       markDirty(path);
       try { runtimeRef.current?.writeFile(path, ""); } catch { /* not mounted */ }
+    },
+    [markDirty],
+  );
+
+  /** One drag & drop (DEV-2500), committed as a single change.
+   *
+   *  Not `addFile` in a loop: that would be one `setFiles` per file — and on a
+   *  Tier-2 framework one dev-server rebuild per file, each invalidating the
+   *  last. One state commit, one dirty-set update, then stream the files. */
+  const addFiles = useCallback(
+    (dropped: { path: string; contents: string }[]) => {
+      if (!dropped.length) return;
+      const next = { ...filesRef.current };
+      for (const { path, contents } of dropped) next[path] = contents;
+      filesRef.current = next;
+      setFiles(next);
+      // Variadic on purpose (see its definition): one call dots every dropped tab.
+      markDirty(...dropped.map((file) => file.path));
+      for (const { path, contents } of dropped) {
+        try { runtimeRef.current?.writeFile(path, contents); } catch { /* not mounted */ }
+      }
+      // Container frameworks rebuild server-side; same feedback an edit gets.
+      if (containerModeRef.current) {
+        setSyncing(true);
+        if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = setTimeout(() => setSyncing(false), 4000);
+      }
     },
     [markDirty],
   );
@@ -1415,7 +1698,7 @@ function Authoring({
         body: JSON.stringify({
           framework: entry.framework,
           files: filesRef.current,
-          title: `${entry.displayName} (embed)`,
+          title: importedTitle ? `${importedTitle} (embed)` : `${entry.displayName} (embed)`,
           htVersion: version,
           forkedFrom: forkedFrom ?? undefined,
         }),
@@ -1433,7 +1716,7 @@ function Authoring({
     } finally {
       setEmbedding(false);
     }
-  }, [user, entry, version, forkedFrom]);
+  }, [user, entry, version, forkedFrom, importedTitle]);
 
   /** Fork the current playground code into a new saved demo, then open its edit page. */
   const onFork = useCallback(async () => {
@@ -1448,7 +1731,9 @@ function Authoring({
         body: JSON.stringify({
           framework: entry.framework,
           files: filesRef.current,
-          title: `Fork of ${entry.displayName}`,
+          // An imported project keeps its own name: "Fork of TypeScript (Vite)"
+          // describes the starter its framework resolved to, not the demo.
+          title: importedTitle ?? `Fork of ${entry.displayName}`,
           htVersion: version,
           forkedFrom: forkedFrom ?? undefined,
         }),
@@ -1464,9 +1749,19 @@ function Authoring({
       setErrorMessage(e instanceof Error ? e.message : String(e));
       setForking(false);
     }
-  }, [user, entry, version, forkedFrom]);
+  }, [user, entry, version, forkedFrom, importedTitle]);
 
-  /** Save the saved-demo edits: title/description + code (rebuilds the snapshot). */
+  /** Save the saved-demo edits: the code, which rebuilds the snapshot.
+   *
+   *  Deliberately *not* the title and description. Since DEV-2495 the Edit info
+   *  dialog writes those itself, and sending them here as well gave the row two
+   *  writers racing on one field: this PATCH captures the metadata when the user
+   *  hits Save, but the server only writes it at the *end* of the rebuild
+   *  (`updateDemo`), so a rename committed while a rebuild is in flight is
+   *  overwritten by the pre-rename values seconds later. The UI keeps the new
+   *  title, so it surfaces as the rename not sticking — the exact bug this branch
+   *  exists to fix. Omitted keys leave the stored values alone (the endpoint falls
+   *  back to `row.title` / `row.description`), so metadata has one writer. */
   const onSave = useCallback(async () => {
     if (!savedId || isShare) return;
     setSaving(true);
@@ -1477,8 +1772,6 @@ function Authoring({
         method: "PATCH",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
-          title: title.trim() || "Untitled demo",
-          description: description.trim() || null,
           files: filesRef.current,
           htVersion: version,
         }),
@@ -1496,7 +1789,7 @@ function Authoring({
     } finally {
       setSaving(false);
     }
-  }, [savedId, isShare, title, description, version, clearDirty]);
+  }, [savedId, isShare, version, clearDirty]);
 
   /**
    * The preview bar's share icon, mode-aware (ADR-0025). `edit` has a saved demo
@@ -1705,6 +1998,7 @@ function Authoring({
         // changing.) Editing file *contents* is unaffected in all three modes, and nothing
         // persists here without `onSave`.
         onAddFile={canEditFiles ? addFile : undefined}
+        onAddFiles={canEditFiles ? addFiles : undefined}
         onRenameFile={canEditFiles ? renameFile : undefined}
         onDeleteFile={canEditFiles ? deleteFile : undefined}
         onSave={onSave}
@@ -1741,6 +2035,7 @@ function Authoring({
         dirtyPaths={dirtyPaths}
         versionWarning={versionWarning}
         budgetNotice={budgetNotice}
+        importNotice={importNotice}
         // Ask AI and Style, both from DEV-2047. Available on every route — the
         // public `/share` view included, since explaining or restyling a demo is
         // exactly what a shared link invites. Mutually exclusive: since DEV-2209
@@ -1842,23 +2137,23 @@ function Authoring({
         <ShareLinks clientUrl={clientUrl} embedUrl={embedUrl} onClose={() => setShareLinksOpen(false)} />
       )}
 
-      {editInfoOpen && (
+      {/* `savedId` narrows the dialog's `demoId` — the pencil is `edit`-only, so it
+          is never null here, but the render guard is where that is provable. */}
+      {editInfoOpen && savedId && (
         <EditInfoDialog
+          apiBase={API_BASE}
+          demoId={savedId}
+          token={getToken()}
           title={title}
           description={description}
           onClose={closeEditInfo}
-          // Marks the workspace dirty rather than PATCHing on its own: the code and
-          // the metadata are one snapshot, and `onSave` sends both in a single
-          // rebuilding PATCH. Saving here too would rebuild twice.
-          //
-          // `markDirty()` with no path, deliberately: the title and description belong
-          // to no file, so this must not dot a tab. It is also the reason `dirty` can't
-          // just be `dirtyPaths.size > 0` (T12).
+          // The dialog PATCHes on its own (DEV-2495) and this runs once the server
+          // has taken it, so there is nothing outstanding to mark: no `markDirty()`.
+          // It used to call it with no path — which is what left a `Save •` over an
+          // edit that had, from the user's side, already been saved.
           onSave={(next) => {
             setTitle(next.title);
             setDescription(next.description);
-            markDirty();
-            closeEditInfo();
           }}
         />
       )}
@@ -1869,6 +2164,9 @@ function Authoring({
           token={getToken()}
           getFiles={() => filesRef.current}
           applyEdit={onEdit}
+          postToPreview={postToPreview}
+          onPreviewMessage={onPreviewMessage}
+          flushQuietEdits={flushQuietEdits}
           onClose={() => setStyleOpen(false)}
         />
       )}

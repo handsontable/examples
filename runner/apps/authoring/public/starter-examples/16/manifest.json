@@ -3,8 +3,29 @@
   "sourceRef": "prod-examples/16",
   "generatedFrom": "handsontable/examples examples/",
   "hotVersion": "16.2.0",
-  "count": 11,
+  "count": 14,
   "examples": [
+    {
+      "framework": "blank",
+      "displayName": "Blank (JavaScript)",
+      "tier": 1,
+      "engine": "sandpack",
+      "minCoreMajor": null
+    },
+    {
+      "framework": "blank-ts",
+      "displayName": "Blank (TypeScript)",
+      "tier": 1,
+      "engine": "sandpack",
+      "minCoreMajor": null
+    },
+    {
+      "framework": "blank-react",
+      "displayName": "Blank (React)",
+      "tier": 1,
+      "engine": "sandpack",
+      "minCoreMajor": null
+    },
     {
       "framework": "example1",
       "displayName": "Vanilla (Vite, TS)",
