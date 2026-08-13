@@ -13,6 +13,7 @@ import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate } from "./auth.js";
+import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse } from "./error-page.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, updateDemo, type DemoRow } from "./share.js";
 import {
@@ -679,14 +680,29 @@ export default Sentry.withSentry(sentryOptions, {
         return json({ id: created.id, url: `/d/${created.id}`, embedUrl: `/embed/${created.id}` }, 201);
       }
 
-      // GET /api/demos  (auth, ?mine=1) — list the caller's demos
+      // GET /api/demos  (auth) — the caller's demos, or `?scope=all` for the
+      // team's (DEV-2506). Visibility only: editing still answers to
+      // `created_by` in the PATCH/DELETE handlers below.
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts.length === 2) {
         const id = await authenticate(request, env);
         if (!id) return json({ error: "unauthorized" }, 401);
-        const rows = await env.DB.prepare(
-          "SELECT id,title,description,framework,tier,ht_version,forked_from,visibility,revoked,created_at,updated_at FROM demos WHERE created_by = ? ORDER BY updated_at DESC",
-        ).bind(id.email).all();
-        return json({ demos: rows.results });
+        const scope = parseDemoScope(url.searchParams.get("scope"));
+        const query = demoListQuery(scope, id.email);
+        const rows = await env.DB.prepare(query.sql).bind(...query.binds).all();
+        return json({ demos: rows.results, scope });
+      }
+
+      // GET /api/demos/:id/access  (auth) — may the caller edit this demo?
+      //
+      // Its own endpoint because `GET /api/demos/:id` is public *and* edge-cached
+      // (`cacheableJson`): adding an auth-dependent field there would hand one
+      // caller's answer to the next. One row, no cache, no body to speak of.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts[3] === "access" && parts.length === 4) {
+        const id = await authenticate(request, env);
+        if (!id) return json({ error: "unauthorized" }, 401);
+        const row = await getDemo(env, parts[2]!);
+        if (!row) return json({ error: "not found" }, 404);
+        return json({ owned: row.created_by === id.email, revoked: !!row.revoked });
       }
 
       // GET /api/demos/:id/source  (public) — source snapshot for the read-only

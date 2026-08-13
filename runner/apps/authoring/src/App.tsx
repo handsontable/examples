@@ -205,10 +205,12 @@ type EditorRoute =
 
 /** Routes that are not the editor at all. Kept out of `EditorRoute` so every
  *  `route.mode` switch inside `Authoring` stays exhaustive over editor modes. */
-type AppRoute = EditorRoute | { mode: "myDemos" } | { mode: "settings" };
+type AppRoute = EditorRoute | { mode: "myDemos" } | { mode: "allDemos" } | { mode: "settings" };
 
 function parseRoute(): AppRoute {
   if (/^\/my-demos\/?$/.test(location.pathname)) return { mode: "myDemos" };
+  // `/all-demos` (DEV-2506) — the same listing with a wider scope.
+  if (/^\/all-demos\/?$/.test(location.pathname)) return { mode: "allDemos" };
   // `/settings` (DEV-2166). Before this line the fallthrough below matched it and
   // the profile page silently rendered the playground — the static Worker already
   // serves index.html for it (`not_found_handling: "single-page-application"`),
@@ -249,7 +251,7 @@ function beacon(path: string): void {
  * new — and the maximize button has to work from the editor, which is where it lives.
  */
 function fullModeId(route: AppRoute): string | null {
-  if (route.mode === "play" || route.mode === "myDemos" || route.mode === "settings") return null;
+  if (route.mode === "play" || route.mode === "myDemos" || route.mode === "allDemos" || route.mode === "settings") return null;
   return new URLSearchParams(location.search).get("mode") === "full" ? route.id : null;
 }
 
@@ -281,6 +283,7 @@ export function App() {
   // Before `Gate`/`Authoring`, which boot a container session this page has no
   // use for. It is auth-gated all the same — the listing is per-user.
   if (route.mode === "myDemos") return <MyDemosRoute />;
+  if (route.mode === "allDemos") return <MyDemosRoute scope="all" />;
   // Same story as My demos: auth-gated, renders no runtime, boots no container.
   if (route.mode === "settings") return <SettingsRoute />;
   // The share page is a public, read-only playground — no auth needed.
@@ -290,19 +293,23 @@ export function App() {
 
 /** `/my-demos`. Same login-on-anonymous contract as `/edit/:id`: the listing is
  *  `WHERE created_by = <caller>`, so there is nothing to show a stranger. */
-function MyDemosRoute() {
+function MyDemosRoute({ scope = "mine" }: { scope?: "mine" | "all" }) {
   const [user, setUser] = useState<User | null | undefined>(undefined);
   useEffect(() => {
     currentUser().then(setUser);
   }, []);
   useEffect(() => {
-    if (user === null) login(); // return_to preserves /my-demos
+    if (user === null) login(); // return_to preserves /my-demos, /all-demos
   }, [user]);
-  useDocumentTitle("My demos");
+  useDocumentTitle(scope === "all" ? "All demos" : "My demos");
 
   if (user === undefined) return <Splash text="Loading data …" />;
-  if (user === null) return <Splash text="Sign in to see your demos…" />;
-  return <MyDemosPage apiBase={API_BASE} user={user} />;
+  // Signed in either way: `/all-demos` lists internal work, and the endpoint
+  // behind it is authenticated.
+  if (user === null) {
+    return <Splash text={scope === "all" ? "Sign in to see the team's demos…" : "Sign in to see your demos…"} />;
+  }
+  return <MyDemosPage apiBase={API_BASE} user={user} scope={scope} />;
 }
 
 /** `/settings` (DEV-2166). A profile is per-user by definition, so the same
@@ -478,10 +485,54 @@ function Gate({ route }: { route: { mode: "play" } | { mode: "edit"; id: string 
     if (user === null && route.mode === "edit") login(); // return_to preserves /edit/:id
   }, [user, route.mode]);
 
+  /**
+   * May this user edit this demo? (DEV-2506)
+   *
+   * Being signed in was the whole of the old gate, which was fine while the only
+   * way to reach `/edit/:id` was from your own list. Now that the team's demos are
+   * browsable, a link can land anyone here — and the editor would offer a Save the
+   * API refuses with a 403, which is a worse answer than not offering it.
+   *
+   * `undefined` while the answer is in flight; `edit` waits for it rather than
+   * flashing an editor a reader cannot use.
+   */
+  const [canEdit, setCanEdit] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (route.mode !== "edit" || !user) return;
+    let live = true;
+    const token = getToken();
+    fetch(`${API_BASE}/api/demos/${route.id}/access`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((res) => (res.ok ? (res.json() as Promise<{ owned?: boolean }>) : null))
+      .then((body) => {
+        if (!live) return;
+        // Only an explicit `owned: false` sends someone away. A missing demo is not
+        // an ownership question (the editor's own load path renders that), and a
+        // body without the field is an answer we do not understand — treating
+        // either as "not yours" would bounce an owner to /share on a payload shape,
+        // which is exactly what happened to the older specs' generic
+        // `**/api/demos/**` stub the first time this shipped.
+        setCanEdit(typeof body?.owned === "boolean" ? body.owned : true);
+      })
+      // Fail *open*: the API still refuses a stranger's save, so the worst case is
+      // the behaviour that shipped before this check. Failing closed would lock an
+      // owner out of their own demo on one flaky request.
+      .catch(() => { if (live) setCanEdit(true); });
+    return () => { live = false; };
+  }, [route, user]);
+
+  // Someone else's demo is the read-only playground, and the address bar should
+  // say so — a `/edit/` URL showing a page with no Save is its own small lie.
+  useEffect(() => {
+    if (route.mode === "edit" && canEdit === false) location.replace(`/share/${route.id}`);
+  }, [route, canEdit]);
+
   // The frame gives the loading screen one string, so both load states use it. The
   // sign-in line below is a different message, not a load state, and keeps its own.
   if (user === undefined) return <Splash text="Loading data …" />;
   if (user === null && route.mode === "edit") return <Splash text="Sign in to edit this demo…" />;
+  if (route.mode === "edit" && canEdit !== true) return <Splash text="Loading data …" />;
   return <Authoring user={user} route={route} />;
 }
 
