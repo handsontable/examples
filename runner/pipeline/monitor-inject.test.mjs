@@ -461,6 +461,40 @@ test("sanitizeMonitorPayload bounds every field", () => {
   assert.ok(clean.url.includes("<preview>"));
 });
 
+test("a host straddling the cap is still redacted", () => {
+  // Bugbot #190, HIGH: truncating before redacting cut the hostname in half, and the
+  // surviving prefix still carried the token — while `redactPreviewHosts` could no
+  // longer match it, because the host it looks for was incomplete. Verified as a real
+  // leak before the fix: the full `tok9xQ` reached the payload.
+  //
+  // The fixture places the token *inside* the cap and the `.demos…` suffix outside it,
+  // which is exactly the boundary a crafted postMessage would aim for.
+  const prefix = `https://${PREVIEW_HOST.split(".")[0]}`;
+  const straddle = "x".repeat(MONITOR_MESSAGE_MAX - prefix.length) + `https://${PREVIEW_HOST}/x`;
+
+  const clean = sanitizeMonitorPayload({
+    type: MONITOR_MESSAGE_TYPE,
+    kind: "error",
+    message: straddle,
+    stack: "s".repeat(MONITOR_STACK_MAX - prefix.length) + `at f (https://${PREVIEW_HOST}/a.js:1:1)`,
+  });
+
+  assert.equal(clean.message.includes("tok9x"), false, "no token fragment may survive the cap");
+  assert.equal(clean.stack.includes("tok9x"), false);
+  assert.ok(clean.message.length <= MONITOR_MESSAGE_MAX + 3, "still bounded");
+});
+
+test("reporter redacts before truncating too", () => {
+  const h = runReporter();
+  const prefix = `https://${PREVIEW_HOST.split(".")[0]}`;
+  const err = new Error("y".repeat(MONITOR_MESSAGE_MAX - prefix.length) + `https://${PREVIEW_HOST}/x`);
+  err.stack = `Error: boom\n    at f (https://${PREVIEW_HOST}/a.js:1:1)`;
+
+  h.fire("error", { error: err });
+
+  assert.equal(JSON.stringify(h.sent).includes("tok9x"), false);
+});
+
 test("sanitizeMonitorPayload keeps optional fields absent rather than empty", () => {
   const clean = sanitizeMonitorPayload({ type: MONITOR_MESSAGE_TYPE, kind: "console-warn", message: "x" });
   assert.equal("stack" in clean, false);

@@ -79,15 +79,27 @@ export function sanitizeMonitorPayload(payload: MonitorPayload): MonitorPayload 
   const clean: MonitorPayload = {
     type: payload.type,
     kind: payload.kind,
-    message: redactPreviewHosts(truncateMessage(payload.message, MONITOR_MESSAGE_MAX)),
+    message: bound(payload.message, MONITOR_MESSAGE_MAX),
   };
-  if (payload.stack) {
-    clean.stack = redactPreviewHosts(truncateMessage(payload.stack, MONITOR_STACK_MAX));
-  }
-  if (payload.url) {
-    clean.url = redactPreviewHosts(truncateMessage(payload.url, MONITOR_URL_MAX));
-  }
+  if (payload.stack) clean.stack = bound(payload.stack, MONITOR_STACK_MAX);
+  if (payload.url) clean.url = bound(payload.url, MONITOR_URL_MAX);
   return clean;
+}
+
+/**
+ * Redact, **then** truncate. The order is the security property, not a style choice.
+ *
+ * Truncating first can cut a hostname in half, and the surviving prefix still carries
+ * the session token (`https://3000-sbx7f2a-tok9xQ`) — while `redactPreviewHosts` can
+ * no longer match it, because the host it is looking for is incomplete. Long Next and
+ * Angular stacks routinely run past the stack cap, and a crafted `postMessage` can put
+ * a host on the boundary deliberately.
+ *
+ * Redacting first also leaves more of the useful string inside the cap, since a
+ * hostname collapses to a short placeholder.
+ */
+function bound(value: string, max: number): string {
+  return truncateMessage(redactPreviewHosts(value), max);
 }
 
 /** What the reporter observed. `stderr` is the only kind not raised in-page — it
@@ -270,7 +282,10 @@ export const REPORTER_SOURCE = `(function () {
   // than with a regex so the host needs no escaping.
   var HOST = "";
   try { HOST = String(location.host).toLowerCase(); } catch (e) { HOST = ""; }
-  function redact(s) {
+  function redact(value) {
+    // Coerced here because \`redact\` now runs before \`truncate\`, which used to be what
+    // turned a non-string into one.
+    var s = typeof value === "string" ? value : String(value == null ? "" : value);
     if (!s || !HOST) return s;
     var haystack = s.toLowerCase();
     var out = "";
@@ -308,8 +323,11 @@ export const REPORTER_SOURCE = `(function () {
   function send(kind, message, stack, url) {
     try {
       if (used >= CEILING) return;
-      var m = redact(truncate(message, MAX));
-      var s = stack ? redact(truncate(stack, STACK_MAX)) : "";
+      // Redact before truncating, never after: a cap that splits a hostname leaves
+      // the session token in the surviving prefix, and \`redact\` can no longer match
+      // an incomplete host. Angular and Next stacks run past STACK_MAX routinely.
+      var m = truncate(redact(message), MAX);
+      var s = stack ? truncate(redact(stack), STACK_MAX) : "";
       var k = kind + "|" + m + "|" + firstFrame(s);
       if (seen[k]) return;
       seen[k] = true;

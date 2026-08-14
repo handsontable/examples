@@ -280,11 +280,17 @@ authorises access to a live preview (a mismatch is the `INVALID_TOKEN` failure),
 it reaches strings three ways: a scrubbed network URL, *every frame* of a stack raised
 in the preview, and any message quoting a URL. The reporter strips its own
 `location.host` before sending and `redactPreviewHosts` catches it again parent-side.
-Match case-insensitively if you touch this — the token is mixed-case, but anything
-through a URL parser hands back a lowercased hostname, so a case-sensitive compare
-misses precisely the tokens it is meant to remove. The app's own
-`demos.handsontable.com` origin stays readable; only hosts with a subdomain label are
-redacted.
+Two traps if you touch this, both of which shipped once and were caught in review:
+
+- **Match case-insensitively.** The token is mixed-case, but anything through a URL
+  parser hands back a lowercased hostname, so a case-sensitive compare misses
+  precisely the tokens it is meant to remove.
+- **Redact before truncating.** A cap that splits a hostname leaves the token in the
+  surviving prefix, where the redactor can no longer match it — the host it is looking
+  for is incomplete. Angular and Next stacks run past the cap routinely.
+
+The app's own `demos.handsontable.com` origin stays readable; only hosts with a
+subdomain label are redacted.
 
 **Removing it** means deleting `packages/runtime/src/monitor.ts`, its test
 (`pipeline/monitor-inject.test.mjs`), and its callsites: `withMonitor` in
