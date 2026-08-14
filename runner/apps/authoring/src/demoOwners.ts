@@ -68,6 +68,19 @@ export function ownerOptions(
   return [{ value: "", label: `Everyone (${demos.length})`, count: demos.length }, ...owners];
 }
 
+/**
+ * Is this row the signed-in person's?
+ *
+ * Case-insensitive: `created_by` is written by two paths — the browser stores the address
+ * exactly as the login broker returns it, and the MCP service path stores a normalised one
+ * (DEV-2501) — so an exact match would render someone's own demo as a stranger's: Open would
+ * go to `/share` and Rename/Delete would stay hidden while the API happily allowed the edit.
+ */
+export function isOwnedBy(createdBy: string | null | undefined, email: string | null | undefined): boolean {
+  const owner = ownerSlug(createdBy ?? "");
+  return owner !== "" && owner === ownerSlug(email ?? "");
+}
+
 /** The rows one option shows. An empty or unknown slug is not an error: the URL is
  *  user-editable, and an unrecognized owner honestly has no demos. */
 export function filterByOwner<T extends OwnedRow>(demos: T[], slug: string): T[] {

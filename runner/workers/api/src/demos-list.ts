@@ -58,8 +58,10 @@ export function demoListQuery(scope: DemoScope, email: string): { sql: string; b
       binds: [],
     };
   }
+  // LOWER() on both sides: addresses are normalised on the way in now, but rows written
+  // before that are not, and "My demos" silently missing one is the worst way to find out.
   return {
-    sql: `SELECT ${COLUMNS} FROM demos WHERE created_by = ? ORDER BY updated_at DESC`,
-    binds: [email],
+    sql: `SELECT ${COLUMNS} FROM demos WHERE LOWER(created_by) = ? ORDER BY updated_at DESC`,
+    binds: [email.trim().toLowerCase()],
   };
 }

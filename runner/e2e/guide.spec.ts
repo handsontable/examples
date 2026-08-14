@@ -36,8 +36,10 @@ test("the guide renders the doc as formatted text", async ({ page }) => {
     // A `###` subsection, which the `##` ones above would not prove renders.
     "From the Theme Builder",
     "5. Publish a demo from your own machine",
-    "8. Save, fork, share, embed",
-    "10. Useful URLs",
+    // Inserted by DEV-2501, which pushed the sections below it down by one.
+    "6. Ask Claude to build one for you — no browser step",
+    "9. Save, fork, share, embed",
+    "11. Useful URLs",
   ]) {
     await expect(page.getByText(section, { exact: true })).toBeVisible();
   }

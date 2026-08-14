@@ -124,7 +124,43 @@ everything around it, not the login itself. And there is a sibling plugin,
 its own storage gets its own Cloudflare Worker and belongs there. Examples — a
 grid, its data, and the code that configures it — belong here.
 
-## 6. Ask AI, and the Style panel
+## 6. Ask Claude to build one for you — no browser step
+
+If the demo does not exist yet, you can describe it and get a finished link back.
+This runs through the **Handsontable MCP**, so there is no folder to prepare and no
+drag step:
+
+```
+create a demo showing a sales grid with column filters, a total row and Polish
+number formatting, and share the link with me
+```
+
+Claude writes the example (it has the Handsontable documentation available while it
+does), sends it here, and the runner builds it exactly as **Save** would. You get
+back the client link and the edit link, and the demo appears in **My demos** under
+your own account — because the MCP tells the runner who asked, and it can only ever
+say that about the person whose Claude session made the call.
+
+Worth knowing:
+
+- **You are already signed in as far as this is concerned.** The MCP knows your
+  Google identity from your session, so nothing asks you to log in again — and only
+  `@handsontable.com` addresses can create anything here, exactly as in the browser.
+- **It defaults to the fastest starter.** Unless you ask for a framework, you get a
+  plain-JavaScript demo, which builds in the in-browser bundler rather than a
+  container. Say "in React" or "in Vue" and you get that instead; Angular, Next.js,
+  Nuxt, Astro and Remix work too, they just cost a container build and are slower to
+  come back.
+- **Title and description are written for you**, and the description is required on
+  this path. Someone opening the link later was not in your conversation.
+- **It is for examples, not projects.** The path takes up to 50 text files and 256 KB
+  of source, refuses anything called `.env`, and refuses `node_modules`, build output
+  and lockfiles rather than quietly dropping them. A real project belongs in the
+  previous section's flow, or in `publish-app`.
+- **Open `/edit/:id` afterwards** if you want to change anything by hand. It is an
+  ordinary demo of yours from that point on — rename it, fork it, revoke it.
+
+## 7. Ask AI, and the Style panel
 
 - **Ask AI** answers questions about the open example, with links into the
   documentation. If it suggests a code change it *proposes* it — you apply it, or
@@ -134,7 +170,7 @@ grid, its data, and the code that configures it — belong here.
   you share is the styling you see. You can also describe a look in words and let
   it generate the theme.
 
-## 7. Title and description
+## 8. Title and description
 
 The pencil in **Box info** (top of the sidebar) edits the demo's **title** and
 **description**.
@@ -152,7 +188,7 @@ with a **Show more** toggle, so a detailed one never pushes the file tree off th
 screen. The limit is 4,000 characters, and the field tells you when you are near
 it.
 
-## 8. Save, fork, share, embed
+## 9. Save, fork, share, embed
 
 - **Save** (on a demo you own) writes your edits and rebuilds the shared page.
 - **Fork** takes whatever is open — a starter, a docs example, someone else's
@@ -198,7 +234,7 @@ and the frame stays blank — that is the frame lock doing its job, not a broken
 demo. The **client link** cannot be framed at all, on any site: if you need
 something embedded, use the embed URL.
 
-## 9. My demos
+## 10. My demos
 
 **My demos** (account menu) lists everything you have created: open, copy the
 link, rename, fork, or delete. Deleting revokes the link — the client page starts
@@ -213,7 +249,7 @@ opens the read-only view instead. Revoked demos stay in your own list, with thei
 badge, so you can see what happened to a link you shared; they do not clutter
 anyone else's.
 
-## 10. Useful URLs
+## 11. Useful URLs
 
 Anything you can reach by clicking, you can also link to directly:
 
@@ -233,7 +269,7 @@ Anything you can reach by clicking, you can also link to directly:
 | `/my-demos`, `/all-demos` | your demos; everyone's |
 | `/settings`, `/guide` | your profile; this page |
 
-## 11. Settings and admin
+## 12. Settings and admin
 
 - **Settings** is your display name, a short bio and your avatar — what shows on
   your demo cards.
@@ -242,7 +278,7 @@ Anything you can reach by clicking, you can also link to directly:
   a live preview refuses to start with a budget message, that is where the limits
   live.
 
-## 12. When something looks wrong
+## 13. When something looks wrong
 
 **The preview sits on "Starting the live dev server…" for a while.** Expected on
 Angular, Next, Nuxt, Astro and Remix: a real dev server is starting in a
