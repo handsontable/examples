@@ -111,6 +111,38 @@ test("a starter is the way out of a failed boot", async ({ page }) => {
 
   await expect(fileRow(page, "/index.ts")).toBeVisible();
   await expect(page.getByText(/this playground link has expired/i)).toHaveCount(0);
+
+  // Bugbot: and the dead id is gone from the URL, so the recovery survives a
+  // reload. It used to be left behind — the URL-sync effect copies
+  // `location.search` forward, so the next load replaced the starter with the
+  // expiry card again.
+  await expect(page).not.toHaveURL(/payload=/);
+});
+
+test("a starter picked while the boot is in flight lands when it fails", async ({ page }) => {
+  // Bugbot: the "failed" gate is only reachable if the starter effect re-runs on the
+  // phase change. A pick made during the request returns early on "loading", and
+  // without `importPhase` in the dependency list nothing re-ran when the phase went
+  // to "failed" — the pick was swallowed and the visitor had to ask twice.
+  await stubShell(page);
+  await anonymous(page);
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/payload/**", async (route) => {
+    await held;
+    return route.fulfill({ status: 404, json: { error: "not found" } });
+  });
+  await page.goto(`/?payload=${PAYLOAD_ID}`);
+
+  // Pick a starter while the payload request is still open.
+  await page.getByRole("button", { name: /React|Starter/ }).first().click();
+  await page.getByRole("option", { name: "Starter templates" }).click();
+  await page.getByRole("treeitem", { name: "TypeScript (Vite)" }).click();
+  release();
+
+  // The pick wins: it is what the visitor asked for after the link.
+  await expect(fileRow(page, "/index.ts")).toBeVisible();
+  await expect(page.getByText(/this playground link has expired/i)).toHaveCount(0);
 });
 
 test("a payload survives a version change, re-pinned in place", async ({ page }) => {

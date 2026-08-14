@@ -1060,6 +1060,20 @@ function Authoring({
   useEffect(() => {
     if (!initialPayload) return;
     let cancelled = false;
+    /** Take `?payload=` out of the URL. Called on success and on the two *permanent*
+     *  failures, never on a transient one.
+     *
+     *  Bugbot: leaving it there after an expiry outlives the error card. The visitor
+     *  picks a starter, the URL-sync effect copies `location.search` forward with the
+     *  dead id still in it, and the next reload throws away the starter to show the
+     *  expiry again — a link that can never work holding the page hostage. A 500 or a
+     *  dropped connection is the opposite case: the record may well be alive, so the
+     *  param stays and a reload retries. */
+    const dropPayloadParam = () => {
+      const url = new URL(location.href);
+      url.searchParams.delete("payload");
+      history.replaceState(null, "", url.pathname + url.search);
+    };
     (async () => {
       try {
         const res = await fetch(`${API_BASE}/api/payload/${encodeURIComponent(initialPayload)}`);
@@ -1078,11 +1092,14 @@ function Authoring({
           // expired key from one that never existed, and the only thing that mints
           // these ids is the Theme Builder, seconds before the visit. The server's
           // own `error` is not shown here for the same reason — it says "not found".
-          setErrorMessage(
-            res.status === 404
-              ? "This playground link has expired — generate a new one from the Theme Builder."
-              : (body.error ?? "Could not open that playground link."),
-          );
+          if (res.status === 404) {
+            setErrorMessage(
+              "This playground link has expired — generate a new one from the Theme Builder.",
+            );
+            dropPayloadParam();
+          } else {
+            setErrorMessage(body.error ?? "Could not open that playground link.");
+          }
           return;
         }
         // Same guard as the import path: the Worker resolves the framework against
@@ -1096,6 +1113,8 @@ function Authoring({
           setStatus("error");
           setRetryable(false);
           setErrorMessage(`That link resolved to an unknown framework (${body.framework}).`);
+          // Permanent too: the record is intact and we still cannot open it.
+          dropPayloadParam();
           return;
         }
         // Both halves of the starter-load gate, as in the import effect: the
@@ -1118,11 +1137,9 @@ function Authoring({
         setSourceLoaded(true);
         sourceLoadedRef.current = true;
         activeStarterBucketRef.current = null;
-        // Drop `?payload=` once consumed, so a reload does not reinstall the
-        // Theme Builder's files over the edits made since.
-        const url = new URL(location.href);
-        url.searchParams.delete("payload");
-        history.replaceState(null, "", url.pathname + url.search);
+        // Consumed, so a reload does not reinstall the Theme Builder's files over
+        // the edits made since.
+        dropPayloadParam();
       } catch (error) {
         if (cancelled) return;
         reportError(error, "payload-boot");
@@ -1398,6 +1415,12 @@ function Authoring({
     // still holds its mount value, so the gate is shut exactly while the user has
     // picked nothing, and a starter they chose while the boot was in flight still
     // lands on top of the card.
+    //
+    // Bugbot: that last part is why `importPhase` is in this effect's dependency
+    // list. A pick made while the request is in flight returns early on "loading",
+    // and without the dependency nothing re-runs when the phase becomes "failed" —
+    // it only looked like it worked because `/api/versions` happening to resolve
+    // afterwards re-ran the effect for its own reasons.
     if (
       (importPhase === "loaded" || importPhase === "failed")
       && starterGen === importStarterGenRef.current
@@ -1494,6 +1517,7 @@ function Authoring({
   }, [
     framework,
     starterGen,
+    importPhase,
     version,
     nextVersion,
     versionsResolved,
