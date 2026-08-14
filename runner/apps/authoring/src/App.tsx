@@ -838,6 +838,25 @@ function Authoring({
   const filesRef = useRef<FilesMap>(files);
   filesRef.current = files;
 
+  // ---- Test contract (DEV-2203) -------------------------------------------
+  // The workspace files, readable by the E2E suite (e2e/style-panel.spec.ts)
+  // without scraping CodeMirror's DOM — `.cm-content` is virtualised, so it
+  // only holds the lines on screen and file-content assertions against it
+  // pass or fail on scroll position. `filesRef` is updated synchronously by
+  // every edit path, including the Style panel's quiet writes, so the hook
+  // sees a write before any debounce fires. Same standing as the preview's
+  // `data-preview-status` (PreviewPane.tsx): rename or remove only together
+  // with the suite. Exposes nothing that is not already client-side in the
+  // user's own tab, and doubles as a support tool ("run
+  // __HOT_FILES__() in the console and send me the result").
+  useEffect(() => {
+    const w = window as unknown as { __HOT_FILES__?: () => FilesMap };
+    w.__HOT_FILES__ = () => ({ ...filesRef.current });
+    return () => {
+      delete w.__HOT_FILES__;
+    };
+  }, []);
+
   // Gates the first mount until the workspace source has resolved: a saved
   // demo's snapshot, a `?docs=` example, or (since starters are lazy-fetched
   // per bucket, DEV-2213) the starter artifact itself.
