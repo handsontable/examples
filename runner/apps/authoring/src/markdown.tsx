@@ -233,7 +233,10 @@ const preStyle: React.CSSProperties = {
 const documentPreStyle: React.CSSProperties = {
   background: theme.color.surfaceMuted,
   color: theme.color.text,
-  border: `1px solid ${theme.color.border}`,
+  // `controlBorder`, not `border`: dark `border` (#222222) sits on dark `surfaceMuted`
+  // (#19191c) and the edge all but disappears — and an edge is the point, since this is
+  // meant to read as a control you type into. Light is the same value either way.
+  border: `1px solid ${theme.color.controlBorder}`,
   borderRadius: theme.radius.md,
   padding: "12px 14px",
   margin: "0 0 12px",

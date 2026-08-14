@@ -127,6 +127,7 @@ test("prompt blocks read as something you type, and never overflow", async ({ pa
       wrap: s.whiteSpace,
       scrollable: el.scrollWidth - el.clientWidth,
       bg: s.backgroundColor,
+      borderColor: s.borderTopColor,
       bodyBg: getComputedStyle(document.body).backgroundColor,
     };
   });
@@ -138,6 +139,13 @@ test("prompt blocks read as something you type, and never overflow", async ({ pa
   expect(box.wrap).toBe("pre-wrap");
   expect(box.scrollable).toBe(0);
   expect(box.bg).not.toBe(box.bodyBg);
+  // …and its edge is visible against its own fill, in both themes. Dark `border` is
+  // `surfaceMuted`'s near-neighbour, which is how the first version lost the outline.
+  const rgb = (v: string) => (v.match(/\d+/g) ?? []).slice(0, 3).map(Number);
+  const [br, bg2, bb] = rgb(box.borderColor);
+  const [fr, fg, fb] = rgb(box.bg);
+  const contrast = Math.abs(br - fr) + Math.abs(bg2 - fg) + Math.abs(bb - fb);
+  expect(contrast, `border ${box.borderColor} is invisible on ${box.bg}`).toBeGreaterThan(20);
 });
 
 test("a section deeplink scrolls to that section", async ({ page }) => {
