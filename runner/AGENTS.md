@@ -111,6 +111,12 @@ What a green E2E run does and does not prove:
 - **Interaction states need a real pointer and `getComputedStyle`** — see
   [ADR-0026](docs/adr/0026-shell-styling-inline-vs-stylesheet.md). A synthetic `mouseover` does not
   fire CSS `:hover`, and a screenshot cannot tell a subtle live hover from a dead one.
+- **Backend-bound specs self-gate on `E2E_BASE_URL`** (`share-view.spec.ts` and friends):
+  `vite preview` has no `/api`, `/d` or `/embed` routes, so they skip unless pointed at a
+  deployment. `e2e/share-view.spec.ts` additionally depends on a **permanent fixture demo**
+  (`FIXTURE_ID` in the spec — currently `r-react-18-0-0`). Never revoke it; if it is lost,
+  mint a replacement titled "E2E fixture — do not revoke" from any signed-in session and
+  update the constant.
 
 ## Build & deploy
 
