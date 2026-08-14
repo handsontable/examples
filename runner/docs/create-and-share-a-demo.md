@@ -81,6 +81,17 @@ Only projects that actually use Handsontable can be imported — this playground
 hosts Handsontable demos, and an import that has no `handsontable` dependency, no
 import of it and no CDN tag is refused with that explanation.
 
+### From the Theme Builder
+
+The **Theme Builder** has an *Open in playground* button instead of a URL to paste:
+it hands its generated project straight over and opens it here as `/?payload=<id>`,
+again unsaved and editable, with the theme you built already applied.
+
+That link is good for **24 hours** — long enough to come back to it tomorrow, not a
+place to keep anything. **Save** turns it into a real demo of yours, and after that
+the demo's own URL is the one to keep. Opening an older link says it has expired;
+generating a new one from the Theme Builder is the fix.
+
 ## 5. Publish a demo from your own machine
 
 If the example already exists in a folder on your computer, the **publish-demo**
@@ -213,6 +224,7 @@ Anything you can reach by clicking, you can also link to directly:
 | `/?docs=guides/columns/column-adding/react/example1.tsx` | a documentation example |
 | `/?v=17.1.0` | the same page at a chosen version (combines with the above) |
 | `/?import=<url>` | the import flow for a JSFiddle or StackBlitz URL |
+| `/?payload=<id>` | a project handed over from the Theme Builder (24 hours) |
 | `/edit/ab12cd34` | your saved demo, editable |
 | `/share/ab12cd34` | the read-only playground for a demo |
 | `/d/ab12cd34/` | the built client page |

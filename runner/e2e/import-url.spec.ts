@@ -187,4 +187,10 @@ test("a refused import says why instead of hanging on a spinner", async ({ page 
   await expect(accountAvatar(page)).toBeVisible();
 
   await expect(page.getByText(/only hosts Handsontable demos/)).toBeVisible();
+  // …and it stays up. The starter effect is gated on a failed boot as well as a
+  // loaded one (DEV-2517): the default starter used to land on top and
+  // `loadWorkspace` cleared `errorMessage` with it, so the refusal was visible for
+  // about a second. Shared with `?payload=` — see payload-boot.spec.ts.
+  await expect(fileRow(page, "/src/index.tsx")).toHaveCount(0);
+  await expect(page.getByText(/only hosts Handsontable demos/)).toBeVisible();
 });

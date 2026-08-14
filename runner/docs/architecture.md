@@ -97,7 +97,10 @@ forever.
 
 - **D1** — demo metadata + short ids, and user profiles (see schema below).
 - **R2** — source snapshots + built artifacts, and profile avatars.
-- **KV** — edge read-cache for demo JSON (`stale-while-revalidate`).
+- **KV** — edge read-cache for demo JSON (`stale-while-revalidate`), and the
+  `payload:<id>` records an ad-hoc example boots from (24h TTL, no D1 row — see
+  below). Deliberately the throwaway tier: nothing here survives its expiry, and
+  nothing here is what a user is asked to keep.
 
 ### D1 schema
 
@@ -258,6 +261,29 @@ them in the example picker by docs-folder breadcrumb and opens one via
 JavaScript/TypeScript/React run on Tier-1 (Sandpack); Vue and Angular run on Tier-2
 (container, real dev server) because the classic in-browser bundler cannot compile
 Vue 3 `<script setup>` or modern Angular. See `docs/docs-examples.md`.
+
+## Ad-hoc examples — `?payload=<id>`
+
+Two paths open a workspace that is in no catalog: `?import=<url>`, where the Worker
+fetches a JSFiddle or StackBlitz page and converts it (ADR-0032), and `?payload=<id>`,
+where the *client* hands over a project it generated itself — today the Theme Builder,
+which used to export to StackBlitz (DEV-2048).
+
+`POST /api/payload` takes `{ files, title?, framework? }`, validates it
+(`validatePayloadFiles`: workspace-safe paths, text only, no `.env`, 80 files, 256 KB,
+and `assertHandsontableProject` — the same Handsontable-only rule imports get),
+resolves the starter with `detectFramework`, and stores the record in KV under
+`payload:<id>` for 24 hours. The playground boots from `GET /api/payload/:id`, opens
+the files unsaved — exactly as after a fork — and strips the param so a reload cannot
+reinstall them over the author's edits. A miss is a 404 and is worded as an expiry:
+KV cannot distinguish the two, and there is nothing here worth a tombstone.
+
+Unlike `/api/import`, the route is **public**. Import is authenticated because it
+makes the Worker fetch a user-supplied URL (`resolveSource` is the host gate); a
+payload fetches nothing, and Theme Builder users are anonymous, so the gate is the
+rate limit plus those ceilings. Nothing durable is created either way: a payload the
+author wants to keep is one **Save** away from being a real demo, and that Save is
+what mints the D1 row (with `forked_from = "payload:theme-builder"`).
 
 ## Deliverables
 

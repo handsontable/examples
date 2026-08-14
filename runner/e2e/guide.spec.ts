@@ -33,6 +33,8 @@ test("the guide renders the doc as formatted text", async ({ page }) => {
   for (const section of [
     "1. Pick a starting point",
     "4. Import a demo from somewhere else",
+    // A `###` subsection, which the `##` ones above would not prove renders.
+    "From the Theme Builder",
     "5. Publish a demo from your own machine",
     "8. Save, fork, share, embed",
     "10. Useful URLs",
@@ -43,12 +45,15 @@ test("the guide renders the doc as formatted text", async ({ page }) => {
   // A table of URLs, not a wall of pipes: the renderer builds a real table.
   await expect(page.locator("table")).toBeVisible();
   await expect(page.locator("table")).toContainText("/embed/ab12cd34/");
+  await expect(page.locator("table")).toContainText("/?payload=<id>");
 
-  // And no leaked syntax anywhere on the page.
+  // And no leaked syntax anywhere on the page. `#{2,4}` rather than `##`: the
+  // document has `###` headings too, and a renderer that dropped those would have
+  // passed a check that only looked for the two-hash kind.
   const body = await page.locator("main").innerText();
   expect(body).not.toContain("|-----|");
   expect(body).not.toMatch(/\*\*[A-Za-z]/);
-  expect(body).not.toMatch(/^## /m);
+  expect(body).not.toMatch(/^#{2,4} /m);
 });
 
 test("the guide is reachable from the account menu", async ({ page }) => {
