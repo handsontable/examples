@@ -228,3 +228,27 @@ test("no HTML entities in the guide's markdown", () => {
     assert.deepEqual(found, [], `${name}.md contains HTML entities: ${found.join(", ")}`);
   }
 });
+
+test("every MCP prompt in the guide names the tool it needs", () => {
+  // Claude fetches tools on demand: a prompt that does not start with `Load
+  // create_demo` / `Load update_demo` is the one that comes back "I do not have that
+  // tool", and the reader on this track has no way to diagnose that.
+  const fenced = /```\n([\s\S]*?)```/g;
+  let checked = 0;
+  for (const name of [...GUIDE_TRACKS.map((t) => t.slug), "overview"]) {
+    const md = fs.readFileSync(path.join(docs, `${name}.md`), "utf8");
+    for (const m of md.matchAll(fenced)) {
+      const body = m[1];
+      // Only the prompts: blocks that ask for a demo in prose, not shell commands.
+      if (!/\bdemo\b/i.test(body) || /^\s*(claude|curl|https?:|npm|pnpm|\/publish)/im.test(body)) continue;
+      if (!/create_demo|update_demo/.test(body)) continue;
+      checked += 1;
+      assert.match(
+        body.trim(),
+        /^Load (create_demo|update_demo),/,
+        `${name}.md has a prompt that does not open by loading the tool: ${body.trim().slice(0, 60)}`,
+      );
+    }
+  }
+  assert.ok(checked >= 6, `expected the guide to carry MCP prompts, found ${checked}`);
+});

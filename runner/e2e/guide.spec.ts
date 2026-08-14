@@ -85,6 +85,10 @@ test("each track renders its own document, and only its own", async ({ page }) =
   // not a demo that works, and this reader never sees the code.
   await expect(page.getByRole("heading", { name: "Open the link before you send it" })).toBeVisible();
   await expect(page.locator("main")).toContainText("builds is not the same as a demo that works");
+  // Both tools, both named in the prompts a reader will copy.
+  await expect(page.locator("main")).toContainText("Load create_demo, then create a demo");
+  await expect(page.getByRole("heading", { name: "Changing a demo, also by asking" })).toBeVisible();
+  await expect(page.locator("main")).toContainText("Load update_demo, then make the Overdue rows red");
   // The two subjects that must not bleed across tracks.
   await expect(page.locator("main")).not.toContainText("pkg.pr.new");
 
