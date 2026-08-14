@@ -13,6 +13,11 @@ export interface Env {
   CACHE: KVNamespace;
   ARTIFACTS: R2Bucket;
 
+  /** Shared secret for the MCP service path (`wrangler secret put MCP_SHARED_SECRET`).
+   *  Absent -> `POST /api/mcp/demos` 401s for everyone, which is the safe default
+   *  (DEV-2501, ADR-0033). Never in git. */
+  MCP_SHARED_SECRET?: string;
+
   // Public, non-secret config.
   LOGIN_BROKER_URL: string;
   EMBED_ALLOWED_ANCESTORS: string;

@@ -20,10 +20,12 @@ test("the scope defaults to mine, and anything unrecognized falls back to it", (
   }
 });
 
-test("mine filters by the caller and binds their address", () => {
+test("mine filters by the caller and binds their address, case-folded", () => {
+  // LOWER() on both sides: an owner whose stored address differs only in case must still
+  // see their demo (PR #170 review). Normalising only on the way in would miss old rows.
   const { sql, binds } = demoListQuery("mine", EMAIL);
-  assert.match(sql, /WHERE created_by = \?/);
-  assert.deepEqual(binds, [EMAIL]);
+  assert.match(sql, /WHERE LOWER\(created_by\) = \?/);
+  assert.deepEqual(binds, [EMAIL.toLowerCase()]);
 });
 
 test("all returns the team's demos and binds nothing", () => {

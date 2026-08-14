@@ -8,6 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   filterByOwner,
+  isOwnedBy,
   ownerNameFromSlug,
   ownerOptions,
   ownerSlug,
@@ -86,4 +87,15 @@ test("no filter means everything, and an unknown owner means nothing", () => {
 
 test("the empty-result line names the person", () => {
   assert.equal(ownerNameFromSlug("marek.martuszewski", displayNameFromEmail), "Marek Martuszewski");
+});
+
+test("isOwnedBy folds case — two writers fill created_by (DEV-2501)", () => {
+  // The browser stores the broker's address as-is; the MCP service path stores a
+  // normalised one. An exact match rendered your own demo as a stranger's.
+  assert.ok(isOwnedBy("dev@handsontable.com", "Dev@Handsontable.com"));
+  assert.ok(isOwnedBy("Dev@Handsontable.com", "dev@handsontable.com"));
+  assert.ok(!isOwnedBy("other@handsontable.com", "dev@handsontable.com"));
+  // Never let two blanks add up to ownership of a row.
+  assert.ok(!isOwnedBy("", ""));
+  assert.ok(!isOwnedBy(null, undefined));
 });

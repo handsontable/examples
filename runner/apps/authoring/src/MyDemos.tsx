@@ -39,7 +39,7 @@ import {
 } from "@handsontable/demo-editor-shell";
 import { getEntry } from "./catalog.js";
 import { Markdown } from "./markdown.js";
-import { filterByOwner, ownerNameFromSlug, ownerOptions } from "./demoOwners.js";
+import { filterByOwner, isOwnedBy, ownerNameFromSlug, ownerOptions } from "./demoOwners.js";
 import { getToken, logout, type User } from "./auth.js";
 import { displayNameFromEmail, initialFromEmail } from "./displayName.js";
 import { fieldInput, fieldLabel, formFooter, ghostButton, primaryButton } from "./formStyles.js";
@@ -280,7 +280,8 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
               {visibleDemos.map((d) => {
                 // Ownership is compared here, not trusted from the scope: the
                 // team list contains your own demos too, and those stay editable.
-                const mine = d.created_by === user.email;
+                // Case-insensitively, because two writers fill `created_by` (DEV-2501).
+                const mine = isOwnedBy(d.created_by, user.email);
                 return (
                   <DemoCard
                     key={d.id}

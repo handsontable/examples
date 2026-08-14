@@ -28,7 +28,7 @@ Cursor **Bugbot** auto-reviews each PR push.
 | `apps/authoring/` | The web app (Vite + React 19). SPA served as Cloudflare Workers Assets → worker `handsontable-demos-authoring`. |
 | `packages/editor-shell/` | Framework-agnostic editor UI: toolbar, file tree, code editor, preview pane, theme. **Most UI/UX lives here.** |
 | `packages/runtime/` | The `DemoRuntime` engines: `sandpack.ts` (Tier-1, in-browser bundler) and `container.ts` (Tier-2, live Cloudflare Sandbox container). Plus `version.ts` (HOT version dispatch). |
-| `workers/api/` | Orchestration + sharing worker `handsontable-demos-api` (sessions, `/api/demos`, `/d`, `/embed`, build snapshotter, `/api/chat`). |
+| `workers/api/` | Orchestration + sharing worker `handsontable-demos-api` (sessions, `/api/demos`, `/d`, `/embed`, build snapshotter, `/api/chat`, and `/api/mcp/demos` — headless creation for the Handsontable MCP, ADR-0033). |
 | `config/frameworks.json` | Single source of truth per example (tier, engine, wrappers, entry). `pipeline/import.mjs` → starter buckets + the `catalog.json` index. Key order is picker order. `synthetic: true` = no `examples/` directory; `pipeline/blank-starters.mjs` generates the files per bucket (the **blank** templates, ADR-0030). |
 | `apps/authoring/public/docs-examples/` | Generated documentation-guide examples (manifest + one CatalogEntry JSON each). `pipeline/import-docs.mjs` + `wrap-docs-example.mjs`. |
 | `apps/authoring/public/starter-examples/` | Generated starter buckets, one per Handsontable major plus `next` (DEV-2213), each pinned to a concrete version. `pipeline/import.mjs`; `catalog.json` is only the files-free index. |

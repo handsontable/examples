@@ -12,8 +12,9 @@ import { DEFAULT_MAX_MAJOR, DEFAULT_MIN_MAJOR, mintSessionId, pickLatestNextVers
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
-import { authenticate } from "./auth.js";
+import { authenticate, authenticateService, sameOwner } from "./auth.js";
 import { MAX_TITLE, isValidationError, validateDescription, validateTitle } from "./demo-info.js";
+import { isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse } from "./error-page.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
@@ -649,6 +650,66 @@ export default Sentry.withSentry(sentryOptions, {
 
       // ---- Sharing (D5) ----------------------------------------------------
 
+      // POST /api/mcp/demos  (service auth) — headless create for the Handsontable
+      // MCP (DEV-2501, ADR-0033). Same build path as the editor's Save; the only
+      // differences are how the caller is authenticated and that an agent-supplied
+      // file map has to be re-validated here (mcp-create.ts).
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "mcp" && parts[2] === "demos" && parts.length === 3) {
+        const id = await authenticateService(request, env);
+        if (!id) return json({ error: "unauthorized" }, 401);
+        const body = (await request.json()) as {
+          framework?: string;
+          files?: unknown;
+          title?: string;
+          description?: string;
+          htVersion?: string;
+        };
+        const cfg = body.framework ? BUILD_CONFIG[body.framework] : undefined;
+        if (!body.framework || !cfg) {
+          return json({ error: `unknown framework: ${body.framework ?? "(missing)"}` }, 400);
+        }
+        const title = validateTitle(body.title);
+        if (isValidationError(title)) return json(title, 400);
+        // A demo created from a prompt is read by people who were not in that
+        // conversation, so the description is required here even though the editor
+        // treats it as optional.
+        if (!body.description || !body.description.trim()) {
+          return json({ error: "description is required for MCP-created demos" }, 400);
+        }
+        const description = validateDescription(body.description);
+        if (isValidationError(description)) return json(description, 400);
+        const files = validateMcpFiles(body.files);
+        if (isMcpValidationError(files)) return json(files, 400);
+
+        // A build is a container boot, so it answers to the same ceiling as any other.
+        const buildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `mcp build ${body.framework}` });
+        if (buildDenied) return buildDenied;
+        await recordUsageEvent(env, "build", body.framework);
+
+        const created = await createDemo(env, {
+          entry: { framework: body.framework, ...cfg },
+          files,
+          htVersion: body.htVersion ?? "latest",
+          title,
+          description: description ?? null,
+          createdBy: id.email,
+          forkedFrom: `mcp:${body.framework}`,
+          now: nowIso(),
+        });
+        await recordUsageEvent(env, "share_created", body.framework);
+        return json(
+          {
+            id: created.id,
+            url: `/d/${created.id}`,
+            embedUrl: `/embed/${created.id}`,
+            editUrl: `/edit/${created.id}`,
+            shareUrl: `/share/${created.id}`,
+            createdBy: id.email,
+          },
+          201,
+        );
+      }
+
       // POST /api/demos  (auth) — fork -> build -> R2 -> short id -> /d/:id
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "demos" && parts.length === 2) {
         const id = await authenticate(request, env);
@@ -713,7 +774,7 @@ export default Sentry.withSentry(sentryOptions, {
         if (!id) return json({ error: "unauthorized" }, 401);
         const row = await getDemo(env, parts[2]!);
         if (!row) return json({ error: "not found" }, 404);
-        return json({ owned: row.created_by === id.email, revoked: !!row.revoked });
+        return json({ owned: sameOwner(row.created_by, id.email), revoked: !!row.revoked });
       }
 
       // GET /api/demos/:id/source  (public) — source snapshot for the read-only
@@ -740,7 +801,7 @@ export default Sentry.withSentry(sentryOptions, {
         const demoId = parts[2]!;
         const row = await getDemo(env, demoId);
         if (!row) return json({ error: "not found" }, 404);
-        if (row.created_by !== id.email) return json({ error: "forbidden" }, 403);
+        if (!sameOwner(row.created_by, id.email)) return json({ error: "forbidden" }, 403);
         const patch = (await request.json()) as {
           title?: string; description?: string | null; visibility?: string;
           files?: Record<string, string>; htVersion?: string;
@@ -807,7 +868,7 @@ export default Sentry.withSentry(sentryOptions, {
         const demoId = parts[2]!;
         const row = await getDemo(env, demoId);
         if (!row) return json({ error: "not found" }, 404);
-        if (row.created_by !== id.email) return json({ error: "forbidden" }, 403);
+        if (!sameOwner(row.created_by, id.email)) return json({ error: "forbidden" }, 403);
         await env.DB.prepare("UPDATE demos SET revoked=1, revoked_at=?, updated_at=? WHERE id=?")
           .bind(nowIso(), nowIso(), demoId).run();
         await invalidateDemo(env, demoId);

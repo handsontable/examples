@@ -37,3 +37,4 @@ once Accepted.
 | [0030](0030-blank-starter-templates.md) | Blank starter templates, synthesized per bucket | Accepted |
 | [0031](0031-files-drag-and-drop-is-text-only.md) | Drag & drop into FILES is text-only, and batched | Accepted |
 | [0032](0032-importing-from-jsfiddle-and-stackblitz.md) | Importing from JSFiddle and StackBlitz; the Handsontable-only rule | Accepted |
+| [0033](0033-mcp-service-auth-for-headless-demo-creation.md) | A separate service auth for headless demo creation from the MCP | Accepted |
