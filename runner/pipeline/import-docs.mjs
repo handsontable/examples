@@ -135,7 +135,7 @@ const RUNNER = {
     sandpackTemplate: null, sandpackEnvironment: null, container: "angular",
     htWrappers: ["@handsontable/angular-wrapper"],
     entry: "/src/main.ts", htmlEntry: "/src/index.html",
-    devCommand: "pnpm exec ng serve --host 0.0.0.0 --disable-host-check --port 3000",
+    devCommand: "pnpm exec ng serve --host 0.0.0.0 --port 3000",
     buildCommand: "ng build", outputDir: "dist", outputGlob: "dist/*/browser",
     staticExport: false, spaMode: false, port: 3000, installCommand: "pnpm install",
   },
