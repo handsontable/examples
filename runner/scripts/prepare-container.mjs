@@ -53,7 +53,14 @@ const COREPACK_BIN = "node /usr/local/lib/node_modules/corepack/dist/corepack.js
 // CLI treats everything after it as positional, silently dropping --host/--port.
 const DEV = {
   remix: { cmd: "pnpm exec remix vite:dev --host 0.0.0.0 --port 5173", port: 5173 },
-  angular: { cmd: "pnpm exec ng serve --host 0.0.0.0 --port 4200 --disable-host-check", port: 4200 },
+  // NOTE: no `--disable-host-check` (DEV-2521). It is a webpack-dev-server
+  // option that only the deprecated `@angular-devkit/build-angular:dev-server`
+  // shim still accepts; a project on the modern `@angular/build:dev-server`
+  // (e.g. a Theme Builder export) exits with `Unknown argument:
+  // disable-host-check` before the server ever starts. Nothing needs it —
+  // every other container framework serves through Vite with no host-check
+  // opt-out, so the Host the sandbox proxy forwards is already an accepted one.
+  angular: { cmd: "pnpm exec ng serve --host 0.0.0.0 --port 4200", port: 4200 },
   "next.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001 },
   "next-shadcn.js": { cmd: "pnpm exec next dev -p 3001 -H 0.0.0.0", port: 3001 },
   astro: { cmd: "pnpm exec astro dev --host 0.0.0.0 --port 4321", port: 4321 },
