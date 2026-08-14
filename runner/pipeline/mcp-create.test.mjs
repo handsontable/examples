@@ -144,3 +144,31 @@ test("the listing query matches an owner regardless of the stored case", () => {
   assert.match(sql, /LOWER\(created_by\) = \?/);
   assert.deepEqual(binds, ["dev@handsontable.com"]);
 });
+
+// --- updating a demo from the MCP (DEV-2501) ----------------------------------
+//
+// The update path re-uses validateMcpFiles, so the file rules are already covered
+// above. What is specific to it is *who* may rewrite *which* demo: the shared secret
+// says a trusted service is calling, never whose demos it may touch. That check is
+// `sameOwner(row.created_by, assertedAuthor)` in the route; these cases pin the
+// comparison it depends on.
+
+test("only the demo's own author may update it", () => {
+  const row = { created_by: "dev@handsontable.com" };
+  assert.ok(sameOwner(row.created_by, "dev@handsontable.com"));
+  // Case is folded, so a mixed-case session still owns its own demo.
+  assert.ok(sameOwner(row.created_by, "Dev@Handsontable.com"));
+  // Somebody else's demo is refused even with a valid service secret.
+  assert.ok(!sameOwner(row.created_by, "someone.else@handsontable.com"));
+  // A row with no author is nobody's — it must never become updatable.
+  assert.ok(!sameOwner("", "dev@handsontable.com"));
+  assert.ok(!sameOwner(undefined, "dev@handsontable.com"));
+});
+
+test("an update payload is held to the same file rules as a create", () => {
+  // The route calls validateMcpFiles on `patch.files`, so a fixed demo cannot
+  // smuggle in what a new one could not.
+  assert.ok(isMcpValidationError(validateMcpFiles({ "/package.json": "{}", "/.envrc": "S=1" })));
+  assert.ok(isMcpValidationError(validateMcpFiles({ "/index.js": "x" })), "manifest still required");
+  assert.deepEqual(validateMcpFiles(ok), ok);
+});

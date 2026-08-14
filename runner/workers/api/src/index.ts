@@ -752,6 +752,71 @@ export default Sentry.withSentry(sentryOptions, {
         return json({ id: created.id, url: `/d/${created.id}`, embedUrl: `/embed/${created.id}` }, 201);
       }
 
+      // PATCH /api/mcp/demos/:id  (service auth, owner) — fix a demo in place from the
+      // MCP (DEV-2501, ADR-0033). Mirrors the editor's Save: same updateDemo(), same
+      // budget gate. The ownership check is the whole point — the shared service secret
+      // says a trusted service is calling, it does not say whose demos it may rewrite.
+      if (request.method === "PATCH" && parts[0] === "api" && parts[1] === "mcp" && parts[2] === "demos" && parts.length === 4) {
+        const id = await authenticateService(request, env);
+        if (!id) return json({ error: "unauthorized" }, 401);
+        const demoId = parts[3]!;
+        const row = await getDemo(env, demoId);
+        if (!row) return json({ error: "not found" }, 404);
+        // A revoked demo is gone as far as every reader is concerned; rebuilding one
+        // would quietly resurrect a link someone deliberately killed.
+        if (row.revoked) return json({ error: "gone" }, 410);
+        if (!sameOwner(row.created_by, id.email)) {
+          return json({ error: "forbidden", detail: "this demo belongs to someone else" }, 403);
+        }
+        const patch = (await request.json()) as {
+          title?: string;
+          description?: string | null;
+          files?: unknown;
+          htVersion?: string;
+        };
+        const patchTitle = patch.title?.trim() ? validateTitle(patch.title) : undefined;
+        if (isValidationError(patchTitle)) return json(patchTitle, 400);
+        const patchDescription = validateDescription(patch.description);
+        if (isValidationError(patchDescription)) return json(patchDescription, 400);
+
+        if (patch.files !== undefined) {
+          const files = validateMcpFiles(patch.files);
+          if (isMcpValidationError(files)) return json(files, 400);
+          const cfg = BUILD_CONFIG[row.framework];
+          if (!cfg) return json({ error: `unknown framework: ${row.framework}` }, 400);
+          const rebuildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `mcp rebuild ${row.framework}` });
+          if (rebuildDenied) return rebuildDenied;
+          await recordUsageEvent(env, "build", row.framework);
+          await updateDemo(env, {
+            id: demoId,
+            entry: { framework: row.framework, ...cfg },
+            files,
+            htVersion: patch.htVersion ?? row.ht_version,
+            // Absent means "leave the column alone" — never fall back to the row read
+            // at the start of this handler, or a rename committed during the rebuild
+            // would be reverted (the DEV-2495 lesson from the broker path above).
+            ...(patchTitle ? { title: patchTitle } : {}),
+            ...(patchDescription !== undefined ? { description: patchDescription } : {}),
+            now: nowIso(),
+          });
+          return json({ ok: true, id: demoId, url: `/d/${demoId}`, editUrl: `/edit/${demoId}`, rebuilt: true });
+        }
+
+        if (patchTitle === undefined && patchDescription === undefined) {
+          return json({ error: "nothing to update: pass files, title or description" }, 400);
+        }
+        await env.DB.prepare("UPDATE demos SET title=?, description=?, updated_at=? WHERE id=?")
+          .bind(
+            patchTitle ?? row.title,
+            patchDescription !== undefined ? patchDescription : row.description,
+            nowIso(),
+            demoId,
+          )
+          .run();
+        await invalidateDemo(env, demoId);
+        return json({ ok: true, id: demoId, url: `/d/${demoId}`, editUrl: `/edit/${demoId}`, rebuilt: false });
+      }
+
       // GET /api/demos  (auth) — the caller's demos, or `?scope=all` for the
       // team's (DEV-2506). Visibility only: editing still answers to
       // `created_by` in the PATCH/DELETE handlers below.
