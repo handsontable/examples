@@ -139,7 +139,12 @@ export function PreviewPane({
         ref={iframeRef}
         title="Demo preview"
         style={s.previewIframe}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+        // `allow-downloads` (DEV-2203): without it Chrome blocks a download the demo
+        // starts, silently — the file is built and thrown away, so an `ExportFile`
+        // demo looks like a Handsontable bug rather than a frame policy. Every other
+        // token here is what the demos need to run; this one is what they need to
+        // *finish*.
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
       />
     </section>
   );
