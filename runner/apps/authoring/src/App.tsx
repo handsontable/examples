@@ -669,6 +669,16 @@ function NotFound({ path, transient = false }: { path: string | null; transient?
   );
 }
 
+/** Does this lineage name a workspace that came from outside the catalog?
+ *
+ *  `import:<provider>` (DEV-2504) and `payload:<source>` (DEV-2517) both arrive
+ *  with their own files and their own title, so `loadWorkspace` must not treat
+ *  either one's *own* load as the thing that replaced it. Every other lineage —
+ *  `catalog:<framework>`, a saved demo's id — is a workspace that does. */
+function isAdHocLineage(lineage: string): boolean {
+  return /^(import|payload):/.test(lineage);
+}
+
 function Authoring({
   user,
   route,
@@ -709,6 +719,13 @@ function Authoring({
   const initialImport = route.mode === "play"
     ? new URLSearchParams(location.search).get("import")
     : null;
+  // `?payload=<id>` opens an ad-hoc project the Theme Builder handed to
+  // `POST /api/payload` (DEV-2517). A param rather than a POST into this page for
+  // the same reason as `?import=`: the boot is one plain GET the browser can
+  // repeat, and the id is all the Theme Builder has to know about us.
+  const initialPayload = route.mode === "play"
+    ? new URLSearchParams(location.search).get("payload")
+    : null;
   const [framework, setFramework] = useState<string>(() => {
     const p = new URLSearchParams(location.search).get("example");
     return catalog.examples.some((e) => e.framework === p) ? (p as string) : "react";
@@ -721,11 +738,18 @@ function Authoring({
   const [entry, setEntry] = useState<CatalogEntry>(() => toPlaceholderEntry(getEntry(framework)));
   // Non-null when the current example is a documentation-guide example.
   const [docsPath, setDocsPath] = useState<string | null>(initialDocs);
-  /** `?import=` lifecycle: idle when there is nothing to import, loading while
-   *  the Worker fetches and parses the provider page, loaded once the workspace
-   *  is the imported one, failed with a message the user can act on. */
+  /** Lifecycle of a workspace that came from *outside* the catalog — an
+   *  `?import=` URL or a `?payload=` id (DEV-2517). Idle when there is none,
+   *  loading while the Worker answers, loaded once that workspace is the open
+   *  one, failed with a message the user can act on.
+   *
+   *  One phase for both on purpose: everything downstream cares only that the
+   *  files are not a starter's — the starter-load gate below must stay shut, and
+   *  the version picker has to re-pin the files itself. The `import` names are
+   *  kept because two effects and a save path read them; a payload is the second
+   *  kind of ad-hoc workspace, not a second mechanism. */
   const [importPhase, setImportPhase] = useState<"idle" | "loading" | "loaded" | "failed">(
-    initialImport ? "loading" : "idle",
+    initialImport || initialPayload ? "loading" : "idle",
   );
   const [importSkipped, setImportSkipped] = useState<{ path: string; reason: string }[]>([]);
   /** The provider's own title for an imported workspace. Kept apart from `title`
@@ -917,12 +941,12 @@ function Authoring({
 
   const loadWorkspace = useCallback(
     (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
-      // Whatever workspace replaces an import is no longer the import's, so its
-      // title and its skipped-files notice are cleared here — at the moment the
-      // new files are installed, which a failed starter or docs load never
-      // reaches. Doing it in the pickers instead left a failed switch showing the
-      // previous import's notice and minting Fork/Share names from its title.
-      if (!lineage.startsWith("import:")) {
+      // Whatever workspace replaces an ad-hoc one is no longer its, so its title
+      // and its skipped-files notice are cleared here — at the moment the new
+      // files are installed, which a failed starter or docs load never reaches.
+      // Doing it in the pickers instead left a failed switch showing the previous
+      // import's notice and minting Fork/Share names from its title.
+      if (!isAdHocLineage(lineage)) {
         setImportPhase("idle");
         setImportedTitle(null);
         setImportSkipped([]);
@@ -1026,6 +1050,107 @@ function Authoring({
     })();
     return () => { cancelled = true; };
   }, [initialImport, loadWorkspace]);
+
+  // `?payload=<id>`: read back a project the Theme Builder posted to
+  // `POST /api/payload` and open it as an unsaved workspace (DEV-2517). The same
+  // shape as the import above, with three differences that come from the route:
+  // it is a public GET so no token is sent, the record carries no `provider` and
+  // no `skipped[]`, and a miss is the case worth wording well — the record lives
+  // 24 hours, so the failure users will actually hit is an expired link.
+  useEffect(() => {
+    if (!initialPayload) return;
+    let cancelled = false;
+    /** Take `?payload=` out of the URL. Called on success and on the two *permanent*
+     *  failures, never on a transient one.
+     *
+     *  Bugbot: leaving it there after an expiry outlives the error card. The visitor
+     *  picks a starter, the URL-sync effect copies `location.search` forward with the
+     *  dead id still in it, and the next reload throws away the starter to show the
+     *  expiry again — a link that can never work holding the page hostage. A 500 or a
+     *  dropped connection is the opposite case: the record may well be alive, so the
+     *  param stays and a reload retries. */
+    const dropPayloadParam = () => {
+      const url = new URL(location.href);
+      url.searchParams.delete("payload");
+      history.replaceState(null, "", url.pathname + url.search);
+    };
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/payload/${encodeURIComponent(initialPayload)}`);
+        const body = (await res.json().catch(() => ({}))) as {
+          framework?: string;
+          files?: FilesMap;
+          title?: string;
+          error?: string;
+        };
+        if (cancelled) return;
+        if (!res.ok || !body.files || !body.framework) {
+          setImportPhase("failed");
+          setStatus("error");
+          setRetryable(false);
+          // 404 is read as expired rather than as "no such id": KV cannot tell an
+          // expired key from one that never existed, and the only thing that mints
+          // these ids is the Theme Builder, seconds before the visit. The server's
+          // own `error` is not shown here for the same reason — it says "not found".
+          if (res.status === 404) {
+            setErrorMessage(
+              "This playground link has expired — generate a new one from the Theme Builder.",
+            );
+            dropPayloadParam();
+          } else {
+            setErrorMessage(body.error ?? "Could not open that playground link.");
+          }
+          return;
+        }
+        // Same guard as the import path: the Worker resolves the framework against
+        // BUILD_CONFIG and this app against its catalog, so a mismatch means the
+        // two drifted — and `getEntry` throwing here would unmount the route.
+        let indexEntry;
+        try {
+          indexEntry = getEntry(body.framework);
+        } catch {
+          setImportPhase("failed");
+          setStatus("error");
+          setRetryable(false);
+          setErrorMessage(`That link resolved to an unknown framework (${body.framework}).`);
+          // Permanent too: the record is intact and we still cannot open it.
+          dropPayloadParam();
+          return;
+        }
+        // Both halves of the starter-load gate, as in the import effect: the
+        // sequence bump neutralizes a fetch already in flight from the first
+        // render, and the generation is what keeps the gate shut afterwards until
+        // the user picks a starter themselves.
+        starterRequestSeqRef.current += 1;
+        importStarterGenRef.current = starterGenRef.current;
+        loadWorkspace(toPlaceholderEntry(indexEntry), { ...body.files }, "payload:theme-builder");
+        if (body.title) {
+          setTitle(body.title);
+          setImportedTitle(body.title);
+        }
+        // Nothing is dropped on this route — a payload that carries a file we
+        // cannot accept is refused whole — so there is never a notice to show.
+        setImportSkipped([]);
+        setImportPhase("loaded");
+        // Release the mount gate the starter path owns; the starter fetch is
+        // skipped for this workspace, so nothing else will.
+        setSourceLoaded(true);
+        sourceLoadedRef.current = true;
+        activeStarterBucketRef.current = null;
+        // Consumed, so a reload does not reinstall the Theme Builder's files over
+        // the edits made since.
+        dropPayloadParam();
+      } catch (error) {
+        if (cancelled) return;
+        reportError(error, "payload-boot");
+        setImportPhase("failed");
+        setStatus("error");
+        setRetryable(false);
+        setErrorMessage("Could not open that playground link.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [initialPayload, loadWorkspace]);
 
   // Edit/share mode: load the saved demo's source + metadata into the workspace.
   useEffect(() => {
@@ -1263,9 +1388,9 @@ function Authoring({
   // message the mount guard uses.
   useEffect(() => {
     if (route.mode === "share" || savedId || docsPath) return;
-    // An imported workspace owns its files the way a saved demo does (`savedId`
-    // above) — but only until the user asks for a starter, and *that* distinction
-    // is what two review rounds went around:
+    // An ad-hoc workspace — an import or a payload — owns its files the way a
+    // saved demo does (`savedId` above) — but only until the user asks for a
+    // starter, and *that* distinction is what two review rounds went around:
     //
     //  - gate on "loading" only, and the effect re-runs on the `framework` the
     //    import just set; `activeStarterBucketRef` is null and `loadWorkspace`
@@ -1280,7 +1405,26 @@ function Authoring({
     // change, which the re-pin effect below handles), and a bumped one means the
     // user picked something. Nothing has to be cleared early for it to hold.
     if (importPhase === "loading") return;
-    if (importPhase === "loaded" && starterGen === importStarterGenRef.current) return;
+    // "failed" is gated the same way as "loaded" (DEV-2517). A boot that failed has
+    // put an error card up explaining why; letting the default starter land wipes
+    // it — `loadWorkspace` clears `errorMessage` — so the visitor is left in a
+    // react starter they never asked for, with no trace of what went wrong. For an
+    // expired payload link, that message *is* the whole answer.
+    //
+    // `importStarterGenRef` is deliberately not touched on the failure paths: it
+    // still holds its mount value, so the gate is shut exactly while the user has
+    // picked nothing, and a starter they chose while the boot was in flight still
+    // lands on top of the card.
+    //
+    // Bugbot: that last part is why `importPhase` is in this effect's dependency
+    // list. A pick made while the request is in flight returns early on "loading",
+    // and without the dependency nothing re-runs when the phase becomes "failed" —
+    // it only looked like it worked because `/api/versions` happening to resolve
+    // afterwards re-ran the effect for its own reasons.
+    if (
+      (importPhase === "loaded" || importPhase === "failed")
+      && starterGen === importStarterGenRef.current
+    ) return;
     // Only next-format versions need nextVersion to resolve a bucket; plain
     // releases are not held on /api/versions.
     if (isNextPrereleaseVersion(version) && !versionsResolved) return;
@@ -1373,6 +1517,7 @@ function Authoring({
   }, [
     framework,
     starterGen,
+    importPhase,
     version,
     nextVersion,
     versionsResolved,
@@ -1383,10 +1528,10 @@ function Authoring({
     loadWorkspace,
   ]);
 
-  // A version change on an imported workspace re-pins its Handsontable
-  // dependencies in place. The starter effect is gated off while an import is
-  // open, so without this the version picker would move the label and change
-  // nothing in the files.
+  // A version change on an ad-hoc workspace — an import or a payload — re-pins
+  // its Handsontable dependencies in place. The starter effect is gated off while
+  // one is open, so without this the version picker would move the label and
+  // change nothing in the files.
   useEffect(() => {
     if (importPhase !== "loaded") return;
     const pinned = pinHandsontableFiles(filesRef.current, version);
