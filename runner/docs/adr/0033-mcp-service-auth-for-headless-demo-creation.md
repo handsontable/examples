@@ -71,9 +71,17 @@ broken link alive, which is worse than either outcome. So the decision extends t
 `PATCH /api/mcp/demos/:id`, same service auth, same `updateDemo()` and budget gate as the
 editor's **Save**, with two guards that the create path does not need:
 
-- **Ownership.** `sameOwner(row.created_by, assertedAuthor)` or 403. The shared secret says a
-  trusted service is calling; it says nothing about whose demos it may rewrite, and without
-  this check one leaked secret would mean rewriting anyone's published link.
+- **Ownership.** `sameOwner(row.created_by, assertedAuthor)` or 403. Note what this does and
+  does not buy (raised by the security review): `X-Demo-Author` is asserted under the *same*
+  secret that grants access to the route, so the check catches a wrong id or a confused caller —
+  it cannot withstand misuse of the secret itself, because a holder can assert any team address.
+  Per-user cryptographic proof would mean carrying the broker's authority here, which this ADR
+  rejects for the reasons above.
+- **Provenance, as containment for exactly that.** The route refuses any demo whose `forked_from`
+  does not start with `mcp:` — i.e. it can only rewrite what this service published. A leaked
+  secret therefore can never overwrite work somebody built in the browser; the blast radius stays
+  inside what the MCP created. Fixing a hand-built demo remains a browser job, which is also the
+  honest answer: that demo has an author who did not ask an agent to touch it.
 - **Revoked demos are gone.** A revoked id returns 410 rather than rebuilding — resurrecting a
   link somebody deliberately killed is not an update.
 

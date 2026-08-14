@@ -172,3 +172,16 @@ test("an update payload is held to the same file rules as a create", () => {
   assert.ok(isMcpValidationError(validateMcpFiles({ "/index.js": "x" })), "manifest still required");
   assert.deepEqual(validateMcpFiles(ok), ok);
 });
+
+test("only demos the MCP created are updatable through it", () => {
+  // Containment for the shared-secret trust model (security review of PR #177): the
+  // asserted author cannot be stronger than the secret that carries it, so the path is
+  // limited to what this service published. `forked_from` is the provenance stamp.
+  const fromMcp = (row) => Boolean(row.forked_from?.startsWith("mcp:"));
+  assert.ok(fromMcp({ forked_from: "mcp:javascript" }));
+  assert.ok(fromMcp({ forked_from: "mcp:react" }));
+  // Anything built in the browser stays out of reach of this route.
+  assert.ok(!fromMcp({ forked_from: "catalog:javascript" }));
+  assert.ok(!fromMcp({ forked_from: null }));
+  assert.ok(!fromMcp({}));
+});

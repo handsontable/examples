@@ -768,6 +768,22 @@ export default Sentry.withSentry(sentryOptions, {
         if (!sameOwner(row.created_by, id.email)) {
           return json({ error: "forbidden", detail: "this demo belongs to someone else" }, 403);
         }
+        // Containment, not authentication (security review of PR #177). `X-Demo-Author` is
+        // asserted under the same shared secret that grants access to this route, so the
+        // ownership check above catches a wrong id — it cannot withstand misuse of the secret
+        // itself. Restricting the path to demos this service created means a leaked secret can
+        // never rewrite work somebody built in the browser; the blast radius stays inside what
+        // the MCP published in the first place.
+        if (!row.forked_from?.startsWith("mcp:")) {
+          return json(
+            {
+              error: "forbidden",
+              detail:
+                "this demo was not created through the MCP; edit it at /edit/<id> in the browser",
+            },
+            403,
+          );
+        }
         const patch = (await request.json()) as {
           title?: string;
           description?: string | null;

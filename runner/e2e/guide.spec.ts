@@ -48,6 +48,32 @@ test("the overview offers one track per audience", async ({ page }) => {
   expect(body).not.toMatch(/^#{1,4} /m);
 });
 
+test("prose wraps to the window, not to the markdown's line endings", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await page.goto("/guide/support");
+  // Wait for the document, not the shell: the count below is a one-shot assertion, and
+  // the page is a splash until the identity resolves.
+  await expect(
+    page.getByRole("heading", { name: "Build a demo in the browser", level: 1 }),
+  ).toBeVisible();
+
+  // The docs are hard-wrapped at ~88 columns so their diffs are reviewable. That is a
+  // file-format detail: rendered with `pre-wrap` (which the chat panel needs) every
+  // one of those wraps became a line break on screen, and the prose broke mid-sentence
+  // at a width nobody's window happens to be.
+  //
+  // Paragraphs holding a figure are skipped: the image is a block element inside the
+  // paragraph, so `innerText` reports a newline around it no matter how text wraps.
+  const paragraphs = page.locator("main article p:not(:has(img))");
+  const count = await paragraphs.count();
+  expect(count).toBeGreaterThan(10);
+  for (let i = 0; i < count; i += 1) {
+    const text = await paragraphs.nth(i).innerText();
+    expect(text, `paragraph ${i} kept the source's line endings`).not.toContain("\n");
+  }
+});
+
 test("each track renders its own document, and only its own", async ({ page }) => {
   await stubShell(page);
   await signIn(page);
