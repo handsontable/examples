@@ -94,7 +94,7 @@ version picker, where you can bisect it.
 
 ![The Import a project dialog with a field for a JSFiddle or StackBlitz URL](/guide/import-dialog.jpg)
 
-*My demos &rarr; Import. The project opens unsaved, so nothing is created until you Save.*
+*My demos → Import. The project opens unsaved, so nothing is created until you Save.*
 
 Only projects that actually use Handsontable can be imported: an import with no
 `handsontable` dependency, no import of it and no CDN tag is refused, with that
@@ -116,7 +116,7 @@ somebody.
 
 ![All demos with the Owner dropdown open, listing each teammate and their demo count](/guide/all-demos-owner-filter.jpg)
 
-*All demos, filtered by owner &mdash; counts per person, and "Everyone" to go back.*
+*All demos, filtered by owner — counts per person, and "Everyone" to go back.*
 
 - **Open** takes you to the read-only playground: read the code, try changes,
   download a `.zip`.
@@ -145,7 +145,7 @@ link.*
 
 ![The Ask about this example panel, with suggested questions about the open demo](/guide/ask-ai.jpg)
 
-*Ask AI is scoped to the code you have open &mdash; not Handsontable in general.*
+*Ask AI is scoped to the code you have open — not Handsontable in general.*
 
 ## 7. Title and description
 

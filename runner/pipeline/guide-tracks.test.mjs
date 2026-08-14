@@ -217,3 +217,14 @@ test("every figure the guide references is a file the app ships", () => {
     assert.ok(referenced.has(file), `apps/authoring/public/guide/${file} is referenced by no track`);
   }
 });
+
+test("no HTML entities in the guide's markdown", () => {
+  // The renderer prints text verbatim — it builds React elements and never touches
+  // innerHTML, which is what makes it safe for model output. So `&mdash;` reaches the
+  // reader as "&mdash;". Write the character.
+  for (const name of [...GUIDE_TRACKS.map((t) => t.slug), "overview"]) {
+    const md = fs.readFileSync(path.join(docs, `${name}.md`), "utf8");
+    const found = [...md.matchAll(/&[a-zA-Z]+;/g)].map((m) => m[0]);
+    assert.deepEqual(found, [], `${name}.md contains HTML entities: ${found.join(", ")}`);
+  }
+});
