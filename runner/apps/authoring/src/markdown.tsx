@@ -172,7 +172,7 @@ export function Markdown({
           }
           default:
             return (
-              <p key={key} style={{ margin: "0 0 8px", whiteSpace: "pre-wrap" }}>
+              <p key={key} style={asDocument ? documentParagraphStyle : chatParagraphStyle}>
                 {renderInline(block.children, key)}
               </p>
             );
@@ -200,6 +200,16 @@ const imageStyle: React.CSSProperties = {
   background: theme.color.surfaceSunken,
   cursor: "zoom-in",
 };
+
+/** Model answers: `pre-wrap`, because a newline the model wrote is a newline it
+ *  meant — a blank line between steps, an indented aside. */
+const chatParagraphStyle: React.CSSProperties = { margin: "0 0 8px", whiteSpace: "pre-wrap" };
+
+/** Documents: normal wrapping. The guide's markdown is hard-wrapped at ~88 columns
+ *  for reviewable diffs, and `pre-wrap` reproduced those wraps on screen — prose that
+ *  broke mid-sentence at a width nobody's window happens to be. The source's line
+ *  endings are a file-format detail; the reader should never see them. */
+const documentParagraphStyle: React.CSSProperties = { margin: "0 0 10px", whiteSpace: "normal" };
 
 const codeStyle: React.CSSProperties = {
   fontFamily: theme.font.mono, fontSize: "0.92em", background: theme.color.surfaceMuted,
