@@ -6,12 +6,16 @@ import {
   MONITOR_KINDS,
   MONITOR_MESSAGE_MAX,
   MONITOR_MESSAGE_TYPE,
+  MONITOR_STACK_MAX,
+  MONITOR_URL_MAX,
   REPORTER_SOURCE,
   createMonitorBudget,
   injectReporter,
   injectReporterIntoHtml,
   isMonitorPayload,
   normalizeMonitorMessage,
+  redactPreviewHosts,
+  sanitizeMonitorPayload,
   truncateMessage,
 } from "../packages/runtime/dist/monitor.js";
 
@@ -26,6 +30,9 @@ import {
 //    build step executes. So these tests *run* it against a stub window rather than
 //    grepping it — the DEV-2129 lesson (a transpiler test that only inspected its
 //    output passed while the output could not execute).
+
+/** Shape of a real Tier-2 preview host: the third label is the session token. */
+const PREVIEW_HOST = "3000-sbx7f2a-tok9xQ.demos.handsontable.com";
 
 const HTML_ENTRY = "/index.html";
 const HTML = `<!doctype html>
@@ -125,13 +132,18 @@ function runReporter() {
     }),
   };
 
+  // A token-bearing Tier-2 preview host, which is what the page is really served
+  // from — the reporter must strip it from everything it sends.
+  const location = { host: PREVIEW_HOST };
+
   // eslint-disable-next-line no-new-func
-  new Function("window", "parent", "console", "document", "XMLHttpRequest", REPORTER_SOURCE)(
+  new Function("window", "parent", "console", "document", "XMLHttpRequest", "location", REPORTER_SOURCE)(
     win,
     parent,
     consoleStub,
     document,
     undefined,
+    location,
   );
 
   return {
@@ -212,12 +224,13 @@ test("reporter never relays twice into the same window", () => {
   const h = runReporter();
   // A second injection (an HTML entry plus a module prepend, say) must not
   // double-hook console or double-count the ceiling.
-  new Function("window", "parent", "console", "document", "XMLHttpRequest", REPORTER_SOURCE)(
+  new Function("window", "parent", "console", "document", "XMLHttpRequest", "location", REPORTER_SOURCE)(
     h.win,
     { postMessage: () => assert.fail("second injection must be inert") },
     h.console,
     { createElement: () => ({}) },
     undefined,
+    { host: PREVIEW_HOST },
   );
   h.console.error("once");
   assert.equal(h.sent.length, 1);
@@ -369,6 +382,89 @@ test("MONITOR_KINDS covers exactly the kinds the reporter can emit", () => {
     [...MONITOR_KINDS].sort(),
     ["console-error", "console-warn", "error", "network", "rejection", "stderr"],
   );
+});
+
+// ---- preview-token redaction -----------------------------------------------
+//
+// Security review on #190, HIGH: a Tier-2 preview host is
+// `<port>-<sandboxId>-<token>.demos.handsontable.com`, so **the hostname is a session
+// credential**. It reaches telemetry three ways, not one — the review named the
+// scrubbed URL, but a stack from the preview carries it in every frame, and any
+// message quoting a URL carries it too. All three are covered here.
+
+test("reporter strips its own preview host from url, stack and message", () => {
+  const h = runReporter();
+
+  h.fire("error", { target: { src: `https://${PREVIEW_HOST}/src/main.js` } });
+  const err = new Error(`Failed to fetch https://${PREVIEW_HOST}/api/x`);
+  err.stack = `Error: boom\n    at grid (https://${PREVIEW_HOST}/src/main.js:4:9)`;
+  h.fire("error", { error: err });
+
+  const blob = JSON.stringify(h.sent);
+  assert.equal(blob.includes("tok9xQ"), false, "the session token must not leave the page");
+  assert.equal(blob.includes(PREVIEW_HOST), false);
+  assert.ok(h.sent[0].url.includes("<preview>"), "url redacted");
+  assert.ok(h.sent[1].stack.includes("<preview>"), "stack redacted");
+  assert.ok(h.sent[1].message.includes("<preview>"), "message redacted");
+  assert.ok(h.sent[1].stack.includes("/src/main.js:4:9"), "the useful part of the frame survives");
+});
+
+test("reporter redaction is case-insensitive", () => {
+  // The bug the first version of this fix shipped: the session token is mixed-case,
+  // but anything through a URL parser — `scrub`, or a browser's own stack frames —
+  // returns a lowercased hostname. A case-sensitive compare missed exactly the tokens
+  // it existed to remove, and only a mixed-case fixture catches it.
+  const h = runReporter();
+  h.fire("error", { target: { src: `https://${PREVIEW_HOST.toLowerCase()}/x.js` } });
+
+  assert.equal(h.sent[0].url.includes("tok9x"), false, "lowercased host must redact too");
+  assert.ok(h.sent[0].url.includes("<preview>"));
+});
+
+test("redactPreviewHosts covers a payload the reporter never touched", () => {
+  // The parent's backstop: a demo can post this shape directly, without the reporter.
+  const dirty = `at f (https://3000-abc-SECRET.demos.handsontable.com/src/main.js:1:1)`;
+  const clean = redactPreviewHosts(dirty);
+  assert.equal(clean.includes("SECRET"), false);
+  assert.ok(clean.includes("<preview>"));
+  assert.ok(clean.includes("/src/main.js:1:1"));
+});
+
+test("redactPreviewHosts leaves the app origin and third parties readable", () => {
+  // Only hosts with a subdomain label are preview hosts; the app's own origin has
+  // none, and a CDN host carries no secret and is worth reading.
+  assert.equal(
+    redactPreviewHosts("https://demos.handsontable.com/api/versions failed"),
+    "https://demos.handsontable.com/api/versions failed",
+  );
+  assert.equal(redactPreviewHosts("https://unpkg.com/handsontable@18.0.0"), "https://unpkg.com/handsontable@18.0.0");
+});
+
+test("sanitizeMonitorPayload bounds every field", () => {
+  // Security review on #190, MEDIUM: `stack` was forwarded unbounded — hashed for
+  // dedupe, fingerprinted, and sent — so a crafted postMessage was free resource
+  // pressure regardless of the event ceiling.
+  const clean = sanitizeMonitorPayload({
+    type: MONITOR_MESSAGE_TYPE,
+    kind: "error",
+    message: "m".repeat(5000),
+    stack: "s".repeat(50_000),
+    url: `https://${PREVIEW_HOST}/${"p".repeat(5000)}`,
+  });
+
+  assert.equal(clean.message.length, MONITOR_MESSAGE_MAX + 3);
+  assert.equal(clean.stack.length, MONITOR_STACK_MAX + 3);
+  // Bounded, then redacted — so the url can come back *shorter* than the cap, because
+  // the host it replaced was longer than the placeholder.
+  assert.ok(clean.url.length <= MONITOR_URL_MAX + 3, `url still ${clean.url.length} long`);
+  assert.equal(clean.url.includes("tok9xQ"), false, "redacted as well as bounded");
+  assert.ok(clean.url.includes("<preview>"));
+});
+
+test("sanitizeMonitorPayload keeps optional fields absent rather than empty", () => {
+  const clean = sanitizeMonitorPayload({ type: MONITOR_MESSAGE_TYPE, kind: "console-warn", message: "x" });
+  assert.equal("stack" in clean, false);
+  assert.equal("url" in clean, false);
 });
 
 // ---- the parent-side budget ------------------------------------------------

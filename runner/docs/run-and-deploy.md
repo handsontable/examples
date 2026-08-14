@@ -271,8 +271,20 @@ advisory and the relay's as the limit.
 brake that works without a build** — keep one configured for as long as this is on.
 
 Nothing identifying is relayed: no source snippets, no file map, and network events
-carry scheme, host and path only, with the query string stripped (it can hold a
-token). Same rule as `analytics.ts`.
+carry scheme, host and path only, with the query string stripped. Same rule as
+`analytics.ts`.
+
+**The Tier-2 preview hostname is itself a session credential** and is redacted to
+`<preview>` everywhere. `<port>-<sandboxId>-<token>.demos.handsontable.com` is what
+authorises access to a live preview (a mismatch is the `INVALID_TOKEN` failure), and
+it reaches strings three ways: a scrubbed network URL, *every frame* of a stack raised
+in the preview, and any message quoting a URL. The reporter strips its own
+`location.host` before sending and `redactPreviewHosts` catches it again parent-side.
+Match case-insensitively if you touch this — the token is mixed-case, but anything
+through a URL parser hands back a lowercased hostname, so a case-sensitive compare
+misses precisely the tokens it is meant to remove. The app's own
+`demos.handsontable.com` origin stays readable; only hosts with a subdomain label are
+redacted.
 
 **Removing it** means deleting `packages/runtime/src/monitor.ts`, its test
 (`pipeline/monitor-inject.test.mjs`), and its callsites: `withMonitor` in

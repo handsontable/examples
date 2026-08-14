@@ -10,7 +10,7 @@ import {
   MONITOR_EVENT_CEILING,
   createMonitorBudget,
   normalizeMonitorMessage,
-  truncateMessage,
+  sanitizeMonitorPayload,
   type MonitorPayload,
 } from "@handsontable/demo-runtime/monitor";
 
@@ -172,31 +172,36 @@ export interface DemoEventContext {
  */
 export function reportDemoEvent(payload: MonitorPayload, context: DemoEventContext): void {
   if (!monitorDemos) return;
-  const message = truncateMessage(payload.message);
-  if (!demoRelayBudget.admit(payload.kind, message, payload.stack)) return;
+  // Bound and redacted before anything else touches it — including the dedupe key
+  // below, which hashes the stack. An unbounded `stack` from a crafted postMessage is
+  // free client-side resource pressure, and a Tier-2 preview host inside it is a live
+  // session token.
+  const clean = sanitizeMonitorPayload(payload);
+  const message = clean.message;
+  if (!demoRelayBudget.admit(clean.kind, message, clean.stack)) return;
   const tags: Record<string, string> = {
     surface: DEMO_SURFACE,
-    kind: payload.kind,
+    kind: clean.kind,
     tier: String(context.tier),
     framework: context.framework,
   };
   if (context.demoId) tags.demo_id = context.demoId;
   const captureContext = {
     tags,
-    fingerprint: [DEMO_SURFACE, payload.kind, normalizeMonitorMessage(message)],
-    level: (payload.kind === "error" || payload.kind === "rejection" ? "error" : "warning") as
+    fingerprint: [DEMO_SURFACE, clean.kind, normalizeMonitorMessage(message)],
+    level: (clean.kind === "error" || clean.kind === "rejection" ? "error" : "warning") as
       | "error"
       | "warning",
-    ...(payload.url ? { extra: { url: payload.url } } : {}),
+    ...(clean.url ? { extra: { url: clean.url } } : {}),
   };
 
   // An exception (with the preview's own stack) for a throw; a message for the
   // kinds that never had one. A synthesised Error is how the relayed stack reaches
   // Sentry's parser at all — captureMessage would drop it.
-  if (payload.kind === "error" || payload.kind === "rejection") {
+  if (clean.kind === "error" || clean.kind === "rejection") {
     const error = new Error(message);
-    error.name = payload.kind === "rejection" ? "DemoUnhandledRejection" : "DemoError";
-    if (payload.stack) error.stack = `${error.name}: ${message}\n${payload.stack}`;
+    error.name = clean.kind === "rejection" ? "DemoUnhandledRejection" : "DemoError";
+    if (clean.stack) error.stack = `${error.name}: ${message}\n${clean.stack}`;
     Sentry.captureException(error, captureContext);
     return;
   }

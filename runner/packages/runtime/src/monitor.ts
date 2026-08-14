@@ -32,6 +32,64 @@ export const MONITOR_MESSAGE_MAX = 500;
 /** Stack cap. Enough for a fingerprint and a first frame, not a whole trace. */
 export const MONITOR_STACK_MAX = 2000;
 
+/** URL cap. A path this long is already unreadable; the rest is only volume. */
+export const MONITOR_URL_MAX = 500;
+
+/**
+ * What a Tier-2 preview host is replaced with.
+ *
+ * Preview URLs are `<port>-<sandboxId>-<token>.demos.handsontable.com`, so **the
+ * hostname is a session credential** — that token is what authorises access to a
+ * live preview (a mismatch is the `INVALID_TOKEN` failure). It reaches strings three
+ * ways: a scrubbed network URL, every frame of a stack from the preview
+ * (`https://<port>-<id>-<token>.demos…/src/main.js:1:1`), and any message that quotes
+ * a URL. All three are redacted — telemetry must never carry a credential that
+ * anyone with dashboard access could replay.
+ *
+ * Losing the exact host costs nothing diagnostically: which session it was is not
+ * actionable, and the path and third-party hosts survive.
+ */
+export const PREVIEW_HOST_PLACEHOLDER = "<preview>";
+
+/**
+ * Redact Tier-2 preview hostnames from a string.
+ *
+ * Matches only hosts with a subdomain label, so the app's own
+ * `demos.handsontable.com` origin is left readable — a preview host always has the
+ * `<port>-<id>-<token>` label in front.
+ *
+ * This is the parent's backstop. The reporter redacts its own `location.host` before
+ * sending, which is the precise version; this catches whatever crossed the boundary
+ * anyway, including a payload from a demo that never ran the reporter.
+ */
+export function redactPreviewHosts(value: string): string {
+  return value.replace(/\b[a-z0-9-]+\.demos\.handsontable\.com\b/gi, PREVIEW_HOST_PLACEHOLDER);
+}
+
+/**
+ * Bound and redact a payload that crossed the origin boundary.
+ *
+ * Nothing in it is trusted. The reporter truncates and redacts in-page, but a demo
+ * can post this shape without ever running the reporter, so every field is done again
+ * here — otherwise an unbounded `stack` is free client-side resource pressure (it is
+ * hashed for dedupe, fingerprinted, and forwarded) and a leaked host is a live
+ * session token in telemetry.
+ */
+export function sanitizeMonitorPayload(payload: MonitorPayload): MonitorPayload {
+  const clean: MonitorPayload = {
+    type: payload.type,
+    kind: payload.kind,
+    message: redactPreviewHosts(truncateMessage(payload.message, MONITOR_MESSAGE_MAX)),
+  };
+  if (payload.stack) {
+    clean.stack = redactPreviewHosts(truncateMessage(payload.stack, MONITOR_STACK_MAX));
+  }
+  if (payload.url) {
+    clean.url = redactPreviewHosts(truncateMessage(payload.url, MONITOR_URL_MAX));
+  }
+  return clean;
+}
+
 /** What the reporter observed. `stderr` is the only kind not raised in-page — it
  *  comes from the Tier-2 dev server via the session status poll. */
 export type MonitorKind =
@@ -200,6 +258,31 @@ export const REPORTER_SOURCE = `(function () {
     return s.length <= max ? s : s.slice(0, max) + "...";
   }
 
+  // A Tier-2 preview host carries the session token
+  // (<port>-<id>-<token>.demos.handsontable.com), and this page is served from it —
+  // so it appears in stack frames, in scrubbed URLs, and in any message quoting a
+  // URL. Strip it before anything leaves.
+  //
+  // Matched case-insensitively, which is the whole difficulty: the token is
+  // mixed-case, and anything that has been through a URL parser (\`scrub\` above, a
+  // browser's own stack frames) hands back a lowercased hostname. A case-sensitive
+  // compare therefore misses the very tokens it exists to remove. Done by hand rather
+  // than with a regex so the host needs no escaping.
+  var HOST = "";
+  try { HOST = String(location.host).toLowerCase(); } catch (e) { HOST = ""; }
+  function redact(s) {
+    if (!s || !HOST) return s;
+    var haystack = s.toLowerCase();
+    var out = "";
+    var from = 0;
+    for (;;) {
+      var at = haystack.indexOf(HOST, from);
+      if (at === -1) return out + s.slice(from);
+      out += s.slice(from, at) + ${JSON.stringify(PREVIEW_HOST_PLACEHOLDER)};
+      from = at + HOST.length;
+    }
+  }
+
   function firstFrame(stack) {
     if (!stack) return "";
     var lines = stack.split("\\n");
@@ -225,15 +308,15 @@ export const REPORTER_SOURCE = `(function () {
   function send(kind, message, stack, url) {
     try {
       if (used >= CEILING) return;
-      var m = truncate(message, MAX);
-      var s = stack ? truncate(stack, STACK_MAX) : "";
+      var m = redact(truncate(message, MAX));
+      var s = stack ? redact(truncate(stack, STACK_MAX)) : "";
       var k = kind + "|" + m + "|" + firstFrame(s);
       if (seen[k]) return;
       seen[k] = true;
       used++;
       var payload = { type: TYPE, kind: kind, message: m };
       if (s) payload.stack = s;
-      if (url) payload.url = url;
+      if (url) payload.url = redact(url);
       parent.postMessage(payload, "*");
     } catch (e) { /* the reporter must never be the reason a demo breaks */ }
   }
