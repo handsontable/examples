@@ -54,7 +54,11 @@ async function stubDemos(page: Page) {
   await page.route("**/api/demos?scope=*", (route) => {
     const scope = new URL(route.request().url()).searchParams.get("scope");
     const demos = scope === "all"
-      ? [demo(MINE, "My grid", EMAIL), demo(THEIRS, "Their grid", OTHER)]
+      ? [
+          demo(MINE, "My grid", EMAIL),
+          demo(THEIRS, "Their grid", OTHER),
+          demo("their002", "Their second grid", OTHER),
+        ]
       : [demo(MINE, "My grid", EMAIL)];
     return route.fulfill({ json: { demos, scope } });
   });
@@ -119,6 +123,65 @@ test("your own card keeps every action, on either list", async ({ page }) => {
   await expect(menuItem(page, "Open")).toHaveAttribute("href", `/edit/${MINE}`);
   await expect(menuItem(page, "Rename")).toBeVisible();
   await expect(menuItem(page, "Delete")).toBeVisible();
+});
+
+test("the owner filter shows one person's demos, and the view is a link", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await stubDemos(page);
+  await page.goto("/all-demos");
+  await expect(card(page, "My grid")).toBeVisible();
+
+  // Options are the owners actually in the list, counted.
+  const picker = page.getByRole("button", { name: "Filter demos by owner" });
+  await expect(picker).toContainText("Everyone (3)");
+  await picker.click();
+  await expect(page.getByRole("option", { name: "Someone Else (2)" })).toBeVisible();
+  await expect(page.getByRole("option", { name: "Dev (1)" })).toBeVisible();
+
+  await page.getByRole("option", { name: "Someone Else (2)" }).click();
+
+  // Their two, not yours…
+  await expect(card(page, "Their grid")).toBeVisible();
+  await expect(card(page, "Their second grid")).toBeVisible();
+  await expect(card(page, "My grid")).toHaveCount(0);
+  // …and the URL carries it, by local part rather than the whole address.
+  await expect(page).toHaveURL(/\/all-demos\?owner=someone\.else$/);
+  expect(page.url()).not.toContain("@");
+
+  // A reload keeps the filter, which is the point of putting it in the URL.
+  await page.reload();
+  await expect(card(page, "Their grid")).toBeVisible();
+  await expect(card(page, "My grid")).toHaveCount(0);
+
+  // Everyone puts the grid back and drops the parameter.
+  await page.getByRole("button", { name: "Filter demos by owner" }).click();
+  await page.getByRole("option", { name: "Everyone (3)" }).click();
+  await expect(card(page, "My grid")).toBeVisible();
+  await expect(page).not.toHaveURL(/owner=/);
+});
+
+test("a filter that matches nobody says whose it was", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await stubDemos(page);
+  // The URL is user-editable, so an unknown owner is a normal input.
+  await page.goto("/all-demos?owner=nobody.here");
+
+  await expect(page.getByText("No demos from Nobody Here.")).toBeVisible();
+  // Not the generic empty state, which would read as "nobody has saved anything".
+  await expect(page.getByText("Nobody has saved a demo yet.")).toHaveCount(0);
+  await expect(card(page, "My grid")).toHaveCount(0);
+});
+
+test("My demos has no owner filter — it has one owner", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await stubDemos(page);
+  await page.goto("/my-demos");
+
+  await expect(card(page, "My grid")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Filter demos by owner" })).toHaveCount(0);
 });
 
 test("/edit/:id for someone else's demo lands on the read-only playground", async ({ page }) => {

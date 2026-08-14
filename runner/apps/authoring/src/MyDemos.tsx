@@ -19,6 +19,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useLayoutEffect,
   useRef,
   useState,
@@ -26,6 +27,7 @@ import {
 } from "react";
 import {
   Dialog,
+  MenuButton,
   IconDotsVertical,
   IconPlus,
   SideNav,
@@ -37,6 +39,7 @@ import {
 } from "@handsontable/demo-editor-shell";
 import { getEntry } from "./catalog.js";
 import { Markdown } from "./markdown.js";
+import { filterByOwner, ownerNameFromSlug, ownerOptions } from "./demoOwners.js";
 import { getToken, logout, type User } from "./auth.js";
 import { displayNameFromEmail, initialFromEmail } from "./displayName.js";
 import { fieldInput, fieldLabel, formFooter, ghostButton, primaryButton } from "./formStyles.js";
@@ -88,6 +91,12 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
   /** The Import dialog (DEV-2504) — a URL prompt, nothing more: the fetch itself
    *  happens once, in the playground, off the `?import=` param. */
   const [importing, setImporting] = useState(false);
+  /** `?owner=<local-part>` on `/all-demos` (DEV-2519). Seeded from the URL so a
+   *  filtered view is a link, and written back with `replaceState` — a filter is
+   *  not a navigation. */
+  const [owner, setOwner] = useState(() =>
+    scope === "all" ? (new URLSearchParams(location.search).get("owner") ?? "").toLowerCase() : "",
+  );
 
   const markBusy = (id: string, what: "fork" | "delete") =>
     setBusy((b) => ({ ...b, [id]: what }));
@@ -200,6 +209,20 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
   const ownerInitial = profile?.initial ?? initialFromEmail(user.email);
   const ownerAvatar = profile?.avatar_url ?? null;
 
+  // Both from the loaded rows: the options are whoever is actually in this list,
+  // and the grid renders the subset. Client-side because the scope's listing is
+  // already here — a round trip to hide cards would be slower and no more correct.
+  const ownerChoices = useMemo(() => ownerOptions(demos ?? [], displayNameFromEmail), [demos]);
+  const visibleDemos = useMemo(() => filterByOwner(demos ?? [], owner), [demos, owner]);
+
+  const chooseOwner = useCallback((next: string) => {
+    setOwner(next);
+    const url = new URL(location.href);
+    if (next) url.searchParams.set("owner", next);
+    else url.searchParams.delete("owner");
+    history.replaceState(null, "", url.pathname + url.search);
+  }, []);
+
   async function copyLink(demo: DemoListItem) {
     try {
       await navigator.clipboard.writeText(`${location.origin}/share/${demo.id}`);
@@ -235,9 +258,26 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
 
           {!demos && <div style={loading}><Spinner size={20} /><span>Loading your demos…</span></div>}
 
+          {/* Only on the team list: My demos has exactly one owner, so a filter
+              there would be furniture. */}
+          {scope === "all" && demos && demos.length > 0 && (
+            <div style={filterBar}>
+              <span style={filterLabel}>Owner</span>
+              <MenuButton
+                ariaLabel="Filter demos by owner"
+                title="Show one person's demos"
+                options={ownerChoices}
+                value={owner}
+                onSelect={chooseOwner}
+              >
+                {ownerChoices.find((choice) => choice.value === owner)?.label ?? "Everyone"}
+              </MenuButton>
+            </div>
+          )}
+
           {demos && (
             <div style={grid}>
-              {demos.map((d) => {
+              {visibleDemos.map((d) => {
                 // Ownership is compared here, not trusted from the scope: the
                 // team list contains your own demos too, and those stay editable.
                 const mine = d.created_by === user.email;
@@ -273,6 +313,13 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
 
           {/* Simple, per the DEV-2163 decision: one line beside the Create tile,
               no illustration. The tile is already the call to action. */}
+          {/* A filter that matches nothing is not an empty listing: the generic line
+              would read as "nobody has saved anything", which is wrong and
+              confusing when you have just picked a name. */}
+          {demos && demos.length > 0 && visibleDemos.length === 0 && !error && (
+            <p style={emptyText}>No demos from {ownerNameFromSlug(owner, displayNameFromEmail)}.</p>
+          )}
+
           {demos && demos.length === 0 && !error && (
             scope === "all" ? (
               <p style={emptyText}>Nobody has saved a demo yet.</p>
@@ -828,6 +875,21 @@ const authorImage: CSSProperties = {
 };
 
 const createdText: CSSProperties = { whiteSpace: "nowrap" };
+
+/** One row above the grid. `space(2)` off the cards, so the control reads as part
+ *  of the listing rather than as page chrome. */
+const filterBar: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: theme.space(2),
+  padding: `0 ${theme.space(2)} ${theme.space(2)}`,
+};
+
+const filterLabel: CSSProperties = {
+  fontFamily: theme.font.ui,
+  fontSize: 12,
+  color: theme.color.textMuted,
+};
 
 const importHint: CSSProperties = {
   margin: `${theme.space(2)} 0 0`,
