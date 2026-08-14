@@ -74,7 +74,15 @@ export function GuidePage({ apiBase, user }: GuidePageProps) {
       />
 
       <div style={body}>
-        <SideNav active="guide" onLogout={() => logout("/")} />
+        <SideNav
+          active="guide"
+          guideSubItems={GUIDE_TRACKS.map((t) => ({
+            href: guidePath(t.slug),
+            label: t.label,
+            active: t.slug === route.track,
+          }))}
+          onLogout={() => logout("/")}
+        />
         <main style={content}>
           {track ? (
             <TrackView track={track} markdown={TRACK_MARKDOWN[track.slug]} />
@@ -160,8 +168,6 @@ function TrackView({ track, markdown }: { track: GuideTrack; markdown: string })
 
   return (
     <div style={column}>
-      <TrackTabs active={track.slug} />
-
       <div style={trackLayout}>
         <article style={prose}>
           {/* The document supplies its own `# ` heading; this page adds none — two
@@ -179,26 +185,6 @@ function TrackView({ track, markdown }: { track: GuideTrack; markdown: string })
   );
 }
 
-function TrackTabs({ active }: { active: GuideTrackSlug }) {
-  return (
-    <nav style={tabs} aria-label="Guide tracks">
-      <a href="/guide" style={tab(false)} className="hot-menu-row">
-        Overview
-      </a>
-      {GUIDE_TRACKS.map((t) => (
-        <a
-          key={t.slug}
-          href={guidePath(t.slug)}
-          style={tab(t.slug === active)}
-          aria-current={t.slug === active ? "page" : undefined}
-          className="hot-menu-row"
-        >
-          {t.label}
-        </a>
-      ))}
-    </nav>
-  );
-}
 
 /**
  * "On this page", and the page's deeplink surface: every row is an anchor to a
@@ -365,7 +351,7 @@ const badge = (technical: boolean): CSSProperties => ({
   borderRadius: theme.radius.sm,
   border: `1px solid ${theme.color.border}`,
   background: technical ? theme.color.surfaceSunken : theme.color.accentSoft,
-  color: technical ? theme.color.textMuted : theme.color.accent,
+  color: technical ? theme.color.textMuted : theme.color.accentText,
   fontSize: 10,
   letterSpacing: ".06em",
   textTransform: "uppercase",
@@ -409,29 +395,10 @@ const cardMore: CSSProperties = {
   marginTop: "auto",
   paddingTop: theme.space(2),
   fontSize: 12,
-  color: theme.color.accent,
+  color: theme.color.accentText,
 };
 
-const tabs: CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: 2,
-  marginBottom: theme.space(5),
-  paddingBottom: theme.space(2),
-  borderBottom: `1px solid ${theme.color.border}`,
-};
 
-const tab = (active: boolean): CSSProperties => ({
-  padding: `4px ${theme.space(2)}`,
-  borderRadius: theme.radius.sm,
-  fontFamily: theme.font.ui,
-  fontSize: 12.5,
-  textDecoration: "none",
-  color: active ? theme.color.accent : theme.color.textMuted,
-  // No `background` when inactive: `.hot-menu-row`'s hover lives in the app's global
-  // stylesheet and an inline value would outrank it (ADR-0026).
-  ...(active ? { background: theme.color.accentSoft } : null),
-});
 
 const contents: CSSProperties = {
   position: "sticky",
@@ -477,7 +444,7 @@ const copyButton = (copied: boolean): CSSProperties => ({
   padding: "0 3px",
   border: "none",
   background: "transparent",
-  color: copied ? theme.color.accent : theme.color.textMuted,
+  color: copied ? theme.color.accentText : theme.color.textMuted,
   fontFamily: theme.font.ui,
   fontSize: 10,
   cursor: "pointer",

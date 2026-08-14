@@ -149,3 +149,39 @@ test("root-relative links survive, and only genuine paths do", () => {
   // The absolute form is untouched.
   assert.equal(link("[docs](https://handsontable.com/docs)")?.href, "https://handsontable.com/docs");
 });
+
+// Images (DEV-2522): the guide carries figures, and the *only* thing this renderer
+// will load is a file the app ships. Model answers and user-written descriptions go
+// through the same parser, where a remote <img> is a request the reader never asked
+// for — a tracking pixel in a description, or a model-authored URL that leaks the
+// page it rendered on.
+test("images load from this site only, and never from a URL", () => {
+  const img = (md) => parseMarkdown(md)[0].children.find((n) => n.kind === "image") ?? null;
+
+  assert.deepEqual(img("![the picker](/guide/example-picker.jpg)"), {
+    kind: "image",
+    alt: "the picker",
+    src: "/guide/example-picker.jpg",
+  });
+  assert.equal(img("![](/guide/x.png)")?.alt, "");
+
+  for (const rejected of [
+    "![nope](https://evil.example/pixel.gif)",
+    "![nope](http://evil.example/p.png)",
+    "![nope](//evil.example/p.png)",
+    "![nope](/\\evil.example/p.png)",
+    "![nope](data:image/svg+xml,<svg/onload=alert(1)>)",
+    "![nope](javascript:alert(1))",
+    "![nope](guide/relative.png)",
+  ]) {
+    assert.equal(img(rejected), null, rejected);
+    // The alt text survives as prose, so the sentence still reads.
+    assert.match(text(parseMarkdown(rejected)[0].children), /nope/);
+  }
+
+  // A link is still a link — the `!` is what makes it an image, and the two forms
+  // share a line constantly.
+  const mixed = parseMarkdown("![shot](/guide/a.jpg) and [docs](https://handsontable.com)")[0].children;
+  assert.equal(mixed.filter((n) => n.kind === "image").length, 1);
+  assert.equal(mixed.filter((n) => n.kind === "link").length, 1);
+});

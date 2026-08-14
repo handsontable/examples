@@ -57,6 +57,23 @@ anything itself, so the contents list and the rendered anchors cannot disagree.
 **An unknown track renders the overview with a notice**, rather than a blank column or a
 redirect that hides the typo — stale links are the normal cost of naming things.
 
+**The tracks are navigated from the left panel**, not a tab strip inside the content.
+`SideNav` grows a nested sub-list under Guide, drawn only when Guide is the current
+page; the four sections sit where every other section of the account area sits, and the
+"on this page" rail handles the second axis. A tab strip two lines below a sidebar
+listing the same four things was the same list twice.
+
+**The guide carries figures**, and the parser learned `![alt](/path)` to allow it. The
+rule is deliberately narrower than links: **same-origin paths only, no `http(s)`**. The
+figures are files the app ships (`apps/authoring/public/guide/*`), and the same renderer
+draws model answers and user-written demo descriptions, where a remote `<img>` is a
+request the reader never asked for — a tracking pixel in a description, or a
+model-authored URL that leaks the page it rendered on. Images are `loading="lazy"` and
+wrapped in a link to themselves, so a track you do not open costs nothing and a
+screenshot too dense for a 700px measure opens full-size in the browser's own viewer.
+A test asserts every referenced figure exists and has real alt text; the initial split
+shipped without figures, which was the wrong call for a page people skim.
+
 ## Consequences
 
 - Renaming a heading changes its anchor, and a link somebody pasted into Slack stops

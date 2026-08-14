@@ -22,6 +22,33 @@ function renderInline(nodes: Inline[], keyPrefix: string): ReactNode[] {
         return <strong key={key}>{renderInline(node.children, key)}</strong>;
       case "em":
         return <em key={key}>{renderInline(node.children, key)}</em>;
+      case "image":
+        return (
+          // Clickable, because a 1,400px screenshot of the app inside a 700px reading
+          // measure is legible as a shape and not as text. The browser's own image
+          // view is the zoom — no lightbox to build, and middle-click and "save as"
+          // keep working like any other image.
+          //
+          // `loading="lazy"` is the whole reason the guide can carry figures at all:
+          // the track you are not reading costs nothing, and the screencast is
+          // megabytes. The caption is the prose underneath, not something drawn here.
+          <a
+            key={key}
+            href={node.src}
+            target="_blank"
+            rel="noreferrer"
+            style={{ display: "block" }}
+            title="Open the full-size image"
+          >
+            <img
+              src={node.src}
+              alt={node.alt}
+              loading="lazy"
+              decoding="async"
+              style={imageStyle}
+            />
+          </a>
+        );
       case "link": {
         // A link to another page of this app stays in the tab: the guide's tracks
         // cross-reference each other (DEV-2522), and a new tab per cross-reference
@@ -157,6 +184,23 @@ export function Markdown({
 
 // `controlBorder`, for the same reason the table below gives: the chat drawer is
 // `surfaceRaised`, which dark `border` *is*, so this outline would vanish there.
+/** Full-width inside the measure, with a frame so a screenshot of the app does not
+ *  bleed into the page around it.
+ *
+ *  `controlBorder`, not `border`: dark `border` is #222222, which is the value of dark
+ *  `surfaceRaised` — the drawer and dialog fill this renderer also paints inside, where
+ *  a `border` frame would be invisible. */
+const imageStyle: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  height: "auto",
+  margin: "10px 0 4px",
+  border: `1px solid ${theme.color.controlBorder}`,
+  borderRadius: theme.radius.sm,
+  background: theme.color.surfaceSunken,
+  cursor: "zoom-in",
+};
+
 const codeStyle: React.CSSProperties = {
   fontFamily: theme.font.mono, fontSize: "0.92em", background: theme.color.surfaceMuted,
   border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.sm,

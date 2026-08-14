@@ -21,6 +21,11 @@ The **example picker** in the top bar holds three kinds of thing:
 - **Documentation examples** — every example from the Handsontable guides, searchable
   by name. The search box at the top of the picker searches all of them at once.
 
+![The example picker open, blank templates first, with every documentation category searchable beside it](/guide/example-picker.jpg)
+
+*Blank templates first, then the framework starters; the search box searches every
+documentation example at once.*
+
 For a customer question, the documentation examples are usually the shortest path:
 the example that proves the feature already exists, so your job is to relabel it with
 the customer's columns rather than write it.
@@ -64,6 +69,10 @@ is nowhere for them to live; use a URL to an already-hosted image, or inline it 
 data URI in the CSS. And **`.env` files**, always, because a demo is one Save away
 from a public link.
 
+![The Files panel outlined mid-drag, with the hint "Drop into the project root"](/guide/files-drop.jpg)
+
+*Mid-drag: the panel outlines itself and names the directory the drop will land in.*
+
 Nothing is persisted until you **Save** (a demo you own) or **Fork** (a new one).
 
 ## 4. Send us a fiddle? Import it
@@ -83,6 +92,10 @@ version picker, where you can bisect it.
 - **CodeSandbox cannot be imported.** It blocks automated reads of its projects. Use
   *File → Export to ZIP* there, unpack it, and drag the files onto the Files panel.
 
+![The Import a project dialog with a field for a JSFiddle or StackBlitz URL](/guide/import-dialog.jpg)
+
+*My demos → Import. The project opens unsaved, so nothing is created until you Save.*
+
 Only projects that actually use Handsontable can be imported: an import with no
 `handsontable` dependency, no import of it and no CDN tag is refused, with that
 explanation.
@@ -100,6 +113,10 @@ the demo's own URL is the one to keep.
 filters it to one person — the filter is in the URL
 (`/all-demos?owner=marek-martuszewski`), so you can paste the filtered view to
 somebody.
+
+![All demos with the Owner dropdown open, listing each teammate and their demo count](/guide/all-demos-owner-filter.jpg)
+
+*All demos, filtered by owner — counts per person, and "Everyone" to go back.*
 
 - **Open** takes you to the read-only playground: read the code, try changes,
   download a `.zip`.
@@ -120,6 +137,16 @@ exists costs nothing.
   density, borders. It writes a real theme module into the demo, so what you share is
   the styling you see. Useful when the question is "will it look like our app?".
 
+![The Style panel changing a grid's token mapping, icon set and density while the preview restyles itself](/guide/style-panel.gif)
+
+*Recorded in the playground: three token mappings and an icon set, applied live to a
+100,000-row grid. The theme is written into the demo, so the styling travels with the
+link.*
+
+![The Ask about this example panel, with suggested questions about the open demo](/guide/ask-ai.jpg)
+
+*Ask AI is scoped to the code you have open — not Handsontable in general.*
+
 ## 7. Title and description
 
 The pencil in **Box info** (top of the sidebar) edits the demo's **title** and
@@ -135,6 +162,14 @@ is the right place for what the demo shows, the caveat you would otherwise say o
 loud, and a link back to the ticket. Up to 4,000 characters, and the field tells you
 when you are near the limit.
 
+![The Edit info dialog: a title field and a markdown description with a formatting toolbar](/guide/description-write.jpg)
+
+*Writing: the toolbar puts the markdown in for you.*
+
+![The same dialog with Preview on, showing the description rendered as formatted text](/guide/description-preview.jpg)
+
+*Preview: exactly what the sidebar, the demo card and the shared page will show.*
+
 Write it even when you are in a hurry. The demo will outlive the conversation, and in
 three months it is the description that tells you whether it is still the right link
 to send.
@@ -148,6 +183,10 @@ to send.
   (`/d/<id>/`): a permanent static page, safe to send, and it costs nothing to keep
   online because it is built once rather than run live. If they want to read the code,
   send `/share/<id>` instead.
+
+![The Share this demo dialog listing the client link, the full-window link and the docs embed URL](/guide/share-dialog.jpg)
+
+*Share, on a demo you own. Each field has a copy button.*
 
 Check the client link opens before you paste it into the ticket. A 404 means the build
 failed — reopen `/edit/<id>`, press Save and read the error.

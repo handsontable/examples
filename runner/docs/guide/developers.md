@@ -25,6 +25,11 @@ https://demos.handsontable.com/?docs=guides/rows/row-sorting/react/example1.tsx&
 https://demos.handsontable.com/?example=react&v=https://pkg.pr.new/handsontable@13191
 ```
 
+![A demo running at a pull-request build: the version pill reads Handsontable 13191 and package.json points at pkg.pr.new](/guide/pr-version.jpg)
+
+*Verified on PR #13191: the pill reads `13191`, `package.json` points at
+`https://pkg.pr.new/handsontable@13191`, and the grid renders on that build.*
+
 This is the reason support and engineering can look at the same URL: they send you a
 reproduction on the released version, you send it back with the number of your PR in
 the query string.
