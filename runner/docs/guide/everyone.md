@@ -52,11 +52,23 @@ Load create_demo, then create a Handsontable demo with an invoice grid
 share link.
 ```
 
-What Claude did, in its own words: checked the Handsontable documentation, wrote the
-files locally and syntax-checked them, published through `create_demo`, and — when the
-runner refused the first attempt because the `package.json` it wrote had dropped the
-build tool — fixed that and published again. One demo, not two: a refused publish
-creates nothing.
+![The Claude conversation: the prompt, then Claude loading the tool, checking the documentation, writing the files and publishing to the runner](/guide/claude-asking.jpg)
+
+*The whole interaction, as it looks in Claude. The grey lines are Claude narrating what it
+is doing; you do not have to read them.*
+
+What Claude did, in its own words: checked the Handsontable documentation, wrote the files
+locally and syntax-checked them, published through `create_demo`, and — when the runner
+refused the first attempt because the `package.json` it wrote had dropped the build tool —
+fixed that and published again. One demo, not two: a refused publish creates nothing.
+
+**The first time, Claude asks permission** to use the tool — "Claude wants to use *Create
+a Handsontable demo* from Handsontable MCP". Choose **Allow once**, or **Always allow** if
+you expect to do this again.
+
+![Claude's answer: the client link, the edit link, the read-only playground and the docs embed URL](/guide/claude-links.jpg)
+
+*And the answer: four links, and the demo waiting in your My demos.*
 
 Then it handed back the four links, and a summary of what it had built: twelve invoices
 with generated client names, a filter menu on every header, a strict Draft / Sent / Paid
@@ -110,6 +122,16 @@ and then fails the moment the grid starts up still gets a green build and a work
 That happened on the very run above: the page came out with its title, its description
 and its buttons — and an empty space where the grid should be.
 
+![The published demo: twelve invoices, colour-coded statuses and a pinned TOTAL row](/guide/mcp-demo-client-page.jpg)
+
+*The client link from the run above — what a customer sees. The demo alone: no editor, no
+sign-in.*
+
+![The same demo filtered to two clients, with the totals row recomputed to four invoices](/guide/mcp-demo-filtered.jpg)
+
+*Filtered to two clients, and the totals row follows the filter. Worth clicking around in
+before you send it: that is how you find out whether Claude built what you meant.*
+
 So open the client link and look for the grid:
 
 - **Grid there, data plausible?** Send it.
@@ -146,6 +168,25 @@ rollout: start a new conversation, or reconnect the Handsontable MCP, and ask ag
 If it still refuses, the runner side is unreachable — say so in the team channel
 rather than working around it, and use the [browser route](/guide/support) in the
 meantime.
+
+## Changing a demo, also by asking
+
+You do not have to start again to change one. Tell Claude what to fix or add — "make the
+Overdue rows red", "add a VAT column", "the grid does not render, please fix it" — and it
+updates **the demo you already have**, at the same links. Anything you have already sent
+keeps working, and starts showing the new version.
+
+**Status: landing shortly.** The endpoint behind it is in review
+(`handsontable/examples` #177). Until it deploys, Claude can still write the change, and
+you apply it one of two ways:
+
+- Open **`/edit/<id>`**, paste in what Claude gives you, press **Save** — same link, same
+  demo. Anyone technical can do this in a minute if you would rather not.
+- Or ask Claude for a new demo and **delete the old one** in My demos — but only if you
+  have not sent the first link to anybody. Deleting revokes it for good.
+
+Once it is live, "make me one" and "change it" are the same conversation, and neither needs
+the browser.
 
 ## Where your demos live
 
