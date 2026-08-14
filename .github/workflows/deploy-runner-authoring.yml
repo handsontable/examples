@@ -93,3 +93,14 @@ jobs:
           done
           echo "::error::prod frontend does not serve the freshly built bundle"
           exit 1
+
+  # Post-deploy smoke (DEV-2203): the @smoke E2E subset against the freshly
+  # deployed frontend — one render per engine, a share fixture, a docs example
+  # and one Style round-trip. The curl check above proves the bundle shipped;
+  # this proves the shipped bundle still puts a grid on screen.
+  smoke:
+    needs: deploy
+    uses: ./.github/workflows/e2e-live.yml
+    with:
+      base_url: 'https://demos.handsontable.com'
+      smoke: true

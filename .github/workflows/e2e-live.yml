@@ -1,38 +1,31 @@
 name: E2E — live render (Sandpack bundler)
 
-# Runs the E2E_LIVE=1 checks — the tests that need the external hosted Sandpack
-# bundler (or a real Tier-2 container) and therefore stay out of the
-# deterministic PR suite (ci.yml):
+# Runs everything the deterministic PR suite (ci.yml) cannot: the tests that
+# need the external hosted Sandpack bundler, a real Tier-2 container, the
+# deployed API worker, or real LLM budget.
 #
-#   - docs-examples.spec.ts   what actually renders inside a Tier-1 sandbox:
-#                             grid boots, plugins work (context menu opens,
-#                             getPlugin() succeeds), compiled JSX executes.
-#                             Both DEV-2129 regressions (dead plugins, "React is
-#                             not defined") were invisible to PR CI.
-#   - style-apply.spec.ts     whether a generated theme module reaches the grid,
-#                             one case per wiring shape (DEV-2197). The only
-#                             suite that *executes* generated theme source; the
-#                             node tests read it as text, and every defect it
-#                             found was green under those.
+# Three ways in (DEV-2203):
+#   - workflow_dispatch — the manual run. base_url empty (default) builds the
+#     selected ref and tests it via a local `vite preview`; base_url set tests
+#     the deployed app directly. `ai: true` adds the LLM answer checks;
+#     `pkg_pr_new_ref` boots one container at a pkg.pr.new build (DEV-2198
+#     validation days).
+#   - schedule — the weekly prod canary (Mon 05:00 UTC), deployed mode with AI
+#     on. Deploy-time breakage is caught by the post-deploy smoke below; the
+#     canary exists for external drift — the hosted bundler, npm, the broker,
+#     docs-bucket rot — which moves on week-scale. Daily would burn container
+#     hours and turn every bundler blip into a triage.
+#   - workflow_call with `smoke: true` — the post-deploy subset both deploy
+#     workflows invoke: `--grep @smoke`, one container, a few minutes.
 #
-# Manual only (not a merge gate — owner decision): depends on an external
-# service, so a bundler outage would block merges. Run it:
-#   - before merging any change to packages/runtime (sandpack.ts, transpile.ts)
-#     or pipeline/import-docs.mjs — pick your branch in the dispatch UI;
-#   - after a deploy / docs-bucket regen, with base_url pointed at prod.
+# Not a merge gate — owner decision: all of it depends on external services,
+# so an outage would block merges.
 #
-# Two modes:
-#   - base_url empty (default): builds the workspace from the selected ref and
-#     tests it via a local `vite preview` (playwright.config.ts webServer) —
-#     validates YOUR CODE against the live bundler before it ships.
-#   - base_url set (e.g. https://demos.handsontable.com): tests the deployed
-#     app directly — post-deploy smoke; no build needed.
-#
-# Only the deployed mode can cover the whole Style panel suite. Its `astro` and
-# `angular` cases are Tier 2: they need the API worker reachable on the *same
-# origin*, and local mode serves the app with `vite preview`, whose config has no
-# API proxy (the proxy lives under `server:`). Locally those two are skipped
-# rather than left to fail on a preview stuck at `booting`.
+# Only the deployed mode can cover the container suites. Tier-2 cases need the
+# API worker reachable on the *same origin*, and local mode serves the app with
+# `vite preview`, whose config has no API proxy (the proxy lives under
+# `server:`). Backend-bound specs self-gate on E2E_BASE_URL for the same
+# reason — locally they skip instead of failing on a preview stuck at booting.
 
 on:
   workflow_dispatch:
@@ -41,34 +34,53 @@ on:
         description: 'Deployed app URL to test (leave empty to build and test the selected ref locally)'
         default: ''
         required: false
+      ai:
+        description: 'Also run the live LLM answer checks (spends budget)'
+        type: boolean
+        default: false
+      pkg_pr_new_ref:
+        description: 'pkg.pr.new build id to verify end to end in a container (DEV-2198)'
+        default: ''
+        required: false
+  schedule:
+    # Weekly prod canary. Monday 05:00 UTC — before the CET workday, off-peak
+    # for the container pool.
+    - cron: '0 5 * * 1'
+  workflow_call:
+    inputs:
+      base_url:
+        type: string
+        required: true
+      smoke:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-# Cancelling is safe in local mode only. That premise used to hold for the whole
-# workflow — Tier-1 render checks hold nothing server-side — but the deployed
-# Style panel step boots Tier-2 containers, and the spec has no teardown: its
-# sessions are left to expire. Killing a run mid-flight therefore strands them in
-# the global `Sandbox` pool of 5 and starves live previews, which is why
-# `e2e-starter-matrix.yml` disables cancellation outright.
-#
-# The group is keyed by mode as well as by ref. Sharing one group would let a new
-# *local* run — which is cancellable — cancel an in-flight *deployed* run, and
-# that is precisely the leak this avoids.
+# Cancelling is safe in local mode only: deployed runs boot Tier-2 containers
+# and a killed run strands its sessions in the global `Sandbox` pool of 5
+# (specs clean up in `finally`, which a cancellation never reaches). The group
+# is keyed by mode so a new cancellable *local* run can never cancel an
+# in-flight *deployed* one, and smoke calls key by run id so two deploys never
+# queue behind each other's smoke.
 concurrency:
-  group: e2e-live-${{ github.ref }}-${{ inputs.base_url != '' && 'deployed' || 'local' }}
-  cancel-in-progress: ${{ inputs.base_url == '' }}
+  group: e2e-live-${{ github.ref }}-${{ inputs.smoke && format('smoke-{0}', github.run_id) || (inputs.base_url != '' && 'deployed' || (github.event_name == 'schedule' && 'canary' || 'local')) }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.base_url == '' && !inputs.smoke }}
 
 jobs:
   live:
     runs-on: ubuntu-latest
-    # Local live run takes seconds once built; leave headroom for a cold
-    # hosted-bundler transpile of the heavier examples. The deployed run also
-    # boots four real containers for the Style panel suite, one at a time.
-    timeout-minutes: 60
+    # Smoke: minutes. Full deployed run: the sandpack suite plus ~8 container
+    # boots, strictly one at a time. Local run: seconds once built.
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: runner
+    env:
+      # One place resolves the target: dispatch/call input, or prod when the
+      # weekly canary fires (schedule events carry no inputs).
+      BASE_URL: ${{ inputs.base_url || (github.event_name == 'schedule' && 'https://demos.handsontable.com' || '') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -85,7 +97,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Build workspace + authoring app (local mode only)
-        if: inputs.base_url == ''
+        if: env.BASE_URL == ''
         run: |
           pnpm build
           pnpm --filter @handsontable/demo-authoring build
@@ -93,30 +105,93 @@ jobs:
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: E2E with live-render checks
+      # ---- Post-deploy smoke: the @smoke subset and nothing else. ----------
+      - name: Smoke — one render per engine, one share, one docs example, one Style round-trip
+        if: inputs.smoke
         env:
           E2E_LIVE: '1'
-          E2E_BASE_URL: ${{ inputs.base_url }}
-        run: pnpm e2e e2e/docs-examples.spec.ts
+          E2E_BASE_URL: ${{ env.BASE_URL }}
+        run: pnpm e2e --grep "@smoke" --workers=1
 
-      # A separate step, and `--workers=1`: the Tier-2 cases each hold a
-      # live-preview container, prod caps those at 5 concurrently *globally*
-      # (Sandbox max_instances), and sessions are not torn down between tests. In
-      # parallel the second one fails with the preview stuck on `booting`, which
-      # reads as a product failure and is not one.
-      - name: E2E — Style panel reaches the grid (deployed, all wiring shapes)
-        if: inputs.base_url != ''
+      # ---- The full run (everything below skips when smoke). ---------------
+
+      # Sandpack-only and API-read-only specs: no containers held, parallel-safe.
+      # Backend-bound tests inside these files self-skip in local mode.
+      - name: E2E — Sandpack live renders, docs examples, editor, versions, share viewer
+        if: '!inputs.smoke'
         env:
           E2E_LIVE: '1'
-          E2E_BASE_URL: ${{ inputs.base_url }}
-        run: pnpm e2e e2e/style-apply.spec.ts --workers=1
+          E2E_BASE_URL: ${{ env.BASE_URL }}
+        run: >
+          pnpm e2e
+          e2e/docs-examples.spec.ts
+          e2e/preview-recovery.spec.ts
+          e2e/import-live.spec.ts
+          e2e/row-striping.spec.ts
+          e2e/preview-downloads.spec.ts
+          e2e/editor-download.spec.ts
+          e2e/version-pinning.spec.ts
+          e2e/share-view.spec.ts
+          e2e/style-panel.spec.ts
 
-      # Local mode: Tier-1 shapes only — see the note at the top of this file.
+      # Container suites, one worker: each Tier-2 case holds a live-preview
+      # container, prod caps those at 5 *globally* (Sandbox max_instances), and
+      # a parallel second boot reads as a product failure without being one.
+      - name: E2E — container suites (Style shapes, docs frameworks, engine smoke)
+        if: ${{ !inputs.smoke && env.BASE_URL != '' }}
+        env:
+          E2E_LIVE: '1'
+          E2E_BASE_URL: ${{ env.BASE_URL }}
+        run: >
+          pnpm e2e
+          e2e/style-apply.spec.ts
+          e2e/docs-frameworks.spec.ts
+          e2e/engine-smoke.spec.ts
+          --workers=1
+
+      # DEV-2198 validation: one real container at a pkg.pr.new build.
+      - name: E2E — pkg.pr.new build end to end
+        if: ${{ !inputs.smoke && env.BASE_URL != '' && inputs.pkg_pr_new_ref != '' }}
+        env:
+          E2E_BASE_URL: ${{ env.BASE_URL }}
+          E2E_PKG_PR_NEW_REF: ${{ inputs.pkg_pr_new_ref }}
+        run: pnpm e2e e2e/version-pinning.spec.ts -g "pkg.pr.new build boots" --workers=1
+
+      # Local mode: Tier-1 Style shapes only — see the note at the top.
       - name: E2E — Style panel reaches the grid (local build, Tier 1 only)
-        if: inputs.base_url == ''
+        if: ${{ !inputs.smoke && env.BASE_URL == '' }}
         env:
           E2E_LIVE: '1'
         run: pnpm e2e e2e/style-apply.spec.ts --workers=1 -g "react|vue|javascript|switching"
+
+      # The authed share round-trip needs a hand-refreshed broker token
+      # (AGENTS.md § E2E). An absent or expired token is a notice, not a red
+      # run — the secret rots by design and rot is not a product failure.
+      - name: E2E — authed share round-trip (secret-gated)
+        if: ${{ !inputs.smoke && env.BASE_URL != '' }}
+        env:
+          E2E_BASE_URL: ${{ env.BASE_URL }}
+          E2E_BROKER_TOKEN: ${{ secrets.E2E_BROKER_TOKEN }}
+        run: |
+          if [ -z "$E2E_BROKER_TOKEN" ]; then
+            echo "::notice::E2E_BROKER_TOKEN is not set — the authed share round-trip was skipped."
+            exit 0
+          fi
+          code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $E2E_BROKER_TOKEN" \
+            "https://mcp-auth-proxy-j0tb.onrender.com/broker/userinfo" || true)
+          if [ "$code" != "200" ]; then
+            echo "::warning::E2E_BROKER_TOKEN no longer validates against the broker ($code) — refresh the secret to run the authed share round-trip."
+            exit 0
+          fi
+          pnpm e2e e2e/share-create-live.spec.ts --workers=1
+
+      # Two real LLM calls. On by dispatch input and on the weekly canary.
+      - name: E2E — AI endpoints answer usably
+        if: ${{ !inputs.smoke && env.BASE_URL != '' && (inputs.ai || github.event_name == 'schedule') }}
+        env:
+          E2E_AI: '1'
+          E2E_BASE_URL: ${{ env.BASE_URL }}
+        run: pnpm e2e e2e/ai-live.spec.ts
 
       - name: Upload Playwright report on failure
         if: failure()

@@ -80,3 +80,13 @@ jobs:
           done
           echo "::error::prod /api/health did not return 200 after deploy"
           exit 1
+
+  # Post-deploy smoke (DEV-2203): the @smoke E2E subset against prod. The
+  # health curl above proves the worker answers; this boots one container —
+  # exactly the thing this deploy just rebuilt — and renders a grid in it.
+  smoke:
+    needs: deploy
+    uses: ./.github/workflows/e2e-live.yml
+    with:
+      base_url: 'https://demos.handsontable.com'
+      smoke: true

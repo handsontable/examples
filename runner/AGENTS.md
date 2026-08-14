@@ -162,10 +162,10 @@ Seven workflows live in `.github/workflows/` at the repo root:
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
 | `ci.yml` | every PR + push to `master` | build, typecheck, unit + catalog-smoke tests, authoring build, Playwright e2e. Also `workflow_call`able, so the deploy workflows gate on it. |
-| `deploy-runner-api.yml` | push to `master` touching `workers/api`, `containers`, `scripts`, `config`, `packages` (or manual) | deploys `workers/api`. |
-| `deploy-runner-authoring.yml` | push to `master` touching `apps/authoring`, `packages`, `config`, **`catalog.json`** (or manual) | builds + deploys `apps/authoring`. |
-| `e2e-live.yml` | manual | the `E2E_LIVE=1` specs that mount a real preview. |
-| `e2e-starter-matrix.yml` | manual | every starter through a live session; serialized against the global container cap. |
+| `deploy-runner-api.yml` | push to `master` touching `workers/api`, `containers`, `scripts`, `config`, `packages` (or manual) | deploys `workers/api`, then calls the `@smoke` E2E subset against prod. |
+| `deploy-runner-authoring.yml` | push to `master` touching `apps/authoring`, `packages`, `config`, **`catalog.json`** (or manual) | builds + deploys `apps/authoring`, then calls the `@smoke` E2E subset against prod. |
+| `e2e-live.yml` | manual, weekly canary (Mon 05:00 UTC, prod + AI), or `workflow_call` with `smoke: true` from the deploy workflows | everything ci.yml cannot run: live renders, container suites, the share viewer/round-trip, AI answer checks. Dispatch inputs: `base_url`, `ai`, `pkg_pr_new_ref` (DEV-2198). |
+| `e2e-starter-matrix.yml` | manual + monthly (1st, 05:00 UTC) | every starter × major through a live session; serialized against the global container cap. |
 | `import-docs.yml` | manual, or `repository_dispatch: docs-examples-sync` from the docs repo | re-imports the documentation-guide examples. |
 | `import-starters.yml` | manual, `repository_dispatch: starter-examples-sync`, weekly cron, or push touching `examples/**` | re-imports the versioned starter buckets (each from `prod-examples/<major>` when the branch exists, else `master`), rebuilds the catalog index + container contexts, opens a PR. |
 
