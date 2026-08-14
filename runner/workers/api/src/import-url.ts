@@ -73,9 +73,9 @@ const EXCLUDE_DIRS = new Set([
 const EXCLUDE_FILES = new Set([
   "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", ".DS_Store",
 ]);
-const SECRET_FILE_RE = /(^|\/)\.env(\..+)?$/i;
+export const SECRET_FILE_RE = /(^|\/)\.env(\..+)?$/i;
 
-function isTextPath(path: string): boolean {
+export function isTextPath(path: string): boolean {
   const name = path.slice(path.lastIndexOf("/") + 1);
   if (TEXT_FILENAMES.has(name)) return true;
   const dot = name.lastIndexOf(".");
@@ -93,7 +93,7 @@ function isTextPath(path: string): boolean {
  * root, so traversal is rejected rather than normalized away — a path that needed
  * rewriting to be safe is not a path we should be importing at all.
  */
-function workspacePath(raw: string): string | null {
+export function workspacePath(raw: string): string | null {
   const segments = raw.replace(/\\/g, "/").split("/").filter(Boolean);
   if (!segments.length) return null;
   if (segments.some((segment) => segment === "." || segment === ".." )) return null;
@@ -891,4 +891,99 @@ export async function importFromUrl(
     ...parsed,
     framework: detectFramework(parsed.files, options.knownFrameworks),
   };
+}
+
+// ---- ad-hoc payloads (DEV-2516) ---------------------------------------------
+//
+// The Theme Builder POSTs a generated project straight to /api/payload: no
+// provider, no page, no parser in between. That removes the SSRF surface this
+// module was built around and adds a different one — the paths arrive from a
+// browser, and a workspace key is composed with the builder container's root
+// when the demo is saved (`CONTAINER_ROOT + path` in share.ts). So every key
+// still goes through `workspacePath`, for the reason its doc comment gives.
+//
+// Two kinds of unwanted file, handled two ways. A `.env`, a traversal key or a
+// binary is a *client error*: refused loudly, because a payload comes from our
+// own client and a file we cannot accept there is a bug worth hearing about.
+// (The URL importers push those to `skipped` instead — an import that rejects a
+// file leaves the author no way to get their code back.) A lockfile, a
+// `node_modules/` or a `dist/` entry is *noise* the builder re-derives anyway,
+// so it is dropped silently: 400-ing an otherwise fine export over one is a
+// worse outcome than ignoring it.
+//
+// This lives in this file rather than its own module for the reason the
+// CDN-globals section above gives: the pipeline tests load it through
+// `--experimental-strip-types`, which cannot resolve a sibling `./x.js`.
+
+/** Ceiling for a whole payload, counted in characters like the response cap
+ *  above. A real Theme Builder export is ~40 KB, its `data.js` alone ~32 KB. */
+export const MAX_PAYLOAD_CHARS = 256 * 1024;
+
+/**
+ * Validate a browser-supplied file set and decide which starter it is.
+ *
+ * Throws `ImportError` — 413 for the size ceiling, 400 for everything else — so
+ * the route can hand the message straight to the user, as /api/import does.
+ */
+export function validatePayloadFiles(
+  input: unknown,
+  options: { knownFrameworks: Set<string>; framework?: string },
+): { files: Record<string, string>; framework: string } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new ImportError("files are required.");
+  }
+  const entries = Object.entries(input as Record<string, unknown>);
+  if (!entries.length) throw new ImportError("files are required.");
+  if (entries.length > MAX_FILES) {
+    throw new ImportError(`A demo cannot carry more than ${MAX_FILES} files.`);
+  }
+
+  const files: Record<string, string> = {};
+  let total = 0;
+  for (const [raw, contents] of entries) {
+    if (typeof contents !== "string") {
+      throw new ImportError(`${raw} has no text contents — every file must be a string.`);
+    }
+    const path = workspacePath(raw);
+    if (!path) throw new ImportError(`${raw} is not a path this playground can accept.`);
+
+    // Dropped, not refused — see the note above. Lockfiles matter most: the
+    // version the workspace is rewritten to is resolved in the container, and a
+    // lockfile from the exporter's machine pins it back.
+    const segments = path.slice(1).split("/");
+    if (segments.slice(0, -1).some((dir) => EXCLUDE_DIRS.has(dir))) continue;
+    if (EXCLUDE_FILES.has(segments[segments.length - 1]!)) continue;
+
+    if (SECRET_FILE_RE.test(path)) {
+      throw new ImportError("Environment files cannot be sent to the playground.");
+    }
+    if (!isTextPath(path)) {
+      throw new ImportError(`${path} is not a text file, and only text files can be sent.`);
+    }
+    const text = contents.replace(/\r\n/g, "\n");
+    total += text.length;
+    if (total > MAX_PAYLOAD_CHARS) {
+      throw new ImportError(
+        `That project is larger than ${Math.floor(MAX_PAYLOAD_CHARS / 1024)} KB.`,
+        413,
+      );
+    }
+    files[path] = text;
+  }
+
+  if (!Object.keys(files).length) {
+    throw new ImportError("That project has no files this playground can open.");
+  }
+  assertHandsontableProject(files);
+
+  // An explicit hint only wins when it names a starter we actually have. This
+  // route is public and the framework becomes a `usage_daily` dimension, so the
+  // caller must not be able to grow that space (see `knownFramework` in index).
+  const hint = options.framework?.trim();
+  const framework =
+    hint && options.knownFrameworks.has(hint)
+      ? hint
+      : detectFramework(files, options.knownFrameworks);
+
+  return { files, framework };
 }

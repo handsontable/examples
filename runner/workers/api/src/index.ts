@@ -13,11 +13,11 @@ import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate } from "./auth.js";
-import { isValidationError, validateDescription, validateTitle } from "./demo-info.js";
+import { MAX_TITLE, isValidationError, validateDescription, validateTitle } from "./demo-info.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse } from "./error-page.js";
-import { ImportError, importFromUrl } from "./import-url.js";
-import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, updateDemo, type DemoRow } from "./share.js";
+import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
+import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
   budgetPausedMessage,
   countEgress,
@@ -231,6 +231,11 @@ const knownFramework = (value: unknown): string => {
   if (Object.prototype.hasOwnProperty.call(BUILD_CONFIG, value)) return value;
   return KNOWN_DOC_FLAVOURS.has(value) ? value : "other";
 };
+
+/** How long an ad-hoc payload stays openable (DEV-2516). Long enough to survive
+ *  a "let me finish this tomorrow", short enough that nothing here is a store:
+ *  a payload the author wants to keep is one Save away from being a real demo. */
+const PAYLOAD_TTL_SECONDS = 24 * 60 * 60;
 
 const flushMeters = (env: Env): Promise<void> =>
   Promise.all([flushTraffic(env), flushUsage(env), flushAnalytics(env)]).then(() => undefined);
@@ -885,6 +890,85 @@ export default Sentry.withSentry(sentryOptions, {
           Sentry.captureException(error, { tags: { upstream: "import-url" } });
           return json({ error: "import failed" }, 500);
         }
+      }
+
+      // POST /api/payload (public, rate-limited) — hand the runner an ad-hoc
+      // example that is in no catalog: the Theme Builder's generated project
+      // (DEV-2516). Returns an id the playground boots from as `?payload=<id>`.
+      //
+      // Public on purpose, unlike /api/import above. That route is authenticated
+      // because it makes the Worker fetch a user-supplied URL; this one fetches
+      // nothing, and Theme Builder users are anonymous — an authenticate() line
+      // here would 401 every real caller. The gate is the rate limit plus the
+      // ceilings in validatePayloadFiles.
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "payload" && parts.length === 2) {
+        // Cheap refusal first, so an oversized body is never buffered. JSON
+        // escaping inflates the payload, so this ceiling is deliberately looser
+        // than MAX_PAYLOAD_CHARS — the real check is on the parsed files, since
+        // the header can be absent or a lie.
+        const declared = Number(request.headers.get("Content-Length"));
+        if (Number.isFinite(declared) && declared > MAX_PAYLOAD_CHARS * 4) {
+          return json({ error: `That project is larger than ${MAX_PAYLOAD_CHARS / 1024} KB.` }, 413);
+        }
+
+        const ip = request.headers.get("cf-connecting-ip") ?? "";
+        const limit = await checkChatRateLimit(env, ip, "payload");
+        if (!limit.ok) {
+          return cors(new Response(
+            JSON.stringify({ error: "rate_limited", message: "Too many demos at once — give it a minute." }),
+            { status: 429, headers: { "Content-Type": "application/json", "Retry-After": String(limit.retryAfter) } },
+          ));
+        }
+
+        const body = (await request.json().catch(() => ({}))) as {
+          files?: unknown;
+          title?: unknown;
+          framework?: unknown;
+        };
+        try {
+          const { files, framework } = validatePayloadFiles(body.files, {
+            knownFrameworks: new Set(Object.keys(BUILD_CONFIG)),
+            framework: typeof body.framework === "string" ? body.framework : undefined,
+          });
+          // The title is cosmetic here — a demo is not being saved — so it is
+          // clamped rather than validated: a long one must not 400 a project
+          // that is otherwise fine.
+          const title = (typeof body.title === "string" ? body.title.trim() : "").slice(0, MAX_TITLE)
+            || "Untitled example";
+
+          const id = shortId();
+          await env.CACHE.put(
+            `payload:${id}`,
+            JSON.stringify({ files, framework, title }),
+            { expirationTtl: PAYLOAD_TTL_SECONDS },
+          );
+          ctx.waitUntil(recordUsageEvent(env, "payload", framework));
+          return json({ id, framework, title }, 201);
+        } catch (error) {
+          // Every refusal in validatePayloadFiles is written to be shown; only a
+          // KV failure gets here as something else, and that one is ours.
+          if (error instanceof ImportError) return json({ error: error.message }, error.status);
+          Sentry.captureException(error, { tags: { route: "payload" } });
+          return json({ error: "could not store that project" }, 500);
+        }
+      }
+
+      // GET /api/payload/:id (public) — what the playground boots from.
+      //
+      // 404, never 410, on a miss: KV cannot tell an expired key from one that
+      // never existed (`get` returns null either way), and distinguishing them
+      // would mean a D1 row or a tombstone for a record that is deliberately
+      // throwaway. Every 410 elsewhere in this Worker is a stored flag.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "payload" && parts.length === 3) {
+        // Shape-check before the lookup: a KV key is capped at 512 bytes, so an
+        // overlong segment makes `get` throw, and a malformed request would then
+        // be reported to Sentry as our 500. Ids are what `shortId` mints.
+        const payloadId = parts[2]!;
+        if (!/^[a-z0-9]{1,32}$/i.test(payloadId)) return json({ error: "not found" }, 404);
+        const record = await env.CACHE.get(`payload:${payloadId}`, "json");
+        if (!record) return json({ error: "not found" }, 404);
+        // Immutable under an unguessable id, so the edge may hold it.
+        return cors(cacheableJson(record));
       }
 
       // GET /api/versions (public) — real published Handsontable versions.
