@@ -97,7 +97,8 @@ This route shipped on **14 August 2026**. If Claude answers that demo creation i
 configured, or does not seem to know the tool exists, your session predates the
 rollout: start a new conversation, or reconnect the Handsontable MCP, and ask again.
 If it still refuses, the runner side is unreachable — say so in the team channel
-rather than working around it, and use the browser route in the meantime.
+rather than working around it, and use the [browser route](/guide/support) in the
+meantime.
 
 ## Where your demos live
 

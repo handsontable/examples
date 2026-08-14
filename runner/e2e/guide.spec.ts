@@ -111,6 +111,32 @@ test("the tracks are reachable from each other, and from the overview", async ({
     .getByRole("link", { name: "PR builds & tooling" })).toHaveAttribute("aria-current", "page");
 });
 
+test("a cross-track link is a same-tab link, and the cards take a hover border", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await page.goto("/guide/support");
+
+  // The tracks refer to each other in prose. Two things have to hold: the markdown
+  // link became a link at all (the parser only admits absolute URLs and paths), and
+  // it does not open a tab — a reader following three cross-references would
+  // otherwise end up with three windows.
+  const cross = page.locator("main").getByRole("link", { name: "Developers track" });
+  await expect(cross).toHaveAttribute("href", "/guide/developers");
+  await expect(cross).not.toHaveAttribute("target", /.+/);
+  await cross.click();
+  await expect(page).toHaveURL(/\/guide\/developers$/);
+
+  // The overview's cards keep their resting border in the stylesheet, so the hover
+  // rule can change it (ADR-0026: an inline `border` shorthand would win instead).
+  await page.goto("/guide");
+  const card = page.getByRole("link", { name: /Ask Claude/ }).first();
+  const resting = await card.evaluate((el) => getComputedStyle(el).borderTopColor);
+  await card.hover();
+  await expect
+    .poll(() => card.evaluate((el) => getComputedStyle(el).borderTopColor))
+    .not.toBe(resting);
+});
+
 test("a stale track link lands on the overview and says so", async ({ page }) => {
   await stubShell(page);
   await signIn(page);

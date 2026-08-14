@@ -102,10 +102,22 @@ function splitRow(line: string): string[] {
   return cells.map((cell) => cell.trim());
 }
 
-/** Only absolute http(s) links survive; `javascript:` and friends stay text. */
+/**
+ * Only absolute http(s) links and same-origin paths survive; `javascript:` and
+ * friends stay text.
+ *
+ * The path form exists for the guide, whose tracks link to each other
+ * (`[the Developers track](/guide/developers)`, ADR-0034). It is deliberately
+ * narrow: a leading `/` and *not* a second `/` or `\`, because `//host` is
+ * protocol-relative and the URL spec treats `/\` the same way — both are external
+ * addresses wearing a path's clothes, and this renderer also draws model output and
+ * user-written demo descriptions.
+ */
 export function safeHref(url: string): string | null {
+  const trimmed = url.trim();
+  if (/^\/(?![/\\])/.test(trimmed)) return trimmed;
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(trimmed);
     return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
   } catch {
     return null;

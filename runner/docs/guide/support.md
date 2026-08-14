@@ -37,9 +37,9 @@ answer is "this is fixed in a later release", show both: one demo on their versi
 one on the current one.
 
 The pencil beside the control also accepts unreleased builds — a nightly, or a
-specific pull request. That is a developer's tool and it lives in the **Developers**
-track; you will rarely need it, but it is the reason support and engineering can look
-at the same URL.
+specific pull request. That is a developer's tool and it lives in the
+[Developers track](/guide/developers); you will rarely need it, but it is the reason
+support and engineering can look at the same URL.
 
 ## 3. Edit the demo
 

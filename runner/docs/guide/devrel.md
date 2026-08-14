@@ -5,8 +5,9 @@ Handsontable example inside a page we publish. A demo here is a better artefact 
 code block: it runs, it is pinned to a version, and it can be changed without
 redeploying the docs.
 
-Everything in the **Support** track applies to building the demo. This page is about
-the part that comes after: getting it into a page, and keeping it working.
+Everything in the [Support track](/guide/support) applies to building the demo. This
+page is about the part that comes after: getting it into a page, and keeping it
+working.
 
 ## The embed URL
 

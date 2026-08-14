@@ -166,3 +166,22 @@ test("the tracks divide the material rather than repeating it", () => {
   assert.ok(!/pkg\.pr\.new/.test(everyone), "PR builds belong to the developers track");
   assert.ok(!/<iframe/.test(support), "embedding belongs to the devrel track");
 });
+
+test("every cross-track link points at a track that exists", () => {
+  // The tracks refer to each other in prose, and a link to `/guide/marketing` would
+  // land the reader on the overview's "does not exist" notice — a broken link that
+  // looks like a working one. The parser only admits root-relative paths, so these
+  // are the only guide links that can be written.
+  const slugs = new Set(GUIDE_TRACKS.map((t) => t.slug));
+  let seen = 0;
+  for (const name of [...GUIDE_TRACKS.map((t) => t.slug), "overview"]) {
+    const md = fs.readFileSync(path.join(docs, `${name}.md`), "utf8");
+    for (const m of md.matchAll(/\]\(\/guide\/([a-z-]+)(#[^)]*)?\)/g)) {
+      seen += 1;
+      assert.ok(slugs.has(m[1]), `${name}.md links to /guide/${m[1]}, which is not a track`);
+    }
+  }
+  // And the cross-links are actually there: the same-tab rendering they rely on is
+  // dead code otherwise, which is how it shipped broken the first time.
+  assert.ok(seen >= 3, `expected the tracks to cross-reference each other, found ${seen} links`);
+});

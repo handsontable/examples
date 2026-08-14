@@ -343,12 +343,14 @@ const cardGrid: CSSProperties = {
   marginBottom: theme.space(7),
 };
 
+/** No `border` here: the resting border lives in the app's stylesheet next to the
+ *  hover, because an inline shorthand carries border-color and would outrank it —
+ *  ADR-0026, and the mistake `.hot-demo-card` already documents. */
 const card: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: theme.space(1),
   padding: theme.space(3),
-  border: `1px solid ${theme.color.border}`,
   borderRadius: theme.radius.md,
   textDecoration: "none",
   color: theme.color.text,

@@ -98,7 +98,7 @@ there.
 
 For a demo that does not exist yet, the **Handsontable MCP** route is faster than either
 — describe it in Claude and get the built link back, with no browser step at all. That
-is the **Everyone** track; it applies to you too.
+is the [Everyone track](/guide/everyone); it applies to you too.
 
 ## What the runner accepts
 
