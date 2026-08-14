@@ -106,9 +106,11 @@ Plain language is enough. What actually changes the result:
   a real container.
 - **The Handsontable version.** Say nothing and you get the current release. Name a
   version — "on 17.1.0" — if the conversation is about that one.
-- **The description.** Claude writes one, because whoever opens the link later was
-  not in your conversation. Tell it what to say if the demo is going into a ticket or
-  a customer thread — a link back to that thread is usually the useful part.
+- **The description.** Required on this route: the runner refuses a demo without
+  one, because whoever opens the link later was not in your conversation. (The
+  browser editor treats it as optional; here it is not.) Claude writes it — tell it
+  what to say if the demo is going into a ticket or a customer thread, because a link
+  back to that thread is usually the useful part.
 
 ## Open the link before you send it
 
@@ -139,7 +141,7 @@ So open the client link and look for the grid:
   at startup. Paste the link back to Claude, say the grid does not render, and ask it to
   fix and re-save. The link stays the same, so anything you already sent starts working
   once it is fixed.
-- **"This demo is not available" or a 404?** The build failed. Ask Claude to try again.
+- **"This demo is unavailable." or a 404?** The build failed. Ask Claude to try again.
 
 Claude often **cannot open the link itself** — the sandbox it runs in is not allowed to
 reach demos.handsontable.com. If it says it could not verify the demo, that is not
@@ -174,19 +176,12 @@ meantime.
 You do not have to start again to change one. Tell Claude what to fix or add — "make the
 Overdue rows red", "add a VAT column", "the grid does not render, please fix it" — and it
 updates **the demo you already have**, at the same links. Anything you have already sent
-keeps working, and starts showing the new version.
+keeps working, and starts showing the new version. "Make me one" and "change it" are the
+same conversation, and neither needs the browser.
 
-**Status: landing shortly.** The endpoint behind it is in review
-(`handsontable/examples` #177). Until it deploys, Claude can still write the change, and
-you apply it one of two ways:
-
-- Open **`/edit/<id>`**, paste in what Claude gives you, press **Save** — same link, same
-  demo. Anyone technical can do this in a minute if you would rather not.
-- Or ask Claude for a new demo and **delete the old one** in My demos — but only if you
-  have not sent the first link to anybody. Deleting revokes it for good.
-
-Once it is live, "make me one" and "change it" are the same conversation, and neither needs
-the browser.
+One boundary: asking works on **demos the MCP created**. A demo you built in the browser
+answers with a refusal — "this demo was not created through the MCP; edit it at
+`/edit/<id>` in the browser" — which is where you change those anyway.
 
 ## Where your demos live
 

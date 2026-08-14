@@ -21,7 +21,7 @@ Or skip the clicking:
 
 ```
 https://demos.handsontable.com/?example=javascript&v=13191
-https://demos.handsontable.com/?docs=guides/rows/row-sorting/react/example1.tsx&v=13191
+https://demos.handsontable.com/?docs=guides/rows/rows-sorting/react/exampleSortingDemo.tsx&v=13191
 https://demos.handsontable.com/?example=react&v=https://pkg.pr.new/handsontable@13191
 ```
 
@@ -52,26 +52,30 @@ majors are **15–19**; anything outside that is refused rather than half-workin
 
 Two edges worth knowing:
 
-- **Integers below 1000 are read as a version, not a PR.** `18` means 18.0.0. Real
-  Handsontable PR numbers are five digits, so this only bites on toy input.
+- **A bare integer is only a PR ref from 1000 up.** `15`–`19` are read as majors —
+  `18` means 18.0.0 — and `20`–`999` are refused outright rather than guessed at.
+  Real Handsontable PR numbers are five digits, so this only bites on toy input.
 - **The build has to exist.** If CI has not published yet, or the PR comes from a fork
   that cannot publish, the install fails and the preview says so. `curl -sI
   https://pkg.pr.new/handsontable@<number>` answering `200` is the check.
 
 ## Where a demo runs, and why some are slow
 
-Two tiers, and which one you get is decided by the starter:
+Two engines, and which one you get is decided by the starter:
 
-- **In-browser (tier 1)** — the blank templates, JavaScript, TypeScript, React, Vue.
+- **In-browser** — the blank templates, JavaScript, TypeScript, React, Vue.
   Bundled in the page by Sandpack. Fast, cheap, no container, and unaffected by the
   monthly budget.
-- **Container (tier 2)** — Angular, Next.js, Nuxt, Astro, Remix, and the UI-library
+- **Container** — Angular, Next.js, Nuxt, Astro, Remix, and the UI-library
   starters (MUI, Ant Design, Fluent UI, Base Web). A real dev server in a Cloudflare
   Sandbox, with a real `install`. The first load is slow by construction, and these are
-  what the budget ceiling pauses.
+  what the budget ceiling pauses. One surprise in the list: React (Vite, JS) runs in a
+  container too, despite being a React starter — the instant React is the TypeScript
+  one.
 
-If you are demonstrating grid behaviour rather than framework integration, pick a tier-1
-starter: it costs nothing, starts instantly, and a PR build resolves in it just as well.
+If you are demonstrating grid behaviour rather than framework integration, pick an
+in-browser starter: it costs nothing, starts instantly, and a PR build resolves in it
+just as well.
 
 ## Publish an example from your own machine
 
@@ -107,7 +111,8 @@ is the [Everyone track](/guide/everyone); it applies to you too.
 
 ## What the runner accepts
 
-The same limits on every path — file drop, plugin, MCP:
+The same rules on every path — file drop, plugin, MCP — with the per-path differences
+called out:
 
 - **Text files only.** Source (`.js .jsx .mjs .cjs .ts .tsx .vue .svelte .astro`),
   markup and styles (`.html .css .scss .sass .less .svg`), data and config
@@ -116,8 +121,10 @@ The same limits on every path — file drop, plugin, MCP:
   URL, or inline a data URI.
 - **`.env` and `.env.*` are never accepted**, on any path, and that is deliberate rather
   than incidental.
-- **`node_modules`, build output and lockfiles are refused, not dropped** — you find out
-  instead of wondering why the tree looks odd.
+- **`node_modules`, build output and lockfiles never make it in**, but the two paths
+  say so differently. The MCP refuses the whole payload, with the reason. A file drop
+  skips them quietly — nobody means to drop `node_modules` — and stops at 50 files,
+  saying where it stopped.
 - **About 50 files and 256 KB of source** on the MCP path. If an example is bigger than
   that, it is a project: trim it to the grid, its data and its configuration.
 
@@ -140,9 +147,10 @@ bridge back to a local reproduction: unzip, install, run.
   version does not have. That is a real answer to a compatibility question, not a
   broken demo.
 - **A PR build fails to install.** See above: the build is probably not published yet.
-- **"Live editing is paused…"** is the monthly budget on the container tier. Tier-1
-  starters keep working, and saving, forking, client links and embeds are unaffected —
-  they are static builds.
+- **"Live editing is paused…"** is the monthly budget on the container starters.
+  In-browser starters keep working, and existing links and embeds are unaffected —
+  they are static builds. A Save or a Fork boots a build container, though, so the
+  top budget tiers refuse those too.
 - **An import was refused as not-Handsontable.** The guard wants a `handsontable`
   dependency, an import of it, or a CDN tag. A project that uses it only through your
   own wrapper package will trip this; add the dependency, or drop the files in instead.
