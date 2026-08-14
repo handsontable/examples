@@ -65,6 +65,23 @@ right price for a narrow feature.
   `budgetGate` and `recordUsageEvent` as any other build, and stamps
   `forkedFrom: "mcp:<framework>"` so MCP-created demos are identifiable in D1.
 
+**Amended 2026-08-14 — updating a demo in place.** The very first demo published this way
+needed a one-line fix, and there was no way to make it: creating a second demo leaves the
+broken link alive, which is worse than either outcome. So the decision extends to
+`PATCH /api/mcp/demos/:id`, same service auth, same `updateDemo()` and budget gate as the
+editor's **Save**, with two guards that the create path does not need:
+
+- **Ownership.** `sameOwner(row.created_by, assertedAuthor)` or 403. The shared secret says a
+  trusted service is calling; it says nothing about whose demos it may rewrite, and without
+  this check one leaked secret would mean rewriting anyone's published link.
+- **Revoked demos are gone.** A revoked id returns 410 rather than rebuilding — resurrecting a
+  link somebody deliberately killed is not an update.
+
+`files` is validated by the same `mcp-create.ts` rules, so a fix cannot smuggle in what a new
+demo could not. Absent fields mean "leave the column alone" (never falling back to the row read
+at the start of the handler, per the DEV-2495 lesson on the broker path), and a patch with
+nothing in it is a 400 rather than a pointless rebuild.
+
 ## Consequences
 
 A demo can be created end-to-end from a prompt, owned by the person who asked, appearing in
@@ -83,6 +100,5 @@ credential that makes it possible can do nothing except create demos as a named 
 - The caps make this path unsuitable for uploading a real project. That is deliberate: the
   ticketed-upload flow in DEV-2501 is the answer for local folders, and it can reuse
   `authenticateService()` unchanged.
-- `update_demo` / `delete_demo` from the MCP are not part of this decision. They would need
-  the service path to assert ownership the way the broker path does, and nothing needs them
-  yet.
+- `delete_demo` from the MCP is still not part of this decision. Revoking a link is
+  irreversible and nothing needs it yet; the browser path exists for the rare case.
