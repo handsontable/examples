@@ -255,11 +255,20 @@ because Next and Nuxt have no `index.html` for a file-level injection to find.
 - Worker: `MONITOR_DEMOS` in the `vars` block of `workers/api/wrangler.jsonc`
 
 Anything other than `"1"` (including deleting the line) is off. Because off costs a
-deploy, the immediate brake is elsewhere: the reporter stops after
-`MONITOR_EVENT_CEILING` (20) events per page load, dedupes by message plus first
-stack frame, and truncates messages to 500 characters. **A per-environment rate
-limit on `demo-runtime` in the Sentry UI is the only brake that works without a
-build** — keep one configured for as long as this is on.
+deploy, the immediate brake is elsewhere: `MONITOR_EVENT_CEILING` (20) events per
+page load, deduped by kind plus message plus first stack frame, messages truncated
+to 500 characters.
+
+That ceiling is enforced **twice, and the parent's copy is the one that counts**. The
+reporter applies it in-page, but it runs beside code the demo's author wrote — and
+for a shared or docs example that author is not the person viewing it. Such a demo
+can ignore the reporter and `postMessage` crafted payloads straight at the app, so
+`reportDemoEvent` keeps its own `createMonitorBudget` and validates every field,
+`kind` against a closed set (it becomes a Sentry tag). Treat the in-page cap as
+advisory and the relay's as the limit.
+
+**A per-environment rate limit on `demo-runtime` in the Sentry UI is still the only
+brake that works without a build** — keep one configured for as long as this is on.
 
 Nothing identifying is relayed: no source snippets, no file map, and network events
 carry scheme, host and path only, with the query string stripped (it can hold a

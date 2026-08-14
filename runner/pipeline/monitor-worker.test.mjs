@@ -73,6 +73,35 @@ test("preserves status and statusText", async () => {
   assert.ok((await out.text()).includes(MONITOR_MESSAGE_TYPE));
 });
 
+test("reads a clone, so the original body is never consumed", async () => {
+  // Bugbot #190: this read `response` directly, so on any throw the catch — the one
+  // that exists to keep monitoring from breaking a preview — handed back a *drained*
+  // response, i.e. a blank iframe.
+  //
+  // `bodyUsed` on the original is what discriminates the fix from the bug: it was
+  // `true` before and must be `false` now. Asserting that the error path "still
+  // rejects" would not — a drained body and a failed upstream both reject.
+  const original = htmlResponse();
+  const out = await injectMonitor(original, ON, PROD);
+
+  assert.equal(original.bodyUsed, false, "the original must remain streamable");
+  assert.ok((await out.text()).includes(MONITOR_MESSAGE_TYPE));
+});
+
+test("returns the untouched original when the body cannot be read", async () => {
+  const failing = new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("<html><head>"));
+        controller.error(new Error("upstream died mid-body"));
+      },
+    }),
+    { headers: { "content-type": "text/html" } },
+  );
+
+  assert.equal(await injectMonitor(failing, ON, PROD), failing);
+});
+
 test("is idempotent", async () => {
   const once = await injectMonitor(htmlResponse(), ON, PROD);
   const twice = await injectMonitor(htmlResponse(await once.clone().text()), ON, PROD);

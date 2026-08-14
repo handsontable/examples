@@ -7,6 +7,8 @@
 // SDK directly, which keeps the production gate authoritative in one place.
 import * as Sentry from "@sentry/react";
 import {
+  MONITOR_EVENT_CEILING,
+  createMonitorBudget,
   normalizeMonitorMessage,
   truncateMessage,
   type MonitorPayload,
@@ -140,6 +142,14 @@ export function reportError(error: unknown, context: string): void {
   Sentry.captureException(error, { tags: { context } });
 }
 
+/**
+ * The relay's budget, module-scoped so it lasts the page load rather than the mount —
+ * switching examples must not hand out a fresh allowance. The reporter's in-page copy
+ * of this cap is advisory: the demo it lives beside can bypass it by posting straight
+ * at this window (see `createMonitorBudget`). This is the enforceable one.
+ */
+const demoRelayBudget = createMonitorBudget(MONITOR_EVENT_CEILING);
+
 /** Where a relayed event came from. `tier` distinguishes the two engines; `demoId`
  *  is present only for a saved demo. */
 export interface DemoEventContext {
@@ -163,6 +173,7 @@ export interface DemoEventContext {
 export function reportDemoEvent(payload: MonitorPayload, context: DemoEventContext): void {
   if (!monitorDemos) return;
   const message = truncateMessage(payload.message);
+  if (!demoRelayBudget.admit(payload.kind, message, payload.stack)) return;
   const tags: Record<string, string> = {
     surface: DEMO_SURFACE,
     kind: payload.kind,

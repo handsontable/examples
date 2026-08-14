@@ -1,10 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as acorn from "acorn";
 import {
   MONITOR_EVENT_CEILING,
+  MONITOR_KINDS,
   MONITOR_MESSAGE_MAX,
   MONITOR_MESSAGE_TYPE,
   REPORTER_SOURCE,
+  createMonitorBudget,
   injectReporter,
   injectReporterIntoHtml,
   isMonitorPayload,
@@ -339,4 +342,84 @@ test("isMonitorPayload rejects anything else on the page", () => {
   assert.equal(isMonitorPayload(null), false);
   assert.equal(isMonitorPayload("hot-runner-monitor"), false);
   assert.equal(isMonitorPayload({ type: MONITOR_MESSAGE_TYPE, kind: "error" }), false, "message required");
+});
+
+test("isMonitorPayload rejects a kind outside the closed set", () => {
+  // `kind` becomes a Sentry tag and the payload is written by whoever authored the
+  // demo, so an arbitrary string here is unbounded tag cardinality of their choosing
+  // (Bugbot #190).
+  const base = { type: MONITOR_MESSAGE_TYPE, message: "x" };
+  assert.equal(isMonitorPayload({ ...base, kind: "error" }), true);
+  assert.equal(isMonitorPayload({ ...base, kind: "whatever-i-want" }), false);
+  assert.equal(isMonitorPayload({ ...base, kind: "" }), false);
+  assert.equal(isMonitorPayload({ ...base, kind: 1 }), false);
+});
+
+test("isMonitorPayload rejects wrong types on the optional fields", () => {
+  const base = { type: MONITOR_MESSAGE_TYPE, kind: "error", message: "x" };
+  assert.equal(isMonitorPayload({ ...base, stack: 42 }), false);
+  assert.equal(isMonitorPayload({ ...base, url: {} }), false);
+  assert.equal(isMonitorPayload({ ...base, stack: "at f", url: "https://x/y" }), true);
+});
+
+test("MONITOR_KINDS covers exactly the kinds the reporter can emit", () => {
+  // A kind the reporter sends but the allowlist omits is a silently dropped class of
+  // report — the failure mode of a closed set is drift, so pin it.
+  assert.deepEqual(
+    [...MONITOR_KINDS].sort(),
+    ["console-error", "console-warn", "error", "network", "rejection", "stderr"],
+  );
+});
+
+// ---- the parent-side budget ------------------------------------------------
+//
+// Bugbot #190, MEDIUM: the reporter's ceiling runs *inside* the preview, next to code
+// the demo's author wrote — and for a shared or docs example that author is not the
+// person viewing it. Such a demo can skip the reporter and postMessage crafted
+// payloads with unique messages straight at the parent, so the in-page cap bounds
+// nothing. These cover the copy that is actually enforceable.
+
+test("budget stops at the ceiling however unique the messages are", () => {
+  const budget = createMonitorBudget(3);
+  const admitted = Array.from({ length: 50 }, (_, i) => budget.admit("error", `unique ${i}`));
+  assert.equal(admitted.filter(Boolean).length, 3, "a flood of distinct messages is still capped");
+});
+
+test("budget dedupes on kind + message + first frame", () => {
+  const budget = createMonitorBudget(10);
+  const stack = "Error: x\n    at boom (https://preview/app.js:1:1)";
+
+  assert.equal(budget.admit("error", "same", stack), true);
+  assert.equal(budget.admit("error", "same", stack), false, "identical report");
+  assert.equal(budget.admit("console-error", "same", stack), true, "a different kind is a different report");
+  assert.equal(
+    budget.admit("error", "same", "Error: x\n    at other (https://preview/app.js:9:9)"),
+    true,
+    "same message, different frame, is a different fault",
+  );
+});
+
+test("budgets are independent instances", () => {
+  // The app holds one per page load; a per-mount budget would hand out a fresh
+  // allowance on every example switch.
+  const a = createMonitorBudget(1);
+  const b = createMonitorBudget(1);
+  assert.equal(a.admit("error", "x"), true);
+  assert.equal(a.admit("error", "y"), false);
+  assert.equal(b.admit("error", "x"), true, "a separate budget is unaffected");
+});
+
+test("REPORTER_SOURCE parses as ES5", () => {
+  // Bugbot #190 caught a trailing comma in a `.then(...)` call — ES2017 — that the
+  // execution tests above could never see, because `new Function` in modern Node
+  // accepts it. The classic bundler runs 2018-era babel over the entry it is
+  // prepended to, where a parse failure is a blank Tier-1 preview.
+  //
+  // Parsed, not grepped: a syntax allowlist is a list of the mistakes already made.
+  assert.doesNotThrow(() => acorn.parse(REPORTER_SOURCE, { ecmaVersion: 5 }));
+});
+
+test("REPORTER_SOURCE cannot break out of a <script> block", () => {
+  // It is inlined into HTML by both injectors.
+  assert.equal(REPORTER_SOURCE.includes("</script"), false);
 });

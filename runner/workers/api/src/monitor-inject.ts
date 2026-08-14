@@ -44,8 +44,14 @@ export async function injectMonitor(
   // A WebSocket upgrade (HMR) has no body to read and must pass through untouched.
   const withSocket = response as Response & { webSocket?: unknown };
   if (withSocket.webSocket || !response.body) return response;
+  // Read a clone, never the response itself. `text()` consumes the body, so a throw
+  // partway through the read (buffer limit, timeout, a truncated upstream) would
+  // leave the caller returning a drained response — a blank iframe, caused by the
+  // very catch that exists to stop monitoring from breaking a preview. Cloning keeps
+  // the original body intact and streamable on that path.
+  const copy = response.clone();
   try {
-    const html = await response.text();
+    const html = await copy.text();
     const headers = new Headers(response.headers);
     headers.delete("content-length");
     return new Response(injectReporterIntoHtml(html), {
@@ -54,9 +60,6 @@ export async function injectMonitor(
       headers,
     });
   } catch {
-    // A body that could not be read has already been consumed or errored. The
-    // original response is the only thing left to return, and monitoring is never
-    // worth failing a preview over.
     return response;
   }
 }
