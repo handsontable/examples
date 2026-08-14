@@ -33,7 +33,7 @@ Cursor **Bugbot** auto-reviews each PR push.
 | `apps/authoring/public/docs-examples/` | Generated documentation-guide examples (manifest + one CatalogEntry JSON each). `pipeline/import-docs.mjs` + `wrap-docs-example.mjs`. |
 | `apps/authoring/public/starter-examples/` | Generated starter buckets, one per Handsontable major plus `next` (DEV-2213), each pinned to a concrete version. `pipeline/import.mjs`; `catalog.json` is only the files-free index. |
 | `containers/`, `scripts/` | Live/builder Dockerfiles + baked deps; `prepare-container.mjs`, `warm.ts`. |
-| `docs/` | Architecture, ADRs, run/deploy notes. |
+| `docs/` | Architecture, ADRs, run/deploy notes. `docs/guide/*.md` **is** the in-app guide at `/guide` — four role-based tracks, rendered raw (ADR-0034); edit the markdown, not a `.tsx`. |
 
 ## URL model (routing lives in `apps/authoring/src/App.tsx`)
 

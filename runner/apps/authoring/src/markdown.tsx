@@ -22,12 +22,24 @@ function renderInline(nodes: Inline[], keyPrefix: string): ReactNode[] {
         return <strong key={key}>{renderInline(node.children, key)}</strong>;
       case "em":
         return <em key={key}>{renderInline(node.children, key)}</em>;
-      case "link":
+      case "link": {
+        // A link to another page of this app stays in the tab: the guide's tracks
+        // cross-reference each other (DEV-2522), and a new tab per cross-reference
+        // turns reading two tracks into a window-management problem. Everything
+        // else — model answers, documentation links — still leaves.
+        const internal = node.href.startsWith("/") && !node.href.startsWith("//");
         return (
-          <a key={key} href={node.href} target="_blank" rel="noreferrer" style={linkStyle}>
+          <a
+            key={key}
+            href={node.href}
+            target={internal ? undefined : "_blank"}
+            rel={internal ? undefined : "noreferrer"}
+            style={linkStyle}
+          >
             {node.text}
           </a>
         );
+      }
       default:
         return node.text;
     }
@@ -42,17 +54,28 @@ function renderInline(nodes: Inline[], keyPrefix: string): ReactNode[] {
  * side panel is noise. A page of prose (`/guide`, DEV-2503) needs the opposite —
  * without hierarchy the title, the section headings and the body all read as the
  * same thing — and it needs the landmarks a screen reader navigates by.
+ *
+ * `headingIds` gives the headings anchor ids, by document order — the nth entry is
+ * the nth heading. The ids are computed by the caller (`guideTracks.ts`) rather than
+ * here so that the page's contents list and the rendered anchors come from one
+ * function; a slugger inside this file would be a second implementation of the same
+ * rule, free to disagree with the first.
  */
 export function Markdown({
   text,
   error,
   document: asDocument,
+  headingIds,
 }: {
   text: string;
   error?: boolean;
   document?: boolean;
+  headingIds?: readonly (string | undefined)[];
 }) {
   const blocks = parseMarkdown(text);
+  // Counted during the map, not stored: render order is document order, so the nth
+  // heading rendered is the nth heading parsed on every render.
+  let headingIndex = -1;
   return (
     <div style={{ color: error ? theme.color.danger : undefined }}>
       {blocks.map((block, i) => {
@@ -63,6 +86,7 @@ export function Markdown({
           case "rule":
             return <hr key={key} style={ruleStyle} />;
           case "heading": {
+            headingIndex += 1;
             if (!asDocument) {
               return (
                 <div key={key} style={headingStyle}>
@@ -75,7 +99,13 @@ export function Markdown({
             const level = Math.min(Math.max(block.level, 1), 6);
             const Tag = `h${level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
             return (
-              <Tag key={key} style={documentHeadingStyle(level)}>
+              <Tag
+                key={key}
+                id={headingIds?.[headingIndex]}
+                // Cleared by the anchor scroll otherwise: the page's own header is
+                // sticky, so a heading scrolled to by `#id` would sit under it.
+                style={{ ...documentHeadingStyle(level), scrollMarginTop: 16 }}
+              >
                 {renderInline(block.children, key)}
               </Tag>
             );

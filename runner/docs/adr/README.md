@@ -38,3 +38,4 @@ once Accepted.
 | [0031](0031-files-drag-and-drop-is-text-only.md) | Drag & drop into FILES is text-only, and batched | Accepted |
 | [0032](0032-importing-from-jsfiddle-and-stackblitz.md) | Importing from JSFiddle and StackBlitz; the Handsontable-only rule | Accepted |
 | [0033](0033-mcp-service-auth-for-headless-demo-creation.md) | A separate service auth for headless demo creation from the MCP | Accepted |
+| [0034](0034-role-based-guide-tracks.md) | The guide is four role-based tracks, not one document | Accepted (supersedes the DEV-2503 single-document shape) |
