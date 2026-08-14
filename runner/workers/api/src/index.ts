@@ -920,20 +920,24 @@ export default Sentry.withSentry(sentryOptions, {
           ));
         }
 
-        const body = (await request.json().catch(() => ({}))) as {
+        // A body of literal `null` parses fine, so the catch never fires and the
+        // reads below have to tolerate it — otherwise probing this public route
+        // with `null` is a TypeError, which the handler downstream would report
+        // to Sentry as our own 500 instead of answering 400.
+        const body = (await request.json().catch(() => null)) as {
           files?: unknown;
           title?: unknown;
           framework?: unknown;
-        };
+        } | null;
         try {
-          const { files, framework } = validatePayloadFiles(body.files, {
+          const { files, framework } = validatePayloadFiles(body?.files, {
             knownFrameworks: new Set(Object.keys(BUILD_CONFIG)),
-            framework: typeof body.framework === "string" ? body.framework : undefined,
+            framework: typeof body?.framework === "string" ? body.framework : undefined,
           });
           // The title is cosmetic here — a demo is not being saved — so it is
           // clamped rather than validated: a long one must not 400 a project
           // that is otherwise fine.
-          const title = (typeof body.title === "string" ? body.title.trim() : "").slice(0, MAX_TITLE)
+          const title = (typeof body?.title === "string" ? body.title.trim() : "").slice(0, MAX_TITLE)
             || "Untitled example";
 
           const id = shortId();
