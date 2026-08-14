@@ -543,7 +543,9 @@ function FullMode({ id }: { id: string }) {
           title="Handsontable demo"
           src={`${API_BASE}/d/${id}/`}
           style={{ width: "100%", height: "100%", border: "none", display: "block" }}
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+          // `allow-downloads` for the same reason as the preview pane (DEV-2203): a
+          // demo that exports a file has to be able to hand it over here too.
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
         />
 
         <PreviewStatusBar status={status} frameworkName={frameworkName} version={version} />
