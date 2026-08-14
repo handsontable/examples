@@ -239,8 +239,10 @@ test("every MCP prompt in the guide names the tool it needs", () => {
     const md = fs.readFileSync(path.join(docs, `${name}.md`), "utf8");
     for (const m of md.matchAll(fenced)) {
       const body = m[1];
-      // Only the prompts: blocks that ask for a demo in prose, not shell commands.
-      if (!/\bdemo\b/i.test(body) || /^\s*(claude|curl|https?:|npm|pnpm|\/publish)/im.test(body)) continue;
+      // Naming either tool is what makes a block an MCP prompt — no second filter.
+      // The first version also tested `\bdemo\b` (which cannot match inside
+      // `update_demo`) and excluded blocks with a URL on their own line, which between
+      // them skipped the one prompt this test exists to guard.
       if (!/create_demo|update_demo/.test(body)) continue;
       checked += 1;
       assert.match(

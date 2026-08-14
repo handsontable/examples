@@ -109,7 +109,11 @@ export function Markdown({
         const key = String(i);
         switch (block.kind) {
           case "code":
-            return <pre key={key} style={preStyle}><code>{block.text}</code></pre>;
+            return (
+              <pre key={key} style={asDocument ? documentPreStyle : preStyle}>
+                <code>{block.text}</code>
+              </pre>
+            );
           case "rule":
             return <hr key={key} style={ruleStyle} />;
           case "heading": {
@@ -219,6 +223,25 @@ const codeStyle: React.CSSProperties = {
 const preStyle: React.CSSProperties = {
   background: theme.color.editorBg, color: theme.color.text, borderRadius: theme.radius.md,
   padding: 10, overflowX: "auto", fontFamily: theme.font.mono, fontSize: 12, margin: "0 0 8px",
+};
+
+/** In a document, most of these blocks are things you *say to Claude*, not code — so
+ *  they get the shape of the box you type into: a soft grey card, room to breathe, and
+ *  wrapping instead of a scrollbar, because a prompt that runs off the right edge is a
+ *  prompt nobody copies whole. `surfaceMuted` rather than `editorBg`: a terminal-dark
+ *  panel in the middle of a page of prose reads as output to read, not input to send. */
+const documentPreStyle: React.CSSProperties = {
+  background: theme.color.surfaceMuted,
+  color: theme.color.text,
+  border: `1px solid ${theme.color.border}`,
+  borderRadius: theme.radius.md,
+  padding: "12px 14px",
+  margin: "0 0 12px",
+  fontFamily: theme.font.mono,
+  fontSize: 12.5,
+  lineHeight: 1.55,
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
 };
 // A section divider, not a box edge: one hairline, no default 3D border, and
 // `controlBorder` rather than `border` — dark's `border` is `surfaceRaised`, the

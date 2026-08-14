@@ -110,6 +110,36 @@ test("each track renders its own document, and only its own", async ({ page }) =
   await expect(page.getByRole("heading", { name: "Demo an unreleased fix: the PR number as the version" })).toBeVisible();
 });
 
+test("prompt blocks read as something you type, and never overflow", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await page.goto("/guide/everyone");
+  await expect(page.getByRole("heading", { name: "Ask Claude for a demo", level: 1 })).toBeVisible();
+
+  const prompt = page.locator("main article pre").first();
+  await expect(prompt).toContainText("Load create_demo");
+
+  const box = await prompt.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return {
+      radius: parseFloat(s.borderTopLeftRadius),
+      padding: parseFloat(s.paddingLeft),
+      wrap: s.whiteSpace,
+      scrollable: el.scrollWidth - el.clientWidth,
+      bg: s.backgroundColor,
+      bodyBg: getComputedStyle(document.body).backgroundColor,
+    };
+  });
+  // A card, not a terminal line: rounded, padded, its own fill, and wrapping rather
+  // than a horizontal scrollbar — a prompt that runs off the edge is one nobody copies
+  // whole.
+  expect(box.radius).toBeGreaterThanOrEqual(4);
+  expect(box.padding).toBeGreaterThanOrEqual(10);
+  expect(box.wrap).toBe("pre-wrap");
+  expect(box.scrollable).toBe(0);
+  expect(box.bg).not.toBe(box.bodyBg);
+});
+
 test("a section deeplink scrolls to that section", async ({ page }) => {
   await stubShell(page);
   await signIn(page);
