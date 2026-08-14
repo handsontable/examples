@@ -441,7 +441,8 @@ test("an open docs example with no target bucket stops preview and remains recov
 });
 
 // Live render — needs the external Sandpack bundler; opt-in via E2E_LIVE=1.
-test("live: a JavaScript example renders a Handsontable grid", async ({ page }) => {
+// @smoke: the post-deploy subset (DEV-2203) uses this as its docs-example canary.
+test("live: a JavaScript example renders a Handsontable grid", { tag: "@smoke" }, async ({ page }) => {
   test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
   test.setTimeout(120_000);
   // (column-adding was removed from the docs; accessibility example1 is a
