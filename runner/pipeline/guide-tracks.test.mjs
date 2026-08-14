@@ -185,3 +185,35 @@ test("every cross-track link points at a track that exists", () => {
   // dead code otherwise, which is how it shipped broken the first time.
   assert.ok(seen >= 3, `expected the tracks to cross-reference each other, found ${seen} links`);
 });
+
+test("every figure the guide references is a file the app ships", () => {
+  const assets = path.join(here, "../apps/authoring/public");
+  let seen = 0;
+  for (const name of [...GUIDE_TRACKS.map((t) => t.slug), "overview"]) {
+    const md = fs.readFileSync(path.join(docs, `${name}.md`), "utf8");
+    for (const m of md.matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)) {
+      seen += 1;
+      const [, alt, src] = m;
+      // Same-origin paths only: the parser drops anything else to plain text, so a
+      // URL here would render as a stray sentence rather than a figure.
+      assert.ok(src.startsWith("/guide/"), `${name}.md: ${src} is not a /guide/ asset`);
+      assert.ok(alt.length > 12, `${name}.md: ${src} needs real alt text, got "${alt}"`);
+      assert.ok(
+        fs.existsSync(path.join(assets, src.replace(/^\//, ""))),
+        `${name}.md references ${src}, which is not in apps/authoring/public`,
+      );
+    }
+  }
+  assert.ok(seen >= 8, `expected the guide to carry figures, found ${seen}`);
+
+  // …and nothing sits in the assets folder unused: these ship with the app, and a
+  // forgotten screenshot is weight in every deploy.
+  const referenced = new Set();
+  for (const name of [...GUIDE_TRACKS.map((t) => t.slug), "overview"]) {
+    const md = fs.readFileSync(path.join(docs, `${name}.md`), "utf8");
+    for (const m of md.matchAll(/!\[[^\]]*\]\(\/guide\/([^)\s]+)\)/g)) referenced.add(m[1]);
+  }
+  for (const file of fs.readdirSync(path.join(assets, "guide"))) {
+    assert.ok(referenced.has(file), `apps/authoring/public/guide/${file} is referenced by no track`);
+  }
+});

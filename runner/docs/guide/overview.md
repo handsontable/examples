@@ -12,6 +12,12 @@ readout; it is deliberately quiet, because most visitors here are not on the tea
 Nothing on this site requires a checkout, an editor, or a build tool. One of the
 four routes above requires no browser either.
 
+![The playground: the example picker at the top, files and code on the left, a live grid on the right](/guide/playground.jpg)
+
+*The example picker sits top centre; Files and Box info on the left; the live preview
+and the version control on the right; Ask AI, Style, Fork/Save and Download top right.
+The Sign in link is bottom-right, next to the version readout.*
+
 ## The links every demo has
 
 A saved demo is reachable four ways, and picking the right one is most of what

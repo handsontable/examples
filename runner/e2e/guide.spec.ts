@@ -93,22 +93,61 @@ test("a section deeplink scrolls to that section", async ({ page }) => {
   await expect(contents.getByRole("link", { name: "7. Title and description" })).toBeVisible();
 });
 
-test("the tracks are reachable from each other, and from the overview", async ({ page }) => {
+test("the left panel carries the tracks as a submenu under Guide", async ({ page }) => {
   await stubShell(page);
   await signIn(page);
   await page.goto("/guide");
 
-  await page.getByRole("link", { name: /Docs & blog/ }).click();
+  // From the overview's cards…
+  await page.locator("main").getByRole("link", { name: /Docs & blog/ }).click();
   await expect(page).toHaveURL(/\/guide\/devrel$/);
 
-  // The switcher on a track page, which is how someone lands on the wrong one and
-  // recovers without going back to the overview.
-  await page.getByRole("navigation", { name: "Guide tracks" })
-    .getByRole("link", { name: "PR builds & tooling" })
-    .click();
+  // …and from then on, from the sidebar: four rows nested under Guide, the current
+  // one marked. This is how someone who landed on the wrong track recovers without
+  // going back to the overview.
+  const tracks = page.getByRole("navigation", { name: "Guide tracks" });
+  for (const label of ["Ask Claude", "In the browser", "Docs & blog", "PR builds & tooling"]) {
+    await expect(tracks.getByRole("link", { name: label })).toBeVisible();
+  }
+  await expect(tracks.getByRole("link", { name: "Docs & blog" })).toHaveAttribute("aria-current", "page");
+
+  await tracks.getByRole("link", { name: "PR builds & tooling" }).click();
   await expect(page).toHaveURL(/\/guide\/developers$/);
-  await expect(page.getByRole("navigation", { name: "Guide tracks" })
-    .getByRole("link", { name: "PR builds & tooling" })).toHaveAttribute("aria-current", "page");
+  await expect(tracks.getByRole("link", { name: "PR builds & tooling" })).toHaveAttribute("aria-current", "page");
+
+  // The submenu belongs to the page you are on: My demos does not carry the guide's
+  // sections.
+  await page.goto("/my-demos");
+  await expect(page.getByRole("navigation", { name: "Guide tracks" })).toHaveCount(0);
+});
+
+test("the tracks carry figures, loaded lazily and only where they belong", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await page.goto("/guide/support");
+
+  const shots = page.locator("main img");
+  expect(await shots.count()).toBeGreaterThanOrEqual(6);
+  // Lazy, because the screencast alone is a couple of megabytes and the reader may
+  // never scroll to it.
+  await expect(shots.first()).toHaveAttribute("loading", "lazy");
+  // Real alt text, not a filename: this page is read by people who need it read out.
+  for (const img of await shots.all()) {
+    expect((await img.getAttribute("alt"))?.length ?? 0).toBeGreaterThan(12);
+  }
+  // The one that has to actually be there: the file drop, which is impossible to
+  // describe in words alone.
+  await expect(page.locator('main img[src="/guide/files-drop.jpg"]')).toBeVisible();
+  // And it resolves — a 404 here renders as a broken frame in the middle of the prose.
+  const status = await page.evaluate(async () =>
+    (await fetch("/guide/files-drop.jpg", { method: "HEAD" })).status,
+  );
+  expect(status).toBe(200);
+
+  // DevRel's track is prose and code, and stays that way — the figures follow the
+  // subject, they are not decoration sprinkled on every page.
+  await page.goto("/guide/devrel");
+  await expect(page.locator("main img")).toHaveCount(0);
 });
 
 test("a cross-track link is a same-tab link, and the cards take a hover border", async ({ page }) => {
@@ -129,7 +168,7 @@ test("a cross-track link is a same-tab link, and the cards take a hover border",
   // The overview's cards keep their resting border in the stylesheet, so the hover
   // rule can change it (ADR-0026: an inline `border` shorthand would win instead).
   await page.goto("/guide");
-  const card = page.getByRole("link", { name: /Ask Claude/ }).first();
+  const card = page.locator("main").getByRole("link", { name: /Ask Claude/ });
   const resting = await card.evaluate((el) => getComputedStyle(el).borderTopColor);
   await card.hover();
   await expect

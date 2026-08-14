@@ -20,6 +20,7 @@ export type Inline =
   | { kind: "text"; text: string }
   | { kind: "code"; text: string }
   | { kind: "link"; text: string; href: string }
+  | { kind: "image"; alt: string; src: string }
   | { kind: "strong"; children: Inline[] }
   | { kind: "em"; children: Inline[] };
 
@@ -115,7 +116,7 @@ function splitRow(line: string): string[] {
  */
 export function safeHref(url: string): string | null {
   const trimmed = url.trim();
-  if (/^\/(?![/\\])/.test(trimmed)) return trimmed;
+  if (isSameOriginPath(trimmed)) return trimmed;
   try {
     const parsed = new URL(trimmed);
     return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
@@ -124,7 +125,30 @@ export function safeHref(url: string): string | null {
   }
 }
 
-const INLINE_TOKEN = /(`[^`]+`)|(\*\*[\s\S]+?\*\*)|(__[\s\S]+?__)|(\*[^*\n]+\*)|(_[^_\n]+_)|(\[[^\]]+\]\([^)\s]+\))/;
+/**
+ * A path on this site: a leading `/` and *not* a second `/` or `\`. `//host` is
+ * protocol-relative and the URL spec treats `/\` the same way, so both are external
+ * addresses wearing a path's clothes.
+ */
+function isSameOriginPath(url: string): boolean {
+  return /^\/(?![/\\])/.test(url);
+}
+
+/**
+ * Image sources are **same-origin paths only** — no `http(s)`, unlike links.
+ *
+ * The guide's figures are files this app ships (`/guide/*.jpg`, ADR-0034), and that
+ * is the whole use case. The same renderer also draws model answers and user-written
+ * demo descriptions, where a remote `<img>` is a request the reader never asked for:
+ * a tracking pixel in a description, or a model-authored URL that leaks the page it
+ * was rendered on. A path cannot do either, so the narrow rule costs us nothing.
+ */
+export function safeImageSrc(url: string): string | null {
+  const trimmed = url.trim();
+  return isSameOriginPath(trimmed) ? trimmed : null;
+}
+
+const INLINE_TOKEN = /(`[^`]+`)|(!\[[^\]]*\]\([^)\s]+\))|(\*\*[\s\S]+?\*\*)|(__[\s\S]+?__)|(\*[^*\n]+\*)|(_[^_\n]+_)|(\[[^\]]+\]\([^)\s]+\))/;
 
 /**
  * Inline spans, applied recursively.
@@ -149,6 +173,13 @@ export function parseInline(text: string): Inline[] {
       out.push({ kind: "code", text: token.slice(1, -1) });
     } else if (token.startsWith("**") || token.startsWith("__")) {
       out.push({ kind: "strong", children: parseInline(token.slice(2, -2)) });
+    } else if (token.startsWith("![")) {
+      const split = token.indexOf("](");
+      const src = safeImageSrc(token.slice(split + 2, -1));
+      const alt = token.slice(2, split);
+      // A rejected source leaves the alt text, which is the honest fallback: the
+      // sentence still reads, and nothing silently loads.
+      out.push(src ? { kind: "image", alt, src } : { kind: "text", text: alt });
     } else if (token.startsWith("[")) {
       const split = token.indexOf("](");
       const href = safeHref(token.slice(split + 2, -1));

@@ -102,6 +102,10 @@ meantime.
 
 ## Where your demos live
 
+![My demos: a demo card with a rendered markdown description, beside the Create and Import tiles](/guide/my-demos.jpg)
+
+*My demos, with the two tiles that start the commonest browser routes.*
+
 **My demos** in the account menu lists everything you have created, whichever way you
 made it — open it, copy the link, rename it, fork it, delete it. **All demos** shows
 the whole team's, so you can check whether the demo you are about to ask for already
