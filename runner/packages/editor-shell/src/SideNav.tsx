@@ -141,7 +141,10 @@ const subRow = (active: boolean): CSSProperties => ({
   height: 30,
   padding: `0 ${theme.space(2)}`,
   borderRadius: theme.radius.sm,
-  color: active ? theme.color.accent : theme.color.textMuted,
+  // `accentText`, not `accent`: this is text on `surfaceSunken`, which in dark is
+  // #000000 — plain brand blue reads as disabled there, which is why the token pair
+  // exists at all.
+  color: active ? theme.color.accentText : theme.color.textMuted,
   fontFamily: theme.font.ui,
   fontSize: 12.5,
   textDecoration: "none",

@@ -184,14 +184,18 @@ export function Markdown({
 
 // `controlBorder`, for the same reason the table below gives: the chat drawer is
 // `surfaceRaised`, which dark `border` *is*, so this outline would vanish there.
-/** Full-width inside the measure, with the shell's border so a screenshot of the
- *  app does not bleed into the page around it. */
+/** Full-width inside the measure, with a frame so a screenshot of the app does not
+ *  bleed into the page around it.
+ *
+ *  `controlBorder`, not `border`: dark `border` is #222222, which is the value of dark
+ *  `surfaceRaised` — the drawer and dialog fill this renderer also paints inside, where
+ *  a `border` frame would be invisible. */
 const imageStyle: React.CSSProperties = {
   display: "block",
   width: "100%",
   height: "auto",
   margin: "10px 0 4px",
-  border: `1px solid ${theme.color.border}`,
+  border: `1px solid ${theme.color.controlBorder}`,
   borderRadius: theme.radius.sm,
   background: theme.color.surfaceSunken,
   cursor: "zoom-in",

@@ -351,7 +351,7 @@ const badge = (technical: boolean): CSSProperties => ({
   borderRadius: theme.radius.sm,
   border: `1px solid ${theme.color.border}`,
   background: technical ? theme.color.surfaceSunken : theme.color.accentSoft,
-  color: technical ? theme.color.textMuted : theme.color.accent,
+  color: technical ? theme.color.textMuted : theme.color.accentText,
   fontSize: 10,
   letterSpacing: ".06em",
   textTransform: "uppercase",
@@ -395,7 +395,7 @@ const cardMore: CSSProperties = {
   marginTop: "auto",
   paddingTop: theme.space(2),
   fontSize: 12,
-  color: theme.color.accent,
+  color: theme.color.accentText,
 };
 
 
@@ -444,7 +444,7 @@ const copyButton = (copied: boolean): CSSProperties => ({
   padding: "0 3px",
   border: "none",
   background: "transparent",
-  color: copied ? theme.color.accent : theme.color.textMuted,
+  color: copied ? theme.color.accentText : theme.color.textMuted,
   fontFamily: theme.font.ui,
   fontSize: 10,
   cursor: "pointer",
