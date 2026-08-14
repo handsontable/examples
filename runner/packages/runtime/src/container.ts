@@ -17,6 +17,13 @@ import type {
 } from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
+import { MONITOR_EVENT_CEILING, truncateMessage } from "./monitor.js";
+
+/** Dev-server output worth relaying (DEV-2527). Broad on purpose — the point is to
+ *  learn what running dev servers complain about — but narrow enough that ordinary
+ *  request logging and HMR chatter do not qualify. */
+const STDERR_MARKERS =
+  /\b(error|failed|failure|exception|unhandled|cannot find|not found|econnrefused|eaddrinuse)\b/i;
 
 /** The container reached the server and booted, but the boot script itself
  * exited nonzero (e.g. pnpm couldn't resolve the pinned Handsontable
@@ -101,6 +108,9 @@ export interface ContainerRuntimeOptions {
    *  session request so the cost guardrail's `anon_blocked` tier (live editing
    *  restricted to signed-in users at >=80% of budget) can recognise them. */
   authToken?: string | null;
+  /** Relay post-boot dev-server stderr through `onStderr` (DEV-2527). Off unless
+   *  the app's build has monitoring on. */
+  monitor?: boolean;
 }
 
 export class ContainerRuntime implements DemoRuntime {
@@ -124,6 +134,12 @@ export class ContainerRuntime implements DemoRuntime {
   private quietPending = new Map<string, string>();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly progressCbs = new Set<(log: string) => void>();
+  private readonly stderrCbs = new Set<(line: string) => void>();
+  /** Dev-server stderr lines already relayed, so a message the server repeats every
+   *  keystroke is filed once. Capped by `MONITOR_EVENT_CEILING` below; the set only
+   *  ever holds what fit under it. */
+  private readonly stderrSeen = new Set<string>();
+  private stderrRelayed = 0;
   private previewUrl = "";
   private port = 0;
   private pointed = false;
@@ -169,6 +185,18 @@ export class ContainerRuntime implements DemoRuntime {
   /** Boot-progress log lines while the container installs deps + starts the dev server. */
   onProgress(cb: (log: string) => void): void {
     this.progressCbs.add(cb);
+  }
+  /**
+   * Dev-server stderr raised *after* the preview came up (DEV-2527).
+   *
+   * Distinct from `onProgress` (which is boot narration for the loading card) and
+   * from `ContainerBootFailure` on `onError` (which is the boot script exiting
+   * nonzero). This is the third case: a dev server that started fine and then logged
+   * a compile or runtime fault — invisible until now, because the shell stops
+   * listening to the log the moment it points the iframe.
+   */
+  onStderr(cb: (line: string) => void): void {
+    this.stderrCbs.add(cb);
   }
   private emitReady() {
     if (this.didReady) return;
@@ -451,6 +479,28 @@ export class ContainerRuntime implements DemoRuntime {
 
   /** Ping the session periodically (while the tab is visible) to reset the
    *  container's sleepAfter timer, keeping the dev server warm during use. */
+  /**
+   * Pick the error-ish lines out of a dev-server log tail and relay each once.
+   *
+   * The status route returns the last 2500 bytes of the log on every ping, so the
+   * same lines arrive over and over; `stderrSeen` is what makes this a report per
+   * fault rather than one per minute. The ceiling is the same one the in-page
+   * reporter uses, for the same reason — the kill switch is a deploy away.
+   */
+  private relayStderr(log: string): void {
+    if (this.disposed || this.stderrCbs.size === 0) return;
+    for (const raw of log.replace(/\x1b\[[0-9;]*m/g, "").split("\n")) {
+      if (this.stderrRelayed >= MONITOR_EVENT_CEILING) return;
+      const line = raw.trim();
+      if (!line || !STDERR_MARKERS.test(line)) continue;
+      const message = truncateMessage(line);
+      if (this.stderrSeen.has(message)) continue;
+      this.stderrSeen.add(message);
+      this.stderrRelayed += 1;
+      for (const cb of this.stderrCbs) cb(message);
+    }
+  }
+
   private startKeepalive(): void {
     if (this.keepaliveTimer || this.disposed) return;
     const intervalMs = this.opts.keepaliveMs ?? 60000;
@@ -459,6 +509,15 @@ export class ContainerRuntime implements DemoRuntime {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       void fetch(`${this.opts.apiBase}/api/session/${this.sessionId}/status?port=${this.port}`)
         .then(async (r) => {
+          // The keepalive is also the only post-boot read of the dev-server log:
+          // `poll()` stops the moment it points the iframe, so from here on this
+          // request is where a fault the running dev server logged shows up. The
+          // granularity is the keepalive interval (60s by default), which is a
+          // diagnostic, not a live feed.
+          if (r.ok && this.opts.monitor) {
+            const body = await r.clone().json().catch(() => null) as { log?: unknown } | null;
+            if (typeof body?.log === "string") this.relayStderr(body.log);
+          }
           // Session tombstoned elsewhere — pinging it forever is pointless.
           if (r.status !== 410) return;
           if (this.keepaliveTimer) {

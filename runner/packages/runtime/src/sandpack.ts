@@ -20,6 +20,7 @@ import type {
 import { transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
 import { resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
+import { injectReporter } from "./monitor.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 // Derive Sandpack's option/setup types straight from the loader signature so we
@@ -35,6 +36,12 @@ export interface SandpackRuntimeOptions {
   bundlerURL?: string;
   /** Pin Handsontable to this version before mounting. */
   version?: HandsontableVersionRef;
+  /**
+   * Inject the demo-runtime monitor into the preview (DEV-2527). Passed in rather
+   * than read from the environment here: this package is also loaded by the
+   * (non-DOM) sharing Worker, and the flag lives in the app's build.
+   */
+  monitor?: boolean;
 }
 
 /**
@@ -200,8 +207,41 @@ export class SandpackRuntime implements DemoRuntime {
    */
   private sandboxFiles(): Promise<FilesMap> | FilesMap {
     return this.env === "parcel"
-      ? transpileFilesForParcel(this.files).then(applyDepShims)
-      : this.files;
+      ? transpileFilesForParcel(this.files).then(applyDepShims).then((f) => this.withMonitor(f))
+      : this.withMonitor(this.files);
+  }
+
+  /**
+   * Add the monitor to the bundler's view of the files (DEV-2527).
+   *
+   * Applied here, to the *derived* map, and never to `this.files`: the authored map
+   * is what Download-zip, fork and the StackBlitz/CodeSandbox exports read, and the
+   * monitor must not ship inside a demo someone downloads. It also runs *after* the
+   * parcel pre-transpile, so babel never has to parse it.
+   *
+   * A missing entry is `setupFrom()`'s error to raise, with its own message
+   * (DEV-2130) — `injectReporter` returns the map untouched rather than throwing a
+   * second, less useful error from here.
+   */
+  private withMonitor(files: FilesMap): FilesMap {
+    if (!this.opts.monitor) return files;
+    // Both entries, when they differ. For `parcel` — every Tier-1 example — the
+    // resolved sandbox entry is the HTML file, and whether the classic bundler
+    // preserves a `<script>` we put in its head is not something this code can
+    // guarantee. The JS module is the belt to that braces: it is evaluated either
+    // way, and `__hotRunnerMonitor` makes the second injection inert, so injecting
+    // twice costs one duplicated string and removes the failure mode.
+    const targets: string[] = [];
+    try {
+      targets.push(resolveSandboxEntry(this.env, this.entry.entry, this.entry.htmlEntry, files));
+    } catch {
+      // A missing entry is `setupFrom()`'s error to raise, with its own message
+      // (DEV-2130). Monitoring must not pre-empt it with a worse one.
+      return files;
+    }
+    const moduleEntry = this.env === "parcel" ? toParcelEntry(this.entry.entry) : this.entry.entry;
+    if (!targets.includes(moduleEntry)) targets.push(moduleEntry);
+    return targets.reduce((acc, path) => injectReporter(acc, path), files);
   }
 
   private setupFrom(files: FilesMap): SandboxSetup {
