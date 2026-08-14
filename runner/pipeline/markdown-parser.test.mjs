@@ -121,3 +121,31 @@ test("a bullet is still a bullet, not a rule", () => {
   // Two dashes is not enough for a rule, and there is no space, so it is prose.
   assert.deepEqual(parseMarkdown("a -- b").map((b) => b.kind), ["paragraph"]);
 });
+
+// Link safety (DEV-2522). `safeHref` gained a same-origin path form so the guide's
+// tracks can link to each other; the renderer draws model output and user-written
+// demo descriptions through the same function, so what it *rejects* is the part
+// worth pinning.
+test("root-relative links survive, and only genuine paths do", () => {
+  const link = (md) => {
+    const blocks = parseMarkdown(md);
+    const nodes = blocks[0].children;
+    return nodes.find((n) => n.kind === "link") ?? null;
+  };
+
+  assert.equal(link("see [the Developers track](/guide/developers) for that")?.href, "/guide/developers");
+  assert.equal(link("[a section](/guide/support#7-title-and-description)")?.href, "/guide/support#7-title-and-description");
+  assert.equal(link("[with a query](/all-demos?owner=someone)")?.href, "/all-demos?owner=someone");
+
+  // Protocol-relative in disguise: `//host` is an origin, and the URL spec treats
+  // `/\` the same way — both would leave the site while looking like a path.
+  assert.equal(link("[nope](//evil.example)"), null);
+  assert.equal(link("[nope](/\\evil.example)"), null);
+  // Still no scheme smuggling, and still no bare relative paths (which would
+  // resolve against whatever page the renderer happens to be on).
+  assert.equal(link("[nope](javascript:alert(1))"), null);
+  assert.equal(link("[nope](data:text/html,<script>)"), null);
+  assert.equal(link("[nope](guide/support)"), null);
+  // The absolute form is untouched.
+  assert.equal(link("[docs](https://handsontable.com/docs)")?.href, "https://handsontable.com/docs");
+});

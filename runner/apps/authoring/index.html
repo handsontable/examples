@@ -123,6 +123,10 @@
         background: var(--hot-color-danger);
         color: var(--hot-color-accent-contrast);
       }
+      /* Guide track cards (DEV-2522). Same reasoning as .hot-demo-card: the resting
+         border is here so the hover can outrank it. */
+      .hot-guide-card { border: 1px solid var(--hot-color-border); transition: border-color 0.12s ease, background-color 0.12s ease; }
+      .hot-guide-card:hover { border-color: var(--hot-color-accent-border); background: var(--hot-color-hover); }
       /* Demo cards (T9, 114:26635). The resting border lives here, not inline: an
          inline `border` shorthand carries border-color and would outrank the
          hover. Revoked cards don't take the class — they have nothing to click. */

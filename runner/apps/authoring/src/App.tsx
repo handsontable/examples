@@ -42,6 +42,7 @@ import { StyleButton, StylePanel } from "./StylePanel.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
 import { GuidePage } from "./Guide.js";
+import { guideTrack, parseGuideRoute } from "./guideTracks.js";
 import { Markdown } from "./markdown.js";
 import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
@@ -226,7 +227,10 @@ function parseRoute(): AppRoute {
   if (/^\/settings\/?$/.test(location.pathname)) return { mode: "settings" };
   // `/guide` (DEV-2503) — the in-app how-to. Same shape as the two above: matched
   // before the editor fallthrough, which would otherwise read it as a demo id.
-  if (/^\/guide\/?$/.test(location.pathname)) return { mode: "guide" };
+  // `/guide` and `/guide/<track>` (DEV-2522): one route, because the page reads the
+  // track off the path itself — a mode per track would put the guide's table of
+  // contents in two places.
+  if (/^\/guide(\/[^/]*)?\/?$/.test(location.pathname)) return { mode: "guide" };
   const m = location.pathname.match(/^\/(edit|share)\/([A-Za-z0-9_-]+)\/?$/);
   if (m) return { mode: m[1] as "edit" | "share", id: m[2]! };
   return { mode: "play" };
@@ -349,17 +353,20 @@ function SettingsRoute() {
   return <SettingsPage apiBase={API_BASE} user={user} />;
 }
 
-/** `/guide` (DEV-2503). The content is the same markdown as
- *  `runner/docs/create-and-share-a-demo.md`; this route only gates and frames it. */
+/** `/guide` and `/guide/<track>` (DEV-2503, tracks in DEV-2522). The content is the
+ *  markdown in `runner/docs/guide/`; this route only gates and frames it. */
 function GuideRoute() {
   const [user, setUser] = useState<User | null | undefined>(undefined);
   useEffect(() => {
     currentUser().then(setUser);
   }, []);
   useEffect(() => {
-    if (user === null) login(); // return_to preserves /guide
+    if (user === null) login(); // return_to preserves /guide and the track path
   }, [user]);
-  useDocumentTitle("Guide");
+  // Named by track, so four open guide tabs are four distinguishable tabs.
+  const guideSlug = parseGuideRoute(location.pathname).track;
+  const guideLabel = guideSlug ? guideTrack(guideSlug)?.label : null;
+  useDocumentTitle(guideLabel ? `Guide: ${guideLabel}` : "Guide");
 
   if (user === undefined) return <Splash text="Loading data …" />;
   if (user === null) return <Splash text="Sign in to read the guide…" />;

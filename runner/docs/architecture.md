@@ -300,8 +300,8 @@ what mints the D1 row (with `forked_from = "payload:theme-builder"`).
 7. ✅ Build snapshotter (builder container) + version injection. `scripts/warm.ts`
    (prebuild N versions) still to add.
 8. ✅ `render-ms` removed (its version-dispatch logic lives in `version.ts`).
-9. ✅ `docs/`: run-and-deploy, self-host-bundler, create-and-share-a-demo,
-   cloudflare-resources, docs-examples, ADRs.
+9. ✅ `docs/`: run-and-deploy, self-host-bundler, `guide/` (the four role-based
+   tracks rendered at `/guide`, ADR-0034), cloudflare-resources, docs-examples, ADRs.
 10. ✅ Documentation-guide examples: `import-docs.mjs` + `wrap-docs-example.mjs`
     → `docs-examples/`, opened via `?docs=`.
 
