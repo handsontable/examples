@@ -48,6 +48,12 @@
     // Wildcard base host for Tier-2 container preview URLs
     // (<port>-<sandboxId>-<token>.demos.handsontable.com).
     "PREVIEW_HOST": "demos.handsontable.com",
+    // Demo-runtime monitoring (DEV-2527). "1" injects the monitor into proxied
+    // preview documents; anything else, or removing this line, turns it off — see
+    // docs/run-and-deploy.md. The browser half is VITE_MONITOR_DEMOS in
+    // apps/authoring/.env.production, and both must be on for a Tier-2 event to be
+    // both raised and filed.
+    "MONITOR_DEMOS": "1",
 
     // ---- Cost guardrails (DEV-2030) -------------------------------------
     // Cloudflare's own Budget alerts (configured in the dashboard) only email;

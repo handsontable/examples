@@ -196,8 +196,9 @@ the corresponding `--route` flags to the API workflow's `wrangler deploy` step.
 ## Error monitoring (Sentry)
 
 Errors only — no tracing, no session replay, no profiling. One Sentry project
-serves both surfaces, separated by `environment`: `authoring-production` (browser)
-and `api-production` (Worker).
+serves every surface, separated by `environment`: `authoring-production` (browser),
+`api-production` (Worker), and `demo-runtime` (the preview itself — temporary, see
+below).
 
 **The DSN is committed, in two places**, because a DSN is a write-only ingest
 endpoint that ships inside the JS bundle by construction — hiding it buys nothing,
@@ -225,12 +226,51 @@ a host:
   switch Tier-2 preview URLs use, overridden in `workers/api/.dev.vars`
   (`workers/api/src/index.ts`).
 
-**Preview-iframe errors are deliberately not reported.** The iframe runs arbitrary
+**Preview-iframe errors are not reported by default.** The iframe runs arbitrary
 authored and imported example code, so a compile error or a mid-keystroke typo is
 product output, not an application fault. `reportRuntimeError` in
 `apps/authoring/src/App.tsx` reports only container-engine faults —
 `SessionStartError` (Tier-2 pool refusing a session; 410 excluded, that is normal
-teardown) and `ContainerBootFailure` — and never anything from the Sandpack engine.
+teardown) and `ContainerBootFailure` — and nothing from the Sandpack engine.
+
+### Demo-runtime monitoring (DEV-2527) — temporary
+
+A third `environment`, `demo-runtime`, carries what the preview itself hits:
+uncaught errors, unhandled rejections, `console.error` / `console.warn`, failed
+requests, Tier-1 Sandpack compile errors, and Tier-2 dev-server stderr raised after
+the preview came up. It covers all traffic on `demos.handsontable.com`, anonymous
+visitors included.
+
+The preview is cross-origin on both tiers, so nothing in it can reach this window's
+handlers. `packages/runtime/src/monitor.ts` holds the bridge — one ES5 reporter,
+injected in two places and `postMessage`d back to the app, where
+`reportDemoEvent` files it. Tier 1 injects into the *derived* bundler file view
+(`SandpackRuntime.withMonitor`), never the authored map, so a downloaded or forked
+demo never contains it. Tier 2 injects at the `proxyToSandbox` seam in the Worker,
+because Next and Nuxt have no `index.html` for a file-level injection to find.
+
+**Turning it off** — both halves, each a one-line change plus a deploy:
+
+- browser: `VITE_MONITOR_DEMOS` in `apps/authoring/.env.production`
+- Worker: `MONITOR_DEMOS` in the `vars` block of `workers/api/wrangler.jsonc`
+
+Anything other than `"1"` (including deleting the line) is off. Because off costs a
+deploy, the immediate brake is elsewhere: the reporter stops after
+`MONITOR_EVENT_CEILING` (20) events per page load, dedupes by message plus first
+stack frame, and truncates messages to 500 characters. **A per-environment rate
+limit on `demo-runtime` in the Sentry UI is the only brake that works without a
+build** — keep one configured for as long as this is on.
+
+Nothing identifying is relayed: no source snippets, no file map, and network events
+carry scheme, host and path only, with the query string stripped (it can hold a
+token). Same rule as `analytics.ts`.
+
+**Removing it** means deleting `packages/runtime/src/monitor.ts`, its test
+(`pipeline/monitor-inject.test.mjs`), and its callsites: `withMonitor` in
+`sandpack.ts`, `onStderr`/`relayStderr` in `container.ts`, `injectMonitor` in the
+Worker, and `monitorDemos` / `reportDemoEvent` in `sentry.ts` plus the relay listener
+in `App.tsx`. The `beforeSend` narrowing in `sentry.ts` is **not** part of this
+feature and must stay — it is a fix in its own right.
 
 **Releases.** The frontend release is the commit (`GITHUB_SHA`, injected as
 `VITE_SENTRY_RELEASE`). The Worker release is Cloudflare's per-deploy version id

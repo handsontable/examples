@@ -9,6 +9,7 @@
 import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/sandbox";
 import * as Sentry from "@sentry/cloudflare";
 import { DEFAULT_MAX_MAJOR, DEFAULT_MIN_MAJOR, mintSessionId, pickLatestNextVersion } from "@handsontable/demo-runtime";
+import { injectMonitor } from "./monitor-inject.js";
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
@@ -405,8 +406,9 @@ export default Sentry.withSentry(sentryOptions, {
     const proxied = await proxy(request, env);
     // Preview responses are the one unbounded egress path we own — every asset
     // and dev-server payload of a live session leaves through here. Count the
-    // bytes on the way out (WebSocket upgrades pass through unmeasured).
-    if (proxied) return countEgress(proxied);
+    // bytes on the way out (WebSocket upgrades pass through unmeasured), after the
+    // monitor rewrite so its bytes are metered too.
+    if (proxied) return countEgress(await injectMonitor(proxied, env, PRODUCTION_HOST));
 
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
 
