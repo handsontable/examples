@@ -37,6 +37,35 @@ build a demo showing cell validation: an email column that goes red when
 the address is malformed, with a description explaining what to try
 ```
 
+### If Claude does not seem to have the tool
+
+Ask for it by name — **"load create_demo"** — and then ask again. Claude loads tools on
+demand, and a long conversation may not have reached for this one yet.
+
+## A real one, start to finish
+
+This is an actual run, not an illustration. The prompt:
+
+```
+Load create_demo, then create a Handsontable demo with an invoice grid
+(12 rows, column filters, status dropdown, totals row) and give me the
+share link.
+```
+
+What Claude did, in its own words: checked the Handsontable documentation, wrote the
+files locally and syntax-checked them, published through `create_demo`, and — when the
+runner refused the first attempt because the `package.json` it wrote had dropped the
+build tool — fixed that and published again. One demo, not two: a refused publish
+creates nothing.
+
+Then it handed back the four links, and a summary of what it had built: twelve invoices
+with generated client names, a filter menu on every header, a strict Draft / Sent / Paid
+/ Overdue dropdown, and a pinned totals row that recalculates to whatever the filter
+leaves visible.
+
+Which is the point of this route: two lines of typing, and a link with a real answer in
+it.
+
 ## What comes back
 
 Claude answers with the links, and the demo appears in **My demos** under your own
@@ -69,17 +98,35 @@ Plain language is enough. What actually changes the result:
   not in your conversation. Tell it what to say if the demo is going into a ticket or
   a customer thread — a link back to that thread is usually the useful part.
 
-## Before you send the link
+## Open the link before you send it
 
-Two things, and they matter more on this route than any other, because there is no
-moment where you look at the files:
+**Always. Every time.** This matters more here than on any other route, because there is
+no moment where you look at the demo yourself, and because of one thing worth
+understanding:
 
-- **Open the client link yourself first.** It takes five seconds and it is the only
-  way you know the demo built and shows what you asked for.
-- **Never ask for a demo built from a customer's real data.** If you paste a
-  spreadsheet into the conversation, that data ends up on a public page. Ask for
-  *realistic invented* data instead — "invoice-looking rows, made up" — and say so in
-  the description.
+**A demo that builds is not the same as a demo that works.** The runner compiles the
+code and publishes the page; it does not click around in the result. Code that compiles
+and then fails the moment the grid starts up still gets a green build and a working link.
+That happened on the very run above: the page came out with its title, its description
+and its buttons — and an empty space where the grid should be.
+
+So open the client link and look for the grid:
+
+- **Grid there, data plausible?** Send it.
+- **Title and description, but a blank space where the grid should be?** The code failed
+  at startup. Paste the link back to Claude, say the grid does not render, and ask it to
+  fix and re-save. The link stays the same, so anything you already sent starts working
+  once it is fixed.
+- **"This demo is not available" or a 404?** The build failed. Ask Claude to try again.
+
+Claude often **cannot open the link itself** — the sandbox it runs in is not allowed to
+reach demos.handsontable.com. If it says it could not verify the demo, that is not
+hedging: you are the only one who can check.
+
+**And never ask for a demo built from a customer's real data.** If you paste a
+spreadsheet into the conversation, that data ends up on a public page. Ask for
+*realistic invented* data instead — "invoice-looking rows, made up" — and say so in the
+description.
 
 ## What it will not do
 
