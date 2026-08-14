@@ -50,6 +50,12 @@ const MAX_ANSWER_CHARS = 6_000;
 const RATE_LIMITS = {
   chat: { perMinute: 8, perDay: 120 },
   event: { perMinute: 60, perDay: 600 },
+  /** One "Open in playground" click per payload (DEV-2516). Its own bucket for
+   *  the reason above: a Theme Builder export must not eat an IP's questions.
+   *  The daily figure matches chat's rather than undercutting it — a payload
+   *  costs one KV write against chat's LLM call, and the day is shared by a
+   *  whole office behind one NAT, where a rate-limited button reads as broken. */
+  payload: { perMinute: 6, perDay: 120 },
 } as const;
 
 export type RateBucket = keyof typeof RATE_LIMITS;

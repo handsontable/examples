@@ -71,7 +71,7 @@ export async function filesHash(files: Record<string, string>): Promise<string> 
   return (await sha256Hex(sorted)).slice(0, 32);
 }
 
-function shortId(): string {
+export function shortId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   return [...bytes].map((b) => b.toString(36)).join("").slice(0, 10);
 }

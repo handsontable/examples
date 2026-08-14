@@ -27,7 +27,11 @@ export type UsageMetric =
   | "theme_prompt"
   /** An external project pulled in from a provider URL (DEV-2504); the dimension
    *  is the provider, so /admin shows which one people actually use. */
-  | "import";
+  | "import"
+  /** An ad-hoc project posted to /api/payload (DEV-2516) — today the Theme
+   *  Builder's "Open in playground". The dimension is the detected framework,
+   *  so /admin shows which export variant people actually open. */
+  | "payload";
 
 const utcDay = (): string => new Date().toISOString().slice(0, 10);
 
