@@ -112,6 +112,13 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
   // problem, which is what the heuristic below would do with a 503.
   if (isBudgetRefusal(e)) return e.message;
   const msg = e instanceof Error ? e.message : String(e);
+  // ⚠ This heuristic REPLACES the runtime's message, so every alternative below is a
+  // contract with whoever writes those messages. `sessionStartMessage` in
+  // packages/runtime/src/container.ts phrases its gateway-timeout tier to miss this
+  // test deliberately, and its other tiers to hit it. Widening the alternation — or
+  // letting "fetch" back into that timeout sentence — tells a production visitor whose
+  // sandbox timed out to install Docker and run a worker (DEV-2538, Sentry DEMOS-9).
+  // `runner/pipeline/session-start-failure.test.mjs` pins the other end.
   if (engine === "container" && /failed to fetch|networkerror|load failed|session start failed|fetch/i.test(msg)) {
     return "This example runs on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
   }
