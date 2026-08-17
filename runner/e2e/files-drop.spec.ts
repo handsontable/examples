@@ -179,6 +179,37 @@ test("the drop target follows the pointer off a row", async ({ page }) => {
   await expect(fileRow(page, "/src/notes.md")).toHaveCount(0);
 });
 
+test("a drop on a folder row lands inside that folder", async ({ page }) => {
+  // The mirror image of "the drop target follows the pointer off a row" above:
+  // there the pointer left the /src row and the drop had to fall back to the
+  // root; here it stays on the folder row and the drop must land inside src/.
+  // A folder row carries `data-drop-path` but no handler of its own — the
+  // section's dragover resolves whatever row is under the pointer — so the same
+  // event sequence drives both, and this one completes the drop instead of
+  // moving off.
+  await stubShell(page);
+  await signIn(page);
+  await page.goto("/?example=react");
+  await expect(accountAvatar(page)).toBeVisible();
+  await expect(fileRow(page, "/src/index.tsx")).toBeVisible();
+
+  const panel = filesPanel(page);
+  const dataTransfer = await dataTransferOf(page, [{ name: "notes.md", contents: "x" }]);
+  await panel.dispatchEvent("dragenter", { dataTransfer });
+
+  // Over the folder row itself (its button is titled "/src"), and the hint
+  // names the directory — the promise the drop below has to keep.
+  await fileRow(page, "/src").dispatchEvent("dragover", { dataTransfer });
+  await expect(dropHint(page)).toHaveText("Drop into src");
+
+  await fileRow(page, "/src").dispatchEvent("drop", { dataTransfer });
+
+  // Inside the folder, and nowhere else — a root /notes.md would mean the drop
+  // ignored the target the hint had named.
+  await expect(fileRow(page, "/src/notes.md")).toBeVisible();
+  await expect(fileRow(page, "/notes.md")).toHaveCount(0);
+});
+
 test("the drop hint does not move the file rows", async ({ page }) => {
   // The hint used to sit in the flow at the top of the list, so it pushed every
   // row down by its own height the moment a drag entered — under a stationary
@@ -269,6 +300,35 @@ test("Cancel on a colliding drop adds nothing", async ({ page }) => {
   await expect(collisionDialog(page)).toHaveCount(0);
   await expect(fileRow(page, "/notes-1.md")).toHaveCount(0);
   await expect(fileRow(page, "/notes.md")).toBeVisible();
+});
+
+test("Replace on a colliding drop overwrites in place, and adds no copy", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await page.goto("/?example=react");
+  await expect(accountAvatar(page)).toBeVisible();
+  await expect(fileRow(page, "/src/index.tsx")).toBeVisible();
+
+  await dropOnto(page, filesPanel(page), [{ name: "notes.md", contents: "first\n" }]);
+  await expect(fileRow(page, "/notes.md")).toBeVisible();
+  await dropOnto(page, filesPanel(page), [{ name: "notes.md", contents: "second\n" }]);
+
+  await collisionDialog(page).getByRole("button", { name: "Replace" }).click();
+  await expect(collisionDialog(page)).toHaveCount(0);
+
+  // In place: the row survives and no `-1` copy appeared alongside it.
+  await expect(fileRow(page, "/notes.md")).toBeVisible();
+  await expect(fileRow(page, "/notes-1.md")).toHaveCount(0);
+
+  // The crux is the content: Replace and Cancel both leave exactly one
+  // /notes.md row, so row assertions alone cannot tell them apart. `commit`
+  // re-selects the dropped file, which makes its pane the active one, and the
+  // file is one line — the whole document is in the DOM, so `.cm-content` is
+  // safe to read (CodeMirror virtualises long files; this one isn't).
+  await expect(rowOf(page, "/notes.md")).toHaveAttribute("data-active", "true");
+  const editor = page.locator('[data-pane-active="true"] .cm-content');
+  await expect(editor).toContainText("second");
+  await expect(editor).not.toContainText("first");
 });
 
 test("anonymous play has no drop target", async ({ page }) => {
