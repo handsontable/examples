@@ -24,7 +24,7 @@ import {
   type FilesMap,
   type WriteFileOptions,
 } from "@handsontable/demo-runtime";
-import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
+import { SandpackRuntime, SandpackEvaluationError } from "@handsontable/demo-runtime/sandpack";
 import { ContainerRuntime, ContainerBootFailure, SessionStartError, isBudgetRefusal } from "@handsontable/demo-runtime/container";
 import { zipSync, strToU8 } from "fflate";
 import { catalog, getEntry, fetchVersions, checkVersionExists, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
@@ -172,6 +172,18 @@ function reportRuntimeError(e: unknown, engine: string): void {
   // rules that follow.
   if (engine !== "container") {
     if (!monitorDemos) return;
+    // One owner per class of failure (DEV-2552). A throw from a module that had already
+    // started evaluating belongs to the in-preview reporter, which files it with the
+    // preview's own stack, the tier, the framework and the demo id — everything this
+    // path lacks. Reporting it here as well filed one fault as two more issues, under a
+    // stack (`SandpackRuntime.onMessage`) that points at us rather than at the demo.
+    //
+    // What is left below is exactly the class the reporter structurally cannot see: a
+    // bundler diagnostic for a module that never ran, so nothing inside the preview ever
+    // threw. The `sandpack-compile` tag and the flat fingerprint become accurate at that
+    // point — a transpile message is the visitor's own source, which default grouping
+    // would shard into an issue per typo.
+    if (e instanceof SandpackEvaluationError) return;
     Sentry.captureException(e, {
       tags: { surface: "demo-runtime", kind: "sandpack-compile", tier: "1" },
       // Flat, like ContainerBootFailure's: a compile error's text is the example's

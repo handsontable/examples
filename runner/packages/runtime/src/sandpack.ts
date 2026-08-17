@@ -152,6 +152,33 @@ export class SandpackCompileError extends Error {
   }
 }
 
+/**
+ * A `show-error` the bundler raised for a module that had already started evaluating
+ * — i.e. the demo *ran* and threw (DEV-2552).
+ *
+ * Deliberately a sibling of `SandpackCompileError`, not a subclass: the whole point of
+ * the distinction is that the shell must stand down for this class, and a subclass
+ * makes reintroducing the double report as easy as writing
+ * `instanceof SandpackCompileError`. It is also not a compile diagnostic, which is what
+ * that class is documented to be.
+ *
+ * Why the shell stands down: a throw inside a running preview is *already* reported, by
+ * the in-page reporter (`packages/runtime/src/monitor.ts`), and reported far better —
+ * with the preview's own stack, the tier, the framework and the demo id, fingerprinted
+ * per message. The shell's view of the same throw has this file's `onMessage` as its
+ * stack, which says nothing, and a flat fingerprint that collapses every distinct
+ * Tier-1 fault into one issue. See `reportRuntimeError` in apps/authoring/src/App.tsx.
+ *
+ * The message still goes through `boundCompileMessage`, and the error card still renders
+ * it — only the Sentry report differs.
+ */
+export class SandpackEvaluationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandpackEvaluationError";
+  }
+}
+
 const COMPILE_ERROR_FALLBACK = "Sandpack compile error";
 
 /** Inline source maps the bundler echoes back inside a compile message. A
@@ -392,7 +419,13 @@ export class SandpackRuntime implements DemoRuntime {
   }
 
   private onMessage(msg: unknown) {
-    const m = msg as { type?: string; action?: string; compilatonError?: boolean; message?: unknown };
+    const m = msg as {
+      type?: string;
+      action?: string;
+      compilatonError?: boolean;
+      message?: unknown;
+      payload?: { frames?: unknown };
+    };
     switch (m.type) {
       case "done":
         // (`compilatonError` is misspelled in the upstream payload. Leave it.)
@@ -405,7 +438,26 @@ export class SandpackRuntime implements DemoRuntime {
           // bundler's, about the visitor's code, and it goes to the error card *and*
           // to Sentry. A fresh error carries it — nothing the handler received is
           // rewritten in place.
-          this.emitError(new SandpackCompileError(boundCompileMessage(m.message)));
+          //
+          // `payload.frames` is the class split (DEV-2552). It is upstream's own
+          // discriminator — `extractErrorDetails` in @codesandbox/sandpack-client takes
+          // the stack-frame path exactly when it is populated — and it is declared on
+          // `SandpackErrorMessage`, the type this action carries. Frames mean the module
+          // evaluated, so the throw already reached the in-preview reporter with a real
+          // stack; no frames mean the module never ran, and this channel is the *only*
+          // one that can see the failure.
+          //
+          // The direction of the guess is deliberate: an unrecognised shape falls through
+          // to `SandpackCompileError`, which over-reports (today's behaviour) rather than
+          // losing a build diagnostic. `title === "SyntaxError"`, upstream's other branch,
+          // is not usable here — the observed transpile payload (DEMOS-15) is a TypeError
+          // raised while the bundler mutated a SyntaxError.
+          const frames = m.payload?.frames;
+          const evaluated = Array.isArray(frames) && frames.length > 0;
+          const message = boundCompileMessage(m.message);
+          this.emitError(
+            evaluated ? new SandpackEvaluationError(message) : new SandpackCompileError(message),
+          );
         }
         break;
       case "console":

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SandpackCompileError, SandpackRuntime } from "../packages/runtime/dist/sandpack.js";
+import { SandpackCompileError, SandpackEvaluationError, SandpackRuntime } from "../packages/runtime/dist/sandpack.js";
 import { MONITOR_COMPILE_MESSAGE_MAX } from "../packages/runtime/dist/monitor.js";
 
 // DEV-2176: the classic bundler drops every `compile` message carrying
@@ -205,12 +205,17 @@ test("reload() before mount() is a no-op", async () => {
 // — throws on exactly the kind of object the bundler's own message is about, and
 // that throw is the failure this ticket describes.
 
-/** Collect what a runtime reports, driving the private `show-error` branch directly. */
-function showError(message) {
+/** Collect what a runtime reports, driving the private `show-error` branch directly.
+ *
+ *  `payload` is the upstream `SandpackErrorMessage.payload`, omitted by every DEV-2550
+ *  case above — those are all build diagnostics, which is exactly the no-frames shape. */
+function showError(message, payload) {
   const runtime = new SandpackRuntime(ENTRY, { iframe: {} });
   const seen = [];
   runtime.onError((e) => seen.push(e));
-  runtime.onMessage(message === undefined ? { type: "action", action: "show-error" } : { type: "action", action: "show-error", message });
+  const msg = message === undefined ? { type: "action", action: "show-error" } : { type: "action", action: "show-error", message };
+  if (payload !== undefined) msg.payload = payload;
+  runtime.onMessage(msg);
   assert.equal(seen.length, 1, "a show-error action must report exactly one error");
   return seen[0];
 }
@@ -357,4 +362,60 @@ test("DEV-2550: the reported error names itself, so the Sentry title says what i
   const reported = showError("SyntaxError: /src/main.js: Unexpected token (1:1)");
   assert.ok(reported instanceof Error);
   assert.equal(reported.name, "SandpackCompileError");
+});
+
+// ---------------------------------------------------------------------------
+// DEV-2552 — which channel owns a `show-error`.
+//
+// One Tier-1 runtime throw was filed three times: twice by the in-preview reporter
+// (fixed in monitor.ts) and once more here, because the bundler independently posts
+// `show-error` for a module that threw while evaluating. That third copy is the least
+// useful of them — its stack is `SandpackRuntime.onMessage`, our own code — and its
+// flat fingerprint collapses every distinct Tier-1 fault into one Sentry issue.
+//
+// So the shell keeps exactly one class: a diagnostic for a module that never ran. That
+// class is not optional coverage — a module that never evaluates cannot raise anything
+// the in-page reporter could see, so this is its only channel. (Verified in Sentry: the
+// transpile event in trace 6cc61e8a has no relay sibling in its trace.)
+//
+// `payload.frames` is upstream's own split: `extractErrorDetails` in
+// @codesandbox/sandpack-client takes the stack-frame path exactly when it is populated,
+// and the field is declared on `SandpackErrorMessage`, the type this action carries.
+
+test("DEV-2552: a show-error with stack frames is an evaluation error, not a compile error", () => {
+  const reported = showError("c is not defined", {
+    frames: [{ fileName: "/src/index.js", lineNumber: 300, _originalFileName: "/src/index.js" }],
+  });
+
+  assert.ok(reported instanceof SandpackEvaluationError);
+  assert.ok(
+    !(reported instanceof SandpackCompileError),
+    "a sibling, not a subclass — a subclass makes the double report one `instanceof` away from returning",
+  );
+  assert.equal(reported.name, "SandpackEvaluationError");
+  assert.equal(reported.message, "c is not defined", "the error card reads .message and must not change");
+});
+
+test("DEV-2552: a show-error with no frames stays a compile error", () => {
+  // The build-diagnostic class, which the shell is the only channel for.
+  const raw = "SyntaxError: /src/main.ts: Invalid regular expression flag. (257:22)";
+  for (const payload of [undefined, {}, { frames: [] }, { frames: "nonsense" }]) {
+    const reported = showError(raw, payload);
+    assert.ok(reported instanceof SandpackCompileError, `payload ${JSON.stringify(payload)} must stay a compile error`);
+    assert.ok(!(reported instanceof SandpackEvaluationError));
+    assert.equal(reported.message, raw);
+  }
+});
+
+test("DEV-2552: an evaluation error is bounded exactly like a compile error", () => {
+  // The split changes who reports, never what the user is shown: both branches go
+  // through `boundCompileMessage`.
+  const frames = { frames: [{ _originalFileName: "/src/index.js" }] };
+  const blob = "//# sourceMappingURL=data:application/json;charset=utf-8;base64," + "A".repeat(8000);
+  const reported = showError(`${blob}\nc is not defined`, frames);
+
+  assert.ok(reported instanceof SandpackEvaluationError);
+  assert.ok(!reported.message.includes("AAAA"));
+  assert.match(reported.message, /c is not defined/);
+  assert.ok(reported.message.length <= MONITOR_COMPILE_MESSAGE_MAX + 3);
 });

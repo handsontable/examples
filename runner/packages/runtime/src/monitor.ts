@@ -424,12 +424,63 @@ export const REPORTER_SOURCE = `(function () {
     } catch (e) { /* the reporter must never be the reason a demo breaks */ }
   }
 
+  // \`instanceof\` can throw on an exotic proxy, and a cross-realm error (one raised in
+  // an iframe the demo itself created) answers false. Both degrade the same way: the
+  // value is not treated as an Error, so the console event is relayed as a plain
+  // \`console-error\` — the pre-DEV-2552 behaviour, never a crash.
+  function isErrorLike(a) {
+    try {
+      return !!a && a instanceof Error;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // DEV-2552. An Error that reaches \`console.error\` is the *error* channel's business,
+  // not the console channel's. The same throw usually also reaches the window \`error\`
+  // listener a few lines below, and relaying both filed one fault as two Sentry issues
+  // — a stackless \`console-error\` and a stacked \`error\`.
+  //
+  // So the event is re-homed rather than dropped: relayed under kind \`error\`, with the
+  // Error's *own* message and stack rather than the joined arguments. That makes the
+  // key \`send\` dedupes on (\`kind|message|firstFrame\`) byte-identical to the one the
+  // window listener produces for the same Error, so whichever channel sees it first
+  // wins and the second is dropped. Order-independent on purpose: the console copy
+  // consistently arrives first, so a "drop the console copy" rule would keep the
+  // stackless one — and, worse, would report *nothing* for the faults where the window
+  // listener never fires at all. Those are real and observed: a DOMException thrown out
+  // of React's commit phase (Sentry DEMOS-19) has no \`error\`-kind twin, and Angular's
+  // default \`ErrorHandler\` console.errors every error zone.js swallows, which is the
+  // whole of that framework's error reporting on both tiers.
+  //
+  // Taking the Error's own message, not \`argsToMessage\`, is what makes the keys match
+  // when the caller prefixes the log (\`console.error("ERROR", err)\`).
+  //
+  // Extraction is wrapped because it runs at the *call site*, outside \`send\`'s own
+  // try/catch: a subclass with a throwing \`message\` getter must not throw out of the
+  // demo's \`console.error\` call, which would also cost it \`origError.apply\` below.
+  //
+  // \`console.warn\` is not re-homed — it is a breadcrumb channel and has no
+  // error-channel twin.
+  function errorArgReport(args) {
+    for (var i = 0; i < args.length; i++) {
+      if (isErrorLike(args[i])) {
+        try {
+          return { message: String(args[i].message || "unknown error"), stack: args[i].stack };
+        } catch (e) {
+          return { message: "unknown error", stack: "" };
+        }
+      }
+    }
+    return null;
+  }
+
   function argsToMessage(args) {
     var parts = [];
     for (var i = 0; i < args.length; i++) {
       var a = args[i];
       try {
-        parts.push(a instanceof Error ? String(a && a.message) : typeof a === "string" ? a : String(a));
+        parts.push(isErrorLike(a) ? String(a && a.message) : typeof a === "string" ? a : String(a));
       } catch (e) {
         parts.push("<unserializable>");
       }
@@ -465,7 +516,13 @@ export const REPORTER_SOURCE = `(function () {
     var origError = console.error;
     var origWarn = console.warn;
     console.error = function () {
-      send("console-error", argsToMessage(arguments), "");
+      // See \`errorArgReport\`: an Error here belongs to the error channel, and is sent
+      // under that kind so \`send\`'s dedupe collapses it with the window listener's
+      // copy of the same throw. The passthrough is outside the branch — what the
+      // reporter does with an event must never change the demo's own console output.
+      var report = errorArgReport(arguments);
+      if (report) send("error", report.message, report.stack);
+      else send("console-error", argsToMessage(arguments), "");
       if (origError) origError.apply(console, arguments);
     };
     console.warn = function () {

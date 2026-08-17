@@ -234,6 +234,117 @@ test("reporter wraps console.error/warn and calls through", () => {
   assert.equal(h.passthrough.length, 2, "the demo's own console output still happens");
 });
 
+// ---- console.error(Error) belongs to the error channel (DEV-2552) -----------
+//
+// The Sandpack sandbox does both: it `console.error`s the evaluation failure *and*
+// lets the throw reach the window `error` listener. Relaying both filed one fault as
+// two Sentry issues — a stackless `console-error` at warning level (DEMOS-1A) and a
+// stacked `error` (DEMOS-18) — which the dedupe could not merge, because its key
+// (`kind|message|firstFrame`) starts with the kind.
+//
+// So the console copy is re-homed, not dropped: sent under kind `error` carrying the
+// Error's own message and stack, which makes the key identical to the window
+// listener's for the same Error. Whichever arrives first wins; the second is deduped.
+//
+// Re-homing rather than dropping is the whole point. Not every Error that reaches
+// `console.error` has a window-`error` twin — DEMOS-19 (a DOMException out of React's
+// commit phase) has none, and Angular's default `ErrorHandler` console.errors every
+// error zone.js swallows, which is that framework's entire error reporting on both
+// tiers. Dropping by content would have deleted those faults outright.
+
+test("DEV-2552: console.error of an Error is relayed on the error channel, with its stack", () => {
+  // The regression guard for the no-twin case above: no window `error` event is fired
+  // here, and the fault must still be reported exactly once.
+  const h = runReporter();
+  h.console.error(new Error("boom"));
+
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].kind, "error", "not `console-error` — this one has a stack");
+  assert.equal(h.sent[0].message, "boom");
+  assert.ok(h.sent[0].stack.includes("Error: boom"));
+  assert.equal(h.passthrough.length, 1, "the demo's own console output must be untouched");
+});
+
+test("DEV-2552: an Error anywhere in the arguments re-homes the event, message and all", () => {
+  // The message is the Error's own, not the joined arguments: that is what keeps the
+  // dedupe key identical to the window listener's when the caller prefixes the log,
+  // as Angular's `console.error('ERROR', err)` does.
+  const h = runReporter();
+  h.console.error("ERROR", 42, new Error("x"));
+
+  assert.deepEqual(
+    h.sent.map((p) => [p.kind, p.message]),
+    [["error", "x"]],
+  );
+  assert.equal(h.passthrough.length, 1);
+});
+
+test("DEV-2552: one fault, one event, in either order", () => {
+  // The duplication this ticket is about. Order-independent by construction, which
+  // matters because the console copy consistently arrives first — a "skip what was
+  // already seen" rule would have kept the stackless one.
+  for (const consoleFirst of [true, false]) {
+    const h = runReporter();
+    const err = new Error("c is not defined");
+    const fireWindow = () => h.fire("error", { error: err, message: err.message });
+    if (consoleFirst) {
+      h.console.error(err);
+      fireWindow();
+    } else {
+      fireWindow();
+      h.console.error(err);
+    }
+
+    assert.equal(h.sent.length, 1, `exactly one event (console first: ${consoleFirst})`);
+    assert.equal(h.sent[0].kind, "error");
+    assert.equal(h.sent[0].message, "c is not defined");
+    assert.ok(h.sent[0].stack.includes("Error: c is not defined"));
+  }
+});
+
+test("DEV-2552: an Error with a throwing message getter neither throws nor is lost", () => {
+  // The extraction runs at the callsite, outside `send`'s own try/catch, and it must
+  // not be able to throw out of the demo's `console.error` call — that would cost the
+  // demo its console output as well as the report.
+  const h = runReporter();
+  const err = new Error("ignored");
+  Object.defineProperty(err, "message", {
+    get() {
+      throw new Error("hostile getter");
+    },
+  });
+  h.console.error(err);
+
+  assert.deepEqual(
+    h.sent.map((p) => [p.kind, p.message]),
+    [["error", "unknown error"]],
+  );
+  assert.equal(h.passthrough.length, 1, "the demo's own console output still happens");
+});
+
+test("DEV-2552: a stackless console.error stays on the console channel", () => {
+  // The regression guard against over-reaching: string arguments are what the console
+  // channel exists for, and the library warnings it catches (an already-registered
+  // theme, a bad dateFormat, a sanitizer notice) all look like this.
+  const h = runReporter();
+  h.console.error("bad", 42);
+
+  assert.deepEqual(
+    h.sent.map((p) => [p.kind, p.message]),
+    [["console-error", "bad 42"]],
+  );
+});
+
+test("DEV-2552: console.warn is not re-homed — it has no error-channel twin", () => {
+  const h = runReporter();
+  h.console.warn(new Error("careful"));
+
+  assert.deepEqual(
+    h.sent.map((p) => [p.kind, p.message]),
+    [["console-warn", "careful"]],
+  );
+});
+
 // ---- network events are same-origin only (DEV-2539, DEMOS-Z) ----------------
 //
 // The reporter runs inside the preview document, so `location.host` *is* the preview
