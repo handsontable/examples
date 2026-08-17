@@ -65,7 +65,14 @@ function isUnsafeEntryPath(path: string): boolean {
   if (path.startsWith("/") || path.startsWith("\\")) return true;
   if (/^[A-Za-z]:/.test(path)) return true;
   if (path.includes("\\")) return true;
-  return path.split("/").some((segment) => segment === ".." || segment === ".");
+  // Only `..` is traversal. A `.` segment is how some zip tools spell "here"
+  // (`./src/index.js`), and refusing those threw away entire archives.
+  return path.split("/").some((segment) => segment === "..");
+}
+
+/** Drop the `.` segments a zip tool may have written, so `./src/a.js` is `src/a.js`. */
+function normalizeEntryPath(path: string): string {
+  return path.split("/").filter((segment) => segment !== "." && segment !== "").join("/");
 }
 
 /**
@@ -108,24 +115,36 @@ export function expandZip(
   rules: ZipRules,
   limit = MAX_ZIP_UNPACKED_BYTES,
 ): ZipExpansion {
-  let entries: Record<string, Uint8Array>;
+  // Two passes, and the order matters. The first reads the central directory only —
+  // names and *declared* sizes — so every decision about what to take is made before
+  // a single entry is inflated. Deciding afterwards would mean a 1 MB archive of
+  // zeros could expand to gigabytes in the tab before any cap was consulted.
+  let listing: Array<{ path: string; size: number }>;
   try {
-    entries = unzipSync(bytes);
+    listing = [];
+    unzipSync(bytes, {
+      filter: (file) => {
+        if (!file.name.endsWith("/")) listing.push({ path: file.name, size: file.originalSize ?? 0 });
+        return false;
+      },
+    });
   } catch (e) {
     return { files: [], rejected: [], error: `not a readable .zip (${(e as Error).message})` };
   }
 
-  // Directory entries are zero-length names ending in `/`; they carry nothing.
-  const paths = Object.keys(entries).filter((path) => !path.endsWith("/"));
-  if (!paths.length) return { files: [], rejected: [], error: "the archive is empty" };
+  if (!listing.length) return { files: [], rejected: [], error: "the archive is empty" };
 
-  const root = commonRoot(paths);
-  const files: ZipFile[] = [];
+  const root = commonRoot(listing.map((entry) => normalizeEntryPath(entry.path)));
   const rejected: ZipRejection[] = [];
-  let unpacked = 0;
+  const wanted = new Map<string, string>();
+  let declared = 0;
 
-  for (const path of paths.sort()) {
-    const relative = root ? path.slice(root.length + 1) : path;
+  for (const { path, size } of [...listing].sort((a, b) => a.path.localeCompare(b.path))) {
+    const normalized = normalizeEntryPath(path);
+    const relative = root ? normalized.slice(root.length + 1) : normalized;
+    // The *raw* path, deliberately: normalising strips the leading slash off
+    // `/etc/passwd`, which defangs it but also hides that the archive asked for an
+    // absolute path at all. An entry that asked deserves to be named.
     if (isUnsafeEntryPath(path) || !relative) {
       rejected.push({ path: relative || path, reason: "unsafe path in the archive" });
       continue;
@@ -133,17 +152,37 @@ export function expandZip(
     if (rules.isExcludedPath(relative)) continue;
 
     const name = relative.slice(relative.lastIndexOf("/") + 1);
-    const data = entries[path]!;
     if (!rules.isTextFileName(name)) {
       rejected.push({ path: relative, reason: "not a text file" });
       continue;
     }
-    if (data.length > rules.maxFileBytes) {
+    if (size > rules.maxFileBytes) {
       rejected.push({ path: relative, reason: `larger than ${Math.floor(rules.maxFileBytes / 1024)} KB` });
       continue;
     }
-    if (unpacked + data.length > limit) {
+    if (declared + size > limit) {
       rejected.push({ path: relative, reason: "archive is too large to unpack" });
+      continue;
+    }
+    declared += size;
+    wanted.set(path, relative);
+  }
+
+  // Second pass: inflate only what survived, and only up to what it declared.
+  let entries: Record<string, Uint8Array>;
+  try {
+    entries = unzipSync(bytes, { filter: (file) => wanted.has(file.name) });
+  } catch (e) {
+    return { files: [], rejected: [], error: `not a readable .zip (${(e as Error).message})` };
+  }
+
+  const files: ZipFile[] = [];
+  for (const [path, relative] of wanted) {
+    const data = entries[path];
+    if (!data) continue;
+    // A header can lie about its size; the real bytes are the authority.
+    if (data.length > rules.maxFileBytes) {
+      rejected.push({ path: relative, reason: `larger than ${Math.floor(rules.maxFileBytes / 1024)} KB` });
       continue;
     }
     const text = decodeText(data);
@@ -151,7 +190,6 @@ export function expandZip(
       rejected.push({ path: relative, reason: "not a text file" });
       continue;
     }
-    unpacked += data.length;
     files.push({ path: relative, contents: text });
   }
 

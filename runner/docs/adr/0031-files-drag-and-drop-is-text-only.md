@@ -92,8 +92,13 @@ Three rules exist only for archives, in `dropZip.ts`:
 - **Traversal is refused, not resolved.** `..` segments, absolute paths, drive letters
   and backslash separators are rejected per entry — a zip is the one input here whose
   paths come from a stranger's filesystem.
-- **The unpacked total is capped** (4 MB), separately from the per-file 512 KB, because
-  a small archive can hold a large amount of text.
+- **Nothing is inflated before the caps are consulted.** The expander reads the central
+  directory first — names and declared sizes — decides what it will take, and only then
+  inflates that subset (`unzipSync`'s `filter`). Deciding afterwards was the first cut,
+  and it meant a 1 MB archive of zeros could expand to gigabytes in the tab before any
+  limit was reached. The declared size is a claim, so the inflated length is checked
+  too. Three ceilings: 512 KB per entry, 4 MB unpacked in total, and 8 MB on the
+  archive's own bytes, checked before it is read into memory at all.
 
 `dropZip.ts` takes the accept/exclude rules as an *argument* rather than importing them
 from `dropFiles.ts`. Both modules are unit-tested by `pipeline/*.test.mjs`, which runs

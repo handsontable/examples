@@ -22,6 +22,9 @@ export const MAX_DROP_FILE_BYTES = 512 * 1024;
  *  keeps it from becoming a 400-file workspace nobody can undo. */
 export const MAX_DROP_FILES = 50;
 
+/** Ceiling on a dropped archive's own bytes, checked before it is read into memory. */
+export const MAX_ARCHIVE_BYTES = 8 * 1024 * 1024;
+
 /** Extensions that can be dropped. An allowlist, not a binary denylist: an
  *  unknown extension is far more likely to be an asset than a source file, and
  *  the failure mode of guessing wrong is a corrupted file in the editor. */
@@ -236,11 +239,26 @@ async function takeArchive(
     result.rejected.push({ path, reason: "not a text file" });
     return;
   }
+  // Bound the archive before reading it: everything downstream is in memory, and an
+  // 8 MB zip already holds far more text than a demo can.
+  if (file.size > MAX_ARCHIVE_BYTES) {
+    result.rejected.push({
+      path,
+      reason: `archive larger than ${Math.floor(MAX_ARCHIVE_BYTES / (1024 * 1024))} MB`,
+    });
+    return;
+  }
   const dir = path.slice(0, path.lastIndexOf("/"));
   const expansion = options.unzip(new Uint8Array(await file.arrayBuffer()));
   if (expansion.error) {
     result.rejected.push({ path, reason: expansion.error });
     return;
+  }
+  // Refusals first. Taking the files first meant the drop's ceiling could return
+  // early and swallow them — including the `.env` the reader most needs to hear was
+  // refused, since a refusal nobody sees is indistinguishable from an acceptance.
+  for (const entry of expansion.rejected) {
+    result.rejected.push({ path: dropPath(dir, entry.path), reason: entry.reason });
   }
   for (const entry of expansion.files) {
     if (result.files.length >= MAX_DROP_FILES) {
@@ -248,9 +266,6 @@ async function takeArchive(
       return;
     }
     result.files.push({ path: dropPath(dir, entry.path), contents: entry.contents });
-  }
-  for (const entry of expansion.rejected) {
-    result.rejected.push({ path: dropPath(dir, entry.path), reason: entry.reason });
   }
 }
 

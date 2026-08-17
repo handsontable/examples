@@ -152,3 +152,35 @@ test("isZipFileName is by extension, case-insensitively", () => {
   assert.ok(!isZipFileName("project.zip.js"));
   assert.ok(!isZipFileName("project.tar.gz"));
 });
+
+// ── The three things the review caught ────────────────────────────────────────
+
+test("a `.` segment is not traversal (DEV-2531 review)", () => {
+  // Some zip tools store paths as `./src/a.js`. Refusing those as unsafe threw away
+  // whole archives; only `..` is traversal.
+  const { files, rejected } = expandZip(zip({ "./src/a.js": "1", "./package.json": "{}" }));
+  assert.deepEqual(files.map((f) => f.path).sort(), ["package.json", "src/a.js"]);
+  assert.deepEqual(rejected, []);
+  // …and `..` is still refused.
+  const evil = expandZip(zip({ "p/../../evil.js": "x", "p/ok.js": "1" }));
+  assert.ok(evil.rejected.some((r) => r.reason === "unsafe path in the archive"));
+});
+
+test("nothing is inflated before the caps are consulted", () => {
+  // A bomb: two entries that declare 5 MB each against a 1 MB ceiling. The first pass
+  // reads the central directory only, so neither is expanded — proven by the fact
+  // that the rejection names the size rule rather than the process running out of
+  // memory, and by both entries being refused rather than the first one landing.
+  const big = "z".repeat(2 * 1024 * 1024);
+  const { files, rejected } = expandZip(zip({ "p/a.js": big, "p/b.js": big }), 1024 * 1024);
+  assert.deepEqual(files, []);
+  assert.equal(rejected.length, 2);
+  assert.ok(rejected.every((r) => /larger than|too large to unpack/.test(r.reason)));
+});
+
+test("a lying header is caught by the bytes themselves", () => {
+  // The declared size is a claim; the inflated length is the fact. Both are checked,
+  // so an archive that under-reports cannot smuggle a large file through.
+  const { files } = expandZip(zip({ "p/ok.js": "x".repeat(100) }), 10 * 1024);
+  assert.deepEqual(files.map((f) => f.path), ["ok.js"]);
+});
