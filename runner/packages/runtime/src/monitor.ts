@@ -52,6 +52,22 @@ export const MONITOR_MESSAGE_MAX = 500;
 /** Stack cap. Enough for a fingerprint and a first frame, not a whole trace. */
 export const MONITOR_STACK_MAX = 2000;
 
+/**
+ * Cap for a Tier-1 compile message (DEV-2550) — the bundler's `show-error` string,
+ * which reaches the error card and Sentry through `SandpackRuntime`.
+ *
+ * Deliberately larger than `MONITOR_MESSAGE_MAX`. A relayed message is one line of
+ * a thrown error; this one is a babel diagnostic whose code frame *is* the useful
+ * part, and 500 chars cuts it in half. Same order as the stack cap, and still ~2%
+ * of the payload actually observed (DEMOS-15: a code frame followed by a
+ * multi-kilobyte inline source map).
+ *
+ * It lives here, beside the other caps, rather than in sandpack.ts: this file's
+ * header is explicit that a second set of caps elsewhere is a second set to keep in
+ * sync.
+ */
+export const MONITOR_COMPILE_MESSAGE_MAX = 2000;
+
 /** URL cap. A path this long is already unreadable; the rest is only volume. */
 export const MONITOR_URL_MAX = 500;
 

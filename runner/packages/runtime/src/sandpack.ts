@@ -20,7 +20,12 @@ import type {
 import { transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
 import { resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
-import { injectReporter } from "./monitor.js";
+import {
+  MONITOR_COMPILE_MESSAGE_MAX,
+  injectReporter,
+  redactPreviewHosts,
+  truncateMessage,
+} from "./monitor.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 // Derive Sandpack's option/setup types straight from the loader signature so we
@@ -127,6 +132,63 @@ function sameFiles(a: FilesMap, b: FilesMap | null): boolean {
   const paths = Object.keys(a);
   if (paths.length !== Object.keys(b).length) return false;
   return paths.every((path) => a[path] === b[path]);
+}
+
+/**
+ * A compile diagnostic from the in-browser bundler, as reported to the shell.
+ *
+ * Named, because it is the exception type Sentry puts in the issue title: a bare
+ * `Error` there reads as an application crash, and the first line of a bundler
+ * message about visitor-authored code was in fact read that way once (DEV-2550 was
+ * filed against the app for text the bundler produced about a demo's own source).
+ *
+ * Always constructed from a string, never wrapped around an error the handler was
+ * handed — see `boundCompileMessage`.
+ */
+export class SandpackCompileError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandpackCompileError";
+  }
+}
+
+const COMPILE_ERROR_FALLBACK = "Sandpack compile error";
+
+/** Inline source maps the bundler echoes back inside a compile message. A
+ *  `data:application/json;base64,…` blob is kilobytes of noise around the one line
+ *  that says what is wrong; the marker is kept so the line still reads. */
+const INLINE_SOURCE_MAP = /sourceMappingURL=data:[^\s'"*]*/gi;
+
+/**
+ * Bound the bundler's `show-error` string (DEV-2550).
+ *
+ * This is third-party output about code an anonymous visitor wrote, and it was the
+ * only DEV-2527 channel that reached both the error card and `Sentry.captureException`
+ * unbounded — the observed payload (DEMOS-15) was a babel code frame followed by a
+ * multi-kilobyte inline source map, so the diagnostic was buried in the card and the
+ * Sentry event was mostly base64. `reportDemoEvent` bounds its channel through
+ * `sanitizeMonitorPayload`, container stderr through `truncateMessage`; this is the
+ * same treatment for this one.
+ *
+ * Order is load-bearing twice over. Source maps are stripped *first*, so the cap
+ * spends its budget on the diagnostic instead of on half a blob. Hosts are then
+ * redacted *before* truncation — the security property monitor.ts documents on
+ * `bound()`: truncating first can cut a preview hostname in half and strand a live
+ * session token in a form the redactor no longer recognises.
+ *
+ * Takes `unknown` and coerces, matching `truncateMessage`: the payload crossed an
+ * origin boundary from a page running the visitor's code, so its shape is not a
+ * promise. It never reads-and-writes a property of its input — the returned message
+ * always goes into a *new* `SandpackCompileError`. A caught error can be frozen (a
+ * babel `SyntaxError` carries a non-writable `message`, which is precisely what the
+ * text in DEMOS-15 is about), and "rewrite the message in place" is the shape that
+ * turns a report into a throw.
+ */
+function boundCompileMessage(value: unknown): string {
+  const raw = typeof value === "string" ? value : value === undefined || value === null ? "" : String(value);
+  if (raw.trim() === "") return COMPILE_ERROR_FALLBACK;
+  const withoutMaps = raw.replace(INLINE_SOURCE_MAP, "sourceMappingURL=<omitted>");
+  return truncateMessage(redactPreviewHosts(withoutMaps), MONITOR_COMPILE_MESSAGE_MAX);
 }
 
 export class SandpackRuntime implements DemoRuntime {
@@ -312,7 +374,7 @@ export class SandpackRuntime implements DemoRuntime {
   }
 
   private onMessage(msg: unknown) {
-    const m = msg as { type?: string; action?: string; compilatonError?: boolean; message?: string };
+    const m = msg as { type?: string; action?: string; compilatonError?: boolean; message?: unknown };
     switch (m.type) {
       case "done":
         // (`compilatonError` is misspelled in the upstream payload. Leave it.)
@@ -321,7 +383,11 @@ export class SandpackRuntime implements DemoRuntime {
         break;
       case "action":
         if (m.action === "show-error") {
-          this.emitError(new Error(m.message || "Sandpack compile error"));
+          // Bounded and de-noised on the way in (DEV-2550): this string is the
+          // bundler's, about the visitor's code, and it goes to the error card *and*
+          // to Sentry. A fresh error carries it — nothing the handler received is
+          // rewritten in place.
+          this.emitError(new SandpackCompileError(boundCompileMessage(m.message)));
         }
         break;
       case "console":
