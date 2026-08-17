@@ -1,8 +1,9 @@
-// DEV-2536 drift guard. Run: node --test pipeline/*.test.mjs
+// DEV-2536 drift guard. Run: pnpm test (the FRAMEWORK_DEV import below needs
+// the `--experimental-strip-types` that the `test` script passes).
 //
 // The docs Angular scaffold hardcodes its Angular/TypeScript pins in
 // `wrap-docs-example.mjs`, but the container a docs demo boots in is seeded
-// from `containers/live/baked/angular-18/`, which is generated from the
+// from `containers/live/baked/<bakedKey>/`, which is generated from the
 // checked-in `examples/angular` starter. Docs artifacts ship no
 // `pnpm-lock.yaml`, so the boot always takes `pnpm install
 // --no-frozen-lockfile` against that seeded tree. When the two agree the
@@ -17,9 +18,17 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { wrapDocsExample } from "./wrap-docs-example.mjs";
+import { FRAMEWORK_DEV } from "../workers/api/src/frameworks.generated.ts";
+
+// Resolve the seed the same way the API worker does: a docs artifact carries no
+// fingerprint match, so `workers/api/src/index.ts` falls back to
+// `defaultBakedKey`. Deriving it here (rather than hardcoding `angular-18`)
+// keeps the guard pointed at the context sessions actually seed when
+// `prepare-container.mjs` moves SEED_BUCKET to the next Handsontable major.
+const BAKED_KEY = FRAMEWORK_DEV.angular?.defaultBakedKey;
 
 const BAKED_PKG = fileURLToPath(
-  new URL("../containers/live/baked/angular-18/package.json", import.meta.url),
+  new URL(`../containers/live/baked/${BAKED_KEY}/package.json`, import.meta.url),
 );
 
 // The two files split dependencies/devDependencies differently — the docs
@@ -49,6 +58,8 @@ const emitAngularPkg = () =>
   );
 
 test("docs Angular scaffold pins match the baked container context", () => {
+  assert.ok(BAKED_KEY, "FRAMEWORK_DEV.angular declares a defaultBakedKey");
+
   const emitted = merged(emitAngularPkg());
   const baked = merged(JSON.parse(readFileSync(BAKED_PKG, "utf8")));
 
