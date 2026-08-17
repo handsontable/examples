@@ -172,26 +172,31 @@ async function readFailure(
 }
 
 /** Statuses that mean "nothing answered in time", emitted by the platform rather than
- *  by us (DEV-2538). Deliberately excludes 502 and 503: 503 is the cost guardrail's own
- *  status, and both read better as the connectivity tier below.
+ *  by us (DEV-2538). Deliberately excludes 502 and 503. 503 has its own tier below
+ *  (DEV-2553) because "the service did not take the request" is all an envelope-less
+ *  503 supports — "took too long" would be a stronger claim than the evidence. 502
+ *  stays in the connectivity tier: nothing has been observed emitting one, so there is
+ *  no case to write a sentence for.
  *
  *  Only meaningful together with `envelope: false` — a 504 carrying a real `{ error }`
  *  body would be our Worker speaking, and its own words win. */
 const TIMEOUT_STATUSES = new Set([504, 522, 524]);
 
 /**
- * What to tell the user when POST /api/session comes back not-ok, in four tiers.
+ * What to tell the user when POST /api/session comes back not-ok, in five tiers.
  *
- * ⚠ The wording of the timeout tier is a contract with `describeRuntimeError` in
- * apps/authoring/src/App.tsx, whose container-engine heuristic matches
+ * ⚠ The wording of the two platform tiers — gateway-timeout and service-unavailable —
+ * is a contract with `describeRuntimeError` in apps/authoring/src/App.tsx, whose
+ * container-engine heuristic matches
  * /failed to fetch|networkerror|load failed|session start failed|fetch/i and REPLACES
  * the message with the local-dev "run the API worker, it needs Docker" text. That is
  * right for a developer whose worker is down and wrong for a visitor on
  * demos.handsontable.com whose sandbox timed out — which is exactly what production
- * users got for the 82 events of Sentry DEMOS-9 (DEV-2538). So the timeout sentence
- * must contain none of those words, "fetch" above all. The connectivity tiers below it
- * keep saying "session start failed" on purpose, so they keep tripping the heuristic.
- * `pipeline/session-start-failure.test.mjs` is what holds both halves in place.
+ * users got for the 82 events of Sentry DEMOS-9 (DEV-2538). So both of those sentences
+ * must contain none of those words, "fetch" above all. The connectivity tiers below
+ * them keep saying "session start failed" on purpose, so they keep tripping the
+ * heuristic. `pipeline/session-start-failure.test.mjs` is what holds both halves in
+ * place.
  */
 function sessionStartMessage(
   status: number,
@@ -207,6 +212,17 @@ function sessionStartMessage(
   // status rather than merging every gateway failure into one.
   if (!failure.envelope && TIMEOUT_STATUSES.has(status)) {
     return `The sandbox took too long to start (${status}). Nothing is wrong with the code — try "Restart preview".`;
+  }
+  // A 503 with no envelope did not come from our Worker either: every refusal it makes
+  // on this route is a `json({ error }, status)` — the budget guardrail above included,
+  // and its catch-all answers `json({ error }, 500)` — so this one was emitted above
+  // us. Not folded into TIMEOUT_STATUSES: only "the service did not take the request"
+  // is supportable, never "it took too long" (DEV-2553). Gated on the envelope rather
+  // than on an empty message on purpose: a platform 503 that DOES carry text — a
+  // gateway's own HTML page — is just as much not-ours, and letting that case fall
+  // through would keep the App.tsx misattribution alive for exactly it.
+  if (!failure.envelope && status === 503) {
+    return `The sandbox service is unavailable right now (503). Nothing is wrong with the code — try "Restart preview" in a moment.`;
   }
   // No body at all on some other status: the API is not answering usefully, which in
   // practice is a local worker that isn't running. No trailing colon introducing a
