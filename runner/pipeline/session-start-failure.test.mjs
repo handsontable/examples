@@ -199,7 +199,15 @@ test("a gateway page on a 503 never becomes the user's message", async () => {
   const err = await sessionStartError(503, page);
 
   assert.doesNotMatch(err.message, /<html/i, "the page is not the user's message");
-  assert.match(err.message, /unavailable/i, "the envelope-less tier, not the body tier");
+  // Anchored at the start, not a bare /unavailable/i: the fixture's own <title> is
+  // "Service Unavailable" and sits inside the 200-char truncation cap, so a loose match
+  // would pass on `session start failed (503): <html><head><title>Service Unavailable…`
+  // — i.e. on the very body tier this test exists to rule out.
+  assert.match(
+    err.message,
+    /^The sandbox service is unavailable/,
+    "the envelope-less tier, not the body tier",
+  );
   assert.doesNotMatch(err.message, /session start failed/i, "would trip the App.tsx heuristic");
   assert.ok(err.message.length < 300, `message should be a sentence, got ${err.message.length} chars`);
 });
