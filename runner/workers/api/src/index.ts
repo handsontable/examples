@@ -129,9 +129,12 @@ class SandboxBaseWithSleep extends SandboxBase {
   private bootFailureReported = false;
 
   /**
-   * Fires on every container start — initial boot and wake-from-sleep alike,
-   * which is exactly the clock DEV-2537 needs. Stamped before `super.onStart()`
-   * because the SDK's own start work is part of the boot a visitor is waiting on.
+   * Fires on every container start, which is exactly the clock DEV-2537 needs:
+   * a refusal is only ever reachable inside the generation that exposed the port
+   * (see `preview-boot.ts` — a restart makes every preview URL a 410 instead),
+   * so "since this container started" is the right thing to measure. Stamped
+   * before `super.onStart()` because the SDK's own start work is part of the
+   * boot a visitor is waiting on.
    */
   override async onStart(): Promise<void> {
     this.bootStartedAt = Date.now();

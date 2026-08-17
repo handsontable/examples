@@ -108,8 +108,10 @@ test("the terminal copy never tells the visitor to reload the frame", () => {
 });
 
 test("the copy never asserts a first boot", () => {
-  // The dominant cause is wake-from-sleep, where the boot script is not re-run.
-  // "still starting" would be a guess dressed as a fact.
+  // A refusal is only reachable inside the container generation that exposed the
+  // port — a restart turns every preview URL into a 410 instead — so the usual
+  // cause is a dev server that died after serving happily for minutes. "Still
+  // starting" would be a guess dressed as a fact.
   for (const elapsedMs of [5_000, 120_000]) {
     const d = classifyPreviewBootFailure({ ...html, elapsedMs });
     assert.ok(!/still starting/i.test(`${d.title} ${d.body}`), `elapsedMs=${elapsedMs}`);

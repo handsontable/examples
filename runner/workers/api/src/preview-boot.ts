@@ -14,22 +14,41 @@
 // reading a Request: importing `wantsHtmlError` from `./error-page.js` would
 // make the specifier unresolvable to strip-types.
 //
-// The copy is deliberately neutral. The dominant cause is NOT a first boot:
+// WHAT CAN ACTUALLY REACH HERE, read out of the SDK rather than assumed — it is
+// narrower than it looks, and the copy below depends on it.
+//
+// A preview request only reaches the throwing `tcpPort.fetch()` when the port
+// activation still belongs to the *current* container generation. `Sandbox.stop()`
+// (which `sleepAfter` invokes through the Container base's activity alarm) clears
+// both the runtime identity and the stored port activations, and `onStart()` mints
+// a fresh runtime id via `markStarted()`. So after any container restart —
+// wake-from-sleep included — `validatePreviewURLForRuntime()` answers `stale` and
+// `proxyPreviewRequest()` returns its own 410 long before anything can throw. Wake
+// from sleep is therefore NOT a source of these events; a preview URL that outlives
+// its container is already a 410, and recovering it needs a new session, not this.
+//
+// What is left is a dead port inside a live generation: the dev server process
+// crashed, was killed, or is restarting itself (a Vite config change), or the
+// `/status` probe won the race against the server actually serving. Note the probe
+// makes a cold start an unlikely visitor-facing cause on its own —
 // `packages/runtime/src/container.ts` only points the iframe at the preview URL
-// after `/status` reports a real `net.connect` probe as ready, so a cold start
-// mostly does not reach here. What does is wake-from-sleep, where (per the
-// `sleepAfter` note in `index.ts`) the disk is ephemeral and the boot script is
-// not re-run — the dev server is simply gone. "The demo is still starting"
-// would be a guess dressed as a fact.
+// after `/status` reports a real `net.connect` success.
+//
+// Hence the neutral copy. "The demo is still starting" would be a guess dressed as
+// a fact for a container that has been serving happily for ten minutes.
 
 /**
- * How long a refusal is treated as a boot still in progress rather than a fault.
+ * How long a refused port is treated as a server on its way up rather than a
+ * fault. The clock is per container generation: `onStart()` stamps it, and the
+ * first refusal after a successful request restamps it, so it measures "how long
+ * has this port been refusing", not "how old is the session".
  *
  * Inferred from this repo's own e2e render budget — the container-preview specs
- * allow 90s for a demo to paint — NOT measured against production cold-boot
- * percentiles. It is one named constant precisely because it will want retuning
- * once DEMOS-K volume is observable: too low and ordinary cold starts still
- * file, too high and a permanently dead container is invisible for 90s.
+ * allow 90s for a demo to paint — NOT measured against production percentiles.
+ * It is one named constant precisely because it will want retuning once the
+ * volume is observable: too low and a dev server restarting itself files an
+ * issue, too high and a crashed one is invisible for 90s while the retry page
+ * keeps the container warm.
  */
 export const BOOT_WINDOW_MS = 90_000;
 
