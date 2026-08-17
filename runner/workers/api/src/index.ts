@@ -15,7 +15,7 @@ import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate, authenticateService, sameOwner } from "./auth.js";
 import { MAX_TITLE, isValidationError, validateDescription, validateTitle } from "./demo-info.js";
-import { isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
+import { isMcpCreated, isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse } from "./error-page.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
@@ -773,10 +773,10 @@ export default Sentry.withSentry(sentryOptions, {
         // Containment, not authentication (security review of PR #177). `X-Demo-Author` is
         // asserted under the same shared secret that grants access to this route, so the
         // ownership check above catches a wrong id — it cannot withstand misuse of the secret
-        // itself. Restricting the path to demos this service created means a leaked secret can
-        // never rewrite work somebody built in the browser; the blast radius stays inside what
-        // the MCP published in the first place.
-        if (!row.forked_from?.startsWith("mcp:")) {
+        // itself. `isMcpCreated()` restricts the path to demos this service created (its JSDoc
+        // carries the full rationale); tests import that same predicate, so keep the check on
+        // it rather than re-inlining `forked_from` here.
+        if (!isMcpCreated(row)) {
           return json(
             {
               error: "forbidden",
