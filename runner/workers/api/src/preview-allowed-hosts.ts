@@ -90,11 +90,21 @@ const PREVIEW_HOST_RE = /^([a-z0-9.-]+)(?::\d+)?$/;
  * The per-session name never has to be computed, and nothing has to be known at
  * image-build time.
  *
+ * The wildcard only works because the variable is appended to `server.allowedHosts`.
+ * `isHostAllowedWithoutCache` walks two lists and they are NOT equivalent: the
+ * `config.additionalAllowedHosts` loop compares by exact equality, and only the
+ * `server.allowedHosts` loop honours a leading dot as a suffix match. A future
+ * refactor that routed this value into the other list would take the wildcard away
+ * without changing anything visible until sessions stopped hot-reloading.
+ *
  * Returns `{}` — inject nothing — when there is no host to derive, when vite would
  * allow the host natively anyway (local `wrangler dev` runs on `localhost:8787`, so
  * previews are `*.localhost:8787`), or when the value does not look like a bare
  * hostname. Every rejection falls back to today's behaviour rather than risking a
- * dev server that misparses its own environment.
+ * dev server that misparses its own environment — and `{}` is genuinely inert, not
+ * merely harmless: the SDK's `resolveExecutionEnv` filters an empty map to
+ * `undefined` and `buildExecutionRequestOptions` then omits the field entirely, so
+ * the boot request is byte-identical to the one made before DEV-2541.
  *
  * @param previewHost `env.PREVIEW_HOST`, with or without a `:port` suffix.
  */

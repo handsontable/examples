@@ -24,6 +24,13 @@ import { viteAllowedHostEnv } from "../workers/api/src/preview-allowed-hosts.ts"
 // variable, 101 with it. The negative case is what proves the test measures the
 // host check rather than something incidental.
 //
+// `shouldHandle` has TWO gates that both refuse with an indistinguishable bare 400:
+// the host check, and — whenever an `Origin` header is present — a `?token=` check.
+// A browser always sends `Origin`, so passing only the first gate would silence the
+// warning while leaving HMR just as dead. One test therefore isolates the host gate
+// (no `Origin`) and a second drives the full browser shape: preview `Host`, matching
+// `Origin`, and the token read back out of the served `/@vite/client`.
+//
 // SCOPE, HONESTLY: the boot half pins the contract of the vite the repo has
 // installed (6.4.3). Containers do not run one version — Angular runs 7.3.5 (pinned
 // by @angular/build), and a booted react-js container was observed on 8.1.1 — so
@@ -64,7 +71,7 @@ const freePort = () =>
 
 /** Raw HTTP request over a bare socket so we control the `Host` header exactly —
  *  fetch() and http.request both derive it from the URL. Resolves the status line. */
-function rawRequest(port, headers) {
+function rawRequest(port, headers, path = "/") {
   return new Promise((resolve, reject) => {
     const socket = net.connect(port, "127.0.0.1");
     let buf = "";
@@ -75,7 +82,7 @@ function rawRequest(port, headers) {
     socket.setTimeout(10_000, done(reject).bind(null, new Error("socket timeout")));
     socket.once("error", done(reject));
     socket.once("connect", () => {
-      socket.write(`GET / HTTP/1.1\r\n${headers.join("\r\n")}\r\n\r\n`);
+      socket.write(`GET ${path} HTTP/1.1\r\n${headers.join("\r\n")}\r\n\r\n`);
     });
     socket.on("data", (chunk) => {
       buf += chunk.toString("latin1");
@@ -88,20 +95,70 @@ function rawRequest(port, headers) {
   });
 }
 
-/** A vite-hmr upgrade. Deliberately sends NO `Origin`: with one present
- *  `shouldHandle` falls through to a token check, and a rejection there would
- *  masquerade as the host-check failure this test is about. */
-const wsHandshake = (port, host) =>
-  rawRequest(port, [
-    `Host: ${host}`,
-    "Upgrade: websocket",
-    "Connection: Upgrade",
-    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-    "Sec-WebSocket-Version: 13",
-    // `vite-hmr`, never `vite-ping`: ping short-circuits to allowed BEFORE the
-    // host check, which would make both directions pass and prove nothing.
-    "Sec-WebSocket-Protocol: vite-hmr",
-  ]);
+/** Same socket, but read to EOF and return the whole response — used to pull the
+ *  per-server HMR token out of the served client, exactly as a browser would. */
+function rawGet(port, path, host) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, "127.0.0.1");
+    let buf = "";
+    socket.setTimeout(10_000, () => {
+      socket.destroy();
+      reject(new Error("socket timeout"));
+    });
+    socket.once("connect", () => {
+      socket.write(`GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+    });
+    socket.on("data", (chunk) => (buf += chunk.toString("utf8")));
+    socket.once("error", reject);
+    socket.once("close", () => resolve(buf));
+  });
+}
+
+/**
+ * The HMR token vite bakes into `/@vite/client` for this server instance.
+ *
+ * `clientInjectionsPlugin` substitutes `__WS_TOKEN__` with `config.webSocketToken`,
+ * and the client appends it as `?token=` to the socket URL. Reading it back the way
+ * the browser gets it is what lets the handshake below be browser-shaped rather than
+ * merely upgrade-shaped.
+ */
+async function hmrToken(port) {
+  const body = await rawGet(port, "/@vite/client", `localhost:${port}`);
+  const token = /const wsToken = "([^"]+)"/.exec(body)?.[1];
+  assert.ok(token, `could not read the HMR token out of /@vite/client:\n${body.slice(0, 400)}`);
+  return token;
+}
+
+/**
+ * A `vite-hmr` upgrade.
+ *
+ * `origin`/`token` are opt-in because `shouldHandle` has two gates and they are
+ * indistinguishable from the wire — both refuse with a bare 400:
+ *
+ *   1. the host check (`isHostAllowed`), which is what DEV-2541 is about;
+ *   2. with an `Origin` header present, `hasValidToken(config, url)`.
+ *
+ * Omitting `Origin` isolates gate 1, which is what proves the fix. But a real
+ * browser ALWAYS sends `Origin` on a WebSocket handshake, so production only ever
+ * takes gate 2 as well — hence the browser-shaped test further down, which sends
+ * both and therefore proves the handshake a browser makes actually completes.
+ */
+const wsHandshake = (port, host, { origin, token } = {}) =>
+  rawRequest(
+    port,
+    [
+      `Host: ${host}`,
+      ...(origin ? [`Origin: ${origin}`] : []),
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+      "Sec-WebSocket-Version: 13",
+      // `vite-hmr`, never `vite-ping`: ping short-circuits to allowed BEFORE the
+      // host check, which would make both directions pass and prove nothing.
+      "Sec-WebSocket-Protocol: vite-hmr",
+    ],
+    token === undefined ? "/" : `/?token=${token}`,
+  );
 
 /** Boot vite on its own port in `dir`, wait for it to answer, run `fn`, always kill it. */
 async function withVite(dir, extraEnv, fn) {
@@ -158,6 +215,52 @@ test("vite refuses the HMR upgrade from a preview host, and the env var fixes it
       "with the env var vite must accept the preview host; a silent removal upstream shows up here",
     );
     assert.equal(await wsHandshake(port, `localhost:${port}`), 101, "localhost must keep working");
+  });
+});
+
+test("the handshake a real browser makes completes once the env var is set", async (t) => {
+  // The test above isolates the host check by omitting `Origin`. No browser does
+  // that: a WebSocket handshake always carries one, so in production `shouldHandle`
+  // runs the host check AND `hasValidToken`. Both refuse with an identical bare 400,
+  // which is why fixing only the host check could look like a fix and still leave
+  // HMR dead. This drives the full browser shape — preview `Host`, matching `Origin`,
+  // and the `?token=` the vite client reads out of `/@vite/client` — end to end
+  // against the dev server.
+  const dir = await mkdtemp(join(tmpdir(), "dev2541-browser-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, "package.json"), JSON.stringify({ name: "dev2541-browser", private: true, type: "module" }));
+  await writeFile(join(dir, "index.html"), "<!doctype html><html><body>dev2541</body></html>");
+
+  const origin = `https://${PREVIEW_HOST}`;
+
+  await withVite(dir, {}, async (port) => {
+    const token = await hmrToken(port);
+    assert.equal(
+      await wsHandshake(port, PREVIEW_HOST, { origin, token }),
+      400,
+      "unfixed: a valid token does not help, the host check refuses first",
+    );
+  });
+
+  await withVite(dir, viteAllowedHostEnv("demos.handsontable.com"), async (port) => {
+    const token = await hmrToken(port);
+    assert.equal(
+      await wsHandshake(port, PREVIEW_HOST, { origin, token }),
+      101,
+      "fixed: the exact handshake a browser sends must be accepted, not merely the host check",
+    );
+    // Control: the token gate is live on this same request shape, so the 101 above
+    // is a real acceptance and not a check that silently stopped being enforced.
+    assert.equal(
+      await wsHandshake(port, PREVIEW_HOST, { origin }),
+      400,
+      "with an Origin and no token vite must still refuse — otherwise the 101 proves nothing about the token gate",
+    );
+    assert.equal(
+      await wsHandshake(port, PREVIEW_HOST, { origin, token: "not-the-token" }),
+      400,
+      "a wrong token must still refuse",
+    );
   });
 });
 

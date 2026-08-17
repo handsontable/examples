@@ -67,22 +67,38 @@ which passes it straight into the vite server config. Angular's own host-check
 middleware only prettifies vite's 403; it delegates the decision to vite. Nuxt is
 expected to be covered by the same array default but has not been observed.
 
-Two things to know before changing any of this:
+Three things to know before changing any of this:
 
 - **It is not a `server.hmr` problem.** With no `server.hmr` config the HMR client
   derives host, port and protocol from `import.meta.url` and already dials
   `wss://<preview-host>/` correctly. Adding `--hmr.clientPort` / `--hmr.protocol`
   to a dev command does not help and actively breaks the session: vite's CLI
   declares no `--hmr` option, so it aborts with `CACError` before it ever listens,
-  and the session then serves the boot-failure page forever.
+  and the session then serves the boot-failure page forever. Vite's own console
+  diagnostic is what sends people down that path — `[vite] failed to connect to
+  websocket … (browser) <preview>:/ <--[WebSocket (failing)]--> localhost:5173/
+  (server)` does *not* mean the client dialed `localhost:5173`. In
+  `dist/client/client.mjs` the right-hand side of both lines is `serverHost` /
+  `directSocketHost`, a static label for where the dev server bound; the browser
+  side of the failing line is the preview host, and it is already correct.
+- **`shouldHandle` refuses on two gates that look identical on the wire.** Both the
+  host check and — whenever the request carries an `Origin`, which a browser always
+  sends on a WebSocket handshake — the `?token=` check against the value vite bakes
+  into `/@vite/client` abort with a bare `400`. Only the host gate is broken here,
+  but a change that satisfied just that gate would be indistinguishable from one
+  that actually restores HMR. That is why the guard test drives the whole
+  browser-shaped handshake (preview `Host`, matching `Origin`, real token) and not
+  only the host check.
 - **The variable is internal to vite and unversioned, and it has already changed.**
   vite 6.4.3 and 7.3.5 append the value verbatim; 8.1.1 splits it on commas and
   discards it entirely — warning only, no error — if it contains `\`, `"` or `'`.
   Every failure here is silent: HMR just goes back to being broken.
   `pipeline/vite-allowed-hosts.test.mjs` is what would notice. It boots a real vite
   and drives a real upgrade handshake with a preview-shaped `Host`, asserting `400`
-  without the variable and `101` with it, and separately pins the value's shape
-  against vite 8's parsing rules.
+  without the variable and `101` with it — once with `Origin` omitted to isolate the
+  host gate, and once in full browser shape to prove the handshake a browser
+  actually sends completes — and separately pins the value's shape against vite 8's
+  parsing rules.
 
 > **There is no single container vite version.** Three are in play: the repo (and
 > therefore the test) installs **6.4.3**; Angular runs **7.3.5**, pinned by
