@@ -17,7 +17,8 @@ import { authenticate, authenticateService, sameOwner } from "./auth.js";
 import { MAX_TITLE, isValidationError, validateDescription, validateTitle } from "./demo-info.js";
 import { isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
-import { errorPageResponse } from "./error-page.js";
+import { errorPageResponse, wantsHtmlError } from "./error-page.js";
+import { classifyPreviewBootFailure, isPortNotListening } from "./preview-boot.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
@@ -98,8 +99,117 @@ const sentryOptions = (env: Env): Sentry.CloudflareOptions => ({
   tracesSampleRate: 0,
 });
 
+/**
+ * The literal value of the SDK's `PREVIEW_PROXY_HEADER`, pinned.
+ *
+ * `proxyToSandbox()` strips the four `x-sandbox-preview-*` names off the
+ * incoming request and sets this one to "1" before calling `sandbox.fetch()`,
+ * so it is the reliable "this DO fetch is preview traffic" signal. The constant
+ * is `@internal` in the SDK and not exported, hence the copy. If the SDK renames
+ * it, the check below stops matching and we degrade to today's behaviour — a 500
+ * — which is the right direction for a guess to fail in.
+ */
+const PREVIEW_PROXY_HEADER = "x-sandbox-preview-proxy";
+
+/** Marks our own boot-failure page so the proxy seam leaves it alone. */
+const PREVIEW_BOOTING_HEADER = "x-demo-preview-booting";
+
 class SandboxBaseWithSleep extends SandboxBase {
   sleepAfter = "5m";
+
+  /**
+   * When the container this DO fronts last started, or when it first refused a
+   * preview request. In-memory on purpose: it is a per-boot clock, and a DO
+   * isolate recreated without `onStart()` having run falls back to the
+   * first-refusal stamp, which biases toward under-reporting. That is the
+   * correct direction here — over-reporting is the bug being fixed.
+   */
+  private bootStartedAt: number | null = null;
+  /** One Sentry event per overrunning boot, not one per HMR retry. */
+  private bootFailureReported = false;
+
+  /**
+   * Fires on every container start — initial boot and wake-from-sleep alike,
+   * which is exactly the clock DEV-2537 needs. Stamped before `super.onStart()`
+   * because the SDK's own start work is part of the boot a visitor is waiting on.
+   */
+  override async onStart(): Promise<void> {
+    this.bootStartedAt = Date.now();
+    this.bootFailureReported = false;
+    await super.onStart();
+  }
+
+  /**
+   * Turn "the container is up but nothing is listening on the dev-server port"
+   * into an honest 503 instead of a thrown exception (DEV-2537).
+   *
+   * This has to live inside the Durable Object, not at the Worker's proxy seam:
+   * `proxyToSandbox()` already catches and synthesises `500 Proxy routing error`,
+   * so the Worker never sees the throw — and the Sentry event does not come from
+   * `withSentry` on the fetch handler either. It comes from
+   * `instrumentDurableObjectWithSentry`, which binds and wraps `obj.fetch` after
+   * construction. Because it binds the *instance* method, this override is what
+   * gets wrapped, so our catch runs first and Sentry never sees a throw. An event
+   * captured here still ships: the wrapper's isolation scope holds the client for
+   * the whole call and flushes it via `waitUntil` on the normal return path.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    let response: Response;
+    try {
+      response = await super.fetch(request);
+    } catch (err) {
+      // Anything we did not diagnose keeps today's status and today's report.
+      // The intercept keys on a workerd message string, so a wording change must
+      // degrade to current behaviour, never to a swallowed error.
+      if (!isPortNotListening(err) || request.headers.get(PREVIEW_PROXY_HEADER) !== "1") throw err;
+      return this.previewBootFailureResponse(request, err);
+    }
+    // Cleared on any non-throwing return, so a dev server that dies mid-session
+    // starts a fresh clock at its first refusal rather than being permanently
+    // silenced by the successful boot that preceded it.
+    this.bootStartedAt = null;
+    this.bootFailureReported = false;
+    return response;
+  }
+
+  private previewBootFailureResponse(request: Request, err: unknown): Response {
+    if (this.bootStartedAt === null) this.bootStartedAt = Date.now();
+    // `PREVIEW_PROXY_HEADERS` strips only the four `x-sandbox-preview-*` names,
+    // so `Upgrade` and `Accept` are the client's own and are readable here.
+    const descriptor = classifyPreviewBootFailure({
+      elapsedMs: Date.now() - this.bootStartedAt,
+      isUpgrade: request.headers.get("Upgrade")?.toLowerCase() === "websocket",
+      wantsHtml: wantsHtmlError(new URL(request.url).pathname),
+      acceptsHtml: (request.headers.get("Accept") ?? "").toLowerCase().includes("text/html"),
+    });
+
+    if (descriptor.report && !this.bootFailureReported) {
+      this.bootFailureReported = true;
+      Sentry.captureException(err);
+    }
+
+    const response =
+      descriptor.shape === "html"
+        ? errorPageResponse({
+            status: 503,
+            title: descriptor.title,
+            body: descriptor.body,
+            refreshSeconds: descriptor.refreshSeconds,
+          })
+        : new Response(descriptor.shape === "bare" ? null : `${descriptor.title}. ${descriptor.body}`, {
+            status: 503,
+            headers: descriptor.shape === "bare" ? {} : { "Content-Type": "text/plain; charset=utf-8" },
+          });
+
+    // 503 stays the status for both branches. It is what `Retry-After` is for,
+    // and it is in the SDK's `RETRYABLE_WEBSOCKET_UPGRADE_STATUSES` — the SDK's
+    // own 410 "stale preview" would drop out of that set and change how HMR
+    // reconnects. `refreshSeconds` and the copy carry the distinction instead.
+    response.headers.set("Cache-Control", "no-store");
+    response.headers.set("Retry-After", String(descriptor.retryAfterSeconds));
+    response.headers.set(PREVIEW_BOOTING_HEADER, "1");
+    return response;
+  }
 }
 
 /** The builder is destroyed in runBuild's `finally`, so this window only ever
@@ -408,7 +518,12 @@ export default Sentry.withSentry(sentryOptions, {
     // and dev-server payload of a live session leaves through here. Count the
     // bytes on the way out (WebSocket upgrades pass through unmeasured), after the
     // monitor rewrite so its bytes are metered too.
-    if (proxied) return countEgress(await injectMonitor(proxied, env, PRODUCTION_HOST));
+    // Our own boot-failure page (DEV-2537) is not a dev-server document and has
+    // no demo to monitor — skip the reporter injection, but still meter the bytes.
+    if (proxied) {
+      const body = proxied.headers.has(PREVIEW_BOOTING_HEADER) ? proxied : await injectMonitor(proxied, env, PRODUCTION_HOST);
+      return countEgress(body);
+    }
 
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
 
