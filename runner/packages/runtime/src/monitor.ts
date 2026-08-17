@@ -424,12 +424,41 @@ export const REPORTER_SOURCE = `(function () {
     } catch (e) { /* the reporter must never be the reason a demo breaks */ }
   }
 
+  // \`instanceof\` can throw on an exotic proxy, and a cross-realm error (one raised in
+  // an iframe the demo itself created) answers false. Both degrade the same way: the
+  // value is not treated as an Error, which for the guard below means the console
+  // event is still relayed — the pre-DEV-2552 behaviour, never a crash.
+  function isErrorLike(a) {
+    try {
+      return !!a && a instanceof Error;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // DEV-2552. An Error that reaches \`console.error\` is the *error* channel's business,
+  // not the console channel's: the same throw also reaches the window \`error\` listener
+  // a few lines below, which files it with the real preview stack. Relaying both filed
+  // one fault as two Sentry issues — a stackless \`console-error\` and a stacked
+  // \`error\` — and the reporter's own dedupe cannot collapse them, because its key
+  // starts with the kind.
+  //
+  // The console channel keeps what it exists for: stackless *messages*. Library and
+  // framework warnings pass strings, so they are untouched. \`console.warn\` is not
+  // guarded at all — it is a breadcrumb channel and has no error-channel twin.
+  function hasErrorArg(args) {
+    for (var i = 0; i < args.length; i++) {
+      if (isErrorLike(args[i])) return true;
+    }
+    return false;
+  }
+
   function argsToMessage(args) {
     var parts = [];
     for (var i = 0; i < args.length; i++) {
       var a = args[i];
       try {
-        parts.push(a instanceof Error ? String(a && a.message) : typeof a === "string" ? a : String(a));
+        parts.push(isErrorLike(a) ? String(a && a.message) : typeof a === "string" ? a : String(a));
       } catch (e) {
         parts.push("<unserializable>");
       }
@@ -465,7 +494,10 @@ export const REPORTER_SOURCE = `(function () {
     var origError = console.error;
     var origWarn = console.warn;
     console.error = function () {
-      send("console-error", argsToMessage(arguments), "");
+      // See \`hasErrorArg\`: an Error here is already the error channel's. The
+      // passthrough is outside the guard — suppressing the *report* must never
+      // suppress the demo's own console output.
+      if (!hasErrorArg(arguments)) send("console-error", argsToMessage(arguments), "");
       if (origError) origError.apply(console, arguments);
     };
     console.warn = function () {

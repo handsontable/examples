@@ -234,6 +234,71 @@ test("reporter wraps console.error/warn and calls through", () => {
   assert.equal(h.passthrough.length, 2, "the demo's own console output still happens");
 });
 
+// ---- console.error(Error) belongs to the error channel (DEV-2552) -----------
+//
+// The Sandpack sandbox does both: it `console.error`s the evaluation failure *and*
+// lets the throw reach the window `error` listener. Relaying both filed one fault as
+// two Sentry issues — a stackless `console-error` at warning level and a stacked
+// `error` — and the reporter's own dedupe cannot merge them, because its key
+// (`kind|message|firstFrame`) starts with the kind.
+//
+// The rule is by content, not by order: the console event consistently arrives first,
+// so any "skip if already seen" scheme would keep the stackless copy and drop the
+// stacked one — precisely the wrong way round.
+
+test("DEV-2552: console.error of an Error is not relayed, but still prints", () => {
+  const h = runReporter();
+  h.console.error(new Error("boom"));
+
+  assert.deepEqual(h.sent, [], "the window error listener owns this fault");
+  assert.equal(h.passthrough.length, 1, "the demo's own console output must be untouched");
+});
+
+test("DEV-2552: an Error anywhere in the arguments suppresses the relay", () => {
+  const h = runReporter();
+  h.console.error("bad", 42, new Error("x"));
+
+  assert.deepEqual(h.sent, []);
+  assert.equal(h.passthrough.length, 1);
+});
+
+test("DEV-2552: a stackless console.error is still relayed", () => {
+  // The regression guard against over-suppression: string arguments are what the
+  // console channel exists for, and the library warnings it catches (an already-
+  // registered theme, a bad dateFormat, a sanitizer notice) all look like this.
+  const h = runReporter();
+  h.console.error("bad", 42);
+
+  assert.deepEqual(
+    h.sent.map((p) => [p.kind, p.message]),
+    [["console-error", "bad 42"]],
+  );
+});
+
+test("DEV-2552: console.warn is not guarded — it has no error-channel twin", () => {
+  const h = runReporter();
+  h.console.warn(new Error("careful"));
+
+  assert.deepEqual(
+    h.sent.map((p) => [p.kind, p.message]),
+    [["console-warn", "careful"]],
+  );
+});
+
+test("DEV-2552: the window error listener still relays the throw with its stack", () => {
+  // The other half of the pair: suppressing the console copy is only correct because
+  // this one survives, and it is the one carrying the preview's stack.
+  const h = runReporter();
+  const err = new Error("c is not defined");
+  h.console.error(err);
+  h.fire("error", { error: err, message: err.message });
+
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].kind, "error");
+  assert.equal(h.sent[0].message, "c is not defined");
+  assert.ok(h.sent[0].stack.includes("Error: c is not defined"));
+});
+
 // ---- network events are same-origin only (DEV-2539, DEMOS-Z) ----------------
 //
 // The reporter runs inside the preview document, so `location.host` *is* the preview

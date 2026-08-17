@@ -316,6 +316,16 @@ of 100: at 100 a demo spending its whole allowance would erase half the clicks a
 fetches you would need to explain an unrelated app failure. The two numbers move
 together or not at all.
 
+**One owner per class of failure** (DEV-2552), because two channels can see the same
+Tier-1 fault. The in-preview relay owns anything the demo raised *while running* —
+uncaught errors, rejections, and `console.error` for stackless messages only: an Error
+passed to `console.error` is left to the window `error` listener, which files the same
+throw with a real stack. `reportRuntimeError` in `App.tsx` owns the other class, a
+bundler diagnostic for a module that never evaluated (`SandpackCompileError`); a
+`show-error` that carries `payload.frames` came from a module that did evaluate
+(`SandpackEvaluationError`) and the shell stands down for it. Before the split, one
+Tier-1 throw filed three Sentry issues.
+
 The preview is cross-origin on both tiers, so nothing in it can reach this window's
 handlers. `packages/runtime/src/monitor.ts` holds the bridge — one ES5 reporter,
 injected in two places and `postMessage`d back to the app, where
@@ -405,6 +415,13 @@ subdomain label are redacted.
 Worker, and `monitorDemos` / `reportDemoEvent` in `sentry.ts` plus the relay listener
 in `App.tsx`. The `beforeSend` narrowing in `sentry.ts` is **not** part of this
 feature and must stay — it is a fix in its own right.
+
+Removal must also drop the `SandpackEvaluationError` early return in
+`reportRuntimeError` (`App.tsx`), and with it the `SandpackEvaluationError` branch in
+`sandpack.ts`. That guard stands down for evaluated Tier-1 throws *because the relay
+reports them* — delete the relay and leave the guard, and that class of failure is
+reported by nobody. It is the only place the two halves are load-bearing on each
+other.
 
 **Releases.** The frontend release is the commit (`GITHUB_SHA`, injected as
 `VITE_SENTRY_RELEASE`). The Worker release is Cloudflare's per-deploy version id
