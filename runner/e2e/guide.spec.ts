@@ -85,6 +85,10 @@ test("each track renders its own document, and only its own", async ({ page }) =
   // not a demo that works, and this reader never sees the code.
   await expect(page.getByRole("heading", { name: "Open the link before you send it" })).toBeVisible();
   await expect(page.locator("main")).toContainText("builds is not the same as a demo that works");
+  // Both tools, both named in the prompts a reader will copy.
+  await expect(page.locator("main")).toContainText("Load create_demo, then create a demo");
+  await expect(page.getByRole("heading", { name: "Changing a demo, also by asking" })).toBeVisible();
+  await expect(page.locator("main")).toContainText("Load update_demo, then make the Overdue rows red");
   // The two subjects that must not bleed across tracks.
   await expect(page.locator("main")).not.toContainText("pkg.pr.new");
 
@@ -104,6 +108,65 @@ test("each track renders its own document, and only its own", async ({ page }) =
   await page.goto("/guide/developers");
   await expect(page.locator("main")).toContainText("pkg.pr.new");
   await expect(page.getByRole("heading", { name: "Demo an unreleased fix: the PR number as the version" })).toBeVisible();
+});
+
+/** The prompt card's measurements, in whichever theme the page is in. */
+async function promptBox(page: Page) {
+  const prompt = page.locator("main article pre").first();
+  await expect(prompt).toContainText("Load create_demo");
+  return prompt.evaluate((el) => {
+    const s = getComputedStyle(el);
+    const rgb = (v: string) => (v.match(/\d+/g) ?? []).slice(0, 3).map(Number);
+    const [br, bg, bb] = rgb(s.borderTopColor);
+    const [fr, fg, fb] = rgb(s.backgroundColor);
+    return {
+      radius: parseFloat(s.borderTopLeftRadius),
+      padding: parseFloat(s.paddingLeft),
+      wrap: s.whiteSpace,
+      scrollable: el.scrollWidth - el.clientWidth,
+      bg: s.backgroundColor,
+      borderColor: s.borderTopColor,
+      bodyBg: getComputedStyle(document.body).backgroundColor,
+      // Manhattan distance between the edge and the fill it sits on.
+      edgeVsFill: Math.abs(br - fr) + Math.abs(bg - fg) + Math.abs(bb - fb),
+    };
+  });
+}
+
+test("prompt blocks read as something you type, and never overflow", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await page.goto("/guide/everyone");
+  await expect(page.getByRole("heading", { name: "Ask Claude for a demo", level: 1 })).toBeVisible();
+
+  const box = await promptBox(page);
+  // A card, not a terminal line: rounded, padded, its own fill, and wrapping rather
+  // than a horizontal scrollbar — a prompt that runs off the edge is one nobody copies
+  // whole.
+  expect(box.radius).toBeGreaterThanOrEqual(4);
+  expect(box.padding).toBeGreaterThanOrEqual(10);
+  expect(box.wrap).toBe("pre-wrap");
+  expect(box.scrollable).toBe(0);
+  expect(box.bg).not.toBe(box.bodyBg);
+  expect(box.edgeVsFill, `border ${box.borderColor} is invisible on ${box.bg}`).toBeGreaterThan(40);
+});
+
+test("the prompt card keeps its edge in dark mode", async ({ page }) => {
+  // Dark is where the outline was lost: `border` is #222222 and the card's fill
+  // `surfaceMuted` is #19191c, 24 apart — so this test has to *be* in dark mode, and
+  // its threshold has to sit above that pair. In light mode `border` and
+  // `controlBorder` are the same value, so a light-only check cannot tell the two
+  // tokens apart and would pass on the broken one.
+  await stubShell(page);
+  await signIn(page);
+  await page.addInitScript(() => localStorage.setItem("hot-theme", "dark"));
+  await page.goto("/guide/everyone");
+  await expect(page.getByRole("heading", { name: "Ask Claude for a demo", level: 1 })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-hot-theme", "dark");
+
+  const box = await promptBox(page);
+  expect(box.edgeVsFill, `border ${box.borderColor} is invisible on ${box.bg} in dark mode`)
+    .toBeGreaterThan(40);
 });
 
 test("a section deeplink scrolls to that section", async ({ page }) => {

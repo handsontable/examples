@@ -12,35 +12,41 @@ browser would.
 
 ## Ask for it
 
-In Claude — the desktop app, the web app, Claude Code, anywhere the Handsontable MCP
-is connected — describe the demo and ask for the link:
+In Claude — the desktop app, the web app, Claude Code, anywhere the Handsontable MCP is
+connected — **start by naming the tool**, then describe the demo and ask for the link:
 
 ```
-create a demo showing a sales grid with column filters, a total row
-and Polish number formatting, and share the link with me
+Load create_demo, then create a demo showing a sales grid with column
+filters, a total row and Polish number formatting, and give me the share link
 ```
 
-That is the whole interaction. A few more, for the shape of it:
+That is the whole interaction. The two words that matter are **`Load create_demo`**:
+Claude fetches tools on demand, and in a long conversation it will not always reach for
+this one unless you say so. It costs nothing when the tool is already loaded.
+
+A few more, for the shape of it:
 
 ```
-make me a demo of a 50,000-row grid that stays smooth while scrolling,
-for the enterprise evaluation call tomorrow
+Load create_demo, then make me a demo of a 50,000-row grid that stays
+smooth while scrolling, for the enterprise evaluation call tomorrow
 ```
 
 ```
-create a demo with two frozen columns and a right-click menu, in React,
-on Handsontable 17.1.0
+Load create_demo, then create a demo with two frozen columns and a
+right-click menu, in React, on Handsontable 17.1.0
 ```
 
 ```
-build a demo showing cell validation: an email column that goes red when
-the address is malformed, with a description explaining what to try
+Load create_demo, then build a demo showing cell validation: an email
+column that goes red when the address is malformed, with a description
+explaining what to try
 ```
 
-### If Claude does not seem to have the tool
+### If Claude still does not seem to have it
 
-Ask for it by name — **"load create_demo"** — and then ask again. Claude loads tools on
-demand, and a long conversation may not have reached for this one yet.
+Say it on its own — **"load create_demo"**, or **"load update_demo"** for a change to an
+existing demo — and then ask again. If Claude answers that it cannot find the tool at
+all, see the last section of this page.
 
 ## A real one, start to finish
 
@@ -162,31 +168,52 @@ description.
 
 ## If it says the tool is not configured
 
-This route shipped on **14 August 2026**. If Claude answers that demo creation is not
-configured, or does not seem to know the tool exists, your session predates the
-rollout: start a new conversation, or reconnect the Handsontable MCP, and ask again.
+Both tools — **`create_demo`** and **`update_demo`** — shipped on **14 August 2026**. If
+Claude answers that demo creation is not configured, or cannot find the tool at all, your
+session predates the rollout: start a new conversation, or reconnect the Handsontable MCP,
+and ask again.
 If it still refuses, the runner side is unreachable — say so in the team channel
 rather than working around it, and use the [browser route](/guide/support) in the
 meantime.
 
 ## Changing a demo, also by asking
 
-You do not have to start again to change one. Tell Claude what to fix or add — "make the
-Overdue rows red", "add a VAT column", "the grid does not render, please fix it" — and it
-updates **the demo you already have**, at the same links. Anything you have already sent
-keeps working, and starts showing the new version.
+You do not have to start again to change one. There is a second tool, **`update_demo`**,
+and it edits **the demo you already have** — same id, same links. Anything you have
+already sent keeps working and starts showing the new version.
 
-**Status: landing shortly.** The endpoint behind it is in review
-(`handsontable/examples` #177). Until it deploys, Claude can still write the change, and
-you apply it one of two ways:
+Name the tool, then say which demo and what to change. The link or the id is how Claude
+knows which one:
 
-- Open **`/edit/<id>`**, paste in what Claude gives you, press **Save** — same link, same
-  demo. Anyone technical can do this in a minute if you would rather not.
-- Or ask Claude for a new demo and **delete the old one** in My demos — but only if you
-  have not sent the first link to anybody. Deleting revokes it for good.
+```
+Load update_demo, then make the Overdue rows red in
+https://demos.handsontable.com/d/1g72n1o3r2/
+```
 
-Once it is live, "make me one" and "change it" are the same conversation, and neither needs
-the browser.
+```
+Load update_demo, then add a VAT column to demo 1g72n1o3r2 and
+re-save it
+```
+
+```
+Load update_demo, then fix the invoice demo you made me — the page
+loads but the grid does not appear
+```
+
+That last one is the common case, and the reason this tool exists: a demo that built but
+does not render is one message away from being fixed, instead of a second demo and a dead
+link to explain.
+
+Worth knowing:
+
+- **It only touches demos you created.** Somebody else's demo comes back refused, not
+  rewritten — the same rule as the browser, where their demo opens read-only for you.
+- **A deleted demo cannot be updated.** Deleting revokes the link for good; there is
+  nothing to update afterwards.
+- **The links never change**, so you do not have to re-send anything. Reload the page you
+  already sent and it is the new version.
+- **Check it again afterwards.** Same reason as the first time: the runner rebuilds and
+  publishes, it does not click around in the result.
 
 ## Where your demos live
 
