@@ -73,6 +73,9 @@ export interface ErrorPageInit {
   refreshSeconds?: number;
 }
 
+/** A whole number of seconds, at least 1 — `content="0"` is a busy loop. */
+const refreshInterval = (seconds: number) => Math.max(1, Math.round(seconds));
+
 /**
  * A minimal branded error document.
  *
@@ -120,9 +123,6 @@ ${homeUrl ? `<a href="${escapeHtml(homeUrl)}">Back to the playground</a>` : ""}
 </body>
 </html>`;
 }
-
-/** A whole number of seconds, at least 1 — `content="0"` is a busy loop. */
-const refreshInterval = (seconds: number) => Math.max(1, Math.round(seconds));
 
 /** `errorPageHtml` wrapped in a Response, with the status it describes. */
 export function errorPageResponse(init: ErrorPageInit): Response {

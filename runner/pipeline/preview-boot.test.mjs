@@ -99,6 +99,14 @@ test("the terminal branch reports for every shape, not just the document", () =>
   assert.equal(classifyPreviewBootFailure({ ...html, ...past, wantsHtml: false }).report, true);
 });
 
+test("the terminal copy never tells the visitor to reload the frame", () => {
+  // The page renders inside the demo's iframe. Reloading it re-requests the
+  // same dead preview URL and lands back here; only reopening the enclosing
+  // page mints a new session.
+  const d = classifyPreviewBootFailure({ ...html, elapsedMs: 120_000 });
+  assert.ok(!/reload/i.test(`${d.title} ${d.body}`));
+});
+
 test("the copy never asserts a first boot", () => {
   // The dominant cause is wake-from-sleep, where the boot script is not re-run.
   // "still starting" would be a guess dressed as a fact.

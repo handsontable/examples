@@ -124,11 +124,16 @@ export function classifyPreviewBootFailure({
     };
   }
 
+  // No "reload" here. This document renders inside the demo's own iframe, and
+  // reloading the frame re-requests the same dead preview URL and lands right
+  // back on this page. Only reopening the enclosing demo page mints a new
+  // session — and recovering the frame in place (a tombstone plus a "Restart
+  // preview" affordance) is deliberately not part of this change.
   return {
     shape,
     retryAfterSeconds: 30,
     title: "The demo stopped responding",
-    body: "The server behind this live preview is no longer running. Reload the page to start a new session.",
+    body: "The server behind this live preview is no longer running. Open the demo again to start a new session.",
     report: true,
   };
 }

@@ -185,7 +185,14 @@ class SandboxBaseWithSleep extends SandboxBase {
 
     if (descriptor.report && !this.bootFailureReported) {
       this.bootFailureReported = true;
-      Sentry.captureException(err);
+      // Fingerprinted away from the raw error. Without this the surviving
+      // events land in the same issue as the 500s this change removes, and the
+      // one signal that tells "the fix worked" from "the report never fired" —
+      // volume dropping to near zero rather than to exactly zero — is unreadable.
+      Sentry.captureException(err, {
+        fingerprint: ["preview-boot-window-exceeded"],
+        tags: { preview_boot: "terminal" },
+      });
     }
 
     const response =
