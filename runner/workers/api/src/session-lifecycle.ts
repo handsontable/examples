@@ -101,10 +101,21 @@ const NOT_RUNNING_PATTERN = /container is not running/i;
  * Whether a failed `destroy()` is the platform declining rather than a teardown
  * regression.
  *
- * All three messages mean the same thing for a release: there is nothing here
- * to destroy right now, and there is no slot being held by whatever we failed
- * to reach. The caller answers 204 and logs; anything that does NOT match is
- * rethrown and keeps today's status and today's Sentry event.
+ * The caller answers 204 and files a `warning`-level Sentry event under its own
+ * fingerprint; anything that does NOT match is rethrown and keeps today's status
+ * and today's (bare, grab-bag) Sentry event. The 204 is for the caller's
+ * benefit — a fire-and-forget `keepalive` fetch that discards the response — and
+ * is only defensible because the failure stays legible in Sentry. A `console`
+ * line is not that: `observability.head_sampling_rate` is 0.1 in wrangler.jsonc.
+ *
+ * The three messages are NOT equally strong evidence, and the weakest one is why
+ * the report above is not optional. "Not running" and "maximum instances
+ * exceeded" both imply there is no slot being held by whatever we failed to
+ * reach — nothing to reclaim. "Service unreachable" does not: a container may
+ * well be running and billing, and the teardown simply could not get to it. The
+ * `sleepAfter` backstop bounds that, and it is exactly today's outcome (a 500
+ * nobody retries either), so this is not a regression — but it is the case a
+ * reviewer should expect to see in the `tier2-teardown-declined` issue.
  *
  * DEGRADE DIRECTION, documented like `isPortNotListening`: these strings come
  * from the platform, not from any package in this repo, so a message match is

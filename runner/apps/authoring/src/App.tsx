@@ -200,9 +200,26 @@ function reportRuntimeError(e: unknown, engine: string): void {
   if (isBudgetRefusal(e)) return;
   if (e instanceof SessionStartError) {
     if (e.status === 410) return;
+    // The server's machine-readable reason joins the fingerprint when it sent
+    // one (DEV-2556). Status alone is too coarse now that the Worker refuses at
+    // capacity with its own 503: `at_capacity` — every container slot taken,
+    // which is a spend decision — would otherwise land in the same issue as an
+    // envelope-less platform 503 ("The sandbox service is unavailable right
+    // now"), which is a gateway fault and has nothing to do with our pool. That
+    // grouping is the only capacity evidence the create side has left, since the
+    // refusal is now a returned 503 rather than a throw the outer catch reports.
+    //
+    // Appended rather than substituted so uncoded failures keep the exact
+    // fingerprint they have today: no live issue regroups, and only the coded
+    // refusals split off. `budget_*` codes never reach here (suppressed above).
+    const code = typeof e.code === "string" && e.code.length > 0 ? e.code : null;
     Sentry.captureException(e, {
-      tags: { context: "tier2-session-start", session_status: String(e.status) },
-      fingerprint: ["tier2-session-start", String(e.status)],
+      tags: {
+        context: "tier2-session-start",
+        session_status: String(e.status),
+        ...(code ? { session_refusal: code } : {}),
+      },
+      fingerprint: ["tier2-session-start", String(e.status), ...(code ? [code] : [])],
     });
     return;
   }

@@ -751,11 +751,20 @@ export default Sentry.withSentry(sentryOptions, {
           // max_instances" — straight to a visitor, via the raw-body tier of
           // `sessionStartMessage`. It is a refusal, not a fault: a 503 with an
           // envelope, phrased for the person reading it, alongside the budget
-          // guardrail's denials. Kept as a Sentry event on the client (the
-          // `tier2-session-start`/503 fingerprint) — with the outer catch no
-          // longer firing, that plus this log line is the only capacity signal
-          // we have, and raising `max_instances` is a spend decision that needs
-          // to be made on evidence.
+          // guardrail's denials.
+          //
+          // The outer catch no longer fires here, so this refusal has to stay
+          // legible some other way — raising `max_instances` is a spend decision
+          // and it needs evidence. That evidence is the CLIENT's Sentry event:
+          // `reportRuntimeError` in apps/authoring/src/App.tsx keeps reporting a
+          // `SessionStartError` (only `isBudgetRefusal` is suppressed, and this
+          // code is not a `budget_` one), fingerprinted
+          // `["tier2-session-start", "503", "at_capacity"]` — the trailing code
+          // is what keeps it out of the same issue as an envelope-less platform
+          // 503, which carries the same status and a completely different cause.
+          // The log line below is a convenience, NOT the signal:
+          // `observability.head_sampling_rate` is 0.1, so nine of ten are never
+          // retained.
           if (isAtCapacityFailure(err)) {
             console.warn(
               `[session] refused ${body.framework} session ${sessionId}: container pool at capacity`,
@@ -881,8 +890,8 @@ export default Sentry.withSentry(sentryOptions, {
         // forget `keepalive` fetch from `pagehide` that discards the response.
         // A refusal also means no slot is being held by whatever we failed to
         // reach, so there is nothing left to reclaim here. Recognised platform
-        // messages become a log line and a 204; anything else still throws to
-        // the outer catch and keeps today's status and today's Sentry event.
+        // messages become a 204; anything else still throws to the outer catch
+        // and keeps today's status and today's Sentry event.
         try {
           await sandbox.destroy();
           await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
@@ -892,6 +901,32 @@ export default Sentry.withSentry(sentryOptions, {
             `[session] teardown for ${sessionId} declined by the platform:`,
             err instanceof Error ? err.message : String(err),
           );
+          // The log line alone is NOT the signal, and assuming it was is how
+          // this swallow would have gone dark: `observability.head_sampling_rate`
+          // is 0.1 in wrangler.jsonc, so nine of ten of these console.warn lines
+          // are never retained. Capacity events are rare (two in 90 days), which
+          // makes the expected number of surviving log lines a fraction of one.
+          //
+          // So the event still goes to Sentry — just as a `warning` that no
+          // longer fails the request, instead of the 500 it used to ride in on.
+          // Fingerprinted for the reason the preview-boot capture above is: the
+          // outer catch reports bare, and this project groups on the culprit
+          // `Object.fetch(index)`, so without a fingerprint this would land back
+          // in the same grab-bag as DEMOS-1 and be unreadable as a capacity
+          // signal. `beforeSend` (rehomeBudgetAlert) only re-homes
+          // `context: "budget-alert"` and drops nothing, so a warning arrives.
+          //
+          // This matters most for `container service is unreachable`, the
+          // weakest member of `isExpectedTeardownFailure`: unlike the other two
+          // it does NOT imply no slot is held, so a swallowed one can leave a
+          // container billing until sleepAfter. 204 is still the right answer to
+          // a caller that discards the response — but only because the failure
+          // is legible somewhere, and this is that somewhere.
+          Sentry.captureException(err, {
+            level: "warning",
+            fingerprint: ["tier2-teardown-declined"],
+            tags: { context: "tier2-teardown" },
+          });
         }
         return cors(new Response(null, { status: 204 }));
       }
