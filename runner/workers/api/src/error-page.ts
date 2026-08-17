@@ -61,7 +61,20 @@ export interface ErrorPageInit {
   body: string;
   /** Rendered as a link back to the playground. Omitted inside an embed. */
   homeUrl?: string;
+  /**
+   * When set, the page reloads itself after this many seconds and the response
+   * carries a matching `Retry-After` (DEV-2537).
+   *
+   * The two halves are not redundant: `Retry-After` is the correct-HTTP half,
+   * but no browser acts on it for a navigation, so the meta-refresh is the half
+   * that actually recovers a visitor. Optional, and every pre-existing caller
+   * omits it — a 404 that reloaded itself would be a loop, not a recovery.
+   */
+  refreshSeconds?: number;
 }
+
+/** A whole number of seconds, at least 1 — `content="0"` is a busy loop. */
+const refreshInterval = (seconds: number) => Math.max(1, Math.round(seconds));
 
 /**
  * A minimal branded error document.
@@ -70,13 +83,17 @@ export interface ErrorPageInit {
  * docs page, where a full-width "Back to the playground" call to action would be
  * wrong. The caller decides.
  */
-export function errorPageHtml({ status, title, body, homeUrl }: ErrorPageInit): string {
+export function errorPageHtml({ status, title, body, homeUrl, refreshSeconds }: ErrorPageInit): string {
+  // A number formatted straight into the attribute — never through escapeHtml,
+  // which takes a string and would happily pass one through.
+  const refresh =
+    refreshSeconds === undefined ? "" : `\n<meta http-equiv="refresh" content="${refreshInterval(refreshSeconds)}">`;
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
+<meta name="robots" content="noindex">${refresh}
 <title>${escapeHtml(title)} — Handsontable Demos</title>
 <style>
 :root{${vars(LIGHT)};color-scheme:light}
@@ -109,13 +126,14 @@ ${homeUrl ? `<a href="${escapeHtml(homeUrl)}">Back to the playground</a>` : ""}
 
 /** `errorPageHtml` wrapped in a Response, with the status it describes. */
 export function errorPageResponse(init: ErrorPageInit): Response {
-  return new Response(errorPageHtml(init), {
-    status: init.status,
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-    },
+  const headers = new Headers({
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
   });
+  if (init.refreshSeconds !== undefined) {
+    headers.set("Retry-After", String(refreshInterval(init.refreshSeconds)));
+  }
+  return new Response(errorPageHtml(init), { status: init.status, headers });
 }
 
 /**
