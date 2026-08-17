@@ -80,6 +80,88 @@ test("a failed preview offers a restart that remounts the runtime", async ({ pag
   });
 });
 
+// DEV-2554. A full container pool is temporary, so the card says so and asks again
+// on its own instead of leaving a dead frame.
+//
+// THIS TEST IS THE ONLY THING PINNING THE HEURISTIC BYPASS. `describeRuntimeError`
+// in apps/authoring/src/App.tsx rewrites any container-engine message matching
+// /…|session start failed|fetch/i into "run the local API worker (requires Docker)".
+// The server's capacity refusal is a 503 whose message the runtime wraps as
+// "session start failed (503): …", so it WOULD match — the escape is an early return
+// keyed on `code === "at_capacity"`, placed above the regex. The unit test in
+// `pipeline/session-start-failure.test.mjs` can only pin the code and the status; it
+// cannot see App.tsx at all. Delete assertion (a) and DEV-2538 comes back on this
+// status with nothing else noticing.
+//
+// The stub's message is obviously synthetic on purpose, following the "e2e: refused
+// on purpose" convention above: a realistic-looking capacity sentence in a
+// `route.fulfill` is exactly what made the DEMOS-P issues unreadable for a week.
+test("a pool at capacity retries itself and never mentions Docker", async ({ page }) => {
+  const sessionPosts: string[] = [];
+  await page.route("**/api/session", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    sessionPosts.push(route.request().url());
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      headers: { "retry-after": "1" },
+      body: JSON.stringify({
+        error: "at_capacity",
+        message: "e2e: at capacity on purpose",
+        retryAfterSeconds: 1,
+      }),
+    });
+  });
+
+  await page.goto("/?example=react-js");
+  await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "error", {
+    timeout: 60_000,
+  });
+
+  // (a) THE CONTRACT. The visitor is told the slots are busy, not to install Docker.
+  await expect(page.getByText(/All live-demo slots are busy/)).toBeVisible();
+  await expect(page.getByText(/requires Docker/)).toHaveCount(0);
+  // The wrapped runtime jargon must not reach the card either.
+  await expect(page.getByText(/session start failed/)).toHaveCount(0);
+
+  // (b) The retry is automatic: a second POST with nothing clicked.
+  const before = sessionPosts.length;
+  expect(before, "the first mount attempted a session").toBeGreaterThan(0);
+  await expect(async () => {
+    expect(sessionPosts.length).toBeGreaterThan(before);
+  }).toPass({ timeout: 30_000 });
+
+  // (c) The budget is bounded at exactly three creates, and then retrying STOPS.
+  // This is what catches the reset-on-`retryGen` mistake, which retries for ever
+  // against a pool that is already full.
+  await expect(async () => {
+    expect(sessionPosts.length).toBe(3);
+  }).toPass({ timeout: 60_000 });
+
+  // The countdown text is the difference between "spent" and "merely mid-wait". The
+  // pane deliberately stays `data-preview-status="error"` *during* each wait — the
+  // message explains the delay instead of a silent spinner — so the error card and
+  // its "Restart preview" button are on screen throughout, and sampling the POST
+  // count on the button alone would read a number from between two attempts.
+  await expect(page.getByText(/Retrying in/)).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByText(/All live-demo slots are busy/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Restart preview" })).toBeVisible();
+
+  await page.waitForTimeout(8000);
+  expect(sessionPosts.length, "retrying must stop once the budget is spent").toBe(3);
+
+  // (d) The bound is three creates PER DELIBERATE ATTEMPT, not three for ever.
+  // "Restart preview" refills the budget — a person who chose to try again gets a
+  // real try, and by then the pool may well have freed a slot. Stated here because
+  // it is a design decision, not a side effect: only the button refills it (the
+  // automatic retry inlines the same state updates precisely so it cannot), and
+  // without this assertion that distinction is invisible.
+  await page.getByRole("button", { name: "Restart preview" }).click();
+  await expect(async () => {
+    expect(sessionPosts.length).toBe(6);
+  }).toPass({ timeout: 60_000 });
+});
+
 test("live: fixing a runtime error clears the preview error card", async ({ page }) => {
   test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
   test.setTimeout(180_000);

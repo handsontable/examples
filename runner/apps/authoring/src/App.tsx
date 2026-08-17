@@ -102,6 +102,39 @@ function docsPageUrl(framework: string, permalink: string): string {
   return `https://handsontable.com/docs/${prefix}${permalink}/`;
 }
 
+/**
+ * The Tier-2 container pool had no free slot (DEV-2554).
+ *
+ * Keyed on the server's `code`, never on the 503 status: `budget_exhausted` is a 503
+ * too and means the opposite — final, deliberate, and not to be retried — and so is
+ * the envelope-less 503 that DEV-2553 owns. Retrying either of those would be wrong.
+ *
+ * Returns a plain `boolean`, not a type predicate. As `e is SessionStartError` it
+ * would be useless as a discriminator inside the `e instanceof SessionStartError`
+ * branch of `reportRuntimeError`: `e` is already that type there, so the *negative*
+ * branch narrows to `never` and every later `e.status` stops compiling.
+ */
+const isAtCapacity = (e: unknown): boolean =>
+  e instanceof SessionStartError && e.code === "at_capacity";
+
+/** How many session creates one mount is allowed before it gives up and shows the
+ *  card's own "Restart preview" button. Three total = the first plus two retries.
+ *  Deliberately small: every attempt is a container start request, so retrying hard
+ *  adds load at precisely the moment there is none to spare. */
+const AT_CAPACITY_MAX_ATTEMPTS = 3;
+
+/** Seconds between capacity retries. Mirrors the server's `Retry-After` rather than
+ *  reading it: the value never reaches the client (plumbing it would mean editing
+ *  the runtime's failure parsing, which this change deliberately leaves alone), and
+ *  the two are free to be tuned independently anyway. */
+const AT_CAPACITY_RETRY_SECONDS = 5;
+
+/** What the visitor reads. Owned here rather than taken from the server so it is one
+ *  edit away from the code that renders it — and so the copy survives a server that
+ *  answered with a shape we did not expect. */
+const AT_CAPACITY_MESSAGE =
+  "All live-demo slots are busy right now. Trying again in a moment — no need to change anything.";
+
 /** Turn a raw runtime error into a message that explains container prerequisites. */
 function describeRuntimeError(e: unknown, engine: string, version: string): string {
   // A boot-script failure explains itself: a one-line cause, with the recent boot
@@ -116,6 +149,14 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
   // server already phrased it for users — never rewrite it as a connectivity
   // problem, which is what the heuristic below would do with a 503.
   if (isBudgetRefusal(e)) return e.message;
+  // The Tier-2 pool is full (DEV-2554). Like the budget refusal above, this has to
+  // return before the heuristic: the server's 503 wraps into "session start failed
+  // (503): …", which the regex below would replace with the install-Docker text —
+  // DEV-2538 recurring on a status nobody had covered. Deliberately NOT `e.message`:
+  // `sessionStartMessage` in the runtime is untouched by this change (its wording is
+  // DEV-2553's), so the wrapped string still leads with "session start failed", which
+  // is jargon aimed at us. The sentence the visitor reads is owned here instead.
+  if (isAtCapacity(e)) return AT_CAPACITY_MESSAGE;
   const msg = e instanceof Error ? e.message : String(e);
   // ⚠ This heuristic REPLACES the runtime's message, so every alternative below is a
   // contract with whoever writes those messages. `sessionStartMessage` in
@@ -185,6 +226,20 @@ function reportRuntimeError(e: unknown, engine: string): void {
   if (isBudgetRefusal(e)) return;
   if (e instanceof SessionStartError) {
     if (e.status === 410) return;
+    // A pool-capacity refusal is a real condition worth counting, but it is not the
+    // same bug as whatever else answered 503 — and the fingerprint below keys on the
+    // status, so without this branch it would merge into the envelope-less 503 group
+    // DEV-2553 owns and make both unreadable. `warning`, because the server already
+    // handled it and the client is already retrying; the server files its own event
+    // under `session-pool-exhausted` with the workerd sentence attached.
+    if (isAtCapacity(e)) {
+      Sentry.captureException(e, {
+        tags: { context: "tier2-session-start", session_status: "503", capacity: "session" },
+        fingerprint: ["tier2-session-start", "at_capacity"],
+        level: "warning",
+      });
+      return;
+    }
     Sentry.captureException(e, {
       tags: { context: "tier2-session-start", session_status: String(e.status) },
       fingerprint: ["tier2-session-start", String(e.status)],
@@ -855,6 +910,16 @@ function Authoring({
   const refreshSeqRef = useRef(0);
   const containerModeRef = useRef(false);
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // How many session creates this demo has spent on a full pool (DEV-2554).
+  //
+  // A ref, not state: bumping it must not itself re-render, and it is read inside the
+  // mount effect's own error handler. Reset when the demo being previewed changes —
+  // see the effect below — but deliberately NOT on `retryGen`, which is the counter
+  // the capacity retry bumps to remount. Resetting on that would make the budget
+  // unreachable and turn this into an unbounded retry loop against a pool that is
+  // already full, which is the exact failure mode the bound exists to prevent.
+  const capacityAttemptsRef = useRef(0);
+  const capacityTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Bumped whenever the whole workspace is replaced (example switch or fork) so
   // the runtime remounts even when the framework is unchanged.
   const [mountGen, setMountGen] = useState(0);
@@ -1808,9 +1873,48 @@ function Authoring({
       reportDemoEvent(event.data, demoContext());
     };
     if (monitorDemos) window.addEventListener("message", onPreviewMessage);
+    /**
+     * A full pool is temporary, so ask again instead of handing the visitor a dead
+     * card (DEV-2554). Returns true when it took ownership of the failure.
+     *
+     * The wait is visible on purpose. Calling `retryPreview()` straight away would
+     * blank the message and show a silent spinner, leaving the visitor with nothing
+     * explaining why the demo is taking so long — so the card keeps `status: "error"`
+     * and counts down in place, then remounts. Each remount mints a fresh session id,
+     * which is required: the failed attempt's id was tombstoned for 10 minutes.
+     */
+    const scheduleCapacityRetry = (e: unknown): boolean => {
+      if (cancelled || !isAtCapacity(e)) return false;
+      capacityAttemptsRef.current += 1;
+      if (capacityAttemptsRef.current >= AT_CAPACITY_MAX_ATTEMPTS) return false;
+      const attempt = capacityAttemptsRef.current + 1;
+      let remaining = AT_CAPACITY_RETRY_SECONDS;
+      const render = () =>
+        setErrorMessage(
+          `${AT_CAPACITY_MESSAGE}\n\nRetrying in ${remaining}s — attempt ${attempt} of ${AT_CAPACITY_MAX_ATTEMPTS}.`,
+        );
+      setStatus("error");
+      render();
+      if (capacityTimerRef.current) clearInterval(capacityTimerRef.current);
+      capacityTimerRef.current = setInterval(() => {
+        remaining -= 1;
+        if (remaining > 0) return render();
+        if (capacityTimerRef.current) clearInterval(capacityTimerRef.current);
+        capacityTimerRef.current = null;
+        // `retryPreview`'s body, inlined so this does not depend on a callback
+        // declared further down the component.
+        setStatus("booting");
+        setErrorMessage(null);
+        setBootLog("");
+        setRetryGen((g) => g + 1);
+      }, 1000);
+      return true;
+    };
+
     runtime.onReady(() => !cancelled && setStatus("ready"));
     runtime.onError((e) => {
       if (cancelled) return;
+      if (scheduleCapacityRetry(e)) return;
       setStatus("error");
       setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
       reportRuntimeError(e, entry.engine);
@@ -1828,6 +1932,10 @@ function Authoring({
         if (!cancelled) setPreviewUrl(own ? url : "");
       })
       .catch((e: unknown) => {
+        // A capacity refusal that still has attempts left is not a failure to show or
+        // to report — it is a wait. Reported only once the budget is spent, so one
+        // busy moment files one event instead of three.
+        if (scheduleCapacityRetry(e)) return;
         if (!cancelled) {
           setStatus("error");
           setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
@@ -1839,12 +1947,30 @@ function Authoring({
     return () => {
       cancelled = true;
       window.removeEventListener("message", onPreviewMessage);
+      // An example switch mid-countdown must not fire a retry for the demo that just
+      // went away — it would remount the new one for no reason.
+      if (capacityTimerRef.current) {
+        clearInterval(capacityTimerRef.current);
+        capacityTimerRef.current = null;
+      }
       runtime.dispose();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
     // mountGen forces a remount when files are replaced (example switch or fork/edit load);
     // retryGen when the user asks for one from the error card.
   }, [iframeEl, entry, version, mountGen, retryGen, sourceLoaded, docsNotFound, docsRuntimeBlocked, starterRuntimeBlocked, versionPending, docsPath]);
+
+  // Each demo gets its own capacity budget (DEV-2554): switching example, changing
+  // version or reloading the workspace starts fresh, so a visitor never inherits an
+  // exhausted budget from the demo they were looking at a minute ago.
+  //
+  // `retryGen` is deliberately absent from these deps. It is what the capacity retry
+  // bumps to remount, so including it would reset the counter on every retry and the
+  // bound would never be reached. `mountGen` is safe — it changes only when the whole
+  // workspace is replaced.
+  useEffect(() => {
+    capacityAttemptsRef.current = 0;
+  }, [entry, version, mountGen]);
 
   /** "Restart preview" — mount a fresh runtime from the current (edited) sources.
    *
@@ -1853,6 +1979,10 @@ function Authoring({
    *  failure exits the container's dev server, and streaming the fixed file into a
    *  container with no dev server changes nothing. Only a new session re-runs it. */
   const retryPreview = useCallback(() => {
+    // A person choosing to try again gets a fresh capacity budget (DEV-2554). Only
+    // this button does — the automatic retry inlines the four calls below rather than
+    // going through here, precisely so it cannot refill its own bound.
+    capacityAttemptsRef.current = 0;
     setStatus("booting");
     setErrorMessage(null);
     setBootLog("");

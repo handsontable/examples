@@ -17,7 +17,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ContainerRuntime, SessionStartError } from "../packages/runtime/dist/container.js";
+import { ContainerRuntime, SessionStartError, isBudgetRefusal } from "../packages/runtime/dist/container.js";
 
 const ENTRY = {
   framework: "angular",
@@ -170,6 +170,58 @@ test("a budget refusal still reaches the user as the server phrased it", async (
 
   assert.equal(err.code, "budget_exhausted");
   assert.equal(err.message, sentence);
+});
+
+test("a pool-capacity refusal arrives as a distinguishable at_capacity envelope", async () => {
+  // DEV-2554. When `max_instances` is reached, `POST /api/session` answers
+  // 503 `{error:"at_capacity"}` instead of letting the workerd sentence fall through
+  // the catch-all as a 500. What the client needs from this is the *code*: it is what
+  // App.tsx keys on to bypass the container-engine heuristic and to start the bounded
+  // auto-retry.
+  //
+  // NOTE ON WHERE THE CONTRACT LIVES. The 504 tier above dodges the heuristic by
+  // choosing its words. This tier deliberately does NOT: `sessionStartMessage` is
+  // untouched by DEV-2554 (the envelope-less 503 wording belongs to DEV-2553), so the
+  // message here is the ordinary wrapped form and DOES contain "session start failed".
+  // The bypass moved instead to an early return in `describeRuntimeError`
+  // (apps/authoring/src/App.tsx — grep the function), which returns its own capacity
+  // copy before the regex is ever evaluated, exactly as it already does for
+  // `isBudgetRefusal`. That early return is pinned by the "at capacity" test in
+  // `e2e/preview-recovery.spec.ts`, which asserts the Docker text is absent — that
+  // spec is the only thing standing between this path and DEV-2538 recurring.
+  const sentence = "All live-demo slots are busy right now.";
+  const err = await sessionStartError(
+    503,
+    JSON.stringify({ error: "at_capacity", message: sentence, retryAfterSeconds: 5 }),
+  );
+
+  assert.equal(err.code, "at_capacity", "the code is the whole signal the client keys on");
+  assert.equal(err.status, 503);
+  assert.match(err.message, /All live-demo slots are busy/, "the server's sentence must survive");
+});
+
+test("at_capacity stays distinguishable from the other deliberate refusal", async () => {
+  // Two "the system said no on purpose" classes now share status 503, and they must
+  // not merge: a budget refusal is final (retrying cannot help and would burn the
+  // guardrail's whole point), a capacity refusal is transient and IS retried. Keying
+  // either on the status alone would make one behave as the other.
+  const budget = await sessionStartError(
+    503,
+    JSON.stringify({ error: "budget_exhausted", message: "Live editing is paused for today." }),
+  );
+  const capacity = await sessionStartError(
+    503,
+    JSON.stringify({ error: "at_capacity", message: "All live-demo slots are busy right now." }),
+  );
+  const plain = await sessionStartError(500, JSON.stringify({ error: "boom", message: "boom" }));
+
+  assert.equal(budget.code, "budget_exhausted");
+  assert.equal(capacity.code, "at_capacity");
+  assert.equal(plain.code, "boom");
+  // `isBudgetRefusal` is the predicate App.tsx already trusts to mean "final, do not
+  // report, do not retry". A capacity refusal must not satisfy it.
+  assert.equal(isBudgetRefusal(capacity), false, "capacity must not read as a budget refusal");
+  assert.equal(isBudgetRefusal(budget), true);
 });
 
 test("an ordinary envelope error is unchanged", async () => {

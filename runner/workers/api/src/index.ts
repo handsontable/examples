@@ -26,6 +26,7 @@ import { isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { classifyPreviewBootFailure, isPortNotListening } from "./preview-boot.js";
+import { atCapacityBody, isPoolExhausted } from "./pool-capacity.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
@@ -330,7 +331,14 @@ const liveSbx = (env: Env, id: string): SandboxLike => getSandboxShallow(env.San
  *  restarts it if it isn't running), so a straggler file write or status ping
  *  would resurrect an empty container under a dead id and squat a pool slot.
  *  A KV read failure counts as "no tombstone" — refusing healthy sessions on
- *  a KV hiccup is worse than falling back to the sleepAfter backstop. */
+ *  a KV hiccup is worse than falling back to the sleepAfter backstop.
+ *
+ *  TEARDOWN PAYS THIS TOO (DEV-2554). "Any RPC auto-boots a container" applies to
+ *  `destroy()` itself: the start comes from addressing the Durable Object at all,
+ *  not from the method. So a DELETE arriving while the pool is full asks for a
+ *  slot in order to release one, and fails. Both genuine capacity events we have
+ *  seen came from that route. The seam there treats it as success rather than as
+ *  our fault — see the DELETE handler. */
 const isTombstoned = async (env: Env, sessionId: string): Promise<boolean> =>
   (await env.CACHE.get(`session-tombstone:${sessionId}`).catch(() => null)) !== null;
 
@@ -701,6 +709,33 @@ export default Sentry.withSentry(sentryOptions, {
           // run the same tombstone check before surfacing the error.
           const closed = await closedWhileCreating();
           if (closed) return closed;
+          // The pool is full (DEV-2554). Any of the RPCs above — writeFiles,
+          // startProcess, exposePort — can raise it. Untouched it would reach the
+          // catch-all as `500 {error: "<raw workerd sentence>"}`, which files a
+          // capacity condition as our own unhandled fault AND, because the client
+          // wraps a 500 into a message containing "session start failed", makes
+          // App.tsx tell a production visitor to install Docker. 503 + Retry-After
+          // is what this actually is: a real, temporary, retryable refusal.
+          if (isPoolExhausted(err)) {
+            const body = atCapacityBody();
+            // Still reported, because a pool that fills up is worth knowing about —
+            // but as a warning under its own fingerprint, so it counts separately
+            // instead of merging into whichever 500 it happened to look like.
+            Sentry.captureException(err, {
+              tags: { context: "tier2-session-start", capacity: "session" },
+              fingerprint: ["session-pool-exhausted"],
+              level: "warning",
+            });
+            return cors(
+              new Response(JSON.stringify(body), {
+                status: 503,
+                headers: {
+                  "content-type": "application/json",
+                  "retry-after": String(body.retryAfterSeconds),
+                },
+              }),
+            );
+          }
           throw err;
         }
       }
@@ -797,7 +832,31 @@ export default Sentry.withSentry(sentryOptions, {
         // one teardown path that knows the session is over for good.
         await meterSession(env, sessionId, { final: true });
         const sandbox = liveSbx(env, sessionId);
-        await sandbox.destroy();
+        try {
+          await sandbox.destroy();
+        } catch (err) {
+          // The pool was full when we tried to tear down (DEV-2554). This is the
+          // route both genuine capacity events came from, and it is a bleakly funny
+          // failure: addressing the Durable Object is itself what starts a
+          // container, so releasing a slot requires taking one.
+          //
+          // 204 anyway. The throw means nothing was running under this id — a live
+          // container would have been destroyed, not refused — so there is no slot
+          // being held here to leak. The tombstone (above) and the final meter have
+          // already landed, `sleepAfter = "5m"` is the backstop, and the client's
+          // `fetch` is a `keepalive` from `pagehide` that reads no response at all:
+          // a 500 here would only turn a tab-close into a Sentry issue.
+          //
+          // The tripwire for that reasoning is the fingerprint below. If Cloudflare
+          // ever raises this from a path where a container IS running, these events
+          // are what will say so — and then this branch has to change.
+          if (!isPoolExhausted(err)) throw err;
+          Sentry.captureException(err, {
+            tags: { context: "tier2-session-teardown", capacity: "teardown" },
+            fingerprint: ["session-pool-exhausted"],
+            level: "warning",
+          });
+        }
         return cors(new Response(null, { status: 204 }));
       }
 

@@ -43,6 +43,31 @@ So `max_instances` is a real, Cloudflare-enforced cap sitting at roughly 25–45
 of a $1,000 ceiling. **Leave it at 5/3** — raising it is the one change that
 invalidates this table.
 
+### What happens when the cap is reached (DEV-2554)
+
+Hitting it is answered in software, not by raising the number. Past `max_instances`,
+Cloudflare rejects any RPC that would start a container with `Maximum number of
+running container instances exceeded…`. `POST /api/session` now classifies that
+(`workers/api/src/pool-capacity.ts`) and answers `503 {"error":"at_capacity"}` with a
+`Retry-After`; the app shows "all live-demo slots are busy" and retries up to three
+times on its own. Previously it fell through the catch-all as a `500` carrying the raw
+platform sentence, which the authoring app's connectivity heuristic then rewrote into
+"run the local API worker (requires Docker)" — telling a visitor to install Docker
+because five other people were mid-demo.
+
+The measured rate behind leaving the cap alone: **two** genuine capacity events in 90
+days, both on 2026-08-10, and both on `DELETE /api/session/:id` — teardown, not
+create, because addressing the Durable Object is itself what starts a container, so
+releasing a slot briefly needs one. That path now answers `204` rather than reporting
+a fault. Note the reported symptom that opened DEV-2554, a visitor refused with "no
+container slots", was **not** real: that string is a `route.fulfill` stub in
+`e2e/preview-recovery.spec.ts` and appears nowhere else in the tree.
+
+Both server-side capacity events are fingerprinted `session-pool-exhausted`, tagged
+`capacity: session | teardown`. If that issue starts firing at a rate the three-attempt
+retry cannot absorb, *that* is the evidence for revisiting the cap — and it invalidates
+the table above, so re-price it in the same change.
+
 Ranked by what is actually unbounded:
 
 1. **Container egress** — every dev-server asset and HMR frame of a Tier-2
