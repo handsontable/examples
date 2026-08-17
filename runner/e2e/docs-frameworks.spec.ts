@@ -24,6 +24,10 @@ test.describe("docs examples on the container engine", () => {
   test.describe.configure({ timeout: 300_000 });
 
   test("switching a docs example to Vue renders the Vue variant in a container", async ({ page, request }) => {
+    // Two engines in sequence: a Sandpack ready (up to 120s) *and then* a
+    // container ready (240s) plus the grid poll — the shared 300s describe
+    // budget fits a single boot, not both (Bugbot, #184).
+    test.setTimeout(480_000);
     const tracked = trackSessions(page);
     try {
       await page.goto(REACT_DOCS);
