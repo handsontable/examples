@@ -7,6 +7,7 @@
 // SDK directly, which keeps the production gate authoritative in one place.
 import * as Sentry from "@sentry/react";
 import {
+  MONITOR_BREADCRUMB_CEILING,
   MONITOR_EVENT_CEILING,
   createMonitorBudget,
   normalizeMonitorMessage,
@@ -150,6 +151,17 @@ export function reportError(error: unknown, context: string): void {
  */
 const demoRelayBudget = createMonitorBudget(MONITOR_EVENT_CEILING);
 
+/**
+ * A second, separate budget for the warnings that become breadcrumbs (DEV-2539).
+ *
+ * Separate in both directions. A breadcrumb files no issue, so it can be looser than
+ * the relay ceiling; and a demo that warns on every render must not be able to spend
+ * the relay budget before the `console.error` explaining the breakage arrives. Its
+ * `admit` also dedupes, so the repeated "Theme is already registered" notice occupies
+ * one breadcrumb rather than the whole buffer.
+ */
+const demoBreadcrumbBudget = createMonitorBudget(MONITOR_BREADCRUMB_CEILING);
+
 /** Where a relayed event came from. `tier` distinguishes the two engines; `demoId`
  *  is present only for a saved demo. */
 export interface DemoEventContext {
@@ -178,6 +190,34 @@ export function reportDemoEvent(payload: MonitorPayload, context: DemoEventConte
   // session token.
   const clean = sanitizeMonitorPayload(payload);
   const message = clean.message;
+  // A warning is context, not a fault (DEV-2539). Handsontable's own "Theme is already
+  // registered" notice is emitted by normal re-renders, and every warning used to open
+  // a Sentry issue — a message event at `warning` level is still an issue. Filed as a
+  // breadcrumb instead, so it survives as the context attached to the next real error
+  // from the preview without being one itself.
+  //
+  // Before `demoRelayBudget.admit`, so a warning never consumes a relay slot, and after
+  // `sanitizeMonitorPayload`, so the breadcrumb is bounded and host-redacted like
+  // everything else that crossed the origin boundary.
+  //
+  // Breadcrumbs live on the Sentry scope, which outlives a preview: one recorded while
+  // example A was mounted can still be attached to an error from example B. `data`
+  // carries the tier, framework and demo id so a stale one is identifiable — cheaper
+  // and less fragile than trying to clear the buffer on every mount.
+  if (clean.kind === "console-warn") {
+    if (!demoBreadcrumbBudget.admit(clean.kind, message)) return;
+    Sentry.addBreadcrumb({
+      category: `${DEMO_SURFACE}.console`,
+      level: "warning",
+      message,
+      data: {
+        tier: context.tier,
+        framework: context.framework,
+        ...(context.demoId ? { demo_id: context.demoId } : {}),
+      },
+    });
+    return;
+  }
   if (!demoRelayBudget.admit(clean.kind, message, clean.stack)) return;
   const tags: Record<string, string> = {
     surface: DEMO_SURFACE,
@@ -205,7 +245,20 @@ export function reportDemoEvent(payload: MonitorPayload, context: DemoEventConte
     Sentry.captureException(error, captureContext);
     return;
   }
-  Sentry.captureMessage(message, captureContext);
+  // Display only, and only for network events (DEV-2539/DEMOS-12). "resource failed to
+  // load" as an issue title says nothing; the URL is the whole diagnosis, and `extra`
+  // is not visible from the issue list. Deliberately NOT used for
+  // `demoRelayBudget.admit` or the fingerprint above, both of which stay on the bare
+  // `message` — so a demo with a dozen broken assets still collapses into one issue and
+  // still costs one relay slot, while the title becomes actionable.
+  //
+  // This is the first path that puts an untrusted `url` into an issue *title*, and the
+  // bare-message fingerprint is what bounds it: the url is already capped at
+  // MONITOR_URL_MAX and host-redacted by `sanitizeMonitorPayload`, and because it never
+  // enters the fingerprint, a crafted payload posting a thousand distinct urls still
+  // produces one issue, titled with whichever arrived first.
+  const display = clean.kind === "network" && clean.url ? `${message}: ${clean.url}` : message;
+  Sentry.captureMessage(display, captureContext);
 }
 
 export { Sentry };
