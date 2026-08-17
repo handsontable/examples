@@ -22,6 +22,7 @@ import { applyDepShims } from "./dep-shims.js";
 import { resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
 import {
   MONITOR_COMPILE_MESSAGE_MAX,
+  REPORTER_MODULE_LINE,
   injectReporter,
   redactPreviewHosts,
   truncateMessage,
@@ -187,6 +188,37 @@ const COMPILE_ERROR_FALLBACK = "Sandpack compile error";
 const INLINE_SOURCE_MAP = /sourceMappingURL=data:[^\s'"*]*/gi;
 
 /**
+ * What the injected reporter line is replaced with inside a compile message
+ * (DEV-2557). Kept, rather than deleted, so the code frame's line numbering still
+ * lines up with what the message says.
+ */
+const INJECTED_REPORTER_MARKER = "<hot-runner monitor>";
+
+/**
+ * Strip the monitor's own injected line out of a compile message (DEV-2557).
+ *
+ * `REPORTER_MODULE_LINE` is one 12.6 KB physical line at the top of the module entry,
+ * and babel's code frame prints the two lines *above* the fault verbatim — so a syntax
+ * error on authored line 1 or 2 renders that whole blob into the message before the
+ * offending line is reached. Measured on the vue starter's entry with an unterminated
+ * string on line 1: 289 characters of usable message with a caret when the reporter was
+ * still inlined, 12,872 with it on one line, and `MONITOR_COMPILE_MESSAGE_MAX` then cuts
+ * at 2,000 — so the diagnostic line and its caret were gone. That is DEV-2550's
+ * buried-diagnostic failure (DEMOS-15) coming back on the same channel, from our own
+ * bytes rather than from a source map.
+ *
+ * Matched against the exported constant rather than a pattern, deliberately: the strip
+ * has to stay coupled to the injection. A regex over the injected *shape* would keep
+ * passing its own tests while silently ceasing to match a reworded injection, and the
+ * burying would return with nothing red. `pipeline/sandpack-reload.test.mjs` runs a real
+ * babel over a real `injectReporter` output and asserts the visitor's own source
+ * survives the cap, so a change to either side fails there rather than in production.
+ */
+function stripInjectedReporter(message: string): string {
+  return message.split(REPORTER_MODULE_LINE).join(INJECTED_REPORTER_MARKER);
+}
+
+/**
  * Bound the bundler's `show-error` string (DEV-2550).
  *
  * This is third-party output about code an anonymous visitor wrote, and it was the
@@ -197,11 +229,12 @@ const INLINE_SOURCE_MAP = /sourceMappingURL=data:[^\s'"*]*/gi;
  * `sanitizeMonitorPayload`, container stderr through `truncateMessage`; this is the
  * same treatment for this one.
  *
- * Order is load-bearing twice over. Source maps are stripped *first*, so the cap
- * spends its budget on the diagnostic instead of on half a blob. Hosts are then
- * redacted *before* truncation — the security property monitor.ts documents on
- * `bound()`: truncating first can cut a preview hostname in half and strand a live
- * session token in a form the redactor no longer recognises.
+ * Order is load-bearing three times over. Source maps and the injected reporter line
+ * (see `stripInjectedReporter`) are stripped *first*, so the cap spends its budget on
+ * the diagnostic instead of on half a blob. Hosts are then redacted *before* truncation
+ * — the security property monitor.ts documents on `bound()`: truncating first can cut a
+ * preview hostname in half and strand a live session token in a form the redactor no
+ * longer recognises.
  *
  * Takes `unknown` and coerces, matching `truncateMessage`: the payload crossed an
  * origin boundary from a page running the visitor's code, so its shape is not a
@@ -233,7 +266,8 @@ function boundCompileMessage(value: unknown): string {
   }
   if (raw.trim() === "") return COMPILE_ERROR_FALLBACK;
   const withoutMaps = raw.replace(INLINE_SOURCE_MAP, "sourceMappingURL=<omitted>");
-  return truncateMessage(redactPreviewHosts(withoutMaps), MONITOR_COMPILE_MESSAGE_MAX);
+  const withoutReporter = stripInjectedReporter(withoutMaps);
+  return truncateMessage(redactPreviewHosts(withoutReporter), MONITOR_COMPILE_MESSAGE_MAX);
 }
 
 export class SandpackRuntime implements DemoRuntime {

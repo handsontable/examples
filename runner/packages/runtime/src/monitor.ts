@@ -616,6 +616,16 @@ export const REPORTER_SOURCE = `(function () {
  * MONITOR_MESSAGE_TYPE but leaves the string itself verbatim, so a double injection
  * stays a no-op.
  *
+ * One physical line is not free, and the cost lands somewhere non-obvious: babel's code
+ * frame prints the two lines above the fault verbatim, so a syntax error on authored
+ * line 1 or 2 renders all 12.6 KB of this into the compile message ahead of the line
+ * that is actually wrong, and `MONITOR_COMPILE_MESSAGE_MAX` then cuts the diagnostic off
+ * (measured: 289 characters of usable message with the reporter inlined, 12,872 with it
+ * on one line). `boundCompileMessage` in sandpack.ts therefore replaces this exact
+ * constant with a marker before the cap runs — `stripInjectedReporter`, which is
+ * coupled to this constant on purpose. Do not change the shape of this line without
+ * checking that strip still fires.
+ *
  * What this does NOT fix: the entry is generally transpiled before the injection —
  * `transpileFilesForParcel` for the parcel entries, and babel does not use
  * `retainLines` — so a reported line is still a *compiled* line. Do not read this as

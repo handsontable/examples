@@ -943,8 +943,14 @@ test("REPORTER_SOURCE parses as ES5", () => {
   // This must stay pointed at REPORTER_SOURCE and never at the injected output.
   // Since DEV-2557 the module entry carries the reporter as a single JSON string
   // literal, which parses at ES5 no matter what is inside it — repointing the guard
-  // there would check nothing, forever, and the symptom of the slip it stopped
-  // catching is a blank Tier-1 preview with no build error.
+  // there would check nothing, forever.
+  //
+  // And the slip it catches got *quieter*, not louder, on that path: the injected form
+  // is `try{(0,eval)(...)}catch(e){}`, so a parse failure inside the string is swallowed
+  // by that catch and costs the demo nothing visible — Tier-1 monitoring simply goes
+  // off, with no build error and no blank preview to notice it by. The HTML entry
+  // (Tier-2's only channel, `workers/api/src/monitor-inject.ts`) still inlines the body,
+  // where a slip is loud. This assertion is the only thing that fails first.
   assert.doesNotThrow(() => acorn.parse(REPORTER_SOURCE, { ecmaVersion: 5 }));
 });
 
