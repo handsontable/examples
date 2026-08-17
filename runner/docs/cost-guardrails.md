@@ -59,9 +59,19 @@ The measured rate behind leaving the cap alone: **two** genuine capacity events 
 days, both on 2026-08-10, and both on `DELETE /api/session/:id` — teardown, not
 create, because addressing the Durable Object is itself what starts a container, so
 releasing a slot briefly needs one. That path now answers `204` rather than reporting
-a fault. Note the reported symptom that opened DEV-2554, a visitor refused with "no
-container slots", was **not** real: that string is a `route.fulfill` stub in
-`e2e/preview-recovery.spec.ts` and appears nowhere else in the tree.
+a fault.
+
+On the wording of the report. DEV-2554 described a visitor refused with "no container
+slots", and that exact string is not something this system can emit — it appears in the
+tree only as a `route.fulfill` stub in `e2e/preview-recovery.spec.ts`. It is still a
+faithful *paraphrase* of the condition: the Sandbox SDK's own capacity path phrases it
+"All container slots are in use" (`@cloudflare/sandbox/dist/bridge/index.js`, its
+`WarmPool.throwCapacityError`), and the platform-level sentence our worker actually sees
+means the same thing. So the ticket names a real condition in imprecise words, not a
+phantom — do not close it as unreproducible. What our worker cannot raise is the SDK's
+sentence: that lives in `@cloudflare/sandbox/bridge`, which this repo does not import
+and which needs a `WarmPool` Durable Object binding we do not declare. If we ever adopt
+the bridge, `isPoolExhausted` needs a second pattern for `instance limit reached`.
 
 Both server-side capacity events are fingerprinted `session-pool-exhausted`, tagged
 `capacity: session | teardown`. If that issue starts firing at a rate the three-attempt

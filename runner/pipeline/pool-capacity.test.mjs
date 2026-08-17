@@ -8,12 +8,18 @@ import {
 
 // DEV-2554. What happens when the Tier-2 container pool has no slot left.
 //
-// The ticket reported visitors being refused with "no container slots". That string
-// is a TEST FIXTURE — `e2e/preview-recovery.spec.ts` stubs it — and a repo-wide grep
-// finds it in that one place and nowhere else. No worker, no runtime and no version
-// of `@cloudflare/sandbox` emits it. What Cloudflare actually raises when
-// `max_instances` is reached is the sentence pinned below, and it appears nowhere in
-// this tree either, because nothing has ever handled it.
+// The ticket reported visitors being refused with "no container slots". Read that as a
+// paraphrase, not as a quote: nothing here emits those exact words (a repo-wide grep
+// finds them only in an `e2e/preview-recovery.spec.ts` stub), but the SDK's own capacity
+// path says "All container slots are in use" — see `WarmPool.throwCapacityError` in
+// `@cloudflare/sandbox/dist/bridge/index.js` — and means exactly this condition. That
+// module is unreachable from our worker (it needs a `WarmPool` DO binding we do not
+// declare and a `bridge()` entry point we do not use), so if we ever adopt it,
+// `isPoolExhausted` needs a second pattern for `instance limit reached`.
+//
+// What our worker actually sees when `max_instances` is reached is the platform-level
+// sentence pinned below. It appears nowhere in this tree, because nothing has ever
+// handled it — which is precisely the bug.
 //
 // The classifier is pinned here because the two seams in `index.ts` that call it
 // cannot be exercised from `pipeline/` at all — reproducing a full pool needs five
