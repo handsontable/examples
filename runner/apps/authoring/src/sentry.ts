@@ -14,6 +14,7 @@ import {
   sanitizeMonitorPayload,
   type MonitorPayload,
 } from "@handsontable/demo-runtime/monitor";
+import { ApiError } from "./apiError.js";
 
 /**
  * The deployed host. Reporting is enabled ONLY here.
@@ -148,6 +149,13 @@ if (reportingEnabled) {
 /** Report a caught error that would otherwise be swallowed. No-op when gated off. */
 export function reportError(error: unknown, context: string): void {
   if (!reportingEnabled) return;
+  // A described failure the user is already being told about, and that says
+  // nothing about this app's health, stops here (DEV-2534). One gate, rather
+  // than an `if` at each of the callsites, is what retires the expired-session
+  // half of DEMOS-3/-6/-7/-B/-W without touching a single `catch`. Note this is
+  // deliberately narrow: an ownership 403 is still `reportable`, because the UI
+  // only offers Save and Delete on a demo it believes is the user's.
+  if (error instanceof ApiError && !error.reportable) return;
   Sentry.captureException(error, { tags: { context } });
 }
 
