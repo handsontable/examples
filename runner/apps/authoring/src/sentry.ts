@@ -124,6 +124,14 @@ if (reportingEnabled) {
     release: (import.meta.env.VITE_SENTRY_RELEASE as string | undefined) || undefined,
     // Errors only. Spans would triple the event volume for signal we don't act on.
     tracesSampleRate: 0,
+    // Stated rather than inherited, because `reportDemoEvent` now writes into this
+    // buffer (DEV-2539). The SDK default is 100 and it keeps the *most recent* N, so
+    // with the default a demo spending its whole `MONITOR_BREADCRUMB_CEILING` (50)
+    // would evict half the authoring app's own trail — a save failure would file an
+    // issue whose breadcrumbs are demo warnings instead of the user's clicks and
+    // fetches. At 200 the demo's ceiling can never take more than a quarter. Raise
+    // this alongside that ceiling, never one without the other.
+    maxBreadcrumbs: 200,
     beforeSend(event) {
       if (isUnhandledNoise(event)) return null;
       // A client carries one `environment` from init, so a relayed demo event is

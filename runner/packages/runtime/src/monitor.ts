@@ -37,6 +37,11 @@ export const MONITOR_EVENT_CEILING = 20;
  * demo that warns on every render (Handsontable's own "Theme is already registered"
  * notice is emitted by normal re-renders) spend all twenty slots before the
  * `console.error` explaining the breakage is ever posted.
+ *
+ * Paired with `maxBreadcrumbs` in `apps/authoring/src/sentry.ts`, which the demo
+ * shares with the authoring app's own trail and which evicts oldest-first: this
+ * number must stay a small fraction of it, or a chatty demo silently erases the
+ * clicks and fetches that explain an unrelated app failure. Move the two together.
  */
 export const MONITOR_BREADCRUMB_CEILING = 50;
 

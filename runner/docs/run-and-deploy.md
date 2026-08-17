@@ -251,7 +251,12 @@ breadcrumb files no issue so it can be looser, but a demo warning on every rende
 not spend the twenty relay slots before the `console.error` explaining the breakage is
 posted. Breadcrumbs live on the Sentry scope, which outlives one preview, so a warning
 recorded under example A can appear beneath an error from example B — their `data`
-carries tier, framework and demo id for exactly that reason.
+carries tier, framework and demo id for exactly that reason. That scope is shared with
+the authoring app's own trail, and the buffer evicts oldest-first, which is why
+`Sentry.init` now states `maxBreadcrumbs: 200` instead of inheriting the SDK's default
+of 100: at 100 a demo spending its whole allowance would erase half the clicks and
+fetches you would need to explain an unrelated app failure. The two numbers move
+together or not at all.
 
 The preview is cross-origin on both tiers, so nothing in it can reach this window's
 handlers. `packages/runtime/src/monitor.ts` holds the bridge — one ES5 reporter,
@@ -286,7 +291,11 @@ brake that works without a build** — keep one configured for as long as this i
 
 Nothing identifying is relayed: no source snippets, no file map, and network events
 carry scheme, host and path only, with the query string stripped. Same rule as
-`analytics.ts`.
+`analytics.ts`. One narrow exception, by construction: a `data:` or `blob:` URL has no
+host to strip and its "path" *is* its payload, so a failed `<script src="data:…">`
+relays up to `MONITOR_URL_MAX` characters of the demo's own bytes. Kept deliberately —
+such a URL cannot be a third-party beacon, so the origin filter treats it as the demo's
+own — but it is the one shape in which a snippet can reach an event.
 
 **Network events the reporter produces are same-origin only** (DEV-2539) — a crafted
 `postMessage` can still carry any url, which is why a relayed url reaches `extra` and
@@ -306,7 +315,13 @@ narrow version is an allowlist of the hosts docs examples actually use, not a re
 reporting every host. For the events that survive, the URL is appended to the
 issue title as well as `extra` — `resource failed to load` alone is unactionable — but
 never to the fingerprint or the budget key, so a dozen broken assets stay one issue and
-one relay slot.
+one relay slot. One issue with *one* URL, though, not twelve: the reporter's own dedupe
+key is kind plus message plus first stack frame, and a resource load has no stack, so
+every failed `<img>/<script>/<link>` on a page collapses to the constant
+`network|resource failed to load|` and only the first is ever posted. The title names
+the asset that failed first and gives no hint that others did. Widening the dedupe key
+to include the URL was rejected on purpose: a dozen distinct keys would burn a dozen of
+the twenty relay slots and crowd out the `console.error` that explains the breakage.
 
 **The Tier-2 preview hostname is itself a session credential** and is redacted to
 `<preview>` everywhere. `<port>-<sandboxId>-<token>.demos.handsontable.com` is what

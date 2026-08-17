@@ -251,7 +251,12 @@ test("reporter drops a third-party beacon", async () => {
   // The shape that actually produced the noise: a rejected `fetch`, not a resource
   // load. The wrapper must still rethrow — the reporter never changes what the demo
   // sees.
-  const h = runReporter({ fetch: () => Promise.reject(new TypeError("Failed to fetch")) });
+  const stub = () => Promise.reject(new TypeError("Failed to fetch"));
+  const h = runReporter({ fetch: stub });
+
+  // Asserted before the drop, because an empty `h.sent` proves nothing on its own:
+  // it is also what a reporter that never installed the wrapper produces.
+  assert.notEqual(h.win.fetch, stub, "the reporter wrapped window.fetch");
 
   await assert.rejects(() => h.win.fetch("https://col.csbops.io/data/sandpack", { method: "POST" }), /Failed to fetch/);
   assert.deepEqual(h.sent, [], "a blocked third-party beacon is not a demo fault");
@@ -276,24 +281,40 @@ test("reporter drops a failed third-party resource load", () => {
 });
 
 test("reporter filters XHR by origin too", () => {
-  // The XHR wrapper is a second, independent path to the same `send`. Both branches
-  // it hooks (`error`, and `load` with status >= 400) go through the one gate.
+  // The XHR wrapper is a second, independent path to the same `send`, and it hooks
+  // two events — `error`, and `load` with status >= 400. Both are exercised here, in
+  // both directions, because each is a separate `scrub(this.__hotUrl)` callsite: drop
+  // the `scrub` from either one and a third-party failure comes back *with its query
+  // string*, which is the token exposure `scrub` exists to prevent.
   const XHR = makeFakeXHR();
   const h = runReporter({ XMLHttpRequest: XHR });
 
   const foreign = new XHR();
-  foreign.open("GET", "https://cdn.example.com/data.json");
+  foreign.open("GET", "https://cdn.example.com/data.json?token=secret");
   foreign.status = 404;
   foreign.emit("load");
   assert.deepEqual(h.sent, [], "cross-host XHR failure dropped");
+
+  const foreignErr = new XHR();
+  foreignErr.open("POST", "https://col.csbops.io/data/sandpack?token=secret");
+  foreignErr.emit("error");
+  assert.deepEqual(h.sent, [], "cross-host XHR transport error dropped");
 
   const own = new XHR();
   own.open("GET", "/api/rows");
   own.status = 500;
   own.emit("load");
+
+  const ownErr = new XHR();
+  ownErr.open("PUT", `https://${PREVIEW_HOST}/api/save?token=secret`);
+  ownErr.emit("error");
+
   assert.deepEqual(
     h.sent.map((p) => [p.kind, p.message, p.url]),
-    [["network", "GET 500", "https://<preview>/api/rows"]],
+    [
+      ["network", "GET 500", "https://<preview>/api/rows"],
+      ["network", "PUT failed", "https://<preview>/api/save"],
+    ],
   );
 });
 
