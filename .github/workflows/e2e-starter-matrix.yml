@@ -31,8 +31,10 @@ on:
         required: true
   schedule:
     # Monthly full sweep; schedule events carry no inputs, so the run step
-    # falls back to prod below.
-    - cron: '0 5 1 * *'
+    # falls back to prod below. 03:00, not 05:00: the weekly e2e-live canary
+    # fires Mondays at 05:00, and a Monday-the-1st must not start both against
+    # the same global pool of five container slots (Bugbot, #189).
+    - cron: '0 3 1 * *'
 
 # Two overlapping runs = 4 workers against the global 5-container cap, leaving
 # real traffic 1 slot. cancel-in-progress: false (opposite of ci.yml) on purpose:

@@ -44,7 +44,8 @@ on:
         required: false
   schedule:
     # Weekly prod canary. Monday 05:00 UTC — before the CET workday, off-peak
-    # for the container pool.
+    # for the container pool. The monthly starter matrix runs at 03:00 on the
+    # 1st so a Monday-the-1st never starts both against the same five slots.
     - cron: '0 5 * * 1'
   workflow_call:
     inputs:
@@ -183,7 +184,15 @@ jobs:
             echo "::warning::E2E_BROKER_TOKEN no longer validates against the broker ($code) — refresh the secret to run the authed share round-trip."
             exit 0
           fi
-          pnpm e2e e2e/share-create-live.spec.ts --workers=1
+          # Secret hygiene (Bugbot, #189): this run puts a live session JWT in
+          # sessionStorage and an Authorization header — a Playwright trace
+          # records both, GitHub does not redact secrets inside artifact zips,
+          # and this repo is public. No traces, no retries, and every artifact
+          # of this step is scrubbed before the on-failure upload can see it.
+          status=0
+          pnpm e2e e2e/share-create-live.spec.ts --workers=1 --retries=0 --trace off || status=$?
+          rm -rf test-results playwright-report
+          exit $status
 
       # Two real LLM calls. On by dispatch input and on the weekly canary.
       - name: E2E — AI endpoints answer usably
