@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Dialog,
   EditorShell,
   FullBar,
   markUrl,
@@ -37,6 +38,9 @@ import {
 import { loadStarterExample, toPlaceholderEntry } from "./starter-catalog.js";
 import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
+import { assertApiOk, readApiJson } from "./api.js";
+import { isSessionExpired } from "./apiError.js";
+import { formFooter, ghostButton, primaryButton } from "./formStyles.js";
 import { AdminPanel } from "./Admin.js";
 import { AskAiButton, ChatPanel } from "./Chat.js";
 import { StyleButton, StylePanel } from "./StylePanel.js";
@@ -810,6 +814,11 @@ function Authoring({
   const [versionsResolved, setVersionsResolved] = useState(false);
   const [status, setStatus] = useState<PreviewStatus>("booting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Set when an authed action came back 401 (DEV-2534). Its own state rather
+  // than an `errorMessage`, because `errorMessage` renders into a `<pre>` in the
+  // preview pane and this needs a button: the answer to an expired session is
+  // "sign in again", which is an action, not a sentence.
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [versionWarning, setVersionWarning] = useState<string | null>(null);
   // Cost-guardrail notice (DEV-2030): non-null once spend crosses the warn
   // threshold, so a user learns live sessions are about to get restricted
@@ -2007,14 +2016,13 @@ function Authoring({
           forkedFrom: forkedFrom ?? undefined,
         }),
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error || `embed failed (${res.status})`);
-      }
-      const { id } = (await res.json()) as { id: string };
+      const { id } = await readApiJson<{ id: string }>(res, `embed failed (${res.status})`);
       setLinksId(id);
       setShareLinksOpen(true);
     } catch (e) {
+      // The dialog answers this one; a `<pre>` full of prose with no button
+      // would not (DEV-2534). `finally` still clears the in-flight state.
+      if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-embed");
       setErrorMessage(e instanceof Error ? e.message : String(e));
     } finally {
@@ -2042,16 +2050,19 @@ function Authoring({
           forkedFrom: forkedFrom ?? undefined,
         }),
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error || `fork failed (${res.status})`);
-      }
-      const { id } = (await res.json()) as { id: string };
+      const { id } = await readApiJson<{ id: string }>(res, `fork failed (${res.status})`);
       location.href = `/edit/${id}`; // boot into the edit page for the new demo
     } catch (e) {
+      // First statement, before any branch. There is no `finally` here on
+      // purpose — the success path navigates away and clearing `forking` first
+      // would flash the button back to idle mid-navigation — so every *failure*
+      // path has to clear it itself. An early return added below it (the shape
+      // `onEmbed` and `onSave` can use, since they do have a `finally`) would
+      // leave the Fork button spinning forever on an expired session (DEV-2534).
+      setForking(false);
+      if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-fork");
       setErrorMessage(e instanceof Error ? e.message : String(e));
-      setForking(false);
     }
   }, [user, entry, version, forkedFrom, importedTitle]);
 
@@ -2080,14 +2091,16 @@ function Authoring({
           htVersion: version,
         }),
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error || `save failed (${res.status})`);
-      }
+      await assertApiOk(res, `save failed (${res.status})`);
       clearDirty();
     } catch (e) {
       // Losing a save is the worst outcome in the app — the user's edits are only
-      // in this tab's memory until the PATCH lands.
+      // in this tab's memory until the PATCH lands. Which is exactly why an
+      // expired session opens a dialog here instead of calling `login()`: that
+      // sets `location.href`, and the edits would go with the page (DEV-2534).
+      // `dirty` is untouched, so the Save button keeps its dot and the work is
+      // still there to re-save — or to Download — once the user is back in.
+      if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-save");
       setErrorMessage(e instanceof Error ? e.message : String(e));
     } finally {
@@ -2451,6 +2464,37 @@ function Authoring({
         <ShareLinks clientUrl={clientUrl} embedUrl={embedUrl} onClose={() => setShareLinksOpen(false)} />
       )}
 
+      {/* An expired session, asked about rather than acted on (DEV-2534).
+          `login()` sets `location.href`, and the workspace only exists in this
+          tab's memory — so the re-auth is offered, not taken. Dismissing it
+          leaves the top bar's Download reachable, which is the escape hatch for
+          someone who would rather take a zip than risk the round trip. */}
+      {sessionExpired && (
+        <Dialog title="Your session expired" onClose={() => setSessionExpired(false)}>
+          <p style={sessionExpiredBody}>
+            Sign in again to continue. Your unsaved work stays in this tab either way —
+            you can also download it first.
+          </p>
+          <div style={formFooter}>
+            <button type="button" style={primaryButton} onClick={login}>
+              Sign in again
+            </button>
+            {/* Focus lands here, not on "Sign in again": that button leaves the
+                page, and landing on it would make Space or Enter — pressed by
+                someone who did not read a dialog they did not ask for — take the
+                unsaved workspace with it. */}
+            <button
+              type="button"
+              data-autofocus
+              style={ghostButton}
+              onClick={() => setSessionExpired(false)}
+            >
+              Not now
+            </button>
+          </div>
+        </Dialog>
+      )}
+
       {/* `savedId` narrows the dialog's `demoId` — the pencil is `edit`-only, so it
           is never null here, but the render guard is where that is provable. */}
       {editInfoOpen && savedId && (
@@ -2506,6 +2550,16 @@ function Logo({ size = 24 }: { size?: number }) {
   const logoUrl = useLogoUrl();
   return <img src={logoUrl} alt="Handsontable" style={{ height: size, display: "block" }} />;
 }
+
+/** The re-auth dialog's one paragraph — the same body treatment the delete
+ *  confirmation in `MyDemos` uses, so the two modals read as one component. */
+const sessionExpiredBody: React.CSSProperties = {
+  margin: 0,
+  fontFamily: theme.font.ui,
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: theme.color.textMuted,
+};
 
 const centered: React.CSSProperties = {
   height: "100%",
