@@ -47,7 +47,8 @@ import { Markdown } from "./markdown.js";
 import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
 import { useProfile } from "./useProfile.js";
-import { reportError, reportingEnabled, Sentry } from "./sentry.js";
+import { monitorDemos, reportDemoEvent, reportError, reportingEnabled, Sentry } from "./sentry.js";
+import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
 
 const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefined;
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
@@ -142,7 +143,25 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
  * of issues.
  */
 function reportRuntimeError(e: unknown, engine: string): void {
-  if (!reportingEnabled || engine !== "container") return;
+  if (!reportingEnabled) return;
+  // Tier-1 compile and runtime errors are the "product output" case above — dropped
+  // by default, reported while demo monitoring is on (DEV-2527). They arrive as
+  // ordinary app-surface events rather than through `reportDemoEvent`, because this
+  // channel is the shell's own view of the failure, not something the preview
+  // relayed: `Sentry.captureException` below keeps the engine tag and the fingerprint
+  // rules that follow.
+  if (engine !== "container") {
+    if (!monitorDemos) return;
+    Sentry.captureException(e, {
+      tags: { surface: "demo-runtime", kind: "sandpack-compile", tier: "1" },
+      // Flat, like ContainerBootFailure's: a compile error's text is the example's
+      // own source, so default grouping would shard one class of failure into an
+      // issue per typo. Individual messages stay readable as samples on the issue.
+      fingerprint: ["demo-runtime", "sandpack-compile"],
+      level: "warning",
+    });
+    return;
+  }
   // The budget guardrail refusing a session is the guardrail working. It would
   // otherwise arrive as a flood of identical 503s at exactly the moment the
   // team is already dealing with the spend.
@@ -838,6 +857,25 @@ function Authoring({
   const filesRef = useRef<FilesMap>(files);
   filesRef.current = files;
 
+  // ---- Test contract (DEV-2203) -------------------------------------------
+  // The workspace files, readable by the E2E suite (e2e/style-panel.spec.ts)
+  // without scraping CodeMirror's DOM — `.cm-content` is virtualised, so it
+  // only holds the lines on screen and file-content assertions against it
+  // pass or fail on scroll position. `filesRef` is updated synchronously by
+  // every edit path, including the Style panel's quiet writes, so the hook
+  // sees a write before any debounce fires. Same standing as the preview's
+  // `data-preview-status` (PreviewPane.tsx): rename or remove only together
+  // with the suite. Exposes nothing that is not already client-side in the
+  // user's own tab, and doubles as a support tool ("run
+  // __HOT_FILES__() in the console and send me the result").
+  useEffect(() => {
+    const w = window as unknown as { __HOT_FILES__?: () => FilesMap };
+    w.__HOT_FILES__ = () => ({ ...filesRef.current });
+    return () => {
+      delete w.__HOT_FILES__;
+    };
+  }, []);
+
   // Gates the first mount until the workspace source has resolved: a saved
   // demo's snapshot, a `?docs=` example, or (since starters are lazy-fetched
   // per bucket, DEV-2213) the starter artifact itself.
@@ -905,11 +943,16 @@ function Authoring({
   // Bucket the open starter workspace was fetched from; a version change
   // inside the same bucket only re-pins in place instead of refetching.
   const activeStarterBucketRef = useRef<string | null>(null);
+  /** Read by the monitor relay only (DEV-2527). A ref, not a dependency of the mount
+   *  effect: `savedId` appears the moment a demo is saved, and remounting the preview
+   *  on save would throw away the running session the user just saved. */
+  const savedIdRef = useRef<string | null>(null);
   docsPathRef.current = docsPath;
   dirtyRef.current = dirty;
   sourceLoadedRef.current = sourceLoaded;
   activeDocsBucketRef.current = activeDocsBucket;
   activeDocsManifestRef.current = activeDocsManifest;
+  savedIdRef.current = savedId;
 
   /** Mark the workspace unsaved, and the named files with it.
    *
@@ -1711,11 +1754,41 @@ function Authoring({
             // Identifies the caller to the cost guardrail: at >=80% of the
             // monthly budget live sessions are signed-in-only (DEV-2030).
             authToken: getToken(),
+            monitor: monitorDemos,
           })
-        : new SandpackRuntime(entry, { iframe: iframeEl, bundlerURL: SANDPACK_BUNDLER_URL, version: v.value });
+        : new SandpackRuntime(entry, {
+            iframe: iframeEl,
+            bundlerURL: SANDPACK_BUNDLER_URL,
+            version: v.value,
+            monitor: monitorDemos,
+          });
+    // Resolved per event: the demo id can be minted (first save) while this very
+    // preview is running, and the ref is how that reaches an already-wired relay.
+    const demoContext = () => ({
+      tier: (entry.engine === "container" ? 2 : 1) as 1 | 2,
+      framework: entry.framework,
+      demoId: savedIdRef.current,
+    });
     if (entry.engine === "container") {
       (runtime as ContainerRuntime).onProgress((log) => !cancelled && setBootLog(log));
+      // Post-boot dev-server faults (DEV-2527). Not gated on `cancelled`: a dev
+      // server that logged an error still logged it, and an unmount is often the
+      // user giving up on exactly that — the same reasoning as the mount catch below.
+      (runtime as ContainerRuntime).onStderr((message) =>
+        reportDemoEvent({ type: "hot-runner-monitor", kind: "stderr", message }, demoContext()),
+      );
     }
+    // The preview relays what it sees from inside the iframe (DEV-2527). Sender
+    // identity is `event.source`, not the origin string: Tier 1 runs on Sandpack's
+    // bundler host (a CodeSandbox default we do not configure) and Tier 2 on a
+    // per-session wildcard subdomain, so there is no origin to match against — but
+    // there is exactly one window we are willing to hear from.
+    const onPreviewMessage = (event: MessageEvent) => {
+      if (cancelled || event.source !== iframeEl.contentWindow) return;
+      if (!isMonitorPayload(event.data)) return;
+      reportDemoEvent(event.data, demoContext());
+    };
+    if (monitorDemos) window.addEventListener("message", onPreviewMessage);
     runtime.onReady(() => !cancelled && setStatus("ready"));
     runtime.onError((e) => {
       if (cancelled) return;
@@ -1746,6 +1819,7 @@ function Authoring({
       });
     return () => {
       cancelled = true;
+      window.removeEventListener("message", onPreviewMessage);
       runtime.dispose();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };

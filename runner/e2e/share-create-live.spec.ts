@@ -31,7 +31,18 @@ test("a demo shared today is a page a client can open — until it is revoked", 
   // The real token, the real broker, no stubs.
   await page.addInitScript((token) => sessionStorage.setItem("hot_token", token), TOKEN!);
 
+  // The id is captured off the network, not the dialog: a locator throwing
+  // between the mint and the id read would leave a live production share with
+  // nothing to revoke it (Bugbot, #186 — getByLabel(/client link/i) also
+  // matched the "Copy Public client link" button and strict mode threw).
   let demoId: string | null = null;
+  page.on("response", async (res) => {
+    if (res.request().method() === "POST" && /\/api\/demos$/.test(res.url()) && res.ok()) {
+      const body = (await res.json().catch(() => null)) as { id?: string } | null;
+      if (body?.id) demoId = body.id;
+    }
+  });
+
   try {
     await page.goto("/?example=react");
     // Fork appearing in the top bar is the signed-in signal — assert it before
@@ -47,9 +58,11 @@ test("a demo shared today is a page a client can open — until it is revoked", 
     const dialog = page.getByRole("dialog", { name: "Share this demo" });
     await expect(dialog).toBeVisible({ timeout: 300_000 });
 
-    const clientLink = await dialog.getByLabel(/client link/i).inputValue();
-    demoId = new URL(clientLink).pathname.split("/").filter(Boolean).pop() ?? null;
-    expect(demoId, `a demo id in the dialog's client link (got: ${clientLink})`).toBeTruthy();
+    // The textbox role, not getByLabel: the field's copy button is named
+    // "Copy Public client link" and would collide under strict mode.
+    const clientLink = await dialog.getByRole("textbox", { name: /client link/i }).inputValue();
+    expect(demoId, "the mint response carried a demo id").toBeTruthy();
+    expect(clientLink, "the dialog's client link names the minted demo").toContain(demoId!);
 
     // The built page renders for an anonymous client (fresh context state not
     // needed — /d is public and static, cookies play no part).
