@@ -155,6 +155,104 @@ test("a row matching zero or two sites throws rather than silently no-opping", (
   );
 });
 
+test("a site wrapped across lines throws instead of being corrupted in place", () => {
+  // The patterns are line-scoped, so a wrapped site still matches EXACTLY ONE
+  // site (`dateFormat: {`), the count guard passes, and the replacement would
+  // orphan the remaining lines into invalid source — while the shape lint still
+  // passes, because the expected literal IS present. Green regen, dead starter.
+  const wrapped = {
+    "/index.js": [
+      "columns: [",
+      "  {",
+      "    type: 'date',",
+      "    dateFormat: {",
+      "      year: 'numeric',",
+      "      month: '2-digit',",
+      "    },",
+      "  },",
+      "]",
+    ].join("\n"),
+    "/src/utils.js": "const d = () => new Date(0).toISOString().slice(0, 10);\n",
+    "/package.json": "{}",
+  };
+
+  // Precondition: this is the dangerous case, not the already-loud one.
+  const sites = wrapped["/index.js"].match(/^([ \t]*)dateFormat:[^\n]*$/gm);
+  assert.equal(sites.length, 1, "exactly one match, so the count guard cannot catch it");
+
+  assert.throws(
+    () => applyStarterOverrides("javascript", wrapped, { bucket: "17" }),
+    /spans more than one line/,
+  );
+});
+
+test("every registry site in the real starters is single-line today", () => {
+  // The guard above is only useful if it is not already tripping.
+  for (const shape of ["'DD/MM/YYYY'", "{ year: 'numeric', month: '2-digit', day: '2-digit' }"]) {
+    assert.doesNotThrow(() =>
+      applyStarterOverrides("javascript", jsStarter(shape), { bucket: "18" }),
+    );
+  }
+});
+
+test("a normalization row whose site moved throws instead of silently no-opping", () => {
+  // "nothing left matching `pattern`" is trivially true when `pattern` never
+  // matched, so the negative postcondition alone cannot tell "already migrated"
+  // from "this row is now dead". Renaming the call is exactly how a frozen
+  // branch would drift out from under a row.
+  const drifted = {
+    "/index.js": jsStarter("'DD/MM/YYYY'")["/index.js"],
+    "/src/utils.js": "const d = () => new Date(0).toLocaleDateString('en-GB');\n",
+    "/package.json": "{}",
+  };
+  assert.throws(
+    () => applyStarterOverrides("javascript", drifted, { bucket: "18" }),
+    /javascript:random-date-iso: \/src\/utils\.js does not match .* after migration/,
+  );
+});
+
+test("stored slash-dates fail the lint at 18 and next, whatever the option says", () => {
+  // Option shape and stored value are coupled: 18's dateValidator is
+  // isValidISODate and ignores dateFormat entirely, so a correct Intl object
+  // over DD/MM data is BAD_VALUE on every row.
+  const files = {
+    "/src/index.tsx": '<HotColumn data={4} type="date" />\n',
+    "/src/constants.ts": 'export const data = [["Tagcat", "11/10/2020"]];\n',
+  };
+  for (const bucket of INTL_BUCKETS) {
+    const problems = lintStarterOptionShapes("react", files, { bucket });
+    assert.equal(problems.length, 1, `${bucket}: ${JSON.stringify(problems)}`);
+    assert.match(problems[0], /slash-separated date literal/);
+    assert.match(problems[0], /\/src\/constants\.ts/);
+  }
+  // Below 18 the format string parses DD/MM/YYYY, so storage is not linted.
+  for (const bucket of LEGACY_BUCKETS) {
+    assert.deepEqual(lintStarterOptionShapes("react", files, { bucket }), [], bucket);
+  }
+});
+
+test("the stored-value rule covers date columns that carry no dateFormat at all", () => {
+  // react, react-js, typescript and vue are all in this shape today: a date
+  // column with no dateFormat is invisible to both option rules, so without
+  // this rule nothing at all guards their data.
+  const files = { "/src/index.tsx": 'const d = "11/10/2020";\n<HotColumn type="date" />\n' };
+  assert.equal(lintStarterOptionShapes("react", files, { bucket: "18" }).length, 1);
+});
+
+test("the stored-value rule ignores prose and starters with no date cell", () => {
+  // A README line would otherwise fail a whole bucket regen.
+  const prose = {
+    "/src/index.tsx": '<HotColumn data={4} type="date" />\n',
+    "/README.md": "Dates render as 31/12/2020 in the grid.\n",
+    "/src/constants.ts": 'export const data = [["Tagcat", "2020-10-11"]];\n',
+  };
+  assert.deepEqual(lintStarterOptionShapes("react", prose, { bucket: "18" }), []);
+
+  // No date/time cell anywhere: a slash-date is just a string.
+  const noCell = { "/src/index.tsx": 'const label = "11/10/2020";\n' };
+  assert.deepEqual(lintStarterOptionShapes("react", noCell, { bucket: "18" }), []);
+});
+
 test("a missing target file throws", () => {
   assert.throws(
     () => applyStarterOverrides("javascript", { "/package.json": "{}" }, { bucket: "18" }),

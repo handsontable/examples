@@ -84,6 +84,10 @@ const INTL_DATE_DQ = '{ year: "numeric", month: "2-digit", day: "2-digit" }';
  * source currently carries, so the rewrite is idempotent and branch-agnostic.
  * A row matching zero or two sites THROWS — a source refactor that moves or
  * duplicates the site must be loud, not silently a no-op.
+ *
+ * The patterns are LINE-SCOPED (`[^\n]*$`), so a row is only correct while its
+ * site fits on one line. `assertSingleLineSite` enforces that; see its comment
+ * for the silent corruption it exists to prevent.
  */
 export const OPTION_OVERRIDES = [
   {
@@ -179,6 +183,14 @@ export const OPTION_OVERRIDES = [
  * with a DD/MM option at 15/16/17.
  *
  * `buckets: "intl"` applies only at 18+/next; `"all"` applies everywhere.
+ *
+ * `expect` is the POSITIVE postcondition, and it is the half that matters.
+ * "nothing left matching `pattern`" is trivially true when `pattern` never
+ * matched anything, so on its own it cannot tell "the source already carries
+ * the migrated form" (success) apart from "the source moved and this row is now
+ * dead" (a silent regression that would pair unmigrated data with a migrated
+ * option). `expect` must hold on the OUTPUT either way, so a row that stops
+ * finding its site fails the import instead of quietly doing nothing.
  */
 export const SOURCE_NORMALIZATIONS = [
   {
@@ -198,6 +210,7 @@ export const SOURCE_NORMALIZATIONS = [
     buckets: "all",
     pattern: /'(\d{2})\/(\d{2})\/(\d{4})'/g,
     replacement: "'$3-$2-$1'",
+    expect: /'\d{4}-\d{2}-\d{2}'/,
   },
   {
     // The Arabic demo generates its dates with
@@ -210,6 +223,7 @@ export const SOURCE_NORMALIZATIONS = [
     buckets: "all",
     pattern: /\.toLocaleDateString\('en-gb'\)/g,
     replacement: ".toISOString().slice(0, 10)",
+    expect: /\.toISOString\(\)\.slice\(0, 10\)/,
   },
 ];
 
@@ -223,6 +237,16 @@ const DATE_CELL_MARKERS = [
 
 const hasDateCell = (text) => DATE_CELL_MARKERS.some((re) => re.test(text));
 
+/**
+ * Files whose string literals are candidate cell VALUES. Deliberately narrow:
+ * the file map also carries READMEs and lockfiles, and a prose line like
+ * "renders as 31/12/2020" must not fail a bucket regen.
+ */
+const SOURCE_EXT = /\.(?:js|jsx|mjs|cjs|ts|tsx|vue|svelte|astro)$/i;
+
+/** A quoted slash-separated date — the shape HOT 18's isValidISODate rejects. */
+const SLASH_DATE = /['"]\d{1,2}\/\d{1,2}\/\d{4}['"]/;
+
 function rowsFor(list, framework) {
   return list.filter((row) => row.framework === framework);
 }
@@ -234,6 +258,34 @@ function literalFor(row, bucket) {
 
 function normalizationApplies(row, bucket) {
   return row.buckets === "all" || usesIntlDate(bucket);
+}
+
+/**
+ * Refuse to rewrite a site whose value spills past the matched line.
+ *
+ * The patterns end in `[^\n]*$`, so if a source site is ever wrapped across
+ * lines — one added field pushes
+ * `dateFormat={{ year: "numeric", month: "short", day: "2-digit" }}` (66 chars)
+ * past prettier's 80 and it wraps — the pattern still matches EXACTLY ONE site
+ * (`      dateFormat={{`), the count guard passes, and the replacement orphans
+ * the remaining `year: ...` / `}}` lines into syntactically invalid source. The
+ * shape lint would pass too, because the expected literal IS present. That is a
+ * green regen shipping a starter that cannot compile.
+ *
+ * Balanced braces on the matched text is the cheap invariant that catches it:
+ * a complete one-line site closes every brace it opens (0/0 for a quoted
+ * string, 1/1 for an object literal, 2/2 for a JSX expression container).
+ */
+function assertSingleLineSite(row, site) {
+  const opens = (site.match(/\{/g) ?? []).length;
+  const closes = (site.match(/\}/g) ?? []).length;
+  if (opens !== closes) {
+    throw new Error(
+      `[starter-overrides] ${row.id}: the \`${row.option}\` site in ${row.file} spans more than ` +
+        `one line (unbalanced braces in ${JSON.stringify(site.trim())}). These rows rewrite a ` +
+        `single line — re-join the site or widen the row's pattern.`,
+    );
+  }
 }
 
 /**
@@ -265,6 +317,7 @@ export function applyStarterOverrides(framework, files, { bucket }) {
           `found ${matches.length}. The starter was refactored — update the registry row.`,
       );
     }
+    assertSingleLineSite(row, matches[0]);
     const replaced = text.replace(row.pattern, `$1${literalFor(row, bucket)}`);
     if (replaced !== text) applied.push(row.id);
     next = { ...next, [row.file]: replaced };
@@ -279,12 +332,25 @@ export function applyStarterOverrides(framework, files, { bucket }) {
       );
     }
     const replaced = text.replace(row.pattern, row.replacement);
-    // Postcondition: nothing stale survived. Makes the row idempotent (master
-    // may already carry the migrated form) without letting a partial through.
+    // Postcondition, negative half: nothing stale survived. Makes the row
+    // idempotent (master may already carry the migrated form) without letting a
+    // partial through.
     const residue = new RegExp(row.pattern.source, row.pattern.flags).test(replaced);
     if (residue) {
       throw new Error(
         `[starter-overrides] ${row.id}: ${row.file} still matches ${row.pattern} after migration`,
+      );
+    }
+    // Positive half: the migrated form is actually present. Without this a row
+    // whose site moved or was renamed on a frozen branch matches nothing, the
+    // negative check passes vacuously, and the bucket ships unmigrated data
+    // paired with a migrated option — the exact pairing this module exists to
+    // make impossible.
+    if (!new RegExp(row.expect.source, row.expect.flags.replace("g", "")).test(replaced)) {
+      throw new Error(
+        `[starter-overrides] ${row.id}: ${row.file} does not match ${row.expect} after migration. ` +
+          `The row found nothing to migrate and the source no longer carries the migrated form — ` +
+          `the site moved, so update the row.`,
       );
     }
     if (replaced !== text) applied.push(row.id);
@@ -299,13 +365,20 @@ export function applyStarterOverrides(framework, files, { bucket }) {
  * shape that bucket's Handsontable major supports. Returns problem strings;
  * `importStarters` pushes them into its `problems[]`, which throws.
  *
- * Two rules:
+ * Three rules:
  *   - REGISTERED sites must carry the registry's literal for this bucket.
  *   - COMPLETENESS: any dateFormat/timeFormat in a file that also declares a
  *     date/time cell type and is NOT covered by a row fails generation. This is
  *     what stops the class returning silently — a new or edited starter that
  *     adds a date column cannot reach a bucket until someone declares its
  *     per-major shape here.
+ *   - STORED VALUE at 18+: a starter that declares a date/time cell must not
+ *     ship slash-separated date literals. Option shape and stored value are
+ *     coupled (see the header), and the first two rules only cover the option —
+ *     so without this a starter whose data drifts to `DD/MM/YYYY`, or one whose
+ *     date column carries NO dateFormat at all (react, react-js, typescript and
+ *     vue are all in that shape today), reaches bucket 18 invisible to both,
+ *     and 18's isValidISODate turns every row into BAD_VALUE.
  */
 export function lintStarterOptionShapes(framework, files, { bucket }) {
   const problems = [];
@@ -335,6 +408,26 @@ export function lintStarterOptionShapes(framework, files, { bucket }) {
       problems.push(
         `${framework}: ${file} sets \`${option}\` on a date/time cell but has no ` +
           `starter-overrides.mjs row declaring its per-major shape (bucket ${bucket})`,
+      );
+    }
+  }
+
+  // Stored values. Scoped to the whole starter, not per file: the cell type is
+  // declared in the component and the values live in a sibling constants file.
+  const declaresDateCell = Object.values(files).some(
+    (text) => typeof text === "string" && hasDateCell(text),
+  );
+  if (usesIntlDate(bucket) && declaresDateCell) {
+    for (const [file, text] of Object.entries(files)) {
+      if (typeof text !== "string" || !SOURCE_EXT.test(file)) continue;
+      const hit = text.match(SLASH_DATE);
+      if (!hit) continue;
+      problems.push(
+        `${framework}: ${file} carries a slash-separated date literal (${hit[0]}) at bucket ` +
+          `${bucket}. Handsontable ${bucket === "next" ? "18+" : bucket}'s dateValidator is ` +
+          `isValidISODate and its renderer parses through the ISO-only parseToLocalDate, so a ` +
+          `date cell's stored value must be YYYY-MM-DD however it is displayed — add a ` +
+          `starter-overrides.mjs SOURCE_NORMALIZATIONS row`,
       );
     }
   }
