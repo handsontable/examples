@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy --routes '*.demos.handsontable.com/*' --routes 'demos.handsontable.com/api/*' --routes 'demos.handsontable.com/d/*' --routes 'demos.handsontable.com/embed/*'",
+    "deploy": "wrangler deploy --routes '*.demos.handsontable.com/*' --routes 'demos.handsontable.com/api/*' --routes 'demos.handsontable.com/d/*' --routes 'demos.handsontable.com/embed/*' --var SENTRY_ENVIRONMENT:api-production",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -196,9 +196,20 @@ the corresponding `--route` flags to the API workflow's `wrangler deploy` step.
 ## Error monitoring (Sentry)
 
 Errors only — no tracing, no session replay, no profiling. One Sentry project
-serves every surface, separated by `environment`: `authoring-production` (browser),
-`api-production` (Worker), and `demo-runtime` (the preview itself — temporary, see
-below).
+serves every surface, separated by `environment`:
+
+| `environment` | Surface |
+| --- | --- |
+| `authoring-production` | The browser app, on the production host. |
+| `api-production` | The deployed API Worker. |
+| `demo-runtime` | The preview itself — temporary, see below. |
+| `budget-alerts` | The nightly spend alerts, re-homed per event so they can be filtered, muted and rate-limited apart from real faults. They are still issues in this project. |
+| `authoring-local` | A browser build served anywhere but the production host. Never sent while the gate is closed — it exists so that a gate patched open locally is self-labelling. |
+
+The first two are no longer hardcoded literals; they are derived (from the hostname
+and from a deploy-time var respectively), with the production strings unchanged.
+Anything keying on them Sentry-side — alert rules, saved searches, dashboards —
+keeps working.
 
 **The DSN is committed, in two places**, because a DSN is a write-only ingest
 endpoint that ships inside the JS bundle by construction — hiding it buys nothing,
@@ -218,13 +229,60 @@ protection).
 **Nothing is reported outside production.** `.env.production` is committed and so
 is loaded by every production-mode build — including CI's authoring build, whose
 output Playwright then serves at `localhost:4173`. Both surfaces therefore gate on
-a host:
+a host, and since DEV-2540 both need a second signal as well. The decisions live in
+two small import-free modules, `apps/authoring/src/reportingGate.ts` and
+`workers/api/src/sentry-gate.ts`, and are unit-tested in
+`pipeline/sentry-gating.test.mjs`.
 
-- browser: `window.location.hostname === "demos.handsontable.com"`
-  (`apps/authoring/src/sentry.ts`);
-- Worker: `PREVIEW_HOST` matching the production host — the same prod-vs-local
-  switch Tier-2 preview URLs use, overridden in `workers/api/.dev.vars`
-  (`workers/api/src/index.ts`).
+- browser: `window.location.hostname === "demos.handsontable.com"` **and**
+  `navigator.webdriver !== true`. The second conjunct keeps an e2e suite pointed at
+  production (`E2E_BASE_URL=https://demos.handsontable.com`, `e2e-live.yml`,
+  `e2e-starter-matrix.yml`) from filing real issues; it used to. Nothing is lost —
+  `e2e/starter-matrix.spec.ts` collects failures itself via `page.on("pageerror")`
+  and never reads Sentry. It also silences demo-runtime relaying during those runs,
+  deliberately: an e2e-driven page load is not real demo usage.
+- Worker: `PREVIEW_HOST` matching the production host **and** `SENTRY_ENVIRONMENT`
+  being set. `PREVIEW_HOST` alone failed open — the committed `wrangler.jsonc` vars
+  carry the production value, so the config default *is* production and only the
+  gitignored `workers/api/.dev.vars` (a manual setup step) turned it off. Skip that
+  step and `wrangler dev` filed local experiments into the production project.
+  `SENTRY_ENVIRONMENT` is passed only by `--var` from the `deploy` script, so no
+  local run can produce it.
+
+> ⚠️ **Deploy with `pnpm run deploy`, not a bare `wrangler deploy`.** The
+> `--var SENTRY_ENVIRONMENT:api-production` flag lives in that script, and without
+> it the deployed Worker comes up with error reporting silently off — nothing
+> errors, events just stop arriving. That is the fail-closed direction working as
+> intended, but it is invisible, so it is worth knowing. `.github/workflows/deploy-runner-api.yml`
+> calls `pnpm run deploy`, so CI is fine. Verify a change to the flag with
+> `pnpm exec wrangler deploy --dry-run --outdir /tmp/x --var SENTRY_ENVIRONMENT:api-production`
+> and check the binding table; a flag-supplied var prints as `(hidden)`, which is a
+> display convention, not a broken binding.
+
+> `.dev.vars` is no longer the only thing standing between a local Worker and the
+> production project, but keep creating it — it is still what points Tier-2 preview
+> URLs at localhost.
+
+### Verifying the wiring
+
+There is deliberately **no force-enable escape hatch** in either gate: a bypass flag
+would enlarge exactly the surface these gates exist to shrink. Fifteen localhost
+events reached the production project in July, labelled `authoring-production` and
+indistinguishable from real traffic, because the only way to exercise the wiring
+off-host was to patch the gate open by hand.
+
+To test the browser half off-host, point `VITE_SENTRY_DSN` in the gitignored
+`apps/authoring/.env.local` at a **separate** Sentry project's DSN — never the
+production one — and patch `enabled` locally if you must. The `environment` is
+derived independently of `enabled` precisely so that such a run still labels itself
+`authoring-local`.
+
+One control has no code equivalent and is not in this repo: the Sentry project's
+**inbound filter for localhost**, in project settings for `handsoncode/demos`. It is
+the only thing that catches the failure mode above — a gate patched open by hand —
+and it covers both SDKs at once. If it has been enabled, an off-host verification
+against localhost will be dropped at ingest, and the test has to run against a
+non-localhost host to prove anything.
 
 **Preview-iframe errors are not reported by default.** The iframe runs arbitrary
 authored and imported example code, so a compile error or a mid-keystroke typo is
