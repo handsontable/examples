@@ -393,13 +393,30 @@ test("a grid shape the panel does not recognise gets the manual hint, not a mang
   // — a computed expression wireTheme deliberately refuses to touch.
   const drawer = await openPanel(page, "/?docs=guides/styling/themes/javascript/exampleTheme.js&v=18.0.0");
 
+  // Wait for the docs workspace to actually arrive before applying: until the
+  // fetch lands, the files map is empty, and wireTheme over an empty map shows
+  // the very same hint — the test would pass without ever touching the fixture
+  // (Bugbot, #185). The unrecognisable expression is the precondition.
+  let before = "";
+  let entryPath = "";
+  await expect(async () => {
+    const files = await workspaceFiles(page);
+    entryPath = Object.keys(files).find((p) => files[p].includes("theme: getTheme(")) ?? "";
+    expect(entryPath, "the docs example with the computed theme expression has loaded").not.toBe("");
+    before = files[entryPath];
+  }).toPass();
+
   const tokensSection = drawer.locator("section").filter({ hasText: "Token mapping" }).first();
   await tokensSection.getByRole("button", { name: "horizon" }).click();
 
   await expect(drawer.getByText("shape the panel does not recognise")).toBeVisible();
   await expect(drawer.locator("code", { hasText: "handsontable-theme" }).first()).toBeVisible();
-  // The module is still written — only the wiring is left to the user.
+  // The module is still written — only the wiring is left to the user…
   await expect(page.locator(".hot-file-row", { hasText: "handsontable-theme" })).toBeVisible();
+  // …and the file the panel refused to wire is byte-identical to how it loaded.
+  await expect(async () => {
+    expect((await workspaceFiles(page))[entryPath]).toBe(before);
+  }).toPass();
 });
 
 test("a Google Font pick injects the stylesheet link and says so", async ({ page }) => {
