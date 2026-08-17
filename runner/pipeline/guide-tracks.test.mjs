@@ -228,3 +228,29 @@ test("no HTML entities in the guide's markdown", () => {
     assert.deepEqual(found, [], `${name}.md contains HTML entities: ${found.join(", ")}`);
   }
 });
+
+test("every MCP prompt in the guide names the tool it needs", () => {
+  // Claude fetches tools on demand: a prompt that does not start with `Load
+  // create_demo` / `Load update_demo` is the one that comes back "I do not have that
+  // tool", and the reader on this track has no way to diagnose that.
+  const fenced = /```\n([\s\S]*?)```/g;
+  let checked = 0;
+  for (const name of [...GUIDE_TRACKS.map((t) => t.slug), "overview"]) {
+    const md = fs.readFileSync(path.join(docs, `${name}.md`), "utf8");
+    for (const m of md.matchAll(fenced)) {
+      const body = m[1];
+      // Naming either tool is what makes a block an MCP prompt — no second filter.
+      // The first version also tested `\bdemo\b` (which cannot match inside
+      // `update_demo`) and excluded blocks with a URL on their own line, which between
+      // them skipped the one prompt this test exists to guard.
+      if (!/create_demo|update_demo/.test(body)) continue;
+      checked += 1;
+      assert.match(
+        body.trim(),
+        /^Load (create_demo|update_demo),/,
+        `${name}.md has a prompt that does not open by loading the tool: ${body.trim().slice(0, 60)}`,
+      );
+    }
+  }
+  assert.ok(checked >= 6, `expected the guide to carry MCP prompts, found ${checked}`);
+});
