@@ -11,6 +11,12 @@ import * as Sentry from "@sentry/cloudflare";
 import { DEFAULT_MAX_MAJOR, DEFAULT_MIN_MAJOR, mintSessionId, pickLatestNextVersion } from "@handsontable/demo-runtime";
 import { injectMonitor } from "./monitor-inject.js";
 import { viteAllowedHostEnv } from "./preview-allowed-hosts.js";
+import {
+  PRODUCTION_HOST,
+  apiSentryDsn,
+  apiSentryEnvironment,
+  rehomeBudgetAlert,
+} from "./sentry-gate.js";
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
@@ -65,21 +71,27 @@ import { requestTheme, validateStylePrompt } from "./theme-ai.js";
 // abandoned sessions exhaust the pool. Disk is ephemeral, so a slept container
 // cold-boots on return — the point is to avoid that mid-session, not to make
 // wake cheap.
-/** The one production host. Doubles as the "am I deployed?" signal below. */
-const PRODUCTION_HOST = "demos.handsontable.com";
-
 /**
  * Sentry init options, shared by the fetch handler and both Durable Objects so
  * every event carries the same release and environment. Errors only — no
  * tracing, no profiling. See docs/run-and-deploy.md.
  *
- * Reporting is enabled only on the deployed Worker. `PREVIEW_HOST` is the
- * discriminator: it is `demos.handsontable.com` in the committed
- * `wrangler.jsonc` vars and is overridden to `localhost:8787` by
- * `workers/api/.dev.vars` for local runs — the same prod-vs-local switch the
- * Tier-2 preview URLs already depend on. Without the gate, `wrangler dev` would
- * file local experiments as `api-production` issues. The browser SDK gates on
- * `window.location.hostname` for the same reason.
+ * Every decision here lives in `sentry-gate.ts`, which is import-free and unit
+ * tested (`pipeline/sentry-gating.test.mjs`). In summary (DEV-2540):
+ *
+ * - Reporting needs TWO signals. `PREVIEW_HOST === PRODUCTION_HOST` was the only
+ *   one, and it fails open: the committed `wrangler.jsonc` vars carry the
+ *   production host, so the config default IS the production value and only the
+ *   gitignored `.dev.vars` — a manual setup step — turns it off. A developer who
+ *   skipped that step filed `wrangler dev` runs into the production project.
+ *   `SENTRY_ENVIRONMENT` comes only from the `deploy` script's `--var`, so
+ *   `wrangler dev` cannot produce it and the gate now fails closed. The cost is
+ *   that a bare `wrangler deploy` ships reporting silently OFF — documented.
+ * - `environment` is that same deploy var rather than a hardcoded literal, which
+ *   is what stopped local runs from being labelled `api-production`.
+ * - `beforeSend` re-homes the nightly spend alerts to their own `environment` so
+ *   they stay filterable and rate-limitable apart from real faults. It drops
+ *   nothing.
  *
  * The DSN var is deliberately NOT named `SENTRY_DSN`: the SDK's own
  * `getFinalOptions` falls back to `env.SENTRY_DSN` whenever the options object
@@ -94,10 +106,11 @@ const PRODUCTION_HOST = "demos.handsontable.com";
  * throwaway id, and a missing release must never throw at init.
  */
 const sentryOptions = (env: Env): Sentry.CloudflareOptions => ({
-  dsn: env.PREVIEW_HOST === PRODUCTION_HOST ? env.ERROR_REPORTING_DSN : undefined,
-  environment: "api-production",
+  dsn: apiSentryDsn(env),
+  environment: apiSentryEnvironment(env),
   release: env.CF_VERSION_METADATA?.id,
   tracesSampleRate: 0,
+  beforeSend: rehomeBudgetAlert,
 });
 
 /**

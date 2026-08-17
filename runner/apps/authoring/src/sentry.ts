@@ -15,26 +15,39 @@ import {
   type MonitorPayload,
 } from "@handsontable/demo-runtime/monitor";
 import { ApiError } from "./apiError.js";
-
-/**
- * The deployed host. Reporting is enabled ONLY here.
- *
- * `.env.production` is committed and is therefore loaded by every production-mode
- * build, including `ci.yml`'s "Build authoring" step — whose output Playwright
- * then serves at http://localhost:4173. Without this gate every PR run, and every
- * local `vite preview`, would file events against the production project. Gating
- * on the runtime hostname (rather than on a second env var or a CI secret) makes
- * that structurally impossible.
- *
- * The API worker gates on `PREVIEW_HOST` for the same reason — see
- * workers/api/src/index.ts.
- */
-const PRODUCTION_HOST = "demos.handsontable.com";
+import { resolveReporting } from "./reportingGate.js";
 
 const DSN = import.meta.env.VITE_SENTRY_DSN as string | undefined;
 
-export const reportingEnabled =
-  Boolean(DSN) && typeof window !== "undefined" && window.location.hostname === PRODUCTION_HOST;
+/**
+ * Who may report, and under what `environment`. Both come from `reportingGate.ts`,
+ * which holds the production-host literal and is import-free so the decision can be
+ * unit-tested (`pipeline/sentry-gating.test.mjs`) — this module cannot be, it reads
+ * `import.meta.env` and pulls in the SDK.
+ *
+ * Two DEV-2540 facts worth carrying at the callsite:
+ *
+ * 1. `navigator.webdriver === true` under any automation harness, and that closes
+ *    the gate. A Playwright suite pointed at the production host used to file real
+ *    issues (DEMOS-P, 3 events, release `ddf044c0`, Chrome 149 on Windows,
+ *    `context: tier2-session-start`). This covers every prod-targeted harness at
+ *    once — `e2e-starter-matrix.yml`, `e2e-live.yml`, and the ad-hoc local
+ *    `E2E_BASE_URL=https://demos.handsontable.com` run that actually produced those
+ *    events. Nothing is lost: `e2e/starter-matrix.spec.ts` collects failures itself
+ *    through `page.on("console")` / `page.on("pageerror")` and never reads Sentry.
+ * 2. `environment` is hostname-derived, so a build served anywhere else labels
+ *    itself `authoring-local` even when the enable gate has been patched open
+ *    locally — which is what produced 15 mislabelled `authoring-production` events
+ *    on 2026-07-27/28. Mode-derived would not have helped: one of those was a
+ *    production-MODE build served at localhost:4173.
+ */
+const reporting = resolveReporting({
+  dsn: DSN,
+  hostname: typeof window !== "undefined" ? window.location.hostname : undefined,
+  webdriver: typeof navigator !== "undefined" ? navigator.webdriver : undefined,
+});
+
+export const reportingEnabled = reporting.enabled;
 
 /**
  * Demo-runtime monitoring (DEV-2527). Temporary and deliberately build-time: off is
@@ -43,7 +56,10 @@ export const reportingEnabled =
  * path in docs/run-and-deploy.md.
  *
  * No second host gate: `reportingEnabled` already pins reporting to production, so
- * local runs and PR CI stay silent whatever this is set to.
+ * local runs and PR CI stay silent whatever this is set to. It inherits the
+ * automation gate through the same flag, also deliberately (DEV-2540) — an
+ * e2e-driven page load is not real demo usage, so the ~36-minute `e2e:matrix` run
+ * against production no longer relays preview events either.
  */
 export const monitorDemos =
   reportingEnabled && (import.meta.env.VITE_MONITOR_DEMOS as string | undefined) === "1";
@@ -118,7 +134,7 @@ function isForeignUnhandled(event: Sentry.ErrorEvent): boolean {
 if (reportingEnabled) {
   Sentry.init({
     dsn: DSN,
-    environment: "authoring-production",
+    environment: reporting.environment,
     // `|| undefined` matters: the define below substitutes "" when GITHUB_SHA is
     // absent, and a release of "" would not match the SHA-named artifact bundle
     // the plugin uploads — source maps would silently stop resolving.

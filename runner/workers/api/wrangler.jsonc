@@ -26,10 +26,16 @@
   "workers_dev": true,
 
   // Per-deploy version id (Cloudflare-managed), used as the Sentry release so
-  // an issue points at the exact deployment that introduced it. Preferred over
-  // injecting a git SHA with `--var`: the `deploy` script already passes four
-  // `--routes` flags, and `--var` would have to merge cleanly with the `vars`
-  // block below.
+  // an issue points at the exact deployment that introduced it. Still preferred
+  // over injecting a git SHA by hand, but the doubt this note used to record —
+  // whether `--var` merges cleanly with the `vars` block below — is now measured
+  // and settled: `wrangler deploy --dry-run --var SENTRY_ENVIRONMENT:api-production`
+  // prints every var from this file PLUS the flag-supplied one. DEV-2540 relies on
+  // that, and the `deploy` script passes it alongside the four `--routes` flags.
+  //
+  // A flag-supplied var renders as `(hidden)` in wrangler's binding table. That is
+  // a display convention for values that did not come from config — it reads off
+  // `env` at runtime exactly like the ones below, so it is not a broken binding.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
 
   // Public, non-secret config.
@@ -42,7 +48,10 @@
     // protection), not by hiding this string.
     // The key is NOT `SENTRY_DSN`: @sentry/cloudflare auto-reads that exact name
     // off env, which would initialise the SDK in `wrangler dev` too and file
-    // local runs as api-production issues. See src/index.ts.
+    // local runs as api-production issues. See src/sentry-gate.ts.
+    // Since DEV-2540 this DSN alone no longer enables reporting: the gate also
+    // requires SENTRY_ENVIRONMENT, which exists only as a `--var` on the `deploy`
+    // script. Nothing in this file, on its own, can turn reporting on.
     "ERROR_REPORTING_DSN": "https://da4d7c549a5ac69c61bfe44be68873bd@o95873.ingest.us.sentry.io/4511806997135360",
     "EMBED_ALLOWED_ANCESTORS": "https://handsontable.com https://*.handsontable.com https://*.handsontable-docs-staging.pages.dev http://localhost:*",
     // Wildcard base host for Tier-2 container preview URLs
