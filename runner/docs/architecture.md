@@ -36,6 +36,62 @@ DemoRuntime
 > Angular is Tier 2: the Angular versions used here need a real Node backend/dev
 > server rather than Sandpack's in-browser Angular template.
 
+### Why the Tier-2 dev server needs an allowed-hosts opt-in (DEV-2541)
+
+The Sandbox SDK's preview proxy shows the dev server two different `Host` values
+depending on the request (`buildPreviewProxyRequest`):
+
+| request | what the dev server sees |
+| --- | --- |
+| ordinary HTTP | rewritten to `http://localhost:<port>` |
+| WebSocket upgrade | the **original** preview host, `<port>-<session>-<token>.demos.handsontable.com` |
+
+Vite gates both on `server.allowedHosts`, which defaults to `[]`. The rewrite
+means the page always passes the check, so previews render; the upgrade does not,
+so vite refuses the HMR socket with a `400` and live editing silently stops
+reloading. That asymmetry is why the bug survived unnoticed until browser consoles
+started reporting it — nothing about the preview *looks* broken.
+
+The opt-in is the `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` environment variable,
+derived from `PREVIEW_HOST` in `workers/api/src/preview-allowed-hosts.ts` and
+handed to the dev-server process via `startProcess({ env })`. The value carries a
+leading dot (`.demos.handsontable.com`), which vite treats as a suffix wildcard,
+so one static string covers every per-session preview hostname. Vite applies it
+only when `server.allowedHosts` is still an array, so it is a no-op for the
+starters that already set `allowedHosts: true` (react-js, ant-design, mui,
+base-web, fluent-ui, remix, astro). Angular is covered too, via the builder chain
+its `angular.json` actually names: `@angular-devkit/build-angular:dev-server` sees
+an `:application` build target, takes its esbuild branch, normalises an unset
+`allowedHosts` to `[]`, and hands that array to `@angular/build`'s `serveWithVite`,
+which passes it straight into the vite server config. Angular's own host-check
+middleware only prettifies vite's 403; it delegates the decision to vite. Nuxt is
+expected to be covered by the same array default but has not been observed.
+
+Two things to know before changing any of this:
+
+- **It is not a `server.hmr` problem.** With no `server.hmr` config the HMR client
+  derives host, port and protocol from `import.meta.url` and already dials
+  `wss://<preview-host>/` correctly. Adding `--hmr.clientPort` / `--hmr.protocol`
+  to a dev command does not help and actively breaks the session: vite's CLI
+  declares no `--hmr` option, so it aborts with `CACError` before it ever listens,
+  and the session then serves the boot-failure page forever.
+- **The variable is internal to vite and unversioned, and it has already changed.**
+  vite 6.4.3 and 7.3.5 append the value verbatim; 8.1.1 splits it on commas and
+  discards it entirely — warning only, no error — if it contains `\`, `"` or `'`.
+  Every failure here is silent: HMR just goes back to being broken.
+  `pipeline/vite-allowed-hosts.test.mjs` is what would notice. It boots a real vite
+  and drives a real upgrade handshake with a preview-shaped `Host`, asserting `400`
+  without the variable and `101` with it, and separately pins the value's shape
+  against vite 8's parsing rules.
+
+> **There is no single container vite version.** Three are in play: the repo (and
+> therefore the test) installs **6.4.3**; Angular runs **7.3.5**, pinned by
+> `@angular/build` rather than by the starter; and a booted react-js container was
+> observed on **8.1.1**, since each starter pins its own. All three default
+> `allowedHosts` to `[]`, honour the leading-dot wildcard, and read the variable, so
+> the fix holds across them — but the *behavioural* half of the guard only ever
+> exercises 6.4.3. Booting the containers' own vite in CI would close that gap.
+
 ## Version dispatch
 
 `applyHandsontableVersion(files, version)` (`packages/runtime/src/version.ts`)

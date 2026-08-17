@@ -10,6 +10,7 @@ import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/
 import * as Sentry from "@sentry/cloudflare";
 import { DEFAULT_MAX_MAJOR, DEFAULT_MIN_MAJOR, mintSessionId, pickLatestNextVersion } from "@handsontable/demo-runtime";
 import { injectMonitor } from "./monitor-inject.js";
+import { viteAllowedHostEnv } from "./preview-allowed-hosts.js";
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
@@ -649,8 +650,20 @@ export default Sentry.withSentry(sentryOptions, {
           // ever runs. A subshell isolates that fatal exit so the parent always
           // reaches the marker append, whether the script failed or (for the
           // normal case) the dev server is still running in the foreground.
+          // `env` (DEV-2541) makes vite accept the HMR WebSocket upgrade. The SDK's
+          // preview proxy rewrites ordinary HTTP to `http://localhost:<port>` but
+          // forwards a WS upgrade with the ORIGINAL preview `Host`, so vite's
+          // `server.allowedHosts` check passes for the page and refuses the socket
+          // with a 400. See preview-allowed-hosts.ts for the full mechanism —
+          // in particular, this is NOT a `server.hmr` problem, so do not add
+          // `--hmr.clientPort` / `--hmr.protocol` to `dev.cmd`: vite's CLI has no
+          // `--hmr` option and aborts with CACError before it ever listens.
+          // Passed out of band rather than as an `export` line inside the script:
+          // the string is `shq`-quoted and runs under `set -e`, so splicing worker
+          // config into it would make a bad value a boot failure.
           await sandbox.startProcess(
             `sh -lc ${shq(`( ${script} ) > ${BOOT_LOG} 2>&1; echo "__RUNNER_EXIT__:$?" >> ${BOOT_LOG}`)}`,
+            { env: viteAllowedHostEnv(env.PREVIEW_HOST) },
           );
 
           // Preview URL host: the wildcard domain in production (PREVIEW_HOST), or
