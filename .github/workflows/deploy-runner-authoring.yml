@@ -25,9 +25,14 @@ on:
       - ".github/workflows/ci.yml"
   workflow_dispatch: {}
 
+# cancel-in-progress was true until the post-deploy smoke arrived (DEV-2203):
+# the smoke boots a live-preview container, and cancelling a run mid-smoke
+# strands that session in the global Sandbox pool (cleanup lives in a `finally`
+# a cancellation never reaches). Deploys now queue instead — same posture as
+# deploy-runner-api.yml.
 concurrency:
   group: deploy-runner-authoring
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # Gate: run the full CI suite (typecheck, unit/smoke, e2e) before deploying.
