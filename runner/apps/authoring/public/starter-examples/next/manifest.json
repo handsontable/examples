@@ -2,7 +2,7 @@
   "bucket": "next",
   "sourceRef": "master",
   "generatedFrom": "handsontable/examples examples/",
-  "hotVersion": "0.0.0-next-14e6634-20260814",
+  "hotVersion": "0.0.0-next-4d16fd7-20260817",
   "count": 19,
   "examples": [
     {
@@ -10,133 +10,163 @@
       "displayName": "Blank (JavaScript)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "blank-ts",
       "displayName": "Blank (TypeScript)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "blank-react",
       "displayName": "Blank (React)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "example1",
       "displayName": "Vanilla (Vite, TS)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": [
+        "example1:dateFormat"
+      ]
     },
     {
       "framework": "javascript",
       "displayName": "JavaScript (Vite)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": [
+        "javascript:dateFormat",
+        "javascript:random-date-iso"
+      ]
     },
     {
       "framework": "typescript",
       "displayName": "TypeScript (Vite)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "react",
       "displayName": "React (Vite, TS)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "react-js",
       "displayName": "React (Vite, JS)",
       "tier": 1,
       "engine": "container",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "ant-design",
       "displayName": "Ant Design + React",
       "tier": 1,
       "engine": "container",
-      "minCoreMajor": 17
+      "minCoreMajor": 17,
+      "overrides": []
     },
     {
       "framework": "mui",
       "displayName": "MUI + React",
       "tier": 1,
       "engine": "container",
-      "minCoreMajor": 17
+      "minCoreMajor": 17,
+      "overrides": []
     },
     {
       "framework": "base-web",
       "displayName": "Base Web + React",
       "tier": 1,
       "engine": "container",
-      "minCoreMajor": 17
+      "minCoreMajor": 17,
+      "overrides": []
     },
     {
       "framework": "fluent-ui",
       "displayName": "Fluent UI + React",
       "tier": 1,
       "engine": "container",
-      "minCoreMajor": 17
+      "minCoreMajor": 17,
+      "overrides": []
     },
     {
       "framework": "vue",
       "displayName": "Vue 3 (Vite)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "angular",
       "displayName": "Angular",
       "tier": 2,
       "engine": "container",
-      "minCoreMajor": 16
+      "minCoreMajor": 16,
+      "overrides": [
+        "angular:dateFormat",
+        "angular:data-iso"
+      ]
     },
     {
       "framework": "next.js",
       "displayName": "Next.js (App Router)",
       "tier": 2,
       "engine": "container",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "next-shadcn.js",
       "displayName": "Next.js + shadcn/ui",
       "tier": 2,
       "engine": "container",
-      "minCoreMajor": 17
+      "minCoreMajor": 17,
+      "overrides": [
+        "next-shadcn.js:dateFormat",
+        "next-shadcn.js:timeFormat"
+      ]
     },
     {
       "framework": "astro",
       "displayName": "Astro",
       "tier": 2,
       "engine": "container",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "nuxt",
       "displayName": "Nuxt 3",
       "tier": 2,
       "engine": "container",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "remix",
       "displayName": "Remix",
       "tier": 2,
       "engine": "container",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     }
   ]
 }
