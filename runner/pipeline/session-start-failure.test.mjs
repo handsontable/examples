@@ -93,16 +93,49 @@ test("an empty-bodied 504 says the sandbox timed out, in words the app will not 
   assert.doesNotMatch(err.message, /:\s*$/, "no dangling colon where the body should have been");
   assert.match(err.message, /504/, "the status keeps Sentry titles distinguishable per status");
 
-  // THE CONTRACT. `describeRuntimeError` at apps/authoring/src/App.tsx:115 tests
+  // THE CONTRACT. The container-engine heuristic in `describeRuntimeError`
+  // (apps/authoring/src/App.tsx — grep the function, not a line number) tests
   // /failed to fetch|networkerror|load failed|session start failed|fetch/i against this
   // message and, on a match, replaces it with the local-dev "install Docker, run the API
   // worker" text. That is the right answer when a developer's worker is down and the
   // wrong one for a production visitor whose container timed out. Nothing else in the
   // repo pins this — the regex lives in another package — so a copy edit that reads
   // better but says "fetch" would silently restore the misattribution.
-  assert.doesNotMatch(err.message, /session start failed/i, "would trip App.tsx:115");
-  assert.doesNotMatch(err.message, /fetch/i, "would trip App.tsx:115");
+  assert.doesNotMatch(err.message, /session start failed/i, "would trip the App.tsx heuristic");
+  assert.doesNotMatch(err.message, /fetch/i, "would trip the App.tsx heuristic");
   assert.doesNotMatch(err.message, /failed to fetch|networkerror|load failed/i);
+});
+
+test("522 and 524 read as timeouts too, not just 504", async () => {
+  // Cloudflare's own "origin never answered" statuses. Without a case per member,
+  // a typo in TIMEOUT_STATUSES leaves the 504 test green and ships the old message
+  // for the other two.
+  for (const status of [522, 524]) {
+    const err = await sessionStartError(status, "");
+    assert.match(err.message, /took too long/, `${status} should read as a timeout`);
+    assert.match(err.message, new RegExp(String(status)));
+    assert.doesNotMatch(err.message, /session start failed/i, "would trip the App.tsx heuristic");
+  }
+});
+
+test("a 504 that does carry an {error} envelope keeps the server's own words", async () => {
+  // What `envelope` is for. The timeout tier is deliberately gated on the ABSENCE of
+  // an envelope: a body we recognise came from a handler that chose its own words, and
+  // discarding them for a generic "took too long" would lose the only explanation.
+  // Nothing in our Worker emits a 504 today (its handler and its catch-all both answer
+  // with `json({error}, status)` and neither uses 504), so this tier is defensive —
+  // but drop the `!failure.envelope` guard and this is the case that silently changes.
+  //
+  // KNOWN RESIDUAL (DEV-2538): the message this produces still contains "session start
+  // failed", so the App.tsx heuristic would still rewrite it as the local-dev hint.
+  // Left as is because no producer of an enveloped 504 exists to fix it for; asserted
+  // on the server's words rather than on the full string so the wrapper stays free to
+  // change without this test blessing the misattribution.
+  const err = await sessionStartError(504, JSON.stringify({ error: "boom", message: "the pool is full" }));
+
+  assert.equal(err.code, "boom");
+  assert.match(err.message, /the pool is full/, "the envelope's message must survive");
+  assert.doesNotMatch(err.message, /took too long/, "the timeout tier must not swallow an envelope");
 });
 
 test("a gateway HTML error page never becomes the user's message", async () => {
