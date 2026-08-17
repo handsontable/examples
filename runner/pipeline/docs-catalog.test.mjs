@@ -102,8 +102,20 @@ test("manifest: a 500 rejects but is NOT missing — a transient failure stays t
   assert.match(error.message, /500/);
 });
 
-test("manifest: the happy path parses and is fetched once per bucket", async (t) => {
-  const calls = withFetch(t, () => reply({ body: manifestBody("happy") }));
+/** The JSON fast path must consume the body with `res.json()`, never `res.text()`
+ *  + `JSON.parse`: the release manifest is ~800 KB and the whole point of testing
+ *  content-type before sniffing for `<` is to avoid that extra JS-side string copy.
+ *  Nothing else pins the branch order, so a refactor that read `text()` first would
+ *  otherwise pass every test in this file. */
+function jsonOnly(response) {
+  return {
+    ...response,
+    text: async () => { throw new Error("res.text() must not be called on the JSON fast path"); },
+  };
+}
+
+test("manifest: the happy path parses via res.json() and is fetched once per bucket", async (t) => {
+  const calls = withFetch(t, () => jsonOnly(reply({ body: manifestBody("happy") })));
 
   const first = await fetchDocsManifest("happy");
   const second = await fetchDocsManifest("happy");
@@ -119,6 +131,20 @@ test("manifest: valid JSON served with a wrong content-type still parses", async
   const manifest = await fetchDocsManifest("wrong-type");
 
   assert.equal(manifest.bucket, "wrong-type");
+});
+
+test("manifest: a truncated body served as application/json names the bucket and stays transient", async (t) => {
+  // A half-uploaded artifact: the host DOES have the file, so this is not
+  // "missing" — but the raw `res.json()` SyntaxError it used to throw carried no
+  // bucket key, which is exactly the ungroupable DEMOS-A shape.
+  withFetch(t, () => reply({ body: manifestBody("truncated").slice(0, 40) }));
+
+  const error = await rejection(fetchDocsManifest("truncated"));
+
+  assert.equal(isDocsResourceMissing(error), false);
+  assert.match(error.message, /truncated/);
+  assert.notEqual(error.name, "SyntaxError");
+  assert.equal(error.cause instanceof Error, true);
 });
 
 test("manifest: a 200 body that is neither HTML nor JSON rejects as non-missing", async (t) => {
@@ -180,8 +206,8 @@ test("example: a 500 rejects but is NOT missing", async (t) => {
   assert.equal(isDocsResourceMissing(error), false);
 });
 
-test("example: the happy path parses and caches per bucket+path", async (t) => {
-  const calls = withFetch(t, () => reply({ body: entryBody("entry-happy") }));
+test("example: the happy path parses via res.json() and caches per bucket+path", async (t) => {
+  const calls = withFetch(t, () => jsonOnly(reply({ body: entryBody("entry-happy") })));
 
   const first = await loadDocsExample("entry-happy", DOCS_PATH);
   const second = await loadDocsExample("entry-happy", DOCS_PATH);

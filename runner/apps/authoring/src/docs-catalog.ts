@@ -46,7 +46,18 @@ async function fetchDocsJson<T>(url: string, describe: string): Promise<T> {
   const type = res.headers.get("content-type") ?? "";
   // Content-type first, so the ~800 KB happy-path manifest is still parsed by
   // `res.json()` without an extra JS-side string copy.
-  if (/\bjson\b/i.test(type)) return (await res.json()) as T;
+  if (/\bjson\b/i.test(type)) {
+    try {
+      return (await res.json()) as T;
+    } catch (cause) {
+      // A truncated or half-uploaded artifact served correctly as JSON. Left as a
+      // plain (transient) Error — the host does have the file — but re-thrown with
+      // `describe` so it still carries the bucket key. A bare `res.json()` reject
+      // here would surface as the very `SyntaxError: Unexpected token '<'` this
+      // ticket is retiring, with nothing in the message to group on.
+      throw new Error(`${describe} unparseable JSON (200 ${type})`, { cause });
+    }
+  }
   const body = await res.text();
   if (/^\s*</.test(body)) {
     throw new DocsResourceMissingError(
