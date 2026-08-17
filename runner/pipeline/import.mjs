@@ -37,7 +37,11 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { blankStarterFiles } from "./blank-starters.mjs";
-import { applyStarterOverrides, lintStarterOptionShapes } from "./starter-overrides.mjs";
+import {
+  applyStarterOverrides,
+  lintStarterOptionShapes,
+  starterOverrideIds,
+} from "./starter-overrides.mjs";
 import {
   assertStarterBucket,
   resolveLatestStableMajor,
@@ -282,7 +286,13 @@ export async function importStarters({
     // /package.json must stay byte-identical to what the runtime's
     // applyHandsontableVersion re-serializes (see pinHandsontableDependencies),
     // so the pin gets the last word.
-    const { files: overlaid, applied: overrides } = applyStarterOverrides(framework, rawFiles, { bucket });
+    const { files: overlaid } = applyStarterOverrides(framework, rawFiles, { bucket });
+    // The rows that GOVERN this artifact, not the subset that happened to
+    // mutate bytes on this run — a row is a no-op whenever the source branch
+    // already carries the bucket-correct shape, and recording only mutations
+    // would leave the artifact the overlay exists for describing itself as
+    // untouched.
+    const overrides = starterOverrideIds(framework, bucket);
     let files = pinHandsontableDependencies(overlaid, hotVersion);
     // Synthetic starters ship no lockfile of their own, but they still get one
     // resolved here: without it the snapshot builder's frozen install fails and
