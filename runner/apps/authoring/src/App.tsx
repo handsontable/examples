@@ -1044,11 +1044,19 @@ function Authoring({
           setImportPhase("failed");
           setStatus("error");
           setRetryable(false);
+          // The status wins over `body.error`, and the order matters (DEV-2534):
+          // `/api/import` answers an expired session with `{"error":
+          // "unauthorized"}` (workers/api/src/index.ts:1019-1020), so while
+          // `body.error` was consulted first the 401 arm below was unreachable
+          // and the word "unauthorized" was the whole of what the user was told
+          // — the same defect as the migrated callsites, one branch further out.
+          // The copy stays "Sign in", not "Your session expired": `/` is
+          // reachable signed out, so a 401 here is as likely to mean "never
+          // signed in" as "signed in an hour ago".
           setErrorMessage(
-            body.error ??
-              (res.status === 401
-                ? "Sign in to import a project."
-                : "Could not import that URL."),
+            res.status === 401
+              ? "Sign in to import a project."
+              : (body.error ?? "Could not import that URL."),
           );
           return;
         }
