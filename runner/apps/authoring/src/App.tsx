@@ -30,6 +30,7 @@ import { catalog, getEntry, fetchVersions, checkVersionExists, VERSION_OPTIONS, 
 import {
   fetchDocsManifest,
   loadDocsExample,
+  isDocsResourceMissing,
   type DocsManifest,
   type DocsManifestItem,
 } from "./docs-catalog.js";
@@ -214,8 +215,13 @@ function pinHandsontableFiles(files: FilesMap, version: string): FilesMap {
   }
 }
 
+/** Did the host simply not have this docs resource? Delegates to the loader's
+ *  typed error (DEV-2535): the old `/\b404\b/` message sniff missed the deployed
+ *  host entirely, which serves 200 + index.html for a miss and so surfaced as a
+ *  JSON SyntaxError, and it could equally misfire on a docs path containing
+ *  "404" interpolated into an unrelated failure's message. */
 function isMissingDocsResource(error: unknown): boolean {
-  return error instanceof Error && /\b404\b/.test(error.message);
+  return isDocsResourceMissing(error);
 }
 
 /** Zip a file map and hand it to the browser. Module-level because two callers need

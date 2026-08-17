@@ -12,6 +12,66 @@ import type { CatalogEntry } from "@handsontable/demo-runtime";
 
 const BASE = "/docs-examples";
 
+/** A docs resource the host did not serve. Distinct from a transient fetch or
+ *  parse failure because the two produce different UI and different Sentry tags.
+ *
+ *  On the deployed host a miss is NOT a 404: apps/authoring/wrangler.jsonc sets
+ *  `not_found_handling: "single-page-application"`, so Workers Assets answers
+ *  200 + index.html for anything missing under /docs-examples/. An HTML body is
+ *  the 404 the host refused to send. */
+export class DocsResourceMissingError extends Error {
+  readonly docsResourceMissing = true;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "DocsResourceMissingError";
+  }
+}
+
+export function isDocsResourceMissing(error: unknown): boolean {
+  return error instanceof Error
+    && (error as { docsResourceMissing?: boolean }).docsResourceMissing === true;
+}
+
+/** Fetch JSON from the docs asset host, telling "the host has no such file"
+ *  apart from "the request failed". `describe` is carried into the message, so
+ *  it must name the bucket — that is what makes Sentry group per bucket (one
+ *  bucket failing is user traffic, every bucket at once is a broken deploy). */
+async function fetchDocsJson<T>(url: string, describe: string): Promise<T> {
+  const res = await fetch(url);
+  // The dev server and any correctly configured host answer 404 here; in
+  // production this branch is effectively dead (see DocsResourceMissingError).
+  if (res.status === 404) throw new DocsResourceMissingError(`${describe} not found (404)`);
+  if (!res.ok) throw new Error(`${describe} failed (${res.status})`);
+  const type = res.headers.get("content-type") ?? "";
+  // Content-type first, so the ~800 KB happy-path manifest is still parsed by
+  // `res.json()` without an extra JS-side string copy.
+  if (/\bjson\b/i.test(type)) {
+    try {
+      return (await res.json()) as T;
+    } catch (cause) {
+      // A truncated or half-uploaded artifact served correctly as JSON. Left as a
+      // plain (transient) Error — the host does have the file — but re-thrown with
+      // `describe` so it still carries the bucket key. A bare `res.json()` reject
+      // here would surface as the very `SyntaxError: Unexpected token '<'` this
+      // ticket is retiring, with nothing in the message to group on.
+      throw new Error(`${describe} unparseable JSON (200 ${type})`, { cause });
+    }
+  }
+  const body = await res.text();
+  if (/^\s*</.test(body)) {
+    throw new DocsResourceMissingError(
+      `${describe} not found (SPA fallback: 200 ${type || "no content-type"})`,
+    );
+  }
+  try {
+    // JSON served with a wrong or absent content-type is still JSON.
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error(`${describe} unparseable (200 ${type || "no content-type"})`);
+  }
+}
+
 export interface DocsManifestItem {
   bucket: string;
   docsPath: string;
@@ -53,15 +113,13 @@ const manifestPromises = new Map<string, Promise<DocsManifest>>();
 export function fetchDocsManifest(bucket: string): Promise<DocsManifest> {
   let manifestPromise = manifestPromises.get(bucket);
   if (!manifestPromise) {
-    manifestPromise = fetch(`${BASE}/${bucket}/manifest.json`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`docs manifest ${r.status}`);
-        return r.json() as Promise<DocsManifest>;
-      })
-      .catch((e) => {
-        manifestPromises.delete(bucket); // allow retry
-        throw e;
-      });
+    manifestPromise = fetchDocsJson<DocsManifest>(
+      `${BASE}/${bucket}/manifest.json`,
+      `docs manifest for bucket "${bucket}"`,
+    ).catch((e) => {
+      manifestPromises.delete(bucket); // allow retry
+      throw e;
+    });
     manifestPromises.set(bucket, manifestPromise);
   }
   return manifestPromise;
@@ -267,9 +325,10 @@ export async function loadDocsExample(
   const cached = entryCache.get(cacheKey);
   if (cached) return cached;
   const file = docsPath.replace(/\//g, "__") + ".json";
-  const res = await fetch(`${BASE}/${bucket}/${file}`);
-  if (!res.ok) throw new Error(`docs example not found: ${docsPath} (${res.status})`);
-  const entry = (await res.json()) as DocsCatalogEntry;
+  const entry = await fetchDocsJson<DocsCatalogEntry>(
+    `${BASE}/${bucket}/${file}`,
+    `docs example ${docsPath} in bucket "${bucket}"`,
+  );
   entryCache.set(cacheKey, entry);
   return entry;
 }
