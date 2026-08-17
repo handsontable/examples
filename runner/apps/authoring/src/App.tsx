@@ -99,11 +99,14 @@ function docsPageUrl(framework: string, permalink: string): string {
 
 /** Turn a raw runtime error into a message that explains container prerequisites. */
 function describeRuntimeError(e: unknown, engine: string, version: string): string {
-  // A boot-script failure carries its own real (and possibly multiline) log
-  // text — show it verbatim rather than running it through the connectivity
-  // heuristic below, which would otherwise misfire on words like "fetching"
-  // that pnpm's own error output happens to contain.
-  if (e instanceof ContainerBootFailure) return e.message;
+  // A boot-script failure explains itself: a one-line cause, with the recent boot
+  // output beside it on the error object. Compose the two here — the error card
+  // renders `errorMessage` and nothing else, so this is the only place a user ever
+  // sees the log — and skip the connectivity heuristic below, which would otherwise
+  // misfire on words like "fetching" that pnpm's own error output happens to contain.
+  // The cause line deliberately shows twice, once as the headline and once in place,
+  // so the tail stays a faithful copy of what the container printed.
+  if (e instanceof ContainerBootFailure) return e.log ? `${e.message}\n\n${e.log}` : e.message;
   // A cost-guardrail refusal (DEV-2030) is a deliberate product state, and the
   // server already phrased it for users — never rewrite it as a connectivity
   // problem, which is what the heuristic below would do with a 503.
@@ -138,9 +141,11 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
  * client had already navigated away and the server tore the session down, which
  * is the designed outcome, not a failure.
  *
- * Fingerprinted by error class: `ContainerBootFailure` carries the raw boot log,
- * which differs per example and would otherwise shard one problem into hundreds
- * of issues.
+ * Fingerprinted by error class, not by message: one boot failure is one issue no
+ * matter which example or framework hit it, and the grouping stays stable as the
+ * message text improves (DEV-2533 replaced the raw log with a one-line cause). The
+ * log travels as `extra.bootLog` instead — extras take no part in grouping, titling
+ * or stack parsing, which is exactly what putting it in the message got wrong.
  */
 function reportRuntimeError(e: unknown, engine: string): void {
   if (!reportingEnabled) return;
@@ -178,6 +183,9 @@ function reportRuntimeError(e: unknown, engine: string): void {
     Sentry.captureException(e, {
       tags: { context: "tier2-container-boot" },
       fingerprint: ["tier2-container-boot"],
+      // Bounded upstream (the status route tails 2500 bytes, `bootFailureDetail`
+      // keeps 40 lines) and already redacted of preview hosts, so no extra cap here.
+      ...(e.log ? { extra: { bootLog: e.log } } : {}),
     });
     return;
   }
