@@ -236,10 +236,27 @@ teardown) and `ContainerBootFailure` — and nothing from the Sandpack engine.
 ### Demo-runtime monitoring (DEV-2527) — temporary
 
 A third `environment`, `demo-runtime`, carries what the preview itself hits:
-uncaught errors, unhandled rejections, `console.error` / `console.warn`, failed
-requests, Tier-1 Sandpack compile errors, and Tier-2 dev-server stderr raised after
-the preview came up. It covers all traffic on `demos.handsontable.com`, anonymous
-visitors included.
+uncaught errors, unhandled rejections, `console.error`, failed requests, Tier-1
+Sandpack compile errors, and Tier-2 dev-server stderr raised after the preview came
+up. It covers all traffic on `demos.handsontable.com`, anonymous visitors included.
+
+`console.warn` is relayed too but **never becomes an issue** (DEV-2539).
+`reportDemoEvent` files it as a Sentry *breadcrumb*, so the warnings that preceded a
+failure arrive as context on the next real error instead of as issues of their own —
+a message event at `warning` level is still an issue, and Handsontable's idempotent
+`Theme "…" is already registered` notice, emitted by ordinary re-renders, was the
+loudest of them. Breadcrumbs get their own ceiling at both ends
+(`MONITOR_BREADCRUMB_CEILING`, 50), deliberately separate from the relay ceiling: a
+breadcrumb files no issue so it can be looser, but a demo warning on every render must
+not spend the twenty relay slots before the `console.error` explaining the breakage is
+posted. Breadcrumbs live on the Sentry scope, which outlives one preview, so a warning
+recorded under example A can appear beneath an error from example B — their `data`
+carries tier, framework and demo id for exactly that reason. That scope is shared with
+the authoring app's own trail, and the buffer evicts oldest-first, which is why
+`Sentry.init` now states `maxBreadcrumbs: 200` instead of inheriting the SDK's default
+of 100: at 100 a demo spending its whole allowance would erase half the clicks and
+fetches you would need to explain an unrelated app failure. The two numbers move
+together or not at all.
 
 The preview is cross-origin on both tiers, so nothing in it can reach this window's
 handlers. `packages/runtime/src/monitor.ts` holds the bridge — one ES5 reporter,
@@ -257,7 +274,9 @@ because Next and Nuxt have no `index.html` for a file-level injection to find.
 Anything other than `"1"` (including deleting the line) is off. Because off costs a
 deploy, the immediate brake is elsewhere: `MONITOR_EVENT_CEILING` (20) events per
 page load, deduped by kind plus message plus first stack frame, messages truncated
-to 500 characters.
+to 500 characters. Warnings are counted against a second, separate ceiling — see the
+breadcrumb paragraph above — so 20 is the cap on issue-producing events, not on
+everything the reporter sends.
 
 That ceiling is enforced **twice, and the parent's copy is the one that counts**. The
 reporter applies it in-page, but it runs beside code the demo's author wrote — and
@@ -272,7 +291,37 @@ brake that works without a build** — keep one configured for as long as this i
 
 Nothing identifying is relayed: no source snippets, no file map, and network events
 carry scheme, host and path only, with the query string stripped. Same rule as
-`analytics.ts`.
+`analytics.ts`. One narrow exception, by construction: a `data:` or `blob:` URL has no
+host to strip and its "path" *is* its payload, so a failed `<script src="data:…">`
+relays up to `MONITOR_URL_MAX` characters of the demo's own bytes. Kept deliberately —
+such a URL cannot be a third-party beacon, so the origin filter treats it as the demo's
+own — but it is the one shape in which a snippet can reach an event.
+
+**Network events the reporter produces are same-origin only** (DEV-2539) — a crafted
+`postMessage` can still carry any url, which is why a relayed url reaches `extra` and
+the issue title only, never a Sentry tag and never the fingerprint. The reporter's
+`scrub` drops any request whose host is not the preview's own, so third-party beacons
+and CDN fetches never leave the page: Tier 1 runs inside CodeSandbox's bundler
+document, which beacons to its own telemetry host, and an ad blocker turns that into a
+`fetch` rejection the unfiltered wrapper filed against the demo. The check belongs in
+the reporter and nowhere else — `location.host` *is* the preview origin on both tiers,
+and by the time a payload reaches the app that host has been redacted to `<preview>` by
+design, so a parent-side origin check would be a check against a forgeable string. It
+fails open when `location` is unreadable (blinding the monitor is worse than noise) and
+treats a `data:`/`blob:` URL as the demo's own. Known cost, accepted: a docs example's
+genuine failure against a third-party host is dropped along with the beacons — a data
+API that 404s, and a broken CDN `<script>`/`<link>` too. If those are wanted back, the
+narrow version is an allowlist of the hosts docs examples actually use, not a return to
+reporting every host. For the events that survive, the URL is appended to the
+issue title as well as `extra` — `resource failed to load` alone is unactionable — but
+never to the fingerprint or the budget key, so a dozen broken assets stay one issue and
+one relay slot. One issue with *one* URL, though, not twelve: the reporter's own dedupe
+key is kind plus message plus first stack frame, and a resource load has no stack, so
+every failed `<img>/<script>/<link>` on a page collapses to the constant
+`network|resource failed to load|` and only the first is ever posted. The title names
+the asset that failed first and gives no hint that others did. Widening the dedupe key
+to include the URL was rejected on purpose: a dozen distinct keys would burn a dozen of
+the twenty relay slots and crowd out the `console.error` that explains the breakage.
 
 **The Tier-2 preview hostname is itself a session credential** and is redacted to
 `<preview>` everywhere. `<port>-<sandboxId>-<token>.demos.handsontable.com` is what

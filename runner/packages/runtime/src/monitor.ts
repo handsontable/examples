@@ -25,6 +25,26 @@ export const MONITOR_MESSAGE_TYPE = "hot-runner-monitor";
  */
 export const MONITOR_EVENT_CEILING = 20;
 
+/**
+ * Ceiling on relayed `console-warn` events per page load, counted separately from
+ * `MONITOR_EVENT_CEILING` (DEV-2539).
+ *
+ * A warning is context, not a fault: parent-side it becomes a Sentry *breadcrumb*
+ * attached to the next real error, never an issue of its own. That is why the two
+ * ceilings are separate in both directions. Looser, because a breadcrumb costs no
+ * issue and the whole point is to have the warnings that preceded a failure. But
+ * still capped, and still its own budget — sharing the relay ceiling would let a
+ * demo that warns on every render (Handsontable's own "Theme is already registered"
+ * notice is emitted by normal re-renders) spend all twenty slots before the
+ * `console.error` explaining the breakage is ever posted.
+ *
+ * Paired with `maxBreadcrumbs` in `apps/authoring/src/sentry.ts`, which the demo
+ * shares with the authoring app's own trail and which evicts oldest-first: this
+ * number must stay a small fraction of it, or a chatty demo silently erases the
+ * clicks and fetches that explain an unrelated app failure. Move the two together.
+ */
+export const MONITOR_BREADCRUMB_CEILING = 50;
+
 /** Message length cap. Demo code is authored by anonymous visitors; a message can
  *  quote it, so it is truncated rather than relayed whole. */
 export const MONITOR_MESSAGE_MAX = 500;
@@ -103,7 +123,11 @@ function bound(value: string, max: number): string {
 }
 
 /** What the reporter observed. `stderr` is the only kind not raised in-page — it
- *  comes from the Tier-2 dev server via the session status poll. */
+ *  comes from the Tier-2 dev server via the session status poll.
+ *
+ *  `console-warn` is relayed but never filed as an issue: `reportDemoEvent` turns it
+ *  into a breadcrumb (DEV-2539). It stays in the union and in `MONITOR_KINDS` because
+ *  the payload still has to survive `isMonitorPayload` to reach that branch. */
 export type MonitorKind =
   | "error"
   | "rejection"
@@ -133,7 +157,12 @@ export interface MonitorPayload {
   message: string;
   /** Truncated. Absent for console and network events. */
   stack?: string;
-  /** Network events only: scheme + host + path, query stripped. */
+  /** Network events only: scheme + host + path, query stripped. The reporter relays a
+   *  network event only when that host is the preview's own (DEV-2539) — but that holds
+   *  for payloads *the reporter produced*. A demo can post this shape without ever
+   *  running the reporter, and `isMonitorPayload` only type-checks this field, so a
+   *  crafted payload can still carry any url at all. Which is why it reaches `extra` and
+   *  the issue title only, never a Sentry tag and never the fingerprint. */
   url?: string;
 }
 
@@ -260,10 +289,12 @@ export const REPORTER_SOURCE = `(function () {
 
   var TYPE = ${JSON.stringify(MONITOR_MESSAGE_TYPE)};
   var CEILING = ${MONITOR_EVENT_CEILING};
+  var WARN_CEILING = ${MONITOR_BREADCRUMB_CEILING};
   var MAX = ${MONITOR_MESSAGE_MAX};
   var STACK_MAX = ${MONITOR_STACK_MAX};
   var seen = {};
   var used = 0;
+  var warnUsed = 0;
 
   function truncate(value, max) {
     var s = typeof value === "string" ? value : String(value);
@@ -308,12 +339,40 @@ export const REPORTER_SOURCE = `(function () {
     return String(lines[0] || "").replace(/^\\s+|\\s+$/g, "");
   }
 
-  // Scheme + host + path. A query string can carry a token, and none of the
-  // diagnostics here need one.
+  // Scheme + host + path, **and only for the page's own host**. A query string can
+  // carry a token, and none of the diagnostics here need one.
+  //
+  // The origin filter lives here rather than at the four \`send("network", ...)\` call
+  // sites because this is the one function all four already go through, and because it
+  // is the only place the URL is still intact: what this returns is
+  // \`protocol + "//" + host + pathname\`, which for a \`data:\` or \`blob:\` URL is no
+  // longer a parseable URL, so a second parse downstream cannot recover the host.
+  //
+  // The reporter runs *inside* the preview, so \`location.host\` is the preview origin on
+  // both tiers — Sandpack's bundler host for Tier 1, the token-bearing
+  // <port>-<id>-<token>.demos.handsontable.com for Tier 2. Anything else is a third
+  // party, and a third party's failure is not the demo's fault: Tier 1's own bundler
+  // beacons out, an ad blocker turns that into a fetch rejection, and the unfiltered
+  // wrapper filed it against the demo (DEV-2539).
+  //
+  // Returning "" is what drops the event — \`send\` refuses a network event with no URL,
+  // which is also the right answer for one nobody could act on. Three branches are
+  // deliberate:
+  //   - HOST empty (\`location\` unreadable) -> keep. Fail open, exactly as \`redact\`
+  //     no-ops; blinding the monitor is worse than relaying noise.
+  //   - parsed host empty (data:, blob:) -> keep. Not a third-party beacon; the demo's
+  //     own bytes.
+  //   - parse threw -> "" -> drop.
+  //
+  // Both sides lowercased, for the reason spelled out above \`redact\`: a URL parser
+  // hands back a lowercased host while the session token is mixed-case. Both include
+  // the port, so they compare consistently.
   function scrub(raw) {
     try {
       var a = document.createElement("a");
       a.href = String(raw);
+      var h = String(a.host || "").toLowerCase();
+      if (HOST && h && h !== HOST) return "";
       return a.protocol + "//" + a.host + a.pathname;
     } catch (e) {
       return "";
@@ -322,7 +381,17 @@ export const REPORTER_SOURCE = `(function () {
 
   function send(kind, message, stack, url) {
     try {
-      if (used >= CEILING) return;
+      // A network event with no URL is either third-party (\`scrub\` filtered it) or
+      // unattributable (\`scrub\` could not parse it); neither is actionable. Tested
+      // before the ceiling so a dropped event costs neither a budget slot nor a dedupe
+      // entry. Every network callsite must pass \`scrub(...)\` — that is where the
+      // same-origin filter lives.
+      if (kind === "network" && !url) return;
+      // Warnings are relayed as breadcrumbs, not issues, so they get a separate and
+      // looser allowance. Shared with the error budget, a demo warning on every render
+      // would evict the console.error that explains the breakage.
+      var isWarn = kind === "console-warn";
+      if (isWarn ? warnUsed >= WARN_CEILING : used >= CEILING) return;
       // Redact before truncating, never after: a cap that splits a hostname leaves
       // the session token in the surviving prefix, and \`redact\` can no longer match
       // an incomplete host. Angular and Next stacks run past STACK_MAX routinely.
@@ -331,7 +400,7 @@ export const REPORTER_SOURCE = `(function () {
       var k = kind + "|" + m + "|" + firstFrame(s);
       if (seen[k]) return;
       seen[k] = true;
-      used++;
+      if (isWarn) warnUsed++; else used++;
       var payload = { type: TYPE, kind: kind, message: m };
       if (s) payload.stack = s;
       if (url) payload.url = redact(url);

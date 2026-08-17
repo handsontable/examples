@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as acorn from "acorn";
 import {
+  MONITOR_BREADCRUMB_CEILING,
   MONITOR_EVENT_CEILING,
   MONITOR_KINDS,
   MONITOR_MESSAGE_MAX,
@@ -104,8 +105,14 @@ test("falls back to body, then to a prepend, when there is no head", () => {
 
 /** Run REPORTER_SOURCE against stubs and return the harness. Bare `window`,
  *  `parent`, `console`, `document` and `XMLHttpRequest` in the reporter resolve to
- *  these parameters, so no DOM implementation is needed. */
-function runReporter() {
+ *  these parameters, so no DOM implementation is needed.
+ *
+ *  Options, each present because one behaviour can only be reached through it:
+ *  `fetch` and `XMLHttpRequest` install the transports the reporter wraps,
+ *  `location` overrides the page's own host (pass `undefined` to make it
+ *  unreadable), and `brokenAnchor` makes `document.createElement` throw, which is
+ *  the only way to produce a network event with no attributable URL. */
+function runReporter(options = {}) {
   const sent = [];
   const listeners = new Map();
   const passthrough = [];
@@ -116,25 +123,35 @@ function runReporter() {
       listeners.get(type).push(cb);
     },
   };
+  if (options.fetch) win.fetch = options.fetch;
+  if (options.XMLHttpRequest) win.XMLHttpRequest = options.XMLHttpRequest;
   const parent = { postMessage: (payload) => sent.push(payload) };
   const consoleStub = {
     error: (...args) => passthrough.push(["error", ...args]),
     warn: (...args) => passthrough.push(["warn", ...args]),
   };
   const document = {
-    createElement: () => ({
-      set href(value) {
-        const u = new URL(value, "http://demo.invalid");
-        this.protocol = u.protocol;
-        this.host = u.host;
-        this.pathname = u.pathname;
-      },
-    }),
+    createElement: () => {
+      if (options.brokenAnchor) throw new Error("no document");
+      return {
+        set href(value) {
+          // Resolved against the *preview's own* URL, because that is what a real
+          // browser does with an anchor: `a.href = "/api/x"` resolves against the
+          // document. This base is load-bearing now that the reporter compares the
+          // parsed host against `location.host` — a foreign base would make every
+          // relative request in these tests look third-party.
+          const u = new URL(value, `https://${PREVIEW_HOST}`);
+          this.protocol = u.protocol;
+          this.host = u.host;
+          this.pathname = u.pathname;
+        },
+      };
+    },
   };
 
   // A token-bearing Tier-2 preview host, which is what the page is really served
   // from — the reporter must strip it from everything it sends.
-  const location = { host: PREVIEW_HOST };
+  const location = "location" in options ? options.location : { host: PREVIEW_HOST };
 
   // eslint-disable-next-line no-new-func
   new Function("window", "parent", "console", "document", "XMLHttpRequest", "location", REPORTER_SOURCE)(
@@ -142,7 +159,7 @@ function runReporter() {
     parent,
     consoleStub,
     document,
-    undefined,
+    options.XMLHttpRequest,
     location,
   );
 
@@ -154,6 +171,27 @@ function runReporter() {
     fire(type, event) {
       for (const cb of listeners.get(type) ?? []) cb(event);
     },
+  };
+}
+
+/** A fresh XHR stub class per call — the reporter patches `prototype.open`, so a
+ *  shared class would end up wrapped once per harness. */
+function makeFakeXHR() {
+  return class FakeXHR {
+    constructor() {
+      this.handlers = {};
+      this.status = 200;
+    }
+    addEventListener(type, cb) {
+      (this.handlers[type] ||= []).push(cb);
+    }
+    open(method, url) {
+      this.method = method;
+      this.url = url;
+    }
+    emit(type) {
+      for (const cb of this.handlers[type] ?? []) cb.call(this);
+    }
   };
 }
 
@@ -178,10 +216,10 @@ test("reporter relays an unhandled rejection", () => {
 
 test("reporter treats a failed resource load as a network fault", () => {
   const h = runReporter();
-  h.fire("error", { target: { src: "https://cdn.example.com/x.js?token=secret" } });
+  h.fire("error", { target: { src: `https://${PREVIEW_HOST}/assets/x.js?token=secret` } });
 
   assert.equal(h.sent[0].kind, "network");
-  assert.equal(h.sent[0].url, "https://cdn.example.com/x.js", "query stripped");
+  assert.equal(h.sent[0].url, "https://<preview>/assets/x.js", "query stripped");
 });
 
 test("reporter wraps console.error/warn and calls through", () => {
@@ -194,6 +232,115 @@ test("reporter wraps console.error/warn and calls through", () => {
     [["console-error", "bad 42"], ["console-warn", "careful"]],
   );
   assert.equal(h.passthrough.length, 2, "the demo's own console output still happens");
+});
+
+// ---- network events are same-origin only (DEV-2539, DEMOS-Z) ----------------
+//
+// The reporter runs inside the preview document, so `location.host` *is* the preview
+// origin on both tiers — Sandpack's bundler host for Tier 1, the token-bearing
+// `<port>-<id>-<token>.demos.handsontable.com` for Tier 2. Anything else is a third
+// party, and a third party's failure is not the demo's fault: Tier 1's own bundler
+// beacons to `col.csbops.io`, an ad blocker turns that into a fetch rejection, and
+// the unfiltered wrapper filed one Sentry issue per visitor with a blocker.
+//
+// The gate lives in the reporter and nowhere else, on purpose: by the time a payload
+// reaches the parent the host has been redacted to `<preview>` by design, so a
+// parent-side origin check would be a check against a forgeable string.
+
+test("reporter drops a third-party beacon", async () => {
+  // The shape that actually produced the noise: a rejected `fetch`, not a resource
+  // load. The wrapper must still rethrow — the reporter never changes what the demo
+  // sees.
+  const stub = () => Promise.reject(new TypeError("Failed to fetch"));
+  const h = runReporter({ fetch: stub });
+
+  // Asserted before the drop, because an empty `h.sent` proves nothing on its own:
+  // it is also what a reporter that never installed the wrapper produces.
+  assert.notEqual(h.win.fetch, stub, "the reporter wrapped window.fetch");
+
+  await assert.rejects(() => h.win.fetch("https://col.csbops.io/data/sandpack", { method: "POST" }), /Failed to fetch/);
+  assert.deepEqual(h.sent, [], "a blocked third-party beacon is not a demo fault");
+});
+
+test("reporter keeps a same-origin request failure", async () => {
+  const h = runReporter({ fetch: () => Promise.resolve({ ok: false, status: 500 }) });
+
+  const res = await h.win.fetch("/api/data", { method: "POST" });
+
+  assert.equal(res.status, 500, "the demo still gets its own response");
+  assert.deepEqual(
+    h.sent.map((p) => [p.kind, p.message, p.url]),
+    [["network", "POST 500", "https://<preview>/api/data"]],
+  );
+});
+
+test("reporter drops a failed third-party resource load", () => {
+  const h = runReporter();
+  h.fire("error", { target: { src: "https://cdn.example.com/x.js" } });
+  assert.deepEqual(h.sent, []);
+});
+
+test("reporter filters XHR by origin too", () => {
+  // The XHR wrapper is a second, independent path to the same `send`, and it hooks
+  // two events — `error`, and `load` with status >= 400. Both are exercised here, in
+  // both directions, because each is a separate `scrub(this.__hotUrl)` callsite: drop
+  // the `scrub` from either one and a third-party failure comes back *with its query
+  // string*, which is the token exposure `scrub` exists to prevent.
+  const XHR = makeFakeXHR();
+  const h = runReporter({ XMLHttpRequest: XHR });
+
+  const foreign = new XHR();
+  foreign.open("GET", "https://cdn.example.com/data.json?token=secret");
+  foreign.status = 404;
+  foreign.emit("load");
+  assert.deepEqual(h.sent, [], "cross-host XHR failure dropped");
+
+  const foreignErr = new XHR();
+  foreignErr.open("POST", "https://col.csbops.io/data/sandpack?token=secret");
+  foreignErr.emit("error");
+  assert.deepEqual(h.sent, [], "cross-host XHR transport error dropped");
+
+  const own = new XHR();
+  own.open("GET", "/api/rows");
+  own.status = 500;
+  own.emit("load");
+
+  const ownErr = new XHR();
+  ownErr.open("PUT", `https://${PREVIEW_HOST}/api/save?token=secret`);
+  ownErr.emit("error");
+
+  assert.deepEqual(
+    h.sent.map((p) => [p.kind, p.message, p.url]),
+    [
+      ["network", "GET 500", "https://<preview>/api/rows"],
+      ["network", "PUT failed", "https://<preview>/api/save"],
+    ],
+  );
+});
+
+test("a network event with no attributable url is dropped", () => {
+  // `scrub` returns "" when the URL cannot be parsed. A network fault nobody can
+  // locate is not worth an issue — that is half of what DEMOS-12 complained about.
+  const h = runReporter({ brokenAnchor: true });
+  h.fire("error", { target: { src: "https://cdn.example.com/x.js" } });
+  assert.deepEqual(h.sent, []);
+});
+
+test("a data: url counts as the demo's own", () => {
+  // A parsed host of "" cannot be a third-party beacon; it is the demo's own bytes.
+  const h = runReporter();
+  h.fire("error", { target: { src: "data:text/javascript,boom" } });
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].kind, "network");
+});
+
+test("the network filter fails open when the page's own host is unreadable", () => {
+  // `location` unreadable leaves HOST empty, exactly as `redact` already handles.
+  // Blinding the monitor is worse than relaying noise, so the gate must not become a
+  // drop-everything when it cannot tell.
+  const h = runReporter({ location: undefined });
+  h.fire("error", { target: { src: "https://cdn.example.com/x.js" } });
+  assert.equal(h.sent.length, 1, "fail open, not closed");
 });
 
 test("reporter dedupes identical reports", () => {
@@ -211,6 +358,27 @@ test("reporter stops at the ceiling", () => {
     h.fire("error", { error: new Error(`distinct ${i}`) });
   }
   assert.equal(h.sent.length, MONITOR_EVENT_CEILING);
+});
+
+test("console warnings have their own ceiling and cannot crowd out errors", () => {
+  // DEV-2539. Warnings are context, not faults: parent-side they become breadcrumbs
+  // rather than issues, so they get a looser cap — but a separate one. Sharing the
+  // relay ceiling would let a demo that warns on every render spend all 20 slots
+  // before the console.error that explains the breakage is ever posted.
+  const h = runReporter();
+  for (let i = 0; i < MONITOR_BREADCRUMB_CEILING + 10; i++) h.console.warn(`warn ${i}`);
+  h.console.error("the real fault");
+
+  assert.equal(
+    h.sent.filter((p) => p.kind === "console-warn").length,
+    MONITOR_BREADCRUMB_CEILING,
+    "warnings capped on their own budget",
+  );
+  assert.deepEqual(
+    h.sent.filter((p) => p.kind === "console-error").map((p) => p.message),
+    ["the real fault"],
+    "the error still gets through after a flood of warnings",
+  );
 });
 
 test("reporter truncates the message", () => {
@@ -366,6 +534,10 @@ test("isMonitorPayload rejects a kind outside the closed set", () => {
   assert.equal(isMonitorPayload({ ...base, kind: "whatever-i-want" }), false);
   assert.equal(isMonitorPayload({ ...base, kind: "" }), false);
   assert.equal(isMonitorPayload({ ...base, kind: 1 }), false);
+  // `console-warn` stays *inside* the set (DEV-2539). It no longer files an issue —
+  // `reportDemoEvent` turns it into a breadcrumb — but the payload has to reach that
+  // branch, and rejecting it here would make the breadcrumb path dead code.
+  assert.equal(isMonitorPayload({ ...base, kind: "console-warn" }), true);
 });
 
 test("isMonitorPayload rejects wrong types on the optional fields", () => {
