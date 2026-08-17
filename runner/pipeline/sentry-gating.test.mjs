@@ -98,6 +98,14 @@ test("the committed wrangler.jsonc vars alone are never enough", () => {
   // developer who skipped the `.dev.vars` setup step: PREVIEW_HOST and the DSN both
   // come straight from committed config, so the old single-signal gate opened and
   // `wrangler dev` filed local runs into the production project.
+  //
+  // `apiSentryDsn` reads `env.SENTRY_ENVIRONMENT` itself rather than calling
+  // `apiSentryEnvironment`, deliberately: the tempting future edit to the latter is
+  // a default (`|| "api-production"`) so every event carries a label even on a bare
+  // `wrangler deploy`, and through a shared code path that would reopen this gate
+  // for every local run. That coupling is not observable from outside the two
+  // functions, so it is guarded by the comments in sentry-gate.ts — this assertion
+  // is what would go red if the gate were reconnected to a defaulted labeller.
   const { SENTRY_ENVIRONMENT: _omitted, ...noDeployVar } = DEPLOYED;
   assert.equal(apiSentryDsn(noDeployVar), undefined);
   assert.equal(apiSentryEnvironment(noDeployVar), undefined);

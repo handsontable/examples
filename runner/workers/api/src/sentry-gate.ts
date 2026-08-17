@@ -14,9 +14,15 @@ export const PRODUCTION_HOST = "demos.handsontable.com";
 
 /**
  * The Worker's `environment`, supplied only by `--var SENTRY_ENVIRONMENT` in the
- * `deploy` script. It is the second signal of the two-signal gate below and the
- * replacement for the literal `"api-production"` that used to be hardcoded at the
- * init site.
+ * `deploy` script. Replaces the literal `"api-production"` that used to be
+ * hardcoded at the init site.
+ *
+ * This is a LABELLING function only. `apiSentryDsn` deliberately does not call it
+ * — it reads `env.SENTRY_ENVIRONMENT` itself — because the obvious future edit
+ * here is a default for UI tidiness (`|| "api-production"`, so every event carries
+ * an environment even on a bare `wrangler deploy`). Through a shared code path that
+ * edit would silently reopen the DSN gate for every `wrangler dev` run and put the
+ * original bug straight back. Keep the two independent.
  */
 export function apiSentryEnvironment(env: Env): string | undefined {
   return env.SENTRY_ENVIRONMENT || undefined;
@@ -45,9 +51,13 @@ export function apiSentryEnvironment(env: Env): string | undefined {
  * undefined options object) is load-bearing: `@sentry/cloudflare`'s
  * `getFinalOptions` treats a missing options object as empty and then falls back
  * to `env.SENTRY_DSN`. That fallback is also why the var is not named `SENTRY_DSN`.
+ *
+ * Reads `env.SENTRY_ENVIRONMENT` directly rather than through
+ * `apiSentryEnvironment` — see the note there. Truthiness, not `!== undefined`:
+ * `wrangler deploy --var SENTRY_ENVIRONMENT:` yields an empty string.
  */
 export function apiSentryDsn(env: Env): string | undefined {
-  if (!apiSentryEnvironment(env)) return undefined;
+  if (!env.SENTRY_ENVIRONMENT) return undefined;
   return env.PREVIEW_HOST === PRODUCTION_HOST ? env.ERROR_REPORTING_DSN : undefined;
 }
 
