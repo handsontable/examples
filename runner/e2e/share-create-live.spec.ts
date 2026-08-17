@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { workspaceFiles } from "./helpers";
 
 // The authed share round-trip, for real (DEV-2203): create → build → view →
 // revoke, against a deployed worker. Everything else about sharing is proved
@@ -51,6 +52,16 @@ test("a demo shared today is a page a client can open — until it is revoked", 
       page.getByRole("button", { name: "Fork", exact: true }),
       "no authed top bar — is E2E_BROKER_TOKEN expired?",
     ).toBeVisible({ timeout: 30_000 });
+
+    // Auth is not the only precondition: the workspace starts as an empty
+    // placeholder and fills asynchronously (and can refill when /api/versions
+    // swaps in `latest`). Minting in that window posts empty files and burns
+    // the whole dialog budget on a doomed build (Bugbot, #186) — so wait for
+    // the starter to actually be here before sharing.
+    await expect(async () => {
+      const files = await workspaceFiles(page);
+      expect(files["/package.json"], "the starter workspace has loaded").toBeTruthy();
+    }).toPass({ timeout: 30_000 });
 
     // Share mints a demo: POST /api/demos runs a real container build and
     // only then hands back links, so the dialog opening means "built".
