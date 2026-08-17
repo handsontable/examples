@@ -140,14 +140,79 @@ export class SessionStartError extends Error {
 export const isBudgetRefusal = (e: unknown): e is SessionStartError =>
   e instanceof SessionStartError && typeof e.code === "string" && e.code.startsWith("budget_");
 
-/** Read a `{ error, message }` body if the server sent one, else the raw text. */
-async function readFailure(res: Response): Promise<{ code?: string; message: string }> {
-  const text = await res.text().catch(() => res.statusText);
+/** Cap for a non-envelope failure body. Shorter than the monitor's own message bound:
+ *  this text is prose for a user, not a log excerpt. */
+const FAILURE_TEXT_MAX = 200;
+
+/** Read a `{ error, message }` body if the server sent one, else the raw text.
+ *
+ * `envelope` says which of the two happened, and that distinction is load-bearing:
+ * every deliberate failure from our own Worker is a JSON `{ error }` — its handler
+ * and its catch-all both are — so a response WITHOUT one did not come from our code
+ * at all. It came from the platform above it (or from whatever proxy is standing in
+ * for the API in local dev), and there is nothing in it worth showing a user.
+ *
+ * The raw-text branch is capped because it is unbounded: a gateway can answer with a
+ * whole HTML error page, and that page would otherwise be interpolated verbatim into
+ * both the message the user reads and the Sentry issue title. */
+async function readFailure(
+  res: Response,
+): Promise<{ code?: string; message: string; envelope: boolean }> {
+  // Not `res.statusText` on failure: Cloudflare serves HTTP/2, where browsers expose
+  // statusText as "", so that fallback never bought anything and must not become a
+  // message tier of its own.
+  const text = await res.text().catch(() => "");
   try {
     const body = JSON.parse(text) as { error?: string; message?: string };
-    if (body?.error) return { code: body.error, message: body.message ?? body.error };
+    if (body?.error) {
+      return { code: body.error, message: body.message ?? body.error, envelope: true };
+    }
   } catch { /* not JSON — fall through to the raw text */ }
-  return { message: text };
+  return { message: truncateMessage(text.trim(), FAILURE_TEXT_MAX), envelope: false };
+}
+
+/** Statuses that mean "nothing answered in time", emitted by the platform rather than
+ *  by us (DEV-2538). Deliberately excludes 502 and 503: 503 is the cost guardrail's own
+ *  status, and both read better as the connectivity tier below.
+ *
+ *  Only meaningful together with `envelope: false` — a 504 carrying a real `{ error }`
+ *  body would be our Worker speaking, and its own words win. */
+const TIMEOUT_STATUSES = new Set([504, 522, 524]);
+
+/**
+ * What to tell the user when POST /api/session comes back not-ok, in four tiers.
+ *
+ * ⚠ The wording of the timeout tier is a contract with `describeRuntimeError` in
+ * apps/authoring/src/App.tsx, whose container-engine heuristic matches
+ * /failed to fetch|networkerror|load failed|session start failed|fetch/i and REPLACES
+ * the message with the local-dev "run the API worker, it needs Docker" text. That is
+ * right for a developer whose worker is down and wrong for a visitor on
+ * demos.handsontable.com whose sandbox timed out — which is exactly what production
+ * users got for the 82 events of Sentry DEMOS-9 (DEV-2538). So the timeout sentence
+ * must contain none of those words, "fetch" above all. The connectivity tiers below it
+ * keep saying "session start failed" on purpose, so they keep tripping the heuristic.
+ * `pipeline/session-start-failure.test.mjs` is what holds both halves in place.
+ */
+function sessionStartMessage(
+  status: number,
+  failure: { code?: string; message: string; envelope: boolean },
+): string {
+  // A guardrail refusal already reads as a sentence aimed at the user; wrapping it in
+  // "session start failed (503): …" would bury it (and trip the heuristic above).
+  if (failure.code?.startsWith("budget_")) return failure.message;
+  // Nothing answered in time, and no envelope means the silence came from above our
+  // Worker. Nothing is wrong with the demo or with the visitor's connection, so say so
+  // — "Restart preview" is the error card's own button (packages/editor-shell/src/
+  // PreviewPane.tsx). The status stays in the sentence so Sentry keeps one issue per
+  // status rather than merging every gateway failure into one.
+  if (!failure.envelope && TIMEOUT_STATUSES.has(status)) {
+    return `The sandbox took too long to start (${status}). Nothing is wrong with the code — try "Restart preview".`;
+  }
+  // No body at all on some other status: the API is not answering usefully, which in
+  // practice is a local worker that isn't running. No trailing colon introducing a
+  // message that does not exist — that empty tail is what titled DEMOS-9.
+  if (!failure.message) return `session start failed (${status})`;
+  return `session start failed (${status}): ${failure.message}`;
 }
 
 /** How long `reload()` waits for the reloaded page's `load` before settling anyway.
@@ -330,16 +395,7 @@ export class ContainerRuntime implements DemoRuntime {
       });
       if (!res.ok) {
         const failure = await readFailure(res);
-        // A guardrail refusal already reads as a sentence aimed at the user;
-        // wrapping it in "session start failed (503): …" would bury it (and
-        // would trip the app's generic connectivity heuristic).
-        throw new SessionStartError(
-          res.status,
-          failure.code?.startsWith("budget_")
-            ? failure.message
-            : `session start failed (${res.status}): ${failure.message}`,
-          failure.code,
-        );
+        throw new SessionStartError(res.status, sessionStartMessage(res.status, failure), failure.code);
       }
       ({ previewUrl, port } = (await res.json()) as { previewUrl: string; port: number });
     } catch (err) {
