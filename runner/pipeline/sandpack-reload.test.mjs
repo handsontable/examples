@@ -322,6 +322,24 @@ test("DEV-2550: a show-error with no message keeps the generic fallback", () => 
   assert.equal(showError("   \n").message, "Sandpack compile error");
 });
 
+test("DEV-2550: a message that cannot be stringified is reported, not thrown", () => {
+  // The other way this handler throws instead of reporting, and the one that predates
+  // the fix: `String()` on a plain object whose `toString` is not callable raises
+  // "Cannot convert object to primitive value" — and `{ toString: 42 }` survives a
+  // structured clone, so it is a shape the preview window can actually post. Sandpack's
+  // `IFrameProtocol.eventListener` dispatches channel listeners in a bare `forEach`, so
+  // the throw would abort the dispatch rather than being contained.
+  const hostile = { toString: 42 };
+  assert.throws(() => String(hostile), TypeError, "the fixture must be one String() cannot coerce");
+
+  // `showError` asserts exactly one error was emitted, so a throw here fails the test
+  // rather than passing it quietly.
+  const reported = showError(hostile);
+
+  assert.ok(reported instanceof SandpackCompileError);
+  assert.equal(reported.message, "Sandpack compile error");
+});
+
 test("DEV-2550: a preview host is redacted before the cap can split it", () => {
   // Positioned so that truncating first keeps `3000-sbx7f2a-tok9xQ.demos.hand` — the
   // session token, in a form `redactPreviewHosts` can no longer match. Redacting

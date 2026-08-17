@@ -183,9 +183,27 @@ const INLINE_SOURCE_MAP = /sourceMappingURL=data:[^\s'"*]*/gi;
  * babel `SyntaxError` carries a non-writable `message`, which is precisely what the
  * text in DEMOS-15 is about), and "rewrite the message in place" is the shape that
  * turns a report into a throw.
+ *
+ * The coercion itself is the other way this handler could throw instead of
+ * reporting, and it predates this fix (`new Error(value)` stringifies too). `message`
+ * is whatever survived a structured clone from the preview window, and a plain object
+ * with a non-callable `toString` — `{ toString: 42 }`, perfectly clonable — makes
+ * `String()` raise "Cannot convert object to primitive value". Sandpack's
+ * `IFrameProtocol.eventListener` runs its channel listeners in a bare `forEach` with
+ * no `try`, so that TypeError would abort the dispatch, leave the error card on the
+ * last good state, and surface as an unrelated window-level fault. Fall back instead.
  */
 function boundCompileMessage(value: unknown): string {
-  const raw = typeof value === "string" ? value : value === undefined || value === null ? "" : String(value);
+  let raw: string;
+  if (typeof value === "string") raw = value;
+  else if (value === undefined || value === null) raw = "";
+  else {
+    try {
+      raw = String(value);
+    } catch {
+      return COMPILE_ERROR_FALLBACK;
+    }
+  }
   if (raw.trim() === "") return COMPILE_ERROR_FALLBACK;
   const withoutMaps = raw.replace(INLINE_SOURCE_MAP, "sourceMappingURL=<omitted>");
   return truncateMessage(redactPreviewHosts(withoutMaps), MONITOR_COMPILE_MESSAGE_MAX);
