@@ -106,8 +106,23 @@ with a backend, a login or its own storage gets its own Cloudflare Worker and be
 there.
 
 For a demo that does not exist yet, the **Handsontable MCP** route is faster than either
-— describe it in Claude and get the built link back, with no browser step at all. That
-is the [Everyone track](/guide/everyone); it applies to you too.
+— describe it in Claude and get the built link back, with no browser step at all:
+
+```
+Load create_demo, then create a demo reproducing the autocomplete
+dropdown width issue on Handsontable 18.0.0, and give me the share link
+```
+
+```
+Load update_demo, then re-point demo 1g72n1o3r2 at pull request 13191
+so support can see the fix
+```
+
+Name the tool first (`Load create_demo` / `Load update_demo`): tools are fetched on
+demand, and a long session will not always reach for one unasked. `update_demo` edits the
+demo in place — same id, same links, so a reproduction you have already sent to support
+becomes the fixed version rather than a second link to explain. Full instructions are on
+the [Everyone track](/guide/everyone); it applies to you too.
 
 ## What the runner accepts
 

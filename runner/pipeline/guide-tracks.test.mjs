@@ -293,6 +293,12 @@ test("the guide's numbers are the product's numbers", () => {
   assert.match(all, new RegExp(`\\b${MAX_MCP_FILES} (?:text )?files\\b`));
   assert.match(all, new RegExp(`\\b${MAX_MCP_BYTES / 1024} KB\\b`));
 
+  // The drop ceiling is a different constant than the MCP's (Bugbot, #188):
+  // developers.md says the file drop "stops at N files", and that N is
+  // dropFiles.ts's own MAX_DROP_FILES — the two ceilings can diverge.
+  const maxDrop = Number(sourceConst("../packages/editor-shell/src/dropFiles.ts", "MAX_DROP_FILES"));
+  assert.match(all, new RegExp(`stops at ${maxDrop} files`));
+
   // The description field's ceiling (support.md's title-and-description section).
   assert.match(all, new RegExp(`\\b${MAX_DESCRIPTION.toLocaleString("en-US")} characters\\b`));
 
@@ -397,4 +403,30 @@ test("the guide's container claims match the catalog engines", () => {
       `developers.md lists ${displayName} as in-browser, but catalog.json says engine=${byKey.get(key)?.engine}`,
     );
   }
+});
+
+test("every MCP prompt in the guide names the tool it needs", () => {
+  // Claude fetches tools on demand: a prompt that does not start with `Load
+  // create_demo` / `Load update_demo` is the one that comes back "I do not have that
+  // tool", and the reader on this track has no way to diagnose that.
+  const fenced = /```\n([\s\S]*?)```/g;
+  let checked = 0;
+  for (const name of [...GUIDE_TRACKS.map((t) => t.slug), "overview"]) {
+    const md = fs.readFileSync(path.join(docs, `${name}.md`), "utf8");
+    for (const m of md.matchAll(fenced)) {
+      const body = m[1];
+      // Naming either tool is what makes a block an MCP prompt — no second filter.
+      // The first version also tested `\bdemo\b` (which cannot match inside
+      // `update_demo`) and excluded blocks with a URL on their own line, which between
+      // them skipped the one prompt this test exists to guard.
+      if (!/create_demo|update_demo/.test(body)) continue;
+      checked += 1;
+      assert.match(
+        body.trim(),
+        /^Load (create_demo|update_demo),/,
+        `${name}.md has a prompt that does not open by loading the tool: ${body.trim().slice(0, 60)}`,
+      );
+    }
+  }
+  assert.ok(checked >= 6, `expected the guide to carry MCP prompts, found ${checked}`);
 });
