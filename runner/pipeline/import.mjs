@@ -37,6 +37,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { blankStarterFiles } from "./blank-starters.mjs";
+import { applyStarterOverrides, lintStarterOptionShapes } from "./starter-overrides.mjs";
 import {
   assertStarterBucket,
   resolveLatestStableMajor,
@@ -274,7 +275,15 @@ export async function importStarters({
     const { files: rawFiles, assets, skipped } = FRAMEWORKS[framework].synthetic
       ? { files: blankStarterFiles(framework, { bucket }), assets: [], skipped: [] }
       : collectExample(framework, sourceDir);
-    let files = pinHandsontableDependencies(rawFiles, hotVersion);
+    // Per-major starter source (DEV-2545). The bucket's `examples/` tree comes
+    // from a frozen prod-examples/<major> branch, so date/time cell options and
+    // the values they parse are rewritten here to the shape the bucket's
+    // Handsontable major supports. Runs BEFORE the version pin: the pinned
+    // /package.json must stay byte-identical to what the runtime's
+    // applyHandsontableVersion re-serializes (see pinHandsontableDependencies),
+    // so the pin gets the last word.
+    const { files: overlaid, applied: overrides } = applyStarterOverrides(framework, rawFiles, { bucket });
+    let files = pinHandsontableDependencies(overlaid, hotVersion);
     // Synthetic starters ship no lockfile of their own, but they still get one
     // resolved here: without it the snapshot builder's frozen install fails and
     // falls back to a fresh resolve, so a demo saved a year from now would build
@@ -288,10 +297,16 @@ export async function importStarters({
       ...configEntry(framework),
       htCoreRange: hotVersion,
       fileCount: Object.keys(files).length,
+      overrides,
       assets,
       skipped,
       files,
     };
+
+    // The overlay makes bucket content a two-place question (source ref + the
+    // registry), so a bucket that would emit an option shape its major does not
+    // support must fail GENERATION rather than ship misrendering.
+    problems.push(...lintStarterOptionShapes(framework, files, { bucket }));
 
     // Sanity: every artifact must have package.json and its declared entry file.
     if (!files["/package.json"]) problems.push(`${framework}: missing package.json`);
@@ -308,6 +323,7 @@ export async function importStarters({
       tier: entry.tier,
       engine: entry.engine,
       minCoreMajor: entry.minCoreMajor,
+      overrides,
     });
   }
 
@@ -317,6 +333,9 @@ export async function importStarters({
       {
         bucket,
         sourceRef: ref,
+        // Bucket content = this source ref PLUS the per-major overlay applied
+        // on top of it (pipeline/starter-overrides.mjs). Recorded per starter
+        // in `examples[].overrides` so an artifact is self-describing.
         generatedFrom: "handsontable/examples examples/",
         hotVersion,
         count: manifest.length,
@@ -395,6 +414,9 @@ export function importSyntheticStarters({ outDir = OUT_DIR, regenLockfile = defa
         ...configEntry(framework),
         htCoreRange: hotVersion,
         fileCount: Object.keys(files).length,
+        // Synthetic starters are generated per bucket already (blank-starters.mjs
+        // branches on the bucket itself), so the overlay has no rows for them.
+        overrides: [],
         assets: [],
         skipped: [],
         files,
@@ -409,6 +431,7 @@ export function importSyntheticStarters({ outDir = OUT_DIR, regenLockfile = defa
         tier: entry.tier,
         engine: entry.engine,
         minCoreMajor: entry.minCoreMajor,
+        overrides: [],
       });
     }
 
