@@ -205,6 +205,13 @@ function sessionStartMessage(
   // A guardrail refusal already reads as a sentence aimed at the user; wrapping it in
   // "session start failed (503): …" would bury it (and trip the heuristic above).
   if (failure.code?.startsWith("budget_")) return failure.message;
+  // Same reasoning, different refusal: `at_capacity` (DEV-2556) is the Worker
+  // saying every container slot is taken, in a sentence written for the person
+  // reading it. Wrapping it in "session start failed (503): …" would both bury
+  // it and hand it to the App.tsx heuristic. Before the envelope-less 503 tier
+  // below on purpose — this one HAS an envelope, so it would otherwise fall
+  // through to the generic wrapper at the bottom.
+  if (failure.code === "at_capacity") return failure.message;
   // Nothing answered in time, and no envelope means the silence came from above our
   // Worker. Nothing is wrong with the demo or with the visitor's connection, so say so
   // — "Restart preview" is the error card's own button (packages/editor-shell/src/

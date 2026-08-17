@@ -26,6 +26,16 @@ import { isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { classifyPreviewBootFailure, isPortNotListening } from "./preview-boot.js";
+import {
+  AT_CAPACITY_CODE,
+  atCapacityMessage,
+  destroyConfirmed,
+  isAtCapacityFailure,
+  isExpectedTeardownFailure,
+  TOMBSTONE_ATTEMPTED,
+  TOMBSTONE_DESTROYED,
+  TOMBSTONE_TTL_SECONDS,
+} from "./session-lifecycle.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
@@ -332,7 +342,28 @@ const liveSbx = (env: Env, id: string): SandboxLike => getSandboxShallow(env.San
  *  A KV read failure counts as "no tombstone" — refusing healthy sessions on
  *  a KV hiccup is worse than falling back to the sleepAfter backstop. */
 const isTombstoned = async (env: Env, sessionId: string): Promise<boolean> =>
-  (await env.CACHE.get(`session-tombstone:${sessionId}`).catch(() => null)) !== null;
+  (await readTombstone(env, sessionId)) !== null;
+
+const tombstoneKey = (sessionId: string) => `session-tombstone:${sessionId}`;
+
+/** The marker's value, not just its presence — `TOMBSTONE_ATTEMPTED` (a teardown
+ *  started, outcome unknown) vs `TOMBSTONE_DESTROYED` (we watched `destroy()`
+ *  resolve). Only the second lets `DELETE /api/session/:id` answer without a
+ *  sandbox RPC; see `destroyConfirmed`. A KV read failure reads as no marker,
+ *  for the reason `isTombstoned` documents. */
+const readTombstone = (env: Env, sessionId: string): Promise<string | null> =>
+  env.CACHE.get(tombstoneKey(sessionId)).catch(() => null);
+
+/** Write (or upgrade) a marker. Always best-effort: every caller is on a
+ *  teardown path whose primary action is the destroy, and a KV hiccup there
+ *  must not become the 500 this whole change exists to remove. Without the
+ *  marker the mid-create race and the duplicate-DELETE skip both fall back to
+ *  the `sleepAfter` backstop, which is where they were before DEV-2556. */
+async function putTombstone(env: Env, sessionId: string, marker: string): Promise<void> {
+  try {
+    await env.CACHE.put(tombstoneKey(sessionId), marker, { expirationTtl: TOMBSTONE_TTL_SECONDS });
+  } catch { /* defense-in-depth only */ }
+}
 
 function cors(resp: Response): Response {
   const h = new Headers(resp.headers);
@@ -459,11 +490,13 @@ async function sessionSubrouteGuard(env: Env, sessionId: string): Promise<Respon
   if (state.tier !== "closed") return null;
 
   await meterSession(env, sessionId, { final: true });
-  try {
-    await env.CACHE.put(`session-tombstone:${sessionId}`, "1", { expirationTtl: 600 });
-  } catch { /* the destroy below is the primary action */ }
+  await putTombstone(env, sessionId, TOMBSTONE_ATTEMPTED);
   try {
     await liveSbx(env, sessionId).destroy();
+    // Upgrade only on the resolved destroy, and inside the try: a marker that
+    // said "destroyed" after a failed teardown would let the next DELETE skip
+    // the RPC and strand the container until sleepAfter.
+    await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
   } catch { /* best effort */ }
   console.log(`[budget] closed live session ${sessionId}: over the monthly ceiling`);
   return json({ error: "budget_exhausted", message: budgetPausedMessage, tier: "closed" }, 410);
@@ -590,7 +623,19 @@ export default Sentry.withSentry(sentryOptions, {
         // that is already gone.
         const closedWhileCreating = async (): Promise<Response | null> => {
           if (!(await isTombstoned(env, sessionId))) return null;
-          try { await sandbox.destroy(); } catch { /* best effort */ }
+          // Never skipped on a `destroyed` marker, unlike the DELETE handler: a
+          // confirmed destroy here refers to the generation the DELETE tore
+          // down, and the whole reason this check exists is that the create
+          // kept running afterwards and booted a NEW container under the same
+          // id. Skipping would leak exactly the container this is here to
+          // reclaim. The marker below is written after the destroy resolves, so
+          // it describes the container that actually just went away — which is
+          // what makes the client's follow-up DELETE (container.ts sends one
+          // when a create finishes after dispose) free instead of a boot.
+          try {
+            await sandbox.destroy();
+            await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
+          } catch { /* best effort */ }
           return json({ error: "session was closed while it was being created" }, 410);
         };
 
@@ -701,6 +746,22 @@ export default Sentry.withSentry(sentryOptions, {
           // run the same tombstone check before surfacing the error.
           const closed = await closedWhileCreating();
           if (closed) return closed;
+          // The pool is full (DEV-2556). Today this leaves as a 500 carrying
+          // the platform's own words — "…try configuring a higher value for
+          // max_instances" — straight to a visitor, via the raw-body tier of
+          // `sessionStartMessage`. It is a refusal, not a fault: a 503 with an
+          // envelope, phrased for the person reading it, alongside the budget
+          // guardrail's denials. Kept as a Sentry event on the client (the
+          // `tier2-session-start`/503 fingerprint) — with the outer catch no
+          // longer firing, that plus this log line is the only capacity signal
+          // we have, and raising `max_instances` is a spend decision that needs
+          // to be made on evidence.
+          if (isAtCapacityFailure(err)) {
+            console.warn(
+              `[session] refused ${body.framework} session ${sessionId}: container pool at capacity`,
+            );
+            return json({ error: AT_CAPACITY_CODE, message: atCapacityMessage }, 503);
+          }
           throw err;
         }
       }
@@ -783,6 +844,24 @@ export default Sentry.withSentry(sentryOptions, {
       // DELETE /api/session/:id -> destroy container
       if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "session" && parts.length === 3) {
         const sessionId = parts[2]!;
+        // A session we have already watched go away answers from KV. Every
+        // sandbox RPC boots a container if one isn't running, so a second
+        // DELETE that re-entered the sandbox would be asking for a slot in
+        // order to destroy something that is not there — the create/delete
+        // race (packages/runtime/src/container.ts) sends exactly that.
+        if (destroyConfirmed(await readTombstone(env, sessionId))) {
+          // Still metered: `closedWhileCreating()` writes the confirmation
+          // without ever metering final, so on that arm this request is the
+          // only one that can close the awake window. A no-op once the meter
+          // key is gone (`meterSessionUnsafe` returns early on a missing
+          // meter), which is what every other writer of this marker leaves
+          // behind — the cost of keeping it is one KV read.
+          await meterSession(env, sessionId, { final: true });
+          // Keep the marker alive for as long as DELETEs keep arriving: it is
+          // also what the resurrection gate above reads.
+          await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
+          return cors(new Response(null, { status: 204 }));
+        }
         // Tombstone BEFORE destroying: if a create for this id is still in
         // flight (tab closed mid-POST), destroy() alone hits a half-built
         // session and the create keeps going — the POST handler re-checks
@@ -790,14 +869,30 @@ export default Sentry.withSentry(sentryOptions, {
         // stale markers from accumulating. Best-effort: a KV hiccup must not
         // block the primary destroy below (without the marker the mid-create
         // race falls back to the sleepAfter backstop).
-        try {
-          await env.CACHE.put(`session-tombstone:${sessionId}`, "1", { expirationTtl: 600 });
-        } catch { /* tombstone is defense-in-depth only */ }
+        await putTombstone(env, sessionId, TOMBSTONE_ATTEMPTED);
         // Close the awake window before the container goes away: this is the
         // one teardown path that knows the session is over for good.
         await meterSession(env, sessionId, { final: true });
         const sandbox = liveSbx(env, sessionId);
-        await sandbox.destroy();
+        // Releasing a container must not need one (DEV-2556, Sentry DEMOS-1).
+        // When the pool is full the platform refuses `destroy()` itself, and
+        // this route — the only unguarded destroy in the file — turned that
+        // into a thrown 500 nobody could act on: the caller is a fire-and-
+        // forget `keepalive` fetch from `pagehide` that discards the response.
+        // A refusal also means no slot is being held by whatever we failed to
+        // reach, so there is nothing left to reclaim here. Recognised platform
+        // messages become a log line and a 204; anything else still throws to
+        // the outer catch and keeps today's status and today's Sentry event.
+        try {
+          await sandbox.destroy();
+          await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
+        } catch (err) {
+          if (!isExpectedTeardownFailure(err)) throw err;
+          console.warn(
+            `[session] teardown for ${sessionId} declined by the platform:`,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
         return cors(new Response(null, { status: 204 }));
       }
 
