@@ -17,7 +17,7 @@ import type {
 } from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
-import { MONITOR_EVENT_CEILING, truncateMessage } from "./monitor.js";
+import { MONITOR_EVENT_CEILING, redactPreviewHosts, truncateMessage } from "./monitor.js";
 
 /** Dev-server output worth relaying (DEV-2527). Broad on purpose — the point is to
  *  learn what running dev servers complain about — but narrow enough that ordinary
@@ -25,14 +25,99 @@ import { MONITOR_EVENT_CEILING, truncateMessage } from "./monitor.js";
 const STDERR_MARKERS =
   /\b(error|failed|failure|exception|unhandled|cannot find|not found|econnrefused|eaddrinuse)\b/i;
 
+/** A line that ANNOUNCES a cause, as opposed to merely mentioning one. Anchored at the
+ *  start of the line on purpose: pnpm prints its prose hints ("This error happened
+ *  while installing the dependencies of …") AFTER the code line, so an unanchored scan
+ *  from the end of the log picks the hint over ERR_PNPM_NO_MATCHING_VERSION.
+ *
+ *  Deliberately separate from STDERR_MARKERS rather than a widening of it: that set is
+ *  load-bearing for `relayStderr`, where it controls how much dev-server noise is
+ *  shipped as demo events. Two patterns, two jobs. */
+const BOOT_CAUSE_LINE = /^(?:err_[a-z0-9_]+|npm ERR!|ELIFECYCLE|::error::|[a-z]*error\b)/i;
+
+/** ANSI codes meaning "what follows replaces this line": erase-whole-line (`\x1b[2K`)
+ *  and cursor-to-column (`\x1b[nG`). pnpm redraws its progress counter with these
+ *  rather than with a bare `\r`, so stripping them as ordinary CSI would glue every
+ *  redraw frame into one run-on line. Normalised to `\r` so one last-frame-wins rule
+ *  covers both.
+ *
+ *  `2K` specifically, NOT `\d*K`: a bare `\x1b[K` is erase-to-end-of-line, the "wipe
+ *  what the previous longer line left behind" idiom, and it usually trails the text it
+ *  is protecting. Treating it as a reset would drop that text — deleting exactly the
+ *  cause line this function exists to find. Those fall through to ANSI_CSI below and
+ *  are stripped like any other code.
+ *
+ *  (`PreviewPane.tailLines` strips CSI first and therefore keeps redraw fragments.
+ *  Deliberately stricter here: nothing there ends up as a Sentry issue title.) */
+const LINE_RESET = /\x1b\[(?:2K|\d*G)/g;
+
+/** Full CSI, not just colour (`m`): a boot log is mostly cursor movement. */
+const ANSI_CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+
+/** The last entry satisfying `pred` — the newest occurrence, since logs run forwards. */
+function findLastLine(lines: readonly string[], pred: (line: string) => boolean): string | null {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (pred(lines[i]!)) return lines[i]!;
+  }
+  return null;
+}
+
+/**
+ * Split a failed boot log into the one line worth titling an issue with (`cause`) and
+ * the recent context worth keeping beside it (`tail`).
+ *
+ * The whole log used to become the `Error.message` (DEV-2533). A message that is a log
+ * takes the issue title from whatever the tail happened to start with, and — because
+ * V8 puts the message inside `error.stack` and stack parsers skip only the first
+ * line — feeds lines 2..n of it to the frame regexes, inventing both a stack and a
+ * culprit. The actual cause, meanwhile, sat unread on the last line.
+ *
+ * The cause is chosen in three tiers, each scanning backwards: a line that announces a
+ * failure, else a line that mentions one, else the last line there is.
+ */
+export function bootFailureDetail(log: string): { cause: string; tail: string } {
+  const lines = log
+    .replace(LINE_RESET, "\r")
+    .replace(ANSI_CSI, "")
+    .split("\n")
+    .map((l) => l.slice(l.lastIndexOf("\r") + 1).trimEnd())
+    .filter(Boolean)
+    // Already bounded upstream by the status route's `tail -c 2500`; this is the
+    // readability bound, and it is what `tail` promises callers.
+    .slice(-40);
+
+  const candidate =
+    findLastLine(lines, (l) => BOOT_CAUSE_LINE.test(l.trimStart())) ??
+    findLastLine(lines, (l) => STDERR_MARKERS.test(l)) ??
+    lines[lines.length - 1] ??
+    "";
+
+  // Redact, then truncate — the order is the security property (e0da4598): truncating
+  // first can cut a preview hostname in half and leave the session token behind in a
+  // form the redactor no longer recognises.
+  const cause = truncateMessage(redactPreviewHosts(candidate.trim()));
+  return {
+    cause: cause || "Container failed to install dependencies or start.",
+    tail: redactPreviewHosts(lines.join("\n")),
+  };
+}
+
 /** The container reached the server and booted, but the boot script itself
  * exited nonzero (e.g. pnpm couldn't resolve the pinned Handsontable
  * version) — as opposed to the session request never reaching the server at
- * all. Callers should show this message as-is: it's a real, often-multiline
- * install/boot log, not a connectivity problem, and its text can incidentally
- * contain words like "fetching" that would otherwise trip a generic
- * network-error heuristic. */
-export class ContainerBootFailure extends Error {}
+ * all.
+ *
+ * `message` is a single line: the cause, as picked by `bootFailureDetail`. `log` is
+ * the recent boot output it was picked out of — context for whoever reads the report,
+ * and never part of the message (see `bootFailureDetail` for why that distinction
+ * matters). Callers should still show the message as-is rather than running it through
+ * a connectivity heuristic: it can incidentally contain words like "fetching" that
+ * pnpm's own error output happens to use. */
+export class ContainerBootFailure extends Error {
+  constructor(message: string, readonly log = "") {
+    super(message);
+  }
+}
 
 /** POST /api/session failed. `status` distinguishes the server's 410
  * "closed while being created" (session already destroyed server-side; a
@@ -334,14 +419,8 @@ export class ContainerRuntime implements DemoRuntime {
             // re-emitting on every poll would file the same boot failure every few
             // seconds for as long as the tab stayed open.
             if (this.failedPolls === 0) {
-              const detail = log
-                .replace(/\x1b\[[0-9;]*m/g, "")
-                .split("\n")
-                .map((l) => l.trimEnd())
-                .filter(Boolean)
-                .slice(-40)
-                .join("\n");
-              this.emitError(new ContainerBootFailure(detail || "Container failed to install dependencies or start."));
+              const { cause, tail } = bootFailureDetail(log);
+              this.emitError(new ContainerBootFailure(cause, tail));
             }
             this.failedPolls += 1;
             // The boot script has exited, so this is a long shot, not the recovery path —
