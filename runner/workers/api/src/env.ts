@@ -30,6 +30,10 @@ export interface Env {
   // Wildcard base host for Tier-2 container preview URLs (e.g.
   // "demos.handsontable.com"). Empty -> use the request host (local dev).
   PREVIEW_HOST?: string;
+  // "1" injects the demo-runtime monitor into proxied Tier-2 preview documents
+  // (DEV-2527). Temporary; the browser half is VITE_MONITOR_DEMOS. Paired with the
+  // PREVIEW_HOST production check, so `wrangler dev` never injects.
+  MONITOR_DEMOS?: string;
 
   // Cost guardrails (DEV-2030). All optional with safe defaults in budget.ts,
   // so a missing var can never be the reason a session is refused.
