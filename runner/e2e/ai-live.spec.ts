@@ -21,6 +21,22 @@ test.describe("AI endpoints answer usably", () => {
   test.skip(process.env.E2E_AI !== "1", "set E2E_AI=1 to spend LLM budget on live answer checks");
   test.describe.configure({ timeout: 120_000 });
 
+  /** Refusals that are traffic or spend policy, never the AI chain itself:
+   *  429 from the shared per-IP bucket, 401 budget_login_required at the
+   *  anon_blocked tier, 503 budget_exhausted at new_blocked/closed. A 503
+   *  chat_unavailable (missing gateway key) stays a failure — that IS the
+   *  product being broken. */
+  async function skipIfRefused(res: { status(): number; json(): Promise<unknown> }) {
+    if (res.status() === 429) test.skip(true, "rate limit reached from this IP — not a product failure");
+    if (res.status() === 401 || res.status() === 503) {
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      test.skip(
+        typeof body?.error === "string" && body.error.startsWith("budget_"),
+        `budget tier refusal (${body?.error}) — spend policy, not a product failure`,
+      );
+    }
+  }
+
   test("/api/chat returns an answer with the documented shape", async ({ request, baseURL }) => {
     const res = await request.post(`${baseURL}/api/chat`, {
       data: {
@@ -33,8 +49,7 @@ test.describe("AI endpoints answer usably", () => {
       },
     });
 
-    // A shared per-IP bucket means a 429 is traffic, not a product failure.
-    test.skip(res.status() === 429, "chat rate limit reached from this IP — not a product failure");
+    await skipIfRefused(res);
     expect(res.status(), await res.text().catch(() => "")).toBe(200);
 
     const body = (await res.json()) as { message?: unknown; edits?: unknown; references?: unknown; pages?: unknown };
@@ -50,7 +65,7 @@ test.describe("AI endpoints answer usably", () => {
       data: { prompt: "corporate green", current: {} },
     });
 
-    test.skip(res.status() === 429, "theme shares the chat rate bucket — not a product failure");
+    await skipIfRefused(res);
     expect(res.status(), await res.text().catch(() => "")).toBe(200);
 
     const body = (await res.json()) as {
