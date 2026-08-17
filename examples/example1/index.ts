@@ -477,7 +477,7 @@ new Handsontable(container, {
     {
       data: "restockDate",
       type: "date",
-      dateFormat: "YYYY-MM-DD",
+      dateFormat: { year: "numeric", month: "2-digit", day: "2-digit" },
       headerClassName: "htRight",
       className: "htRight",
       width: 150,

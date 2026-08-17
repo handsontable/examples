@@ -106,6 +106,36 @@ test("the runtime version rewrite is a byte-level no-op on emitted artifacts", a
   }
 });
 
+test("artifacts record the override rows that GOVERN them, not just the mutating ones", async (t) => {
+  // DEV-2545. A row is a no-op whenever the source already carries the
+  // bucket-correct shape — at "next" the master sources are already migrated,
+  // so recording only byte-changing rows left exactly the artifacts the overlay
+  // exists for describing themselves as untouched.
+  const outDir = makeOutDir(t);
+  await importStarters({
+    bucket: "next",
+    outDir,
+    hotVersion: "0.0.0-next-abc1234-20260801",
+    regenLockfile: passthroughLock,
+  });
+
+  const read = (framework) =>
+    JSON.parse(fs.readFileSync(path.join(outDir, "next", `${framework}.json`), "utf8"));
+
+  assert.deepEqual(read("angular").overrides, ["angular:dateFormat", "angular:data-iso"]);
+  assert.deepEqual(read("next-shadcn.js").overrides, [
+    "next-shadcn.js:dateFormat",
+    "next-shadcn.js:timeFormat",
+  ]);
+  // A starter with no date column records nothing.
+  assert.deepEqual(read("react").overrides, []);
+
+  // The manifest row carries the same list, so the bucket is self-describing.
+  const manifest = JSON.parse(fs.readFileSync(path.join(outDir, "next", "manifest.json"), "utf8"));
+  const row = manifest.examples.find((e) => e.framework === "angular");
+  assert.deepEqual(row.overrides, ["angular:dateFormat", "angular:data-iso"]);
+});
+
 test("the catalog index lists buckets and drops files from every entry", async (t) => {
   const outDir = makeOutDir(t);
   await importStarters({ bucket: "next", outDir, hotVersion: "0.0.0-next-abc1234-20260801", regenLockfile: passthroughLock });
