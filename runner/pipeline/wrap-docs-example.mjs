@@ -358,21 +358,26 @@ function buildAngularProject(hotVersion, exampleId, userFiles, extraDeps, extraD
     {
       handsontable: hotVersion,
       '@handsontable/angular-wrapper': hotVersion,
-      '@angular/animations': '21.x',
-      '@angular/common': '21.x',
-      '@angular/compiler': '21.x',
-      '@angular/core': '21.x',
-      '@angular/forms': '21.x',
-      '@angular/platform-browser': '21.x',
-      '@angular/platform-browser-dynamic': '21.x',
-      '@angular/router': '21.x',
-      rxjs: '~7.8.0',
-      tslib: '^2.3.0',
-      'zone.js': '~0.15.0',
-      '@angular-devkit/build-angular': '21.x',
-      '@angular/cli': '21.x',
-      '@angular/compiler-cli': '21.x',
-      typescript: '~5.9.0',
+      // Keep in lockstep with `containers/live/baked/angular-18/package.json`
+      // — docs artifacts ship no lockfile, so the boot always installs
+      // non-frozen against that seeded tree. Pins that disagree with the seed
+      // make pnpm refetch the whole Angular tree (~27s per cold demo boot).
+      // `docs-angular-pins.test.mjs` fails when the two drift apart. DEV-2536.
+      '@angular/animations': '22.0.6',
+      '@angular/common': '22.0.6',
+      '@angular/compiler': '22.0.6',
+      '@angular/core': '22.0.6',
+      '@angular/forms': '22.0.6',
+      '@angular/platform-browser': '22.0.6',
+      '@angular/platform-browser-dynamic': '22.0.6',
+      '@angular/router': '22.0.6',
+      rxjs: '~7.8.2',
+      tslib: '^2.8.1',
+      'zone.js': '~0.16.2',
+      '@angular-devkit/build-angular': '22.0.6',
+      '@angular/cli': '22.0.6',
+      '@angular/compiler-cli': '22.0.6',
+      typescript: '~6.0.3',
     },
     extraDeps,
   );
