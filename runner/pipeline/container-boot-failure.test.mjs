@@ -67,9 +67,56 @@ test("pnpm's ERR_ code beats the hint lines printed after it", () => {
   assert.ok(cause.includes("handsontable@99.0.0"), "the unresolvable spec is the whole point of the line");
 });
 
+/** The boot script's own cause line. `workers/api/src/index.ts` refuses to touch a
+ *  generated starter's lockfile and echoes `::error::…` before `exit 1`, which is the
+ *  only reason `::error::` is one of the announcing prefixes at all. Nothing else in
+ *  the runner emits it, so nothing else can pin it. */
+const FROZEN_INSTALL_LOG = [
+  "::seeding immutable baked dependencies::",
+  "::reconciling dependencies with pnpm::",
+  " ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with \"frozen-lockfile\" because pnpm-lock.yaml is absent",
+  "",
+  "Note that in CI environments this setting is true by default.",
+  "::error::frozen install failed for generated starter metadata; refusing to modify its lockfile",
+].join("\n");
+
+/** A failure whose announcing line is not at the start of the line: esbuild (under
+ *  vite, next, astro …) prefixes its errors with `✘`, and the source excerpt it prints
+ *  AFTER them has no marker word at all. Tier 1 cannot see it and tier 3 would return
+ *  the excerpt, so this fixture is the only thing standing between the middle tier and
+ *  dead code. */
+const ESBUILD_LOG = [
+  "::starting dev server::",
+  "Done in 9.1s using pnpm v10.34.5",
+  '✘ [ERROR] Could not resolve "./app/App"',
+  "",
+  "    src/main.tsx:3:18:",
+  "      3 | import App from './app/App'",
+].join("\n");
+
+test("the boot script's own ::error:: line is the cause it went to the trouble of printing", () => {
+  const { cause, tail } = bootFailureDetail(FROZEN_INSTALL_LOG);
+  assert.equal(
+    cause,
+    "::error::frozen install failed for generated starter metadata; refusing to modify its lockfile",
+  );
+  // The runner's final word wins over pnpm's code line above it — it is deliberate,
+  // it is stable across occurrences (which is what a title wants), and the pnpm code
+  // is one line away in the log that travels beside it.
+  assert.ok(tail.includes("ERR_PNPM_OUTDATED_LOCKFILE"), "pnpm's own diagnosis stays in the tail");
+});
+
+test("a line that only mentions a failure is used when no line announces one", () => {
+  // The middle tier. Without this the `STDERR_MARKERS` fallback could be deleted
+  // outright and every other test here would still pass.
+  const { cause } = bootFailureDetail(ESBUILD_LOG);
+  assert.equal(cause, '✘ [ERROR] Could not resolve "./app/App"');
+  assert.ok(!cause.startsWith("      3 |"), "the last line is a source excerpt, not a cause");
+});
+
 test("the cause is always a single line", () => {
   // The property that stops a stack parser reading message lines as frames.
-  for (const log of [ANGULAR_LOG, PNPM_LOG]) {
+  for (const log of [ANGULAR_LOG, PNPM_LOG, FROZEN_INSTALL_LOG, ESBUILD_LOG]) {
     assert.ok(!bootFailureDetail(log).cause.includes("\n"));
   }
 });
