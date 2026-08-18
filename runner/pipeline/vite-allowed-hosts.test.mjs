@@ -7,6 +7,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { viteAllowedHostEnv } from "../workers/api/src/preview-allowed-hosts.ts";
+import { DOCS_VITE_SERVER_BLOCK } from "./wrap-docs-example.mjs";
 
 // DEV-2541. Tier-2 previews reach the dev server through the Sandbox SDK proxy,
 // which rewrites ordinary HTTP to `http://localhost:<port>` but forwards a
@@ -49,6 +50,20 @@ const require = createRequire(import.meta.url);
  *  walk to the bin rather than resolving the bin directly. */
 const VITE_BIN = join(
   dirname(require.resolve("vite/package.json", { paths: [new URL("../apps/authoring", import.meta.url).pathname] })),
+  "bin",
+  "vite.js",
+);
+
+/** The vite the docs Vue container actually installs (DEV-2564).
+ *
+ *  `vite5` is an exact `npm:vite@5.4.21` alias in the runner's devDependencies, not a
+ *  range: the tests below assert what this specific version does, and a floating pin
+ *  would turn any upstream 5.4.x change into a red build on a question the config-level
+ *  fix has already settled. It is an alias rather than a second real `vite` because the
+ *  root already resolves vite transitively.
+ */
+const VITE5_BIN = join(
+  dirname(require.resolve("vite5/package.json", { paths: [new URL("..", import.meta.url).pathname] })),
   "bin",
   "vite.js",
 );
@@ -160,10 +175,11 @@ const wsHandshake = (port, host, { origin, token } = {}) =>
     token === undefined ? "/" : `/?token=${token}`,
   );
 
-/** Boot vite on its own port in `dir`, wait for it to answer, run `fn`, always kill it. */
-async function withVite(dir, extraEnv, fn) {
+/** Boot vite on its own port in `dir`, wait for it to answer, run `fn`, always kill it.
+ *  `bin` defaults to the repo's own vite; pass VITE5_BIN for the docs Vue container's. */
+async function withVite(dir, extraEnv, fn, bin = VITE_BIN) {
   const port = await freePort();
-  const child = spawn(process.execPath, [VITE_BIN, "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
+  const child = spawn(process.execPath, [bin, "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
     cwd: dir,
     env: { ...process.env, ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
@@ -320,4 +336,104 @@ test("viteAllowedHostEnv injects nothing when it would be pointless or unsafe", 
   assert.deepEqual(viteAllowedHostEnv("https://demos.handsontable.com"), {});
   assert.deepEqual(viteAllowedHostEnv("demos handsontable com"), {});
   assert.deepEqual(viteAllowedHostEnv("demos.handsontable.com/path"), {});
+});
+
+// ── DEV-2564: the container the env var never reached ─────────────────────────
+//
+// Everything above pins the DEV-2541 mechanism — vite's internal
+// `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`. That variable does not exist before vite
+// 6. The docs Vue container is pinned to vite 5 (`vite: "^5.4.0"`, emitted by
+// `buildVueProject` in wrap-docs-example.mjs and baked into
+// containers/live/baked/vue-18/package.json), so on the ~500 Vue docs examples the
+// DEV-2541 fix was silently inert and HMR stayed refused. Measured on 5.4.21 while
+// writing DEV-2564: 400 without the variable and 400 with it — and there is no
+// occurrence of the name anywhere in that version's `dist`.
+//
+// So the Vue config opts in from config instead, via `DOCS_VITE_SERVER_BLOCK`. These
+// tests boot the REAL 5.4.21 the container installs, against the EXACT string the
+// generator emits, and prove the upgrade a browser sends completes. They deliberately
+// do NOT assert that the env var stays absent from vite 5: if some 5.4.x ever
+// backported it the right response would be "does not matter, we use config now", and
+// a red build there would be noise.
+
+/** A throwaway project with an optional vite.config, in the shape a docs project has. */
+async function fixture(t, prefix, viteConfig) {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, "package.json"), JSON.stringify({ name: prefix, private: true, type: "module" }));
+  await writeFile(join(dir, "index.html"), "<!doctype html><html><body>dev2564</body></html>");
+  // No plugin import: `@vitejs/plugin-vue` is not resolvable from a temp dir, and the
+  // plugin is irrelevant to the host check. The `server` block is the whole subject,
+  // and it is imported from the generator so editing that string cannot bypass this.
+  if (viteConfig) await writeFile(join(dir, "vite.config.js"), viteConfig);
+  return dir;
+}
+
+const DOCS_SERVER_ONLY_CONFIG = `export default { ${DOCS_VITE_SERVER_BLOCK} };\n`;
+
+test("vite 5.4.21 refuses the preview host, and the generated server block fixes it", async (t) => {
+  // Negative control first, and on the same version: without the block, 5.4.21 must
+  // refuse. This is what proves the 101 below measures the host gate rather than a
+  // gate that quietly stopped being enforced in this version.
+  const bare = await fixture(t, "dev2564-bare-");
+  await withVite(
+    bare,
+    {},
+    async (port) => {
+      assert.equal(await wsHandshake(port, `localhost:${port}`), 101, "control: localhost is always allowed");
+      assert.equal(
+        await wsHandshake(port, PREVIEW_HOST),
+        400,
+        "vite 5.4.21 with no server block must refuse the preview host — this is the bug DEV-2564 reports",
+      );
+    },
+    VITE5_BIN,
+  );
+
+  const fixed = await fixture(t, "dev2564-fixed-", DOCS_SERVER_ONLY_CONFIG);
+  await withVite(
+    fixed,
+    {},
+    async (port) => {
+      // No env var anywhere in this boot: the config alone has to carry it, which is
+      // the whole point of fixing it this way rather than bumping the vite pin.
+      assert.equal(
+        await wsHandshake(port, PREVIEW_HOST),
+        101,
+        "the emitted server block must open the host gate on vite 5, with no environment variable involved",
+      );
+      assert.equal(await wsHandshake(port, `localhost:${port}`), 101, "localhost must keep working");
+
+      // Browser shape, same boot — a real WebSocket handshake always carries `Origin`,
+      // so `shouldHandle` also runs `hasValidToken`. 5.4.12 added both the token gate
+      // and `server.allowedHosts` (CVE-2025-24010), so 5.4.21 has both and passing only
+      // the host gate would leave HMR just as dead.
+      const origin = `https://${PREVIEW_HOST}`;
+      const token = await hmrToken(port);
+      assert.equal(
+        await wsHandshake(port, PREVIEW_HOST, { origin, token }),
+        101,
+        "the exact handshake a browser sends must be accepted, not merely the host check",
+      );
+      assert.equal(
+        await wsHandshake(port, PREVIEW_HOST, { origin }),
+        400,
+        "with an Origin and no token vite must still refuse — otherwise the 101 above proves nothing",
+      );
+    },
+    VITE5_BIN,
+  );
+});
+
+test("the generated server block also covers the majors the env var reaches", async (t) => {
+  // The Vue container is on 5 today, but the fix has to keep working if that pin ever
+  // moves — and every other container is on 6/7/8. Booting the repo's own vite against
+  // the same string, with no env var, pins the config path across majors so a future
+  // bump cannot quietly land back on the broken side.
+  const fixed = await fixture(t, "dev2564-cross-", DOCS_SERVER_ONLY_CONFIG);
+  await withVite(fixed, {}, async (port) => {
+    const origin = `https://${PREVIEW_HOST}`;
+    const token = await hmrToken(port);
+    assert.equal(await wsHandshake(port, PREVIEW_HOST, { origin, token }), 101);
+  });
 });
