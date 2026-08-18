@@ -39,6 +39,10 @@ concurrency:
 jobs:
   matrix:
     runs-on: ubuntu-latest
+    # Same image rule as ci.yml: keep the tag in lockstep with @playwright/test
+    # in runner/package.json — bump the two together, never apart.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
     # ~36 min observed locally (--workers=2, --retries=2); 180 leaves ample
     # headroom for slower CI runners + retry storms.
     timeout-minutes: 180
@@ -62,9 +66,6 @@ jobs:
 
       # No `pnpm build`: the matrix spec only imports catalog.json + fetches npm
       # and runs against deployed prod, so no workspace build is needed.
-
-      - name: Install Playwright browser
-        run: pnpm exec playwright install --with-deps chromium
 
       - name: Run starter matrix
         env:

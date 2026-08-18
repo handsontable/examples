@@ -5,8 +5,11 @@ name: CI
 # of rebuilt, and the Playwright job runs inside the pinned Playwright
 # container so the browser always matches the test package.
 #
-#   build ──► authoring ──► e2e
-#   unit  (parallel — `pnpm test` builds the runtime itself, by design)
+#   unit ──► build ──► authoring ──► e2e
+#
+# unit gates build: it is the cheapest job (pnpm test builds the runtime
+# itself, by design), so a broken helper fails the run before any minutes go
+# into the app build or a browser container.
 #
 # The live-render checks that need the external Sandpack bundler stay gated
 # behind E2E_LIVE (e2e-live.yml). Also callable (workflow_call) so the deploy
@@ -28,7 +31,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Unit + catalog-smoke tests
+        run: pnpm test
+
   build:
+    needs: unit
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -64,31 +91,6 @@ jobs:
           path: runner/packages/runtime/dist/
           retention-days: 1
           if-no-files-found: error
-
-  unit:
-    # Deliberately not `needs: build` — `pnpm test` builds the runtime itself
-    # (several pipeline tests import from dist), so this runs in parallel.
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: runner
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          package_json_file: runner/package.json
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: runner/pnpm-lock.yaml
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Unit + catalog-smoke tests
-        run: pnpm test
 
   authoring:
     needs: build
