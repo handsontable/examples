@@ -988,8 +988,15 @@ export default Sentry.withSentry(sentryOptions, {
         if (isMcpValidationError(files)) return json(files, 400);
         // Before the budget gate: an unusable version is a 400, not a container
         // boot spent on an install that cannot succeed (DEV-2565).
-        const version = await resolveHandsontableVersion(env, { htVersion: body.htVersion, files });
+        // `trustDistTag`: a tag from this path is the model's own request, not a
+        // forwarded row value, and it is a machine caller's only lever.
+        const version = await resolveHandsontableVersion(env, { htVersion: body.htVersion, files, trustDistTag: true });
         if (!version.ok) return json({ error: version.message }, version.status);
+        // The cap has to hold on what gets stored, not on what was sent: the pin
+        // re-serialises /package.json at two-space indent and swaps ranges for
+        // pkg.pr.new URLs, and both only grow it.
+        const pinnedFiles = validateMcpFiles(version.files);
+        if (isMcpValidationError(pinnedFiles)) return json(pinnedFiles, 400);
 
         // A build is a container boot, so it answers to the same ceiling as any other.
         const buildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `mcp build ${body.framework}` });
@@ -998,7 +1005,7 @@ export default Sentry.withSentry(sentryOptions, {
 
         const created = await createDemo(env, {
           entry: { framework: body.framework, ...cfg },
-          files: version.files,
+          files: pinnedFiles,
           htVersion: version.ref,
           title,
           description: description ?? null,
@@ -1015,6 +1022,11 @@ export default Sentry.withSentry(sentryOptions, {
             editUrl: `/edit/${created.id}`,
             shareUrl: `/share/${created.id}`,
             createdBy: id.email,
+            // What was actually built, which is not always what was asked for: a
+            // dist-tag resolves to a release, and it ranks below a pin the payload
+            // already carried. Echoed so a machine caller can see which ref won
+            // instead of reporting back whatever it sent (review of PR #230).
+            htVersion: version.ref,
           },
           201,
         );
@@ -1061,7 +1073,10 @@ export default Sentry.withSentry(sentryOptions, {
           now: nowIso(),
         });
         await recordUsageEvent(env, "share_created", body.framework);
-        return json({ id: created.id, url: `/d/${created.id}`, embedUrl: `/embed/${created.id}` }, 201);
+        return json(
+          { id: created.id, url: `/d/${created.id}`, embedUrl: `/embed/${created.id}`, htVersion: version.ref },
+          201,
+        );
       }
 
       // PATCH /api/mcp/demos/:id  (service auth, owner) — fix a demo in place from the
@@ -1118,15 +1133,19 @@ export default Sentry.withSentry(sentryOptions, {
             htVersion: patch.htVersion,
             files,
             previousRef: row.ht_version,
+            trustDistTag: true, // service path — see the create handler above
           });
           if (!version.ok) return json({ error: version.message }, version.status);
+          // See the create handler: the cap answers for the pinned map, not the sent one.
+          const pinnedFiles = validateMcpFiles(version.files);
+          if (isMcpValidationError(pinnedFiles)) return json(pinnedFiles, 400);
           const rebuildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `mcp rebuild ${row.framework}` });
           if (rebuildDenied) return rebuildDenied;
           await recordUsageEvent(env, "build", row.framework);
           await updateDemo(env, {
             id: demoId,
             entry: { framework: row.framework, ...cfg },
-            files: version.files,
+            files: pinnedFiles,
             htVersion: version.ref,
             // Absent means "leave the column alone" — never fall back to the row read
             // at the start of this handler, or a rename committed during the rebuild
@@ -1135,7 +1154,8 @@ export default Sentry.withSentry(sentryOptions, {
             ...(patchDescription !== undefined ? { description: patchDescription } : {}),
             now: nowIso(),
           });
-          return json({ ok: true, id: demoId, url: `/d/${demoId}`, editUrl: `/edit/${demoId}`, rebuilt: true });
+          // `htVersion` is what was built, not what was asked for — see the create handler.
+          return json({ ok: true, id: demoId, url: `/d/${demoId}`, editUrl: `/edit/${demoId}`, rebuilt: true, htVersion: version.ref });
         }
 
         if (patchTitle === undefined && patchDescription === undefined) {
@@ -1261,7 +1281,9 @@ export default Sentry.withSentry(sentryOptions, {
             ...(patchDescription !== undefined ? { description: patchDescription } : {}),
             now: nowIso(),
           });
-          return json({ ok: true });
+          // The ref the rebuild actually used, which the picker may not have asked
+          // for (a pin the payload carried outranks a dist-tag).
+          return json({ ok: true, htVersion: version.ref });
         }
         // Metadata-only update (title / description / visibility).
         await env.DB.prepare("UPDATE demos SET title=?, description=?, visibility=?, updated_at=? WHERE id=?")

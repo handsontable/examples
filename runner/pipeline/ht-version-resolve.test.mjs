@@ -22,6 +22,7 @@ import {
   fetchVersionCatalog,
   resolveHandsontableVersion,
 } from "../workers/api/src/ht-version.ts";
+import { MAX_MCP_BYTES, isMcpValidationError, validateMcpFiles } from "../workers/api/src/mcp-create.ts";
 
 const PR_URL = "https://pkg.pr.new/handsontable@13106";
 
@@ -55,6 +56,7 @@ function fakeEnv(t, { latest = "18.0.0", registry = true, status = 200 } = {}) {
         return type === "json" ? JSON.parse(raw) : raw;
       },
       put: async (key, value) => void store.set(key, value),
+      delete: async (key) => void store.delete(key),
     },
   };
   const real = globalThis.fetch;
@@ -174,6 +176,22 @@ test("a dist-tag never outranks the pin the payload carries", async (t) => {
   assert.equal(r.ref, "13106");
   assert.equal(deps(r.files).handsontable, PR_URL);
   assert.equal(calls.registry, 0);
+});
+
+test("on the service path an explicit dist-tag is the caller's intent and does outrank the payload", async (t) => {
+  // The service path has no forwarding hazard: hot-mcp sends only what the model
+  // passed, never a stored `ht_version`. So a tag there is a fresh request, and
+  // ignoring it would leave a machine caller with no way to move a demo off a PR
+  // build — silently, since nothing said the tag lost (review of PR #230).
+  const { env } = fakeEnv(t, { latest: "18.0.0" });
+  const r = await resolveHandsontableVersion(env, {
+    htVersion: "latest",
+    files: filesWith(PR_URL),
+    trustDistTag: true,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.ref, "18.0.0");
+  assert.equal(deps(r.files).handsontable, "18.0.0");
 });
 
 test("a dist-tag still outranks the demo's previous ref", async (t) => {
@@ -330,4 +348,59 @@ test("editorVersionRef repairs the 'latest' sentinel from the snapshot's own pin
 test("editorVersionRef gives up when neither the row nor the snapshot names a ref", () => {
   assert.equal(editorVersionRef("latest", filesWith("^18.0.0")), null);
   assert.equal(editorVersionRef(null, {}), null);
+});
+
+// ---- npm being unreachable must not refuse a demo ---------------------------
+//
+// Review of PR #230: resolving `latest` server-side made npm availability a
+// dependency of demo *creation*, where before it only degraded the version
+// dropdown. A payload carrying nothing but ranges — the shape hot-mcp's tool
+// description asks the model for — would 502 on a registry hiccup, reaching MCP
+// callers as "the runner refused your demo".
+
+test("a registry outage falls back to the last latest npm was known to have", async (t) => {
+  const { env } = fakeEnv(t, { latest: "18.0.0" });
+  await fetchVersionCatalog(env); // one good day, which is what records it
+  const { env: down } = fakeEnv(t, { registry: false });
+  down.CACHE = env.CACHE; // same namespace, and the hour-long catalog has expired
+  await down.CACHE.delete("versions");
+
+  const r = await resolveHandsontableVersion(down, { files: filesWith("^18.0.0") });
+  assert.equal(r.ok, true);
+  assert.equal(r.ref, "18.0.0");
+  assert.equal(deps(r.files).handsontable, "18.0.0");
+});
+
+test("a registry outage with nothing remembered is still a 502", async (t) => {
+  const { env } = fakeEnv(t, { registry: false });
+  const r = await resolveHandsontableVersion(env, { files: filesWith("^18.0.0") });
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 502);
+});
+
+// ---- the byte cap has to hold on what is stored, not what was sent ----------
+
+test("pinning can push a payload that passed the cap over it", async (t) => {
+  // Why the MCP handlers re-validate after resolving: the pin re-serialises
+  // /package.json at two-space indent and swaps ranges for pkg.pr.new URLs, and
+  // both only grow it. Re-indenting a minified manifest is the unbounded half.
+  const manifest = JSON.stringify({
+    name: "demo",
+    dependencies: Object.fromEntries([
+      ["handsontable", "18.0.0"],
+      ...Array.from({ length: 400 }, (_, i) => [`pkg-${i}`, "1.0.0"]),
+    ]),
+  });
+  const filler = "x".repeat(MAX_MCP_BYTES - manifest.length - 32);
+  const files = { "/package.json": manifest, "/filler.js": filler };
+
+  const accepted = validateMcpFiles(files);
+  assert.equal(isMcpValidationError(accepted), false, "the payload as sent is under the cap");
+
+  const { env } = fakeEnv(t);
+  const r = await resolveHandsontableVersion(env, { htVersion: "13106", files });
+  assert.equal(r.ok, true);
+  const refused = validateMcpFiles(r.files);
+  assert.equal(isMcpValidationError(refused), true, "the pinned payload is over it");
+  assert.match(refused.error, /files too large/);
 });

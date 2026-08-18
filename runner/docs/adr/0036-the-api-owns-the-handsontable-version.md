@@ -54,14 +54,23 @@ Resolving the missing version against npm and rewriting the dependency would
 rebuild its demo against a different core — worse than the bug being fixed, and
 exactly the case DEV-2565 came from. So the payload is asked before npm.
 
-A dist-tag deliberately ranks *below* the payload (step 3, not step 1): it names
-whatever npm has today, which is the same non-answer a range is. `MyDemos`'s fork
-forwards the row's `ht_version` verbatim, so a demo saved before this ADR forks
-with `htVersion: "latest"` while its `package.json` pins a PR build — treating
-the tag as authoritative there would move the fork onto a different core. A
-*concrete* explicit ref does outrank the payload, which is the contract the
-editor and hot-mcp both rely on: **explicit beats the payload's pin; omitting it
-preserves the pin.**
+A dist-tag ranks *below* the payload for a browser caller (step 3, not step 1):
+it names whatever npm has today, which is the same non-answer a range is, and
+`MyDemos`'s fork forwards the row's `ht_version` verbatim — so a demo saved before
+this ADR forks with `htVersion: "latest"` while its `package.json` pins a PR
+build, and treating the tag as authoritative there would move the fork onto a
+different core. A *concrete* explicit ref always outranks the payload: **explicit
+beats the payload's pin; omitting it preserves the pin.**
+
+On the service path (`/api/mcp/demos`) a dist-tag *does* outrank the payload
+(`trustDistTag`). The forwarding hazard is specific to the browser: hot-mcp passes
+through what the model asked for and never a stored `ht_version`, so a tag there
+is a fresh request — and demoting it would leave a machine caller with no way to
+move a demo off a PR build, silently, since the demo's own resent files would keep
+winning.
+
+Both create and rebuild responses echo the resolved `htVersion`. A caller cannot
+otherwise tell which ref won — hot-mcp used to report whatever it sent.
 
 `pinHandsontableFiles` moves into `packages/runtime/src/version.ts` so the editor
 and the worker share one rewrite rule. It stays `dependencies`-only and keeps the
@@ -77,6 +86,17 @@ it, else the snapshot's own pin — and the editor prefers it over
 
 ## Consequences
 - An invalid version costs a `400`, not a builder container.
+- The MCP byte cap (`validateMcpFiles`, ADR-0033) is re-checked on the *pinned*
+  map, not only the submitted one: the pin re-serialises `package.json` at
+  two-space indent and swaps ranges for longer URLs, so a payload accepted just
+  under the cap could otherwise be stored above it. The editor paths have no byte
+  cap at all — deliberately, they are authenticated humans importing real
+  projects — so nothing was added there.
+- npm being unreachable no longer refuses a create. `latest` falls back to the
+  last value the registry was known to have (`versions:last-good-latest`, 30
+  days): a release-behind pin is a far better answer than "the runner refused your
+  demo" for a build `pnpm install` would have resolved by itself. `next` has no
+  fallback — a stale nightly is a specific build nobody asked for.
 - **Behaviour change:** the editor always sends `htVersion`, so a hand-edited
   Handsontable dependency in `package.json` no longer survives Save — the picker
   wins and the dependency is rewritten to its ref. On master that edit survived

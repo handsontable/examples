@@ -32,6 +32,19 @@ const DIST_TAGS = new Set(["latest", "next"]);
 
 const CATALOG_KEY = "versions";
 const CATALOG_TTL = 3600;
+/**
+ * The last `latest` npm was known to have, kept far longer than the catalog.
+ *
+ * Resolving a dist-tag server-side made npm availability a dependency of demo
+ * *creation*, where before it only degraded the version dropdown (review of PR
+ * #230). A payload that carries nothing but ranges — the shape hot-mcp asks the
+ * model for — would otherwise 502 on a registry hiccup, and reach an MCP caller
+ * as "the runner refused your demo". A month-old `latest` is a far better answer
+ * than a refusal: it is a real published version, so the demo builds, and the
+ * only cost of it being stale is a demo pinned one release behind.
+ */
+const LAST_GOOD_LATEST_KEY = "versions:last-good-latest";
+const LAST_GOOD_LATEST_TTL = 30 * 24 * 3600;
 
 export interface VersionCatalog {
   latest: string | null;
@@ -84,7 +97,10 @@ export async function fetchVersionCatalog(env: Env): Promise<VersionCatalog> {
   // Returned either way — `GET /api/versions` keeps answering with whatever npm
   // gave, and the picker degrades onto its hardcoded list on its own — but a
   // document that answers no version question is not worth an hour of KV.
-  if (latest) await env.CACHE.put(CATALOG_KEY, JSON.stringify(payload), { expirationTtl: CATALOG_TTL });
+  if (latest) {
+    await env.CACHE.put(CATALOG_KEY, JSON.stringify(payload), { expirationTtl: CATALOG_TTL });
+    await env.CACHE.put(LAST_GOOD_LATEST_KEY, latest, { expirationTtl: LAST_GOOD_LATEST_TTL });
+  }
   return payload;
 }
 
@@ -99,33 +115,53 @@ export interface ResolveArgs {
   files: Record<string, string>;
   /** The demo's current ref, on a rebuild — used only when the payload is silent. */
   previousRef?: string | null;
+  /**
+   * Treat an explicit dist-tag as the caller's intent, outranking the payload's own
+   * pin. True on the service path (`/api/mcp/demos`) only: hot-mcp passes through
+   * what the model asked for and never a stored `ht_version`, so a tag there is a
+   * fresh request — and without this a machine caller has no way to move a demo off
+   * a PR build. The browser paths keep the tag demoted, because `MyDemos`'s fork
+   * used to forward a legacy row's sentinel and a cached build still can.
+   */
+  trustDistTag?: boolean;
 }
 
 /** Resolve one dist-tag through the catalog, or say why it could not be. */
 async function resolveDistTag(env: Env, tag: string): Promise<{ ok: true; ref: string } | { ok: false; status: number; message: string }> {
-  let catalog: VersionCatalog;
+  let catalog: VersionCatalog | null = null;
+  let reason = "";
   try {
     catalog = await fetchVersionCatalog(env);
   } catch (e) {
-    return {
-      ok: false,
-      status: 502,
-      message: `could not reach the npm registry to resolve handsontable@${tag}: ${e instanceof Error ? e.message : String(e)}`,
-    };
+    reason = e instanceof Error ? e.message : String(e);
   }
-  const ref = tag === "next" ? catalog.next : catalog.latest;
-  // A registry document with no usable tag is the registry's problem, not the
-  // caller's — and storing the tag itself is the defect this module exists for.
-  if (!ref) return { ok: false, status: 502, message: `npm has no handsontable@${tag} to resolve` };
-  return { ok: true, ref };
+  const ref = catalog ? (tag === "next" ? catalog.next : catalog.latest) : null;
+  if (ref) return { ok: true, ref };
+
+  // npm is unreachable or answered with no such tag. For `latest` that is not the
+  // caller's problem and not worth refusing a build over: fall back to the last
+  // one we saw. `next` has no equivalent — a stale nightly is a specific build
+  // nobody asked for, where a stale `latest` is just a release behind.
+  if (tag === "latest") {
+    const remembered = await env.CACHE.get(LAST_GOOD_LATEST_KEY, "text");
+    if (remembered) return { ok: true, ref: remembered };
+  }
+  return {
+    ok: false,
+    status: 502,
+    message: reason
+      ? `could not reach the npm registry to resolve handsontable@${tag}: ${reason}`
+      : `npm has no handsontable@${tag} to resolve`,
+  };
 }
 
 /**
  * Decide the ref a create/rebuild is for, and return the file map pinned to it.
  *
- * Order: a concrete ref the caller asked for, then what the payload's
- * package.json already pins, then a dist-tag the caller asked for, then the
- * demo's current ref, then npm `latest`. Only an explicit unusable `htVersion`
+ * Order: a concrete ref the caller asked for, then — on the service path only
+ * (`trustDistTag`) — an explicit dist-tag, then what the payload's package.json
+ * already pins, then a dist-tag from a browser caller, then the demo's current
+ * ref, then npm `latest`. Only an explicit unusable `htVersion`
  * is refused — with the validator's own message, and before the caller spends a
  * builder container on a doomed install.
  */
@@ -143,6 +179,12 @@ export async function resolveHandsontableVersion(env: Env, args: ResolveArgs): P
     const validated = validateHandsontableVersion(explicit);
     if (!validated.ok) return { ok: false, status: 400, message: validated.message };
     ref = validated.value.ref;
+  }
+
+  if (tag && args.trustDistTag) {
+    const tagged = await resolveDistTag(env, tag);
+    if (!tagged.ok) return tagged;
+    ref = tagged.ref;
   }
 
   ref ??= handsontableDependencyRef(args.files);
