@@ -45,7 +45,14 @@ test("a container starter boots and renders a grid at the requested version", { 
     await page.goto("/?example=react-js");
     await previewReady(page, "container");
     await expectGridRendered(page);
-    expect(postedHtVersion, "the session was asked for a concrete Handsontable version").not.toBeNull();
+    // "At the requested version" needs a real oracle, not non-null: with no
+    // ?v= in the URL the app must resolve /api/versions' latest, so ask the
+    // same endpoint and compare. not.toBeNull() stayed green when version
+    // resolution regressed to a stale hardcoded default (audit, DEV-2203).
+    const versions = (await (await request.get(`${process.env.E2E_BASE_URL}/api/versions`)).json()) as {
+      latest?: string;
+    };
+    expect(postedHtVersion, "the session was asked for the resolved latest version").toBe(versions.latest);
   } finally {
     await tracked.cleanup(request);
   }
