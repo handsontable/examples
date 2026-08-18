@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-4d16fd7-20260817",
-  "count": 1452,
+  "hotVersion": "0.0.0-next-f553f26-20260818",
+  "count": 1462,
   "examples": [
     {
       "bucket": "next",
@@ -4508,6 +4508,166 @@
       "guideTitle": "Selection",
       "exampleId": "example6",
       "exampleTitle": "Jump across horizontal edges",
+      "docPermalink": "/selection",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/selection/angular/example7.ts",
+      "file": "guides__cell-features__selection__angular__example7.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example7",
+      "exampleTitle": "Resize a selection with handles",
+      "docPermalink": "/selection",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/selection/javascript/example7.js",
+      "file": "guides__cell-features__selection__javascript__example7.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example7",
+      "exampleTitle": "Resize a selection with handles",
+      "docPermalink": "/selection",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/selection/react/example7.tsx",
+      "file": "guides__cell-features__selection__react__example7.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example7",
+      "exampleTitle": "Resize a selection with handles",
+      "docPermalink": "/selection",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/selection/javascript/example7.ts",
+      "file": "guides__cell-features__selection__javascript__example7.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example7",
+      "exampleTitle": "Resize a selection with handles",
+      "docPermalink": "/selection",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/selection/vue/example7.vue",
+      "file": "guides__cell-features__selection__vue__example7.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example7",
+      "exampleTitle": "Resize a selection with handles",
+      "docPermalink": "/selection",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/selection/angular/example8.ts",
+      "file": "guides__cell-features__selection__angular__example8.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example8",
+      "exampleTitle": "Move a selection by dragging",
+      "docPermalink": "/selection",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/selection/javascript/example8.js",
+      "file": "guides__cell-features__selection__javascript__example8.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example8",
+      "exampleTitle": "Move a selection by dragging",
+      "docPermalink": "/selection",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/selection/react/example8.tsx",
+      "file": "guides__cell-features__selection__react__example8.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example8",
+      "exampleTitle": "Move a selection by dragging",
+      "docPermalink": "/selection",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/selection/javascript/example8.ts",
+      "file": "guides__cell-features__selection__javascript__example8.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example8",
+      "exampleTitle": "Move a selection by dragging",
+      "docPermalink": "/selection",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/selection/vue/example8.vue",
+      "file": "guides__cell-features__selection__vue__example8.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Selection"
+      ],
+      "guide": "guides/cell-features/selection/selection.md",
+      "guideTitle": "Selection",
+      "exampleId": "example8",
+      "exampleTitle": "Move a selection by dragging",
       "docPermalink": "/selection",
       "framework": "vue",
       "displayName": "Vue 3"
