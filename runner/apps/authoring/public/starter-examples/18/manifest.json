@@ -122,7 +122,8 @@
       "minCoreMajor": 16,
       "overrides": [
         "angular:dateFormat",
-        "angular:data-iso"
+        "angular:data-iso",
+        "angular:data-passthrough"
       ]
     },
     {
