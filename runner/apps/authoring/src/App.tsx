@@ -86,6 +86,16 @@ function releaseMajor(version: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/** The Style panel writes `import … from "handsontable/themes"` plus three
+ * `themes/static/variables/*` imports into the demo, and none of those paths
+ * exist before 17.0.0 — below that the generated module cannot resolve its own
+ * imports and the preview fails to compile (DEV-2560).
+ *
+ * Deliberately not the runner's `DEFAULT_MIN_MAJOR` (15): that floor is "cores
+ * we boot", this one is "cores with a theme API". It is the same cut line
+ * `pipeline/blank-starters.mjs` calls `isLegacyBucket`. */
+const THEME_API_MIN_MAJOR = 17;
+
 /** A starter may declare a minimum core major (e.g. the UI-library starters need
  * the themes API added in Handsontable 17); hide lower published majors from its
  * version picker. next/custom refs (major null) always pass through. */
@@ -980,6 +990,19 @@ function Authoring({
   // example. Mutually exclusive with the chat panel: they occupy the same edge
   // of the screen, and both are secondary to the code.
   const [styleOpen, setStyleOpen] = useState(false);
+  /** Can this demo's core be themed at all? `releaseMajor` answers null for the
+   *  `next` dist-tag and for pkg.pr.new refs, which are post-18 builds — those
+   *  pass, since refusing them would block exactly the people testing them. */
+  const themingSupported = (() => {
+    const major = releaseMajor(version);
+    return major === null || major >= THEME_API_MIN_MAJOR;
+  })();
+  // Switching the version *down* has to close an open panel, not just hide it:
+  // `styleOpen` would stay latched true and the toolbar button would keep
+  // reading as pressed with nothing on screen.
+  useEffect(() => {
+    if (!themingSupported) setStyleOpen(false);
+  }, [themingSupported]);
   /** Edit info (`114:24410`), opened from the BOX INFO pencil. Replaces the two
    *  bare inputs T2 had to park in the authed action bar for want of a frame.
    *
@@ -2454,7 +2477,12 @@ function Authoring({
         secondaryActions={
           <>
             <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />
-            <StyleButton open={styleOpen} onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }} />
+            <StyleButton
+              open={styleOpen}
+              onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }}
+              disabled={!themingSupported}
+              disabledReason={`Theming needs Handsontable ${THEME_API_MIN_MAJOR} or newer — this demo is on ${version}.`}
+            />
           </>
         }
         // ---- chrome (T2) --------------------------------------------------
@@ -2599,10 +2627,11 @@ function Authoring({
         />
       )}
 
-      {styleOpen && (
+      {styleOpen && themingSupported && (
         <StylePanel
           apiBase={API_BASE}
           token={getToken()}
+          htVersion={version}
           getFiles={() => filesRef.current}
           applyEdit={onEdit}
           postToPreview={postToPreview}

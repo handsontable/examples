@@ -69,7 +69,7 @@ const RESULTS = inTheme(`
   // What the endpoint's resting-surface tint resolves to, in both schemes. The
   // tint is a pair of ramp references precisely so these differ.
   import { effectiveColors, effectiveTokens, resolveTokenValue } from "./theme/resolve.ts";
-  import { presetColors, presetTokens, densitySizes } from "./theme/presets.ts";
+  import { presetColors, presetTokens, densitySizes, SIZING } from "./theme/presets.ts";
   const TINT = ["colors.primary.100", "colors.primary.600"];
   const headerIn = (scheme) => {
     const state = {
@@ -80,7 +80,9 @@ const RESULTS = inTheme(`
     };
     const tokens = effectiveTokens(presetTokens(state.tokens), state.params);
     const colors = effectiveColors(presetColors(state.colors), state.palette);
-    const at = (key) => resolveTokenValue(tokens[key], colors, tokens, densitySizes("default"), scheme);
+    const at = (key) => resolveTokenValue(tokens[key], {
+      tokens, colors, density: densitySizes("default"), sizing: SIZING, colorScheme: scheme,
+    });
     return { background: at("headerBackgroundColor"), foreground: at("headerForegroundColor") };
   };
 
