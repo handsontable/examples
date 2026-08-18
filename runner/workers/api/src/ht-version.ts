@@ -46,7 +46,11 @@ export interface VersionCatalog {
  */
 export async function fetchVersionCatalog(env: Env): Promise<VersionCatalog> {
   const cached = (await env.CACHE.get(CATALOG_KEY, "json")) as VersionCatalog | null;
-  if (cached) return cached;
+  // `cached.latest`, not just `cached`: before DEV-2565 this catalog was written
+  // unconditionally, so an npm error body parsed as `{latest:null}` is sitting in
+  // KV under this key today and outlives the deploy. Returning one now would 502
+  // every create that falls through to npm latest until its TTL ran out.
+  if (cached?.latest) return cached;
 
   const r = await fetch("https://registry.npmjs.org/handsontable");
   // Checked before anything is cached: an error body parses fine as JSON and
@@ -76,13 +80,11 @@ export async function fetchVersionCatalog(env: Env): Promise<VersionCatalog> {
     .sort(cmp)
     .slice(0, 15);
 
-  // A document with no `latest` is not a catalog worth keeping for an hour
-  // either: it answers no version question, and npm having no latest tag for
-  // handsontable means something is wrong upstream, not here.
-  if (!latest) throw new Error("npm registry document carries no handsontable latest dist-tag");
-
   const payload: VersionCatalog = { latest, next, versions };
-  await env.CACHE.put(CATALOG_KEY, JSON.stringify(payload), { expirationTtl: CATALOG_TTL });
+  // Returned either way — `GET /api/versions` keeps answering with whatever npm
+  // gave, and the picker degrades onto its hardcoded list on its own — but a
+  // document that answers no version question is not worth an hour of KV.
+  if (latest) await env.CACHE.put(CATALOG_KEY, JSON.stringify(payload), { expirationTtl: CATALOG_TTL });
   return payload;
 }
 

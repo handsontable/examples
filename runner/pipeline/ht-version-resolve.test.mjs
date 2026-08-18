@@ -275,9 +275,33 @@ test("fetchVersionCatalog refuses a non-200 registry response instead of caching
   assert.equal(calls.registry, 2, "nothing was cached, so the second call retries npm");
 });
 
-test("fetchVersionCatalog refuses a registry document with no latest dist-tag", async (t) => {
-  const { env } = fakeEnv(t, { latest: null });
-  await assert.rejects(() => fetchVersionCatalog(env), /latest/i);
+test("fetchVersionCatalog does not cache a document with no latest dist-tag", async (t) => {
+  // The picker can still degrade on a catalog like this, so it is returned — but
+  // caching it would answer for the whole TTL, and demo creation now depends on
+  // the answer.
+  const { env, calls } = fakeEnv(t, { latest: null });
+  const first = await fetchVersionCatalog(env);
+  assert.equal(first.latest, null);
+  await fetchVersionCatalog(env);
+  assert.equal(calls.registry, 2, "nothing was cached, so the second call retries npm");
+});
+
+test("fetchVersionCatalog ignores a degenerate catalog already in KV", async (t) => {
+  // Exactly what master leaves behind: it cached whatever npm returned, including
+  // an error body parsed as `{latest:null}`. That entry outlives this deploy.
+  const { env, calls } = fakeEnv(t, { latest: "18.0.0" });
+  await env.CACHE.put("versions", JSON.stringify({ latest: null, next: null, versions: [] }));
+  const catalog = await fetchVersionCatalog(env);
+  assert.equal(catalog.latest, "18.0.0");
+  assert.equal(calls.registry, 1);
+});
+
+test("a demo create still resolves latest with a degenerate catalog in KV", async (t) => {
+  const { env } = fakeEnv(t, { latest: "18.0.0" });
+  await env.CACHE.put("versions", JSON.stringify({ latest: null, next: null, versions: [] }));
+  const r = await resolveHandsontableVersion(env, { files: filesWith("^18.0.0") });
+  assert.equal(r.ok, true);
+  assert.equal(r.ref, "18.0.0");
 });
 
 test("fetchVersionCatalog lists only in-range published releases, newest first", async (t) => {

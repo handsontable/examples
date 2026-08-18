@@ -1352,6 +1352,17 @@ function Authoring({
            *  sentinel there, and adopting it as version state is a boot refusal. */
           htVersion?: string | null;
         };
+        // Read outside the metadata branch on purpose: the version rides on the
+        // snapshot now, so a transient metadata failure must not cost the demo its
+        // pin — the editor would resolve latest and the next Save would re-pin the
+        // demo to it.
+        //
+        // Presence, not truthiness: the route answers `null` for a legacy row whose
+        // snapshot pins nothing exact, and *that* is the answer — falling back to
+        // `meta.ht_version` there would adopt the "latest" sentinel and reproduce
+        // the boot refusal this branch removes (DEV-2565).
+        let pinnedVersion: string | null | undefined =
+          "htVersion" in src ? src.htVersion : undefined;
         if (metaRes.ok) {
           const meta = (await metaRes.json()) as {
             title: string;
@@ -1362,16 +1373,13 @@ function Authoring({
           setTitle(meta.title ?? "");
           setDescription(meta.description ?? "");
           setCreatedAt(meta.created_at ?? "");
-          // Presence, not truthiness: the route answers `null` for a legacy row
-          // whose snapshot pins nothing exact, and *that* is the answer — falling
-          // back to `meta.ht_version` there would adopt the "latest" sentinel and
-          // reproduce the boot refusal this branch removes. `meta` is only the
-          // fallback for an API old enough not to send the field at all.
-          const pinned = "htVersion" in src ? src.htVersion : meta.ht_version;
-          if (pinned) {
-            hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
-            setVersion(pinned);
-          }
+          // The column is the fallback only for an API old enough not to send the
+          // field at all.
+          if (pinnedVersion === undefined) pinnedVersion = meta.ht_version;
+        }
+        if (pinnedVersion) {
+          hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
+          setVersion(pinnedVersion);
         }
         loadWorkspace(toPlaceholderEntry(getEntry(src.framework)), src.files, savedId);
         setSourceLoaded(true);
