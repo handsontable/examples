@@ -229,6 +229,10 @@ class SandboxBaseWithSleep extends SandboxBase {
             title: descriptor.title,
             body: descriptor.body,
             refreshSeconds: descriptor.refreshSeconds,
+            // Only the document shape can carry it — the other two shapes are a
+            // bodyless upgrade refusal and a sub-resource, neither of which runs
+            // a script (DEV-2547).
+            previewState: descriptor.previewState,
           })
         : new Response(descriptor.shape === "bare" ? null : `${descriptor.title}. ${descriptor.body}`, {
             status: 503,
@@ -834,7 +838,22 @@ export default Sentry.withSentry(sentryOptions, {
         const port = Number(url.searchParams.get("port")) || 0;
         let ready = false;
         if (port) {
-          const probe = `node -e "require('net').connect(${port},'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"`;
+          // An HTTP GET of `/`, not a bare TCP connect (DEV-2547). A dev server that has
+          // bound the port but is not yet serving — or is answering 5xx — accepts a
+          // connection exactly like a healthy one, and the client points the iframe at
+          // the preview the moment this says `ready`. The frame's first request then
+          // races the server and can land on the Worker's own boot page, which is the
+          // reported "ready, but no grid" signature.
+          //
+          // `< 500` rather than `=== 200`: a starter that redirects its root or answers
+          // 404 there is still a server that is up, and this route is not the place to
+          // judge routing. A 2s timeout keeps the poll (2.5s on the client) from queueing
+          // on itself, and any error — refused, reset, timed out — reads as not ready,
+          // the same as the old probe.
+          const probe =
+            `node -e "const h=require('http');const q=h.get({host:'127.0.0.1',port:${port},path:'/',` +
+            `headers:{host:'localhost:${port}'},timeout:2000},s=>{s.resume();process.exit(s.statusCode<500?0:1)});` +
+            `q.on('timeout',()=>{q.destroy();process.exit(1)});q.on('error',()=>process.exit(1))"`;
           try { ready = (await sandbox.exec(probe)).success === true; } catch { ready = false; }
         }
         let log = "";

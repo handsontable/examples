@@ -71,10 +71,41 @@ export interface ErrorPageInit {
    * omits it — a 404 that reloaded itself would be a loop, not a recovery.
    */
   refreshSeconds?: number;
+  /**
+   * Tell the embedding shell what this document is (DEV-2547).
+   *
+   * Only the live-preview pages set it. The frame is cross-origin, so the shell
+   * cannot read it — but this page is ours, so it can speak: an inline script
+   * posts `{ source: "demo-preview", state }` to the parent, which is what keeps
+   * `data-preview-status` from reaching "ready" over an apology page. Omitted by
+   * every other caller: `/d/:id` and `/embed/:id` errors replace the whole page,
+   * not a frame inside one, so there is no parent to tell.
+   */
+  previewState?: "booting" | "dead";
 }
 
 /** A whole number of seconds, at least 1 — `content="0"` is a busy loop. */
 const refreshInterval = (seconds: number) => Math.max(1, Math.round(seconds));
+
+/**
+ * The parent notification, inlined.
+ *
+ * Inline rather than a module: this document is served by the Worker in place of
+ * whatever the frame asked for, so a second request for a script file would hit
+ * the same dead port. No CSP is set on these responses (`errorPageResponse`) and
+ * the shell's iframe carries `allow-scripts`
+ * (`packages/editor-shell/src/PreviewPane.tsx`), so it runs.
+ *
+ * `"*"` as the target origin: the shell is on the app origin and this page is on
+ * the per-session preview origin, and the message carries no secret — it says
+ * only what the visitor can already see. The receiver checks the *sender* origin
+ * instead, which is the half that matters.
+ *
+ * Runs at parse time, so the message is queued before this document's `load`
+ * fires — the ordering the shell's per-navigation decision depends on.
+ */
+const previewStateScript = (state: "booting" | "dead") =>
+  `\n<script>try{if(window.parent!==window)window.parent.postMessage({source:"demo-preview",state:"${state}"},"*")}catch(e){}</script>`;
 
 /**
  * A minimal branded error document.
@@ -83,7 +114,14 @@ const refreshInterval = (seconds: number) => Math.max(1, Math.round(seconds));
  * docs page, where a full-width "Back to the playground" call to action would be
  * wrong. The caller decides.
  */
-export function errorPageHtml({ status, title, body, homeUrl, refreshSeconds }: ErrorPageInit): string {
+export function errorPageHtml({
+  status,
+  title,
+  body,
+  homeUrl,
+  refreshSeconds,
+  previewState,
+}: ErrorPageInit): string {
   // A number formatted straight into the attribute — never through escapeHtml,
   // which takes a string and would happily pass one through.
   const refresh =
@@ -119,7 +157,7 @@ ${MARK}
 <h1>${escapeHtml(title)}</h1>
 <p>${escapeHtml(body)}</p>
 ${homeUrl ? `<a href="${escapeHtml(homeUrl)}">Back to the playground</a>` : ""}
-</main>
+</main>${previewState === undefined ? "" : previewStateScript(previewState)}
 </body>
 </html>`;
 }
