@@ -6,10 +6,17 @@ name: CI
 # container so the browser always matches the test package.
 #
 #   unit ──► build ──► authoring ──► e2e
+#   presence (PR-only, needs nothing — runs in parallel)
 #
 # unit gates build: it is the cheapest job (pnpm test builds the runtime
 # itself, by design), so a broken helper fails the run before any minutes go
 # into the app build or a browser container.
+#
+# presence is the test-presence gate (runner/docs/TESTING.md): a PR that
+# changes runner source must also change a test, or declare a Refactor-only:/
+# Test-plan: trailer. It only fires on pull_request — a master push arrives
+# here via workflow_call after its PR already passed it, and has no base to
+# diff against anyway.
 #
 # The live-render checks that need the external Sandpack bundler stay gated
 # behind E2E_LIVE (e2e-live.yml). Also callable (workflow_call) so the deploy
@@ -31,6 +38,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  presence:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The gate diffs the PR range against its base — it needs history,
+          # not just the merge commit.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test-presence gate (source change ⇒ test change)
+        run: node runner/scripts/check-test-presence.mjs "${{ github.base_ref }}"
+
   unit:
     runs-on: ubuntu-latest
     defaults:
