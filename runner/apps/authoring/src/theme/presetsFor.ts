@@ -106,9 +106,11 @@ export async function loadPresets(
   tokens: TokensPreset,
   colors: ColorsPreset,
 ): Promise<PresetSet> {
-  if (version === BUNDLED_VERSION || !canLoadPresets(version)) {
-    return bundledPresets(tokens, colors);
-  }
+  // The pinned version is not a fallback — those *are* the right numbers.
+  if (version === BUNDLED_VERSION) return bundledPresets(tokens, colors);
+  // An unfetchable ref is: the panel is showing this app's numbers for someone
+  // else's version, which is exactly what the note exists to say.
+  if (!canLoadPresets(version)) return bundledPresets(tokens, colors, true);
 
   const timeout = new Promise<PresetSet>((resolve) => {
     setTimeout(() => resolve(bundledPresets(tokens, colors, true)), LOAD_TIMEOUT_MS);

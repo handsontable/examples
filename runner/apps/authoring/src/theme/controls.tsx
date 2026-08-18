@@ -155,8 +155,13 @@ function SizeControl({ value, resolved, effectiveRef = "", density, sizing, mode
   onChange: (v: string) => void;
 }) {
   const raw = typeof value === "string" ? value : "";
+  /** The reference in force — the override, else the preset's own. Both the mode
+   *  the popover opens on and the row it highlights follow this: keying either to
+   *  `raw` alone left an untouched token on a list with nothing selected, while
+   *  its trigger already showed the resolved preset value. */
+  const current = raw || effectiveRef;
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<SizeMode>(() => modeFor(effectiveRef || raw, modes));
+  const [mode, setMode] = useState<SizeMode>(() => modeFor(current, modes));
 
   return (
     <div>
@@ -180,7 +185,7 @@ function SizeControl({ value, resolved, effectiveRef = "", density, sizing, mode
                 .sort((a, b) => parseFloat(a[1]) - parseFloat(b[1]))
                 .map(([k, v]) => (
                   <button key={k} type="button" className="hot-panel-list-item" style={listItem}
-                    data-active={raw === `sizing.${k}`}
+                    data-active={current === `sizing.${k}`}
                     onClick={() => onChange(`sizing.${k}`)}>
                     <span>{k}</span><span style={listItemValue}>{v}</span>
                   </button>
@@ -191,7 +196,7 @@ function SizeControl({ value, resolved, effectiveRef = "", density, sizing, mode
             <div style={scrollList}>
               {Object.keys(density).map((k) => (
                 <button key={k} type="button" className="hot-panel-list-item" style={listItem}
-                  data-active={raw === `density.${k}`}
+                  data-active={current === `density.${k}`}
                   onClick={() => onChange(`density.${k}`)}>
                   <span>{k.replace(/([A-Z])/g, " $1").replace(/^\w/, (c) => c.toUpperCase())}</span>
                   <span style={listItemValue}>{density[k]}</span>
@@ -204,9 +209,13 @@ function SizeControl({ value, resolved, effectiveRef = "", density, sizing, mode
             // `1rem`, `50%` and unitless numbers are all valid sizes, and
             // reopening the editor blank while the trigger showed the real value
             // made the next edit a guess.
+            //
+            // From `raw`, not `current`: seeding an untouched token with the
+            // preset's literal would let a blur alone commit that literal as an
+            // override. The resolved value is the placeholder instead.
             <input type="text" style={{ ...control, width: "100%" }}
               defaultValue={/^(sizing|density)\./.test(raw) ? "" : raw}
-              placeholder="e.g. 12px, 1rem, 50%"
+              placeholder={resolved || "e.g. 12px, 1rem, 50%"}
               onBlur={(e) => e.target.value && onChange(e.target.value)} />
           )}
         </div>
