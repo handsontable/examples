@@ -22,7 +22,9 @@ import { Data } from "../../app/data";
 // Handsontable 17.0.0 passes a plain theme-config object straight to
 // ThemeManager.update on the updateSettings path (normalization was added in
 // 17.1.0), so this branch hands over a registered ThemeBuilder instead.
-const dataGridTheme = hasTheme("main") ? getTheme("main") : registerTheme(mainTheme);
+const dataGridTheme = hasTheme("main")
+  ? getTheme("main")
+  : registerTheme({ ...mainTheme, colorScheme: "light" });
 
 registerCellType(CheckboxCellType);
 registerCellType(NumericCellType);

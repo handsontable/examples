@@ -355,7 +355,7 @@ const container = document.querySelector<HTMLElement>("#handsontable-grid")!;
 
 new Handsontable(container, {
   data,
-  theme: mainTheme,
+  theme: { ...mainTheme, colorScheme: 'light' },
   colHeaders: [
     "ID",
     "Item Name",

@@ -58,7 +58,7 @@ const example = document.getElementById('example');
 
 new Handsontable(example, {
   data: generateExampleData(),
-  theme: mainTheme,
+  theme: { ...mainTheme, colorScheme: 'light' },
   layoutDirection: isArabicDemoEnabled() ? 'rtl' : 'ltr',
   language: isArabicDemoEnabled() ? arAR.languageCode : 'en-US',
   height: 248,
