@@ -27,6 +27,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import * as acorn from "acorn";
 import { fileURLToPath } from "node:url";
 import { RUNNER } from "./import-docs.mjs";
 import { wrapDocsExample } from "./wrap-docs-example.mjs";
@@ -149,6 +150,19 @@ test("the Vue docs config carries the opt-in itself, not just a high enough vite
     /server:\s*\{\s*allowedHosts:\s*true\s*\}/,
     "the generated vue vite config must set server.allowedHosts",
   );
+});
+
+test("the config that actually ships parses", () => {
+  // The boot test in vite-allowed-hosts.test.mjs runs a stripped, plugin-less config
+  // (`@vitejs/plugin-vue` is not resolvable from a temp dir), so nothing there parses
+  // the text that reaches the artifacts — where the block is interpolated AFTER
+  // `plugins: [vue()], `. An edit that is valid standalone and broken in that position
+  // would pass every other assertion here and take the container's boot down with a
+  // syntax error. This repo has been caught by exactly that gap before: a hand-written
+  // ES5 file with an ES2017 trailing comma that `new Function` accepted and the
+  // shipping parser did not.
+  const config = viteConfigOf(emit("vue"));
+  acorn.parse(config, { ecmaVersion: 2020, sourceType: "module" });
 });
 
 test("the Vue docs vite pin matches the baked container it installs against", () => {
