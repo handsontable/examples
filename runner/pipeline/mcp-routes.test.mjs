@@ -200,16 +200,21 @@ test("a created demo answers with the four links and its owner", async () => {
   assert.equal(res.status, 201);
   const body = await res.json();
   // Exactly these keys — an agent navigates by them, so a dropped or renamed
-  // link is a breaking change of the MCP contract.
+  // link is a breaking change of the MCP contract. `htVersion` joined the
+  // response when the version catalog moved server-side (master, ht-version.ts)
+  // — this assertion caught that addition, which is its job; grew, reviewed,
+  // admitted.
   assert.deepEqual(
     Object.keys(body).sort(),
-    ["createdBy", "editUrl", "embedUrl", "id", "shareUrl", "url"],
+    ["createdBy", "editUrl", "embedUrl", "htVersion", "id", "shareUrl", "url"],
   );
   assert.equal(body.url, `/d/${body.id}`);
   assert.equal(body.embedUrl, `/embed/${body.id}`);
   assert.equal(body.editUrl, `/edit/${body.id}`);
   assert.equal(body.shareUrl, `/share/${body.id}`);
   assert.equal(body.createdBy, AUTHOR);
+  // Concrete, not a dist-tag: the agent pins its follow-up update to this.
+  assert.match(body.htVersion, /^\d+\.\d+\.\d+/);
 });
 
 test("a created demo is written with the caller as its owner, and its owner's listing finds it", async () => {
