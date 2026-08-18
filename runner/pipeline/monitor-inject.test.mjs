@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import * as acorn from "acorn";
 import {
   MONITOR_BREADCRUMB_CEILING,
@@ -9,6 +10,7 @@ import {
   MONITOR_MESSAGE_TYPE,
   MONITOR_STACK_MAX,
   MONITOR_URL_MAX,
+  REPORTER_MODULE_LINE,
   REPORTER_SOURCE,
   createMonitorBudget,
   injectReporter,
@@ -70,6 +72,61 @@ test("prepends to a JS module entry", () => {
   assert.ok(out["/src/main.js"].trimEnd().endsWith("grid();"), "demo source stays last");
 });
 
+// ---- DEV-2557: the module entry may shift the demo by at most one line -------
+//
+// Every position the bundler reports for the entry file is offset by whatever we
+// prepended to it. Inlining the reporter body cost 226 lines at the releases the
+// Sentry events were tagged with, and 283 after DEV-2552 grew it — which is how a
+// syntax error in a 70-line file came back as "(257:22)". The injection is now one
+// physical line, so the distortion *we* add is one line, and it stays that way only
+// because these tests check it.
+
+const MODULE_ENTRY = "/src/main.js";
+const MODULE_SOURCE = ["import { grid } from './grid';", "", "// a comment", "grid();", ""].join("\n");
+
+test("DEV-2557: a module entry is shifted by exactly one line", () => {
+  // Computed from the split rather than asserted against a constant: a constant is
+  // what put the wrong number in the ticket in the first place.
+  const injected = injectReporter({ [MODULE_ENTRY]: MODULE_SOURCE }, MODULE_ENTRY)[MODULE_ENTRY];
+  const before = MODULE_SOURCE.split("\n");
+  const after = injected.split("\n");
+
+  assert.equal(after.length - before.length, 1, "exactly one line added");
+  for (let i = 0; i < before.length; i += 1) {
+    assert.equal(after[i + 1], before[i], `authored line ${i + 1} lands on reported line ${i + 2}`);
+  }
+  assert.ok(after[0].includes(MONITOR_MESSAGE_TYPE), "and that one line is the reporter");
+});
+
+test("DEV-2557: the injected module prefix carries no line terminator", () => {
+  // `JSON.stringify` escapes \n and \r but NOT U+2028/U+2029, which JS treats as
+  // line terminators. REPORTER_SOURCE is ASCII today; this is the only thing
+  // standing between a future non-ASCII edit and a silent return of the offset.
+  // Built with `fromCharCode` rather than written literally, so no editor or
+  // formatter can quietly normalise away the characters this test exists to reject.
+  for (const [name, ch] of [
+    ["LF", "\n"],
+    ["CR", "\r"],
+    ["U+2028", String.fromCharCode(0x2028)],
+    ["U+2029", String.fromCharCode(0x2029)],
+  ]) {
+    assert.equal(REPORTER_MODULE_LINE.includes(ch), false, `prefix must not contain ${name}`);
+  }
+});
+
+test("DEV-2557: module-entry injection is idempotent and byte-deterministic", () => {
+  // The existing pair of tests covers the HTML entry only. `alreadyInjected` keys on
+  // MONITOR_MESSAGE_TYPE appearing in the source, and the marker has to survive the
+  // JSON escaping of the reporter body for a double injection to stay a no-op.
+  const files = { [MODULE_ENTRY]: MODULE_SOURCE };
+  const a = injectReporter(files, MODULE_ENTRY);
+  const b = injectReporter(files, MODULE_ENTRY);
+  assert.equal(a[MODULE_ENTRY], b[MODULE_ENTRY], "two builds of the same source are byte-identical");
+
+  const twice = injectReporter(a, MODULE_ENTRY);
+  assert.equal(twice, a, "second injection returns the same object, untouched");
+});
+
 test("injection is byte-deterministic", () => {
   // `sameFiles` skips the compile when the sandbox is unchanged. A reporter that
   // varied between builds would make every keystroke a real diff and defeat it.
@@ -103,16 +160,17 @@ test("falls back to body, then to a prepend, when there is no head", () => {
 
 // ---- the reporter, executed -------------------------------------------------
 
-/** Run REPORTER_SOURCE against stubs and return the harness. Bare `window`,
- *  `parent`, `console`, `document` and `XMLHttpRequest` in the reporter resolve to
- *  these parameters, so no DOM implementation is needed.
+/** The stub environment the reporter is executed against — no DOM implementation
+ *  needed. Extracted from `runReporter` so the DEV-2557 vm test can install the
+ *  *same* stubs as real context globals and compare the two runs; the eval form
+ *  evaluates in global scope and can never see `new Function` parameters.
  *
  *  Options, each present because one behaviour can only be reached through it:
  *  `fetch` and `XMLHttpRequest` install the transports the reporter wraps,
  *  `location` overrides the page's own host (pass `undefined` to make it
  *  unreadable), and `brokenAnchor` makes `document.createElement` throw, which is
  *  the only way to produce a network event with no attributable URL. */
-function runReporter(options = {}) {
+function makeReporterStubs(options = {}) {
   const sent = [];
   const listeners = new Map();
   const passthrough = [];
@@ -153,25 +211,36 @@ function runReporter(options = {}) {
   // from — the reporter must strip it from everything it sends.
   const location = "location" in options ? options.location : { host: PREVIEW_HOST };
 
-  // eslint-disable-next-line no-new-func
-  new Function("window", "parent", "console", "document", "XMLHttpRequest", "location", REPORTER_SOURCE)(
-    win,
-    parent,
-    consoleStub,
-    document,
-    options.XMLHttpRequest,
-    location,
-  );
-
   return {
     sent,
     passthrough,
     win,
+    parent,
+    document,
+    location,
+    XMLHttpRequest: options.XMLHttpRequest,
     console: consoleStub,
     fire(type, event) {
       for (const cb of listeners.get(type) ?? []) cb(event);
     },
   };
+}
+
+/** Run REPORTER_SOURCE against those stubs and return the harness. Bare `window`,
+ *  `parent`, `console`, `document` and `XMLHttpRequest` in the reporter resolve to
+ *  these parameters. */
+function runReporter(options = {}) {
+  const h = makeReporterStubs(options);
+  // eslint-disable-next-line no-new-func
+  new Function("window", "parent", "console", "document", "XMLHttpRequest", "location", REPORTER_SOURCE)(
+    h.win,
+    h.parent,
+    h.console,
+    h.document,
+    h.XMLHttpRequest,
+    h.location,
+  );
+  return h;
 }
 
 /** A fresh XHR stub class per call — the reporter patches `prototype.open`, so a
@@ -205,6 +274,47 @@ test("reporter relays an uncaught error", () => {
   assert.equal(h.sent[0].message, "boom");
   assert.ok(h.sent[0].stack.includes("Error: boom"));
   assert.ok(isMonitorPayload(h.sent[0]), "payload passes the parent's own validation");
+});
+
+test("DEV-2557: the one-line eval form installs the same hooks as the inlined reporter", () => {
+  // The one-line injection buys its line count with an indirect eval, so the eval
+  // path has to be *executed*, not assumed — the DEV-2129 lesson again. `runReporter`
+  // above cannot do it: it hands the stubs in as `new Function` parameters, and an
+  // indirect eval evaluates in global scope where those bindings do not exist. Hence
+  // a vm context, where the same stubs are real globals.
+  //
+  // Asserted as an equivalence against the inlined run rather than as "something was
+  // sent": the payload is what the parent validates and Sentry receives, and a
+  // divergence in it is the failure that would matter.
+  const inlined = runReporter();
+  inlined.fire("error", { error: new Error("boom"), message: "boom" });
+
+  const evaled = makeReporterStubs();
+  const context = vm.createContext({
+    window: evaled.win,
+    parent: evaled.parent,
+    console: evaled.console,
+    document: evaled.document,
+    location: evaled.location,
+    URL,
+  });
+  const injected = injectReporter({ [MODULE_ENTRY]: "globalThis.__demoRan = true;" }, MODULE_ENTRY)[MODULE_ENTRY];
+  vm.runInContext(injected, context, { filename: MODULE_ENTRY });
+
+  assert.equal(context.__demoRan, true, "the demo's own source still evaluates after the prefix");
+
+  evaled.fire("error", { error: new Error("boom"), message: "boom" });
+  assert.equal(evaled.sent.length, 1, "the eval-installed listener fired");
+  assert.ok(isMonitorPayload(evaled.sent[0]), "payload passes the parent's own validation");
+  // Structural compare: the payload is built inside the vm realm, so its prototype is
+  // not this realm's Object.prototype and a strict deep-equal would fail on that
+  // alone. The stack differs only by the two `new Error` call sites.
+  assert.deepEqual(
+    { ...evaled.sent[0], stack: undefined },
+    { ...inlined.sent[0], stack: undefined },
+    "eval-injected reporter produces the same payload as the inlined one",
+  );
+  assert.ok(evaled.sent[0].stack.includes("Error: boom"), "stack still relayed");
 });
 
 test("reporter relays an unhandled rejection", () => {
@@ -829,6 +939,18 @@ test("REPORTER_SOURCE parses as ES5", () => {
   // prepended to, where a parse failure is a blank Tier-1 preview.
   //
   // Parsed, not grepped: a syntax allowlist is a list of the mistakes already made.
+  //
+  // This must stay pointed at REPORTER_SOURCE and never at the injected output.
+  // Since DEV-2557 the module entry carries the reporter as a single JSON string
+  // literal, which parses at ES5 no matter what is inside it — repointing the guard
+  // there would check nothing, forever.
+  //
+  // And the slip it catches got *quieter*, not louder, on that path: the injected form
+  // is `try{(0,eval)(...)}catch(e){}`, so a parse failure inside the string is swallowed
+  // by that catch and costs the demo nothing visible — Tier-1 monitoring simply goes
+  // off, with no build error and no blank preview to notice it by. The HTML entry
+  // (Tier-2's only channel, `workers/api/src/monitor-inject.ts`) still inlines the body,
+  // where a slip is loud. This assertion is the only thing that fails first.
   assert.doesNotThrow(() => acorn.parse(REPORTER_SOURCE, { ecmaVersion: 5 }));
 });
 

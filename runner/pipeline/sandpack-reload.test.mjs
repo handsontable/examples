@@ -1,7 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { SandpackCompileError, SandpackEvaluationError, SandpackRuntime } from "../packages/runtime/dist/sandpack.js";
-import { MONITOR_COMPILE_MESSAGE_MAX } from "../packages/runtime/dist/monitor.js";
+import {
+  MONITOR_COMPILE_MESSAGE_MAX,
+  REPORTER_MODULE_LINE,
+  injectReporter,
+} from "../packages/runtime/dist/monitor.js";
+
+/** `@babel/standalone` is `packages/runtime`'s dependency, not the workspace root's, and
+ *  under pnpm it is only resolvable from there. Resolved against that package's manifest
+ *  so the DEV-2557 fixture below can drive the real transform the bundler runs. */
+const requireFromRuntime = createRequire(new URL("../packages/runtime/package.json", import.meta.url));
 
 // DEV-2176: the classic bundler drops every `compile` message carrying
 // `isInitializationCompile: true` after the first one — from its own
@@ -58,6 +68,10 @@ const ENTRY = {
   skipped: [],
   files: {},
 };
+
+/** The file `injectReporter` prepends to for this entry — `vue-cli` is outside
+ *  HTML_ENTRY_ENVS, so the JS module is the sandbox entry and the only injection site. */
+const MODULE_ENTRY = ENTRY.entry;
 
 const FILES = {
   "/package.json": JSON.stringify({ dependencies: { handsontable: "16.0.1" } }),
@@ -418,4 +432,76 @@ test("DEV-2552: an evaluation error is bounded exactly like a compile error", ()
   assert.ok(!reported.message.includes("AAAA"));
   assert.match(reported.message, /c is not defined/);
   assert.ok(reported.message.length <= MONITOR_COMPILE_MESSAGE_MAX + 3);
+});
+
+// ---------------------------------------------------------------------------
+// DEV-2557 — the injected reporter must not bury the diagnostic it shortened.
+//
+// Shrinking the injection to one physical line fixed the line *number* and broke the
+// code *frame*: babel prints the two lines above the fault verbatim, so a syntax error
+// on authored line 1 or 2 of the entry renders all 12.6 KB of `REPORTER_MODULE_LINE`
+// into the message ahead of the offending line, and MONITOR_COMPILE_MESSAGE_MAX then
+// cuts at 2,000 — the caret and the visitor's own source gone. That is exactly DEV-2550
+// (DEMOS-15) again, on the same channel, sourced from our bytes instead of a source map.
+// `boundCompileMessage` strips the line before the cap; this is what says so.
+//
+// The fixture is a *real* babel run over a *real* `injectReporter` output rather than a
+// hand-assembled string. A hand-assembled message would pass whatever the strip and the
+// injection happened to agree on, including agreeing wrongly; only the real transform
+// pins the thing that matters, which is that what the bundler actually emits still
+// carries the visitor's source after bounding.
+
+/** Compile `source` the way the bundler does and return the message it would post. */
+function compileErrorMessageFor(source) {
+  const babel = requireFromRuntime("@babel/standalone");
+  try {
+    babel.transform(source, {
+      filename: MODULE_ENTRY,
+      presets: [["env", { targets: { chrome: "58" } }]],
+      babelrc: false,
+      configFile: false,
+    });
+  } catch (e) {
+    return String(e.message);
+  }
+  assert.fail("the fixture source must not compile — it is supposed to be a syntax error");
+}
+
+const BROKEN_FIRST_LINE = [
+  "import Handsontable from 'handsontable;", // unterminated string, authored line 1
+  "import { registerAllModules } from 'handsontable/registry';",
+  "",
+  "const hot = new Handsontable(document.body, { data: [] });",
+].join("\n");
+
+test("DEV-2557: the injected line does not push the diagnostic past the cap", () => {
+  const injected = injectReporter({ [MODULE_ENTRY]: BROKEN_FIRST_LINE }, MODULE_ENTRY)[MODULE_ENTRY];
+  const raw = compileErrorMessageFor(injected);
+
+  // The premise, asserted so the test cannot pass by the blob never having been there:
+  // untreated, this message is kilobytes of reporter and the visitor's line is past the
+  // cap. If a future babel stops printing long context lines verbatim this fails here,
+  // which is the right place to find that out.
+  assert.ok(raw.length > MONITOR_COMPILE_MESSAGE_MAX, `premise gone: raw message is only ${raw.length} chars`);
+  assert.ok(raw.includes(REPORTER_MODULE_LINE), "premise gone: the injected line is no longer echoed verbatim");
+  assert.ok(
+    !raw.slice(0, MONITOR_COMPILE_MESSAGE_MAX).includes("from 'handsontable;"),
+    "premise gone: the offending line already fits under the cap untreated",
+  );
+
+  const reported = showError(raw);
+
+  assert.ok(reported instanceof SandpackCompileError);
+  assert.match(reported.message, /Unterminated string constant/, "the diagnostic survives");
+  assert.match(reported.message, /from 'handsontable;/, "the visitor's own source survives the cap");
+  assert.ok(!reported.message.includes("__hotRunnerMonitor"), "the reporter body must not reach the card or Sentry");
+  assert.ok(reported.message.length <= MONITOR_COMPILE_MESSAGE_MAX + 3);
+});
+
+test("DEV-2557: an uninjected message is left byte-identical", () => {
+  // The strip must be inert on everything else — no Tier-2 message, no container
+  // diagnostic, nothing a visitor typed, is allowed to change shape because of it.
+  const raw = compileErrorMessageFor(BROKEN_FIRST_LINE);
+  assert.ok(raw.length <= MONITOR_COMPILE_MESSAGE_MAX, "an uninjected frame is small enough to compare whole");
+  assert.equal(showError(raw).message, raw);
 });

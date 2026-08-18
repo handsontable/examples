@@ -581,6 +581,61 @@ export const REPORTER_SOURCE = `(function () {
 })();
 `;
 
+/**
+ * The reporter as a *single physical line*, for prepending to a JS module entry.
+ *
+ * DEV-2557. Whatever we prepend to the entry shifts every position the bundler
+ * reports for that file, and the visitor is shown those positions verbatim. Inlining
+ * the reporter body cost 226 lines at the releases the Sentry events were tagged
+ * with, and 283 after DEV-2552 grew it — which is how a syntax error in a 70-line
+ * file came back as "(257:22)". One line of prefix means one line of shift.
+ *
+ * Why an indirect eval and not a separate module the entry imports: a new module
+ * would put a specifier the author never wrote into the graph, next to a moving entry
+ * path, entangled with `resolveSandboxEntry`, `sameFiles` and `stampEntry`, and would
+ * depend on the classic bundler evaluating an injected dependency before the entry
+ * body. Its failure mode is a blank preview. This form has zero graph interaction.
+ *
+ * Why `(0,eval)` and not `eval`: the indirect form evaluates in global scope, where
+ * the reporter's bare `window`/`parent`/`document`/`location`/`XMLHttpRequest`
+ * resolve, and where it leaks no bindings into the bundler's module wrapper.
+ *
+ * Why the try/catch: if `eval` is ever unavailable, that must cost monitoring on this
+ * path and never the demo. An entry that resolves to an HTML file (`parcel`/`static`
+ * with an `htmlEntry` — see `resolveSandboxEntry`) keeps the `<script>` injection as a
+ * working channel; anything else, the vue entry included, reaches the reporter only
+ * through this one. Verified live rather than inferred, since the catch would hide the
+ * failure: `window.__hotRunnerMonitor` is true inside the real Sandpack preview iframe
+ * for both a vue and a react entry.
+ *
+ * Still byte-deterministic: a pure function of a constant, computed once at module
+ * load — nothing hashed, padded, timestamped or randomised — so `sameFiles` keeps
+ * skipping the no-op compile (see `injectReporter` below).
+ *
+ * `alreadyInjected` still matches it: `JSON.stringify` escapes the quotes around
+ * MONITOR_MESSAGE_TYPE but leaves the string itself verbatim, so a double injection
+ * stays a no-op.
+ *
+ * One physical line is not free, and the cost lands somewhere non-obvious: babel's code
+ * frame prints the two lines above the fault verbatim, so a syntax error on authored
+ * line 1 or 2 renders all 12.6 KB of this into the compile message ahead of the line
+ * that is actually wrong, and `MONITOR_COMPILE_MESSAGE_MAX` then cuts the diagnostic off
+ * (measured: 289 characters of usable message with the reporter inlined, 12,872 with it
+ * on one line). `boundCompileMessage` in sandpack.ts therefore replaces this exact
+ * constant with a marker before the cap runs — `stripInjectedReporter`, which is
+ * coupled to this constant on purpose. Do not change the shape of this line without
+ * checking that strip still fires.
+ *
+ * What this does NOT fix: the entry is generally transpiled before the injection —
+ * `transpileFilesForParcel` for the parcel entries, and babel does not use
+ * `retainLines` — so a reported line is still a *compiled* line. Do not read this as
+ * "line numbers are now correct" for any entry: measured on the vue starter, a syntax
+ * error typed on authored line 11 reports line 14, the residual +3 coming from that
+ * entry's own TS transform. This removes the distortion we add (the same error
+ * reported line 316 before), and only source maps can close the rest.
+ */
+export const REPORTER_MODULE_LINE = `try{(0,eval)(${JSON.stringify(REPORTER_SOURCE)})}catch(e){}`;
+
 /** True when `source` already carries the reporter. */
 function alreadyInjected(source: string): boolean {
   return source.indexOf(MONITOR_MESSAGE_TYPE) !== -1;
@@ -616,6 +671,12 @@ export function injectReporterIntoHtml(html: string): string {
  * `static` environments (which is every Tier-1 example that has one), a JS module
  * otherwise. Both are handled, because a module entry still runs before the demo.
  *
+ * The module branch prepends `REPORTER_MODULE_LINE`, which is one physical line, so
+ * the compile positions the visitor is shown are off by one rather than by the
+ * reporter's length (DEV-2557). The HTML branch is deliberately left as it is: it is
+ * Tier-2's only monitoring channel (`workers/api/src/monitor-inject.ts`) and widening
+ * the eval bet to it wants its own decision.
+ *
  * Byte-deterministic by construction: no timestamp, no id, no ordering that
  * depends on iteration. `SandpackRuntime.sameFiles` skips the compile when the
  * sandbox is unchanged, and a reporter that differed between two builds of the
@@ -631,6 +692,6 @@ export function injectReporter(files: Record<string, string>, entryPath: string)
   if (alreadyInjected(source)) return files;
   const injected = entryPath.toLowerCase().endsWith(".html")
     ? injectReporterIntoHtml(source)
-    : REPORTER_SOURCE + "\n" + source;
+    : REPORTER_MODULE_LINE + "\n" + source;
   return { ...files, [entryPath]: injected };
 }
