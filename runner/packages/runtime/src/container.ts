@@ -119,18 +119,45 @@ export class ContainerBootFailure extends Error {
   }
 }
 
+/** What only `mount()` can know about a failed create (DEV-2559).
+ *
+ * Both fields exist to tell two very different causes of Sentry DEMOS-9 apart —
+ * a fixed ceiling somewhere above our Worker, versus container starts that are
+ * genuinely slow — and neither is observable at the report site in App.tsx: only
+ * this method holds the clock and the `Response`. They ride on the error because
+ * that is the one thing that already crosses the package boundary; widening
+ * `onError` or bolting a diagnostics callback onto `ContainerRuntime` would be a
+ * far larger API change than one optional property.
+ *
+ * `ray` is the failing response's `cf-ray`, the id Cloudflare stamps on every
+ * edge response — the join key from one Sentry event back to that invocation in
+ * Workers Logs. It is `<hex>-<COLO>`, where the colo is a datacenter code:
+ * strictly coarser than the `user.geo` Sentry already stores, and not a preview
+ * hostname, so nothing here is a session credential. It is null whenever the
+ * header is unreadable — a cross-origin dev setup pointed straight at :8787,
+ * since `cors()` in workers/api sets no Access-Control-Expose-Headers. In
+ * production the page and the API share an origin, so the response is `basic`
+ * and every header is readable. */
+export interface SessionStartDiagnostics {
+  readonly elapsedMs: number;
+  readonly ray: string | null;
+}
+
 /** POST /api/session failed. `status` distinguishes the server's 410
  * "closed while being created" (session already destroyed server-side; a
  * follow-up DELETE would only re-extend its tombstone) from other failures.
  * `code` carries the server's machine-readable reason when it sent one —
  * `budget_exhausted` / `budget_login_required` are cost-guardrail refusals
  * (DEV-2030): a deliberate product state with a message written for users, not
- * a fault to retry or report. */
+ * a fault to retry or report. `diagnostics` is the timing/edge-id pair above;
+ * optional so that the three arguments the message contract depends on stay
+ * exactly where they were. */
 export class SessionStartError extends Error {
   constructor(
     public readonly status: number,
     message: string,
     public readonly code?: string,
+    public readonly diagnostics?: SessionStartDiagnostics,
   ) {
     super(message);
   }
@@ -403,22 +430,52 @@ export class ContainerRuntime implements DemoRuntime {
     let previewUrl: string;
     let port: number;
     try {
+      // Serialised BEFORE the clock starts, not inline in the fetch call below.
+      // Argument expressions are evaluated after `startedAt` would have been
+      // assigned, so leaving this where it reads most naturally would put
+      // `relativeFiles` plus a `JSON.stringify` of the entire file map inside the
+      // measured window — the one thing the measurement is defined to exclude.
+      const body = JSON.stringify({
+        framework: this.entry.framework,
+        files: relativeFiles(this.files),
+        sessionId,
+        htVersion: this.opts.version?.ref,
+      });
+      // The create clock (DEV-2559), started here rather than at the top of mount()
+      // on purpose: this is where the gateway's own clock starts, so the two measure
+      // the same interval. Everything above — `applyHandsontableVersion` and the
+      // serialisation just above it — varies by framework and file count, and folding
+      // that in would smear a fixed ceiling into an apparent spread, destroying the
+      // one distinction the number exists to make. `performance.now()` for
+      // monotonicity: a clock step must not read as a slow container.
+      const startedAt = performance.now();
       const res = await fetch(`${this.opts.apiBase}/api/session`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(this.opts.authToken ? { Authorization: `Bearer ${this.opts.authToken}` } : {}),
         },
-        body: JSON.stringify({
-          framework: this.entry.framework,
-          files: relativeFiles(this.files),
-          sessionId,
-          htVersion: this.opts.version?.ref,
-        }),
+        body,
       });
+      // Stopped the instant the response headers land, before `readFailure` touches
+      // the body: a gateway can answer with a whole HTML page, and how long we spend
+      // reading it is our latency, not the sandbox's.
+      const elapsedMs = Math.round(performance.now() - startedAt);
       if (!res.ok) {
+        // Inside the failure branch only — several pipeline tests stub a successful
+        // create as a bare `{ ok: true, status: 200, json }` with no `headers`, and
+        // an unconditional read would break them. Not guarded with `?.` either: an
+        // optional chain here would make the ray assertion in
+        // pipeline/session-start-failure.test.mjs pass whether or not the header is
+        // ever read.
+        const ray = res.headers.get("cf-ray");
         const failure = await readFailure(res);
-        throw new SessionStartError(res.status, sessionStartMessage(res.status, failure), failure.code);
+        throw new SessionStartError(
+          res.status,
+          sessionStartMessage(res.status, failure),
+          failure.code,
+          { elapsedMs, ray },
+        );
       }
       ({ previewUrl, port } = (await res.json()) as { previewUrl: string; port: number });
     } catch (err) {

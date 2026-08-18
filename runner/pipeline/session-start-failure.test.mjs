@@ -63,6 +63,10 @@ const ENTRY = {
   files: {},
 };
 
+/** The ray the failing create stub advertises, in the shape Cloudflare actually
+ *  emits — `<hex>-<COLO>`. */
+const RAY = "a2cee5e30f0c08c1-PRG";
+
 const FILES = {
   "/package.json": JSON.stringify({ dependencies: { handsontable: "16.0.1" } }),
   "/src/main.ts": "console.log('demo');",
@@ -76,13 +80,19 @@ const FILES = {
  * follow-up request too (a throwing DELETE would mask the assertion).
  */
 async function sessionStartError(status, body) {
+  // A real `Headers`, not a hand-rolled `{ get }`: mount() reads `cf-ray` off the
+  // failing response (DEV-2559), and every test in this file goes through here, so
+  // they all exercise that read rather than a guard around it. If this stub ever
+  // loses its headers the fix is to give them back — NOT to make the read optional
+  // in container.ts, which would leave the ray assertion below passing on nothing.
+  const headers = new Headers({ "cf-ray": RAY });
   const fetchBefore = globalThis.fetch;
   const windowBefore = globalThis.window;
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   globalThis.fetch = (url, init = {}) => {
     if (url.endsWith("/api/session") && init.method === "POST") {
       // `readFailure` reads the body with res.text(), not res.json().
-      return Promise.resolve({ ok: false, status, text: () => Promise.resolve(body) });
+      return Promise.resolve({ ok: false, status, headers, text: () => Promise.resolve(body) });
     }
     // The cleanup DELETE, and anything else the teardown reaches for.
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
@@ -286,4 +296,40 @@ test("an empty-bodied 500 drops the colon but keeps the connectivity hint", asyn
 
   assert.equal(err.message, "session start failed (500)");
   assert.match(err.message, /session start failed/i, "must still trip App.tsx:115");
+});
+
+test("a failed create carries the edge id and how long it took", async () => {
+  // DEV-2559. Sentry DEMOS-9 has 83 events and no way to tell its two candidate causes
+  // apart: a fixed ceiling above our Worker, or container starts that are honestly too
+  // slow. Neither the duration nor the `cf-ray` is observable at the report site in
+  // App.tsx — only mount() holds the clock and the Response — so they ride out on the
+  // error, and this pins that they survive the throw.
+  //
+  // Surviving the throw is the non-obvious half: mount()'s catch tears the runtime
+  // down, DELETEs the half-created session and rethrows with
+  // `err instanceof Error ? err : …`, i.e. the same instance. Construct a fresh
+  // SessionStartError there instead and the diagnostics are silently dropped while
+  // every other test in this file stays green.
+  const err = await sessionStartError(504, "");
+
+  assert.equal(err.diagnostics?.ray, RAY, "the cf-ray of the failing response, read off it");
+  assert.equal(typeof err.diagnostics?.elapsedMs, "number");
+  assert.ok(err.diagnostics.elapsedMs >= 0, "a monotonic clock never goes backwards");
+});
+
+test("the diagnostics ride alongside the message contract, not inside it", async () => {
+  // The behaviour-neutrality half. Everything above about the five message tiers is
+  // unchanged by DEV-2559, and the guardrail refusals are the sharpest case: their
+  // sentences must still arrive verbatim, and the status/code the App.tsx branch keys
+  // on must still be the first things on the error.
+  const sentence = "Live editing is paused for today. Try again tomorrow.";
+  const err = await sessionStartError(
+    503,
+    JSON.stringify({ error: "budget_exhausted", message: sentence }),
+  );
+
+  assert.equal(err.message, sentence, "the diagnostics argument must not disturb the message");
+  assert.equal(err.code, "budget_exhausted");
+  assert.equal(err.status, 503);
+  assert.equal(err.diagnostics?.ray, RAY);
 });

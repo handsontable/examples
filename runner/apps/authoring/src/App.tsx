@@ -48,6 +48,7 @@ import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
 import { GuidePage } from "./Guide.js";
 import { guideTrack, parseGuideRoute } from "./guideTracks.js";
+import { elapsedBucket } from "./sessionDiagnostics.js";
 import { Markdown } from "./markdown.js";
 import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
@@ -162,7 +163,7 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
  * log travels as `extra.bootLog` instead — extras take no part in grouping, titling
  * or stack parsing, which is exactly what putting it in the message got wrong.
  */
-function reportRuntimeError(e: unknown, engine: string): void {
+function reportRuntimeError(e: unknown, engine: string, framework: string): void {
   if (!reportingEnabled) return;
   // Tier-1 compile and runtime errors are the "product output" case above — dropped
   // by default, reported while demo monitoring is on (DEV-2527). They arrive as
@@ -213,13 +214,40 @@ function reportRuntimeError(e: unknown, engine: string): void {
     // fingerprint they have today: no live issue regroups, and only the coded
     // refusals split off. `budget_*` codes never reach here (suppressed above).
     const code = typeof e.code === "string" && e.code.length > 0 ? e.code : null;
+    // DEV-2559. Three facets that make DEMOS-9's 83 events answerable, all of them
+    // TAGS beside the fingerprint and never inside it: the fingerprint below stays
+    // byte-identical, because sharding one continuous signal by framework would
+    // destroy the only trend the issue has.
+    //
+    // `framework` uses the key `reportDemoEvent` already tags with, so both sides of
+    // the preview boundary facet together. Deliberately added to this branch alone —
+    // the boot and compile branches have no question pending on them, and tag churn
+    // there would only muddy their own histories.
+    //
+    // `session_elapsed_bucket` over a raw-ms tag: see sessionDiagnostics.ts. The exact
+    // count rides in `extra`, which is not searchable but is readable per event.
+    //
+    // `cf_ray` is a tag rather than an extra precisely because it IS searchable, which
+    // makes the reverse join work — spot a slow invocation in Cloudflare's Workers
+    // Logs, search the ray here, and find out whether it was one of these. That gives
+    // it ~one value per event, which is only acceptable because this path fires a
+    // handful of times a day; it would be the wrong call on a hot one.
+    const diagnostics = e.diagnostics;
     Sentry.captureException(e, {
       tags: {
         context: "tier2-session-start",
         session_status: String(e.status),
+        framework,
         ...(code ? { session_refusal: code } : {}),
+        ...(diagnostics
+          ? {
+              session_elapsed_bucket: elapsedBucket(diagnostics.elapsedMs),
+              ...(diagnostics.ray ? { cf_ray: diagnostics.ray } : {}),
+            }
+          : {}),
       },
       fingerprint: ["tier2-session-start", String(e.status), ...(code ? [code] : [])],
+      ...(diagnostics ? { extra: { sessionElapsedMs: diagnostics.elapsedMs } } : {}),
     });
     return;
   }
@@ -1845,7 +1873,7 @@ function Authoring({
       if (cancelled) return;
       setStatus("error");
       setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
-      reportRuntimeError(e, entry.engine);
+      reportRuntimeError(e, entry.engine, entry.framework);
     });
     runtimeRef.current = runtime;
     setPreviewUrl("");
@@ -1866,7 +1894,7 @@ function Authoring({
         }
         // Reported even when cancelled: a session the pool refused still failed,
         // and the unmount that set `cancelled` is often the user giving up on it.
-        reportRuntimeError(e, entry.engine);
+        reportRuntimeError(e, entry.engine, entry.framework);
       });
     return () => {
       cancelled = true;
