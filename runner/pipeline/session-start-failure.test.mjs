@@ -254,6 +254,23 @@ test("a budget refusal still reaches the user as the server phrased it", async (
   assert.equal(err.message, sentence);
 });
 
+test("an at-capacity refusal reaches the user as the server phrased it", async () => {
+  // DEV-2556. When every container slot is taken the Worker now answers 503
+  // `{ error: "at_capacity", message }` instead of letting the platform's own
+  // words ("…try configuring a higher value for max_instances") leave as a 500.
+  // That sentence is written for a visitor, so it must arrive unwrapped — the
+  // generic tier would prefix "session start failed (503):" and hand the whole
+  // thing to the App.tsx heuristic, which answers with the local-dev Docker
+  // hint. `pipeline/session-lifecycle.test.mjs` pins the sentence itself; this
+  // pins that the runtime does not wrap it.
+  const sentence = "All live-preview sandboxes are busy right now. Try again in a minute.";
+  const err = await sessionStartError(503, JSON.stringify({ error: "at_capacity", message: sentence }));
+
+  assert.equal(err.code, "at_capacity");
+  assert.equal(err.message, sentence);
+  assert.doesNotMatch(err.message, /unavailable/i, "the envelope-less tier must not swallow an envelope");
+});
+
 test("an ordinary envelope error is unchanged", async () => {
   const err = await sessionStartError(500, JSON.stringify({ error: "boom", message: "boom" }));
 
