@@ -31,6 +31,87 @@ const jsStarter = (dateFormat) => ({
   "/package.json": '{\n  "name": "javascript"\n}\n',
 });
 
+/**
+ * Copy of `ISO_DATE_REGEX` from handsontable/helpers/dateTime (18.0.0) — the
+ * only shape `parseToLocalDate` and `isValidISODate` accept. Copied rather than
+ * imported so this file stays hermetic; if core ever widens it, this test gets
+ * stricter than core, never looser.
+ */
+const ISO_DATE_REGEX = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+/** The two accessor shapes that exist in the wild: the frozen branches' DD/MM
+ *  normalizer (byte-identical to `examples/angular`, which is what pins the
+ *  registry pattern) and master's post-DEV-2563 pass-through. */
+const ANGULAR_ACCESSORS = {
+  split: [
+    "export function getData() {",
+    "  return data.map((row) => {",
+    "    const [day, month, year] = String(row[4]).split('/');",
+    "",
+    "    return [...row.slice(0, 4), `${year}-${month}-${day}`, ...row.slice(5)];",
+    "  });",
+    "}",
+  ].join("\n"),
+  passthrough: ["export function getData() {", "  return data.map((row) => [...row]);", "}"].join(
+    "\n",
+  ),
+};
+
+const ANGULAR_DATES = {
+  slash: ["'11/10/2020'", "'03/05/2020'", "'27/03/2020'"],
+  iso: ["'2020-10-11'", "'2020-05-03'", "'2020-03-27'"],
+};
+
+/** The date column is \`data: 4\`, and the accessor reads \`row[4]\` — so a
+ *  fixture row has to be index-accurate or the corruption never happens and the
+ *  test passes for the wrong reason. */
+const DATE_INDEX = 4;
+
+const angularStarter = ({ dates, accessor }) => ({
+  "/src/app/data-grid.component.ts": [
+    "export class DataGridComponent {",
+    "  gridSettings = {",
+    "    columns: [",
+    "      {",
+    `        data: ${DATE_INDEX},`,
+    "        type: 'date',",
+    "        dateFormat: 'DD/MM/YYYY',",
+    "        locale: 'en-GB',",
+    "        allowInvalid: false,",
+    "      },",
+    "    ],",
+    "  };",
+    "}",
+  ].join("\n"),
+  "/src/app/utils/constants.ts": [
+    "export const data = [",
+    ...ANGULAR_DATES[dates].map((date) =>
+      [
+        "  [",
+        "    false,",
+        "    'Tagcat',",
+        "    'United Kingdom',",
+        "    'Classic Vest',",
+        `    ${date},`,
+        "    '01-2331942',",
+        "    true,",
+        "  ],",
+      ].join("\n"),
+    ),
+    "];",
+    "",
+    ANGULAR_ACCESSORS[accessor],
+    "",
+  ].join("\n"),
+  "/package.json": '{\n  "name": "angular"\n}\n',
+});
+
+/** Evaluate an emitted constants module and return the date column's values. */
+const sellDates = (source) =>
+  new Function(`${source.replace(/^export /gm, "")}\nreturn getData();`)().map(
+    (row) => row[DATE_INDEX],
+  );
+
 test("usesIntlDate keys off the bucket key, not the pinned version", () => {
   for (const bucket of LEGACY_BUCKETS) assert.equal(usesIntlDate(bucket), false, bucket);
   for (const bucket of INTL_BUCKETS) assert.equal(usesIntlDate(bucket), true, bucket);
@@ -279,7 +360,9 @@ test("stored values converge on ISO at EVERY bucket, display stays per-bucket", 
   // option at 15/16/17.
   const angular = {
     "/src/app/data-grid.component.ts": "        dateFormat: 'DD/MM/YYYY',\n        type: 'date',\n",
-    "/src/app/utils/constants.ts": "export const data = [[false, 'Tagcat', '11/10/2020'], [true, 'Zoomzone', '03/05/2020']];\n",
+    "/src/app/utils/constants.ts":
+      "export const data = [[false, 'Tagcat', '11/10/2020'], [true, 'Zoomzone', '03/05/2020']];\n" +
+      `\n${ANGULAR_ACCESSORS.passthrough}\n`,
   };
 
   for (const bucket of [...LEGACY_BUCKETS, ...INTL_BUCKETS]) {
@@ -303,7 +386,9 @@ test("an already-ISO angular dataset is left untouched at every bucket", () => {
   // master carries the migrated form; the frozen prod-examples branches do not.
   const angular = {
     "/src/app/data-grid.component.ts": "        dateFormat: 'YYYY-MM-DD',\n        type: 'date',\n",
-    "/src/app/utils/constants.ts": "export const data = [[false, 'Tagcat', '2020-10-11']];\n",
+    "/src/app/utils/constants.ts":
+      "export const data = [[false, 'Tagcat', '2020-10-11']];\n" +
+      `\n${ANGULAR_ACCESSORS.passthrough}\n`,
   };
   for (const bucket of [...LEGACY_BUCKETS, ...INTL_BUCKETS]) {
     const { files } = applyStarterOverrides("angular", angular, { bucket });
@@ -331,7 +416,11 @@ test("stored-value normalization is idempotent on already-migrated source", () =
 test("starterOverrideIds reports what a bucket applies", () => {
   // Storage migration is bucket-independent; only the option literal varies.
   for (const bucket of [...LEGACY_BUCKETS, ...INTL_BUCKETS]) {
-    assert.deepEqual(starterOverrideIds("angular", bucket), ["angular:dateFormat", "angular:data-iso"], bucket);
+    assert.deepEqual(
+      starterOverrideIds("angular", bucket),
+      ["angular:dateFormat", "angular:data-iso", "angular:data-passthrough"],
+      bucket,
+    );
   }
   // The javascript data migration is bucket-independent.
   for (const bucket of [...LEGACY_BUCKETS, ...INTL_BUCKETS]) {
@@ -347,4 +436,50 @@ test("every registry row targets a distinct (file, option) site", () => {
     assert.equal(seen.has(key), false, `duplicate row for ${key}`);
     seen.add(key);
   }
+});
+
+// DEV-2563. Both registries and the lint read source TEXT, so a starter that
+// REFORMATS its stored value at runtime is invisible to all three. The angular
+// dataset shipped with a DD/MM/YYYY normalizer inside `getData()`; once
+// `angular:data-iso` migrated the literals under it, the split returned a
+// one-element array and every date reached the grid as
+// `undefined-undefined-2020-10-11` — BAD_VALUE on every row at 18+, every cell
+// invalid at 16/17. Every text assertion above passed while that shipped, which
+// is the whole reason this test EXECUTES the emitted module and inspects the
+// value the grid would actually receive.
+
+test("the angular date column reaches the grid as ISO at every bucket", () => {
+  // Every combination, because the overlay must converge them: the frozen
+  // branches are slash+split, master is iso+pass-through, and iso+split is the
+  // corrupted pairing DEV-2545 created and DEV-2563 closed.
+  for (const accessor of Object.keys(ANGULAR_ACCESSORS)) {
+    for (const dates of Object.keys(ANGULAR_DATES)) {
+      for (const bucket of [...LEGACY_BUCKETS, ...INTL_BUCKETS]) {
+        const label = `${dates}+${accessor} @ ${bucket}`;
+        const { files } = applyStarterOverrides("angular", angularStarter({ dates, accessor }), {
+          bucket,
+        });
+
+        for (const value of sellDates(files["/src/app/utils/constants.ts"])) {
+          assert.match(value, ISO_DATE_REGEX, `${label}: ${JSON.stringify(value)}`);
+        }
+        assert.deepEqual(lintStarterOptionShapes("angular", files, { bucket }), [], label);
+      }
+    }
+  }
+});
+
+test("the emitted angular accessor is byte-identical whatever the source ref", () => {
+  // Convergence is what lets a frozen branch be brought to master's state
+  // without the registry rows going stale: they become no-ops that still assert.
+  const emitted = new Set();
+  for (const accessor of Object.keys(ANGULAR_ACCESSORS)) {
+    for (const dates of Object.keys(ANGULAR_DATES)) {
+      const { files } = applyStarterOverrides("angular", angularStarter({ dates, accessor }), {
+        bucket: "18",
+      });
+      emitted.add(files["/src/app/utils/constants.ts"].slice(files["/src/app/utils/constants.ts"].indexOf("function getData")));
+    }
+  }
+  assert.equal(emitted.size, 1, [...emitted].join("\n---\n"));
 });

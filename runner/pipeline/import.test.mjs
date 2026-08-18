@@ -122,7 +122,11 @@ test("artifacts record the override rows that GOVERN them, not just the mutating
   const read = (framework) =>
     JSON.parse(fs.readFileSync(path.join(outDir, "next", `${framework}.json`), "utf8"));
 
-  assert.deepEqual(read("angular").overrides, ["angular:dateFormat", "angular:data-iso"]);
+  assert.deepEqual(read("angular").overrides, [
+    "angular:dateFormat",
+    "angular:data-iso",
+    "angular:data-passthrough",
+  ]);
   assert.deepEqual(read("next-shadcn.js").overrides, [
     "next-shadcn.js:dateFormat",
     "next-shadcn.js:timeFormat",
@@ -133,7 +137,11 @@ test("artifacts record the override rows that GOVERN them, not just the mutating
   // The manifest row carries the same list, so the bucket is self-describing.
   const manifest = JSON.parse(fs.readFileSync(path.join(outDir, "next", "manifest.json"), "utf8"));
   const row = manifest.examples.find((e) => e.framework === "angular");
-  assert.deepEqual(row.overrides, ["angular:dateFormat", "angular:data-iso"]);
+  assert.deepEqual(row.overrides, [
+    "angular:dateFormat",
+    "angular:data-iso",
+    "angular:data-passthrough",
+  ]);
 });
 
 test("the catalog index lists buckets and drops files from every entry", async (t) => {
