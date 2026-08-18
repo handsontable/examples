@@ -9,7 +9,7 @@
 import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/sandbox";
 import * as Sentry from "@sentry/cloudflare";
 import { DEFAULT_MAX_MAJOR, DEFAULT_MIN_MAJOR, mintSessionId, pickLatestNextVersion } from "@handsontable/demo-runtime";
-import { injectMonitor } from "./monitor-inject.js";
+import { injectMonitor, injectScheme } from "./monitor-inject.js";
 import { viteAllowedHostEnv } from "./preview-allowed-hosts.js";
 import {
   PRODUCTION_HOST,
@@ -580,9 +580,12 @@ export default Sentry.withSentry(sentryOptions, {
     // bytes on the way out (WebSocket upgrades pass through unmeasured), after the
     // monitor rewrite so its bytes are metered too.
     // Our own boot-failure page (DEV-2537) is not a dev-server document and has
-    // no demo to monitor — skip the reporter injection, but still meter the bytes.
+    // no demo to monitor or re-theme — skip both injections, but still meter the
+    // bytes.
     if (proxied) {
-      const body = proxied.headers.has(PREVIEW_BOOTING_HEADER) ? proxied : await injectMonitor(proxied, env, PRODUCTION_HOST);
+      const body = proxied.headers.has(PREVIEW_BOOTING_HEADER)
+        ? proxied
+        : await injectScheme(await injectMonitor(proxied, env, PRODUCTION_HOST));
       return countEgress(body);
     }
 
