@@ -442,12 +442,16 @@ export class ContainerRuntime implements DemoRuntime {
         htVersion: this.opts.version?.ref,
       });
       // The create clock (DEV-2559), started here rather than at the top of mount()
-      // on purpose: this is where the gateway's own clock starts, so the two measure
-      // the same interval. Everything above — `applyHandsontableVersion` and the
-      // serialisation just above it — varies by framework and file count, and folding
-      // that in would smear a fixed ceiling into an apparent spread, destroying the
-      // one distinction the number exists to make. `performance.now()` for
-      // monotonicity: a clock step must not read as a slow container.
+      // on purpose: this is as close as the client can get to the interval the
+      // gateway itself is timing. Not the same interval — connection setup and the
+      // upload of `body` fall inside this window and outside the gateway's, which
+      // starts on receipt — but that difference is milliseconds against a ceiling
+      // near 100s, so it cannot move a bucket. Everything ABOVE this line is the
+      // part that would: `applyHandsontableVersion` and the serialisation just
+      // above vary by framework and file count, and folding them in would smear a
+      // fixed ceiling into an apparent spread, destroying the one distinction the
+      // number exists to make. `performance.now()` for monotonicity: a clock step
+      // must not read as a slow container.
       const startedAt = performance.now();
       const res = await fetch(`${this.opts.apiBase}/api/session`, {
         method: "POST",

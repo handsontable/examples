@@ -291,6 +291,20 @@ product output, not an application fault. `reportRuntimeError` in
 `SessionStartError` (Tier-2 pool refusing a session; 410 excluded, that is normal
 teardown) and `ContainerBootFailure` — and nothing from the Sandpack engine.
 
+**Session-start diagnostics (DEV-2559) — temporary, remove with the DEMOS-9 fix.**
+The `tier2-session-start` branch of `reportRuntimeError` carries three extra tags —
+`framework`, `session_elapsed_bucket`, `cf_ray` — plus `extra.sessionElapsedMs`, all
+of them beside the fingerprint and none of them in it. They exist to answer one
+question on Sentry DEMOS-9 (is the 504 a fixed ceiling above our Worker, or container
+starts that are honestly slow?) and should come out once it is answered, together
+with the DEV-2527 teardown below. Three pieces, in this order: `SessionStartDiagnostics`
+and the clock in `packages/runtime/src/container.ts` (the fourth `SessionStartError`
+argument is optional, so the error's shape survives either way),
+`apps/authoring/src/sessionDiagnostics.ts` with `pipeline/session-diagnostics.test.mjs`,
+and the tag block in `App.tsx`. `cf_ray` is the reason for the deadline: it is
+~one tag value per event, affordable only because this path fires a handful of times a
+day, and it must not survive into a hotter one.
+
 ### Demo-runtime monitoring (DEV-2527) — temporary
 
 A third `environment`, `demo-runtime`, carries what the preview itself hits:
