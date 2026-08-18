@@ -139,11 +139,16 @@ discarding the theme over a CSS class. Two rules it encodes:
   ignored in silence, so the generated source cannot distinguish the two
   readings and the rendered cell can.
 
-`?example=angular` is `test.fixme`: its wiring is correct, but **no** edit
-reaches the Angular preview — a bare `<p>` typed into its template was still
-absent after 90 seconds, while the same probe on `react-js` and `astro` (also
-Tier 2) appears in about ten. That blocks the editor and the AI assistant there
-too, so it is a container defect rather than a theming one — DEV-2216.
+`?example=angular` is a full case (DEV-2216). It was `test.fixme` while it read as
+"no edit ever reaches the Angular preview" — a bare `<p>` typed into its template
+was still absent after 90 seconds, while the same probe on `react-js` and `astro`
+(also Tier 2) appeared in about ten. That was a misdiagnosis: Angular's dev server
+is the only one that type-checks, so a type error in the generated theme module
+fails its build *silently* — the broken module stays on disk and swallows every
+later edit too, while the last good bundle keeps being served. This is the case
+worth having for exactly that reason. `pipeline/theme-typecheck.test.mjs` compiles
+the generated module against Handsontable's types; the `angular` case here is what
+proves the compiled result also renders.
 
 Run it with **`--workers=1`** whenever `astro` or `angular` is selected. Those
 are the Tier-2 cases; the pool holds five container slots and sessions are not
