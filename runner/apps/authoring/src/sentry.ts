@@ -7,32 +7,47 @@
 // SDK directly, which keeps the production gate authoritative in one place.
 import * as Sentry from "@sentry/react";
 import {
+  MONITOR_BREADCRUMB_CEILING,
   MONITOR_EVENT_CEILING,
   createMonitorBudget,
   normalizeMonitorMessage,
   sanitizeMonitorPayload,
   type MonitorPayload,
 } from "@handsontable/demo-runtime/monitor";
-
-/**
- * The deployed host. Reporting is enabled ONLY here.
- *
- * `.env.production` is committed and is therefore loaded by every production-mode
- * build, including `ci.yml`'s "Build authoring" step — whose output Playwright
- * then serves at http://localhost:4173. Without this gate every PR run, and every
- * local `vite preview`, would file events against the production project. Gating
- * on the runtime hostname (rather than on a second env var or a CI secret) makes
- * that structurally impossible.
- *
- * The API worker gates on `PREVIEW_HOST` for the same reason — see
- * workers/api/src/index.ts.
- */
-const PRODUCTION_HOST = "demos.handsontable.com";
+import { ApiError } from "./apiError.js";
+import { resolveReporting } from "./reportingGate.js";
 
 const DSN = import.meta.env.VITE_SENTRY_DSN as string | undefined;
 
-export const reportingEnabled =
-  Boolean(DSN) && typeof window !== "undefined" && window.location.hostname === PRODUCTION_HOST;
+/**
+ * Who may report, and under what `environment`. Both come from `reportingGate.ts`,
+ * which holds the production-host literal and is import-free so the decision can be
+ * unit-tested (`pipeline/sentry-gating.test.mjs`) — this module cannot be, it reads
+ * `import.meta.env` and pulls in the SDK.
+ *
+ * Two DEV-2540 facts worth carrying at the callsite:
+ *
+ * 1. `navigator.webdriver === true` under any automation harness, and that closes
+ *    the gate. A Playwright suite pointed at the production host used to file real
+ *    issues (DEMOS-P, 3 events, release `ddf044c0`, Chrome 149 on Windows,
+ *    `context: tier2-session-start`). This covers every prod-targeted harness at
+ *    once — `e2e-starter-matrix.yml`, `e2e-live.yml`, and the ad-hoc local
+ *    `E2E_BASE_URL=https://demos.handsontable.com` run that actually produced those
+ *    events. Nothing is lost: `e2e/starter-matrix.spec.ts` collects failures itself
+ *    through `page.on("console")` / `page.on("pageerror")` and never reads Sentry.
+ * 2. `environment` is hostname-derived, so a build served anywhere else labels
+ *    itself `authoring-local` even when the enable gate has been patched open
+ *    locally — which is what produced 15 mislabelled `authoring-production` events
+ *    on 2026-07-27/28. Mode-derived would not have helped: one of those was a
+ *    production-MODE build served at localhost:4173.
+ */
+const reporting = resolveReporting({
+  dsn: DSN,
+  hostname: typeof window !== "undefined" ? window.location.hostname : undefined,
+  webdriver: typeof navigator !== "undefined" ? navigator.webdriver : undefined,
+});
+
+export const reportingEnabled = reporting.enabled;
 
 /**
  * Demo-runtime monitoring (DEV-2527). Temporary and deliberately build-time: off is
@@ -41,7 +56,10 @@ export const reportingEnabled =
  * path in docs/run-and-deploy.md.
  *
  * No second host gate: `reportingEnabled` already pins reporting to production, so
- * local runs and PR CI stay silent whatever this is set to.
+ * local runs and PR CI stay silent whatever this is set to. It inherits the
+ * automation gate through the same flag, also deliberately (DEV-2540) — an
+ * e2e-driven page load is not real demo usage, so the ~36-minute `e2e:matrix` run
+ * against production no longer relays preview events either.
  */
 export const monitorDemos =
   reportingEnabled && (import.meta.env.VITE_MONITOR_DEMOS as string | undefined) === "1";
@@ -116,13 +134,21 @@ function isForeignUnhandled(event: Sentry.ErrorEvent): boolean {
 if (reportingEnabled) {
   Sentry.init({
     dsn: DSN,
-    environment: "authoring-production",
+    environment: reporting.environment,
     // `|| undefined` matters: the define below substitutes "" when GITHUB_SHA is
     // absent, and a release of "" would not match the SHA-named artifact bundle
     // the plugin uploads — source maps would silently stop resolving.
     release: (import.meta.env.VITE_SENTRY_RELEASE as string | undefined) || undefined,
     // Errors only. Spans would triple the event volume for signal we don't act on.
     tracesSampleRate: 0,
+    // Stated rather than inherited, because `reportDemoEvent` now writes into this
+    // buffer (DEV-2539). The SDK default is 100 and it keeps the *most recent* N, so
+    // with the default a demo spending its whole `MONITOR_BREADCRUMB_CEILING` (50)
+    // would evict half the authoring app's own trail — a save failure would file an
+    // issue whose breadcrumbs are demo warnings instead of the user's clicks and
+    // fetches. At 200 the demo's ceiling can never take more than a quarter. Raise
+    // this alongside that ceiling, never one without the other.
+    maxBreadcrumbs: 200,
     beforeSend(event) {
       if (isUnhandledNoise(event)) return null;
       // A client carries one `environment` from init, so a relayed demo event is
@@ -139,6 +165,13 @@ if (reportingEnabled) {
 /** Report a caught error that would otherwise be swallowed. No-op when gated off. */
 export function reportError(error: unknown, context: string): void {
   if (!reportingEnabled) return;
+  // A described failure the user is already being told about, and that says
+  // nothing about this app's health, stops here (DEV-2534). One gate, rather
+  // than an `if` at each of the callsites, is what retires the expired-session
+  // half of DEMOS-3/-6/-7/-B/-W without touching a single `catch`. Note this is
+  // deliberately narrow: an ownership 403 is still `reportable`, because the UI
+  // only offers Save and Delete on a demo it believes is the user's.
+  if (error instanceof ApiError && !error.reportable) return;
   Sentry.captureException(error, { tags: { context } });
 }
 
@@ -149,6 +182,17 @@ export function reportError(error: unknown, context: string): void {
  * at this window (see `createMonitorBudget`). This is the enforceable one.
  */
 const demoRelayBudget = createMonitorBudget(MONITOR_EVENT_CEILING);
+
+/**
+ * A second, separate budget for the warnings that become breadcrumbs (DEV-2539).
+ *
+ * Separate in both directions. A breadcrumb files no issue, so it can be looser than
+ * the relay ceiling; and a demo that warns on every render must not be able to spend
+ * the relay budget before the `console.error` explaining the breakage arrives. Its
+ * `admit` also dedupes, so the repeated "Theme is already registered" notice occupies
+ * one breadcrumb rather than the whole buffer.
+ */
+const demoBreadcrumbBudget = createMonitorBudget(MONITOR_BREADCRUMB_CEILING);
 
 /** Where a relayed event came from. `tier` distinguishes the two engines; `demoId`
  *  is present only for a saved demo. */
@@ -178,6 +222,34 @@ export function reportDemoEvent(payload: MonitorPayload, context: DemoEventConte
   // session token.
   const clean = sanitizeMonitorPayload(payload);
   const message = clean.message;
+  // A warning is context, not a fault (DEV-2539). Handsontable's own "Theme is already
+  // registered" notice is emitted by normal re-renders, and every warning used to open
+  // a Sentry issue — a message event at `warning` level is still an issue. Filed as a
+  // breadcrumb instead, so it survives as the context attached to the next real error
+  // from the preview without being one itself.
+  //
+  // Before `demoRelayBudget.admit`, so a warning never consumes a relay slot, and after
+  // `sanitizeMonitorPayload`, so the breadcrumb is bounded and host-redacted like
+  // everything else that crossed the origin boundary.
+  //
+  // Breadcrumbs live on the Sentry scope, which outlives a preview: one recorded while
+  // example A was mounted can still be attached to an error from example B. `data`
+  // carries the tier, framework and demo id so a stale one is identifiable — cheaper
+  // and less fragile than trying to clear the buffer on every mount.
+  if (clean.kind === "console-warn") {
+    if (!demoBreadcrumbBudget.admit(clean.kind, message)) return;
+    Sentry.addBreadcrumb({
+      category: `${DEMO_SURFACE}.console`,
+      level: "warning",
+      message,
+      data: {
+        tier: context.tier,
+        framework: context.framework,
+        ...(context.demoId ? { demo_id: context.demoId } : {}),
+      },
+    });
+    return;
+  }
   if (!demoRelayBudget.admit(clean.kind, message, clean.stack)) return;
   const tags: Record<string, string> = {
     surface: DEMO_SURFACE,
@@ -205,7 +277,20 @@ export function reportDemoEvent(payload: MonitorPayload, context: DemoEventConte
     Sentry.captureException(error, captureContext);
     return;
   }
-  Sentry.captureMessage(message, captureContext);
+  // Display only, and only for network events (DEV-2539/DEMOS-12). "resource failed to
+  // load" as an issue title says nothing; the URL is the whole diagnosis, and `extra`
+  // is not visible from the issue list. Deliberately NOT used for
+  // `demoRelayBudget.admit` or the fingerprint above, both of which stay on the bare
+  // `message` — so a demo with a dozen broken assets still collapses into one issue and
+  // still costs one relay slot, while the title becomes actionable.
+  //
+  // This is the first path that puts an untrusted `url` into an issue *title*, and the
+  // bare-message fingerprint is what bounds it: the url is already capped at
+  // MONITOR_URL_MAX and host-redacted by `sanitizeMonitorPayload`, and because it never
+  // enters the fingerprint, a crafted payload posting a thousand distinct urls still
+  // produces one issue, titled with whichever arrived first.
+  const display = clean.kind === "network" && clean.url ? `${message}: ${clean.url}` : message;
+  Sentry.captureMessage(display, captureContext);
 }
 
 export { Sentry };

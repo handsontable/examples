@@ -13,6 +13,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { injectSchemeReceiver } from "../packages/runtime/dist/scheme.js";
 import { SandpackRuntime } from "../packages/runtime/dist/sandpack.js";
 import { ContainerRuntime } from "../packages/runtime/dist/container.js";
 
@@ -71,7 +72,10 @@ function mountedSandpack() {
   const client = fakeClient();
   runtime.client = client;
   runtime.files = { ...FILES };
-  runtime.published = { ...FILES };
+  // The *derived* map, which is what buildSetup records: the runner appends its
+  // colour-scheme receiver to the entry (DEV-2561), so an authored-map baseline
+  // would make every push look like a change.
+  runtime.published = injectSchemeReceiver({ ...FILES }, ENTRY.entry);
   return { runtime, client };
 }
 
@@ -112,7 +116,9 @@ test("the next ordinary edit carries the quiet writes with it", async () => {
   assert.equal(client.pushes.length, 1, "one compile, for the pair of them");
   const files = client.pushes[0].setup.files;
   assert.equal(files[THEME].code, "export const customTheme = 1;");
-  assert.equal(files["/src/main.js"].code, "console.log('edited');");
+  // `startsWith`, not `equal`: the entry also carries the appended colour-scheme
+  // receiver (DEV-2561). The authored source has to be there in full ahead of it.
+  assert.ok(files["/src/main.js"].code.startsWith("console.log('edited');"));
 });
 
 test("flushQuiet() compiles what was held back", async () => {

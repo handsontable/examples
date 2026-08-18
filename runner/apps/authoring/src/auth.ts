@@ -65,7 +65,26 @@ export function login(): void {
 }
 
 /**
- * Drop the session.
+ * Drop the stored credentials without navigating anywhere.
+ *
+ * Split out of `logout()` for DEV-2534: a request that comes back 401 has to
+ * discard the token too — the broker has already rejected it, and keeping it
+ * means every later call carries a credential that will be refused while
+ * `currentUser()` keeps paying for the round trip that discovers this. That path
+ * must *not* reload or redirect, though: the tab may be holding unsaved work,
+ * which is why this is the half of `logout()` without the navigation.
+ */
+export function clearSession(): void {
+  sessionStorage.removeItem(TOKEN_KEY);
+  // The cached profile (DEV-2166) goes with the token, or the next person to
+  // sign in on this tab sees the previous one's name and avatar until the
+  // network corrects it. Removed by name rather than `sessionStorage.clear()`:
+  // this key is ours, the rest of the origin's storage is not.
+  sessionStorage.removeItem(PROFILE_CACHE_KEY);
+}
+
+/**
+ * Drop the session and leave the page.
  *
  * `returnTo` matters on the auth-gated routes. Reloading in place is correct on
  * `/` and `/share/:id`, which work fine anonymously — the visitor keeps the
@@ -75,12 +94,7 @@ export function login(): void {
  * were trying to leave. Those callers pass a public surface instead.
  */
 export function logout(returnTo?: string): void {
-  sessionStorage.removeItem(TOKEN_KEY);
-  // The cached profile (DEV-2166) goes with the token, or the next person to
-  // sign in on this tab sees the previous one's name and avatar until the
-  // network corrects it. Removed by name rather than `sessionStorage.clear()`:
-  // this key is ours, the rest of the origin's storage is not.
-  sessionStorage.removeItem(PROFILE_CACHE_KEY);
+  clearSession();
   if (returnTo) {
     location.href = returnTo;
     return;

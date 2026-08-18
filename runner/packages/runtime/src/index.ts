@@ -14,6 +14,8 @@ export type {
 export {
   applyHandsontableCss,
   applyHandsontableVersion,
+  handsontableDependencyRef,
+  pinHandsontableFiles,
   validateHandsontableVersion,
   isHandsontablePackage,
   isNextPrereleaseVersion,
@@ -34,9 +36,3 @@ export {
 export type { DocsBucketResolution, StarterBucketResolution } from "./docs-bucket.js";
 
 export { mintSessionId } from "./session.js";
-
-export {
-  resolveRuntime,
-  resolveRuntimeKind,
-} from "./resolveRuntime.js";
-export type { RuntimeKind, RuntimeFactories } from "./resolveRuntime.js";

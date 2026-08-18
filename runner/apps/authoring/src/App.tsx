@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Dialog,
   EditorShell,
   FullBar,
   markUrl,
@@ -9,13 +10,18 @@ import {
   theme,
   TopBar,
   useLogoUrl,
+  useTheme,
   type PreviewStatus,
 } from "@handsontable/demo-editor-shell";
 import {
-  applyHandsontableCss,
-  applyHandsontableVersion,
+  isSchemeReady,
+  SCHEME_MESSAGE_TYPE,
+  type SchemeMode,
+} from "@handsontable/demo-runtime/scheme";
+import {
   deriveDocsBucketCandidate,
   isNextPrereleaseVersion,
+  pinHandsontableFiles as pinToVersionRef,
   resolveStarterBucket,
   validateHandsontableVersion,
   type CatalogEntry,
@@ -23,26 +29,32 @@ import {
   type FilesMap,
   type WriteFileOptions,
 } from "@handsontable/demo-runtime";
-import { SandpackRuntime } from "@handsontable/demo-runtime/sandpack";
+import { SandpackRuntime, SandpackEvaluationError } from "@handsontable/demo-runtime/sandpack";
 import { ContainerRuntime, ContainerBootFailure, SessionStartError, isBudgetRefusal } from "@handsontable/demo-runtime/container";
 import { zipSync, strToU8 } from "fflate";
 import { catalog, getEntry, fetchVersions, checkVersionExists, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
 import {
   fetchDocsManifest,
   loadDocsExample,
+  isDocsResourceMissing,
   type DocsManifest,
   type DocsManifestItem,
 } from "./docs-catalog.js";
 import { loadStarterExample, toPlaceholderEntry } from "./starter-catalog.js";
 import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
 import { currentUser, login, logout, getToken, type User } from "./auth.js";
+import { assertApiOk, readApiJson } from "./api.js";
+import { isSessionExpired } from "./apiError.js";
+import { formFooter, ghostButton, primaryButton } from "./formStyles.js";
 import { AdminPanel } from "./Admin.js";
 import { AskAiButton, ChatPanel } from "./Chat.js";
 import { StyleButton, StylePanel } from "./StylePanel.js";
+import { THEME_MODULE_BASENAME } from "./theme/codegen.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
 import { GuidePage } from "./Guide.js";
 import { guideTrack, parseGuideRoute } from "./guideTracks.js";
+import { elapsedBucket } from "./sessionDiagnostics.js";
 import { Markdown } from "./markdown.js";
 import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
@@ -80,6 +92,16 @@ function releaseMajor(version: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/** The Style panel writes `import … from "handsontable/themes"` plus three
+ * `themes/static/variables/*` imports into the demo, and none of those paths
+ * exist before 17.0.0 — below that the generated module cannot resolve its own
+ * imports and the preview fails to compile (DEV-2560).
+ *
+ * Deliberately not the runner's `DEFAULT_MIN_MAJOR` (15): that floor is "cores
+ * we boot", this one is "cores with a theme API". It is the same cut line
+ * `pipeline/blank-starters.mjs` calls `isLegacyBucket`. */
+const THEME_API_MIN_MAJOR = 17;
+
 /** A starter may declare a minimum core major (e.g. the UI-library starters need
  * the themes API added in Handsontable 17); hide lower published majors from its
  * version picker. next/custom refs (major null) always pass through. */
@@ -99,16 +121,29 @@ function docsPageUrl(framework: string, permalink: string): string {
 
 /** Turn a raw runtime error into a message that explains container prerequisites. */
 function describeRuntimeError(e: unknown, engine: string, version: string): string {
-  // A boot-script failure carries its own real (and possibly multiline) log
-  // text — show it verbatim rather than running it through the connectivity
-  // heuristic below, which would otherwise misfire on words like "fetching"
-  // that pnpm's own error output happens to contain.
-  if (e instanceof ContainerBootFailure) return e.message;
+  // A boot-script failure explains itself: a one-line cause, with the recent boot
+  // output beside it on the error object. Compose the two here — the error card
+  // renders `errorMessage` and nothing else, so this is the only place a user ever
+  // sees the log — and skip the connectivity heuristic below, which would otherwise
+  // misfire on words like "fetching" that pnpm's own error output happens to contain.
+  // The cause line deliberately shows twice, once as the headline and once in place,
+  // so the tail stays a faithful copy of what the container printed.
+  if (e instanceof ContainerBootFailure) return e.log ? `${e.message}\n\n${e.log}` : e.message;
   // A cost-guardrail refusal (DEV-2030) is a deliberate product state, and the
   // server already phrased it for users — never rewrite it as a connectivity
   // problem, which is what the heuristic below would do with a 503.
   if (isBudgetRefusal(e)) return e.message;
   const msg = e instanceof Error ? e.message : String(e);
+  // ⚠ This heuristic REPLACES the runtime's message, so every alternative below is a
+  // contract with whoever writes those messages. `sessionStartMessage` in
+  // packages/runtime/src/container.ts phrases two tiers to miss this test deliberately
+  // — gateway-timeout (504/522/524) and service-unavailable (an envelope-less 503,
+  // DEV-2553) — and its connectivity tiers to hit it, which is what still gets a
+  // developer whose own worker is down the right answer. Widening the alternation — or
+  // letting "fetch" back into either of those sentences — tells a production visitor
+  // whose sandbox never started to install Docker and run a worker (DEV-2538/DEV-2553,
+  // Sentry DEMOS-9).
+  // `runner/pipeline/session-start-failure.test.mjs` pins the other end.
   if (engine === "container" && /failed to fetch|networkerror|load failed|session start failed|fetch/i.test(msg)) {
     return "This example runs on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
   }
@@ -138,11 +173,13 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
  * client had already navigated away and the server tore the session down, which
  * is the designed outcome, not a failure.
  *
- * Fingerprinted by error class: `ContainerBootFailure` carries the raw boot log,
- * which differs per example and would otherwise shard one problem into hundreds
- * of issues.
+ * Fingerprinted by error class, not by message: one boot failure is one issue no
+ * matter which example or framework hit it, and the grouping stays stable as the
+ * message text improves (DEV-2533 replaced the raw log with a one-line cause). The
+ * log travels as `extra.bootLog` instead — extras take no part in grouping, titling
+ * or stack parsing, which is exactly what putting it in the message got wrong.
  */
-function reportRuntimeError(e: unknown, engine: string): void {
+function reportRuntimeError(e: unknown, engine: string, framework: string): void {
   if (!reportingEnabled) return;
   // Tier-1 compile and runtime errors are the "product output" case above — dropped
   // by default, reported while demo monitoring is on (DEV-2527). They arrive as
@@ -152,6 +189,18 @@ function reportRuntimeError(e: unknown, engine: string): void {
   // rules that follow.
   if (engine !== "container") {
     if (!monitorDemos) return;
+    // One owner per class of failure (DEV-2552). A throw from a module that had already
+    // started evaluating belongs to the in-preview reporter, which files it with the
+    // preview's own stack, the tier, the framework and the demo id — everything this
+    // path lacks. Reporting it here as well filed one fault as two more issues, under a
+    // stack (`SandpackRuntime.onMessage`) that points at us rather than at the demo.
+    //
+    // What is left below is exactly the class the reporter structurally cannot see: a
+    // bundler diagnostic for a module that never ran, so nothing inside the preview ever
+    // threw. The `sandpack-compile` tag and the flat fingerprint become accurate at that
+    // point — a transpile message is the visitor's own source, which default grouping
+    // would shard into an issue per typo.
+    if (e instanceof SandpackEvaluationError) return;
     Sentry.captureException(e, {
       tags: { surface: "demo-runtime", kind: "sandpack-compile", tier: "1" },
       // Flat, like ContainerBootFailure's: a compile error's text is the example's
@@ -168,9 +217,53 @@ function reportRuntimeError(e: unknown, engine: string): void {
   if (isBudgetRefusal(e)) return;
   if (e instanceof SessionStartError) {
     if (e.status === 410) return;
+    // The server's machine-readable reason joins the fingerprint when it sent
+    // one (DEV-2556). Status alone is too coarse now that the Worker refuses at
+    // capacity with its own 503: `at_capacity` — every container slot taken,
+    // which is a spend decision — would otherwise land in the same issue as an
+    // envelope-less platform 503 ("The sandbox service is unavailable right
+    // now"), which is a gateway fault and has nothing to do with our pool. That
+    // grouping is the only capacity evidence the create side has left, since the
+    // refusal is now a returned 503 rather than a throw the outer catch reports.
+    //
+    // Appended rather than substituted so uncoded failures keep the exact
+    // fingerprint they have today: no live issue regroups, and only the coded
+    // refusals split off. `budget_*` codes never reach here (suppressed above).
+    const code = typeof e.code === "string" && e.code.length > 0 ? e.code : null;
+    // DEV-2559. Three facets that make DEMOS-9's 83 events answerable, all of them
+    // TAGS beside the fingerprint and never inside it: the fingerprint below stays
+    // byte-identical, because sharding one continuous signal by framework would
+    // destroy the only trend the issue has.
+    //
+    // `framework` uses the key `reportDemoEvent` already tags with, so both sides of
+    // the preview boundary facet together. Deliberately added to this branch alone —
+    // the boot and compile branches have no question pending on them, and tag churn
+    // there would only muddy their own histories.
+    //
+    // `session_elapsed_bucket` over a raw-ms tag: see sessionDiagnostics.ts. The exact
+    // count rides in `extra`, which is not searchable but is readable per event.
+    //
+    // `cf_ray` is a tag rather than an extra precisely because it IS searchable, which
+    // makes the reverse join work — spot a slow invocation in Cloudflare's Workers
+    // Logs, search the ray here, and find out whether it was one of these. That gives
+    // it ~one value per event, which is only acceptable because this path fires a
+    // handful of times a day; it would be the wrong call on a hot one.
+    const diagnostics = e.diagnostics;
     Sentry.captureException(e, {
-      tags: { context: "tier2-session-start", session_status: String(e.status) },
-      fingerprint: ["tier2-session-start", String(e.status)],
+      tags: {
+        context: "tier2-session-start",
+        session_status: String(e.status),
+        framework,
+        ...(code ? { session_refusal: code } : {}),
+        ...(diagnostics
+          ? {
+              session_elapsed_bucket: elapsedBucket(diagnostics.elapsedMs),
+              ...(diagnostics.ray ? { cf_ray: diagnostics.ray } : {}),
+            }
+          : {}),
+      },
+      fingerprint: ["tier2-session-start", String(e.status), ...(code ? [code] : [])],
+      ...(diagnostics ? { extra: { sessionElapsedMs: diagnostics.elapsedMs } } : {}),
     });
     return;
   }
@@ -178,6 +271,9 @@ function reportRuntimeError(e: unknown, engine: string): void {
     Sentry.captureException(e, {
       tags: { context: "tier2-container-boot" },
       fingerprint: ["tier2-container-boot"],
+      // Bounded upstream (the status route tails 2500 bytes, `bootFailureDetail`
+      // keeps 40 lines) and already redacted of preview hosts, so no extra cap here.
+      ...(e.log ? { extra: { bootLog: e.log } } : {}),
     });
     return;
   }
@@ -186,21 +282,27 @@ function reportRuntimeError(e: unknown, engine: string): void {
   Sentry.captureException(e, { tags: { context: "tier2-runtime" } });
 }
 
+/** Pin the workspace to the version state's ref. Thin wrapper over the shared
+ *  `pinHandsontableFiles` (packages/runtime), which the API worker also calls
+ *  since DEV-2565 — one rewrite rule, two callers.
+ *
+ *  An unusable version is left unpinned rather than thrown: the mount guard owns
+ *  that message and refuses to boot behind this, and the only way to reach it now
+ *  is a hand-typed `?v=`, since the API no longer stores a ref the validator
+ *  rejects. */
 function pinHandsontableFiles(files: FilesMap, version: string): FilesMap {
   const validated = validateHandsontableVersion(version);
-  if (!validated.ok || files["/package.json"] === undefined) return files;
-  try {
-    return applyHandsontableCss(
-      applyHandsontableVersion(files, validated.value),
-      validated.value,
-    );
-  } catch {
-    return files;
-  }
+  if (!validated.ok) return files;
+  return pinToVersionRef(files, validated.value);
 }
 
+/** Did the host simply not have this docs resource? Delegates to the loader's
+ *  typed error (DEV-2535): the old `/\b404\b/` message sniff missed the deployed
+ *  host entirely, which serves 200 + index.html for a miss and so surfaced as a
+ *  JSON SyntaxError, and it could equally misfire on a docs path containing
+ *  "404" interpolated into an unrelated failure's message. */
 function isMissingDocsResource(error: unknown): boolean {
-  return error instanceof Error && /\b404\b/.test(error.message);
+  return isDocsResourceMissing(error);
 }
 
 /** Zip a file map and hand it to the browser. Module-level because two callers need
@@ -460,7 +562,14 @@ function FullMode({ id }: { id: string }) {
         if (cancelled || !meta) return;
         setTitle(meta.title ?? "");
         setDescription(meta.description ?? "");
-        if (meta.ht_version) setVersion(meta.ht_version);
+        // Only a ref the validator accepts. This view is handed `ht_version`
+        // verbatim, so a demo saved before DEV-2565 carries the "latest" sentinel
+        // here, and the snapshot read below is what repairs it — but these two
+        // fetches settle in either order. Gating on validity is what makes the
+        // displayed version independent of which one lands last.
+        if (meta.ht_version && validateHandsontableVersion(meta.ht_version).ok) {
+          setVersion(meta.ht_version);
+        }
       })
       .catch(() => { /* the status dot reports the build; a missing title is not an error state */ });
     return () => { cancelled = true; };
@@ -474,9 +583,13 @@ function FullMode({ id }: { id: string }) {
     let cancelled = false;
     fetch(`${API_BASE}/api/demos/${id}/source`)
       .then((res) => (res.ok ? res.json() : null))
-      .then((src: { framework: string; files: FilesMap } | null) => {
+      .then((src: { framework: string; files: FilesMap; htVersion?: string | null } | null) => {
         if (cancelled || !src) return;
         setFiles(src.files);
+        // The repaired ref (DEV-2565) — the metadata read above hands this view
+        // `ht_version` verbatim, so a demo saved before that fix would print the
+        // "latest" sentinel as its version.
+        if (src.htVersion) setVersion(src.htVersion);
         // The design's short label ("React (Vite, TS)") comes from the starter catalog,
         // same resolution the shell's status bar uses in every other mode.
         setFrameworkName(catalog.examples.find((x) => x.framework === src.framework)?.displayName);
@@ -795,6 +908,9 @@ function Authoring({
   const [activeDocsBucket, setActiveDocsBucket] = useState<string | null>(null);
   const [activeDocsManifest, setActiveDocsManifest] = useState<DocsManifest | null>(null);
 
+  /** The shell's own light/dark, so the preview can be told about it (DEV-2561). */
+  const { mode: themeMode } = useTheme();
+
   const [files, setFiles] = useState<FilesMap>(() => ({ ...entry.files }));
   const [version, setVersion] = useState<string>(
     () => new URLSearchParams(location.search).get("v") || DEFAULT_VERSION,
@@ -804,6 +920,11 @@ function Authoring({
   const [versionsResolved, setVersionsResolved] = useState(false);
   const [status, setStatus] = useState<PreviewStatus>("booting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Set when an authed action came back 401 (DEV-2534). Its own state rather
+  // than an `errorMessage`, because `errorMessage` renders into a `<pre>` in the
+  // preview pane and this needs a button: the answer to an expired session is
+  // "sign in again", which is an action, not a sentence.
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [versionWarning, setVersionWarning] = useState<string | null>(null);
   // Cost-guardrail notice (DEV-2030): non-null once spend crosses the warn
   // threshold, so a user learns live sessions are about to get restricted
@@ -890,6 +1011,19 @@ function Authoring({
   // example. Mutually exclusive with the chat panel: they occupy the same edge
   // of the screen, and both are secondary to the code.
   const [styleOpen, setStyleOpen] = useState(false);
+  /** Can this demo's core be themed at all? `releaseMajor` answers null for the
+   *  `next` dist-tag and for pkg.pr.new refs, which are post-18 builds — those
+   *  pass, since refusing them would block exactly the people testing them. */
+  const themingSupported = (() => {
+    const major = releaseMajor(version);
+    return major === null || major >= THEME_API_MIN_MAJOR;
+  })();
+  // Switching the version *down* has to close an open panel, not just hide it:
+  // `styleOpen` would stay latched true and the toolbar button would keep
+  // reading as pressed with nothing on screen.
+  useEffect(() => {
+    if (!themingSupported) setStyleOpen(false);
+  }, [themingSupported]);
   /** Edit info (`114:24410`), opened from the BOX INFO pencil. Replaces the two
    *  bare inputs T2 had to park in the authed action bar for want of a frame.
    *
@@ -1029,11 +1163,19 @@ function Authoring({
           setImportPhase("failed");
           setStatus("error");
           setRetryable(false);
+          // The status wins over `body.error`, and the order matters (DEV-2534):
+          // `/api/import` answers an expired session with `{"error":
+          // "unauthorized"}` (workers/api/src/index.ts:1019-1020), so while
+          // `body.error` was consulted first the 401 arm below was unreachable
+          // and the word "unauthorized" was the whole of what the user was told
+          // — the same defect as the migrated callsites, one branch further out.
+          // The copy stays "Sign in", not "Your session expired": `/` is
+          // reachable signed out, so a 401 here is as likely to mean "never
+          // signed in" as "signed in an hour ago".
           setErrorMessage(
-            body.error ??
-              (res.status === 401
-                ? "Sign in to import a project."
-                : "Could not import that URL."),
+            res.status === 401
+              ? "Sign in to import a project."
+              : (body.error ?? "Could not import that URL."),
           );
           return;
         }
@@ -1208,7 +1350,26 @@ function Authoring({
           setSourceLoaded(true);
           return;
         }
-        const src = (await srcRes.json()) as { framework: string; files: FilesMap };
+        const src = (await srcRes.json()) as {
+          framework: string;
+          files: FilesMap;
+          /** The row's ref when the validator accepts it, else the one the snapshot
+           *  itself pins — see `editorVersionRef` (DEV-2565). Preferred over
+           *  `meta.ht_version` because demos saved before that fix hold the "latest"
+           *  sentinel there, and adopting it as version state is a boot refusal. */
+          htVersion?: string | null;
+        };
+        // Read outside the metadata branch on purpose: the version rides on the
+        // snapshot now, so a transient metadata failure must not cost the demo its
+        // pin — the editor would resolve latest and the next Save would re-pin the
+        // demo to it.
+        //
+        // Presence, not truthiness: the route answers `null` for a legacy row whose
+        // snapshot pins nothing exact, and *that* is the answer — falling back to
+        // `meta.ht_version` there would adopt the "latest" sentinel and reproduce
+        // the boot refusal this branch removes (DEV-2565).
+        let pinnedVersion: string | null | undefined =
+          "htVersion" in src ? src.htVersion : undefined;
         if (metaRes.ok) {
           const meta = (await metaRes.json()) as {
             title: string;
@@ -1219,10 +1380,13 @@ function Authoring({
           setTitle(meta.title ?? "");
           setDescription(meta.description ?? "");
           setCreatedAt(meta.created_at ?? "");
-          if (meta.ht_version) {
-            hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
-            setVersion(meta.ht_version);
-          }
+          // The column is the fallback only for an API old enough not to send the
+          // field at all.
+          if (pinnedVersion === undefined) pinnedVersion = meta.ht_version;
+        }
+        if (pinnedVersion) {
+          hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
+          setVersion(pinnedVersion);
         }
         loadWorkspace(toPlaceholderEntry(getEntry(src.framework)), src.files, savedId);
         setSourceLoaded(true);
@@ -1775,7 +1939,7 @@ function Authoring({
       if (cancelled) return;
       setStatus("error");
       setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
-      reportRuntimeError(e, entry.engine);
+      reportRuntimeError(e, entry.engine, entry.framework);
     });
     runtimeRef.current = runtime;
     setPreviewUrl("");
@@ -1796,7 +1960,7 @@ function Authoring({
         }
         // Reported even when cancelled: a session the pool refused still failed,
         // and the unmount that set `cancelled` is often the user giving up on it.
-        reportRuntimeError(e, entry.engine);
+        reportRuntimeError(e, entry.engine, entry.framework);
       });
     return () => {
       cancelled = true;
@@ -1871,6 +2035,37 @@ function Authoring({
     window.addEventListener("message", listener);
     return () => window.removeEventListener("message", listener);
   }, [iframeEl]);
+
+  /**
+   * Carry the shell's colour scheme into the preview (DEV-2561, ADR-0035).
+   *
+   * Which demos the shell may decide for is settled *here*, not inside the
+   * receiver: from within the frame, "the runner pinned this starter to light" and
+   * "this demo deliberately declares light" are the same two words. Out here both
+   * facts are in hand.
+   *
+   * `auto` is the stand-down signal — the receiver drops its override and whatever
+   * the demo declares takes effect. Sent for a docs example (eight of the theming
+   * guide's own examples ship an `ht-theme-*-dark` class they exist to
+   * demonstrate) and from the moment the Style panel has written a theme module,
+   * whose `colorScheme` is then the demo's own declaration.
+   */
+  const shellSchemeMode: SchemeMode = useMemo(() => {
+    if (docsPath) return "auto";
+    const wired = Object.keys(files).some((path) => path.includes(THEME_MODULE_BASENAME));
+    return wired ? "auto" : themeMode;
+  }, [docsPath, files, themeMode]);
+
+  /** Re-sent on every `ready`, not only on change: the iframe is replaced on each
+   *  rebuild and the fresh document starts with no override at all. */
+  useEffect(() => {
+    if (!iframeEl) return;
+    const send = () => postToPreview({ source: SCHEME_MESSAGE_TYPE, mode: shellSchemeMode });
+    send();
+    return onPreviewMessage((data) => {
+      if (isSchemeReady(data)) send();
+    });
+  }, [iframeEl, onPreviewMessage, postToPreview, shellSchemeMode]);
 
   /** Push whatever a `{ quiet: true }` write left pending — the Style panel's fallback
    *  when a live patch did not land, and how a theme change that *must* rebuild (first
@@ -2001,14 +2196,13 @@ function Authoring({
           forkedFrom: forkedFrom ?? undefined,
         }),
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error || `embed failed (${res.status})`);
-      }
-      const { id } = (await res.json()) as { id: string };
+      const { id } = await readApiJson<{ id: string }>(res, `embed failed (${res.status})`);
       setLinksId(id);
       setShareLinksOpen(true);
     } catch (e) {
+      // The dialog answers this one; a `<pre>` full of prose with no button
+      // would not (DEV-2534). `finally` still clears the in-flight state.
+      if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-embed");
       setErrorMessage(e instanceof Error ? e.message : String(e));
     } finally {
@@ -2036,16 +2230,19 @@ function Authoring({
           forkedFrom: forkedFrom ?? undefined,
         }),
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error || `fork failed (${res.status})`);
-      }
-      const { id } = (await res.json()) as { id: string };
+      const { id } = await readApiJson<{ id: string }>(res, `fork failed (${res.status})`);
       location.href = `/edit/${id}`; // boot into the edit page for the new demo
     } catch (e) {
+      // First statement, before any branch. There is no `finally` here on
+      // purpose — the success path navigates away and clearing `forking` first
+      // would flash the button back to idle mid-navigation — so every *failure*
+      // path has to clear it itself. An early return added below it (the shape
+      // `onEmbed` and `onSave` can use, since they do have a `finally`) would
+      // leave the Fork button spinning forever on an expired session (DEV-2534).
+      setForking(false);
+      if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-fork");
       setErrorMessage(e instanceof Error ? e.message : String(e));
-      setForking(false);
     }
   }, [user, entry, version, forkedFrom, importedTitle]);
 
@@ -2074,14 +2271,16 @@ function Authoring({
           htVersion: version,
         }),
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error || `save failed (${res.status})`);
-      }
+      await assertApiOk(res, `save failed (${res.status})`);
       clearDirty();
     } catch (e) {
       // Losing a save is the worst outcome in the app — the user's edits are only
-      // in this tab's memory until the PATCH lands.
+      // in this tab's memory until the PATCH lands. Which is exactly why an
+      // expired session opens a dialog here instead of calling `login()`: that
+      // sets `location.href`, and the edits would go with the page (DEV-2534).
+      // `dirty` is untouched, so the Save button keeps its dot and the work is
+      // still there to re-save — or to Download — once the user is back in.
+      if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-save");
       setErrorMessage(e instanceof Error ? e.message : String(e));
     } finally {
@@ -2352,7 +2551,12 @@ function Authoring({
         secondaryActions={
           <>
             <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />
-            <StyleButton open={styleOpen} onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }} />
+            <StyleButton
+              open={styleOpen}
+              onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }}
+              disabled={!themingSupported}
+              disabledReason={`Theming needs Handsontable ${THEME_API_MIN_MAJOR} or newer — this demo is on ${version}.`}
+            />
           </>
         }
         // ---- chrome (T2) --------------------------------------------------
@@ -2445,6 +2649,37 @@ function Authoring({
         <ShareLinks clientUrl={clientUrl} embedUrl={embedUrl} onClose={() => setShareLinksOpen(false)} />
       )}
 
+      {/* An expired session, asked about rather than acted on (DEV-2534).
+          `login()` sets `location.href`, and the workspace only exists in this
+          tab's memory — so the re-auth is offered, not taken. Dismissing it
+          leaves the top bar's Download reachable, which is the escape hatch for
+          someone who would rather take a zip than risk the round trip. */}
+      {sessionExpired && (
+        <Dialog title="Your session expired" onClose={() => setSessionExpired(false)}>
+          <p style={sessionExpiredBody}>
+            Sign in again to continue. Your unsaved work stays in this tab either way —
+            you can also download it first.
+          </p>
+          <div style={formFooter}>
+            <button type="button" style={primaryButton} onClick={login}>
+              Sign in again
+            </button>
+            {/* Focus lands here, not on "Sign in again": that button leaves the
+                page, and landing on it would make Space or Enter — pressed by
+                someone who did not read a dialog they did not ask for — take the
+                unsaved workspace with it. */}
+            <button
+              type="button"
+              data-autofocus
+              style={ghostButton}
+              onClick={() => setSessionExpired(false)}
+            >
+              Not now
+            </button>
+          </div>
+        </Dialog>
+      )}
+
       {/* `savedId` narrows the dialog's `demoId` — the pencil is `edit`-only, so it
           is never null here, but the render guard is where that is provable. */}
       {editInfoOpen && savedId && (
@@ -2466,10 +2701,11 @@ function Authoring({
         />
       )}
 
-      {styleOpen && (
+      {styleOpen && themingSupported && (
         <StylePanel
           apiBase={API_BASE}
           token={getToken()}
+          htVersion={version}
           getFiles={() => filesRef.current}
           applyEdit={onEdit}
           postToPreview={postToPreview}
@@ -2500,6 +2736,16 @@ function Logo({ size = 24 }: { size?: number }) {
   const logoUrl = useLogoUrl();
   return <img src={logoUrl} alt="Handsontable" style={{ height: size, display: "block" }} />;
 }
+
+/** The re-auth dialog's one paragraph — the same body treatment the delete
+ *  confirmation in `MyDemos` uses, so the two modals read as one component. */
+const sessionExpiredBody: React.CSSProperties = {
+  margin: 0,
+  fontFamily: theme.font.ui,
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: theme.color.textMuted,
+};
 
 const centered: React.CSSProperties = {
   height: "100%",

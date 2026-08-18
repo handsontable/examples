@@ -59,9 +59,17 @@ import {
   NOTHING_CHANGED_NOTE,
   type ThemeAnswer,
 } from "./theme/suggestion.js";
-import { densitySizes as presetDensity, presetColors, presetTokens } from "./theme/presets.js";
-import { effectiveColors, effectiveDensity, effectiveTokens } from "./theme/resolve.js";
-import { TokenControl, type ControlContext } from "./theme/controls.js";
+import { type ColorsMap } from "./theme/presets.js";
+import { bundledPresets, loadPresets, type PresetSet } from "./theme/presetsFor.js";
+import { hexInputValue, isTransparentHex } from "./theme/color.js";
+import {
+  effectiveColors,
+  effectiveDensity,
+  effectiveTokens,
+  getNestedValue,
+  resolveTokenValue,
+} from "./theme/resolve.js";
+import { DensitySizeControl, TokenControl, type ControlContext } from "./theme/controls.js";
 
 /** Foundation / Common / Component / AI ✨, as theme-builder splits its panel. */
 type Tab = "foundation" | "common" | "component" | "ai";
@@ -112,6 +120,10 @@ export interface StylePanelProps {
    *  as the chat route, so without this a signed-in user is refused at the
    *  `anon_blocked` tier — exactly when the tier means to keep them working. */
   token: string | null;
+  /** The Handsontable version the demo is pinned to. The panel resolves preset
+   *  defaults against *this* version rather than the one the app is built with
+   *  (DEV-2560) — see `theme/presetsFor.ts`. */
+  htVersion: string;
   getFiles: () => FilesMap;
   /** Write a file into the editor + running preview. `{ quiet: true }` keeps the
    *  file and skips the rebuild, for a change the bridge has already applied. */
@@ -129,6 +141,7 @@ export interface StylePanelProps {
 export function StylePanel({
   apiBase,
   token,
+  htVersion,
   getFiles,
   applyEdit,
   postToPreview,
@@ -160,6 +173,11 @@ export function StylePanel({
   const [densityVariant, setDensityVariant] = useState<ThemeState["density"]>(() => state.density);
   const [showCode, setShowCode] = useState(false);
   const [applied, setApplied] = useState<{ linked: boolean } | null>(null);
+  /** The preset data the controls resolve against — the demo's own Handsontable
+   *  version, fetched, with this app's copy as the synchronous first render and
+   *  the fallback (DEV-2560). */
+  const [presets, setPresets] = useState<PresetSet>(() => bundledPresets(state.tokens, state.colors));
+  const [loadingPresets, setLoadingPresets] = useState(false);
 
   /**
    * Is there a live theme bridge in the preview right now? (DEV-2496)
@@ -174,6 +192,9 @@ export function StylePanel({
   /** The current theme, readable from the unmount cleanup — which runs after the last
    *  render and so cannot see `state` through a stale closure. */
   const stateRef = useRef(state);
+  /** The loaded presets, for the same reason: `patchLive` is called from `apply`,
+   *  which runs inside the setState burst that changed the theme. */
+  const presetsRef = useRef(presets);
   /** Live patches in flight, by id, waiting for their `ack`. */
   const acks = useRef(new Map<number, (ok: boolean) => void>());
   const patchSeq = useRef(0);
@@ -206,6 +227,21 @@ export function StylePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The preset data for the demo's own Handsontable version (DEV-2560). Loaded
+  // for display only — `state` holds overrides and nothing else, so a version
+  // change re-resolves what the controls *show* and touches no value the user
+  // set. The previous set stays on screen while the next one lands: blanking the
+  // panel mid-load would be a worse lie than a stale number, and an override
+  // typed during the load is version-independent and must still commit.
+  useEffect(() => {
+    let live = true;
+    setLoadingPresets(true);
+    loadPresets(htVersion, state.tokens, state.colors)
+      .then((loaded) => { if (live) { presetsRef.current = loaded; setPresets(loaded); } })
+      .finally(() => { if (live) setLoadingPresets(false); });
+    return () => { live = false; };
+  }, [htVersion, state.tokens, state.colors]);
+
   // A theme restored from a previous session describes files this demo may not
   // have — reopening the panel, or opening a different example, must reconcile
   // the two rather than wait for the next edit to notice.
@@ -229,11 +265,34 @@ export function StylePanel({
    *  overrides layered on. Recomputed per edit so a resolved value never lags
    *  behind the grid it is describing. */
   const ctx: ControlContext = useMemo(() => ({
-    tokens: effectiveTokens(presetTokens(state.tokens), state.params),
-    colors: effectiveColors(presetColors(state.colors), state.palette),
-    density: effectiveDensity(presetDensity(state.density), state.densitySizes[state.density] ?? {}),
+    tokens: effectiveTokens(presets.tokens, state.params),
+    colors: effectiveColors(presets.colors, state.palette),
+    density: effectiveDensity(presets.density[state.density] ?? {}, state.densitySizes[state.density] ?? {}),
+    sizing: presets.sizing,
     colorScheme: state.colorScheme,
-  }), [state]);
+  }), [presets, state]);
+
+  /** The density measurements for the variant the *sizes editor* is pointed at,
+   *  overrides layered on. Not `ctx.density`, which follows the variant the grid
+   *  is on — the two differ whenever the switcher has been moved, and a row has
+   *  to show the value it is editing. */
+  const editedDensity = useMemo(
+    () => effectiveDensity(presets.density[densityVariant] ?? {}, state.densitySizes[densityVariant] ?? {}),
+    [presets, densityVariant, state.densitySizes],
+  );
+
+  /** What a density measurement actually comes out as: the preset stores
+   *  references (`"sizing.size_1"`), and the row has to read `4px`. */
+  const resolvedDensitySize = (key: string) =>
+    String(resolveTokenValue(editedDensity[key], { ...ctx, density: editedDensity }) ?? "");
+
+  /** The colour the brand ramp is generated from — the effective `primary.500`,
+   *  so the picker opens on the preset's blue rather than a hard-coded one that
+   *  is wrong for every preset but `main`. */
+  const brandColour = hexInputValue(
+    state.palette["primary.500"] ?? String(getNestedValue(ctx.colors, "primary.500") ?? ""),
+    "#1a42e8",
+  );
 
   /** One token row, wired to the panel's state. */
   const tokenRow = (token: Token) => (
@@ -272,7 +331,9 @@ export function StylePanel({
       };
       const timer = setTimeout(() => settle(false), BRIDGE_ACK_TIMEOUT_MS);
       acks.current.set(id, settle);
-      postToPreview({ source: THEME_BRIDGE_SOURCE, id, params: buildThemeParams(next) });
+      // The demo's own version's presets when they are loaded — the payload is
+      // effective objects, so the presets travel inside it (DEV-2560).
+      postToPreview({ source: THEME_BRIDGE_SOURCE, id, params: buildThemeParams(next, presetsRef.current) });
     });
   }
 
@@ -607,6 +668,21 @@ export function StylePanel({
         </Section>
         )}
 
+        {/* Which version's defaults are on screen (DEV-2560). Only shown once the
+            load has settled: it would otherwise flash on every panel open, and
+            again whenever `/api/versions` repoints a `next` stamp. */}
+        {!loadingPresets && presets.fallback && (
+          <div style={{ ...sectionNote, margin: `0 ${ui.space(4)} ${ui.space(2)}` }}>
+            Showing Handsontable {presets.version}&rsquo;s defaults — {htVersion}&rsquo;s could not
+            be loaded. Overrides you set are unaffected.
+          </div>
+        )}
+        {loadingPresets && (
+          <div style={{ ...sectionNote, margin: `0 ${ui.space(4)} ${ui.space(2)}` }}>
+            Resolving Handsontable {htVersion} defaults&hellip;
+          </div>
+        )}
+
         {tab === "foundation" && (<>
         <Section title="Token mapping">
           {/* Tiles, not a dropdown: the three token presets differ in how the
@@ -687,26 +763,29 @@ export function StylePanel({
                   <input
                     type="color"
                     aria-label="Generate the brand ramp from this colour"
-                    value={state.palette["primary.500"] ?? "#1a42e8"}
+                    value={brandColour}
                     onChange={(e) => rampFrom(e.target.value)}
                     style={swatch}
                   />
-                  <button type="button" style={{ ...ghost, flex: 1 }} onClick={() => rampFrom(state.palette["primary.500"] ?? "#1a42e8")}>
+                  <button type="button" style={{ ...ghost, flex: 1 }} onClick={() => rampFrom(brandColour)}>
                     Generate all six steps
                   </button>
                 </span>
               </label>
               <div style={sectionTitle}>Primary</div>
-              <Ramp steps={PRIMARY_STEPS} prefix="primary" state={state} onChange={setPalette} />
+              <Ramp steps={PRIMARY_STEPS} prefix="primary" state={state} colors={ctx.colors} onChange={setPalette} />
               <div style={sectionTitle}>Neutral</div>
-              <Ramp steps={NEUTRAL_STEPS} prefix="palette" state={state} onChange={setPalette} />
+              <Ramp steps={NEUTRAL_STEPS} prefix="palette" state={state} colors={ctx.colors} onChange={setPalette} />
               <div style={sectionTitle}>Base</div>
               {["white", "black"].map((key) => (
                 <TokenField
                   key={key}
                   token={{ key, label: key[0]!.toUpperCase() + key.slice(1), type: "color", description: "" }}
                   value={state.palette[key] ?? ""}
+                  resolved={String(ctx.colors[key] ?? "")}
+                  overridden={state.palette[key] !== undefined}
                   onChange={(v) => setPalette(key, v)}
+                  onReset={() => setPalette(key, "")}
                 />
               ))}
             </div>
@@ -727,9 +806,10 @@ export function StylePanel({
           {openGroup === "Density sizes" && (
             <div style={{ padding: BODY_PAD }}>
               <p style={{ ...note, marginTop: 0 }}>
-                Fine-tune a density preset one measurement at a time. Blank means "whatever
-                the preset says". All three variants are editable, so a theme still behaves
-                when the grid is switched between them.
+                Fine-tune a density preset one measurement at a time. Each row shows what the
+                preset resolves to; pick or type another value to override it, and Reset puts
+                it back. All three variants are editable, so a theme still behaves when the
+                grid is switched between them.
               </p>
               {/* Which variant is being edited — independent of the one the grid is
                   set to, exactly as theme-builder's density modal allows. */}
@@ -758,11 +838,15 @@ export function StylePanel({
                 <div key={group.label}>
                   <div style={subGroup}>{group.label}</div>
                   {group.tokens.map((token) => (
-                    <TokenField
+                    <DensitySizeControl
                       key={token.key}
                       token={token}
-                      value={state.densitySizes[densityVariant]?.[token.key] ?? ""}
+                      ctx={ctx}
+                      value={state.densitySizes[densityVariant]?.[token.key]}
+                      resolved={resolvedDensitySize(token.key)}
+                      effectiveRef={editedDensity[token.key] ?? ""}
                       onChange={(v) => setDensitySize(densityVariant, token.key, v)}
+                      onReset={() => setDensitySize(densityVariant, token.key, "")}
                     />
                   ))}
                 </div>
@@ -893,36 +977,84 @@ function GroupLabel({ label, open }: { label: string; open: boolean }) {
 }
 
 /** A colour ramp as a row of swatches — the shape of the ramp is the thing
- *  worth seeing, and eleven stacked text fields hide it. */
+ *  worth seeing, and eleven stacked text fields hide it.
+ *
+ *  Each swatch paints the *effective* colour: the override where there is one,
+ *  the preset's own step where there is not (DEV-2560). It used to paint white
+ *  at 35% opacity until a step was overridden, so a freshly opened panel read as
+ *  eleven identical grey squares — "nie wygladaja jak by dzialaly". The hex is
+ *  in the tooltip; theme-builder's own modal lists it, and eleven text fields
+ *  next to eleven pickers do not fit a 400px drawer.
+ *
+ *  Because opacity no longer says which steps are overridden, an accent outline
+ *  does, and the per-ramp Reset is how an override comes back off — clearing by
+ *  emptying a field is not available on a colour input. */
 function Ramp({
   steps,
   prefix,
   state,
+  colors,
   onChange,
 }: {
   steps: readonly string[];
   prefix: string;
   state: ThemeState;
+  /** The effective colours — preset with the panel's palette layered on. */
+  colors: ColorsMap;
   onChange: (key: string, value: string) => void;
 }) {
+  const overridden = steps.filter((step) => state.palette[`${prefix}.${step}`] !== undefined);
+
   return (
-    <div style={{ display: "flex", gap: ui.space(1), marginBottom: ui.space(3), flexWrap: "wrap" }}>
-      {steps.map((step) => {
-        const key = `${prefix}.${step}`;
-        const value = state.palette[key] ?? "";
-        return (
-          <label key={key} style={{ textAlign: "center" }} title={`${key}${value ? ` — ${value}` : " (theme default)"}`}>
-            <input
-              type="color"
-              aria-label={key}
-              value={/^#[0-9a-f]{6}$/i.test(value) ? value : "#ffffff"}
-              onChange={(e) => onChange(key, e.target.value)}
-              style={{ ...swatch, width: 26, flex: "0 0 26px", opacity: value ? 1 : 0.35 }}
-            />
-            <div style={{ fontSize: 10, color: ui.color.textMuted }}>{step}</div>
-          </label>
-        );
-      })}
+    <div style={{ marginBottom: ui.space(3) }}>
+      <div style={{ display: "flex", gap: ui.space(1), flexWrap: "wrap" }}>
+        {steps.map((step) => {
+          const key = `${prefix}.${step}`;
+          const override = state.palette[key];
+          const resolved = String(getNestedValue(colors, key) ?? "");
+          const effective = override ?? resolved;
+          return (
+            <label
+              key={key}
+              style={{ textAlign: "center" }}
+              title={`${key} — ${effective || "unset"}${override ? "" : " (theme default)"}`}
+            >
+              <input
+                type="color"
+                aria-label={key}
+                value={hexInputValue(effective, "#ffffff")}
+                onChange={(e) => onChange(key, e.target.value)}
+                style={{
+                  ...swatch,
+                  width: 26,
+                  flex: "0 0 26px",
+                  border: `${override ? 2 : 1}px solid ${override ? ui.color.accent : ui.color.controlBorder}`,
+                  // A fully transparent preset colour normalises to white, which
+                  // would read as an opaque swatch — the chequer says otherwise.
+                  backgroundImage: isTransparentHex(effective)
+                    ? "linear-gradient(45deg, rgba(128,128,128,.4) 25%, transparent 25% 75%, rgba(128,128,128,.4) 75%)"
+                    : undefined,
+                  backgroundSize: "8px 8px",
+                }}
+              />
+              <div style={{ fontSize: 10, color: ui.color.textMuted }}>{step}</div>
+            </label>
+          );
+        })}
+      </div>
+      {overridden.length > 0 && (
+        <button
+          type="button"
+          style={{ ...ghost, marginTop: ui.space(2), fontSize: 12 }}
+          // Not the bare word "Reset": the panel footer has one of those, and a
+          // second exact match makes every `name: "Reset", exact: true` locator
+          // ambiguous.
+          aria-label={`Reset the ${prefix} ramp`}
+          onClick={() => { for (const step of overridden) onChange(`${prefix}.${step}`, ""); }}
+        >
+          Reset ramp ({overridden.length})
+        </button>
+      )}
     </div>
   );
 }
@@ -961,18 +1093,33 @@ function Select({
 
 /** One token. Colours get a swatch beside the text box, because a hex field
  *  alone makes choosing a colour a guessing game — but the text box stays, so
- *  `transparent`, a CSS variable or an rgba() are all still expressible. */
+ *  `transparent`, a CSS variable or an rgba() are all still expressible.
+ *
+ *  `value` is the override and nothing else — the preset's value shows as the
+ *  *placeholder* (DEV-2560). Binding it into `value` would be the tempting
+ *  version and the wrong one twice over: the field would stop distinguishing a
+ *  default from an override, and the first keystroke would commit the whole
+ *  resolved value as one. Empty stays the override signal, which is what keeps
+ *  `isPristine`, the group badges and the generated module honest. */
 function TokenField({
   token,
   value,
+  resolved,
+  overridden,
   onChange,
+  onReset,
 }: {
   token: Token;
+  /** The override, or `""` when this token has none. */
   value: string;
+  /** What it comes out as without an override — shown as the placeholder. */
+  resolved?: string;
+  overridden?: boolean;
   onChange: (value: string) => void;
+  onReset?: () => void;
 }) {
   return (
-    <div style={{ marginBottom: ui.space(2) }}>
+    <div style={{ marginBottom: ui.space(2) }} data-token={token.key}>
       <label style={row}>
         <span style={rowLabel} title={token.key}>{token.label}</span>
         <span style={{ display: "flex", gap: ui.space(1), flex: 1 }}>
@@ -980,7 +1127,7 @@ function TokenField({
             <input
               type="color"
               aria-label={`${token.label} colour picker`}
-              value={/^#[0-9a-f]{6}$/i.test(value) ? value : "#000000"}
+              value={hexInputValue(value || resolved)}
               onChange={(e) => onChange(e.target.value)}
               style={swatch}
             />
@@ -988,11 +1135,18 @@ function TokenField({
           <input
             type="text"
             value={value}
-            placeholder="theme default"
+            placeholder={resolved || "theme default"}
             onChange={(e) => onChange(e.target.value)}
             style={control}
           />
         </span>
+        {overridden && onReset && (
+          // `aria-label`, not the bare word: the footer's Reset is the one an
+          // exact-name locator means, and this must not collide with it.
+          <button type="button" style={resetLink} aria-label={`Reset ${token.key}`} onClick={onReset}>
+            Reset
+          </button>
+        )}
       </label>
       {token.description && <div style={hint}>{token.description}</div>}
     </div>
@@ -1006,12 +1160,22 @@ function TokenField({
  * someone learns before clicking that this is the whole of Theme Builder, that
  * it writes a real module into the demo rather than a throwaway preview, and
  * that a sentence of English is a valid way to drive it.
+ *
+ * `disabled` keeps the button on screen and repurposes that tooltip to say why
+ * (DEV-2560). A toolbar entry that vanishes on some versions reads as a bug and
+ * explains nothing, and the reason — the demo's core has no theme API — is not
+ * something anyone would guess.
  */
-export function StyleButton({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+export function StyleButton({ open, onToggle, disabled = false, disabledReason }: {
+  open: boolean;
+  onToggle: () => void;
+  disabled?: boolean;
+  disabledReason?: string;
+}) {
   const [hint, setHint] = useState(false);
   // Not over the panel it opens: once that is up the tooltip only repeats what
-  // the user can already read.
-  const show = hint && !open;
+  // the user can already read. Disabled, there is no panel, so it always shows.
+  const show = hint && (disabled || !open);
 
   return (
     <span
@@ -1021,12 +1185,15 @@ export function StyleButton({ open, onToggle }: { open: boolean; onToggle: () =>
     >
       <button
         type="button"
-        style={styleBtn}
-        onClick={onToggle}
+        // Kept focusable while disabled so the tooltip is reachable by keyboard —
+        // `aria-disabled` says it does nothing, and the click handler agrees.
+        style={disabled ? { ...styleBtn, opacity: 0.5, cursor: "not-allowed" } : styleBtn}
+        onClick={() => { if (!disabled) onToggle(); }}
         onFocus={() => setHint(true)}
         onBlur={() => setHint(false)}
         onKeyDown={(e) => { if (e.key === "Escape") setHint(false); }}
         aria-pressed={open}
+        aria-disabled={disabled || undefined}
         aria-describedby={show ? "style-hint" : undefined}
       >
         <IconPalette />
@@ -1035,17 +1202,26 @@ export function StyleButton({ open, onToggle }: { open: boolean; onToggle: () =>
 
       {show && (
         <span id="style-hint" role="tooltip" style={tooltip}>
-          <strong style={{ display: "block", marginBottom: ui.space(1) }}>Restyle this example</strong>
-          <span style={{ display: "block", color: ui.color.textMuted, marginBottom: ui.space(2) }}>
-            Everything Theme Builder does, applied to the demo you have open.
-          </span>
-          <span style={tooltipItem}>272 tokens — colours, sizes, typography, per component</span>
-          <span style={tooltipItem}>“Retro amber terminal” — describe it and the grid becomes it</span>
-          <span style={tooltipItem}>Presets, brand ramp, light/dark and density</span>
-          <span style={{ display: "block", marginTop: ui.space(2), color: ui.color.textMuted }}>
-            Written into the demo as a real module, so it survives Download and Share — and
-            Reset puts everything back.
-          </span>
+          {disabled ? (
+            <>
+              <strong style={{ display: "block", marginBottom: ui.space(1) }}>Not available here</strong>
+              <span style={{ display: "block", color: ui.color.textMuted }}>{disabledReason}</span>
+            </>
+          ) : (
+            <>
+              <strong style={{ display: "block", marginBottom: ui.space(1) }}>Restyle this example</strong>
+              <span style={{ display: "block", color: ui.color.textMuted, marginBottom: ui.space(2) }}>
+                Everything Theme Builder does, applied to the demo you have open.
+              </span>
+              <span style={tooltipItem}>272 tokens — colours, sizes, typography, per component</span>
+              <span style={tooltipItem}>“Retro amber terminal” — describe it and the grid becomes it</span>
+              <span style={tooltipItem}>Presets, brand ramp, light/dark and density</span>
+              <span style={{ display: "block", marginTop: ui.space(2), color: ui.color.textMuted }}>
+                Written into the demo as a real module, so it survives Download and Share — and
+                Reset puts everything back.
+              </span>
+            </>
+          )}
         </span>
       )}
     </span>
@@ -1097,6 +1273,12 @@ const swatch: React.CSSProperties = {
   width: 30, flex: "0 0 30px", padding: 0, height: 26,
   border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.sm,
   background: ui.color.surface, cursor: "pointer",
+};
+/** The inline "Reset" beside an overridden field — the same affordance the token
+ *  rows carry in `theme/controls.tsx`, on the same `accentText`. */
+const resetLink: React.CSSProperties = {
+  border: "none", background: "none", color: ui.color.accentText, fontSize: 12,
+  cursor: "pointer", padding: `0 ${ui.space(1)}`, flex: "0 0 auto",
 };
 /** Sits under a control, so it indents past the label column to line up with it. */
 const hint: React.CSSProperties = {

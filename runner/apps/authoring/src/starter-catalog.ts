@@ -37,5 +37,14 @@ export async function loadStarterExample(
  * real artifact replaces it.
  */
 export function toPlaceholderEntry(index: CatalogIndexEntry): CatalogEntry {
-  return { ...index, htCoreRange: null, fileCount: 0, assets: [], skipped: [], files: {} };
+  return {
+    ...index,
+    htCoreRange: null,
+    // Per-bucket, like htCoreRange: unknown until the bucket artifact lands.
+    overrides: [],
+    fileCount: 0,
+    assets: [],
+    skipped: [],
+    files: {},
+  };
 }

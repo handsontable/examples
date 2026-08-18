@@ -51,7 +51,7 @@ if (example) {
     rowHeaders: true,
     afterGetColHeader: alignHeaders,
     beforeRenderer: addClassesToRows,
-    theme: mainTheme,
+    theme: { ...mainTheme, colorScheme: 'light' },
     licenseKey: 'non-commercial-and-evaluation',
   });
 

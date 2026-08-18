@@ -194,3 +194,20 @@ test("a refused import says why instead of hanging on a spinner", async ({ page 
   await expect(fileRow(page, "/src/index.tsx")).toHaveCount(0);
   await expect(page.getByText(/only hosts Handsontable demos/)).toBeVisible();
 });
+
+// DEV-2534. `/api/import` answers an unauthenticated or expired request with
+// `{"error":"unauthorized"}`, and the import branch consulted `body.error`
+// first — so its own 401 copy never ran and the wire string was what a person
+// read. The status is what decides now.
+test("an import refused for want of a session says to sign in, not 'unauthorized'", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await page.route("**/api/import", (route) =>
+    route.fulfill({ status: 401, json: { error: "unauthorized" } }),
+  );
+  await page.goto("/?import=https%3A%2F%2Fstackblitz.com%2Fedit%2Fvitejs-vite-de8qy2bm");
+  await expect(accountAvatar(page)).toBeVisible();
+
+  await expect(page.getByText("Sign in to import a project.")).toBeVisible();
+  await expect(page.getByText(/unauthorized/i)).toHaveCount(0);
+});
