@@ -168,6 +168,17 @@ test("derives a pkg.pr.new ref from the submitted package.json rather than defau
   assert.equal(calls.registry, 0, "no need to ask npm when the payload already says what it wants");
 });
 
+test("normalises the bare PR number that produced DEMOS-1X into a pkg.pr.new install", async (t) => {
+  // The exact save that failed: a hand-typed PR ref in package.json, no explicit
+  // htVersion, and a row still holding the sentinel. pnpm saw handsontable@13106
+  // as a registry range; it must see the pkg.pr.new tarball instead.
+  const { env } = fakeEnv(t);
+  const r = await resolveHandsontableVersion(env, { files: filesWith("13106"), previousRef: "latest" });
+  assert.equal(r.ok, true);
+  assert.equal(r.ref, "13106");
+  assert.equal(deps(r.files).handsontable, PR_URL);
+});
+
 test("derives an exact version from the submitted package.json", async (t) => {
   const { env } = fakeEnv(t);
   const r = await resolveHandsontableVersion(env, { files: filesWith("17.6.0") });
