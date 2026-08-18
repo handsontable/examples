@@ -51,7 +51,7 @@ const ENTRY = {
 
 /** A pointed runtime: the status route says ready, so `poll()` wires the frame
  *  listeners and sets `iframe.src`. Returns the two handlers it registered. */
-async function pointed() {
+async function pointed({ ready: readyNow = () => true } = {}) {
   const fetchBefore = globalThis.fetch;
   const windowBefore = globalThis.window;
   const windowListeners = new Map();
@@ -60,7 +60,7 @@ async function pointed() {
     removeEventListener(type) { windowListeners.delete(type); },
   };
   globalThis.fetch = () =>
-    Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ready: true, log: "" }) });
+    Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ready: readyNow(), log: "" }) });
 
   const frameListeners = new Map();
   const iframe = {
@@ -94,6 +94,7 @@ async function pointed() {
 
   return {
     runtime,
+    iframe,
     ready,
     errors,
     post,
@@ -201,6 +202,36 @@ test("the hard fallback only covers a load event that never fired", async () => 
     clearTimeout(fallback);
     fire();
     assert.deepEqual(h.ready, []);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a port that stopped answering during the grace does not become ready", async () => {
+  // The shape the frame cannot describe: a dev server that died between the probe
+  // and the frame's first request hands it the SDK's own `500 Proxy routing error`,
+  // which posts nothing and refreshes nothing. The re-probe is what catches it.
+  let up = true;
+  const h = await pointed({ ready: () => up });
+  try {
+    up = false;
+    h.load();
+    await afterGrace();
+    assert.deepEqual(h.ready, [], "the port answered once; it does not answer now");
+    assert.deepEqual(h.errors, []);
+
+    // Back in the boot loop: the next successful poll re-points the frame, and the
+    // navigation it triggers is what finally earns ready.
+    up = true;
+    h.iframe.src = "";
+    clearTimeout(h.runtime.pollTimer);
+    h.runtime.poll();
+    await settle();
+    await settle();
+    assert.equal(h.iframe.src, PREVIEW_URL, "a recovered dev server gets the frame pointed again");
+    h.load();
+    await afterGrace();
+    assert.deepEqual(h.ready, [true]);
   } finally {
     h.restore();
   }

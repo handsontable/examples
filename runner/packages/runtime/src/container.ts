@@ -403,7 +403,7 @@ export class ContainerRuntime implements DemoRuntime {
     }
     this.graceTimer = setTimeout(() => {
       this.graceTimer = null;
-      this.emitReady();
+      void this.confirmAndEmitReady();
     }, this.opts.renderGraceMs ?? 3500);
   };
   /**
@@ -486,6 +486,47 @@ export class ContainerRuntime implements DemoRuntime {
   private emitError(e: Error) {
     for (const cb of this.errorCbs) cb(e);
   }
+  /**
+   * Ask the container once more before claiming the demo is up (DEV-2547).
+   *
+   * The frame's document is only self-describing when we wrote it: a dev server
+   * that died between the readiness probe and the frame's first request can also
+   * hand the frame the SDK's own `500 Proxy routing error`, or a truncated
+   * document, and neither of those says so. One re-probe at the end of the render
+   * grace turns "the port answered once" into "the port still answers", which is
+   * the weakest claim that makes `ready` honest for shapes we do not author.
+   *
+   * On a failed confirmation this drops back into the boot loop rather than
+   * failing: `pointed` goes false, so `poll()` re-points the iframe when the dev
+   * server answers again — the frame gets a fresh navigation, and a document that
+   * never refreshes itself is no longer a dead end.
+   */
+  private async confirmAndEmitReady(): Promise<void> {
+    if (this.disposed || this.didReady) return;
+    if (await this.probeStatusReady()) {
+      if (!this.disposed) this.emitReady();
+      return;
+    }
+    if (this.disposed || this.didReady) return;
+    this.emitProgress("Dev server stopped answering — waiting for it to come back…");
+    this.pointed = false;
+    this.poll();
+  }
+
+  /** `ready` off the status route, with every failure reading as "not ready" — the
+   *  same shape `poll()` uses, minus the log and the failure branches it owns. */
+  private async probeStatusReady(): Promise<boolean> {
+    if (!this.sessionId) return false;
+    try {
+      const r = await fetch(`${this.opts.apiBase}/api/session/${this.sessionId}/status?port=${this.port}`);
+      if (!r.ok) return false;
+      const { ready } = (await r.json()) as { ready?: boolean };
+      return ready === true;
+    } catch {
+      return false;
+    }
+  }
+
   /** The preview's server is gone and is not coming back on its own — the shell's
    *  error card, with its "Restart preview" action, is the only way out. */
   private reportPreviewDead(): void {
@@ -676,7 +717,7 @@ export class ContainerRuntime implements DemoRuntime {
             // is holding the boot page must not be called ready twenty seconds later.
             this.readyFallbackTimer = setTimeout(() => {
               this.readyFallbackTimer = null;
-              if (this.frameLoads === 0) this.emitReady();
+              if (this.frameLoads === 0) void this.confirmAndEmitReady();
             }, 20000);
             // Keep the container awake while the demo is open so it never has to
             // cold-boot again mid-session. Any request resets sleepAfter; we ping
