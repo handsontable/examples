@@ -1,0 +1,206 @@
+name: Master
+
+# The single master-push pipeline (the handsontable monorepo's develop.yml
+# pattern). Before this existed, one push touching runner/packages/** ran the
+# CI suite three times — ci.yml's own push trigger plus a `uses: ci.yml` gate
+# inside each deploy workflow. Now: one CI run, and the two deploys hang off
+# it as conditional jobs, path-gated by a plain `git diff` (the push-level
+# `paths:` filter can't be used once the deploys share a workflow).
+#
+#   changes ─┐
+#            ├─► deploy-authoring   (if authoring paths changed)
+#   test ────┤
+#            └─► deploy-api         (if api paths changed)
+#
+# Manual deploys: workflow_dispatch with the two checkboxes.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      deploy_authoring:
+        description: 'Deploy the authoring frontend'
+        type: boolean
+        default: false
+      deploy_api:
+        description: 'Deploy the API worker + Tier-2 container image'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never cancel: a run may be mid container-build/push (the old
+# deploy-runner-api rule, now covering both deploys). Queued runs wait.
+concurrency:
+  group: master-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      authoring: ${{ steps.detect.outputs.authoring }}
+      api: ${{ steps.detect.outputs.api }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # HEAD^ of a merge commit is the old master, so the diff is exactly
+          # what this push introduced.
+          fetch-depth: 2
+
+      - id: detect
+        name: Detect what this push touches
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "authoring=${{ inputs.deploy_authoring }}" >> "$GITHUB_OUTPUT"
+            echo "api=${{ inputs.deploy_api }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only HEAD^ HEAD > /tmp/changed.txt
+          echo "--- changed files ---"; cat /tmp/changed.txt
+          # The same path sets the two deploy workflows used to declare under
+          # `on.push.paths` (catalog.json is authoring-only: the app bundles it
+          # at build time; scripts/ and containers/ are api-only).
+          authoring=false; api=false
+          grep -qE '^runner/(apps/authoring/|packages/|config/|catalog\.json$|pnpm-lock\.yaml$)|^\.github/workflows/(master|ci)\.yml$' /tmp/changed.txt && authoring=true
+          grep -qE '^runner/(workers/api/|containers/|scripts/|config/|packages/|pnpm-lock\.yaml$)|^\.github/workflows/(master|ci)\.yml$' /tmp/changed.txt && api=true
+          echo "authoring=$authoring" >> "$GITHUB_OUTPUT"
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+
+  # The one CI run per master push — the deploys gate on it, and it doubles as
+  # the post-merge canary for pushes that deploy nothing.
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  deploy-authoring:
+    needs: [changes, test]
+    if: needs.changes.outputs.authoring == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # Build workspace packages, then the authoring app. VITE_API_BASE comes
+      # from apps/authoring/.env.production (committed) so it targets prod.
+      - run: pnpm build
+      # SENTRY_* are only set here, on the deploying build. The `test` job
+      # reuses ci.yml, which gets no token, so PR builds neither emit source
+      # maps nor upload a release — see apps/authoring/vite.config.ts.
+      - run: pnpm --filter @handsontable/demo-authoring build
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          GITHUB_SHA: ${{ github.sha }}
+
+      - name: Deploy authoring worker
+        working-directory: runner/apps/authoring
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx -y wrangler@4.108.0 deploy
+
+      - name: Smoke test — prod frontend serves current bundle
+        working-directory: .
+        run: |
+          # The entry bundle is the one referenced by the built index.html —
+          # don't glob dist/assets (lazy chunks like index-<digits>-*.js sort
+          # before the entry and produce a false mismatch).
+          built_asset=$(grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' runner/apps/authoring/dist/index.html | head -1)
+          if [ -z "$built_asset" ]; then
+            echo "::error::could not find entry bundle in built index.html"
+            exit 1
+          fi
+          for i in $(seq 1 12); do
+            prod_asset=$(curl -s https://demos.handsontable.com/ | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' | head -1)
+            echo "attempt $i -> prod: $prod_asset, built: $built_asset"
+            [ "$prod_asset" = "$built_asset" ] && exit 0
+            sleep 5
+          done
+          echo "::error::prod frontend does not serve the freshly built bundle"
+          exit 1
+
+  # Post-deploy smoke (DEV-2203): the @smoke E2E subset against prod — one
+  # render per engine, a share fixture, a docs example, one Style round-trip.
+  # One run however many deploys fired (the per-workflow design would have
+  # smoked twice on a packages/** push). `always()` unwraps the skipped-deploy
+  # case; the result checks keep it off when nothing deployed or one failed.
+  smoke:
+    needs: [deploy-authoring, deploy-api]
+    if: >-
+      always() &&
+      (needs.deploy-authoring.result == 'success' || needs.deploy-api.result == 'success') &&
+      needs.deploy-authoring.result != 'failure' &&
+      needs.deploy-api.result != 'failure'
+    uses: ./.github/workflows/e2e-live.yml
+    with:
+      base_url: 'https://demos.handsontable.com'
+      smoke: true
+
+  deploy-api:
+    needs: [changes, test]
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      # Apply pending D1 schema changes to the remote DB before shipping code
+      # that may depend on them. Migrations are idempotent (IF NOT EXISTS).
+      - name: Apply D1 migrations (remote)
+        working-directory: runner/workers/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: pnpm exec wrangler d1 migrations apply handsontable-demos --remote
+
+      # ubuntu-latest ships Docker with the daemon running; wrangler uses it to
+      # build + push the containers/live image. Use the package `deploy` script,
+      # which attaches the demos.handsontable.com routes via --routes (routes are
+      # intentionally NOT in wrangler.jsonc — see ADR-0020 / run-and-deploy.md).
+      - name: Deploy API worker (builds + pushes Tier-2 image, attaches routes)
+        working-directory: runner/workers/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: pnpm run deploy
+
+      - name: Smoke test — prod API health
+        working-directory: .
+        run: |
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" https://demos.handsontable.com/api/health || true)
+            echo "health attempt $i -> $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 6
+          done
+          echo "::error::prod /api/health did not return 200 after deploy"
+          exit 1

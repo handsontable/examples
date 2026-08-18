@@ -157,15 +157,14 @@ that term to a bare `localhost:` — catalog README text mentions dev-server por
 
 ## CI/CD
 
-Seven workflows live in `.github/workflows/` at the repo root:
+Six workflows live in `.github/workflows/` at the repo root:
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
-| `ci.yml` | every PR + push to `master` | build, typecheck, unit + catalog-smoke tests, authoring build, Playwright e2e. Also `workflow_call`able, so the deploy workflows gate on it. |
-| `deploy-runner-api.yml` | push to `master` touching `workers/api`, `containers`, `scripts`, `config`, `packages` (or manual) | deploys `workers/api`, then calls the `@smoke` E2E subset against prod. |
-| `deploy-runner-authoring.yml` | push to `master` touching `apps/authoring`, `packages`, `config`, **`catalog.json`** (or manual) | builds + deploys `apps/authoring`, then calls the `@smoke` E2E subset against prod. |
-| `e2e-live.yml` | manual, weekly canary (Mon 05:00 UTC, prod + AI), or `workflow_call` with `smoke: true` from the deploy workflows | everything ci.yml cannot run: live renders, container suites, the share viewer/round-trip, AI answer checks. Dispatch inputs: `base_url`, `ai`, `pkg_pr_new_ref` (DEV-2198). |
-| `e2e-starter-matrix.yml` | manual + monthly (1st, 05:00 UTC) | every starter × major through a live session; serialized against the global container cap. |
+| `ci.yml` | every PR; `workflow_call` from `master.yml` and manual dispatch | the reusable CI DAG: build → authoring → e2e (in the pinned Playwright container), with unit in parallel. No push trigger of its own — master runs it once through `master.yml`. |
+| `master.yml` | every push to `master` (or manual dispatch with per-target checkboxes) | one CI run + path-gated deploys (`deploy-authoring`, `deploy-api`), each followed by the `@smoke` E2E subset against prod. Replaces the two `deploy-runner-*.yml` workflows, whose per-workflow CI gates ran the suite up to three times per push. |
+| `e2e-live.yml` | manual, weekly canary (Mon 05:00 UTC, prod + AI), or `workflow_call` with `smoke: true` from `master.yml` | everything ci.yml cannot run: live renders, container suites, the share viewer/round-trip, AI answer checks. Dispatch inputs: `base_url`, `ai`, `pkg_pr_new_ref` (DEV-2198). |
+| `e2e-starter-matrix.yml` | manual + monthly (1st, 03:00 UTC) | every starter × major through a live session; serialized against the global container cap. |
 | `import-docs.yml` | manual, or `repository_dispatch: docs-examples-sync` from the docs repo | re-imports the documentation-guide examples. |
 | `import-starters.yml` | manual, `repository_dispatch: starter-examples-sync`, weekly cron, or push touching `examples/**` | re-imports the versioned starter buckets (each from `prod-examples/<major>` when the branch exists, else `master`), rebuilds the catalog index + container contexts, opens a PR. |
 
