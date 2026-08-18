@@ -81,7 +81,7 @@ jobs:
           # The monthly schedule carries no inputs — fall back to prod.
           E2E_BASE_URL: ${{ inputs.base_url || 'https://demos.handsontable.com' }}
         # e2e:matrix already sets E2E_STARTER_MATRIX=1, PLAYWRIGHT_JSON_OUTPUT_NAME
-        # and --workers=2 --retries=1 --reporter=list,json.
+        # and --workers=2 --retries=2 --reporter=list,json.
         run: pnpm e2e:matrix
 
       - name: Generate report

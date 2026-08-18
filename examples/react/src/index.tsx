@@ -37,7 +37,7 @@ const App = () => {
       manualRowMove={true}
       autoWrapRow={true}
       navigableHeaders={true}
-      theme={mainTheme}
+      theme={{ ...mainTheme, colorScheme: 'light' }}
       licenseKey="non-commercial-and-evaluation"
     >
       <HotColumn data={1} />

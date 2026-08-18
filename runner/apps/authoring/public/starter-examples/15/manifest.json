@@ -10,91 +10,109 @@
       "displayName": "Blank (JavaScript)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "blank-ts",
       "displayName": "Blank (TypeScript)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "blank-react",
       "displayName": "Blank (React)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "example1",
       "displayName": "Vanilla (Vite, TS)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": [
+        "example1:dateFormat"
+      ]
     },
     {
       "framework": "javascript",
       "displayName": "JavaScript (Vite)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": [
+        "javascript:dateFormat",
+        "javascript:random-date-iso"
+      ]
     },
     {
       "framework": "typescript",
       "displayName": "TypeScript (Vite)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "react",
       "displayName": "React (Vite, TS)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "react-js",
       "displayName": "React (Vite, JS)",
       "tier": 1,
       "engine": "container",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "vue",
       "displayName": "Vue 3 (Vite)",
       "tier": 1,
       "engine": "sandpack",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "next.js",
       "displayName": "Next.js (App Router)",
       "tier": 2,
       "engine": "container",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "astro",
       "displayName": "Astro",
       "tier": 2,
       "engine": "container",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "nuxt",
       "displayName": "Nuxt 3",
       "tier": 2,
       "engine": "container",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     },
     {
       "framework": "remix",
       "displayName": "Remix",
       "tier": 2,
       "engine": "container",
-      "minCoreMajor": null
+      "minCoreMajor": null,
+      "overrides": []
     }
   ]
 }

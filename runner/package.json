@@ -14,7 +14,6 @@
     "import-docs": "node pipeline/import-docs.mjs",
     "build": "pnpm -r --filter \"./packages/**\" run build",
     "typecheck": "pnpm -r run typecheck",
-    "lint": "pnpm -r run lint",
     "test": "pnpm --filter @handsontable/demo-runtime build && node --experimental-strip-types --test pipeline/*.test.mjs",
     "e2e": "playwright test",
     "e2e:matrix": "E2E_STARTER_MATRIX=1 PLAYWRIGHT_JSON_OUTPUT_NAME=test-results/starter-matrix.json playwright test e2e/starter-matrix.spec.ts --workers=2 --retries=2 --reporter=list,json",
@@ -24,6 +23,7 @@
     "@playwright/test": "1.61.1",
     "acorn": "^8.18.0",
     "fflate": "^0.8.2",
-    "typescript": "~5.6.0"
+"typescript": "~5.6.0",
+    "vite5": "npm:vite@5.4.21"
   }
 }

@@ -39,7 +39,7 @@ const props = defineProps(['tableData']);
 
 const hotSettings = computed(() => {
   return {
-    theme: mainTheme,
+    theme: { ...mainTheme, colorScheme: 'light' },
     data: props.tableData,
     colWidths: [140, 126, 192, 100, 100, 90, 90, 110, 97],
     colHeaders: [

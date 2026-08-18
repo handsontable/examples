@@ -69,3 +69,40 @@ at all.
   entry traversal. Both paths exist for that reason, not only for old browsers.
 - The 50-file ceiling and every per-file refusal are reported. A silent cap would
   read as "everything was added".
+
+## Amendment — archives are unpacked (DEV-2531)
+
+**Status:** accepted, 2026-08-14.
+
+One binary is now accepted at the drop: a `.zip`. It is still never *stored* — it is
+expanded in the browser and discarded, and every entry then faces exactly the rules
+above. So the decision this ADR records is unchanged (a workspace is text), while the
+route into it is no longer "unzip it yourself first".
+
+Why: the forum case. A user attaches an archive of the project that fails for them,
+and the manual unzip was the only step between that and their code running here at
+any version. The reverse direction already existed — Download writes a `.zip` of the
+workspace with `fflate`, so reading one is `unzipSync` and costs no new dependency.
+
+Three rules exist only for archives, in `dropZip.ts`:
+
+- **A single wrapping directory is stripped.** Archives are `project/…`; landing
+  `project/src/index.js` when the user expected `src/index.js` is wrong. Two roots, or
+  a file at the root, keep their paths.
+- **Traversal is refused, not resolved.** `..` segments, absolute paths, drive letters
+  and backslash separators are rejected per entry — a zip is the one input here whose
+  paths come from a stranger's filesystem.
+- **Nothing is inflated before the caps are consulted.** The expander reads the central
+  directory first — names and declared sizes — decides what it will take, and only then
+  inflates that subset (`unzipSync`'s `filter`). Deciding afterwards was the first cut,
+  and it meant a 1 MB archive of zeros could expand to gigabytes in the tab before any
+  limit was reached. The declared size is a claim, so the inflated length is checked
+  too. Three ceilings: 512 KB per entry, 4 MB unpacked in total, and 8 MB on the
+  archive's own bytes, checked before it is read into memory at all.
+
+`dropZip.ts` takes the accept/exclude rules as an *argument* rather than importing them
+from `dropFiles.ts`. Both modules are unit-tested by `pipeline/*.test.mjs`, which runs
+the sources through `--experimental-strip-types` and cannot resolve a sibling
+`./dropFiles.js` specifier with no build output. The injection is what makes the test
+able to pass the real rules — which it does, so "what a drop accepts" and "what an
+archive accepts" cannot drift apart.
