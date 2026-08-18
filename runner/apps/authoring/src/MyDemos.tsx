@@ -40,7 +40,9 @@ import {
 import { getEntry } from "./catalog.js";
 import { Markdown } from "./markdown.js";
 import { filterByOwner, isOwnedBy, ownerNameFromSlug, ownerOptions } from "./demoOwners.js";
-import { getToken, logout, type User } from "./auth.js";
+import { assertApiOk, readApiJson } from "./api.js";
+import { isSessionExpired } from "./apiError.js";
+import { getToken, login, logout, type User } from "./auth.js";
 import { displayNameFromEmail, initialFromEmail } from "./displayName.js";
 import { fieldInput, fieldLabel, formFooter, ghostButton, primaryButton } from "./formStyles.js";
 import { useProfile } from "./useProfile.js";
@@ -113,16 +115,23 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
       const res = await fetch(`${apiBase}/api/demos?scope=${scope}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (!res.ok) {
-        throw new Error(
-          scope === "all"
-            ? `Couldn't load the team's demos (${res.status}).`
-            : `Couldn't load your demos (${res.status}).`,
-        );
-      }
-      const data = (await res.json()) as { demos: DemoListItem[] };
+      // `preferFallback`: this call has never rendered `body.error`, and the
+      // shared helper must not start doing so on its behalf — only the 401 and
+      // 403 branches change what this callsite says (DEV-2534).
+      const data = await readApiJson<{ demos: DemoListItem[] }>(
+        res,
+        scope === "all"
+          ? `Couldn't load the team's demos (${res.status}).`
+          : `Couldn't load your demos (${res.status}).`,
+        { preferFallback: true },
+      );
       setDemos(data.demos);
     } catch (e) {
+      // Straight to the broker, unlike `App.tsx`: this page holds no unsaved
+      // state, and it already answers a null user with `login()` — so a session
+      // that expired under it is exactly a fresh load, and a dialog would only
+      // add a click to a page that has nothing to show without an identity.
+      if (isSessionExpired(e)) return login();
       reportError(e, "my-demos-list");
       setDemos([]);
       setError(e instanceof Error ? e.message : String(e));
@@ -145,12 +154,19 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
         method: "DELETE",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (!(res.status === 204 || res.ok)) throw new Error(`Delete failed (${res.status}).`);
+      // `Response.ok` already covers the whole 2xx range, 204 included, so the
+      // old `res.status === 204 ||` was redundant. `preferFallback` for the same
+      // reason as `load()`: this sentence is the callsite's own.
+      await assertApiOk(res, `Delete failed (${res.status}).`, { preferFallback: true });
       setDemos((cur) => cur?.map((d) => (d.id === demo.id ? { ...d, revoked: 1 } : d)) ?? cur);
     } catch (e) {
       // The drawer's `.catch(() => null)` meant a failed delete looked like a
       // no-op. Say so instead. Reported too: a non-OK response is as silent
-      // server-side as a network error and needs the same visibility.
+      // server-side as a network error and needs the same visibility — and that
+      // still holds for the ownership 403 (DEV-2544): Delete is only drawn on a
+      // demo this page believes is `mine`, so a refusal is a real disagreement
+      // between the two, which is why `ApiError.reportable` stays true for it.
+      if (isSessionExpired(e)) return login();
       reportError(e, "demo-revoke");
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -172,7 +188,11 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
     try {
       const srcRes = await fetch(`${apiBase}/api/demos/${demo.id}/source`);
       if (!srcRes.ok) throw new Error(`Couldn't read that demo's files (${srcRes.status}).`);
-      const src = (await srcRes.json()) as { framework: string; files: Record<string, string> };
+      const src = (await srcRes.json()) as {
+        framework: string;
+        files: Record<string, string>;
+        htVersion?: string | null;
+      };
       const res = await fetch(`${apiBase}/api/demos`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -181,20 +201,26 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
           files: src.files,
           title: `${demo.title} - Fork`,
           description: demo.description ?? undefined,
-          htVersion: demo.ht_version,
+          // The snapshot's repaired ref, not the list row's: a demo saved before
+          // DEV-2565 carries the "latest" sentinel in `ht_version`, and sending it
+          // as an explicit version would ask the API to resolve npm latest for a
+          // fork whose package.json pins something else. Omitted means "derive it
+          // from the files", which is what preserves the pin.
+          htVersion: src.htVersion ?? undefined,
           forkedFrom: demo.id,
         }),
       });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error || `Fork failed (${res.status}).`);
-      }
-      const { id } = (await res.json()) as { id: string };
+      const { id } = await readApiJson<{ id: string }>(res, `Fork failed (${res.status}).`);
       location.href = `/edit/${id}`;
     } catch (e) {
+      // First statement, before any branch, for the reason the note below gives:
+      // there is no `finally`, so every failure path has to clear `busy` itself.
+      // Returning early above this line would leave the card spinning forever on
+      // an expired session (DEV-2534).
+      clearBusy(demo.id);
+      if (isSessionExpired(e)) return login();
       reportError(e, "demo-fork");
       setError(e instanceof Error ? e.message : String(e));
-      clearBusy(demo.id);
     }
     // No `finally`: the success path navigates away, and clearing `busy` first
     // would flash the card back to idle mid-navigation.

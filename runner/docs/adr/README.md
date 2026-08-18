@@ -32,10 +32,12 @@ once Accepted.
 | [0025](0025-redesign-scope-corrections-after-login-frames.md) | DEV-2027 redesign — scope corrections after the After Login frames | Accepted |
 | [0026](0026-shell-styling-inline-vs-stylesheet.md) | Shell styling — inline component styles, interaction states in the global stylesheet | Accepted |
 | [0027](0027-dev-2027-shipped-deviations.md) | DEV-2027 — where the shipped UI deliberately departs from the frames | Accepted |
-| [0028](0028-shell-theming-via-css-custom-properties.md) | Shell theming via CSS custom properties; the example owns its own theme | Accepted (embed theme hint dropped, ADR-0025) |
+| [0028](0028-shell-theming-via-css-custom-properties.md) | Shell theming via CSS custom properties; the example owns its own theme | Accepted (embed theme hint dropped, ADR-0025; example-theme decision superseded by 0035) |
 | [0029](0029-starter-example-buckets-and-frozen-branch-backports.md) | Starter-example buckets, the single-seed image, and frozen-branch backports | Accepted (supersedes 0021 decision 10) |
 | [0030](0030-blank-starter-templates.md) | Blank starter templates, synthesized per bucket | Accepted |
-| [0031](0031-files-drag-and-drop-is-text-only.md) | Drag & drop into FILES is text-only, and batched | Accepted |
+| [0031](0031-files-drag-and-drop-is-text-only.md) | Drag & drop into FILES is text-only, and batched | Accepted (amended: a `.zip` is unpacked, DEV-2531) |
 | [0032](0032-importing-from-jsfiddle-and-stackblitz.md) | Importing from JSFiddle and StackBlitz; the Handsontable-only rule | Accepted |
 | [0033](0033-mcp-service-auth-for-headless-demo-creation.md) | A separate service auth for headless demo creation from the MCP | Accepted |
 | [0034](0034-role-based-guide-tracks.md) | The guide is four role-based tracks, not one document | Accepted (supersedes the DEV-2503 single-document shape) |
+| [0035](0035-the-shell-drives-the-preview-colour-scheme.md) | The shell drives the preview's colour scheme, unless the demo declares one | Accepted (supersedes part of 0028) |
+| [0036](0036-the-api-owns-the-handsontable-version.md) | The API owns the Handsontable version — derive from the payload, never default to a dist-tag | Accepted (amends 0005 with who applies it) |

@@ -23,6 +23,33 @@
 // Output file keys have NO leading slash (StackBlitz convention, e.g.
 // "src/main.js"); the importer re-keys them to "/src/main.js" for the runner.
 
+/**
+ * The `server` block every generated vite config for a Tier-2 (container) docs
+ * project must carry (DEV-2564).
+ *
+ * The Sandbox SDK preview proxy rewrites ordinary HTTP to `http://localhost:<port>`
+ * but forwards a WebSocket upgrade bearing the ORIGINAL preview `Host`, and vite
+ * gates the HMR upgrade on `server.allowedHosts` (default `[]`). So the page renders
+ * and the socket is refused with a bare 400 — live editing silently stops reloading.
+ * See workers/api/src/preview-allowed-hosts.ts for the whole mechanism.
+ *
+ * DEV-2541 opted in through vite's `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` escape
+ * hatch, which covers every container EXCEPT this one: the docs Vue project is pinned
+ * to vite 5 (see `buildVueProject`), and that variable does not exist before 6.x — it
+ * was measured inert on 5.4.21 (still 400 with the variable set). Opting in from
+ * config is version-proof instead: it needs no internal variable, and it survives
+ * vite 8's stricter parsing of that variable's value.
+ *
+ * Turning the host check off is right for a Tier-2 session — an ephemeral per-session
+ * container reachable only through the authenticated preview proxy — and it is what
+ * the checked-in starters already do (examples/vue/vite.config.ts, examples/remix,
+ * react-js, ant-design, mui, base-web, fluent-ui, javascript).
+ *
+ * Exported so pipeline/vite-allowed-hosts.test.mjs boots a real vite against the
+ * exact text that ships rather than a re-typed copy of it.
+ */
+export const DOCS_VITE_SERVER_BLOCK = 'server: { allowedHosts: true }';
+
 /** Returns the first filename in `files` that ends with `ext`, or null. */
 function findFile(files, ext) {
   return Object.keys(files).find((k) => k.endsWith(ext)) || null;
@@ -260,11 +287,14 @@ function buildVueProject(hotVersion, exampleId, userFiles, extraDeps) {
     scripts: { start: 'vite', build: 'vite build' },
   }, null, 2);
 
+  // The `server` block is what keeps HMR alive behind the preview proxy (DEV-2564);
+  // vue is the one docs framework that runs a real dev server on vite 5, where the
+  // DEV-2541 environment-variable opt-in does not exist.
   const viteConfig = [
     'import { defineConfig } from "vite";',
     'import vue from "@vitejs/plugin-vue";',
     '',
-    'export default defineConfig({ plugins: [vue()] });',
+    `export default defineConfig({ plugins: [vue()], ${DOCS_VITE_SERVER_BLOCK} });`,
   ].join('\n');
 
   const mainCode = [
@@ -358,21 +388,26 @@ function buildAngularProject(hotVersion, exampleId, userFiles, extraDeps, extraD
     {
       handsontable: hotVersion,
       '@handsontable/angular-wrapper': hotVersion,
-      '@angular/animations': '21.x',
-      '@angular/common': '21.x',
-      '@angular/compiler': '21.x',
-      '@angular/core': '21.x',
-      '@angular/forms': '21.x',
-      '@angular/platform-browser': '21.x',
-      '@angular/platform-browser-dynamic': '21.x',
-      '@angular/router': '21.x',
-      rxjs: '~7.8.0',
-      tslib: '^2.3.0',
-      'zone.js': '~0.15.0',
-      '@angular-devkit/build-angular': '21.x',
-      '@angular/cli': '21.x',
-      '@angular/compiler-cli': '21.x',
-      typescript: '~5.9.0',
+      // Keep in lockstep with `containers/live/baked/angular-18/package.json`
+      // — docs artifacts ship no lockfile, so the boot always installs
+      // non-frozen against that seeded tree. Pins that disagree with the seed
+      // make pnpm refetch the whole Angular tree (~27s per cold demo boot).
+      // `docs-angular-pins.test.mjs` fails when the two drift apart. DEV-2536.
+      '@angular/animations': '22.0.6',
+      '@angular/common': '22.0.6',
+      '@angular/compiler': '22.0.6',
+      '@angular/core': '22.0.6',
+      '@angular/forms': '22.0.6',
+      '@angular/platform-browser': '22.0.6',
+      '@angular/platform-browser-dynamic': '22.0.6',
+      '@angular/router': '22.0.6',
+      rxjs: '~7.8.2',
+      tslib: '^2.8.1',
+      'zone.js': '~0.16.2',
+      '@angular-devkit/build-angular': '22.0.6',
+      '@angular/cli': '22.0.6',
+      '@angular/compiler-cli': '22.0.6',
+      typescript: '~6.0.3',
     },
     extraDeps,
   );

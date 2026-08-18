@@ -11,8 +11,12 @@ and the look of the editor under our own control.
 ## One UX, two engines behind an adapter
 
 The editor shell binds only to the `DemoRuntime` interface
-(`packages/runtime/src/types.ts`). `resolveRuntime(entry)` selects the engine by
-tier:
+(`packages/runtime/src/types.ts`) and branches on one field, `entry.engine`. That
+field is **not** derived from the tier at render time: it is authored per framework
+in `config/frameworks.json` and only *defaults* from the tier when the catalog is
+generated (`engine: cfg.engine ?? (cfg.tier === 2 ? "container" : "sandpack")`,
+`pipeline/import.mjs`). Five tier-1 starters deliberately override it to
+`"container"` (see below), so "tier 1 means Sandpack" is false — read `engine`.
 
 ```
 DemoRuntime
@@ -25,9 +29,9 @@ DemoRuntime
   `typescript`, `react`, `vue`. Bundles in the browser; no server; tens-of-ms
   edit latency; zero compute cost.
 - **Tier 1 via the container engine:** `react-js`, `ant-design`, `mui`,
-  `base-web`. Still tier 1 (no SSR), but routed through the same container
-  engine as Tier 2 so they render exactly as authored (real Vite dev server)
-  instead of through Sandpack's in-browser bundler.
+  `base-web`, `fluent-ui`. Still tier 1 (no SSR), but routed through the same
+  container engine as Tier 2 so they render exactly as authored (real Vite dev
+  server) instead of through Sandpack's in-browser bundler.
 - **Tier 2 — SSR / meta-framework:** `angular`, `next.js`, `next-shadcn.js`,
   `astro`, `nuxt`, `remix`. A per-session container runs the framework's real
   `npm run dev` with HMR; edits stream over WebSocket; the preview iframe points
@@ -35,6 +39,126 @@ DemoRuntime
 
 > Angular is Tier 2: the Angular versions used here need a real Node backend/dev
 > server rather than Sandpack's in-browser Angular template.
+
+### Why the Tier-2 dev server needs an allowed-hosts opt-in (DEV-2541)
+
+The Sandbox SDK's preview proxy shows the dev server two different `Host` values
+depending on the request (`buildPreviewProxyRequest`):
+
+| request | what the dev server sees |
+| --- | --- |
+| ordinary HTTP | rewritten to `http://localhost:<port>` |
+| WebSocket upgrade | the **original** preview host, `<port>-<session>-<token>.demos.handsontable.com` |
+
+Vite gates both on `server.allowedHosts`, which defaults to `[]`. The rewrite
+means the page always passes the check, so previews render; the upgrade does not,
+so vite refuses the HMR socket with a `400` and live editing silently stops
+reloading. That asymmetry is why the bug survived unnoticed until browser consoles
+started reporting it — nothing about the preview *looks* broken.
+
+There are two ways to opt in, and they do **not** cover the same ground. Every
+container except one uses the environment variable below. The docs Vue container
+cannot: it is pinned to vite 5, where that variable does not exist, so it sets
+`server.allowedHosts` in its own generated config instead (DEV-2564, see below).
+
+The opt-in is the `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` environment variable,
+derived from `PREVIEW_HOST` in `workers/api/src/preview-allowed-hosts.ts` and
+handed to the dev-server process via `startProcess({ env })`. The value carries a
+leading dot (`.demos.handsontable.com`), which vite treats as a suffix wildcard,
+so one static string covers every per-session preview hostname. Vite applies it
+only when `server.allowedHosts` is still an array, so it is a no-op for the
+starters that already set `allowedHosts: true` (react-js, ant-design, mui,
+base-web, fluent-ui, remix, astro). Angular is covered too, via the builder chain
+its `angular.json` actually names: `@angular-devkit/build-angular:dev-server` sees
+an `:application` build target, takes its esbuild branch, normalises an unset
+`allowedHosts` to `[]`, and hands that array to `@angular/build`'s `serveWithVite`,
+which passes it straight into the vite server config. Angular's own host-check
+middleware only prettifies vite's 403; it delegates the decision to vite. Nuxt is
+expected to be covered by the same array default but has not been observed.
+
+Three things to know before changing any of this:
+
+- **It is not a `server.hmr` problem.** With no `server.hmr` config the HMR client
+  derives host, port and protocol from `import.meta.url` and already dials
+  `wss://<preview-host>/` correctly. Adding `--hmr.clientPort` / `--hmr.protocol`
+  to a dev command does not help and actively breaks the session: vite's CLI
+  declares no `--hmr` option, so it aborts with `CACError` before it ever listens,
+  and the session then serves the boot-failure page forever. Vite's own console
+  diagnostic is what sends people down that path — `[vite] failed to connect to
+  websocket … (browser) <preview>:/ <--[WebSocket (failing)]--> localhost:5173/
+  (server)` does *not* mean the client dialed `localhost:5173`. In
+  `dist/client/client.mjs` the right-hand side of both lines is `serverHost` /
+  `directSocketHost`, a static label for where the dev server bound; the browser
+  side of the failing line is the preview host, and it is already correct.
+- **`shouldHandle` refuses on two gates that look identical on the wire.** Both the
+  host check and — whenever the request carries an `Origin`, which a browser always
+  sends on a WebSocket handshake — the `?token=` check against the value vite bakes
+  into `/@vite/client` abort with a bare `400`. Only the host gate is broken here,
+  but a change that satisfied just that gate would be indistinguishable from one
+  that actually restores HMR. That is why the guard test drives the whole
+  browser-shaped handshake (preview `Host`, matching `Origin`, real token) and not
+  only the host check.
+- **The variable is internal to vite and unversioned, and it has already changed.**
+  vite 6.4.3 and 7.3.5 append the value verbatim; 8.1.1 splits it on commas and
+  discards it entirely — warning only, no error — if it contains `\`, `"` or `'`.
+  **It does not exist at all before vite 6** — see the Vue section below.
+  Every failure here is silent: HMR just goes back to being broken.
+  `pipeline/vite-allowed-hosts.test.mjs` is what would notice. It boots a real vite
+  and drives a real upgrade handshake with a preview-shaped `Host`, asserting `400`
+  without the variable and `101` with it — once with `Origin` omitted to isolate the
+  host gate, and once in full browser shape to prove the handshake a browser
+  actually sends completes — and separately pins the value's shape against vite 8's
+  parsing rules.
+
+> **There is no single container vite version.** Three are in play: the repo (and
+> therefore the test) installs **6.4.3**; Angular runs **7.3.5**, pinned by
+> `@angular/build` rather than by the starter; and a booted react-js container was
+> observed on **8.1.1**, since each starter pins its own. All three default
+> `allowedHosts` to `[]`, honour the leading-dot wildcard, and read the variable, so
+> the fix holds across them — but the *behavioural* half of the guard only ever
+> exercises 6.4.3. Booting the containers' own vite in CI would close that gap.
+
+### Why the Vue docs container opts in from config instead (DEV-2564)
+
+There is a fourth version, and it is the one the note above missed: the docs Vue
+container runs **vite 5.4.21**, pinned `^5.4.0` in both `buildVueProject`
+(`pipeline/wrap-docs-example.mjs`) and `extraContainer()`
+(`scripts/prepare-container.mjs`). `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` first
+appears in 6.x — the name occurs nowhere in `vite@5.4.21/dist` — but vite 5 still
+runs the host check. So for every Vue docs example the DEV-2541 fix was **silently
+inert**: measured `400` both with and without the variable, while Angular's 7.3.5
+went `400` → `101`. Roughly 500 docs artifacts were affected, all of them booting,
+rendering, and never hot-reloading.
+
+The Vue project therefore carries `server: { allowedHosts: true }` in its generated
+`vite.config.js` (`DOCS_VITE_SERVER_BLOCK`, exported from `wrap-docs-example.mjs`).
+Config over a vite bump on purpose: it works on every major, it needs no internal
+variable, it survives vite 8's stricter parsing of that variable's value, and it does
+not change what ~500 examples install. vite 5 is deliberate for the docs projects —
+vite 8/rolldown tree-shakes Handsontable's filter-condition registrations away given
+its `sideEffects: false`. It is also what the checked-in starters already do
+(`examples/vue/vite.config.ts`, remix, react-js, ant-design, mui, base-web,
+fluent-ui, javascript). Turning the host check off is right for an ephemeral
+per-session container reachable only through the authenticated preview proxy.
+
+Two guards, because both directions of this mistake are silent — a config that loses
+its `server` block, and a vite pin that drops below 6:
+
+- `pipeline/vite-allowed-hosts.test.mjs` boots the real 5.4.21 (an exact
+  `vite5: npm:vite@5.4.21` devDependency alias) against the exact emitted string:
+  `400` with no config, `101` with it and no environment variable, in full browser
+  shape. It deliberately does *not* assert the variable stays absent from vite 5 — if
+  some 5.4.x backported it, the config route makes that irrelevant.
+- `pipeline/docs-container-vite-hosts.test.mjs` holds every `engine: "container"`
+  docs framework to the rule: ship `allowedHosts` in the vite config, or run a vite
+  `>= 6`. The version each container runs is read from its baked `pnpm-lock.yaml`,
+  not from declared dependencies — Angular declares no vite and still runs 7.3.5 via
+  `@angular/build`.
+
+Changing the generator changes nothing live until the docs buckets are re-baked: the
+`vite.config.js` ships inside each artifact under
+`apps/authoring/public/docs-examples/<bucket>/`. Re-run the **Import versioned docs
+examples** workflow to regenerate them.
 
 ## Version dispatch
 

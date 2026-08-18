@@ -22,7 +22,11 @@ export type { Token, TokenGroup, TokenType };
 export const TOKENS_PRESETS = ["main", "horizon", "classic"] as const;
 export const COLORS_PRESETS = ["main", "horizon", "classic", "ant", "shadcn", "material"] as const;
 export const ICONS_PRESETS = ["main", "horizon"] as const;
-export const COLOR_SCHEMES = ["light", "dark"] as const;
+/** Handsontable's own three values, spelled its way so nothing has to translate
+ *  (`ThemeColorScheme` in `handsontable/themes`). `auto` resolves to
+ *  `color-scheme: light dark`, i.e. the visitor's OS decides — which is also the
+ *  only value that lets the shell's own toggle drive the grid (ADR-0035). */
+export const COLOR_SCHEMES = ["light", "dark", "auto"] as const;
 export const DENSITY_VARIANTS = ["compact", "default", "comfortable"] as const;
 
 export type TokensPreset = (typeof TOKENS_PRESETS)[number];
@@ -72,6 +76,9 @@ export const DEFAULT_THEME: ThemeState = {
   tokens: "main",
   colors: "main",
   icons: "main",
+  // Explicit, and matching what the starters declare: a theme the panel produces
+  // should render the same for every reader, not track whichever OS opened it.
+  // `auto` is available in the control for anyone who wants the opposite.
   colorScheme: "light",
   density: "default",
   params: {},
@@ -198,6 +205,8 @@ export const TOKEN_KEYS: string[] = ALL_TOKENS.map((t) => t.key);
 
 /** The class Handsontable puts a themed instance in, per tokens preset. */
 export function themeClass(state: ThemeState): string {
+  // `auto` takes the unsuffixed class: the suffix names a *fixed* dark theme,
+  // while `auto` is one theme whose `color-scheme` resolves per visitor.
   return `ht-theme-${state.tokens}${state.colorScheme === "dark" ? "-dark" : ""}`;
 }
 

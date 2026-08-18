@@ -457,3 +457,165 @@ test("Sign in sits in the status bar, not the top bar", async ({ page }) => {
   // …and nowhere in the header.
   await expect(page.locator("header").getByRole("button", { name: "Sign in" })).toHaveCount(0);
 });
+
+// ── An expired session (DEV-2534) ────────────────────────────────────────────
+//
+// A token that was valid when the tab opened stops being valid while it sits
+// there, and every authed action then comes back 401 with `{"error":
+// "unauthorized"}`. That wire string used to be rendered verbatim and reported
+// to Sentry as five separate issues. What replaces it is a re-auth prompt —
+// offered, not taken: `login()` sets `location.href`, and the workspace only
+// exists in this tab's memory until a PATCH lands.
+
+const reauthDialog = (page: Page) => page.getByRole("dialog", { name: "Your session expired" });
+const storedToken = (page: Page) => page.evaluate(() => sessionStorage.getItem("hot_token"));
+
+/**
+ * The top bar's background profile refresh, which every signed-in page fires on
+ * mount. Left unstubbed it reaches `VITE_API_BASE` — the real
+ * demos.handsontable.com, which `.env.production` sets and `vite preview`
+ * therefore serves — where the faked `e2e-token` is answered 401, and since
+ * DEV-2534 a 401 clears the session. `hot_token` would be gone before the case
+ * under test ran. Any assertion about the token has to pin this request first.
+ */
+async function stubProfile(page: Page) {
+  await page.route("**/api/profile", (route) =>
+    route.fulfill({
+      json: {
+        email: EMAIL,
+        display_name: "Dev",
+        saved_name: null,
+        description: null,
+        avatar_url: null,
+        initial: "D",
+      },
+    }),
+  );
+}
+
+/** Answer the demo write with `status`, leaving `stubSavedDemo`'s reads alone.
+ *  Registered after it, which is what makes it win: Playwright runs the most
+ *  recently added matching handler first. */
+async function failWrite(page: Page, method: "PATCH" | "POST", status: number, body: object) {
+  await page.route("**/api/demos/**", async (route) => {
+    if (route.request().method() === method) return route.fulfill({ status, json: body });
+    return route.fallback();
+  });
+}
+
+test("a Save on an expired session prompts to sign in again, not with 'unauthorized'", async ({ page }) => {
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await signIn(page);
+  await stubProfile(page);
+  await failWrite(page, "PATCH", 401, { error: "unauthorized" });
+
+  await page.goto(`/edit/${DEMO_ID}`);
+  await expect(accountAvatar(page)).toBeVisible();
+  expect(await storedToken(page)).toBe("e2e-token");
+
+  await editor(page).click();
+  await page.keyboard.type("// edit");
+  await expect(saveButton(page)).toHaveText("Save •");
+
+  await saveButton(page).click();
+
+  await expect(reauthDialog(page)).toBeVisible();
+  await expect(reauthDialog(page).getByRole("button", { name: "Sign in again" })).toBeVisible();
+  // The headline assertion of this file's newest section: the Worker's wire
+  // string reaches nothing a person reads.
+  await expect(page.getByText(/unauthorized/i)).toHaveCount(0);
+  // The rejected credential is dropped, so nothing later carries it and the next
+  // `currentUser()` answers null instead of paying for the round trip that
+  // rediscovers this.
+  expect(await storedToken(page)).toBeNull();
+  // The edit is still here to re-save — the dot is what proves `dirty` survived
+  // the failure, which is the whole reason this is a dialog and not a redirect.
+  await expect(saveButton(page)).toHaveText("Save •");
+
+  // And it is dismissible, because Download in the top bar is the other way out.
+  await reauthDialog(page).getByRole("button", { name: "Not now" }).click();
+  await expect(reauthDialog(page)).toHaveCount(0);
+});
+
+test("a Save the server refuses on ownership says so, and is not a session prompt", async ({ page }) => {
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await signIn(page);
+  await stubProfile(page);
+  // A bare `forbidden` — what `workers/api/src/index.ts:887` actually sends.
+  await failWrite(page, "PATCH", 403, { error: "forbidden" });
+
+  await page.goto(`/edit/${DEMO_ID}`);
+  await expect(accountAvatar(page)).toBeVisible();
+
+  await editor(page).click();
+  await page.keyboard.type("// edit");
+  await saveButton(page).click();
+
+  // A live session refused a specific demo: no prompt, and above all no clearing
+  // of a token that is perfectly good.
+  await expect(reauthDialog(page)).toHaveCount(0);
+  await expect(page.getByText(/forbidden/i)).toHaveCount(0);
+  expect(await storedToken(page)).toBe("e2e-token");
+});
+
+// The bug the uniform early-return would have introduced. `onFork` has no
+// `finally` — the success path navigates away, and clearing `forking` first
+// would flash the button back to idle mid-navigation — so the busy state is
+// cleared as the first statement of the `catch`, ahead of the session branch.
+// Return before it and the button says "Creating…" forever.
+test("a Fork on an expired session leaves the button idle, not spinning", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await stubProfile(page);
+  await page.route("**/api/demos", (route) =>
+    route.fulfill({ status: 401, json: { error: "unauthorized" } }),
+  );
+
+  await page.goto("/?example=react");
+  await expect(accountAvatar(page)).toBeVisible();
+
+  await forkButton(page).click();
+
+  await expect(reauthDialog(page)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Creating…" })).toHaveCount(0);
+  await expect(forkButton(page)).toBeEnabled();
+  await expect(page.getByText(/unauthorized/i)).toHaveCount(0);
+});
+
+// The other half of DEMOS-W. The top bar's profile refresh is a *background*
+// call — `useProfile` fires it on every signed-in page, and the same code path
+// serves `/` and `/share/:id`, which work fine signed out. So a 401 there has to
+// clear the dead token and then say nothing at all: no dialog, no error line.
+// Hijacking a page the visitor is reading, over a name and an avatar they never
+// asked to refresh, would be worse than the monogram it already falls back to.
+test("a background profile refresh on an expired session is silent", async ({ page }) => {
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await signIn(page);
+  const profileCalls: string[] = [];
+  await page.route("**/api/profile", (route) => {
+    profileCalls.push(route.request().method());
+    return route.fulfill({ status: 401, json: { error: "unauthorized" } });
+  });
+
+  await page.goto(`/edit/${DEMO_ID}`);
+  await expect(accountAvatar(page)).toBeVisible();
+
+  // The refresh really did fire and really was refused — without this the
+  // silence below would pass for a request that never happened.
+  await expect.poll(() => profileCalls).toEqual(["GET"]);
+  // `hot_token` is deliberately NOT asserted here. `signIn`'s `addInitScript`
+  // runs in *every* document of the origin, and the preview iframe is
+  // same-origin, so it re-seeds the key after `clearSession` drops it. The
+  // clearing itself is asserted on the Save path above, where nothing reloads.
+  //
+  // What this case is actually for: nothing is said about it.
+  await expect(reauthDialog(page)).toHaveCount(0);
+  await expect(page.getByText(/session expired/i)).toHaveCount(0);
+  await expect(page.getByText(/unauthorized/i)).toHaveCount(0);
+  // The page is still usable: the fallbacks derived from the address render the
+  // account control with or without a profile.
+  await expect(saveButton(page)).toBeVisible();
+});

@@ -209,7 +209,10 @@ test("the left panel carries the tracks as a submenu under Guide", async ({ page
   await expect(tracks.getByRole("link", { name: "PR builds & tooling" })).toHaveAttribute("aria-current", "page");
 
   // The submenu belongs to the page you are on: My demos does not carry the guide's
-  // sections.
+  // sections. The listing is stubbed rather than left to fall through to the real
+  // `VITE_API_BASE` (DEV-2534): the faked token is answered 401 there, and a 401 on
+  // this page now sends the user to the broker instead of painting an error line.
+  await page.route("**/api/demos**", (route) => route.fulfill({ json: { demos: [] } }));
   await page.goto("/my-demos");
   await expect(page.getByRole("navigation", { name: "Guide tracks" })).toHaveCount(0);
 });

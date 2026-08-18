@@ -226,3 +226,51 @@ test("an access check that fails does not lock the owner out", async ({ page }) 
   await expect(page).toHaveURL(new RegExp(`/edit/${MINE}$`));
   await expect(page.getByRole("button", { name: /^Save/ })).toBeVisible();
 });
+
+// DEV-2534 / DEV-2544. Delete is only drawn on a card this page believes is
+// yours, so a 403 here is a genuine disagreement between the UI and the server —
+// which is why the message names ownership instead of echoing the wire string,
+// why the session is left alone, and why (unlike a 401) this one still reports.
+test("a revoke the server refuses on ownership says whose demo it is", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await stubDemos(page);
+  // The top bar's background profile refresh. Unstubbed it reaches the real
+  // `VITE_API_BASE` from `.env.production`, is answered 401 for the faked token,
+  // and since DEV-2534 a 401 clears the session — so `hot_token` would already
+  // be gone by the time this case looks at it.
+  await page.route("**/api/profile", (route) =>
+    route.fulfill({
+      json: {
+        email: EMAIL,
+        display_name: "Dev",
+        saved_name: null,
+        description: null,
+        avatar_url: null,
+        initial: "D",
+      },
+    }),
+  );
+  // Registered after `stubDemos`, so it wins for the DELETE and defers the rest.
+  await page.route("**/api/demos/*", async (route) => {
+    if (route.request().method() === "DELETE") {
+      return route.fulfill({ status: 403, json: { error: "forbidden" } });
+    }
+    return route.fallback();
+  });
+
+  await page.goto("/my-demos");
+  await kebab(page, "My grid").click();
+  await menuItem(page, "Delete").click();
+  await page.getByRole("dialog", { name: "Delete this demo?" })
+    .getByRole("button", { name: "Delete" })
+    .click();
+
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText("belongs to someone else");
+  await expect(alert).not.toContainText("forbidden");
+  // A live session, refused one row: the token stays.
+  expect(await page.evaluate(() => sessionStorage.getItem("hot_token"))).toBe("e2e-token");
+  // And the card is not shown as revoked, because it was not.
+  await expect(card(page, "My grid")).toBeVisible();
+});

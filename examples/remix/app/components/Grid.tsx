@@ -38,7 +38,7 @@ export default function Grid(props: GridProps) {
   return (
     <div>
       <HotTable
-        theme={mainTheme}
+        theme={{ ...mainTheme, colorScheme: 'light' }}
         data={props.data}
         colWidths={[140, 126, 192, 100, 100, 90, 90, 110, 97]}
         colHeaders={[
