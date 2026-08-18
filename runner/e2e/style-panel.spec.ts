@@ -224,12 +224,16 @@ test("density sizes are written per variant, including one the grid is not on", 
   await drawer.getByRole("button", { name: "comfortable", exact: true }).click();
   await expect(drawer.getByText("won't show in the preview yet")).toBeVisible();
 
-  const row = drawer.locator("label").filter({ has: page.locator('span[title="cellVertical"]') });
-  await row.locator('input[type="text"]').fill("28px");
+  // DEV-2560 made density sizes scale pickers with a `data-token` hook — the
+  // same interaction style-apply.spec.ts drives; pick a step off the sizing
+  // scale rather than typing a literal.
+  const row = drawer.locator('[data-token="cellVertical"]');
+  await row.getByRole("button", { expanded: false }).first().click();
+  await row.getByRole("button", { name: /^size_7\b/ }).click();
 
   await expect(async () => {
     const sizes = (await state(page))?.densitySizes ?? {};
-    expect(sizes.comfortable?.cellVertical).toBe("28px");
+    expect(sizes.comfortable?.cellVertical).toBe("sizing.size_7");
     expect(sizes.default).toBeUndefined();
   }).toPass();
 
@@ -237,39 +241,38 @@ test("density sizes are written per variant, including one the grid is not on", 
   await expect(async () => {
     const module = (await workspaceFiles(page))["/handsontable-theme.ts"] ?? "";
     expect(module).toContain('"comfortable": {');
-    expect(module).toContain('"cellVertical": "28px"');
+    expect(module).toContain('"cellVertical": "sizing.size_7"');
     expect(module).toContain('type: "default"');
   }).toPass();
 });
 
-// The displaced-themeName round trip needs a starter that *has* a themeName —
-// v17+ starters wire `theme={mainTheme}` and carry none, so both shapes pin
-// the 16.2.0 bucket. Assert the precondition first: if the generated v16
-// artifact ever loses its themeName, this must read as "fixture changed",
-// not "product broke".
+// The displaced-themeName round trip needs a fixture that *has* a themeName on
+// a version the panel will theme: DEV-2222 disables Style below major 17
+// (`themingSupported`), which retired the v16 starters as fixtures, and the
+// v17+ starters wire `theme={mainTheme}` and carry none. The docs bucket still
+// has the attribute shape at 18: the theme-customization React example ships a
+// literal `themeName="ht-theme-main"`. The settings shape (`themeName: '…'`)
+// has no natural fixture on a themable version — its round trip is pinned at
+// codegen level by pipeline/theme-wiring.test.mjs instead. Assert the
+// precondition first: if the docs artifact ever loses its themeName, this must
+// read as "fixture changed", not "product broke".
 for (const shape of [
   {
-    example: "react",
-    file: "/src/index.tsx",
+    label: "docs react @ 18.0.0",
+    url: "/?docs=guides/styling/theme-customization/react/example1.tsx&v=18.0.0",
+    file: "/src/App.tsx",
     original: 'themeName="ht-theme-main"',
     wired: "theme={customTheme}",
     module: "/handsontable-theme.ts",
   },
-  {
-    example: "javascript",
-    file: "/index.js",
-    original: "themeName: 'ht-theme-main'",
-    wired: "theme: customTheme,",
-    module: "/handsontable-theme.js",
-  },
 ]) {
-  test(`apply then Reset round-trips a displaced themeName (${shape.example} @ 16.2.0)`, async ({ page }) => {
-    const drawer = await openPanel(page, `/?example=${shape.example}&v=16.2.0`);
+  test(`apply then Reset round-trips a displaced themeName (${shape.label})`, async ({ page }) => {
+    const drawer = await openPanel(page, shape.url);
 
     let before: Record<string, string> = {};
     await expect(async () => {
       before = await workspaceFiles(page);
-      expect(before[shape.file], `fixture precondition: the v16 ${shape.example} starter carries a themeName`)
+      expect(before[shape.file], `fixture precondition: ${shape.label} carries a themeName`)
         .toContain(shape.original);
     }).toPass();
 
@@ -284,8 +287,8 @@ for (const shape of [
       expect(wiredFile).toContain(shape.wired);
       // … and the displaced themeName rides the marker comment: after wiring,
       // the only line still mentioning themeName is the marker that will
-      // restore it. (Counting the raw string would trip over the v16 CSS
-      // import, which also names ht-theme-main.)
+      // restore it. (Line-based, not a raw count: the fixture's stylesheet
+      // also names ht-theme-main, in a rule, not an attribute.)
       expect(wiredFile).toContain("// handsontable-theme restore:");
       const themeNameLines = wiredFile.split("\n").filter((l) => l.includes("themeName"));
       expect(themeNameLines).toHaveLength(1);
@@ -350,15 +353,16 @@ test("the generated module quotes every key", async ({ page }) => {
   await drawer.getByLabel("Generate the brand ramp from this colour").fill("#1a7a38");
 
   await drawer.getByRole("button", { name: /Density sizes/ }).click();
-  const row = drawer.locator("label").filter({ has: page.locator('span[title="cellVertical"]') });
-  await row.locator('input[type="text"]').fill("28px");
+  const row = drawer.locator('[data-token="cellVertical"]');
+  await row.getByRole("button", { expanded: false }).first().click();
+  await row.getByRole("button", { name: /^size_7\b/ }).click();
 
   await expect(async () => {
     const module = (await workspaceFiles(page))["/handsontable-theme.ts"] ?? "";
     expect(module).toContain('"fontWeight": "700"');
     expect(module).toContain('"primary"');
     expect(module).toContain('"500"');
-    expect(module).toContain('"cellVertical": "28px"');
+    expect(module).toContain('"cellVertical": "sizing.size_7"');
     // The density variant key is dynamic too — a variant name from state must
     // come out quoted just like token and ramp keys. (Structural keys the
     // codegen owns — tokens:, density:, type: — are legitimately bare; the
