@@ -46,24 +46,9 @@ test.describe("docs examples on the container engine", () => {
     }
   });
 
-  // KNOWN DEFECT, found by this spec's first prod run (2026-08-14): the Angular
-  // docs container renders, but its HMR websocket never connects — the proxy
-  // answers the `wss://4200-angular-….demos.handsontable.com` handshake with a
-  // 400, Vite falls back to `wss://localhost:4200` (refused) and gives up. The
-  // Vue docs container on the same proxy connects fine. User-visible as "an
-  // edit to an Angular docs example only shows after a manual reload" — the
-  // DEV-2216 symptom class. Filtered here so the render coverage stays live;
-  // the fixme below is the assertion that should hold once the proxy is fixed.
-  const ANGULAR_HMR_DEFECT = [
-    /WebSocket connection to 'wss:\/\/.*' failed/,
-    /\[vite\] failed to connect to websocket/,
-  ];
-
-  test("an Angular docs example renders", async ({ page, request }) => {
-    const consoleErrors: string[] = [];
-    page.on("console", (m) => {
-      if (m.type() === "error") consoleErrors.push(m.text());
-    });
+  test("an Angular docs example renders, and its HMR websocket connects", async ({ page, request }) => {
+    const consoleLines: string[] = [];
+    page.on("console", (m) => consoleLines.push(`${m.type()}: ${m.text()}`));
 
     const tracked = trackSessions(page);
     try {
@@ -71,25 +56,26 @@ test.describe("docs examples on the container engine", () => {
       await previewReady(page, "container");
       await expectGridRendered(page);
 
+      // The HMR socket must be *connected*, not merely quiet: this spec's
+      // first prod run found the proxy refusing the `vite-hmr` upgrade with a
+      // 400 (vite gates it on `server.allowedHosts`; fixed by DEV-2541), and
+      // the defect stayed invisible for three days precisely because the page
+      // rendered and only the console knew. A boot that never reaches the HMR
+      // client at all would silently pass an errors-only check the same way.
+      await expect(async () => {
+        expect(
+          consoleLines.some((l) => /\[vite\] connected/.test(l)),
+          "the dev server's HMR client reported [vite] connected",
+        ).toBe(true);
+      }).toPass({ timeout: 60_000 });
+
       // Angular's dev server is the only one that type-checks, so a broken
       // generated file fails *silently* by serving the last good bundle
       // (DEV-2216) — a clean console is part of "it rendered".
-      const real = consoleErrors.filter(
-        (e) => !isKnownNoise(e) && !ANGULAR_HMR_DEFECT.some((re) => re.test(e)),
-      );
+      const real = consoleLines.filter((l) => l.startsWith("error:")).filter((e) => !isKnownNoise(e));
       expect(real, `console errors:\n${real.join("\n")}`).toEqual([]);
     } finally {
       await tracked.cleanup(request);
     }
   });
-
-  test.fixme(
-    "the Angular docs container's HMR websocket connects",
-    async () => {
-      // Un-fixme together with removing ANGULAR_HMR_DEFECT above: open
-      // ANGULAR_DOCS, wait for ready, and assert no console line matches
-      // either defect pattern. Until the proxy accepts the Angular dev
-      // server's websocket upgrade, that assertion fails on production.
-    },
-  );
 });
