@@ -46,9 +46,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # HEAD^ of a merge commit is the old master, so the diff is exactly
-          # what this push introduced.
-          fetch-depth: 2
+          # Full history: the diff below spans the whole push range, and a
+          # multi-commit push (rebase-and-merge, a direct push of several
+          # commits) reaches past any fixed depth.
+          fetch-depth: 0
 
       - id: detect
         name: Detect what this push touches
@@ -58,7 +59,17 @@ jobs:
             echo "api=${{ inputs.deploy_api }}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git diff --name-only HEAD^ HEAD > /tmp/changed.txt
+          # The push event's `before` bounds the range: HEAD^ only covers the
+          # tip commit, so a multi-commit push would skip deploys for files
+          # changed in the earlier commits (Bugbot, #184). `before` is the
+          # zero sha on a branch creation, and unreachable after a force push
+          # that discarded it — fall back to the tip diff in both cases.
+          before="${{ github.event.before }}"
+          if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "$before" 2>/dev/null; then
+            before="$(git rev-parse HEAD^)"
+          fi
+          git diff --name-only "$before" HEAD > /tmp/changed.txt
           echo "--- changed files ---"; cat /tmp/changed.txt
           # The same path sets the two deploy workflows used to declare under
           # `on.push.paths` (catalog.json is authoring-only: the app bundles it
