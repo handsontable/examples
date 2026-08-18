@@ -715,6 +715,10 @@ export class ContainerRuntime implements DemoRuntime {
             // Hard fallback for "the load event never fired at all". Gated on that,
             // rather than firing unconditionally: a frame that did load and told us it
             // is holding the boot page must not be called ready twenty seconds later.
+            // Cleared first: the confirmation path re-enters `poll()` with `pointed`
+            // false, and overwriting a pending handle would leave one `dispose()` can
+            // no longer reach.
+            if (this.readyFallbackTimer) clearTimeout(this.readyFallbackTimer);
             this.readyFallbackTimer = setTimeout(() => {
               this.readyFallbackTimer = null;
               if (this.frameLoads === 0) void this.confirmAndEmitReady();

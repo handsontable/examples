@@ -148,7 +148,11 @@ async function openExample(page: Page, example: string) {
     apology
       .waitFor({ state: "visible", timeout: 120_000 })
       .then(() => "runner-page" as const)
-      .catch(() => "grid" as const),
+      // Never settles: both waits share a deadline, so a resolved timeout here would
+      // race the cell wait's rejection and could win it — returning "the grid is
+      // there" for the very case (no cell, no apology either) this exists to report.
+      // Only the cell branch may end the race.
+      .catch(() => new Promise<never>(() => {})),
   ]);
   if (outcome === "runner-page") {
     throw new Error(
