@@ -25,6 +25,8 @@ import {
 import { MAX_MCP_BYTES, isMcpValidationError, validateMcpFiles } from "../workers/api/src/mcp-create.ts";
 
 const PR_URL = "https://pkg.pr.new/handsontable@13106";
+/** Captured once, before any stub is installed. */
+const REAL_FETCH = globalThis.fetch;
 
 /** A minimal /package.json whose Handsontable dep is `dep`. */
 const pkg = (dep, extra = {}) =>
@@ -59,7 +61,6 @@ function fakeEnv(t, { latest = "18.0.0", registry = true, status = 200 } = {}) {
       delete: async (key) => void store.delete(key),
     },
   };
-  const real = globalThis.fetch;
   globalThis.fetch = async () => {
     calls.registry += 1;
     if (!registry) throw new Error("registry unreachable");
@@ -73,7 +74,9 @@ function fakeEnv(t, { latest = "18.0.0", registry = true, status = 200 } = {}) {
       }),
     };
   };
-  t.after(() => { globalThis.fetch = real; });
+  // REAL_FETCH, not "whatever was installed when this ran": the outage test builds
+  // two envs, so saving the live value here would restore the *first stub*.
+  t.after(() => { globalThis.fetch = REAL_FETCH; });
   return { env, calls };
 }
 
@@ -192,6 +195,22 @@ test("on the service path an explicit dist-tag is the caller's intent and does o
   assert.equal(r.ok, true);
   assert.equal(r.ref, "18.0.0");
   assert.equal(deps(r.files).handsontable, "18.0.0");
+});
+
+test("a trusted dist-tag is a preference, not a gate: an outage falls through to the payload", async (t) => {
+  // Ranking the tag first must not make npm a gate on the service path — the
+  // payload names a usable build, so refusing the create would be the same wrong
+  // trade as before, one door over. `next` is the sharp case: it has no
+  // last-good fallback.
+  const { env } = fakeEnv(t, { registry: false });
+  const r = await resolveHandsontableVersion(env, {
+    htVersion: "next",
+    files: filesWith(PR_URL),
+    trustDistTag: true,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.ref, "13106");
+  assert.equal(deps(r.files).handsontable, PR_URL);
 });
 
 test("a dist-tag still outranks the demo's previous ref", async (t) => {

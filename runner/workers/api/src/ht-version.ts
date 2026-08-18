@@ -181,19 +181,26 @@ export async function resolveHandsontableVersion(env: Env, args: ResolveArgs): P
     ref = validated.value.ref;
   }
 
-  if (tag && args.trustDistTag) {
-    const tagged = await resolveDistTag(env, tag);
-    if (!tagged.ok) return tagged;
-    ref = tagged.ref;
-  }
+  // Every tag is a *preference*, never a gate — including a trusted one, which is
+  // consulted first. A registry outage must not refuse a create whose payload
+  // already names a usable build: that is the trade this module exists to avoid,
+  // and `next` has no last-good fallback at all. Memoised, so one lookup per tag
+  // however many steps ask for it.
+  const attempts = new Map<string, Awaited<ReturnType<typeof resolveDistTag>>>();
+  const fromTag = async (name: string): Promise<string | null> => {
+    let outcome = attempts.get(name);
+    if (!outcome) {
+      outcome = await resolveDistTag(env, name);
+      attempts.set(name, outcome);
+    }
+    return outcome.ok ? outcome.ref : null;
+  };
+
+  if (tag && args.trustDistTag) ref ??= await fromTag(tag);
 
   ref ??= handsontableDependencyRef(args.files);
 
-  if (ref === null && tag) {
-    const tagged = await resolveDistTag(env, tag);
-    if (!tagged.ok) return tagged;
-    ref = tagged.ref;
-  }
+  if (tag) ref ??= await fromTag(tag);
 
   if (ref === null && args.previousRef) {
     // Legacy rows hold the "latest" sentinel, so the stored value is a candidate,
@@ -203,9 +210,17 @@ export async function resolveHandsontableVersion(env: Env, args: ResolveArgs): P
   }
 
   if (ref === null) {
-    const tagged = await resolveDistTag(env, "latest");
-    if (!tagged.ok) return tagged;
-    ref = tagged.ref;
+    ref = await fromTag("latest");
+    if (ref === null) {
+      // Nothing answered. Report the tag the caller actually asked for, when they
+      // asked for one — "npm has no handsontable@next" is the useful message, not
+      // the failure of the fallback nobody requested.
+      const asked = tag ? attempts.get(tag) : undefined;
+      const failure = asked && !asked.ok ? asked : attempts.get("latest");
+      return failure && !failure.ok
+        ? failure
+        : { ok: false, status: 502, message: "could not resolve a Handsontable version" };
+    }
   }
 
   // One normalisation point for every branch above: turns "13106" back into a
