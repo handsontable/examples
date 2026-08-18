@@ -98,6 +98,33 @@ test("the density editor tracks the theme's variant on load and on reset", () =>
   );
 });
 
+test("density sizes are picked from the scale, not typed as free text", () => {
+  // They were free-text boxes: to raise cell padding you had to know `8px` was
+  // legal and that the preset said `sizing.size_2`, neither of which the row
+  // said (DEV-2560). `DensitySizeControl` is the size control minus its
+  // self-referential `density` mode.
+  const panel = readFileSync(join(root, "apps/authoring/src/StylePanel.tsx"), "utf8");
+  const controls = readFileSync(join(root, "apps/authoring/src/theme/controls.tsx"), "utf8");
+  assert.match(panel, /<DensitySizeControl/);
+  assert.match(controls, /export function DensitySizeControl/);
+  assert.match(controls, /modes=\{\["sizing", "custom"\]\}/, "a density size must not point at a density slot");
+});
+
+test("a prefilled control still knows it is unset", () => {
+  // The panel shows preset defaults now (DEV-2560), and the one way to get that
+  // wrong is to store them: every badge, `isPristine`, the footer Reset and the
+  // generated module all read "overridden" as "the key is present". The display
+  // value belongs in `placeholder`, never in `value`.
+  const panel = readFileSync(join(root, "apps/authoring/src/StylePanel.tsx"), "utf8");
+  assert.match(panel, /placeholder=\{resolved \|\| "theme default"\}/);
+  assert.doesNotMatch(panel, /opacity: value \? 1 : 0\.35/, "an unset swatch paints the preset colour now");
+  assert.match(panel, /state\.palette\[key\] !== undefined/, "a base colour reads its own override");
+  // The density rows and the 272 token rows hand the raw override down and let
+  // the control decide — same rule, one layer along.
+  const controls = readFileSync(join(root, "apps/authoring/src/theme/controls.tsx"), "utf8");
+  assert.match(controls, /overridden=\{value !== undefined\}/);
+});
+
 test("every token declares a type the panel can render", () => {
   const types = new Set([...catalogue.matchAll(/^\s+type: "([^"]+)",$/gm)].map((m) => m[1]));
   assert.deepEqual([...types].sort(), ["color", "numeric", "select", "size"]);

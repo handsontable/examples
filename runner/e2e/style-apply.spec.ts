@@ -96,6 +96,25 @@ async function expectThemeModuleWritten(page: Page) {
   await expect(page.locator(STYLE).getByText("Applied to the preview")).toBeVisible();
 }
 
+/**
+ * Set one density measurement through the size control (DEV-2560).
+ *
+ * The row used to be a free-text `<input>` inside a `<label>`; it is the shared
+ * size control now, which is a `<div>` with a disclosure — hence `data-token`
+ * rather than a label filter. The sizing list is what this clicks, not the
+ * `custom` text box: the list commits on click, while the text box commits on
+ * blur, which `fill()` does not trigger.
+ *
+ * `size_10` is 40px, the top of the scale; `density.default.cellVertical` is
+ * `sizing.size_1`, 4px. So a row-height assertion cannot pass or fail for want
+ * of a big enough step.
+ */
+async function setDensitySize(page: Page, key: string, step: string) {
+  const row = page.locator(STYLE).locator(`[data-token="${key}"]`);
+  await row.getByRole("button", { expanded: false }).first().click();
+  await row.getByRole("button", { name: new RegExp(`^${step}\\b`) }).click();
+}
+
 for (const { example, shape } of SHAPES) {
   test.describe(`${example} — ${shape}`, () => {
     test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
@@ -138,7 +157,9 @@ for (const { example, shape } of SHAPES) {
 
       // 4. Reset returns the grid to the theme it arrived on — including the
       //    `ht-theme-*` class on the container that apply had to take off.
-      await drawer.getByRole("button", { name: "Reset", exact: true }).click();
+      // Scoped to the footer: the panel body carries per-row resets now, and an
+      // unscoped exact-name match would be ambiguous with a group expanded.
+      await drawer.locator("footer").getByRole("button", { name: "Reset", exact: true }).click();
       await expect(async () => {
         expect(await themeClass(page), "Reset left the demo on someone else's theme").toEqual(before);
       }).toPass({ timeout: 60_000 });
@@ -159,8 +180,7 @@ for (const { example, shape } of SHAPES) {
 
       // The variant editor opens on the variant the grid is set to, so this
       // override lands where the preview will show it.
-      const row = drawer.locator("label").filter({ has: page.locator('span[title="cellVertical"]') });
-      await row.locator('input[type="text"]').fill("28px");
+      await setDensitySize(page, "cellVertical", "size_10");
 
       await expectThemeModuleWritten(page);
       await expect(async () => {
@@ -196,7 +216,7 @@ test("switching examples does not carry one demo's theme into the next", async (
   // Polled, not sampled: the second demo's file tree renders as its session
   // comes up, and reading the count once right after the switch measures the
   // race rather than the behaviour.
-  const reset = page.locator(STYLE).getByRole("button", { name: "Reset", exact: true });
+  const reset = page.locator(STYLE).locator("footer").getByRole("button", { name: "Reset", exact: true });
   const module_ = page.locator(".hot-file-row", { hasText: "handsontable-theme" });
 
   await expect(async () => {
@@ -254,8 +274,7 @@ for (const example of ["react", "astro"] as const) {
     // A density size, for the same reason the suite already uses one: row height is a
     // signal no starter stylesheet can outrank.
     await drawer.getByRole("button", { name: /Density sizes/ }).click();
-    const row = drawer.locator("label").filter({ has: page.locator('span[title="cellVertical"]') });
-    await row.locator('input[type="text"]').fill("28px");
+    await setDensitySize(page, "cellVertical", "size_10");
 
     await expect(async () => {
       expect(await cellHeight(page), "the edit never reached the grid").toBeGreaterThan(before);
