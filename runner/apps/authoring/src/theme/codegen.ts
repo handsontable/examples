@@ -227,8 +227,20 @@ export const THEME_BRIDGE_SOURCE = "hot-runner-theme";
  *
  * Sizes are emitted for every density variant, not just the selected one, for the
  * same reversibility reason and to match the module (DEV-2199).
+ *
+ * `presets` is the demo's own version's preset data when the panel has it
+ * (DEV-2560). Since the payload is *effective* objects, the presets are baked
+ * into what goes over the wire: built from this app's copy they would push 18's
+ * numbers into a preview running 17 — extra token keys that core ignores, and a
+ * couple of values that differ — until the next rebuild snapped them back.
+ * Optional, so the codegen tests and any caller without a loaded set keep the
+ * bundled behaviour.
  */
-export function buildThemeParams(state: ThemeState): {
+export function buildThemeParams(state: ThemeState, presets?: {
+  tokens: Record<string, TokenValue>;
+  colors: Record<string, unknown>;
+  density: Record<string, Record<string, string>>;
+}): {
   tokens: Record<string, TokenValue>;
   colors: Record<string, unknown>;
   density: { type: ThemeState["density"]; sizes: Record<string, Record<string, string>> };
@@ -236,12 +248,13 @@ export function buildThemeParams(state: ThemeState): {
 } {
   const sizes: Record<string, Record<string, string>> = {};
   for (const variant of DENSITY_VARIANTS) {
-    sizes[variant] = effectiveDensity(densitySizes(variant), state.densitySizes?.[variant] ?? {});
+    const preset = presets?.density[variant] ?? densitySizes(variant);
+    sizes[variant] = effectiveDensity(preset, state.densitySizes?.[variant] ?? {});
   }
 
   return {
-    tokens: effectiveTokens(presetTokens(state.tokens), state.params),
-    colors: effectiveColors(presetColors(state.colors), state.palette),
+    tokens: effectiveTokens(presets?.tokens ?? presetTokens(state.tokens), state.params),
+    colors: effectiveColors(presets?.colors ?? presetColors(state.colors), state.palette),
     density: { type: state.density, sizes },
     colorScheme: state.colorScheme,
   };

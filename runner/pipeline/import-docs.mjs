@@ -81,7 +81,10 @@ const BUILTIN_PKGS = new Set([
 // wrap-docs-example.mjs emits. Tier-1 frameworks run in Sandpack (in-browser);
 // Angular runs in a Cloudflare Sandbox container (the server derives its dev
 // command/port from the `framework` key).
-const RUNNER = {
+// Exported for pipeline/docs-container-vite-hosts.test.mjs, which needs to know
+// which frameworks run a real dev server (`engine: "container"`) in order to hold
+// their generated vite config to the allowed-hosts rule (DEV-2564).
+export const RUNNER = {
   // DEV-2129: all Tier-1 frameworks run on the classic bundler's `parcel`
   // environment — the only one that shares Handsontable's internal module
   // registry across entry points, so `registerAllModules()` actually reaches

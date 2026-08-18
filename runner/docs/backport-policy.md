@@ -41,6 +41,68 @@ those branches keep `handsontable/styles/*.css` imports and the string
 Apply eligible fixes **newest → oldest** (18 → 17 → 16 → 15), stopping at the
 oldest major where the fix is still relevant.
 
+## Prefer the pipeline-side overlay to a cherry-pick round
+
+When the difference between majors is a **small, mechanical, per-major source
+variation** — the same site needing a different literal at different majors —
+do **not** open a cherry-pick round. Add a row to
+`pipeline/starter-overrides.mjs` instead. It runs from master and therefore
+reaches every bucket at once, including buckets whose branch is frozen.
+
+This is the same reasoning `pipeline/blank-starters.mjs` records in its header
+for the synthetic templates: a disk-backed per-major variant "would have to be
+hand-committed to `prod-examples/15` and `prod-examples/16` and kept in sync
+forever". A cherry-pick round also has to be repeated on every future branch
+cut, whereas an override row is written once.
+
+The worked example is DEV-2545. Handsontable 18 changed the `date`/`time` cell
+contract in two coupled ways, and the defect class is **bidirectional**:
+
+- **Option shape.** 18 requires an `Intl.DateTimeFormatOptions` object; its
+  renderer returns the raw value early (with a one-per-instance console
+  warning) when it sees a format **string**. Below 18 the reverse holds —
+  15/16/17 feed the option straight into `moment(value, format, true)`, which
+  cannot consume an object, so an object fails validation there **silently**,
+  with no warning at all. A fix keyed only on "string is bad" misses half the
+  class; `next-shadcn.js` was already shipping the object into bucket 17.
+- **Stored value.** 18's `dateValidator` is `isValidISODate(value)` — it
+  ignores `dateFormat` entirely — and its renderer parses through the ISO-only
+  `parseToLocalDate`. So at 18 a date column's **data** must be ISO 8601
+  however it is displayed. Swapping only the option on a starter whose data is
+  `DD/MM/YYYY` turns a readable raw value into BAD_VALUE on every row.
+
+The resulting rule, encoded in the registry: **storage is uniform, display is
+per-bucket.** ISO 8601 is the one stored shape every supported major accepts
+(`moment(v,'YYYY-MM-DD',true)` at 15/16/17, `isValidISODate(v)` at 18+), so
+stored values are migrated to ISO at *every* bucket and only the display option
+varies. Keeping storage bucket-dependent would make a local full regen (which
+sources master for every bucket) disagree with CI (which sources the frozen
+branches).
+
+Three consequences worth knowing before relying on this:
+
+- **Bucket content becomes a two-place question** — the source ref *plus* the
+  registry. Reading `examples/angular` on master no longer tells you what
+  bucket 16 ships. Each artifact and manifest row records the applied override
+  ids (`overrides`) so it answers for itself.
+- **Generation fails closed.** `lintStarterOptionShapes` runs inside
+  `importStarters`, so a starter that grows a date/time column without a
+  registry row declaring its per-major shape **fails the import** rather than
+  quietly shipping the wrong shape. It guards the stored value too: at 18+ a
+  starter that declares a date/time cell may not carry slash-separated date
+  literals, and that is the only rule reaching a date column which carries no
+  `dateFormat` at all (`react`, `react-js`, `typescript` and `vue` are all in
+  that shape). Failing closed is deliberate — it is what stops this class
+  returning silently — but it means a regen can go red at an inconvenient
+  moment, and the fix is to add the row, never to weaken the lint.
+- **A rewrite that finds nothing is an error, not a no-op.** Both registries
+  assert a positive postcondition — option rows require exactly one matching
+  site *and* that it fits on one line; normalization rows require their
+  `expect` pattern on the output. "Nothing left matching the pattern" is
+  trivially true when the pattern never matched, so without this a frozen
+  branch that renames or re-wraps a site would leave the row silently dead and
+  pair unmigrated data with a migrated option.
+
 ## Keep repairs dependency-minimal
 
 The container image bakes **one** node_modules seed per framework (bucket 18;

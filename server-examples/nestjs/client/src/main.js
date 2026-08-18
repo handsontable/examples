@@ -180,7 +180,12 @@ const hot = new Handsontable(container, {
       width: 100,
     },
     { data: 'assignee',  type: 'text',     width: 150 },
-    { data: 'createdAt', type: 'date',     dateFormat: 'YYYY-MM-DD', width: 120 },
+    {
+      data: 'createdAt',
+      type: 'date',
+      dateFormat: { year: 'numeric', month: '2-digit', day: '2-digit' },
+      width: 120,
+    },
   ],
 
   rowHeaders: true,

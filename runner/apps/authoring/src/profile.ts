@@ -15,6 +15,7 @@
 // previous user's avatar painted until the network answered. It is not a
 // security boundary either way: the server decides whose row this is.
 
+import { readApiJson } from "./api.js";
 import { getToken, PROFILE_CACHE_KEY } from "./auth.js";
 import { reportError } from "./sentry.js";
 
@@ -64,13 +65,11 @@ export function cacheProfile(profile: Profile | null): void {
   }
 }
 
-async function readJson(res: Response): Promise<Profile> {
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || `Request failed (${res.status}).`);
-  }
-  return (await res.json()) as Profile;
-}
+/** These four inline their `fetch` into the call, so there is no `res` in scope
+ *  to interpolate; the shape of the message goes instead (DEV-2534). */
+const PROFILE_FALLBACK = (status: number) => `Request failed (${status}).`;
+
+const readJson = (res: Response) => readApiJson<Profile>(res, PROFILE_FALLBACK);
 
 export async function fetchProfile(apiBase: string): Promise<Profile> {
   const profile = await readJson(await fetch(`${apiBase}/api/profile`, { headers: authHeaders() }));
@@ -124,6 +123,16 @@ export async function removeAvatar(apiBase: string): Promise<Profile> {
  * A failure here is deliberately silent: the fallbacks derived from the email
  * are always correct enough to render, and a toast about a profile nobody asked
  * for would be noise on a page that is doing something else.
+ *
+ * That includes an expired session (DEV-2534). `readApiJson` still clears the
+ * dead token — the next interactive call must not carry it — but this path
+ * raises no re-auth prompt: it is a background refresh that fires on `/` and
+ * `/share/:id` too, and those work fine signed out. The interactive caller that
+ * *does* want the sentence is `Settings.tsx`'s `fail()`, which renders
+ * `e.message` and so now shows "Your session expired…" where it used to print
+ * the Worker's "unauthorized". With `reportError` gated on `reportable`, the
+ * `.catch` below is a true no-op for that case rather than the Sentry issue
+ * DEMOS-W.
  */
 export function loadProfileInBackground(
   apiBase: string,

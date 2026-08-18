@@ -369,7 +369,8 @@ test.describe("behaviour survives the restyle", () => {
     await openPlayground(page, "light");
     await page.getByRole("button", { name: "Style", exact: true }).click();
 
-    const reset = page.locator(STYLE).getByRole("button", { name: "Reset" });
+    // The footer Reset, not a per-row one: the panel body grew its own in DEV-2560.
+    const reset = page.locator(STYLE).locator("footer").getByRole("button", { name: "Reset", exact: true });
     await expect(reset).toBeDisabled();
 
     await page.locator(`${STYLE} .hot-panel-tile`, { hasText: "horizon" }).first().click();
@@ -382,5 +383,34 @@ test.describe("behaviour survives the restyle", () => {
     await reset.click();
     await expect(reset).toBeDisabled();
     await expect(page.locator(`${STYLE} .hot-panel-tile[data-active="true"]`).first()).toContainText("main");
+  });
+
+  test("controls prefilled with the preset's values still count as unset", async ({ page }) => {
+    // The panel shows resolved preset values instead of empty boxes (DEV-2560),
+    // and the trap is storing them: overridden-ness is "is the key present", so a
+    // display value that leaked into state would un-pristine every demo and emit
+    // the whole catalogue into the generated module. Node cannot render the
+    // panel, so this is the assertion that actually covers it.
+    await openPlayground(page, "light");
+    await page.getByRole("button", { name: "Style", exact: true }).click();
+
+    const panel = page.locator(STYLE);
+
+    // One group at a time — the Foundation sections are an accordion — so the
+    // ramp is checked before the density rows, not alongside them.
+    await panel.getByRole("button", { name: /^Palette/ }).click();
+    // Populated: the brand ramp paints the preset's own blue rather than white.
+    await expect(panel.getByLabel("primary.500")).toHaveValue("#1a42e8");
+
+    await panel.getByRole("button", { name: /^Density sizes/ }).click();
+    // And a density row reads a measurement, not "theme default".
+    await expect(panel.locator('[data-token="cellVertical"]')).toContainText("px");
+
+    // Yet nothing is overridden. The group headers carry a count only once
+    // something is, so an exact name is the badge-free assertion — and the
+    // footer Reset is dead.
+    await expect(panel.getByRole("button", { name: "Palette", exact: true })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Density sizes", exact: true })).toBeVisible();
+    await expect(panel.locator("footer").getByRole("button", { name: "Reset", exact: true })).toBeDisabled();
   });
 });

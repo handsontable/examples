@@ -2,7 +2,7 @@ import { test, expect, type FrameLocator, type Page } from "@playwright/test";
 
 // Does the starters' own row striping survive a dark colour scheme? (DEV-2197)
 //
-// Five starters mark every other row with `odd` from their own `beforeRenderer`
+// Six starters mark every other row with `odd` from their own `beforeRenderer`
 // and stripe it from their own stylesheet. That rule used to pin
 // `background: #fafbff`, which outranks the theme's `:where()`-wrapped tokens —
 // so a demo switched to dark kept near-white rows carrying the theme's *light*
@@ -28,15 +28,15 @@ import { test, expect, type FrameLocator, type Page } from "@playwright/test";
 // `angular` carry the same rule but are `engine: "container"`, so including them
 // would force the 5-slot `Sandbox` pool and a same-origin API worker onto every
 // run. Check those by hand against a `vite dev` with `VITE_API_BASE` pointed at
-// its own port — and note `angular` is `test.fixme` in `style-apply.spec.ts`
-// because no *edit* reaches its preview (DEV-2216), so only its initial load is
-// observable there.
+// its own port. `angular` is a full case in `style-apply.spec.ts` (DEV-2216): what
+// once read as "no edit reaches its preview" was a silent type-check failure in the
+// generated theme module, so edits there are observable now.
 
 /** Every starter that stripes its own rows and boots in Sandpack. */
 const EXAMPLES = ["react", "javascript", "typescript", "vue"] as const;
 
 type Row = { bg: [number, number, number]; color: [number, number, number] };
-type Reading = { odd: Row; even: Row };
+type Reading = { odd: Row; even: Row; prefersDark: boolean };
 
 const preview = (page: Page): FrameLocator => page.frameLocator("iframe").first();
 const cell = (page: Page) => preview(page).locator(".handsontable td").first();
@@ -47,32 +47,59 @@ const cell = (page: Page) => preview(page).locator(".handsontable td").first();
  * Read through `color()` as well as `rgb()`: a `color-mix()` result computes to
  * `color(srgb 0.965 …)`, so a naive `rgb(…)` parse silently yields nothing and
  * every comparison below would trivially pass.
+ *
+ * Two of the guards below exist because of DEV-2546, where a grid that had lost
+ * its theme entirely was read as a legitimately dark one and only the stripe
+ * delta noticed. Refusing transparency and requiring the theme's own tokens
+ * turns that into an accurate message instead of a puzzling `Received: 0`.
  */
 async function readRows(page: Page): Promise<Reading> {
   return preview(page)
     .locator(".handsontable")
     .first()
-    .evaluate(() => {
-      const parse = (value: string): [number, number, number] => {
-        // `color(srgb …)` carries 0-1 components; `rgb(…)` carries 0-255.
+    .evaluate((grid) => {
+      const parse = (value: string, what: string): [number, number, number] => {
+        // `color(srgb …)` carries 0-1 components; `rgb(…)` carries 0-255. Alpha
+        // is 0-1 in both notations and is never scaled.
         const scale = value.startsWith("color(") ? 255 : 1;
-        const nums = (value.match(/-?[\d.]+/g) ?? []).slice(0, 3).map((n) => Number(n) * scale);
+        const nums = (value.match(/-?[\d.]+/g) ?? []).map(Number);
         if (nums.length < 3 || nums.some((n) => Number.isNaN(n))) {
-          // A transparent or unparsed background is the failure this suite is
-          // looking for, so refuse to guess a value for it.
-          throw new Error(`cannot read a colour out of ${JSON.stringify(value)}`);
+          // An unparsed colour is the failure this suite is looking for, so
+          // refuse to guess a value for it.
+          throw new Error(`cannot read a colour out of ${JSON.stringify(value)} (${what})`);
         }
-        return [nums[0]!, nums[1]!, nums[2]!];
+        // `transparent` computes to `rgba(0, 0, 0, 0)` — four numbers, none of
+        // them NaN — so it parses as pure black and sails past every check
+        // below. That is exactly how an unthemed grid passed for a dark one.
+        if (nums.length > 3 && nums[3] === 0) {
+          throw new Error(`${what} is transparent — the rule that paints it never applied`);
+        }
+        return [nums[0]! * scale, nums[1]! * scale, nums[2]! * scale];
       };
       const read = (selector: string) => {
         const el = document.querySelector(selector);
         if (!el) throw new Error(`no cell matched ${selector}`);
         const styles = getComputedStyle(el);
-        return { bg: parse(styles.backgroundColor), color: parse(styles.color) };
+        return {
+          bg: parse(styles.backgroundColor, `${selector} background`),
+          color: parse(styles.color, `${selector} text`),
+        };
       };
+      // The two tokens the stripe is mixed from. Read off the same ancestor
+      // `themeClass` and `resolvedScheme` use. Empty here means the theme block
+      // `ThemeManager` injects is no longer reaching this grid, at which point
+      // every colour below is a fallback rather than a theme's answer.
+      const wrapper = grid.closest("[class*='ht-theme-']");
+      if (!wrapper) throw new Error("no ht-theme-* wrapper around the grid");
+      if (!getComputedStyle(wrapper).getPropertyValue("--ht-background-color").trim()) {
+        throw new Error("the grid lost its theme — `--ht-background-color` is unset");
+      }
       return {
         odd: read("table.htCore tr.odd td"),
         even: read("table.htCore tr.ht__row_even:not(.odd) td"),
+        // Diagnostic only: proof that a media emulation reached this
+        // cross-origin document, so a scheme that did not flip says why.
+        prefersDark: window.matchMedia("(prefers-color-scheme: dark)").matches,
       };
     });
 }
@@ -107,6 +134,23 @@ async function resolvedScheme(page: Page): Promise<string> {
       const wrapper = el.closest("[class*='ht-theme-']");
       return wrapper ? getComputedStyle(wrapper).colorScheme : "";
     });
+}
+
+/**
+ * Put the shell in `mode`, and prove it landed before returning.
+ *
+ * The toggle is a single button labelled with its *destination*, so the label is
+ * the state test: "Switch to dark theme" means the shell is light. `data-hot-theme`
+ * is the shell-side confirmation, exactly as `panels.spec.ts` reads it — but note
+ * that it says nothing about the preview, which is a separate document reached only
+ * over the bridge. That is what the caller asserts next.
+ */
+async function toggleShellTheme(page: Page, mode: "light" | "dark") {
+  const current = await page.locator("html").getAttribute("data-hot-theme");
+  if (current !== mode) {
+    await page.getByRole("button", { name: `Switch to ${mode} theme` }).click();
+  }
+  await expect(page.locator("html")).toHaveAttribute("data-hot-theme", mode);
 }
 
 /** Relative luminance, WCAG's definition — the basis of both checks below. */
@@ -163,9 +207,10 @@ function expectLegibleStripe(reading: Reading, scheme: string) {
  * touches it, so its background is the theme's own answer.
  */
 function expectSchemeFlipped(light: Reading, dark: Reading) {
+  const witness = `(the preview reports prefers-color-scheme: dark = ${dark.prefersDark})`;
   expect(
     contrast(light.even.bg, dark.even.bg),
-    "the colour scheme never changed — this run proves nothing about dark mode",
+    `the colour scheme never changed — this run proves nothing about dark mode ${witness}`,
   ).toBeGreaterThan(4);
   expect(luminance(dark.even.bg), "the 'dark' reading is not dark").toBeLessThan(
     luminance(light.even.bg),
@@ -188,32 +233,49 @@ for (const example of EXAMPLES) {
 
       // 1 & 2. The theme the demo ships with, in both of its schemes. This is
       //    what a visitor sees before touching anything, and what someone
-      //    copying the starter into their own app gets. The shipped
-      //    `ht-theme-main.min.css` delivers its light/dark pairs as a
-      //    lightningcss `var()` switch keyed off the class name, so swapping the
-      //    class is what flips it — there is no media query to emulate.
+      //    copying the starter into their own app gets.
       let shippedLight: Reading | undefined;
       await expect(async () => {
         shippedLight = await readRows(page);
         expectLegibleStripe(shippedLight, "default theme, light");
       }).toPass({ timeout: 60_000 });
 
-      await preview(page)
-        .locator(".handsontable")
-        .first()
-        .evaluate(() => {
-          document.querySelectorAll(".ht-theme-main").forEach((el) => {
-            el.classList.replace("ht-theme-main", "ht-theme-main-dark");
-          });
-        });
-      expect(await themeClass(page), "the dark theme class did not land").toEqual(
-        "ht-theme-main-dark",
+      // The starters declare `colorScheme: 'light'` (DEV-2561), so the shipped
+      // theme is pinned and nothing about the visitor's machine moves it. What
+      // moves it is the shell's own toggle, over the colour-scheme bridge
+      // (ADR-0035) — the shell is authoritative for a stock demo, which this is.
+      //
+      // Two earlier mechanisms are gone, and both were wrong for reasons worth
+      // keeping. Swapping the wrapper class `ht-theme-main` -> `ht-theme-main-dark`
+      // worked only while the starters imported `ht-theme-main.min.css`, the one
+      // place the dark class was defined; DEV-2200 dropped that import, so the
+      // rename detached the injected theme block and left an *unthemed* grid,
+      // which is not a dark one (DEV-2546). Emulating `prefers-color-scheme`
+      // replaced it and was honest at the time — the theme was `auto` — but a
+      // pinned starter ignores the OS by design, so it now moves nothing.
+      // A definite scheme, not `light dark`. Note what this does *not* prove: the
+      // shell is already driving this grid to light, so it reads `light` whether or
+      // not the starter pinned itself. The pin is asserted where it is visible —
+      // against the starter artifacts, in `pipeline/starter-scheme.test.mjs`.
+      expect(await resolvedScheme(page), "the shell's light never reached the grid").toEqual(
+        "light",
       );
+      await toggleShellTheme(page, "dark");
       await expect(async () => {
+        expect(await resolvedScheme(page), "the shell's dark never reached the grid").toEqual(
+          "dark",
+        );
         const shippedDark = await readRows(page);
         expectSchemeFlipped(shippedLight!, shippedDark);
         expectLegibleStripe(shippedDark, "default theme, dark");
       }).toPass({ timeout: 60_000 });
+
+      // Back to light before the panel half. The toggle persists to
+      // `localStorage`, so leaving it dark would outlive the reload below — and
+      // the panel half asserts the shell *cannot* move a demo that declares its
+      // own scheme, which is not a claim worth making from an unknown starting
+      // point.
+      await toggleShellTheme(page, "light");
 
       // 3 & 4. A theme from the Style panel. Structurally different, and the
       //    reason both halves are worth running: the panel's theme is injected
@@ -267,6 +329,19 @@ for (const example of EXAMPLES) {
         }).toPass({ timeout: 60_000 });
       }
       expectSchemeFlipped(panel.light!, panel.dark!);
+
+      // 5. Precedence (DEV-2561). The panel has written a theme module, so this
+      //    demo now declares its own scheme and the shell stands down — it sends
+      //    `auto`, the receiver drops its override, and the panel's `light` is
+      //    what remains. A shell toggle that moved this grid would mean chrome
+      //    silently overruling the demo's own source.
+      await toggleShellTheme(page, "dark");
+      await expect(async () => {
+        expect(
+          await resolvedScheme(page),
+          "the shell overrode a scheme the demo declares for itself",
+        ).toEqual("light");
+      }).toPass({ timeout: 30_000 });
     });
   });
 }

@@ -65,13 +65,35 @@ from `panel/tabs/components/TokenItem.tsx`):
 Every row carries its label and description, and a **Reset that appears only
 once the token is overridden**.
 
+**The effective value is what a control displays; the state record is what says
+it is overridden** (DEV-2560). Controls used to render `state.palette[key] ?? ""`
+and nothing else, so an untouched panel was eleven identical grey swatches and a
+column of empty boxes reading "theme default" — it did not look like it worked,
+because nothing in it showed a value. Two binding shapes now, and every control
+picks one:
+
+| shape | used by | `value` | the default shows as | overridden reads as |
+|---|---|---|---|---|
+| text-ish | `TokenField`, the `size` trigger, `select` | the override only | `placeholder` / trigger text | Reset appears |
+| swatch-ish | `Ramp`, any `input type="color"` | override **or** resolved | the swatch paints it | accent outline + Reset |
+
+The rule underneath: `state.params` / `state.palette` / `state.densitySizes` are
+written **only** from a handler carrying a user event. Nothing derived from a
+preset is ever passed to `setParam` / `setPalette` / `setDensitySize`, because
+emptiness *is* the override signal — it drives `isPristine`, both group badges,
+the footer Reset, and which keys `buildThemeModule` emits. A prefilled display
+value that leaked into state would make every demo emit all 272 tokens and both
+ramps, and would break reset-to-arrival. A colour input needs `#rrggbb` while the
+presets are 8-digit hex, so swatches go through `hexInputValue` (`theme/color.ts`,
+tested directly by `pipeline/theme-color.test.mjs`).
+
 Two behaviours worth knowing:
 
 * **Values resolve.** `borderRadius` is `"sizing.size_1"`, which is `4px`;
   `cellHorizontalPadding` is `"density.cellHorizontal"` → `"sizing.size_2"` →
   `8px`. `theme/resolve.ts` follows those chains so a control shows the value
-  rather than the reference. It resolves against the Handsontable version *this
-  app* is built with, not the one in the version dropdown.
+  rather than the reference — against the version the *demo* runs, see
+  [Which version's defaults](#which-versions-defaults-are-on-screen).
 * **Colours are `[light, dark]` pairs.** Picking a raw colour writes only the
   half matching the scheme you're looking at, so styling in light mode doesn't
   silently rewrite dark mode. Picking a *common* colour (`tokens.accentColor`)
@@ -94,6 +116,13 @@ All fifteen `DensitySizeKey`s are exposed, grouped as theme-builder's density
 modal groups them. `cellVertical` and `cellHorizontal` — cell padding, the ones
 people actually reach for — were missing entirely before DEV-2199.
 
+Each measurement is edited with `DensitySizeControl` — the same size control the
+65 `size` tokens use, minus its `density` mode, since a density measurement
+pointing at a density slot points at itself (DEV-2560). They were free-text boxes
+before: raising cell padding meant knowing both that `8px` was a legal value and
+that the preset said `sizing.size_2`, neither of which the row told you. The row
+shows the measurement resolved (`4px`), and the picker offers the scale.
+
 A theme saved under the old flat shape is migrated on load
 (`migrateThemeState`): a flat object is read as belonging to the variant the
 theme was saved with, which is the only reading that can be right.
@@ -114,6 +143,61 @@ its grid.
 `pipeline/theme-wiring.test.mjs` runs the real codegen over every wiring shape
 (plus single-line variants, SFCs and Astro) and asserts apply-then-reset is
 byte-identical.
+
+## Which version's defaults are on screen
+
+The panel is built against one pinned Handsontable — `BUNDLED_VERSION` in
+`theme/presets.ts`, kept in step with the `apps/authoring` dependency by
+`pipeline/theme-presets-version.test.mjs` — but a demo runs whatever the version
+picker says, and the presets are not frozen: `tokens/main` is 262 keys at 17.0.1
+and 279 at 18.0.0, and two `rowHeader*` colours changed. Showing this app's
+numbers for someone else's version is a confidently wrong value, which is worse
+than the empty box it replaced.
+
+So `theme/presetsFor.ts` fetches the demo's own version's presets — four leaf
+`.mjs` modules (`sizing`, `density`, `tokens/<preset>`, `colors/<preset>`, ~20 KB
+in total) `import()`ed straight off jsDelivr. They are dependency-free data
+modules with a default export, served `access-control-allow-origin: *` and
+`immutable`, so no bundling step, no worker route and no committed snapshots are
+involved. The cache is keyed by **module URL**, not by (version, preset), so
+flipping the tokens preset costs one request rather than four. `/* @vite-ignore */`
+on the `import()` is load-bearing — without it Vite tries to resolve the runtime
+URL at build time.
+
+Failure is always the bundled copy plus a visible note naming it, never an error
+in place of a ramp: an unfetchable ref (pkg.pr.new), a network failure, or a
+4 s timeout — a dynamic `import()` cannot be aborted, so the timeout is the only
+way a hung response does not leave the panel resolving forever. While a load is
+in flight the previous values stay on screen and every control stays live: an
+override typed mid-load is version-independent and must still commit.
+
+The live bridge gets the same treatment. `buildThemeParams` takes the loaded
+presets, because its payload is *effective* objects — built from this app's copy
+it would push 18's numbers into a preview running 17 until the next rebuild
+snapped them back.
+
+`theme/` must not import outside itself: `pipeline/theme-wiring.test.mjs` copies
+the directory into a tmp dir, and an unresolvable import turns all eighteen of
+its cases into skips that read as a green run. Hence `presetUrls.ts` re-declaring
+the next-prerelease regex instead of importing it from `packages/runtime`, and
+hence nothing inside `theme/` importing `presetsFor.ts` — only `StylePanel.tsx`,
+which is outside `theme/` and in neither harness, loads it.
+
+### The panel needs Handsontable 17
+
+`themes/static/variables/*` first exists in 17.0.0-rc1; jsDelivr and unpkg 404 it
+for every 15.x and 16.x, and 16.2.0 ships no `themes/` directory at all. Since
+the generated module imports both `handsontable/themes` and three of those
+variable paths, below 17 it cannot resolve its own imports and the preview fails
+to compile. So `App.tsx` gates the toolbar button on `THEME_API_MIN_MAJOR = 17`,
+disabling it with the reason in its tooltip rather than hiding it, and closing an
+open panel when the version drops.
+
+Deliberately *not* the runner's `DEFAULT_MIN_MAJOR` (15, `packages/runtime/src/version.ts`):
+that floor is "cores we boot", this one is "cores with a theme API" — the same cut
+line `pipeline/blank-starters.mjs` calls `isLegacyBucket`. `next` and pkg.pr.new
+refs pass, since `releaseMajor` answers `null` for them and they are post-18
+builds.
 
 ## What only a browser can tell you
 
@@ -138,12 +222,27 @@ discarding the theme over a CSS class. Two rules it encodes:
 * **Density is settled by row height.** A wrongly-keyed `density.sizes` is
   ignored in silence, so the generated source cannot distinguish the two
   readings and the rendered cell can.
+* **Pick a density size through the control, not by filling a box.** The rows are
+  `[data-token="<key>"]` disclosures, not labelled text inputs, and the sizing
+  list commits on click while the `custom` field commits on blur — which
+  `fill()` never fires. `setDensitySize()` in `e2e/style-apply.spec.ts` does both
+  steps; it uses `size_10` (40px) against a `sizing.size_1` (4px) default so a
+  row-height assertion cannot fail for want of a big enough step.
 
-`?example=angular` is `test.fixme`: its wiring is correct, but **no** edit
-reaches the Angular preview — a bare `<p>` typed into its template was still
-absent after 90 seconds, while the same probe on `react-js` and `astro` (also
-Tier 2) appears in about ten. That blocks the editor and the AI assistant there
-too, so it is a container defect rather than a theming one — DEV-2216.
+The panel's footer Reset is located as `footer >> role=button[name="Reset"]`:
+overridden rows carry their own Reset now, so an unscoped exact-name match is
+ambiguous with a group expanded.
+
+`?example=angular` is a full case (DEV-2216). It was `test.fixme` while it read as
+"no edit ever reaches the Angular preview" — a bare `<p>` typed into its template
+was still absent after 90 seconds, while the same probe on `react-js` and `astro`
+(also Tier 2) appeared in about ten. That was a misdiagnosis: Angular's dev server
+is the only one that type-checks, so a type error in the generated theme module
+fails its build *silently* — the broken module stays on disk and swallows every
+later edit too, while the last good bundle keeps being served. This is the case
+worth having for exactly that reason. `pipeline/theme-typecheck.test.mjs` compiles
+the generated module against Handsontable's types; the `angular` case here is what
+proves the compiled result also renders.
 
 Run it with **`--workers=1`** whenever `astro` or `angular` is selected. Those
 are the Tier-2 cases; the pool holds five container slots and sessions are not

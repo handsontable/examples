@@ -17,7 +17,7 @@ import type {
 } from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
-import { MONITOR_EVENT_CEILING, truncateMessage } from "./monitor.js";
+import { MONITOR_EVENT_CEILING, redactPreviewHosts, truncateMessage } from "./monitor.js";
 
 /** Dev-server output worth relaying (DEV-2527). Broad on purpose — the point is to
  *  learn what running dev servers complain about — but narrow enough that ordinary
@@ -25,14 +25,123 @@ import { MONITOR_EVENT_CEILING, truncateMessage } from "./monitor.js";
 const STDERR_MARKERS =
   /\b(error|failed|failure|exception|unhandled|cannot find|not found|econnrefused|eaddrinuse)\b/i;
 
+/** A line that ANNOUNCES a cause, as opposed to merely mentioning one. Anchored at the
+ *  start of the line on purpose: pnpm prints its prose hints ("This error happened
+ *  while installing the dependencies of …") AFTER the code line, so an unanchored scan
+ *  from the end of the log picks the hint over ERR_PNPM_NO_MATCHING_VERSION.
+ *
+ *  Deliberately separate from STDERR_MARKERS rather than a widening of it: that set is
+ *  load-bearing for `relayStderr`, where it controls how much dev-server noise is
+ *  shipped as demo events. Two patterns, two jobs. */
+const BOOT_CAUSE_LINE = /^(?:err_[a-z0-9_]+|npm ERR!|ELIFECYCLE|::error::|[a-z]*error\b)/i;
+
+/** ANSI codes meaning "what follows replaces this line": erase-whole-line (`\x1b[2K`)
+ *  and cursor-to-column (`\x1b[nG`). pnpm redraws its progress counter with these
+ *  rather than with a bare `\r`, so stripping them as ordinary CSI would glue every
+ *  redraw frame into one run-on line. Normalised to `\r` so one last-frame-wins rule
+ *  covers both.
+ *
+ *  `2K` specifically, NOT `\d*K`: a bare `\x1b[K` is erase-to-end-of-line, the "wipe
+ *  what the previous longer line left behind" idiom, and it usually trails the text it
+ *  is protecting. Treating it as a reset would drop that text — deleting exactly the
+ *  cause line this function exists to find. Those fall through to ANSI_CSI below and
+ *  are stripped like any other code.
+ *
+ *  (`PreviewPane.tailLines` strips CSI first and therefore keeps redraw fragments.
+ *  Deliberately stricter here: nothing there ends up as a Sentry issue title.) */
+const LINE_RESET = /\x1b\[(?:2K|\d*G)/g;
+
+/** Full CSI, not just colour (`m`): a boot log is mostly cursor movement. */
+const ANSI_CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+
+/** The last entry satisfying `pred` — the newest occurrence, since logs run forwards. */
+function findLastLine(lines: readonly string[], pred: (line: string) => boolean): string | null {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (pred(lines[i]!)) return lines[i]!;
+  }
+  return null;
+}
+
+/**
+ * Split a failed boot log into the one line worth titling an issue with (`cause`) and
+ * the recent context worth keeping beside it (`tail`).
+ *
+ * The whole log used to become the `Error.message` (DEV-2533). A message that is a log
+ * takes the issue title from whatever the tail happened to start with, and — because
+ * V8 puts the message inside `error.stack` and stack parsers skip only the first
+ * line — feeds lines 2..n of it to the frame regexes, inventing both a stack and a
+ * culprit. The actual cause, meanwhile, sat unread on the last line.
+ *
+ * The cause is chosen in three tiers, each scanning backwards: a line that announces a
+ * failure, else a line that mentions one, else the last line there is.
+ */
+export function bootFailureDetail(log: string): { cause: string; tail: string } {
+  const lines = log
+    .replace(LINE_RESET, "\r")
+    .replace(ANSI_CSI, "")
+    .split("\n")
+    .map((l) => l.slice(l.lastIndexOf("\r") + 1).trimEnd())
+    .filter(Boolean)
+    // Already bounded upstream by the status route's `tail -c 2500`; this is the
+    // readability bound, and it is what `tail` promises callers.
+    .slice(-40);
+
+  const candidate =
+    findLastLine(lines, (l) => BOOT_CAUSE_LINE.test(l.trimStart())) ??
+    findLastLine(lines, (l) => STDERR_MARKERS.test(l)) ??
+    lines[lines.length - 1] ??
+    "";
+
+  // Redact, then truncate — the order is the security property (e0da4598): truncating
+  // first can cut a preview hostname in half and leave the session token behind in a
+  // form the redactor no longer recognises.
+  const cause = truncateMessage(redactPreviewHosts(candidate.trim()));
+  return {
+    cause: cause || "Container failed to install dependencies or start.",
+    tail: redactPreviewHosts(lines.join("\n")),
+  };
+}
+
 /** The container reached the server and booted, but the boot script itself
  * exited nonzero (e.g. pnpm couldn't resolve the pinned Handsontable
  * version) — as opposed to the session request never reaching the server at
- * all. Callers should show this message as-is: it's a real, often-multiline
- * install/boot log, not a connectivity problem, and its text can incidentally
- * contain words like "fetching" that would otherwise trip a generic
- * network-error heuristic. */
-export class ContainerBootFailure extends Error {}
+ * all.
+ *
+ * `message` is a single line: the cause, as picked by `bootFailureDetail`. `log` is
+ * the recent boot output it was picked out of — context for whoever reads the report,
+ * and never part of the message (see `bootFailureDetail` for why that distinction
+ * matters). Callers should still show the message as-is rather than running it through
+ * a connectivity heuristic: it can incidentally contain words like "fetching" that
+ * pnpm's own error output happens to use. */
+export class ContainerBootFailure extends Error {
+  constructor(message: string, readonly log = "") {
+    super(message);
+  }
+}
+
+/** What only `mount()` can know about a failed create (DEV-2559).
+ *
+ * Both fields exist to tell two very different causes of Sentry DEMOS-9 apart —
+ * a fixed ceiling somewhere above our Worker, versus container starts that are
+ * genuinely slow — and neither is observable at the report site in App.tsx: only
+ * this method holds the clock and the `Response`. They ride on the error because
+ * that is the one thing that already crosses the package boundary; widening
+ * `onError` or bolting a diagnostics callback onto `ContainerRuntime` would be a
+ * far larger API change than one optional property.
+ *
+ * `ray` is the failing response's `cf-ray`, the id Cloudflare stamps on every
+ * edge response — the join key from one Sentry event back to that invocation in
+ * Workers Logs. It is `<hex>-<COLO>`, where the colo is a datacenter code:
+ * strictly coarser than the `user.geo` Sentry already stores, and not a preview
+ * hostname, so nothing here is a session credential. It is null whenever the
+ * header is unreadable — a cross-origin dev setup pointed straight at :8787,
+ * since `cors()` in workers/api sets no Access-Control-Expose-Headers. In
+ * production the page and the API share an origin, so the response is `basic`
+ * and every header is readable. */
+export interface SessionStartDiagnostics {
+  readonly elapsedMs: number;
+  readonly ray: string | null;
+}
 
 /** POST /api/session failed. `status` distinguishes the server's 410
  * "closed while being created" (session already destroyed server-side; a
@@ -40,12 +149,15 @@ export class ContainerBootFailure extends Error {}
  * `code` carries the server's machine-readable reason when it sent one —
  * `budget_exhausted` / `budget_login_required` are cost-guardrail refusals
  * (DEV-2030): a deliberate product state with a message written for users, not
- * a fault to retry or report. */
+ * a fault to retry or report. `diagnostics` is the timing/edge-id pair above;
+ * optional so that the three arguments the message contract depends on stay
+ * exactly where they were. */
 export class SessionStartError extends Error {
   constructor(
     public readonly status: number,
     message: string,
     public readonly code?: string,
+    public readonly diagnostics?: SessionStartDiagnostics,
   ) {
     super(message);
   }
@@ -55,14 +167,102 @@ export class SessionStartError extends Error {
 export const isBudgetRefusal = (e: unknown): e is SessionStartError =>
   e instanceof SessionStartError && typeof e.code === "string" && e.code.startsWith("budget_");
 
-/** Read a `{ error, message }` body if the server sent one, else the raw text. */
-async function readFailure(res: Response): Promise<{ code?: string; message: string }> {
-  const text = await res.text().catch(() => res.statusText);
+/** Cap for a non-envelope failure body. Shorter than the monitor's own message bound:
+ *  this text is prose for a user, not a log excerpt. */
+const FAILURE_TEXT_MAX = 200;
+
+/** Read a `{ error, message }` body if the server sent one, else the raw text.
+ *
+ * `envelope` says which of the two happened, and that distinction is load-bearing:
+ * every deliberate failure from our own Worker is a JSON `{ error }` — its handler
+ * and its catch-all both are — so a response WITHOUT one did not come from our code
+ * at all. It came from the platform above it (or from whatever proxy is standing in
+ * for the API in local dev), and there is nothing in it worth showing a user.
+ *
+ * The raw-text branch is capped because it is unbounded: a gateway can answer with a
+ * whole HTML error page, and that page would otherwise be interpolated verbatim into
+ * both the message the user reads and the Sentry issue title. */
+async function readFailure(
+  res: Response,
+): Promise<{ code?: string; message: string; envelope: boolean }> {
+  // Not `res.statusText` on failure: Cloudflare serves HTTP/2, where browsers expose
+  // statusText as "", so that fallback never bought anything and must not become a
+  // message tier of its own.
+  const text = await res.text().catch(() => "");
   try {
     const body = JSON.parse(text) as { error?: string; message?: string };
-    if (body?.error) return { code: body.error, message: body.message ?? body.error };
+    if (body?.error) {
+      return { code: body.error, message: body.message ?? body.error, envelope: true };
+    }
   } catch { /* not JSON — fall through to the raw text */ }
-  return { message: text };
+  return { message: truncateMessage(text.trim(), FAILURE_TEXT_MAX), envelope: false };
+}
+
+/** Statuses that mean "nothing answered in time", emitted by the platform rather than
+ *  by us (DEV-2538). Deliberately excludes 502 and 503. 503 has its own tier below
+ *  (DEV-2553) because "the service did not take the request" is all an envelope-less
+ *  503 supports — "took too long" would be a stronger claim than the evidence. 502
+ *  stays in the connectivity tier: nothing has been observed emitting one, so there is
+ *  no case to write a sentence for.
+ *
+ *  Only meaningful together with `envelope: false` — a 504 carrying a real `{ error }`
+ *  body would be our Worker speaking, and its own words win. */
+const TIMEOUT_STATUSES = new Set([504, 522, 524]);
+
+/**
+ * What to tell the user when POST /api/session comes back not-ok, in five tiers.
+ *
+ * ⚠ The wording of the two platform tiers — gateway-timeout and service-unavailable —
+ * is a contract with `describeRuntimeError` in apps/authoring/src/App.tsx, whose
+ * container-engine heuristic matches
+ * /failed to fetch|networkerror|load failed|session start failed|fetch/i and REPLACES
+ * the message with the local-dev "run the API worker, it needs Docker" text. That is
+ * right for a developer whose worker is down and wrong for a visitor on
+ * demos.handsontable.com whose sandbox timed out — which is exactly what production
+ * users got for the 82 events of Sentry DEMOS-9 (DEV-2538). So both of those sentences
+ * must contain none of those words, "fetch" above all. The connectivity tiers below
+ * them keep saying "session start failed" on purpose, so they keep tripping the
+ * heuristic. `pipeline/session-start-failure.test.mjs` is what holds both halves in
+ * place.
+ */
+function sessionStartMessage(
+  status: number,
+  failure: { code?: string; message: string; envelope: boolean },
+): string {
+  // A guardrail refusal already reads as a sentence aimed at the user; wrapping it in
+  // "session start failed (503): …" would bury it (and trip the heuristic above).
+  if (failure.code?.startsWith("budget_")) return failure.message;
+  // Same reasoning, different refusal: `at_capacity` (DEV-2556) is the Worker
+  // saying every container slot is taken, in a sentence written for the person
+  // reading it. Wrapping it in "session start failed (503): …" would both bury
+  // it and hand it to the App.tsx heuristic. Before the envelope-less 503 tier
+  // below on purpose — this one HAS an envelope, so it would otherwise fall
+  // through to the generic wrapper at the bottom.
+  if (failure.code === "at_capacity") return failure.message;
+  // Nothing answered in time, and no envelope means the silence came from above our
+  // Worker. Nothing is wrong with the demo or with the visitor's connection, so say so
+  // — "Restart preview" is the error card's own button (packages/editor-shell/src/
+  // PreviewPane.tsx). The status stays in the sentence so Sentry keeps one issue per
+  // status rather than merging every gateway failure into one.
+  if (!failure.envelope && TIMEOUT_STATUSES.has(status)) {
+    return `The sandbox took too long to start (${status}). Nothing is wrong with the code — try "Restart preview".`;
+  }
+  // A 503 with no envelope did not come from our Worker either: every refusal it makes
+  // on this route is a `json({ error }, status)` — the budget guardrail above included,
+  // and its catch-all answers `json({ error }, 500)` — so this one was emitted above
+  // us. Not folded into TIMEOUT_STATUSES: only "the service did not take the request"
+  // is supportable, never "it took too long" (DEV-2553). Gated on the envelope rather
+  // than on an empty message on purpose: a platform 503 that DOES carry text — a
+  // gateway's own HTML page — is just as much not-ours, and letting that case fall
+  // through would keep the App.tsx misattribution alive for exactly it.
+  if (!failure.envelope && status === 503) {
+    return `The sandbox service is unavailable right now (503). Nothing is wrong with the code — try "Restart preview" in a moment.`;
+  }
+  // No body at all on some other status: the API is not answering usefully, which in
+  // practice is a local worker that isn't running. No trailing colon introducing a
+  // message that does not exist — that empty tail is what titled DEMOS-9.
+  if (!failure.message) return `session start failed (${status})`;
+  return `session start failed (${status}): ${failure.message}`;
 }
 
 /** How long `reload()` waits for the reloaded page's `load` before settling anyway.
@@ -143,6 +343,15 @@ export class ContainerRuntime implements DemoRuntime {
   private previewUrl = "";
   private port = 0;
   private pointed = false;
+  /**
+   * Whether the iframe has ever been pointed at the preview URL.
+   *
+   * Distinct from `pointed`, which is `poll()`'s own gate and goes false again
+   * when a confirmation fails (see `confirmAndEmitReady`). `dispose()` needs the
+   * sticky answer: a frame left on the preview URL keeps its HMR reconnect loop
+   * running, and that loop resurrects the container this dispose just destroyed.
+   */
+  private frameEverPointed = false;
   /** Settle callbacks for in-flight `reload()` promises, so `dispose()` can close them
    *  out rather than leaving the shell's refresh spinner up on a torn-down preview. */
   private readonly reloadSettlers = new Set<() => void>();
@@ -153,6 +362,97 @@ export class ContainerRuntime implements DemoRuntime {
    *  costs two `exec`s in the container. */
   private failedPolls = 0;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * What the preview frame said about the document it is loading, consumed by the
+   * next `load` event (DEV-2547).
+   *
+   * The Worker serves its own branded page when the dev-server port refuses
+   * (`workers/api/src/preview-boot.ts`), and that page fires `load` exactly like a
+   * real demo — which is how `data-preview-status` used to reach "ready" over a
+   * "Reconnecting to the demo" card with no grid behind it. The page now posts its
+   * state to us; an inline script runs at parse time, so the message is queued
+   * before that document's `load`.
+   */
+  private pendingFrameState: "unknown" | "booting" | "dead" = "unknown";
+  /** Frame navigations seen since the iframe was pointed. Gates the hard readiness
+   *  fallback, whose only job is "the `load` event never fired at all". */
+  private frameLoads = 0;
+  private graceTimer: ReturnType<typeof setTimeout> | null = null;
+  private readyFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+  /** One error per session for a preview that died — the terminal page is served
+   *  per request, and `onError` is wired to Sentry. */
+  private previewDeadReported = false;
+  /**
+   * Decide readiness per frame navigation rather than once.
+   *
+   * The listener is deliberately NOT `{ once: true }`: the boot page refreshes
+   * itself every two seconds, so a container that does come up is a later `load`
+   * on the same iframe. Suppressing ready without listening again would leave the
+   * boot overlay covering a working grid — status polling has already stopped by
+   * the time we point the iframe.
+   */
+  private readonly onFrameLoad = () => {
+    if (this.disposed) return;
+    this.frameLoads += 1;
+    const state = this.pendingFrameState;
+    this.pendingFrameState = "unknown";
+    if (this.graceTimer) {
+      clearTimeout(this.graceTimer);
+      this.graceTimer = null;
+    }
+    if (state === "dead") {
+      this.reportPreviewDead();
+      return;
+    }
+    if (state === "booting") {
+      // Honest and recoverable: the pane keeps the boot overlay, and the page's own
+      // meta-refresh gives us another `load` to judge.
+      this.emitProgress("Dev server not answering yet — retrying…");
+      return;
+    }
+    this.graceTimer = setTimeout(() => {
+      this.graceTimer = null;
+      void this.confirmAndEmitReady();
+    }, this.opts.renderGraceMs ?? 3500);
+  };
+  /**
+   * `postMessage` from the Worker's own preview page. Origin-checked against the
+   * session's preview URL: any frame or opener can post to us, and this message
+   * decides whether the shell claims the demo is up.
+   */
+  private readonly onPreviewMessage = (event: MessageEvent) => {
+    if (this.disposed || !this.previewUrl) return;
+    let previewOrigin: string;
+    try {
+      previewOrigin = new URL(this.previewUrl).origin;
+    } catch {
+      return;
+    }
+    if (event.origin !== previewOrigin) return;
+    const data = event.data as { source?: unknown; state?: unknown } | null;
+    if (!data || typeof data !== "object" || data.source !== "demo-preview") return;
+    if (data.state !== "booting" && data.state !== "dead") return;
+    // Which navigation does this message describe? A grace timer is running only
+    // between a `load` and the readiness decision for that same document, so:
+    //
+    // - grace running -> it describes what is in the frame NOW (either a message
+    //   delivered after its own `load`, or the next boot-page refresh arriving
+    //   inside the previous document's 3.5s grace — the refresh interval is 2s).
+    //   Cancel the decision and keep nothing: leaving it pending would let the
+    //   next `load` — often the recovered demo — consume a stale `booting` and
+    //   never emit ready, which is the boot overlay covering a working grid.
+    // - no grace running -> the page is being parsed and its `load` has not
+    //   fired yet (the ordinary case, since the script runs at parse time).
+    //   Hold it for that `load` to consume.
+    if (this.graceTimer) {
+      clearTimeout(this.graceTimer);
+      this.graceTimer = null;
+      this.pendingFrameState = "unknown";
+    } else {
+      this.pendingFrameState = data.state;
+    }
+    if (data.state === "dead") this.reportPreviewDead();
+  };
   // Tear the session down when the page goes away (tab close, navigation) —
   // otherwise the container squats one of the few live-preview instance slots
   // until sleepAfter expires. pagehide is the reliable end-of-page signal
@@ -206,6 +506,54 @@ export class ContainerRuntime implements DemoRuntime {
   private emitError(e: Error) {
     for (const cb of this.errorCbs) cb(e);
   }
+  /**
+   * Ask the container once more before claiming the demo is up (DEV-2547).
+   *
+   * The frame's document is only self-describing when we wrote it: a dev server
+   * that died between the readiness probe and the frame's first request can also
+   * hand the frame the SDK's own `500 Proxy routing error`, or a truncated
+   * document, and neither of those says so. One re-probe at the end of the render
+   * grace turns "the port answered once" into "the port still answers", which is
+   * the weakest claim that makes `ready` honest for shapes we do not author.
+   *
+   * On a failed confirmation this drops back into the boot loop rather than
+   * failing: `pointed` goes false, so `poll()` re-points the iframe when the dev
+   * server answers again — the frame gets a fresh navigation, and a document that
+   * never refreshes itself is no longer a dead end.
+   */
+  private async confirmAndEmitReady(): Promise<void> {
+    if (this.disposed || this.didReady) return;
+    if (await this.probeStatusReady()) {
+      if (!this.disposed) this.emitReady();
+      return;
+    }
+    if (this.disposed || this.didReady) return;
+    this.emitProgress("Dev server stopped answering — waiting for it to come back…");
+    this.pointed = false;
+    this.poll();
+  }
+
+  /** `ready` off the status route, with every failure reading as "not ready" — the
+   *  same shape `poll()` uses, minus the log and the failure branches it owns. */
+  private async probeStatusReady(): Promise<boolean> {
+    if (!this.sessionId) return false;
+    try {
+      const r = await fetch(`${this.opts.apiBase}/api/session/${this.sessionId}/status?port=${this.port}`);
+      if (!r.ok) return false;
+      const { ready } = (await r.json()) as { ready?: boolean };
+      return ready === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The preview's server is gone and is not coming back on its own — the shell's
+   *  error card, with its "Restart preview" action, is the only way out. */
+  private reportPreviewDead(): void {
+    if (this.previewDeadReported || this.disposed) return;
+    this.previewDeadReported = true;
+    this.emitError(new Error("The demo stopped responding. Restart the preview to start a new session."));
+  }
   private emitProgress(log: string) {
     for (const cb of this.progressCbs) cb(log);
   }
@@ -230,30 +578,55 @@ export class ContainerRuntime implements DemoRuntime {
     let previewUrl: string;
     let port: number;
     try {
+      // Serialised BEFORE the clock starts, not inline in the fetch call below.
+      // Argument expressions are evaluated after `startedAt` would have been
+      // assigned, so leaving this where it reads most naturally would put
+      // `relativeFiles` plus a `JSON.stringify` of the entire file map inside the
+      // measured window — the one thing the measurement is defined to exclude.
+      const body = JSON.stringify({
+        framework: this.entry.framework,
+        files: relativeFiles(this.files),
+        sessionId,
+        htVersion: this.opts.version?.ref,
+      });
+      // The create clock (DEV-2559), started here rather than at the top of mount()
+      // on purpose: this is as close as the client can get to the interval the
+      // gateway itself is timing. Not the same interval — connection setup and the
+      // upload of `body` fall inside this window and outside the gateway's, which
+      // starts on receipt — but that difference is milliseconds against a ceiling
+      // near 100s, so it cannot move a bucket. Everything ABOVE this line is the
+      // part that would: `applyHandsontableVersion` and the serialisation just
+      // above vary by framework and file count, and folding them in would smear a
+      // fixed ceiling into an apparent spread, destroying the one distinction the
+      // number exists to make. `performance.now()` for monotonicity: a clock step
+      // must not read as a slow container.
+      const startedAt = performance.now();
       const res = await fetch(`${this.opts.apiBase}/api/session`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(this.opts.authToken ? { Authorization: `Bearer ${this.opts.authToken}` } : {}),
         },
-        body: JSON.stringify({
-          framework: this.entry.framework,
-          files: relativeFiles(this.files),
-          sessionId,
-          htVersion: this.opts.version?.ref,
-        }),
+        body,
       });
+      // Stopped the instant the response headers land, before `readFailure` touches
+      // the body: a gateway can answer with a whole HTML page, and how long we spend
+      // reading it is our latency, not the sandbox's.
+      const elapsedMs = Math.round(performance.now() - startedAt);
       if (!res.ok) {
+        // Inside the failure branch only — several pipeline tests stub a successful
+        // create as a bare `{ ok: true, status: 200, json }` with no `headers`, and
+        // an unconditional read would break them. Not guarded with `?.` either: an
+        // optional chain here would make the ray assertion in
+        // pipeline/session-start-failure.test.mjs pass whether or not the header is
+        // ever read.
+        const ray = res.headers.get("cf-ray");
         const failure = await readFailure(res);
-        // A guardrail refusal already reads as a sentence aimed at the user;
-        // wrapping it in "session start failed (503): …" would bury it (and
-        // would trip the app's generic connectivity heuristic).
         throw new SessionStartError(
           res.status,
-          failure.code?.startsWith("budget_")
-            ? failure.message
-            : `session start failed (${res.status}): ${failure.message}`,
+          sessionStartMessage(res.status, failure),
           failure.code,
+          { elapsedMs, ray },
         );
       }
       ({ previewUrl, port } = (await res.json()) as { previewUrl: string; port: number });
@@ -334,14 +707,8 @@ export class ContainerRuntime implements DemoRuntime {
             // re-emitting on every poll would file the same boot failure every few
             // seconds for as long as the tab stayed open.
             if (this.failedPolls === 0) {
-              const detail = log
-                .replace(/\x1b\[[0-9;]*m/g, "")
-                .split("\n")
-                .map((l) => l.trimEnd())
-                .filter(Boolean)
-                .slice(-40)
-                .join("\n");
-              this.emitError(new ContainerBootFailure(detail || "Container failed to install dependencies or start."));
+              const { cause, tail } = bootFailureDetail(log);
+              this.emitError(new ContainerBootFailure(cause, tail));
             }
             this.failedPolls += 1;
             // The boot script has exited, so this is a long shot, not the recovery path —
@@ -358,15 +725,25 @@ export class ContainerRuntime implements DemoRuntime {
             // boot + render the grid after the HTML loads). We can't inspect the
             // cross-origin iframe, so: on load, wait a short grace, then ready.
             this.pointed = true;
+            this.frameEverPointed = true;
             this.emitProgress("Dev server ready — rendering the demo…");
-            this.opts.iframe.addEventListener(
-              "load",
-              () => setTimeout(() => this.emitReady(), this.opts.renderGraceMs ?? 3500),
-              { once: true },
-            );
+            // The port answered, but a port is not a page: the request the frame is
+            // about to make can still land on the Worker's boot page. `onFrameLoad`
+            // and `onPreviewMessage` are what tell those two apart (DEV-2547).
+            window.addEventListener("message", this.onPreviewMessage);
+            this.opts.iframe.addEventListener("load", this.onFrameLoad);
             this.opts.iframe.src = this.previewUrl;
-            // Hard fallback in case the load event never fires.
-            setTimeout(() => this.emitReady(), 20000);
+            // Hard fallback for "the load event never fired at all". Gated on that,
+            // rather than firing unconditionally: a frame that did load and told us it
+            // is holding the boot page must not be called ready twenty seconds later.
+            // Cleared first: the confirmation path re-enters `poll()` with `pointed`
+            // false, and overwriting a pending handle would leave one `dispose()` can
+            // no longer reach.
+            if (this.readyFallbackTimer) clearTimeout(this.readyFallbackTimer);
+            this.readyFallbackTimer = setTimeout(() => {
+              this.readyFallbackTimer = null;
+              if (this.frameLoads === 0) void this.confirmAndEmitReady();
+            }, 20000);
             // Keep the container awake while the demo is open so it never has to
             // cold-boot again mid-session. Any request resets sleepAfter; we ping
             // only while the tab is visible so a backgrounded/closed tab lets it
@@ -529,7 +906,7 @@ export class ContainerRuntime implements DemoRuntime {
           // request). Without this the preview would just quietly go stale.
           const failure = await readFailure(r);
           if (this.disposed || !failure.code?.startsWith("budget_")) return;
-          if (this.pointed) this.opts.iframe.src = "about:blank";
+          if (this.frameEverPointed) this.opts.iframe.src = "about:blank";
           this.emitError(new SessionStartError(410, failure.message, failure.code));
         })
         .catch(() => {});
@@ -574,15 +951,21 @@ export class ContainerRuntime implements DemoRuntime {
   dispose(): void {
     this.disposed = true;
     window.removeEventListener("pagehide", this.onPagehide);
+    window.removeEventListener("message", this.onPreviewMessage);
+    // Guarded like the `src` reset below: the listener is attached when the iframe is
+    // pointed, and a runtime disposed before that never touched the element.
+    if (this.frameEverPointed) this.opts.iframe.removeEventListener("load", this.onFrameLoad);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     if (this.pollTimer) clearTimeout(this.pollTimer);
+    if (this.graceTimer) clearTimeout(this.graceTimer);
+    if (this.readyFallbackTimer) clearTimeout(this.readyFallbackTimer);
     if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
     // Point the preview away from the dead session. Preview traffic proxies
     // straight to the container BEFORE any tombstone check (proxyToSandbox is
     // the Worker's first routing step), so a still-mounted iframe — above all
     // its Vite HMR WebSocket reconnect loop — would resurrect the container
     // this dispose just destroyed.
-    if (this.pointed) this.opts.iframe.src = "about:blank";
+    if (this.frameEverPointed) this.opts.iframe.src = "about:blank";
     // On the `pointed` path that `about:blank` fires its own `load` and would settle
     // these anyway; doing it here too costs a line and drops the ordering assumption.
     for (const settle of [...this.reloadSettlers]) settle();

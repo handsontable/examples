@@ -21,6 +21,10 @@
     "./monitor": {
       "types": "./dist/monitor.d.ts",
       "default": "./dist/monitor.js"
+    },
+    "./scheme": {
+      "types": "./dist/scheme.d.ts",
+      "default": "./dist/scheme.js"
     }
   },
   "scripts": {

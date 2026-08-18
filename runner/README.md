@@ -31,7 +31,7 @@ sits behind it is invisible to the author:
 | `config/frameworks.json` | Single source of truth: tier, wrappers, dev/build commands, ports per example. |
 | `catalog.json` | Generated. All 16 examples normalized into starting templates. |
 | `pipeline/` | `import.mjs` (starter catalog), `import-docs.mjs` + `wrap-docs-example.mjs` (documentation-guide examples). |
-| `packages/runtime/` | `DemoRuntime` interface, `applyHandsontableVersion`, `resolveRuntime`. |
+| `packages/runtime/` | `DemoRuntime` interface + its two implementations (`sandpack.ts`, `container.ts`), `applyHandsontableVersion`. |
 | `packages/editor-shell/` | Framework-agnostic editor UI + branding `theme.ts`. |
 | `apps/authoring/` | Vite+React authoring app (behind Cloudflare Access). |
 | `workers/api/` | Sharing + Tier-2 orchestration Worker. Also serves the prebuilt static demos from R2: `/d/:id` (public viewer) and `/embed/:id` (docs-only embed). |

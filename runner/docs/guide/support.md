@@ -56,10 +56,18 @@ dev server.
 Signed in, Files also lets you:
 
 - **Add a file** with the `+` button, or a file in a new folder with the folder button.
-- **Drop files in.** Drag one or many text files — or a whole folder — onto the Files
-  panel. The panel outlines itself and tells you which directory the drop will land
-  in; drop on a folder row to go inside it. Existing paths ask before they are
-  replaced.
+- **Drop files in.** Drag one or many text files — a whole folder, or a **`.zip`** —
+  onto the Files panel. The panel outlines itself and tells you which directory the
+  drop will land in; drop on a folder row to go inside it. Existing paths ask before
+  they are replaced.
+- **A zip is unpacked for you.** This is the forum case: somebody attaches an archive
+  of the project that does not work for them, and dropping it straight in gets you
+  their code running here, at any version you like. If everything sits under one
+  folder inside the archive, that folder is stripped — you get `src/index.js`, not
+  `their-project/src/index.js` — and every entry faces the same rules as a loose
+  file, so a `.env`, a binary or a `node_modules` inside the zip does not come along.
+  The other direction is **Download**: the whole workspace as a `.zip`, which is how
+  you answer with "here is exactly what I ran".
 - **Rename or delete** a file from the row's own controls.
 - **Download** the whole workspace, including your edits, as a `.zip`.
 
@@ -90,7 +98,7 @@ version picker, where you can bisect it.
 - **StackBlitz**: the project's files come across as they are, minus build output,
   lockfiles and binaries.
 - **CodeSandbox cannot be imported.** It blocks automated reads of its projects. Use
-  *File → Export to ZIP* there, unpack it, and drag the files onto the Files panel.
+  *File → Export to ZIP* there and drop the zip onto the Files panel.
 
 ![The Import a project dialog with a field for a JSFiddle or StackBlitz URL](/guide/import-dialog.jpg)
 

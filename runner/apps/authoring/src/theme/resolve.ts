@@ -12,8 +12,25 @@
 // out what a token actually evaluates to.
 
 import type { ColorsMap, TokenMap, TokenValue } from "./presets.js";
-import { SIZING } from "./presets.js";
 import type { ColorScheme } from "./vocabulary.js";
+
+/**
+ * Everything a reference can point at, plus the scheme that picks a
+ * `[light, dark]` half.
+ *
+ * `sizing` is a field rather than the module-level `SIZING` import it used to be
+ * (DEV-2560): the panel resolves against the Handsontable version the *demo* is
+ * pinned to, and a value baked in at module scope is the one thing a caller
+ * cannot override. Passing the whole set as one object is what makes forgetting
+ * it a type error rather than a silent fall back to this app's own version.
+ */
+export interface ResolveContext {
+  colors: ColorsMap;
+  tokens: TokenMap;
+  density: Record<string, string>;
+  sizing: Record<string, string>;
+  colorScheme: ColorScheme;
+}
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Object.prototype.toString.call(value) === "[object Object]";
@@ -36,49 +53,31 @@ export function getNestedValue(obj: unknown, path: string): unknown {
  * A `[light, dark]` pair picks the side matching the colour scheme first, then
  * keeps resolving — the chosen side is itself usually a `colors.` reference.
  */
-export function resolveTokenValue(
-  value: unknown,
-  colors: ColorsMap,
-  tokens: TokenMap,
-  density: Record<string, string>,
-  colorScheme: ColorScheme,
-): unknown {
+export function resolveTokenValue(value: unknown, ctx: ResolveContext): unknown {
   if (Array.isArray(value) && value.length >= 2
     && typeof value[0] === "string" && typeof value[1] === "string") {
-    const picked = colorScheme === "light" ? value[0] : value[1];
-    return resolveTokenValue(picked, colors, tokens, density, colorScheme);
+    const picked = ctx.colorScheme === "light" ? value[0] : value[1];
+    return resolveTokenValue(picked, ctx);
   }
 
   if (typeof value === "string") {
     for (const [prefix, source] of [
-      ["tokens.", tokens],
-      ["colors.", colors],
-      ["sizing.", SIZING],
-      ["density.", density],
+      ["tokens.", ctx.tokens],
+      ["colors.", ctx.colors],
+      ["sizing.", ctx.sizing],
+      ["density.", ctx.density],
     ] as const) {
       if (value.startsWith(prefix)) {
         // A token pointing at itself would spin forever; the presets don't do
         // that, but an override typed by hand could.
         const next = getNestedValue(source, value.slice(prefix.length));
         if (next === value) return value;
-        return resolveTokenValue(next, colors, tokens, density, colorScheme);
+        return resolveTokenValue(next, ctx);
       }
     }
   }
 
   return value;
-}
-
-/** The resolved value of one token, as a string for display. */
-export function resolvedValue(
-  key: string,
-  colors: ColorsMap,
-  tokens: TokenMap,
-  density: Record<string, string>,
-  colorScheme: ColorScheme,
-): string {
-  const resolved = resolveTokenValue(tokens[key], colors, tokens, density, colorScheme);
-  return typeof resolved === "string" ? resolved : "";
 }
 
 /**
@@ -163,21 +162,4 @@ export function effectiveDensity(
   const merged = { ...preset };
   for (const [key, value] of Object.entries(overrides)) if (value) merged[key] = value;
   return merged;
-}
-
-/** The colour a swatch should paint, following `colors.` references. */
-export function swatchColor(
-  value: TokenValue | undefined,
-  colorScheme: ColorScheme,
-  colors: ColorsMap,
-): string {
-  let ref = value;
-  if (Array.isArray(ref)) ref = ref[colorScheme === "light" ? 0 : 1];
-  if (typeof ref !== "string") return "transparent";
-
-  if (ref.startsWith("colors.")) {
-    const resolved = getNestedValue(colors, ref.slice("colors.".length));
-    return typeof resolved === "string" ? resolved : ref;
-  }
-  return ref;
 }
