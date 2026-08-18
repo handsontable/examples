@@ -34,6 +34,13 @@ export interface CatalogEntry {
    * The UI hides lower majors from the version picker and refuses to boot them
    * (e.g. the UI-library starters need the themes API introduced in core 17). */
   minCoreMajor: number | null;
+  /** Ids of the pipeline/starter-overrides.mjs rows that govern this artifact
+   * at its bucket (DEV-2545). Bucket content is a two-place question — the
+   * examples/ source ref PLUS that per-major overlay — so reading examples/ on
+   * master no longer tells you what a bucket ships; the artifact records which
+   * rows govern it and answers for itself. Empty when no row applies. Per
+   * bucket, so `CatalogIndexEntry` drops it alongside `htCoreRange`. */
+  overrides: string[];
   fileCount: number;
   assets: string[];
   skipped: { path: string; reason: string }[];
@@ -44,12 +51,13 @@ export interface CatalogEntry {
  * A catalog.json row (DEV-2213): everything the picker, the version dropdown,
  * and BUILD_CONFIG need, without the inlined files. Full entries live per
  * bucket under public/starter-examples/ and are lazy-fetched on select.
- * `htCoreRange` is dropped too — it is per-bucket (the bucket's pinned
- * hotVersion), not a property of the framework.
+ * `htCoreRange` and `overrides` are dropped too — both are per-bucket (the
+ * bucket's pinned hotVersion, and which override rows govern it), not
+ * properties of the framework.
  */
 export type CatalogIndexEntry = Omit<
   CatalogEntry,
-  "files" | "fileCount" | "assets" | "skipped" | "htCoreRange"
+  "files" | "fileCount" | "assets" | "skipped" | "htCoreRange" | "overrides"
 >;
 
 /** The catalog.json index: bucket list + files-free starter rows. */
@@ -67,6 +75,9 @@ export interface StarterBucketManifestEntry {
   tier: Tier;
   engine: "sandpack" | "container";
   minCoreMajor: number | null;
+  /** Same list as the artifact's `overrides`, mirrored here so the bucket is
+   * self-describing without fetching 19 artifacts (DEV-2545). */
+  overrides: string[];
 }
 
 /** manifest.json of one public/starter-examples/<bucket>/ directory. */

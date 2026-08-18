@@ -20,7 +20,14 @@ import type {
 import { transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
 import { resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
-import { injectReporter } from "./monitor.js";
+import {
+  MONITOR_COMPILE_MESSAGE_MAX,
+  REPORTER_MODULE_LINE,
+  injectReporter,
+  redactPreviewHosts,
+  truncateMessage,
+} from "./monitor.js";
+import { injectSchemeReceiver } from "./scheme.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 // Derive Sandpack's option/setup types straight from the loader signature so we
@@ -129,6 +136,141 @@ function sameFiles(a: FilesMap, b: FilesMap | null): boolean {
   return paths.every((path) => a[path] === b[path]);
 }
 
+/**
+ * A compile diagnostic from the in-browser bundler, as reported to the shell.
+ *
+ * Named, because it is the exception type Sentry puts in the issue title: a bare
+ * `Error` there reads as an application crash, and the first line of a bundler
+ * message about visitor-authored code was in fact read that way once (DEV-2550 was
+ * filed against the app for text the bundler produced about a demo's own source).
+ *
+ * Always constructed from a string, never wrapped around an error the handler was
+ * handed — see `boundCompileMessage`.
+ */
+export class SandpackCompileError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandpackCompileError";
+  }
+}
+
+/**
+ * A `show-error` the bundler raised for a module that had already started evaluating
+ * — i.e. the demo *ran* and threw (DEV-2552).
+ *
+ * Deliberately a sibling of `SandpackCompileError`, not a subclass: the whole point of
+ * the distinction is that the shell must stand down for this class, and a subclass
+ * makes reintroducing the double report as easy as writing
+ * `instanceof SandpackCompileError`. It is also not a compile diagnostic, which is what
+ * that class is documented to be.
+ *
+ * Why the shell stands down: a throw inside a running preview is *already* reported, by
+ * the in-page reporter (`packages/runtime/src/monitor.ts`), and reported far better —
+ * with the preview's own stack, the tier, the framework and the demo id, fingerprinted
+ * per message. The shell's view of the same throw has this file's `onMessage` as its
+ * stack, which says nothing, and a flat fingerprint that collapses every distinct
+ * Tier-1 fault into one issue. See `reportRuntimeError` in apps/authoring/src/App.tsx.
+ *
+ * The message still goes through `boundCompileMessage`, and the error card still renders
+ * it — only the Sentry report differs.
+ */
+export class SandpackEvaluationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandpackEvaluationError";
+  }
+}
+
+const COMPILE_ERROR_FALLBACK = "Sandpack compile error";
+
+/** Inline source maps the bundler echoes back inside a compile message. A
+ *  `data:application/json;base64,…` blob is kilobytes of noise around the one line
+ *  that says what is wrong; the marker is kept so the line still reads. */
+const INLINE_SOURCE_MAP = /sourceMappingURL=data:[^\s'"*]*/gi;
+
+/**
+ * What the injected reporter line is replaced with inside a compile message
+ * (DEV-2557). Kept, rather than deleted, so the code frame's line numbering still
+ * lines up with what the message says.
+ */
+const INJECTED_REPORTER_MARKER = "<hot-runner monitor>";
+
+/**
+ * Strip the monitor's own injected line out of a compile message (DEV-2557).
+ *
+ * `REPORTER_MODULE_LINE` is one 12.6 KB physical line at the top of the module entry,
+ * and babel's code frame prints the two lines *above* the fault verbatim — so a syntax
+ * error on authored line 1 or 2 renders that whole blob into the message before the
+ * offending line is reached. Measured on the vue starter's entry with an unterminated
+ * string on line 1: 289 characters of usable message with a caret when the reporter was
+ * still inlined, 12,872 with it on one line, and `MONITOR_COMPILE_MESSAGE_MAX` then cuts
+ * at 2,000 — so the diagnostic line and its caret were gone. That is DEV-2550's
+ * buried-diagnostic failure (DEMOS-15) coming back on the same channel, from our own
+ * bytes rather than from a source map.
+ *
+ * Matched against the exported constant rather than a pattern, deliberately: the strip
+ * has to stay coupled to the injection. A regex over the injected *shape* would keep
+ * passing its own tests while silently ceasing to match a reworded injection, and the
+ * burying would return with nothing red. `pipeline/sandpack-reload.test.mjs` runs a real
+ * babel over a real `injectReporter` output and asserts the visitor's own source
+ * survives the cap, so a change to either side fails there rather than in production.
+ */
+function stripInjectedReporter(message: string): string {
+  return message.split(REPORTER_MODULE_LINE).join(INJECTED_REPORTER_MARKER);
+}
+
+/**
+ * Bound the bundler's `show-error` string (DEV-2550).
+ *
+ * This is third-party output about code an anonymous visitor wrote, and it was the
+ * only DEV-2527 channel that reached both the error card and `Sentry.captureException`
+ * unbounded — the observed payload (DEMOS-15) was a babel code frame followed by a
+ * multi-kilobyte inline source map, so the diagnostic was buried in the card and the
+ * Sentry event was mostly base64. `reportDemoEvent` bounds its channel through
+ * `sanitizeMonitorPayload`, container stderr through `truncateMessage`; this is the
+ * same treatment for this one.
+ *
+ * Order is load-bearing three times over. Source maps and the injected reporter line
+ * (see `stripInjectedReporter`) are stripped *first*, so the cap spends its budget on
+ * the diagnostic instead of on half a blob. Hosts are then redacted *before* truncation
+ * — the security property monitor.ts documents on `bound()`: truncating first can cut a
+ * preview hostname in half and strand a live session token in a form the redactor no
+ * longer recognises.
+ *
+ * Takes `unknown` and coerces, matching `truncateMessage`: the payload crossed an
+ * origin boundary from a page running the visitor's code, so its shape is not a
+ * promise. It never reads-and-writes a property of its input — the returned message
+ * always goes into a *new* `SandpackCompileError`. A caught error can be frozen (a
+ * babel `SyntaxError` carries a non-writable `message`, which is precisely what the
+ * text in DEMOS-15 is about), and "rewrite the message in place" is the shape that
+ * turns a report into a throw.
+ *
+ * The coercion itself is the other way this handler could throw instead of
+ * reporting, and it predates this fix (`new Error(value)` stringifies too). `message`
+ * is whatever survived a structured clone from the preview window, and a plain object
+ * with a non-callable `toString` — `{ toString: 42 }`, perfectly clonable — makes
+ * `String()` raise "Cannot convert object to primitive value". Sandpack's
+ * `IFrameProtocol.eventListener` runs its channel listeners in a bare `forEach` with
+ * no `try`, so that TypeError would abort the dispatch, leave the error card on the
+ * last good state, and surface as an unrelated window-level fault. Fall back instead.
+ */
+function boundCompileMessage(value: unknown): string {
+  let raw: string;
+  if (typeof value === "string") raw = value;
+  else if (value === undefined || value === null) raw = "";
+  else {
+    try {
+      raw = String(value);
+    } catch {
+      return COMPILE_ERROR_FALLBACK;
+    }
+  }
+  if (raw.trim() === "") return COMPILE_ERROR_FALLBACK;
+  const withoutMaps = raw.replace(INLINE_SOURCE_MAP, "sourceMappingURL=<omitted>");
+  const withoutReporter = stripInjectedReporter(withoutMaps);
+  return truncateMessage(redactPreviewHosts(withoutReporter), MONITOR_COMPILE_MESSAGE_MAX);
+}
+
 export class SandpackRuntime implements DemoRuntime {
   private readonly entry: CatalogEntry;
   private readonly opts: SandpackRuntimeOptions;
@@ -207,41 +349,54 @@ export class SandpackRuntime implements DemoRuntime {
    */
   private sandboxFiles(): Promise<FilesMap> | FilesMap {
     return this.env === "parcel"
-      ? transpileFilesForParcel(this.files).then(applyDepShims).then((f) => this.withMonitor(f))
-      : this.withMonitor(this.files);
+      ? transpileFilesForParcel(this.files).then(applyDepShims).then((f) => this.withInjections(f))
+      : this.withInjections(this.files);
   }
 
   /**
-   * Add the monitor to the bundler's view of the files (DEV-2527).
+   * Add the runner's own injections to the bundler's view of the files.
    *
    * Applied here, to the *derived* map, and never to `this.files`: the authored map
-   * is what Download-zip, fork and the StackBlitz/CodeSandbox exports read, and the
-   * monitor must not ship inside a demo someone downloads. It also runs *after* the
-   * parcel pre-transpile, so babel never has to parse it.
+   * is what Download-zip, fork and the StackBlitz/CodeSandbox exports read, and
+   * neither the monitor nor the colour-scheme receiver may ship inside a demo
+   * someone downloads. It also runs *after* the parcel pre-transpile, so babel
+   * never has to parse either of them.
+   *
+   * Two injections, two lifetimes. The monitor is diagnostics behind a flag
+   * (DEV-2527) and is gated on `opts.monitor`. The scheme receiver is how the
+   * shell's toggle reaches the grid at all (DEV-2561, ADR-0035), so it is
+   * unconditional — a preview that cannot be re-themed is the bug.
+   *
+   * Both are byte-deterministic constants that learn what they need over
+   * `postMessage`. Nothing here may carry a *value*: `sameFiles` skips the compile
+   * when the sandbox is unchanged, so injecting the current scheme would turn every
+   * toggle into a full Sandpack rebuild — the exact cost DEV-2496's bridge exists
+   * to avoid.
    *
    * A missing entry is `setupFrom()`'s error to raise, with its own message
-   * (DEV-2130) — `injectReporter` returns the map untouched rather than throwing a
+   * (DEV-2130) — both injectors return the map untouched rather than throwing a
    * second, less useful error from here.
    */
-  private withMonitor(files: FilesMap): FilesMap {
-    if (!this.opts.monitor) return files;
+  private withInjections(files: FilesMap): FilesMap {
     // Both entries, when they differ. For `parcel` — every Tier-1 example — the
     // resolved sandbox entry is the HTML file, and whether the classic bundler
     // preserves a `<script>` we put in its head is not something this code can
     // guarantee. The JS module is the belt to that braces: it is evaluated either
-    // way, and `__hotRunnerMonitor` makes the second injection inert, so injecting
-    // twice costs one duplicated string and removes the failure mode.
+    // way, and each injector's own marker makes the second injection inert, so
+    // injecting twice costs one duplicated string and removes the failure mode.
     const targets: string[] = [];
     try {
       targets.push(resolveSandboxEntry(this.env, this.entry.entry, this.entry.htmlEntry, files));
     } catch {
       // A missing entry is `setupFrom()`'s error to raise, with its own message
-      // (DEV-2130). Monitoring must not pre-empt it with a worse one.
+      // (DEV-2130). Neither injection must pre-empt it with a worse one.
       return files;
     }
     const moduleEntry = this.env === "parcel" ? toParcelEntry(this.entry.entry) : this.entry.entry;
     if (!targets.includes(moduleEntry)) targets.push(moduleEntry);
-    return targets.reduce((acc, path) => injectReporter(acc, path), files);
+    const withScheme = targets.reduce((acc, path) => injectSchemeReceiver(acc, path), files);
+    if (!this.opts.monitor) return withScheme;
+    return targets.reduce((acc, path) => injectReporter(acc, path), withScheme);
   }
 
   private setupFrom(files: FilesMap): SandboxSetup {
@@ -312,7 +467,13 @@ export class SandpackRuntime implements DemoRuntime {
   }
 
   private onMessage(msg: unknown) {
-    const m = msg as { type?: string; action?: string; compilatonError?: boolean; message?: string };
+    const m = msg as {
+      type?: string;
+      action?: string;
+      compilatonError?: boolean;
+      message?: unknown;
+      payload?: { frames?: unknown };
+    };
     switch (m.type) {
       case "done":
         // (`compilatonError` is misspelled in the upstream payload. Leave it.)
@@ -321,7 +482,30 @@ export class SandpackRuntime implements DemoRuntime {
         break;
       case "action":
         if (m.action === "show-error") {
-          this.emitError(new Error(m.message || "Sandpack compile error"));
+          // Bounded and de-noised on the way in (DEV-2550): this string is the
+          // bundler's, about the visitor's code, and it goes to the error card *and*
+          // to Sentry. A fresh error carries it — nothing the handler received is
+          // rewritten in place.
+          //
+          // `payload.frames` is the class split (DEV-2552). It is upstream's own
+          // discriminator — `extractErrorDetails` in @codesandbox/sandpack-client takes
+          // the stack-frame path exactly when it is populated — and it is declared on
+          // `SandpackErrorMessage`, the type this action carries. Frames mean the module
+          // evaluated, so the throw already reached the in-preview reporter with a real
+          // stack; no frames mean the module never ran, and this channel is the *only*
+          // one that can see the failure.
+          //
+          // The direction of the guess is deliberate: an unrecognised shape falls through
+          // to `SandpackCompileError`, which over-reports (today's behaviour) rather than
+          // losing a build diagnostic. `title === "SyntaxError"`, upstream's other branch,
+          // is not usable here — the observed transpile payload (DEMOS-15) is a TypeError
+          // raised while the bundler mutated a SyntaxError.
+          const frames = m.payload?.frames;
+          const evaluated = Array.isArray(frames) && frames.length > 0;
+          const message = boundCompileMessage(m.message);
+          this.emitError(
+            evaluated ? new SandpackEvaluationError(message) : new SandpackCompileError(message),
+          );
         }
         break;
       case "console":
@@ -503,9 +687,4 @@ export class SandpackRuntime implements DemoRuntime {
       // promise hanging.
     }
   }
-}
-
-/** Factory matching RuntimeFactories["sandpack"], with shared options closed over. */
-export function makeSandpackFactory(base: Omit<SandpackRuntimeOptions, "version"> & { version?: HandsontableVersionRef }) {
-  return (entry: CatalogEntry) => new SandpackRuntime(entry, base);
 }

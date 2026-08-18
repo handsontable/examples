@@ -17,3 +17,9 @@ shell binds only to the interface; `resolveRuntime(entry)` picks by tier.
 - The author cannot tell which engine runs (met acceptance criterion).
 - New engines can be added behind the same interface without touching the shell.
 - Tier assignment lives in `config/frameworks.json`.
+
+**As built (2026-08-18, DEV-2529):** the engine is picked per framework, not per
+tier. `config/frameworks.json` carries an explicit `engine` (defaulted from the
+tier once, at catalog generation) and five tier-1 starters ship
+`engine: "container"`; the shell branches on `entry.engine` directly. The
+`resolveRuntime(entry)` helper named above was never wired and has been removed.

@@ -23,8 +23,15 @@ export interface Env {
   EMBED_ALLOWED_ANCESTORS: string;
   // Sentry ingest endpoint (write-only, committed in wrangler.jsonc `vars`).
   // NOT named SENTRY_DSN on purpose — the SDK auto-reads that exact key from env
-  // and would bypass the local-dev gate in index.ts. See the note there.
+  // and would bypass the local-dev gate in sentry-gate.ts. See the note there.
   ERROR_REPORTING_DSN: string;
+  // The Sentry `environment`, and the second half of the reporting gate (DEV-2540).
+  // Supplied ONLY by the `deploy` script's `--var SENTRY_ENVIRONMENT:api-production`
+  // — never in the wrangler.jsonc `vars` block and never in `.dev.vars`. Its absence
+  // is what keeps `wrangler dev` silent even though `PREVIEW_HOST` still carries the
+  // committed production value. See src/sentry-gate.ts.
+  // Optional is load-bearing: a required field breaks `wrangler dev` typechecking.
+  SENTRY_ENVIRONMENT?: string;
   // Cloudflare-managed per-deploy version id, used as the Sentry release.
   CF_VERSION_METADATA: { id: string; tag: string };
   // Wildcard base host for Tier-2 container preview URLs (e.g.

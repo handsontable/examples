@@ -7,6 +7,7 @@
 // cached forever (ADR-0006).
 
 import { getSandbox } from "@cloudflare/sandbox";
+import { injectSchemeIntoHtml } from "@handsontable/demo-runtime/scheme";
 import type { Env } from "./env.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { recordContainerUsage, SESSION_INSTANCE_TYPE } from "./budget.js";
@@ -220,7 +221,7 @@ export async function runBuild(
 
 export interface CreateArgs {
   entry: BuildEntry;
-  files: Record<string, string>;      // already version-injected
+  files: Record<string, string>;      // version-injected by the caller (index.ts -> resolveHandsontableVersion)
   htVersion: string;
   title: string;
   description?: string | null;
@@ -286,7 +287,7 @@ export async function createDemo(env: Env, args: CreateArgs): Promise<{ id: stri
 export interface UpdateArgs {
   id: string;
   entry: BuildEntry;
-  files: Record<string, string>;   // already version-injected
+  files: Record<string, string>;   // version-injected by the caller (index.ts -> resolveHandsontableVersion)
   htVersion: string;
   /** Metadata, only when the request actually carried it. Absent means "leave the
    *  stored value alone", and that distinction is load-bearing (DEV-2495): a
@@ -457,7 +458,12 @@ export async function serveDemoAsset(
   // HTML entry's root-absolute refs to relative so they resolve under the prefix
   // (the /d/:id -> /d/:id/ redirect guarantees a trailing slash to resolve against).
   if (hitPath.endsWith(".html")) {
-    const rewritten = rewriteHtmlRoots(await obj.text());
+    // The colour-scheme receiver rides along with the root-path fix (DEV-2561):
+    // `/d/:id` is what full mode frames, and a maximised demo that stopped
+    // following the shell would be a visible seam against the pane it came from.
+    // Inert wherever nothing posts to it — `/embed/:id` on the documentation site
+    // is framed by a page that never sends the message.
+    const rewritten = injectSchemeIntoHtml(rewriteHtmlRoots(await obj.text()));
     return new Response(rewritten, { headers });
   }
   return new Response(obj.body, { headers });

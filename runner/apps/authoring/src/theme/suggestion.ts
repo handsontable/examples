@@ -15,7 +15,7 @@
 // Pure and inside `theme/`, which is what makes it testable without a browser —
 // see pipeline/theme-suggestion.test.mjs.
 
-import { presetColors, presetTokens, densitySizes, COMMON_COLORS_KEYS } from "./presets.js";
+import { presetColors, presetTokens, densitySizes, COMMON_COLORS_KEYS, SIZING } from "./presets.js";
 import { effectiveColors, effectiveDensity, effectiveTokens, resolveTokenValue } from "./resolve.js";
 import type { ThemeState, TokenValue } from "./vocabulary.js";
 
@@ -97,8 +97,9 @@ function restingAppearance(state: ThemeState): string {
   const tokens = effectiveTokens(presetTokens(state.tokens), state.params);
   const colors = effectiveColors(presetColors(state.colors), state.palette);
   const density = effectiveDensity(densitySizes(state.density), state.densitySizes?.[state.density] ?? {});
+  const ctx = { tokens, colors, density, sizing: SIZING, colorScheme: state.colorScheme };
   return RESTING_TOKENS
-    .map((key) => `${key}=${String(resolveTokenValue(tokens[key], colors, tokens, density, state.colorScheme))}`)
+    .map((key) => `${key}=${String(resolveTokenValue(tokens[key], ctx))}`)
     .join("|");
 }
 

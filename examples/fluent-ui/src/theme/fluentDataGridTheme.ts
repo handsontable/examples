@@ -8,6 +8,9 @@ const THEME_NAME = 'fluent-data-grid';
 export const fluentDataGridTheme = hasTheme(THEME_NAME)
   ? getTheme(THEME_NAME)
   : registerTheme(THEME_NAME, {
+      // Fluent's light palette, stated as literals — see the note in the MUI
+      // starter for why the scheme has to be explicit alongside them.
+      colorScheme: 'light',
       icons: iconsHorizon,
       colors: colorsFluent,
       tokens: tokensHorizon,
