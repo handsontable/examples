@@ -19,10 +19,9 @@ import {
   type SchemeMode,
 } from "@handsontable/demo-runtime/scheme";
 import {
-  applyHandsontableCss,
-  applyHandsontableVersion,
   deriveDocsBucketCandidate,
   isNextPrereleaseVersion,
+  pinHandsontableFiles as pinToVersionRef,
   resolveStarterBucket,
   validateHandsontableVersion,
   type CatalogEntry,
@@ -283,17 +282,18 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
   Sentry.captureException(e, { tags: { context: "tier2-runtime" } });
 }
 
+/** Pin the workspace to the version state's ref. Thin wrapper over the shared
+ *  `pinHandsontableFiles` (packages/runtime), which the API worker also calls
+ *  since DEV-2565 — one rewrite rule, two callers.
+ *
+ *  An unusable version is left unpinned rather than thrown: the mount guard owns
+ *  that message and refuses to boot behind this, and the only way to reach it now
+ *  is a hand-typed `?v=`, since the API no longer stores a ref the validator
+ *  rejects. */
 function pinHandsontableFiles(files: FilesMap, version: string): FilesMap {
   const validated = validateHandsontableVersion(version);
-  if (!validated.ok || files["/package.json"] === undefined) return files;
-  try {
-    return applyHandsontableCss(
-      applyHandsontableVersion(files, validated.value),
-      validated.value,
-    );
-  } catch {
-    return files;
-  }
+  if (!validated.ok) return files;
+  return pinToVersionRef(files, validated.value);
 }
 
 /** Did the host simply not have this docs resource? Delegates to the loader's
@@ -1339,7 +1339,15 @@ function Authoring({
           setSourceLoaded(true);
           return;
         }
-        const src = (await srcRes.json()) as { framework: string; files: FilesMap };
+        const src = (await srcRes.json()) as {
+          framework: string;
+          files: FilesMap;
+          /** The row's ref when the validator accepts it, else the one the snapshot
+           *  itself pins — see `editorVersionRef` (DEV-2565). Preferred over
+           *  `meta.ht_version` because demos saved before that fix hold the "latest"
+           *  sentinel there, and adopting it as version state is a boot refusal. */
+          htVersion?: string | null;
+        };
         if (metaRes.ok) {
           const meta = (await metaRes.json()) as {
             title: string;
@@ -1350,9 +1358,10 @@ function Authoring({
           setTitle(meta.title ?? "");
           setDescription(meta.description ?? "");
           setCreatedAt(meta.created_at ?? "");
-          if (meta.ht_version) {
+          const pinned = src.htVersion ?? meta.ht_version;
+          if (pinned) {
             hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
-            setVersion(meta.ht_version);
+            setVersion(pinned);
           }
         }
         loadWorkspace(toPlaceholderEntry(getEntry(src.framework)), src.files, savedId);

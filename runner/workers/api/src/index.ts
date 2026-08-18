@@ -8,7 +8,7 @@
 
 import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/sandbox";
 import * as Sentry from "@sentry/cloudflare";
-import { DEFAULT_MAX_MAJOR, DEFAULT_MIN_MAJOR, mintSessionId, pickLatestNextVersion } from "@handsontable/demo-runtime";
+import { mintSessionId } from "@handsontable/demo-runtime";
 import { injectMonitor, injectScheme } from "./monitor-inject.js";
 import { viteAllowedHostEnv } from "./preview-allowed-hosts.js";
 import {
@@ -23,6 +23,7 @@ import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate, authenticateService, sameOwner } from "./auth.js";
 import { MAX_TITLE, isValidationError, validateDescription, validateTitle } from "./demo-info.js";
 import { isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
+import { editorVersionRef, fetchVersionCatalog, resolveHandsontableVersion } from "./ht-version.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { classifyPreviewBootFailure, isPortNotListening } from "./preview-boot.js";
@@ -985,6 +986,10 @@ export default Sentry.withSentry(sentryOptions, {
         if (isValidationError(description)) return json(description, 400);
         const files = validateMcpFiles(body.files);
         if (isMcpValidationError(files)) return json(files, 400);
+        // Before the budget gate: an unusable version is a 400, not a container
+        // boot spent on an install that cannot succeed (DEV-2565).
+        const version = await resolveHandsontableVersion(env, { htVersion: body.htVersion, files });
+        if (!version.ok) return json({ error: version.message }, version.status);
 
         // A build is a container boot, so it answers to the same ceiling as any other.
         const buildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `mcp build ${body.framework}` });
@@ -993,8 +998,8 @@ export default Sentry.withSentry(sentryOptions, {
 
         const created = await createDemo(env, {
           entry: { framework: body.framework, ...cfg },
-          files,
-          htVersion: body.htVersion ?? "latest",
+          files: version.files,
+          htVersion: version.ref,
           title,
           description: description ?? null,
           createdBy: id.email,
@@ -1035,6 +1040,8 @@ export default Sentry.withSentry(sentryOptions, {
         const description = validateDescription(body.description);
         if (isValidationError(description)) return json(description, 400);
         if (!body.files || !body.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
+        const version = await resolveHandsontableVersion(env, { htVersion: body.htVersion, files: body.files });
+        if (!version.ok) return json({ error: version.message }, version.status);
 
         // A build is a container boot too, so it answers to the same ceiling.
         // The caller is authenticated by definition here, so only the
@@ -1045,8 +1052,8 @@ export default Sentry.withSentry(sentryOptions, {
 
         const created = await createDemo(env, {
           entry: { framework: body.framework, ...cfg },
-          files: body.files,
-          htVersion: body.htVersion ?? "latest",
+          files: version.files,
+          htVersion: version.ref,
           title,
           description: description ?? null,
           createdBy: id.email,
@@ -1105,14 +1112,22 @@ export default Sentry.withSentry(sentryOptions, {
           if (isMcpValidationError(files)) return json(files, 400);
           const cfg = BUILD_CONFIG[row.framework];
           if (!cfg) return json({ error: `unknown framework: ${row.framework}` }, 400);
+          // `row.ht_version` is a candidate, not an authority: rows created before
+          // DEV-2565 hold the "latest" sentinel, which no consumer can use.
+          const version = await resolveHandsontableVersion(env, {
+            htVersion: patch.htVersion,
+            files,
+            previousRef: row.ht_version,
+          });
+          if (!version.ok) return json({ error: version.message }, version.status);
           const rebuildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `mcp rebuild ${row.framework}` });
           if (rebuildDenied) return rebuildDenied;
           await recordUsageEvent(env, "build", row.framework);
           await updateDemo(env, {
             id: demoId,
             entry: { framework: row.framework, ...cfg },
-            files,
-            htVersion: patch.htVersion ?? row.ht_version,
+            files: version.files,
+            htVersion: version.ref,
             // Absent means "leave the column alone" — never fall back to the row read
             // at the start of this handler, or a rename committed during the rebuild
             // would be reverted (the DEV-2495 lesson from the broker path above).
@@ -1169,7 +1184,13 @@ export default Sentry.withSentry(sentryOptions, {
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts[3] === "source") {
         const src = await getDemoSource(env, parts[2]!);
         if (!src) return json({ error: "not found" }, 404);
-        return json(src);
+        // `htVersion` rides along with the snapshot because this is the one route
+        // that has both halves in hand: demos saved before DEV-2565 hold the
+        // "latest" sentinel in D1, and the editor adopts whatever version it is
+        // given, so the snapshot's own pin is what repairs them. Null means the
+        // editor falls back to npm latest, as it does for a fresh playground.
+        const row = await getDemo(env, parts[2]!);
+        return json({ ...src, htVersion: editorVersionRef(row?.ht_version, src.files) });
       }
 
       // GET /api/demos/:id  (public) — metadata; 410 if revoked
@@ -1208,6 +1229,16 @@ export default Sentry.withSentry(sentryOptions, {
           if (!patch.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
           const cfg = BUILD_CONFIG[row.framework];
           if (!cfg) return json({ error: `unknown framework: ${row.framework}` }, 400);
+          // The editor sends the files it holds in memory, which for a saved demo
+          // are the ones it loaded — nothing re-pins them client-side on a version
+          // change (App.tsx:1554 / :1700). Pinning here is what keeps the rebuilt
+          // artifact and the stored ref describing the same core (DEV-2565).
+          const version = await resolveHandsontableVersion(env, {
+            htVersion: patch.htVersion,
+            files: patch.files,
+            previousRef: row.ht_version,
+          });
+          if (!version.ok) return json({ error: version.message }, version.status);
           // Same ceiling as a first build — a re-save boots a builder container.
           const rebuildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `rebuild ${row.framework}` });
           if (rebuildDenied) return rebuildDenied;
@@ -1215,8 +1246,8 @@ export default Sentry.withSentry(sentryOptions, {
           await updateDemo(env, {
             id: demoId,
             entry: { framework: row.framework, ...cfg },
-            files: patch.files,
-            htVersion: patch.htVersion ?? row.ht_version,
+            files: version.files,
+            htVersion: version.ref,
             // Forwarded only when the request carried them, and `row` is never used
             // as the fallback: a rebuild takes long enough for the Edit info dialog
             // to commit a rename in the middle of one, and re-writing the row this
@@ -1424,34 +1455,10 @@ export default Sentry.withSentry(sentryOptions, {
 
       // GET /api/versions (public) — real published Handsontable versions.
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "versions" && parts.length === 2) {
-        const cached = await env.CACHE.get("versions", "json");
-        if (cached) return cors(cacheableJson(cached));
         try {
-          const r = await fetch("https://registry.npmjs.org/handsontable");
-          const j = (await r.json()) as {
-            "dist-tags"?: Record<string, string>;
-            versions?: Record<string, unknown>;
-            time?: Record<string, string>;
-          };
-          const latest = j["dist-tags"]?.latest ?? null;
-          // Newest -next build by publish date — the `next` dist-tag went
-          // stale (2026-02-19) while nightlies kept publishing, and serving
-          // it here re-pinned docs examples onto a five-month-old core. The
-          // tag is only a fallback for a registry document without `time`.
-          const next = pickLatestNextVersion(j.time) ?? j["dist-tags"]?.next ?? null;
-          const cmp = (a: string, b: string) => {
-            const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
-            for (let i = 0; i < 3; i++) { const d = (pb[i] ?? 0) - (pa[i] ?? 0); if (d) return d; }
-            return 0;
-          };
-          const versions = Object.keys(j.versions ?? {})
-            .filter((v) => /^\d+\.\d+\.\d+$/.test(v))
-            .filter((v) => { const m = Number(v.split(".")[0]); return m >= DEFAULT_MIN_MAJOR && m <= DEFAULT_MAX_MAJOR; })
-            .sort(cmp)
-            .slice(0, 15);
-          const payload = { latest, next, versions };
-          await env.CACHE.put("versions", JSON.stringify(payload), { expirationTtl: 3600 });
-          return cors(cacheableJson(payload));
+          // Shared with the API-side version resolution (ht-version.ts) so a
+          // dist-tag resolves through exactly the picker's own view of npm.
+          return cors(cacheableJson(await fetchVersionCatalog(env)));
         } catch (e) {
           // Version picker falls back to a stale list when this fails.
           Sentry.captureException(e, { tags: { upstream: "npm-registry", probe: "versions" } });

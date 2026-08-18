@@ -165,6 +165,65 @@ export function isHandsontablePackage(name: string): boolean {
 }
 
 /**
+ * The ref a file map already asks for, or null when its package.json does not
+ * name one — a range (`^18.0.0`), a dist-tag, an unparseable file, or no
+ * Handsontable dependency at all.
+ *
+ * DEV-2565: this is what lets the API derive a version from the payload instead
+ * of defaulting to the `latest` sentinel. An agent that pins a PR build in
+ * package.json and says nothing about `htVersion` is asking for that build, so
+ * resolving the missing version against npm would silently rebuild its demo
+ * against a different core. Deriving keeps the caller's intent.
+ */
+export function handsontableDependencyRef(files: FilesMap, pkgPath = "/package.json"): string | null {
+  const raw = files[pkgPath];
+  if (raw === undefined) return null;
+
+  let deps: Record<string, string> | undefined;
+  try {
+    deps = (JSON.parse(raw) as { dependencies?: Record<string, string> }).dependencies;
+  } catch {
+    return null;
+  }
+  if (!deps) return null;
+
+  // Core first; a wrapper-only workspace (no `handsontable` entry) still pins in
+  // lockstep, so any rewritable Handsontable dep answers the same question.
+  const value = deps["handsontable"]
+    ?? Object.entries(deps).find(([name]) => isHandsontablePackage(name))?.[1];
+  if (typeof value !== "string" || value.trim() === "") return null;
+
+  const urlRef = parsePkgPrNewFromUrl(value);
+  if (urlRef !== null) return urlRef;
+
+  // Ranges and dist-tags fail here, which is the point: they say "whatever npm
+  // has", not "this build", so they carry no ref to preserve.
+  const validated = validateHandsontableVersion(value);
+  return validated.ok ? validated.value.ref : null;
+}
+
+/**
+ * Pin a whole file map to `version`: the Handsontable dependencies plus the
+ * legacy stylesheet shim. The one implementation shared by the editor
+ * (apps/authoring) and the API worker (DEV-2565) — before the worker pinned,
+ * `share.ts`'s `files // already version-injected` was a promise only the
+ * browser kept, so an agent-supplied package.json installed exactly as written.
+ *
+ * Idempotent: the rewrite never reads the incoming dependency value, so a map
+ * that is already pinned to `version` is a fixed point.
+ */
+export function pinHandsontableFiles(files: FilesMap, version: HandsontableVersionRef): FilesMap {
+  if (files["/package.json"] === undefined) return files;
+  try {
+    return applyHandsontableCss(applyHandsontableVersion(files, version), version);
+  } catch {
+    // Only an unparseable package.json reaches here. Leaving it alone hands the
+    // failure to the install, which names the file and the syntax error.
+    return files;
+  }
+}
+
+/**
  * Return a new FilesMap with package.json's Handsontable deps pinned to `version`.
  * Pure: does not mutate the input. Throws if package.json is missing/unparseable.
  */
