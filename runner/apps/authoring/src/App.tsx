@@ -10,8 +10,14 @@ import {
   theme,
   TopBar,
   useLogoUrl,
+  useTheme,
   type PreviewStatus,
 } from "@handsontable/demo-editor-shell";
+import {
+  isSchemeReady,
+  SCHEME_MESSAGE_TYPE,
+  type SchemeMode,
+} from "@handsontable/demo-runtime/scheme";
 import {
   applyHandsontableCss,
   applyHandsontableVersion,
@@ -44,6 +50,7 @@ import { formFooter, ghostButton, primaryButton } from "./formStyles.js";
 import { AdminPanel } from "./Admin.js";
 import { AskAiButton, ChatPanel } from "./Chat.js";
 import { StyleButton, StylePanel } from "./StylePanel.js";
+import { THEME_MODULE_BASENAME } from "./theme/codegen.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
 import { GuidePage } from "./Guide.js";
@@ -889,6 +896,9 @@ function Authoring({
   const [docsItems, setDocsItems] = useState<DocsManifestItem[]>([]);
   const [activeDocsBucket, setActiveDocsBucket] = useState<string | null>(null);
   const [activeDocsManifest, setActiveDocsManifest] = useState<DocsManifest | null>(null);
+
+  /** The shell's own light/dark, so the preview can be told about it (DEV-2561). */
+  const { mode: themeMode } = useTheme();
 
   const [files, setFiles] = useState<FilesMap>(() => ({ ...entry.files }));
   const [version, setVersion] = useState<string>(
@@ -1992,6 +2002,37 @@ function Authoring({
     window.addEventListener("message", listener);
     return () => window.removeEventListener("message", listener);
   }, [iframeEl]);
+
+  /**
+   * Carry the shell's colour scheme into the preview (DEV-2561, ADR-0035).
+   *
+   * Which demos the shell may decide for is settled *here*, not inside the
+   * receiver: from within the frame, "the runner pinned this starter to light" and
+   * "this demo deliberately declares light" are the same two words. Out here both
+   * facts are in hand.
+   *
+   * `auto` is the stand-down signal — the receiver drops its override and whatever
+   * the demo declares takes effect. Sent for a docs example (eight of the theming
+   * guide's own examples ship an `ht-theme-*-dark` class they exist to
+   * demonstrate) and from the moment the Style panel has written a theme module,
+   * whose `colorScheme` is then the demo's own declaration.
+   */
+  const shellSchemeMode: SchemeMode = useMemo(() => {
+    if (docsPath) return "auto";
+    const wired = Object.keys(files).some((path) => path.includes(THEME_MODULE_BASENAME));
+    return wired ? "auto" : themeMode;
+  }, [docsPath, files, themeMode]);
+
+  /** Re-sent on every `ready`, not only on change: the iframe is replaced on each
+   *  rebuild and the fresh document starts with no override at all. */
+  useEffect(() => {
+    if (!iframeEl) return;
+    const send = () => postToPreview({ source: SCHEME_MESSAGE_TYPE, mode: shellSchemeMode });
+    send();
+    return onPreviewMessage((data) => {
+      if (isSchemeReady(data)) send();
+    });
+  }, [iframeEl, onPreviewMessage, postToPreview, shellSchemeMode]);
 
   /** Push whatever a `{ quiet: true }` write left pending — the Style panel's fallback
    *  when a live patch did not land, and how a theme change that *must* rebuild (first

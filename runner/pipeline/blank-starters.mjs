@@ -98,7 +98,7 @@ function vanillaEntry(bucket, { typescript }) {
     "",
     "new Handsontable(container, {",
     ...GRID_OPTIONS.map((o) => `  ${o},`),
-    legacy ? "  themeName: 'ht-theme-main'," : "  theme: mainTheme,",
+    legacy ? "  themeName: 'ht-theme-main'," : "  theme: { ...mainTheme, colorScheme: 'light' },",
     `  licenseKey: '${LICENSE_KEY}',`,
     "});",
     "",
@@ -127,7 +127,7 @@ function reactEntry(bucket) {
       const [key, value] = o.split(": ");
       return `    ${key}={${value}}`;
     }),
-    legacy ? '    themeName="ht-theme-main"' : "    theme={mainTheme}",
+    legacy ? '    themeName="ht-theme-main"' : "    theme={{ ...mainTheme, colorScheme: 'light' }}",
     `    licenseKey="${LICENSE_KEY}"`,
     "  />,",
     ");",

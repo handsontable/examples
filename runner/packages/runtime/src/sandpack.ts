@@ -27,6 +27,7 @@ import {
   redactPreviewHosts,
   truncateMessage,
 } from "./monitor.js";
+import { injectSchemeReceiver } from "./scheme.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 // Derive Sandpack's option/setup types straight from the loader signature so we
@@ -348,41 +349,54 @@ export class SandpackRuntime implements DemoRuntime {
    */
   private sandboxFiles(): Promise<FilesMap> | FilesMap {
     return this.env === "parcel"
-      ? transpileFilesForParcel(this.files).then(applyDepShims).then((f) => this.withMonitor(f))
-      : this.withMonitor(this.files);
+      ? transpileFilesForParcel(this.files).then(applyDepShims).then((f) => this.withInjections(f))
+      : this.withInjections(this.files);
   }
 
   /**
-   * Add the monitor to the bundler's view of the files (DEV-2527).
+   * Add the runner's own injections to the bundler's view of the files.
    *
    * Applied here, to the *derived* map, and never to `this.files`: the authored map
-   * is what Download-zip, fork and the StackBlitz/CodeSandbox exports read, and the
-   * monitor must not ship inside a demo someone downloads. It also runs *after* the
-   * parcel pre-transpile, so babel never has to parse it.
+   * is what Download-zip, fork and the StackBlitz/CodeSandbox exports read, and
+   * neither the monitor nor the colour-scheme receiver may ship inside a demo
+   * someone downloads. It also runs *after* the parcel pre-transpile, so babel
+   * never has to parse either of them.
+   *
+   * Two injections, two lifetimes. The monitor is diagnostics behind a flag
+   * (DEV-2527) and is gated on `opts.monitor`. The scheme receiver is how the
+   * shell's toggle reaches the grid at all (DEV-2561, ADR-0035), so it is
+   * unconditional — a preview that cannot be re-themed is the bug.
+   *
+   * Both are byte-deterministic constants that learn what they need over
+   * `postMessage`. Nothing here may carry a *value*: `sameFiles` skips the compile
+   * when the sandbox is unchanged, so injecting the current scheme would turn every
+   * toggle into a full Sandpack rebuild — the exact cost DEV-2496's bridge exists
+   * to avoid.
    *
    * A missing entry is `setupFrom()`'s error to raise, with its own message
-   * (DEV-2130) — `injectReporter` returns the map untouched rather than throwing a
+   * (DEV-2130) — both injectors return the map untouched rather than throwing a
    * second, less useful error from here.
    */
-  private withMonitor(files: FilesMap): FilesMap {
-    if (!this.opts.monitor) return files;
+  private withInjections(files: FilesMap): FilesMap {
     // Both entries, when they differ. For `parcel` — every Tier-1 example — the
     // resolved sandbox entry is the HTML file, and whether the classic bundler
     // preserves a `<script>` we put in its head is not something this code can
     // guarantee. The JS module is the belt to that braces: it is evaluated either
-    // way, and `__hotRunnerMonitor` makes the second injection inert, so injecting
-    // twice costs one duplicated string and removes the failure mode.
+    // way, and each injector's own marker makes the second injection inert, so
+    // injecting twice costs one duplicated string and removes the failure mode.
     const targets: string[] = [];
     try {
       targets.push(resolveSandboxEntry(this.env, this.entry.entry, this.entry.htmlEntry, files));
     } catch {
       // A missing entry is `setupFrom()`'s error to raise, with its own message
-      // (DEV-2130). Monitoring must not pre-empt it with a worse one.
+      // (DEV-2130). Neither injection must pre-empt it with a worse one.
       return files;
     }
     const moduleEntry = this.env === "parcel" ? toParcelEntry(this.entry.entry) : this.entry.entry;
     if (!targets.includes(moduleEntry)) targets.push(moduleEntry);
-    return targets.reduce((acc, path) => injectReporter(acc, path), files);
+    const withScheme = targets.reduce((acc, path) => injectSchemeReceiver(acc, path), files);
+    if (!this.opts.monitor) return withScheme;
+    return targets.reduce((acc, path) => injectReporter(acc, path), withScheme);
   }
 
   private setupFrom(files: FilesMap): SandboxSetup {

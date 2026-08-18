@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { injectSchemeReceiver } from "../packages/runtime/dist/scheme.js";
 import { createRequire } from "node:module";
 import { SandpackCompileError, SandpackEvaluationError, SandpackRuntime } from "../packages/runtime/dist/sandpack.js";
 import {
@@ -101,7 +102,10 @@ function mounted() {
   runtime.files = { ...FILES };
   // What mount() records in buildSetup: the sandbox the bundler now holds. Without it the
   // no-op check has no baseline to compare against, and every push looks like a change.
-  runtime.published = { ...FILES };
+  // The *derived* map, which is what buildSetup records: the runner appends its
+  // colour-scheme receiver to the entry (DEV-2561), so an authored-map baseline
+  // would make every push look like a change.
+  runtime.published = injectSchemeReceiver({ ...FILES }, ENTRY.entry);
   return { runtime, client };
 }
 
@@ -159,8 +163,11 @@ test("reload() stamps the entry, so the bundler always has a diff to act on", as
     "two refreshes must not publish identical entry code — the bundler treats a no-change compile as nothing to do and blanks the preview",
   );
   for (const code of [first, second]) {
-    // A comment, so the stamp can never change what the module does.
-    assert.match(code, /^console\.log\('demo'\);\n\/\/ hot-runner-compile \d+\n$/);
+    // A comment, so the stamp can never change what the module does. The runner's
+    // colour-scheme receiver (DEV-2561) sits between the two, appended to the
+    // entry before the stamp — hence two assertions rather than one full match.
+    assert.ok(code.startsWith("console.log('demo');\n"), "the authored source stays first");
+    assert.match(code, /\/\/ hot-runner-compile \d+\n$/);
   }
 });
 

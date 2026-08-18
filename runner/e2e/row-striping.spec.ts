@@ -136,6 +136,23 @@ async function resolvedScheme(page: Page): Promise<string> {
     });
 }
 
+/**
+ * Put the shell in `mode`, and prove it landed before returning.
+ *
+ * The toggle is a single button labelled with its *destination*, so the label is
+ * the state test: "Switch to dark theme" means the shell is light. `data-hot-theme`
+ * is the shell-side confirmation, exactly as `panels.spec.ts` reads it — but note
+ * that it says nothing about the preview, which is a separate document reached only
+ * over the bridge. That is what the caller asserts next.
+ */
+async function toggleShellTheme(page: Page, mode: "light" | "dark") {
+  const current = await page.locator("html").getAttribute("data-hot-theme");
+  if (current !== mode) {
+    await page.getByRole("button", { name: `Switch to ${mode} theme` }).click();
+  }
+  await expect(page.locator("html")).toHaveAttribute("data-hot-theme", mode);
+}
+
 /** Relative luminance, WCAG's definition — the basis of both checks below. */
 function luminance([r, g, b]: [number, number, number]): number {
   const channel = (c: number) => {
@@ -223,31 +240,42 @@ for (const example of EXAMPLES) {
         expectLegibleStripe(shippedLight, "default theme, light");
       }).toPass({ timeout: 60_000 });
 
-      // The starters pass `theme: mainTheme` (DEV-2200) and `mainTheme` declares
-      // no `colorScheme`, so `ThemeManager` writes `color-scheme: light dark`:
-      // the grid resolves its `light-dark()` tokens against the visitor's own
-      // preference, and emulating the media query is the only honest switch.
+      // The starters declare `colorScheme: 'light'` (DEV-2561), so the shipped
+      // theme is pinned and nothing about the visitor's machine moves it. What
+      // moves it is the shell's own toggle, over the colour-scheme bridge
+      // (ADR-0035) — the shell is authoritative for a stock demo, which this is.
       //
-      // This used to swap the wrapper class `ht-theme-main` -> `ht-theme-main-dark`
-      // instead. That worked only while the starters imported
-      // `handsontable/styles/ht-theme-main.min.css`, the one place the dark
-      // class was ever defined; DEV-2200 dropped that import. Renaming the class
-      // now detaches the theme block `ThemeManager` injected against the
-      // resolved name, so every `--ht-*` token goes empty and *both* rows fall
-      // back to `transparent` — an unthemed grid, which is not a dark one
-      // (DEV-2546).
-      expect(await resolvedScheme(page), "the shipped theme is not scheme-adaptive").toEqual(
-        "light dark",
+      // Two earlier mechanisms are gone, and both were wrong for reasons worth
+      // keeping. Swapping the wrapper class `ht-theme-main` -> `ht-theme-main-dark`
+      // worked only while the starters imported `ht-theme-main.min.css`, the one
+      // place the dark class was defined; DEV-2200 dropped that import, so the
+      // rename detached the injected theme block and left an *unthemed* grid,
+      // which is not a dark one (DEV-2546). Emulating `prefers-color-scheme`
+      // replaced it and was honest at the time — the theme was `auto` — but a
+      // pinned starter ignores the OS by design, so it now moves nothing.
+      // A definite scheme, not `light dark`. Note what this does *not* prove: the
+      // shell is already driving this grid to light, so it reads `light` whether or
+      // not the starter pinned itself. The pin is asserted where it is visible —
+      // against the starter artifacts, in `pipeline/starter-scheme.test.mjs`.
+      expect(await resolvedScheme(page), "the shell's light never reached the grid").toEqual(
+        "light",
       );
-      await page.emulateMedia({ colorScheme: "dark" });
+      await toggleShellTheme(page, "dark");
       await expect(async () => {
+        expect(await resolvedScheme(page), "the shell's dark never reached the grid").toEqual(
+          "dark",
+        );
         const shippedDark = await readRows(page);
         expectSchemeFlipped(shippedLight!, shippedDark);
         expectLegibleStripe(shippedDark, "default theme, dark");
       }).toPass({ timeout: 60_000 });
-      // Page-scoped, and it survives the reload below. The panel half sets its
-      // own explicit scheme and must not inherit this one.
-      await page.emulateMedia({ colorScheme: "light" });
+
+      // Back to light before the panel half. The toggle persists to
+      // `localStorage`, so leaving it dark would outlive the reload below — and
+      // the panel half asserts the shell *cannot* move a demo that declares its
+      // own scheme, which is not a claim worth making from an unknown starting
+      // point.
+      await toggleShellTheme(page, "light");
 
       // 3 & 4. A theme from the Style panel. Structurally different, and the
       //    reason both halves are worth running: the panel's theme is injected
@@ -301,6 +329,19 @@ for (const example of EXAMPLES) {
         }).toPass({ timeout: 60_000 });
       }
       expectSchemeFlipped(panel.light!, panel.dark!);
+
+      // 5. Precedence (DEV-2561). The panel has written a theme module, so this
+      //    demo now declares its own scheme and the shell stands down — it sends
+      //    `auto`, the receiver drops its override, and the panel's `light` is
+      //    what remains. A shell toggle that moved this grid would mean chrome
+      //    silently overruling the demo's own source.
+      await toggleShellTheme(page, "dark");
+      await expect(async () => {
+        expect(
+          await resolvedScheme(page),
+          "the shell overrode a scheme the demo declares for itself",
+        ).toEqual("light");
+      }).toPass({ timeout: 30_000 });
     });
   });
 }
