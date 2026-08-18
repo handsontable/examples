@@ -1205,9 +1205,5 @@ export const SELECTED_CLASS = 'selected';
 export const ODD_ROW_CLASS = 'odd';
 
 export function getData() {
-  return data.map((row) => {
-    const [day, month, year] = String(row[4]).split('/');
-
-    return [...row.slice(0, 4), `${year}-${month}-${day}`, ...row.slice(5)];
-  });
+  return data.map((row) => [...row]);
 }

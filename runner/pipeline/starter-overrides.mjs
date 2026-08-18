@@ -213,6 +213,33 @@ export const SOURCE_NORMALIZATIONS = [
     expect: /'\d{4}-\d{2}-\d{2}'/,
   },
   {
+    // The dataset arrived with a DD/MM/YYYY normalizer baked into its accessor:
+    // `getData()` splits row[4] on "/" and reassembles it as
+    // `${year}-${month}-${day}`. That was correct while the literals WERE
+    // DD/MM/YYYY. Once `angular:data-iso` above (or DEV-2545 on master) turns
+    // them into ISO, the split returns a one-element array and every date
+    // reaches the grid as `undefined-undefined-2020-10-11`: at 18+
+    // parseToLocalDate rejects it and the column renders BAD_VALUE on every
+    // row, at 16/17 moment strict-fails it and allowInvalid:false flags every
+    // cell. So a literals-only migration is not enough — the stored value and
+    // the code that reads it have to move together. Neither the option rows nor
+    // lintStarterOptionShapes could catch this: both read source TEXT, and this
+    // is a computed value (the header's STATED LIMITATION). DEV-2563.
+    //
+    // The replacement is byte-identical to master's post-fix function, so every
+    // source ref converges on the same bytes. `expect` must therefore describe
+    // THAT text rather than the frozen-branch shape — it is re-tested on the
+    // output at every bucket, `next` (which sources master) included.
+    id: "angular:data-passthrough",
+    framework: "angular",
+    file: "/src/app/utils/constants.ts",
+    buckets: "all",
+    pattern:
+      /export function getData\(\) \{\n  return data\.map\(\(row\) => \{\n    const \[day, month, year\] = String\(row\[4\]\)\.split\('\/'\);\n\n    return \[\.\.\.row\.slice\(0, 4\), `\$\{year\}-\$\{month\}-\$\{day\}`, \.\.\.row\.slice\(5\)\];\n  \}\);\n\}/g,
+    replacement: "export function getData() {\n  return data.map((row) => [...row]);\n}",
+    expect: /return data\.map\(\(row\) => \[\.\.\.row\]\);/,
+  },
+  {
     // The Arabic demo generates its dates with
     // `toLocaleDateString('en-gb')` = DD/MM/YYYY, while the static dataset in
     // the same starter is ISO. Applied at ALL buckets so the starter is
