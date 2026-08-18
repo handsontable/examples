@@ -68,7 +68,7 @@ export class DataGridComponent {
       {
         data: 4,
         type: 'date',
-        dateFormat: 'DD/MM/YYYY',
+        dateFormat: { year: 'numeric', month: '2-digit', day: '2-digit' },
         locale: 'en-GB',
         allowInvalid: false,
       },
