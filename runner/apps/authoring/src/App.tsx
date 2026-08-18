@@ -562,7 +562,14 @@ function FullMode({ id }: { id: string }) {
         if (cancelled || !meta) return;
         setTitle(meta.title ?? "");
         setDescription(meta.description ?? "");
-        if (meta.ht_version) setVersion(meta.ht_version);
+        // Only a ref the validator accepts. This view is handed `ht_version`
+        // verbatim, so a demo saved before DEV-2565 carries the "latest" sentinel
+        // here, and the snapshot read below is what repairs it — but these two
+        // fetches settle in either order. Gating on validity is what makes the
+        // displayed version independent of which one lands last.
+        if (meta.ht_version && validateHandsontableVersion(meta.ht_version).ok) {
+          setVersion(meta.ht_version);
+        }
       })
       .catch(() => { /* the status dot reports the build; a missing title is not an error state */ });
     return () => { cancelled = true; };
