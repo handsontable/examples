@@ -343,6 +343,15 @@ export class ContainerRuntime implements DemoRuntime {
   private previewUrl = "";
   private port = 0;
   private pointed = false;
+  /**
+   * Whether the iframe has ever been pointed at the preview URL.
+   *
+   * Distinct from `pointed`, which is `poll()`'s own gate and goes false again
+   * when a confirmation fails (see `confirmAndEmitReady`). `dispose()` needs the
+   * sticky answer: a frame left on the preview URL keeps its HMR reconnect loop
+   * running, and that loop resurrects the container this dispose just destroyed.
+   */
+  private frameEverPointed = false;
   /** Settle callbacks for in-flight `reload()` promises, so `dispose()` can close them
    *  out rather than leaving the shell's refresh spinner up on a torn-down preview. */
   private readonly reloadSettlers = new Set<() => void>();
@@ -353,6 +362,97 @@ export class ContainerRuntime implements DemoRuntime {
    *  costs two `exec`s in the container. */
   private failedPolls = 0;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * What the preview frame said about the document it is loading, consumed by the
+   * next `load` event (DEV-2547).
+   *
+   * The Worker serves its own branded page when the dev-server port refuses
+   * (`workers/api/src/preview-boot.ts`), and that page fires `load` exactly like a
+   * real demo — which is how `data-preview-status` used to reach "ready" over a
+   * "Reconnecting to the demo" card with no grid behind it. The page now posts its
+   * state to us; an inline script runs at parse time, so the message is queued
+   * before that document's `load`.
+   */
+  private pendingFrameState: "unknown" | "booting" | "dead" = "unknown";
+  /** Frame navigations seen since the iframe was pointed. Gates the hard readiness
+   *  fallback, whose only job is "the `load` event never fired at all". */
+  private frameLoads = 0;
+  private graceTimer: ReturnType<typeof setTimeout> | null = null;
+  private readyFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+  /** One error per session for a preview that died — the terminal page is served
+   *  per request, and `onError` is wired to Sentry. */
+  private previewDeadReported = false;
+  /**
+   * Decide readiness per frame navigation rather than once.
+   *
+   * The listener is deliberately NOT `{ once: true }`: the boot page refreshes
+   * itself every two seconds, so a container that does come up is a later `load`
+   * on the same iframe. Suppressing ready without listening again would leave the
+   * boot overlay covering a working grid — status polling has already stopped by
+   * the time we point the iframe.
+   */
+  private readonly onFrameLoad = () => {
+    if (this.disposed) return;
+    this.frameLoads += 1;
+    const state = this.pendingFrameState;
+    this.pendingFrameState = "unknown";
+    if (this.graceTimer) {
+      clearTimeout(this.graceTimer);
+      this.graceTimer = null;
+    }
+    if (state === "dead") {
+      this.reportPreviewDead();
+      return;
+    }
+    if (state === "booting") {
+      // Honest and recoverable: the pane keeps the boot overlay, and the page's own
+      // meta-refresh gives us another `load` to judge.
+      this.emitProgress("Dev server not answering yet — retrying…");
+      return;
+    }
+    this.graceTimer = setTimeout(() => {
+      this.graceTimer = null;
+      void this.confirmAndEmitReady();
+    }, this.opts.renderGraceMs ?? 3500);
+  };
+  /**
+   * `postMessage` from the Worker's own preview page. Origin-checked against the
+   * session's preview URL: any frame or opener can post to us, and this message
+   * decides whether the shell claims the demo is up.
+   */
+  private readonly onPreviewMessage = (event: MessageEvent) => {
+    if (this.disposed || !this.previewUrl) return;
+    let previewOrigin: string;
+    try {
+      previewOrigin = new URL(this.previewUrl).origin;
+    } catch {
+      return;
+    }
+    if (event.origin !== previewOrigin) return;
+    const data = event.data as { source?: unknown; state?: unknown } | null;
+    if (!data || typeof data !== "object" || data.source !== "demo-preview") return;
+    if (data.state !== "booting" && data.state !== "dead") return;
+    // Which navigation does this message describe? A grace timer is running only
+    // between a `load` and the readiness decision for that same document, so:
+    //
+    // - grace running -> it describes what is in the frame NOW (either a message
+    //   delivered after its own `load`, or the next boot-page refresh arriving
+    //   inside the previous document's 3.5s grace — the refresh interval is 2s).
+    //   Cancel the decision and keep nothing: leaving it pending would let the
+    //   next `load` — often the recovered demo — consume a stale `booting` and
+    //   never emit ready, which is the boot overlay covering a working grid.
+    // - no grace running -> the page is being parsed and its `load` has not
+    //   fired yet (the ordinary case, since the script runs at parse time).
+    //   Hold it for that `load` to consume.
+    if (this.graceTimer) {
+      clearTimeout(this.graceTimer);
+      this.graceTimer = null;
+      this.pendingFrameState = "unknown";
+    } else {
+      this.pendingFrameState = data.state;
+    }
+    if (data.state === "dead") this.reportPreviewDead();
+  };
   // Tear the session down when the page goes away (tab close, navigation) —
   // otherwise the container squats one of the few live-preview instance slots
   // until sleepAfter expires. pagehide is the reliable end-of-page signal
@@ -405,6 +505,54 @@ export class ContainerRuntime implements DemoRuntime {
   }
   private emitError(e: Error) {
     for (const cb of this.errorCbs) cb(e);
+  }
+  /**
+   * Ask the container once more before claiming the demo is up (DEV-2547).
+   *
+   * The frame's document is only self-describing when we wrote it: a dev server
+   * that died between the readiness probe and the frame's first request can also
+   * hand the frame the SDK's own `500 Proxy routing error`, or a truncated
+   * document, and neither of those says so. One re-probe at the end of the render
+   * grace turns "the port answered once" into "the port still answers", which is
+   * the weakest claim that makes `ready` honest for shapes we do not author.
+   *
+   * On a failed confirmation this drops back into the boot loop rather than
+   * failing: `pointed` goes false, so `poll()` re-points the iframe when the dev
+   * server answers again — the frame gets a fresh navigation, and a document that
+   * never refreshes itself is no longer a dead end.
+   */
+  private async confirmAndEmitReady(): Promise<void> {
+    if (this.disposed || this.didReady) return;
+    if (await this.probeStatusReady()) {
+      if (!this.disposed) this.emitReady();
+      return;
+    }
+    if (this.disposed || this.didReady) return;
+    this.emitProgress("Dev server stopped answering — waiting for it to come back…");
+    this.pointed = false;
+    this.poll();
+  }
+
+  /** `ready` off the status route, with every failure reading as "not ready" — the
+   *  same shape `poll()` uses, minus the log and the failure branches it owns. */
+  private async probeStatusReady(): Promise<boolean> {
+    if (!this.sessionId) return false;
+    try {
+      const r = await fetch(`${this.opts.apiBase}/api/session/${this.sessionId}/status?port=${this.port}`);
+      if (!r.ok) return false;
+      const { ready } = (await r.json()) as { ready?: boolean };
+      return ready === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The preview's server is gone and is not coming back on its own — the shell's
+   *  error card, with its "Restart preview" action, is the only way out. */
+  private reportPreviewDead(): void {
+    if (this.previewDeadReported || this.disposed) return;
+    this.previewDeadReported = true;
+    this.emitError(new Error("The demo stopped responding. Restart the preview to start a new session."));
   }
   private emitProgress(log: string) {
     for (const cb of this.progressCbs) cb(log);
@@ -577,15 +725,25 @@ export class ContainerRuntime implements DemoRuntime {
             // boot + render the grid after the HTML loads). We can't inspect the
             // cross-origin iframe, so: on load, wait a short grace, then ready.
             this.pointed = true;
+            this.frameEverPointed = true;
             this.emitProgress("Dev server ready — rendering the demo…");
-            this.opts.iframe.addEventListener(
-              "load",
-              () => setTimeout(() => this.emitReady(), this.opts.renderGraceMs ?? 3500),
-              { once: true },
-            );
+            // The port answered, but a port is not a page: the request the frame is
+            // about to make can still land on the Worker's boot page. `onFrameLoad`
+            // and `onPreviewMessage` are what tell those two apart (DEV-2547).
+            window.addEventListener("message", this.onPreviewMessage);
+            this.opts.iframe.addEventListener("load", this.onFrameLoad);
             this.opts.iframe.src = this.previewUrl;
-            // Hard fallback in case the load event never fires.
-            setTimeout(() => this.emitReady(), 20000);
+            // Hard fallback for "the load event never fired at all". Gated on that,
+            // rather than firing unconditionally: a frame that did load and told us it
+            // is holding the boot page must not be called ready twenty seconds later.
+            // Cleared first: the confirmation path re-enters `poll()` with `pointed`
+            // false, and overwriting a pending handle would leave one `dispose()` can
+            // no longer reach.
+            if (this.readyFallbackTimer) clearTimeout(this.readyFallbackTimer);
+            this.readyFallbackTimer = setTimeout(() => {
+              this.readyFallbackTimer = null;
+              if (this.frameLoads === 0) void this.confirmAndEmitReady();
+            }, 20000);
             // Keep the container awake while the demo is open so it never has to
             // cold-boot again mid-session. Any request resets sleepAfter; we ping
             // only while the tab is visible so a backgrounded/closed tab lets it
@@ -748,7 +906,7 @@ export class ContainerRuntime implements DemoRuntime {
           // request). Without this the preview would just quietly go stale.
           const failure = await readFailure(r);
           if (this.disposed || !failure.code?.startsWith("budget_")) return;
-          if (this.pointed) this.opts.iframe.src = "about:blank";
+          if (this.frameEverPointed) this.opts.iframe.src = "about:blank";
           this.emitError(new SessionStartError(410, failure.message, failure.code));
         })
         .catch(() => {});
@@ -793,15 +951,21 @@ export class ContainerRuntime implements DemoRuntime {
   dispose(): void {
     this.disposed = true;
     window.removeEventListener("pagehide", this.onPagehide);
+    window.removeEventListener("message", this.onPreviewMessage);
+    // Guarded like the `src` reset below: the listener is attached when the iframe is
+    // pointed, and a runtime disposed before that never touched the element.
+    if (this.frameEverPointed) this.opts.iframe.removeEventListener("load", this.onFrameLoad);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     if (this.pollTimer) clearTimeout(this.pollTimer);
+    if (this.graceTimer) clearTimeout(this.graceTimer);
+    if (this.readyFallbackTimer) clearTimeout(this.readyFallbackTimer);
     if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
     // Point the preview away from the dead session. Preview traffic proxies
     // straight to the container BEFORE any tombstone check (proxyToSandbox is
     // the Worker's first routing step), so a still-mounted iframe — above all
     // its Vite HMR WebSocket reconnect loop — would resurrect the container
     // this dispose just destroyed.
-    if (this.pointed) this.opts.iframe.src = "about:blank";
+    if (this.frameEverPointed) this.opts.iframe.src = "about:blank";
     // On the `pointed` path that `about:blank` fires its own `load` and would settle
     // these anyway; doing it here too costs a line and drops the ordering assumption.
     for (const settle of [...this.reloadSettlers]) settle();

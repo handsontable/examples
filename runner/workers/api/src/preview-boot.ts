@@ -98,6 +98,20 @@ export interface PreviewBootFailure {
   body: string;
   /** Whether this refusal is worth a Sentry event. */
   report: boolean;
+  /**
+   * What the frame is holding, for the parent shell (DEV-2547).
+   *
+   * `data-preview-status` used to reach "ready" over one of these pages: the
+   * container's readiness is a port probe, and the shell then emits ready a
+   * fixed grace after the frame's `load` — which this document fires as happily
+   * as a real demo does. The `html` shape carries the state to the parent over
+   * `postMessage`, so "ready" can mean the demo, not our own apology for it.
+   *
+   * `booting` pairs with `refreshSeconds`: the page is coming back on its own,
+   * so the shell keeps the boot overlay and waits for the next navigation.
+   * `dead` is terminal and is the shell's cue to show the error card.
+   */
+  previewState: "booting" | "dead";
 }
 
 export interface PreviewBootInput {
@@ -140,6 +154,7 @@ export function classifyPreviewBootFailure({
       title: "Reconnecting to the demo",
       body: "The live preview lost its connection to the demo server. Retrying…",
       report: false,
+      previewState: "booting",
     };
   }
 
@@ -154,5 +169,6 @@ export function classifyPreviewBootFailure({
     title: "The demo stopped responding",
     body: "The server behind this live preview is no longer running. Open the demo again to start a new session.",
     report: true,
+    previewState: "dead",
   };
 }

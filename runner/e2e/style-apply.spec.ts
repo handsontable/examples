@@ -1,4 +1,4 @@
-import { test, expect, type FrameLocator, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type FrameLocator, type Page } from "@playwright/test";
 
 // Does a generated theme module actually reach the grid? (DEV-2197)
 //
@@ -20,16 +20,54 @@ import { test, expect, type FrameLocator, type Page } from "@playwright/test";
 //   E2E_LIVE=1 E2E_BASE_URL=https://demos.handsontable.com pnpm e2e e2e/style-apply.spec.ts --workers=1
 //
 // `--workers=1` whenever `astro` or `angular` is in the selection: they are the
-// Tier-2 cases, the container pool holds 5 slots (`Sandbox max_instances`), and
-// sessions are not torn down between tests. At `--workers=2` the second Tier-2
-// case fails with the preview stuck on `booting` — which reads as a product
-// failure and is not one. Consecutive runs can exhaust the pool on their own.
+// Tier-2 cases and the container pool holds 5 slots (`Sandbox max_instances`).
+// At `--workers=2` the second Tier-2 case fails with the preview stuck on
+// `booting` — which reads as a product failure and is not one.
+//
+// Sessions ARE torn down now (DEV-2547): every session this file creates is
+// deleted in `afterEach`, so a failed run no longer leaves containers squatting
+// slots shared with real traffic until their idle window expires. Consecutive
+// runs used to exhaust the pool on their own.
 //
 // The Tier-1 cases (react, vue, javascript) need no container and no API worker;
 // a plain `vite preview` serves them. Tier 2 needs the API worker reachable on
 // the *same origin* — `vite dev` with `VITE_API_BASE` pointed at its own port.
 
 const STYLE = 'aside[aria-label="Style this demo"]';
+
+/**
+ * Tier-2 sessions this file created, so they can be deleted even when a test
+ * fails (DEV-2547).
+ *
+ * The container pool is five global slots shared with production traffic, and a
+ * leaked session holds one for its whole idle window — which is how a red run
+ * poisoned the next one. Tier-1 tests create no session, so the hooks are a
+ * no-op there.
+ *
+ * Local to this spec on purpose: `trackSessions` lands in `e2e/helpers.ts` with
+ * the DEV-2203 suites, and duplicating it there for one release is cheaper than
+ * conflicting with that file.
+ */
+const created = new WeakMap<Page, { id: string; apiBase: string }[]>();
+
+test.beforeEach(({ page }) => {
+  const sessions: { id: string; apiBase: string }[] = [];
+  created.set(page, sessions);
+  page.on("response", async (res) => {
+    if (res.request().method() !== "POST" || !/\/api\/session$/.test(res.url()) || !res.ok()) return;
+    const body = (await res.json().catch(() => null)) as { sessionId?: string } | null;
+    if (body?.sessionId) sessions.push({ id: body.sessionId, apiBase: new URL(res.url()).origin });
+  });
+});
+
+test.afterEach(async ({ page, request }: { page: Page; request: APIRequestContext }) => {
+  for (const { id, apiBase } of created.get(page) ?? []) {
+    // Best effort: the session may already be gone (the shell's own pagehide
+    // teardown races this one), and a failed DELETE must not fail the test that
+    // has already reported its real result.
+    await request.delete(`${apiBase}/api/session/${id}`).catch(() => {});
+  }
+});
 
 /** The four shapes `wireTheme` recognises, one example each. `astro` and
  *  `angular` are Tier 2: they boot a real container and are correspondingly
@@ -74,12 +112,53 @@ async function cellHeight(page: Page): Promise<number> {
   return cell(page).evaluate((el) => Math.round(el.getBoundingClientRect().height));
 }
 
+/**
+ * The Worker's own preview documents, served in place of the demo when the
+ * container's dev-server port refuses (`workers/api/src/preview-boot.ts`).
+ *
+ * They matter to this suite because they are indistinguishable from a slow demo
+ * if all you wait for is a cell: DEV-2547 was reported as "reaches ready, then
+ * `.handsontable td` never appears (120s)" for astro and angular, and the report
+ * could not say which page the frame was holding — a boot page, a dead-server
+ * page, or a demo that genuinely failed to render. Naming them turns that 120s
+ * silence into one line.
+ */
+const RUNNER_PREVIEW_PAGE = /Reconnecting to the demo|The demo stopped responding/;
+
 async function openExample(page: Page, example: string) {
   await page.goto(`/?example=${example}`);
-  await expect(page.locator('[aria-label="Preview"]')).toHaveAttribute("data-preview-status", "ready", {
-    timeout: 180_000,
-  });
-  await expect(cell(page)).toBeVisible({ timeout: 120_000 });
+  const pane = page.locator('[aria-label="Preview"]');
+  // Not `toHaveAttribute("ready")`: a preview that fails outright sits on `error`
+  // for the full 180s and reports as a timeout. Poll off `booting` first, then say
+  // which of the two terminal states it reached and why.
+  await expect
+    .poll(() => pane.getAttribute("data-preview-status"), { timeout: 180_000, intervals: [1_000] })
+    .not.toEqual("booting");
+  if ((await pane.getAttribute("data-preview-status")) === "error") {
+    const detail = await pane.locator("pre").first().innerText().catch(() => "(no detail)");
+    throw new Error(`the ${example} preview failed to start: ${detail}`);
+  }
+  await expect(pane).toHaveAttribute("data-preview-status", "ready");
+
+  // Ready means the demo rendered — but if the frame is holding one of the
+  // runner's own pages instead, fail on that fact rather than on a missing cell.
+  const apology = preview(page).getByText(RUNNER_PREVIEW_PAGE).first();
+  const outcome = await Promise.race([
+    cell(page).waitFor({ state: "visible", timeout: 120_000 }).then(() => "grid" as const),
+    apology
+      .waitFor({ state: "visible", timeout: 120_000 })
+      .then(() => "runner-page" as const)
+      // Never settles: both waits share a deadline, so a resolved timeout here would
+      // race the cell wait's rejection and could win it — returning "the grid is
+      // there" for the very case (no cell, no apology either) this exists to report.
+      // Only the cell branch may end the race.
+      .catch(() => new Promise<never>(() => {})),
+  ]);
+  if (outcome === "runner-page") {
+    throw new Error(
+      `the ${example} preview frame is holding the runner's own page, not the demo: ${await apology.innerText()}`,
+    );
+  }
 }
 
 async function openStylePanel(page: Page) {

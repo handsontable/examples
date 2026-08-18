@@ -136,3 +136,38 @@ test("errorPageResponse carries Retry-After only alongside a refresh", () => {
   assert.equal(plain.headers.get("retry-after"), null);
   assert.equal(plain.headers.get("cache-control"), "no-store");
 });
+
+// DEV-2547. The classifier also names what the frame is holding, so the shell can
+// keep `data-preview-status` off "ready" while the frame shows one of these pages.
+
+test("the descriptor names the frame state per branch", () => {
+  assert.equal(classifyPreviewBootFailure({ elapsedMs: 1_000, ...html }).previewState, "booting");
+  assert.equal(classifyPreviewBootFailure({ elapsedMs: BOOT_WINDOW_MS, ...html }).previewState, "dead");
+});
+
+test("the frame state is independent of the shape", () => {
+  // The shell only ever receives it from the document shape, but the classifier must
+  // not make the state depend on what the client asked for — a sub-resource refused
+  // past the window is the same dead server as a navigation refused past it.
+  for (const shapeInput of [
+    { isUpgrade: true, wantsHtml: true, acceptsHtml: true },
+    { isUpgrade: false, wantsHtml: false, acceptsHtml: false },
+  ]) {
+    assert.equal(classifyPreviewBootFailure({ elapsedMs: 1_000, ...shapeInput }).previewState, "booting");
+    assert.equal(classifyPreviewBootFailure({ elapsedMs: 200_000, ...shapeInput }).previewState, "dead");
+  }
+});
+
+test("errorPageHtml tells the parent what it is holding, only when asked", () => {
+  const booting = errorPageHtml({ status: 503, title: "x", body: "y", refreshSeconds: 2, previewState: "booting" });
+  assert.match(booting, /postMessage\(\{source:"demo-preview",state:"booting"\}/);
+  // Inline and parse-time: a deferred or external script would be a second request to
+  // the same dead port, and the shell's grace timer would already have run.
+  assert.ok(!/\bdefer\b|\bsrc=/.test(booting.slice(booting.indexOf("<script"))), "must stay inline");
+
+  const dead = errorPageHtml({ status: 503, title: "x", body: "y", previewState: "dead" });
+  assert.match(dead, /postMessage\(\{source:"demo-preview",state:"dead"\}/);
+
+  const other = errorPageHtml({ status: 404, title: "x", body: "y" });
+  assert.ok(!other.includes("<script"), "the /d/:id and /embed/:id pages have no parent to tell");
+});
