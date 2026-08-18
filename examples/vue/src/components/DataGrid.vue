@@ -19,7 +19,7 @@ export default defineComponent({
   },
   computed: {
     mainThemeProp() {
-      return mainTheme;
+      return { ...mainTheme, colorScheme: 'light' };
     },
 
     alignHeadersProp() {

@@ -77,7 +77,7 @@ export class DataGridComponent {
       { data: 5 },
       { data: 2 },
     ],
-    theme: mainTheme,
+    theme: { ...mainTheme, colorScheme: 'light' },
     licenseKey: 'non-commercial-and-evaluation',
   };
 }
