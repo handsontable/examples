@@ -111,28 +111,35 @@ async function resolveDistTag(env: Env, tag: string): Promise<{ ok: true; ref: s
 /**
  * Decide the ref a create/rebuild is for, and return the file map pinned to it.
  *
- * Order: what the caller asked for, then what the payload's package.json already
- * pins, then the demo's current ref, then npm `latest`. Only an explicit
- * unusable `htVersion` is refused — with the validator's own message, and before
- * the caller spends a builder container on a doomed install.
+ * Order: a concrete ref the caller asked for, then what the payload's
+ * package.json already pins, then a dist-tag the caller asked for, then the
+ * demo's current ref, then npm `latest`. Only an explicit unusable `htVersion`
+ * is refused — with the validator's own message, and before the caller spends a
+ * builder container on a doomed install.
  */
 export async function resolveHandsontableVersion(env: Env, args: ResolveArgs): Promise<ResolvedVersion> {
   const explicit = args.htVersion?.trim();
+  // A dist-tag is not an answer, it is a deferral: it names whatever npm has
+  // today, exactly as a range does. `MyDemos`'s fork forwards the row's
+  // `ht_version` verbatim, so legacy demos arrive here asking for "latest" while
+  // their package.json pins a PR build — and rewriting that would fork the demo
+  // onto a different core. So a tag ranks below the payload's own pin.
+  const tag = explicit && DIST_TAGS.has(explicit.toLowerCase()) ? explicit.toLowerCase() : null;
   let ref: string | null = null;
 
-  if (explicit) {
-    if (DIST_TAGS.has(explicit.toLowerCase())) {
-      const tagged = await resolveDistTag(env, explicit.toLowerCase());
-      if (!tagged.ok) return tagged;
-      ref = tagged.ref;
-    } else {
-      const validated = validateHandsontableVersion(explicit);
-      if (!validated.ok) return { ok: false, status: 400, message: validated.message };
-      ref = validated.value.ref;
-    }
+  if (explicit && !tag) {
+    const validated = validateHandsontableVersion(explicit);
+    if (!validated.ok) return { ok: false, status: 400, message: validated.message };
+    ref = validated.value.ref;
   }
 
   ref ??= handsontableDependencyRef(args.files);
+
+  if (ref === null && tag) {
+    const tagged = await resolveDistTag(env, tag);
+    if (!tagged.ok) return tagged;
+    ref = tagged.ref;
+  }
 
   if (ref === null && args.previousRef) {
     // Legacy rows hold the "latest" sentinel, so the stored value is a candidate,

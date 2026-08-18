@@ -38,21 +38,30 @@ gate, and pass its `files` and `ref` to `createDemo` / `updateDemo`.
 
 Resolution order is **derive, don't default**:
 
-1. what the caller explicitly asked for — a dist-tag (`latest`, `next`) is
-   resolved through the same catalog `GET /api/versions` serves; anything else is
-   validated, and an unusable ref is a `400` carrying the validator's own message
+1. a concrete ref the caller explicitly asked for — validated, and an unusable
+   one is a `400` carrying the validator's own message
 2. the ref the submitted `package.json` already pins
    (`handsontableDependencyRef`)
-3. the demo's current `ht_version`, on a rebuild — a candidate, never an
+3. a dist-tag (`latest`, `next`) the caller asked for, resolved through the same
+   catalog `GET /api/versions` serves — never stored as the tag itself
+4. the demo's current `ht_version`, on a rebuild — a candidate, never an
    authority, because legacy rows hold the sentinel
-4. npm `latest`
+5. npm `latest`
 
 Step 2 is the load-bearing one. A caller that pins a pkg.pr.new build in
 `package.json` and says nothing about `htVersion` is asking for *that* build.
 Resolving the missing version against npm and rewriting the dependency would
 rebuild its demo against a different core — worse than the bug being fixed, and
-exactly the case DEV-2565 came from. So the payload is asked before npm, and a
-dist-tag is never stored.
+exactly the case DEV-2565 came from. So the payload is asked before npm.
+
+A dist-tag deliberately ranks *below* the payload (step 3, not step 1): it names
+whatever npm has today, which is the same non-answer a range is. `MyDemos`'s fork
+forwards the row's `ht_version` verbatim, so a demo saved before this ADR forks
+with `htVersion: "latest"` while its `package.json` pins a PR build — treating
+the tag as authoritative there would move the fork onto a different core. A
+*concrete* explicit ref does outrank the payload, which is the contract the
+editor and hot-mcp both rely on: **explicit beats the payload's pin; omitting it
+preserves the pin.**
 
 `pinHandsontableFiles` moves into `packages/runtime/src/version.ts` so the editor
 and the worker share one rewrite rule. It stays `dependencies`-only and keeps the
@@ -68,6 +77,18 @@ it, else the snapshot's own pin — and the editor prefers it over
 
 ## Consequences
 - An invalid version costs a `400`, not a builder container.
+- **Behaviour change:** the editor always sends `htVersion`, so a hand-edited
+  Handsontable dependency in `package.json` no longer survives Save — the picker
+  wins and the dependency is rewritten to its ref. On master that edit survived
+  (the API installed the file map verbatim), which is why the demo behind
+  DEV-2565 built against its PR core at all. The pin has to move with the picker
+  for preview, artifact and column to agree, and the picker accepts a pkg.pr.new
+  ref or URL, so the hand edit is no longer the way to ask for a PR build.
+- No batch backfill: rows created before this ADR keep the sentinel in
+  `ht_version` until something saves them. Only the editor was broken by it —
+  `demos-list` shows the column as a label and `buildCacheKey` only needs it to
+  be stable — so lazy repair through the source route is enough, and it avoids
+  guessing a ref for a demo nobody opens.
 - `demos.ht_version` always holds a ref the editor can validate, so it stays
   usable as both label and `buildCacheKey` component.
 - Server-side pinning also covers the saved-demo edit path, where the client

@@ -150,6 +150,29 @@ test("an explicit dist-tag resolves against the registry instead of being stored
   assert.equal(calls.registry, 1);
 });
 
+test("a dist-tag never outranks the pin the payload carries", async (t) => {
+  // `MyDemos`'s fork forwards the row's `ht_version` verbatim, so a legacy demo
+  // forks with htVersion: "latest". A tag names a moving target — the same
+  // non-answer a range is — so it must not rewrite a payload that pins a build.
+  const { env, calls } = fakeEnv(t, { latest: "18.0.0" });
+  const r = await resolveHandsontableVersion(env, { htVersion: "latest", files: filesWith(PR_URL) });
+  assert.equal(r.ok, true);
+  assert.equal(r.ref, "13106");
+  assert.equal(deps(r.files).handsontable, PR_URL);
+  assert.equal(calls.registry, 0);
+});
+
+test("a dist-tag still outranks the demo's previous ref", async (t) => {
+  const { env } = fakeEnv(t, { latest: "18.0.0" });
+  const r = await resolveHandsontableVersion(env, {
+    htVersion: "latest",
+    files: filesWith("^18.0.0"),
+    previousRef: "17.6.0",
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.ref, "18.0.0");
+});
+
 test("the `next` dist-tag resolves to the newest nightly by publish date, not the stale tag", async (t) => {
   const { env } = fakeEnv(t);
   const r = await resolveHandsontableVersion(env, { htVersion: "next", files: filesWith("^18.0.0") });
