@@ -24,9 +24,15 @@
 // not guessed: Angular declares no vite at all and still runs 7.3.5 via
 // `@angular/build`, so a check that only looked at declared dependencies would call it
 // vite-less and wave it through.
+//
+// The rule is applied TWICE, to the generator and to the committed docs buckets. Those
+// are different claims. A docs artifact carries its own frozen copy of the files the
+// generator emitted whenever its bucket was last imported, and that is what a session
+// actually boots — so a correct generator and a stale bucket is precisely the shipped
+// state DEV-2564 describes, and only the artifact pass can see it.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import * as acorn from "acorn";
 import { fileURLToPath } from "node:url";
 import { RUNNER } from "./import-docs.mjs";
@@ -62,9 +68,13 @@ const emit = (framework) =>
     userFiles: SAMPLES[framework],
   });
 
-/** The vite config a project ships, whatever extension it uses (or null). */
+/** The vite config a project ships, whatever extension it uses (or null).
+ *
+ *  The leading slash is optional because the two callers key their files differently:
+ *  the generator emits `vite.config.js` and the importer re-keys it to
+ *  `/vite.config.js` in the artifact. */
 const viteConfigOf = (files) => {
-  const key = Object.keys(files).find((name) => /^vite\.config\.[cm]?[jt]s$/.test(name));
+  const key = Object.keys(files).find((name) => /^\/?vite\.config\.[cm]?[jt]s$/.test(name));
   return key === undefined ? null : files[key];
 };
 
@@ -103,29 +113,39 @@ test("every container docs framework is covered by a sample here", () => {
   assert.ok(containerFrameworks.length > 0, "RUNNER declares at least one container framework");
 });
 
+/**
+ * The rule, once, for one project's files. Returns a description of how the project
+ * fails it, or `null` when it passes.
+ *
+ * `containerKey` names the baked context the project boots in, so the vite that arrives
+ * transitively can be read; `files` uses whatever key shape the caller has (the
+ * generator emits `vite.config.js`, an artifact stores `/vite.config.js`).
+ */
+function hostGateFailure(label, files, containerKey) {
+  const config = viteConfigOf(files);
+  const pkg = JSON.parse(files[Object.keys(files).find((name) => /^\/?package\.json$/.test(name))]);
+  const declared = rangeMinMajor(pkg.dependencies?.vite ?? pkg.devDependencies?.vite);
+  const resolved = bakedViteMajors(containerKey);
+  // Nothing on vite at all: no host gate to open.
+  if (declared === null && resolved.length === 0) return null;
+
+  if (config !== null && /allowedHosts/.test(config)) return null;
+  // The env var only exists from vite 6, so EVERY vite the container could run has to be
+  // >= 6 for that branch to hold — a declared range that can float down to 5 counts
+  // against it.
+  const lowest = Math.min(...[declared, ...resolved].filter((major) => major !== null));
+  if (lowest >= 6) return null;
+
+  return (
+    `${label}: runs vite ${lowest} (declared ${declared ?? "-"}, baked ${resolved.join("/") || "-"}) ` +
+    `and its vite config ${config === null ? "does not exist" : "has no allowedHosts"}`
+  );
+}
+
 test("every container docs framework opts in to the preview host, one way or the other", () => {
-  const failures = [];
-
-  for (const framework of containerFrameworks) {
-    const files = emit(framework);
-    const config = viteConfigOf(files);
-    const declared = rangeMinMajor(JSON.parse(files["package.json"]).dependencies?.vite);
-    const resolved = bakedViteMajors(framework);
-    // Nothing on vite at all: no host gate to open.
-    if (declared === null && resolved.length === 0) continue;
-
-    const byConfig = config !== null && /allowedHosts/.test(config);
-    // The env var only exists from vite 6, so EVERY vite the container could run has
-    // to be >= 6 for that branch to hold — a declared range that can float down to 5
-    // counts against it.
-    const lowest = Math.min(...[declared, ...resolved].filter((major) => major !== null));
-    if (byConfig || lowest >= 6) continue;
-
-    failures.push(
-      `${framework}: runs vite ${lowest} (declared ${declared ?? "-"}, baked ${resolved.join("/") || "-"}) ` +
-        `and its vite config ${config === null ? "does not exist" : "has no allowedHosts"}`,
-    );
-  }
+  const failures = containerFrameworks
+    .map((framework) => hostGateFailure(framework, emit(framework), framework))
+    .filter((failure) => failure !== null);
 
   assert.deepEqual(
     failures,
@@ -181,4 +201,60 @@ test("the Vue docs vite pin matches the baked container it installs against", ()
         "Update extraContainer() in scripts/prepare-container.mjs and buildVueProject() together.",
     );
   }
+});
+
+// ── The same rule, against what is actually committed ─────────────────────────
+//
+// Everything above reads the generator. A session boots an ARTIFACT — a frozen copy of
+// what the generator emitted the last time that bucket was imported — so a fixed
+// generator plus a stale bucket is exactly the broken state that shipped for DEV-2564,
+// and nothing above can see it. `catalog-smoke.test.mjs` already walks these files but
+// only checks that they are runnable; the vite/host pairing needs the baked-lockfile
+// resolution and the version arithmetic that live in this file, so it goes here rather
+// than being duplicated there.
+
+const BUCKETS_DIR = fileURLToPath(new URL("../apps/authoring/public/docs-examples/", import.meta.url));
+
+/** Every committed docs artifact, bucket by bucket, as `{ label, entry }`. */
+function* committedArtifacts() {
+  for (const bucket of readdirSync(BUCKETS_DIR, { withFileTypes: true })) {
+    if (!bucket.isDirectory()) continue;
+    for (const file of readdirSync(`${BUCKETS_DIR}${bucket.name}`)) {
+      if (!file.endsWith(".json") || file === "manifest.json") continue;
+      yield {
+        label: `${bucket.name}/${file}`,
+        entry: JSON.parse(readFileSync(`${BUCKETS_DIR}${bucket.name}/${file}`, "utf8")),
+      };
+    }
+  }
+}
+
+test("every committed container artifact opts in to the preview host", () => {
+  const failures = [];
+  let checked = 0;
+
+  for (const { label, entry } of committedArtifacts()) {
+    if (entry.engine !== "container") continue;
+    checked += 1;
+    const failure = hostGateFailure(label, entry.files, entry.container ?? entry.framework);
+    if (failure !== null) failures.push(failure);
+  }
+
+  // Guard the guard: a rename of the buckets directory, or an artifact schema that stops
+  // carrying `engine`, would otherwise turn this into a test that walks nothing and
+  // passes. There were 502 Vue and 568 Angular container artifacts when this was written.
+  assert.ok(
+    checked > 500,
+    `expected to walk hundreds of committed container artifacts, walked ${checked} — ` +
+      `is ${BUCKETS_DIR} still where the buckets live?`,
+  );
+
+  assert.deepEqual(
+    failures.slice(0, 10),
+    [],
+    `${failures.length} committed container artifacts will have their HMR upgrade refused ` +
+      `(first 10 shown):\n  ${failures.slice(0, 10).join("\n  ")}\n` +
+      "The generator is not the fix on its own — re-run the 'Import versioned docs examples' " +
+      "workflow so the buckets carry it.",
+  );
 });
