@@ -11,8 +11,12 @@ and the look of the editor under our own control.
 ## One UX, two engines behind an adapter
 
 The editor shell binds only to the `DemoRuntime` interface
-(`packages/runtime/src/types.ts`). `resolveRuntime(entry)` selects the engine by
-tier:
+(`packages/runtime/src/types.ts`) and branches on one field, `entry.engine`. That
+field is **not** derived from the tier at render time: it is authored per framework
+in `config/frameworks.json` and only *defaults* from the tier when the catalog is
+generated (`engine: cfg.engine ?? (cfg.tier === 2 ? "container" : "sandpack")`,
+`pipeline/import.mjs`). Five tier-1 starters deliberately override it to
+`"container"` (see below), so "tier 1 means Sandpack" is false — read `engine`.
 
 ```
 DemoRuntime
@@ -25,9 +29,9 @@ DemoRuntime
   `typescript`, `react`, `vue`. Bundles in the browser; no server; tens-of-ms
   edit latency; zero compute cost.
 - **Tier 1 via the container engine:** `react-js`, `ant-design`, `mui`,
-  `base-web`. Still tier 1 (no SSR), but routed through the same container
-  engine as Tier 2 so they render exactly as authored (real Vite dev server)
-  instead of through Sandpack's in-browser bundler.
+  `base-web`, `fluent-ui`. Still tier 1 (no SSR), but routed through the same
+  container engine as Tier 2 so they render exactly as authored (real Vite dev
+  server) instead of through Sandpack's in-browser bundler.
 - **Tier 2 — SSR / meta-framework:** `angular`, `next.js`, `next-shadcn.js`,
   `astro`, `nuxt`, `remix`. A per-session container runs the framework's real
   `npm run dev` with HMR; edits stream over WebSocket; the preview iframe points

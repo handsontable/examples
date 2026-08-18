@@ -674,8 +674,3 @@ export class SandpackRuntime implements DemoRuntime {
     }
   }
 }
-
-/** Factory matching RuntimeFactories["sandpack"], with shared options closed over. */
-export function makeSandpackFactory(base: Omit<SandpackRuntimeOptions, "version"> & { version?: HandsontableVersionRef }) {
-  return (entry: CatalogEntry) => new SandpackRuntime(entry, base);
-}

@@ -28,9 +28,9 @@ import { test, expect, type FrameLocator, type Page } from "@playwright/test";
 // `angular` carry the same rule but are `engine: "container"`, so including them
 // would force the 5-slot `Sandbox` pool and a same-origin API worker onto every
 // run. Check those by hand against a `vite dev` with `VITE_API_BASE` pointed at
-// its own port — and note `angular` is `test.fixme` in `style-apply.spec.ts`
-// because no *edit* reaches its preview (DEV-2216), so only its initial load is
-// observable there.
+// its own port. `angular` is a full case in `style-apply.spec.ts` (DEV-2216): what
+// once read as "no edit reaches its preview" was a silent type-check failure in the
+// generated theme module, so edits there are observable now.
 
 /** Every starter that stripes its own rows and boots in Sandpack. */
 const EXAMPLES = ["react", "javascript", "typescript", "vue"] as const;
