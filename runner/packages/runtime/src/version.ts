@@ -196,9 +196,24 @@ export function handsontableDependencyRef(files: FilesMap, pkgPath = "/package.j
   const urlRef = parsePkgPrNewFromUrl(value);
   if (urlRef !== null) return urlRef;
 
-  // Ranges and dist-tags fail here, which is the point: they say "whatever npm
-  // has", not "this build", so they carry no ref to preserve.
-  const validated = validateHandsontableVersion(value);
+  // Only a value that names one build counts. Ranges and dist-tags say "whatever
+  // npm has", so they carry no ref to preserve — and neither does a *partial*
+  // version, which npm reads as a range too: "18" is any 18.x, so deriving
+  // 18.0.0 from it would pin the demo below what npm would have installed.
+  // `validateHandsontableVersion` coerces partials, so the shape is checked here
+  // rather than delegated to it.
+  const trimmed = value.trim();
+
+  if (/^\d+$/.test(trimmed)) {
+    // A bare integer is either a pkg.pr.new id or a major-only range; the
+    // validator's own threshold is what tells them apart, and only the id names a
+    // build. This is the hand-typed PR number from DEMOS-1X.
+    const numeric = validateHandsontableVersion(trimmed);
+    return numeric.ok && numeric.value.pkgPrNew ? numeric.value.ref : null;
+  }
+
+  if (!/^\d+\.\d+\.\d+(?:[-+].*)?$/.test(trimmed)) return null;
+  const validated = validateHandsontableVersion(trimmed);
   return validated.ok ? validated.value.ref : null;
 }
 

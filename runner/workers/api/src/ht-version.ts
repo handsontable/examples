@@ -49,6 +49,11 @@ export async function fetchVersionCatalog(env: Env): Promise<VersionCatalog> {
   if (cached) return cached;
 
   const r = await fetch("https://registry.npmjs.org/handsontable");
+  // Checked before anything is cached: an error body parses fine as JSON and
+  // would otherwise be stored as an empty catalog for the whole TTL. That used to
+  // degrade only the version dropdown; since this module gates demo creation it
+  // would 502 every create that falls through to npm latest for an hour.
+  if (!r.ok) throw new Error(`npm registry answered ${r.status} for handsontable`);
   const j = (await r.json()) as {
     "dist-tags"?: Record<string, string>;
     versions?: Record<string, unknown>;
@@ -70,6 +75,11 @@ export async function fetchVersionCatalog(env: Env): Promise<VersionCatalog> {
     .filter((v) => { const m = Number(v.split(".")[0]); return m >= DEFAULT_MIN_MAJOR && m <= DEFAULT_MAX_MAJOR; })
     .sort(cmp)
     .slice(0, 15);
+
+  // A document with no `latest` is not a catalog worth keeping for an hour
+  // either: it answers no version question, and npm having no latest tag for
+  // handsontable means something is wrong upstream, not here.
+  if (!latest) throw new Error("npm registry document carries no handsontable latest dist-tag");
 
   const payload: VersionCatalog = { latest, next, versions };
   await env.CACHE.put(CATALOG_KEY, JSON.stringify(payload), { expirationTtl: CATALOG_TTL });

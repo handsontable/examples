@@ -44,7 +44,7 @@ const devDeps = (files) => JSON.parse(files["/package.json"]).devDependencies;
 
 /** Env double: KV-backed `CACHE`, plus a registry document served to global `fetch`
  *  (which is how the Worker reaches npm). `t.after` restores the real one. */
-function fakeEnv(t, { latest = "18.0.0", registry = true } = {}) {
+function fakeEnv(t, { latest = "18.0.0", registry = true, status = 200 } = {}) {
   const store = new Map();
   const calls = { registry: 0 };
   const env = {
@@ -62,9 +62,10 @@ function fakeEnv(t, { latest = "18.0.0", registry = true } = {}) {
     calls.registry += 1;
     if (!registry) throw new Error("registry unreachable");
     return {
-      ok: true,
+      ok: status >= 200 && status < 300,
+      status,
       json: async () => ({
-        "dist-tags": { latest, next: "0.0.0-next-stale-20260219" },
+        "dist-tags": { ...(latest ? { latest } : {}), next: "0.0.0-next-stale-20260219" },
         versions: { "17.6.0": {}, "18.0.0": {} },
         time: { "19.0.0-next.4": "2026-08-01T00:00:00.000Z" },
       }),
@@ -84,11 +85,24 @@ test("handsontableDependencyRef keeps an exact published version", () => {
   assert.equal(handsontableDependencyRef(filesWith("17.6.0")), "17.6.0");
 });
 
+test("handsontableDependencyRef keeps a bare pkg.pr.new id — the DEMOS-1X shape", () => {
+  assert.equal(handsontableDependencyRef(filesWith("13106")), "13106");
+});
+
 test("handsontableDependencyRef refuses a range or a dist-tag", () => {
   assert.equal(handsontableDependencyRef(filesWith("^18.0.0")), null);
+  assert.equal(handsontableDependencyRef(filesWith("~18.0.0")), null);
+  assert.equal(handsontableDependencyRef(filesWith(">=17")), null);
   assert.equal(handsontableDependencyRef(filesWith("latest")), null);
   assert.equal(handsontableDependencyRef({ "/package.json": "{}" }), null);
   assert.equal(handsontableDependencyRef({}), null);
+});
+
+test("handsontableDependencyRef refuses a partial version, which npm reads as a range", () => {
+  // "18" is any 18.x and "18.0" any 18.0.x. Deriving 18.0.0 from either would
+  // pin the demo *down* from whatever npm would have installed.
+  assert.equal(handsontableDependencyRef(filesWith("18")), null);
+  assert.equal(handsontableDependencyRef(filesWith("18.0")), null);
 });
 
 test("handsontableDependencyRef ignores an unparseable package.json", () => {
@@ -249,6 +263,21 @@ test("fetchVersionCatalog caches the registry document in KV", async (t) => {
   assert.equal(first.latest, "18.0.0");
   assert.deepEqual(second, first);
   assert.equal(calls.registry, 1, "second call is served from KV");
+});
+
+test("fetchVersionCatalog refuses a non-200 registry response instead of caching an empty catalog", async (t) => {
+  // A cached `{latest:null}` would answer for an hour, and since DEV-2565 the
+  // catalog gates demo creation, not just the version dropdown: every create
+  // that falls through to npm latest would 502 for that hour.
+  const { env, calls } = fakeEnv(t, { status: 503 });
+  await assert.rejects(() => fetchVersionCatalog(env), /registry/i);
+  await assert.rejects(() => fetchVersionCatalog(env));
+  assert.equal(calls.registry, 2, "nothing was cached, so the second call retries npm");
+});
+
+test("fetchVersionCatalog refuses a registry document with no latest dist-tag", async (t) => {
+  const { env } = fakeEnv(t, { latest: null });
+  await assert.rejects(() => fetchVersionCatalog(env), /latest/i);
 });
 
 test("fetchVersionCatalog lists only in-range published releases, newest first", async (t) => {

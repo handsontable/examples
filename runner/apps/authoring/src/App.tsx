@@ -576,9 +576,13 @@ function FullMode({ id }: { id: string }) {
     let cancelled = false;
     fetch(`${API_BASE}/api/demos/${id}/source`)
       .then((res) => (res.ok ? res.json() : null))
-      .then((src: { framework: string; files: FilesMap } | null) => {
+      .then((src: { framework: string; files: FilesMap; htVersion?: string | null } | null) => {
         if (cancelled || !src) return;
         setFiles(src.files);
+        // The repaired ref (DEV-2565) — the metadata read above hands this view
+        // `ht_version` verbatim, so a demo saved before that fix would print the
+        // "latest" sentinel as its version.
+        if (src.htVersion) setVersion(src.htVersion);
         // The design's short label ("React (Vite, TS)") comes from the starter catalog,
         // same resolution the shell's status bar uses in every other mode.
         setFrameworkName(catalog.examples.find((x) => x.framework === src.framework)?.displayName);
@@ -1358,7 +1362,12 @@ function Authoring({
           setTitle(meta.title ?? "");
           setDescription(meta.description ?? "");
           setCreatedAt(meta.created_at ?? "");
-          const pinned = src.htVersion ?? meta.ht_version;
+          // Presence, not truthiness: the route answers `null` for a legacy row
+          // whose snapshot pins nothing exact, and *that* is the answer — falling
+          // back to `meta.ht_version` there would adopt the "latest" sentinel and
+          // reproduce the boot refusal this branch removes. `meta` is only the
+          // fallback for an API old enough not to send the field at all.
+          const pinned = "htVersion" in src ? src.htVersion : meta.ht_version;
           if (pinned) {
             hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
             setVersion(pinned);
