@@ -343,6 +343,15 @@ export class ContainerRuntime implements DemoRuntime {
   private previewUrl = "";
   private port = 0;
   private pointed = false;
+  /**
+   * Whether the iframe has ever been pointed at the preview URL.
+   *
+   * Distinct from `pointed`, which is `poll()`'s own gate and goes false again
+   * when a confirmation fails (see `confirmAndEmitReady`). `dispose()` needs the
+   * sticky answer: a frame left on the preview URL keeps its HMR reconnect loop
+   * running, and that loop resurrects the container this dispose just destroyed.
+   */
+  private frameEverPointed = false;
   /** Settle callbacks for in-flight `reload()` promises, so `dispose()` can close them
    *  out rather than leaving the shell's refresh spinner up on a torn-down preview. */
   private readonly reloadSettlers = new Set<() => void>();
@@ -423,13 +432,24 @@ export class ContainerRuntime implements DemoRuntime {
     const data = event.data as { source?: unknown; state?: unknown } | null;
     if (!data || typeof data !== "object" || data.source !== "demo-preview") return;
     if (data.state !== "booting" && data.state !== "dead") return;
-    this.pendingFrameState = data.state;
-    // The message normally lands before the `load` it belongs to, but a browser that
-    // delivers it after would otherwise have the grace already running on our own
-    // apology page.
+    // Which navigation does this message describe? A grace timer is running only
+    // between a `load` and the readiness decision for that same document, so:
+    //
+    // - grace running -> it describes what is in the frame NOW (either a message
+    //   delivered after its own `load`, or the next boot-page refresh arriving
+    //   inside the previous document's 3.5s grace — the refresh interval is 2s).
+    //   Cancel the decision and keep nothing: leaving it pending would let the
+    //   next `load` — often the recovered demo — consume a stale `booting` and
+    //   never emit ready, which is the boot overlay covering a working grid.
+    // - no grace running -> the page is being parsed and its `load` has not
+    //   fired yet (the ordinary case, since the script runs at parse time).
+    //   Hold it for that `load` to consume.
     if (this.graceTimer) {
       clearTimeout(this.graceTimer);
       this.graceTimer = null;
+      this.pendingFrameState = "unknown";
+    } else {
+      this.pendingFrameState = data.state;
     }
     if (data.state === "dead") this.reportPreviewDead();
   };
@@ -705,6 +725,7 @@ export class ContainerRuntime implements DemoRuntime {
             // boot + render the grid after the HTML loads). We can't inspect the
             // cross-origin iframe, so: on load, wait a short grace, then ready.
             this.pointed = true;
+            this.frameEverPointed = true;
             this.emitProgress("Dev server ready — rendering the demo…");
             // The port answered, but a port is not a page: the request the frame is
             // about to make can still land on the Worker's boot page. `onFrameLoad`
@@ -885,7 +906,7 @@ export class ContainerRuntime implements DemoRuntime {
           // request). Without this the preview would just quietly go stale.
           const failure = await readFailure(r);
           if (this.disposed || !failure.code?.startsWith("budget_")) return;
-          if (this.pointed) this.opts.iframe.src = "about:blank";
+          if (this.frameEverPointed) this.opts.iframe.src = "about:blank";
           this.emitError(new SessionStartError(410, failure.message, failure.code));
         })
         .catch(() => {});
@@ -933,7 +954,7 @@ export class ContainerRuntime implements DemoRuntime {
     window.removeEventListener("message", this.onPreviewMessage);
     // Guarded like the `src` reset below: the listener is attached when the iframe is
     // pointed, and a runtime disposed before that never touched the element.
-    if (this.pointed) this.opts.iframe.removeEventListener("load", this.onFrameLoad);
+    if (this.frameEverPointed) this.opts.iframe.removeEventListener("load", this.onFrameLoad);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     if (this.pollTimer) clearTimeout(this.pollTimer);
     if (this.graceTimer) clearTimeout(this.graceTimer);
@@ -944,7 +965,7 @@ export class ContainerRuntime implements DemoRuntime {
     // the Worker's first routing step), so a still-mounted iframe — above all
     // its Vite HMR WebSocket reconnect loop — would resurrect the container
     // this dispose just destroyed.
-    if (this.pointed) this.opts.iframe.src = "about:blank";
+    if (this.frameEverPointed) this.opts.iframe.src = "about:blank";
     // On the `pointed` path that `about:blank` fires its own `load` and would settle
     // these anyway; doing it here too costs a line and drops the ordering assumption.
     for (const settle of [...this.reloadSettlers]) settle();

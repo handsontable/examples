@@ -152,6 +152,48 @@ test("a message that lands after its own load still cancels the grace", async ()
   }
 });
 
+test("a late message does not poison the navigation after it", async () => {
+  // Bugbot #222: a message delivered after its own `load` used to stay pending, so
+  // the boot page's next refresh — often the recovered demo — consumed a stale
+  // `booting` and never emitted ready. That is the boot overlay sitting over a
+  // working grid, the failure mode this whole change exists to avoid.
+  const h = await pointed();
+  try {
+    h.load();
+    h.post("booting");
+    await afterGrace();
+    assert.deepEqual(h.ready, [], "the frame is holding the boot page right now");
+
+    h.load(); // the meta-refresh that finds the dev server up
+    await afterGrace();
+    assert.deepEqual(h.ready, [true], "the next document must be judged on its own");
+  } finally {
+    h.restore();
+  }
+});
+
+test("a refresh arriving inside the previous grace does not become the next verdict", async () => {
+  // The boot page refreshes every 2s and the grace is 3.5s, so in production the
+  // next document's parse-time message routinely lands while the previous
+  // document's grace is still running.
+  const h = await pointed();
+  try {
+    h.post("booting");
+    h.load(); // boot page N
+    await afterGrace();
+    h.load(); // boot page N+1
+    h.post("booting"); // ...whose message arrives during N+1's grace
+    await afterGrace();
+    assert.deepEqual(h.ready, [], "still the boot page");
+
+    h.load(); // the demo
+    await afterGrace();
+    assert.deepEqual(h.ready, [true]);
+  } finally {
+    h.restore();
+  }
+});
+
 test("the terminal page reports an error instead of ready, once", async () => {
   const h = await pointed();
   try {
@@ -232,6 +274,25 @@ test("a port that stopped answering during the grace does not become ready", asy
     h.load();
     await afterGrace();
     assert.deepEqual(h.ready, [true]);
+  } finally {
+    h.restore();
+  }
+});
+
+test("a dispose while awaiting recovery still blanks the frame", async () => {
+  // Bugbot #222: `dispose()` keyed the `about:blank` on `pointed`, which the
+  // confirmation path clears. A frame left on the preview URL keeps its HMR
+  // reconnect loop running, and that loop resurrects the container this dispose
+  // just destroyed — the exact case the guard was written for.
+  let up = true;
+  const h = await pointed({ ready: () => up });
+  try {
+    up = false;
+    h.load();
+    await afterGrace();
+    assert.equal(h.runtime.pointed, false, "the confirmation failed, so poll() owns the frame again");
+    h.runtime.dispose();
+    assert.equal(h.iframe.src, "about:blank");
   } finally {
     h.restore();
   }
