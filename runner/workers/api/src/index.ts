@@ -8,16 +8,35 @@
 
 import { getSandbox, proxyToSandbox, Sandbox as SandboxBase } from "@cloudflare/sandbox";
 import * as Sentry from "@sentry/cloudflare";
-import { DEFAULT_MAX_MAJOR, DEFAULT_MIN_MAJOR, mintSessionId, pickLatestNextVersion } from "@handsontable/demo-runtime";
-import { injectMonitor } from "./monitor-inject.js";
+import { mintSessionId } from "@handsontable/demo-runtime";
+import { injectMonitor, injectScheme } from "./monitor-inject.js";
+import { viteAllowedHostEnv } from "./preview-allowed-hosts.js";
+import {
+  PRODUCTION_HOST,
+  apiSentryDsn,
+  apiSentryEnvironment,
+  rehomeBudgetAlert,
+} from "./sentry-gate.js";
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate, authenticateService, sameOwner } from "./auth.js";
 import { MAX_TITLE, isValidationError, validateDescription, validateTitle } from "./demo-info.js";
 import { isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
+import { editorVersionRef, fetchVersionCatalog, resolveHandsontableVersion } from "./ht-version.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
-import { errorPageResponse } from "./error-page.js";
+import { errorPageResponse, wantsHtmlError } from "./error-page.js";
+import { classifyPreviewBootFailure, isPortNotListening } from "./preview-boot.js";
+import {
+  AT_CAPACITY_CODE,
+  atCapacityMessage,
+  destroyConfirmed,
+  isAtCapacityFailure,
+  isExpectedTeardownFailure,
+  TOMBSTONE_ATTEMPTED,
+  TOMBSTONE_DESTROYED,
+  TOMBSTONE_TTL_SECONDS,
+} from "./session-lifecycle.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
@@ -63,21 +82,27 @@ import { requestTheme, validateStylePrompt } from "./theme-ai.js";
 // abandoned sessions exhaust the pool. Disk is ephemeral, so a slept container
 // cold-boots on return — the point is to avoid that mid-session, not to make
 // wake cheap.
-/** The one production host. Doubles as the "am I deployed?" signal below. */
-const PRODUCTION_HOST = "demos.handsontable.com";
-
 /**
  * Sentry init options, shared by the fetch handler and both Durable Objects so
  * every event carries the same release and environment. Errors only — no
  * tracing, no profiling. See docs/run-and-deploy.md.
  *
- * Reporting is enabled only on the deployed Worker. `PREVIEW_HOST` is the
- * discriminator: it is `demos.handsontable.com` in the committed
- * `wrangler.jsonc` vars and is overridden to `localhost:8787` by
- * `workers/api/.dev.vars` for local runs — the same prod-vs-local switch the
- * Tier-2 preview URLs already depend on. Without the gate, `wrangler dev` would
- * file local experiments as `api-production` issues. The browser SDK gates on
- * `window.location.hostname` for the same reason.
+ * Every decision here lives in `sentry-gate.ts`, which is import-free and unit
+ * tested (`pipeline/sentry-gating.test.mjs`). In summary (DEV-2540):
+ *
+ * - Reporting needs TWO signals. `PREVIEW_HOST === PRODUCTION_HOST` was the only
+ *   one, and it fails open: the committed `wrangler.jsonc` vars carry the
+ *   production host, so the config default IS the production value and only the
+ *   gitignored `.dev.vars` — a manual setup step — turns it off. A developer who
+ *   skipped that step filed `wrangler dev` runs into the production project.
+ *   `SENTRY_ENVIRONMENT` comes only from the `deploy` script's `--var`, so
+ *   `wrangler dev` cannot produce it and the gate now fails closed. The cost is
+ *   that a bare `wrangler deploy` ships reporting silently OFF — documented.
+ * - `environment` is that same deploy var rather than a hardcoded literal, which
+ *   is what stopped local runs from being labelled `api-production`.
+ * - `beforeSend` re-homes the nightly spend alerts to their own `environment` so
+ *   they stay filterable and rate-limitable apart from real faults. It drops
+ *   nothing.
  *
  * The DSN var is deliberately NOT named `SENTRY_DSN`: the SDK's own
  * `getFinalOptions` falls back to `env.SENTRY_DSN` whenever the options object
@@ -92,14 +117,138 @@ const PRODUCTION_HOST = "demos.handsontable.com";
  * throwaway id, and a missing release must never throw at init.
  */
 const sentryOptions = (env: Env): Sentry.CloudflareOptions => ({
-  dsn: env.PREVIEW_HOST === PRODUCTION_HOST ? env.ERROR_REPORTING_DSN : undefined,
-  environment: "api-production",
+  dsn: apiSentryDsn(env),
+  environment: apiSentryEnvironment(env),
   release: env.CF_VERSION_METADATA?.id,
   tracesSampleRate: 0,
+  beforeSend: rehomeBudgetAlert,
 });
+
+/**
+ * The literal value of the SDK's `PREVIEW_PROXY_HEADER`, pinned.
+ *
+ * `proxyToSandbox()` strips the four `x-sandbox-preview-*` names off the
+ * incoming request and sets this one to "1" before calling `sandbox.fetch()`,
+ * so it is the reliable "this DO fetch is preview traffic" signal. The constant
+ * is `@internal` in the SDK and not exported, hence the copy. If the SDK renames
+ * it, the check below stops matching and we degrade to today's behaviour — a 500
+ * — which is the right direction for a guess to fail in.
+ */
+const PREVIEW_PROXY_HEADER = "x-sandbox-preview-proxy";
+
+/** Marks our own boot-failure page so the proxy seam leaves it alone. */
+const PREVIEW_BOOTING_HEADER = "x-demo-preview-booting";
 
 class SandboxBaseWithSleep extends SandboxBase {
   sleepAfter = "5m";
+
+  /**
+   * When the container this DO fronts last started, or when it first refused a
+   * preview request. In-memory on purpose: it is a per-boot clock, and a DO
+   * isolate recreated without `onStart()` having run falls back to the
+   * first-refusal stamp, which biases toward under-reporting. That is the
+   * correct direction here — over-reporting is the bug being fixed.
+   */
+  private bootStartedAt: number | null = null;
+  /** One Sentry event per overrunning boot, not one per HMR retry. */
+  private bootFailureReported = false;
+
+  /**
+   * Fires on every container start, which is exactly the clock DEV-2537 needs:
+   * a refusal is only ever reachable inside the generation that exposed the port
+   * (see `preview-boot.ts` — a restart makes every preview URL a 410 instead),
+   * so "since this container started" is the right thing to measure. Stamped
+   * before `super.onStart()` because the SDK's own start work is part of the
+   * boot a visitor is waiting on.
+   */
+  override async onStart(): Promise<void> {
+    this.bootStartedAt = Date.now();
+    this.bootFailureReported = false;
+    await super.onStart();
+  }
+
+  /**
+   * Turn "the container is up but nothing is listening on the dev-server port"
+   * into an honest 503 instead of a thrown exception (DEV-2537).
+   *
+   * This has to live inside the Durable Object, not at the Worker's proxy seam:
+   * `proxyToSandbox()` already catches and synthesises `500 Proxy routing error`,
+   * so the Worker never sees the throw — and the Sentry event does not come from
+   * `withSentry` on the fetch handler either. It comes from
+   * `instrumentDurableObjectWithSentry`, which binds and wraps `obj.fetch` after
+   * construction. Because it binds the *instance* method, this override is what
+   * gets wrapped, so our catch runs first and Sentry never sees a throw. An event
+   * captured here still ships: the wrapper's isolation scope holds the client for
+   * the whole call and flushes it via `waitUntil` on the normal return path.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    let response: Response;
+    try {
+      response = await super.fetch(request);
+    } catch (err) {
+      // Anything we did not diagnose keeps today's status and today's report.
+      // The intercept keys on a workerd message string, so a wording change must
+      // degrade to current behaviour, never to a swallowed error.
+      if (!isPortNotListening(err) || request.headers.get(PREVIEW_PROXY_HEADER) !== "1") throw err;
+      return this.previewBootFailureResponse(request, err);
+    }
+    // Cleared on any non-throwing return, so a dev server that dies mid-session
+    // starts a fresh clock at its first refusal rather than being permanently
+    // silenced by the successful boot that preceded it.
+    this.bootStartedAt = null;
+    this.bootFailureReported = false;
+    return response;
+  }
+
+  private previewBootFailureResponse(request: Request, err: unknown): Response {
+    if (this.bootStartedAt === null) this.bootStartedAt = Date.now();
+    // `PREVIEW_PROXY_HEADERS` strips only the four `x-sandbox-preview-*` names,
+    // so `Upgrade` and `Accept` are the client's own and are readable here.
+    const descriptor = classifyPreviewBootFailure({
+      elapsedMs: Date.now() - this.bootStartedAt,
+      isUpgrade: request.headers.get("Upgrade")?.toLowerCase() === "websocket",
+      wantsHtml: wantsHtmlError(new URL(request.url).pathname),
+      acceptsHtml: (request.headers.get("Accept") ?? "").toLowerCase().includes("text/html"),
+    });
+
+    if (descriptor.report && !this.bootFailureReported) {
+      this.bootFailureReported = true;
+      // Fingerprinted away from the raw error. Without this the surviving
+      // events land in the same issue as the 500s this change removes, and the
+      // one signal that tells "the fix worked" from "the report never fired" —
+      // volume dropping to near zero rather than to exactly zero — is unreadable.
+      Sentry.captureException(err, {
+        fingerprint: ["preview-boot-window-exceeded"],
+        tags: { preview_boot: "terminal" },
+      });
+    }
+
+    const response =
+      descriptor.shape === "html"
+        ? errorPageResponse({
+            status: 503,
+            title: descriptor.title,
+            body: descriptor.body,
+            refreshSeconds: descriptor.refreshSeconds,
+            // Only the document shape can carry it — the other two shapes are a
+            // bodyless upgrade refusal and a sub-resource, neither of which runs
+            // a script (DEV-2547).
+            previewState: descriptor.previewState,
+          })
+        : new Response(descriptor.shape === "bare" ? null : `${descriptor.title}. ${descriptor.body}`, {
+            status: 503,
+            headers: descriptor.shape === "bare" ? {} : { "Content-Type": "text/plain; charset=utf-8" },
+          });
+
+    // 503 stays the status for both branches. It is what `Retry-After` is for,
+    // and it is in the SDK's `RETRYABLE_WEBSOCKET_UPGRADE_STATUSES` — the SDK's
+    // own 410 "stale preview" would drop out of that set and change how HMR
+    // reconnects. `refreshSeconds` and the copy carry the distinction instead.
+    response.headers.set("Cache-Control", "no-store");
+    response.headers.set("Retry-After", String(descriptor.retryAfterSeconds));
+    response.headers.set(PREVIEW_BOOTING_HEADER, "1");
+    return response;
+  }
 }
 
 /** The builder is destroyed in runBuild's `finally`, so this window only ever
@@ -198,7 +347,28 @@ const liveSbx = (env: Env, id: string): SandboxLike => getSandboxShallow(env.San
  *  A KV read failure counts as "no tombstone" — refusing healthy sessions on
  *  a KV hiccup is worse than falling back to the sleepAfter backstop. */
 const isTombstoned = async (env: Env, sessionId: string): Promise<boolean> =>
-  (await env.CACHE.get(`session-tombstone:${sessionId}`).catch(() => null)) !== null;
+  (await readTombstone(env, sessionId)) !== null;
+
+const tombstoneKey = (sessionId: string) => `session-tombstone:${sessionId}`;
+
+/** The marker's value, not just its presence — `TOMBSTONE_ATTEMPTED` (a teardown
+ *  started, outcome unknown) vs `TOMBSTONE_DESTROYED` (we watched `destroy()`
+ *  resolve). Only the second lets `DELETE /api/session/:id` answer without a
+ *  sandbox RPC; see `destroyConfirmed`. A KV read failure reads as no marker,
+ *  for the reason `isTombstoned` documents. */
+const readTombstone = (env: Env, sessionId: string): Promise<string | null> =>
+  env.CACHE.get(tombstoneKey(sessionId)).catch(() => null);
+
+/** Write (or upgrade) a marker. Always best-effort: every caller is on a
+ *  teardown path whose primary action is the destroy, and a KV hiccup there
+ *  must not become the 500 this whole change exists to remove. Without the
+ *  marker the mid-create race and the duplicate-DELETE skip both fall back to
+ *  the `sleepAfter` backstop, which is where they were before DEV-2556. */
+async function putTombstone(env: Env, sessionId: string, marker: string): Promise<void> {
+  try {
+    await env.CACHE.put(tombstoneKey(sessionId), marker, { expirationTtl: TOMBSTONE_TTL_SECONDS });
+  } catch { /* defense-in-depth only */ }
+}
 
 function cors(resp: Response): Response {
   const h = new Headers(resp.headers);
@@ -325,11 +495,13 @@ async function sessionSubrouteGuard(env: Env, sessionId: string): Promise<Respon
   if (state.tier !== "closed") return null;
 
   await meterSession(env, sessionId, { final: true });
-  try {
-    await env.CACHE.put(`session-tombstone:${sessionId}`, "1", { expirationTtl: 600 });
-  } catch { /* the destroy below is the primary action */ }
+  await putTombstone(env, sessionId, TOMBSTONE_ATTEMPTED);
   try {
     await liveSbx(env, sessionId).destroy();
+    // Upgrade only on the resolved destroy, and inside the try: a marker that
+    // said "destroyed" after a failed teardown would let the next DELETE skip
+    // the RPC and strand the container until sleepAfter.
+    await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
   } catch { /* best effort */ }
   console.log(`[budget] closed live session ${sessionId}: over the monthly ceiling`);
   return json({ error: "budget_exhausted", message: budgetPausedMessage, tier: "closed" }, 410);
@@ -408,7 +580,15 @@ export default Sentry.withSentry(sentryOptions, {
     // and dev-server payload of a live session leaves through here. Count the
     // bytes on the way out (WebSocket upgrades pass through unmeasured), after the
     // monitor rewrite so its bytes are metered too.
-    if (proxied) return countEgress(await injectMonitor(proxied, env, PRODUCTION_HOST));
+    // Our own boot-failure page (DEV-2537) is not a dev-server document and has
+    // no demo to monitor or re-theme — skip both injections, but still meter the
+    // bytes.
+    if (proxied) {
+      const body = proxied.headers.has(PREVIEW_BOOTING_HEADER)
+        ? proxied
+        : await injectScheme(await injectMonitor(proxied, env, PRODUCTION_HOST));
+      return countEgress(body);
+    }
 
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
 
@@ -451,7 +631,19 @@ export default Sentry.withSentry(sentryOptions, {
         // that is already gone.
         const closedWhileCreating = async (): Promise<Response | null> => {
           if (!(await isTombstoned(env, sessionId))) return null;
-          try { await sandbox.destroy(); } catch { /* best effort */ }
+          // Never skipped on a `destroyed` marker, unlike the DELETE handler: a
+          // confirmed destroy here refers to the generation the DELETE tore
+          // down, and the whole reason this check exists is that the create
+          // kept running afterwards and booted a NEW container under the same
+          // id. Skipping would leak exactly the container this is here to
+          // reclaim. The marker below is written after the destroy resolves, so
+          // it describes the container that actually just went away — which is
+          // what makes the client's follow-up DELETE (container.ts sends one
+          // when a create finishes after dispose) free instead of a boot.
+          try {
+            await sandbox.destroy();
+            await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
+          } catch { /* best effort */ }
           return json({ error: "session was closed while it was being created" }, 410);
         };
 
@@ -524,8 +716,20 @@ export default Sentry.withSentry(sentryOptions, {
           // ever runs. A subshell isolates that fatal exit so the parent always
           // reaches the marker append, whether the script failed or (for the
           // normal case) the dev server is still running in the foreground.
+          // `env` (DEV-2541) makes vite accept the HMR WebSocket upgrade. The SDK's
+          // preview proxy rewrites ordinary HTTP to `http://localhost:<port>` but
+          // forwards a WS upgrade with the ORIGINAL preview `Host`, so vite's
+          // `server.allowedHosts` check passes for the page and refuses the socket
+          // with a 400. See preview-allowed-hosts.ts for the full mechanism —
+          // in particular, this is NOT a `server.hmr` problem, so do not add
+          // `--hmr.clientPort` / `--hmr.protocol` to `dev.cmd`: vite's CLI has no
+          // `--hmr` option and aborts with CACError before it ever listens.
+          // Passed out of band rather than as an `export` line inside the script:
+          // the string is `shq`-quoted and runs under `set -e`, so splicing worker
+          // config into it would make a bad value a boot failure.
           await sandbox.startProcess(
             `sh -lc ${shq(`( ${script} ) > ${BOOT_LOG} 2>&1; echo "__RUNNER_EXIT__:$?" >> ${BOOT_LOG}`)}`,
+            { env: viteAllowedHostEnv(env.PREVIEW_HOST) },
           );
 
           // Preview URL host: the wildcard domain in production (PREVIEW_HOST), or
@@ -550,6 +754,31 @@ export default Sentry.withSentry(sentryOptions, {
           // run the same tombstone check before surfacing the error.
           const closed = await closedWhileCreating();
           if (closed) return closed;
+          // The pool is full (DEV-2556). Today this leaves as a 500 carrying
+          // the platform's own words — "…try configuring a higher value for
+          // max_instances" — straight to a visitor, via the raw-body tier of
+          // `sessionStartMessage`. It is a refusal, not a fault: a 503 with an
+          // envelope, phrased for the person reading it, alongside the budget
+          // guardrail's denials.
+          //
+          // The outer catch no longer fires here, so this refusal has to stay
+          // legible some other way — raising `max_instances` is a spend decision
+          // and it needs evidence. That evidence is the CLIENT's Sentry event:
+          // `reportRuntimeError` in apps/authoring/src/App.tsx keeps reporting a
+          // `SessionStartError` (only `isBudgetRefusal` is suppressed, and this
+          // code is not a `budget_` one), fingerprinted
+          // `["tier2-session-start", "503", "at_capacity"]` — the trailing code
+          // is what keeps it out of the same issue as an envelope-less platform
+          // 503, which carries the same status and a completely different cause.
+          // The log line below is a convenience, NOT the signal:
+          // `observability.head_sampling_rate` is 0.1, so nine of ten are never
+          // retained.
+          if (isAtCapacityFailure(err)) {
+            console.warn(
+              `[session] refused ${body.framework} session ${sessionId}: container pool at capacity`,
+            );
+            return json({ error: AT_CAPACITY_CODE, message: atCapacityMessage }, 503);
+          }
           throw err;
         }
       }
@@ -613,7 +842,22 @@ export default Sentry.withSentry(sentryOptions, {
         const port = Number(url.searchParams.get("port")) || 0;
         let ready = false;
         if (port) {
-          const probe = `node -e "require('net').connect(${port},'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"`;
+          // An HTTP GET of `/`, not a bare TCP connect (DEV-2547). A dev server that has
+          // bound the port but is not yet serving — or is answering 5xx — accepts a
+          // connection exactly like a healthy one, and the client points the iframe at
+          // the preview the moment this says `ready`. The frame's first request then
+          // races the server and can land on the Worker's own boot page, which is the
+          // reported "ready, but no grid" signature.
+          //
+          // `< 500` rather than `=== 200`: a starter that redirects its root or answers
+          // 404 there is still a server that is up, and this route is not the place to
+          // judge routing. A 2s timeout keeps the poll (2.5s on the client) from queueing
+          // on itself, and any error — refused, reset, timed out — reads as not ready,
+          // the same as the old probe.
+          const probe =
+            `node -e "const h=require('http');const q=h.get({host:'127.0.0.1',port:${port},path:'/',` +
+            `headers:{host:'localhost:${port}'},timeout:2000},s=>{s.resume();process.exit(s.statusCode<500?0:1)});` +
+            `q.on('timeout',()=>{q.destroy();process.exit(1)});q.on('error',()=>process.exit(1))"`;
           try { ready = (await sandbox.exec(probe)).success === true; } catch { ready = false; }
         }
         let log = "";
@@ -632,6 +876,24 @@ export default Sentry.withSentry(sentryOptions, {
       // DELETE /api/session/:id -> destroy container
       if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "session" && parts.length === 3) {
         const sessionId = parts[2]!;
+        // A session we have already watched go away answers from KV. Every
+        // sandbox RPC boots a container if one isn't running, so a second
+        // DELETE that re-entered the sandbox would be asking for a slot in
+        // order to destroy something that is not there — the create/delete
+        // race (packages/runtime/src/container.ts) sends exactly that.
+        if (destroyConfirmed(await readTombstone(env, sessionId))) {
+          // Still metered: `closedWhileCreating()` writes the confirmation
+          // without ever metering final, so on that arm this request is the
+          // only one that can close the awake window. A no-op once the meter
+          // key is gone (`meterSessionUnsafe` returns early on a missing
+          // meter), which is what every other writer of this marker leaves
+          // behind — the cost of keeping it is one KV read.
+          await meterSession(env, sessionId, { final: true });
+          // Keep the marker alive for as long as DELETEs keep arriving: it is
+          // also what the resurrection gate above reads.
+          await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
+          return cors(new Response(null, { status: 204 }));
+        }
         // Tombstone BEFORE destroying: if a create for this id is still in
         // flight (tab closed mid-POST), destroy() alone hits a half-built
         // session and the create keeps going — the POST handler re-checks
@@ -639,14 +901,56 @@ export default Sentry.withSentry(sentryOptions, {
         // stale markers from accumulating. Best-effort: a KV hiccup must not
         // block the primary destroy below (without the marker the mid-create
         // race falls back to the sleepAfter backstop).
-        try {
-          await env.CACHE.put(`session-tombstone:${sessionId}`, "1", { expirationTtl: 600 });
-        } catch { /* tombstone is defense-in-depth only */ }
+        await putTombstone(env, sessionId, TOMBSTONE_ATTEMPTED);
         // Close the awake window before the container goes away: this is the
         // one teardown path that knows the session is over for good.
         await meterSession(env, sessionId, { final: true });
         const sandbox = liveSbx(env, sessionId);
-        await sandbox.destroy();
+        // Releasing a container must not need one (DEV-2556, Sentry DEMOS-1).
+        // When the pool is full the platform refuses `destroy()` itself, and
+        // this route — the only unguarded destroy in the file — turned that
+        // into a thrown 500 nobody could act on: the caller is a fire-and-
+        // forget `keepalive` fetch from `pagehide` that discards the response.
+        // A refusal also means no slot is being held by whatever we failed to
+        // reach, so there is nothing left to reclaim here. Recognised platform
+        // messages become a 204; anything else still throws to the outer catch
+        // and keeps today's status and today's Sentry event.
+        try {
+          await sandbox.destroy();
+          await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
+        } catch (err) {
+          if (!isExpectedTeardownFailure(err)) throw err;
+          console.warn(
+            `[session] teardown for ${sessionId} declined by the platform:`,
+            err instanceof Error ? err.message : String(err),
+          );
+          // The log line alone is NOT the signal, and assuming it was is how
+          // this swallow would have gone dark: `observability.head_sampling_rate`
+          // is 0.1 in wrangler.jsonc, so nine of ten of these console.warn lines
+          // are never retained. Capacity events are rare (two in 90 days), which
+          // makes the expected number of surviving log lines a fraction of one.
+          //
+          // So the event still goes to Sentry — just as a `warning` that no
+          // longer fails the request, instead of the 500 it used to ride in on.
+          // Fingerprinted for the reason the preview-boot capture above is: the
+          // outer catch reports bare, and this project groups on the culprit
+          // `Object.fetch(index)`, so without a fingerprint this would land back
+          // in the same grab-bag as DEMOS-1 and be unreadable as a capacity
+          // signal. `beforeSend` (rehomeBudgetAlert) only re-homes
+          // `context: "budget-alert"` and drops nothing, so a warning arrives.
+          //
+          // This matters most for `container service is unreachable`, the
+          // weakest member of `isExpectedTeardownFailure`: unlike the other two
+          // it does NOT imply no slot is held, so a swallowed one can leave a
+          // container billing until sleepAfter. 204 is still the right answer to
+          // a caller that discards the response — but only because the failure
+          // is legible somewhere, and this is that somewhere.
+          Sentry.captureException(err, {
+            level: "warning",
+            fingerprint: ["tier2-teardown-declined"],
+            tags: { context: "tier2-teardown" },
+          });
+        }
         return cors(new Response(null, { status: 204 }));
       }
 
@@ -682,6 +986,17 @@ export default Sentry.withSentry(sentryOptions, {
         if (isValidationError(description)) return json(description, 400);
         const files = validateMcpFiles(body.files);
         if (isMcpValidationError(files)) return json(files, 400);
+        // Before the budget gate: an unusable version is a 400, not a container
+        // boot spent on an install that cannot succeed (DEV-2565).
+        // `trustDistTag`: a tag from this path is the model's own request, not a
+        // forwarded row value, and it is a machine caller's only lever.
+        const version = await resolveHandsontableVersion(env, { htVersion: body.htVersion, files, trustDistTag: true });
+        if (!version.ok) return json({ error: version.message }, version.status);
+        // The cap has to hold on what gets stored, not on what was sent: the pin
+        // re-serialises /package.json at two-space indent and swaps ranges for
+        // pkg.pr.new URLs, and both only grow it.
+        const pinnedFiles = validateMcpFiles(version.files);
+        if (isMcpValidationError(pinnedFiles)) return json(pinnedFiles, 400);
 
         // A build is a container boot, so it answers to the same ceiling as any other.
         const buildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `mcp build ${body.framework}` });
@@ -690,8 +1005,8 @@ export default Sentry.withSentry(sentryOptions, {
 
         const created = await createDemo(env, {
           entry: { framework: body.framework, ...cfg },
-          files,
-          htVersion: body.htVersion ?? "latest",
+          files: pinnedFiles,
+          htVersion: version.ref,
           title,
           description: description ?? null,
           createdBy: id.email,
@@ -707,6 +1022,11 @@ export default Sentry.withSentry(sentryOptions, {
             editUrl: `/edit/${created.id}`,
             shareUrl: `/share/${created.id}`,
             createdBy: id.email,
+            // What was actually built, which is not always what was asked for: a
+            // dist-tag resolves to a release, and it ranks below a pin the payload
+            // already carried. Echoed so a machine caller can see which ref won
+            // instead of reporting back whatever it sent (review of PR #230).
+            htVersion: version.ref,
           },
           201,
         );
@@ -732,6 +1052,8 @@ export default Sentry.withSentry(sentryOptions, {
         const description = validateDescription(body.description);
         if (isValidationError(description)) return json(description, 400);
         if (!body.files || !body.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
+        const version = await resolveHandsontableVersion(env, { htVersion: body.htVersion, files: body.files });
+        if (!version.ok) return json({ error: version.message }, version.status);
 
         // A build is a container boot too, so it answers to the same ceiling.
         // The caller is authenticated by definition here, so only the
@@ -742,8 +1064,8 @@ export default Sentry.withSentry(sentryOptions, {
 
         const created = await createDemo(env, {
           entry: { framework: body.framework, ...cfg },
-          files: body.files,
-          htVersion: body.htVersion ?? "latest",
+          files: version.files,
+          htVersion: version.ref,
           title,
           description: description ?? null,
           createdBy: id.email,
@@ -751,7 +1073,10 @@ export default Sentry.withSentry(sentryOptions, {
           now: nowIso(),
         });
         await recordUsageEvent(env, "share_created", body.framework);
-        return json({ id: created.id, url: `/d/${created.id}`, embedUrl: `/embed/${created.id}` }, 201);
+        return json(
+          { id: created.id, url: `/d/${created.id}`, embedUrl: `/embed/${created.id}`, htVersion: version.ref },
+          201,
+        );
       }
 
       // PATCH /api/mcp/demos/:id  (service auth, owner) — fix a demo in place from the
@@ -802,14 +1127,26 @@ export default Sentry.withSentry(sentryOptions, {
           if (isMcpValidationError(files)) return json(files, 400);
           const cfg = BUILD_CONFIG[row.framework];
           if (!cfg) return json({ error: `unknown framework: ${row.framework}` }, 400);
+          // `row.ht_version` is a candidate, not an authority: rows created before
+          // DEV-2565 hold the "latest" sentinel, which no consumer can use.
+          const version = await resolveHandsontableVersion(env, {
+            htVersion: patch.htVersion,
+            files,
+            previousRef: row.ht_version,
+            trustDistTag: true, // service path — see the create handler above
+          });
+          if (!version.ok) return json({ error: version.message }, version.status);
+          // See the create handler: the cap answers for the pinned map, not the sent one.
+          const pinnedFiles = validateMcpFiles(version.files);
+          if (isMcpValidationError(pinnedFiles)) return json(pinnedFiles, 400);
           const rebuildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `mcp rebuild ${row.framework}` });
           if (rebuildDenied) return rebuildDenied;
           await recordUsageEvent(env, "build", row.framework);
           await updateDemo(env, {
             id: demoId,
             entry: { framework: row.framework, ...cfg },
-            files,
-            htVersion: patch.htVersion ?? row.ht_version,
+            files: pinnedFiles,
+            htVersion: version.ref,
             // Absent means "leave the column alone" — never fall back to the row read
             // at the start of this handler, or a rename committed during the rebuild
             // would be reverted (the DEV-2495 lesson from the broker path above).
@@ -817,7 +1154,8 @@ export default Sentry.withSentry(sentryOptions, {
             ...(patchDescription !== undefined ? { description: patchDescription } : {}),
             now: nowIso(),
           });
-          return json({ ok: true, id: demoId, url: `/d/${demoId}`, editUrl: `/edit/${demoId}`, rebuilt: true });
+          // `htVersion` is what was built, not what was asked for — see the create handler.
+          return json({ ok: true, id: demoId, url: `/d/${demoId}`, editUrl: `/edit/${demoId}`, rebuilt: true, htVersion: version.ref });
         }
 
         if (patchTitle === undefined && patchDescription === undefined) {
@@ -866,7 +1204,13 @@ export default Sentry.withSentry(sentryOptions, {
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts[3] === "source") {
         const src = await getDemoSource(env, parts[2]!);
         if (!src) return json({ error: "not found" }, 404);
-        return json(src);
+        // `htVersion` rides along with the snapshot because this is the one route
+        // that has both halves in hand: demos saved before DEV-2565 hold the
+        // "latest" sentinel in D1, and the editor adopts whatever version it is
+        // given, so the snapshot's own pin is what repairs them. Null means the
+        // editor falls back to npm latest, as it does for a fresh playground.
+        const row = await getDemo(env, parts[2]!);
+        return json({ ...src, htVersion: editorVersionRef(row?.ht_version, src.files) });
       }
 
       // GET /api/demos/:id  (public) — metadata; 410 if revoked
@@ -905,6 +1249,16 @@ export default Sentry.withSentry(sentryOptions, {
           if (!patch.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
           const cfg = BUILD_CONFIG[row.framework];
           if (!cfg) return json({ error: `unknown framework: ${row.framework}` }, 400);
+          // The editor sends the files it holds in memory, which for a saved demo
+          // are the ones it loaded — nothing re-pins them client-side on a version
+          // change (App.tsx:1554 / :1700). Pinning here is what keeps the rebuilt
+          // artifact and the stored ref describing the same core (DEV-2565).
+          const version = await resolveHandsontableVersion(env, {
+            htVersion: patch.htVersion,
+            files: patch.files,
+            previousRef: row.ht_version,
+          });
+          if (!version.ok) return json({ error: version.message }, version.status);
           // Same ceiling as a first build — a re-save boots a builder container.
           const rebuildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `rebuild ${row.framework}` });
           if (rebuildDenied) return rebuildDenied;
@@ -912,8 +1266,8 @@ export default Sentry.withSentry(sentryOptions, {
           await updateDemo(env, {
             id: demoId,
             entry: { framework: row.framework, ...cfg },
-            files: patch.files,
-            htVersion: patch.htVersion ?? row.ht_version,
+            files: version.files,
+            htVersion: version.ref,
             // Forwarded only when the request carried them, and `row` is never used
             // as the fallback: a rebuild takes long enough for the Edit info dialog
             // to commit a rename in the middle of one, and re-writing the row this
@@ -927,7 +1281,9 @@ export default Sentry.withSentry(sentryOptions, {
             ...(patchDescription !== undefined ? { description: patchDescription } : {}),
             now: nowIso(),
           });
-          return json({ ok: true });
+          // The ref the rebuild actually used, which the picker may not have asked
+          // for (a pin the payload carried outranks a dist-tag).
+          return json({ ok: true, htVersion: version.ref });
         }
         // Metadata-only update (title / description / visibility).
         await env.DB.prepare("UPDATE demos SET title=?, description=?, visibility=?, updated_at=? WHERE id=?")
@@ -1121,34 +1477,10 @@ export default Sentry.withSentry(sentryOptions, {
 
       // GET /api/versions (public) — real published Handsontable versions.
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "versions" && parts.length === 2) {
-        const cached = await env.CACHE.get("versions", "json");
-        if (cached) return cors(cacheableJson(cached));
         try {
-          const r = await fetch("https://registry.npmjs.org/handsontable");
-          const j = (await r.json()) as {
-            "dist-tags"?: Record<string, string>;
-            versions?: Record<string, unknown>;
-            time?: Record<string, string>;
-          };
-          const latest = j["dist-tags"]?.latest ?? null;
-          // Newest -next build by publish date — the `next` dist-tag went
-          // stale (2026-02-19) while nightlies kept publishing, and serving
-          // it here re-pinned docs examples onto a five-month-old core. The
-          // tag is only a fallback for a registry document without `time`.
-          const next = pickLatestNextVersion(j.time) ?? j["dist-tags"]?.next ?? null;
-          const cmp = (a: string, b: string) => {
-            const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
-            for (let i = 0; i < 3; i++) { const d = (pb[i] ?? 0) - (pa[i] ?? 0); if (d) return d; }
-            return 0;
-          };
-          const versions = Object.keys(j.versions ?? {})
-            .filter((v) => /^\d+\.\d+\.\d+$/.test(v))
-            .filter((v) => { const m = Number(v.split(".")[0]); return m >= DEFAULT_MIN_MAJOR && m <= DEFAULT_MAX_MAJOR; })
-            .sort(cmp)
-            .slice(0, 15);
-          const payload = { latest, next, versions };
-          await env.CACHE.put("versions", JSON.stringify(payload), { expirationTtl: 3600 });
-          return cors(cacheableJson(payload));
+          // Shared with the API-side version resolution (ht-version.ts) so a
+          // dist-tag resolves through exactly the picker's own view of npm.
+          return cors(cacheableJson(await fetchVersionCatalog(env)));
         } catch (e) {
           // Version picker falls back to a stale list when this fails.
           Sentry.captureException(e, { tags: { upstream: "npm-registry", probe: "versions" } });

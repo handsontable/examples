@@ -196,9 +196,20 @@ the corresponding `--route` flags to the API workflow's `wrangler deploy` step.
 ## Error monitoring (Sentry)
 
 Errors only — no tracing, no session replay, no profiling. One Sentry project
-serves every surface, separated by `environment`: `authoring-production` (browser),
-`api-production` (Worker), and `demo-runtime` (the preview itself — temporary, see
-below).
+serves every surface, separated by `environment`:
+
+| `environment` | Surface |
+| --- | --- |
+| `authoring-production` | The browser app, on the production host. |
+| `api-production` | The deployed API Worker. |
+| `demo-runtime` | The preview itself — temporary, see below. |
+| `budget-alerts` | The nightly spend alerts, re-homed per event so they can be filtered, muted and rate-limited apart from real faults. They are still issues in this project. |
+| `authoring-local` | A browser build served anywhere but the production host. Never sent while the gate is closed — it exists so that a gate patched open locally is self-labelling. |
+
+The first two are no longer hardcoded literals; they are derived (from the hostname
+and from a deploy-time var respectively), with the production strings unchanged.
+Anything keying on them Sentry-side — alert rules, saved searches, dashboards —
+keeps working.
 
 **The DSN is committed, in two places**, because a DSN is a write-only ingest
 endpoint that ships inside the JS bundle by construction — hiding it buys nothing,
@@ -218,13 +229,60 @@ protection).
 **Nothing is reported outside production.** `.env.production` is committed and so
 is loaded by every production-mode build — including CI's authoring build, whose
 output Playwright then serves at `localhost:4173`. Both surfaces therefore gate on
-a host:
+a host, and since DEV-2540 both need a second signal as well. The decisions live in
+two small import-free modules, `apps/authoring/src/reportingGate.ts` and
+`workers/api/src/sentry-gate.ts`, and are unit-tested in
+`pipeline/sentry-gating.test.mjs`.
 
-- browser: `window.location.hostname === "demos.handsontable.com"`
-  (`apps/authoring/src/sentry.ts`);
-- Worker: `PREVIEW_HOST` matching the production host — the same prod-vs-local
-  switch Tier-2 preview URLs use, overridden in `workers/api/.dev.vars`
-  (`workers/api/src/index.ts`).
+- browser: `window.location.hostname === "demos.handsontable.com"` **and**
+  `navigator.webdriver !== true`. The second conjunct keeps an e2e suite pointed at
+  production (`E2E_BASE_URL=https://demos.handsontable.com`, `e2e-live.yml`,
+  `e2e-starter-matrix.yml`) from filing real issues; it used to. Nothing is lost —
+  `e2e/starter-matrix.spec.ts` collects failures itself via `page.on("pageerror")`
+  and never reads Sentry. It also silences demo-runtime relaying during those runs,
+  deliberately: an e2e-driven page load is not real demo usage.
+- Worker: `PREVIEW_HOST` matching the production host **and** `SENTRY_ENVIRONMENT`
+  being set. `PREVIEW_HOST` alone failed open — the committed `wrangler.jsonc` vars
+  carry the production value, so the config default *is* production and only the
+  gitignored `workers/api/.dev.vars` (a manual setup step) turned it off. Skip that
+  step and `wrangler dev` filed local experiments into the production project.
+  `SENTRY_ENVIRONMENT` is passed only by `--var` from the `deploy` script, so no
+  local run can produce it.
+
+> ⚠️ **Deploy with `pnpm run deploy`, not a bare `wrangler deploy`.** The
+> `--var SENTRY_ENVIRONMENT:api-production` flag lives in that script, and without
+> it the deployed Worker comes up with error reporting silently off — nothing
+> errors, events just stop arriving. That is the fail-closed direction working as
+> intended, but it is invisible, so it is worth knowing. `.github/workflows/deploy-runner-api.yml`
+> calls `pnpm run deploy`, so CI is fine. Verify a change to the flag with
+> `pnpm exec wrangler deploy --dry-run --outdir /tmp/x --var SENTRY_ENVIRONMENT:api-production`
+> and check the binding table; a flag-supplied var prints as `(hidden)`, which is a
+> display convention, not a broken binding.
+
+> `.dev.vars` is no longer the only thing standing between a local Worker and the
+> production project, but keep creating it — it is still what points Tier-2 preview
+> URLs at localhost.
+
+### Verifying the wiring
+
+There is deliberately **no force-enable escape hatch** in either gate: a bypass flag
+would enlarge exactly the surface these gates exist to shrink. Fifteen localhost
+events reached the production project in July, labelled `authoring-production` and
+indistinguishable from real traffic, because the only way to exercise the wiring
+off-host was to patch the gate open by hand.
+
+To test the browser half off-host, point `VITE_SENTRY_DSN` in the gitignored
+`apps/authoring/.env.local` at a **separate** Sentry project's DSN — never the
+production one — and patch `enabled` locally if you must. The `environment` is
+derived independently of `enabled` precisely so that such a run still labels itself
+`authoring-local`.
+
+One control has no code equivalent and is not in this repo: the Sentry project's
+**inbound filter for localhost**, in project settings for `handsoncode/demos`. It is
+the only thing that catches the failure mode above — a gate patched open by hand —
+and it covers both SDKs at once. If it has been enabled, an off-host verification
+against localhost will be dropped at ingest, and the test has to run against a
+non-localhost host to prove anything.
 
 **Preview-iframe errors are not reported by default.** The iframe runs arbitrary
 authored and imported example code, so a compile error or a mid-keystroke typo is
@@ -233,13 +291,58 @@ product output, not an application fault. `reportRuntimeError` in
 `SessionStartError` (Tier-2 pool refusing a session; 410 excluded, that is normal
 teardown) and `ContainerBootFailure` — and nothing from the Sandpack engine.
 
+**Session-start diagnostics (DEV-2559) — temporary, remove with the DEMOS-9 fix.**
+The `tier2-session-start` branch of `reportRuntimeError` carries three extra tags —
+`framework`, `session_elapsed_bucket`, `cf_ray` — plus `extra.sessionElapsedMs`, all
+of them beside the fingerprint and none of them in it. They exist to answer one
+question on Sentry DEMOS-9 (is the 504 a fixed ceiling above our Worker, or container
+starts that are honestly slow?) and should come out once it is answered, together
+with the DEV-2527 teardown below. Three pieces, in this order: `SessionStartDiagnostics`
+and the clock in `packages/runtime/src/container.ts` (the fourth `SessionStartError`
+argument is optional, so the error's shape survives either way),
+`apps/authoring/src/sessionDiagnostics.ts` with `pipeline/session-diagnostics.test.mjs`,
+and the tag block in `App.tsx`. `cf_ray` is the reason for the deadline: it is
+~one tag value per event, affordable only because this path fires a handful of times a
+day, and it must not survive into a hotter one.
+
 ### Demo-runtime monitoring (DEV-2527) — temporary
 
 A third `environment`, `demo-runtime`, carries what the preview itself hits:
-uncaught errors, unhandled rejections, `console.error` / `console.warn`, failed
-requests, Tier-1 Sandpack compile errors, and Tier-2 dev-server stderr raised after
-the preview came up. It covers all traffic on `demos.handsontable.com`, anonymous
-visitors included.
+uncaught errors, unhandled rejections, `console.error`, failed requests, Tier-1
+Sandpack compile errors, and Tier-2 dev-server stderr raised after the preview came
+up. It covers all traffic on `demos.handsontable.com`, anonymous visitors included.
+
+`console.warn` is relayed too but **never becomes an issue** (DEV-2539).
+`reportDemoEvent` files it as a Sentry *breadcrumb*, so the warnings that preceded a
+failure arrive as context on the next real error instead of as issues of their own —
+a message event at `warning` level is still an issue, and Handsontable's idempotent
+`Theme "…" is already registered` notice, emitted by ordinary re-renders, was the
+loudest of them. Breadcrumbs get their own ceiling at both ends
+(`MONITOR_BREADCRUMB_CEILING`, 50), deliberately separate from the relay ceiling: a
+breadcrumb files no issue so it can be looser, but a demo warning on every render must
+not spend the twenty relay slots before the `console.error` explaining the breakage is
+posted. Breadcrumbs live on the Sentry scope, which outlives one preview, so a warning
+recorded under example A can appear beneath an error from example B — their `data`
+carries tier, framework and demo id for exactly that reason. That scope is shared with
+the authoring app's own trail, and the buffer evicts oldest-first, which is why
+`Sentry.init` now states `maxBreadcrumbs: 200` instead of inheriting the SDK's default
+of 100: at 100 a demo spending its whole allowance would erase half the clicks and
+fetches you would need to explain an unrelated app failure. The two numbers move
+together or not at all.
+
+**One owner per class of failure** (DEV-2552), because two channels can see the same
+Tier-1 fault. The in-preview relay owns anything the demo raised *while running* —
+uncaught errors, rejections, and `console.error`. An Error passed to `console.error` is
+relayed under kind `error` carrying that Error's own message and stack, not as a
+`console-error`, so the reporter's dedupe (`kind|message|firstFrame`) collapses it with
+the window `error` listener's copy of the same throw whichever arrives first. It is
+re-homed rather than dropped because the twin is not guaranteed: a DOMException out of
+React's commit phase never reaches the window listener, and Angular's default
+`ErrorHandler` console.errors every error zone.js swallows. `reportRuntimeError` in
+`App.tsx` owns the other class, a bundler diagnostic for a module that never evaluated
+(`SandpackCompileError`); a `show-error` that carries `payload.frames` came from a
+module that did evaluate (`SandpackEvaluationError`) and the shell stands down for it.
+Before the split, one Tier-1 throw filed three Sentry issues.
 
 The preview is cross-origin on both tiers, so nothing in it can reach this window's
 handlers. `packages/runtime/src/monitor.ts` holds the bridge — one ES5 reporter,
@@ -257,7 +360,9 @@ because Next and Nuxt have no `index.html` for a file-level injection to find.
 Anything other than `"1"` (including deleting the line) is off. Because off costs a
 deploy, the immediate brake is elsewhere: `MONITOR_EVENT_CEILING` (20) events per
 page load, deduped by kind plus message plus first stack frame, messages truncated
-to 500 characters.
+to 500 characters. Warnings are counted against a second, separate ceiling — see the
+breadcrumb paragraph above — so 20 is the cap on issue-producing events, not on
+everything the reporter sends.
 
 That ceiling is enforced **twice, and the parent's copy is the one that counts**. The
 reporter applies it in-page, but it runs beside code the demo's author wrote — and
@@ -272,7 +377,37 @@ brake that works without a build** — keep one configured for as long as this i
 
 Nothing identifying is relayed: no source snippets, no file map, and network events
 carry scheme, host and path only, with the query string stripped. Same rule as
-`analytics.ts`.
+`analytics.ts`. One narrow exception, by construction: a `data:` or `blob:` URL has no
+host to strip and its "path" *is* its payload, so a failed `<script src="data:…">`
+relays up to `MONITOR_URL_MAX` characters of the demo's own bytes. Kept deliberately —
+such a URL cannot be a third-party beacon, so the origin filter treats it as the demo's
+own — but it is the one shape in which a snippet can reach an event.
+
+**Network events the reporter produces are same-origin only** (DEV-2539) — a crafted
+`postMessage` can still carry any url, which is why a relayed url reaches `extra` and
+the issue title only, never a Sentry tag and never the fingerprint. The reporter's
+`scrub` drops any request whose host is not the preview's own, so third-party beacons
+and CDN fetches never leave the page: Tier 1 runs inside CodeSandbox's bundler
+document, which beacons to its own telemetry host, and an ad blocker turns that into a
+`fetch` rejection the unfiltered wrapper filed against the demo. The check belongs in
+the reporter and nowhere else — `location.host` *is* the preview origin on both tiers,
+and by the time a payload reaches the app that host has been redacted to `<preview>` by
+design, so a parent-side origin check would be a check against a forgeable string. It
+fails open when `location` is unreadable (blinding the monitor is worse than noise) and
+treats a `data:`/`blob:` URL as the demo's own. Known cost, accepted: a docs example's
+genuine failure against a third-party host is dropped along with the beacons — a data
+API that 404s, and a broken CDN `<script>`/`<link>` too. If those are wanted back, the
+narrow version is an allowlist of the hosts docs examples actually use, not a return to
+reporting every host. For the events that survive, the URL is appended to the
+issue title as well as `extra` — `resource failed to load` alone is unactionable — but
+never to the fingerprint or the budget key, so a dozen broken assets stay one issue and
+one relay slot. One issue with *one* URL, though, not twelve: the reporter's own dedupe
+key is kind plus message plus first stack frame, and a resource load has no stack, so
+every failed `<img>/<script>/<link>` on a page collapses to the constant
+`network|resource failed to load|` and only the first is ever posted. The title names
+the asset that failed first and gives no hint that others did. Widening the dedupe key
+to include the URL was rejected on purpose: a dozen distinct keys would burn a dozen of
+the twenty relay slots and crowd out the `console.error` that explains the breakage.
 
 **The Tier-2 preview hostname is itself a session credential** and is redacted to
 `<preview>` everywhere. `<port>-<sandboxId>-<token>.demos.handsontable.com` is what
@@ -298,6 +433,12 @@ subdomain label are redacted.
 Worker, and `monitorDemos` / `reportDemoEvent` in `sentry.ts` plus the relay listener
 in `App.tsx`. The `beforeSend` narrowing in `sentry.ts` is **not** part of this
 feature and must stay — it is a fix in its own right.
+
+Removal must also drop the `SandpackEvaluationError` early return in
+`reportRuntimeError` (`App.tsx`), and with it the `SandpackEvaluationError` branch in
+`sandpack.ts`. That guard stands down for evaluated Tier-1 throws *because the relay
+reports them* — delete the relay and leave the guard, and that class of failure is
+reported by nobody. It is the one place the shell depends on the relay existing.
 
 **Releases.** The frontend release is the commit (`GITHUB_SHA`, injected as
 `VITE_SENTRY_RELEASE`). The Worker release is Cloudflare's per-deploy version id

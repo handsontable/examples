@@ -58,7 +58,7 @@ const example = document.getElementById('example');
 
 new Handsontable(example, {
   data: generateExampleData(),
-  theme: mainTheme,
+  theme: { ...mainTheme, colorScheme: 'light' },
   layoutDirection: isArabicDemoEnabled() ? 'rtl' : 'ltr',
   language: isArabicDemoEnabled() ? arAR.languageCode : 'en-US',
   height: 248,
@@ -81,7 +81,7 @@ new Handsontable(example, {
       data: 4,
       type: 'date',
       allowInvalid: false,
-      dateFormat: isArabicDemoEnabled() ? 'M/D/YYYY' : 'DD/MM/YYYY',
+      dateFormat: { year: 'numeric', month: '2-digit', day: '2-digit' },
     },
     {
       data: 6,

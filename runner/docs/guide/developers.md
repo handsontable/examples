@@ -127,8 +127,12 @@ The same limits on every path — file drop, plugin, MCP:
 - **Text files only.** Source (`.js .jsx .mjs .cjs .ts .tsx .vue .svelte .astro`),
   markup and styles (`.html .css .scss .sass .less .svg`), data and config
   (`.json .yaml .yml .toml .csv .md`), and `package.json`.
-- **No binaries.** A demo's files are text all the way to the build. Reference a hosted
-  URL, or inline a data URI.
+- **No binaries** — with one exception: a **`.zip`** dropped on FILES is unpacked in the
+  browser rather than stored, and its entries then face every rule in this list. A
+  single wrapping directory is stripped, `..` paths are refused outright, and the
+  unpacked total is capped so an archive cannot fill the tab. Everything else binary
+  stays refused: a demo's files are text all the way to the build, so reference a
+  hosted URL or inline a data URI.
 - **`.env` and `.env.*` are never accepted**, on any path, and that is deliberate rather
   than incidental.
 - **`node_modules`, build output and lockfiles are refused, not dropped** — you find out

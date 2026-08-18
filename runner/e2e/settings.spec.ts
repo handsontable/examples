@@ -427,7 +427,13 @@ test.describe("/settings", () => {
   test("the account menu's Settings row is live and navigates", async ({ page }) => {
     await signIn(page);
     await stubProfileApi(page);
-    await page.route("**/api/demos", (route) => route.fulfill({ json: { demos: [] } }));
+    // `?scope=*`, the glob the other My Demos specs use: the listing is fetched
+    // as `/api/demos?scope=mine`, and the bare `**/api/demos` here never matched
+    // it — the request went to the real `VITE_API_BASE` and was answered 401 for
+    // the faked token. Invisible while a failed listing only painted an error
+    // line; since DEV-2534 a 401 on this page redirects to the broker, which hung
+    // the test instead.
+    await page.route("**/api/demos?scope=*", (route) => route.fulfill({ json: { demos: [] } }));
     await page.goto("/my-demos");
 
     await page.getByRole("button", { name: `Account: ${EMAIL}` }).click();
@@ -445,7 +451,13 @@ test.describe("/settings", () => {
     // asserted from `/my-demos` to prove it is a working link at all.
     await signIn(page);
     await stubProfileApi(page);
-    await page.route("**/api/demos", (route) => route.fulfill({ json: { demos: [] } }));
+    // `?scope=*`, the glob the other My Demos specs use: the listing is fetched
+    // as `/api/demos?scope=mine`, and the bare `**/api/demos` here never matched
+    // it — the request went to the real `VITE_API_BASE` and was answered 401 for
+    // the faked token. Invisible while a failed listing only painted an error
+    // line; since DEV-2534 a 401 on this page redirects to the broker, which hung
+    // the test instead.
+    await page.route("**/api/demos?scope=*", (route) => route.fulfill({ json: { demos: [] } }));
     await page.goto("/my-demos");
 
     const nav = page.getByRole("navigation", { name: "Account" });
@@ -486,5 +498,32 @@ test.describe("/settings", () => {
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
     // The playground's pill would be the example cascader.
     await expect(page.getByRole("button", { name: /Choose an example/i })).toHaveCount(0);
+  });
+
+  // DEV-2534, the interactive half of DEMOS-W. This form's `fail()` renders
+  // `e.message`, so the Worker's `{"error":"unauthorized"}` used to be the whole
+  // of what a user was told when their session had quietly expired. Unlike the
+  // background refresh on the top bar — which clears and says nothing — an
+  // action the user just took has to be answered.
+  test("a save on an expired session says so, in words", async ({ page }) => {
+    await signIn(page);
+    await stubProfileApi(page);
+    await page.goto("/settings");
+    await nameField(page).fill("Ada L.");
+
+    // Registered after the stub, so it wins for the PUT; the GET the page has
+    // already made falls through to the profile server above.
+    await page.route("**/api/profile", async (route) => {
+      if (route.request().method() === "PUT") {
+        return route.fulfill({ status: 401, json: { error: "unauthorized" } });
+      }
+      return route.fallback();
+    });
+    await saveButton(page).click();
+
+    await expect(page.getByRole("alert")).toContainText("Your session expired");
+    await expect(page.getByText(/unauthorized/i)).toHaveCount(0);
+    // The rejected token goes with it, so nothing later carries it.
+    expect(await page.evaluate(() => sessionStorage.getItem("hot_token"))).toBeNull();
   });
 });

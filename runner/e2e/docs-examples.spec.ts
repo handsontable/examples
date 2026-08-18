@@ -93,20 +93,49 @@ function fixtureEntry(bucket: string, path: string, generatedVersion: string) {
   };
 }
 
+/** What the deployed host actually answers for a missing docs asset.
+ *
+ *  apps/authoring/wrangler.jsonc sets `not_found_handling: "single-page-application"`,
+ *  so Workers Assets serves 200 + index.html for every miss under /docs-examples/.
+ *  These fixtures used to answer 404 — the dev-server shape — which is why the
+ *  DEV-2535 misclassification stayed green through the whole suite. */
+async function spaFallback(route: import("@playwright/test").Route) {
+  await route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: `<!doctype html><html><head></head><body><div id="root"></div></body></html>`,
+  });
+}
+
 async function installRouteFixtures(
   page: import("@playwright/test").Page,
   {
     latest = "18.0.0",
     availableBuckets = ["18.0", "next"],
     missingPaths = [],
+    missingArtifacts = [],
+    notFoundStatus = 200,
     requests = [],
   }: {
     latest?: string;
     availableBuckets?: string[];
+    /** Dropped from the manifest *and* missing as an artifact. */
     missingPaths?: string[];
+    /** Listed in the manifest but missing as an artifact — the DEV-2130 class,
+     *  the only way to reach the `loadDocsExample` guard. */
+    missingArtifacts?: string[];
+    /** 200 = the deployed SPA-fallback host (default). 404 = the dev server. */
+    notFoundStatus?: 200 | 404;
     requests?: string[];
   } = {},
 ) {
+  const miss = async (route: import("@playwright/test").Route) => {
+    if (notFoundStatus === 404) {
+      await route.fulfill({ status: 404, body: "not found" });
+      return;
+    }
+    await spaFallback(route);
+  };
   await page.route("**/api/versions", (route) => route.fulfill({
     json: {
       latest,
@@ -121,8 +150,13 @@ async function installRouteFixtures(
     requests.push(url.pathname);
     const [, bucket, file] = url.pathname.match(/\/docs-examples\/([^/]+)\/(.+)$/) ?? [];
     const path = decodeURIComponent(file ?? "").replace(/\.json$/, "").replace(/__/g, "/");
-    if (!bucket || !availableBuckets.includes(bucket) || missingPaths.includes(path)) {
-      await route.fulfill({ status: 404, body: "not found" });
+    if (
+      !bucket
+      || !availableBuckets.includes(bucket)
+      || missingPaths.includes(path)
+      || missingArtifacts.includes(path)
+    ) {
+      await miss(route);
       return;
     }
     const generatedVersion = bucket === "next" ? "19.0.0-next.0" : "18.0.0";
@@ -133,9 +167,11 @@ async function installRouteFixtures(
     requests.push(url.pathname);
     const bucket = url.pathname.split("/").at(-2) ?? "";
     if (!availableBuckets.includes(bucket)) {
-      await route.fulfill({ status: 404, body: "not found" });
+      await miss(route);
       return;
     }
+    // `missingArtifacts` deliberately stays listed here: the row must survive
+    // the manifest check at App.tsx so the failure comes from the artifact fetch.
     const examples = fixtureItems(bucket).filter((item) => !missingPaths.includes(item.docsPath));
     await route.fulfill({
       json: {
@@ -438,6 +474,43 @@ test("an open docs example with no target bucket stops preview and remains recov
   // so a text assertion would now pass no matter what the picker highlighted.
   const reactStarter = page.getByRole("treeitem", { name: "React (Vite, TS)" });
   await expect(reactStarter).toHaveAttribute("aria-selected", "false");
+});
+
+test("an open docs example with no target bucket is classified the same on a 404 host", async ({ page }) => {
+  // The dev server and any correctly configured host still answer 404. Keeps
+  // that path covered now that the fixture default is the deployed SPA shape.
+  await installRouteFixtures(page, { notFoundStatus: 404 });
+  await page.goto(`/?docs=${DOCS_PATH}&v=18.0.0`);
+  await expect(editor(page)).toContainText(`18.0:${DOCS_PATH}`);
+
+  await pickFromMenu(page, "Handsontable version", "17.1.0");
+
+  await expect(page.getByText(/No documentation examples are available for Handsontable 17\.1\.0/).first()).toBeVisible();
+});
+
+test("a deep link into a bucket-less version shows not-found, not a retry prompt", async ({ page }) => {
+  await installRouteFixtures(page);
+  await page.goto(`/?docs=${DOCS_PATH}&v=17.1.0`);
+
+  await expect(page.getByText("Example not found")).toBeVisible();
+  // The half nothing pinned before DEV-2535: a permanently absent bucket used
+  // to render the transient screen, offering a retry for a condition that will
+  // never resolve on its own.
+  await expect(page.getByText("Example temporarily unavailable")).toHaveCount(0);
+  await expect(page.getByText(/Try again later/)).toHaveCount(0);
+  await expect(page.locator("iframe")).toHaveCount(0);
+});
+
+test("a deep link whose manifest row has no artifact shows not-found", async ({ page }) => {
+  // The DEV-2130 class: the row survives the manifest check, so the failure can
+  // only come from the artifact fetch — the second `res.ok`-only hole. The
+  // `missingPaths` test above never reaches `loadDocsExample` at all.
+  await installRouteFixtures(page, { missingArtifacts: [DOCS_PATH] });
+  await page.goto(`/?docs=${DOCS_PATH}&v=18.0.0`);
+
+  await expect(page.getByText("Example not found")).toBeVisible();
+  await expect(page.getByText("Example temporarily unavailable")).toHaveCount(0);
+  await expect(page.locator("iframe")).toHaveCount(0);
 });
 
 // Live render — needs the external Sandpack bundler; opt-in via E2E_LIVE=1.

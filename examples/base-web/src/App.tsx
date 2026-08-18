@@ -112,6 +112,9 @@ function createHotTheme() {
   };
 
   return registerTheme(THEME_NAME, {
+    // Base Web's light palette, stated as literals — see the note in the MUI
+    // starter for why the scheme has to be explicit alongside them.
+    colorScheme: 'light',
     icons: iconsHorizon,
     colors: colorsBase,
     tokens: tokensHorizon,

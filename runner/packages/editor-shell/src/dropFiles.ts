@@ -9,6 +9,11 @@
 // the path and drops the bytes), and `POST /api/session/:id/file` takes
 // `{ path, contents }` as text. A dropped .png has nowhere to live yet, so it is
 // refused with a message rather than silently ignored or written as mojibake.
+//
+// ONE EXCEPTION: a `.zip` (DEV-2531). It is still not stored — it is unpacked, and
+// every entry then faces exactly these rules. The unpacker is injected rather than
+// imported so this module stays free of dependencies and `pipeline/drop-files.test.mjs`
+// can drive the zip branch with a fake; `dropZip.ts` is the real one.
 
 /** Matches the importer's MAX_TEXT_BYTES — one place decides "too big to inline". */
 export const MAX_DROP_FILE_BYTES = 512 * 1024;
@@ -16,6 +21,9 @@ export const MAX_DROP_FILE_BYTES = 512 * 1024;
 /** Ceiling on one drop. A dropped project directory is usually a mistake; this
  *  keeps it from becoming a 400-file workspace nobody can undo. */
 export const MAX_DROP_FILES = 50;
+
+/** Ceiling on a dropped archive's own bytes, checked before it is read into memory. */
+export const MAX_ARCHIVE_BYTES = 8 * 1024 * 1024;
 
 /** Extensions that can be dropped. An allowlist, not a binary denylist: an
  *  unknown extension is far more likely to be an asset than a source file, and
@@ -53,6 +61,21 @@ const EXCLUDE_FILES = new Set(["package-lock.json", "yarn.lock", ".DS_Store", "T
 /** `.env` files can carry real credentials. Never accept one, whatever its suffix. */
 const SECRET_FILENAME_RE = /^\.env(\..+)?$/i;
 
+/**
+ * Is this relative path one a drop skips silently — build output, a lockfile, a
+ * `.git` directory? Silently, because unlike a refused file these are never what
+ * somebody meant to hand over, so naming them is noise.
+ *
+ * Exported for the zip expander, which walks paths rather than directory entries
+ * and must answer the same question the traversal below answers per level.
+ */
+export function isExcludedPath(path: string): boolean {
+  const segments = path.split("/").filter(Boolean);
+  const name = segments[segments.length - 1] ?? "";
+  if (EXCLUDE_FILES.has(name)) return true;
+  return segments.slice(0, -1).some((dir) => EXCLUDE_DIRS.has(dir));
+}
+
 /** A file the caller can hand to the workspace. */
 export interface DroppedFile {
   path: string;
@@ -71,11 +94,22 @@ export interface DropResult {
   truncated: boolean;
 }
 
-/** The part of `File` this module uses. */
+/** The part of `File` this module uses. `arrayBuffer` only for archives. */
 export interface DropFileLike {
   name: string;
   size: number;
   text(): Promise<string>;
+  arrayBuffer?(): Promise<ArrayBuffer>;
+}
+
+/** Unpacks an archive into workspace-relative files. `dropZip.ts` implements it. */
+export interface ZipUnpacker {
+  (bytes: Uint8Array): { files: DroppedFile[]; rejected: RejectedFile[]; error?: string };
+}
+
+export interface DropOptions {
+  /** Absent ⇒ a dropped `.zip` is refused, as any other binary is. */
+  unzip?: ZipUnpacker;
 }
 
 /** The part of `FileSystemEntry` this module uses (the callback-style webkit API). */
@@ -166,7 +200,12 @@ async function takeFile(
   result: DropResult,
   path: string,
   file: DropFileLike,
+  options: DropOptions = {},
 ): Promise<void> {
+  if (isZipName(file.name)) {
+    await takeArchive(result, path, file, options);
+    return;
+  }
   if (!isTextFileName(file.name)) {
     result.rejected.push({ path, reason: "not a text file" });
     return;
@@ -176,6 +215,58 @@ async function takeFile(
     return;
   }
   result.files.push({ path, contents: normalizeEol(await file.text()) });
+}
+
+/** `.zip` by name; the bytes are checked by trying to read them. */
+function isZipName(name: string): boolean {
+  return /\.zip$/i.test(name);
+}
+
+/**
+ * Unpack an archive *into the directory it was dropped on*, so a zip of `src/` and
+ * `package.json` lands as a project rather than as a folder named after the file.
+ *
+ * The archive's own cap is separate from the drop's: an unreadable zip is one
+ * rejection, and `MAX_DROP_FILES` still governs how much of it is taken.
+ */
+async function takeArchive(
+  result: DropResult,
+  path: string,
+  file: DropFileLike,
+  options: DropOptions,
+): Promise<void> {
+  if (!options.unzip || !file.arrayBuffer) {
+    result.rejected.push({ path, reason: "not a text file" });
+    return;
+  }
+  // Bound the archive before reading it: everything downstream is in memory, and an
+  // 8 MB zip already holds far more text than a demo can.
+  if (file.size > MAX_ARCHIVE_BYTES) {
+    result.rejected.push({
+      path,
+      reason: `archive larger than ${Math.floor(MAX_ARCHIVE_BYTES / (1024 * 1024))} MB`,
+    });
+    return;
+  }
+  const dir = path.slice(0, path.lastIndexOf("/"));
+  const expansion = options.unzip(new Uint8Array(await file.arrayBuffer()));
+  if (expansion.error) {
+    result.rejected.push({ path, reason: expansion.error });
+    return;
+  }
+  // Refusals first. Taking the files first meant the drop's ceiling could return
+  // early and swallow them — including the `.env` the reader most needs to hear was
+  // refused, since a refusal nobody sees is indistinguishable from an acceptance.
+  for (const entry of expansion.rejected) {
+    result.rejected.push({ path: dropPath(dir, entry.path), reason: entry.reason });
+  }
+  for (const entry of expansion.files) {
+    if (result.files.length >= MAX_DROP_FILES) {
+      result.truncated = true;
+      return;
+    }
+    result.files.push({ path: dropPath(dir, entry.path), contents: entry.contents });
+  }
 }
 
 /** Match the importer: workspaces store LF, so a Windows-authored drop is normalized. */
@@ -193,6 +284,7 @@ function normalizeEol(text: string): string {
 export async function collectDroppedEntries(
   entries: DropEntryLike[],
   targetDir = "",
+  options: DropOptions = {},
 ): Promise<DropResult> {
   const result: DropResult = { files: [], rejected: [], truncated: false };
   const queue: Array<{ entry: DropEntryLike; dir: string }> = entries.map((entry) => ({
@@ -214,7 +306,7 @@ export async function collectDroppedEntries(
       continue;
     }
     if (!entry.isFile || EXCLUDE_FILES.has(entry.name)) continue;
-    await takeFile(result, dropPath(dir, entry.name), await entryFile(entry));
+    await takeFile(result, dropPath(dir, entry.name), await entryFile(entry), options);
   }
 
   return result;
@@ -228,6 +320,7 @@ export async function collectDroppedEntries(
 export async function collectDroppedFiles(
   files: DropFileLike[],
   targetDir = "",
+  options: DropOptions = {},
 ): Promise<DropResult> {
   const result: DropResult = { files: [], rejected: [], truncated: false };
   for (const file of files) {
@@ -236,7 +329,7 @@ export async function collectDroppedFiles(
       return result;
     }
     if (EXCLUDE_FILES.has(file.name)) continue;
-    await takeFile(result, dropPath(targetDir, file.name), file);
+    await takeFile(result, dropPath(targetDir, file.name), file, options);
   }
   return result;
 }

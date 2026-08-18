@@ -18,6 +18,22 @@ const activeEditor = (page: import("@playwright/test").Page) =>
 const previewStatus = (page: import("@playwright/test").Page) =>
   page.locator('[aria-label="Preview"]');
 
+// The browser-side Sentry gate rests on one premise (DEV-2540): the app stops
+// reporting when `navigator.webdriver` is true, which is what keeps a suite pointed
+// at production out of the production Sentry project. DEMOS-P is what that looked
+// like before the gate existed — three real issues filed by an ad-hoc
+// `E2E_BASE_URL=https://demos.handsontable.com` run, tagged
+// `context: tier2-session-start`, from the same 503 session refusal the test below
+// stubs. If this assertion ever goes false the gate is silently open again, and
+// nothing else in the suite would notice.
+//
+// `playwright.config.ts` declares a single `chromium` project. Adding a firefox or
+// webkit project means re-verifying this there rather than assuming it carries over.
+test("the harness identifies itself as automation", async ({ page }) => {
+  await page.goto("/");
+  expect(await page.evaluate(() => navigator.webdriver)).toBe(true);
+});
+
 // Deterministic — no `E2E_LIVE=1`: the session POST is stubbed to a refusal, so the
 // error card appears whether or not a real API worker (and container pool) happens to be
 // reachable from wherever the suite runs. Without the stub this test passes only when
