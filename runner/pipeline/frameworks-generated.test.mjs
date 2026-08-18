@@ -5,6 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "../workers/api/src/frameworks.generated.ts";
+import { dependencyMetadataFingerprint } from "../workers/api/src/dependency-metadata.ts";
 
 const HEX_64 = /^[0-9a-f]{64}$/;
 
@@ -71,14 +72,17 @@ test("baked fingerprints match the bucket artifacts they were derived from", asy
   // baked fingerprint — and on a match the boot script hard-fails instead of
   // retrying non-frozen. Regenerating buckets without prepare-container (or
   // vice versa) would silently break that invariant; catch the drift here.
+  //
+  // Hashed with `dependencyMetadataFingerprint` — the export the Worker's
+  // runtime match uses (`index.ts`) — and NOT a local re-implementation: the
+  // committed fingerprints come from `prepare-container.mjs`'s own copy of the
+  // preimage, so a test carrying a third copy would agree with the generator
+  // and stay green while the canonical preimage drifted — with every session
+  // silently falling off the frozen path. Only the canonical function can call
+  // that drift out. (`prepare-container.mjs` still keeps its private copy — it
+  // runs under plain `node`, where the `.ts` import doesn't resolve; this test
+  // is the tripwire for the generator's copy drifting too.)
   const fs = await import("node:fs");
-  const { createHash } = await import("node:crypto");
-  const part = (name, value) =>
-    value === undefined ? `${name}:missing\n` : `${name}:${value.length}:${value}\n`;
-  const fingerprint = ({ packageJson, pnpmLock }) =>
-    createHash("sha256")
-      .update(`${part("package.json", packageJson)}${part("pnpm-lock.yaml", pnpmLock)}`)
-      .digest("hex");
 
   const bucketsDir = new URL("../apps/authoring/public/starter-examples/", import.meta.url);
   const catalog = JSON.parse(fs.readFileSync(new URL("../catalog.json", import.meta.url), "utf8"));
@@ -99,7 +103,7 @@ test("baked fingerprints match the bucket artifacts they were derived from", asy
       const artifact = JSON.parse(fs.readFileSync(artifactUrl, "utf8"));
       assert.equal(
         context.sourceDependencyFingerprint,
-        fingerprint({
+        await dependencyMetadataFingerprint({
           packageJson: artifact.files["/package.json"],
           pnpmLock: artifact.files["/pnpm-lock.yaml"],
         }),

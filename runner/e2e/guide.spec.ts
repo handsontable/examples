@@ -221,6 +221,11 @@ test("the tracks carry figures, loaded lazily and only where they belong", async
   await stubShell(page);
   await signIn(page);
   await page.goto("/guide/support");
+  // Wait for the document, not the shell: the count below is a one-shot
+  // assertion, and the page is a splash until the identity resolves.
+  await expect(
+    page.getByRole("heading", { name: "Build a demo in the browser", level: 1 }),
+  ).toBeVisible();
 
   const shots = page.locator("main img");
   expect(await shots.count()).toBeGreaterThanOrEqual(6);
@@ -241,8 +246,14 @@ test("the tracks carry figures, loaded lazily and only where they belong", async
   expect(status).toBe(200);
 
   // DevRel's track is prose and code, and stays that way — the figures follow the
-  // subject, they are not decoration sprinkled on every page.
+  // subject, they are not decoration sprinkled on every page. Anchor on the
+  // rendered document first: `toHaveCount(0)` succeeds on its first poll, and the
+  // pre-identity splash has no `main` at all — sampled there, this half was green
+  // whatever the devrel track carried.
   await page.goto("/guide/devrel");
+  await expect(
+    page.getByRole("heading", { name: "Demos in the documentation and on the blog", level: 1 }),
+  ).toBeVisible();
   await expect(page.locator("main img")).toHaveCount(0);
 });
 

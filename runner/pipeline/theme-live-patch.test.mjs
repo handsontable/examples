@@ -158,11 +158,11 @@ test("refresh serves the theme the panel is showing", async () => {
 
 /** A container runtime with a session and the network stubbed. `mounted: false` is the
  *  window between the create POST going out and the session accepting writes. */
-function mountedContainer({ mounted = true } = {}) {
+function mountedContainer({ mounted = true, writeDebounceMs } = {}) {
   const posts = [];
   const runtime = new ContainerRuntime(
     { ...ENTRY, engine: "container", tier: 2, container: "vue" },
-    { iframe: {}, apiBase: "https://api.test" },
+    { iframe: {}, apiBase: "https://api.test", writeDebounceMs },
   );
   runtime.sessionId = "s1";
   runtime.mounted = mounted;
@@ -176,9 +176,25 @@ function mountedContainer({ mounted = true } = {}) {
 
 test("a quiet write reaches neither the dev server nor the timer", async () => {
   const fetchBefore = globalThis.fetch;
-  const { runtime, posts } = mountedContainer();
+  // `writeDebounceMs: 0`, so a quiet branch that regressed into the debounce path
+  // would flush on the very next timers tick — inside this test, not 250ms after
+  // it restored `globalThis.fetch`. With the default debounce, `posts` was empty
+  // at settle-time either way and the "nor the timer" half could never fail.
+  const { runtime, posts } = mountedContainer({ writeDebounceMs: 0 });
   try {
     runtime.writeFile(THEME, "export const customTheme = 1;", { quiet: true });
+
+    // The timer half, asserted directly: quiet means *never scheduled*, not
+    // "scheduled but not yet fired". A pending flush timer is the tier-2 form of
+    // DEV-2496 — a page-reloading stream per drag frame.
+    assert.equal(runtime.flushTimer, null, "a quiet write must not arm the debounce timer");
+    // …and the write sits in the held-back map, not the streaming one.
+    assert.equal(runtime.quietPending.get(THEME), "export const customTheme = 1;");
+    assert.equal(runtime.pending.has(THEME), false);
+
+    // Wait out a timers phase too — a 0ms timer armed above would have fired
+    // before this 0ms sleep resolves — then the microtask queue behind it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     await settle();
 
     assert.deepEqual(posts, [], "streaming it would reload the page — the worst version of this bug");

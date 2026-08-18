@@ -141,31 +141,73 @@ test("live: breaking and un-breaking a line leaves the grid alone", async ({ pag
   test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
   test.setTimeout(180_000);
 
-  const grid = page.frameLocator("iframe").first().locator(".handsontable td").first();
+  const preview = page.frameLocator("iframe").first();
+  const grid = preview.locator(".handsontable td").first();
   await page.goto("/?example=react");
   await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "ready", {
     timeout: 120_000,
   });
   await expect(grid).toBeVisible({ timeout: 90_000 });
 
+  // The bug leaves nothing the chrome can see: the no-change push resets the
+  // preview *document* with a clean `done` — no error, `data-preview-status`
+  // stays "ready" — so a fixed sleep here was a window the erroneous push could
+  // simply arrive after, and the external bundler's latency is unbounded. What a
+  // document reset cannot survive is state on the preview's own window: a real
+  // (changed-file) compile re-evaluates modules in the same document and keeps
+  // it, only a document reset drops it. So mark the window, close the hazard on
+  // an event, and check the mark.
+  const previewFrame = async () => {
+    const frame = await (await page.locator("iframe").first().elementHandle())?.contentFrame();
+    if (!frame) throw new Error("the preview frame is gone");
+    return frame;
+  };
+  await (await previewFrame()).evaluate(() => {
+    (window as Window & { __hotDocumentKept?: boolean }).__hotDocumentKept = true;
+  });
+
   // Drop the comma after a `colHeaders` entry: a syntax error, so the transpile fails and
-  // the bundler is never told. The grid on screen is the last good render.
+  // the bundler is never told. The grid on screen is the last good render. The pause is
+  // not the oracle — a failed transpile pushes nothing, so there is no event to wait on;
+  // it only spaces the two edits so they reach the recompute as two cycles rather than
+  // coalescing in one debounce window.
   const commaAt = await page.evaluate(`(() => {
     const view = document.querySelector('.cm-content').cmTile.view;
     const at = view.state.doc.toString().indexOf("'Company name',") + "'Company name'".length;
     view.dispatch({ changes: { from: at, to: at + 1, insert: "" } });
     return at;
   })()`);
-  await page.waitForTimeout(4000);
+  await page.waitForTimeout(2000);
   await expect(grid).toBeVisible();
 
-  // Put it back. The file is now byte-identical to the one that rendered.
+  // Put it back. The file is now byte-identical to the one that rendered — the push
+  // the fix exists to suppress.
   await page.evaluate(
     `document.querySelector('.cm-content').cmTile.view.dispatch({ changes: { from: ${commaAt}, insert: "," } })`,
   );
-  await page.waitForTimeout(8000);
+
+  // Close the hazard window on an event rather than the clock: a *real* edit queued
+  // behind the un-break. Pushes are FIFO through the one client, so by the time this
+  // edit's output is on screen, whatever the un-break pushed (nothing, if the fix
+  // holds) has already been through the bundler — however slow the round trip was.
+  await page.evaluate(`(() => {
+    const view = document.querySelector('.cm-content').cmTile.view;
+    const doc = view.state.doc.toString();
+    const at = doc.indexOf("'Company name'") + 1;
+    view.dispatch({ changes: { from: at, to: at + "Company name".length, insert: "Sentinel column" } });
+  })()`);
+  await expect(preview.getByText("Sentinel column")).toBeVisible({ timeout: 60_000 });
+
+  // The grid never left, the status never left ready — and, the discriminating bit,
+  // the preview document was never reset behind our back.
   await expect(grid).toBeVisible();
   await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "ready");
+  expect(
+    await (await previewFrame()).evaluate(
+      () => (window as Window & { __hotDocumentKept?: boolean }).__hotDocumentKept,
+    ),
+    "the byte-identical push reset the preview document",
+  ).toBe(true);
 });
 
 // The other path to the same no-change compile: the row-2 refresh button pushes the

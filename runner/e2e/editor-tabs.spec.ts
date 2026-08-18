@@ -279,16 +279,31 @@ test("an example switch does not carry undo history into the new workspace", asy
 test("switching example discards the previous workspace's tabs", async ({ page }) => {
   // The trap T3 hit with directory expansion, and the reason `workspaceKey` exists:
   // both starters contain `/package.json`, so reconciling by "does this path still
-  // exist" would leave that tab open across the switch.
+  // exist" would leave that tab open across the switch. Driven through the real
+  // in-app cascader (`switchStarter`), for the reason that helper's own comment
+  // gives: a `page.goto` is a fresh page load, which boots at exactly one tab
+  // whatever the discard effect does — asserted that way, this test could never
+  // fail, and the discard it certifies was exercised by nothing.
   await openReact(page);
+  // `MUI + React` is a container starter; refuse its session POST up front so the
+  // switch never spends a real Tier-2 slot. The tab reconciliation under test
+  // reads nothing from the preview (the bundler is aborted by `stubShell` too).
+  await page.route("**/api/session", (route) =>
+    route.fulfill({ status: 503, json: { error: "no container slots" } }),
+  );
   await fileRow(page, "/package.json").click();
   await expect(tabs(page)).toHaveCount(2);
 
-  await page.goto("/?example=angular");
-  await expect(filesPanel(page)).toBeVisible();
+  await switchStarter(page, "MUI + React");
+  // The new workspace really arrived — `/pnpm-lock.yaml` is MUI's, not React's.
+  await expect(fileRow(page, "/pnpm-lock.yaml")).toBeVisible();
+  // The open set collapsed to the new workspace's entry alone. `/package.json`
+  // exists in the MUI starter too, so only the `workspaceKey` discard can have
+  // closed its tab — the path-existence reconcile would keep it open, which is
+  // exactly the regression this test exists to catch.
   await expect(tabs(page)).toHaveCount(1);
-  await expect(tab(page, "/src/index.tsx")).toHaveCount(0);
   await expect(tab(page, "/package.json")).toHaveCount(0);
+  await expect(tab(page, "/src/index.tsx")).toHaveAttribute("aria-selected", "true");
 });
 
 test("renaming an open file moves its tab; deleting one closes it", async ({ page }) => {
