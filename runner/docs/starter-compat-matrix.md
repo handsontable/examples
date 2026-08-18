@@ -40,7 +40,7 @@ its own JSON file:
 ```sh
 E2E_STARTER_MATRIX=1 E2E_BASE_URL=https://demos.handsontable.com \
   PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/matrix-batch1.json \
-  npx playwright test e2e/starter-matrix.spec.ts --workers=2 --retries=1 \
+  npx playwright test e2e/starter-matrix.spec.ts --workers=2 --retries=2 \
   --grep 'matrix: (react|vue) @' --reporter=list,json
 ```
 

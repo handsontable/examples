@@ -16,6 +16,10 @@ const muiTableTheme = (() => {
     return getTheme(THEME_NAME);
   }
   return registerTheme(THEME_NAME, {
+    // The palette below is Material's light one, stated as literals. Without an
+    // explicit scheme the builder defaults to `auto`, and a dark-OS visitor would
+    // get core's dark `light-dark()` answers over these light tokens.
+    colorScheme: 'light',
     icons: iconsHorizon,
     colors: {
       palette: {

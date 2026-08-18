@@ -25,12 +25,48 @@ export const MONITOR_MESSAGE_TYPE = "hot-runner-monitor";
  */
 export const MONITOR_EVENT_CEILING = 20;
 
+/**
+ * Ceiling on relayed `console-warn` events per page load, counted separately from
+ * `MONITOR_EVENT_CEILING` (DEV-2539).
+ *
+ * A warning is context, not a fault: parent-side it becomes a Sentry *breadcrumb*
+ * attached to the next real error, never an issue of its own. That is why the two
+ * ceilings are separate in both directions. Looser, because a breadcrumb costs no
+ * issue and the whole point is to have the warnings that preceded a failure. But
+ * still capped, and still its own budget — sharing the relay ceiling would let a
+ * demo that warns on every render (Handsontable's own "Theme is already registered"
+ * notice is emitted by normal re-renders) spend all twenty slots before the
+ * `console.error` explaining the breakage is ever posted.
+ *
+ * Paired with `maxBreadcrumbs` in `apps/authoring/src/sentry.ts`, which the demo
+ * shares with the authoring app's own trail and which evicts oldest-first: this
+ * number must stay a small fraction of it, or a chatty demo silently erases the
+ * clicks and fetches that explain an unrelated app failure. Move the two together.
+ */
+export const MONITOR_BREADCRUMB_CEILING = 50;
+
 /** Message length cap. Demo code is authored by anonymous visitors; a message can
  *  quote it, so it is truncated rather than relayed whole. */
 export const MONITOR_MESSAGE_MAX = 500;
 
 /** Stack cap. Enough for a fingerprint and a first frame, not a whole trace. */
 export const MONITOR_STACK_MAX = 2000;
+
+/**
+ * Cap for a Tier-1 compile message (DEV-2550) — the bundler's `show-error` string,
+ * which reaches the error card and Sentry through `SandpackRuntime`.
+ *
+ * Deliberately larger than `MONITOR_MESSAGE_MAX`. A relayed message is one line of
+ * a thrown error; this one is a babel diagnostic whose code frame *is* the useful
+ * part, and 500 chars cuts it in half. Same order as the stack cap, and still ~2%
+ * of the payload actually observed (DEMOS-15: a code frame followed by a
+ * multi-kilobyte inline source map).
+ *
+ * It lives here, beside the other caps, rather than in sandpack.ts: this file's
+ * header is explicit that a second set of caps elsewhere is a second set to keep in
+ * sync.
+ */
+export const MONITOR_COMPILE_MESSAGE_MAX = 2000;
 
 /** URL cap. A path this long is already unreadable; the rest is only volume. */
 export const MONITOR_URL_MAX = 500;
@@ -103,7 +139,11 @@ function bound(value: string, max: number): string {
 }
 
 /** What the reporter observed. `stderr` is the only kind not raised in-page — it
- *  comes from the Tier-2 dev server via the session status poll. */
+ *  comes from the Tier-2 dev server via the session status poll.
+ *
+ *  `console-warn` is relayed but never filed as an issue: `reportDemoEvent` turns it
+ *  into a breadcrumb (DEV-2539). It stays in the union and in `MONITOR_KINDS` because
+ *  the payload still has to survive `isMonitorPayload` to reach that branch. */
 export type MonitorKind =
   | "error"
   | "rejection"
@@ -133,7 +173,12 @@ export interface MonitorPayload {
   message: string;
   /** Truncated. Absent for console and network events. */
   stack?: string;
-  /** Network events only: scheme + host + path, query stripped. */
+  /** Network events only: scheme + host + path, query stripped. The reporter relays a
+   *  network event only when that host is the preview's own (DEV-2539) — but that holds
+   *  for payloads *the reporter produced*. A demo can post this shape without ever
+   *  running the reporter, and `isMonitorPayload` only type-checks this field, so a
+   *  crafted payload can still carry any url at all. Which is why it reaches `extra` and
+   *  the issue title only, never a Sentry tag and never the fingerprint. */
   url?: string;
 }
 
@@ -260,10 +305,12 @@ export const REPORTER_SOURCE = `(function () {
 
   var TYPE = ${JSON.stringify(MONITOR_MESSAGE_TYPE)};
   var CEILING = ${MONITOR_EVENT_CEILING};
+  var WARN_CEILING = ${MONITOR_BREADCRUMB_CEILING};
   var MAX = ${MONITOR_MESSAGE_MAX};
   var STACK_MAX = ${MONITOR_STACK_MAX};
   var seen = {};
   var used = 0;
+  var warnUsed = 0;
 
   function truncate(value, max) {
     var s = typeof value === "string" ? value : String(value);
@@ -308,12 +355,40 @@ export const REPORTER_SOURCE = `(function () {
     return String(lines[0] || "").replace(/^\\s+|\\s+$/g, "");
   }
 
-  // Scheme + host + path. A query string can carry a token, and none of the
-  // diagnostics here need one.
+  // Scheme + host + path, **and only for the page's own host**. A query string can
+  // carry a token, and none of the diagnostics here need one.
+  //
+  // The origin filter lives here rather than at the four \`send("network", ...)\` call
+  // sites because this is the one function all four already go through, and because it
+  // is the only place the URL is still intact: what this returns is
+  // \`protocol + "//" + host + pathname\`, which for a \`data:\` or \`blob:\` URL is no
+  // longer a parseable URL, so a second parse downstream cannot recover the host.
+  //
+  // The reporter runs *inside* the preview, so \`location.host\` is the preview origin on
+  // both tiers — Sandpack's bundler host for Tier 1, the token-bearing
+  // <port>-<id>-<token>.demos.handsontable.com for Tier 2. Anything else is a third
+  // party, and a third party's failure is not the demo's fault: Tier 1's own bundler
+  // beacons out, an ad blocker turns that into a fetch rejection, and the unfiltered
+  // wrapper filed it against the demo (DEV-2539).
+  //
+  // Returning "" is what drops the event — \`send\` refuses a network event with no URL,
+  // which is also the right answer for one nobody could act on. Three branches are
+  // deliberate:
+  //   - HOST empty (\`location\` unreadable) -> keep. Fail open, exactly as \`redact\`
+  //     no-ops; blinding the monitor is worse than relaying noise.
+  //   - parsed host empty (data:, blob:) -> keep. Not a third-party beacon; the demo's
+  //     own bytes.
+  //   - parse threw -> "" -> drop.
+  //
+  // Both sides lowercased, for the reason spelled out above \`redact\`: a URL parser
+  // hands back a lowercased host while the session token is mixed-case. Both include
+  // the port, so they compare consistently.
   function scrub(raw) {
     try {
       var a = document.createElement("a");
       a.href = String(raw);
+      var h = String(a.host || "").toLowerCase();
+      if (HOST && h && h !== HOST) return "";
       return a.protocol + "//" + a.host + a.pathname;
     } catch (e) {
       return "";
@@ -322,7 +397,17 @@ export const REPORTER_SOURCE = `(function () {
 
   function send(kind, message, stack, url) {
     try {
-      if (used >= CEILING) return;
+      // A network event with no URL is either third-party (\`scrub\` filtered it) or
+      // unattributable (\`scrub\` could not parse it); neither is actionable. Tested
+      // before the ceiling so a dropped event costs neither a budget slot nor a dedupe
+      // entry. Every network callsite must pass \`scrub(...)\` — that is where the
+      // same-origin filter lives.
+      if (kind === "network" && !url) return;
+      // Warnings are relayed as breadcrumbs, not issues, so they get a separate and
+      // looser allowance. Shared with the error budget, a demo warning on every render
+      // would evict the console.error that explains the breakage.
+      var isWarn = kind === "console-warn";
+      if (isWarn ? warnUsed >= WARN_CEILING : used >= CEILING) return;
       // Redact before truncating, never after: a cap that splits a hostname leaves
       // the session token in the surviving prefix, and \`redact\` can no longer match
       // an incomplete host. Angular and Next stacks run past STACK_MAX routinely.
@@ -331,7 +416,7 @@ export const REPORTER_SOURCE = `(function () {
       var k = kind + "|" + m + "|" + firstFrame(s);
       if (seen[k]) return;
       seen[k] = true;
-      used++;
+      if (isWarn) warnUsed++; else used++;
       var payload = { type: TYPE, kind: kind, message: m };
       if (s) payload.stack = s;
       if (url) payload.url = redact(url);
@@ -339,12 +424,63 @@ export const REPORTER_SOURCE = `(function () {
     } catch (e) { /* the reporter must never be the reason a demo breaks */ }
   }
 
+  // \`instanceof\` can throw on an exotic proxy, and a cross-realm error (one raised in
+  // an iframe the demo itself created) answers false. Both degrade the same way: the
+  // value is not treated as an Error, so the console event is relayed as a plain
+  // \`console-error\` — the pre-DEV-2552 behaviour, never a crash.
+  function isErrorLike(a) {
+    try {
+      return !!a && a instanceof Error;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // DEV-2552. An Error that reaches \`console.error\` is the *error* channel's business,
+  // not the console channel's. The same throw usually also reaches the window \`error\`
+  // listener a few lines below, and relaying both filed one fault as two Sentry issues
+  // — a stackless \`console-error\` and a stacked \`error\`.
+  //
+  // So the event is re-homed rather than dropped: relayed under kind \`error\`, with the
+  // Error's *own* message and stack rather than the joined arguments. That makes the
+  // key \`send\` dedupes on (\`kind|message|firstFrame\`) byte-identical to the one the
+  // window listener produces for the same Error, so whichever channel sees it first
+  // wins and the second is dropped. Order-independent on purpose: the console copy
+  // consistently arrives first, so a "drop the console copy" rule would keep the
+  // stackless one — and, worse, would report *nothing* for the faults where the window
+  // listener never fires at all. Those are real and observed: a DOMException thrown out
+  // of React's commit phase (Sentry DEMOS-19) has no \`error\`-kind twin, and Angular's
+  // default \`ErrorHandler\` console.errors every error zone.js swallows, which is the
+  // whole of that framework's error reporting on both tiers.
+  //
+  // Taking the Error's own message, not \`argsToMessage\`, is what makes the keys match
+  // when the caller prefixes the log (\`console.error("ERROR", err)\`).
+  //
+  // Extraction is wrapped because it runs at the *call site*, outside \`send\`'s own
+  // try/catch: a subclass with a throwing \`message\` getter must not throw out of the
+  // demo's \`console.error\` call, which would also cost it \`origError.apply\` below.
+  //
+  // \`console.warn\` is not re-homed — it is a breadcrumb channel and has no
+  // error-channel twin.
+  function errorArgReport(args) {
+    for (var i = 0; i < args.length; i++) {
+      if (isErrorLike(args[i])) {
+        try {
+          return { message: String(args[i].message || "unknown error"), stack: args[i].stack };
+        } catch (e) {
+          return { message: "unknown error", stack: "" };
+        }
+      }
+    }
+    return null;
+  }
+
   function argsToMessage(args) {
     var parts = [];
     for (var i = 0; i < args.length; i++) {
       var a = args[i];
       try {
-        parts.push(a instanceof Error ? String(a && a.message) : typeof a === "string" ? a : String(a));
+        parts.push(isErrorLike(a) ? String(a && a.message) : typeof a === "string" ? a : String(a));
       } catch (e) {
         parts.push("<unserializable>");
       }
@@ -380,7 +516,13 @@ export const REPORTER_SOURCE = `(function () {
     var origError = console.error;
     var origWarn = console.warn;
     console.error = function () {
-      send("console-error", argsToMessage(arguments), "");
+      // See \`errorArgReport\`: an Error here belongs to the error channel, and is sent
+      // under that kind so \`send\`'s dedupe collapses it with the window listener's
+      // copy of the same throw. The passthrough is outside the branch — what the
+      // reporter does with an event must never change the demo's own console output.
+      var report = errorArgReport(arguments);
+      if (report) send("error", report.message, report.stack);
+      else send("console-error", argsToMessage(arguments), "");
       if (origError) origError.apply(console, arguments);
     };
     console.warn = function () {
@@ -439,6 +581,61 @@ export const REPORTER_SOURCE = `(function () {
 })();
 `;
 
+/**
+ * The reporter as a *single physical line*, for prepending to a JS module entry.
+ *
+ * DEV-2557. Whatever we prepend to the entry shifts every position the bundler
+ * reports for that file, and the visitor is shown those positions verbatim. Inlining
+ * the reporter body cost 226 lines at the releases the Sentry events were tagged
+ * with, and 283 after DEV-2552 grew it — which is how a syntax error in a 70-line
+ * file came back as "(257:22)". One line of prefix means one line of shift.
+ *
+ * Why an indirect eval and not a separate module the entry imports: a new module
+ * would put a specifier the author never wrote into the graph, next to a moving entry
+ * path, entangled with `resolveSandboxEntry`, `sameFiles` and `stampEntry`, and would
+ * depend on the classic bundler evaluating an injected dependency before the entry
+ * body. Its failure mode is a blank preview. This form has zero graph interaction.
+ *
+ * Why `(0,eval)` and not `eval`: the indirect form evaluates in global scope, where
+ * the reporter's bare `window`/`parent`/`document`/`location`/`XMLHttpRequest`
+ * resolve, and where it leaks no bindings into the bundler's module wrapper.
+ *
+ * Why the try/catch: if `eval` is ever unavailable, that must cost monitoring on this
+ * path and never the demo. An entry that resolves to an HTML file (`parcel`/`static`
+ * with an `htmlEntry` — see `resolveSandboxEntry`) keeps the `<script>` injection as a
+ * working channel; anything else, the vue entry included, reaches the reporter only
+ * through this one. Verified live rather than inferred, since the catch would hide the
+ * failure: `window.__hotRunnerMonitor` is true inside the real Sandpack preview iframe
+ * for both a vue and a react entry.
+ *
+ * Still byte-deterministic: a pure function of a constant, computed once at module
+ * load — nothing hashed, padded, timestamped or randomised — so `sameFiles` keeps
+ * skipping the no-op compile (see `injectReporter` below).
+ *
+ * `alreadyInjected` still matches it: `JSON.stringify` escapes the quotes around
+ * MONITOR_MESSAGE_TYPE but leaves the string itself verbatim, so a double injection
+ * stays a no-op.
+ *
+ * One physical line is not free, and the cost lands somewhere non-obvious: babel's code
+ * frame prints the two lines above the fault verbatim, so a syntax error on authored
+ * line 1 or 2 renders all 12.6 KB of this into the compile message ahead of the line
+ * that is actually wrong, and `MONITOR_COMPILE_MESSAGE_MAX` then cuts the diagnostic off
+ * (measured: 289 characters of usable message with the reporter inlined, 12,872 with it
+ * on one line). `boundCompileMessage` in sandpack.ts therefore replaces this exact
+ * constant with a marker before the cap runs — `stripInjectedReporter`, which is
+ * coupled to this constant on purpose. Do not change the shape of this line without
+ * checking that strip still fires.
+ *
+ * What this does NOT fix: the entry is generally transpiled before the injection —
+ * `transpileFilesForParcel` for the parcel entries, and babel does not use
+ * `retainLines` — so a reported line is still a *compiled* line. Do not read this as
+ * "line numbers are now correct" for any entry: measured on the vue starter, a syntax
+ * error typed on authored line 11 reports line 14, the residual +3 coming from that
+ * entry's own TS transform. This removes the distortion we add (the same error
+ * reported line 316 before), and only source maps can close the rest.
+ */
+export const REPORTER_MODULE_LINE = `try{(0,eval)(${JSON.stringify(REPORTER_SOURCE)})}catch(e){}`;
+
 /** True when `source` already carries the reporter. */
 function alreadyInjected(source: string): boolean {
   return source.indexOf(MONITOR_MESSAGE_TYPE) !== -1;
@@ -474,6 +671,12 @@ export function injectReporterIntoHtml(html: string): string {
  * `static` environments (which is every Tier-1 example that has one), a JS module
  * otherwise. Both are handled, because a module entry still runs before the demo.
  *
+ * The module branch prepends `REPORTER_MODULE_LINE`, which is one physical line, so
+ * the compile positions the visitor is shown are off by one rather than by the
+ * reporter's length (DEV-2557). The HTML branch is deliberately left as it is: it is
+ * Tier-2's only monitoring channel (`workers/api/src/monitor-inject.ts`) and widening
+ * the eval bet to it wants its own decision.
+ *
  * Byte-deterministic by construction: no timestamp, no id, no ordering that
  * depends on iteration. `SandpackRuntime.sameFiles` skips the compile when the
  * sandbox is unchanged, and a reporter that differed between two builds of the
@@ -489,6 +692,6 @@ export function injectReporter(files: Record<string, string>, entryPath: string)
   if (alreadyInjected(source)) return files;
   const injected = entryPath.toLowerCase().endsWith(".html")
     ? injectReporterIntoHtml(source)
-    : REPORTER_SOURCE + "\n" + source;
+    : REPORTER_MODULE_LINE + "\n" + source;
   return { ...files, [entryPath]: injected };
 }

@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { theme, logoUrl } from "@handsontable/demo-editor-shell";
+import { assertApiOk } from "./api.js";
 import { reportError } from "./sentry.js";
 
 interface LedgerRow { day: string; sku: string; source: string; units: number; usd: number }
@@ -455,8 +456,10 @@ function SettingsForm({
             })
           : undefined,
       });
-      const body = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(body.error ?? `request failed (${res.status})`);
+      // Was a bare `res.json()` before the shared reader (DEV-2534) — which also
+      // threw a SyntaxError, rather than the described failure, whenever the
+      // error body was not JSON.
+      await assertApiOk(res, `request failed (${res.status})`);
       setState("saved");
       onSaved();
     } catch (e: unknown) {

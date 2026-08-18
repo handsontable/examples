@@ -5,11 +5,15 @@ import {
   collectDroppedEntries,
   collectDroppedFiles,
   dropTargetDir,
+  isExcludedPath,
+  isTextFileName,
+  MAX_DROP_FILE_BYTES,
   rejectionMessage,
   uniquePath,
   type DropEntryLike,
   type DroppedFile,
 } from "./dropFiles.js";
+import { expandZip } from "./dropZip.js";
 import {
   FileIcon,
   FolderIcon,
@@ -194,8 +198,10 @@ export function FileTree({
     setDropNote(null);
 
     const result = entries.length
-      ? await collectDroppedEntries(entries, targetDir)
-      : await collectDroppedFiles(plainFiles, targetDir);
+      // `expandZip` is injected rather than imported by `dropFiles.ts`: that module
+      // stays dependency-free (and unit-testable with fakes), this one owns fflate.
+      ? await collectDroppedEntries(entries, targetDir, { unzip })
+      : await collectDroppedFiles(plainFiles, targetDir, { unzip });
     setDropNote(rejectionMessage(result));
     if (!result.files.length) return;
     // Files are about to appear; a shut section would hide the whole result.
@@ -208,6 +214,12 @@ export function FileTree({
     }
     commit(result.files, "overwrite");
   }
+
+  /** An archive is unpacked with the *drop's* rules (DEV-2531) — `dropZip.ts` takes
+   *  them as an argument so it can stay free of sibling imports, and this is the
+   *  only place that knows both halves. */
+  const unzip = (bytes: Uint8Array) =>
+    expandZip(bytes, { isTextFileName, isExcludedPath, maxFileBytes: MAX_DROP_FILE_BYTES });
 
   /** Drop-zone props, spread onto the section. Empty when dropping is not allowed
    *  — without a `dragover` preventDefault the browser navigates to the file. */

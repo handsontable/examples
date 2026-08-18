@@ -73,6 +73,21 @@ async function dataTransferOf(page: Page, files: DropFile[]) {
   }, files);
 }
 
+/** Build a DataTransfer holding one binary file (base64 in, bytes out). */
+async function binaryDataTransferOf(page: Page, name: string, base64: string) {
+  return page.evaluateHandle(
+    ({ name: fileName, data }) => {
+      const bin = atob(data);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+      const dt = new DataTransfer();
+      dt.items.add(new File([bytes], fileName, { type: "application/zip" }));
+      return dt;
+    },
+    { name, data: base64 },
+  );
+}
+
 /** A full drag over the FILES section and a drop on it. */
 async function dropOnto(page: Page, target: ReturnType<typeof filesPanel>, files: DropFile[]) {
   const dataTransfer = await dataTransferOf(page, files);
@@ -297,4 +312,43 @@ test("a signed-in visitor cannot drop onto someone else's share", async ({ page 
   await dropOnto(page, filesPanel(page), [{ name: "notes.md", contents: "x" }]);
   await expect(dropHint(page)).toHaveCount(0);
   await expect(fileRow(page, "/notes.md")).toHaveCount(0);
+});
+
+test("dropping a .zip unpacks it (DEV-2531)", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await page.goto("/?example=react");
+  await expect(accountAvatar(page)).toBeVisible();
+  await expect(fileRow(page, "/src/index.tsx")).toBeVisible();
+
+  // A real archive, built with the same library the Download button writes with, and
+  // shaped like one a forum user attaches: a wrapping directory, a file we take, a
+  // file we refuse, and something that should never arrive at all.
+  const { zipSync, strToU8 } = await import("fflate");
+  const bytes = zipSync({
+    "my-repro/index.js": strToU8("console.log('repro');\n"),
+    "my-repro/data/rows.json": strToU8('[{ "a": 1 }]'),
+    "my-repro/.env": strToU8("SECRET=1\n"),
+    "my-repro/logo.png": strToU8("pretend"),
+    "my-repro/node_modules/left-pad/index.js": strToU8("module.exports = 1\n"),
+  });
+  const base64 = Buffer.from(bytes).toString("base64");
+
+  const panel = filesPanel(page);
+  const dataTransfer = await binaryDataTransferOf(page, "my-repro.zip", base64);
+  await panel.dispatchEvent("dragenter", { dataTransfer });
+  await panel.dispatchEvent("dragover", { dataTransfer });
+  await panel.dispatchEvent("drop", { dataTransfer });
+
+  // Root stripped, so the project lands as a project.
+  await expect(fileRow(page, "/index.js")).toBeVisible();
+  await expect(fileRow(page, "/data/rows.json")).toBeVisible();
+  // The archive itself is never stored, and neither is anything it should not carry.
+  await expect(fileRow(page, "/my-repro.zip")).toHaveCount(0);
+  await expect(fileRow(page, "/.env")).toHaveCount(0);
+  await expect(fileRow(page, "/logo.png")).toHaveCount(0);
+  await expect(fileRow(page, "/node_modules/left-pad/index.js")).toHaveCount(0);
+
+  // And what it refused is said out loud, not swallowed.
+  await expect(page.getByText(/Skipped/)).toContainText(/\.env|logo\.png/);
 });

@@ -21,13 +21,8 @@ import {
   theme as ui,
 } from "@handsontable/demo-editor-shell";
 import type { ColorsMap, TokenMap } from "./presets.js";
-import { COMMON_COLORS_KEYS, SIZING } from "./presets.js";
-import {
-  mergeForColorScheme,
-  resolveTokenValue,
-  swatchColor,
-  tokenValueLabel,
-} from "./resolve.js";
+import { COMMON_COLORS_KEYS } from "./presets.js";
+import { mergeForColorScheme, resolveTokenValue, tokenValueLabel } from "./resolve.js";
 import type { ColorScheme, Token, TokenValue } from "./vocabulary.js";
 
 export interface ControlContext {
@@ -35,6 +30,10 @@ export interface ControlContext {
   tokens: TokenMap;
   colors: ColorsMap;
   density: Record<string, string>;
+  /** The sizing scale — `{ size_1: "4px", … }`. Passed in rather than imported
+   *  from `presets.ts`, so it can come from the Handsontable version the demo is
+   *  pinned to instead of the one this app is built with (DEV-2560). */
+  sizing: Record<string, string>;
   colorScheme: ColorScheme;
 }
 
@@ -69,7 +68,10 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div style={rowWrap}>
+    // `data-token` is the stable hook a test can pick a row by: this is a `div`,
+    // so `label`-based locators cannot reach it, and the label text ("Vertical")
+    // repeats across groups.
+    <div style={rowWrap} data-token={token.key}>
       <div style={rowHead}>
         <span style={rowLabel} title={token.key}>{token.label}</span>
         {overridden && (
@@ -122,23 +124,44 @@ function UnitControl({ token, resolved, onChange }: {
   );
 }
 
+type SizeMode = "sizing" | "density" | "custom";
+
+/** Which list to open on: the mode the *effective* value already speaks, so an
+ *  untouched token whose preset value is `sizing.size_1` opens on the sizing
+ *  scale rather than a blank text box (DEV-2560). */
+function modeFor(effectiveRef: string, modes: readonly SizeMode[]): SizeMode {
+  const guessed: SizeMode = effectiveRef.startsWith("sizing.")
+    ? "sizing"
+    : effectiveRef.startsWith("density.") ? "density" : "custom";
+  return modes.includes(guessed) ? guessed : modes[0]!;
+}
+
 /**
  * `size` — pick from the sizing scale, follow a density slot, or type a value.
  *
  * The density option is the interesting one: a token set to `density.cellHorizontal`
  * keeps tracking the density preset, so switching compact/comfortable still moves it.
+ * It is also the one the density-size rows must not offer — a density measurement
+ * pointing at a density slot is a measurement pointing at itself — hence `modes`.
  */
-function SizeControl({ value, resolved, density, onChange }: {
+function SizeControl({ value, resolved, effectiveRef = "", density, sizing, modes = ["sizing", "density", "custom"], onChange }: {
   value: TokenValue | undefined;
   resolved: string;
+  /** The raw value in force — the override, or the preset's own reference. */
+  effectiveRef?: string;
   density: Record<string, string>;
+  sizing: Record<string, string>;
+  modes?: readonly SizeMode[];
   onChange: (v: string) => void;
 }) {
   const raw = typeof value === "string" ? value : "";
+  /** The reference in force — the override, else the preset's own. Both the mode
+   *  the popover opens on and the row it highlights follow this: keying either to
+   *  `raw` alone left an untouched token on a list with nothing selected, while
+   *  its trigger already showed the resolved preset value. */
+  const current = raw || effectiveRef;
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<"sizing" | "density" | "custom">(
-    raw.startsWith("sizing.") ? "sizing" : raw.startsWith("density.") ? "density" : "custom",
-  );
+  const [mode, setMode] = useState<SizeMode>(() => modeFor(current, modes));
 
   return (
     <div>
@@ -149,17 +172,20 @@ function SizeControl({ value, resolved, density, onChange }: {
       {open && (
         <div style={popover}>
           <div style={segmented}>
-            {(["sizing", "density", "custom"] as const).map((m) => (
+            {modes.map((m) => (
               <button key={m} type="button" style={segment(mode === m)} onClick={() => setMode(m)}>{m}</button>
             ))}
           </div>
           {mode === "sizing" && (
             <div style={scrollList}>
-              {Object.entries(SIZING)
-                .sort((a, b) => parseInt(a[1], 10) - parseInt(b[1], 10))
+              {/* By value, not by name: the scale declares `size_1_5` after
+                  `size_2` and `size_0_25` last, and `parseFloat` is what keeps
+                  the sub-pixel steps in order. */}
+              {Object.entries(sizing)
+                .sort((a, b) => parseFloat(a[1]) - parseFloat(b[1]))
                 .map(([k, v]) => (
                   <button key={k} type="button" className="hot-panel-list-item" style={listItem}
-                    data-active={raw === `sizing.${k}`}
+                    data-active={current === `sizing.${k}`}
                     onClick={() => onChange(`sizing.${k}`)}>
                     <span>{k}</span><span style={listItemValue}>{v}</span>
                   </button>
@@ -170,7 +196,7 @@ function SizeControl({ value, resolved, density, onChange }: {
             <div style={scrollList}>
               {Object.keys(density).map((k) => (
                 <button key={k} type="button" className="hot-panel-list-item" style={listItem}
-                  data-active={raw === `density.${k}`}
+                  data-active={current === `density.${k}`}
                   onClick={() => onChange(`density.${k}`)}>
                   <span>{k.replace(/([A-Z])/g, " $1").replace(/^\w/, (c) => c.toUpperCase())}</span>
                   <span style={listItemValue}>{density[k]}</span>
@@ -183,9 +209,13 @@ function SizeControl({ value, resolved, density, onChange }: {
             // `1rem`, `50%` and unitless numbers are all valid sizes, and
             // reopening the editor blank while the trigger showed the real value
             // made the next edit a guess.
+            //
+            // From `raw`, not `current`: seeding an untouched token with the
+            // preset's literal would let a blur alone commit that literal as an
+            // override. The resolved value is the placeholder instead.
             <input type="text" style={{ ...control, width: "100%" }}
               defaultValue={/^(sizing|density)\./.test(raw) ? "" : raw}
-              placeholder="e.g. 12px, 1rem, 50%"
+              placeholder={resolved || "e.g. 12px, 1rem, 50%"}
               onBlur={(e) => e.target.value && onChange(e.target.value)} />
           )}
         </div>
@@ -244,8 +274,7 @@ function ColorControl({ token, value, ctx, resolved, onChange }: {
                     onClick={() => onChange(`tokens.${key}`)}>
                     <span style={{
                       ...swatch,
-                      background: String(resolveTokenValue(
-                        tokens[key], colors, tokens, ctx.density, colorScheme) ?? "#ccc"),
+                      background: String(resolveTokenValue(tokens[key], { ...ctx, tokens, colors }) ?? "#ccc"),
                     }} />
                   </button>
                 ))}
@@ -294,9 +323,7 @@ function ColorControl({ token, value, ctx, resolved, onChange }: {
 
 /** Dispatch on the token's declared type; anything unrecognised stays text. */
 export function TokenControl({ token, ctx, value, onChange, onReset }: TokenControlProps) {
-  const resolved = String(
-    resolveTokenValue(value ?? ctx.tokens[token.key], ctx.colors, ctx.tokens, ctx.density, ctx.colorScheme) ?? "",
-  );
+  const resolved = String(resolveTokenValue(value ?? ctx.tokens[token.key], ctx) ?? "");
   const overridden = value !== undefined;
 
   return (
@@ -305,7 +332,14 @@ export function TokenControl({ token, ctx, value, onChange, onReset }: TokenCont
         <SelectControl token={token} value={value} resolved={resolved} onChange={onChange} />
       )}
       {token.type === "size" && (
-        <SizeControl value={value} resolved={resolved} density={ctx.density} onChange={onChange} />
+        <SizeControl
+          value={value}
+          resolved={resolved}
+          effectiveRef={typeof (value ?? ctx.tokens[token.key]) === "string" ? String(value ?? ctx.tokens[token.key]) : ""}
+          density={ctx.density}
+          sizing={ctx.sizing}
+          onChange={onChange}
+        />
       )}
       {token.type === "numeric" && (
         <UnitControl token={token} resolved={resolved} onChange={onChange} />
@@ -317,6 +351,45 @@ export function TokenControl({ token, ctx, value, onChange, onReset }: TokenCont
         <input type="text" style={control} value={typeof value === "string" ? value : ""}
           placeholder={resolved || "theme default"} onChange={(e) => onChange(e.target.value)} />
       )}
+    </Row>
+  );
+}
+
+/**
+ * One density measurement, on the same size control the 65 `size` tokens use
+ * (DEV-2560).
+ *
+ * These were free-text boxes: to raise cell padding you had to know that `8px`
+ * was a legal value and that the preset said `sizing.size_2`, neither of which
+ * the row told you. Theme Builder offers a picker, and so does this now.
+ *
+ * No `density` mode — a density measurement that points at a density slot points
+ * at itself. `Row` supplies the label, the description and the Reset, exactly as
+ * for a token, so an overridden measurement can be put back without knowing that
+ * clearing the box is what does it.
+ */
+export function DensitySizeControl({ token, ctx, value, resolved, effectiveRef, onChange, onReset }: {
+  token: Token;
+  ctx: ControlContext;
+  value: string | undefined;
+  /** The measurement in force, resolved through the scale — `"4px"`. */
+  resolved: string;
+  /** The raw value in force — `"sizing.size_1"`, or a literal. */
+  effectiveRef: string;
+  onChange: (v: string) => void;
+  onReset: () => void;
+}) {
+  return (
+    <Row token={token} overridden={value !== undefined} onReset={onReset}>
+      <SizeControl
+        value={value}
+        resolved={resolved}
+        effectiveRef={effectiveRef}
+        density={{}}
+        sizing={ctx.sizing}
+        modes={["sizing", "custom"]}
+        onChange={onChange}
+      />
     </Row>
   );
 }
