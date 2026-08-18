@@ -67,7 +67,7 @@ export class DataGridComponent {
       {
         data: 4,
         type: 'date',
-        dateFormat: 'DD/MM/YYYY',
+        dateFormat: 'YYYY-MM-DD',
         locale: 'en-GB',
         allowInvalid: false,
       },
