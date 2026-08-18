@@ -91,11 +91,28 @@ test("a fresh pkg.pr.new build boots a real container at that ref", async ({ pag
   test.skip(!process.env.E2E_BASE_URL, "needs a deployed API origin");
   test.setTimeout(300_000);
 
+  // The ref must be *proven* to reach the session, not assumed: without this,
+  // deleting the ?v= pkg.pr.new dispatch entirely would leave react-js booting
+  // at DEFAULT_VERSION and the render assertions green (audit, DEV-2203). The
+  // install itself happens server-side in the container, so the session
+  // payload is the observable seam — the browser never fetches pkg.pr.new.
+  let postedHtVersion: string | null = null;
+  page.on("request", (req) => {
+    if (req.method() === "POST" && /\/api\/session$/.test(req.url())) {
+      try {
+        postedHtVersion = (JSON.parse(req.postData() ?? "{}") as { htVersion?: string }).htVersion ?? null;
+      } catch {
+        // malformed payload just leaves the assertion below to fail
+      }
+    }
+  });
+
   const tracked = trackSessions(page);
   try {
     await page.goto(`/?example=react-js&v=${encodeURIComponent(ref!)}`);
     await previewReady(page, "container");
     await expectGridRendered(page);
+    expect(postedHtVersion, "the validated pkg.pr.new ref reached the container session").toBe(ref);
   } finally {
     await tracked.cleanup(request);
   }
