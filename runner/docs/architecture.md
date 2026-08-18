@@ -56,6 +56,11 @@ so vite refuses the HMR socket with a `400` and live editing silently stops
 reloading. That asymmetry is why the bug survived unnoticed until browser consoles
 started reporting it — nothing about the preview *looks* broken.
 
+There are two ways to opt in, and they do **not** cover the same ground. Every
+container except one uses the environment variable below. The docs Vue container
+cannot: it is pinned to vite 5, where that variable does not exist, so it sets
+`server.allowedHosts` in its own generated config instead (DEV-2564, see below).
+
 The opt-in is the `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` environment variable,
 derived from `PREVIEW_HOST` in `workers/api/src/preview-allowed-hosts.ts` and
 handed to the dev-server process via `startProcess({ env })`. The value carries a
@@ -96,6 +101,7 @@ Three things to know before changing any of this:
 - **The variable is internal to vite and unversioned, and it has already changed.**
   vite 6.4.3 and 7.3.5 append the value verbatim; 8.1.1 splits it on commas and
   discards it entirely — warning only, no error — if it contains `\`, `"` or `'`.
+  **It does not exist at all before vite 6** — see the Vue section below.
   Every failure here is silent: HMR just goes back to being broken.
   `pipeline/vite-allowed-hosts.test.mjs` is what would notice. It boots a real vite
   and drives a real upgrade handshake with a preview-shaped `Host`, asserting `400`
@@ -111,6 +117,48 @@ Three things to know before changing any of this:
 > `allowedHosts` to `[]`, honour the leading-dot wildcard, and read the variable, so
 > the fix holds across them — but the *behavioural* half of the guard only ever
 > exercises 6.4.3. Booting the containers' own vite in CI would close that gap.
+
+### Why the Vue docs container opts in from config instead (DEV-2564)
+
+There is a fourth version, and it is the one the note above missed: the docs Vue
+container runs **vite 5.4.21**, pinned `^5.4.0` in both `buildVueProject`
+(`pipeline/wrap-docs-example.mjs`) and `extraContainer()`
+(`scripts/prepare-container.mjs`). `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` first
+appears in 6.x — the name occurs nowhere in `vite@5.4.21/dist` — but vite 5 still
+runs the host check. So for every Vue docs example the DEV-2541 fix was **silently
+inert**: measured `400` both with and without the variable, while Angular's 7.3.5
+went `400` → `101`. Roughly 500 docs artifacts were affected, all of them booting,
+rendering, and never hot-reloading.
+
+The Vue project therefore carries `server: { allowedHosts: true }` in its generated
+`vite.config.js` (`DOCS_VITE_SERVER_BLOCK`, exported from `wrap-docs-example.mjs`).
+Config over a vite bump on purpose: it works on every major, it needs no internal
+variable, it survives vite 8's stricter parsing of that variable's value, and it does
+not change what ~500 examples install. vite 5 is deliberate for the docs projects —
+vite 8/rolldown tree-shakes Handsontable's filter-condition registrations away given
+its `sideEffects: false`. It is also what the checked-in starters already do
+(`examples/vue/vite.config.ts`, remix, react-js, ant-design, mui, base-web,
+fluent-ui, javascript). Turning the host check off is right for an ephemeral
+per-session container reachable only through the authenticated preview proxy.
+
+Two guards, because both directions of this mistake are silent — a config that loses
+its `server` block, and a vite pin that drops below 6:
+
+- `pipeline/vite-allowed-hosts.test.mjs` boots the real 5.4.21 (an exact
+  `vite5: npm:vite@5.4.21` devDependency alias) against the exact emitted string:
+  `400` with no config, `101` with it and no environment variable, in full browser
+  shape. It deliberately does *not* assert the variable stays absent from vite 5 — if
+  some 5.4.x backported it, the config route makes that irrelevant.
+- `pipeline/docs-container-vite-hosts.test.mjs` holds every `engine: "container"`
+  docs framework to the rule: ship `allowedHosts` in the vite config, or run a vite
+  `>= 6`. The version each container runs is read from its baked `pnpm-lock.yaml`,
+  not from declared dependencies — Angular declares no vite and still runs 7.3.5 via
+  `@angular/build`.
+
+Changing the generator changes nothing live until the docs buckets are re-baked: the
+`vite.config.js` ships inside each artifact under
+`apps/authoring/public/docs-examples/<bucket>/`. Re-run the **Import versioned docs
+examples** workflow to regenerate them.
 
 ## Version dispatch
 

@@ -45,18 +45,27 @@
  * string: a silent removal upstream is the failure mode this pin cannot self-detect.
  *
  * It really does move between versions, and the containers do not run one version.
- * Three are in play, all checked against this value:
+ * Four are in play:
+ *   - 5.4.21 — the docs Vue container, pinned `^5.4.0`. **The variable does not exist
+ *     here at all** (DEV-2564): it first appears in 6.x, the name occurs nowhere in
+ *     `vite@5.4.21/dist`, and vite 5 still runs the host check — so this function is
+ *     measurably inert for that container (400 with the variable set, exactly as
+ *     without it). Vue is covered instead by `server: { allowedHosts: true }` in its
+ *     generated `vite.config.js` (`DOCS_VITE_SERVER_BLOCK` in
+ *     pipeline/wrap-docs-example.mjs), which needs no variable and no version floor.
  *   - 6.4.3 — what this repo installs, so what the pipeline test can boot;
  *   - 7.3.5 — what Angular runs, pinned by `@angular/build`, not by the starter;
  *   - 8.1.1 — observed in a booted react-js container (starters pin their own vite).
  * 6.4.3 and 7.3.5 append the value verbatim. 8.1.1 splits it on commas and discards
- * it entirely — warning only — if it contains `\`, `"` or `'`. All three default
+ * it entirely — warning only — if it contains `\`, `"` or `'`. All of them default
  * `allowedHosts` to `[]` and honour the leading-dot suffix wildcard. The hostname
  * pattern below excludes commas and all three reserved characters, so a single
- * value satisfies every version.
+ * value satisfies every version that reads it.
  *
  * The `Array.isArray` guard is why this is safe to set unconditionally for every
- * framework: wherever a starter already ships `server.allowedHosts: true`
+ * framework — but note that "safe" is not "sufficient": a container below vite 6 needs
+ * the config route regardless, because there is no variable to read. Wherever a starter
+ * already ships `server.allowedHosts: true`
  * (react-js, ant-design, mui, base-web, fluent-ui, remix, astro) the variable is a
  * no-op. Angular is covered via the builder its `angular.json` names —
  * `@angular-devkit/build-angular:dev-server` takes its esbuild branch for an
