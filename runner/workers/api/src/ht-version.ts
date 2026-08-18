@@ -168,10 +168,13 @@ async function resolveDistTag(env: Env, tag: string): Promise<{ ok: true; ref: s
 export async function resolveHandsontableVersion(env: Env, args: ResolveArgs): Promise<ResolvedVersion> {
   const explicit = args.htVersion?.trim();
   // A dist-tag is not an answer, it is a deferral: it names whatever npm has
-  // today, exactly as a range does. `MyDemos`'s fork forwards the row's
-  // `ht_version` verbatim, so legacy demos arrive here asking for "latest" while
-  // their package.json pins a PR build — and rewriting that would fork the demo
-  // onto a different core. So a tag ranks below the payload's own pin.
+  // today, exactly as a range does — so where it sits in the order depends on who
+  // sent it. From a browser it ranks below the payload's own pin, because
+  // `MyDemos`'s fork forwards the row's `ht_version` verbatim: a legacy demo
+  // arrives asking for "latest" while its package.json pins a PR build, and
+  // rewriting that would fork the demo onto a different core. From the service
+  // path (`trustDistTag`) it is the model's own request rather than a forwarded
+  // value, and outranks the pin — see the docstring above for the full order.
   const tag = explicit && DIST_TAGS.has(explicit.toLowerCase()) ? explicit.toLowerCase() : null;
   let ref: string | null = null;
 
