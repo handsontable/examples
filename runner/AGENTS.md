@@ -150,13 +150,12 @@ that term to a bare `localhost:` — catalog README text mentions dev-server por
 
 ## CI/CD
 
-Seven workflows live in `.github/workflows/` at the repo root:
+Six workflows live in `.github/workflows/` at the repo root:
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
-| `ci.yml` | every PR + push to `master` | build, typecheck, unit + catalog-smoke tests, authoring build, Playwright e2e. Also `workflow_call`able, so the deploy workflows gate on it. |
-| `deploy-runner-api.yml` | push to `master` touching `workers/api`, `containers`, `scripts`, `config`, `packages` (or manual) | deploys `workers/api`. |
-| `deploy-runner-authoring.yml` | push to `master` touching `apps/authoring`, `packages`, `config`, **`catalog.json`** (or manual) | builds + deploys `apps/authoring`. |
+| `ci.yml` | every PR; `workflow_call` from `master.yml` and manual dispatch | the reusable CI DAG: build → authoring → e2e (in the pinned Playwright container), with unit in parallel. No push trigger of its own — master runs it once through `master.yml`. |
+| `master.yml` | every push to `master` (or manual dispatch with per-target checkboxes) | one CI run + path-gated deploys: `deploy-authoring` and `deploy-api` run only when a plain `git diff` says their files changed. Replaces the two `deploy-runner-*.yml` workflows, whose per-workflow CI gates ran the suite up to three times per push. |
 | `e2e-live.yml` | manual | the `E2E_LIVE=1` specs that mount a real preview. |
 | `e2e-starter-matrix.yml` | manual | every starter through a live session; serialized against the global container cap. |
 | `import-docs.yml` | manual, or `repository_dispatch: docs-examples-sync` from the docs repo | re-imports the documentation-guide examples. |
