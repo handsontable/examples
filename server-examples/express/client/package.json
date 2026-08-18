@@ -8,7 +8,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@handsontable/pikaday": "^1.0.0",
     "handsontable": "^18.0.0"
   },
   "devDependencies": {
