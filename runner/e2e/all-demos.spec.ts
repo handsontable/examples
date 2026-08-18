@@ -136,10 +136,16 @@ test("a demo the MCP created shows up on your own list", async ({ page }) => {
   // indistinguishable from a demo saved in the browser: on *your* list, with the
   // full owner's menu — not the read-only card a teammate's demo gets, which is
   // what a `created_by` mismatch between the two writers would produce.
+  //
+  // The mismatch has to be real or the test proves nothing (audit, DEV-2203):
+  // the MCP writer normalises case differently than the browser session, so
+  // `created_by` here deliberately differs in case from the signed-in email —
+  // the owner's menu below appears only if `isOwnedBy`'s case-folding is wired
+  // into the card path, which is the exact two-writer seam this test guards.
   await stubShell(page);
   await signIn(page);
   await stubDemos(page, [
-    { ...demo("mcpdemo1", "Pushed from my machine", EMAIL), forked_from: "mcp:react" },
+    { ...demo("mcpdemo1", "Pushed from my machine", "Dev@Handsontable.com"), forked_from: "mcp:react" },
   ]);
   await page.goto("/my-demos");
 
