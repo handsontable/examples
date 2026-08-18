@@ -72,6 +72,10 @@ concurrency:
 jobs:
   live:
     runs-on: ubuntu-latest
+    # Same image rule as ci.yml: keep the tag in lockstep with @playwright/test
+    # in runner/package.json — bump the two together, never apart.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
     # Smoke: minutes. Full deployed run: the sandpack suite plus ~8 container
     # boots, strictly one at a time. Local run: seconds once built.
     timeout-minutes: 90
@@ -102,9 +106,6 @@ jobs:
         run: |
           pnpm build
           pnpm --filter @handsontable/demo-authoring build
-
-      - name: Install Playwright browser
-        run: pnpm exec playwright install --with-deps chromium
 
       # ---- Post-deploy smoke: the @smoke subset and nothing else. ----------
       - name: Smoke — one render per engine, one share, one docs example, one Style round-trip
