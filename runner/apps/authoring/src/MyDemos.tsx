@@ -188,7 +188,11 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
     try {
       const srcRes = await fetch(`${apiBase}/api/demos/${demo.id}/source`);
       if (!srcRes.ok) throw new Error(`Couldn't read that demo's files (${srcRes.status}).`);
-      const src = (await srcRes.json()) as { framework: string; files: Record<string, string> };
+      const src = (await srcRes.json()) as {
+        framework: string;
+        files: Record<string, string>;
+        htVersion?: string | null;
+      };
       const res = await fetch(`${apiBase}/api/demos`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -197,7 +201,12 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
           files: src.files,
           title: `${demo.title} - Fork`,
           description: demo.description ?? undefined,
-          htVersion: demo.ht_version,
+          // The snapshot's repaired ref, not the list row's: a demo saved before
+          // DEV-2565 carries the "latest" sentinel in `ht_version`, and sending it
+          // as an explicit version would ask the API to resolve npm latest for a
+          // fork whose package.json pins something else. Omitted means "derive it
+          // from the files", which is what preserves the pin.
+          htVersion: src.htVersion ?? undefined,
           forkedFrom: demo.id,
         }),
       });

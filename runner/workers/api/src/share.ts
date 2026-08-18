@@ -221,7 +221,7 @@ export async function runBuild(
 
 export interface CreateArgs {
   entry: BuildEntry;
-  files: Record<string, string>;      // already version-injected
+  files: Record<string, string>;      // version-injected by the caller (index.ts -> resolveHandsontableVersion)
   htVersion: string;
   title: string;
   description?: string | null;
@@ -287,7 +287,7 @@ export async function createDemo(env: Env, args: CreateArgs): Promise<{ id: stri
 export interface UpdateArgs {
   id: string;
   entry: BuildEntry;
-  files: Record<string, string>;   // already version-injected
+  files: Record<string, string>;   // version-injected by the caller (index.ts -> resolveHandsontableVersion)
   htVersion: string;
   /** Metadata, only when the request actually carried it. Absent means "leave the
    *  stored value alone", and that distinction is load-bearing (DEV-2495): a

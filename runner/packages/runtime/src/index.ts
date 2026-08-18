@@ -14,6 +14,8 @@ export type {
 export {
   applyHandsontableCss,
   applyHandsontableVersion,
+  handsontableDependencyRef,
+  pinHandsontableFiles,
   validateHandsontableVersion,
   isHandsontablePackage,
   isNextPrereleaseVersion,

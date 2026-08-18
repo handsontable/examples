@@ -19,10 +19,9 @@ import {
   type SchemeMode,
 } from "@handsontable/demo-runtime/scheme";
 import {
-  applyHandsontableCss,
-  applyHandsontableVersion,
   deriveDocsBucketCandidate,
   isNextPrereleaseVersion,
+  pinHandsontableFiles as pinToVersionRef,
   resolveStarterBucket,
   validateHandsontableVersion,
   type CatalogEntry,
@@ -283,17 +282,18 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
   Sentry.captureException(e, { tags: { context: "tier2-runtime" } });
 }
 
+/** Pin the workspace to the version state's ref. Thin wrapper over the shared
+ *  `pinHandsontableFiles` (packages/runtime), which the API worker also calls
+ *  since DEV-2565 — one rewrite rule, two callers.
+ *
+ *  An unusable version is left unpinned rather than thrown: the mount guard owns
+ *  that message and refuses to boot behind this, and the only way to reach it now
+ *  is a hand-typed `?v=`, since the API no longer stores a ref the validator
+ *  rejects. */
 function pinHandsontableFiles(files: FilesMap, version: string): FilesMap {
   const validated = validateHandsontableVersion(version);
-  if (!validated.ok || files["/package.json"] === undefined) return files;
-  try {
-    return applyHandsontableCss(
-      applyHandsontableVersion(files, validated.value),
-      validated.value,
-    );
-  } catch {
-    return files;
-  }
+  if (!validated.ok) return files;
+  return pinToVersionRef(files, validated.value);
 }
 
 /** Did the host simply not have this docs resource? Delegates to the loader's
@@ -562,7 +562,14 @@ function FullMode({ id }: { id: string }) {
         if (cancelled || !meta) return;
         setTitle(meta.title ?? "");
         setDescription(meta.description ?? "");
-        if (meta.ht_version) setVersion(meta.ht_version);
+        // Only a ref the validator accepts. This view is handed `ht_version`
+        // verbatim, so a demo saved before DEV-2565 carries the "latest" sentinel
+        // here, and the snapshot read below is what repairs it — but these two
+        // fetches settle in either order. Gating on validity is what makes the
+        // displayed version independent of which one lands last.
+        if (meta.ht_version && validateHandsontableVersion(meta.ht_version).ok) {
+          setVersion(meta.ht_version);
+        }
       })
       .catch(() => { /* the status dot reports the build; a missing title is not an error state */ });
     return () => { cancelled = true; };
@@ -576,9 +583,13 @@ function FullMode({ id }: { id: string }) {
     let cancelled = false;
     fetch(`${API_BASE}/api/demos/${id}/source`)
       .then((res) => (res.ok ? res.json() : null))
-      .then((src: { framework: string; files: FilesMap } | null) => {
+      .then((src: { framework: string; files: FilesMap; htVersion?: string | null } | null) => {
         if (cancelled || !src) return;
         setFiles(src.files);
+        // The repaired ref (DEV-2565) — the metadata read above hands this view
+        // `ht_version` verbatim, so a demo saved before that fix would print the
+        // "latest" sentinel as its version.
+        if (src.htVersion) setVersion(src.htVersion);
         // The design's short label ("React (Vite, TS)") comes from the starter catalog,
         // same resolution the shell's status bar uses in every other mode.
         setFrameworkName(catalog.examples.find((x) => x.framework === src.framework)?.displayName);
@@ -1339,7 +1350,26 @@ function Authoring({
           setSourceLoaded(true);
           return;
         }
-        const src = (await srcRes.json()) as { framework: string; files: FilesMap };
+        const src = (await srcRes.json()) as {
+          framework: string;
+          files: FilesMap;
+          /** The row's ref when the validator accepts it, else the one the snapshot
+           *  itself pins — see `editorVersionRef` (DEV-2565). Preferred over
+           *  `meta.ht_version` because demos saved before that fix hold the "latest"
+           *  sentinel there, and adopting it as version state is a boot refusal. */
+          htVersion?: string | null;
+        };
+        // Read outside the metadata branch on purpose: the version rides on the
+        // snapshot now, so a transient metadata failure must not cost the demo its
+        // pin — the editor would resolve latest and the next Save would re-pin the
+        // demo to it.
+        //
+        // Presence, not truthiness: the route answers `null` for a legacy row whose
+        // snapshot pins nothing exact, and *that* is the answer — falling back to
+        // `meta.ht_version` there would adopt the "latest" sentinel and reproduce
+        // the boot refusal this branch removes (DEV-2565).
+        let pinnedVersion: string | null | undefined =
+          "htVersion" in src ? src.htVersion : undefined;
         if (metaRes.ok) {
           const meta = (await metaRes.json()) as {
             title: string;
@@ -1350,10 +1380,13 @@ function Authoring({
           setTitle(meta.title ?? "");
           setDescription(meta.description ?? "");
           setCreatedAt(meta.created_at ?? "");
-          if (meta.ht_version) {
-            hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
-            setVersion(meta.ht_version);
-          }
+          // The column is the fallback only for an API old enough not to send the
+          // field at all.
+          if (pinnedVersion === undefined) pinnedVersion = meta.ht_version;
+        }
+        if (pinnedVersion) {
+          hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
+          setVersion(pinnedVersion);
         }
         loadWorkspace(toPlaceholderEntry(getEntry(src.framework)), src.files, savedId);
         setSourceLoaded(true);
