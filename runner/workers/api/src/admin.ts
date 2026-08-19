@@ -10,8 +10,27 @@
 // @handsontable.com identity. Spend figures are internal, not secret.
 
 import type { Env } from "./env.js";
-import { computeBudgetState, containerUsdPerSecond, SESSION_INSTANCE_TYPE } from "./budget.js";
+import {
+  computeBudgetState,
+  containerUsdPerSecond,
+  KV_METER_PREFIX,
+  SESSION_INSTANCE_TYPE,
+  type SessionMeter,
+  type SessionMeterMetadata,
+} from "./budget.js";
 import { analyticsReport } from "./analytics.js";
+import {
+  classifyMeter,
+  frameworkOf,
+  type Page,
+  pageOf,
+  parseSessionQuery,
+  resolveSessionRef,
+  scanTruncated,
+  sessionRef,
+  type SessionQuery,
+  type SessionState,
+} from "./session-listing.js";
 
 export interface LedgerRow {
   day: string;
@@ -29,64 +48,175 @@ export interface UsageRow {
 }
 
 /**
- * A live Tier-2 session, derived from the awake-window meters in KV.
+ * A Tier-2 session with a meter in KV — awake, or on the 24h tail (DEV-2567).
  *
  * `ref` is a one-way digest of the session id, never the id itself. Session
  * ids are bearer capabilities — `/api/session/:id/*` is unauthenticated by
  * design, so anyone holding an id can write files into that container or tear
  * it down. Handing them to every signed-in viewer of this panel would let one
  * colleague interfere with another's live session. The digest is enough to
- * tell two rows apart, which is all the panel needs.
+ * tell two rows apart, and `DELETE /api/admin/sessions/:ref` resolves it back
+ * server-side, so the kill button needs no id either.
  */
-interface LiveSession {
+export interface LiveSession {
   ref: string;
   framework: string;
   startedAt: number;
+  /** Wall-clock since session start — what the Awake column has always shown. */
   awakeSeconds: number;
+  /** Awake time the ledger can stand behind: capped at the idle window past the
+   *  last keepalive tick. For a `slept` row this is far below `awakeSeconds`,
+   *  and it is the honest basis for `estimatedUsd`. */
+  billableSeconds: number;
+  /** Since the last keepalive tick; `state` is a threshold on this. */
+  quietSeconds: number;
+  state: SessionState;
   estimatedUsd: number;
+}
+
+export interface LiveSessionsPage extends Page<LiveSession> {
+  /** Matching the filter (`total`) vs. every meter in KV, so the panel can label
+   *  its own checkbox with what unchecking it would reveal. */
+  awakeCount: number;
+  meterCount: number;
+  /** True when the KV scan hit its own ceiling — see MAX_LIST_PAGES. Never let a
+   *  bounded table read as a complete one; that is how the 50-row cap this
+   *  replaces went unnoticed. */
+  truncated: boolean;
 }
 
 const dayAgo = (days: number): string => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 
-/** Short, non-reversible stand-in for a session id (see LiveSession.ref). */
-async function digest(value: string): Promise<string> {
-  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(hash)].slice(0, 4).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
+/** KV's own per-call maximum. */
+const LIST_PAGE_LIMIT = 1000;
+/** Ceiling on the scan. Four calls is ~4000 concurrent-plus-stale sessions, well
+ *  past anything 24h of Tier-2 traffic against a 5-instance pool can produce; it
+ *  exists so a runaway cannot turn one panel load into an unbounded KV bill. */
+const MAX_LIST_PAGES = 4;
+/** Meters written before `SessionMeterMetadata` shipped need a `get` each. Bounded
+ *  because that is a per-row round trip; the branch empties itself within one
+ *  KV_METER_TTL_SECONDS of the deploy, after which this is dead code. */
+const MAX_LEGACY_READS = 200;
+/** Legacy `get`s run in parallel batches rather than all at once — a burst of
+ *  hundreds of concurrent subrequests is its own failure mode. */
+const LEGACY_READ_BATCH = 20;
 
-/** Session ids are `<framework-slug>-<8 random chars>` (see mintSessionId). */
-const frameworkOf = (sessionId: string): string => {
-  const cut = sessionId.lastIndexOf("-");
-  return cut > 0 ? sessionId.slice(0, cut) : sessionId;
-};
+interface MeterRecord {
+  sessionId: string;
+  startedAt: number;
+  meteredThrough: number;
+  instanceType: typeof SESSION_INSTANCE_TYPE;
+}
 
 /**
- * Sessions currently being metered. The meter key exists from session start
- * until teardown, so this is "live" to within one keepalive interval — a
- * crashed client lingers here until its idle window lapses, which is exactly
- * the thing worth seeing on a cost panel.
+ * Every metered session, from KV list metadata alone where possible.
+ *
+ * `list()` returns each key's metadata inline, which is what lets this page over
+ * the whole prefix without a read per row — the previous shape spent one `get`
+ * per key and was capped at 50, and since KV lists in UTF-8 key order and session
+ * ids begin with the framework slug, that cap meant the table could only ever
+ * show `angular` (the alphabetically first Tier-2 slug). That artifact is the
+ * whole reason DEV-2567 read as an Angular-specific leak.
  */
-async function liveSessions(env: Env): Promise<LiveSession[]> {
-  const listed = await env.CACHE.list({ prefix: "session-meter:", limit: 50 });
+async function readMeters(env: Env): Promise<{ meters: MeterRecord[]; truncated: boolean }> {
+  const meters: MeterRecord[] = [];
+  const legacyKeys: string[] = [];
+  let cursor: string | undefined;
+  let complete = false;
+
+  for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
+    const listed = await env.CACHE.list<SessionMeterMetadata>({
+      prefix: KV_METER_PREFIX,
+      limit: LIST_PAGE_LIMIT,
+      cursor,
+    });
+    for (const key of listed.keys) {
+      const sessionId = key.name.slice(KV_METER_PREFIX.length);
+      const meta = key.metadata;
+      // A partial metadata record counts as legacy: half a meter would price a
+      // row off NaN, and the `get` is authoritative anyway.
+      if (meta && Number.isFinite(meta.s) && Number.isFinite(meta.m)) {
+        meters.push({
+          sessionId,
+          startedAt: meta.s,
+          meteredThrough: meta.m,
+          instanceType: meta.i ?? SESSION_INSTANCE_TYPE,
+        });
+      } else {
+        legacyKeys.push(sessionId);
+      }
+    }
+    if (listed.list_complete) { complete = true; break; }
+    cursor = listed.cursor;
+  }
+
+  const legacy = legacyKeys.slice(0, MAX_LEGACY_READS);
+  const truncated = scanTruncated({
+    listComplete: complete,
+    legacyFound: legacyKeys.length,
+    legacyRead: legacy.length,
+  });
+  for (let i = 0; i < legacy.length; i += LEGACY_READ_BATCH) {
+    const batch = await Promise.all(
+      legacy.slice(i, i + LEGACY_READ_BATCH).map(async (sessionId) => {
+        const meter = (await env.CACHE.get(`${KV_METER_PREFIX}${sessionId}`, "json")
+          .catch(() => null)) as SessionMeter | null;
+        if (!meter || !Number.isFinite(meter.startedAt)) return null;
+        return {
+          sessionId,
+          startedAt: meter.startedAt,
+          // Pre-metadata meters do carry `meteredThrough`; the fallback is for a
+          // record written by an even older shape, where the safe reading is "no
+          // tick has ever been observed" — i.e. slept unless it just started.
+          meteredThrough: Number.isFinite(meter.meteredThrough) ? meter.meteredThrough : meter.startedAt,
+          instanceType: meter.instanceType ?? SESSION_INSTANCE_TYPE,
+        };
+      }),
+    );
+    for (const record of batch) if (record) meters.push(record);
+  }
+  return { meters, truncated };
+}
+
+/**
+ * The panel's session table: classified, filtered, paged.
+ *
+ * Sorted oldest-first and kept that way: the longest-quiet row is the one worth
+ * acting on, and it must not fall off the end of page one.
+ */
+export async function liveSessions(env: Env, query: SessionQuery): Promise<LiveSessionsPage> {
+  const { meters, truncated } = await readMeters(env);
   const now = Date.now();
-  const out: LiveSession[] = [];
-  for (const key of listed.keys) {
-    const meter = (await env.CACHE.get(key.name, "json").catch(() => null)) as
-      | { startedAt: number; instanceType: typeof SESSION_INSTANCE_TYPE }
-      | null;
-    if (!meter) continue;
-    const sessionId = key.name.slice("session-meter:".length);
-    const awakeSeconds = Math.max(0, (now - meter.startedAt) / 1000);
-    out.push({
-      ref: await digest(sessionId),
-      framework: frameworkOf(sessionId),
+  const all: LiveSession[] = [];
+  for (const meter of meters) {
+    const state = classifyMeter(meter, now);
+    all.push({
+      ref: await sessionRef(meter.sessionId),
+      framework: frameworkOf(meter.sessionId),
       startedAt: meter.startedAt,
-      awakeSeconds,
-      estimatedUsd: awakeSeconds * containerUsdPerSecond(meter.instanceType ?? SESSION_INSTANCE_TYPE),
+      awakeSeconds: state.ageSeconds,
+      billableSeconds: state.billableSeconds,
+      quietSeconds: state.quietSeconds,
+      state: state.state,
+      estimatedUsd: state.billableSeconds * containerUsdPerSecond(meter.instanceType),
     });
   }
-  return out.sort((a, b) => a.startedAt - b.startedAt);
+  all.sort((a, b) => a.startedAt - b.startedAt);
+  const awakeCount = all.filter((s) => s.state === "awake").length;
+  const matching = query.awakeOnly ? all.filter((s) => s.state === "awake") : all;
+  return { ...pageOf(matching, query), awakeCount, meterCount: all.length, truncated };
 }
+
+/** Which session id the panel's `ref` stands for, or why it cannot say. */
+export async function lookupSessionRef(env: Env, ref: string) {
+  const { meters } = await readMeters(env);
+  return resolveSessionRef(meters.map((m) => m.sessionId), ref);
+}
+
+/** The table on its own, for paging and for the awake/all toggle — so neither
+ *  costs a re-run of the D1 aggregates behind the rest of the report. */
+export const adminSessions = (env: Env, params: { get(name: string): string | null }) =>
+  liveSessions(env, parseSessionQuery(params));
 
 export async function adminUsage(env: Env, days: number) {
   const since = dayAgo(days);
@@ -127,7 +257,10 @@ export async function adminUsage(env: Env, days: number) {
     // not a five-minute-old copy of it.
     computeBudgetState(env),
 
-    liveSessions(env),
+    // The default view (awake only, first page). Paging and the "show the 24h
+    // tail" toggle go to `GET /api/admin/sessions` instead, so neither re-runs
+    // the D1 aggregates above.
+    liveSessions(env, parseSessionQuery(new URLSearchParams())),
 
     analyticsReport(env, days),
   ]);

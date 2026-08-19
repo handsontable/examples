@@ -1,32 +1,56 @@
 // Internal usage + cost panel (/admin), added with the DEV-2030 guardrails.
 //
-// Everything it renders comes from one authenticated call to
-// `GET /api/admin/usage` — the cost ledger, usage counters, anonymous audience
-// aggregates, demo inventory and the live-session meters. The one thing it can
-// change is the guardrail settings (ceiling, tiers, alerts, enforcement), via
-// `PUT /api/admin/settings`; the wrangler.jsonc vars are only defaults.
+// The page loads from one authenticated call to `GET /api/admin/usage` — the cost
+// ledger, usage counters, anonymous audience aggregates, demo inventory and the
+// first page of live-session meters. Two things it can change: the guardrail
+// settings (ceiling, tiers, alerts, enforcement) via `PUT /api/admin/settings`,
+// and a live session's existence via `DELETE /api/admin/sessions/:ref`. Paging
+// the session table re-reads `GET /api/admin/sessions` alone rather than the
+// whole report, since none of the aggregates move when you turn a page.
 //
 // Session ids are never rendered — they are bearer capabilities for the
-// unauthenticated `/api/session/:id/*` routes, so the server sends a digest.
+// unauthenticated `/api/session/:id/*` routes, so the server sends a digest, and
+// the kill button sends that digest back for the server to resolve.
 //
 // Charts are plain divs. A chart library would be a new dependency in the
 // authoring bundle for six bar charts on an internal page.
 
 import { useCallback, useEffect, useState } from "react";
 import { theme, logoUrl } from "@handsontable/demo-editor-shell";
-import { assertApiOk } from "./api.js";
+import { assertApiOk, readApiJson } from "./api.js";
 import { reportError } from "./sentry.js";
 
 interface LedgerRow { day: string; sku: string; source: string; units: number; usd: number }
 interface UsageRow { day: string; metric: string; dimension: string; count: number }
 interface LiveSession {
   /** A one-way digest, not the session id: ids are bearer capabilities for the
-   *  unauthenticated /api/session/:id/* routes and must not be handed out. */
+   *  unauthenticated /api/session/:id/* routes and must not be handed out. The
+   *  kill button below sends this back and the server resolves it. */
   ref: string;
   framework: string;
   startedAt: number;
+  /** Wall clock since the session started. */
   awakeSeconds: number;
+  /** Awake time the ledger stands behind — see session-listing.ts. */
+  billableSeconds: number;
+  quietSeconds: number;
+  /** `slept`: the meter has been quiet longer than the container's idle window,
+   *  so it has scaled to zero and stopped billing. Its meter row survives for
+   *  24h regardless, which is what the default filter hides (DEV-2567). */
+  state: "awake" | "slept";
   estimatedUsd: number;
+}
+
+interface LiveSessionsPage {
+  rows: LiveSession[];
+  offset: number;
+  limit: number;
+  /** Rows matching the current filter, across every page. */
+  total: number;
+  awakeCount: number;
+  /** Every meter in KV, filter ignored — what unchecking the box would show. */
+  meterCount: number;
+  truncated: boolean;
 }
 
 /** The editable guardrail settings (dollars, not fractions — see settings.ts). */
@@ -80,7 +104,9 @@ interface UsageReport {
     byFramework: { framework: string; count: number }[];
     topViewed: { id: string; title: string; framework: string; views: number }[];
   };
-  liveSessions: LiveSession[];
+  /** The default view only (awake, first page). Paging and the "show all"
+   *  toggle go to `GET /api/admin/sessions`, so neither re-runs the aggregates. */
+  liveSessions: LiveSessionsPage;
 }
 
 const WINDOWS = [7, 30, 90];
@@ -133,6 +159,9 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
   const [days, setDays] = useState(30);
   const [report, setReport] = useState<UsageReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Session counts as of the table's own last read, which moves independently
+   *  of the report once someone pages or kills a row. Null until it does. */
+  const [sessionCounts, setSessionCounts] = useState<{ awakeCount: number; meterCount: number } | null>(null);
 
   const load = useCallback(
     (window: number) => {
@@ -143,6 +172,10 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
         .then(async (r) => {
           if (!r.ok) throw new Error(`usage request failed (${r.status})`);
           setReport((await r.json()) as UsageReport);
+          // The report carries a fresh first page, so the table's own counts are
+          // superseded; dropping them here is what lets a window switch or a
+          // Refresh re-seed the section instead of leaving it on stale numbers.
+          setSessionCounts(null);
         })
         .catch((e: unknown) => {
           // The panel is the only view of spend; a silent failure here is how
@@ -194,7 +227,11 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
           />
 
           <section style={grid}>
-            <Stat label="Live sessions now" value={int(report.liveSessions.length)} />
+            <Stat
+              label="Live sessions now"
+              value={int((sessionCounts ?? report.liveSessions).awakeCount)}
+              hint={`${(sessionCounts ?? report.liveSessions).meterCount} metered in the last 24h, including sessions whose container has already slept`}
+            />
             <Stat
               label={`Sessions started (${report.windowDays}d)`}
               value={int(sumMetric(report.usage, "session_started"))}
@@ -268,31 +305,16 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
             })}
           </Section>
 
-          <Section title="Live sessions">
-            {report.liveSessions.length === 0 ? (
-              <p style={note}>No containers awake right now.</p>
-            ) : (
-              <table style={table}>
-                <thead>
-                  <tr><Th>Session</Th><Th>Example</Th><Th align="right">Awake</Th><Th align="right">Est. cost</Th></tr>
-                </thead>
-                <tbody>
-                  {report.liveSessions.map((s) => (
-                    <tr key={s.ref}>
-                      <Td mono>{s.ref}</Td>
-                      <Td>{s.framework}</Td>
-                      <Td align="right">{duration(s.awakeSeconds)}</Td>
-                      <Td align="right">{usd(s.estimatedUsd)}</Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <p style={note}>
-              Derived from the awake-window meters, so a session lingers here until its idle window
-              lapses if the client vanished without a clean teardown.
-            </p>
-          </Section>
+          {/* Keyed on the report's stamp: the section seeds its page from
+              `initial` once, so without this a window switch (which refetches
+              /usage and returns a fresh first page) would never reach the table. */}
+          <LiveSessionsSection
+            key={report.generatedAt}
+            apiBase={apiBase}
+            token={token}
+            initial={report.liveSessions}
+            onCounts={setSessionCounts}
+          />
 
           <Section title="Demos">
             <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
@@ -717,6 +739,228 @@ function TopList({ title, rows, upper }: { title: string; rows: Bucket[]; upper?
   );
 }
 
+/**
+ * The live-session table (DEV-2567): filter, pager, kill button.
+ *
+ * It owns its own fetches instead of re-running `load(days)`, because the report
+ * around it is D1 aggregates plus an analytics rollup and none of that changes
+ * when someone turns a page. The first page arrives inside the report, so the
+ * common case still costs no extra request.
+ *
+ * The filter defaults ON. Before this, every meter key in KV was a row and the
+ * table claimed 50 "live" sessions against a 5-instance pool — the meter outlives
+ * its container by up to 24h, because `hasSessionMeter` doubles as a budget gate
+ * and cannot have a short TTL. Unchecking the box is how you reach that tail,
+ * which is exactly where a phantom row has to be visible to be killed.
+ */
+function LiveSessionsSection({
+  apiBase,
+  token,
+  initial,
+  onCounts,
+}: {
+  apiBase: string;
+  token: string | null;
+  initial: LiveSessionsPage;
+  /** Lifts the counts back to the "Live sessions now" stat, which is otherwise
+   *  fed from the report and would sit there contradicting the table under it
+   *  after a kill. */
+  onCounts: (counts: { awakeCount: number; meterCount: number }) => void;
+}) {
+  const [page, setPage] = useState(initial);
+  const [awakeOnly, setAwakeOnly] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** The ref a confirmation is pending for. Two clicks to kill: this ends
+   *  somebody else's running work, and the rows are addressed by an
+   *  indistinguishable 8-hex digest, so a misclick is easy and unrecoverable. */
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+  const fetchPage = useCallback(
+    async (next: { awakeOnly: boolean; offset: number }) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `${apiBase}/api/admin/sessions?awake=${next.awakeOnly ? "1" : "0"}&offset=${next.offset}`,
+          { headers: authHeaders },
+        );
+        const fresh = await readApiJson<LiveSessionsPage>(res, `sessions request failed (${res.status})`);
+        setPage(fresh);
+        onCounts({ awakeCount: fresh.awakeCount, meterCount: fresh.meterCount });
+        setConfirming(null);
+      } catch (e: unknown) {
+        reportError(e, "admin-sessions");
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    // `authHeaders` is derived from `token`, which is listed.
+    [apiBase, token, onCounts],
+  );
+
+  async function kill(ref: string) {
+    setBusy(true);
+    setError(null);
+    // Held in a local, NOT in state: the reload below starts with `setError(null)`,
+    // so anything set here would be wiped before it could render — which is how
+    // the 409 "matches more than one session" and any 500 from the teardown were
+    // silently unreachable, leaving the operator with a row that did not go away
+    // and no reason why. Re-applied after the reload instead.
+    let failure: string | null = null;
+    try {
+      const res = await fetch(`${apiBase}/api/admin/sessions/${ref}`, {
+        method: "DELETE",
+        headers: authHeaders,
+      });
+      // A 404 means the row was already gone — someone else's teardown won the
+      // race. Not worth an error banner, but the reload below has to happen
+      // either way or the stale row sits there inviting a second click.
+      if (res.status !== 404) await assertApiOk(res, `kill failed (${res.status})`);
+    } catch (e: unknown) {
+      reportError(e, "admin-session-kill");
+      failure = e instanceof Error ? e.message : String(e);
+    } finally {
+      setBusy(false);
+      // Re-read rather than splice the row out locally: a kill changes both
+      // counts and can empty the page, and `pageOf` corrects an offset that ran
+      // off the end.
+      await fetchPage({ awakeOnly, offset: page.offset });
+      if (failure) setError(failure);
+    }
+  }
+
+  const first = page.total === 0 ? 0 : page.offset + 1;
+  const last = Math.min(page.offset + page.limit, page.total);
+  const sleptCount = page.meterCount - page.awakeCount;
+
+  return (
+    <Section title="Live sessions">
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+          <input
+            type="checkbox"
+            checked={awakeOnly}
+            disabled={busy}
+            onChange={(e) => {
+              const next = e.target.checked;
+              setAwakeOnly(next);
+              // Back to page one: the offset means nothing across a filter change.
+              void fetchPage({ awakeOnly: next, offset: 0 });
+            }}
+          />
+          Only sessions still awake
+        </label>
+        <span style={{ fontSize: 12, color: theme.color.textMuted }}>
+          {int(page.awakeCount)} awake
+          {sleptCount > 0 && ` · ${int(sleptCount)} slept but still metered (24h window)`}
+        </span>
+      </div>
+
+      {error && <p style={{ color: theme.color.danger, fontSize: 13 }}>{error}</p>}
+
+      {page.rows.length === 0 ? (
+        <p style={note}>
+          {awakeOnly
+            ? sleptCount > 0
+              ? "No containers awake right now — uncheck the filter to see the sessions that have already slept."
+              : "No containers awake right now."
+            : "No sessions metered in the last 24h."}
+        </p>
+      ) : (
+        <table style={table}>
+          <thead>
+            <tr>
+              <Th>Session</Th>
+              <Th>Example</Th>
+              <Th>State</Th>
+              <Th align="right">Age</Th>
+              <Th align="right">Est. cost</Th>
+              <Th align="right">Action</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {page.rows.map((s) => (
+              <tr key={s.ref}>
+                <Td mono>{s.ref}</Td>
+                <Td>{s.framework}</Td>
+                <Td>
+                  <span style={{ color: s.state === "awake" ? theme.color.text : theme.color.textMuted }}>
+                    {s.state === "awake" ? "awake" : `slept · quiet ${duration(s.quietSeconds)}`}
+                  </span>
+                </Td>
+                <Td align="right">{duration(s.awakeSeconds)}</Td>
+                {/* Priced off billable time, not age: a slept row's container
+                    stopped billing when it scaled to zero, and charging it for
+                    the whole 24h is how the old table read as a runaway bill. */}
+                <Td align="right" title={`${duration(s.billableSeconds)} billable`}>{usd(s.estimatedUsd)}</Td>
+                <Td align="right">
+                  {confirming === s.ref ? (
+                    <span style={{ display: "inline-flex", gap: 6 }}>
+                      <button
+                        type="button"
+                        style={{ ...chip, color: theme.color.danger }}
+                        disabled={busy}
+                        onClick={() => void kill(s.ref)}
+                      >
+                        Confirm kill
+                      </button>
+                      <button type="button" style={chip} disabled={busy} onClick={() => setConfirming(null)}>
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button type="button" style={chip} disabled={busy} onClick={() => setConfirming(s.ref)}>
+                      Kill
+                    </button>
+                  )}
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {page.total > page.limit && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+          <button
+            type="button"
+            style={chip}
+            disabled={busy || page.offset === 0}
+            onClick={() => void fetchPage({ awakeOnly, offset: Math.max(0, page.offset - page.limit) })}
+          >
+            ← Previous
+          </button>
+          <span style={{ fontSize: 12, color: theme.color.textMuted }}>
+            {int(first)}–{int(last)} of {int(page.total)}
+          </span>
+          <button
+            type="button"
+            style={chip}
+            disabled={busy || last >= page.total}
+            onClick={() => void fetchPage({ awakeOnly, offset: page.offset + page.limit })}
+          >
+            Next →
+          </button>
+        </div>
+      )}
+
+      <p style={note}>
+        Derived from the awake-window meters. A meter is written when the session starts and dropped
+        on a clean teardown, but it is kept for 24 hours otherwise — so a client that vanished without
+        one (killed tab, dropped <code>pagehide</code> request) leaves a row here long after its
+        container scaled to zero and stopped billing. Those rows are the <em>slept</em> ones, hidden by
+        default. A backgrounded tab whose HMR socket is still holding its container awake also reads as
+        slept, because the keepalive that ticks the meter is suppressed while the tab is hidden.
+        {page.truncated && " More meters exist than this scan reads; counts are a lower bound."}
+      </p>
+    </Section>
+  );
+}
+
 // ---- Small presentational pieces ---------------------------------------------
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -772,15 +1016,18 @@ const Td = ({
   muted,
   mono,
   colSpan,
+  title,
 }: {
   children: React.ReactNode;
   align?: "right";
   muted?: boolean;
   mono?: boolean;
   colSpan?: number;
+  title?: string;
 }) => (
   <td
     colSpan={colSpan}
+    title={title}
     style={{
       ...td,
       textAlign: align ?? "left",
