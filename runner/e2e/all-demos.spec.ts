@@ -49,8 +49,12 @@ async function signIn(page: Page) {
   await page.route("**/broker/userinfo", (route) => route.fulfill({ json: { email: EMAIL } }));
 }
 
-/** The listing, honouring `?scope=`, plus the per-demo source/metadata/access. */
-async function stubDemos(page: Page) {
+/** The listing, honouring `?scope=`, plus the per-demo source/metadata/access.
+ *
+ *  `extraMine` joins the mine scope only: the owner-filter test counts heads on
+ *  the `all` list ("Everyone (3)"), and a rig-wide extra row would silently move
+ *  those numbers for every test sharing this stub. */
+async function stubDemos(page: Page, extraMine: ReturnType<typeof demo>[] = []) {
   await page.route("**/api/demos?scope=*", (route) => {
     const scope = new URL(route.request().url()).searchParams.get("scope");
     const demos = scope === "all"
@@ -59,7 +63,7 @@ async function stubDemos(page: Page) {
           demo(THEIRS, "Their grid", OTHER),
           demo("their002", "Their second grid", OTHER),
         ]
-      : [demo(MINE, "My grid", EMAIL)];
+      : [demo(MINE, "My grid", EMAIL), ...extraMine];
     return route.fulfill({ json: { demos, scope } });
   });
   await page.route("**/api/demos/*/access", (route) => {
@@ -121,6 +125,36 @@ test("your own card keeps every action, on either list", async ({ page }) => {
 
   await kebab(page, "My grid").click();
   await expect(menuItem(page, "Open")).toHaveAttribute("href", `/edit/${MINE}`);
+  await expect(menuItem(page, "Rename")).toBeVisible();
+  await expect(menuItem(page, "Delete")).toBeVisible();
+});
+
+test("a demo the MCP created shows up on your own list", async ({ page }) => {
+  // The MCP push (DEV-2501) writes through the same worker endpoint the Save
+  // button does, stamping `created_by` from the caller's token and recording its
+  // origin in `forked_from` ("mcp:<framework>"). To this list that row must be
+  // indistinguishable from a demo saved in the browser: on *your* list, with the
+  // full owner's menu — not the read-only card a teammate's demo gets, which is
+  // what a `created_by` mismatch between the two writers would produce.
+  //
+  // The mismatch has to be real or the test proves nothing (audit, DEV-2203):
+  // the MCP writer normalises case differently than the browser session, so
+  // `created_by` here deliberately differs in case from the signed-in email —
+  // the owner's menu below appears only if `isOwnedBy`'s case-folding is wired
+  // into the card path, which is the exact two-writer seam this test guards.
+  await stubShell(page);
+  await signIn(page);
+  await stubDemos(page, [
+    { ...demo("mcpdemo1", "Pushed from my machine", "Dev@Handsontable.com"), forked_from: "mcp:react" },
+  ]);
+  await page.goto("/my-demos");
+
+  await expect(card(page, "Pushed from my machine")).toBeVisible();
+
+  // First-class owned demo: Open goes to the editor, and Rename and Delete are
+  // offered — the two actions the read-only menu withholds.
+  await kebab(page, "Pushed from my machine").click();
+  await expect(menuItem(page, "Open")).toHaveAttribute("href", "/edit/mcpdemo1");
   await expect(menuItem(page, "Rename")).toBeVisible();
   await expect(menuItem(page, "Delete")).toBeVisible();
 });
