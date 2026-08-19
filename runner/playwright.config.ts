@@ -12,7 +12,10 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   fullyParallel: true,
   retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? "github" : "list",
+  // In CI, "github" alone leaves `playwright-report/` empty — the workflows
+  // upload that directory on failure, and until DEV-2203 the artifact was a
+  // no-op. The html reporter fills it; traces land in `test-results/`.
+  reporter: process.env.CI ? [["list"], ["github"], ["html", { open: "never" }]] : "list",
   use: { baseURL, trace: "on-first-retry" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   // Start a local preview only when not pointing at an external URL.

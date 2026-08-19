@@ -16,13 +16,203 @@ type Babel = {
   transform: (code: string, options: Record<string, unknown>) => { code?: string | null };
 };
 
-let babelPromise: Promise<Babel> | null = null;
+/**
+ * A lazy singleton that caches the value but **not** a failure (DEMOS-15).
+ *
+ * The plain `promise ??= load()` form remembers a rejection for the life of the page, so
+ * one failed compiler fetch left Tier 1 unable to compile anything at all. Clearing the
+ * slot from inside the rejection handler is necessary but, on its own, not sufficient —
+ * see `createRetryingLoader` for the browser rule that decides what a retry may ask for.
+ *
+ * Concurrent callers still share one in-flight load, which is the reason to cache at all:
+ * @babel/standalone is ~3 MB.
+ *
+ * Exported for `pipeline/transpile-loader.test.mjs`: the real `loadBabel` cannot be driven
+ * into failure from a test, because the dependency is installed and the import resolves.
+ */
+export function createLazyLoader<T>(load: () => Promise<T>): () => Promise<T> {
+  let pending: Promise<T> | null = null;
+  return () => {
+    pending ??= load().catch((cause: unknown) => {
+      pending = null;
+      throw cause;
+    });
+    return pending;
+  };
+}
 
-function loadBabel(): Promise<Babel> {
-  babelPromise ??= import("@babel/standalone").then(
+/**
+ * What a `CompilerUnavailableError` says, always (DEV-2569).
+ *
+ * Constant on purpose. A Sentry issue derives its title from `name: message` and
+ * re-derives it from the newest event, so a message carrying the hashed chunk URL titles
+ * the issue after one sample and renames it with the next one. That is half of what
+ * DEMOS-15 was. The URL rides on `assetUrl` and reaches Sentry as an extra.
+ */
+export const COMPILER_UNAVAILABLE_MESSAGE = "the in-browser compiler could not be loaded";
+
+/** The one URL in a module-load failure message, if the engine named one. Chrome says
+ *  "Failed to fetch dynamically imported module: <url>" (this is the observed DEMOS-15
+ *  text, so the URL is there in production); Safari says "Load failed" and names nothing,
+ *  so a null here is an ordinary outcome and not a parse bug. */
+export function assetUrlFrom(cause: unknown): string | null {
+  const text = cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "";
+  return /(https?:\/\/[^\s"')]+)/.exec(text)?.[1] ?? null;
+}
+
+/**
+ * The compiler chunk could not be fetched, and this page cannot compile Tier 1 until
+ * something changes (DEV-2569, Sentry DEMOS-15).
+ *
+ * Two causes reach here and they are indistinguishable from inside the page, which is why
+ * the user-facing wording (`describeRuntimeError` in the authoring app) never asserts
+ * either one:
+ *
+ *  - **The asset is gone.** `apps/authoring/wrangler.jsonc` serves the app from Workers
+ *    Assets with `not_found_handling: "single-page-application"`, so a deploy removes the
+ *    previous build's hashed chunks and their paths answer `200 text/html` rather than a
+ *    404 — the host behaviour DEV-2535 had to teach the docs loaders about. Measured on the
+ *    older of the two URLs DEMOS-15 names:
+ *
+ *      $ curl -sI https://demos.handsontable.com/assets/babel-DtyXnKg5.js
+ *      HTTP/2 200
+ *      content-type: text/html
+ *
+ *    An HTML body is not a module. A tab that had not yet fetched the compiler when a
+ *    deploy landed is asking for a file that no longer exists.
+ *
+ *  - **The request was refused.** Offline, an extension, a corporate proxy.
+ *
+ * `replay` distinguishes the throw that discovered the failure from the same error being
+ * re-thrown by the latch, so the shell reports the discovery and not every keystroke after
+ * it (`tier1Report` in the authoring app drops replays).
+ *
+ * Recognised by a marker property rather than `instanceof`, like `DocsResourceMissingError`:
+ * the authoring app has to classify these without importing the runtime's internals, and an
+ * `instanceof` across a bundle boundary is the check that silently starts returning false.
+ */
+export class CompilerUnavailableError extends Error {
+  readonly compilerUnavailable = true;
+
+  readonly assetUrl: string | null;
+
+  readonly replay: boolean;
+
+  constructor(cause: unknown, opts: { replay?: boolean } = {}) {
+    super(COMPILER_UNAVAILABLE_MESSAGE, { cause });
+    this.name = "CompilerUnavailableError";
+    this.assetUrl = assetUrlFrom(cause);
+    this.replay = opts.replay === true;
+  }
+}
+
+/** Whether an error is the compiler-load failure above. */
+export function isCompilerUnavailable(e: unknown): boolean {
+  return e instanceof Error && (e as { compilerUnavailable?: boolean }).compilerUnavailable === true;
+}
+
+/**
+ * Retry a failed chunk load once — against a *different URL* — then stop asking
+ * (DEV-2569).
+ *
+ * ⚠ The load-bearing browser rule, and the reason this is not a plain "call it again":
+ * **a failed module fetch is cached in the module map for the life of the document, and
+ * re-importing the same specifier never touches the network again.** Measured in Chromium
+ * 141 (`@playwright/test` 1.61.1), routing `chunk.js` to an abort and then serving it:
+ *
+ *   attempt 1  ./chunk.js            -> TypeError            1 request
+ *   attempt 2  ./chunk.js            -> same TypeError       1 request  (no refetch)
+ *   attempt 3  ./chunk.js, now 200   -> same TypeError       1 request  (still no refetch)
+ *   attempt 4  ./chunk.js?retry=1    -> module               2 requests
+ *
+ * So evicting our own memo (`createLazyLoader`) is necessary but on its own inert: the
+ * retry has to ask for a URL the module map has never seen. `retryOf` builds that URL from
+ * the failed error's own message — the only place the resolved chunk URL exists at runtime,
+ * since the specifier is rewritten to a hashed path at build time — and returns null when
+ * the engine named no URL, in which case the first failure is already terminal.
+ *
+ * `generation` is what makes *Restart preview* honest rather than a button that reruns a
+ * decided failure: each `rearm` mints a fresh query, so the visitor's retry is a real
+ * request. A rotated-out chunk fails again immediately (the busted URL 404s to the same
+ * HTML), which is what leaves the reload as the only cure for that case, while a blip that
+ * has since passed now genuinely recovers — without a reload, and without losing unsaved
+ * edits.
+ *
+ * Bounded on purpose: two requests per page, plus two per explicit click. Nothing in the
+ * code path retries on its own, so a stranded tab cannot spend the visitor's bandwidth or
+ * file an event per keystroke.
+ */
+export function createRetryingLoader<T>(
+  load: () => Promise<T>,
+  retryOf: (cause: unknown, generation: number) => Promise<T> | null,
+  wrap: (cause: unknown, opts: { replay?: boolean }) => Error,
+): { load: () => Promise<T>; rearm: () => void } {
+  let terminal: Error | null = null;
+  let generation = 0;
+  return {
+    load: async () => {
+      // Re-thrown, not re-wrapped, so `replay` marks it: the shell has already reported
+      // and carded this failure, and every later keystroke arrives here.
+      if (terminal) throw wrap((terminal as Error).cause, { replay: true });
+      let first: unknown;
+      try {
+        return await load();
+      } catch (cause) {
+        first = cause;
+      }
+      const retry = retryOf(first, generation);
+      if (retry) {
+        try {
+          return await retry;
+        } catch (cause) {
+          first = cause;
+        }
+      }
+      terminal = wrap(first, {});
+      throw terminal;
+    },
+    rearm: () => {
+      terminal = null;
+      generation += 1;
+    },
+  };
+}
+
+const loadBabelChunk = createLazyLoader<Babel>(() =>
+  import("@babel/standalone").then((m) => ((m as { default?: Babel }).default ?? m) as Babel),
+);
+
+/** The retry's URL: the failed chunk with a query the module map has not seen. `@vite-ignore`
+ *  because the specifier is only known at runtime — it comes out of the browser's own error
+ *  message — and Vite must not try to resolve or pre-bundle it. */
+function retryBabelChunk(cause: unknown, generation: number): Promise<Babel> | null {
+  const url = assetUrlFrom(cause);
+  if (!url) return null;
+  const sep = url.includes("?") ? "&" : "?";
+  return import(/* @vite-ignore */ `${url}${sep}hotRetry=${generation + 1}`).then(
     (m) => ((m as { default?: Babel }).default ?? m) as Babel,
   );
-  return babelPromise;
+}
+
+const babelLoader = createRetryingLoader<Babel>(
+  loadBabelChunk,
+  retryBabelChunk,
+  (cause, opts) => new CompilerUnavailableError(cause, opts),
+);
+
+const loadBabel = babelLoader.load;
+
+/**
+ * Allow one more compiler-chunk attempt after the loader has given up.
+ *
+ * Called from *Restart preview* in the authoring app and from nowhere else: the point of
+ * the latch is that no code path retries by itself, and the point of this is that a
+ * visitor whose network came back does not have to reload and lose their edits. The next
+ * retry URL carries a fresh query, so it is a real request rather than a module-map replay
+ * — see `createRetryingLoader`.
+ */
+export function rearmCompilerLoad(): void {
+  babelLoader.rearm();
 }
 
 const SOURCE_RE = /\.(tsx|ts|jsx|js)$/;

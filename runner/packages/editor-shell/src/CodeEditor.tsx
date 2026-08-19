@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import CodeMirror, { type EditorView, type ViewUpdate } from "@uiw/react-codemirror";
+import CodeMirror, { type BasicSetupOptions, type EditorView, type ViewUpdate } from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
@@ -34,6 +34,16 @@ function languageFor(path: string) {
       return [];
   }
 }
+
+/** Hoisted, not inlined at the JSX site: `basicSetup` is one of the props in
+ *  `useCodeMirror`'s reconfigure dependency array, so an object literal there churns
+ *  the editor's extensions on every render whatever the callbacks do (DEV-2568). */
+const BASIC_SETUP = {
+  lineNumbers: true,
+  highlightActiveLine: true,
+  foldGutter: true,
+  autocompletion: true,
+} as const satisfies BasicSetupOptions;
 
 /** Caret position, 1-based, as the status bar shows it. */
 export interface CursorPosition {
@@ -71,15 +81,31 @@ export function CodeEditor({
   const extensions = useMemo(() => languageFor(path), [path]);
   const { mode } = useTheme();
 
-  // `useCodeMirror` installs `onUpdate` as an *extension*
-  // (`EditorView.updateListener.of(onUpdate)`), so a handler with a fresh identity
-  // each render churns the editor's extensions on every render — and this one calls
-  // setState in the parent. Hence the empty-dep callback reading a ref: the
-  // extension identity never changes, whatever the caller passes.
+  // Both handlers are insulated behind a ref, because `useCodeMirror` reconfigures the
+  // whole extension set from an effect that lists `onChange` and `onUpdate` among its
+  // dependencies (`useCodeMirror.js:158-165`) — `onUpdate` is literally installed as an
+  // extension (`EditorView.updateListener.of(onUpdate)`). A handler with a fresh
+  // identity each render therefore churns extensions on every render, in *every* open
+  // tab, since T12 keeps them all mounted. Both of these end in setState in the parent.
+  //
+  // `onChange` is the one that bit us: reconfiguring mid-keystroke puts CodeMirror's
+  // `DOMObserver` on the `applyDOMChange` → `defaultInsert()` path, which synthesises a
+  // doc change, which calls `onChange` again — a nested-update loop until React throws
+  // error 185 (DEV-2568 / Sentry DEMOS-1D). Hence the empty-dep callbacks reading refs:
+  // the identities never change, whatever the caller passes.
   const cursorRef = useRef(onCursorChange);
   useEffect(() => {
     cursorRef.current = onCursorChange;
   }, [onCursorChange]);
+
+  const changeRef = useRef(onChange);
+  useEffect(() => {
+    changeRef.current = onChange;
+  }, [onChange]);
+
+  const handleChange = useCallback((value: string) => {
+    changeRef.current(value);
+  }, []);
 
   const handleUpdate = useCallback((vu: ViewUpdate) => {
     if (!vu.docChanged && !vu.selectionSet && !vu.focusChanged) return;
@@ -100,15 +126,10 @@ export function CodeEditor({
       extensions={extensions}
       editable={!readOnly}
       readOnly={readOnly}
-      onChange={onChange}
+      onChange={handleChange}
       onUpdate={handleUpdate}
       onCreateEditor={onCreateEditor}
-      basicSetup={{
-        lineNumbers: true,
-        highlightActiveLine: true,
-        foldGutter: true,
-        autocompletion: true,
-      }}
+      basicSetup={BASIC_SETUP}
     />
   );
 }

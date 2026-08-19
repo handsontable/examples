@@ -1,14 +1,33 @@
 name: CI
 
-# Runs on every PR and on master: typecheck, unit + catalog-smoke tests, an
-# authoring build, and Playwright e2e (deterministic UI flow — the live-render
-# checks that need the external Sandpack bundler are gated behind E2E_LIVE).
-# Also callable (workflow_call) so the deploy workflow can gate on it.
+# The reusable CI suite, as a DAG (same shape as the handsontable monorepo's
+# test workflow): build fans out to the consumers, artifacts are passed instead
+# of rebuilt, and the Playwright job runs inside the pinned Playwright
+# container so the browser always matches the test package.
+#
+#   unit ──► build ──► authoring ──► e2e
+#   presence (PR-only, needs nothing — runs in parallel)
+#
+# unit gates build: it is the cheapest job (pnpm test builds the runtime
+# itself, by design), so a broken helper fails the run before any minutes go
+# into the app build or a browser container.
+#
+# presence is the test-presence gate (runner/docs/TESTING.md): a PR that
+# changes runner source must also change a test, or declare a Refactor-only:/
+# Test-plan: trailer. It only fires on pull_request — a master push arrives
+# here via workflow_call after its PR already passed it, and has no base to
+# diff against anyway.
+#
+# The live-render checks that need the external Sandpack bundler stay gated
+# behind E2E_LIVE (e2e-live.yml). Also callable (workflow_call) so the deploy
+# workflows can gate on the whole DAG.
 
+# No push trigger of its own, and master.yml does not call it either: the full
+# suite runs on every PR, and a master push goes straight to deploy with the
+# @smoke subset verifying production afterwards (master.yml). workflow_call
+# stays for any future caller; workflow_dispatch for by-hand runs.
 on:
   pull_request: {}
-  push:
-    branches: [master]
   workflow_call: {}
   workflow_dispatch: {}
 
@@ -20,7 +39,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  presence:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The gate diffs the PR range against its base — it needs history,
+          # not just the merge commit.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test-presence gate (source change ⇒ test change)
+        run: node runner/scripts/check-test-presence.mjs "${{ github.base_ref }}"
+
+  unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Unit + catalog-smoke tests
+        run: pnpm test
+
+  build:
+    needs: unit
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -44,17 +104,90 @@ jobs:
 
       - run: pnpm build
 
+      # Typecheck rides with build: apps/authoring typechecks against
+      # packages/runtime/dist, which this job just produced.
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Unit + catalog-smoke tests
-        run: pnpm test
+      - name: Upload the runtime build
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-dist
+          path: runner/packages/runtime/dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  authoring:
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Download the runtime build
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime-dist
+          path: runner/packages/runtime/dist/
 
       - name: Build authoring (build smoke + e2e target)
         run: pnpm --filter @handsontable/demo-authoring build
 
-      - name: Install Playwright browser
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Upload the authoring build
+        uses: actions/upload-artifact@v4
+        with:
+          name: authoring-dist
+          path: runner/apps/authoring/dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  e2e:
+    needs: authoring
+    runs-on: ubuntu-latest
+    # The official Playwright image ships the browsers, so there is no
+    # `playwright install` step. Keep this tag in lockstep with
+    # `@playwright/test` in runner/package.json — bump the two together, never
+    # apart (the same rule the handsontable monorepo enforces via its pnpm
+    # catalog comment).
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Download the authoring build (the e2e target)
+        uses: actions/download-artifact@v4
+        with:
+          name: authoring-dist
+          path: runner/apps/authoring/dist/
 
       - name: E2E (Playwright)
         run: pnpm e2e
@@ -64,5 +197,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: runner/playwright-report/
+          # playwright-report/ holds the html report, test-results/ the traces.
+          path: |
+            runner/playwright-report/
+            runner/test-results/
           retention-days: 7
+          if-no-files-found: warn

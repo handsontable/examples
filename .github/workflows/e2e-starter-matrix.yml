@@ -10,9 +10,12 @@ name: E2E — starter compatibility matrix
 # Anonymous session creation on prod works (the app only sends an Authorization
 # header when a login token exists), so no secrets are required here.
 #
-# Manual only — it spins ~50 real container sessions. A local run at --workers=2
-# --retries=2 took ~36 min (46 passed / 27 skipped); allow headroom for CI +
-# flake retries.
+# Manual, plus a monthly sweep (1st of the month, 05:00 UTC — off-peak for the
+# container pool). It spins ~50 real container sessions; a local run at
+# --workers=2 --retries=2 took ~36 min (46 passed / 27 skipped); allow headroom
+# for CI + flake retries. The monthly cadence exists because this is the only
+# coverage of the full starters × majors surface — weekly would double the
+# container-hours for drift that moves on npm-release timescales (DEV-2203).
 #
 # SINGLE JOB, --workers=2. Do NOT "optimize" this into a parallel matrix: prod
 # caps live-preview Sandboxes at 5 CONCURRENT *globally* (not per-job), so N
@@ -26,6 +29,12 @@ on:
         description: 'Deployed app to test against (must have a real API backend)'
         default: 'https://demos.handsontable.com'
         required: true
+  schedule:
+    # Monthly full sweep; schedule events carry no inputs, so the run step
+    # falls back to prod below. 03:00, not 05:00: the weekly e2e-live canary
+    # fires Mondays at 05:00, and a Monday-the-1st must not start both against
+    # the same global pool of five container slots (Bugbot, #189).
+    - cron: '0 3 1 * *'
 
 # Two overlapping runs = 4 workers against the global 5-container cap, leaving
 # real traffic 1 slot. cancel-in-progress: false (opposite of ci.yml) on purpose:
@@ -39,6 +48,10 @@ concurrency:
 jobs:
   matrix:
     runs-on: ubuntu-latest
+    # Same image rule as ci.yml: keep the tag in lockstep with @playwright/test
+    # in runner/package.json — bump the two together, never apart.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
     # ~36 min observed locally (--workers=2, --retries=2); 180 leaves ample
     # headroom for slower CI runners + retry storms.
     timeout-minutes: 180
@@ -63,12 +76,10 @@ jobs:
       # No `pnpm build`: the matrix spec only imports catalog.json + fetches npm
       # and runs against deployed prod, so no workspace build is needed.
 
-      - name: Install Playwright browser
-        run: pnpm exec playwright install --with-deps chromium
-
       - name: Run starter matrix
         env:
-          E2E_BASE_URL: ${{ inputs.base_url }}
+          # The monthly schedule carries no inputs — fall back to prod.
+          E2E_BASE_URL: ${{ inputs.base_url || 'https://demos.handsontable.com' }}
         # e2e:matrix already sets E2E_STARTER_MATRIX=1, PLAYWRIGHT_JSON_OUTPUT_NAME
         # and --workers=2 --retries=2 --reporter=list,json.
         run: pnpm e2e:matrix

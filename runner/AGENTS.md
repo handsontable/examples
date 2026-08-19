@@ -99,7 +99,15 @@ pnpm --filter @handsontable/demo-authoring typecheck
 The `demo-runtime build` is first on purpose: `apps/authoring` typechecks against
 `packages/runtime/dist`, not its source, so a stale `dist` fails on symbols the source has.
 
-What a green E2E run does and does not prove:
+**Testing rules live in [`docs/TESTING.md`](docs/TESTING.md)** — the discipline
+(intent-first, never fake green), the which-test-where table, the env-gate
+taxonomy, and the house assertion idioms — plus the two skills
+(`.claude/skills/runner-test-discipline/`, `.claude/skills/runner-playwright-e2e/`).
+A PR that changes `runner/{apps,packages,workers}/**` source must also change a
+test — machine-enforced by the presence gate (`scripts/check-test-presence.mjs`,
+the `presence` job in `ci.yml`; escape via a `Refactor-only:`/`Test-plan:` trailer).
+
+The quick list — what a green E2E run does and does not prove:
 
 - **The specs that actually mount Sandpack are gated behind `E2E_LIVE=1`.** A default
   `playwright test` skips every one, so a green default run proves nothing about preview
@@ -111,6 +119,19 @@ What a green E2E run does and does not prove:
 - **Interaction states need a real pointer and `getComputedStyle`** — see
   [ADR-0026](docs/adr/0026-shell-styling-inline-vs-stylesheet.md). A synthetic `mouseover` does not
   fire CSS `:hover`, and a screenshot cannot tell a subtle live hover from a dead one.
+- **Backend-bound specs self-gate on `E2E_BASE_URL`** (`share-view.spec.ts` and friends):
+  `vite preview` has no `/api`, `/d` or `/embed` routes, so they skip unless pointed at a
+  deployment. `e2e/share-view.spec.ts` additionally depends on a **permanent fixture demo**
+  (`FIXTURE_ID` in the spec — currently `r-react-18-0-0`). Never revoke it; if it is lost,
+  mint a replacement titled "E2E fixture — do not revoke" from any signed-in session and
+  update the constant.
+- **The authed write round-trip needs `E2E_BROKER_TOKEN`** (`share-create-live.spec.ts`):
+  a fresh `sessionStorage.hot_token` from a signed-in session on the deployed app. Broker
+  tokens expire and cannot be minted programmatically, so the spec self-skips without one
+  and the workflow treats an expired token as a warning, not a failure. It creates one
+  real demo and revokes it in `finally` (the 410 doubles as the revocation assertion).
+- **`E2E_AI=1` gates the live LLM answer checks** (`ai-live.spec.ts`): two API-level calls
+  per run, real budget, shared 8/min-per-IP rate bucket — a 429 skips rather than fails.
 
 ## Build & deploy
 
@@ -144,15 +165,14 @@ that term to a bare `localhost:` — catalog README text mentions dev-server por
 
 ## CI/CD
 
-Seven workflows live in `.github/workflows/` at the repo root:
+Six workflows live in `.github/workflows/` at the repo root:
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
-| `ci.yml` | every PR + push to `master` | build, typecheck, unit + catalog-smoke tests, authoring build, Playwright e2e. Also `workflow_call`able, so the deploy workflows gate on it. |
-| `deploy-runner-api.yml` | push to `master` touching `workers/api`, `containers`, `scripts`, `config`, `packages` (or manual) | deploys `workers/api`. |
-| `deploy-runner-authoring.yml` | push to `master` touching `apps/authoring`, `packages`, `config`, **`catalog.json`** (or manual) | builds + deploys `apps/authoring`. |
-| `e2e-live.yml` | manual | the `E2E_LIVE=1` specs that mount a real preview. |
-| `e2e-starter-matrix.yml` | manual | every starter through a live session; serialized against the global container cap. |
+| `ci.yml` | every PR (+ manual dispatch) | the CI DAG: presence + unit → build → authoring → e2e (in the pinned Playwright container). PRs are the only place the full suite runs — master does not repeat it. |
+| `master.yml` | every push to `master` (or manual dispatch with per-target checkboxes) | deploy-first: path-gated `deploy-authoring`/`deploy-api` (each self-builds — a broken build never reaches wrangler), then one `@smoke` E2E run against prod. Merge-skew is covered by branch protection ("require branches to be up to date"), not by re-running the suite. |
+| `e2e-live.yml` | manual, weekly canary (Mon 05:00 UTC, prod + AI), or `workflow_call` with `smoke: true` from `master.yml` | everything ci.yml cannot run: live renders, container suites, the share viewer/round-trip, AI answer checks. Dispatch inputs: `base_url`, `ai`, `pkg_pr_new_ref` (DEV-2198). |
+| `e2e-starter-matrix.yml` | manual + monthly (1st, 03:00 UTC) | every starter × major through a live session; serialized against the global container cap. |
 | `import-docs.yml` | manual, or `repository_dispatch: docs-examples-sync` from the docs repo | re-imports the documentation-guide examples. |
 | `import-starters.yml` | manual, `repository_dispatch: starter-examples-sync`, weekly cron, or push touching `examples/**` | re-imports the versioned starter buckets (each from `prod-examples/<major>` when the branch exists, else `master`), rebuilds the catalog index + container contexts, opens a PR. |
 

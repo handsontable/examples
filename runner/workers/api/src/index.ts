@@ -37,6 +37,7 @@ import {
   TOMBSTONE_DESTROYED,
   TOMBSTONE_TTL_SECONDS,
 } from "./session-lifecycle.js";
+import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
@@ -56,7 +57,7 @@ import {
 import { checkCostAlerts, gcRevokedArtifacts, reconcileBilling } from "./reconcile.js";
 import { flushUsage, noteView, recordUsageEvent } from "./usage.js";
 import { flushAnalytics, normalisePage, notePageView, pruneAnalytics } from "./analytics.js";
-import { adminUsage } from "./admin.js";
+import { adminSessions, adminUsage, lookupSessionRef } from "./admin.js";
 import {
   ChatUnavailableError,
   checkChatRateLimit,
@@ -370,6 +371,95 @@ async function putTombstone(env: Env, sessionId: string, marker: string): Promis
   } catch { /* defense-in-depth only */ }
 }
 
+/**
+ * Tear a live session down: close its awake window, tombstone it, destroy the
+ * container. Idempotent, and never throws for a failure the platform owns.
+ *
+ * Extracted from `DELETE /api/session/:id` when the admin panel got a kill
+ * button (DEV-2567). Sharing the path is the point: the panel must not be a
+ * second, subtly different teardown — the tombstone ordering below is what keeps
+ * a create still in flight from surviving the destroy, and it would be very easy
+ * to write an admin-only variant that skips it and leaks the container it was
+ * clicked to reclaim.
+ */
+async function teardownLiveSession(env: Env, sessionId: string): Promise<void> {
+  // A session we have already watched go away answers from KV. Every sandbox
+  // RPC boots a container if one isn't running, so a second teardown that
+  // re-entered the sandbox would be asking for a slot in order to destroy
+  // something that is not there — the create/delete race
+  // (packages/runtime/src/container.ts) sends exactly that.
+  if (destroyConfirmed(await readTombstone(env, sessionId))) {
+    // Still metered, even though every writer of a `destroyed` marker now closes
+    // the window itself (`closedWhileCreating()` gained that call in DEV-2567).
+    // Kept as the backstop for the ordering that produced the phantom rows in
+    // the first place: whoever gets here last is the one that can be sure. A
+    // no-op once the meter key is gone — `meterSessionUnsafe` returns early on a
+    // missing meter — so the cost of keeping it is one KV read.
+    await meterSession(env, sessionId, { final: true });
+    // Keep the marker alive for as long as teardowns keep arriving: it is also
+    // what the resurrection gate reads.
+    await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
+    return;
+  }
+  // Tombstone BEFORE destroying: if a create for this id is still in flight
+  // (tab closed mid-POST), destroy() alone hits a half-built session and the
+  // create keeps going — the POST handler re-checks this marker when it
+  // finishes and tears the orphan down. TTL keeps stale markers from
+  // accumulating. Best-effort: a KV hiccup must not block the primary destroy
+  // below (without the marker the mid-create race falls back to the sleepAfter
+  // backstop).
+  await putTombstone(env, sessionId, TOMBSTONE_ATTEMPTED);
+  // Close the awake window before the container goes away: this is the one
+  // teardown path that knows the session is over for good. It also drops the
+  // meter key, which is what takes the row off the admin panel.
+  await meterSession(env, sessionId, { final: true });
+  const sandbox = liveSbx(env, sessionId);
+  // Releasing a container must not need one (DEV-2556, Sentry DEMOS-1).
+  // When the pool is full the platform refuses `destroy()` itself, and this
+  // route — the only unguarded destroy in the file — turned that into a thrown
+  // 500 nobody could act on: the caller is a fire-and-forget `keepalive` fetch
+  // from `pagehide` that discards the response. A refusal also means no slot is
+  // being held by whatever we failed to reach, so there is nothing left to
+  // reclaim here. Recognised platform messages become a 204; anything else
+  // still throws to the outer catch and keeps today's status and today's
+  // Sentry event.
+  try {
+    await sandbox.destroy();
+    await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
+  } catch (err) {
+    if (!isExpectedTeardownFailure(err)) throw err;
+    console.warn(
+      `[session] teardown for ${sessionId} declined by the platform:`,
+      err instanceof Error ? err.message : String(err),
+    );
+    // The log line alone is NOT the signal, and assuming it was is how this
+    // swallow would have gone dark: `observability.head_sampling_rate` is 0.1
+    // in wrangler.jsonc, so nine of ten of these console.warn lines are never
+    // retained. Capacity events are rare (two in 90 days), which makes the
+    // expected number of surviving log lines a fraction of one.
+    //
+    // So the event still goes to Sentry — just as a `warning` that no longer
+    // fails the request, instead of the 500 it used to ride in on.
+    // Fingerprinted for the reason the preview-boot capture is, and because
+    // this project groups on the culprit `Object.fetch(index)`: without one
+    // this would land back in the same grab-bag as DEMOS-1 and be unreadable
+    // as a capacity signal. `beforeSend` (rehomeBudgetAlert) only re-homes
+    // `context: "budget-alert"` and drops nothing, so a warning arrives.
+    //
+    // This matters most for `container service is unreachable`, the weakest
+    // member of `isExpectedTeardownFailure`: unlike the other two it does NOT
+    // imply no slot is held, so a swallowed one can leave a container billing
+    // until sleepAfter. 204 is still the right answer to a caller that
+    // discards the response — but only because the failure is legible
+    // somewhere, and this is that somewhere.
+    Sentry.captureException(err, {
+      level: "warning",
+      fingerprint: ["tier2-teardown-declined"],
+      tags: { context: "tier2-teardown" },
+    });
+  }
+}
+
 function cors(resp: Response): Response {
   const h = new Headers(resp.headers);
   h.set("Access-Control-Allow-Origin", "*");
@@ -640,6 +730,24 @@ export default Sentry.withSentry(sentryOptions, {
           // it describes the container that actually just went away — which is
           // what makes the client's follow-up DELETE (container.ts sends one
           // when a create finishes after dispose) free instead of a boot.
+          // Close the awake window here, and NOT only in the DELETE handler
+          // (DEV-2567). This arm is reachable in an ordering where the DELETE
+          // never had a meter to close: the tiny keepalive DELETE overtakes the
+          // large POST body, `meterSession(final)` runs against a key that does
+          // not exist yet and returns early, and THEN the create above writes
+          // one via `startSessionMeter`. Nothing deleted it afterwards, so the
+          // meter sat in KV for its full 24h TTL with no container behind it —
+          // one phantom row on /admin per abandoned create, which is what filled
+          // the panel with Angular sessions. Angular because it has the largest
+          // starter payload and the slowest boot, so its create window is by far
+          // the widest, and because it is the only container-engine flavour the
+          // documentation embeds (see KNOWN_DOC_FLAVOURS) — every container
+          // session a docs visitor starts is an Angular one.
+          //
+          // Ordered before the destroy for the reason the DELETE handler is: the
+          // container really did run, and this books the seconds it was awake
+          // (capped at one idle window) instead of dropping them.
+          await meterSession(env, sessionId, { final: true });
           try {
             await sandbox.destroy();
             await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
@@ -873,84 +981,12 @@ export default Sentry.withSentry(sentryOptions, {
         return json({ ready, log, failed });
       }
 
-      // DELETE /api/session/:id -> destroy container
+      // DELETE /api/session/:id -> destroy container. The client's own teardown
+      // (`pagehide` -> `deleteSession`, a fire-and-forget keepalive fetch that
+      // discards the response); the admin panel's kill button goes through the
+      // same `teardownLiveSession`.
       if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "session" && parts.length === 3) {
-        const sessionId = parts[2]!;
-        // A session we have already watched go away answers from KV. Every
-        // sandbox RPC boots a container if one isn't running, so a second
-        // DELETE that re-entered the sandbox would be asking for a slot in
-        // order to destroy something that is not there — the create/delete
-        // race (packages/runtime/src/container.ts) sends exactly that.
-        if (destroyConfirmed(await readTombstone(env, sessionId))) {
-          // Still metered: `closedWhileCreating()` writes the confirmation
-          // without ever metering final, so on that arm this request is the
-          // only one that can close the awake window. A no-op once the meter
-          // key is gone (`meterSessionUnsafe` returns early on a missing
-          // meter), which is what every other writer of this marker leaves
-          // behind — the cost of keeping it is one KV read.
-          await meterSession(env, sessionId, { final: true });
-          // Keep the marker alive for as long as DELETEs keep arriving: it is
-          // also what the resurrection gate above reads.
-          await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
-          return cors(new Response(null, { status: 204 }));
-        }
-        // Tombstone BEFORE destroying: if a create for this id is still in
-        // flight (tab closed mid-POST), destroy() alone hits a half-built
-        // session and the create keeps going — the POST handler re-checks
-        // this marker when it finishes and tears the orphan down. TTL keeps
-        // stale markers from accumulating. Best-effort: a KV hiccup must not
-        // block the primary destroy below (without the marker the mid-create
-        // race falls back to the sleepAfter backstop).
-        await putTombstone(env, sessionId, TOMBSTONE_ATTEMPTED);
-        // Close the awake window before the container goes away: this is the
-        // one teardown path that knows the session is over for good.
-        await meterSession(env, sessionId, { final: true });
-        const sandbox = liveSbx(env, sessionId);
-        // Releasing a container must not need one (DEV-2556, Sentry DEMOS-1).
-        // When the pool is full the platform refuses `destroy()` itself, and
-        // this route — the only unguarded destroy in the file — turned that
-        // into a thrown 500 nobody could act on: the caller is a fire-and-
-        // forget `keepalive` fetch from `pagehide` that discards the response.
-        // A refusal also means no slot is being held by whatever we failed to
-        // reach, so there is nothing left to reclaim here. Recognised platform
-        // messages become a 204; anything else still throws to the outer catch
-        // and keeps today's status and today's Sentry event.
-        try {
-          await sandbox.destroy();
-          await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
-        } catch (err) {
-          if (!isExpectedTeardownFailure(err)) throw err;
-          console.warn(
-            `[session] teardown for ${sessionId} declined by the platform:`,
-            err instanceof Error ? err.message : String(err),
-          );
-          // The log line alone is NOT the signal, and assuming it was is how
-          // this swallow would have gone dark: `observability.head_sampling_rate`
-          // is 0.1 in wrangler.jsonc, so nine of ten of these console.warn lines
-          // are never retained. Capacity events are rare (two in 90 days), which
-          // makes the expected number of surviving log lines a fraction of one.
-          //
-          // So the event still goes to Sentry — just as a `warning` that no
-          // longer fails the request, instead of the 500 it used to ride in on.
-          // Fingerprinted for the reason the preview-boot capture above is: the
-          // outer catch reports bare, and this project groups on the culprit
-          // `Object.fetch(index)`, so without a fingerprint this would land back
-          // in the same grab-bag as DEMOS-1 and be unreadable as a capacity
-          // signal. `beforeSend` (rehomeBudgetAlert) only re-homes
-          // `context: "budget-alert"` and drops nothing, so a warning arrives.
-          //
-          // This matters most for `container service is unreachable`, the
-          // weakest member of `isExpectedTeardownFailure`: unlike the other two
-          // it does NOT imply no slot is held, so a swallowed one can leave a
-          // container billing until sleepAfter. 204 is still the right answer to
-          // a caller that discards the response — but only because the failure
-          // is legible somewhere, and this is that somewhere.
-          Sentry.captureException(err, {
-            level: "warning",
-            fingerprint: ["tier2-teardown-declined"],
-            tags: { context: "tier2-teardown" },
-          });
-        }
+        await teardownLiveSession(env, parts[2]!);
         return cors(new Response(null, { status: 204 }));
       }
 
@@ -1756,6 +1792,74 @@ export default Sentry.withSentry(sentryOptions, {
         // missing the current batch of views.
         await flushMeters(env);
         return json(await adminUsage(env, days));
+      }
+
+      // GET /api/admin/sessions?awake=0&offset=&limit= (auth) — the live-session
+      // table on its own (DEV-2567), so paging it and toggling the 24h tail into
+      // view cost neither the D1 aggregates behind `/usage` nor the analytics
+      // rollup. `awake` defaults to on; `awake=0` shows every meter still in KV.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "admin"
+        && parts[2] === "sessions" && parts.length === 3) {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+        return json(await adminSessions(env, url.searchParams));
+      }
+
+      // DELETE /api/admin/sessions/:ref (auth) — kill a session from the panel.
+      //
+      // Addressed by the panel's display digest, not by a session id: ids are
+      // bearer capabilities for the unauthenticated `/api/session/:id/*` routes,
+      // so the panel is never given one and this route resolves the ref against
+      // the live meter set instead. A ref that matches nothing is a 404 and a ref
+      // that matches twice is a 409 — a digest collision must not get somebody
+      // else's running work torn down (see `resolveSessionRef`).
+      //
+      // Unlike the client's own DELETE this one is worth an audit line: it is the
+      // only path where one person's click ends another person's session, and it
+      // is rare enough that `head_sampling_rate` 0.1 is not the problem it is on
+      // a hot path.
+      //
+      // A kill holds against a viewer whose tab is still open, and it is worth
+      // recording why, because the shape of this file argues the opposite:
+      // `proxyToSandbox()` runs at the top of `fetch()`, ahead of the
+      // resurrection gate, and reads no tombstone — so preview and HMR traffic
+      // from a live tab looks like it should re-enter the DO and boot a fresh
+      // container under the dead id, unmetered and invisible to this panel.
+      //
+      // It does not, and the guarantee is the SDK's rather than ours.
+      // `Sandbox.doDestroy()` deletes `PORT_TOKENS_STORAGE_KEY` and clears the
+      // active preview ports FIRST, before any await-heavy teardown, with the
+      // stated intent that "concurrent preview traffic should observe missing
+      // auth or runtime state and fail from DO-owned state without reaching the
+      // container". `validatePreviewURLForRuntime()` then answers `invalid` (no
+      // token) or `stale` (no activation / runtime mismatch / container not
+      // running) purely out of `ctx.storage`, and `fetchPreviewIfRunning()` is
+      // never reached. Verified locally: after a kill, three requests to the
+      // dead preview URL each answered 404 in 3-5 ms with no container activity
+      // — a boot is seconds, so the timing alone rules it out.
+      //
+      // DEGRADE DIRECTION: this rests on SDK internals (0.12.3), not on a
+      // documented contract. If a future version stops clearing preview state
+      // ahead of teardown, a killed session with a live tab becomes a container
+      // that bills until `sleepAfter` and never reappears here. The check that
+      // would catch it is a preview request against a killed session returning
+      // anything other than a fast 4xx.
+      if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "admin"
+        && parts[2] === "sessions" && parts.length === 4) {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+        const ref = parts[3]!;
+        const resolved = await lookupSessionRef(env, ref);
+        if (!resolved.ok) {
+          return resolved.reason === "ambiguous"
+            // Sentence in `error`, not in `message` — see the note on these two
+            // constants: this panel's reader renders `error` and ignores `message`.
+            ? json({ error: refAmbiguousMessage }, 409)
+            : json({ error: refUnknownMessage }, 404);
+        }
+        await teardownLiveSession(env, resolved.sessionId);
+        console.log(`[session] ${identity.email} killed session ${resolved.sessionId} from /admin`);
+        return json({ ref, killed: true });
       }
 
       if (parts[0] === "api" && parts[1] === "health") return json({ ok: true });

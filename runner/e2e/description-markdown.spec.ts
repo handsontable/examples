@@ -69,6 +69,22 @@ test("a markdown description renders as formatted text in the sidebar", async ({
   await expect(info).not.toContainText("- a [link]");
 });
 
+test("a shared demo's description renders as markdown for its reader", async ({ page }) => {
+  // Every markdown assertion above runs on /edit/:id — the owner's surface. The
+  // person the description is *for* reads it on /share/:id, which reaches BoxInfo
+  // by a different route (ShareRoute, whose user is always null — so no sign-in
+  // here, deliberately: the reader is anonymous). The stub already covers it:
+  // share mode hits the same /api/demos/:id + /source pair the editor does.
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await page.goto(`/share/${DEMO_ID}`);
+
+  const info = boxInfo(page);
+  // Rendered for the reader, not echoed: a real <strong>, and no literal syntax.
+  await expect(info.locator("strong", { hasText: "filters" })).toBeVisible();
+  await expect(info).not.toContainText("**filters**");
+});
+
 test("the toolbar writes markdown into the field without typing it", async ({ page }) => {
   await stubShell(page);
   await signIn(page);
