@@ -90,3 +90,16 @@ export function validateMcpFiles(files: unknown): Record<string, string> | McpVa
 export function isTeamEmail(value: unknown): value is string {
   return typeof value === "string" && /^[^\s@]+@handsontable\.com$/i.test(value.trim());
 }
+
+/**
+ * Was this demo published by the MCP itself? The containment control from the
+ * security review of PR #177: the shared secret only proves *a* trusted service is
+ * calling — it says nothing about whose demos that service may rewrite — so the
+ * update route is restricted to rows the MCP created, and `forked_from` is the
+ * provenance stamp (`mcp:<framework>`, written by the create route and never by a
+ * browser save). A leaked secret can then never touch work somebody built in the
+ * browser; the blast radius stays inside what the MCP published in the first place.
+ */
+export function isMcpCreated(row: { forked_from?: string | null }): boolean {
+  return Boolean(row.forked_from?.startsWith("mcp:"));
+}
