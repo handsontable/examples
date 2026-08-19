@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { injectSchemeReceiver } from "../packages/runtime/dist/scheme.js";
 import { createRequire } from "node:module";
 import { SandpackCompileError, SandpackEvaluationError, SandpackRuntime } from "../packages/runtime/dist/sandpack.js";
+import { CompilerUnavailableError } from "../packages/runtime/dist/transpile.js";
 import {
   MONITOR_COMPILE_MESSAGE_MAX,
   REPORTER_MODULE_LINE,
@@ -511,4 +512,49 @@ test("DEV-2557: an uninjected message is left byte-identical", () => {
   const raw = compileErrorMessageFor(BROKEN_FIRST_LINE);
   assert.ok(raw.length <= MONITOR_COMPILE_MESSAGE_MAX, "an uninjected frame is small enough to compare whole");
   assert.equal(showError(raw).message, raw);
+});
+
+// DEV-2569. `pushUpdate` swallows every transpile rejection, which is right for half-typed
+// code and was wrong for one case: the compiler chunk itself failing to load. A tab whose
+// `babel-<hash>.js` was rotated out by a deploy froze silently on its last good render — no
+// error card, no report — on the path a visitor is most likely to be on.
+//
+// `sandboxFiles` is the collaborator whose rejection `pushUpdate` has to route, so the test
+// injects it (the same way this file already assigns `client` and `published`) and drives
+// the real `pushUpdate`.
+test("a compiler-load failure from an edit reaches onError, once", async () => {
+  const { runtime, client } = mounted();
+  const errors = [];
+  runtime.onError((e) => errors.push(e));
+  const terminal = new CompilerUnavailableError(
+    new TypeError("Failed to fetch dynamically imported module: /assets/babel-CRE6e0VF.js"),
+  );
+  runtime.sandboxFiles = () => Promise.reject(terminal);
+
+  runtime.writeFile("/src/main.js", "console.log('edited');");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(errors.length, 1, "the visitor must be told, not left on a frozen preview");
+  assert.equal(errors[0], terminal);
+  assert.equal(client.pushes.length, 0, "nothing compiled, so nothing may be published");
+
+  // The loader has latched by now, so every later keystroke arrives with the same terminal
+  // error and the card is already showing it.
+  runtime.writeFile("/src/main.js", "console.log('again');");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(errors.length, 1, "one fault must not become one Sentry event per keystroke");
+});
+
+test("an ordinary mid-edit transpile failure still reaches nobody", async () => {
+  const { runtime, client } = mounted();
+  const errors = [];
+  runtime.onError((e) => errors.push(e));
+  runtime.sandboxFiles = () => Promise.reject(new SyntaxError("Unexpected token (3:1)"));
+
+  runtime.writeFile("/src/main.js", "const broken = (");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(errors.length, 0, "a half-typed keystroke is not an error card");
+  assert.equal(client.pushes.length, 0);
+  assert.deepEqual(runtime.published, injectSchemeReceiver({ ...FILES }, ENTRY.entry), "the last good sandbox stays published");
 });

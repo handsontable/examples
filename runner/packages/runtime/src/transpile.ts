@@ -16,13 +16,175 @@ type Babel = {
   transform: (code: string, options: Record<string, unknown>) => { code?: string | null };
 };
 
-let babelPromise: Promise<Babel> | null = null;
+/**
+ * A lazy singleton that caches the value but **not** a failure (DEMOS-15).
+ *
+ * The plain `promise ??= load()` form remembers a rejection for the life of the
+ * page. That matters here because `load` is a network fetch of a code-split chunk:
+ * it fails for the ordinary reasons a fetch does — an offline moment, a blocked
+ * request, or a deploy that rotated the hashed asset name out from under a tab
+ * opened before it. With the rejection cached, one such failure leaves Tier 1
+ * unable to compile anything until the page is reloaded, and files a
+ * "Failed to fetch dynamically imported module" per attempt.
+ *
+ * Concurrent callers still share one in-flight load — which is the reason to cache
+ * at all, since @babel/standalone is ~3 MB. The slot is cleared from inside the
+ * rejection handler, by which point the assignment has already happened.
+ *
+ * Exported for `pipeline/transpile-loader.test.mjs`: the real `loadBabel` cannot be
+ * driven into failure from a test (the dependency is installed, so the import
+ * resolves), and this retry rule is the whole of what changed.
+ */
+export function createLazyLoader<T>(load: () => Promise<T>): () => Promise<T> {
+  let pending: Promise<T> | null = null;
+  return () => {
+    pending ??= load().catch((cause: unknown) => {
+      pending = null;
+      throw cause;
+    });
+    return pending;
+  };
+}
 
-function loadBabel(): Promise<Babel> {
-  babelPromise ??= import("@babel/standalone").then(
-    (m) => ((m as { default?: Babel }).default ?? m) as Babel,
-  );
-  return babelPromise;
+/**
+ * What a `CompilerUnavailableError` says, always (DEV-2569).
+ *
+ * Constant on purpose. A Sentry issue takes its title from the first event's
+ * `name: message` and never revises it, so a message carrying the chunk URL — which
+ * is what the browser's own TypeError carries — titles the issue after one sample
+ * and keeps that title after the sample stops being representative. That is half of
+ * what DEMOS-15 was. The URL rides on `assetUrl` instead, and reaches Sentry as an
+ * extra.
+ */
+export const COMPILER_UNAVAILABLE_MESSAGE = "the in-browser compiler could not be loaded";
+
+/** The one URL in a module-load failure message, if the engine named one. Chrome says
+ *  "Failed to fetch dynamically imported module: <url>"; Safari says "Load failed" and
+ *  names nothing, so a null here is an ordinary outcome, not a parse bug. */
+function assetUrlFrom(cause: unknown): string | null {
+  const text = cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "";
+  return /(https?:\/\/[^\s"')]+)/.exec(text)?.[1] ?? null;
+}
+
+/**
+ * The compiler chunk could not be fetched, twice, and retrying is not the answer
+ * (DEV-2569, Sentry DEMOS-15).
+ *
+ * The reason this is terminal rather than transient: `apps/authoring/wrangler.jsonc`
+ * serves the app from Workers Assets with `not_found_handling:
+ * "single-page-application"`, so a deploy removes the previous build's hashed chunks and
+ * their paths answer `200 text/html` instead of a 404 — the same host behaviour DEV-2535
+ * had to teach the docs loaders about. A tab that had not yet fetched the compiler when a
+ * deploy landed is asking for a file that no longer exists, and will ask forever. The two
+ * observed events name two different `babel-<hash>.js` on two different releases, and the
+ * older of the two answers, measured:
+ *
+ *   $ curl -sI https://demos.handsontable.com/assets/babel-DtyXnKg5.js
+ *   HTTP/2 200
+ *   content-type: text/html
+ *
+ * An HTML body is not a module, so the import rejects however many times it is asked.
+ *
+ * Offline and blocked requests reach here too, and for them a reload is also the fix —
+ * so the user-facing wording (`describeRuntimeError` in the authoring app) offers the
+ * reload without asserting a deploy we cannot prove happened.
+ *
+ * Recognised by a marker property rather than `instanceof`, like
+ * `DocsResourceMissingError`: the authoring app has to classify these without
+ * importing the runtime's internals, and an `instanceof` across a bundle boundary is
+ * the kind of check that silently starts returning false.
+ */
+export class CompilerUnavailableError extends Error {
+  readonly compilerUnavailable = true;
+
+  readonly assetUrl: string | null;
+
+  constructor(cause: unknown) {
+    super(COMPILER_UNAVAILABLE_MESSAGE, { cause });
+    this.name = "CompilerUnavailableError";
+    this.assetUrl = assetUrlFrom(cause);
+  }
+}
+
+/** Whether an error is the terminal compiler-load failure above. */
+export function isCompilerUnavailable(e: unknown): boolean {
+  return e instanceof Error && (e as { compilerUnavailable?: boolean }).compilerUnavailable === true;
+}
+
+/**
+ * Bound the retry `createLazyLoader` enables: at most one extra attempt, then stop
+ * asking (DEV-2569).
+ *
+ * `createLazyLoader` alone makes every later compile re-attempt the fetch. That is
+ * right for a transient failure and wrong for a rotated asset, which is the failure
+ * actually observed: the second attempt would fail like the first, once per keystroke,
+ * each one costing a 3 MB request and filing another Sentry event. So the first
+ * rejection is retried immediately — the lazy loader has cleared its slot by then, so
+ * this is a genuine refetch and not a re-await of the same rejection — and the second
+ * rejection latches.
+ *
+ * The latch clears for nothing automatic. Nothing reaches `load` once it is set, so no
+ * success could clear it, and a counter that reset itself would be unbounded retrying
+ * with extra steps. `rearm` is the one exception: it is wired to the visitor pressing
+ * *Restart preview*, so an explicit request buys exactly one more pair of attempts. A
+ * blip that outlasted two fetches therefore does not force a reload and does not cost
+ * unsaved edits, while nothing in the code path retries on its own.
+ *
+ * The same error object is thrown for every latched call, so Sentry's dedupe sees one
+ * fault rather than one per keystroke.
+ *
+ * Two concurrent callers (a mount transpiles sources and dep-shims separately) cost two
+ * fetches, not four: each does its own retry, but `createLazyLoader` collapses whatever
+ * overlaps in flight.
+ */
+export function createBoundedLoader<T>(
+  load: () => Promise<T>,
+  wrap: (cause: unknown) => Error,
+): { load: () => Promise<T>; rearm: () => void } {
+  let terminal: Error | null = null;
+  return {
+    load: async () => {
+      if (terminal) throw terminal;
+      try {
+        return await load();
+      } catch {
+        /* one transient failure is not news — retry below, and report only if that fails too */
+      }
+      try {
+        return await load();
+      } catch (cause) {
+        terminal = wrap(cause);
+        throw terminal;
+      }
+    },
+    rearm: () => {
+      terminal = null;
+    },
+  };
+}
+
+const loadBabelChunk = createLazyLoader<Babel>(() =>
+  import("@babel/standalone").then((m) => ((m as { default?: Babel }).default ?? m) as Babel),
+);
+
+const babelLoader = createBoundedLoader(
+  loadBabelChunk,
+  (cause) => new CompilerUnavailableError(cause),
+);
+
+const loadBabel = babelLoader.load;
+
+/**
+ * Allow one more pair of compiler-chunk fetches after the loader has given up.
+ *
+ * Called from *Restart preview* in the authoring app and from nowhere else: the point of
+ * the latch is that no code path retries by itself, and the point of this is that a
+ * visitor whose network came back does not have to reload and lose their edits. A
+ * rotated-out chunk fails again immediately, which is what leaves the reload as the only
+ * cure for that case.
+ */
+export function rearmCompilerLoad(): void {
+  babelLoader.rearm();
 }
 
 const SOURCE_RE = /\.(tsx|ts|jsx|js)$/;

@@ -287,9 +287,43 @@ non-localhost host to prove anything.
 **Preview-iframe errors are not reported by default.** The iframe runs arbitrary
 authored and imported example code, so a compile error or a mid-keystroke typo is
 product output, not an application fault. `reportRuntimeError` in
-`apps/authoring/src/App.tsx` reports only container-engine faults —
+`apps/authoring/src/App.tsx` reports container-engine faults unconditionally —
 `SessionStartError` (Tier-2 pool refusing a session; 410 excluded, that is normal
-teardown) and `ContainerBootFailure` — and nothing from the Sandpack engine.
+teardown) and `ContainerBootFailure` — and from the Sandpack engine only what the two
+branches below describe.
+
+**Tier-1 grouping and titles (DEV-2569).** Every rule for the Sandpack branch lives in
+`apps/authoring/src/tier1Report.ts`, pinned by `pipeline/tier1-report.test.mjs`; `App.tsx`
+extracts the facts and captures. Two branches, and the split is the fix for Sentry DEMOS-15,
+which held both populations under one title:
+
+- `context: tier1-compiler-asset`, fingerprint `["tier1-compiler-asset"]`, level `error`.
+  Our own `@babel/standalone` chunk failing to load — the Tier-1 pre-transpile is ~3 MB and
+  code-split, so first use is a network fetch. It is reported **ahead of the `monitorDemos`
+  gate** (it is not demo monitoring, and it must outlive the DEV-2527 teardown below) and it
+  deliberately carries **no** `surface: demo-runtime` tag, because `beforeSend` would re-home
+  it into the `demo-runtime` environment where visitor noise is filtered past. The chunk URL
+  travels as `extra.assetUrl`: it is hashed per build, so in the title it would name one
+  deploy's sample and in the fingerprint it would open a new issue every deploy.
+- `kind: sandpack-compile`, fingerprint `["demo-runtime","sandpack-compile"]` (unchanged),
+  level `warning`. A bundler diagnostic for a module that never ran, i.e. the visitor's own
+  source. Flat on purpose — default grouping shards it per typo — and *because* it is flat
+  the code frame must not be in the message: an issue re-derives its title from the newest
+  event, so a per-event message means the title names whichever typo arrived last. Both
+  branches are therefore captured as a **synthetic error with a constant `name: message`**,
+  with the real text in `extra.compileDiagnostic` / `extra.cause`.
+
+The retry rule behind the first branch is in `packages/runtime/src/transpile.ts`. A rejected
+dynamic import used to be cached for the life of the page (`babelPromise ??= import(…)`), so
+one failed fetch left Tier 1 unable to compile anything until reload. It now evicts the
+rejection and retries once; a second failure raises the terminal `CompilerUnavailableError`
+and latches, because the failure actually observed cannot be retried away — Workers Assets
+serves this app with `not_found_handling: "single-page-application"`, so a deploy removes the
+previous build's hashed chunks and their paths answer `200 text/html`. Only *Restart preview*
+lifts the latch (`rearmCompilerLoad`), which buys one more pair of attempts so a visitor
+whose network came back does not have to reload and lose unsaved edits. `pushUpdate` in
+`sandpack.ts` swallows transpile rejections by design (half-typed code) but re-surfaces this
+one, once — without that, a stranded tab froze silently on its last good render.
 
 **Session-start diagnostics (DEV-2559) — temporary, remove with the DEMOS-9 fix.**
 The `tier2-session-start` branch of `reportRuntimeError` carries three extra tags —
@@ -432,7 +466,10 @@ subdomain label are redacted.
 `sandpack.ts`, `onStderr`/`relayStderr` in `container.ts`, `injectMonitor` in the
 Worker, and `monitorDemos` / `reportDemoEvent` in `sentry.ts` plus the relay listener
 in `App.tsx`. The `beforeSend` narrowing in `sentry.ts` is **not** part of this
-feature and must stay — it is a fix in its own right.
+feature and must stay — it is a fix in its own right. Neither is the
+`tier1-compiler-asset` branch of `tier1Report` (DEV-2569): it sits ahead of the
+`monitorDemos` gate precisely so that removing this feature does not take our own
+compiler asset failing to load down with it.
 
 Removal must also drop the `SandpackEvaluationError` early return in
 `reportRuntimeError` (`App.tsx`), and with it the `SandpackEvaluationError` branch in
