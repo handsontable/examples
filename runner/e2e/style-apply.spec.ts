@@ -199,7 +199,9 @@ for (const { example, shape } of SHAPES) {
     test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
     test.describe.configure({ timeout: 300_000 });
 
-    test("a theme applies to the grid, and Reset takes it back off", async ({ page }) => {
+    // @smoke on react only: the post-deploy subset (DEV-2203) wants one Style
+    // apply+reset round-trip, and react is the Tier-1 shape that needs no container.
+    test("a theme applies to the grid, and Reset takes it back off", { tag: example === "react" ? ["@smoke"] : [] }, async ({ page }) => {
       // Every warning the demo logs, so the alias check below sees the whole run.
       const console_: string[] = [];
       page.on("console", (message) => console_.push(message.text()));

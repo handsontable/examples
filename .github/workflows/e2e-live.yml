@@ -62,6 +62,10 @@ concurrency:
 jobs:
   live:
     runs-on: ubuntu-latest
+    # Same image rule as ci.yml: keep the tag in lockstep with @playwright/test
+    # in runner/package.json — bump the two together, never apart.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
     # Local live run takes seconds once built; leave headroom for a cold
     # hosted-bundler transpile of the heavier examples. The deployed run also
     # boots four real containers for the Style panel suite, one at a time.
@@ -89,9 +93,6 @@ jobs:
         run: |
           pnpm build
           pnpm --filter @handsontable/demo-authoring build
-
-      - name: Install Playwright browser
-        run: pnpm exec playwright install --with-deps chromium
 
       - name: E2E with live-render checks
         env:
@@ -123,5 +124,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-live
-          path: runner/playwright-report/
+          # playwright-report/ holds the html report, test-results/ the traces.
+          path: |
+            runner/playwright-report/
+            runner/test-results/
           retention-days: 7
+          if-no-files-found: warn
