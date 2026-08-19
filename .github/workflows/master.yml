@@ -1,18 +1,22 @@
 name: Master
 
-# The single master-push pipeline (the handsontable monorepo's develop.yml
-# pattern). Before this existed, one push touching runner/packages/** ran the
-# CI suite three times — ci.yml's own push trigger plus a `uses: ci.yml` gate
-# inside each deploy workflow. Now: one CI run, and the two deploys hang off
-# it as conditional jobs, path-gated by a plain `git diff` (the push-level
-# `paths:` filter can't be used once the deploys share a workflow).
+# The single master-push pipeline: deploy first, verify production after.
 #
-#   changes ─┐
-#            ├─► deploy-authoring   (if authoring paths changed)
-#   test ────┤
-#            └─► deploy-api         (if api paths changed)
+#   changes ─┬─► deploy-authoring ─┐
+#            └─► deploy-api ───────┴─► smoke (@smoke e2e against prod)
 #
-# Manual deploys: workflow_dispatch with the two checkboxes.
+# No test gate before the deploys, deliberately (Dan, #184 review): the full
+# suite already ran on the PR, each deploy job runs its own `pnpm build` (a
+# broken build cannot reach wrangler), and what a master push needs verified
+# is PRODUCTION — which only exists after the deploy. The smoke job is that
+# verification; the weekly e2e-live canary covers the rest. The compensating
+# control for merge skew (a PR tested before master moved) is branch
+# protection's "require branches to be up to date" — a repo setting, not a
+# workflow.
+#
+# Deploys are path-gated by a plain `git diff` (the push-level `paths:` filter
+# can't be used once the deploys share a workflow). Manual deploys:
+# workflow_dispatch with the two checkboxes.
 
 on:
   push:
@@ -80,13 +84,8 @@ jobs:
           echo "authoring=$authoring" >> "$GITHUB_OUTPUT"
           echo "api=$api" >> "$GITHUB_OUTPUT"
 
-  # The one CI run per master push — the deploys gate on it, and it doubles as
-  # the post-merge canary for pushes that deploy nothing.
-  test:
-    uses: ./.github/workflows/ci.yml
-
   deploy-authoring:
-    needs: [changes, test]
+    needs: [changes]
     if: needs.changes.outputs.authoring == 'true'
     runs-on: ubuntu-latest
     defaults:
@@ -110,9 +109,9 @@ jobs:
       # Build workspace packages, then the authoring app. VITE_API_BASE comes
       # from apps/authoring/.env.production (committed) so it targets prod.
       - run: pnpm build
-      # SENTRY_* are only set here, on the deploying build. The `test` job
-      # reuses ci.yml, which gets no token, so PR builds neither emit source
-      # maps nor upload a release — see apps/authoring/vite.config.ts.
+      # SENTRY_* are only set here, on the deploying build. PR CI (ci.yml)
+      # gets no token, so PR builds neither emit source maps nor upload a
+      # release — see apps/authoring/vite.config.ts.
       - run: pnpm --filter @handsontable/demo-authoring build
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
@@ -164,7 +163,7 @@ jobs:
       smoke: true
 
   deploy-api:
-    needs: [changes, test]
+    needs: [changes]
     if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
     defaults:

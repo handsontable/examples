@@ -169,8 +169,8 @@ Six workflows live in `.github/workflows/` at the repo root:
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
-| `ci.yml` | every PR; `workflow_call` from `master.yml` and manual dispatch | the reusable CI DAG: build → authoring → e2e (in the pinned Playwright container), with unit in parallel. No push trigger of its own — master runs it once through `master.yml`. |
-| `master.yml` | every push to `master` (or manual dispatch with per-target checkboxes) | one CI run + path-gated deploys (`deploy-authoring`, `deploy-api`), each followed by the `@smoke` E2E subset against prod. Replaces the two `deploy-runner-*.yml` workflows, whose per-workflow CI gates ran the suite up to three times per push. |
+| `ci.yml` | every PR (+ manual dispatch) | the CI DAG: presence + unit → build → authoring → e2e (in the pinned Playwright container). PRs are the only place the full suite runs — master does not repeat it. |
+| `master.yml` | every push to `master` (or manual dispatch with per-target checkboxes) | deploy-first: path-gated `deploy-authoring`/`deploy-api` (each self-builds — a broken build never reaches wrangler), then one `@smoke` E2E run against prod. Merge-skew is covered by branch protection ("require branches to be up to date"), not by re-running the suite. |
 | `e2e-live.yml` | manual, weekly canary (Mon 05:00 UTC, prod + AI), or `workflow_call` with `smoke: true` from `master.yml` | everything ci.yml cannot run: live renders, container suites, the share viewer/round-trip, AI answer checks. Dispatch inputs: `base_url`, `ai`, `pkg_pr_new_ref` (DEV-2198). |
 | `e2e-starter-matrix.yml` | manual + monthly (1st, 03:00 UTC) | every starter × major through a live session; serialized against the global container cap. |
 | `import-docs.yml` | manual, or `repository_dispatch: docs-examples-sync` from the docs repo | re-imports the documentation-guide examples. |

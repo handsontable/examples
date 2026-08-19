@@ -22,9 +22,10 @@ name: CI
 # behind E2E_LIVE (e2e-live.yml). Also callable (workflow_call) so the deploy
 # workflows can gate on the whole DAG.
 
-# No push trigger of its own: master pushes run this exactly once through
-# master.yml's `test` job (workflow_call). Before that split, one push touching
-# runner/packages/** ran this suite three times.
+# No push trigger of its own, and master.yml does not call it either: the full
+# suite runs on every PR, and a master push goes straight to deploy with the
+# @smoke subset verifying production afterwards (master.yml). workflow_call
+# stays for any future caller; workflow_dispatch for by-hand runs.
 on:
   pull_request: {}
   workflow_call: {}
