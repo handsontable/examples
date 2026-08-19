@@ -25,6 +25,10 @@ const compilerAsset = (over = {}) => ({
   message: "the in-browser compiler could not be loaded",
   compilerUnavailable: true,
   assetUrl: "https://demos.handsontable.com/assets/babel-CRE6e0VF.js",
+  causeMessage:
+    "Failed to fetch dynamically imported module: https://demos.handsontable.com/assets/babel-CRE6e0VF.js",
+  replay: false,
+  online: true,
   monitorDemos: true,
   ...over,
 });
@@ -83,6 +87,27 @@ test("the chunk URL rides in extra, never in the title or the fingerprint", () =
   assert.equal(r.extra.assetUrl, "https://demos.handsontable.com/assets/babel-CRE6e0VF.js");
   assert.doesNotMatch(r.synthesizeAs.message, /https?:/, "a hashed URL in the title names one deploy's sample");
   assert.doesNotMatch(r.fingerprint.join("|"), /https?:/, "and in the fingerprint it would open a new issue per deploy");
+});
+
+test("a latched replay is not a second event", () => {
+  // The loader re-throws its terminal error on every later compile. The shell has already
+  // reported and carded the discovery; one fault must not become one event per keystroke.
+  assert.equal(tier1Report(compilerAsset({ replay: true })), null);
+});
+
+test("an offline visitor is not filed as our fault", () => {
+  // This branch has no flag gate and no beforeSend re-home, so the one signal that separates
+  // "our asset is gone" from "this visitor has no network" is spent before the event is sent.
+  assert.equal(tier1Report(compilerAsset({ online: false })), null);
+  assert.ok(tier1Report(compilerAsset({ online: true })), "and `true` proves nothing, so it reports");
+});
+
+test("the engine's own wording is the diagnostic, not the constant title", () => {
+  const r = tier1Report(compilerAsset());
+  assert.match(r.extra.cause, /Failed to fetch dynamically imported module/);
+  assert.notEqual(r.extra.cause, r.synthesizeAs.message, "extra.cause carrying the constant would be dead weight");
+  const bare = tier1Report(compilerAsset({ causeMessage: null }));
+  assert.equal(bare.extra.cause, undefined, "and an absent cause must not become the string \"null\"");
 });
 
 test("a compiler failure whose cause named no URL still reports", () => {

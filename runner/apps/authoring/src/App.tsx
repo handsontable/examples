@@ -211,6 +211,9 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
       message: e instanceof Error ? e.message : String(e),
       compilerUnavailable: isCompilerUnavailable(e),
       assetUrl: e instanceof Error ? (e as { assetUrl?: string | null }).assetUrl ?? null : null,
+      causeMessage: e instanceof Error && e.cause instanceof Error ? e.cause.message : null,
+      replay: e instanceof Error && (e as { replay?: boolean }).replay === true,
+      online: navigator.onLine,
       monitorDemos,
     });
     if (!report) return;

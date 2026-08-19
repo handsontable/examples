@@ -313,17 +313,39 @@ which held both populations under one title:
   branches are therefore captured as a **synthetic error with a constant `name: message`**,
   with the real text in `extra.compileDiagnostic` / `extra.cause`.
 
-The retry rule behind the first branch is in `packages/runtime/src/transpile.ts`. A rejected
-dynamic import used to be cached for the life of the page (`babelPromise ??= import(…)`), so
-one failed fetch left Tier 1 unable to compile anything until reload. It now evicts the
-rejection and retries once; a second failure raises the terminal `CompilerUnavailableError`
-and latches, because the failure actually observed cannot be retried away — Workers Assets
-serves this app with `not_found_handling: "single-page-application"`, so a deploy removes the
-previous build's hashed chunks and their paths answer `200 text/html`. Only *Restart preview*
-lifts the latch (`rearmCompilerLoad`), which buys one more pair of attempts so a visitor
-whose network came back does not have to reload and lose unsaved edits. `pushUpdate` in
-`sandpack.ts` swallows transpile rejections by design (half-typed code) but re-surfaces this
-one, once — without that, a stranded tab froze silently on its last good render.
+The retry rule behind the first branch is in `packages/runtime/src/transpile.ts`, and it has
+one non-obvious constraint. A rejected dynamic import used to be cached for the life of the
+page (`babelPromise ??= import(…)`), so one failed fetch left Tier 1 unable to compile
+anything until reload — but **evicting our own memo is not enough, because the browser caches
+the failure too**. A failed module fetch is a null entry in the document's module map, and
+re-importing the same specifier never touches the network again. Measured in Chromium 141:
+
+```
+attempt 1  ./chunk.js           -> TypeError       1 request
+attempt 2  ./chunk.js           -> same TypeError  1 request  (no refetch)
+attempt 3  ./chunk.js, now 200  -> same TypeError  1 request  (still no refetch)
+attempt 4  ./chunk.js?retry=1   -> module          2 requests
+```
+
+So `createRetryingLoader` retries against a **different URL**: the failed chunk plus a
+`hotRetry` query, built from the URL in the browser's own error text — the only place the
+resolved chunk path exists at runtime, since the specifier is a hashed filename after the
+build. An engine that names no URL (Safari says just "Load failed") is terminal on the first
+failure, because there is nothing to bust. A second failure raises the terminal
+`CompilerUnavailableError` and latches; later compiles get the same failure back with
+`replay: true`, which `tier1Report` drops so one fault is not one event per keystroke. An
+offline visitor (`navigator.onLine === false`) is dropped too — this branch has no flag gate
+and no `beforeSend` re-home, so that is the one brake on it.
+
+Only *Restart preview* lifts the latch (`rearmCompilerLoad`), and it mints a fresh query so
+the click is a real request rather than a replay of a decided failure: a blip that has since
+passed recovers without a reload and without losing unsaved edits, while a rotated-out chunk
+fails again at once and leaves the reload as the only cure. Two requests per page, plus two
+per click; nothing retries on its own.
+
+`pushUpdate` in `sandpack.ts` swallows transpile rejections by design (half-typed code) but
+re-surfaces this one, once — without that, a stranded tab froze silently on its last good
+render, with no card and no report.
 
 **Session-start diagnostics (DEV-2559) — temporary, remove with the DEMOS-9 fix.**
 The `tier2-session-start` branch of `reportRuntimeError` carries three extra tags —

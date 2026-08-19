@@ -527,7 +527,9 @@ test("a compiler-load failure from an edit reaches onError, once", async () => {
   const errors = [];
   runtime.onError((e) => errors.push(e));
   const terminal = new CompilerUnavailableError(
-    new TypeError("Failed to fetch dynamically imported module: /assets/babel-CRE6e0VF.js"),
+    new TypeError(
+      "Failed to fetch dynamically imported module: https://demos.handsontable.com/assets/babel-CRE6e0VF.js",
+    ),
   );
   runtime.sandboxFiles = () => Promise.reject(terminal);
 

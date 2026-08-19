@@ -32,6 +32,14 @@ export interface Tier1ErrorFacts {
   compilerUnavailable: boolean;
   /** The chunk URL, when the engine named one (`CompilerUnavailableError.assetUrl`). */
   assetUrl?: string | null;
+  /** The underlying engine wording (`error.cause`), which is the only diagnostic this
+   *  branch has — the error's own message is a constant by design. */
+  causeMessage?: string | null;
+  /** `CompilerUnavailableError.replay`: the latch re-throwing a failure already reported. */
+  replay?: boolean;
+  /** `navigator.onLine`. `false` is proof the visitor's network is down, so the failure is
+   *  not ours; `true` proves nothing, so it is not treated as evidence either way. */
+  online?: boolean;
   /** The DEV-2527 demo-monitoring flag. Deliberately an input, so the gate ORDER is tested. */
   monitorDemos: boolean;
 }
@@ -74,6 +82,16 @@ const COMPILE_TITLE = "Tier-1 compile failed";
  */
 export function tier1Report(facts: Tier1ErrorFacts): Tier1Report | null {
   if (facts.compilerUnavailable) {
+    // Reported once per failure, not once per keystroke: after the first terminal failure
+    // the loader latches and re-throws, and the shell has already carded it.
+    if (facts.replay) return null;
+    // A visitor who is offline is not evidence of anything we can fix, and this branch has
+    // none of the usual brakes on it (no flag gate, and no `beforeSend` re-home into the
+    // filtered demo-runtime environment) — so the one signal that separates "our asset is
+    // gone" from "this visitor has no network" is used before, not after, the event is sent.
+    // `online === true` proves nothing (an extension or proxy still refuses the request),
+    // so only an explicit `false` suppresses.
+    if (facts.online === false) return null;
     return {
       tags: { context: "tier1-compiler-asset", tier: "1" },
       fingerprint: ["tier1-compiler-asset"],
@@ -85,7 +103,8 @@ export function tier1Report(facts: Tier1ErrorFacts): Tier1Report | null {
         // carrying it names one deploy's sample and a fingerprint carrying it opens a new
         // issue every deploy.
         ...(facts.assetUrl ? { assetUrl: facts.assetUrl } : {}),
-        cause: facts.message,
+        // The engine's own wording, not `facts.message` — that one is the constant title.
+        ...(facts.causeMessage ? { cause: facts.causeMessage } : {}),
       },
     };
   }
