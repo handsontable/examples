@@ -889,6 +889,12 @@ export function StylePanel({
                     type="button"
                     className="hot-panel-row"
                     style={componentRow}
+                    // Test contract (DEV-2203): a stable accessible name. The
+                    // computed name otherwise concatenates the override badge
+                    // ("Header 2"), so a role query breaks the moment a token
+                    // is overridden — and "Buttons" collides with "Radio
+                    // Buttons" without an exact match to hang it on.
+                    aria-label={section.label}
                     onClick={() => setComponent(section.label)}
                   >
                     <span>{section.label}</span>
