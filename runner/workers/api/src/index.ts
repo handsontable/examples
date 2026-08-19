@@ -1800,20 +1800,31 @@ export default Sentry.withSentry(sentryOptions, {
       // is rare enough that `head_sampling_rate` 0.1 is not the problem it is on
       // a hot path.
       //
-      // KNOWN GAP, and the reason this is a kill button rather than a promise.
+      // A kill holds against a viewer whose tab is still open, and it is worth
+      // recording why, because the shape of this file argues the opposite:
       // `proxyToSandbox()` runs at the top of `fetch()`, ahead of the
       // resurrection gate, and reads no tombstone — so preview and HMR traffic
-      // from a viewer whose tab is still open re-enters the DO and boots a fresh
-      // container under the dead id within seconds. The meter was dropped by the
-      // teardown, so that container bills (bounded by `sleepAfter`) and cannot
-      // appear in the table again. The hole is older than this route: the client's
-      // own DELETE fires from `pagehide`, by which point no traffic can follow, so
-      // nothing reached it before. Closing it means a tombstone read on the
-      // preview path, which is every asset of every live session — a KV read per
-      // request, not something to add on the way past. Until then a kill is
-      // reliable against an abandoned session (the DEV-2567 case: the row is
-      // `slept` precisely because nothing is talking to it) and best-effort
-      // against a live one.
+      // from a live tab looks like it should re-enter the DO and boot a fresh
+      // container under the dead id, unmetered and invisible to this panel.
+      //
+      // It does not, and the guarantee is the SDK's rather than ours.
+      // `Sandbox.doDestroy()` deletes `PORT_TOKENS_STORAGE_KEY` and clears the
+      // active preview ports FIRST, before any await-heavy teardown, with the
+      // stated intent that "concurrent preview traffic should observe missing
+      // auth or runtime state and fail from DO-owned state without reaching the
+      // container". `validatePreviewURLForRuntime()` then answers `invalid` (no
+      // token) or `stale` (no activation / runtime mismatch / container not
+      // running) purely out of `ctx.storage`, and `fetchPreviewIfRunning()` is
+      // never reached. Verified locally: after a kill, three requests to the
+      // dead preview URL each answered 404 in 3-5 ms with no container activity
+      // — a boot is seconds, so the timing alone rules it out.
+      //
+      // DEGRADE DIRECTION: this rests on SDK internals (0.12.3), not on a
+      // documented contract. If a future version stops clearing preview state
+      // ahead of teardown, a killed session with a live tab becomes a container
+      // that bills until `sleepAfter` and never reappears here. The check that
+      // would catch it is a preview request against a killed session returning
+      // anything other than a fast 4xx.
       if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "admin"
         && parts[2] === "sessions" && parts.length === 4) {
         const identity = await authenticate(request, env);
