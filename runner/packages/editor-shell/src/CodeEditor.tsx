@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import CodeMirror, { type EditorView, type ViewUpdate } from "@uiw/react-codemirror";
+import CodeMirror, { type BasicSetupOptions, type EditorView, type ViewUpdate } from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
@@ -43,7 +43,7 @@ const BASIC_SETUP = {
   highlightActiveLine: true,
   foldGutter: true,
   autocompletion: true,
-};
+} as const satisfies BasicSetupOptions;
 
 /** Caret position, 1-based, as the status bar shows it. */
 export interface CursorPosition {

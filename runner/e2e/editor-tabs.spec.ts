@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { workspaceFiles } from "./helpers";
 
 // Multi-file editor tabs (DEV-2169 / T12, ADR-0025 §3). The strip shipped styled
 // but single-file in T4; here it opens many, closes them, and dots the ones with
@@ -507,8 +508,6 @@ declare global {
   interface Window {
     /** Dispatches seen by the hidden pane, installed by `watchHiddenPane`. */
     __dev2568?: number;
-    /** The workspace-files test contract (apps/authoring/src/App.tsx). */
-    __HOT_FILES__?: () => Record<string, string>;
   }
 }
 
@@ -527,6 +526,23 @@ async function watchHiddenPane(page: Page) {
       window.__dev2568 = (window.__dev2568 ?? 0) + 1;
       return original(...args);
     };
+  });
+}
+
+/** CodeMirror does async work of its own on a freshly mounted document — the language
+ *  parser finishes and dispatches an effect once, on a schedule no test controls, so a
+ *  bare count is 0 or 1 depending on how warm the machine is. Wait for it to stop, then
+ *  zero the counter: what the assertion covers is dispatches *typing* caused. */
+async function settleHiddenPane(page: Page) {
+  await expect
+    .poll(async () => {
+      const before = await page.evaluate(() => window.__dev2568);
+      await page.waitForTimeout(150);
+      return before === (await page.evaluate(() => window.__dev2568));
+    })
+    .toBe(true);
+  await page.evaluate(() => {
+    window.__dev2568 = 0;
   });
 }
 
@@ -549,8 +565,10 @@ async function typeByDispatch(page: Page, text: string) {
 
 test("typing in one pane does not reconfigure the hidden ones", async ({ page }) => {
   const crashes: string[] = [];
+  // Both spellings: the suite runs against a `vite preview` of the production build,
+  // where React 19 strips the message down to "Minified React error #185".
   const watch = (text: string) => {
-    if (/Maximum update depth/.test(text)) crashes.push(text);
+    if (/Maximum update depth|React error #?185/.test(text)) crashes.push(text);
   };
   page.on("console", (message) => message.type() === "error" && watch(message.text()));
   page.on("pageerror", (error) => watch(error.message));
@@ -563,12 +581,13 @@ test("typing in one pane does not reconfigure the hidden ones", async ({ page })
   await expect(activeEditor(page)).toBeVisible();
 
   await watchHiddenPane(page);
+  await settleHiddenPane(page);
   await typeByDispatch(page, "0123456789");
 
   // Positive control first: the edits did reach the workspace, so a zero count below
   // cannot mean "nothing happened".
-  const files = await page.evaluate(() => window.__HOT_FILES__?.());
-  expect(files?.["/src/index.tsx"]).toContain("0123456789");
+  const files = await workspaceFiles(page);
+  expect(files["/src/index.tsx"]).toContain("0123456789");
 
   expect(await page.evaluate(() => window.__dev2568)).toBe(0);
   expect(crashes).toEqual([]);
