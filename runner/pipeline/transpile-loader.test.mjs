@@ -102,6 +102,10 @@ test("two failures in one call become a CompilerUnavailableError", async () => {
   assert.equal(e.name, "CompilerUnavailableError");
   assert.equal(e.message, COMPILER_UNAVAILABLE_MESSAGE, "a constant message is a stable Sentry title");
   assert.equal(e.assetUrl, url, "the sample rides beside the message, never inside it");
+  // Own property, not just a declaration: `App.tsx` reads it off the caught error with a
+  // cast (`(e as { assetUrl?: string | null }).assetUrl`) to reach `extra.assetUrl`, and a
+  // field that survived only in the .d.ts would make that read undefined in production.
+  assert.ok(Object.hasOwn(e, "assetUrl"));
   assert.ok(!e.message.includes(url), "the URL in the title is what made DEMOS-15 name one sample");
   assert.equal(e.cause, cause);
 });
