@@ -66,6 +66,41 @@ const CASES = {
   // restore used `$1...` string substitution instead of a function.
   dollar: jsx('<HotTable data={data} themeName="ht-$pecial" />'),
 
+  // The v18 starters hand the theme over as an INLINE OBJECT (DEV-2203):
+  // `theme={{ ...mainTheme, colorScheme: 'light' }}` in react,
+  // `theme: { ...mainTheme, colorScheme: 'light' },` in the vanilla and Angular
+  // settings. The old JSX regex stopped at the first `}`, leaving a dangling
+  // brace behind — a syntax error the bundler answers by serving the last good
+  // bundle — and the truncated match became Reset's restore payload, so Reset
+  // put back a corrupted file. The settings regex only knew a bare identifier,
+  // so those starters bailed to the manual hint instead of wiring.
+  jsxInlineObject: jsx(
+    "<HotTable\n  data={data}\n  theme={{ ...mainTheme, colorScheme: 'light' }}\n  licenseKey=\"x\"\n/>",
+  ),
+  vanillaInlineObject: jsx(
+    "const hot = new Handsontable(el, {\n  data,\n  theme: { ...mainTheme, colorScheme: 'light' },\n});",
+    "data,",
+  ),
+  angularInlineObject: jsx(
+    "gridSettings: GridSettings = {\n  data,\n  theme: { ...mainTheme, colorScheme: 'light' },\n};",
+    "data,",
+  ),
+  // The same objects spanning several lines: the scan has to cross line ends,
+  // and the multi-line displaced text has to survive the marker round trip.
+  jsxInlineObjectMultiline: jsx(
+    "<HotTable\n  data={data}\n  theme={{\n    ...mainTheme,\n    colorScheme: 'light',\n  }}\n  licenseKey=\"x\"\n/>",
+  ),
+  vanillaInlineObjectMultiline: jsx(
+    "const hot = new Handsontable(el, {\n  data,\n  theme: {\n    ...mainTheme,\n    colorScheme: 'light',\n  },\n});",
+    "data,",
+  ),
+  // An `=` inside the object (a ternary) must not make the restore leg mistake
+  // a displaced *setting* for a displaced *attribute* and drop it.
+  vanillaInlineObjectTernary: jsx(
+    "const hot = new Handsontable(el, {\n  data,\n  theme: { ...mainTheme, colorScheme: dark === true ? 'dark' : 'light' },\n});",
+    "data,",
+  ),
+
   // The two vanilla shapes the census found the old regex walking past
   // (DEV-2197) — between them, 16 of the 17 docs examples it was missing.
   vanillaExpressionElement: jsx(
@@ -206,6 +241,29 @@ test("a construction with no settings literal is left alone", { skip }, () => {
   assert.equal(r.linked, false, "it must report itself unwired, so the panel shows the hint");
   assert.ok(!r.wired, "and must not have been edited anyway");
   assert.ok(r.roundTrips, "the source must come back untouched");
+});
+
+test("an inline theme object is swapped whole — no dangling brace, no bail", { skip }, () => {
+  // The marker line legitimately still holds the displaced object — that is how
+  // Reset puts it back — so read the code, not the comment.
+  const code = (name) => results[name].applied
+    .split("\n").filter((l) => !l.includes("handsontable-theme")).join("\n");
+
+  for (const name of ["jsxInlineObject", "jsxInlineObjectMultiline"]) {
+    assert.match(code(name), /theme=\{customTheme\}/, `${name}: the prop was not taken over`);
+    assert.doesNotMatch(
+      code(name),
+      /customTheme\}\}/,
+      `${name}: a dangling brace survived the swap — a JSX syntax error, and the bundler answers one by serving the last good bundle`,
+    );
+    assert.doesNotMatch(code(name), /mainTheme/, `${name}: part of the old object was left behind`);
+  }
+
+  for (const name of ["vanillaInlineObject", "vanillaInlineObjectMultiline", "angularInlineObject", "vanillaInlineObjectTernary"]) {
+    assert.equal(results[name].linked, true, `${name}: bailed to the manual hint on a form the panel can wire`);
+    assert.match(code(name), /theme: customTheme,/, `${name}: the setting was not taken over`);
+    assert.doesNotMatch(code(name), /mainTheme/, `${name}: part of the old object was left behind`);
+  }
 });
 
 test("a Unicode line separator cannot break out of the marker comment", { skip }, () => {
