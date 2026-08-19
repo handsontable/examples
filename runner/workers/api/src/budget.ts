@@ -17,6 +17,7 @@
 
 import type { Env } from "./env.js";
 import { loadSettings, type ResolvedBudgetSettings } from "./settings.js";
+import { AWAKE_WINDOW_SECONDS } from "./session-listing.js";
 
 /** Cloudflare Containers rates, USD. https://developers.cloudflare.com/workers/platform/pricing/#containers
  *  Memory and disk bill on *provisioned* size for every second the instance is
@@ -75,15 +76,27 @@ const KV_STATE_KEY = "budget:state";
 const KV_STATE_TTL_SECONDS = 300;
 
 /** Per-session awake-window meter. */
-const KV_METER_PREFIX = "session-meter:";
-const KV_METER_TTL_SECONDS = 60 * 60 * 24;
+export const KV_METER_PREFIX = "session-meter:";
+/** How long a meter key outlives the session it measures. Deliberately far past
+ *  `sleepAfter`: `hasSessionMeter` doubles as the budget subroute gate's "is this
+ *  a session we created" check, and flushes only happen on keepalive ticks from a
+ *  VISIBLE tab, so a shorter TTL would start refusing hidden-then-resumed tabs at
+ *  `anon_blocked`. The admin panel therefore has to filter on liveness (DEV-2567)
+ *  rather than lean on this expiry. */
+export const KV_METER_TTL_SECONDS = 60 * 60 * 24;
 /** Don't write a KV/D1 round trip on every keepalive ping; a session pings
  *  every ~60s while visible and polls every 2.5s while booting. */
 const METER_FLUSH_SECONDS = 60;
 /** A gap between pings longer than the container's own idle window means the
  *  container slept in between and stopped billing — never charge the whole
- *  gap. Must stay >= the `sleepAfter` in index.ts. */
-const MAX_UNSEEN_AWAKE_SECONDS = 300;
+ *  gap. Must stay >= the `sleepAfter` in index.ts.
+ *
+ *  Shared with the admin panel's awake/slept split (DEV-2567), which is a
+ *  threshold on the same quantity for the same reason — a meter quiet for longer
+ *  than this fronts a container that has scaled to zero. One definition, so the
+ *  table and the ledger cannot disagree about where sleep begins. (They can
+ *  still disagree about totals — see `MeterState.billableSeconds`.) */
+const MAX_UNSEEN_AWAKE_SECONDS = AWAKE_WINDOW_SECONDS;
 
 /**
  * Cost of one awake container-second.
@@ -227,13 +240,40 @@ export async function recordTraffic(env: Env, egressBytes: number, requests: num
 // no DELETE) therefore under-counts by at most one idle window — the nightly
 // reconciliation is what closes that gap.
 
-interface SessionMeter {
+export interface SessionMeter {
   startedAt: number;
   meteredThrough: number;
   instanceType: InstanceType;
 }
 
 const meterKey = (sessionId: string) => `${KV_METER_PREFIX}${sessionId}`;
+
+/**
+ * The meter, duplicated into the key's KV list metadata (DEV-2567).
+ *
+ * `KV.list()` returns each key's metadata inline, so the admin panel can page
+ * over every meter and classify each one with ZERO `get` round trips — it used
+ * to spend one KV read per row and was capped at 50 rows partly because of it.
+ * Short field names because metadata is capped at 1024 bytes per key; this is
+ * nowhere near it, but there is no reason to spend the room either.
+ *
+ * A duplicate rather than a move: `get()` stays the source of truth, because a
+ * `list` is eventually consistent and because nothing may make metering depend
+ * on metadata surviving. Any key written before this shipped simply has none, and
+ * `admin.ts` falls back to reading it — a branch that drains itself within one
+ * `KV_METER_TTL_SECONDS`.
+ */
+export interface SessionMeterMetadata {
+  s: number;
+  m: number;
+  i: InstanceType;
+}
+
+const meterMetadata = (meter: SessionMeter): SessionMeterMetadata =>
+  // `instanceType` is defaulted rather than trusted: a meter written before the
+  // field existed round-trips through the spread in `meterSessionUnsafe`, and an
+  // absent instance type would price its row at NaN.
+  ({ s: meter.startedAt, m: meter.meteredThrough, i: meter.instanceType ?? SESSION_INSTANCE_TYPE });
 
 /**
  * Does this session id belong to a session we actually created?
@@ -255,8 +295,10 @@ export async function startSessionMeter(
 ): Promise<void> {
   const now = Date.now();
   const meter: SessionMeter = { startedAt: now, meteredThrough: now, instanceType };
-  await env.CACHE.put(meterKey(sessionId), JSON.stringify(meter), { expirationTtl: KV_METER_TTL_SECONDS })
-    .catch(() => { /* metering is best effort; never fail a session on it */ });
+  await env.CACHE.put(meterKey(sessionId), JSON.stringify(meter), {
+    expirationTtl: KV_METER_TTL_SECONDS,
+    metadata: meterMetadata(meter),
+  }).catch(() => { /* metering is best effort; never fail a session on it */ });
 }
 
 /**
@@ -296,8 +338,12 @@ async function meterSessionUnsafe(
   if (opts.final) {
     await env.CACHE.delete(key).catch(() => { /* TTL cleans it up */ });
   } else {
-    await env.CACHE.put(key, JSON.stringify({ ...meter, meteredThrough: now }), {
+    const ticked: SessionMeter = { ...meter, meteredThrough: now };
+    await env.CACHE.put(key, JSON.stringify(ticked), {
       expirationTtl: KV_METER_TTL_SECONDS,
+      // Re-stamped on every tick, which is what makes the metadata a liveness
+      // clock and not just a copy of the start time.
+      metadata: meterMetadata(ticked),
     }).catch(() => { /* next ping re-books the same slice; capped above */ });
   }
   await recordContainerUsage(env, { instanceType: meter.instanceType, awakeSeconds });
