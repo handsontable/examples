@@ -389,12 +389,12 @@ async function teardownLiveSession(env: Env, sessionId: string): Promise<void> {
   // something that is not there — the create/delete race
   // (packages/runtime/src/container.ts) sends exactly that.
   if (destroyConfirmed(await readTombstone(env, sessionId))) {
-    // Still metered: `closedWhileCreating()` writes the confirmation without
-    // ever metering final, so on that arm this call is the only one that can
-    // close the awake window. A no-op once the meter key is gone
-    // (`meterSessionUnsafe` returns early on a missing meter), which is what
-    // every other writer of this marker leaves behind — the cost of keeping it
-    // is one KV read.
+    // Still metered, even though every writer of a `destroyed` marker now closes
+    // the window itself (`closedWhileCreating()` gained that call in DEV-2567).
+    // Kept as the backstop for the ordering that produced the phantom rows in
+    // the first place: whoever gets here last is the one that can be sure. A
+    // no-op once the meter key is gone — `meterSessionUnsafe` returns early on a
+    // missing meter — so the cost of keeping it is one KV read.
     await meterSession(env, sessionId, { final: true });
     // Keep the marker alive for as long as teardowns keep arriving: it is also
     // what the resurrection gate reads.
@@ -730,6 +730,24 @@ export default Sentry.withSentry(sentryOptions, {
           // it describes the container that actually just went away — which is
           // what makes the client's follow-up DELETE (container.ts sends one
           // when a create finishes after dispose) free instead of a boot.
+          // Close the awake window here, and NOT only in the DELETE handler
+          // (DEV-2567). This arm is reachable in an ordering where the DELETE
+          // never had a meter to close: the tiny keepalive DELETE overtakes the
+          // large POST body, `meterSession(final)` runs against a key that does
+          // not exist yet and returns early, and THEN the create above writes
+          // one via `startSessionMeter`. Nothing deleted it afterwards, so the
+          // meter sat in KV for its full 24h TTL with no container behind it —
+          // one phantom row on /admin per abandoned create, which is what filled
+          // the panel with Angular sessions. Angular because it has the largest
+          // starter payload and the slowest boot, so its create window is by far
+          // the widest, and because it is the only container-engine flavour the
+          // documentation embeds (see KNOWN_DOC_FLAVOURS) — every container
+          // session a docs visitor starts is an Angular one.
+          //
+          // Ordered before the destroy for the reason the DELETE handler is: the
+          // container really did run, and this books the seconds it was awake
+          // (capped at one idle window) instead of dropping them.
+          await meterSession(env, sessionId, { final: true });
           try {
             await sandbox.destroy();
             await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
