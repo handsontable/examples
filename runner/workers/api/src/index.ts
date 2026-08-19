@@ -37,6 +37,7 @@ import {
   TOMBSTONE_DESTROYED,
   TOMBSTONE_TTL_SECONDS,
 } from "./session-lifecycle.js";
+import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
 import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
@@ -1833,8 +1834,10 @@ export default Sentry.withSentry(sentryOptions, {
         const resolved = await lookupSessionRef(env, ref);
         if (!resolved.ok) {
           return resolved.reason === "ambiguous"
-            ? json({ error: "ambiguous_ref", message: "That row matches more than one session; reload the panel." }, 409)
-            : json({ error: "unknown_ref", message: "That session is already gone." }, 404);
+            // Sentence in `error`, not in `message` — see the note on these two
+            // constants: this panel's reader renders `error` and ignores `message`.
+            ? json({ error: refAmbiguousMessage }, 409)
+            : json({ error: refUnknownMessage }, 404);
         }
         await teardownLiveSession(env, resolved.sessionId);
         console.log(`[session] ${identity.email} killed session ${resolved.sessionId} from /admin`);

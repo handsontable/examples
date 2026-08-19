@@ -6,6 +6,8 @@ import {
   frameworkOf,
   pageOf,
   parseSessionQuery,
+  refAmbiguousMessage,
+  refUnknownMessage,
   resolveSessionRef,
   scanTruncated,
   sessionRef,
@@ -222,4 +224,31 @@ test("two ids behind one ref refuse rather than tear down a guess", async () => 
   const ref = await sessionRef(id);
   const result = await resolveSessionRef([id, id], ref);
   assert.deepEqual(result, { ok: false, reason: "ambiguous" });
+});
+
+// ---- what a refused kill actually says ---------------------------------------
+//
+// Bugbot caught this on the branch: the route sent `{error: "ambiguous_ref",
+// message: "<sentence>"}`, and `describeApiFailure` renders `body.error` for
+// every status it does not classify while never reading `message` — so the
+// operator saw the wire code, in the one path added specifically to explain this
+// case. The sentences live here so the contract is pinned somewhere the route
+// cannot be edited away from, the same way `atCapacityMessage` is.
+
+test("a refused kill explains itself in a sentence, not a wire code", () => {
+  for (const copy of [refUnknownMessage, refAmbiguousMessage]) {
+    assert.ok(copy.length > 12, "too short to be an explanation");
+    // Nothing snake_case or SCREAMING: those read as an identifier that leaked.
+    assert.doesNotMatch(copy, /_/, `${copy} looks like a wire code`);
+    assert.doesNotMatch(copy, /^[a-z]+$/, `${copy} looks like a bare token`);
+    // A sentence, so it can sit in an error banner unedited.
+    assert.match(copy, /^[A-Z].*[.!]$/, `${copy} is not a sentence`);
+  }
+});
+
+test("the two refusals do not say the same thing", () => {
+  // 404 and 409 are different situations for the operator: one row is already
+  // gone, the other needs a reload before it can be acted on at all.
+  assert.notEqual(refUnknownMessage, refAmbiguousMessage);
+  assert.match(refAmbiguousMessage, /reload/i);
 });

@@ -224,6 +224,29 @@ export async function sessionRef(sessionId: string): Promise<string> {
   return [...new Uint8Array(hash)].slice(0, 4).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * What an operator is told when a kill cannot be carried out.
+ *
+ * Both go on the envelope as `error`, NOT as `message`, and that is a contract
+ * rather than a preference. `describeApiFailure` in apps/authoring/src/apiError.ts
+ * renders `body.error` as the user-facing sentence for every status it does not
+ * classify (401 and 403 are the only two it does) and never looks at `message` —
+ * `ApiErrorBody` does not even declare the field. Sending `{error: "ambiguous_ref",
+ * message: "…"}` therefore puts the wire code on screen and drops the sentence,
+ * which is exactly what the confirm path was added to avoid. The same pattern is
+ * already how `validateSettings` failures reach this panel.
+ *
+ * `at_capacity` and `budget_exhausted` do the opposite (code in `error`, sentence
+ * in `message`) because their reader is `readFailure`/`sessionStartMessage` in
+ * packages/runtime, not this helper. The rule is the consumer, not the route.
+ *
+ * The status carries the machine-readable distinction these codes used to: 404
+ * for a row that is already gone, 409 for a digest that matches twice. Nothing
+ * matched on the codes themselves.
+ */
+export const refUnknownMessage = "That session is already gone.";
+export const refAmbiguousMessage = "That row matches more than one session; reload the panel.";
+
 export type RefResolution =
   | { ok: true; sessionId: string }
   | { ok: false; reason: "unknown" | "ambiguous" };
