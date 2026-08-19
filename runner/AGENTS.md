@@ -99,7 +99,15 @@ pnpm --filter @handsontable/demo-authoring typecheck
 The `demo-runtime build` is first on purpose: `apps/authoring` typechecks against
 `packages/runtime/dist`, not its source, so a stale `dist` fails on symbols the source has.
 
-What a green E2E run does and does not prove:
+**Testing rules live in [`docs/TESTING.md`](docs/TESTING.md)** — the discipline
+(intent-first, never fake green), the which-test-where table, the env-gate
+taxonomy, and the house assertion idioms — plus the two skills
+(`.claude/skills/runner-test-discipline/`, `.claude/skills/runner-playwright-e2e/`).
+A PR that changes `runner/{apps,packages,workers}/**` source must also change a
+test — machine-enforced by the presence gate (`scripts/check-test-presence.mjs`,
+the `presence` job in `ci.yml`; escape via a `Refactor-only:`/`Test-plan:` trailer).
+
+The quick list — what a green E2E run does and does not prove:
 
 - **The specs that actually mount Sandpack are gated behind `E2E_LIVE=1`.** A default
   `playwright test` skips every one, so a green default run proves nothing about preview

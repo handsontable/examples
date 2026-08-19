@@ -5,10 +5,11 @@ dist
 .DS_Store
 .angular
 
-# editors / tooling
+# editors / tooling — local state stays out, committed skills stay in
 .vscode
 .idea/
-.claude/
+.claude/*
+!.claude/skills/
 
 # local environment
 .env
