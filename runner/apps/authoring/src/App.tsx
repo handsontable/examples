@@ -51,6 +51,7 @@ import { assertApiOk, readApiJson } from "./api.js";
 import { isSessionExpired } from "./apiError.js";
 import { formFooter, ghostButton, primaryButton } from "./formStyles.js";
 import { AdminPanel } from "./Admin.js";
+import { applyDroppedFiles } from "./addFiles.js";
 import { AskAiButton, ChatPanel } from "./Chat.js";
 import { StyleButton, StylePanel } from "./StylePanel.js";
 import { THEME_MODULE_BASENAME } from "./theme/codegen.js";
@@ -2149,12 +2150,16 @@ function Authoring({
    *
    *  Not `addFile` in a loop: that would be one `setFiles` per file — and on a
    *  Tier-2 framework one dev-server rebuild per file, each invalidating the
-   *  last. One state commit, one dirty-set update, then stream the files. */
+   *  last. One state commit, one dirty-set update, then stream the files.
+   *
+   *  The map math lives in `addFiles.ts` under `pipeline/add-files.test.mjs`,
+   *  which also greps this function: one `setFiles`, one ref commit, through
+   *  `applyDroppedFiles`. Keep it that shape. */
   const addFiles = useCallback(
     (dropped: { path: string; contents: string }[]) => {
-      if (!dropped.length) return;
-      const next = { ...filesRef.current };
-      for (const { path, contents } of dropped) next[path] = contents;
+      const next = applyDroppedFiles(filesRef.current, dropped);
+      // Reference-equal means an empty drop: nothing to commit, render or push.
+      if (next === filesRef.current) return;
       filesRef.current = next;
       setFiles(next);
       // Variadic on purpose (see its definition): one call dots every dropped tab.
