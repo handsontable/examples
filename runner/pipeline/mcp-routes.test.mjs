@@ -18,6 +18,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
 
+// register() is synchronous by contract: it blocks until the hooks module's
+// initialize has completed and returns void — nothing to await (node:module
+// docs). The worker imports below are dynamic, so they evaluate strictly
+// after the .js→.ts remap and the sandbox stub are live.
 register("./fixtures/worker-hooks.mjs", import.meta.url);
 
 const { default: worker } = await import("../workers/api/src/index.ts");

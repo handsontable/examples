@@ -206,7 +206,10 @@ test("the update route calls isMcpCreated(), not a re-inlined copy of it", () =>
   assert.ok(start > -1, "the MCP update route exists in index.ts");
   const end = source.indexOf('parts[1] === "demos"', start);
   const route = source.slice(start, end > -1 ? end : undefined);
-  assert.match(route, /isMcpCreated\(/, "the route must gate on the exported predicate");
+  // The code shape, not the name: the route's own comment also says
+  // "isMcpCreated()" in prose, so a bare name-match would stay green with the
+  // guard deleted and the comment left behind (Bugbot, #201).
+  assert.match(route, /!isMcpCreated\(row\)/, "the route must gate on the exported predicate");
   assert.doesNotMatch(
     route,
     /forked_from\?*\.\s*startsWith/,
