@@ -1,10 +1,13 @@
-// The guide's routing and anchor slugs (DEV-2522).
+// The guide's routing and anchor slugs (DEV-2522), and its parity with the
+// product it describes (DEV-2203).
 //
-// Two things are worth pinning here. Routing, because a stale `/guide/<something>`
-// link must land on the overview rather than a blank page. And the anchors, because
+// Three things are worth pinning here. Routing, because a stale `/guide/<something>`
+// link must land on the overview rather than a blank page. The anchors, because
 // the page's contents list and the rendered headings get their ids from the same
 // function by position — if that ordering or the de-duplication drifts, every
-// deeplink in the guide silently scrolls to the wrong section.
+// deeplink in the guide silently scrolls to the wrong section. And the facts,
+// because the guide prints URLs, limits and starter names that live in the
+// product — a number that drifts from its constant is a lie with a byline.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -23,9 +26,28 @@ import {
   isGuideTrackSlug,
   parseGuideRoute,
 } from "../apps/authoring/src/guideTracks.ts";
+import { MAX_MCP_BYTES, MAX_MCP_FILES } from "../workers/api/src/mcp-create.ts";
+import { MAX_DESCRIPTION } from "../workers/api/src/demo-info.ts";
+// Built output, the way version.test.mjs imports it: version.ts pulls in `semver`
+// via `./types.js` specifiers that --experimental-strip-types cannot resolve.
+import { DEFAULT_MAX_MAJOR, DEFAULT_MIN_MAJOR } from "../packages/runtime/dist/version.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const docs = path.join(here, "../docs/guide");
+
+/** Every track plus the overview, read once — the parity tests below scan them all. */
+const DOC_NAMES = [...GUIDE_TRACKS.map((t) => t.slug), "overview"];
+const readDoc = (name) => fs.readFileSync(path.join(docs, `${name}.md`), "utf8");
+
+/** A constant that is not exported (or lives in a module the test runner cannot
+ *  import, like the worker entry) is read out of the source instead — the
+ *  arrangement theme-tokens.test.mjs uses for its generated-file guards. */
+function sourceConst(relPath, name) {
+  const source = fs.readFileSync(path.join(here, relPath), "utf8");
+  const m = source.match(new RegExp(`const ${name} = ([^;]+);`));
+  assert.ok(m, `${relPath} no longer declares ${name} — update the guide and this test`);
+  return m[1];
+}
 
 test("the four tracks are the four routes, least technical first", () => {
   assert.deepEqual(
@@ -222,10 +244,164 @@ test("no HTML entities in the guide's markdown", () => {
   // The renderer prints text verbatim — it builds React elements and never touches
   // innerHTML, which is what makes it safe for model output. So `&mdash;` reaches the
   // reader as "&mdash;". Write the character.
-  for (const name of [...GUIDE_TRACKS.map((t) => t.slug), "overview"]) {
-    const md = fs.readFileSync(path.join(docs, `${name}.md`), "utf8");
+  for (const name of DOC_NAMES) {
+    const md = readDoc(name);
     const found = [...md.matchAll(/&[a-zA-Z]+;/g)].map((m) => m[0]);
     assert.deepEqual(found, [], `${name}.md contains HTML entities: ${found.join(", ")}`);
+  }
+});
+
+// ---- Parity with the product (DEV-2203) --------------------------------------
+//
+// The guide asserts facts about the runner: which URLs open, which limits apply,
+// which starters run where. Those facts live in the product's own files, so the
+// guide is tested against them — a reader pasting an example URL out of the guide
+// must land on a page that exists.
+
+test("every ?docs= URL the guide prints exists in the release bucket", () => {
+  // The bucket the guide's unversioned URLs resolve to: the current release line.
+  const manifest = JSON.parse(
+    fs.readFileSync(
+      path.join(here, "../apps/authoring/public/docs-examples/18.0/manifest.json"),
+      "utf8",
+    ),
+  );
+  const known = new Set(manifest.examples.map((e) => e.docsPath));
+
+  let seen = 0;
+  for (const name of DOC_NAMES) {
+    // The path ends at the next query parameter (`&v=`, `&mode=`), closing
+    // backtick (the URL tables), pipe, or whitespace (the code fences).
+    for (const m of readDoc(name).matchAll(/[?&]docs=([^&\s)`|]+)/g)) {
+      seen += 1;
+      const docsPath = decodeURIComponent(m[1]);
+      assert.ok(
+        known.has(docsPath),
+        `${name}.md prints ?docs=${docsPath}, which is not in the 18.0 bucket`,
+      );
+    }
+  }
+  // The guide leans on ?docs= URLs as the way in — them all vanishing would mean
+  // the extraction regex broke, not that the guide went quiet.
+  assert.ok(seen >= 4, `expected the guide to print ?docs= URLs, found ${seen}`);
+});
+
+test("the guide's numbers are the product's numbers", () => {
+  const all = DOC_NAMES.map(readDoc).join("\n");
+
+  // The MCP caps (everyone.md's "what it will not do", developers.md's limits).
+  assert.match(all, new RegExp(`\\b${MAX_MCP_FILES} (?:text )?files\\b`));
+  assert.match(all, new RegExp(`\\b${MAX_MCP_BYTES / 1024} KB\\b`));
+
+  // The drop ceiling is a different constant than the MCP's (Bugbot, #188):
+  // developers.md says the file drop "stops at N files", and that N is
+  // dropFiles.ts's own MAX_DROP_FILES — the two ceilings can diverge.
+  const maxDrop = Number(sourceConst("../packages/editor-shell/src/dropFiles.ts", "MAX_DROP_FILES"));
+  assert.match(all, new RegExp(`stops at ${maxDrop} files`));
+
+  // The description field's ceiling (support.md's title-and-description section).
+  assert.match(all, new RegExp(`\\b${MAX_DESCRIPTION.toLocaleString("en-US")} characters\\b`));
+
+  // The version range and the bare-integer rule (developers.md). The guide commits
+  // to the exact split: majors read as versions, the refused gap, the PR-ref floor.
+  const minBare = Number(sourceConst("../packages/runtime/src/version.ts", "MIN_BARE_NUMERIC_PKG_PR_NEW_REF"));
+  assert.match(all, new RegExp(`\\*\\*${DEFAULT_MIN_MAJOR}–${DEFAULT_MAX_MAJOR}\\*\\*`));
+  assert.match(all, new RegExp(`≥ ${minBare}\\b`));
+  assert.match(all, new RegExp(`from ${minBare} up`));
+  assert.match(all, new RegExp(`\`${DEFAULT_MAX_MAJOR + 1}\`–\`${minBare - 1}\``));
+
+  // The Theme Builder handover TTL (overview.md's URL table, support.md). The worker
+  // entry cannot be imported here, so the declaration is pinned instead: if the TTL
+  // stops being 24 hours, this fails and the guide gets rewritten with it.
+  assert.equal(sourceConst("../workers/api/src/index.ts", "PAYLOAD_TTL_SECONDS"), "24 * 60 * 60");
+  assert.match(all, /\b24 hours\b/);
+});
+
+test("the guide's starter keys match the catalog", () => {
+  const catalog = JSON.parse(fs.readFileSync(path.join(here, "../catalog.json"), "utf8"));
+  const keys = new Set(catalog.examples.map((e) => e.framework));
+
+  let seen = 0;
+  for (const name of DOC_NAMES) {
+    const md = readDoc(name);
+    // Every ?example= the guide prints must open something.
+    for (const m of md.matchAll(/[?&]example=([A-Za-z0-9.-]+)/g)) {
+      seen += 1;
+      assert.ok(keys.has(m[1]), `${name}.md prints ?example=${m[1]}, which is not a catalog key`);
+    }
+    // The URL table lists alternates as bare code spans next to the ?example= rows
+    // ("also `blank-ts`, `blank-react`") — those are keys too, and rename with them.
+    for (const line of md.split("\n")) {
+      if (!line.includes("?example=")) continue;
+      for (const m of line.matchAll(/`([a-z][a-z0-9.-]*)`/g)) {
+        seen += 1;
+        assert.ok(keys.has(m[1]), `${name}.md lists \`${m[1]}\` as a starter, which is not a catalog key`);
+      }
+    }
+  }
+  assert.ok(seen >= 5, `expected the guide to name starters, found ${seen}`);
+});
+
+test("the guide's container claims match the catalog engines", () => {
+  const catalog = JSON.parse(fs.readFileSync(path.join(here, "../catalog.json"), "utf8"));
+  const byKey = new Map(catalog.examples.map((e) => [e.framework, e]));
+
+  // The names the prose uses, mapped to catalog keys — the display names carry
+  // qualifiers ("React (Vite, JS)") that the slugs do not.
+  const NAME_TO_KEY = [
+    ["Angular", "angular"],
+    ["Next.js", "next.js"],
+    ["Nuxt", "nuxt"],
+    ["Astro", "astro"],
+    ["Remix", "remix"],
+    ["MUI", "mui"],
+    ["Ant Design", "ant-design"],
+    ["Fluent UI", "fluent-ui"],
+    ["Base Web", "base-web"],
+    ["React (Vite, JS)", "react-js"],
+  ];
+  const IN_BROWSER_NAMES = [
+    ["JavaScript", "javascript"],
+    ["TypeScript", "typescript"],
+    ["React", "react"],
+    ["Vue", "vue"],
+  ];
+
+  const md = readDoc("developers");
+  const start = md.indexOf("## Where a demo runs");
+  assert.ok(start >= 0, "developers.md lost its 'Where a demo runs' section");
+  const nextHeading = md.indexOf("\n## ", start + 1);
+  const section = md.slice(start, nextHeading === -1 ? undefined : nextHeading);
+
+  // The catalog's `tier` field does not track the engine split (the UI-library
+  // starters are tier 1 *and* engine "container"), which is exactly how the guide
+  // once drifted. The section speaks in engines; tiers stay out of it.
+  assert.ok(!/tier[- ]?\d/i.test(section), "developers.md claims catalog tiers; speak in engines");
+
+  const split = section.indexOf("**Container**");
+  assert.ok(split >= 0, "developers.md lost its container bullet");
+  const inBrowserPart = section.slice(0, split);
+  const containerPart = section.slice(split);
+
+  let found = 0;
+  for (const [displayName, key] of NAME_TO_KEY) {
+    if (!containerPart.includes(displayName)) continue;
+    found += 1;
+    assert.equal(
+      byKey.get(key)?.engine,
+      "container",
+      `developers.md lists ${displayName} as a container starter, but catalog.json says engine=${byKey.get(key)?.engine}`,
+    );
+  }
+  assert.ok(found >= 9, `expected the container list to name the container starters, found ${found}`);
+
+  for (const [displayName, key] of IN_BROWSER_NAMES) {
+    assert.ok(inBrowserPart.includes(displayName), `the in-browser bullet lost ${displayName}`);
+    assert.equal(
+      byKey.get(key)?.engine,
+      "sandpack",
+      `developers.md lists ${displayName} as in-browser, but catalog.json says engine=${byKey.get(key)?.engine}`,
+    );
   }
 });
 

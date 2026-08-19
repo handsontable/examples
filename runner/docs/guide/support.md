@@ -69,7 +69,9 @@ Signed in, Files also lets you:
   The other direction is **Download**: the whole workspace as a `.zip`, which is how
   you answer with "here is exactly what I ran".
 - **Rename or delete** a file from the row's own controls.
-- **Download** the whole workspace, including your edits, as a `.zip`.
+
+**Download** needs no sign-in at all: the button in the top bar hands anyone the whole
+workspace, including unsaved edits, as a `.zip`.
 
 Two things the drop will refuse, on purpose. **Binaries** — images, fonts, videos,
 archives — because a demo's files are text all the way through to the build, so there
@@ -119,7 +121,7 @@ the demo's own URL is the one to keep.
 
 **All demos** lists everything the team has published, and the **Owner** dropdown
 filters it to one person — the filter is in the URL
-(`/all-demos?owner=marek-martuszewski`), so you can paste the filtered view to
+(`/all-demos?owner=marek.martuszewski`), so you can paste the filtered view to
 somebody.
 
 ![All demos with the Owner dropdown open, listing each teammate and their demo count](/guide/all-demos-owner-filter.jpg)
@@ -128,7 +130,7 @@ somebody.
 
 - **Open** takes you to the read-only playground: read the code, try changes,
   download a `.zip`.
-- **Copy link** gives you the client link, ready to send.
+- **Copy link** gives you the public client link (`/share/<id>`), ready to send.
 - **Fork** gives you your own editable copy.
 
 Rename, save and delete stay with the owner, and an `/edit/` link to a demo that is
@@ -187,10 +189,11 @@ to send.
 - **Save** (on a demo you own) writes your edits and rebuilds the shared page.
 - **Fork** takes whatever is open — a starter, a docs example, someone else's demo, an
   import — and makes it a new demo owned by you.
-- **Share** gives you the links. For a customer, that is the **client link**
-  (`/d/<id>/`): a permanent static page, safe to send, and it costs nothing to keep
-  online because it is built once rather than run live. If they want to read the code,
-  send `/share/<id>` instead.
+- **Share** gives you the links. For a customer, copy the **Public client link**
+  (`/share/<id>`): the read-only playground, safe to send — they see the running demo
+  and can read the code, but cannot save over yours. The dialog's other fields are
+  the full-window view (`/share/<id>?mode=full`) and the docs embed. The bare static
+  page behind them all is `/d/<id>/`, which the playground displays inside itself.
 
 ![The Share this demo dialog listing the client link, the full-window link and the docs embed URL](/guide/share-dialog.jpg)
 

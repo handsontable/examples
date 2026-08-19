@@ -55,8 +55,9 @@ changes and download a `.zip`, but cannot save over yours or change its version.
 article, that is the link for "open this in the playground" under an embed — the embed
 shows the result, the playground shows how.
 
-The **client link** (`/d/<id>/`) cannot be framed at all, on any site. Use it in prose,
-never in an `iframe`.
+The bare demo page (`/d/<id>/`) cannot be framed on any *other* site — it answers with
+`frame-ancestors 'self'`, which is exactly how `/share/<id>` and the full-window view
+display it here. Use it in prose, never in an `iframe` of your own.
 
 ## Full-window preview, for screenshots and recordings
 
@@ -65,7 +66,7 @@ you give it. It works on any starting point, which makes it the tool for a clean
 screenshot or a screen recording:
 
 ```
-https://demos.handsontable.com/?docs=guides/rows/row-sorting/react/example1.tsx&v=18.0.0&mode=full
+https://demos.handsontable.com/?docs=guides/rows/rows-sorting/react/exampleSortingDemo.tsx&v=18.0.0&mode=full
 https://demos.handsontable.com/share/ab12cd34
 ```
 
@@ -87,8 +88,8 @@ live on an older docs branch.
 Any example from the guides opens here directly:
 
 ```
-https://demos.handsontable.com/?docs=guides/columns/column-adding/react/example1.tsx
-https://demos.handsontable.com/?docs=…&v=17.1.0
+https://demos.handsontable.com/?docs=guides/rows/rows-sorting/react/exampleSortingDemo.tsx
+https://demos.handsontable.com/?docs=guides/rows/rows-sorting/react/exampleSortingDemo.tsx&v=18.0.0
 ```
 
 Fork it, extend it into something that carries the article's story — realistic columns,
