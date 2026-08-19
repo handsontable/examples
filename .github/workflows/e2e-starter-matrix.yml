@@ -10,12 +10,12 @@ name: E2E — starter compatibility matrix
 # Anonymous session creation on prod works (the app only sends an Authorization
 # header when a login token exists), so no secrets are required here.
 #
-# Manual, plus a monthly sweep (1st of the month, 05:00 UTC — off-peak for the
-# container pool). It spins ~50 real container sessions; a local run at
-# --workers=2 --retries=2 took ~36 min (46 passed / 27 skipped); allow headroom
-# for CI + flake retries. The monthly cadence exists because this is the only
-# coverage of the full starters × majors surface — weekly would double the
-# container-hours for drift that moves on npm-release timescales (DEV-2203).
+# Manual, plus a nightly sweep (01:00 UTC — deep overnight for the CET team,
+# off-peak for the container pool). It spins ~50 real container sessions per
+# run, metered in the cost ledger — the nightly cadence is an owner decision
+# (Dan: every live-gated test runs every night). A run at --workers=2
+# --retries=2 took ~36 min (46 passed / 27 skipped); allow headroom for CI +
+# flake retries.
 #
 # SINGLE JOB, --workers=2. Do NOT "optimize" this into a parallel matrix: prod
 # caps live-preview Sandboxes at 5 CONCURRENT *globally* (not per-job), so N
@@ -30,11 +30,11 @@ on:
         default: 'https://demos.handsontable.com'
         required: true
   schedule:
-    # Monthly full sweep; schedule events carry no inputs, so the run step
-    # falls back to prod below. 03:00, not 05:00: the weekly e2e-live canary
-    # fires Mondays at 05:00, and a Monday-the-1st must not start both against
-    # the same global pool of five container slots (Bugbot, #189).
-    - cron: '0 3 1 * *'
+    # Nightly full sweep (Dan: all live coverage runs daily overnight);
+    # schedule events carry no inputs, so the run step falls back to prod
+    # below. 01:00 UTC, two hours ahead of the 03:00 e2e-live canary, so the
+    # two never contend for the same global pool of five container slots.
+    - cron: '0 1 * * *'
 
 # Two overlapping runs = 4 workers against the global 5-container cap, leaving
 # real traffic 1 slot. cancel-in-progress: false (opposite of ci.yml) on purpose:
