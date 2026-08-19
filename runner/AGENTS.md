@@ -125,6 +125,13 @@ The quick list — what a green E2E run does and does not prove:
   (`FIXTURE_ID` in the spec — currently `r-react-18-0-0`). Never revoke it; if it is lost,
   mint a replacement titled "E2E fixture — do not revoke" from any signed-in session and
   update the constant.
+- **The authed write round-trip needs `E2E_BROKER_TOKEN`** (`share-create-live.spec.ts`):
+  a fresh `sessionStorage.hot_token` from a signed-in session on the deployed app. Broker
+  tokens expire and cannot be minted programmatically, so the spec self-skips without one
+  and the workflow treats an expired token as a warning, not a failure. It creates one
+  real demo and revokes it in `finally` (the 410 doubles as the revocation assertion).
+- **`E2E_AI=1` gates the live LLM answer checks** (`ai-live.spec.ts`): two API-level calls
+  per run, real budget, shared 8/min-per-IP rate bucket — a 429 skips rather than fails.
 
 ## Build & deploy
 
