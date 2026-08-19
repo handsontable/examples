@@ -51,16 +51,44 @@ const mintId = (tag: string) =>
 const refFor = (sessionId: string): string =>
   createHash("sha256").update(sessionId).digest("hex").slice(0, 8);
 
-/** The panel's own view of what is being metered. Authenticated, so this needs a
- *  loopback API (DEV_AUTH_EMAIL) or an explicit token. */
+/** Every ref the panel is metering, across ALL pages.
+ *
+ *  Paged deliberately rather than read as one `limit=200` page. Rows sort
+ *  oldest-first and `SESSIONS_MAX_PAGE_SIZE` is 200, so on an instance carrying a
+ *  real backlog — the incident that opened DEV-2567 had 202 rows — a
+ *  just-created meter is the LAST row and falls off the first page entirely.
+ *  A `.not.toContain()` assertion against that page passes whether or not the
+ *  meter leaked, which would make the two cases below permanently, invisibly
+ *  green. That is the one failure mode a regression test must not have.
+ */
 async function meteredRefs(request: APIRequestContext): Promise<string[]> {
   const headers = process.env.E2E_BROKER_TOKEN
     ? { Authorization: `Bearer ${process.env.E2E_BROKER_TOKEN}` }
     : undefined;
-  const res = await request.get(`${apiBase}/api/admin/sessions?awake=0&limit=200`, { headers });
-  expect(res.ok(), `admin sessions read failed (${res.status()})`).toBeTruthy();
-  const body = (await res.json()) as { rows: { ref: string }[] };
-  return body.rows.map((r) => r.ref);
+  const limit = 200; // SESSIONS_MAX_PAGE_SIZE; a larger ask is clamped to it
+  const refs: string[] = [];
+  let offset = 0;
+  // Bounded so a miscounted `total` cannot spin forever; 40 pages is 8000 rows,
+  // far past anything 24h of Tier-2 traffic can produce.
+  for (let page = 0; page < 40; page += 1) {
+    const res = await request.get(
+      `${apiBase}/api/admin/sessions?awake=0&limit=${limit}&offset=${offset}`,
+      { headers },
+    );
+    expect(res.ok(), `admin sessions read failed (${res.status()})`).toBeTruthy();
+    const body = (await res.json()) as {
+      rows: { ref: string }[];
+      total: number;
+      truncated: boolean;
+    };
+    // The server could not enumerate the whole prefix, so neither can we, and an
+    // absent ref would prove nothing. Fail rather than conclude.
+    expect(body.truncated, "the KV scan was truncated — this run cannot conclude").toBe(false);
+    refs.push(...body.rows.map((r) => r.ref));
+    if (refs.length >= body.total || body.rows.length === 0) return refs;
+    offset += limit;
+  }
+  throw new Error("admin sessions did not finish paging within the page budget");
 }
 
 test.describe("an abandoned create leaves nothing metered behind", () => {
