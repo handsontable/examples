@@ -221,7 +221,16 @@ let skip = false;
 try {
   results = JSON.parse(runCodegen(SCRIPT).trim().split("\n").at(-1));
 } catch (err) {
-  skip = `codegen could not be executed here: ${err.message.split("\n")[0]}`;
+  // Skip ONLY for the runtime this file documents: a Node that cannot strip
+  // types (< 22.6) refuses the flag before any of our code runs. Everything
+  // else — a throw inside the codegen, a child-process crash, garbage on
+  // stdout — is a regression and must rethrow: `node --test` exits 0 on
+  // skipped tests and CI gates on the exit code alone, so a catch-all here
+  // turns a broken generator (U+2028 guard included) into a green run — the
+  // exact skipped-reads-as-green hazard the symlink comment above records.
+  const failure = `${err.stderr ?? ""}\n${err.message ?? ""}`;
+  if (!/bad option: --experimental-strip-types/.test(failure)) throw err;
+  skip = "codegen could not be executed here: Node lacks --experimental-strip-types (needs >= 22.6)";
 }
 
 const wiringCases = () => Object.entries(results).filter(([name]) => !name.startsWith("__"));

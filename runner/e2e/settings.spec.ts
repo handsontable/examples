@@ -221,6 +221,16 @@ test.describe("/settings", () => {
     // A token swap does not have to go through `logout()` — the broker redirect
     // sets one directly — so the owner check, not just the logout path, is what
     // keeps one user's name off another's screen.
+    //
+    // "Never painted" needs the network held open: with the stubbed GET answering
+    // instantly, a leaked cache paints for one frame and the server corrects it
+    // before an auto-retrying matcher ever samples — which is the *other* test
+    // above ("a stale cache is corrected"), not this one. So the initial GET is
+    // held with the same manual-release promise "typing before the profile
+    // loads" uses, and the assertions run while the fetch is provably pending:
+    // in that window the cache is the only thing that could put a name on screen.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
     await signIn(page);
     await page.addInitScript(() => {
       sessionStorage.setItem(
@@ -236,8 +246,31 @@ test.describe("/settings", () => {
       );
     });
     await stubProfileApi(page);
+    await page.route("**/api/profile", async (route) => {
+      // Hold only the GET; nothing here writes.
+      if (route.request().method() === "GET") await held;
+      await route.fallback();
+    });
 
     await page.goto("/settings");
+    // The page is up — the form renders while the profile is still in flight —
+    // and the mismatched cache put nothing on it.
+    await expect(nameField(page)).toBeVisible();
+    await expect(page.getByText("Someone Else")).toHaveCount(0);
+    await expect(nameField(page)).toHaveValue("");
+
+    // And the released server answer settles on the same emptiness, so the
+    // stranger's name never appears later either. The cache re-keying to the
+    // real owner is what proves the answer landed before the final check.
+    release();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const raw = sessionStorage.getItem("hot_profile");
+          return raw ? (JSON.parse(raw) as { email: string }).email : null;
+        }),
+      )
+      .toBe(EMAIL);
     await expect(page.getByText("Someone Else")).toHaveCount(0);
     await expect(nameField(page)).toHaveValue("");
   });

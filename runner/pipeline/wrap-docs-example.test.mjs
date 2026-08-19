@@ -133,7 +133,11 @@ test("adds the pikaday typings stub for upstream pikaday only", () => {
         "example1.html": "<app-root></app-root>",
       },
       extraDeps: { "@handsontable/pikaday": "1.0.0", moment: "2.30.1" },
-      extraDevDeps: { "@types/moment": "2.13.0" },
+      // The stub is *offered* — as the docs resolver could hand it over — and the
+      // "only" below is the wrapper declining it. With no `@types/pikaday` in the
+      // input, the negative assertion asserted the test's own setup: a regression
+      // that blind-merged every extraDevDeps entry would still have passed it.
+      extraDevDeps: { "@types/pikaday": "1.7.10", "@types/moment": "2.13.0" },
     })["package.json"],
   );
 

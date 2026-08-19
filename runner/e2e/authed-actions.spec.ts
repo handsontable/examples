@@ -53,16 +53,29 @@ async function stubSavedDemo(page: Page) {
  * with no trailing segment on purpose: `**​/api/demos/**` (what `stubSavedDemo`
  * registers) requires a literal `/` after `demos` and so never matches the POST.
  * The two handlers cannot shadow each other.
+ *
+ * `hold` keeps the request in flight until the *test* releases it — a promise,
+ * not a timer, so the in-flight assertions run inside a window that cannot close
+ * on its own. A fixed `holdMs` was a deadline the test had to outrace: cross it
+ * on a loaded CI worker and the mint lands, the pending treatment legitimately
+ * resolves, and the assertion false-fails exactly like the regression it guards.
  */
-async function stubMint(page: Page, holdMs = 0) {
+async function stubMint(page: Page, hold?: Promise<void>) {
   const posts: string[] = [];
   await page.route("**/api/demos", async (route) => {
     posts.push(route.request().postData() ?? "");
-    // A deliberate hold when asked, so the in-flight treatment is observable.
-    if (holdMs) await new Promise((r) => setTimeout(r, holdMs));
+    if (hold) await hold;
     await route.fulfill({ json: { id: MINTED_ID } });
   });
   return posts;
+}
+
+/** A manual-release gate for `stubMint`/`stubInfoPatch` holds — the same
+ *  pattern `settings.spec.ts` uses for its held profile GET. */
+function heldGate() {
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  return { held, release };
 }
 
 const forkButton = (page: Page) => page.getByRole("button", { name: "Fork", exact: true });
@@ -147,32 +160,42 @@ test("the play share icon mints a demo, then opens the same dialog Embed did", a
 // guards this — `forking` and `sharing` are both optional booleans, so wiring
 // the wrong one at the call site still compiles.
 test("the share icon and Fork show their in-flight state", async ({ page }) => {
+  const { held, release } = heldGate();
   await stubShell(page);
   await signIn(page);
-  await stubMint(page, 1500);
+  await stubMint(page, held);
   await page.goto("/?example=react");
 
   await expect(accountAvatar(page)).toBeVisible();
 
   await shareIcon(page).click();
+  // The mint is provably still in flight — the route is awaiting `held` — so the
+  // pending treatment below is a controlled state, not a race against a timer.
   const preparing = page.getByRole("button", { name: "Preparing…" });
   await expect(preparing).toBeVisible();
   await expect(preparing).toBeDisabled();
   await expect(preparing).toHaveCSS("cursor", "default");
-  // …and it resolves back rather than sticking.
+
+  // …and it resolves back rather than sticking, once the mint is allowed to land.
+  release();
   await expect(shareDialog(page)).toBeVisible();
   await expect(shareIcon(page)).toBeEnabled();
 });
 
 test("Fork shows its in-flight state and is driven by `forking`, not `sharing`", async ({ page }) => {
+  const { held, release } = heldGate();
   await stubShell(page);
   await signIn(page);
-  await stubMint(page, 1500);
+  // Fork's success path navigates to `/edit/:id`; stub the saved-demo reads so
+  // releasing the mint at the end lands somewhere the harness answers.
+  await stubSavedDemo(page);
+  await stubMint(page, held);
   await page.goto("/?example=react");
 
   await expect(accountAvatar(page)).toBeVisible();
 
   await forkButton(page).click();
+  // Held, so everything below is asserted while the fork is genuinely pending.
   const creating = page.getByRole("button", { name: "Creating…" });
   await expect(creating).toBeVisible();
   await expect(creating).toBeDisabled();
@@ -181,6 +204,10 @@ test("Fork shows its in-flight state and is driven by `forking`, not `sharing`",
   // The regression this guards: while Fork is in flight the *share* icon must
   // stay live. Before T10 one flag drove both under two different names.
   await expect(shareIcon(page)).toBeEnabled();
+
+  // Let the mint land so the test ends with no route left hanging.
+  release();
+  await expect(page.getByRole("button", { name: "Creating…" })).toHaveCount(0);
 });
 
 test("signed-in edit swaps Fork for Save and shares without minting", async ({ page }) => {
@@ -289,14 +316,15 @@ test("Ctrl+S does not save the workspace from under an open dialog", async ({ pa
 /** Routes PATCH on the demo, recording the bodies. `fallback()` for everything
  *  else so `stubSavedDemo`'s GET handler still answers the page load.
  *
- *  `holdMs` keeps the request in flight, which is the only way to observe the
- *  dialog's busy state from outside. */
-async function stubInfoPatch(page: Page, { status = 200, holdMs = 0 } = {}) {
+ *  `hold` keeps the request in flight until the test releases it — which is the
+ *  only way to observe the dialog's busy state from outside *and* know it is
+ *  the busy state being observed (see `stubMint` on why not a timer). */
+async function stubInfoPatch(page: Page, { status = 200, hold }: { status?: number; hold?: Promise<void> } = {}) {
   const patches: Array<Record<string, unknown>> = [];
   await page.route(`**/api/demos/${DEMO_ID}`, async (route) => {
     if (route.request().method() !== "PATCH") return route.fallback();
     patches.push(JSON.parse(route.request().postData() ?? "{}"));
-    if (holdMs) await new Promise((r) => setTimeout(r, holdMs));
+    if (hold) await hold;
     return status === 200
       ? route.fulfill({ json: { ok: true } })
       : route.fulfill({ status, json: { error: "save failed" } });
@@ -363,10 +391,11 @@ test("the workspace save sends the code only, never the metadata", async ({ page
 });
 
 test("the Edit info dialog cannot be dismissed mid-save", async ({ page }) => {
+  const { held, release } = heldGate();
   await stubShell(page);
   await stubSavedDemo(page);
   await signIn(page);
-  await stubInfoPatch(page, { holdMs: 1500 });
+  await stubInfoPatch(page, { hold: held });
 
   await page.goto(`/edit/${DEMO_ID}?edit=info`);
   const dialog = page.getByRole("dialog", { name: "Edit info" });
@@ -376,11 +405,14 @@ test("the Edit info dialog cannot be dismissed mid-save", async ({ page }) => {
   // Escape, the scrim and the X all route to one `onClose` that `Dialog` fires
   // without knowing a request is out. Unmounting here would leave a failure with
   // nowhere to report and a late success applying after the user asked to leave.
+  // The write is provably still in flight — the route is awaiting `held` — so a
+  // closed dialog here can only mean the guard is gone, never a fast save.
   await page.keyboard.press("Escape");
   await expect(dialog).toBeVisible();
 
   // It closes on its own once the write lands — the guard is about *when*, not a
   // dialog that traps the user.
+  release();
   await expect(dialog).toBeHidden();
 });
 
