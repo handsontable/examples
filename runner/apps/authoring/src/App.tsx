@@ -29,7 +29,11 @@ import {
   type FilesMap,
   type WriteFileOptions,
 } from "@handsontable/demo-runtime";
-import { SandpackRuntime, SandpackEvaluationError } from "@handsontable/demo-runtime/sandpack";
+import {
+  SandpackRuntime,
+  isCompilerUnavailable,
+  rearmCompilerLoad,
+} from "@handsontable/demo-runtime/sandpack";
 import { ContainerRuntime, ContainerBootFailure, SessionStartError, isBudgetRefusal } from "@handsontable/demo-runtime/container";
 import { zipSync, strToU8 } from "fflate";
 import { catalog, getEntry, fetchVersions, checkVersionExists, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
@@ -61,6 +65,7 @@ import { SettingsPage } from "./Settings.js";
 import { useProfile } from "./useProfile.js";
 import { monitorDemos, reportDemoEvent, reportError, reportingEnabled, Sentry } from "./sentry.js";
 import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
+import { tier1Report } from "./tier1Report.js";
 
 const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefined;
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
@@ -133,6 +138,13 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
   // server already phrased it for users — never rewrite it as a connectivity
   // problem, which is what the heuristic below would do with a 503.
   if (isBudgetRefusal(e)) return e.message;
+  // Our own compiler chunk never arrived (DEV-2569). Worded without asserting a cause we
+  // cannot prove: a rotated-out asset after a deploy and a blocked or offline fetch are
+  // indistinguishable from here, and both are cured by the same two actions. Deliberately
+  // avoids the words the connectivity heuristic below matches on ("fetch", "load failed").
+  if (isCompilerUnavailable(e)) {
+    return "The preview compiler could not be downloaded, so this example cannot be built. Restart the preview to try again, or reload the page — a tab left open across a deployment has to reload to pick up the current version.";
+  }
   const msg = e instanceof Error ? e.message : String(e);
   // ⚠ This heuristic REPLACES the runtime's message, so every alternative below is a
   // contract with whoever writes those messages. `sessionStartMessage` in
@@ -188,26 +200,37 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
   // relayed: `Sentry.captureException` below keeps the engine tag and the fingerprint
   // rules that follow.
   if (engine !== "container") {
-    if (!monitorDemos) return;
-    // One owner per class of failure (DEV-2552). A throw from a module that had already
-    // started evaluating belongs to the in-preview reporter, which files it with the
-    // preview's own stack, the tier, the framework and the demo id — everything this
-    // path lacks. Reporting it here as well filed one fault as two more issues, under a
-    // stack (`SandpackRuntime.onMessage`) that points at us rather than at the demo.
-    //
-    // What is left below is exactly the class the reporter structurally cannot see: a
-    // bundler diagnostic for a module that never ran, so nothing inside the preview ever
-    // threw. The `sandpack-compile` tag and the flat fingerprint become accurate at that
-    // point — a transpile message is the visitor's own source, which default grouping
-    // would shard into an issue per typo.
-    if (e instanceof SandpackEvaluationError) return;
-    Sentry.captureException(e, {
-      tags: { surface: "demo-runtime", kind: "sandpack-compile", tier: "1" },
-      // Flat, like ContainerBootFailure's: a compile error's text is the example's
-      // own source, so default grouping would shard one class of failure into an
-      // issue per typo. Individual messages stay readable as samples on the issue.
-      fingerprint: ["demo-runtime", "sandpack-compile"],
-      level: "warning",
+    // Every rule for this branch — which failures are reported at all, how they group, and
+    // what the issue is titled — lives in `tier1Report.ts` so it can be unit-tested; this
+    // file cannot be imported by `node --test`. Two of those rules used to be inline here
+    // and are worth naming: the DEV-2552 stand-down for a throw the in-preview reporter
+    // already owns, and the DEV-2527 `monitorDemos` gate, which the compiler-asset branch
+    // deliberately sits ahead of (DEV-2569).
+    const report = tier1Report({
+      name: e instanceof Error ? e.name : "",
+      message: e instanceof Error ? e.message : String(e),
+      compilerUnavailable: isCompilerUnavailable(e),
+      assetUrl: e instanceof Error ? (e as { assetUrl?: string | null }).assetUrl ?? null : null,
+      causeMessage: e instanceof Error && e.cause instanceof Error ? e.cause.message : null,
+      replay: e instanceof Error && (e as { replay?: boolean }).replay === true,
+      online: navigator.onLine,
+      monitorDemos,
+    });
+    if (!report) return;
+    // Captured as a fresh error rather than `e`, and this is the whole of DEMOS-15's second
+    // defect: a Sentry issue takes its title from `name: message` and re-derives it on every
+    // new event, so a per-event message on a flat fingerprint means the issue is titled after
+    // whichever sample arrived last — a visitor's typo, or one deploy's hashed chunk name.
+    // The real text goes to `extra`, which takes no part in grouping or titling. The stack
+    // being dropped costs nothing: it was `SandpackRuntime.onMessage`, which points at us
+    // rather than at the failure.
+    const titled = new Error(report.synthesizeAs.message, { cause: e });
+    titled.name = report.synthesizeAs.name;
+    Sentry.captureException(titled, {
+      tags: report.tags,
+      fingerprint: report.fingerprint,
+      level: report.level,
+      extra: report.extra,
     });
     return;
   }
@@ -1998,6 +2021,12 @@ function Authoring({
    *  failure exits the container's dev server, and streaming the fixed file into a
    *  container with no dev server changes nothing. Only a new session re-runs it. */
   const retryPreview = useCallback(() => {
+    // The Tier-1 compiler loader stops retrying after two failed fetches (DEV-2569) so a
+    // stranded tab cannot burn 3 MB per keystroke. This is the one thing that lifts that:
+    // an explicit request buys one more pair of attempts, so a visitor whose network came
+    // back recovers without reloading and losing unsaved edits. A rotated-out chunk fails
+    // again at once, which is what leaves the reload as the only cure for that case.
+    rearmCompilerLoad();
     setStatus("booting");
     setErrorMessage(null);
     setBootLog("");
