@@ -94,8 +94,16 @@ test("a demo shared today is a page a client can open — until it is revoked", 
   // The textbox role, not getByLabel: the field's copy button is named
   // "Copy Public client link" and would collide under strict mode.
   const clientLink = await dialog.getByRole("textbox", { name: /client link/i }).inputValue();
-  expect(demoId, "the mint response carried a demo id").toBeTruthy();
-  expect(clientLink, "the dialog's client link names the minted demo").toContain(demoId!);
+
+  // The wire capture is un-awaited and its json read is best-effort — if it
+  // lost the race, a demo would exist (the dialog is showing its link) while
+  // afterEach saw null and skipped the revoke (Bugbot, #186). The link is the
+  // recovery path: whichever source answers, afterEach ends up owning the id
+  // of any demo that now exists.
+  const linkId = new URL(clientLink).pathname.split("/").filter(Boolean).pop() ?? null;
+  demoId ??= linkId;
+  expect(demoId, "a demo id, from the mint response or the dialog's link").toBeTruthy();
+  expect(linkId, "the dialog's client link names the minted demo").toBe(demoId);
 
   // The built page renders for an anonymous client (fresh context state not
   // needed — /d is public and static, cookies play no part).
