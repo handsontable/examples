@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   COMPILER_UNAVAILABLE_MESSAGE,
   CompilerUnavailableError,
+  asBabel,
   assetUrlFrom,
   createLazyLoader,
   createRetryingLoader,
@@ -217,4 +218,94 @@ test("isCompilerUnavailable is a marker check, not a message sniff", () => {
   );
   assert.equal(isCompilerUnavailable(null), false);
   assert.equal(isCompilerUnavailable("compiler"), false);
+});
+
+// DEV-2569, second pass. The retry mechanism above was shipped and did not recover: it
+// resolved, and the next compile died as `e.transform is not a function`.
+//
+// The two import sites in transpile.ts are byte-identical in source and are not identical in
+// the bundle. Vite rewrites only the bare specifier, and @babel/standalone is CJS, so the
+// primary gets an interop hop that `@vite-ignore` suppresses on the retry. Measured in the
+// deployed bundle (/assets/index-uxATgr1X.js, 2026-08-20):
+//
+//   primary:  import("./babel-<hash>.js").then(t => t.b).then(t => t.default ?? t)
+//   retry:    import(`${url}?hotRetry=1`).then(o => o.default ?? o)
+//
+// and the chunk exported only that wrapper — `export { Hke as b }`, Hke being Vite's
+// `_mergeNamespaces({__proto__: null, default: babel}, [cjs])`. So the retry resolved the raw
+// record `{b: {…}}` and `m.default ?? m` returned the record itself. In-page probe against
+// that bundle: nsKeys ["b"], hasTransform "undefined", viaB "function".
+//
+// None of this is visible from here — these tests import `packages/runtime/dist`, where both
+// paths really are equivalent, which is why the ten tests above were green over a broken
+// retry. What *is* testable from here is the rule that makes the shapes interchangeable, so
+// these cases fix the three measured shapes as the contract. The bundle itself is pinned by
+// `scripts/check-compiler-chunk.mjs` and by preview-recovery.spec.ts, which run against a build.
+
+/** Stands in for the babel object. Identity is the assertion: `asBabel` must return *this*,
+ *  not some wrapper that merely happens to expose a `transform`. */
+const babelStub = { transform: () => ({ code: "" }) };
+
+/** A module namespace: null-prototype and frozen, the way both bundlers and the engine make
+ *  them — a plain object would let a `default` lookup fall through to Object.prototype. */
+const ns = (props) => Object.freeze({ __proto__: null, ...props });
+
+test("asBabel resolves the shape the bundled retry receives (no interop hop)", () => {
+  const record = ns({ b: ns({ default: babelStub, transform: babelStub.transform }) });
+  assert.equal(asBabel(record), babelStub, "the wrapper is not the compiler");
+});
+
+test("asBabel does not depend on the bundler's export name", () => {
+  // `b` is Rollup's, pinned by nothing. A rename must not strand the retry again.
+  assert.equal(asBabel(ns({ zQ7: ns({ default: babelStub }) })), babelStub);
+});
+
+test("asBabel keeps resolving the two shapes that already worked", () => {
+  // The bundled primary, after Vite's `.then(t => t.b)` hop.
+  assert.equal(asBabel(ns({ default: babelStub })), babelStub);
+  // Node/dist, where the namespace re-exports the CJS members alongside `default`.
+  assert.equal(
+    asBabel(ns({ default: babelStub, transform: babelStub.transform })),
+    babelStub,
+    "`default` is preferred at every level, so the primary path resolves what it does today",
+  );
+});
+
+test("a module with no transform() is a compiler failure, and keeps its URL", async () => {
+  // The SPA fallback answers a rotated chunk with `200 text/html`; a module that parses but
+  // exposes no compiler is the same class of event. It must not be left to surface downstream
+  // inside babel.transform, where tier1Report files it in the visitor-source bucket as if it
+  // were a typo — that is what this defect did in production.
+  const { load } = createRetryingLoader(
+    async () => asBabel(ns({}), CHUNK),
+    () => null,
+    wrap,
+  );
+
+  const e = await load().catch((err) => err);
+  assert.ok(isCompilerUnavailable(e), "ours to fix, not the visitor's");
+  assert.equal(e.message, COMPILER_UNAVAILABLE_MESSAGE);
+  assert.equal(e.assetUrl, CHUNK, "the URL has to ride in the thrown message to survive here");
+});
+
+test("a bad-shape resolution is retried against a fresh URL and recovers", async () => {
+  // The whole point: the retry now yields a usable compiler instead of a wrapper.
+  const asked = [];
+  const { load } = createRetryingLoader(
+    async () => {
+      asked.push(CHUNK);
+      return asBabel(ns({}), CHUNK);
+    },
+    (cause, generation) => {
+      const url = assetUrlFrom(cause);
+      if (!url) return null;
+      const spec = `${url}?hotRetry=${generation + 1}`;
+      asked.push(spec);
+      return Promise.resolve(asBabel(ns({ b: ns({ default: babelStub }) }), spec));
+    },
+    wrap,
+  );
+
+  assert.equal(await load(), babelStub);
+  assert.deepEqual(asked, [CHUNK, `${CHUNK}?hotRetry=1`]);
 });

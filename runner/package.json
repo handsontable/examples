@@ -16,6 +16,7 @@
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm --filter @handsontable/demo-runtime build && node --experimental-strip-types --test pipeline/*.test.mjs",
     "e2e": "playwright test",
+    "check:compiler-chunk": "node scripts/check-compiler-chunk.mjs",
     "e2e:matrix": "E2E_STARTER_MATRIX=1 PLAYWRIGHT_JSON_OUTPUT_NAME=test-results/starter-matrix.json playwright test e2e/starter-matrix.spec.ts --workers=2 --retries=2 --reporter=list,json",
     "e2e:matrix:report": "node scripts/starter-matrix-report.mjs"
   },
