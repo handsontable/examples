@@ -148,6 +148,20 @@ test("is idempotent", () => {
   assert.equal(twice[HTML_ENTRY], once[HTML_ENTRY]);
 });
 
+test("the head injection adds no whitespace of its own", () => {
+  // DEV-2580: the reporter goes into the head of a document the framework's server
+  // already rendered, and a React 18 hydrator that owns the document strict-matches
+  // head children. The newline that used to sit in front of the tag is a text node
+  // there, and it is as fatal as the script element the tag now removes — measured
+  // on the remix starter, each one reproduces React #418 alone. Mirrors the same
+  // assertion in `scheme-bridge.test.mjs`: without it, half of the fix can be
+  // reverted and ship a green suite.
+  const out = injectReporterIntoHtml(HTML);
+  assert.match(out, /<head[^>]*><script>/);
+  assert.doesNotMatch(injectReporterIntoHtml("<body><div id=root></div></body>"), /<body[^>]*>\s/);
+  assert.ok(injectReporterIntoHtml("<div id=root></div>").endsWith("<div id=root></div>"));
+});
+
 test("falls back to body, then to a prepend, when there is no head", () => {
   const bodyOnly = injectReporterIntoHtml("<body><div id=root></div></body>");
   assert.ok(bodyOnly.startsWith("<body>"), "body tag stays first");

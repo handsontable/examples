@@ -177,8 +177,9 @@ test("Tier 2 drops a now-wrong Content-Length", async () => {
 /** A document stub with constructible-stylesheet support, and a real enough
  *  `adoptedStyleSheets` to catch the ObservableArray trap: assignment works,
  *  `concat`/`filter` do not exist on it. */
-function makeSchemeStubs({ constructible = true, breakConstructor = false } = {}) {
+function makeSchemeStubs({ constructible = true, breakConstructor = false, breakReplaceAfter = null } = {}) {
   const created = [];
+  let replaced = 0;
   class FakeSheet {
     constructor() {
       if (breakConstructor) throw new Error("no constructible stylesheets here");
@@ -186,6 +187,8 @@ function makeSchemeStubs({ constructible = true, breakConstructor = false } = {}
       created.push(this);
     }
     replaceSync(text) {
+      replaced += 1;
+      if (breakReplaceAfter !== null && replaced > breakReplaceAfter) throw new Error("replaceSync refused");
       this.cssText = text;
     }
   }
@@ -300,3 +303,17 @@ for (const [name, options] of [
     assert.equal(h.elements.length, 0);
   });
 }
+
+test("a replaceSync that starts failing hands over cleanly, leaving one carrier", () => {
+  // Otherwise the adopted sheet keeps the previous mode, outranks the fallback
+  // element that replaces it, and no later message can clear it.
+  const h = makeSchemeStubs({ breakReplaceAfter: 1 });
+  h.send("dark");
+  assert.equal(h.adopted().length, 1);
+  h.send("light");
+  assert.deepEqual(h.adopted(), [], "the stale sheet must be detached");
+  assert.equal(h.elements.length, 1);
+  assert.match(h.elements[0].textContent, /color-scheme:light !important/);
+  h.send("auto");
+  assert.equal(h.elements.length, 0, "the fallback stays removable");
+});

@@ -99,9 +99,11 @@ export const SCHEME_STYLE_ID = "hot-runner-scheme";
  * blanking it, so "no override" stays observable from the outside.
  *
  * Once the adopted path has failed the receiver latches onto the fallback for the
- * life of the document (`adoptable`). Without the latch, a `<style>` created because
- * the constructor threw is never taken away again: `auto` reaches the adopted branch,
- * finds no sheet of ours, reports success, and leaves the override in place.
+ * life of the document (`fallbackOnly`). Without the latch, a `<style>` created
+ * because the constructor threw is never taken away again: `auto` reaches the adopted
+ * branch, finds no sheet of ours, reports success, and leaves the override in place.
+ * A failure *after* a sheet was already adopted detaches it on the way out, so the
+ * two carriers can never both hold a mode.
  *
  * The `<style>` fallback is kept for a browser without constructible stylesheets
  * (older Safari, where `new CSSStyleSheet()` throws): there, the toggle keeps
@@ -121,7 +123,7 @@ export const SCHEME_RECEIVER_SOURCE = `(function () {
   var STYLE_ID = ${JSON.stringify(SCHEME_STYLE_ID)};
   var SOURCE = ${JSON.stringify(SCHEME_MESSAGE_TYPE)};
   var sheet = null;
-  var adoptable = null;
+  var fallbackOnly = false;
   function rule(mode) {
     return '[class*="ht-theme-"]{color-scheme:' + mode + ' !important;}';
   }
@@ -143,7 +145,15 @@ export const SCHEME_RECEIVER_SOURCE = `(function () {
       if (at !== -1) { sheets.splice(at, 1); document.adoptedStyleSheets = sheets; }
       return true;
     }
-    try { sheet.replaceSync(rule(mode)); } catch (e) { return false; }
+    try {
+      sheet.replaceSync(rule(mode));
+    } catch (e) {
+      // Detach on the way out. An adopted sheet left carrying the *previous* mode
+      // outranks the fallback element that is about to be created, so the stale
+      // scheme would win and no later message could clear it.
+      if (at !== -1) { sheets.splice(at, 1); document.adoptedStyleSheets = sheets; }
+      return false;
+    }
     if (at === -1) { sheets.push(sheet); document.adoptedStyleSheets = sheets; }
     return true;
   }
@@ -161,8 +171,8 @@ export const SCHEME_RECEIVER_SOURCE = `(function () {
     el.textContent = rule(mode);
   }
   function apply(mode) {
-    if (adoptable !== false && canAdopt() && applyAdopted(mode)) { adoptable = true; return; }
-    adoptable = false;
+    if (!fallbackOnly && canAdopt() && applyAdopted(mode)) { return; }
+    fallbackOnly = true;
     applyElement(mode);
   }
   window.addEventListener('message', function (event) {

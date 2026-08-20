@@ -25,7 +25,10 @@
 //   node runner/scripts/ssr-hydration-probe.mjs --inject=none      # the control
 //   node runner/scripts/ssr-hydration-probe.mjs --mode=auto        # shell stands down
 //
-// Exit code 1 when the frame reported a hydration error, so it can gate a bisect.
+// Exit code 1 when the frame reported a hydration error — and equally when the run
+// proved nothing: no grid, or (outside `--mode=auto`) no override. A probe that
+// answers "clean" for a 404 page, a mistyped `--inject`, or a demo that never
+// mounted is a green bisect step over a run that never happened.
 
 import http from "node:http";
 import { chromium } from "@playwright/test";
@@ -66,11 +69,21 @@ const server = http.createServer(async (req, res) => {
     res.end(SHELL);
     return;
   }
-  const upstream = await fetch(UPSTREAM + req.url, {
-    method: req.method,
-    headers: { ...req.headers, host: new URL(UPSTREAM).host },
-    redirect: "manual",
-  });
+  let upstream;
+  try {
+    upstream = await fetch(UPSTREAM + req.url, {
+      method: req.method,
+      headers: { ...req.headers, host: new URL(UPSTREAM).host },
+      redirect: "manual",
+    });
+  } catch (error) {
+    // A refused upstream is a probe misconfiguration, not a hydration result. Answer
+    // it so the verdict below reports "no grid mounted" instead of the process dying
+    // on an unhandled rejection halfway through the run.
+    res.writeHead(502, { "content-type": "text/plain" });
+    res.end(`probe: ${UPSTREAM} refused the request (${error.message}) — is the starter serving?`);
+    return;
+  }
   const headers = Object.fromEntries(upstream.headers.entries());
   // Same two reasons the real seam has: the body is replaced, so a stale length is
   // a truncated page; and `fetch` already decoded the payload.
@@ -92,48 +105,68 @@ const server = http.createServer(async (req, res) => {
 await new Promise((resolve) => server.listen(PORT, resolve));
 console.log(`probing ${UPSTREAM} through :${PORT}  inject=${INJECT} mode=${MODE}`);
 
-const browser = await chromium.launch();
-const page = await browser.newPage();
-const messages = [];
-page.on("console", (m) => messages.push(`[${m.type()}] ${m.text()}`));
-page.on("pageerror", (e) => messages.push(`[pageerror] ${e.message.split("\n")[0]}`));
-await page.goto(`http://127.0.0.1:${PORT}/__shell`, { waitUntil: "load" });
-const frame = page.frames().find((f) => f !== page.mainFrame());
-await frame?.waitForLoadState("load").catch(() => {});
-// The grid mounts after hydration, and a mismatch is reported during it. Long
-// enough to see both without polling for something a broken run never reaches.
-await page.waitForTimeout(6000);
+let browser;
+try {
+  browser = await chromium.launch();
+  const page = await browser.newPage();
+  const messages = [];
+  page.on("console", (m) => messages.push(`[${m.type()}] ${m.text()}`));
+  page.on("pageerror", (e) => messages.push(`[pageerror] ${e.message.split("\n")[0]}`));
+  await page.goto(`http://127.0.0.1:${PORT}/__shell`, { waitUntil: "load" });
+  const frame = page.frames().find((f) => f !== page.mainFrame());
+  if (!frame) throw new Error("the shell rendered no preview frame");
+  await frame.waitForLoadState("load").catch(() => {});
+  // The grid mounts after hydration, and a mismatch is reported during it. Long
+  // enough to see both without polling for something a broken run never reaches.
+  await page.waitForTimeout(6000);
 
-const state = await frame.evaluate(() => {
-  const cell = document.querySelector(".handsontable td, .htCore td");
-  return {
-    head: Array.from(document.head.children)
-      .map((el) => el.tagName.toLowerCase() + (el.id ? `#${el.id}` : ""))
-      .join(","),
-    // Both carriers of the override: the adopted sheet (what ships) and the
-    // `<style>` fallback (older Safari).
-    adopted: Array.from(document.adoptedStyleSheets ?? [])
-      .flatMap((sheet) => Array.from(sheet.cssRules).map((rule) => rule.cssText))
-      .join(""),
-    styleElement: document.getElementById("hot-runner-scheme")?.textContent ?? null,
-    grid: !!document.querySelector(".handsontable, .ht-wrapper, .htCore"),
-    // The scheme is only observable as colour: a green hydration run with a grid
-    // that never flipped is the silent no-op this line exists to catch.
-    cell: cell ? getComputedStyle(cell).backgroundColor : null,
-  };
-});
+  const state = await frame.evaluate(() => {
+    const cell = document.querySelector(".handsontable td, .htCore td");
+    return {
+      head: Array.from(document.head.children)
+        .map((el) => el.tagName.toLowerCase() + (el.id ? `#${el.id}` : ""))
+        .join(","),
+      // Both carriers of the override: the adopted sheet (what ships) and the
+      // `<style>` fallback (older Safari).
+      adopted: Array.from(document.adoptedStyleSheets ?? [])
+        .flatMap((sheet) => Array.from(sheet.cssRules).map((rule) => rule.cssText))
+        .join(""),
+      styleElement: document.getElementById("hot-runner-scheme")?.textContent ?? null,
+      grid: !!document.querySelector(".handsontable, .ht-wrapper, .htCore"),
+      // The scheme is only observable as colour: a green hydration run with a grid
+      // that never flipped is the silent no-op this line exists to catch.
+      cell: cell ? getComputedStyle(cell).backgroundColor : null,
+    };
+  });
 
-// React minifies these in a built starter: #418 is the mismatch, #423 the
-// "switching the whole root to client rendering" that follows it.
-const hydration = messages.filter((m) => /Hydration failed|invariant=(418|423)/.test(m));
+  // React minifies these in a built starter: #418 is the mismatch, #423 the
+  // "switching the whole root to client rendering" that follows it.
+  const hydration = messages.filter((m) => /Hydration failed|invariant=(418|423)/.test(m));
 
-console.log("--- console");
-for (const m of messages) console.log(m.slice(0, 200));
-console.log("--- head        :", state.head);
-console.log("--- override    :", state.adopted || state.styleElement || "(none)");
-console.log("--- grid / cell :", state.grid, state.cell);
-console.log("--- hydration   :", hydration.length ? `${hydration.length} error(s)` : "clean");
+  console.log("--- console");
+  for (const m of messages) console.log(m.slice(0, 200));
+  console.log("--- head        :", state.head);
+  console.log("--- override    :", state.adopted || state.styleElement || "(none)");
+  console.log("--- grid / cell :", state.grid, state.cell);
+  console.log("--- hydration   :", hydration.length ? `${hydration.length} error(s)` : "clean");
 
-await browser.close();
-server.close();
-process.exit(hydration.length ? 1 : 0);
+  // `auto` is the shell standing down, so no override is the expected result there.
+  const override = state.adopted || state.styleElement;
+  const unproven = [
+    hydration.length ? `${hydration.length} hydration error(s)` : null,
+    state.grid ? null : "no grid mounted — is the upstream serving the demo?",
+    MODE === "auto" || override ? null : `no colour-scheme override for mode=${MODE}`,
+  ].filter(Boolean);
+  if (unproven.length) {
+    console.log("--- FAIL        :", unproven.join("; "));
+    process.exitCode = 1;
+  } else {
+    console.log("--- PASS        : hydration clean, grid mounted, override as expected");
+  }
+} finally {
+  // Both closers in a `finally`: the http server keeps the event loop alive, so an
+  // evaluate error or a chromium crash would hang the terminal mid-bisect instead of
+  // printing why.
+  await browser?.close();
+  server.close();
+}
