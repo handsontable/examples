@@ -43,8 +43,15 @@ const arg = (name, fallback) => {
 const UPSTREAM = arg("upstream", "http://127.0.0.1:3199");
 const PORT = Number(arg("port", "3300"));
 // `both` is production (MONITOR_DEMOS=1 on the prod host); the single-injector
-// modes are how you attribute a failure to one of them.
+// modes are how you attribute a failure to one of them, and `none` is the control.
+// Rejected rather than defaulted when unknown: a typo that silently injects nothing
+// reads as a clean baseline, which is the one answer this script must never fake.
+const INJECTIONS = ["both", "monitor", "scheme", "none"];
 const INJECT = arg("inject", "both");
+if (!INJECTIONS.includes(INJECT)) {
+  console.error(`--inject=${INJECT} is not one of ${INJECTIONS.join(", ")}`);
+  process.exit(2);
+}
 // What the fake shell answers `ready` with. `light`/`dark` install the override,
 // `auto` is the shell standing down — and the override is the second head writer,
 // so both directions matter.
@@ -150,18 +157,22 @@ try {
   console.log("--- grid / cell :", state.grid, state.cell);
   console.log("--- hydration   :", hydration.length ? `${hydration.length} error(s)` : "clean");
 
-  // `auto` is the shell standing down, so no override is the expected result there.
+  // An override is only expected when a receiver was actually injected and the shell
+  // asked for a side: `--inject=none|monitor` is the control, and `--mode=auto` is the
+  // shell standing down. Demanding one there would fail the baseline run.
   const override = state.adopted || state.styleElement;
+  const wantsOverride = (INJECT === "both" || INJECT === "scheme") && MODE !== "auto";
   const unproven = [
     hydration.length ? `${hydration.length} hydration error(s)` : null,
     state.grid ? null : "no grid mounted — is the upstream serving the demo?",
-    MODE === "auto" || override ? null : `no colour-scheme override for mode=${MODE}`,
+    !wantsOverride || override ? null : `no colour-scheme override for mode=${MODE}`,
   ].filter(Boolean);
   if (unproven.length) {
     console.log("--- FAIL        :", unproven.join("; "));
     process.exitCode = 1;
   } else {
-    console.log("--- PASS        : hydration clean, grid mounted, override as expected");
+    const scheme = wantsOverride ? "override installed" : "no override expected";
+    console.log(`--- PASS        : hydration clean, grid mounted, ${scheme}`);
   }
 } finally {
   // Both closers in a `finally`: the http server keeps the event loop alive, so an
