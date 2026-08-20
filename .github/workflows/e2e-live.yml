@@ -43,10 +43,11 @@ on:
         default: ''
         required: false
   schedule:
-    # Weekly prod canary. Monday 05:00 UTC — before the CET workday, off-peak
-    # for the container pool. The monthly starter matrix runs at 03:00 on the
-    # 1st so a Monday-the-1st never starts both against the same five slots.
-    - cron: '0 5 * * 1'
+    # Nightly prod canary (Dan: every live-gated test runs every night, not
+    # weekly). 03:00 UTC — deep overnight for the CET team, and two hours
+    # after the nightly starter matrix (01:00) so the two never contend for
+    # the same five container slots.
+    - cron: '0 3 * * *'
   workflow_call:
     inputs:
       base_url:
