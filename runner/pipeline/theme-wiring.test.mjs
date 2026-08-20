@@ -232,6 +232,36 @@ out.__detect = {
     for (const c of buildThemeChanges(files, DEFAULT_THEME).changes) files[c.path] = c.contents;
     return { wired: hasWiredTheme(files), paths: Object.keys(files) };
   })(),
+  // A copy of the module elsewhere in the tree. Not ours to unwire — and saying
+  // otherwise is a predicate that finds what the repair cannot clear.
+  copyElsewhere: hasWiredTheme({
+    "/src/handsontable-theme-copy.js": "import { getTheme } from 'handsontable/themes';\\n",
+  }),
+  // The extension themeModulePath names can move *after* the module is written:
+  // one .ts file added to a JS demo is enough. Repair has to reach a fixed point
+  // anyway, or the effect that strips on a downgrade re-runs forever and the
+  // unresolvable import stays put. (No backticks in here: SCRIPT is a template
+  // literal.)
+  mixedExtension: (() => {
+    const files = { "/index.js": "new Handsontable(el, {\\n  data: data,\\n});\\n" };
+    for (const c of buildThemeChanges(files, DEFAULT_THEME).changes) files[c.path] = c.contents;
+    const wroteTo = Object.keys(files).filter((p) => p.includes("handsontable-theme"));
+    files["/util.ts"] = "export const x = 1;\\n";
+    let repaired = files;
+    for (const c of buildResetChanges(repaired)) repaired = { ...repaired, [c.path]: c.contents };
+    // A second pass must ask for nothing new — that is the fixed point.
+    const secondPass = buildResetChanges(repaired)
+      .filter((c) => repaired[c.path] !== c.contents)
+      .map((c) => c.path);
+    return {
+      wroteTo,
+      wiredAfterRepair: hasWiredTheme(repaired),
+      themesLeft: Object.entries(repaired)
+        .filter(([, src]) => typeof src === "string" && src.includes("handsontable/themes"))
+        .map(([path]) => path),
+      secondPass,
+    };
+  })(),
 };
 console.log(JSON.stringify(out));
 `;
@@ -307,12 +337,27 @@ test("hasWiredTheme reads the module's contents, not its filename", { skip }, ()
 
   const d = results.__detect;
   assert.equal(d.none, false, "no module at all is not a theme");
+  assert.equal(d.copyElsewhere, false, "a copy of the module elsewhere is not the module we wrote");
   // Reset does not delete the file — it leaves `customTheme = undefined` behind
   // (and creates that file even on an unthemed workspace). Keying on the path
   // would report a theme forever after the first Reset.
   assert.equal(d.clearedOnly, false, "a cleared module is not a theme");
   assert.equal(d.moduleNamedButUnrelated, false, "a module that imports nothing themeable is not a theme");
   assert.equal(d.typescript.wired, true, `the .ts module must be found too, got ${d.typescript.paths.join(", ")}`);
+});
+
+// The apply-time extension and the repair-time extension are two different
+// answers, and they diverge as soon as a JS demo gains a `.ts` file. Before this
+// was pinned, Reset wrote a *new* cleared `.ts` module and left the live `.js`
+// one importing `handsontable/themes` — so `hasWiredTheme` stayed true, the
+// downgrade strip re-ran on every render (`files` is in its deps), and DEMOS-1P
+// went on firing behind a preview being recompiled in a loop.
+test("repair clears the module at whichever extension it was written to", { skip }, () => {
+  const m = results.__detect.mixedExtension;
+  assert.deepEqual(m.wroteTo, ["/handsontable-theme.js"], "fixture precondition: a JS demo writes the JS module");
+  assert.deepEqual(m.themesLeft, [], "a handsontable/themes import survived the repair");
+  assert.equal(m.wiredAfterRepair, false, "still reads as themed, so the strip would run again");
+  assert.deepEqual(m.secondPass, [], "repair is not a fixed point: a second pass still wants to write");
 });
 
 test("Reset leaves no handsontable/themes import anywhere", { skip }, () => {

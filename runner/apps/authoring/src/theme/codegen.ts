@@ -800,6 +800,12 @@ export function themeModulePath(files: Record<string, string>): string {
   return `/${THEME_MODULE_BASENAME}.${isTypescript(files) ? "ts" : "js"}`;
 }
 
+/** Every path the generated module can occupy. `themeModulePath` picks one of the
+ *  two by `isTypescript`, and that answer moves after the fact — adding a single
+ *  `.ts` file to a JS demo is enough — so anything that has to *find* an existing
+ *  module, or clear one, has to consider both (DEV-2571). */
+const THEME_MODULE_PATHS = [`/${THEME_MODULE_BASENAME}.ts`, `/${THEME_MODULE_BASENAME}.js`];
+
 /**
  * Is a *live* theme module wired into these files?
  *
@@ -809,15 +815,15 @@ export function themeModulePath(files: Record<string, string>): string {
  * so a path-presence check reports a theme forever after the first Reset. What
  * makes a module a theme is the import that a pre-17 core cannot resolve.
  *
- * Both extensions are scanned rather than just `themeModulePath(files)`: adding
- * a `.ts` file to a JS demo flips that answer, and the stale module would then
- * be invisible to the very check meant to find it.
+ * Exact paths, and exactly the ones `buildResetChanges` clears. The two must
+ * agree: a caller that strips on a downgrade asks this, repairs, and asks again,
+ * so a module this finds and that does not clear is an effect that never reaches
+ * a fixed point. It also means a *copy* of the module somewhere else in the tree
+ * is not "a wired theme" — we cannot unwire what we did not write, and claiming
+ * otherwise is the same non-convergence by another route.
  */
 export function hasWiredTheme(files: Record<string, string>): boolean {
-  return Object.entries(files).some(([path, source]) =>
-    path.includes(THEME_MODULE_BASENAME)
-    && typeof source === "string"
-    && source.includes("handsontable/themes"));
+  return THEME_MODULE_PATHS.some((path) => (files[path] ?? "").includes("handsontable/themes"));
 }
 
 /**
@@ -894,10 +900,17 @@ export function buildResetChanges(files: Record<string, string>): ThemeFileChang
 
     changes.push({ path, contents });
   }
-  changes.push({
-    path: themeModulePath(files),
-    contents: "// Theme cleared.\nexport const customTheme = undefined;\n",
-  });
+  // Every extension the module exists at, not only the one `isTypescript` names
+  // today: a JS demo that has since gained a `.ts` file keeps its live module at
+  // `.js` while `themeModulePath` now answers `.ts`, and clearing only the latter
+  // leaves the unresolvable import exactly where it was (DEV-2571). The canonical
+  // path is always written, which is what makes Reset produce the inert module
+  // even on a workspace that never had a theme.
+  const cleared = "// Theme cleared.\nexport const customTheme = undefined;\n";
+  const stale = THEME_MODULE_PATHS.filter((path) => path in files);
+  for (const path of new Set([themeModulePath(files), ...stale])) {
+    changes.push({ path, contents: cleared });
+  }
   return changes;
 }
 

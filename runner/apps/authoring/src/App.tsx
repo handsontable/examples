@@ -1070,6 +1070,11 @@ function Authoring({
    *  reading this replaced found no `\d+\.` in either, answered null, and so
    *  handed a v16 core the prerelease pass-through (DEV-2571). */
   const themingSupported = (() => {
+    // A ref the validator refuses is not themeable either. `selectedReleaseMajor`
+    // answers null for one — the same null that waves prereleases through — so
+    // without this a `?v=14.0.0` deep link gets a live Style button over a preview
+    // the mount guard refuses to boot.
+    if (!validateHandsontableVersion(version).ok) return false;
     const major = selectedReleaseMajor(version);
     return major === null || major >= THEME_API_MIN_MAJOR;
   })();
@@ -1107,6 +1112,10 @@ function Authoring({
     if (!hasWiredTheme(filesRef.current)) return;
     let next = filesRef.current;
     for (const change of buildResetChanges(next)) {
+      // Skip a write that changes nothing: Reset emits the inert module
+      // unconditionally, and re-writing byte-identical contents would recompile
+      // the preview for no reason.
+      if (next[change.path] === change.contents) continue;
       next = { ...next, [change.path]: change.contents };
       // Covers a `files` change that moves no mount dependency. Safe to do
       // unconditionally: in both runtimes a non-quiet write supersedes any
@@ -1116,6 +1125,12 @@ function Authoring({
       // themed module back over this.
       runtimeRef.current?.writeFile(change.path, change.contents);
     }
+    // Nothing moved. Bail before `setFiles` rather than handing React a fresh
+    // object with identical contents: `files` is in this effect's own deps, so an
+    // unchanged-but-new map re-runs it forever. Which is what any disagreement
+    // between `hasWiredTheme` and `buildResetChanges` would degrade into, so the
+    // guard stays even though the two are written to agree.
+    if (next === filesRef.current) return;
     filesRef.current = next;
     setFiles(next);
     // Deliberately not `markDirty`: this is a repair of a workspace that cannot
@@ -1195,9 +1210,6 @@ function Authoring({
     setDirtyPaths((prev) => (prev.size ? new Set() : prev));
   }, []);
 
-  /** Replace the whole workspace (entry + files + lineage) and remount. */
-  /** One line naming what an import refused, or null when it took everything.
-   *  Built here rather than in the Worker so the wording lives with the UI. */
   /** The single `Notice` slot in the preview bar (DEV-2173 owns its placement).
    *  Two facts can be true at once after a downgrade — the theme was removed,
    *  and the edits kept may not match the new version's API — and the theme
@@ -1208,6 +1220,8 @@ function Authoring({
     [themeRemoved, versionWarning],
   );
 
+  /** One line naming what an import refused, or null when it took everything.
+   *  Built here rather than in the Worker so the wording lives with the UI. */
   const importNotice = useMemo(() => {
     if (!importSkipped.length) return null;
     const shown = importSkipped.slice(0, 2).map((s) => `${s.path} (${s.reason})`);
@@ -1215,6 +1229,7 @@ function Authoring({
     return `Not imported: ${shown.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}.`;
   }, [importSkipped]);
 
+  /** Replace the whole workspace (entry + files + lineage) and remount. */
   const loadWorkspace = useCallback(
     (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
       // Whatever workspace replaces an ad-hoc one is no longer its, so its title

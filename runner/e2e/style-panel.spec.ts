@@ -544,6 +544,21 @@ test("a bare major deep link cannot open the Style panel", async ({ page }) => {
   await expect(page.locator(STYLE)).toBeHidden();
 });
 
+test("a version the validator refuses cannot open the Style panel either", async ({ page }) => {
+  // `selectedReleaseMajor` answers null for a ref the validator rejects, and null
+  // is the pass-through meant for `next`/pkg.pr.new builds — so a sub-floor deep
+  // link used to get a live Style button over a preview the mount guard refuses
+  // to boot, and theming it would have written a module into a workspace that
+  // cannot run at all.
+  await stubShell(page);
+  await page.goto("/?example=react&v=14.0.0");
+
+  const style = page.getByRole("button", { name: "Style", exact: true });
+  await expect(style).toHaveAttribute("aria-disabled", "true");
+  await expect(style).toBeDisabled();
+  await expect(page.locator(STYLE)).toBeHidden();
+});
+
 // The hydration half of DEV-2571, and the shape the reported event most likely
 // had: a workspace that *arrives* themed on a sub-17 pin, with no version change
 // anywhere. Authored as a payload so the only `handsontable/themes` import in it
