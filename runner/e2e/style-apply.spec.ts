@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext, type FrameLocator, type Page } from "@playwright/test";
+import { workspaceFiles } from "./helpers";
 
 // Does a generated theme module actually reach the grid? (DEV-2197)
 //
@@ -126,7 +127,14 @@ async function cellHeight(page: Page): Promise<number> {
 const RUNNER_PREVIEW_PAGE = /Reconnecting to the demo|The demo stopped responding/;
 
 async function openExample(page: Page, example: string) {
-  await page.goto(`/?example=${example}`);
+  return openAt(page, `/?example=${example}`, example);
+}
+
+/** The waits `openExample` is made of, over any URL — a payload route needs the
+ *  same "did the preview really come up, and is the frame holding the demo"
+ *  reading, and it is the reading that costs 40 lines. */
+async function openAt(page: Page, url: string, label: string) {
+  await page.goto(url);
   const pane = page.locator('[aria-label="Preview"]');
   // Not `toHaveAttribute("ready")`: a preview that fails outright sits on `error`
   // for the full 180s and reports as a timeout. Poll off `booting` first, then say
@@ -136,7 +144,7 @@ async function openExample(page: Page, example: string) {
     .not.toEqual("booting");
   if ((await pane.getAttribute("data-preview-status")) === "error") {
     const detail = await pane.locator("pre").first().innerText().catch(() => "(no detail)");
-    throw new Error(`the ${example} preview failed to start: ${detail}`);
+    throw new Error(`the ${label} preview failed to start: ${detail}`);
   }
   await expect(pane).toHaveAttribute("data-preview-status", "ready");
 
@@ -156,7 +164,7 @@ async function openExample(page: Page, example: string) {
   ]);
   if (outcome === "runner-page") {
     throw new Error(
-      `the ${example} preview frame is holding the runner's own page, not the demo: ${await apology.innerText()}`,
+      `the ${label} preview frame is holding the runner's own page, not the demo: ${await apology.innerText()}`,
     );
   }
 }
@@ -527,4 +535,73 @@ test("a recolour reaches the header the grid is painting right now", async ({ pa
       "the recolour never reached anything the grid paints at rest",
     ).toEqual("rgb(230, 244, 234)"); // #e6f4ea, the ramp's lightest step
   }).toPass({ timeout: 60_000 });
+});
+
+// DEV-2571 / Sentry DEMOS-1P, and the one assertion no amount of generated text
+// can make: after the module is taken back out, does the demo actually compile
+// and render on a core that has no theme API?
+//
+// The fixture is a workspace that *arrives* themed on a 16 pin — a payload,
+// which is also the only shape where the generated module is the sole importer
+// of `handsontable/themes`. A 16 starter wires `themeName`, so nothing else in
+// such a demo asks for that path, which is precisely why the reported event
+// named `/handsontable-theme.js`. (A dirty 18 -> 16 switch is a different
+// story: those starters import `handsontable/themes` themselves and ADR-0021 §6
+// keeps the files it finds, which is what the version warning is for.)
+const THEMED_AT_16_PAYLOAD = {
+  framework: "javascript",
+  title: "Themed on 16",
+  files: {
+    // A real Vite entry: the module script is what loads `/index.js` at all, and
+    // 16 has no CSS auto-injection, so the stylesheet is imported by hand.
+    "/index.html":
+      '<!DOCTYPE html>\n<html>\n<head><meta charset="UTF-8" /></head>\n'
+      + '<body>\n  <div id="example"></div>\n'
+      + '  <script type="module" src="./index.js"></script>\n</body>\n</html>\n',
+    "/index.js":
+      "import { customTheme } from './handsontable-theme'; // handsontable-theme\n"
+      + "import Handsontable from 'handsontable';\n"
+      + "import 'handsontable/dist/handsontable.full.min.css';\n\n"
+      + "new Handsontable(document.getElementById('example'), {\n"
+      + "  data: [['Tesla', 'Model 3'], ['Nissan', 'Leaf']],\n"
+      + "  theme: customTheme,\n"
+      + "  rowHeaders: true,\n"
+      + "  colHeaders: true,\n"
+      + "  licenseKey: 'non-commercial-and-evaluation',\n"
+      + "});\n",
+    "/handsontable-theme.js":
+      "import { getTheme, hasTheme, registerTheme, reinitTheme } from 'handsontable/themes';\n"
+      + "import tokensPreset from 'handsontable/themes/static/variables/tokens/main';\n\n"
+      + "const THEME_NAME = 'custom-theme';\n"
+      + "if (hasTheme(THEME_NAME)) reinitTheme(THEME_NAME, { tokens: tokensPreset });\n"
+      + "else registerTheme(THEME_NAME, { tokens: tokensPreset });\n"
+      + "export const customTheme = getTheme(THEME_NAME);\n",
+    "/package.json": JSON.stringify(
+      { dependencies: { handsontable: "16.2.0" } },
+      null,
+      2,
+    ),
+  },
+};
+
+test("a demo that arrives themed on a pre-theme-API core still renders", async ({ page }) => {
+  test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  test.setTimeout(240_000);
+
+  await page.route("**/api/payload/thm16live1", (route) =>
+    route.fulfill({ json: THEMED_AT_16_PAYLOAD }));
+
+  // Unstripped, `handsontable/themes` does not exist in handsontable@16.2.0 and
+  // the bundler answers `Could not find module in path: 'handsontable/themes'
+  // relative to '/handsontable-theme.js'` — `openAt` turns that into the
+  // preview-failed-to-start error with the message attached.
+  await openAt(page, "/?payload=thm16live1&v=16.2.0", "themed-on-16 payload");
+
+  await expect(page.locator(".hot-file-row", { hasText: "handsontable-theme" })).toBeVisible();
+  const files = await workspaceFiles(page);
+  expect(files["/handsontable-theme.js"]).toContain("Theme cleared.");
+  expect(files["/index.js"]).not.toContain("customTheme");
+  // The grid rendered above; it must be the demo's own, unthemed — no theme
+  // class, because the module that would have registered one is inert.
+  expect(await themeClass(page)).toBe("");
 });

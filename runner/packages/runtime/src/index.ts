@@ -17,6 +17,7 @@ export {
   handsontableDependencyRef,
   pinHandsontableFiles,
   validateHandsontableVersion,
+  selectedReleaseMajor,
   isHandsontablePackage,
   isNextPrereleaseVersion,
   pickLatestNextVersion,
