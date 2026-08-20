@@ -35,6 +35,14 @@ const CDN_THEME = "https://cdn.jsdelivr.net/npm/handsontable@18/styles/ht-theme-
 
 const DEMO_JS = `import Handsontable from 'handsontable';
 
+// What a styled demo actually does, and the DEV-2581 regression in one line: this
+// runs *before* the injected head assets are re-created, and it overrides the theme
+// on the same selector the theme itself uses. Equal specificity, so whichever lands
+// later wins — appending the re-created stylesheet erased this.
+const override = document.createElement('style');
+override.textContent = '.ht-theme-main { --ht-cell-vertical-padding: 11px }';
+document.head.appendChild(override);
+
 new Handsontable(document.getElementById('grid'), {
   data: [['a', 1], ['b', 2], ['c', 3]],
   colHeaders: true,
@@ -90,8 +98,42 @@ function readHead(page: Page) {
   });
 }
 
+/**
+ * Wait until the re-created head has finished loading before reading it.
+ *
+ * The stylesheets are cross-origin `<link>`s, so they land some time after the grid
+ * becomes visible — reading immediately made this spec flake (measured: one run in
+ * three saw `links=0`). Polling the observable end state is the fix; a fixed sleep
+ * would either flake again or slow every run to the worst case.
+ */
+async function headSettled(page: Page) {
+  await expect
+    .poll(
+      async () => {
+        const head = await readHead(page);
+        // Non-zero cell padding is the honest "the theme stylesheet applied" signal.
+        // `themeVar !== ""` is not: the demo's own override sets that variable
+        // synchronously, so it is already non-empty while the cross-origin sheet is
+        // still in flight — a readiness check that passes before the thing under test
+        // has happened, which then fails a later assertion for the wrong reason.
+        const themed = head.stylesheets.length > 0 && !head.cellPadding.startsWith("0px");
+        return themed
+          ? "ready"
+          : `pending: links=${head.stylesheets.length} padding=${head.cellPadding}`;
+      },
+      { timeout: 30_000, message: "the re-created head never finished loading" },
+    )
+    .toBe("ready");
+}
+
 test.describe("head assets reach the live preview", () => {
   test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  // The config default is 60s, and the waits inside one test already allow more than
+  // that on a cold bundler: `previewReady` 120s, the grid 120s, `headSettled` 30s. At
+  // 60s the test aborts with Playwright's generic "Test timeout exceeded" *before*
+  // those waits can report what they measured — the least informative failure wins.
+  // Same budget as `preview-scheme.spec.ts`, the closest sibling.
+  test.describe.configure({ timeout: 300_000 });
 
   test("a demo styled only from its <head> renders themed", async ({ page }) => {
     await page.route("**/api/versions", (route) =>
@@ -109,6 +151,7 @@ test.describe("head assets reach the live preview", () => {
     await previewReady(page);
     await expect(grid(page)).toBeVisible({ timeout: 120_000 });
 
+    await headSettled(page);
     const head = await readHead(page);
 
     // Each of these is zero/empty on `master`; the message carries the measurement so
@@ -129,6 +172,12 @@ test.describe("head assets reach the live preview", () => {
     expect(head.themeVar, `measured --ht-cell-vertical-padding: ${JSON.stringify(head.themeVar)}`).not.toBe("");
     expect(head.cellPadding, `measured td padding: ${head.cellPadding}`).not.toBe("0px");
     expect(head.cellPadding).toMatch(/^[1-9]/);
+
+    // DEV-2581: the demo's own override, applied at runtime before the head was
+    // re-created, still wins. `4px` here means the re-created theme stylesheet landed
+    // after it and took the cascade — the state measured on prod for 6z5k1q2bd4,
+    // where the demo's blue/white palette was replaced by the theme's defaults.
+    expect(head.themeVar, "the demo's own theme override survives the re-created head").toBe("11px");
   });
 
   test("what the bundler already handles is not touched, and the workspace stays clean", async ({ page }) => {
@@ -142,6 +191,7 @@ test.describe("head assets reach the live preview", () => {
     await previewReady(page);
     await expect(grid(page)).toBeVisible({ timeout: 120_000 });
 
+    await headSettled(page);
     const head = await readHead(page);
 
     // A local stylesheet already applies today — the bundler resolves the local URL
