@@ -217,8 +217,11 @@ test("the log rides in tail, never in the cause, and stderr survives the byte ca
     { ...BUILDER, maxTailChars: 200 },
   );
   assert.ok(!cause.includes("Progress:"));
-  assert.ok(tail.length <= 204);
+  // The cap is per stream plus a `...` marker on each part it cut, and a newline
+  // between them.
+  assert.ok(tail.length <= 200 + "...".length * 2 + 1, `tail was ${tail.length}`);
   assert.match(tail, /published versions/);
+  assert.match(tail, /Progress: resolved 1/);
 });
 
 test("the thrown BuildFailure names the phase, stays one line, and carries the log apart", () => {
@@ -240,4 +243,28 @@ test("a build with no output still describes itself", () => {
   const err = describeBuildFailure("build", { stdout: "", stderr: "" });
   assert.equal(err.message, "build failed: no output");
   assert.equal(err.code, "other");
+});
+
+test("a loud stream cannot evict the other from the kept log", () => {
+  // The cap keeps the END of the tail, so a single join lets 4000 characters of
+  // stderr deprecation noise drop stdout whole — including the very line the cause
+  // was picked from, leaving a buildLog extra that explains nothing.
+  const noise = Array.from(
+    { length: 60 },
+    (_, i) => `(node:41) [DEP00${i}] DeprecationWarning: ${"x".repeat(90)}`,
+  ).join("\n");
+  const { cause, tail } = execFailureDetail(
+    { stdout: VITE_STDOUT, stderr: noise },
+    { ...BUILDER, maxTailChars: 4000 },
+  );
+  assert.match(cause, /Rollup failed to resolve import/);
+  assert.match(tail, /Rollup failed to resolve import/);
+  assert.match(tail, /DeprecationWarning/);
+  assert.ok(tail.length <= 4000 + "...".length * 2);
+});
+
+test("an empty stream lends its whole share to the other", () => {
+  const long = Array.from({ length: 60 }, (_, i) => `line ${i} ${"y".repeat(90)}`).join("\n");
+  const { tail } = execFailureDetail({ stdout: long, stderr: "" }, { ...BUILDER, maxTailChars: 4000 });
+  assert.ok(tail.length > 3900, `half-budget leak: ${tail.length}`);
 });

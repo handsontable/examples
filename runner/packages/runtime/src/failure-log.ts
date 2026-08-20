@@ -154,21 +154,46 @@ export function causeCode(cause: string): string {
  *  form the redactor no longer recognises. Keeps the END of the log, since that is
  *  what a tail is for. */
 function boundedTail(lines: readonly string[], maxTailChars: number | undefined): string {
-  const redacted = redactPreviewHosts(lines.join("\n"));
-  if (maxTailChars === undefined || redacted.length <= maxTailChars) return redacted;
-  return `...${redacted.slice(-maxTailChars)}`;
+  return bound(redactPreviewHosts(lines.join("\n")), maxTailChars);
 }
 
-function describe(
-  candidate: string | null,
-  lines: readonly string[],
-  options: FailureDetailOptions,
-): FailureDetail {
+function bound(redacted: string, cap: number | undefined): string {
+  if (cap === undefined || redacted.length <= cap) return redacted;
+  return `...${redacted.slice(-cap)}`;
+}
+
+/**
+ * The two streams under one byte budget, neither able to evict the other.
+ *
+ * A single join capped from the front is not enough: the cap keeps the END, so a
+ * stream of deprecation warnings long enough to fill the budget on its own drops the
+ * other stream entirely — including, measurably, the vite line the cause was picked
+ * from, leaving a `buildLog` extra of pure noise. Each stream is therefore capped in
+ * its own right, and a stream that does not need its half lends the remainder to the
+ * other rather than wasting it.
+ */
+function twoStreamTail(
+  out: readonly string[],
+  err: readonly string[],
+  cap: number | undefined,
+): string {
+  const o = redactPreviewHosts(out.join("\n"));
+  const e = redactPreviewHosts(err.join("\n"));
+  if (cap === undefined || o.length + e.length + 1 <= cap) {
+    return [o, e].filter(Boolean).join("\n");
+  }
+  const half = Math.floor((cap - 1) / 2);
+  const outCap = e.length <= half ? cap - 1 - e.length : half;
+  const errCap = o.length <= half ? cap - 1 - o.length : cap - 1 - outCap;
+  return [bound(o, outCap), bound(e, errCap)].filter(Boolean).join("\n");
+}
+
+function describe(candidate: string | null, tail: string, fallback?: string): FailureDetail {
   const picked = (candidate ?? "").trim();
   const cause = truncateMessage(redactPreviewHosts(picked));
   return {
-    cause: cause || (options.fallback ?? DEFAULT_FALLBACK),
-    tail: boundedTail(lines, options.maxTailChars),
+    cause: cause || (fallback ?? DEFAULT_FALLBACK),
+    tail,
     code: picked ? causeCode(picked) : "other",
   };
 }
@@ -194,7 +219,7 @@ export function failureDetail(log: string, options: FailureDetailOptions = {}): 
     lineWithDetail(lines, findLastIndex(lines, mentionsCause)) ??
     lines[lines.length - 1] ??
     null;
-  return describe(candidate, lines, options);
+  return describe(candidate, boundedTail(lines, options.maxTailChars), options.fallback);
 }
 
 /**
@@ -227,5 +252,5 @@ export function execFailureDetail(
     err[err.length - 1] ??
     out[out.length - 1] ??
     null;
-  return describe(candidate, [...out, ...err], options);
+  return describe(candidate, twoStreamTail(out, err, options.maxTailChars), options.fallback);
 }
