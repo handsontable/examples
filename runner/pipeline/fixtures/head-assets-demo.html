@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Head assets demo</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/handsontable@18/styles/handsontable.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/handsontable@18/styles/ht-theme-main.min.css" />
+    <style>:root { --e2e-head-sentinel: 7px }</style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="preload" href="https://cdn.jsdelivr.net/npm/handsontable@18/styles/ht-icons-main.min.css" as="style" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="data:text/css,%3Aroot%7B--e2e-data-sentinel%3A%209px%7D" />
+    <!-- <link rel="stylesheet" href="https://cdn.example.com/commented-out.css" /> -->
+    <script>
+      // A tag in script *text* must not be read as an asset.
+      window.__headFixtureNote = '<link rel="stylesheet" href="https://cdn.example.com/in-script.css">';
+    </script>
+  </head>
+  <body>
+    <div id="grid"></div>
+    <script type="module" src="/index.js"></script>
+  </body>
+</html>

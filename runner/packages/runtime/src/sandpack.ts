@@ -28,6 +28,7 @@ import {
   truncateMessage,
 } from "./monitor.js";
 import { injectSchemeReceiver } from "./scheme.js";
+import { injectHeadAssets, stripInjectedHeadAssets } from "./head-assets.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
 // Re-exported here rather than through a `./transpile` subpath: this is the DOM entry the
@@ -274,7 +275,13 @@ function boundCompileMessage(value: unknown): string {
   if (raw.trim() === "") return COMPILE_ERROR_FALLBACK;
   const withoutMaps = raw.replace(INLINE_SOURCE_MAP, "sourceMappingURL=<omitted>");
   const withoutReporter = stripInjectedReporter(withoutMaps);
-  return truncateMessage(redactPreviewHosts(withoutReporter), MONITOR_COMPILE_MESSAGE_MAX);
+  // Same treatment for the head-assets line (DEV-2576). It is appended, so it only
+  // reaches a code frame for a fault within two lines of EOF — but when it does it is
+  // the demo's whole head, and the cap below would spend its budget on that instead of
+  // on the diagnostic. Matched against that module's exported constants for the reason
+  // `stripInjectedReporter` states.
+  const withoutHead = stripInjectedHeadAssets(withoutReporter);
+  return truncateMessage(redactPreviewHosts(withoutHead), MONITOR_COMPILE_MESSAGE_MAX);
 }
 
 export class SandpackRuntime implements DemoRuntime {
@@ -368,19 +375,24 @@ export class SandpackRuntime implements DemoRuntime {
    * someone downloads. It also runs *after* the parcel pre-transpile, so babel
    * never has to parse either of them.
    *
-   * Two injections, two lifetimes. The monitor is diagnostics behind a flag
+   * Three injections, three lifetimes. The monitor is diagnostics behind a flag
    * (DEV-2527) and is gated on `opts.monitor`. The scheme receiver is how the
    * shell's toggle reaches the grid at all (DEV-2561, ADR-0035), so it is
-   * unconditional — a preview that cannot be re-themed is the bug.
+   * unconditional — a preview that cannot be re-themed is the bug. The head assets
+   * (DEV-2576) are the demo's own `<head>`, which the classic bundler discards, and
+   * they are gated on the entry declaring an `htmlEntry`.
    *
-   * Both are byte-deterministic constants that learn what they need over
-   * `postMessage`. Nothing here may carry a *value*: `sameFiles` skips the compile
-   * when the sandbox is unchanged, so injecting the current scheme would turn every
-   * toggle into a full Sandpack rebuild — the exact cost DEV-2496's bridge exists
-   * to avoid.
+   * The first two are byte-deterministic constants that learn what they need over
+   * `postMessage`, and nothing here may carry a value *from outside the file map*:
+   * `sameFiles` skips the compile when the sandbox is unchanged, so injecting the
+   * current scheme would turn every toggle into a full Sandpack rebuild — the exact
+   * cost DEV-2496's bridge exists to avoid. A value read *out of the sandbox files*
+   * is a different thing and is fine, which is what the head injection does: same
+   * files in, same bytes out, so `sameFiles` still holds. Editing the head is then a
+   * real diff, and it should be — the preview has to pick up the new stylesheet.
    *
    * A missing entry is `setupFrom()`'s error to raise, with its own message
-   * (DEV-2130) — both injectors return the map untouched rather than throwing a
+   * (DEV-2130) — every injector returns the map untouched rather than throwing a
    * second, less useful error from here.
    */
   private withInjections(files: FilesMap): FilesMap {
@@ -401,8 +413,30 @@ export class SandpackRuntime implements DemoRuntime {
     const moduleEntry = this.env === "parcel" ? toParcelEntry(this.entry.entry) : this.entry.entry;
     if (!targets.includes(moduleEntry)) targets.push(moduleEntry);
     const withScheme = targets.reduce((acc, path) => injectSchemeReceiver(acc, path), files);
-    if (!this.opts.monitor) return withScheme;
-    return targets.reduce((acc, path) => injectReporter(acc, path), withScheme);
+    const withMonitor = this.opts.monitor
+      ? targets.reduce((acc, path) => injectReporter(acc, path), withScheme)
+      : withScheme;
+    // Cross-file, so not a step in the reduces above: it reads the authored `<head>`
+    // out of the HTML entry and re-creates it from the module entry (DEV-2576). Keyed
+    // on the catalog entry's own `htmlEntry` rather than `HTML_ENTRY_ENVS`, because on
+    // `vue-cli` the resolved sandbox entry is the module while the document is still
+    // `/index.html` — gating on the env would miss the one non-parcel Tier-1 starter.
+    //
+    // Last, and that is load-bearing: both injectors above decide idempotency with
+    // `indexOf` over the whole entry source, and this payload carries arbitrary demo
+    // text (a `<title>`, a CSS comment). A demo that happened to name `hot-runner-scheme`
+    // would otherwise make the colour-scheme bridge inert. Running last means their
+    // decision is made on demo bytes only.
+    //
+    // `injectHeadAssets` never throws by design; the catch is for the unforeseen. On
+    // mount it would otherwise reject `buildSetup` and steal DEV-2130's "Setup failed"
+    // message, and on an edit `pushUpdate`'s own catch would freeze the preview on its
+    // last good render for every keystroke after it.
+    try {
+      return injectHeadAssets(withMonitor, this.entry.htmlEntry, moduleEntry);
+    } catch {
+      return withMonitor;
+    }
   }
 
   private setupFrom(files: FilesMap): SandboxSetup {

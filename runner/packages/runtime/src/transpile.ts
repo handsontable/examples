@@ -11,6 +11,9 @@
 // sandboxes that need it.
 
 import type { FilesMap } from "./types.js";
+// Shared with `head-assets.ts`, which must classify a head URL exactly the way the
+// `<link>` pruning below does — see html-urls.ts.
+import { toFilesKey } from "./html-urls.js";
 
 type Babel = {
   transform: (code: string, options: Record<string, unknown>) => { code?: string | null };
@@ -352,14 +355,6 @@ function rewriteSpecifiers(path: string, code: string, renamed: Map<string, stri
     if (!renamed.has(resolveSpecifier(path, spec))) return full;
     return `${prefix}${quote}${spec.replace(SOURCE_RE, ".js")}${quote}`;
   });
-}
-
-/** Normalize an HTML src/href value to a files-map key ("/…"), or null if external. */
-function toFilesKey(value: string): string | null {
-  if (/^[a-z][a-z0-9+.-]*:|^\/\//i.test(value)) return null; // http:, data:, protocol-relative …
-  if (value.startsWith("/")) return value;
-  if (value.startsWith("./")) return `/${value.slice(2)}`;
-  return `/${value}`;
 }
 
 /**

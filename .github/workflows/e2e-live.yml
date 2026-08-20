@@ -136,6 +136,7 @@ jobs:
           e2e/version-pinning.spec.ts
           e2e/share-view.spec.ts
           e2e/style-panel.spec.ts
+          e2e/preview-head-assets.spec.ts
 
       # Container suites, one worker: each Tier-2 case holds a live-preview
       # container, prod caps those at 5 *globally* (Sandbox max_instances), and
