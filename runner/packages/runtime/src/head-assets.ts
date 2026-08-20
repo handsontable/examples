@@ -171,10 +171,26 @@ const RECEIVER_HEAD = `(function (assets) {
      appends, which is what an empty head wants. */
   var anchor = head.firstChild;
 
-  /* The demo has already built its grid against an unstyled DOM by the time this
-     runs, and a cross-origin stylesheet lands later still. A generic bubbling
-     resize is the demo-agnostic way to ask for a re-measure — Handsontable's own
-     listener calls refreshDimensions() — and it is bounded at 1 + one per link. */
+  /* A generic bubbling resize, once after the loop and once per stylesheet that
+     loads, for demo code that re-lays itself out on that signal.
+
+     It does NOT make Handsontable re-measure, which is what an earlier version of
+     this comment claimed. Measured on a live preview: the master table re-flows when
+     a late stylesheet grows a wrapping cell (row 8: 29px -> 49px) while the
+     row-header clone keeps 29px, and dispatching resize leaves them desynced. HT
+     checks the root element's own size and returns when it has not changed, and a
+     late stylesheet changes intrinsic content heights without touching the root. The
+     lever that does work is a real layout change its ResizeObserver can see — a 1px
+     padding toggle on <body>, reverted, was enough.
+
+     That perturbation was proposed and deliberately declined: a layout hack in the
+     runtime is the wrong price for one class of demo. The supported route is CSS that
+     reaches the page through the module graph — a package import or a local
+     stylesheet — which the bundler injects at module eval, before the grid is built,
+     so nothing needs re-measuring. DEV-2578 unblocks that for PR-pinned demos and
+     DEV-2577 makes it the authoring contract. Until a demo takes that route, a
+     CDN-linked stylesheet leaves stale row metrics here; /d is unaffected because its
+     head links parse before the module runs. */
   function nudge() {
     try {
       var event = document.createEvent('Event');
