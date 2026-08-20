@@ -162,6 +162,14 @@ const RECEIVER_HEAD = `(function (assets) {
   if (typeof document === 'undefined' || !assets || !assets.length) { return; }
   var MARK = '${MARK_ATTRIBUTE}';
   var head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
+  /* Everything goes in at the head's start, before whatever is already there
+     (DEV-2581). This line runs at the end of the demo's module, so by now the demo
+     has appended its own style, and a demo overrides the theme on the same selector
+     the theme itself uses: equal specificity, document order decides. Appending put
+     the theme after the override and erased it. One anchor, captured once, so the
+     assets keep their authored order among themselves; insertBefore(node, null)
+     appends, which is what an empty head wants. */
+  var anchor = head.firstChild;
 
   /* The demo has already built its grid against an unstyled DOM by the time this
      runs, and a cross-origin stylesheet lands later still. A generic bubbling
@@ -228,7 +236,7 @@ const RECEIVER_HEAD = `(function (assets) {
       style.setAttribute(MARK, '');
       if (asset.media) { style.setAttribute('media', asset.media); }
       style.appendChild(document.createTextNode(asset.css));
-      head.appendChild(style);
+      head.insertBefore(style, anchor);
       continue;
     }
     var element = document.createElement(asset.tag);
@@ -243,7 +251,7 @@ const RECEIVER_HEAD = `(function (assets) {
       element.onerror = nudge;
     }
     element.setAttribute(MARK, '');
-    head.appendChild(element);
+    head.insertBefore(element, anchor);
   }
   nudge();
 })(`;
@@ -296,6 +304,12 @@ export const HEAD_ASSETS_LINE_SUFFIX = `${jsonInner(RECEIVER_TAIL)}")}catch(e){}
  * Prepending would not buy the ordering it looks like it buys, either: a dynamically
  * inserted cross-origin `<link>` never blocks script execution, so the stylesheet
  * lands after the demo's module body either way. That is what `nudge` is for.
+ *
+ * Two different axes, easy to conflate: *this* decision is where the injected line
+ * sits in the JS entry, and it stays last. Where the DOM nodes go is a separate
+ * question with the opposite answer — they are inserted at the head's start, because
+ * the demo's own `<style>` is already there by then and would otherwise win the
+ * cascade (DEV-2581).
  */
 export function headAssetsModuleLine(assets: HeadAsset[]): string {
   return HEAD_ASSETS_LINE_PREFIX + jsonInner(JSON.stringify(assets)) + HEAD_ASSETS_LINE_SUFFIX;

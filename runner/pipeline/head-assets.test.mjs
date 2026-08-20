@@ -261,7 +261,19 @@ test("injecting twice is a no-op, even when the head changed underneath", () => 
 
 /** A fake document, enough for the payload to build nodes against. */
 function fakeDocument() {
-  const head = { children: [], appendChild(node) { this.children.push(node); } };
+  const head = {
+    children: [],
+    appendChild(node) { this.children.push(node); return node; },
+    // Real insertion semantics: the whole point of the DEV-2581 cases is *where* a
+    // node lands relative to what the demo's own module already put here.
+    insertBefore(node, anchor) {
+      const at = anchor === null || anchor === undefined ? -1 : this.children.indexOf(anchor);
+      if (at === -1) this.children.push(node);
+      else this.children.splice(at, 0, node);
+      return node;
+    },
+    get firstChild() { return this.children.length > 0 ? this.children[0] : null; },
+  };
   const created = [];
   const doc = {
     title: "Sandbox - CodeSandbox",
@@ -604,4 +616,55 @@ test("character references in attribute values are decoded, style bodies are not
 test("a title's character references are decoded too", () => {
   const { doc } = runPayload("<head><title>Sales &amp; Ops &#8212; Q3</title></head>");
   assert.equal(doc.title, "Sales & Ops — Q3");
+});
+
+// ------------------------------------- cascade order (DEV-2581, regression on prod)
+
+test("re-created assets land before styles the demo's own module already added", () => {
+  // The demo's module body runs first and appends its own <style>; our line runs at
+  // the end of that module. Appending our nodes therefore put the authored theme
+  // stylesheet *after* the demo's overrides, and a demo overrides the theme on the
+  // same selector the theme itself uses — equal specificity, so document order is
+  // the only tiebreak, and the theme won. Measured on prod for 6z5k1q2bd4:
+  // --ht-accent-color resolved to the theme's #1a42e8 instead of the demo's #2f8fe0.
+  //
+  // `/d` serves the authored HTML, where the head links parse before the module ever
+  // runs. Reproducing that means inserting at the head's start, not the end.
+  const demoStyle = { tagName: "STYLE", attrs: {}, children: [], textContent: ".ht-theme-main { --ht-accent-color: #2f8fe0 }" };
+  const { appended } = runPayload(FIXTURE, [demoStyle]);
+
+  const ours = appended.filter((node) => node.attrs["data-hot-runner-head"] === "");
+  const demoAt = appended.indexOf(demoStyle);
+  assert.equal(demoAt, ours.length, "every re-created node sits before the demo's own style");
+  assert.ok(appended.slice(0, ours.length).every((node) => node.attrs["data-hot-runner-head"] === ""));
+});
+
+test("inserting at the start keeps the authored order among the assets themselves", () => {
+  // Inserting each node before the same anchor in source order is what preserves it;
+  // inserting each before the *previous* one would silently reverse the cascade
+  // between two stylesheets that set the same variable.
+  const demoStyle = { tagName: "STYLE", attrs: {}, children: [], textContent: "/* demo */" };
+  const { appended } = runPayload(FIXTURE, [demoStyle]);
+  const ours = appended.filter((node) => node.attrs["data-hot-runner-head"] === "");
+  assert.deepEqual(
+    ours.map((node) => node.attrs.href ?? node.attrs.name ?? node.textContent),
+    [
+      CDN_CORE,
+      CDN_THEME,
+      ":root { --e2e-head-sentinel: 7px }",
+      "viewport",
+      CDN_ICONS,
+      "data:text/css,%3Aroot%7B--e2e-data-sentinel%3A%209px%7D",
+    ],
+  );
+});
+
+test("an empty head still receives every asset, in order", () => {
+  // The anchor is null in this case, and `insertBefore(node, null)` appends — the
+  // shape every other case in this file exercises, kept explicit so a change to the
+  // anchor logic cannot quietly break the common path.
+  const { appended } = runPayload(FIXTURE);
+  assert.equal(appended.length, 6);
+  assert.equal(appended[0].attrs.href, CDN_CORE);
+  assert.equal(appended.at(-1).attrs.href, "data:text/css,%3Aroot%7B--e2e-data-sentinel%3A%209px%7D");
 });
