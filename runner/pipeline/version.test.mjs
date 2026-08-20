@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyHandsontableCss, pickLatestNextVersion, validateHandsontableVersion } from "../packages/runtime/dist/version.js";
+import {
+  applyHandsontableCss,
+  pickLatestNextVersion,
+  selectedReleaseMajor,
+  validateHandsontableVersion,
+} from "../packages/runtime/dist/version.js";
 
 // DEV-2207: `dist/handsontable.full.min.css` was removed from the package at
 // 17.0.0, so every pre-DEV-2207 artifact 404s at >=17 — where core injects its
@@ -148,4 +153,34 @@ test("pickLatestNextVersion returns null when no -next versions exist", () => {
   assert.equal(pickLatestNextVersion({ created: "2020-01-01T00:00:00.000Z", "18.0.1": "2026-06-02T10:00:00.000Z" }), null);
   assert.equal(pickLatestNextVersion({}), null);
   assert.equal(pickLatestNextVersion(undefined), null);
+});
+
+// DEV-2571 (Sentry DEMOS-1P): the authoring app used to read the major straight
+// off the raw version string with /^(\d+)\./, so a bare npm-style partial — "16",
+// "16.2", both of which validateHandsontableVersion accepts and both reachable
+// through the version pencil and a hand-typed ?v= — answered null. null is the
+// pass-through the theming gate grants `next`/pkg.pr.new refs, so `?v=16` opened
+// the Style panel on a core with no theme API at all. Validate first: the major
+// comes off the *normalized* ref, and null now means only "no semver here".
+test("selectedReleaseMajor reads the major off the validated ref, partials included", () => {
+  assert.equal(selectedReleaseMajor("17.1.0"), 17);
+  assert.equal(selectedReleaseMajor("16"), 16);
+  assert.equal(selectedReleaseMajor("16.2"), 16);
+  assert.equal(selectedReleaseMajor(" 18.0.0 "), 18);
+});
+
+test("selectedReleaseMajor answers null only for refs carrying no comparable semver", () => {
+  // The npm `next` nightly parses as major 0 and is really a post-18 build.
+  assert.equal(selectedReleaseMajor("0.0.0-next-64139ae-20260219"), null);
+  // A dotted prerelease is a -next build too.
+  assert.equal(selectedReleaseMajor("19.0.0-next.1"), null);
+  // pkg.pr.new build ids, bare and as a URL.
+  assert.equal(selectedReleaseMajor("7940"), null);
+  assert.equal(selectedReleaseMajor("https://pkg.pr.new/handsontable@7940"), null);
+  // Anything the validator refuses has no major to report — a range, a dist-tag,
+  // a major under the floor, junk.
+  assert.equal(selectedReleaseMajor("^17.0.0"), null);
+  assert.equal(selectedReleaseMajor("latest"), null);
+  assert.equal(selectedReleaseMajor("14.0.0"), null);
+  assert.equal(selectedReleaseMajor(""), null);
 });
