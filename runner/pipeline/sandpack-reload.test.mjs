@@ -172,6 +172,25 @@ test("reload() stamps the entry, so the bundler always has a diff to act on", as
   }
 });
 
+test("an entry with no htmlEntry gets no head-assets payload", async () => {
+  // What every hand-built baseline in this file (and in theme-live-patch.test.mjs)
+  // silently depends on. `ENTRY.htmlEntry` is null and `FILES` holds no HTML at all,
+  // so the DEV-2576 head injection is inert here and `injectSchemeReceiver` alone is
+  // still the whole derived map. If that injection ever becomes unconditional, this
+  // case goes red and names the reason, instead of four unrelated assertions failing
+  // for a reason none of them is about.
+  const { runtime, client } = mounted();
+
+  await runtime.reload();
+
+  const code = client.pushes[0].setup.files["/src/main.js"].code;
+  assert.ok(!code.includes("hot-runner-head"), "no head payload without an htmlEntry");
+  assert.ok(
+    code.startsWith(injectSchemeReceiver({ ...FILES }, ENTRY.entry)["/src/main.js"]),
+    "the scheme receiver is still the only thing appended before the stamp",
+  );
+});
+
 test("an edit that changes nothing is not pushed at all", async () => {
   const { runtime, client } = mounted();
 
