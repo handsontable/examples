@@ -37,6 +37,12 @@ if (!existsSync(dist)) {
 
 const failures = [];
 const assetsDir = path.join(dist, "assets");
+// Guarded like `dist` itself: a half-cleaned build would otherwise crash with a raw ENOENT
+// stack in place of the message this script exists to print.
+if (!existsSync(assetsDir)) {
+  console.error(`${assetsDir} does not exist — the build did not finish`);
+  process.exit(1);
+}
 const assets = readdirSync(assetsDir);
 
 if (!assets.includes(CHUNK)) {

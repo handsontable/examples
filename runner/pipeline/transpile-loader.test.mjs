@@ -271,22 +271,59 @@ test("asBabel keeps resolving the two shapes that already worked", () => {
   );
 });
 
-test("a module with no transform() is a compiler failure, and keeps its URL", async () => {
+test("a module with no transform() is a compiler failure, not a visitor typo", async () => {
   // The SPA fallback answers a rotated chunk with `200 text/html`; a module that parses but
   // exposes no compiler is the same class of event. It must not be left to surface downstream
   // inside babel.transform, where tier1Report files it in the visitor-source bucket as if it
   // were a typo — that is what this defect did in production.
+  //
+  // Modelled on the *primary* site, which is where a genuine shape change would be met first
+  // and which passes no URL — the specifier is rewritten to a hashed path at build time, so
+  // nothing there knows it. So `assetUrl` is null and the retry is declined, both of which the
+  // real loader does: refetching the same URL returns the same bytes and the same shape.
+  let retries = 0;
   const { load } = createRetryingLoader(
-    async () => asBabel(ns({}), CHUNK),
-    () => null,
+    async () => asBabel(ns({})),
+    () => {
+      retries += 1;
+      return null;
+    },
     wrap,
   );
 
   const e = await load().catch((err) => err);
   assert.ok(isCompilerUnavailable(e), "ours to fix, not the visitor's");
   assert.equal(e.message, COMPILER_UNAVAILABLE_MESSAGE);
-  assert.equal(e.assetUrl, CHUNK, "the URL has to ride in the thrown message to survive here");
+  assert.equal(e.assetUrl, null, "the primary site has no URL to name — see loadBabelChunk");
+  assert.equal(retries, 1, "the retry was offered the cause and declined it — not skipped");
+  assert.match(e.cause.message, /exported no transform/);
 });
+
+// The retry *does* know its URL, and that is the one Sentry gets as `extra.assetUrl`. It only
+// survives because `asBabel` puts it in the thrown message — `assetUrlFrom` regexes the cause.
+//
+// Run for both ways `retryOf` can fail. The real one normalises inside `.then`, so it rejects;
+// a synchronous throw is what a later refactor would produce, and it has to be wrapped just the
+// same — an error that is not a `CompilerUnavailableError` is filed as the visitor's own compile
+// failure, which is the mis-routing half of this defect.
+for (const [how, failing] of [
+  ["rejects", (url) => Promise.resolve(ns({})).then((m) => asBabel(m, url))],
+  ["throws synchronously", (url) => asBabel(ns({}), url)],
+]) {
+  test(`a shape miss on a retry that ${how} keeps the URL it asked for`, async () => {
+    const { load } = createRetryingLoader(
+      async () => {
+        throw new TypeError(`Failed to fetch dynamically imported module: ${CHUNK}`);
+      },
+      (cause) => failing(`${assetUrlFrom(cause)}?hotRetry=1`),
+      wrap,
+    );
+
+    const e = await load().catch((err) => err);
+    assert.ok(isCompilerUnavailable(e), "our asset, not the visitor's source");
+    assert.equal(e.assetUrl, `${CHUNK}?hotRetry=1`);
+  });
+}
 
 test("a bad-shape resolution is retried against a fresh URL and recovers", async () => {
   // The whole point: the retry now yields a usable compiler instead of a wrapper.

@@ -308,6 +308,15 @@ test("live: fixing a Vue template error clears the preview error card", async ({
 const COMPILER_CHUNK = "**/assets/compiler-babel.js*";
 
 test("a blocked compiler chunk cards, and Restart preview really recovers", async ({ page }) => {
+  // Local-build only, and not because it is slow or flaky: the premise is the artifact this
+  // run just built. `e2e-live.yml` runs this file with `E2E_BASE_URL` pointed at a deployment
+  // for the nightly canary, where `baseURL` is off-localhost — the blanket abort below would
+  // kill `page.goto` itself, and the deployed build may predate the stable chunk name. The
+  // live half of this pair is the test after it.
+  test.skip(
+    Boolean(process.env.E2E_BASE_URL),
+    "runs against the locally built app — unset E2E_BASE_URL to run it",
+  );
   test.setTimeout(120_000);
   // Deterministic in the strict sense: `stubShell` alone is not enough here. A `parcel`
   // sandbox loads its bundler from a *versioned* host (measured: 2-19-8-sandpack.codesandbox.io)
@@ -380,9 +389,18 @@ test("live: the grid renders after a compiler-chunk recovery", async ({ page }) 
   // signal; a real bundler behind it is what proves the recovered compiler's output builds.
 
   let blocked = true;
-  await page.route(COMPILER_CHUNK, (route) => (blocked ? route.abort() : route.fallback()));
+  const seen: string[] = [];
+  await page.route(COMPILER_CHUNK, (route) => {
+    seen.push(route.request().url());
+    return blocked ? route.abort() : route.fallback();
+  });
 
   await page.goto("/?example=javascript");
+  // Named before the status wait so a target whose build predates the stable chunk name fails
+  // saying so, rather than as an opaque 60 s timeout on an error card that never appears.
+  await expect
+    .poll(() => seen.length, { timeout: 60_000, intervals: [500] })
+    .toBeGreaterThan(0);
   await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "error", {
     timeout: 60_000,
   });

@@ -163,13 +163,16 @@ export function createRetryingLoader<T>(
       } catch (cause) {
         first = cause;
       }
-      const retry = retryOf(first, generation);
-      if (retry) {
-        try {
-          return await retry;
-        } catch (cause) {
-          first = cause;
-        }
+      try {
+        // `retryOf` is inside the try, not just its promise: the real one builds the URL and
+        // normalises the module inside `.then`, so it rejects — but a synchronous throw from
+        // it (a bad URL, a shape check moved out of the `.then`) would otherwise escape
+        // un-wrapped, and an error that is not a `CompilerUnavailableError` is filed as the
+        // visitor's own compile failure. Half of DEV-2569 was exactly that mis-routing.
+        const retry = retryOf(first, generation);
+        if (retry) return await retry;
+      } catch (cause) {
+        first = cause;
       }
       terminal = wrap(first, {});
       throw terminal;
@@ -242,6 +245,13 @@ function findBabel(value: unknown, depth: number): Babel | null {
   return null;
 }
 
+/** No URL is passed: the primary specifier is rewritten to a hashed path at build time, so
+ *  nothing here knows it (that is the whole reason `retryBabelChunk` reads it out of the
+ *  engine's error text). A shape mismatch discovered here therefore reaches
+ *  `CompilerUnavailableError` with `assetUrl: null` and no retry — correct on both counts:
+ *  refetching the same URL returns the same bytes and the same shape, and the chunk now has
+ *  one fixed path (`assets/compiler-babel.js`), so naming it adds nothing the fingerprint
+ *  does not already say. The engine's own wording still rides in `extra.cause`. */
 const loadBabelChunk = createLazyLoader<Babel>(() =>
   import("@babel/standalone").then((m) => asBabel(m)),
 );
