@@ -12,6 +12,8 @@
 // `@handsontable/demo-runtime`, so the reporter source must never be duplicated
 // into workers/api — a second copy is a second set of caps to keep in sync.
 
+import { injectedScriptTag } from "./inject-html.js";
+
 /** The `postMessage` discriminator. Also the injection idempotency marker. */
 export const MONITOR_MESSAGE_TYPE = "hot-runner-monitor";
 
@@ -646,22 +648,29 @@ function alreadyInjected(source: string): boolean {
  * fault raised while the demo's own scripts evaluate is exactly the class we are
  * here for, so the reporter has to be hooked before them.
  *
+ * Inserted with no surrounding whitespace, and the tag deletes its own element
+ * (see `inject-html.ts`): a React 18 hydrator that owns the whole document — remix's
+ * `hydrateRoot(document, …)` — strict-matches every child of `<head>`, and a leftover
+ * newline text node fails that match exactly as the `<script>` element does. Both
+ * halves were measured against the remix starter; either one alone still throws
+ * React #418 (DEV-2580).
+ *
  * Returns `html` unchanged when it is already injected.
  */
 export function injectReporterIntoHtml(html: string): string {
   if (alreadyInjected(html)) return html;
-  const tag = `<script>${REPORTER_SOURCE}</script>`;
+  const tag = injectedScriptTag(REPORTER_SOURCE);
   const head = /<head\b[^>]*>/i.exec(html);
   if (head) {
     const at = head.index + head[0].length;
-    return html.slice(0, at) + "\n" + tag + html.slice(at);
+    return html.slice(0, at) + tag + html.slice(at);
   }
   const body = /<body\b[^>]*>/i.exec(html);
   if (body) {
     const at = body.index + body[0].length;
-    return html.slice(0, at) + "\n" + tag + html.slice(at);
+    return html.slice(0, at) + tag + html.slice(at);
   }
-  return tag + "\n" + html;
+  return tag + html;
 }
 
 /**
