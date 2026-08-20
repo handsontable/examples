@@ -591,6 +591,32 @@ const THEMED_AT_16 = {
   },
 };
 
+test("an unusable version leaves a wired theme alone", async ({ page }) => {
+  // "Not themeable" and "on a core below the theme API" are two different
+  // questions, and the strip may only key on the second (review, PR #241). A ref
+  // the validator refuses — a half-typed version in the pencil, a legacy `latest`
+  // sentinel on a saved row, a `?v=` typo — is not a pre-17 core. The preview
+  // refuses to boot on all of them, and taking a theme out of the workspace over
+  // any of them destroys files to fix nothing.
+  await stubShell(page);
+  await page.route("**/api/payload/thm16at0002", (route) => route.fulfill({ json: THEMED_AT_16 }));
+  await page.goto("/?payload=thm16at0002&v=latest");
+
+  // The Style button is still refused — that half is right.
+  await expect(page.getByRole("button", { name: "Style", exact: true }))
+    .toHaveAttribute("aria-disabled", "true");
+
+  // The files are untouched. Polled, so this cannot pass by reading the workspace
+  // before the strip effect would have had its chance.
+  await expect(async () => {
+    const files = await workspaceFiles(page);
+    expect(Object.keys(files), "the payload opened").toContain("/handsontable-theme.js");
+    expect(files["/handsontable-theme.js"]).toContain("handsontable/themes");
+    expect(files["/index.js"]).toContain("customTheme");
+  }).toPass();
+  await expect(page.locator('span[title*="the custom theme was removed"]')).toBeHidden();
+});
+
 test("a workspace that arrives themed on a sub-17 pin is repaired on load", async ({ page }) => {
   await stubShell(page);
   await page.route("**/api/payload/thm16at0001", (route) => route.fulfill({ json: THEMED_AT_16 }));

@@ -1078,14 +1078,36 @@ function Authoring({
     const major = selectedReleaseMajor(version);
     return major === null || major >= THEME_API_MIN_MAJOR;
   })();
+
+  /** Is this demo on a core we *know* cannot resolve the theme module's imports —
+   *  a real release major below the floor?
+   *
+   *  A narrower question than `themingSupported`, and the two must not be
+   *  conflated (review, PR #241). A ref the validator refuses is not themeable
+   *  either, but it is not a pre-17 core: a half-typed version in the pencil, a
+   *  legacy `latest` sentinel on a saved row (DEV-2565), a `?v=14.0.0` typo. The
+   *  preview refuses to boot on all three, and taking a theme out of the
+   *  workspace over any of them is destroying files to fix nothing.
+   *
+   *  `selectedReleaseMajor` already answers null for everything that carries no
+   *  comparable major — prereleases, pkg.pr.new refs, refused refs — so the
+   *  positive test is the whole guard. */
+  const belowThemeApi = (() => {
+    const major = selectedReleaseMajor(version);
+    return major !== null && major < THEME_API_MIN_MAJOR;
+  })();
+
   // Switching the version *down* has to close an open panel, not just hide it:
   // `styleOpen` would stay latched true and the toolbar button would keep
   // reading as pressed with nothing on screen.
-  //
-  // And the panel is not the only thing that has to go (DEV-2571, Sentry
-  // DEMOS-1P). The generated theme module is a real workspace file, and a
-  // version switch on a dirty workspace deliberately *keeps* the files it finds
-  // (ADR-0021 §6) — applying a theme is what dirtied it, so a themed demo takes
+  useEffect(() => {
+    if (!themingSupported) setStyleOpen(false);
+  }, [themingSupported]);
+
+  // And on a core below the floor the panel is not the only thing that has to go
+  // (DEV-2571, Sentry DEMOS-1P). The generated theme module is a real workspace
+  // file, and a version switch on a dirty workspace deliberately *keeps* the files
+  // it finds (ADR-0021 §6) — applying a theme is what dirtied it, so a themed demo takes
   // exactly that branch on the way down and arrives on a core where
   // `handsontable/themes` does not exist. The preview then fails to resolve the
   // module's own imports. Reset is already the operation that takes a theme back
@@ -1096,10 +1118,10 @@ function Authoring({
   // (`StylePanel`), and reopening the panel on a supported core reconciles it
   // straight back into the demo.
   //
-  // `files` in the deps, not just `themingSupported`: a saved, shared or
-  // imported workspace can *arrive* already themed on a sub-17 pin, with no
-  // version change anywhere — a fix hanging off the version handler alone would
-  // ship green and leave that path reporting.
+  // `files` in the deps, not just the floor: a saved, shared or imported
+  // workspace can *arrive* already themed on a sub-17 pin, with no version change
+  // anywhere — a fix hanging off the version handler alone would ship green and
+  // leave that path reporting.
   //
   // Declared above the runtime-mount effect on purpose. Effects run in
   // declaration order, so this write to `filesRef.current` lands before the
@@ -1107,8 +1129,7 @@ function Authoring({
   // broken module gets compiled once and only then repaired, which is the very
   // event this fixes.
   useEffect(() => {
-    if (themingSupported) return;
-    setStyleOpen(false);
+    if (!belowThemeApi) return;
     if (!hasWiredTheme(filesRef.current)) return;
     let next = filesRef.current;
     for (const change of buildResetChanges(next)) {
@@ -1137,7 +1158,7 @@ function Authoring({
     // run, not an edit the visitor made. Dirtying it would light up `Save •` on
     // a shared demo nobody has touched.
     setThemeRemoved(true);
-  }, [themingSupported, files]);
+  }, [belowThemeApi, files]);
   /** Edit info (`114:24410`), opened from the BOX INFO pencil. Replaces the two
    *  bare inputs T2 had to park in the authed action bar for want of a frame.
    *
