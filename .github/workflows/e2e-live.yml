@@ -10,11 +10,10 @@ name: E2E — live render (Sandpack bundler)
 #     the deployed app directly. `ai: true` adds the LLM answer checks;
 #     `pkg_pr_new_ref` boots one container at a pkg.pr.new build (DEV-2198
 #     validation days).
-#   - schedule — the weekly prod canary (Mon 05:00 UTC), deployed mode with AI
-#     on. Deploy-time breakage is caught by the post-deploy smoke below; the
-#     canary exists for external drift — the hosted bundler, npm, the broker,
-#     docs-bucket rot — which moves on week-scale. Daily would burn container
-#     hours and turn every bundler blip into a triage.
+#   - schedule — the nightly prod canary (03:00 UTC, after the 01:00 starter
+#     matrix). Deploy-time breakage is caught by the post-deploy smoke below;
+#     the canary catches external drift — the hosted bundler, npm, the broker,
+#     docs-bucket rot — and, at Dan's call, runs every live-gated test nightly.
 #   - workflow_call with `smoke: true` — the post-deploy subset both deploy
 #     workflows invoke: `--grep @smoke`, one container, a few minutes.
 #

@@ -196,7 +196,10 @@ test("live: breaking and un-breaking a line leaves the grid alone", async ({ pag
     const at = doc.indexOf("'Company name'") + 1;
     view.dispatch({ changes: { from: at, to: at + "Company name".length, insert: "Sentinel column" } });
   })()`);
-  await expect(preview.getByText("Sentinel column")).toBeVisible({ timeout: 60_000 });
+  // .first(): Handsontable renders a column header twice — the master table
+  // and the top overlay clone — so a bare getByText is a strict-mode violation
+  // the moment the rename actually lands (first live run of this rework, DEV-2203).
+  await expect(preview.getByText("Sentinel column").first()).toBeVisible({ timeout: 60_000 });
 
   // The grid never left, the status never left ready — and, the discriminating bit,
   // the preview document was never reset behind our back.
