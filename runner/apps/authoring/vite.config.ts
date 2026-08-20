@@ -33,6 +33,41 @@ export default defineConfig({
     // plugin's post-upload cleanup never runs to remove — and a manual
     // `wrangler deploy` would publish them.
     sourcemap: uploadEnabled,
+    rollupOptions: {
+      output: {
+        // Keep @babel/standalone in a chunk whose path does not change per build
+        // (DEV-2569). This app is served from Workers Assets with
+        // `not_found_handling: "single-page-application"` (see wrangler.jsonc), so a
+        // deploy removes the previous build's hashed chunks and their paths answer
+        // `200 text/html` instead of a 404. A tab that had not yet fetched the ~2.3 MB
+        // compiler when a deploy landed was then asking for a file that no longer
+        // existed — forever, since an HTML body is not a module. A stable path always
+        // exists in the deploy that is currently live.
+        //
+        // No cache-header work goes with this: Workers Assets already serves every
+        // asset, hashed or not, as `cache-control: public, max-age=0, must-revalidate`
+        // with an ETag (measured on prod 2026-08-20), so the stable URL revalidates on
+        // each use and picks up the new bytes.
+        //
+        // Two accepted consequences. A tab open across a deploy that fetches the
+        // compiler afterwards gets the *new* build's babel — benign, we only call
+        // `transform`, and strictly better than a permanent failure. And the Sentry
+        // plugin matches sourcemaps by the embedded debug id rather than by filename,
+        // so reusing a name across releases does not confuse symbolication.
+        //
+        // Renaming only, deliberately: no `manualChunks`. Assigning @babel/standalone to
+        // a named chunk was measured to pull Rollup's shared `getDefaultExportFromCjs`
+        // helper in with it (`export { … as b, … as g }`), which made two ordinary chunks
+        // import the 2.3 MB compiler *statically* and put a `modulepreload` for it in
+        // index.html — the opposite of lazy. Rollup's own split of the dynamic import in
+        // `packages/runtime/src/transpile.ts` already isolates it under the implicit name
+        // `babel`; all this does is take the hash off that one file. If a Rollup version
+        // ever renames that chunk, `scripts/check-compiler-chunk.mjs` goes red in CI rather
+        // than the hash quietly coming back.
+        chunkFileNames: (chunk) =>
+          chunk.name === "babel" ? "assets/compiler-babel.js" : "assets/[name]-[hash].js",
+      },
+    },
   },
   plugins: [
     react(),

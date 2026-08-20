@@ -137,6 +137,14 @@ jobs:
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
           GITHUB_SHA: ${{ github.sha }}
 
+      # The one regression that only shows up in a deploy: the compiler chunk's content hash
+      # coming back, which strands every tab opened before the next deploy (DEV-2569). ci.yml
+      # checks the PR build; a push or workflow_dispatch that never had a PR build reaches this
+      # job instead, so it is checked here too — before the upload, not after.
+      - name: Check the compiler chunk (DEV-2569)
+        if: needs.changes.outputs.authoring == 'true'
+        run: node scripts/check-compiler-chunk.mjs
+
       - name: Upload the authoring build
         if: needs.changes.outputs.authoring == 'true'
         uses: actions/upload-artifact@v4

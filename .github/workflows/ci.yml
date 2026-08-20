@@ -147,6 +147,13 @@ jobs:
       - name: Build authoring (build smoke + e2e target)
         run: pnpm --filter @handsontable/demo-authoring build
 
+      # Two properties of the *bundle* that no unit test can see: the compiler chunk keeps a
+      # hash-free path (a rotated hashed chunk answers the SPA fallback and strands open tabs
+      # — DEV-2569 / DEMOS-15), and it stays lazily imported rather than joining the initial
+      # load. Checked here because this is the job that has the build.
+      - name: Check the compiler chunk (DEV-2569)
+        run: node scripts/check-compiler-chunk.mjs
+
       - name: Upload the authoring build
         uses: actions/upload-artifact@v4
         with:

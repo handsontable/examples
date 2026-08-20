@@ -163,13 +163,16 @@ export function createRetryingLoader<T>(
       } catch (cause) {
         first = cause;
       }
-      const retry = retryOf(first, generation);
-      if (retry) {
-        try {
-          return await retry;
-        } catch (cause) {
-          first = cause;
-        }
+      try {
+        // `retryOf` is inside the try, not just its promise: the real one builds the URL and
+        // normalises the module inside `.then`, so it rejects — but a synchronous throw from
+        // it (a bad URL, a shape check moved out of the `.then`) would otherwise escape
+        // un-wrapped, and an error that is not a `CompilerUnavailableError` is filed as the
+        // visitor's own compile failure. Half of DEV-2569 was exactly that mis-routing.
+        const retry = retryOf(first, generation);
+        if (retry) return await retry;
+      } catch (cause) {
+        first = cause;
       }
       terminal = wrap(first, {});
       throw terminal;
@@ -181,8 +184,76 @@ export function createRetryingLoader<T>(
   };
 }
 
+/**
+ * Resolve the babel object out of whatever a dynamic import actually handed back
+ * (DEV-2569, second pass).
+ *
+ * The two import sites in this file are byte-identical in source and *not* identical in the
+ * shipped bundle. Vite rewrites only the bare specifier, and `@babel/standalone` is CJS, so
+ * the primary site gets an interop hop the `@vite-ignore` retry does not. Measured in the
+ * deployed bundle (`/assets/index-uxATgr1X.js`, 2026-08-20):
+ *
+ *   primary:  import("./babel-<hash>.js").then(t => t.b).then(t => t.default ?? t)
+ *   retry:    import(`${url}?hotRetry=1`).then(o => o.default ?? o)
+ *
+ * and the chunk's only export is that wrapper — `export { Hke as b }`, where `Hke` is Vite's
+ * `_mergeNamespaces({__proto__: null, default: babel}, [cjs])`. So the retry resolved the raw
+ * module record `{b: {…}}`, `m.default` was `undefined`, and the loader returned the record:
+ * the retry "succeeded" and the next compile died as `e.transform is not a function`.
+ *
+ * Hence a shape check rather than a fixed unwrap. The three shapes this has to accept, all
+ * measured:
+ *
+ *   Node / `dist` (what `pipeline/*.test.mjs` sees)   { default: babel, …named }
+ *   bundled primary, after Vite's hop                 { __proto__: null, default: babel }
+ *   bundled retry, no hop                             { b: { default: babel, transform } }
+ *
+ * `default` is preferred at every level, so the primary path keeps resolving exactly the
+ * object it resolves today. Walking *values* rather than a hardcoded `b` is what survives
+ * Rollup renaming that export — the name is bundler-generated and pinned by nothing.
+ *
+ * A miss **throws**, and the throw carries the URL: this runs inside the loaders, so the
+ * rejection reaches `createRetryingLoader` and becomes a `CompilerUnavailableError` — latched,
+ * carded, and reported as our own infrastructure failure. Left un-thrown it would surface
+ * downstream inside `babel.transform` and be filed in the visitor-source Sentry bucket as if
+ * it were the visitor's typo, which is the other half of what this defect was. `assetUrl` is
+ * recovered by `assetUrlFrom` regexing the cause's *message*, so the URL has to be in it.
+ */
+export function asBabel(ns: unknown, url?: string | null): Babel {
+  const babel = findBabel(ns, 2);
+  if (babel) return babel;
+  throw new TypeError(
+    `the in-browser compiler module exported no transform()${url ? `: ${url}` : ""}`,
+  );
+}
+
+/** Depth 2 is what the shapes above need: the record, its `default`, and one wrapper level. */
+function findBabel(value: unknown, depth: number): Babel | null {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return null;
+  const record = value as Record<string, unknown>;
+  if (depth > 0) {
+    const viaDefault = findBabel(record.default, depth - 1);
+    if (viaDefault) return viaDefault;
+  }
+  if (typeof record.transform === "function") return record as unknown as Babel;
+  if (depth > 0) {
+    for (const nested of Object.values(record)) {
+      const hit = findBabel(nested, depth - 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/** No URL is passed: the primary specifier is rewritten to a hashed path at build time, so
+ *  nothing here knows it (that is the whole reason `retryBabelChunk` reads it out of the
+ *  engine's error text). A shape mismatch discovered here therefore reaches
+ *  `CompilerUnavailableError` with `assetUrl: null` and no retry — correct on both counts:
+ *  refetching the same URL returns the same bytes and the same shape, and the chunk now has
+ *  one fixed path (`assets/compiler-babel.js`), so naming it adds nothing the fingerprint
+ *  does not already say. The engine's own wording still rides in `extra.cause`. */
 const loadBabelChunk = createLazyLoader<Babel>(() =>
-  import("@babel/standalone").then((m) => ((m as { default?: Babel }).default ?? m) as Babel),
+  import("@babel/standalone").then((m) => asBabel(m)),
 );
 
 /** The retry's URL: the failed chunk with a query the module map has not seen. `@vite-ignore`
@@ -192,9 +263,8 @@ function retryBabelChunk(cause: unknown, generation: number): Promise<Babel> | n
   const url = assetUrlFrom(cause);
   if (!url) return null;
   const sep = url.includes("?") ? "&" : "?";
-  return import(/* @vite-ignore */ `${url}${sep}hotRetry=${generation + 1}`).then(
-    (m) => ((m as { default?: Babel }).default ?? m) as Babel,
-  );
+  const spec = `${url}${sep}hotRetry=${generation + 1}`;
+  return import(/* @vite-ignore */ spec).then((m) => asBabel(m, spec));
 }
 
 const babelLoader = createRetryingLoader<Babel>(
