@@ -90,20 +90,47 @@ export interface FailureDetail {
   code: string;
 }
 
-/** The last entry satisfying `pred` — the newest occurrence, since logs run forwards. */
-function findLastLine(lines: readonly string[], pred: (line: string) => boolean): string | null {
+/** A line that is only a heading for the detail beneath it — vite's `error during
+ *  build:`, esbuild's `Build failed with 1 error:`, tsc's `error TS2307:` when the
+ *  detail wraps. Anchoring on such a line and stopping there loses the actual error:
+ *  the announcing tier picks the label, and the message becomes a content-free
+ *  `build failed: error during build:`. `vite build` is the build command for nearly
+ *  every framework in the catalog, so this is the common path, not an edge case. */
+const CAUSE_LABEL = /:\s*$/;
+
+/** The last entry satisfying `pred` — the newest occurrence, since logs run forwards.
+ *  Returns the index so a caller can look at what followed it. */
+function findLastIndex(lines: readonly string[], pred: (line: string) => boolean): number {
   for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (pred(lines[i]!)) return lines[i]!;
+    if (pred(lines[i]!)) return i;
   }
-  return null;
+  return -1;
 }
 
-/** Strip the redraw frames and escape codes, drop blanks, keep the tail window. */
+/** The cause at `index`, plus the line under it when the cause is only a label. Joined
+ *  rather than replaced: the label carries which tool failed ("error during build:"),
+ *  the line under it carries what failed, and a reader wants both in the title. */
+function lineWithDetail(lines: readonly string[], index: number): string | null {
+  if (index < 0) return null;
+  const line = lines[index]!;
+  const next = lines[index + 1];
+  return CAUSE_LABEL.test(line) && next ? `${line.trim()} ${next.trim()}` : line;
+}
+
+/** Strip the redraw frames and escape codes, drop blanks, keep the tail window.
+ *
+ *  A reset at the very END of a line resets nothing — there is no next frame on that
+ *  line to keep — so it is dropped before the last-frame-wins slice. Without that, a
+ *  line ending in `\x1b[0G` is deleted whole, and a log that is one such line
+ *  (`ERR_PNPM_OUTDATED_LOCKFILE …\x1b[0G`) becomes "no output": no cause, and no
+ *  `buildLog` extra either, since the report site only attaches a non-empty one. Same
+ *  reasoning the comment on `LINE_RESET` gives for trailing `\x1b[K`. */
 function cleanLines(log: string, keepLines: number): string[] {
   return log
     .replace(LINE_RESET, "\r")
     .replace(ANSI_CSI, "")
     .split("\n")
+    .map((l) => l.replace(/\r+$/, ""))
     .map((l) => l.slice(l.lastIndexOf("\r") + 1).trimEnd())
     .filter(Boolean)
     .slice(-keepLines);
@@ -163,8 +190,8 @@ function describe(
 export function failureDetail(log: string, options: FailureDetailOptions = {}): FailureDetail {
   const lines = cleanLines(log, options.keepLines ?? DEFAULT_KEEP_LINES);
   const candidate =
-    findLastLine(lines, announcesCause) ??
-    findLastLine(lines, mentionsCause) ??
+    lineWithDetail(lines, findLastIndex(lines, announcesCause)) ??
+    lineWithDetail(lines, findLastIndex(lines, mentionsCause)) ??
     lines[lines.length - 1] ??
     null;
   return describe(candidate, lines, options);
@@ -193,10 +220,10 @@ export function execFailureDetail(
   const err = cleanLines(result.stderr ?? "", keepLines);
   const out = cleanLines(result.stdout ?? "", keepLines);
   const candidate =
-    findLastLine(err, announcesCause) ??
-    findLastLine(out, announcesCause) ??
-    findLastLine(err, mentionsCause) ??
-    findLastLine(out, mentionsCause) ??
+    lineWithDetail(err, findLastIndex(err, announcesCause)) ??
+    lineWithDetail(out, findLastIndex(out, announcesCause)) ??
+    lineWithDetail(err, findLastIndex(err, mentionsCause)) ??
+    lineWithDetail(out, findLastIndex(out, mentionsCause)) ??
     err[err.length - 1] ??
     out[out.length - 1] ??
     null;

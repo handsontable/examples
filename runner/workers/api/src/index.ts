@@ -1894,6 +1894,10 @@ export default Sentry.withSentry(sentryOptions, {
           // only better titled. Keyed by the machine code so the group stays
           // diagnosable; the title then tracks the newest event within it, which is
           // the accepted trade (`ContainerBootFailure` in App.tsx makes the same one).
+          // Bundler failures carry no machine code and therefore share the `other`
+          // group — coarse, but their causes are specific (the picker takes the line
+          // under a label like vite's "error during build:"), so the title still names
+          // one, and `buildLog` carries the rest.
           fingerprint: ["snapshot-build", err.phase, err.code],
           // Bounded and picked apart in share.ts, and never in the message — a log in
           // an `Error.message` is what invented DEMOS-1Y's culprit.

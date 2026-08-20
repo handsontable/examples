@@ -99,17 +99,60 @@ test("stderr breaks the tie when both streams announce a cause", () => {
   assert.match(cause, /^ERR_PNPM_FETCH_404/);
 });
 
+/** A real `vite build` failure. `runBuild` execs the binary off `node_modules/.bin`
+ *  rather than an npm script (share.ts), so there is no pnpm `ELIFECYCLE` epilogue —
+ *  the announcing line is vite's own section label, and the error is under it. */
+const VITE_STDOUT = `vite v5.4.21 building for production...
+transforming...
+error during build:
+[vite]: Rollup failed to resolve import "handsontable/styles/x.css" from "/app/src/main.ts".`;
+
 test("an announced cause on stdout outranks trailing noise on stderr", () => {
   // vite/ng/next report real build errors on stdout while stderr carries deprecation
   // and browserslist chatter. A plain "stderr wins" rule promotes the warning.
   const { cause } = execFailureDetail(
     {
-      stdout: "vite v5.4.21 building for production...\nerror during build:\nELIFECYCLE  Command failed with exit code 1.",
+      stdout: VITE_STDOUT,
       stderr: "(node:41) [DEP0040] DeprecationWarning: The `punycode` module is deprecated.\nBrowserslist: caniuse-lite is outdated.",
     },
     BUILDER,
   );
-  assert.match(cause, /^ELIFECYCLE/);
+  assert.match(cause, /Rollup failed to resolve import/);
+  assert.ok(!cause.includes("DeprecationWarning"));
+});
+
+test("a label-only cause takes the line under it — the common vite build failure", () => {
+  // Stopping at "error during build:" would title every vite failure identically and
+  // tell the user nothing; `vite build` is the build command for nearly every
+  // framework in the catalog, so this is the dominant path.
+  const { cause } = execFailureDetail({ stdout: VITE_STDOUT }, BUILDER);
+  assert.equal(
+    cause,
+    'error during build: [vite]: Rollup failed to resolve import "handsontable/styles/x.css" from "/app/src/main.ts".',
+  );
+  assert.ok(!cause.includes("\n"));
+});
+
+test("a reset at the end of a line erases nothing", () => {
+  // `\x1b[0G` means "the next frame replaces this line". At the end of a line there is
+  // no next frame, and treating it as one deleted the line — a one-line log then
+  // described itself as "no output", with no cause AND no buildLog extra.
+  const { cause, tail } = execFailureDetail(
+    { stderr: " ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with frozen-lockfile\x1b[0G" },
+    BUILDER,
+  );
+  assert.match(cause, /^ERR_PNPM_OUTDATED_LOCKFILE/);
+  assert.notEqual(tail, "");
+});
+
+test("a redraw mid-line still keeps only the last frame", () => {
+  // The counterpart to the test above: the reset rule must keep collapsing pnpm's
+  // progress redraws, or every frame glues into one run-on line.
+  const { cause } = execFailureDetail(
+    { stdout: "\x1b[2K\x1b[1GProgress: resolved 1\x1b[2K\x1b[1GProgress: resolved 2" },
+    BUILDER,
+  );
+  assert.equal(cause, "Progress: resolved 2");
 });
 
 test("a mentioned cause is used only when nothing announces one", () => {
