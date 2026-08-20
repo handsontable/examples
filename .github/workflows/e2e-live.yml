@@ -136,6 +136,7 @@ jobs:
           e2e/version-pinning.spec.ts
           e2e/share-view.spec.ts
           e2e/style-panel.spec.ts
+          e2e/preview-scheme.spec.ts
 
       # Container suites, one worker: each Tier-2 case holds a live-preview
       # container, prod caps those at 5 *globally* (Sandbox max_instances), and
@@ -174,10 +175,14 @@ jobs:
         if: ${{ !inputs.smoke && env.BASE_URL != '' }}
         env:
           E2E_BASE_URL: ${{ env.BASE_URL }}
+          # The session-leak spec (DEV-2567) drives the API directly and reads
+          # the auth-gated /api/admin/sessions listing, so it rides this
+          # token-gated step rather than the anonymous suites.
+          E2E_API_BASE: ${{ env.BASE_URL }}
           E2E_BROKER_TOKEN: ${{ secrets.E2E_BROKER_TOKEN }}
         run: |
           if [ -z "$E2E_BROKER_TOKEN" ]; then
-            echo "::notice::E2E_BROKER_TOKEN is not set — the authed share round-trip was skipped."
+            echo "::notice::E2E_BROKER_TOKEN is not set — the authed share round-trip and the session-leak spec were skipped."
             exit 0
           fi
           code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $E2E_BROKER_TOKEN" \
@@ -192,7 +197,7 @@ jobs:
           # and this repo is public. No traces, no retries, and every artifact
           # of this step is scrubbed before the on-failure upload can see it.
           status=0
-          pnpm e2e e2e/share-create-live.spec.ts --workers=1 --retries=0 --trace off || status=$?
+          pnpm e2e e2e/share-create-live.spec.ts e2e/session-abandoned-create.spec.ts --workers=1 --retries=0 --trace off || status=$?
           rm -rf test-results playwright-report
           exit $status
 
