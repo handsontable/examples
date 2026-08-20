@@ -286,9 +286,10 @@ test("live: fixing a Vue template error clears the preview error card", async ({
 // @babel/standalone: ~2.3 MB, code-split, fetched on first compile. It fails for ordinary
 // reasons (offline, a blocked request, an extension) and it used to fail permanently for
 // one of ours — a deploy rotating the chunk out from under a tab, which Workers Assets
-// answers with `200 text/html` rather than a 404. `assets/compiler-babel.js` is hash-free
-// now so that population is gone (`scripts/check-compiler-chunk.mjs` pins the name), and
-// what is left is the transient case these two tests drive.
+// answers with `200 text/html` rather than a 404. The hash-free chunk name meant to close that
+// population is reverted (see vite.config.ts — a stable path with a content-hashed dependency
+// drags a second copy of the app into an old tab), so a rotated chunk is still cured only by a
+// reload and the transient case is what these two tests drive.
 //
 // This spec is the *only* place the loader can be tested honestly. Its two import sites are
 // byte-identical in source and are not identical in the bundle — Vite rewrites the bare
@@ -305,7 +306,7 @@ test("live: fixing a Vue template error clears the preview error card", async ({
 
 /** The compiler chunk plus any retry query. The trailing `*` is load-bearing: without it
  *  the `?hotRetry=n` requests slip past the block and the test passes for the wrong reason. */
-const COMPILER_CHUNK = "**/assets/compiler-babel.js*";
+const COMPILER_CHUNK = "**/assets/babel-*.js*";
 
 test("a blocked compiler chunk cards, and Restart preview really recovers", async ({ page }) => {
   // Local-build only, and not because it is slow or flaky: the premise is the artifact this
