@@ -801,6 +801,26 @@ export function themeModulePath(files: Record<string, string>): string {
 }
 
 /**
+ * Is a *live* theme module wired into these files?
+ *
+ * Contents, not filename (DEV-2571 / Sentry DEMOS-1P). `buildResetChanges` does
+ * not delete the module — it leaves `export const customTheme = undefined`
+ * behind, and it writes that file even on a workspace that never had a theme —
+ * so a path-presence check reports a theme forever after the first Reset. What
+ * makes a module a theme is the import that a pre-17 core cannot resolve.
+ *
+ * Both extensions are scanned rather than just `themeModulePath(files)`: adding
+ * a `.ts` file to a JS demo flips that answer, and the stale module would then
+ * be invisible to the very check meant to find it.
+ */
+export function hasWiredTheme(files: Record<string, string>): boolean {
+  return Object.entries(files).some(([path, source]) =>
+    path.includes(THEME_MODULE_BASENAME)
+    && typeof source === "string"
+    && source.includes("handsontable/themes"));
+}
+
+/**
  * The file edits that apply `state` to a demo: the theme module, plus the one
  * line that hands it to the grid when we can see where that happens.
  */

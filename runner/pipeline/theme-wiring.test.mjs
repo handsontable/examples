@@ -167,7 +167,7 @@ const CASES = {
 };
 
 const SCRIPT = `
-const { buildThemeChanges, buildResetChanges, buildThemeModule } = await import("./theme/codegen.ts");
+const { buildThemeChanges, buildResetChanges, buildThemeModule, hasWiredTheme } = await import("./theme/codegen.ts");
 const { DEFAULT_THEME } = await import("./theme/vocabulary.ts");
 const cases = ${JSON.stringify(CASES)};
 const out = {};
@@ -177,10 +177,14 @@ for (const [name, { path, source: original, keep, unwired }] of Object.entries(c
   for (const c of changes) files[c.path] = c.contents;
   const applied = files[path];
   const code = applied.split("\\n").filter((l) => !l.includes("handsontable-theme")).join("\\n");
+  const detectedApplied = hasWiredTheme(files);
   for (const c of buildResetChanges(files)) files[c.path] = c.contents;
   out[name] = {
     linked,
     applied,
+    detectedApplied,
+    detectedReset: hasWiredTheme(files),
+    themesImportAfterReset: Object.values(files).some((s) => s.includes("handsontable/themes")),
     unwired: Boolean(unwired),
     wired: code.includes("theme={customTheme}")
       || code.includes("theme: customTheme")
@@ -213,6 +217,22 @@ out.__density = buildThemeModule(
   },
   true,
 );
+// DEV-2571: what a sub-17 core does to a themed workspace. The strip reuses
+// Reset, so the predicate that decides *whether* to strip is the part that has
+// to be right — path presence is not it, because Reset leaves the module behind.
+out.__detect = {
+  none: hasWiredTheme({ "/src/index.jsx": "const a = 1;\\n" }),
+  clearedOnly: hasWiredTheme({
+    "/src/index.jsx": "const a = 1;\\n",
+    "/handsontable-theme.js": "// Theme cleared.\\nexport const customTheme = undefined;\\n",
+  }),
+  moduleNamedButUnrelated: hasWiredTheme({ "/handsontable-theme.js": "export const customTheme = 1;\\n" }),
+  typescript: (() => {
+    const files = { "/src/index.tsx": '<HotTable data={data} />' };
+    for (const c of buildThemeChanges(files, DEFAULT_THEME).changes) files[c.path] = c.contents;
+    return { wired: hasWiredTheme(files), paths: Object.keys(files) };
+  })(),
+};
 console.log(JSON.stringify(out));
 `;
 
@@ -272,6 +292,39 @@ test("an inline theme object is swapped whole — no dangling brace, no bail", {
     assert.equal(results[name].linked, true, `${name}: bailed to the manual hint on a form the panel can wire`);
     assert.match(code(name), /theme: customTheme,/, `${name}: the setting was not taken over`);
     assert.doesNotMatch(code(name), /mainTheme/, `${name}: part of the old object was left behind`);
+  }
+});
+
+// DEV-2571 (Sentry DEMOS-1P). The generated module is a real workspace file, so
+// it outlives a downgrade to a core with no `handsontable/themes` at all and the
+// preview then fails to resolve its imports. The app strips it below the floor,
+// and it decides *whether* there is anything to strip with this predicate.
+test("hasWiredTheme reads the module's contents, not its filename", { skip }, () => {
+  for (const [name, r] of wiringCases()) {
+    if (r.unwired) continue;
+    assert.equal(r.detectedApplied, true, `${name}: a wired theme went undetected, so a downgrade would keep it`);
+  }
+
+  const d = results.__detect;
+  assert.equal(d.none, false, "no module at all is not a theme");
+  // Reset does not delete the file — it leaves `customTheme = undefined` behind
+  // (and creates that file even on an unthemed workspace). Keying on the path
+  // would report a theme forever after the first Reset.
+  assert.equal(d.clearedOnly, false, "a cleared module is not a theme");
+  assert.equal(d.moduleNamedButUnrelated, false, "a module that imports nothing themeable is not a theme");
+  assert.equal(d.typescript.wired, true, `the .ts module must be found too, got ${d.typescript.paths.join(", ")}`);
+});
+
+test("Reset leaves no handsontable/themes import anywhere", { skip }, () => {
+  // The invariant the downgrade strip depends on: whatever Reset returns has to
+  // be safe to compile against a pre-17 core, in every wiring shape.
+  for (const [name, r] of wiringCases()) {
+    assert.equal(r.detectedReset, false, `${name}: still reads as themed after Reset`);
+    assert.equal(
+      r.themesImportAfterReset,
+      false,
+      `${name}: a handsontable/themes import survived Reset — below 17 that is the DEMOS-1P resolve failure`,
+    );
   }
 });
 

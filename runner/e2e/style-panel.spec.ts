@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { stubShell, workspaceFiles } from "./helpers";
+import { pickFromMenu, stubShell, workspaceFiles } from "./helpers";
 
 // The Style panel itself (DEV-2203) — the highest-value spec on the task,
 // because this seam is where seven defects hid, four of them silently.
@@ -435,4 +435,178 @@ test("a Google Font pick injects the stylesheet link and says so", async ({ page
     expect(module).toContain("fonts.googleapis.com/css2?family=Roboto");
     expect(module).toContain("document.head.appendChild(fontLink)");
   }).toPass();
+});
+
+// DEV-2571 (Sentry DEMOS-1P): `DemoError: Could not find module in path:
+// 'handsontable/themes' relative to '/handsontable-theme.js'`.
+//
+// The generated module is a real workspace file, and a version switch on a
+// *dirty* workspace deliberately keeps the files it finds (ADR-0021 §6) —
+// applying a theme is what dirties it, so a themed demo takes exactly that
+// branch down to a core that has no `handsontable/themes` at all.
+
+/** `stubShell` advertises 18.0.0 and 17.1.0 only, and the picker cannot offer a
+ *  version the list does not hold — so a downgrade case has to widen it. The
+ *  override is registered *after* `stubShell` on purpose: Playwright matches the
+ *  most recently added handler first. */
+async function openPanelAtVersions(page: Page, url: string, versions: string[]) {
+  await stubShell(page);
+  await page.route("**/api/versions", (route) =>
+    route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions } }));
+  await page.route("**/api/versions/exists**", (route) => route.fulfill({ json: { exists: true } }));
+  await page.goto(url);
+  await page.getByRole("button", { name: "Style", exact: true }).click();
+  await expect(page.locator(STYLE)).toBeVisible();
+  return page.locator(STYLE);
+}
+
+const themeModule = (files: Record<string, string>) =>
+  Object.entries(files).find(([path]) => path.includes("handsontable-theme"));
+
+test("a downgrade below the theme API takes the theme module back out", async ({ page }) => {
+  const drawer = await openPanelAtVersions(page, "/?example=react&v=18.0.0", ["18.0.0", "17.1.0", "16.2.0"]);
+
+  await drawer.getByLabel("Colour scheme").selectOption("dark");
+  await expectApplied(page);
+
+  // Precondition: the module really does import the path a pre-17 core lacks,
+  // and the entry really is wired to it. Without this the test could pass on a
+  // demo that was never themed.
+  let entry = "";
+  await expect(async () => {
+    const files = await workspaceFiles(page);
+    const [, module] = themeModule(files) ?? [];
+    expect(module, "fixture precondition: a theme module was written").toContain("handsontable/themes");
+    entry = Object.keys(files).find((p) => files[p].includes("theme={customTheme}")) ?? "";
+    expect(entry, "fixture precondition: the theme was wired into the grid").not.toBe("");
+  }).toPass();
+
+  // The drawer overlays the preview bar, so the version pill is only clickable
+  // with the panel closed — which is also the honest flow: nobody switches core
+  // versions from inside the Style panel. Closing it flushes the panel's pending
+  // quiet writes, so the theme is fully landed before the downgrade.
+  await page.getByRole("button", { name: "Style", exact: true }).click();
+  await expect(page.locator(STYLE)).toBeHidden();
+  // The drawer hands focus back to its trigger as it unmounts, and the trigger
+  // shows its tooltip on focus — a wide one, which then covers the version pill.
+  // Escape is what that button offers to dismiss it (`StyleButton`, onKeyDown).
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("tooltip")).toBeHidden();
+
+  await pickFromMenu(page, "Handsontable version", "16.2.0");
+
+  await expect(async () => {
+    const files = await workspaceFiles(page);
+    // The switch itself happened — otherwise everything below is vacuous.
+    expect(files["/package.json"]).toContain('"handsontable": "16.2.0"');
+    // The module is inert, so nothing it used to import is asked for any more.
+    const [, module] = themeModule(files) ?? [];
+    expect(module).toContain("Theme cleared.");
+    expect(module).not.toContain("handsontable/themes");
+    // Unwired in place, not line-deleted: the grid element survives.
+    expect(files[entry]).not.toContain("customTheme");
+    expect(files[entry]).toContain("<HotTable");
+    // Scope note, deliberately not asserted the other way round: the >=17
+    // starters import `handsontable/themes` themselves (`isLegacyBucket` in
+    // pipeline/blank-starters.mjs emits `theme:` above 16 and `themeName:`
+    // below), and a dirty cross-bucket switch keeps the files it finds by
+    // design (ADR-0021 §6). So this workspace can still hold a 17+ API on a
+    // 16 core — that is what the second half of the composed notice is for,
+    // and it is not DEV-2571's to remove.
+  }).toPass();
+
+  // The notice has to name the theme. The dirty-switch branch sets its own
+  // "unsaved edits may not match the selected version API" string in the same
+  // commit and into the same single slot, and left to win it would tell the user
+  // nothing about the file that just changed under them.
+  await expect(page.locator('span[title*="the custom theme was removed from this demo"]')).toBeVisible();
+
+  // And the button says why it can no longer be opened.
+  await expect(page.getByRole("button", { name: "Style", exact: true }))
+    .toHaveAttribute("aria-disabled", "true");
+});
+
+test("a bare major deep link cannot open the Style panel", async ({ page }) => {
+  // `16` is a version `validateHandsontableVersion` accepts (coerced to 16.0.0)
+  // and both `?v=` and the version pencil pass through verbatim. Reading the
+  // major off the raw string found no `\d+\.`, answered null, and null is the
+  // pass-through meant for `next`/pkg.pr.new builds — so this booted a v16 core
+  // with theming enabled, which is how a themed 16 workspace gets made at all.
+  await stubShell(page);
+  await page.goto("/?example=react&v=16");
+
+  // `aria-disabled` rather than `disabled`: the button stays focusable so its
+  // tooltip is reachable by keyboard. Playwright reads it as not enabled, which
+  // is the assertion — a click cannot be dispatched at all.
+  const style = page.getByRole("button", { name: "Style", exact: true });
+  await expect(style).toHaveAttribute("aria-disabled", "true");
+  await expect(style).toBeDisabled();
+  await expect(page.locator(STYLE)).toBeHidden();
+});
+
+// The hydration half of DEV-2571, and the shape the reported event most likely
+// had: a workspace that *arrives* themed on a sub-17 pin, with no version change
+// anywhere. Authored as a payload so the only `handsontable/themes` import in it
+// is the generated module's — a 16 starter wires `themeName`, so nothing else in
+// a themed-at-16 demo asks for that path, which is exactly why Sandpack blamed
+// `/handsontable-theme.js` by name.
+const THEMED_AT_16 = {
+  framework: "javascript",
+  title: "Themed on 16",
+  files: {
+    "/index.html": '<div id="example"></div>',
+    "/index.js":
+      "import { customTheme } from './handsontable-theme'; // handsontable-theme\n"
+      + "import Handsontable from 'handsontable';\n"
+      + "import { data } from './data.js';\n\n"
+      + "new Handsontable(document.getElementById('example'), {\n"
+      + "  data: data,\n"
+      + "  theme: customTheme,\n"
+      + "  rowHeaders: true,\n"
+      + "});\n",
+    "/data.js": "export const data = [['a']];\n",
+    "/handsontable-theme.js":
+      "import { getTheme, hasTheme, registerTheme, reinitTheme } from 'handsontable/themes';\n"
+      + "import tokensPreset from 'handsontable/themes/static/variables/tokens/main';\n\n"
+      + "const THEME_NAME = 'custom-theme';\n"
+      + "if (hasTheme(THEME_NAME)) reinitTheme(THEME_NAME, { tokens: tokensPreset });\n"
+      + "else registerTheme(THEME_NAME, { tokens: tokensPreset });\n"
+      + "export const customTheme = getTheme(THEME_NAME);\n",
+    "/package.json": JSON.stringify({ dependencies: { handsontable: "16.2.0" } }, null, 2),
+  },
+};
+
+test("a workspace that arrives themed on a sub-17 pin is repaired on load", async ({ page }) => {
+  await stubShell(page);
+  await page.route("**/api/payload/thm16at0001", (route) => route.fulfill({ json: THEMED_AT_16 }));
+  await page.goto("/?payload=thm16at0001&v=16.2.0");
+
+  await expect(async () => {
+    const files = await workspaceFiles(page);
+    expect(Object.keys(files), "the payload opened").toContain("/handsontable-theme.js");
+    // The import a 16 core cannot resolve — the DEMOS-1P message names this file
+    // and this specifier — is gone, and so is the wiring that reached for it.
+    expect(files["/handsontable-theme.js"]).not.toContain("handsontable/themes");
+    expect(files["/handsontable-theme.js"]).toContain("Theme cleared.");
+    expect(files["/index.js"]).not.toContain("customTheme");
+    // Unwired in place: the settings object and the grid survive.
+    expect(files["/index.js"]).toContain("rowHeaders: true,");
+    expect(files["/index.js"]).toContain("new Handsontable(");
+  }).toPass();
+
+  await expect(page.locator('span[title*="the custom theme was removed from this demo"]')).toBeVisible();
+  await expect(page.getByRole("button", { name: "Style", exact: true }))
+    .toHaveAttribute("aria-disabled", "true");
+
+  // The notice is about the workspace that just lost its theme, so it must not
+  // outlive it: the next workspace never had one. (Nothing sets the flag back to
+  // false on its own — the strip effect early-returns when there is no theme.)
+  await page.getByRole("button", { name: /JavaScript/ }).first().click();
+  await page.getByText("Starter templates", { exact: true }).click();
+  await page.getByRole("treeitem", { name: "React (Vite, TS)" }).click();
+  await expect(async () => {
+    const files = await workspaceFiles(page);
+    expect(Object.keys(files), "the starter replaced the payload").not.toContain("/handsontable-theme.js");
+  }).toPass();
+  await expect(page.locator('span[title*="the custom theme was removed"]')).toBeHidden();
 });
