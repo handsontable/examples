@@ -249,9 +249,10 @@ function findBabel(value: unknown, depth: number): Babel | null {
  *  nothing here knows it (that is the whole reason `retryBabelChunk` reads it out of the
  *  engine's error text). A shape mismatch discovered here therefore reaches
  *  `CompilerUnavailableError` with `assetUrl: null` and no retry — correct on both counts:
- *  refetching the same URL returns the same bytes and the same shape, and the chunk now has
- *  one fixed path (`assets/compiler-babel.js`), so naming it adds nothing the fingerprint
- *  does not already say. The engine's own wording still rides in `extra.cause`. */
+ *  refetching the same URL returns the same bytes and the same shape, so there is nothing for
+ *  a retry to do. Only the URL is lost, and `extra.cause` still carries the engine's own
+ *  wording — a shape mismatch is a build-shape bug, which the hashed path does not help
+ *  diagnose anyway. */
 const loadBabelChunk = createLazyLoader<Babel>(() =>
   import("@babel/standalone").then((m) => asBabel(m)),
 );
