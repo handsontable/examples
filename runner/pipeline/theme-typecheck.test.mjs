@@ -106,7 +106,15 @@ if (!existsSync(join(modules, "handsontable"))) {
   try {
     modules_ = JSON.parse(runCodegen(SCRIPT).trim().split("\n").at(-1));
   } catch (err) {
-    skip = `codegen could not be executed here: ${err.message.split("\n")[0]}`;
+    // Skip ONLY when Node itself cannot strip types (< 22.6 refuses the flag).
+    // Any other failure — a throw inside `buildThemeModule`, a crash, garbage on
+    // stdout — must rethrow: `node --test` exits 0 on skips and CI gates on the
+    // exit code alone, so a catch-all would let the guard against the invisible
+    // Angular-build failure itself fail invisibly. Only the two `existsSync`
+    // preconditions above are legitimate skips.
+    const failure = `${err.stderr ?? ""}\n${err.message ?? ""}`;
+    if (!/bad option: --experimental-strip-types/.test(failure)) throw err;
+    skip = "codegen could not be executed here: Node lacks --experimental-strip-types (needs >= 22.6)";
   }
 }
 

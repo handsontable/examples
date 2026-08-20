@@ -91,6 +91,11 @@ export function BoxInfo({ title, description, createdAt, collapsed, onToggle, on
                   ref={descriptionRef}
                   style={descriptionText(expanded)}
                   data-expanded={expanded ? "true" : undefined}
+                  // How the e2e specs measure the clamp box itself (the rendered
+                  // markdown nests its own divs, and measuring one of those
+                  // measures the content rather than the box holding it) — the
+                  // same hook the demo card gives its clamp (`card-description`).
+                  data-testid="sidebar-description"
                 >
                   {description}
                 </div>

@@ -11,10 +11,11 @@ name: Master
 # built the workspace twice, once per deploy job.
 #
 # No test gate before the deploys, deliberately (Dan, #184 review): the full
-# suite already ran on the PR, each deploy job runs its own `pnpm build` (a
-# broken build cannot reach wrangler), and what a master push needs verified
-# is PRODUCTION — which only exists after the deploy. The smoke job is that
-# verification; the weekly e2e-live canary covers the rest. The compensating
+# suite already ran on the PR, the shared `build` job below still has to
+# succeed before either deploy runs (a broken build cannot reach wrangler),
+# and what a master push needs verified is PRODUCTION — which only exists
+# after the deploy. The smoke job is that verification; the nightly e2e-live
+# canary covers the rest (03:00 UTC). The compensating
 # control for merge skew (a PR tested before master moved) is branch
 # protection's "require branches to be up to date" — a repo setting, not a
 # workflow.

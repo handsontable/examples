@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 
 // The Ask AI and Style drawers (DEV-2209). Deterministic — no `E2E_LIVE=1`: both
 // panels are chrome, so the Sandpack bundler is aborted and `/api/versions` is
@@ -34,8 +34,9 @@ async function openPlayground(page: Page, mode: "light" | "dark") {
  *  of their own, and comparing a border against `rgba(0, 0, 0, 0)` can never
  *  fail — which made the check it exists for pass on the very colour it was
  *  written to catch. */
-async function paint(page: Page, selector: string) {
-  return page.locator(selector).first().evaluate((el) => {
+async function paint(page: Page, target: string | Locator) {
+  const locator = typeof target === "string" ? page.locator(target) : target;
+  return locator.first().evaluate((el) => {
     const c = getComputedStyle(el);
     let behind: string | null = null;
     for (let n = el.parentElement; n; n = n.parentElement) {
@@ -272,10 +273,19 @@ test.describe("chat transcript", () => {
       expect(el.borderColor, selector).not.toBe(el.parentBackground);
     }
 
-    // The edit box and its path chip: `controlBorder`, or they dissolve into the
-    // `surfaceMuted` panel they sit on.
-    const chip = await paint(page, `${CHAT} code`);
+    // The edit box's path chip: `controlBorder`, or it dissolves into the
+    // `surfaceMuted` panel it sits on. Selected by its text — the transcript's
+    // inline `colWidths` span also matches `${CHAT} code` and renders first in
+    // DOM order, so an unscoped `.first()` re-measures the span the loop above
+    // already covered and lets the chip's border vanish unnoticed.
+    const chipLocator = page.locator(`${CHAT} code`, { hasText: "src/index.tsx" });
+    const chip = await paint(page, chipLocator);
     expect(chip.borderColor).toBe("rgb(53, 53, 53)");
+    // And the edit box around it — the nearest ancestor that draws a border —
+    // is the other half of the same hairline: same token, same failure mode.
+    const editBox = await paint(page, chipLocator.locator('xpath=ancestor::div[contains(@style, "border")][1]'));
+    expect(editBox.borderColor).toBe("rgb(53, 53, 53)");
+    expect(editBox.borderColor).not.toBe(editBox.parentBackground);
 
     // A section divider is one hairline, and a divider the same colour as the
     // surface behind it is the ADR-0026 §5 defect in its purest form — there is
@@ -307,14 +317,43 @@ test.describe("chat transcript", () => {
     await openPlayground(page, "dark");
     await stubOneAnswer(page);
 
+    // The whole document of the visible pane — `/src/index.tsx`, the entry and only
+    // open tab — read through CodeMirror's own view rather than `.cm-content` text:
+    // the view renders the viewport only, so text-based reads of a long file are
+    // partial by design. `Chat.apply()`'s label flip and its `applyEdit` call are
+    // independent statements, so the labels alone stay green with the write deleted;
+    // the doc is the file, and it is what Apply and Undo are supposed to move.
+    // TODO(#185): read this through `workspaceFiles()` (`window.__HOT_FILES__`)
+    // once that hook lands, instead of CodeMirror internals.
+    const doc = () =>
+      page
+        .locator('[data-pane-active="true"] .cm-content')
+        .evaluate((el) => {
+          const tile = (el as HTMLElement & { cmTile?: { view: { state: { doc: { toString(): string } } } } }).cmTile;
+          if (!tile) throw new Error("CodeMirror's cmTile hook is gone — the doc cannot be read");
+          return tile.view.state.doc.toString();
+        });
+
     await page.getByRole("button", { name: "Ask AI", exact: true }).click();
     await page.locator(`${CHAT} textarea`).fill("How do I set column widths?");
     await page.locator(CHAT).getByRole("button", { name: "Send" }).click();
+    await expect(page.locator(CHAT).getByRole("button", { name: "Apply" })).toBeVisible();
+
+    // The before-shot Undo must restore, captured only once the answer is in —
+    // and provably not already the assistant's version.
+    const original = await doc();
+    expect(original).not.toBe("// changed\n");
 
     await page.locator(CHAT).getByRole("button", { name: "Apply" }).click();
     await expect(page.locator(CHAT).getByText("Applied to")).toBeVisible();
+    // The file itself took the edit — the label above renders off `turn.undo`
+    // and would say "Applied" whether or not anything was written.
+    await expect.poll(doc).toBe("// changed\n");
+
     await page.locator(CHAT).getByRole("button", { name: "Undo" }).click();
     await expect(page.locator(CHAT).getByText("Proposed changes to")).toBeVisible();
+    // Byte-identical, not merely different: Undo restores what was there.
+    await expect.poll(doc).toBe(original);
   });
 });
 

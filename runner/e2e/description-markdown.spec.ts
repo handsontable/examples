@@ -69,6 +69,22 @@ test("a markdown description renders as formatted text in the sidebar", async ({
   await expect(info).not.toContainText("- a [link]");
 });
 
+test("a shared demo's description renders as markdown for its reader", async ({ page }) => {
+  // Every markdown assertion above runs on /edit/:id — the owner's surface. The
+  // person the description is *for* reads it on /share/:id, which reaches BoxInfo
+  // by a different route (ShareRoute, whose user is always null — so no sign-in
+  // here, deliberately: the reader is anonymous). The stub already covers it:
+  // share mode hits the same /api/demos/:id + /source pair the editor does.
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await page.goto(`/share/${DEMO_ID}`);
+
+  const info = boxInfo(page);
+  // Rendered for the reader, not echoed: a real <strong>, and no literal syntax.
+  await expect(info.locator("strong", { hasText: "filters" })).toBeVisible();
+  await expect(info).not.toContainText("**filters**");
+});
+
 test("the toolbar writes markdown into the field without typing it", async ({ page }) => {
   await stubShell(page);
   await signIn(page);
@@ -82,6 +98,16 @@ test("the toolbar writes markdown into the field without typing it", async ({ pa
   await area.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(10, 14));
   await dialog(page).getByRole("button", { name: "Bold (⌘B)" }).click();
   await expect(area).toHaveValue("make this **bold**");
+  // Drain Bold's deferred caret restore before staging the next selection.
+  // `MarkdownField.run()` re-focuses and re-selects in a `requestAnimationFrame`;
+  // `toHaveValue` above reads the value CDP-side without forcing a renderer
+  // frame, so under parallel-run CPU contention that rAF can still be pending
+  // here — and it would then fire *after* the `setSelectionRange` below, clamp
+  // the restored (12,16) into the shorter value, and hand Bullet list a caret in
+  // line 2 only. (12,16) is the inner "bold" of "make this **bold**".
+  await expect
+    .poll(() => area.evaluate((el: HTMLTextAreaElement) => `${el.selectionStart},${el.selectionEnd}`))
+    .toBe("12,16");
 
   // The list button works on the line the caret is in.
   await area.fill("first\nsecond");
@@ -183,10 +209,23 @@ test("a long description is clamped in the sidebar, with a way to read it", asyn
   const more = info.getByRole("button", { name: "Show more" });
   await expect(more).toBeVisible();
 
-  // Clamped: the rendered block is taller than the box showing it.
-  const clamped = info.locator("[data-expanded], div").first();
+  // Clamped: the rendered block is genuinely taller than the box showing it —
+  // measured on the clamp box itself, the way the card test above does, because
+  // "Show more" being offered is BoxInfo's *conclusion* from this same overflow
+  // check, not independent evidence of it.
+  const box = info.getByTestId("sidebar-description");
+  const sizes = await box.evaluate((el) => ({ client: el.clientHeight, scroll: el.scrollHeight }));
+  expect(sizes.client).toBeLessThanOrEqual(100); // the design's five 20px lines
+  expect(sizes.scroll).toBeGreaterThan(sizes.client);
+  // …and the tail really is out of reach until the reader asks for it.
+  await expect(info.getByText("Paragraph 10.")).not.toBeInViewport();
+
   await more.click();
   await expect(info.getByRole("button", { name: "Show less" })).toBeVisible();
   await expect(info).toContainText("Paragraph 10.");
-  expect(clamped).toBeTruthy();
+  await expect(box).toHaveAttribute("data-expanded", "true");
+  // Expanded means unclipped: the box now shows everything it holds.
+  const grown = await box.evaluate((el) => ({ client: el.clientHeight, scroll: el.scrollHeight }));
+  expect(grown.client).toBeGreaterThan(sizes.client);
+  expect(grown.scroll).toBeLessThanOrEqual(grown.client);
 });

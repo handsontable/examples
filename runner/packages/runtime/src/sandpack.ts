@@ -17,7 +17,7 @@ import type {
   HandsontableVersionRef,
   WriteFileOptions,
 } from "./types.js";
-import { transpileFilesForParcel } from "./transpile.js";
+import { isCompilerUnavailable, transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
 import { resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
 import {
@@ -29,6 +29,12 @@ import {
 } from "./monitor.js";
 import { injectSchemeReceiver } from "./scheme.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
+
+// Re-exported here rather than through a `./transpile` subpath: this is the DOM entry the
+// authoring shell already imports, and the compiler-load failure is only reachable through
+// it. The shell needs the predicate to classify the error and `rearmCompilerLoad` to give
+// *Restart preview* one more attempt (DEV-2569).
+export { isCompilerUnavailable, rearmCompilerLoad } from "./transpile.js";
 
 // Derive Sandpack's option/setup types straight from the loader signature so we
 // don't depend on the package's exported type names staying stable.
@@ -637,6 +643,9 @@ export class SandpackRuntime implements DemoRuntime {
    * superseded, or failed to transpile. `reload()` reports that edge as its completion.
    */
   private updateSeq = 0;
+  /** Whether the terminal compiler-load failure has already reached `onError` from the
+   *  edit path — see `pushUpdate`'s catch. */
+  private compilerFailureEmitted = false;
   /** The sandbox the bundler currently holds, as published. Compared against the next
    *  candidate so a no-op compile is never sent — see `pushUpdate`. */
   private published: FilesMap | null = null;
@@ -667,8 +676,18 @@ export class SandpackRuntime implements DemoRuntime {
         this.client.updateSandbox(setup, false);
         this.published = candidate;
       })
-      .catch(() => {
-        /* mid-edit parse error — the user is still typing */
+      .catch((cause: unknown) => {
+        /* mid-edit parse error — the user is still typing.
+         *
+         * One exception (DEV-2569): the compiler chunk itself failing to load is not the
+         * visitor's half-typed code, and swallowing it here left a stranded tab silently
+         * frozen on its last good render — no card, no report, on the path a visitor is
+         * most likely to be on. Emitted once: `loadBabel` has latched by now, so every
+         * later keystroke arrives here with the same terminal error, and the card is
+         * already showing it. */
+        if (this.compilerFailureEmitted || !isCompilerUnavailable(cause)) return;
+        this.compilerFailureEmitted = true;
+        this.emitError(cause as Error);
       });
   }
 

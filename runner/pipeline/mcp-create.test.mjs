@@ -3,9 +3,13 @@
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import {
   MAX_MCP_BYTES,
   MAX_MCP_FILES,
+  isMcpCreated,
   isMcpValidationError,
   isTeamEmail,
   validateMcpFiles,
@@ -177,11 +181,38 @@ test("only demos the MCP created are updatable through it", () => {
   // Containment for the shared-secret trust model (security review of PR #177): the
   // asserted author cannot be stronger than the secret that carries it, so the path is
   // limited to what this service published. `forked_from` is the provenance stamp.
-  const fromMcp = (row) => Boolean(row.forked_from?.startsWith("mcp:"));
-  assert.ok(fromMcp({ forked_from: "mcp:javascript" }));
-  assert.ok(fromMcp({ forked_from: "mcp:react" }));
+  //
+  // `isMcpCreated` is the production predicate — imported, not re-declared here. An
+  // earlier version of this test asserted against its own local copy, which stayed
+  // green with the route guard deleted; a test of a security control has to be able
+  // to fail when the control goes away.
+  assert.ok(isMcpCreated({ forked_from: "mcp:javascript" }));
+  assert.ok(isMcpCreated({ forked_from: "mcp:react" }));
   // Anything built in the browser stays out of reach of this route.
-  assert.ok(!fromMcp({ forked_from: "catalog:javascript" }));
-  assert.ok(!fromMcp({ forked_from: null }));
-  assert.ok(!fromMcp({}));
+  assert.ok(!isMcpCreated({ forked_from: "catalog:javascript" }));
+  assert.ok(!isMcpCreated({ forked_from: null }));
+  assert.ok(!isMcpCreated({ forked_from: undefined }));
+  assert.ok(!isMcpCreated({}));
+});
+
+test("the update route calls isMcpCreated(), not a re-inlined copy of it", () => {
+  // Same style as pipeline/theme-codegen.test.mjs: the rule is structural, so the
+  // route source is read as text. Importing the predicate (above) proves what it
+  // decides; this proves the route still *asks* it — an inline `forked_from` check
+  // could drift away from the exported one while every import-based test stays green.
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const source = readFileSync(join(root, "workers/api/src/index.ts"), "utf8");
+  const start = source.indexOf('request.method === "PATCH" && parts[0] === "api" && parts[1] === "mcp"');
+  assert.ok(start > -1, "the MCP update route exists in index.ts");
+  const end = source.indexOf('parts[1] === "demos"', start);
+  const route = source.slice(start, end > -1 ? end : undefined);
+  // The code shape, not the name: the route's own comment also says
+  // "isMcpCreated()" in prose, so a bare name-match would stay green with the
+  // guard deleted and the comment left behind (Bugbot, #201).
+  assert.match(route, /!isMcpCreated\(row\)/, "the route must gate on the exported predicate");
+  assert.doesNotMatch(
+    route,
+    /forked_from\?*\.\s*startsWith/,
+    "an inline forked_from check would no longer be what the tests import — call isMcpCreated()",
+  );
 });

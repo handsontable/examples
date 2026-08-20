@@ -22,7 +22,7 @@ import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
 import { authenticate, authenticateService, sameOwner } from "./auth.js";
 import { MAX_TITLE, isValidationError, validateDescription, validateTitle } from "./demo-info.js";
-import { isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
+import { isMcpCreated, isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
 import { editorVersionRef, fetchVersionCatalog, resolveHandsontableVersion } from "./ht-version.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
@@ -39,7 +39,7 @@ import {
 } from "./session-lifecycle.js";
 import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
-import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
+import { BuildFailure, createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
   budgetPausedMessage,
   countEgress,
@@ -1134,10 +1134,10 @@ export default Sentry.withSentry(sentryOptions, {
         // Containment, not authentication (security review of PR #177). `X-Demo-Author` is
         // asserted under the same shared secret that grants access to this route, so the
         // ownership check above catches a wrong id — it cannot withstand misuse of the secret
-        // itself. Restricting the path to demos this service created means a leaked secret can
-        // never rewrite work somebody built in the browser; the blast radius stays inside what
-        // the MCP published in the first place.
-        if (!row.forked_from?.startsWith("mcp:")) {
+        // itself. `isMcpCreated()` restricts the path to demos this service created (its JSDoc
+        // carries the full rationale); tests import that same predicate, so keep the check on
+        // it rather than re-inlining `forked_from` here.
+        if (!isMcpCreated(row)) {
           return json(
             {
               error: "forbidden",
@@ -1886,6 +1886,25 @@ export default Sentry.withSentry(sentryOptions, {
       if (err instanceof InvalidFilePathError) return json({ error: err.message }, 400);
       // This catch turns every unexpected throw into a 500 body, so withSentry()
       // never sees it. Report here or the error is invisible.
+      if (err instanceof BuildFailure) {
+        Sentry.captureException(err, {
+          tags: { context: "snapshot-build", build_phase: err.phase },
+          // Without a fingerprint the cause line groups per package and per version,
+          // which is the same one-defect-many-issues shape DEV-2570 exists to end,
+          // only better titled. Keyed by the machine code so the group stays
+          // diagnosable; the title then tracks the newest event within it, which is
+          // the accepted trade (`ContainerBootFailure` in App.tsx makes the same one).
+          // Bundler failures carry no machine code and therefore share the `other`
+          // group — coarse, but their causes are specific (the picker takes the line
+          // under a label like vite's "error during build:"), so the title still names
+          // one, and `buildLog` carries the rest.
+          fingerprint: ["snapshot-build", err.phase, err.code],
+          // Bounded and picked apart in share.ts, and never in the message — a log in
+          // an `Error.message` is what invented DEMOS-1Y's culprit.
+          ...(err.log ? { extra: { buildLog: err.log } } : {}),
+        });
+        return json({ error: err.message }, 500);
+      }
       Sentry.captureException(err);
       return json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }

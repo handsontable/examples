@@ -8,6 +8,7 @@
 
 import { getSandbox } from "@cloudflare/sandbox";
 import { injectSchemeIntoHtml } from "@handsontable/demo-runtime/scheme";
+import { execFailureDetail } from "@handsontable/demo-runtime/failure-log";
 import type { Env } from "./env.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { recordContainerUsage, SESSION_INSTANCE_TYPE } from "./budget.js";
@@ -102,10 +103,57 @@ export function contentTypeFor(path: string): string {
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
 }
 
-/** Tail of a failed exec's output. pnpm (and some build tools) report errors
- *  on stdout, so surface both streams, stdout last. */
-function execTail(r: { stdout?: string; stderr?: string }, n: number): string {
-  return [r.stderr, r.stdout].filter((s) => s?.trim()).join("\n").slice(-n);
+/** How much of a failed exec's output rides along as Sentry context. Generous —
+ *  it is an `extra`, not a message — but bounded, because nothing upstream bounds
+ *  an exec result the way the Tier-2 status route tails a boot log. */
+const BUILD_LOG_MAX = 4000;
+
+/** Lines kept before the cause is picked. Higher than the boot log's 40: a webpack
+ *  or next build prints its error and then a long asset table after it. */
+const BUILD_LOG_LINES = 120;
+
+/**
+ * A snapshot install/build that exited nonzero (DEV-2570).
+ *
+ * `message` is ONE line — the cause, as picked by `execFailureDetail`. The output it
+ * came from is `log`, and it is never part of the message: the route catch-all
+ * relays `err.message` to the browser as the 500 body, the browser turns that into
+ * an `ApiError`, and a multi-line message there is fed to the SDK's stack-frame
+ * regexes, which invents both a stack and a culprit out of the log's own lines
+ * (Sentry DEMOS-1Y). Same reasoning, same shape as `ContainerBootFailure`.
+ *
+ * `phase` and `code` exist so the report site can fingerprint without re-parsing the
+ * message — see the `BuildFailure` branch in index.ts.
+ */
+export class BuildFailure extends Error {
+  // Written out rather than declared as constructor parameter properties: the
+  // pipeline suites import this module through `--experimental-strip-types`, which
+  // refuses them outright (ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX). Same erasable-syntax
+  // constraint `apiError.ts` documents on the client side.
+  readonly phase: "install" | "build";
+  readonly code: string;
+  readonly log: string;
+
+  constructor(message: string, phase: "install" | "build", code: string, log = "") {
+    super(message);
+    this.phase = phase;
+    this.code = code;
+    this.log = log;
+  }
+}
+
+/** Describe a failed exec as a one-line cause plus its bounded output. Exported for
+ *  `pipeline/failure-log.test.mjs`, which owns the "a message is never a log" rule. */
+export function describeBuildFailure(
+  phase: "install" | "build",
+  r: { stdout?: string; stderr?: string },
+): BuildFailure {
+  const { cause, tail, code } = execFailureDetail(r, {
+    keepLines: BUILD_LOG_LINES,
+    maxTailChars: BUILD_LOG_MAX,
+    fallback: "no output",
+  });
+  return new BuildFailure(`${phase} failed: ${cause}`, phase, code, tail);
 }
 
 function base64ToBytes(b64: string): Uint8Array {
@@ -168,7 +216,7 @@ export async function runBuild(
         `sh -lc "cd ${CONTAINER_ROOT} && ${entry.installCommand.replace(" --frozen-lockfile", "")} --no-frozen-lockfile"`,
       );
     }
-    if (install.success === false) throw new Error(`install failed: ${execTail(install, 800)}`);
+    if (install.success === false) throw describeBuildFailure("install", install);
 
     // Snapshots only need the bundle, not type-checking. Strip leading
     // type-check steps (tsc / vue-tsc) that often fail in ephemeral containers
@@ -180,7 +228,7 @@ export async function runBuild(
     const build = await sbx.exec(
       `sh -lc "cd ${CONTAINER_ROOT} && export PATH=${CONTAINER_ROOT}/node_modules/.bin:$PATH && ${buildCommand}"`,
     );
-    if (build.success === false) throw new Error(`build failed: ${execTail(build, 1200)}`);
+    if (build.success === false) throw describeBuildFailure("build", build);
 
     // Resolve the output directory (angular nests under dist/<project>/browser).
     let outDir = `${CONTAINER_ROOT}/${entry.outputDir}`;

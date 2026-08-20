@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { workspaceFiles } from "./helpers";
 
 // Multi-file editor tabs (DEV-2169 / T12, ADR-0025 §3). The strip shipped styled
 // but single-file in T4; here it opens many, closes them, and dots the ones with
@@ -279,16 +280,31 @@ test("an example switch does not carry undo history into the new workspace", asy
 test("switching example discards the previous workspace's tabs", async ({ page }) => {
   // The trap T3 hit with directory expansion, and the reason `workspaceKey` exists:
   // both starters contain `/package.json`, so reconciling by "does this path still
-  // exist" would leave that tab open across the switch.
+  // exist" would leave that tab open across the switch. Driven through the real
+  // in-app cascader (`switchStarter`), for the reason that helper's own comment
+  // gives: a `page.goto` is a fresh page load, which boots at exactly one tab
+  // whatever the discard effect does — asserted that way, this test could never
+  // fail, and the discard it certifies was exercised by nothing.
   await openReact(page);
+  // `MUI + React` is a container starter; refuse its session POST up front so the
+  // switch never spends a real Tier-2 slot. The tab reconciliation under test
+  // reads nothing from the preview (the bundler is aborted by `stubShell` too).
+  await page.route("**/api/session", (route) =>
+    route.fulfill({ status: 503, json: { error: "no container slots" } }),
+  );
   await fileRow(page, "/package.json").click();
   await expect(tabs(page)).toHaveCount(2);
 
-  await page.goto("/?example=angular");
-  await expect(filesPanel(page)).toBeVisible();
+  await switchStarter(page, "MUI + React");
+  // The new workspace really arrived — `/pnpm-lock.yaml` is MUI's, not React's.
+  await expect(fileRow(page, "/pnpm-lock.yaml")).toBeVisible();
+  // The open set collapsed to the new workspace's entry alone. `/package.json`
+  // exists in the MUI starter too, so only the `workspaceKey` discard can have
+  // closed its tab — the path-existence reconcile would keep it open, which is
+  // exactly the regression this test exists to catch.
   await expect(tabs(page)).toHaveCount(1);
-  await expect(tab(page, "/src/index.tsx")).toHaveCount(0);
   await expect(tab(page, "/package.json")).toHaveCount(0);
+  await expect(tab(page, "/src/index.tsx")).toHaveAttribute("aria-selected", "true");
 });
 
 test("renaming an open file moves its tab; deleting one closes it", async ({ page }) => {
@@ -474,4 +490,120 @@ test("closing keeps focus in the strip instead of dropping it on the body", asyn
   await page.keyboard.press("Delete");
   await expect(tabs(page)).toHaveCount(0);
   await expect(strip(page)).toBeFocused();
+});
+
+// ---- render churn: no reconfigure into panes nobody is typing in (DEV-2568) --
+// Regression for Sentry DEMOS-1D (React error 185, "Maximum update depth exceeded").
+// `@uiw/react-codemirror` dispatches `StateEffect.reconfigure` from an effect whose
+// deps include `onChange` and `basicSetup` (`useCodeMirror.js:158-165`), and T12 keeps
+// every open tab mounted — so a prop with a fresh identity each render reconfigures
+// *every* pane on *every* render. Mid-keystroke that puts CodeMirror's `DOMObserver`
+// on the `applyDOMChange` → `defaultInsert()` path, which synthesises a doc change,
+// which calls `onChange` again, which re-renders: >50 nested updates, React throws.
+//
+// The assertion is the reconfigure arriving at a pane the user is *not* typing in,
+// counted by shadowing that view's own `dispatch`. Two reasons not to assert on the
+// crash instead: it needs a DOM-observer race no test can schedule, and by the time
+// React throws the editor is already unusable. The console check is a bonus, not the
+// guard.
+//
+// The views are reached through `.cm-content`'s `cmTile` (@codemirror/view's own
+// back-pointer), the same route `editor-download.spec.ts` uses — `CodeEditor` exposes
+// no handle a test could assert on. Both helpers throw rather than return 0 if that
+// route ever breaks, so the test cannot go quietly green.
+
+/** Just enough of `EditorView` for this file — the spec deliberately does not
+ *  depend on `@codemirror/view`, which is the app's dependency and not the suite's. */
+type EditorViewLike = {
+  state: { doc: { length: number } };
+  dispatch: (...args: unknown[]) => void;
+};
+
+declare global {
+  interface Window {
+    /** Dispatches seen by the hidden pane, installed by `watchHiddenPane`. */
+    __dev2568?: number;
+  }
+}
+
+/** Count every dispatch into the pane that is not on screen. */
+async function watchHiddenPane(page: Page) {
+  await page.evaluate(() => {
+    const pane = document.querySelector('[role="tabpanel"]:not([data-pane-active])');
+    if (!pane) throw new Error("no hidden pane — open a second tab first");
+    const content = pane.querySelector(".cm-content") as unknown as { cmTile?: { view?: EditorViewLike } } | null;
+    const view = content?.cmTile?.view;
+    if (!view) throw new Error("could not reach the hidden pane's EditorView via .cmTile");
+    window.__dev2568 = 0;
+    const original = view.dispatch.bind(view);
+    // An own property shadows the prototype method `useCodeMirror` calls.
+    view.dispatch = (...args: unknown[]) => {
+      window.__dev2568 = (window.__dev2568 ?? 0) + 1;
+      return original(...args);
+    };
+  });
+}
+
+/** CodeMirror does async work of its own on a freshly mounted document — the language
+ *  parser finishes and dispatches an effect once, on a schedule no test controls, so a
+ *  bare count is 0 or 1 depending on how warm the machine is. Wait for it to stop, then
+ *  zero the counter: what the assertion covers is dispatches *typing* caused. */
+async function settleHiddenPane(page: Page) {
+  await expect
+    .poll(async () => {
+      const before = await page.evaluate(() => window.__dev2568);
+      await page.waitForTimeout(150);
+      return before === (await page.evaluate(() => window.__dev2568));
+    })
+    .toBe(true);
+  await page.evaluate(() => {
+    window.__dev2568 = 0;
+  });
+}
+
+/** One `page.evaluate` per character on purpose: `view.dispatch` runs the update
+ *  listener synchronously, so a whole string dispatched inside a single evaluate is
+ *  one task and React 18 batches it into one render. Separate tasks give one render
+ *  per keystroke, which is what a typist produces. Dispatch rather than
+ *  `keyboard.type` because `.cm-content` is virtualised (see `editor-download`). */
+async function typeByDispatch(page: Page, text: string) {
+  for (const char of text) {
+    await page.evaluate((one) => {
+      const pane = document.querySelector('[data-pane-active="true"]');
+      const content = pane?.querySelector(".cm-content") as unknown as { cmTile?: { view?: EditorViewLike } } | null;
+      const view = content?.cmTile?.view;
+      if (!view) throw new Error("could not reach the active pane's EditorView via .cmTile");
+      view.dispatch({ changes: { from: view.state.doc.length, insert: one } });
+    }, char);
+  }
+}
+
+test("typing in one pane does not reconfigure the hidden ones", async ({ page }) => {
+  const crashes: string[] = [];
+  // Both spellings: the suite runs against a `vite preview` of the production build,
+  // where React 19 strips the message down to "Minified React error #185".
+  const watch = (text: string) => {
+    if (/Maximum update depth|React error #?185/.test(text)) crashes.push(text);
+  };
+  page.on("console", (message) => message.type() === "error" && watch(message.text()));
+  page.on("pageerror", (error) => watch(error.message));
+
+  await openReact(page);
+  await fileRow(page, "/src/constants.ts").click();
+  await expect(tabs(page)).toHaveCount(2);
+  // Type in the first tab, watch the second: which one is hidden is the whole point.
+  await tab(page, "/src/index.tsx").click();
+  await expect(activeEditor(page)).toBeVisible();
+
+  await watchHiddenPane(page);
+  await settleHiddenPane(page);
+  await typeByDispatch(page, "0123456789");
+
+  // Positive control first: the edits did reach the workspace, so a zero count below
+  // cannot mean "nothing happened".
+  const files = await workspaceFiles(page);
+  expect(files["/src/index.tsx"]).toContain("0123456789");
+
+  expect(await page.evaluate(() => window.__dev2568)).toBe(0);
+  expect(crashes).toEqual([]);
 });

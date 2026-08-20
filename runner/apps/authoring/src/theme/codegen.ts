@@ -450,7 +450,7 @@ function wireModule(source: string, dir: string, displacedClass: string | null):
   //    rather than adding a second one — several starters set their own.
   if (/<(HotTable|hot-table)\b/.test(source)) {
     next = swapInPlace(source, THEME_NAME_ATTR, "theme={customTheme}")
-      ?? swapInPlace(source, /\btheme=\{[^}]*\}/, "theme={customTheme}")
+      ?? swapText(source, findJsxThemeProp(source), "theme={customTheme}")
       ?? { source: source.replace(/<(HotTable|hot-table)\b/, "<$1 theme={customTheme}"), displaced: null };
   } else if (findVanillaSettings(source)) {
     // 2. Vanilla settings object.
@@ -459,6 +459,7 @@ function wireModule(source: string, dir: string, displacedClass: string | null):
     // 3. Angular's settings object.
     next = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,")
       ?? swapInPlace(source, THEME_SETTING, "theme: customTheme,")
+      ?? swapText(source, findThemeObjectSetting(source), "theme: customTheme,")
       ?? (ANY_THEME_SETTING.test(source) ? null : {
         source: source.replace(/(gridSettings[^=]*=\s*\{)/, "$1\n    theme: customTheme,"),
         displaced: null,
@@ -652,13 +653,87 @@ function endOfString(source: string, at: number): number {
   return source.length;
 }
 
+/**
+ * The `}` closing the brace opened just before `at`, or null.
+ *
+ * Hand-scanned for the same reason `findVanillaSettings` is: a regex wide
+ * enough for an arbitrary expression is wide enough to swallow — or, here,
+ * stop short of — a brace inside it. Strings are skipped the way that scan
+ * skips them; a `}` inside a comment is beyond what any starter writes, and
+ * an unbalanced source returns null, so wiring bails rather than guesses.
+ */
+function endOfBraces(source: string, at: number): number | null {
+  let depth = 1;
+  for (let i = at; i < source.length; i += 1) {
+    const c = source[i]!;
+    if (c === "'" || c === '"' || c === "`") i = endOfString(source, i);
+    else if (c === "{") depth += 1;
+    else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return null;
+}
+
+/**
+ * A JSX `theme={…}` prop, whatever the expression inside (DEV-2203).
+ *
+ * The regex this replaces — `\btheme=\{[^}]*\}` — stopped at the FIRST `}`,
+ * which on the inline object every v18 starter now writes
+ * (`theme={{ ...mainTheme, colorScheme: 'light' }}`) cut the match short: the
+ * swap left `theme={customTheme}}` behind, a syntax error the bundler answers
+ * by silently serving the last good bundle, and the truncated match rode the
+ * marker as Reset's restore payload, so Reset restored a corrupted file.
+ */
+function findJsxThemeProp(source: string): string | null {
+  const open = /\btheme=\{/.exec(source);
+  if (!open) return null;
+  const end = endOfBraces(source, open.index + open[0].length);
+  return end === null ? null : source.slice(open.index, end + 1);
+}
+
+/**
+ * A `theme:` setting holding an inline object literal, plus its trailing
+ * comma when it has one, e.g. `theme: { ...mainTheme, colorScheme: 'light' },`
+ * — the v18 vanilla and Angular starters' shape (DEV-2203). `THEME_SETTING`
+ * only knows a bare identifier, so without this the flagship starters fell
+ * through to the `ANY_THEME_SETTING` bail and the panel showed the manual
+ * hint for a form it can wire. A `theme:` whose value is NOT an object
+ * literal — `theme: getTheme('…')`, a call — still does not match here, so
+ * genuinely unwireable forms still reach that bail.
+ */
+function findThemeObjectSetting(source: string): string | null {
+  const open = /\btheme\s*:\s*\{/.exec(source);
+  if (!open) return null;
+  const end = endOfBraces(source, open.index + open[0].length);
+  if (end === null) return null;
+  // Take the trailing comma along: the replacement (`theme: customTheme,`)
+  // carries its own, and leaving the original's behind would double it.
+  const after = /^[ \t]*,/.exec(source.slice(end + 1))?.[0] ?? "";
+  return source.slice(open.index, end + 1 + after.length);
+}
+
+/**
+ * Swap literal `found` text for `replacement`, carrying the original so the
+ * marker can restore it. The regex-shaped sibling is `swapInPlace`; this one
+ * takes text a hand scan found. Function replacer on the way in for the same
+ * reason the restore leg uses one: a `$` in the displaced text must never be
+ * read as a substitution pattern.
+ */
+function swapText(source: string, found: string | null, replacement: string) {
+  if (!found) return null;
+  return { source: source.replace(found, () => replacement), displaced: found };
+}
+
 /** Add `theme` to a vanilla settings object, wherever it is written. */
 function wireVanilla(source: string, indent: string): { source: string; displaced: string | null } | null {
   const target = findVanillaSettings(source);
   if (!target) return null;
 
   const swapped = swapInPlace(source, THEME_NAME_SETTING, "theme: customTheme,")
-    ?? swapInPlace(source, THEME_SETTING, "theme: customTheme,");
+    ?? swapInPlace(source, THEME_SETTING, "theme: customTheme,")
+    ?? swapText(source, findThemeObjectSetting(source), "theme: customTheme,");
   if (swapped) return swapped;
   if (ANY_THEME_SETTING.test(source)) return null;
 
@@ -763,8 +838,12 @@ export function buildResetChanges(files: Record<string, string>): ThemeFileChang
 
     const restore = displacedThemeName(source);
     // `themeName="x"` went in as an attribute, `themeName: 'x',` as a setting;
-    // each swaps back into the slot its replacement occupies.
-    const isAttr = restore !== null && /=/.test(restore);
+    // each swaps back into the slot its replacement occupies. Anchored to the
+    // payload's own opening — attributes start `theme=`/`themeName=`, with
+    // Vue's `:` in front — because a displaced settings *object* may hold an
+    // `=` of its own (a ternary's `===`, say), and reading any `=` as "it was
+    // an attribute" would drop that payload on Reset (DEV-2203).
+    const isAttr = restore !== null && /^:?theme(?:Name)?=/.test(restore);
     const restoreClass = displacedThemeClass(source);
 
     const unwired = source
