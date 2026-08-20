@@ -43,13 +43,24 @@ export type HeadAsset =
   | { kind: "element"; tag: "link" | "meta"; attrs: [string, string][] };
 
 const HEAD_RE = /<head\b[^>]*>([\s\S]*?)<\/head>/i;
+/** Where the implicit head ends when the document declares none. */
+const BODY_OPEN_RE = /<body\b/i;
 /** Removed before scanning: by injection time the head already holds our own
  *  `<script>` receivers, and a commented-out tag is not an asset. */
 const SCRIPT_BLOCK_RE = /<script\b[^>]*>[\s\S]*?<\/script>/gi;
 const COMMENT_RE = /<!--[\s\S]*?-->/g;
 
-const TOKEN_RE =
-  /<title\b[^>]*>([\s\S]*?)<\/title>|<style\b([^>]*)>([\s\S]*?)<\/style>|<(link|meta)\b([^>]*?)\/?>/gi;
+// `>` is legal inside a quoted attribute value (`content="x > y"`), and a `[^>]*`
+// tag matcher truncates there — `attributesOf` then reads the rest of the value as
+// attribute *names*, so the authored value is lost and unrelated attributes ride
+// along. Quoted runs are therefore matched as units.
+const TAG_BODY = String.raw`(?:"[^"]*"|'[^']*'|[^>])`;
+const TOKEN_RE = new RegExp(
+  `<title\\b${TAG_BODY}*>([\\s\\S]*?)<\\/title>`
+  + `|<style\\b(${TAG_BODY}*)>([\\s\\S]*?)<\\/style>`
+  + `|<(link|meta)\\b(${TAG_BODY}*?)\\/?>`,
+  "gi",
+);
 const ATTR_RE = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 
 function attributesOf(raw: string): [string, string][] {
@@ -75,9 +86,18 @@ const valueOf = (attrs: [string, string][], name: string): string | undefined =>
  * the HTML (see `headAssetsModuleLine`).
  */
 export function extractHeadAssets(html: string): HeadAsset[] {
+  // `<head>` is optional in HTML — a document that omits it still has an implicit
+  // one, and `/d/:id` renders such a demo themed because the browser parses it that
+  // way. Falling back to "everything before <body>" keeps the two paths in step.
   const head = HEAD_RE.exec(html);
-  if (head === null) return [];
-  const inner = (head[1] ?? "").replace(SCRIPT_BLOCK_RE, "").replace(COMMENT_RE, "");
+  let scope: string;
+  if (head !== null) {
+    scope = head[1] ?? "";
+  } else {
+    const body = BODY_OPEN_RE.exec(html);
+    scope = body === null ? html : html.slice(0, body.index);
+  }
+  const inner = scope.replace(SCRIPT_BLOCK_RE, "").replace(COMMENT_RE, "");
 
   const assets: HeadAsset[] = [];
   TOKEN_RE.lastIndex = 0;
@@ -125,15 +145,21 @@ export function extractHeadAssets(html: string): HeadAsset[] {
  * error card. `pipeline/head-assets.test.mjs` gates it with acorn at `ecmaVersion: 5`,
  * because `new Function` in modern node would accept plenty that babel refuses.
  *
- * The three guards make the payload inert when the head *was* preserved — the
+ * The per-asset guards make the payload inert when the head *was* preserved — the
  * head-dropping is measured on the parcel path, and `vue-cli` is not — so it can be
  * applied to every entry that declares an `htmlEntry` without risking a second copy
  * of every stylesheet.
+ *
+ * Deliberately *no* `window`-level "already ran" latch, unlike `scheme.ts` and
+ * `monitor.ts`. Those two register listeners, which must be hooked once; this one
+ * creates DOM nodes, and the bundler resets the preview document on a recompile
+ * (`pushUpdate`'s own comment: "the bundler's no-change path resets the document
+ * without re-evaluating any module"). A latch on `window` — which survives that
+ * reset — would make every compile after the first leave the head empty, while
+ * buying nothing the per-asset guards do not already provide.
  */
 const RECEIVER_HEAD = `(function (assets) {
   if (typeof document === 'undefined' || !assets || !assets.length) { return; }
-  if (window.__hotRunnerHeadAssets) { return; }
-  window.__hotRunnerHeadAssets = true;
   var MARK = '${MARK_ATTRIBUTE}';
   var head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
 
@@ -148,10 +174,23 @@ const RECEIVER_HEAD = `(function (assets) {
       window.dispatchEvent(event);
     } catch (e) {}
   }
-  function hasHref(url) {
+  function relOf(node) {
+    /* node.rel is the reflected property every real link has; getAttribute is the
+       fallback for anything that only carries the attribute. */
+    var value = node.rel;
+    if (value === undefined || value === null) {
+      value = node.getAttribute ? node.getAttribute('rel') : null;
+    }
+    return (value || '').toLowerCase();
+  }
+  /* Keyed on rel *and* href, not href alone: a preload link and a stylesheet link
+     for the same URL are the canonical CDN idiom, and an href-only guard appends the
+     preload and then skips the stylesheet as a duplicate — leaving the demo
+     unstyled, which is the bug this file exists to fix. */
+  function hasLink(url, rel) {
     var links = document.getElementsByTagName('link');
     for (var i = 0; i < links.length; i += 1) {
-      if (links[i].href === url) { return true; }
+      if (links[i].href === url && relOf(links[i]) === rel) { return true; }
     }
     return false;
   }
@@ -189,7 +228,7 @@ const RECEIVER_HEAD = `(function (assets) {
     if (asset.tag === 'link') {
       /* element.href is the resolved absolute URL, which is what an existing link
          reports too — comparing the authored strings would miss a match. */
-      if (hasHref(element.href)) { continue; }
+      if (hasLink(element.href, relOf(element))) { continue; }
       element.onload = nudge;
       element.onerror = nudge;
     }
@@ -205,10 +244,20 @@ export function headAssetsSource(assets: HeadAsset[]): string {
   return RECEIVER_HEAD + JSON.stringify(assets) + RECEIVER_TAIL;
 }
 
-/** `JSON.stringify` of a string, without its surrounding quotes. */
+/**
+ * `JSON.stringify` of a string, without its surrounding quotes.
+ *
+ * U+2028 and U+2029 are escaped by hand because `JSON.stringify` leaves them raw:
+ * they are legal inside an ES2019+ string literal but are LineTerminators in ES5, so
+ * one of them anywhere in a demo's `<title>` or `<style>` (a paste out of a word
+ * processor is enough) makes the emitted line unparseable for the 2018-era babel the
+ * classic bundler runs — presenting as the blank preview with no error card that this
+ * module's ES5 discipline exists to avoid. The module's own acorn gate cannot catch
+ * it: that covers the constant receiver, not the demo-derived payload.
+ */
 const jsonInner = (value: string): string => {
   const quoted = JSON.stringify(value);
-  return quoted.slice(1, quoted.length - 1);
+  return quoted.slice(1, quoted.length - 1).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 };
 
 /**

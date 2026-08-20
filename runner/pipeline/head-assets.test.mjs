@@ -272,7 +272,14 @@ function fakeDocument() {
         attrs: {},
         children: [],
         textContent: "",
-        setAttribute(name, value) { this.attrs[name] = value; },
+        // Reflected properties and getAttribute both, because the payload reads `rel`
+        // and `href` off the node rather than out of its own descriptor — a harness
+        // that only stored attributes could not see a dedupe keyed on them.
+        setAttribute(name, value) {
+          this.attrs[name] = value;
+          if (name === "rel") this.rel = value;
+        },
+        getAttribute(name) { return name in this.attrs ? this.attrs[name] : null; },
         appendChild(child) { this.children.push(child); this.textContent += child.text ?? ""; },
       };
       if (tag === "link") {
@@ -345,7 +352,17 @@ test("a stylesheet the document already has is not added twice", () => {
   // template that *did* keep the head would otherwise fetch every stylesheet twice
   // and stack duplicate rules. `href` on the seed, not just the attribute: that is
   // what a real link reports, and it is what the guard compares.
-  const existing = { tagName: "LINK", attrs: { href: CDN_THEME }, href: CDN_THEME, children: [], textContent: "" };
+  // A real pre-existing stylesheet carries its rel, and the guard is keyed on rel +
+  // resolved href — a bare `<link href>` with no rel is a different link, not this one.
+  const existing = {
+    tagName: "LINK",
+    attrs: { rel: "stylesheet", href: CDN_THEME },
+    rel: "stylesheet",
+    href: CDN_THEME,
+    children: [],
+    textContent: "",
+    getAttribute(name) { return name in this.attrs ? this.attrs[name] : null; },
+  };
   const { appended } = runPayload(FIXTURE, [existing]);
   const themeLinks = appended.filter((node) => node.href === CDN_THEME || node.attrs.href === CDN_THEME);
   assert.equal(themeLinks.length, 1, "only the pre-existing link, no second copy");
@@ -469,4 +486,87 @@ test("the runtime's authored map never sees the payload", async () => {
   const { runtime } = published(entryFor(), filesWith());
   await runtime.sandboxFiles();
   assert.ok(!JSON.stringify(runtime.files).includes(HEAD_ASSETS_MARKER));
+});
+
+// ------------------------------------------------ regressions (review of PR #240)
+
+test("a preload and a stylesheet for the same URL both land", () => {
+  // `<link rel="preload" as="style" href="X">` followed by `<link rel="stylesheet"
+  // href="X">` is the canonical CDN idiom. Deduping on href alone appended the
+  // preload and then skipped the stylesheet as a duplicate — a preload styles
+  // nothing, so the demo stayed unthemed and this whole module no-opped for the
+  // commonest shape it exists to fix. The guard is keyed on rel *and* href.
+  const html =
+    '<head><link rel="preload" as="style" href="https://cdn.example.com/t.css">' +
+    '<link rel="stylesheet" href="https://cdn.example.com/t.css"></head>';
+  const { appended } = runPayload(html);
+  assert.deepEqual(
+    appended.map((node) => `${node.attrs.rel} ${node.attrs.href}`),
+    ["preload https://cdn.example.com/t.css", "stylesheet https://cdn.example.com/t.css"],
+  );
+});
+
+test("a second evaluation against a fresh document re-applies the head", () => {
+  // The bundler resets the preview document on a recompile without re-evaluating
+  // every module (`pushUpdate`'s comment). A `window`-level "already ran" latch —
+  // which `scheme.ts` and `monitor.ts` can afford because they register listeners,
+  // not nodes — would survive that reset and leave every later compile unstyled.
+  const html = '<head><title>T</title><link rel="stylesheet" href="https://cdn.example.com/a.css"></head>';
+  const first = runPayload(html);
+  assert.equal(first.appended.length, 1);
+
+  // Same window object, brand-new document: what a reset looks like from in here.
+  const { doc } = fakeDocument();
+  const context = vm.createContext({ document: doc, window: first.context.window, demoRan: false });
+  context.window.document = doc;
+  const out = injectHeadAssets({ [HTML_ENTRY]: html, [MODULE_ENTRY]: "demoRan = true;\n" }, HTML_ENTRY, MODULE_ENTRY);
+  vm.runInContext(out[MODULE_ENTRY], context);
+
+  assert.equal(doc.head.children.length, 1, "the head is rebuilt, not skipped");
+  assert.equal(doc.title, "T");
+});
+
+test("a U+2028 in the head still emits an ES5-parseable line", () => {
+  // JSON.stringify leaves U+2028/U+2029 raw. They are legal in an ES2019+ string
+  // literal and LineTerminators in ES5, so one pasted into a title (a word processor
+  // is enough) made the emitted line unparseable for the bundler's babel — the blank
+  // preview with no error card. The module's own acorn gate covers the constant
+  // receiver, not the demo-derived payload, so it could not catch this.
+  const line = lineFrom(`<head><title>a${"\u2028"}b</title><style>i${"\u2029"}j</style></head>`);
+  Parser.parse(line, { ecmaVersion: 5 });
+  assert.ok(!stripInjectedHeadAssets(`x ${line} y`).includes("\u2028"), "and the strip still matches");
+});
+
+test("a > inside a quoted attribute value does not truncate the tag", () => {
+  // `[^>]*` stopped at the first `>`, and the remainder of the value was then read as
+  // attribute *names*: the authored content was dropped and unrelated attributes rode
+  // along. On a <link> that corrupts the href that gets loaded.
+  const assets = extractHeadAssets('<head><meta name="og:d" content="x > y"></head>');
+  assert.deepEqual(assets, [
+    { kind: "element", tag: "meta", attrs: [["name", "og:d"], ["content", "x > y"]] },
+  ]);
+});
+
+test("a document with no <head> element still hands over its implicit one", () => {
+  // <head> is optional in HTML; the browser makes one, and `/d/:id` renders such a
+  // demo themed. Everything before <body> is that implicit head.
+  const assets = extractHeadAssets(
+    '<html><link rel="stylesheet" href="https://cdn.example.com/t.css"><body>hi</body></html>',
+  );
+  assert.deepEqual(assets, [
+    { kind: "element", tag: "link", attrs: [["rel", "stylesheet"], ["href", "https://cdn.example.com/t.css"]] },
+  ]);
+
+  // Scope, stated: a link in the *body* is left alone. The bundler renders the body,
+  // so whatever it does with one there it does with or without this module.
+  assert.deepEqual(
+    extractHeadAssets('<html><head><title>t</title></head><body><link rel="stylesheet" href="https://x/b.css"></body></html>'),
+    [{ kind: "title", text: "t" }],
+  );
+});
+
+test("the receiver carries no backtick", () => {
+  // It lives inside a TS template literal. A backtick in one of its comments closes
+  // that literal, and the file stops compiling — twice while writing this module.
+  assert.ok(!headAssetsSource([]).includes("`"));
 });
