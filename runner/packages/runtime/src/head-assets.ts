@@ -174,6 +174,20 @@ const RECEIVER_HEAD = `(function (assets) {
       window.dispatchEvent(event);
     } catch (e) {}
   }
+  /* Character references are resolved by the parser, so a value that reached us as
+     raw source text still carries them: an authored
+     href="...?family=Inter&amp;display=swap" means the URL with a bare "&", and
+     re-creating it verbatim would request a different one. Decoding through a
+     detached textarea uses the browser's own table instead of a hand-rolled one; it
+     is RCDATA, so a tag inside the text stays text and never becomes a node.
+     Attribute values and the title get this; a <style> body does not, because style
+     content is RAWTEXT and its entities are literal. */
+  function decode(text) {
+    if (text.indexOf('&') === -1) { return text; }
+    var box = document.createElement('textarea');
+    box.innerHTML = text;
+    return box.value;
+  }
   function relOf(node) {
     /* node.rel is the reflected property every real link has; getAttribute is the
        fallback for anything that only carries the attribute. */
@@ -205,11 +219,7 @@ const RECEIVER_HEAD = `(function (assets) {
   for (var i = 0; i < assets.length; i += 1) {
     var asset = assets[i];
     if (asset.kind === 'title') {
-      /* Decoded the way the parser would have: a title is RCDATA, so entities are
-         text and a tag inside it never becomes a node. */
-      var box = document.createElement('textarea');
-      box.innerHTML = asset.text;
-      document.title = box.value;
+      document.title = decode(asset.text);
       continue;
     }
     if (asset.kind === 'style') {
@@ -223,7 +233,7 @@ const RECEIVER_HEAD = `(function (assets) {
     }
     var element = document.createElement(asset.tag);
     for (var j = 0; j < asset.attrs.length; j += 1) {
-      try { element.setAttribute(asset.attrs[j][0], asset.attrs[j][1]); } catch (e) {}
+      try { element.setAttribute(asset.attrs[j][0], decode(asset.attrs[j][1])); } catch (e) {}
     }
     if (asset.tag === 'link') {
       /* element.href is the resolved absolute URL, which is what an existing link

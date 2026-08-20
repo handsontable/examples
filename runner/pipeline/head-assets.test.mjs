@@ -289,8 +289,15 @@ function fakeDocument() {
         });
       }
       if (tag === "textarea") {
+        // Stands in for the browser's character-reference table: enough of it for the
+        // cases under test, and `&amp;` last so `&amp;amp;` does not double-decode.
         Object.defineProperty(node, "innerHTML", {
-          set(value) { this.value = value.replace(/&amp;/g, "&").replace(/&mdash;/g, "—"); },
+          set(value) {
+            this.value = value
+              .replace(/&mdash;/g, "—")
+              .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+              .replace(/&amp;/g, "&");
+          },
         });
       }
       created.push(node);
@@ -569,4 +576,32 @@ test("the receiver carries no backtick", () => {
   // It lives inside a TS template literal. A backtick in one of its comments closes
   // that literal, and the file stops compiling — twice while writing this module.
   assert.ok(!headAssetsSource([]).includes("`"));
+});
+
+test("character references in attribute values are decoded, style bodies are not", () => {
+  // The parser resolves references before the DOM ever sees them, so an authored
+  // `href="…?family=Inter&amp;display=swap"` — the idiomatic Google Fonts form — means
+  // the URL with a bare `&`. Re-creating it verbatim requests a different URL and the
+  // font (or stylesheet) never arrives, which is the failure this module exists to end.
+  // A <style> body is the opposite case: its content is RAWTEXT, so `&amp;` there is
+  // literally those five characters and decoding it would corrupt the CSS.
+  const html =
+    '<head><link rel="stylesheet" href="https://fonts.example.com/css2?family=Inter&amp;display=swap">' +
+    '<meta name="d" content="a &amp; b">' +
+    '<style>a[href*="&amp;"] { color: #000 }</style></head>';
+
+  // Extraction keeps the source text; decoding belongs to the payload, where the
+  // browser's own table is available.
+  const assets = extractHeadAssets(html);
+  assert.equal(assets[0].attrs[1][1], "https://fonts.example.com/css2?family=Inter&amp;display=swap");
+
+  const { appended } = runPayload(html);
+  assert.equal(appended[0].attrs.href, "https://fonts.example.com/css2?family=Inter&display=swap");
+  assert.equal(appended[1].attrs.content, "a & b");
+  assert.equal(appended[2].textContent, 'a[href*="&amp;"] { color: #000 }', "style text stays raw");
+});
+
+test("a title's character references are decoded too", () => {
+  const { doc } = runPayload("<head><title>Sales &amp; Ops &#8212; Q3</title></head>");
+  assert.equal(doc.title, "Sales & Ops — Q3");
 });
