@@ -128,6 +128,12 @@ async function headSettled(page: Page) {
 
 test.describe("head assets reach the live preview", () => {
   test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  // The config default is 60s, and the waits inside one test already allow more than
+  // that on a cold bundler: `previewReady` 120s, the grid 120s, `headSettled` 30s. At
+  // 60s the test aborts with Playwright's generic "Test timeout exceeded" *before*
+  // those waits can report what they measured — the least informative failure wins.
+  // Same budget as `preview-scheme.spec.ts`, the closest sibling.
+  test.describe.configure({ timeout: 300_000 });
 
   test("a demo styled only from its <head> renders themed", async ({ page }) => {
     await page.route("**/api/versions", (route) =>
