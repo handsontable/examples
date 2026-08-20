@@ -283,17 +283,22 @@ function Notice({ text }: { text: string }) {
   );
 }
 
+/** Square and the full 36px of the bar — a flush field in the bar's own band,
+ *  like the chat composer, not a floating pill. The hairline is an inset
+ *  box-shadow rather than a border so the field's box stays exactly the bar's
+ *  height with no double edge against the bar's own rules. */
 const customVersion: React.CSSProperties = {
   width: 181,
-  height: 26,
+  height: "100%",
   flex: "0 0 auto",
-  margin: `0 ${theme.space(2)}`,
+  margin: 0,
   padding: `0 ${theme.space(2)}`,
-  borderRadius: theme.radius.md,
-  border: `1px solid ${theme.color.border}`,
+  borderRadius: 0,
+  border: "none",
+  boxShadow: `inset 0 0 0 1px ${theme.color.controlBorder}`,
   background: theme.color.surface,
   color: theme.color.text,
   fontFamily: theme.font.mono,
-  fontSize: 12,
+  ...theme.type.base,
   boxSizing: "border-box",
 };

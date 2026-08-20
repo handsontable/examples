@@ -69,23 +69,31 @@ test.describe("drawer chrome", () => {
     expect(style?.width).toBe(400);
   });
 
+  // The full-height drawer (docs-assistant geometry) covers the top bar, so with a
+  // panel open the other trigger is under it and a pointer click is intercepted —
+  // by design. The drawer traps nothing, so the triggers stay keyboard-reachable,
+  // and keyboard activation is the path these two tests now take. The mutual
+  // exclusion they prove is unchanged: App.tsx closes one panel as it opens the other.
+
   test("only one drawer is open at a time", async ({ page }) => {
     await openPlayground(page, "light");
     await page.getByRole("button", { name: "Ask AI", exact: true }).click();
     await expect(page.locator(CHAT)).toBeVisible();
 
-    await page.getByRole("button", { name: "Style", exact: true }).click();
+    await page.getByRole("button", { name: "Style", exact: true }).focus();
+    await page.keyboard.press("Enter");
     await expect(page.locator(STYLE)).toBeVisible();
     await expect(page.locator(CHAT)).toHaveCount(0);
   });
 
-  test("swapping drawers leaves focus on the trigger that was clicked", async ({ page }) => {
+  test("swapping drawers leaves focus on the trigger that was activated", async ({ page }) => {
     await openPlayground(page, "light");
     const askAi = page.getByRole("button", { name: "Ask AI", exact: true });
     const style = page.getByRole("button", { name: "Style", exact: true });
 
     await askAi.click();
-    await style.click();
+    await style.focus();
+    await page.keyboard.press("Enter");
     await expect(page.locator(STYLE)).toBeVisible();
 
     // The closing drawer used to focus *its* trigger on unmount — which happens
@@ -196,7 +204,11 @@ test.describe("dark mode legibility", () => {
     await page.getByRole("button", { name: "Ask AI", exact: true }).click();
     const textarea = await paint(page, `${CHAT} textarea`);
     expect(textarea.background).not.toBe("rgb(255, 255, 255)");
-    expect(textarea.background).toBe("rgb(7, 6, 4)");
+    // Transparent by design since the docs-assistant restyle (`.da-input`): the
+    // composer is flush with the panel, so what must not be white is the fill
+    // actually behind it — the drawer's own `surfaceRaised`.
+    expect(textarea.background).toBe("rgba(0, 0, 0, 0)");
+    expect(textarea.parentBackground).toBe("rgb(34, 34, 34)");
   });
 
   test("control outlines are visible against the surface they sit on", async ({ page }) => {
@@ -281,9 +293,10 @@ test.describe("chat transcript", () => {
     const chipLocator = page.locator(`${CHAT} code`, { hasText: "src/index.tsx" });
     const chip = await paint(page, chipLocator);
     expect(chip.borderColor).toBe("rgb(53, 53, 53)");
-    // And the edit box around it — the nearest ancestor that draws a border —
-    // is the other half of the same hairline: same token, same failure mode.
-    const editBox = await paint(page, chipLocator.locator('xpath=ancestor::div[contains(@style, "border")][1]'));
+    // And the edit box around it — the card the chip sits in — is the other half
+    // of the same hairline: same token, same failure mode. By class since the
+    // panel moved off inline styles (panels.css).
+    const editBox = await paint(page, chipLocator.locator('xpath=ancestor::div[contains(@class, "hot-chat-edit-box")][1]'));
     expect(editBox.borderColor).toBe("rgb(53, 53, 53)");
     expect(editBox.borderColor).not.toBe(editBox.parentBackground);
 

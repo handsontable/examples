@@ -17,12 +17,12 @@
 import {
   useEffect,
   useRef,
+  useState,
   type CSSProperties,
   type ReactNode,
 } from "react";
 import { IconX } from "./icons/index.js";
-import { s } from "./styles.js";
-import { theme } from "./theme.js";
+import { installCss, theme } from "./theme.js";
 
 /** Both drawers, one width. Ask AI shipped at 400 and Style at 380; the style
  *  panel is the one with a 130px label column beside a control, and it was the
@@ -30,8 +30,11 @@ import { theme } from "./theme.js";
 export const DRAWER_WIDTH = 400;
 
 export interface DrawerProps {
-  /** Rendered in the title row, 18/600, as `Dialog` draws it. */
+  /** Rendered in the title row, 15/600 with an optional leading icon — the docs
+   *  assistant's title treatment (`.da-title`), which these panels now mirror. */
   title: string;
+  /** Drawn before the title, 8px off it — the panel's identity mark. */
+  icon?: ReactNode;
   /** The panel's accessible name. Defaults to `title`; the two panels give the
    *  fuller sentence their `aside` carried before ("Ask about this example"). */
   label?: string;
@@ -44,19 +47,38 @@ export interface DrawerProps {
   subheader?: ReactNode;
   /** Pinned below the scrolling body, on `surfaceMuted`. */
   footer?: ReactNode;
+  /** Merged over the footer band's own style — the chat panel's composer is
+   *  full-bleed on `surface`, where the style panel's buttons keep the padded
+   *  `surfaceMuted` band. */
+  footerStyle?: CSSProperties;
   width?: number;
 }
 
 export function Drawer({
   title,
+  icon,
   label,
   onClose,
   children,
   subheader,
   footer,
+  footerStyle,
   width = DRAWER_WIDTH,
 }: DrawerProps) {
   const panelRef = useRef<HTMLElement | null>(null);
+
+  // Slide-in from the right, as the docs assistant enters (`.da-panel`'s 0.2s
+  // transform). The panel mounts offscreen and moves to 0 one frame later — a
+  // transition needs a painted "from" state, and setting the resting transform
+  // in the same render as the mount would skip the animation entirely. Close is
+  // an unmount in App.tsx, so there is no slide-out; matching the docs' exit
+  // would mean keeping closed drawers mounted, which is a bigger contract change
+  // than an entrance animation justifies.
+  const [entered, setEntered] = useState(false);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   /**
    * Who had focus when this drawer opened — captured **during the first render**,
@@ -105,13 +127,21 @@ export function Drawer({
   }, [onClose]);
 
   return (
-    <aside ref={panelRef} style={{ ...panel, width }} aria-label={label ?? title}>
-      <header style={titleRow}>
-        <h2 style={heading}>{title}</h2>
+    <aside
+      ref={panelRef}
+      className="hot-drawer"
+      data-entered={entered || undefined}
+      style={{ width }}
+      aria-label={label ?? title}
+    >
+      <header className="hot-drawer-header">
+        <h2 className="hot-drawer-title">
+          {icon}
+          {title}
+        </h2>
         <button
           type="button"
-          className="hot-icon-btn"
-          style={closeButton}
+          className="hot-icon-btn hot-drawer-close"
           onClick={onClose}
           aria-label={`Close ${title.toLowerCase()}`}
         >
@@ -122,85 +152,44 @@ export function Drawer({
       {subheader}
 
       {/* The only scrolling region: title row, subheader and footer stay put. */}
-      <div style={body}>{children}</div>
+      <div className="hot-drawer-body">{children}</div>
 
-      {footer !== undefined && <footer style={foot}>{footer}</footer>}
+      {footer !== undefined && <footer className="hot-drawer-foot" style={footerStyle}>{footer}</footer>}
     </aside>
   );
 }
 
-// `zIndex` 900 — under `Dialog`'s 1000. A dialog opened from inside a drawer
-// (Share, from the preview bar) has to paint above it.
+// A real stylesheet, not inline objects (the app-wide move off inline styles):
+// registered once at module scope through `installCss`, colours as `var(--hot-…)`
+// references so the mode flip keeps working. Only per-instance values stay inline
+// — `width` (a prop) and the chat panel's `footerStyle` override.
 //
-// It starts *below* the 72px top bar rather than at `top: 0`, which is what both
-// panels used to do. Covering the bar covered their own triggers: with a drawer
-// open, the other panel's button — and the open one's own toggle — sat under the
-// panel, and Playwright reported the `<h2>` intercepting the click. Mutually
-// exclusive panels you cannot switch between with the mouse are only mutually
-// exclusive on paper (Escape and ✕ were the only ways out). Height follows, or the
-// panel would overhang the viewport by the height of the bar.
-const panel: CSSProperties = {
-  position: "fixed",
-  top: s.topBar.height,
-  right: 0,
-  height: `calc(100% - ${s.topBar.height}px)`,
-  maxWidth: "95vw",
-  zIndex: 900,
-  display: "flex",
-  flexDirection: "column",
-  // `controlBorder`, not `border`: in dark, `border` *is* `surfaceRaised`, so the
-  // drawer's own edge against the workspace would vanish (theme.ts, ADR-0028).
-  borderLeft: `1px solid ${theme.color.controlBorder}`,
-  background: theme.color.surfaceRaised,
-  boxShadow: theme.shadow.panel,
-  color: theme.color.text,
-  fontFamily: theme.font.ui,
-};
-
-const titleRow: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: theme.space(3),
-  flex: "0 0 auto",
-  padding: `${theme.space(3)} ${theme.space(4)}`,
-  // A divider between two same-tone regions, so `border` is right here — the rule
-  // reads in both modes and `controlBorder` would make it shout (ADR-0028).
-  borderBottom: `1px solid ${theme.color.border}`,
-};
-
-const heading: CSSProperties = {
-  margin: 0,
-  fontSize: 18,
-  fontWeight: 600,
-  color: theme.color.text,
-};
-
-// No inline `background`: it would outrank `.hot-icon-btn:hover` (ADR-0026).
-const closeButton: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 28,
-  height: 28,
-  flex: "0 0 auto",
-  marginRight: -4,
-  padding: 0,
-  border: "none",
-  borderRadius: theme.radius.md,
-  color: theme.color.textMuted,
-  cursor: "pointer",
-};
-
-const body: CSSProperties = {
-  flex: 1,
-  minHeight: 0,
-  overflowY: "auto",
-};
-
-const foot: CSSProperties = {
-  flex: "0 0 auto",
-  padding: `${theme.space(3)} ${theme.space(4)}`,
-  borderTop: `1px solid ${theme.color.border}`,
-  background: theme.color.surfaceMuted,
-};
+// The choices the rules encode:
+//  * `z-index` 900 — under `Dialog`'s 1000. A dialog opened from inside a drawer
+//    (Share, from the preview bar) has to paint above it.
+//  * Full viewport height, over the 72px top bar — the docs assistant's geometry
+//    (`.da-panel[data-open]`), adopted deliberately after shipping the
+//    below-the-bar variant first. The cost is known and accepted: with a drawer
+//    open both panel triggers sit under it, so switching panels by pointer means
+//    closing first — the same trade the docs panel makes with its own header. The
+//    triggers stay keyboard-reachable; the drawer is non-modal and traps nothing.
+//  * Entrance is the docs assistant's 0.2s slide, transform-only so nothing
+//    inside reflows; `data-entered` flips one frame after mount so the
+//    transition has a painted "from" state.
+//  * `controlBorder` on the panel edge and both rules, not `border`: in dark,
+//    `border` *is* `surfaceRaised`, so all three hairlines would vanish
+//    (ADR-0028). In light the two tokens share a value.
+//  * The title is `type.base` at 600 with the icon inline (`.da-title`) — the
+//    design's scale tops out at 12px (48:6560), so no third size for a heading.
+//  * `.hot-drawer-close` sets no background: it would outrank
+//    `.hot-icon-btn:hover` (ADR-0026).
+const DRAWER_CSS = `
+.hot-drawer{position:fixed;top:0;right:0;height:100%;max-width:95vw;z-index:900;display:flex;flex-direction:column;border-left:1px solid ${theme.color.controlBorder};background:${theme.color.surfaceRaised};box-shadow:${theme.shadow.panel};color:${theme.color.text};font-family:${theme.font.ui};transition:transform 0.2s ease;transform:translateX(100%)}
+.hot-drawer[data-entered]{transform:translateX(0)}
+.hot-drawer-header{display:flex;align-items:center;justify-content:space-between;gap:${theme.space(3)};flex:0 0 auto;padding:${theme.space(3)} ${theme.space(6)};border-bottom:1px solid ${theme.color.controlBorder}}
+.hot-drawer-title{display:flex;align-items:center;gap:${theme.space(2)};margin:0;font-size:${theme.type.base.fontSize}px;line-height:${theme.type.base.lineHeight};font-weight:600;color:${theme.color.text}}
+.hot-drawer-close{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:0 0 auto;margin-right:-4px;padding:0;border:none;border-radius:${theme.radius.md};color:${theme.color.textMuted};cursor:pointer}
+.hot-drawer-body{flex:1;min-height:0;overflow-y:auto}
+.hot-drawer-foot{flex:0 0 auto;padding:${theme.space(3)} ${theme.space(6)};border-top:1px solid ${theme.color.controlBorder};background:${theme.color.surfaceMuted}}
+`;
+installCss("hot-drawer-css", DRAWER_CSS);

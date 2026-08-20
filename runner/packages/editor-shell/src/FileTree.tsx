@@ -692,8 +692,7 @@ const slot: CSSProperties = {
 
 const label = (strong: boolean): CSSProperties => ({
   fontFamily: theme.font.ui,
-  fontSize: 10,
-  lineHeight: "16px",
+  ...theme.type.row,
   color: strong ? theme.color.text : theme.color.textMuted,
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -718,14 +717,13 @@ const dropHint: CSSProperties = {
   right: theme.space(3),
   bottom: 4,
   margin: 0,
-  padding: "4px 6px",
+  padding: `${theme.space(1)} ${theme.space(2)}`,
   borderRadius: theme.radius.sm,
   border: `1px solid ${theme.color.accentBorder}`,
   background: theme.color.surfaceRaised,
   color: theme.color.accentText,
   fontFamily: theme.font.ui,
-  fontSize: 10,
-  lineHeight: "16px",
+  ...theme.type.row,
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -736,15 +734,13 @@ const dropHint: CSSProperties = {
 const noteText: CSSProperties = {
   margin: `2px ${theme.space(3)}`,
   fontFamily: theme.font.ui,
-  fontSize: 10,
-  lineHeight: "14px",
+  ...theme.type.row,
   color: theme.color.textMuted,
 };
 
 const confirmBody: CSSProperties = {
   margin: 0,
-  fontSize: 13,
-  lineHeight: 1.5,
+  ...theme.type.base,
   color: theme.color.textMuted,
 };
 
@@ -765,7 +761,7 @@ const ghostButton: CSSProperties = {
   background: "transparent",
   color: theme.color.text,
   fontFamily: theme.font.ui,
-  fontSize: 13,
+  ...theme.type.base,
   cursor: "pointer",
 };
 
@@ -783,7 +779,7 @@ const editInput: CSSProperties = {
   boxSizing: "border-box",
   fontFamily: theme.font.mono,
   fontSize: 12,
-  padding: "4px 6px",
+  padding: `${theme.space(1)} ${theme.space(2)}`,
   border: `1px solid ${theme.color.accent}`,
   borderRadius: theme.radius.sm,
   // Raised, not `surface`: this floats over the recessed sidebar, which is

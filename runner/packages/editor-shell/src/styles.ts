@@ -104,14 +104,14 @@ export const s = {
     background: t.color.surface,
     color: t.color.text,
     fontFamily: t.font.ui,
-    fontSize: 13,
+    ...t.type.base,
   }),
 
   /** The pill's text. Every call site drew its own identical copy of this — the
    *  editor's, My Demos', and now Settings' — so it lives here once. */
   pillLabel: {
     fontFamily: t.font.ui,
-    fontSize: 13,
+    ...t.type.base,
     fontWeight: 500,
     color: t.color.text,
   } satisfies CSSProperties,
@@ -137,7 +137,7 @@ export const s = {
     borderBottom: `1px solid ${t.color.border}`,
     background: t.color.surface,
     fontFamily: t.font.ui,
-    fontSize: 13,
+    ...t.type.base,
     color: t.color.text,
   } satisfies CSSProperties,
 
@@ -173,7 +173,7 @@ export const s = {
     background: t.color.surfaceSunken,
     boxShadow: `inset 0 -1px 0 ${t.color.border}`,
     fontFamily: t.font.ui,
-    fontSize: 13,
+    ...t.type.base,
     color: t.color.text,
   } satisfies CSSProperties,
 
@@ -190,7 +190,7 @@ export const s = {
     background: "transparent",
     color: t.color.textMuted,
     fontFamily: t.font.ui,
-    fontSize: 13,
+    ...t.type.base,
     textAlign: "left",
     cursor: "pointer",
   } satisfies CSSProperties,
@@ -206,7 +206,7 @@ export const s = {
     background: "transparent",
     color: t.color.text,
     fontFamily: t.font.ui,
-    fontSize: 13,
+    ...t.type.base,
     cursor: "pointer",
     whiteSpace: "nowrap",
   } satisfies CSSProperties,
@@ -235,9 +235,9 @@ export const s = {
     background: active ? t.color.accentSoft : "transparent",
     color: active ? t.color.text : t.color.textMuted,
     fontFamily: t.font.ui,
-    fontSize: 13,
+    ...t.type.base,
     fontWeight: active ? 600 : 400,
-    padding: `6px ${t.space(2)}`,
+    padding: `${t.space(1)} ${t.space(2)}`,
     cursor: "pointer",
     whiteSpace: "nowrap",
   }),
@@ -372,7 +372,7 @@ export const s = {
     padding: t.space(4),
     textAlign: "center",
     fontFamily: t.font.ui,
-    fontSize: 13,
+    ...t.type.base,
     color: t.color.textMuted,
   } satisfies CSSProperties,
 
@@ -424,8 +424,8 @@ export const s = {
 
   select: {
     fontFamily: t.font.mono,
-    fontSize: 13,
-    padding: `5px 8px`,
+    ...t.type.base,
+    padding: `${t.space(1)} ${t.space(2)}`,
     borderRadius: t.radius.md,
     border: `1px solid ${t.color.border}`,
     background: t.color.surface,

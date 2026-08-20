@@ -84,15 +84,14 @@ const body: CSSProperties = {
 const row: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 10,
+  gap: theme.space(2),
   padding: `${theme.space(2)} ${theme.space(3)}`,
   overflow: "clip",
 };
 
 const nameLink: CSSProperties = {
   fontFamily: theme.font.ui,
-  fontSize: 10,
-  lineHeight: "16px",
+  ...theme.type.row,
   color: theme.color.text,
   textDecoration: "none",
   flex: "0 0 auto",
@@ -100,8 +99,7 @@ const nameLink: CSSProperties = {
 
 const urlText: CSSProperties = {
   fontFamily: theme.font.mono,
-  fontSize: 10,
-  lineHeight: "16px",
+  ...theme.type.row,
   color: theme.color.textMuted,
   overflow: "hidden",
   textOverflow: "ellipsis",

@@ -10,14 +10,18 @@
 //
 // Adaptation: theme-builder builds these out of antd (Popover, Segmented,
 // ColorPicker, InputNumber). The runner has no component library, so the
-// pickers are inline disclosures rather than floating popovers — which also
-// behaves better in a 420px side panel than anything that needs positioning.
+// pickers are hand-rolled popovers anchored under their triggers — floating,
+// as Theme Builder's are, since the panel matched its row layout (label + ⓘ
+// left, control right). The known cost: a popover opened at the very bottom
+// of the panel extends the body's scroll rather than flipping upward.
 
 import { useState } from "react";
 import {
   headerLabel,
   IconChevronDown,
+  IconChevronRight,
   IconChevronUp,
+  IconInfoCircle,
   theme as ui,
 } from "@handsontable/demo-editor-shell";
 import type { ColorsMap, TokenMap } from "./presets.js";
@@ -54,8 +58,10 @@ function Chevron({ open }: { open: boolean }) {
   return <Glyph size={14} style={{ color: ui.color.textMuted, flex: "0 0 auto" }} />;
 }
 
-/** Label, description, the control, and a Reset that appears only when the
- *  token is actually overridden. */
+/** Theme Builder's row: label with the description behind an ⓘ on the left,
+ *  the control on the right, and a Reset that appears only when the token is
+ *  actually overridden. The description used to be a line under every control —
+ *  272 rows of always-on hint text; the tooltip shows it on intent instead. */
 function Row({
   token,
   overridden,
@@ -72,16 +78,22 @@ function Row({
     // so `label`-based locators cannot reach it, and the label text ("Vertical")
     // repeats across groups.
     <div style={rowWrap} data-token={token.key}>
-      <div style={rowHead}>
+      <span style={rowLabelCell}>
         <span style={rowLabel} title={token.key}>{token.label}</span>
+        {token.description && (
+          // Focusable, so the tooltip is keyboard-reachable; the CSS lives in
+          // panels.css (`.hot-info`), a ::after no inline style can express.
+          <span className="hot-info" data-tip={token.description} tabIndex={0} role="img" aria-label={token.description}>
+            <IconInfoCircle size={14} />
+          </span>
+        )}
         {overridden && (
           <button type="button" style={resetBtn} onClick={onReset} title={`Reset ${token.key}`}>
             Reset
           </button>
         )}
-      </div>
-      {children}
-      {token.description && <div style={hint}>{token.description}</div>}
+      </span>
+      <div style={rowControl}>{children}</div>
     </div>
   );
 }
@@ -106,7 +118,7 @@ function UnitControl({ token, resolved, onChange }: {
   const unit = token.params?.unit ?? "";
   const numeric = resolved.replace(unit, "").trim();
   return (
-    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <input
         type="number"
         style={{ ...control, width: 96 }}
@@ -164,7 +176,7 @@ function SizeControl({ value, resolved, effectiveRef = "", density, sizing, mode
   const [mode, setMode] = useState<SizeMode>(() => modeFor(current, modes));
 
   return (
-    <div>
+    <div style={anchor}>
       <button type="button" style={trigger} onClick={() => setOpen(!open)} aria-expanded={open}>
         <span style={ellipsis}>{resolved || "theme default"}</span>
         <Chevron open={open} />
@@ -233,6 +245,22 @@ function SizeControl({ value, resolved, effectiveRef = "", density, sizing, mode
  * of the `[light, dark]` pair matching the scheme you're looking at, so styling
  * in light mode doesn't quietly rewrite dark mode.
  */
+/** A collapsible swatch group inside the colour dropdown — Theme Builder's
+ *  Base / Palette / Primary sections, chevron and all. */
+function ColorGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(true);
+  const Glyph = open ? IconChevronDown : IconChevronRight;
+  return (
+    <div>
+      <button type="button" style={groupToggle} onClick={() => setOpen(!open)} aria-expanded={open}>
+        <Glyph size={14} style={{ color: ui.color.textMuted, flex: "0 0 auto" }} />
+        <span>{label}</span>
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
 function ColorControl({ token, value, ctx, resolved, onChange }: {
   token: Token;
   value: TokenValue | undefined;
@@ -241,6 +269,9 @@ function ColorControl({ token, value, ctx, resolved, onChange }: {
   onChange: (v: TokenValue) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Theme Builder's two-tab dropdown: "Common" is every named colour the theme
+  // already carries, "Pick color" the raw picker (the old "Custom" row).
+  const [pickerTab, setPickerTab] = useState<"common" | "custom">("common");
   const { colors, tokens, colorScheme } = ctx;
   const effective = value ?? tokens[token.key];
   const currentRef = Array.isArray(effective)
@@ -253,9 +284,9 @@ function ColorControl({ token, value, ctx, resolved, onChange }: {
   const base = Object.entries(colors).filter(([k, v]) => typeof v === "string") as [string, string][];
 
   return (
-    <div>
+    <div style={anchor}>
       <button type="button" style={trigger} onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
           <span style={{ ...swatch, background: resolved || "transparent" }} />
           <span style={ellipsis}>{tokenValueLabel(effective, colorScheme) || "theme default"}</span>
         </span>
@@ -263,58 +294,72 @@ function ColorControl({ token, value, ctx, resolved, onChange }: {
       </button>
       {open && (
         <div style={popover}>
-          {!COMMON_COLORS_KEYS.includes(token.key as (typeof COMMON_COLORS_KEYS)[number]) && (
+          <div style={segmented}>
+            <button type="button" style={segment(pickerTab === "common")} onClick={() => setPickerTab("common")}>
+              Common
+            </button>
+            <button type="button" style={segment(pickerTab === "custom")} onClick={() => setPickerTab("custom")}>
+              Pick color
+            </button>
+          </div>
+          {pickerTab === "common" ? (
             <>
-              <div style={groupLabel}>Common — brings its own light &amp; dark</div>
-              <div style={swatchRow}>
-                {COMMON_COLORS_KEYS.map((key) => (
-                  <button key={key} type="button" title={key}
-                    className="hot-swatch-btn" style={swatchBtn}
-                    data-active={currentRef === `tokens.${key}`}
-                    onClick={() => onChange(`tokens.${key}`)}>
-                    <span style={{
-                      ...swatch,
-                      background: String(resolveTokenValue(tokens[key], { ...ctx, tokens, colors }) ?? "#ccc"),
-                    }} />
-                  </button>
-                ))}
+              {!COMMON_COLORS_KEYS.includes(token.key as (typeof COMMON_COLORS_KEYS)[number]) && (
+                <ColorGroup label="Common">
+                  <div style={swatchRow}>
+                    {COMMON_COLORS_KEYS.map((key) => (
+                      <button key={key} type="button" title={key}
+                        className="hot-swatch-btn" style={swatchBtn}
+                        data-active={currentRef === `tokens.${key}`}
+                        onClick={() => onChange(`tokens.${key}`)}>
+                        <span style={{
+                          ...swatchLg,
+                          background: String(resolveTokenValue(tokens[key], { ...ctx, tokens, colors }) ?? "#ccc"),
+                        }} />
+                      </button>
+                    ))}
+                  </div>
+                </ColorGroup>
+              )}
+              <ColorGroup label="Base">
+                <div style={swatchRow}>
+                  {base.map(([k, v]) => (
+                    <button key={k} type="button" title={k} className="hot-swatch-btn" style={swatchBtn}
+                      data-active={currentRef === `colors.${k}`}
+                      onClick={() => pick(`colors.${k}`)}>
+                      <span style={{ ...swatchLg, background: v }} />
+                    </button>
+                  ))}
+                </div>
+              </ColorGroup>
+              {(["palette", "primary"] as const).map((name) => ramp(name).length > 0 && (
+                <ColorGroup key={name} label={name === "primary" ? "Primary" : "Palette"}>
+                  <div style={swatchRow}>
+                    {ramp(name).map(([step, v]) => (
+                      <button key={step} type="button" title={`${name}.${step}`}
+                        className="hot-swatch-btn" style={swatchBtn}
+                        data-active={currentRef === `colors.${name}.${step}`}
+                        onClick={() => pick(`colors.${name}.${step}`)}>
+                        <span style={{ ...swatchLg, background: v }} />
+                      </button>
+                    ))}
+                  </div>
+                </ColorGroup>
+              ))}
+            </>
+          ) : (
+            <>
+              <div style={groupLabel}>Applies to {colorScheme} mode only</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input type="color" className="hot-color-input" aria-label={`${token.label} colour picker`}
+                  value={/^#[0-9a-f]{6}$/i.test(resolved) ? resolved : "#000000"}
+                  onChange={(e) => pick(e.target.value)} />
+                <input type="text" style={control} defaultValue={currentRef.startsWith("colors.") ? "" : currentRef}
+                  placeholder="#rrggbb, rgba(), transparent"
+                  onBlur={(e) => e.target.value && pick(e.target.value)} />
               </div>
             </>
           )}
-          <div style={groupLabel}>Base</div>
-          <div style={swatchRow}>
-            {base.map(([k, v]) => (
-              <button key={k} type="button" title={k} className="hot-swatch-btn" style={swatchBtn}
-                data-active={currentRef === `colors.${k}`}
-                onClick={() => pick(`colors.${k}`)}>
-                <span style={{ ...swatch, background: v }} />
-              </button>
-            ))}
-          </div>
-          {(["primary", "palette"] as const).map((name) => ramp(name).length > 0 && (
-            <div key={name}>
-              <div style={groupLabel}>{name === "primary" ? "Primary" : "Palette"}</div>
-              <div style={swatchRow}>
-                {ramp(name).map(([step, v]) => (
-                  <button key={step} type="button" title={`${name}.${step}`}
-                    className="hot-swatch-btn" style={swatchBtn}
-                    data-active={currentRef === `colors.${name}.${step}`}
-                    onClick={() => pick(`colors.${name}.${step}`)}>
-                    <span style={{ ...swatch, background: v }} />
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-          <div style={groupLabel}>Custom — {colorScheme} only</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <input type="color" aria-label={`${token.label} colour picker`} style={{ ...swatchInput }}
-              value={/^#[0-9a-f]{6}$/i.test(resolved) ? resolved : "#000000"}
-              onChange={(e) => pick(e.target.value)} />
-            <input type="text" style={control} defaultValue={currentRef.startsWith("colors.") ? "" : currentRef}
-              placeholder="#rrggbb, rgba(), transparent"
-              onBlur={(e) => e.target.value && pick(e.target.value)} />
-          </div>
         </div>
       )}
     </div>
@@ -406,16 +451,21 @@ export function DensitySizeControl({ token, ctx, value, resolved, effectiveRef, 
 // `controlBorder`, not `border`, on anything meant to read as an outline: the
 // panel is `surfaceRaised`, and dark `border` *is* `surfaceRaised` (theme.ts).
 
-const rowWrap: React.CSSProperties = { marginBottom: ui.space(3) };
-const rowHead: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "space-between",
-  gap: ui.space(2), marginBottom: ui.space(1),
+/** Theme Builder's two columns: label + ⓘ left, a fixed control column right. */
+const rowWrap: React.CSSProperties = {
+  display: "grid", gridTemplateColumns: "minmax(0, 1fr) 176px", alignItems: "center",
+  gap: ui.space(2), marginBottom: ui.space(2),
 };
-const rowLabel: React.CSSProperties = { fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const rowLabelCell: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: ui.space(1), minWidth: 0,
+};
+/** The popovers' positioning context — each control column anchors its own. */
+const rowControl: React.CSSProperties = { position: "relative", minWidth: 0 };
+const anchor: React.CSSProperties = { position: "relative" };
+const rowLabel: React.CSSProperties = { ...ui.type.base, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-const hint: React.CSSProperties = { fontSize: 12, color: ui.color.textMuted, marginTop: ui.space(1) };
 const control: React.CSSProperties = {
-  flex: 1, minWidth: 0, width: "100%", fontFamily: ui.font.ui, fontSize: 13,
+  flex: 1, minWidth: 0, width: "100%", fontFamily: ui.font.ui, ...ui.type.base,
   padding: `${ui.space(1)} ${ui.space(2)}`,
   border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.sm,
   color: ui.color.text, background: ui.color.surface,
@@ -428,18 +478,36 @@ const resetBtn: React.CSSProperties = {
   border: "none", background: "none", color: ui.color.accentText, fontSize: 12,
   cursor: "pointer", padding: `0 ${ui.space(1)}`, flex: "0 0 auto",
 };
+/** Floating, Theme Builder-style: anchored under the trigger, right-aligned so
+ *  it can be wider than the control column without leaving the 400px drawer.
+ *  `surfaceRaised` + the popover shadow — the recipe every shell popover uses. */
 const popover: React.CSSProperties = {
-  marginTop: ui.space(2), padding: ui.space(2),
+  position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 30,
+  width: 288, maxWidth: "80vw", padding: ui.space(2),
   border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.md,
-  background: ui.color.surfaceMuted,
+  background: ui.color.surfaceRaised, boxShadow: ui.shadow.popover,
 };
-const segmented: React.CSSProperties = { display: "flex", gap: ui.space(1), marginBottom: ui.space(2) };
+/** Theme Builder's segmented controller: a muted track, the selected segment a
+ *  raised pill — not the accent-filled buttons this used to draw. */
+const segmented: React.CSSProperties = {
+  display: "flex", gap: ui.space(1), padding: ui.space(1),
+  background: ui.color.surfaceMuted, borderRadius: ui.radius.md,
+  marginBottom: ui.space(2),
+};
 const segment = (on: boolean): React.CSSProperties => ({
-  flex: 1, fontSize: 12, padding: `${ui.space(1)} 0`, cursor: "pointer", borderRadius: ui.radius.sm,
-  border: `1px solid ${on ? ui.color.accent : ui.color.controlBorder}`,
-  background: on ? ui.color.accent : ui.color.surface,
-  color: on ? ui.color.accentContrast : ui.color.text,
+  flex: 1, ...ui.type.base, padding: `${ui.space(1)} 0`, cursor: "pointer", borderRadius: ui.radius.sm,
+  textTransform: "capitalize", fontFamily: ui.font.ui,
+  border: `1px solid ${on ? ui.color.controlBorder : "transparent"}`,
+  background: on ? ui.color.surfaceRaised : "transparent",
+  color: on ? ui.color.text : ui.color.textMuted,
+  fontWeight: on ? 600 : 400,
 });
+/** The collapsible group header inside the colour dropdown. */
+const groupToggle: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: ui.space(1),
+  margin: `${ui.space(1)} 0`, padding: 0, border: "none", background: "none",
+  fontFamily: ui.font.ui, ...ui.type.base, color: ui.color.text, cursor: "pointer",
+};
 const scrollList: React.CSSProperties = { maxHeight: 190, overflowY: "auto" };
 /** The resolved value trailing a scale entry. `textMuted`, not the old
  *  `opacity: 0.6` — it has to stay legible on the hover fill. */
@@ -460,14 +528,12 @@ const swatch: React.CSSProperties = {
   width: 16, height: 16, borderRadius: ui.radius.sm, flex: "0 0 16px",
   border: `1px solid ${ui.color.controlBorder}`, display: "inline-block",
 };
+/** The dropdown's pick targets — Theme Builder draws these at ~28px, and a 16px
+ *  square is a hard thing to hit with a mouse. */
+const swatchLg: React.CSSProperties = { ...swatch, width: 24, height: 24, flex: "0 0 24px" };
 /** Same split as `listItem` — `.hot-swatch-btn` carries the border colour. */
 const swatchBtn: React.CSSProperties = {
   padding: 2, borderRadius: ui.radius.sm, cursor: "pointer", lineHeight: 0,
   borderWidth: 2, borderStyle: "solid", background: "none",
-};
-const swatchInput: React.CSSProperties = {
-  width: 30, flex: "0 0 30px", padding: 0, height: 26,
-  border: `1px solid ${ui.color.controlBorder}`, borderRadius: ui.radius.sm,
-  background: ui.color.surface, cursor: "pointer",
 };
 const unitTag: React.CSSProperties = { fontSize: 12, color: ui.color.textMuted };

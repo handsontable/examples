@@ -740,7 +740,7 @@ const content: CSSProperties = {
 const grid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fill, minmax(300px, 334px))",
-  gap: 10,
+  gap: 12,
   alignItems: "start",
 };
 

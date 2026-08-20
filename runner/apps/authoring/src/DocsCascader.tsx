@@ -539,7 +539,7 @@ const s = {
     // holds only because the trigger's wrapper is unpositioned; see the note
     // there before giving anything between here and the pill a `position`.
     width: "100%", boxSizing: "border-box",
-    display: "flex", flexDirection: "column", gap: 10,
+    display: "flex", flexDirection: "column", gap: 8,
     padding: theme.space(2),
     background: theme.color.surfaceRaised,
     border: `1px solid ${theme.color.border}`,
@@ -560,7 +560,7 @@ const s = {
     color: theme.color.textMuted, pointerEvents: "none",
   },
 
-  body: { display: "flex", gap: 10, alignItems: "stretch", maxHeight: BODY_MAX_HEIGHT, minHeight: 0 },
+  body: { display: "flex", gap: 8, alignItems: "stretch", maxHeight: BODY_MAX_HEIGHT, minHeight: 0 },
   // `scrollbarWidth: thin` claws back most of the ~15px a classic scrollbar
   // takes out of the 179 (Windows/Linux always; macOS when "always show
   // scrollbars" is on). The design draws no scrollbar at all because it shows 16
@@ -616,7 +616,7 @@ const s = {
   },
   sep: { color: theme.color.textMuted },
   empty: {
-    padding: `10px ${theme.space(3)}`, color: theme.color.textMuted,
+    padding: `${theme.space(2)} ${theme.space(3)}`, color: theme.color.textMuted,
     fontFamily: theme.font.ui, fontSize: 13,
   },
 } satisfies Record<string, React.CSSProperties>;

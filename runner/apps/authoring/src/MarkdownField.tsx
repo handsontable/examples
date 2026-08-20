@@ -151,11 +151,11 @@ const header: CSSProperties = {
 const toolbar: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 2,
+  gap: 4,
 };
 
 /** A worded button ("Link") needs its own width; the glyph buttons stay square. */
-const wordButton: CSSProperties = { width: "auto", padding: "0 6px" };
+const wordButton: CSSProperties = { width: "auto", padding: "0 8px" };
 
 const toolButton: CSSProperties = {
   display: "inline-flex",
@@ -178,7 +178,7 @@ const previewBox: CSSProperties = {
   minHeight: 120,
   maxHeight: 240,
   overflowY: "auto",
-  padding: "8px 10px",
+  padding: "8px 12px",
   border: `1px solid ${theme.color.controlBorder}`,
   borderRadius: theme.radius.md,
   background: theme.color.surface,

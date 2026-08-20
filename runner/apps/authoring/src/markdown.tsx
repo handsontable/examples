@@ -169,7 +169,7 @@ export function Markdown({
             return (
               <List key={key} style={listStyle}>
                 {block.items.map((item, j) => (
-                  <li key={j} style={{ margin: "3px 0" }}>{renderInline(item, `${key}-${j}`)}</li>
+                  <li key={j} style={{ margin: `${theme.space(1)} 0` }}>{renderInline(item, `${key}-${j}`)}</li>
                 ))}
               </List>
             );
@@ -198,7 +198,7 @@ const imageStyle: React.CSSProperties = {
   display: "block",
   width: "100%",
   height: "auto",
-  margin: "10px 0 4px",
+  margin: `${theme.space(2)} 0 ${theme.space(1)}`,
   border: `1px solid ${theme.color.controlBorder}`,
   borderRadius: theme.radius.sm,
   background: theme.color.surfaceSunken,
@@ -213,7 +213,7 @@ const chatParagraphStyle: React.CSSProperties = { margin: "0 0 8px", whiteSpace:
  *  for reviewable diffs, and `pre-wrap` reproduced those wraps on screen — prose that
  *  broke mid-sentence at a width nobody's window happens to be. The source's line
  *  endings are a file-format detail; the reader should never see them. */
-const documentParagraphStyle: React.CSSProperties = { margin: "0 0 10px", whiteSpace: "normal" };
+const documentParagraphStyle: React.CSSProperties = { margin: `0 0 ${theme.space(2)}`, whiteSpace: "normal" };
 
 const codeStyle: React.CSSProperties = {
   fontFamily: theme.font.mono, fontSize: "0.92em", background: theme.color.surfaceMuted,
@@ -222,7 +222,8 @@ const codeStyle: React.CSSProperties = {
 };
 const preStyle: React.CSSProperties = {
   background: theme.color.editorBg, color: theme.color.text, borderRadius: theme.radius.md,
-  padding: 10, overflowX: "auto", fontFamily: theme.font.mono, fontSize: 12, margin: "0 0 8px",
+  padding: theme.space(3), overflowX: "auto", fontFamily: theme.font.mono, ...theme.type.base,
+  margin: `0 0 ${theme.space(2)}`,
 };
 
 /** In a document, most of these blocks are things you *say to Claude*, not code — so
@@ -238,11 +239,10 @@ const documentPreStyle: React.CSSProperties = {
   // meant to read as a control you type into. Light is the same value either way.
   border: `1px solid ${theme.color.controlBorder}`,
   borderRadius: theme.radius.md,
-  padding: "12px 14px",
-  margin: "0 0 12px",
+  padding: `${theme.space(3)} ${theme.space(4)}`,
+  margin: `0 0 ${theme.space(3)}`,
   fontFamily: theme.font.mono,
-  fontSize: 12.5,
-  lineHeight: 1.55,
+  ...theme.type.base,
   whiteSpace: "pre-wrap",
   overflowWrap: "anywhere",
 };
@@ -274,7 +274,7 @@ const linkStyle: React.CSSProperties = { color: theme.color.accentText };
  *  the shell's scale, inside a 400px drawer where two of them are a fraction of a
  *  pixel apart on screen anyway (DEV-2209). */
 const headingStyle: React.CSSProperties = {
-  fontSize: 13, fontWeight: 600, margin: `${theme.space(3)} 0 ${theme.space(1)}`,
+  ...theme.type.base, fontWeight: 600, margin: `${theme.space(3)} 0 ${theme.space(1)}`,
 };
 
 /** Document headings (`document` mode). Sizes step down and the space above each

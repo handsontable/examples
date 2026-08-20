@@ -232,6 +232,24 @@
         outline: 2px solid var(--hot-color-accent);
         outline-offset: 1px;
       }
+      /* The Ask AI panel's rules (bubble tail, suggestion arrows, composer states)
+         live in src/panels.css, imported from main.tsx — this block keeps only what
+         must exist pre-React or is shared across panels. */
+      /* Thin scrollbars, shell-wide. `scrollbar-color` is inherited, so the root
+         declaration reaches every scroller — sidebar, drawers, CodeMirror — but
+         `scrollbar-width` is *not* (measured: a nested scroller computes `auto`),
+         hence the universal selector. Zero specificity, so `.hot-tab-strip`'s `none`
+         below still wins. The ::-webkit-* pseudos are for Safari only: Chrome
+         disables them the moment the standard properties are set, and Firefox never
+         reads them. Track mirrors the surface, thumb the border, so the bar sits in
+         the chrome instead of on top of it. Before React emits the custom properties
+         the var()s are unset and the UA default paints — one frame, unstyled, not
+         broken. */
+      * { scrollbar-width: thin; }
+      html { scrollbar-color: var(--hot-color-border) var(--hot-color-surface); }
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: var(--hot-color-surface); }
+      ::-webkit-scrollbar-thumb { background: var(--hot-color-border); border-radius: 4px; }
       /* The strip scrolls when the open files outgrow it. Both properties: the WebKit
          pseudo-element alone still leaves a scrollbar in Firefox, and a 36px bar has
          no room for one — it would sit on the strip's inset hairline. */

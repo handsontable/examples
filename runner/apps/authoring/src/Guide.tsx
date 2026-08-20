@@ -347,7 +347,7 @@ const cardHead: CSSProperties = { display: "flex", alignItems: "center", gap: th
 
 const badge = (technical: boolean): CSSProperties => ({
   display: "inline-block",
-  padding: "1px 6px",
+  padding: "1px 8px",
   borderRadius: theme.radius.sm,
   border: `1px solid ${theme.color.border}`,
   background: technical ? theme.color.surfaceSunken : theme.color.accentSoft,
@@ -384,11 +384,11 @@ const cardListItem: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.5,
   color: theme.color.textMuted,
-  paddingLeft: 10,
+  paddingLeft: 12,
   position: "relative",
   // A dash, not a bullet: three of these sit inside a card that is already a list
   // item on the page, and a second bullet level reads as an outline.
-  textIndent: -10,
+  textIndent: -12,
 };
 
 const cardMore: CSSProperties = {
@@ -441,7 +441,7 @@ const contentsLink: CSSProperties = {
 
 const copyButton = (copied: boolean): CSSProperties => ({
   flex: "0 0 auto",
-  padding: "0 3px",
+  padding: "0 4px",
   border: "none",
   background: "transparent",
   color: copied ? theme.color.accentText : theme.color.textMuted,

@@ -234,7 +234,11 @@ const tab = (isFirst: boolean): CSSProperties => ({
   display: "flex",
   alignItems: "center",
   gap: 4,
-  padding: 6,
+  // 4, not the frame's 6 (48:6724): the strip is a fixed 36px and the file icon a
+  // fixed 24px, so 6 was the only value that filled it exactly — but the project
+  // spaces on a 4px grid, and with `alignItems: center` the icon centres itself in
+  // the 28px content box just the same.
+  padding: theme.space(1),
   boxSizing: "border-box",
   // Without this, tabs compress to fit instead of overflowing and the strip never
   // scrolls.

@@ -127,8 +127,9 @@ const section: CSSProperties = {
 const body: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  // 10px is the design's own step here and lands off the 4px scale on purpose.
-  gap: 10,
+  // The frame draws 10 here (48:6755); snapped to the 8px rhythm — the project
+  // spaces on the 4px grid and 10 was one of only two values off it.
+  gap: theme.space(2),
   padding: `${theme.space(2)} ${theme.space(3)} ${theme.space(3)}`,
   background: theme.color.surface,
 };
@@ -146,21 +147,19 @@ const titleText: CSSProperties = {
 const descriptionText = (expanded: boolean): CSSProperties => ({
   margin: 0,
   fontFamily: theme.font.ui,
-  fontSize: 10,
-  lineHeight: "20px",
+  ...theme.type.base,
   color: theme.color.textMuted,
   ...(expanded ? {} : { maxHeight: 100, overflow: "hidden" }),
 });
 
 const moreButton: CSSProperties = {
-  margin: `2px 0 0`,
+  margin: `${theme.space(1)} 0 0`,
   padding: 0,
   border: "none",
   background: "none",
   color: theme.color.accentText,
   fontFamily: theme.font.ui,
-  fontSize: 10,
-  lineHeight: "16px",
+  ...theme.type.row,
   cursor: "pointer",
 };
 
@@ -188,7 +187,6 @@ const badgeLabel: CSSProperties = {
 const createdText: CSSProperties = {
   margin: 0,
   fontFamily: theme.font.ui,
-  fontSize: 10,
-  lineHeight: "20px",
+  ...theme.type.base,
   color: theme.color.textMuted,
 };
