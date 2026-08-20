@@ -25,6 +25,8 @@
 // reason: the API worker already depends on this package, so a second copy in
 // `workers/api` would be a second set of rules to keep in sync.
 
+import { injectedScriptTag } from "./inject-html.js";
+
 /** The `postMessage` discriminator. Also the injection idempotency marker. */
 export const SCHEME_MESSAGE_TYPE = "hot-runner-scheme";
 
@@ -59,8 +61,10 @@ export function isSchemeReady(message: unknown): message is SchemeReadyMessage {
   return !!value && value.source === SCHEME_MESSAGE_TYPE && value.ready === true;
 }
 
-/** The element id the receiver owns, so the override can be found and replaced
- *  rather than accumulating one `<style>` per message. */
+/** The element id the receiver owns on its fallback path, so the override can be
+ *  found and replaced rather than accumulating one `<style>` per message. The
+ *  primary path adopts a constructed stylesheet and creates no element at all —
+ *  see `SCHEME_RECEIVER_SOURCE`. */
 export const SCHEME_STYLE_ID = "hot-runner-scheme";
 
 /**
@@ -78,6 +82,34 @@ export const SCHEME_STYLE_ID = "hot-runner-scheme";
  * stylesheet keyed on `[class*="ht-theme-"]` also covers a demo that mounts more
  * than one grid.
  *
+ * It is carried by a *constructed* stylesheet on `document.adoptedStyleSheets`
+ * rather than a `<style>` element, which is load-bearing and was measured
+ * (DEV-2580). A remix preview hydrates with `hydrateRoot(document, …)` on React 18,
+ * which strict-matches every child of `<head>`; the shell answers this receiver's
+ * `ready` while the head is still parsing, so a `<style>` appended there lands
+ * *before* hydration and is exactly as fatal as the injected `<script>` was — the
+ * document is thrown away and client-rendered ("Hydration failed because the initial
+ * UI does not match what was rendered on the server", React #418). Measured against
+ * the remix starter: an override `<style>` present at hydration reproduces it on its
+ * own. An adopted sheet is not a node, so no hydrator can see it.
+ *
+ * `adoptedStyleSheets` is an ObservableArray, not an Array — hence
+ * `Array.prototype.slice.call` and an assignment back, which also preserves any
+ * sheet the demo adopted itself. `auto` detaches ours by identity rather than
+ * blanking it, so "no override" stays observable from the outside.
+ *
+ * Once the adopted path has failed the receiver latches onto the fallback for the
+ * life of the document (`fallbackOnly`). Without the latch, a `<style>` created
+ * because the constructor threw is never taken away again: `auto` reaches the adopted
+ * branch, finds no sheet of ours, reports success, and leaves the override in place.
+ * A failure *after* a sheet was already adopted detaches it on the way out, so the
+ * two carriers can never both hold a mode.
+ *
+ * The `<style>` fallback is kept for a browser without constructible stylesheets
+ * (older Safari, where `new CSSStyleSheet()` throws): there, the toggle keeps
+ * working and a React 18 document hydrator keeps mismatching. A browser-gated
+ * residue on the record, not a silent hole.
+ *
  * Written as ES5 by hand and never transpiled: on Tier 1 the parcel path runs babel
  * 6 over injected code, which will not parse anything newer. No timestamp, no id,
  * no iteration-dependent ordering — `SandpackRuntime.sameFiles` skips the compile
@@ -90,7 +122,42 @@ export const SCHEME_RECEIVER_SOURCE = `(function () {
   window.__hotRunnerScheme = true;
   var STYLE_ID = ${JSON.stringify(SCHEME_STYLE_ID)};
   var SOURCE = ${JSON.stringify(SCHEME_MESSAGE_TYPE)};
-  function apply(mode) {
+  var sheet = null;
+  var fallbackOnly = false;
+  function rule(mode) {
+    return '[class*="ht-theme-"]{color-scheme:' + mode + ' !important;}';
+  }
+  function canAdopt() {
+    return typeof CSSStyleSheet === 'function'
+      && !!CSSStyleSheet.prototype
+      && typeof CSSStyleSheet.prototype.replaceSync === 'function'
+      && !!document.adoptedStyleSheets;
+  }
+  function applyAdopted(mode) {
+    var on = mode === 'light' || mode === 'dark';
+    if (!sheet) {
+      if (!on) { return true; }
+      try { sheet = new CSSStyleSheet(); } catch (e) { return false; }
+    }
+    var sheets = Array.prototype.slice.call(document.adoptedStyleSheets);
+    var at = sheets.indexOf(sheet);
+    if (!on) {
+      if (at !== -1) { sheets.splice(at, 1); document.adoptedStyleSheets = sheets; }
+      return true;
+    }
+    try {
+      sheet.replaceSync(rule(mode));
+    } catch (e) {
+      // Detach on the way out. An adopted sheet left carrying the *previous* mode
+      // outranks the fallback element that is about to be created, so the stale
+      // scheme would win and no later message could clear it.
+      if (at !== -1) { sheets.splice(at, 1); document.adoptedStyleSheets = sheets; }
+      return false;
+    }
+    if (at === -1) { sheets.push(sheet); document.adoptedStyleSheets = sheets; }
+    return true;
+  }
+  function applyElement(mode) {
     var el = document.getElementById(STYLE_ID);
     if (mode !== 'light' && mode !== 'dark') {
       if (el && el.parentNode) { el.parentNode.removeChild(el); }
@@ -101,7 +168,12 @@ export const SCHEME_RECEIVER_SOURCE = `(function () {
       el.id = STYLE_ID;
       (document.head || document.documentElement).appendChild(el);
     }
-    el.textContent = '[class*="ht-theme-"]{color-scheme:' + mode + ' !important;}';
+    el.textContent = rule(mode);
+  }
+  function apply(mode) {
+    if (!fallbackOnly && canAdopt() && applyAdopted(mode)) { return; }
+    fallbackOnly = true;
+    applyElement(mode);
   }
   window.addEventListener('message', function (event) {
     var data = event.data;
@@ -136,22 +208,29 @@ function alreadyInjected(source: string): boolean {
  * still placed in `<head>` for the same reason the monitor is: it is the one
  * insertion point every document has, and being early costs nothing.
  *
+ * Inserted with no surrounding whitespace, and the tag deletes its own element
+ * (see `inject-html.ts`): a React 18 hydrator that owns the whole document — remix's
+ * `hydrateRoot(document, …)` — strict-matches every child of `<head>`, and a leftover
+ * newline text node fails that match exactly as the `<script>` element does. Both
+ * halves were measured against the remix starter; either one alone still throws
+ * React #418 (DEV-2580).
+ *
  * Returns `html` unchanged when it is already injected.
  */
 export function injectSchemeIntoHtml(html: string): string {
   if (alreadyInjected(html)) return html;
-  const tag = `<script>${SCHEME_RECEIVER_SOURCE}</script>`;
+  const tag = injectedScriptTag(SCHEME_RECEIVER_SOURCE);
   const head = /<head\b[^>]*>/i.exec(html);
   if (head) {
     const at = head.index + head[0].length;
-    return html.slice(0, at) + "\n" + tag + html.slice(at);
+    return html.slice(0, at) + tag + html.slice(at);
   }
   const body = /<body\b[^>]*>/i.exec(html);
   if (body) {
     const at = body.index + body[0].length;
-    return html.slice(0, at) + "\n" + tag + html.slice(at);
+    return html.slice(0, at) + tag + html.slice(at);
   }
-  return tag + "\n" + html;
+  return tag + html;
 }
 
 /**

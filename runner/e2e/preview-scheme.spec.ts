@@ -65,9 +65,21 @@ function isDark(colour: string): boolean {
   return (nums[0]! + nums[1]! + nums[2]!) * scale / 3 < 128;
 }
 
-/** True when the runner's own override is present in the preview document. */
+/** True when the runner's own override is present in the preview document.
+ *
+ *  Both carriers count. The receiver adopts a constructed stylesheet (DEV-2580: a
+ *  `<style>` in the head is present when a React 18 document hydrator runs, and
+ *  breaks it), and falls back to the `#hot-runner-scheme` element on a browser
+ *  without constructible stylesheets. Checking only the element would report "no
+ *  override" for every passing run. */
 async function hasOverride(page: Page): Promise<boolean> {
-  return grid(page).evaluate(() => !!document.getElementById("hot-runner-scheme"));
+  return grid(page).evaluate(() => {
+    const adopted = Array.from(document.adoptedStyleSheets ?? []);
+    const inSheets = adopted.some((sheet) =>
+      Array.from(sheet.cssRules).some((rule) => rule.cssText.includes('[class*="ht-theme-"]')),
+    );
+    return inSheets || !!document.getElementById("hot-runner-scheme");
+  });
 }
 
 async function waitForGrid(page: Page) {

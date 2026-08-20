@@ -83,6 +83,16 @@ gate trusts the declaration, the review verifies it.
 **New spec vs. modify existing:** a new feature or endpoint → a new spec; a bug
 fix → a failing case in the closest existing spec.
 
+**SSR hydration, when you touch what we inject into a preview document**
+(`packages/runtime/src/{monitor,scheme,inject-html}.ts`): unit tests can pin the
+emitted bytes and the receiver's behaviour, but not whether a framework's hydrator
+accepts the result — and remix hydrates with `hydrateRoot(document, …)` on React 18,
+which throws the whole document away if `<head>` holds anything the server did not
+render. Run `node runner/scripts/ssr-hydration-probe.mjs` against a locally served
+starter; it puts the real injections and a real shell around it and exits non-zero on
+a mismatch. The standing guard is the nightly starter matrix, which is where DEV-2580
+was caught — four red remix cells, everything else green.
+
 ## The env-gate taxonomy
 
 The default `playwright test` run is the deterministic PR suite: `stubShell()`
