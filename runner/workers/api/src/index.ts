@@ -39,7 +39,7 @@ import {
 } from "./session-lifecycle.js";
 import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
-import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
+import { BuildFailure, createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
   budgetPausedMessage,
   countEgress,
@@ -1886,6 +1886,21 @@ export default Sentry.withSentry(sentryOptions, {
       if (err instanceof InvalidFilePathError) return json({ error: err.message }, 400);
       // This catch turns every unexpected throw into a 500 body, so withSentry()
       // never sees it. Report here or the error is invisible.
+      if (err instanceof BuildFailure) {
+        Sentry.captureException(err, {
+          tags: { context: "snapshot-build", build_phase: err.phase },
+          // Without a fingerprint the cause line groups per package and per version,
+          // which is the same one-defect-many-issues shape DEV-2570 exists to end,
+          // only better titled. Keyed by the machine code so the group stays
+          // diagnosable; the title then tracks the newest event within it, which is
+          // the accepted trade (`ContainerBootFailure` in App.tsx makes the same one).
+          fingerprint: ["snapshot-build", err.phase, err.code],
+          // Bounded and picked apart in share.ts, and never in the message — a log in
+          // an `Error.message` is what invented DEMOS-1Y's culprit.
+          ...(err.log ? { extra: { buildLog: err.log } } : {}),
+        });
+        return json({ error: err.message }, 500);
+      }
       Sentry.captureException(err);
       return json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
