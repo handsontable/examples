@@ -193,6 +193,41 @@ to compile. So `App.tsx` gates the toolbar button on `THEME_API_MIN_MAJOR = 17`,
 disabling it with the reason in its tooltip rather than hiding it, and closing an
 open panel when the version drops.
 
+Closing the panel is not enough, because **the module is a file** (DEV-2571,
+Sentry DEMOS-1P). It outlives the version that wrote it: a switch on a dirty
+workspace deliberately keeps the files it finds and only re-pins them (ADR-0021
+§6), and applying a theme is what dirtied the workspace — so a themed demo takes
+exactly that branch down to a core where `handsontable/themes` does not exist,
+and the preview then cannot resolve the module's own imports. The same state also
+*arrives* ready-made: a saved, shared or imported workspace can open already
+themed on a sub-17 pin with no version change anywhere.
+
+So below the floor the app runs `buildResetChanges` over the workspace — the same
+unwire the footer Reset uses, restoring the displaced `themeName` and container
+class — and says so in the preview bar. Nothing of the visitor's is lost: the
+theme *state* is in `localStorage`, and reopening the panel on a supported core
+reconciles it straight back in. The effect is declared above the runtime-mount
+effect on purpose; below it, the broken module gets compiled once and only then
+repaired, which is the reported event.
+
+Two details that made this reachable at all:
+
+* The floor reads `selectedReleaseMajor` (`packages/runtime`), which validates
+  before taking the major. Reading it off the raw string found no `\d+\.` in a
+  bare `16` or `16.2` — versions the pencil and `?v=` both pass through verbatim
+  and `validateHandsontableVersion` accepts — answered `null`, and `null` is the
+  pass-through meant for prereleases. `?v=16` therefore opened the panel on a
+  v16 core, which is the one configuration where the generated module is the
+  *only* thing importing `handsontable/themes` (a 16 starter wires `themeName`),
+  and so exactly what the Sentry message named.
+* "Is there a theme here" is `hasWiredTheme`, which reads the module's contents.
+  Reset does not delete the file — it leaves `customTheme = undefined` behind,
+  and writes that file even on a demo that never had a theme — so a filename
+  test answers yes forever after the first Reset. `shellSchemeMode` still asks
+  the filename question and so keeps standing the shell down after a Reset;
+  swapping the predicate there is measurably *not* sufficient (the override does
+  not come back), so it is left alone here and wants its own ticket.
+
 Deliberately *not* the runner's `DEFAULT_MIN_MAJOR` (15, `packages/runtime/src/version.ts`):
 that floor is "cores we boot", this one is "cores with a theme API" — the same cut
 line `pipeline/blank-starters.mjs` calls `isLegacyBucket`. `next` and pkg.pr.new

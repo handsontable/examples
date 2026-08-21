@@ -83,6 +83,16 @@ gate trusts the declaration, the review verifies it.
 **New spec vs. modify existing:** a new feature or endpoint → a new spec; a bug
 fix → a failing case in the closest existing spec.
 
+**SSR hydration, when you touch what we inject into a preview document**
+(`packages/runtime/src/{monitor,scheme,inject-html}.ts`): unit tests can pin the
+emitted bytes and the receiver's behaviour, but not whether a framework's hydrator
+accepts the result — and remix hydrates with `hydrateRoot(document, …)` on React 18,
+which throws the whole document away if `<head>` holds anything the server did not
+render. Run `node runner/scripts/ssr-hydration-probe.mjs` against a locally served
+starter; it puts the real injections and a real shell around it and exits non-zero on
+a mismatch. The standing guard is the nightly starter matrix, which is where DEV-2580
+was caught — four red remix cells, everything else green.
+
 ## The env-gate taxonomy
 
 The default `playwright test` run is the deterministic PR suite: `stubShell()`
@@ -95,7 +105,7 @@ covers the dependency:
 | *(none)* | Only the built SPA — shell, routing, stubbed network | `ci.yml` on every PR | The default. If you can stub it, don't gate it. |
 | `E2E_LIVE=1` | A real preview mount — the hosted Sandpack bundler or a Tier-2 container | `e2e-live.yml` (manual + canary/smoke once [#189](https://github.com/handsontable/examples/pull/189) lands) | Off by default so an external-bundler outage never blocks merges. |
 | `E2E_BASE_URL` | Worker routes (`/api`, `/d`, `/embed`) — `vite preview` has none, so the spec self-skips without it | `e2e-live.yml` pointed at a deployment | `share-view.spec.ts` also needs the permanent fixture demo (`FIXTURE_ID`) — never revoke it. |
-| `E2E_BROKER_TOKEN` | An authed write round-trip against the real broker (`share-create-live.spec.ts`, lands with [#186](https://github.com/handsontable/examples/pull/186)) | `e2e-live.yml` | Broker tokens expire and cannot be minted programmatically; an expired token is a warning, not a failure. |
+| `E2E_API_TOKEN` | An authed write round-trip against the deployed API (`share-create-live.spec.ts`, `session-abandoned-create.spec.ts`) | `e2e-live.yml` | A persistent API token minted on `/api-tokens` (ADR-0037). It does not expire, so a token that stops validating **fails** the run — it means revoked or broken. Absent, the step is skipped. |
 | `E2E_AI=1` | A live LLM answer (`ai-live.spec.ts`, lands with [#187](https://github.com/handsontable/examples/pull/187)) | `e2e-live.yml` weekly canary | Real budget, shared 8/min-per-IP rate bucket — a 429 skips rather than fails. |
 | `E2E_STARTER_MATRIX=1` | Every starter × major through a live container session | `e2e-starter-matrix.yml` (manual + monthly) | Serialized against the global container cap; never fold matrix cases into the PR suite. |
 

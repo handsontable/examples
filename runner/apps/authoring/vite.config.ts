@@ -33,6 +33,27 @@ export default defineConfig({
     // plugin's post-upload cleanup never runs to remove — and a manual
     // `wrangler deploy` would publish them.
     sourcemap: uploadEnabled,
+    // ⚠ Do not give the @babel/standalone chunk a hash-free name (reverted from #249,
+    // DEV-2569). The intent was sound — Workers Assets serves this app with
+    // `not_found_handling: "single-page-application"`, so a deploy rotates the hashed chunk
+    // out and its path answers `200 text/html`, which strands a tab that had not fetched the
+    // compiler yet. But the chunk is *not* self-contained: Rollup hoists the shared CJS
+    // interop helpers into the entry, so the emitted chunk opens with
+    //
+    //   import { c as SD, g as Nke } from "./index-<hash>.js";
+    //
+    // and that path is content-hashed. Measured on the deployed build: a stable
+    // `compiler-babel.js` therefore pulls the *new* build's 1.3 MB entry into an old tab, and
+    // that entry's top level is `createRoot(document.getElementById("root")).render(…)` plus
+    // `Sentry.init`. React 18 clears the root container, so the visitor's workspace is
+    // detached and silently remounted from a different build — unsaved edits gone, no card,
+    // two Sentry clients. That is strictly worse than the carded failure it replaced, which
+    // tells the visitor to reload (`describeRuntimeError`, and rearmCompilerLoad's docblock).
+    //
+    // A stable path is still the right end state; it needs the compiler built as its own
+    // self-contained artifact (or the SPA fallback stopped from answering /assets/*) rather
+    // than a `chunkFileNames` rename. Until then the hash is load-bearing: it is what makes a
+    // rotated chunk fail loudly.
   },
   plugins: [
     react(),
@@ -73,11 +94,17 @@ export default defineConfig({
     //
     // Set `VITE_API_BASE=http://localhost:5173` to route through this. An empty
     // value does not work — `App.tsx` falls back to :8787 on any falsy value.
-    // `/d` is a regex, not a prefix string: a bare "/d" key matches every path
-    // that *starts* with it, which swallows `public/docs-examples/` (the docs
-    // snapshots the picker loads) and 404s it against the worker.
+    // `/d` and `/api` are regexes, not prefix strings: a bare key matches every
+    // path that *starts* with it. For `/d` that swallowed `public/docs-examples/`
+    // (the docs snapshots the picker loads) and 404'd it against the worker; for
+    // `/api` it swallowed the `/api-tokens` page (DEV-2583), which proxied to a
+    // worker that has no such route and 500'd where production serves the SPA.
+    // The production route really is `demos.handsontable.com/api/*` (see the
+    // `--routes` flags in workers/api/package.json), so the bare prefix was
+    // always wider here than on the deployment it stands in for. `/embed` has
+    // the same shape but nothing is named as a sibling of it today.
     proxy: {
-      "/api": { target: "http://localhost:8787" },
+      "^/api(?:/|$)": { target: "http://localhost:8787" },
       "^/d(?:/|$)": { target: "http://localhost:8787" },
       "/embed": { target: "http://localhost:8787" },
     },

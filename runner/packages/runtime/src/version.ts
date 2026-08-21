@@ -159,6 +159,37 @@ export function validateHandsontableVersion(
   return err ? { ok: false, message: err } : { ok: true, value: { ref: normalized, pkgPrNew: false } };
 }
 
+/**
+ * The major of the version a picker, a `?v=` deep link or the version pencil
+ * actually selected — validated first, so npm-style partials read as their real
+ * major.
+ *
+ * DEV-2571 (Sentry DEMOS-1P): the authoring app used to take the major off the
+ * raw string with `/^(\d+)\./`, which has no match in a bare `16` or `16.2`.
+ * Both are accepted by `validateHandsontableVersion` (coerced to `16.0.0`) and
+ * both reach version state verbatim, so a floor check on the raw string read
+ * them as "no major" — and "no major" is the pass-through a theme/API floor
+ * grants a prerelease. `?v=16` therefore opened the Style panel on a v16 core.
+ *
+ * `null` means only what it says: this ref carries no comparable release major.
+ * That is the `next` nightlies (a post-18 build parsing as major 0), dotted
+ * `-next` prereleases, pkg.pr.new build refs, and anything the validator
+ * refuses outright. Callers must not read it as 0.
+ *
+ * Deliberately built on the module-private `releaseMajor` below rather than
+ * re-deriving: that one answers a *different* question (which CSS link a ref
+ * wants) and this is the only other place a release major is compared, so a
+ * third implementation is a third thing to drift.
+ */
+export function selectedReleaseMajor(version: string): number | null {
+  const validated = validateHandsontableVersion(version);
+  if (!validated.ok) return null;
+  // A pkg.pr.new ref is a build id, not a version — `releaseMajor` would read
+  // a bare `7940` as major 7940 rather than "not a release".
+  if (validated.value.pkgPrNew) return null;
+  return releaseMajor(validated.value.ref);
+}
+
 /** True if `name` is a Handsontable package that should be version-pinned. */
 export function isHandsontablePackage(name: string): boolean {
   return name.includes("handsontable") && !NEVER_REWRITE.has(name);
@@ -283,7 +314,12 @@ export function applyHandsontableVersion(
  * as major 0 under plain semver while actually being a post-18 nightly, so any
  * `major <= N` comparison silently classifies the newest core as the oldest.
  * Null means "not a release we can compare" — callers must not treat it as 0.
- * Mirrors the App-side `releaseMajor` helper.
+ *
+ * Answers a narrower question than `selectedReleaseMajor` above and is not
+ * interchangeable with it: this one takes an already-validated ref, and it reads
+ * every `-next` build as null because a nightly wants the >=17 CSS treatment
+ * whatever its printed major says. It used to claim to mirror an App-side helper
+ * that disagreed with it on both `"16"` and `"19.0.0-next.1"` (DEV-2571).
  */
 function releaseMajor(ref: string): number | null {
   const trimmed = ref.trim();

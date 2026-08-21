@@ -41,3 +41,4 @@ once Accepted.
 | [0034](0034-role-based-guide-tracks.md) | The guide is four role-based tracks, not one document | Accepted (supersedes the DEV-2503 single-document shape) |
 | [0035](0035-the-shell-drives-the-preview-colour-scheme.md) | The shell drives the preview's colour scheme, unless the demo declares one | Accepted (supersedes part of 0028) |
 | [0036](0036-the-api-owns-the-handsontable-version.md) | The API owns the Handsontable version — derive from the payload, never default to a dist-tag | Accepted (amends 0005 with who applies it) |
+| [0037](0037-persistent-api-tokens.md) | Persistent API tokens, verified in the Worker rather than by the broker | Accepted (DEV-2583; amends 0007) |

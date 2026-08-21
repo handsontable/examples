@@ -49,6 +49,12 @@
 //                                 rather than a modified marker. Filled is the
 //                                 truthful import; the layer name is the slip.
 //
+// And one from no frame either, added by DEV-2583 for the API tokens page:
+//   `IconKey`                   — the account menu + side nav row for
+//                                 `/api-tokens`. Persistent API tokens postdate
+//                                 every frame, and a key is the one glyph the
+//                                 set has nothing else for.
+//
 // The wrapper exists to pin the design's 16px/2px rendering (tabler defaults to
 // 24px) and to mark icons `aria-hidden` — labels live on the enclosing button.
 // Both are overridable via props.
@@ -70,6 +76,7 @@ import {
   IconExternalLink as TablerExternalLink,
   IconFolderPlus as TablerFolderPlus,
   IconInfoCircle as TablerInfoCircle,
+  IconKey as TablerKey,
   IconLayoutSidebarLeftCollapse as TablerLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand as TablerLayoutSidebarLeftExpand,
   IconListDetails as TablerListDetails,
@@ -108,6 +115,7 @@ function ui(displayName: string, Base: TablerIcon) {
 }
 
 export const IconBook = ui("IconBook", TablerBook);
+export const IconKey = ui("IconKey", TablerKey);
 export const IconBrandGithub = ui("IconBrandGithub", TablerBrandGithub);
 export const IconBrandReactNative = ui("IconBrandReactNative", TablerBrandReactNative);
 // The chat composer's send glyph (DEV-2047 restyle) — the docs assistant sends

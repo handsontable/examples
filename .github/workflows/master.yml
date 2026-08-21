@@ -2,14 +2,20 @@ name: Master
 
 # The single master-push pipeline: deploy first, verify production after.
 #
-#   changes ─┬─► deploy-authoring ─┐
-#            └─► deploy-api ───────┴─► smoke (@smoke e2e against prod)
+#   changes ─► build ─┬─► deploy-authoring ─┐
+#                     └─► deploy-api ───────┴─► smoke (@smoke e2e against prod)
+#
+# One build, artifacts reused (Dan, #189 review): the workspace packages and
+# the authoring app are built once, and the deploy jobs only download what
+# they ship — before this, a push touching runner/packages/** installed and
+# built the workspace twice, once per deploy job.
 #
 # No test gate before the deploys, deliberately (Dan, #184 review): the full
-# suite already ran on the PR, each deploy job runs its own `pnpm build` (a
-# broken build cannot reach wrangler), and what a master push needs verified
-# is PRODUCTION — which only exists after the deploy. The smoke job is that
-# verification; the weekly e2e-live canary covers the rest. The compensating
+# suite already ran on the PR, the shared `build` job below still has to
+# succeed before either deploy runs (a broken build cannot reach wrangler),
+# and what a master push needs verified is PRODUCTION — which only exists
+# after the deploy. The smoke job is that verification; the nightly e2e-live
+# canary covers the rest (03:00 UTC). The compensating
 # control for merge skew (a PR tested before master moved) is branch
 # protection's "require branches to be up to date" — a repo setting, not a
 # workflow.
@@ -84,9 +90,10 @@ jobs:
           echo "authoring=$authoring" >> "$GITHUB_OUTPUT"
           echo "api=$api" >> "$GITHUB_OUTPUT"
 
-  deploy-authoring:
+  # One install, one workspace build — shared by both deploys via artifacts.
+  build:
     needs: [changes]
-    if: needs.changes.outputs.authoring == 'true'
+    if: needs.changes.outputs.authoring == 'true' || needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -106,19 +113,65 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Build workspace packages, then the authoring app. VITE_API_BASE comes
-      # from apps/authoring/.env.production (committed) so it targets prod.
       - run: pnpm build
-      # SENTRY_* are only set here, on the deploying build. PR CI (ci.yml)
-      # gets no token, so PR builds neither emit source maps nor upload a
-      # release — see apps/authoring/vite.config.ts.
-      - run: pnpm --filter @handsontable/demo-authoring build
+
+      - name: Upload the runtime build
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-dist
+          path: runner/packages/runtime/dist/
+          retention-days: 1
+          if-no-files-found: error
+
+      # The authoring app builds here too — the deploy job then only ships it.
+      # VITE_API_BASE comes from apps/authoring/.env.production (committed) so
+      # it targets prod. SENTRY_* are only set on this deploying build; PR CI
+      # (ci.yml) gets no token, so PR builds neither emit source maps nor
+      # upload a release — see apps/authoring/vite.config.ts.
+      - name: Build authoring (skipped when only the api deploys)
+        if: needs.changes.outputs.authoring == 'true'
+        run: pnpm --filter @handsontable/demo-authoring build
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
           GITHUB_SHA: ${{ github.sha }}
 
+      # The one regression that only shows up in a deploy: the compiler chunk's content hash
+      # coming back, which strands every tab opened before the next deploy (DEV-2569). ci.yml
+      # checks the PR build; a push or workflow_dispatch that never had a PR build reaches this
+      # job instead, so it is checked here too — before the upload, not after.
+      - name: Check the compiler chunk (DEV-2569)
+        if: needs.changes.outputs.authoring == 'true'
+        run: node scripts/check-compiler-chunk.mjs
+
+      - name: Upload the authoring build
+        if: needs.changes.outputs.authoring == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: authoring-dist
+          path: runner/apps/authoring/dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  deploy-authoring:
+    needs: [changes, build]
+    if: needs.changes.outputs.authoring == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the authoring build
+        uses: actions/download-artifact@v4
+        with:
+          name: authoring-dist
+          path: runner/apps/authoring/dist/
+
+      # No pnpm install: wrangler is pinned through npx and ships ./dist as
+      # Workers Assets — the checkout only supplies wrangler.jsonc.
       - name: Deploy authoring worker
         working-directory: runner/apps/authoring
         env:
@@ -163,7 +216,7 @@ jobs:
       smoke: true
 
   deploy-api:
-    needs: [changes]
+    needs: [changes, build]
     if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
     defaults:
@@ -182,8 +235,16 @@ jobs:
           cache: pnpm
           cache-dependency-path: runner/pnpm-lock.yaml
 
+      # Install stays: `pnpm run deploy` runs the workspace's own wrangler and
+      # bundles the worker, which resolves @handsontable/demo-runtime from the
+      # artifact downloaded below instead of rebuilding it.
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+
+      - name: Download the runtime build
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime-dist
+          path: runner/packages/runtime/dist/
 
       # Apply pending D1 schema changes to the remote DB before shipping code
       # that may depend on them. Migrations are idempotent (IF NOT EXISTS).

@@ -20,7 +20,9 @@ import {
 import type { Env } from "./env.js";
 import { FRAMEWORK_DEV, BUILD_CONFIG } from "./frameworks.generated.js";
 import { dependencyMetadataFingerprint } from "./dependency-metadata.js";
-import { authenticate, authenticateService, sameOwner } from "./auth.js";
+import { authenticate, authenticateService, isTokenIdentity, presentsToken, sameOwner } from "./auth.js";
+import { hashToken, mintToken, normalizeTokenName } from "./token.js";
+import { createToken, listTokens, revokeToken } from "./token-store.js";
 import { MAX_TITLE, isValidationError, validateDescription, validateTitle } from "./demo-info.js";
 import { isMcpCreated, isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
 import { editorVersionRef, fetchVersionCatalog, resolveHandsontableVersion } from "./ht-version.js";
@@ -39,7 +41,7 @@ import {
 } from "./session-lifecycle.js";
 import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
-import { createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
+import { BuildFailure, createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
   budgetPausedMessage,
   countEgress,
@@ -475,6 +477,22 @@ const json = (data: unknown, status = 200) =>
   cors(new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } }));
 
 const nowIso = () => new Date().toISOString();
+
+/**
+ * The capability fence on a persistent API token (ADR-0037).
+ *
+ * A token may do what its creator may, minus four things: change the guardrail
+ * settings, kill somebody else's session, spend AI budget, and manage tokens.
+ * The last is the one that matters most — a leaked token must not be able to
+ * mint itself a successor or revoke the tokens that would be used to kill it.
+ *
+ * `token_forbidden` is a distinct wire code because the client's 403 branch
+ * otherwise renders an ownership sentence ("this demo belongs to someone
+ * else"), which is the wrong explanation and a reportable Sentry issue. The
+ * `detail` is the sentence a person sees; see `apiError.ts`.
+ */
+const tokenForbidden = (what: string) =>
+  json({ error: "token_forbidden", detail: `An API token cannot ${what}.` }, 403);
 
 /** Write out whatever the in-memory meters have accumulated (bytes, requests,
  *  share views). Batched deliberately: one D1 write per asset served would
@@ -1530,6 +1548,10 @@ export default Sentry.withSentry(sentryOptions, {
       // page hits and asks the model, holding the LiteLLM key server-side.
       // See src/chat.ts for why retrieval is split that way.
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "chat" && parts.length === 2) {
+        // Answers cost money and this route admits anonymous callers, so the
+        // fence reads the header rather than an identity: "no credential" and
+        // "a token credential" are different answers here (ADR-0037).
+        if (presentsToken(request)) return tokenForbidden("use the AI features");
         const ip = request.headers.get("cf-connecting-ip") ?? "";
         const limit = await checkChatRateLimit(env, ip);
         if (!limit.ok) {
@@ -1587,6 +1609,8 @@ export default Sentry.withSentry(sentryOptions, {
       // is the same gateway and the same money — but its own tool and its own
       // whitelist, so a styling request can never return file edits.
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "theme" && parts.length === 2) {
+        // Same gateway, same money, same fence as /api/chat.
+        if (presentsToken(request)) return tokenForbidden("use the AI features");
         const limit = await checkChatRateLimit(env, request.headers.get("cf-connecting-ip") ?? "");
         if (!limit.ok) {
           ctx.waitUntil(recordUsageEvent(env, "chat_denied", "rate_limit"));
@@ -1730,6 +1754,57 @@ export default Sentry.withSentry(sentryOptions, {
         return cors(await serveAvatar(env, parts[3]!));
       }
 
+      // The persistent API tokens tab (DEV-2583, ADR-0037). The listing is
+      // org-wide and so is revocation: a permanent credential only its author
+      // can kill is worse than one anybody on the team can, because the author
+      // will eventually be on holiday and the token will not expire on their
+      // behalf. `token_hash` is never selected, so no response here can leak it.
+
+      // GET /api/tokens (auth, people only) — every token in the organization.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "tokens" && parts.length === 2) {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+        // Reading is fenced as well as writing, so the rule is simply "a token
+        // cannot touch token management". The listing holds no digests, but it
+        // does name every credential in the organization and who owns it — and
+        // that is reconnaissance a leaked token has no business doing.
+        if (isTokenIdentity(identity)) return tokenForbidden("read the token list");
+        return json({ tokens: await listTokens(env) });
+      }
+
+      // POST /api/tokens (auth, people only) — mint one. The plaintext is in
+      // this response and nowhere else, ever again.
+      if (request.method === "POST" && parts[0] === "api" && parts[1] === "tokens" && parts.length === 2) {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+        if (isTokenIdentity(identity)) return tokenForbidden("mint another token");
+        const parsed = normalizeTokenName(await request.json().catch(() => null));
+        if (!parsed.ok) return json({ error: parsed.error }, 400);
+        const { id, token } = mintToken();
+        const view = await createToken(env, {
+          id,
+          name: parsed.value,
+          tokenHash: await hashToken(token),
+          createdBy: identity.email,
+          now: nowIso(),
+        });
+        console.log(`[tokens] ${identity.email} minted ${id}`);
+        return json({ ...view, token }, 201);
+      }
+
+      // DELETE /api/tokens/:id (auth, people only) — revoke, from now on.
+      // Anyone on the team, not just the author. Idempotent: revoking a dead
+      // token keeps the first kill's timestamp and attribution.
+      if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "tokens" && parts.length === 3) {
+        const identity = await authenticate(request, env);
+        if (!identity) return json({ error: "unauthorized" }, 401);
+        if (isTokenIdentity(identity)) return tokenForbidden("revoke a token");
+        const existed = await revokeToken(env, { id: parts[2]!, revokedBy: identity.email, now: nowIso() });
+        if (!existed) return json({ error: "not found" }, 404);
+        console.log(`[tokens] ${identity.email} revoked ${parts[2]}`);
+        return cors(new Response(null, { status: 204 }));
+      }
+
       // GET /api/budget (public) — the degradation tier the client should
       // reflect. Dollar figures only for a signed-in Handsontable identity;
       // anonymous callers get the tier and the user-facing notice, which is
@@ -1760,6 +1835,9 @@ export default Sentry.withSentry(sentryOptions, {
         && parts[0] === "api" && parts[1] === "admin" && parts[2] === "settings") {
         const identity = await authenticate(request, env);
         if (!identity) return json({ error: "unauthorized" }, 401);
+        // The spend ceiling and the enforcement switch are the reason the fence
+        // exists: this credential lives in a public repository's secrets.
+        if (isTokenIdentity(identity)) return tokenForbidden("change the guardrail settings");
 
         if (request.method === "DELETE") {
           const defaults = await resetSettings(env);
@@ -1848,6 +1926,9 @@ export default Sentry.withSentry(sentryOptions, {
         && parts[2] === "sessions" && parts.length === 4) {
         const identity = await authenticate(request, env);
         if (!identity) return json({ error: "unauthorized" }, 401);
+        // One person's click ending another person's session is not a thing to
+        // do on behalf of a credential in CI.
+        if (isTokenIdentity(identity)) return tokenForbidden("kill a session");
         const ref = parts[3]!;
         const resolved = await lookupSessionRef(env, ref);
         if (!resolved.ok) {
@@ -1886,6 +1967,25 @@ export default Sentry.withSentry(sentryOptions, {
       if (err instanceof InvalidFilePathError) return json({ error: err.message }, 400);
       // This catch turns every unexpected throw into a 500 body, so withSentry()
       // never sees it. Report here or the error is invisible.
+      if (err instanceof BuildFailure) {
+        Sentry.captureException(err, {
+          tags: { context: "snapshot-build", build_phase: err.phase },
+          // Without a fingerprint the cause line groups per package and per version,
+          // which is the same one-defect-many-issues shape DEV-2570 exists to end,
+          // only better titled. Keyed by the machine code so the group stays
+          // diagnosable; the title then tracks the newest event within it, which is
+          // the accepted trade (`ContainerBootFailure` in App.tsx makes the same one).
+          // Bundler failures carry no machine code and therefore share the `other`
+          // group — coarse, but their causes are specific (the picker takes the line
+          // under a label like vite's "error during build:"), so the title still names
+          // one, and `buildLog` carries the rest.
+          fingerprint: ["snapshot-build", err.phase, err.code],
+          // Bounded and picked apart in share.ts, and never in the message — a log in
+          // an `Error.message` is what invented DEMOS-1Y's culprit.
+          ...(err.log ? { extra: { buildLog: err.log } } : {}),
+        });
+        return json({ error: err.message }, 500);
+      }
       Sentry.captureException(err);
       return json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }

@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { expectGridRendered, stubShell } from "./helpers";
 
 // The preview must be able to come back. A runtime error in edited code puts the
 // pane into `error` (the "The preview could not start" card); fixing the code has
@@ -196,7 +197,14 @@ test("live: breaking and un-breaking a line leaves the grid alone", async ({ pag
     const at = doc.indexOf("'Company name'") + 1;
     view.dispatch({ changes: { from: at, to: at + "Company name".length, insert: "Sentinel column" } });
   })()`);
-  await expect(preview.getByText("Sentinel column")).toBeVisible({ timeout: 60_000 });
+  // Handsontable renders a column header more than once — the master table
+  // plus overlay clones, and at least one copy is a hidden internal render —
+  // so a bare getByText is a strict-mode violation the moment the rename
+  // actually lands, and a positional .first() can pin the hidden copy. Filter
+  // to the visible instance (first live run of this rework, DEV-2203).
+  await expect(
+    preview.getByText("Sentinel column").filter({ visible: true }).first(),
+  ).toBeVisible({ timeout: 60_000 });
 
   // The grid never left, the status never left ready — and, the discriminating bit,
   // the preview document was never reset behind our back.
@@ -270,4 +278,138 @@ test("live: fixing a Vue template error clears the preview error card", async ({
   await expect(page.frameLocator("iframe").first().locator(".handsontable td").first()).toBeVisible({
     timeout: 60_000,
   });
+});
+
+// DEV-2569 / Sentry DEMOS-15 — the compiler chunk, and the only place its failure is real.
+//
+// Tier 1 pre-transpiles sources for the classic `parcel` bundler, which needs
+// @babel/standalone: ~2.3 MB, code-split, fetched on first compile. It fails for ordinary
+// reasons (offline, a blocked request, an extension) and it used to fail permanently for
+// one of ours — a deploy rotating the chunk out from under a tab, which Workers Assets
+// answers with `200 text/html` rather than a 404. The hash-free chunk name meant to close that
+// population is reverted (see vite.config.ts — a stable path with a content-hashed dependency
+// drags a second copy of the app into an old tab), so a rotated chunk is still cured only by a
+// reload and the transient case is what these two tests drive.
+//
+// This spec is the *only* place the loader can be tested honestly. Its two import sites are
+// byte-identical in source and are not identical in the bundle — Vite rewrites the bare
+// specifier and inserts a CJS-interop hop the `@vite-ignore` retry does not get — so the
+// retry used to resolve the chunk's raw module record and die on the next compile with
+// `e.transform is not a function`. `pipeline/transpile-loader.test.mjs` imports
+// `packages/runtime/dist`, where both paths really are equivalent, and was green over
+// exactly that. Playwright runs against a real `vite build` (see playwright.config.ts), so
+// here the divergence exists.
+//
+// Verified red: with the two `asBabel` calls in transpile.ts reverted, the recovery
+// assertion below fails — the status stays `error` after Restart, which is what production
+// did.
+
+/** The compiler chunk plus any retry query. The trailing `*` is load-bearing: without it
+ *  the `?hotRetry=n` requests slip past the block and the test passes for the wrong reason. */
+const COMPILER_CHUNK = "**/assets/babel-*.js*";
+
+test("a blocked compiler chunk cards, and Restart preview really recovers", async ({ page }) => {
+  // Local-build only, and not because it is slow or flaky: the premise is the artifact this
+  // run just built. `e2e-live.yml` runs this file with `E2E_BASE_URL` pointed at a deployment
+  // for the nightly canary, where `baseURL` is off-localhost — the blanket abort below would
+  // kill `page.goto` itself, and the deployed build may predate the stable chunk name. The
+  // live half of this pair is the test after it.
+  test.skip(
+    Boolean(process.env.E2E_BASE_URL),
+    "runs against the locally built app — unset E2E_BASE_URL to run it",
+  );
+  test.setTimeout(120_000);
+  // Deterministic in the strict sense: `stubShell` alone is not enough here. A `parcel`
+  // sandbox loads its bundler from a *versioned* host (measured: 2-19-8-sandpack.codesandbox.io)
+  // plus jsdelivr and prod-packager-packages, none of which stubShell's two globs match — so
+  // this case would have quietly depended on the external bundler. Everything off-localhost is
+  // aborted instead, which costs the `ready` end-state (that one is the E2E_LIVE case below)
+  // and keeps a sharper oracle: with the bundler unreachable, `booting` means our transpile
+  // finished and handed the sandbox over, and `error` means it did not.
+  await stubShell(page);
+  await page.route((url) => url.hostname !== "localhost", (route) => route.abort());
+
+  // The oracle. Handing the compiled sandbox to the bundler is the first thing that happens
+  // *after* our transpile succeeds, and `buildSetup` throws ahead of it when the transpile
+  // fails — so an attempted bundler request is a positive signal that the compiler produced
+  // usable output. Measured both ways on this build: 2 attempts with the fix, 0 without.
+  // The requests are aborted by the route above, so nothing leaves the machine.
+  const bundlerAttempts: string[] = [];
+  page.on("request", (r) => {
+    const { hostname } = new URL(r.url());
+    if (/sandpack/.test(hostname)) bundlerAttempts.push(hostname);
+  });
+
+  const asked: string[] = [];
+  let blocked = true;
+  await page.route(COMPILER_CHUNK, (route) => {
+    asked.push(new URL(route.request().url()).search || "(bare)");
+    return blocked ? route.abort() : route.fallback();
+  });
+
+  // `javascript` is Tier 1 on the `parcel` environment (catalog.json) — the one engine that
+  // needs the compiler at all.
+  await page.goto("/?example=javascript");
+  await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "error", {
+    timeout: 60_000,
+  });
+  await expect(page.getByText("The preview could not start")).toBeVisible();
+  await expect(page.locator("pre")).toContainText("The preview compiler could not be downloaded");
+  const restart = page.getByRole("button", { name: "Restart preview" });
+  await expect(restart, "the card has to offer the action its copy names").toBeVisible();
+  expect(asked, "two bounded attempts, and the second must ask for a URL of its own").toEqual([
+    "(bare)",
+    "?hotRetry=1",
+  ]);
+
+  expect(bundlerAttempts, "a failed transpile never reaches the bundler").toEqual([]);
+
+  blocked = false;
+  await restart.click();
+
+  // The whole fix. Before it the retry resolved the chunk's raw module record and the card
+  // flipped to the exact string production showed — "Failed to transpile /index.js for the
+  // parcel sandbox: e.transform is not a function" — with the status stuck on `error` and no
+  // bundler request ever attempted. Note `data-preview-status` is deliberately *not* the
+  // oracle here: `booting` is on the failure path too (it precedes `error`), so asserting it
+  // passes with the fix reverted.
+  await expect
+    .poll(() => bundlerAttempts.length, { timeout: 60_000, intervals: [250] })
+    .toBeGreaterThan(0);
+  await expect(page.getByText("The preview could not start")).toHaveCount(0);
+  // A browser caches a failed module fetch in the document's module map, so re-importing the
+  // *same* specifier never touches the network again — which is why the remount's bare import
+  // files no third request, and why `rearm` has to mint a fresh query to be honest.
+  expect(asked).toEqual(["(bare)", "?hotRetry=1", "?hotRetry=2"]);
+});
+
+test("live: the grid renders after a compiler-chunk recovery", async ({ page }) => {
+  test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");
+  test.setTimeout(180_000);
+  // The half that was never clicked through before shipping. `booting` above is our own
+  // signal; a real bundler behind it is what proves the recovered compiler's output builds.
+
+  let blocked = true;
+  const seen: string[] = [];
+  await page.route(COMPILER_CHUNK, (route) => {
+    seen.push(route.request().url());
+    return blocked ? route.abort() : route.fallback();
+  });
+
+  await page.goto("/?example=javascript");
+  // Named before the status wait so a target whose build predates the stable chunk name fails
+  // saying so, rather than as an opaque 60 s timeout on an error card that never appears.
+  await expect
+    .poll(() => seen.length, { timeout: 60_000, intervals: [500] })
+    .toBeGreaterThan(0);
+  await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "error", {
+    timeout: 60_000,
+  });
+
+  blocked = false;
+  await page.getByRole("button", { name: "Restart preview" }).click();
+  await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "ready", {
+    timeout: 120_000,
+  });
+  await expectGridRendered(page);
 });

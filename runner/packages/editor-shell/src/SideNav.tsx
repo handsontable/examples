@@ -12,7 +12,7 @@
 // the stylesheet's hover and the rows would look dead.
 
 import type { CSSProperties } from "react";
-import { IconBook, IconListDetails, IconLogin2, IconSettings2, IconUsers } from "./icons/index.js";
+import { IconBook, IconKey, IconListDetails, IconLogin2, IconSettings2, IconUsers } from "./icons/index.js";
 import { theme } from "./theme.js";
 
 /** A child row under one of the sections — the guide's tracks (DEV-2522). */
@@ -24,7 +24,7 @@ export interface SideNavSubItem {
 
 export interface SideNavProps {
   /** Which row is the current page. */
-  active: "myDemos" | "allDemos" | "settings" | "guide";
+  active: "myDemos" | "allDemos" | "settings" | "apiTokens" | "guide";
   /** Rows nested under Guide. Only drawn when Guide is the current page: a
    *  four-item sub-list on My demos would be navigation for a page you are not on. */
   guideSubItems?: SideNavSubItem[];
@@ -40,6 +40,10 @@ export function SideNav({ active, guideSubItems, onLogout }: SideNavProps) {
           `WHERE`, and `IconUsers` says "other people's" without a word. */}
       <NavLink href="/all-demos" active={active === "allDemos"} icon={<IconUsers />} label="All demos" />
       <NavLink href="/settings" active={active === "settings"} icon={<IconSettings2 />} label="Settings" />
+      {/* `/api-tokens` (DEV-2583, ADR-0037) — the persistent credentials. Under
+          Settings because it is account-shaped rather than demo-shaped: what it
+          manages is who may act as you, not anything you built. */}
+      <NavLink href="/api-tokens" active={active === "apiTokens"} icon={<IconKey />} label="API tokens" />
       {/* `/guide` (DEV-2503) — the in-app how-to. `IconBook` is already in the set
           (it heads a README row elsewhere) and reads as documentation. */}
       <NavLink href="/guide" active={active === "guide"} icon={<IconBook />} label="Guide" />

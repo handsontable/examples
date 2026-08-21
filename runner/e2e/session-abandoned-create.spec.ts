@@ -62,8 +62,8 @@ const refFor = (sessionId: string): string =>
  *  green. That is the one failure mode a regression test must not have.
  */
 async function meteredRefs(request: APIRequestContext): Promise<string[]> {
-  const headers = process.env.E2E_BROKER_TOKEN
-    ? { Authorization: `Bearer ${process.env.E2E_BROKER_TOKEN}` }
+  const headers = process.env.E2E_API_TOKEN
+    ? { Authorization: `Bearer ${process.env.E2E_API_TOKEN}` }
     : undefined;
   const limit = 200; // SESSIONS_MAX_PAGE_SIZE; a larger ask is clamped to it
   const refs: string[] = [];

@@ -7,7 +7,8 @@
 // The worker loads under plain `node --test` via the module hooks in
 // fixtures/worker-hooks.mjs (registered below, before the import). Bindings are
 // in-memory fakes covering exactly what these two routes touch: D1 (with a
-// recorded write log), KV, and R2. No route under test may reach a container —
+// recorded write log), KV, and R2 — shared with demo-routes-version.test.mjs
+// via fixtures/worker-harness.mjs. No route under test may reach a container —
 // the create path is steered through createDemo()'s build-cache-hit branch
 // (itself production code) by a fake build_cache row, and the sandbox stub
 // throws if anything asks for a container anyway.
@@ -17,6 +18,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
+// The harness imports nothing from the worker's source tree, so its (hoisted)
+// evaluation before register() below is safe — see its own header comment.
+import {
+  AUTHOR,
+  SECRET,
+  ctx,
+  demoRow,
+  makeEnv,
+  seedCatalog,
+  sourceSnapshot,
+} from "./fixtures/worker-harness.mjs";
 
 // register() is synchronous by contract: it blocks until the hooks module's
 // initialize has completed and returns void — nothing to await (node:module
@@ -27,116 +39,15 @@ register("./fixtures/worker-hooks.mjs", import.meta.url);
 const { default: worker } = await import("../workers/api/src/index.ts");
 const { demoListQuery } = await import("../workers/api/src/demos-list.ts");
 
-// ---- in-memory bindings ------------------------------------------------------
-
-/** Rebuild the row a `INSERT OR REPLACE INTO demos (...) VALUES (...)` wrote:
- *  zip the column list with the placeholders, `?` consuming a bind and a bare
- *  literal (the hardcoded `revoked` 0) standing as itself. */
-function parseDemosInsert(sql, binds) {
-  const m = /INSERT OR REPLACE INTO demos\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/s.exec(sql);
-  if (!m) return null;
-  const cols = m[1].split(",").map((s) => s.trim());
-  const placeholders = m[2].split(",").map((s) => s.trim());
-  let next = 0;
-  const row = {};
-  cols.forEach((col, i) => {
-    row[col] = placeholders[i] === "?" ? binds[next++] : Number(placeholders[i]);
-  });
-  return row;
-}
-
-/** D1 fake: seeded demo rows, a recorded write log, and a build_cache that
- *  always hits so createDemo() takes its cached-artifact branch. Unmatched
- *  reads answer empty, which the budget code treats as "no spend yet". */
-function fakeD1(seedRows = []) {
-  const writes = [];
-  const demos = new Map(seedRows.map((row) => [row.id, row]));
-  const prepare = (sql) => {
-    const bound = (binds) => ({
-      async first() {
-        if (/FROM demos WHERE id = \?/.test(sql)) return demos.get(binds[0]) ?? null;
-        if (/FROM build_cache/.test(sql)) return { r2_prefix: "demos/_prior-identical-build/" };
-        return null;
-      },
-      async run() {
-        writes.push({ sql, binds });
-        const inserted = parseDemosInsert(sql, binds);
-        if (inserted) demos.set(inserted.id, inserted);
-        return { success: true, meta: {} };
-      },
-      async all() {
-        return { success: true, results: [] };
-      },
-    });
-    return { bind: (...binds) => bound(binds), ...bound([]) };
-  };
-  return { db: { prepare }, writes, demos };
-}
-
-function fakeKV() {
-  const store = new Map();
-  return {
-    async get(key, type) {
-      const value = store.get(key);
-      if (value === undefined) return null;
-      return type === "json" ? JSON.parse(value) : value;
-    },
-    async put(key, value) {
-      store.set(key, String(value));
-    },
-    async delete(key) {
-      store.delete(key);
-    },
-  };
-}
-
-function fakeR2() {
-  const puts = [];
-  return {
-    puts,
-    async put(key) {
-      puts.push(key);
-    },
-    async get() {
-      return null;
-    },
-    async list() {
-      return { objects: [] };
-    },
-  };
-}
-
-const SECRET = "test-secret";
-const AUTHOR = "dev@handsontable.com";
-
-function makeEnv(seedRows = []) {
-  const { db, writes, demos } = fakeD1(seedRows);
-  const artifacts = fakeR2();
-  const env = {
-    Sandbox: {},
-    SANDBOX_BUILDER: {},
-    DB: db,
-    CACHE: fakeKV(),
-    ARTIFACTS: artifacts,
-    MCP_SHARED_SECRET: SECRET,
-    LOGIN_BROKER_URL: "https://login.invalid",
-    EMBED_ALLOWED_ANCESTORS: "https://handsontable.com",
-    ERROR_REPORTING_DSN: "",
-    CF_VERSION_METADATA: { id: "test", tag: "test" },
-    // Not the production host, so the Sentry gate in index.ts stays inert.
-    PREVIEW_HOST: "localhost:8787",
-  };
-  return { env, writes, demos, artifacts };
-}
-
-const ctx = {
-  waitUntil(promise) {
-    Promise.resolve(promise).catch(() => {});
-  },
-  passThroughOnException() {},
-};
-
 const FILES = { "/package.json": '{"name":"demo"}', "/index.js": "console.log(1)" };
+
+const PR_URL = "https://pkg.pr.new/handsontable@13106";
+
+/** A minimal workspace whose /package.json pins Handsontable to `dep`. */
+const filesWith = (dep) => ({
+  "/package.json": JSON.stringify({ name: "demo", dependencies: { handsontable: dep } }),
+  "/index.js": "console.log(1)",
+});
 
 const mcpHeaders = {
   "Content-Type": "application/json",
@@ -158,26 +69,6 @@ const patchRequest = (id, body = { files: FILES }) =>
     body: JSON.stringify(body),
   });
 
-/** A stored demo row as D1 would return it (see DemoRow in share.ts). */
-const demoRow = (overrides = {}) => ({
-  id: "abc123",
-  title: "A demo",
-  description: "words",
-  framework: "react",
-  tier: 1,
-  ht_version: "latest",
-  files_hash: "hash",
-  r2_prefix: "demos/abc123/",
-  forked_from: "mcp:react",
-  visibility: "unlisted",
-  revoked: 0,
-  created_by: AUTHOR,
-  created_at: "2026-08-17T00:00:00.000Z",
-  updated_at: "2026-08-17T00:00:00.000Z",
-  revoked_at: null,
-  ...overrides,
-});
-
 // ---- create ------------------------------------------------------------------
 
 test("an MCP demo without a description is refused before it is built", async () => {
@@ -196,6 +87,9 @@ test("an MCP demo without a description is refused before it is built", async ()
 
 test("a created demo answers with the four links and its owner", async () => {
   const { env } = makeEnv();
+  // FILES pins nothing, so the route resolves npm `latest`; seeded so this
+  // spec never depends on a live registry (it used to — fetch-spy proven).
+  await seedCatalog(env);
   const res = await worker.fetch(
     createRequest({ framework: "react", title: "Grid", description: "A sortable grid", files: FILES }),
     env,
@@ -218,11 +112,15 @@ test("a created demo answers with the four links and its owner", async () => {
   assert.equal(body.shareUrl, `/share/${body.id}`);
   assert.equal(body.createdBy, AUTHOR);
   // Concrete, not a dist-tag: the agent pins its follow-up update to this.
-  assert.match(body.htVersion, /^\d+\.\d+\.\d+/);
+  // The exact seeded value, not a shape regex — a live-npm `latest` would also
+  // match /^\d+\.\d+\.\d+/, so a shape match could pass with the seeded catalog
+  // silently ignored (a drifted CACHE key) and the registry dependency back.
+  assert.equal(body.htVersion, "16.2.0");
 });
 
 test("a created demo is written with the caller as its owner, and its owner's listing finds it", async () => {
   const { env, writes, demos } = makeEnv();
+  await seedCatalog(env); // see the create test above — no live npm
   const res = await worker.fetch(
     createRequest({ framework: "react", title: "Grid", description: "A sortable grid", files: FILES }),
     env,
@@ -285,4 +183,83 @@ test("an unknown demo is 404", async () => {
   const res = await worker.fetch(patchRequest("nosuchid"), env, ctx);
   assert.equal(res.status, 404);
   assert.equal((await res.json()).error, "not found");
+});
+
+// ---- update: version resolution on the rebuild path (DEV-2565) ----------------
+//
+// The bug class: both create routes used to store `body.htVersion ?? "latest"`
+// verbatim — a dist-tag sentinel the validator rejects — so /edit refused to
+// boot and Save re-sent a ref pnpm reads as a registry range. The fix derives a
+// concrete ref (payload pin → trusted tag → previous row → catalog) before
+// updateDemo() runs; these specs prove the MCP rebuild handler actually wires
+// that resolution, which until now had zero version assertions.
+
+test("an MCP rebuild derives the bare ref from a pkg.pr.new-pinned payload and repairs a sentinel row", async () => {
+  // A legacy row holding the "latest" sentinel — the exact shape DEV-2565 left
+  // behind — whose owner now re-saves files pinned to a PR build, saying
+  // nothing about htVersion. The promise: the demo stays on the build its own
+  // package.json asks for (bare ref in D1, exact URL in the snapshot), and the
+  // sentinel is repaired rather than re-stored.
+  const { env, writes, artifacts } = makeEnv([demoRow({ ht_version: "latest" })]);
+  const res = await worker.fetch(patchRequest("abc123", { files: filesWith(PR_URL) }), env, ctx);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.rebuilt, true);
+  // The bare ref, never the URL: the column must hold what the validator
+  // accepts, or the next /edit boot refuses the demo all over again.
+  assert.equal(body.htVersion, "13106");
+  // updateDemo's UPDATE is the write oracle (parseDemosInsert only reads
+  // INSERTs): bind order is ht_version, files_hash, updated_at, ..., id.
+  const update = writes.find((w) => /UPDATE demos SET ht_version=/.test(w.sql));
+  assert.ok(update, "the rebuild must update the demos row");
+  assert.equal(update.binds[0], "13106", "the sentinel row is repaired to the derived ref");
+  assert.equal(update.binds.at(-1), "abc123");
+  // Fixed point: the server-side re-pin must hand the install the same URL the
+  // caller pinned — compared as the parsed dependency value, because the pin
+  // re-serialises package.json (2-space indent) and byte equality cannot pass.
+  const snapshot = sourceSnapshot(artifacts, "abc123");
+  assert.equal(JSON.parse(snapshot.files["/package.json"]).dependencies.handsontable, PR_URL);
+});
+
+test("an MCP rebuild lets an explicit 'latest' outrank the payload's own pin (trustDistTag)", async () => {
+  // The service path's one lever for moving a demo OFF a PR build: hot-mcp
+  // forwards the model's own request, so an explicit tag there must beat the
+  // pin the files still carry (trustDistTag at index.ts's MCP PATCH handler).
+  // If the route dropped the flag, the pin would win and '13106' would land
+  // here instead — the deliberate inverse of the browser-PATCH tag test in
+  // demo-routes-version.test.mjs. The seeded catalog value is the only place
+  // '16.2.0' exists, so the assertion cannot pass via a live registry.
+  const { env, writes, artifacts } = makeEnv([demoRow({ ht_version: "latest" })]);
+  await seedCatalog(env, "16.2.0");
+  const res = await worker.fetch(
+    patchRequest("abc123", { htVersion: "latest", files: filesWith(PR_URL) }),
+    env,
+    ctx,
+  );
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).htVersion, "16.2.0");
+  const update = writes.find((w) => /UPDATE demos SET ht_version=/.test(w.sql));
+  assert.ok(update, "the rebuild must update the demos row");
+  assert.equal(update.binds[0], "16.2.0");
+  // The pin follows the winning ref: the PR URL is rewritten to the release.
+  const snapshot = sourceSnapshot(artifacts, "abc123");
+  assert.equal(JSON.parse(snapshot.files["/package.json"]).dependencies.handsontable, "16.2.0");
+});
+
+test("an MCP rebuild refuses an invalid explicit ref with the validator's message and writes nothing", async () => {
+  // The 400 must come from the shared validator, before the budget gate, the
+  // usage event, and updateDemo — a bad ref costs the caller nothing, not a
+  // container boot on a doomed install. Empty write log = no usage event
+  // either, which is why deepEqual([], ...) is the right oracle here and only
+  // on refusal paths (success paths log usage/build_cache writes too).
+  const { env, writes, artifacts } = makeEnv([demoRow()]);
+  const res = await worker.fetch(
+    patchRequest("abc123", { htVersion: "not-a-version", files: filesWith("16.0.2") }),
+    env,
+    ctx,
+  );
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /semver-valid or a pkg\.pr\.new id\/URL/);
+  assert.deepEqual(writes, [], "a refused rebuild must not write");
+  assert.deepEqual(artifacts.puts, [], "a refused rebuild must not store artifacts");
 });

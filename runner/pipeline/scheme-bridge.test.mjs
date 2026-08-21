@@ -59,9 +59,12 @@ test("a JS entry keeps its own line numbers", () => {
   assert.ok(last.includes(SCHEME_MESSAGE_TYPE));
 });
 
-test("an HTML entry gets a script in the head", () => {
+test("an HTML entry gets a script in the head, and not a byte of whitespace", () => {
   const out = injectSchemeReceiver({ "/index.html": HTML }, "/index.html");
-  assert.match(out["/index.html"], /<head[^>]*>\n<script>/);
+  // No newline between the tag and `<head>`: a React 18 hydrator that owns the
+  // document strict-matches head children, and the leftover text node is as fatal
+  // as the script element itself (DEV-2580, measured on the remix starter).
+  assert.match(out["/index.html"], /<head[^>]*><script>/);
   assert.ok(out["/index.html"].includes("<title>demo</title>"), "the demo's document survives");
 });
 
@@ -167,4 +170,150 @@ test("Tier 2 drops a now-wrong Content-Length", async () => {
     }),
   );
   assert.equal(out.headers.get("content-length"), null);
+});
+
+// ---- the receiver, executed ---------------------------------------------------
+
+/** A document stub with constructible-stylesheet support, and a real enough
+ *  `adoptedStyleSheets` to catch the ObservableArray trap: assignment works,
+ *  `concat`/`filter` do not exist on it. */
+function makeSchemeStubs({ constructible = true, breakConstructor = false, breakReplaceAfter = null } = {}) {
+  const created = [];
+  let replaced = 0;
+  class FakeSheet {
+    constructor() {
+      if (breakConstructor) throw new Error("no constructible stylesheets here");
+      this.cssText = "";
+      created.push(this);
+    }
+    replaceSync(text) {
+      replaced += 1;
+      if (breakReplaceAfter !== null && replaced > breakReplaceAfter) throw new Error("replaceSync refused");
+      this.cssText = text;
+    }
+  }
+  if (!constructible) delete FakeSheet.prototype.replaceSync;
+
+  const elements = [];
+  const head = {
+    appendChild(node) {
+      node.parentNode = head;
+      elements.push(node);
+      return node;
+    },
+    removeChild(node) {
+      node.parentNode = null;
+      elements.splice(elements.indexOf(node), 1);
+      return node;
+    },
+  };
+  const store = { sheets: [] };
+  const document = {
+    head,
+    get adoptedStyleSheets() {
+      return constructible ? store.sheets : undefined;
+    },
+    set adoptedStyleSheets(next) {
+      store.sheets = next;
+    },
+    getElementById: (id) => elements.find((el) => el.id === id) ?? null,
+    createElement: () => ({ id: "", textContent: "", parentNode: null }),
+  };
+
+  const listeners = [];
+  const win = {
+    addEventListener: (type, cb) => type === "message" && listeners.push(cb),
+  };
+  const parent = { postMessage() {} };
+  win.parent = parent;
+
+  // eslint-disable-next-line no-new-func
+  new Function("window", "parent", "document", "CSSStyleSheet", SCHEME_RECEIVER_SOURCE)(
+    win,
+    parent,
+    document,
+    FakeSheet,
+  );
+
+  return {
+    created,
+    elements,
+    adopted: () => store.sheets,
+    send: (mode) => listeners.forEach((cb) => cb({ data: { source: SCHEME_MESSAGE_TYPE, mode } })),
+  };
+}
+
+test("a mode is carried by an adopted stylesheet, never by a node in the head", () => {
+  // DEV-2580: the shell answers `ready` while the preview's head is still parsing,
+  // so a `<style>` appended there is present when a React 18 document hydrator runs
+  // — and is exactly as fatal as the injected `<script>` was. An adopted sheet is
+  // not a node, so no hydrator can see it.
+  const h = makeSchemeStubs();
+  h.send("dark");
+  assert.equal(h.elements.length, 0, "the receiver must add no element to the head");
+  assert.equal(h.adopted().length, 1);
+  assert.match(h.adopted()[0].cssText, /color-scheme: *dark *!important/);
+});
+
+test("a second mode replaces the rule instead of adopting a second sheet", () => {
+  const h = makeSchemeStubs();
+  h.send("dark");
+  h.send("light");
+  assert.equal(h.adopted().length, 1);
+  assert.equal(h.created.length, 1);
+  assert.match(h.adopted()[0].cssText, /color-scheme: *light/);
+});
+
+test("`auto` detaches the sheet rather than blanking it", () => {
+  // An adopted-but-empty sheet is invisible in the cascade but indistinguishable
+  // from an active one from the outside, which would make `hasOverride` in
+  // `e2e/preview-scheme.spec.ts` assert nothing.
+  const h = makeSchemeStubs();
+  h.send("dark");
+  h.send("auto");
+  assert.deepEqual(h.adopted(), []);
+});
+
+test("a sheet the demo adopted itself survives ours coming and going", () => {
+  // `adoptedStyleSheets` is an ObservableArray: the receiver copies it with
+  // `Array.prototype.slice` and assigns the copy back, so a demo's own sheet has to
+  // still be there afterwards.
+  const h = makeSchemeStubs();
+  const theirs = { cssText: "theirs" };
+  h.adopted().push(theirs);
+  h.send("dark");
+  assert.equal(h.adopted().length, 2);
+  h.send("auto");
+  assert.deepEqual(h.adopted(), [theirs]);
+});
+
+for (const [name, options] of [
+  ["without constructible stylesheets", { constructible: false }],
+  ["when the constructor throws", { breakConstructor: true }],
+]) {
+  test(`the toggle still works ${name}, over the <style> fallback`, () => {
+    // Older Safari. The toggle keeps working there and a React 18 document hydrator
+    // keeps mismatching — a browser-gated residue on the record, not a silent hole.
+    const h = makeSchemeStubs(options);
+    h.send("dark");
+    assert.equal(h.elements.length, 1);
+    assert.equal(h.elements[0].id, SCHEME_STYLE_ID);
+    assert.match(h.elements[0].textContent, /color-scheme:dark !important/);
+    h.send("auto");
+    assert.equal(h.elements.length, 0);
+  });
+}
+
+test("a replaceSync that starts failing hands over cleanly, leaving one carrier", () => {
+  // Otherwise the adopted sheet keeps the previous mode, outranks the fallback
+  // element that replaces it, and no later message can clear it.
+  const h = makeSchemeStubs({ breakReplaceAfter: 1 });
+  h.send("dark");
+  assert.equal(h.adopted().length, 1);
+  h.send("light");
+  assert.deepEqual(h.adopted(), [], "the stale sheet must be detached");
+  assert.equal(h.elements.length, 1);
+  assert.match(h.elements[0].textContent, /color-scheme:light !important/);
+  h.send("auto");
+  assert.equal(h.elements.length, 0, "the fallback stays removable");
 });

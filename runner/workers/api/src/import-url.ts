@@ -553,8 +553,12 @@ export function normalizeCdnGlobals(html: string, js: string): NormalizedImport 
       cssImports.push(`import 'handsontable/styles/${hotCss[2]}';`);
       return "";
     }
-    // Any other stylesheet is left alone: a CDN <link> loads fine and pins
-    // nothing that the version picker cares about.
+    // Any other stylesheet is left alone: it pins nothing the version picker cares
+    // about. It does *not* "load fine" on its own, which is what this comment used to
+    // claim: the Tier-1 bundler discards the authored <head>, so a CDN <link> reaches
+    // the live preview only because `head-assets.ts` re-creates it from the module
+    // entry (DEV-2576). The rewrite above predates that and exists for the version
+    // pin, not for the loading.
     if (!isScript) return tag;
 
     const found = packageFromCdnUrl(url);

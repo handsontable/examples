@@ -23,6 +23,7 @@ import {
   isNextPrereleaseVersion,
   pinHandsontableFiles as pinToVersionRef,
   resolveStarterBucket,
+  selectedReleaseMajor,
   validateHandsontableVersion,
   type CatalogEntry,
   type DemoRuntime,
@@ -46,7 +47,7 @@ import {
 } from "./docs-catalog.js";
 import { loadStarterExample, toPlaceholderEntry } from "./starter-catalog.js";
 import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
-import { currentUser, login, logout, getToken, type User } from "./auth.js";
+import { currentUser, isTokenSession, login, logout, getToken, type User } from "./auth.js";
 import { assertApiOk, readApiJson } from "./api.js";
 import { isSessionExpired } from "./apiError.js";
 import { formFooter, ghostButton, primaryButton } from "./formStyles.js";
@@ -54,7 +55,7 @@ import { AdminPanel } from "./Admin.js";
 import { applyDroppedFiles } from "./addFiles.js";
 import { AskAiButton, ChatPanel } from "./Chat.js";
 import { StyleButton, StylePanel } from "./StylePanel.js";
-import { THEME_MODULE_BASENAME } from "./theme/codegen.js";
+import { buildResetChanges, hasWiredTheme, THEME_MODULE_BASENAME } from "./theme/codegen.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
 import { GuidePage } from "./Guide.js";
@@ -63,6 +64,7 @@ import { elapsedBucket } from "./sessionDiagnostics.js";
 import { Markdown } from "./markdown.js";
 import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
+import { ApiTokensPage } from "./ApiTokens.js";
 import { useProfile } from "./useProfile.js";
 import { monitorDemos, reportDemoEvent, reportError, reportingEnabled, Sentry } from "./sentry.js";
 import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
@@ -90,14 +92,6 @@ const FW_DOCS: Record<string, string> = {
   angular: "angular-data-grid",
 };
 
-/** Numeric major of a plain release version (e.g. "17.1.0" -> 17), or null for
- * next-dist-tag / pkg.pr.new / non-release refs, which are never floor-checked. */
-function releaseMajor(version: string): number | null {
-  if (isNextPrereleaseVersion(version)) return null;
-  const m = /^(\d+)\./.exec(version.trim());
-  return m ? Number(m[1]) : null;
-}
-
 /** The Style panel writes `import … from "handsontable/themes"` plus three
  * `themes/static/variables/*` imports into the demo, and none of those paths
  * exist before 17.0.0 — below that the generated module cannot resolve its own
@@ -108,13 +102,21 @@ function releaseMajor(version: string): number | null {
  * `pipeline/blank-starters.mjs` calls `isLegacyBucket`. */
 const THEME_API_MIN_MAJOR = 17;
 
+/** Said when a version change takes a generated theme module back out (DEV-2571).
+ *  Names the removal, because it is an edit to the visitor's files that they did
+ *  not make — and says where the theme went, since it is still in localStorage
+ *  and reopening the panel on a supported core writes it back. */
+const THEME_REMOVED_NOTICE =
+  `Theming needs Handsontable ${THEME_API_MIN_MAJOR} or newer, so the custom theme was removed from this demo`
+  + ` — reopen Style on ${THEME_API_MIN_MAJOR} or newer to put it back.`;
+
 /** A starter may declare a minimum core major (e.g. the UI-library starters need
  * the themes API added in Handsontable 17); hide lower published majors from its
  * version picker. next/custom refs (major null) always pass through. */
 function versionsForEntry(options: string[], minCoreMajor: number | null): string[] {
   if (minCoreMajor == null) return options;
   return options.filter((v) => {
-    const major = releaseMajor(v);
+    const major = selectedReleaseMajor(v);
     return major == null || major >= minCoreMajor;
   });
 }
@@ -359,6 +361,7 @@ type AppRoute =
   | { mode: "myDemos" }
   | { mode: "allDemos" }
   | { mode: "settings" }
+  | { mode: "apiTokens" }
   | { mode: "guide" };
 
 function parseRoute(): AppRoute {
@@ -370,6 +373,10 @@ function parseRoute(): AppRoute {
   // serves index.html for it (`not_found_handling: "single-page-application"`),
   // so it never 404'd, it just showed the wrong thing.
   if (/^\/settings\/?$/.test(location.pathname)) return { mode: "settings" };
+  // `/api-tokens` (DEV-2583, ADR-0037). Same shape and the same hazard as
+  // `/settings`: above the editor fallthrough, or the SPA fallback renders the
+  // playground for it instead of the page.
+  if (/^\/api-tokens\/?$/.test(location.pathname)) return { mode: "apiTokens" };
   // `/guide` (DEV-2503) — the in-app how-to. Same shape as the two above: matched
   // before the editor fallthrough, which would otherwise read it as a demo id.
   // `/guide` and `/guide/<track>` (DEV-2522): one route, because the page reads the
@@ -416,6 +423,7 @@ function fullModeId(route: AppRoute): string | null {
     route.mode === "myDemos" ||
     route.mode === "allDemos" ||
     route.mode === "settings" ||
+    route.mode === "apiTokens" ||
     route.mode === "guide"
   ) return null;
   return new URLSearchParams(location.search).get("mode") === "full" ? route.id : null;
@@ -452,6 +460,8 @@ export function App() {
   if (route.mode === "allDemos") return <MyDemosRoute scope="all" />;
   // Same story as My demos: auth-gated, renders no runtime, boots no container.
   if (route.mode === "settings") return <SettingsRoute />;
+  // Same again: auth-gated, no runtime, no container.
+  if (route.mode === "apiTokens") return <ApiTokensRoute />;
   // Login-gated like the two above: the guide describes what signing in unlocks,
   // and it is the account menu that offers it.
   if (route.mode === "guide") return <GuideRoute />;
@@ -496,6 +506,24 @@ function SettingsRoute() {
   if (user === undefined) return <Splash text="Loading data …" />;
   if (user === null) return <Splash text="Sign in to change your profile…" />;
   return <SettingsPage apiBase={API_BASE} user={user} />;
+}
+
+/** `/api-tokens` (DEV-2583, ADR-0037). A token acts as one person, and the
+ *  listing is the team's, so the page needs an identity before it shows
+ *  anything — the same login-on-anonymous contract as `/settings`. */
+function ApiTokensRoute() {
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  useEffect(() => {
+    currentUser().then(setUser);
+  }, []);
+  useEffect(() => {
+    if (user === null) login(); // return_to preserves /api-tokens
+  }, [user]);
+  useDocumentTitle("API tokens");
+
+  if (user === undefined) return <Splash text="Loading data …" />;
+  if (user === null) return <Splash text="Sign in to manage API tokens…" />;
+  return <ApiTokensPage apiBase={API_BASE} user={user} />;
 }
 
 /** `/guide` and `/guide/<track>` (DEV-2503, tracks in DEV-2522). The content is the
@@ -950,6 +978,12 @@ function Authoring({
   // "sign in again", which is an action, not a sentence.
   const [sessionExpired, setSessionExpired] = useState(false);
   const [versionWarning, setVersionWarning] = useState<string | null>(null);
+  /** Did the floor below just cost this demo its theme module? Its own state, not
+   *  a `versionWarning` string: the dirty-switch branches set that one *after*
+   *  this runs, in the same commit, and applying a theme is what makes a
+   *  workspace dirty — so the message would always be the one the user did not
+   *  need (DEV-2571). */
+  const [themeRemoved, setThemeRemoved] = useState(false);
   // Cost-guardrail notice (DEV-2030): non-null once spend crosses the warn
   // threshold, so a user learns live sessions are about to get restricted
   // *before* one is refused. Null whenever the guardrail is observe-only.
@@ -1054,19 +1088,110 @@ function Authoring({
   // example. Mutually exclusive with the chat panel: they occupy the same edge
   // of the screen, and both are secondary to the code.
   const [styleOpen, setStyleOpen] = useState(false);
-  /** Can this demo's core be themed at all? `releaseMajor` answers null for the
-   *  `next` dist-tag and for pkg.pr.new refs, which are post-18 builds — those
-   *  pass, since refusing them would block exactly the people testing them. */
+  /** Can this demo's core be themed at all? `selectedReleaseMajor` answers null
+   *  for the `next` dist-tag and for pkg.pr.new refs, which are post-18 builds —
+   *  those pass, since refusing them would block exactly the people testing them.
+   *
+   *  It validates before reading the major, which is load-bearing: a bare `16` or
+   *  `16.2` is a version both the pencil and `?v=` accept, and the raw-string
+   *  reading this replaced found no `\d+\.` in either, answered null, and so
+   *  handed a v16 core the prerelease pass-through (DEV-2571). */
+  /** Is this tab authenticated by a persistent API token rather than a login
+   *  (ADR-0037)? Read once per render rather than held in state: the value can
+   *  only change by a reload, since nothing in the app writes `hot_token` after
+   *  `currentUser()` has consumed the redirect. */
+  const tokenSession = isTokenSession();
+
   const themingSupported = (() => {
-    const major = releaseMajor(version);
+    // A ref the validator refuses is not themeable either. `selectedReleaseMajor`
+    // answers null for one — the same null that waves prereleases through — so
+    // without this a `?v=14.0.0` deep link gets a live Style button over a preview
+    // the mount guard refuses to boot.
+    if (!validateHandsontableVersion(version).ok) return false;
+    const major = selectedReleaseMajor(version);
     return major === null || major >= THEME_API_MIN_MAJOR;
   })();
+
+  /** Is this demo on a core we *know* cannot resolve the theme module's imports —
+   *  a real release major below the floor?
+   *
+   *  A narrower question than `themingSupported`, and the two must not be
+   *  conflated (review, PR #241). A ref the validator refuses is not themeable
+   *  either, but it is not a pre-17 core: a half-typed version in the pencil, a
+   *  legacy `latest` sentinel on a saved row (DEV-2565), a `?v=14.0.0` typo. The
+   *  preview refuses to boot on all three, and taking a theme out of the
+   *  workspace over any of them is destroying files to fix nothing.
+   *
+   *  `selectedReleaseMajor` already answers null for everything that carries no
+   *  comparable major — prereleases, pkg.pr.new refs, refused refs — so the
+   *  positive test is the whole guard. */
+  const belowThemeApi = (() => {
+    const major = selectedReleaseMajor(version);
+    return major !== null && major < THEME_API_MIN_MAJOR;
+  })();
+
   // Switching the version *down* has to close an open panel, not just hide it:
   // `styleOpen` would stay latched true and the toolbar button would keep
   // reading as pressed with nothing on screen.
   useEffect(() => {
     if (!themingSupported) setStyleOpen(false);
   }, [themingSupported]);
+
+  // And on a core below the floor the panel is not the only thing that has to go
+  // (DEV-2571, Sentry DEMOS-1P). The generated theme module is a real workspace
+  // file, and a version switch on a dirty workspace deliberately *keeps* the files
+  // it finds (ADR-0021 §6) — applying a theme is what dirtied it, so a themed demo takes
+  // exactly that branch on the way down and arrives on a core where
+  // `handsontable/themes` does not exist. The preview then fails to resolve the
+  // module's own imports. Reset is already the operation that takes a theme back
+  // out, restores the `themeName` and container class it displaced, and leaves
+  // the module inert, so reuse it rather than inventing a second unwire.
+  //
+  // Nothing of the visitor's is lost: the theme *state* lives in localStorage
+  // (`StylePanel`), and reopening the panel on a supported core reconciles it
+  // straight back into the demo.
+  //
+  // `files` in the deps, not just the floor: a saved, shared or imported
+  // workspace can *arrive* already themed on a sub-17 pin, with no version change
+  // anywhere — a fix hanging off the version handler alone would ship green and
+  // leave that path reporting.
+  //
+  // Declared above the runtime-mount effect on purpose. Effects run in
+  // declaration order, so this write to `filesRef.current` lands before the
+  // remount that a version change triggers reads it; below the mount effect the
+  // broken module gets compiled once and only then repaired, which is the very
+  // event this fixes.
+  useEffect(() => {
+    if (!belowThemeApi) return;
+    if (!hasWiredTheme(filesRef.current)) return;
+    let next = filesRef.current;
+    for (const change of buildResetChanges(next)) {
+      // Skip a write that changes nothing: Reset emits the inert module
+      // unconditionally, and re-writing byte-identical contents would recompile
+      // the preview for no reason.
+      if (next[change.path] === change.contents) continue;
+      next = { ...next, [change.path]: change.contents };
+      // Covers a `files` change that moves no mount dependency. Safe to do
+      // unconditionally: in both runtimes a non-quiet write supersedes any
+      // quiet write still pending for the same path (`sandpack.ts` keeps one
+      // authoritative `files` map; `container.ts` deletes the path from both
+      // queues first), so the Style panel's unmount flush cannot push the
+      // themed module back over this.
+      runtimeRef.current?.writeFile(change.path, change.contents);
+    }
+    // Nothing moved. Bail before `setFiles` rather than handing React a fresh
+    // object with identical contents: `files` is in this effect's own deps, so an
+    // unchanged-but-new map re-runs it forever. Which is what any disagreement
+    // between `hasWiredTheme` and `buildResetChanges` would degrade into, so the
+    // guard stays even though the two are written to agree.
+    if (next === filesRef.current) return;
+    filesRef.current = next;
+    setFiles(next);
+    // Deliberately not `markDirty`: this is a repair of a workspace that cannot
+    // run, not an edit the visitor made. Dirtying it would light up `Save •` on
+    // a shared demo nobody has touched.
+    setThemeRemoved(true);
+  }, [belowThemeApi, files]);
   /** Edit info (`114:24410`), opened from the BOX INFO pencil. Replaces the two
    *  bare inputs T2 had to park in the authed action bar for want of a frame.
    *
@@ -1139,7 +1264,16 @@ function Authoring({
     setDirtyPaths((prev) => (prev.size ? new Set() : prev));
   }, []);
 
-  /** Replace the whole workspace (entry + files + lineage) and remount. */
+  /** The single `Notice` slot in the preview bar (DEV-2173 owns its placement).
+   *  Two facts can be true at once after a downgrade — the theme was removed,
+   *  and the edits kept may not match the new version's API — and the theme
+   *  leads because it reports a change to the visitor's files rather than a
+   *  caveat about them (DEV-2571). */
+  const versionNotice = useMemo(
+    () => [themeRemoved ? THEME_REMOVED_NOTICE : null, versionWarning].filter(Boolean).join(" ") || null,
+    [themeRemoved, versionWarning],
+  );
+
   /** One line naming what an import refused, or null when it took everything.
    *  Built here rather than in the Worker so the wording lives with the UI. */
   const importNotice = useMemo(() => {
@@ -1149,6 +1283,7 @@ function Authoring({
     return `Not imported: ${shown.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}.`;
   }, [importSkipped]);
 
+  /** Replace the whole workspace (entry + files + lineage) and remount. */
   const loadWorkspace = useCallback(
     (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
       // Whatever workspace replaces an ad-hoc one is no longer its, so its title
@@ -1162,6 +1297,13 @@ function Authoring({
         setImportSkipped([]);
       }
       filesRef.current = nextFiles; // ensure the mount effect reads the new files
+      // A new workspace has not had anything taken out of it. Cleared here rather
+      // than in each picker because every install lands here — starter, docs,
+      // import, payload, saved demo — and the notice is about the files that just
+      // went away with the old one (DEV-2571). A workspace that genuinely arrives
+      // themed below the floor sets it again in the same pass: this batches with
+      // `setFiles`, and the strip effect runs after both.
+      setThemeRemoved(false);
       setEntry(nextEntry);
       setFramework(nextEntry.framework);
       setFiles(nextFiles);
@@ -1680,7 +1822,7 @@ function Authoring({
     }
 
     const indexEntry = getEntry(framework);
-    const requestedMajor = releaseMajor(v.value.ref);
+    const requestedMajor = selectedReleaseMajor(v.value.ref);
     // pkg.pr.new refs are current-dev builds — they read the next bucket.
     const bucket = v.value.pkgPrNew
       ? "next"
@@ -1861,6 +2003,7 @@ function Authoring({
   const changeVersion = useCallback((next: string) => {
     docsRequestSeqRef.current += 1;
     setVersionWarning(null);
+    setThemeRemoved(false);
     if (docsPathRef.current) {
       setDocsItems([]);
       setActiveDocsBucket(null);
@@ -1907,9 +2050,9 @@ function Authoring({
     }
     // Per-starter floor: these starters were authored against a core API that
     // older majors lack, so booting them there produces a broken (or blank)
-    // grid. Refuse rather than boot. `releaseMajor` (shared with the version
-    // picker) returns null for next/pkg.pr.new refs, which bypass the check.
-    const requestedMajor = releaseMajor(v.value.ref);
+    // grid. Refuse rather than boot. `selectedReleaseMajor` (shared with the
+    // version picker) returns null for next/pkg.pr.new refs, which bypass it.
+    const requestedMajor = selectedReleaseMajor(v.value.ref);
     if (
       !docsPath &&
       entry.minCoreMajor != null &&
@@ -2101,6 +2244,13 @@ function Authoring({
    */
   const shellSchemeMode: SchemeMode = useMemo(() => {
     if (docsPath) return "auto";
+    // Path presence, which latches this on `auto` forever after a Reset: the
+    // module stays behind as an inert `customTheme = undefined`. `hasWiredTheme`
+    // is the predicate that answers this correctly, and swapping it in is *not*
+    // enough on its own — the shell then sends its mode again and the override
+    // still does not come back, so there is a second cause in the bridge. Left
+    // as found rather than half-fixed; needs its own ticket and its own test
+    // (measured under DEV-2571, e2e/preview-scheme.spec.ts).
     const wired = Object.keys(files).some((path) => path.includes(THEME_MODULE_BASENAME));
     return wired ? "auto" : themeMode;
   }, [docsPath, files, themeMode]);
@@ -2577,6 +2727,9 @@ function Authoring({
         // account menu that holds it renders only for an identified user.
         onUsage={() => { location.href = "/admin"; }}
         onSettings={() => { location.href = "/settings"; }}
+        // Disabled, not hidden, for a token session: the page explains itself
+        // when reached by URL, and a row that vanished would read as a bug.
+        onApiTokens={tokenSession ? undefined : () => { location.href = "/api-tokens"; }}
         onGuide={() => { location.href = "/guide"; }}
         // `edit` is auth-gated — `Gate` answers a null user with `login()`, so a
         // plain reload would bounce straight back to the broker. `play` and
@@ -2593,7 +2746,7 @@ function Authoring({
         // `dirtyPaths` is which files carry the per-tab dot (T12).
         dirty={dirty}
         dirtyPaths={dirtyPaths}
-        versionWarning={versionWarning}
+        versionWarning={versionNotice}
         budgetNotice={budgetNotice}
         importNotice={importNotice}
         // Ask AI and Style, both from DEV-2047. Available on every route — the
@@ -2601,16 +2754,24 @@ function Authoring({
         // exactly what a shared link invites. Mutually exclusive: since DEV-2209
         // they are literally the same surface — one `Drawer`, one `DRAWER_WIDTH`
         // (400) — on the same edge of the screen.
+        // Both are hidden outright for a session running on a persistent API
+        // token: the Worker fences that credential off `/api/chat` and
+        // `/api/theme` (ADR-0037), so the controls could only ever open a panel
+        // whose first request comes back 403. A disabled pair with a tooltip
+        // would be the kinder treatment for a person, but nobody arrives in a
+        // token session by accident — they pasted the token in.
         secondaryActions={
-          <>
-            <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />
-            <StyleButton
-              open={styleOpen}
-              onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }}
-              disabled={!themingSupported}
-              disabledReason={`Theming needs Handsontable ${THEME_API_MIN_MAJOR} or newer — this demo is on ${version}.`}
-            />
-          </>
+          tokenSession ? null : (
+            <>
+              <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />
+              <StyleButton
+                open={styleOpen}
+                onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }}
+                disabled={!themingSupported}
+                disabledReason={`Theming needs Handsontable ${THEME_API_MIN_MAJOR} or newer — this demo is on ${version}.`}
+              />
+            </>
+          )
         }
         // ---- chrome (T2) --------------------------------------------------
         examplePill={

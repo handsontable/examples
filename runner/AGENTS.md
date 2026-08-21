@@ -125,11 +125,16 @@ The quick list — what a green E2E run does and does not prove:
   (`FIXTURE_ID` in the spec — currently `r-react-18-0-0`). Never revoke it; if it is lost,
   mint a replacement titled "E2E fixture — do not revoke" from any signed-in session and
   update the constant.
-- **The authed write round-trip needs `E2E_BROKER_TOKEN`** (`share-create-live.spec.ts`):
-  a fresh `sessionStorage.hot_token` from a signed-in session on the deployed app. Broker
-  tokens expire and cannot be minted programmatically, so the spec self-skips without one
-  and the workflow treats an expired token as a warning, not a failure. It creates one
-  real demo and revokes it in `finally` (the 410 doubles as the revocation assertion).
+- **The authed write round-trip needs `E2E_API_TOKEN`** (`share-create-live.spec.ts`, and
+  the session-leak spec rides the same step): a persistent API token minted on the
+  deployed app's `/api-tokens` page (DEV-2583, ADR-0037). It never expires, so the spec
+  self-skips only when the secret is *absent* — a token that no longer validates fails the
+  run, because that means somebody revoked it. The spec injects it as
+  `sessionStorage.hot_token` and the client resolves identity for it against our own API,
+  which is what keeps the real Share button under test. It creates one real demo and
+  revokes it in an `afterEach` (the 410 doubles as the revocation assertion).
+  Because the credential has no expiry, that step keeps `--trace off` and scrubs its
+  artifacts — a leaked trace from this repo, which is public, would leak a live token.
 - **`E2E_AI=1` gates the live LLM answer checks** (`ai-live.spec.ts`): two API-level calls
   per run, real budget, shared 8/min-per-IP rate bucket — a 429 skips rather than fails.
 
@@ -170,9 +175,9 @@ Six workflows live in `.github/workflows/` at the repo root:
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
 | `ci.yml` | every PR (+ manual dispatch) | the CI DAG: presence + unit → build → authoring → e2e (in the pinned Playwright container). PRs are the only place the full suite runs — master does not repeat it. |
-| `master.yml` | every push to `master` (or manual dispatch with per-target checkboxes) | deploy-first: path-gated `deploy-authoring`/`deploy-api` (each self-builds — a broken build never reaches wrangler), then one `@smoke` E2E run against prod. Merge-skew is covered by branch protection ("require branches to be up to date"), not by re-running the suite. |
-| `e2e-live.yml` | manual, weekly canary (Mon 05:00 UTC, prod + AI), or `workflow_call` with `smoke: true` from `master.yml` | everything ci.yml cannot run: live renders, container suites, the share viewer/round-trip, AI answer checks. Dispatch inputs: `base_url`, `ai`, `pkg_pr_new_ref` (DEV-2198). |
-| `e2e-starter-matrix.yml` | manual + monthly (1st, 03:00 UTC) | every starter × major through a live session; serialized against the global container cap. |
+| `master.yml` | every push to `master` (or manual dispatch with per-target checkboxes) | deploy-first: one shared `build` job (workspace + authoring, artifacts reused), then path-gated `deploy-authoring`/`deploy-api` ship the downloads — a broken build still never reaches wrangler — then one `@smoke` E2E run against prod. Merge-skew is covered by branch protection ("require branches to be up to date"), not by re-running the suite. |
+| `e2e-live.yml` | manual, nightly canary (03:00 UTC, prod + AI), or `workflow_call` with `smoke: true` from `master.yml` | everything ci.yml cannot run: live renders, container suites, the share viewer/round-trip, AI answer checks. Dispatch inputs: `base_url`, `ai`, `pkg_pr_new_ref` (DEV-2198). |
+| `e2e-starter-matrix.yml` | manual + nightly (01:00 UTC) | every starter × major through a live session; serialized against the global container cap. |
 | `import-docs.yml` | manual, or `repository_dispatch: docs-examples-sync` from the docs repo | re-imports the documentation-guide examples. |
 | `import-starters.yml` | manual, `repository_dispatch: starter-examples-sync`, weekly cron, or push touching `examples/**` | re-imports the versioned starter buckets (each from `prod-examples/<major>` when the branch exists, else `master`), rebuilds the catalog index + container contexts, opens a PR. |
 

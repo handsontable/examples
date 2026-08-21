@@ -17,89 +17,28 @@ import type {
 } from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
-import { MONITOR_EVENT_CEILING, redactPreviewHosts, truncateMessage } from "./monitor.js";
-
-/** Dev-server output worth relaying (DEV-2527). Broad on purpose — the point is to
- *  learn what running dev servers complain about — but narrow enough that ordinary
- *  request logging and HMR chatter do not qualify. */
-const STDERR_MARKERS =
-  /\b(error|failed|failure|exception|unhandled|cannot find|not found|econnrefused|eaddrinuse)\b/i;
-
-/** A line that ANNOUNCES a cause, as opposed to merely mentioning one. Anchored at the
- *  start of the line on purpose: pnpm prints its prose hints ("This error happened
- *  while installing the dependencies of …") AFTER the code line, so an unanchored scan
- *  from the end of the log picks the hint over ERR_PNPM_NO_MATCHING_VERSION.
- *
- *  Deliberately separate from STDERR_MARKERS rather than a widening of it: that set is
- *  load-bearing for `relayStderr`, where it controls how much dev-server noise is
- *  shipped as demo events. Two patterns, two jobs. */
-const BOOT_CAUSE_LINE = /^(?:err_[a-z0-9_]+|npm ERR!|ELIFECYCLE|::error::|[a-z]*error\b)/i;
-
-/** ANSI codes meaning "what follows replaces this line": erase-whole-line (`\x1b[2K`)
- *  and cursor-to-column (`\x1b[nG`). pnpm redraws its progress counter with these
- *  rather than with a bare `\r`, so stripping them as ordinary CSI would glue every
- *  redraw frame into one run-on line. Normalised to `\r` so one last-frame-wins rule
- *  covers both.
- *
- *  `2K` specifically, NOT `\d*K`: a bare `\x1b[K` is erase-to-end-of-line, the "wipe
- *  what the previous longer line left behind" idiom, and it usually trails the text it
- *  is protecting. Treating it as a reset would drop that text — deleting exactly the
- *  cause line this function exists to find. Those fall through to ANSI_CSI below and
- *  are stripped like any other code.
- *
- *  (`PreviewPane.tailLines` strips CSI first and therefore keeps redraw fragments.
- *  Deliberately stricter here: nothing there ends up as a Sentry issue title.) */
-const LINE_RESET = /\x1b\[(?:2K|\d*G)/g;
-
-/** Full CSI, not just colour (`m`): a boot log is mostly cursor movement. */
-const ANSI_CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
-
-/** The last entry satisfying `pred` — the newest occurrence, since logs run forwards. */
-function findLastLine(lines: readonly string[], pred: (line: string) => boolean): string | null {
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (pred(lines[i]!)) return lines[i]!;
-  }
-  return null;
-}
+import { MONITOR_EVENT_CEILING, truncateMessage } from "./monitor.js";
+import { failureDetail, STDERR_MARKERS } from "./failure-log.js";
 
 /**
  * Split a failed boot log into the one line worth titling an issue with (`cause`) and
  * the recent context worth keeping beside it (`tail`).
  *
- * The whole log used to become the `Error.message` (DEV-2533). A message that is a log
- * takes the issue title from whatever the tail happened to start with, and — because
- * V8 puts the message inside `error.stack` and stack parsers skip only the first
- * line — feeds lines 2..n of it to the frame regexes, inventing both a stack and a
- * culprit. The actual cause, meanwhile, sat unread on the last line.
+ * The rule set moved to `failure-log.ts` in DEV-2570, when the snapshot builder turned
+ * out to have the same defect this function was written for (DEV-2533) and reproduced
+ * it with a second copy of these regexes. This wrapper keeps the boot-log defaults —
+ * the log arrives pre-bounded by the status route's `tail -c 2500`, so 40 lines is the
+ * readability window and the byte cap never bites — and keeps the name and the export
+ * `pipeline/container-boot-failure.test.mjs` imports.
  *
- * The cause is chosen in three tiers, each scanning backwards: a line that announces a
- * failure, else a line that mentions one, else the last line there is.
+ * `code` is dropped: it exists for the Worker's Sentry fingerprint, and the boot path
+ * fingerprints on `["tier2-container-boot"]` instead (App.tsx).
  */
 export function bootFailureDetail(log: string): { cause: string; tail: string } {
-  const lines = log
-    .replace(LINE_RESET, "\r")
-    .replace(ANSI_CSI, "")
-    .split("\n")
-    .map((l) => l.slice(l.lastIndexOf("\r") + 1).trimEnd())
-    .filter(Boolean)
-    // Already bounded upstream by the status route's `tail -c 2500`; this is the
-    // readability bound, and it is what `tail` promises callers.
-    .slice(-40);
-
-  const candidate =
-    findLastLine(lines, (l) => BOOT_CAUSE_LINE.test(l.trimStart())) ??
-    findLastLine(lines, (l) => STDERR_MARKERS.test(l)) ??
-    lines[lines.length - 1] ??
-    "";
-
-  // Redact, then truncate — the order is the security property (e0da4598): truncating
-  // first can cut a preview hostname in half and leave the session token behind in a
-  // form the redactor no longer recognises.
-  const cause = truncateMessage(redactPreviewHosts(candidate.trim()));
-  return {
-    cause: cause || "Container failed to install dependencies or start.",
-    tail: redactPreviewHosts(lines.join("\n")),
-  };
+  const { cause, tail } = failureDetail(log, {
+    fallback: "Container failed to install dependencies or start.",
+  });
+  return { cause, tail };
 }
 
 /** The container reached the server and booted, but the boot script itself
