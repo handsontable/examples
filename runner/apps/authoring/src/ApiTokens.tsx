@@ -166,7 +166,7 @@ export function ApiTokensPage({ apiBase, user }: ApiTokensPageProps) {
         accountAvatarUrl={profile?.avatar_url}
         onMyDemos={() => { location.href = "/my-demos"; }}
         onSettings={() => { location.href = "/settings"; }}
-        onApiTokens={() => { location.href = "/api-tokens"; }}
+        onApiTokens={tokenSession ? undefined : () => { location.href = "/api-tokens"; }}
         onGuide={() => { location.href = "/guide"; }}
         onLogout={() => logout("/")}
       />
@@ -430,12 +430,17 @@ const calloutBody: CSSProperties = {
   color: theme.color.textMuted,
 };
 
+// `controlBorder`, not `border`: this is an outlined control on `surfaceSunken`,
+// and in dark those two tokens are #353535 against #222222 — the plain `border`
+// reads as no edge at all, on the one field that has to stay obvious after a
+// mint. The shared `fieldInput` uses `controlBorder` for exactly this reason
+// (Bugbot, #252).
 const field: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: theme.space(1),
   padding: `0 ${theme.space(1)} 0 ${theme.space(3)}`,
-  border: `1px solid ${theme.color.border}`,
+  border: `1px solid ${theme.color.controlBorder}`,
   borderRadius: theme.radius.md,
   background: theme.color.surfaceSunken,
 };

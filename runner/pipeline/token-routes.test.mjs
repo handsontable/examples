@@ -220,6 +220,44 @@ test("an unknown id, and a right id with a wrong secret, are both refused", asyn
   assert.equal(ok.status, 200);
 });
 
+test("extra whitespace after Bearer does not leak the token to the broker", async () => {
+  // RFC 7235 allows `1*SP` between the scheme and the credential, so
+  // `Bearer  hot_pat_…` is a well-formed header — and slicing a fixed "Bearer "
+  // off the front used to leave the space attached, miss the prefix test, and
+  // forward our own permanent credential to the broker (Bugbot, #252).
+  const { token } = await mintViaRoute();
+
+  for (const header of [`Bearer  ${token}`, `Bearer \t${token}`, `Bearer   ${token}  `]) {
+    brokerCalls = 0;
+    const res = await worker.fetch(
+      new Request(`${HOST}/api/demos`, { headers: { Authorization: header } }),
+      env,
+      ctx,
+    );
+    assert.equal(res.status, 200, `${JSON.stringify(header)} still authenticates`);
+    assert.equal(brokerCalls, 0, `${JSON.stringify(header)} was not forwarded to the broker`);
+  }
+});
+
+test("extra whitespace after Bearer does not slip past the capability fence either", async () => {
+  // The other half of the same defect: `/api/chat` admits anonymous callers, so
+  // a token it failed to recognise would have been served as a visitor and
+  // allowed to spend AI budget.
+  const { token } = await mintViaRoute();
+
+  const res = await worker.fetch(
+    new Request(`${HOST}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer  ${token}` },
+      body: JSON.stringify({ question: "hi" }),
+    }),
+    env,
+    ctx,
+  );
+  assert.equal(res.status, 403);
+  assert.equal((await res.json()).error, "token_forbidden");
+});
+
 test("the broker path still works, beside the new one", async () => {
   const res = await worker.fetch(req("GET", "/api/demos", { headers: asPerson() }), env, ctx);
   assert.equal(res.status, 200);

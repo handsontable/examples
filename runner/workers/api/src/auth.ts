@@ -35,6 +35,26 @@ export function isTokenIdentity(identity: Identity | null): boolean {
 }
 
 /**
+ * The bearer credential in an `Authorization` header, or null.
+ *
+ * The single parser for both callers below, deliberately: RFC 7235 spells the
+ * header `auth-scheme 1*SP token68`, so `Bearer  hot_pat_...` — two spaces, a
+ * stray tab, a typo in a `curl -H` — is a well-formed header. Slicing a fixed
+ * `"Bearer "` off the front leaves that whitespace attached, the value then
+ * misses the `hot_pat_` prefix test, and the consequences are the two things
+ * this feature exists to prevent: the credential gets forwarded to the broker,
+ * and the fence on the anonymous-capable routes reads it as no credential at all
+ * (Bugbot, #252). Two parsers would be two chances to reintroduce that.
+ */
+export function bearerFrom(request: Request): string | null {
+  const auth = request.headers.get("Authorization");
+  if (!auth) return null;
+  const match = /^Bearer[ \t]+(.+)$/.exec(auth.trim());
+  const value = match?.[1]?.trim();
+  return value ? value : null;
+}
+
+/**
  * Is the caller presenting an API token, whether or not it is a valid one?
  *
  * For the routes that admit anonymous callers — chat and the theme generator,
@@ -44,8 +64,7 @@ export function isTokenIdentity(identity: Identity | null): boolean {
  * than treated as an anonymous visitor.
  */
 export function presentsToken(request: Request): boolean {
-  const auth = request.headers.get("Authorization");
-  return !!auth?.startsWith("Bearer ") && isTokenBearerValue(auth.slice("Bearer ".length));
+  return isTokenBearerValue(bearerFrom(request));
 }
 
 /**
@@ -125,8 +144,7 @@ export async function authenticateService(request: Request, env: Env): Promise<I
 }
 
 export async function authenticate(request: Request, env: Env): Promise<Identity | null> {
-  const auth = request.headers.get("Authorization");
-  const bearer = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : null;
+  const bearer = bearerFrom(request);
 
   // A persistent API token is ours to verify (ADR-0037). Discriminated on the
   // prefix and answered locally either way: a malformed or revoked `hot_pat_…`
