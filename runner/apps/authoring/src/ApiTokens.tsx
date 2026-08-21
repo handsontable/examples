@@ -264,14 +264,25 @@ export function ApiTokensPage({ apiBase, user }: ApiTokensPageProps) {
           </form>
           )}
 
+          {/* A notice beside the list rather than instead of it. Minting stays
+              available after a failed read, so its row has to be reachable — a
+              credential that exists and cannot be revoked from this page is the
+              worst state the feature has (Bugbot, #252). The notice stays up
+              regardless, because one row known locally is not the same as the
+              list, and this page must not imply otherwise. */}
+          {!tokenSession && loadFailed && (
+            <p style={muted}>
+              The token list could not be loaded, so tokens that already exist may be
+              missing from it. Reload to try again.
+            </p>
+          )}
+
           {tokenSession
             ? null
-            : loadFailed
-            ? <p style={muted}>The token list could not be loaded. Reload to try again.</p>
             : tokens === null
-            ? <p style={muted}><Spinner size={14} /> Loading tokens…</p>
+            ? (loadFailed ? null : <p style={muted}><Spinner size={14} /> Loading tokens…</p>)
             : tokens.length === 0
-              ? <p style={muted}>No tokens yet.</p>
+              ? (loadFailed ? null : <p style={muted}>No tokens yet.</p>)
               : (
                 <ul style={list}>
                   {tokens.map((token) => (

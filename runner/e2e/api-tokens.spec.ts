@@ -233,6 +233,41 @@ test.describe("/api-tokens", () => {
     await expect(page.getByText("No tokens yet.")).toHaveCount(0);
   });
 
+  test("a token minted after a failed listing is still shown, so it can be revoked", async ({ page }) => {
+    // Create is deliberately live after a load failure, so the row it produces
+    // has to be reachable: a credential that exists and cannot be revoked from
+    // the page is the worst state this feature can be in. The failure notice
+    // stays too — the list is still not known to be complete.
+    await signIn(page);
+    await stubProfile(page);
+    const calls: string[] = [];
+    await page.route("**/api/tokens", (route) => {
+      const method = route.request().method();
+      calls.push(method);
+      if (method === "GET") return route.fulfill({ status: 500, json: { error: "boom" } });
+      const created = row({ id: MINTED_ID, name: "after failure" });
+      return route.fulfill({ status: 201, json: { ...created, token: MINTED } });
+    });
+
+    await page.goto("/api-tokens");
+    await expect(page.getByText(/could not be loaded/i)).toBeVisible();
+
+    await nameField(page).fill("after failure");
+    await createButton(page).click();
+
+    await expect(page.getByRole("textbox", { name: "Your new API token" })).toHaveValue(MINTED);
+    await expect(page.getByText("after failure")).toBeVisible();
+    await expect(page.getByText(`hot_pat_${MINTED_ID}_••••••••`)).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Revoke" }),
+      "the token just minted can be revoked",
+    ).toBeEnabled();
+    await expect(
+      page.getByText(/could not be loaded/i),
+      "and the page still admits the list is incomplete",
+    ).toBeVisible();
+  });
+
   test("somebody else's token is listed, and revocable, because revocation is team-wide", async ({ page }) => {
     // The deliberate departure recorded in ADR-0037: a permanent credential only
     // its author can kill is worse than one anybody on the team can.
