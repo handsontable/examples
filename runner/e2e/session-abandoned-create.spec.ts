@@ -91,6 +91,28 @@ async function meteredRefs(request: APIRequestContext): Promise<string[]> {
   throw new Error("admin sessions did not finish paging within the page budget");
 }
 
+/** Assert none of `refs` ever surfaces on the panel across a window that
+ *  comfortably covers KV propagation. Absence cannot be proven with one read:
+ *  the meter put is awaited before the create's response returns, but the
+ *  panel enumerates the prefix with KV `list()`, which is eventually
+ *  consistent — a fresh key can lag its own put by seconds (documented worst
+ *  case 60s; wrangler dev's KV is immediate, which is why this spec's first
+ *  production run was also the first to feel it). A single-shot
+ *  `.not.toContain()` inside that window passes leak or no leak. Sampling
+ *  until the deadline is the strongest honest oracle; the positive control
+ *  below proves a real key surfaces well within the same window. */
+async function expectNeverMetered(request: APIRequestContext, refs: string[], windowMs = 45_000) {
+  const deadline = Date.now() + windowMs;
+  for (;;) {
+    const metered = await meteredRefs(request);
+    for (const ref of refs) {
+      expect(metered, `${ref} surfaced as a phantom row on /admin`).not.toContain(ref);
+    }
+    if (Date.now() >= deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+}
+
 test.describe("an abandoned create leaves nothing metered behind", () => {
   test.beforeEach(async ({ request }) => {
     const health = await request.get(`${apiBase}/api/health`).catch(() => null);
@@ -98,6 +120,7 @@ test.describe("an abandoned create leaves nothing metered behind", () => {
   });
 
   test("a DELETE that overtakes the create does not strand a meter", async ({ request }) => {
+    test.setTimeout(120_000); // the sustained-absence window plus paged panel reads
     const sessionId = mintId("race");
 
     // The tab is already gone before the create is processed.
@@ -108,13 +131,11 @@ test.describe("an abandoned create leaves nothing metered behind", () => {
     // The create ran, found the tombstone at the end, and tore down what it built.
     expect(created.status(), "a create that lost the race must refuse, not succeed").toBe(410);
 
-    expect(
-      await meteredRefs(request),
-      "the abandoned create left a phantom row on /admin",
-    ).not.toContain(refFor(sessionId));
+    await expectNeverMetered(request, [refFor(sessionId)]);
   });
 
   test("repeated abandoned creates do not accumulate", async ({ request }) => {
+    test.setTimeout(120_000); // the sustained-absence window plus paged panel reads
     // One leak is a bug; the reported symptom was 202 of them. A single-shot
     // assertion would pass against a fix that only handles the first.
     const abandoned: string[] = [];
@@ -125,13 +146,11 @@ test.describe("an abandoned create leaves nothing metered behind", () => {
       const created = await request.post(`${apiBase}/api/session`, { data: angularPayload(sessionId) });
       expect(created.status()).toBe(410);
     }
-    const metered = await meteredRefs(request);
-    for (const sessionId of abandoned) {
-      expect(metered, `${sessionId} survived as a phantom row`).not.toContain(refFor(sessionId));
-    }
+    await expectNeverMetered(request, abandoned.map(refFor));
   });
 
   test("a create nobody abandoned is still metered, and its teardown still clears it", async ({ request }) => {
+    test.setTimeout(240_000); // two KV list() propagation polls, up to 90s each
     // The guard against fixing the leak by simply not metering creates. The meter
     // is what the budget subroute gate reads (`hasSessionMeter`), so losing it
     // would start refusing real sessions at `anon_blocked`.
@@ -140,13 +159,19 @@ test.describe("an abandoned create leaves nothing metered behind", () => {
 
     const created = await request.post(`${apiBase}/api/session`, { data: angularPayload(sessionId) });
     expect(created.status(), "an unraced create must succeed").toBe(200);
-    expect(
-      await meteredRefs(request),
-      "a live session must appear on the panel",
-    ).toContain(ref);
+    // Poll, don't read once: the put is awaited before the 200, but the panel's
+    // KV list() surfaces fresh keys eventually, not immediately (see
+    // expectNeverMetered above). The first production execution of this spec
+    // failed exactly here as a single-shot read.
+    await expect(async () => {
+      expect(await meteredRefs(request), "a live session must appear on the panel").toContain(ref);
+    }).toPass({ timeout: 90_000, intervals: [2_000] });
 
     const deleted = await request.delete(`${apiBase}/api/session/${sessionId}`);
     expect(deleted.status()).toBe(204);
-    expect(await meteredRefs(request), "a clean teardown must clear the row").not.toContain(ref);
+    // Deletion rides the same eventually-consistent list().
+    await expect(async () => {
+      expect(await meteredRefs(request), "a clean teardown must clear the row").not.toContain(ref);
+    }).toPass({ timeout: 90_000, intervals: [2_000] });
   });
 });
