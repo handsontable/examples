@@ -11,6 +11,11 @@
 // the `demos/<id>/__source.json` snapshot). The build_cache read always hits,
 // steering createDemo()/updateDemo() through their cached-artifact branch so
 // no route under test ever asks for a container.
+//
+// D1 also models `api_tokens` (DEV-2583), including the two conditional UPDATEs
+// the token store relies on — the idempotent revoke and the hour-coarsened
+// `last_used_at`. Those conditions are the behaviour under test, so a fake that
+// applied every UPDATE unconditionally would hand back a false pass.
 
 import assert from "node:assert/strict";
 
@@ -37,12 +42,19 @@ export function parseDemosInsert(sql, binds) {
  * always hits so createDemo() takes its cached-artifact branch. Unmatched
  * reads answer empty, which the budget code treats as "no spend yet".
  */
-export function fakeD1(seedRows = []) {
+export function fakeD1(seedRows = [], seedTokens = []) {
   const writes = [];
   const demos = new Map(seedRows.map((row) => [row.id, row]));
+  const tokens = new Map(seedTokens.map((row) => [row.id, { ...row }]));
   const prepare = (sql) => {
     const bound = (binds) => ({
       async first() {
+        if (/FROM api_tokens WHERE id = \?/.test(sql)) {
+          const row = tokens.get(binds[0]);
+          // A copy, so a caller cannot mutate the store by holding its row —
+          // and so a route that forgets to write a change cannot appear to.
+          return row ? { ...row } : null;
+        }
         if (/FROM demos WHERE id = \?/.test(sql)) return demos.get(binds[0]) ?? null;
         if (/FROM build_cache/.test(sql)) return { r2_prefix: "demos/_prior-identical-build/" };
         return null;
@@ -51,33 +63,103 @@ export function fakeD1(seedRows = []) {
         writes.push({ sql, binds });
         const inserted = parseDemosInsert(sql, binds);
         if (inserted) demos.set(inserted.id, inserted);
+        applyTokenWrite(tokens, sql, binds);
         return { success: true, meta: {} };
       },
       async all() {
+        if (/FROM api_tokens ORDER BY created_at DESC/.test(sql)) {
+          const results = [...tokens.values()]
+            .map(({ token_hash, ...view }) => view)
+            .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+          return { success: true, results };
+        }
         return { success: true, results: [] };
       },
     });
     return { bind: (...binds) => bound(binds), ...bound([]) };
   };
-  return { db: { prepare }, writes, demos };
+  return { db: { prepare }, writes, demos, tokens };
+}
+
+/**
+ * Apply an `api_tokens` write, honouring the WHERE clause.
+ *
+ * The conditions are the point: the revoke is idempotent because of
+ * `revoked_at IS NULL`, and `last_used_at` is bounded to one write per clock
+ * hour because of `last_used_at < ?`. A fake that ignored them would make both
+ * properties untestable while looking like it had tested them.
+ */
+function applyTokenWrite(tokens, sql, binds) {
+  if (/INSERT INTO api_tokens/.test(sql)) {
+    const [id, name, token_hash, created_by, created_at] = binds;
+    tokens.set(id, {
+      id,
+      name,
+      token_hash,
+      created_by,
+      created_at,
+      last_used_at: null,
+      revoked_at: null,
+      revoked_by: null,
+    });
+    return;
+  }
+  if (/UPDATE api_tokens SET revoked_at/.test(sql)) {
+    const [now, revokedBy, id] = binds;
+    const row = tokens.get(id);
+    if (row && row.revoked_at === null) {
+      row.revoked_at = now;
+      row.revoked_by = revokedBy;
+    }
+    return;
+  }
+  if (/UPDATE api_tokens SET last_used_at/.test(sql)) {
+    const [now, id, threshold] = binds;
+    const row = tokens.get(id);
+    if (row && (row.last_used_at === null || row.last_used_at < threshold)) {
+      row.last_used_at = now;
+    }
+  }
 }
 
 /**
  * KV fake — a Map, ignoring TTL options (nothing under test outlives one).
+ *
+ * `list()` answers the real shape — `{ keys: [{ name, metadata }], list_complete,
+ * cursor }` — because `adminSessions()` reads all three fields, and a fake that
+ * returned only the names would make its paging branch untestable. Metadata is
+ * carried on `put(key, value, { metadata })`, the way the meter writes it.
  */
 export function fakeKV() {
   const store = new Map();
+  const meta = new Map();
   return {
     async get(key, type) {
       const value = store.get(key);
       if (value === undefined) return null;
       return type === "json" ? JSON.parse(value) : value;
     },
-    async put(key, value) {
+    async put(key, value, options) {
       store.set(key, String(value));
+      if (options?.metadata !== undefined) meta.set(key, options.metadata);
     },
     async delete(key) {
       store.delete(key);
+      meta.delete(key);
+    },
+    async list({ prefix = "", limit = 1000, cursor } = {}) {
+      // KV lists in UTF-8 key order and pages with an opaque cursor; the cursor
+      // here is the index it stands for, which is opaque enough for a fake.
+      const all = [...store.keys()].filter((k) => k.startsWith(prefix)).sort();
+      const start = cursor ? Number(cursor) : 0;
+      const page = all.slice(start, start + limit);
+      const end = start + page.length;
+      const complete = end >= all.length;
+      return {
+        keys: page.map((name) => ({ name, metadata: meta.get(name) })),
+        list_complete: complete,
+        ...(complete ? {} : { cursor: String(end) }),
+      };
     },
   };
 }
@@ -113,8 +195,8 @@ export const AUTHOR = "dev@handsontable.com";
  * layered by the caller; none are set here so the broker path stays the one
  * under test on the browser routes.
  */
-export function makeEnv(seedRows = []) {
-  const { db, writes, demos } = fakeD1(seedRows);
+export function makeEnv(seedRows = [], seedTokens = []) {
+  const { db, writes, demos, tokens } = fakeD1(seedRows, seedTokens);
   const artifacts = fakeR2();
   const env = {
     Sandbox: {},
@@ -130,7 +212,7 @@ export function makeEnv(seedRows = []) {
     // Not the production host, so the Sentry gate in index.ts stays inert.
     PREVIEW_HOST: "localhost:8787",
   };
-  return { env, writes, demos, artifacts };
+  return { env, writes, demos, artifacts, tokens };
 }
 
 export const ctx = {

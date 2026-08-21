@@ -108,11 +108,17 @@ export default defineConfig({
     //
     // Set `VITE_API_BASE=http://localhost:5173` to route through this. An empty
     // value does not work — `App.tsx` falls back to :8787 on any falsy value.
-    // `/d` is a regex, not a prefix string: a bare "/d" key matches every path
-    // that *starts* with it, which swallows `public/docs-examples/` (the docs
-    // snapshots the picker loads) and 404s it against the worker.
+    // `/d` and `/api` are regexes, not prefix strings: a bare key matches every
+    // path that *starts* with it. For `/d` that swallowed `public/docs-examples/`
+    // (the docs snapshots the picker loads) and 404'd it against the worker; for
+    // `/api` it swallowed the `/api-tokens` page (DEV-2583), which proxied to a
+    // worker that has no such route and 500'd where production serves the SPA.
+    // The production route really is `demos.handsontable.com/api/*` (see the
+    // `--routes` flags in workers/api/package.json), so the bare prefix was
+    // always wider here than on the deployment it stands in for. `/embed` has
+    // the same shape but nothing is named as a sibling of it today.
     proxy: {
-      "/api": { target: "http://localhost:8787" },
+      "^/api(?:/|$)": { target: "http://localhost:8787" },
       "^/d(?:/|$)": { target: "http://localhost:8787" },
       "/embed": { target: "http://localhost:8787" },
     },

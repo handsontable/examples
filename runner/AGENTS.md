@@ -125,11 +125,16 @@ The quick list — what a green E2E run does and does not prove:
   (`FIXTURE_ID` in the spec — currently `r-react-18-0-0`). Never revoke it; if it is lost,
   mint a replacement titled "E2E fixture — do not revoke" from any signed-in session and
   update the constant.
-- **The authed write round-trip needs `E2E_BROKER_TOKEN`** (`share-create-live.spec.ts`):
-  a fresh `sessionStorage.hot_token` from a signed-in session on the deployed app. Broker
-  tokens expire and cannot be minted programmatically, so the spec self-skips without one
-  and the workflow treats an expired token as a warning, not a failure. It creates one
-  real demo and revokes it in `finally` (the 410 doubles as the revocation assertion).
+- **The authed write round-trip needs `E2E_API_TOKEN`** (`share-create-live.spec.ts`, and
+  the session-leak spec rides the same step): a persistent API token minted on the
+  deployed app's `/api-tokens` page (DEV-2583, ADR-0037). It never expires, so the spec
+  self-skips only when the secret is *absent* — a token that no longer validates fails the
+  run, because that means somebody revoked it. The spec injects it as
+  `sessionStorage.hot_token` and the client resolves identity for it against our own API,
+  which is what keeps the real Share button under test. It creates one real demo and
+  revokes it in an `afterEach` (the 410 doubles as the revocation assertion).
+  Because the credential has no expiry, that step keeps `--trace off` and scrubs its
+  artifacts — a leaked trace from this repo, which is public, would leak a live token.
 - **`E2E_AI=1` gates the live LLM answer checks** (`ai-live.spec.ts`): two API-level calls
   per run, real budget, shared 8/min-per-IP rate bucket — a 429 skips rather than fails.
 

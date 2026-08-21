@@ -185,6 +185,7 @@ export function SettingsPage({ apiBase, user }: SettingsPageProps) {
         accountAvatarUrl={profile?.avatar_url}
         onMyDemos={() => { location.href = "/my-demos"; }}
         onSettings={() => { location.href = "/settings"; }}
+        onApiTokens={() => { location.href = "/api-tokens"; }}
         onGuide={() => { location.href = "/guide"; }}
         // Public target, always: this page answers a null user with `login()`,
         // so a bare reload would walk the user who just logged out straight back

@@ -168,9 +168,13 @@ jobs:
           E2E_LIVE: '1'
         run: pnpm e2e e2e/style-apply.spec.ts --workers=1 -g "react|vue|javascript|switching"
 
-      # The authed share round-trip needs a hand-refreshed broker token
-      # (AGENTS.md § E2E). An absent or expired token is a notice, not a red
-      # run — the secret rots by design and rot is not a product failure.
+      # The authed share round-trip needs a persistent API token, minted from
+      # the app's API tokens page (ADR-0037). Absent, the step is skipped with a
+      # notice — the secret is optional by design. Present and NOT validating is
+      # a red run: this credential does not expire, so a refusal means revoked,
+      # deleted, or broken, none of which should pass quietly. That is the whole
+      # point of DEV-2583 — the broker token it replaced rotted hourly, so its
+      # failure had to be a warning, and the step therefore never ran.
       - name: E2E — authed share round-trip (secret-gated)
         if: ${{ !inputs.smoke && env.BASE_URL != '' }}
         env:
@@ -179,17 +183,22 @@ jobs:
           # the auth-gated /api/admin/sessions listing, so it rides this
           # token-gated step rather than the anonymous suites.
           E2E_API_BASE: ${{ env.BASE_URL }}
-          E2E_BROKER_TOKEN: ${{ secrets.E2E_BROKER_TOKEN }}
+          E2E_API_TOKEN: ${{ secrets.E2E_API_TOKEN }}
         run: |
-          if [ -z "$E2E_BROKER_TOKEN" ]; then
-            echo "::notice::E2E_BROKER_TOKEN is not set — the authed share round-trip and the session-leak spec were skipped."
+          if [ -z "$E2E_API_TOKEN" ]; then
+            echo "::notice::E2E_API_TOKEN is not set — the authed share round-trip and the session-leak spec were skipped."
             exit 0
           fi
-          code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $E2E_BROKER_TOKEN" \
-            "https://mcp-auth-proxy-j0tb.onrender.com/broker/userinfo" || true)
+          # Probed against our own API rather than the broker, which knows
+          # nothing about this credential. `/api/profile` rather than
+          # `/api/tokens`: a token is fenced off token management entirely
+          # (ADR-0037), and verifying the bearer is itself an `api_tokens` read,
+          # so this exercises the new path either way.
+          code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $E2E_API_TOKEN" \
+            "$BASE_URL/api/profile" || true)
           if [ "$code" != "200" ]; then
-            echo "::warning::E2E_BROKER_TOKEN no longer validates against the broker ($code) — refresh the secret to run the authed share round-trip."
-            exit 0
+            echo "::error::E2E_API_TOKEN did not validate ($code). A persistent token does not expire, so this means revoked, deleted, or broken — mint a new one on /api-tokens."
+            exit 1
           fi
           # Secret hygiene (Bugbot, #189): this run puts a live session JWT in
           # sessionStorage and an Authorization header — a Playwright trace

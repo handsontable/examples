@@ -111,3 +111,35 @@ test("isSessionExpired is true only for the 401 ApiError", () => {
   assert.equal(isSessionExpired(null), false);
   assert.equal(isSessionExpired("session-expired"), false);
 });
+
+test("a capability refusal reads as itself, not as an ownership problem (DEV-2583)", () => {
+  // A persistent API token is fenced off AI features and the admin writes
+  // (ADR-0037). Those refusals share the 403 status with the ownership checks,
+  // and the ownership sentence is the wrong explanation for them: nothing
+  // belongs to anybody else, the credential simply may not do this.
+  const failure = describeApiFailure(
+    403,
+    { error: "token_forbidden", detail: "an API token cannot use the AI features" },
+    "ask failed (403)",
+  );
+
+  assert.equal(failure.kind, "forbidden");
+  assert.equal(failure.status, 403);
+  assert.equal(failure.message, "an API token cannot use the AI features");
+  assert.doesNotMatch(failure.message, /belongs to someone else/i);
+  assert.doesNotMatch(failure.message, /token_forbidden/i, "never the wire string");
+  // Not reportable: unlike an ownership 403, this is the fence working as
+  // designed, so it is not a UI/server disagreement worth a Sentry issue.
+  assert.equal(failure.reportable, false);
+  assert.equal(isSessionExpired(failure), false, "a fence is not an expired session");
+});
+
+test("a token_forbidden without a detail still says something useful", () => {
+  // Defensive: every route that sends this code sends a detail, but a proxy or
+  // a truncated body must not produce an empty toast.
+  const failure = describeApiFailure(403, { error: "token_forbidden" }, "ask failed (403)");
+
+  assert.equal(failure.kind, "forbidden");
+  assert.ok(failure.message.length > 0);
+  assert.doesNotMatch(failure.message, /token_forbidden/i);
+});

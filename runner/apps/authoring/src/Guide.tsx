@@ -67,6 +67,7 @@ export function GuidePage({ apiBase, user }: GuidePageProps) {
         accountAvatarUrl={profile?.avatar_url}
         onMyDemos={() => { location.href = "/my-demos"; }}
         onSettings={() => { location.href = "/settings"; }}
+        onApiTokens={() => { location.href = "/api-tokens"; }}
         onGuide={() => { location.href = "/guide"; }}
         // Public target, as on Settings: this page sends a null user to `login()`,
         // so logging out to `/guide` would walk them straight back to the broker.

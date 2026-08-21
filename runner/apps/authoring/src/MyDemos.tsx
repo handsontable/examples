@@ -270,6 +270,7 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
         accountAvatarUrl={ownerAvatar}
         onMyDemos={() => { location.href = "/my-demos"; }}
         onSettings={() => { location.href = "/settings"; }}
+        onApiTokens={() => { location.href = "/api-tokens"; }}
         onGuide={() => { location.href = "/guide"; }}
         // Never a bare reload here: `/my-demos` answers a null user with
         // `login()`, so logging out in place would re-enter the broker.

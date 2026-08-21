@@ -15,7 +15,7 @@
 // `displayName`, and the app owns fetching both.
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { IconBook, IconChartBar, IconListDetails, IconLogin2, IconSettings2 } from "./icons/index.js";
+import { IconBook, IconChartBar, IconKey, IconListDetails, IconLogin2, IconSettings2 } from "./icons/index.js";
 import { theme } from "./theme.js";
 
 export interface AccountMenuProps {
@@ -35,6 +35,9 @@ export interface AccountMenuProps {
   /** `/settings` (DEV-2166). Optional for the same reason `onMyDemos` is a
    *  callback at all: this package does no navigation. */
   onSettings?: () => void;
+  /** `/api-tokens` (DEV-2583, ADR-0037) — the persistent API tokens. Optional for
+   *  the same reason the rest are: this package navigates nothing itself. */
+  onApiTokens?: () => void;
   /** `/guide` (DEV-2503) — the in-app how-to. Optional for the same reason the two
    *  above are: this package navigates nothing itself. */
   onGuide?: () => void;
@@ -48,6 +51,7 @@ export function AccountMenu({
   onMyDemos,
   onUsage,
   onSettings,
+  onApiTokens,
   onGuide,
   onLogout,
 }: AccountMenuProps) {
@@ -116,6 +120,18 @@ export function AccountMenu({
             onClick={onSettings ? () => { setOpen(false); onSettings(); } : undefined}
             disabled={!onSettings}
             title={onSettings ? "Your name, description and avatar" : "Profile settings are not available here"}
+          />
+          {/* `/api-tokens` (DEV-2583). Follows Settings, which is where the thing
+              it manages belongs: a credential that acts as you is account state,
+              not a demo. */}
+          <MenuRow
+            icon={<IconKey />}
+            label="API tokens"
+            onClick={onApiTokens ? () => { setOpen(false); onApiTokens(); } : undefined}
+            disabled={!onApiTokens}
+            title={onApiTokens
+              ? "Persistent tokens for scripts and CI"
+              : "API tokens are not available here"}
           />
           {/* `/guide` (DEV-2503). Last before the rule: it is the row you want on
               your first day and never again, so it sits below the ones you use

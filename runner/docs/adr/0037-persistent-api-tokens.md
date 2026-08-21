@@ -73,12 +73,17 @@ hash, verified inside the Worker, and revocable by anyone on the team.**
   by CI is indistinguishable in the listing from one its owner built by hand, and it
   outlives their involvement.
 - **A token may do what a person may, minus four things.** No `PUT`/`DELETE` on
-  `/api/admin/*`, no `POST /api/chat`, no `POST /api/theme`, and no token management. So
-  a leaked token cannot raise the spend ceiling, cannot turn enforcement off, cannot burn
-  AI budget, and — the one that matters most — cannot mint itself a successor or revoke
-  the tokens that would be used to kill it. `GET /api/admin/*` stays open, because the
-  session-leak spec reads `/api/admin/sessions` and reading internal spend figures is
-  what `admin.ts` already says it is.
+  `/api/admin/*`, no `POST /api/chat`, no `POST /api/theme`, and no token management at
+  all — reads included. So a leaked token cannot raise the spend ceiling, cannot turn
+  enforcement off, cannot burn AI budget, and — the one that matters most — cannot mint
+  itself a successor or revoke the tokens that would be used to kill it. `GET
+  /api/tokens` is fenced along with the writes rather than left open for the CI
+  preflight's convenience: the listing carries no digests, but it names every credential
+  in the organization and its owner, and that is reconnaissance rather than a credential
+  check. The preflight asks `/api/profile` instead, which verifies the bearer — itself an
+  `api_tokens` read — without enumerating anything. `GET /api/admin/*` does stay open,
+  because the session-leak spec reads `/api/admin/sessions` and reading internal spend
+  figures is what `admin.ts` already says it is.
 - **The fence is a fixed rule, not a scope field.** Per-token scopes were considered and
   dropped: this repo has never had a permission model, one consumer exists, and a
   configurable fence is a thing to get wrong at mint time. When a second consumer needs
