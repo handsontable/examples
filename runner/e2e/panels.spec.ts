@@ -26,13 +26,27 @@ async function openPlayground(page: Page, mode: "light" | "dark") {
   await expect(page.locator("html")).toHaveAttribute("data-hot-theme", mode);
 }
 
+/** Composite `fg` (which may be translucent, or fully transparent) over `bg`,
+ *  giving the colour a glyph on top of `fg` is actually read against. Alpha on
+ *  the *text* is out of scope — nothing here paints any. */
+function over(fg: string, bg: string) {
+  const parts = (s: string) => (s.match(/[\d.]+/g) ?? []).map(Number);
+  const f = parts(fg);
+  const b = parts(bg);
+  const a = f.length > 3 ? f[3]! : 1;
+  if (a === 0) return bg;
+  const mix = (i: number) => Math.round(a * f[i]! + (1 - a) * b[i]!);
+  return `rgb(${mix(0)}, ${mix(1)}, ${mix(2)})`;
+}
+
 /** WCAG contrast between two colours already in hand.
  *
  *  Distinct from `contrast(page, selector)` below, which finds the background by
  *  walking up to the first fill with a non-zero alpha. That is right for an
- *  opaque control on a drawer and wrong for a *translucent* chip: it would stop
- *  at the chip's own `rgba(255, 255, 255, 0.16)` and measure white text against
- *  white, when what the glyphs actually sit on is the accent showing through. */
+ *  opaque control on a drawer and wrong for a translucent chip: it would stop at
+ *  the chip's own `rgba(255, 255, 255, 0.16)` and measure white text against
+ *  white rather than against the accent showing through it. Pair this with
+ *  `over()` instead, which composites the two. */
 function contrastPair(a: string, b: string) {
   const chan = (s: string) => s.match(/\d+/g)!.slice(0, 3).map(Number);
   const lum = (c: number[]) =>
@@ -349,10 +363,18 @@ test.describe("chat transcript", () => {
         ["inline code", bubble.locator("code")],
         ["link", bubble.locator("a")],
       ] as const) {
-        const ink = await locator.first().evaluate((el) => getComputedStyle(el).color);
-        // Against the bubble itself: the code chip is translucent, so the accent
-        // is what is actually behind the glyphs.
-        expect(contrastPair(ink, fill), `${what} on the bubble`).toBeGreaterThan(4.5);
+        const paint = await locator.first().evaluate((el) => {
+          const cs = getComputedStyle(el);
+          return { ink: cs.color, own: cs.backgroundColor };
+        });
+        // Composited, not measured against the bubble directly. The chip carries
+        // its own fill, so what the glyphs sit on is that fill over the accent —
+        // and the two states differ only there. The regression paints an *opaque*
+        // `surfaceMuted` chip while still inheriting white; its `color` is white
+        // either way, so a ratio taken against the bubble clears 4.5 and the
+        // defect ships green (Bugbot on db5b9ff6, which is how this read before).
+        const behind = over(paint.own, fill);
+        expect(contrastPair(paint.ink, behind), `${what} on the bubble`).toBeGreaterThan(4.5);
       }
 
       // Colour alone cannot mark a link whose only legible colour is the one the
