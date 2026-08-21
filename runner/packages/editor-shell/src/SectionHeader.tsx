@@ -62,9 +62,10 @@ const headerRow: CSSProperties = {
  *  this module exists rather than living inside `Sidebar`. */
 export const headerLabel: CSSProperties = {
   fontFamily: theme.font.ui,
-  fontSize: 10,
-  lineHeight: "20px",
-  letterSpacing: 0.8,
+  // `type.label` *is* this treatment — 10/20 at 0.8px tracking — and was added
+  // by the type-scale pass with this as its documented call site, then left
+  // hand-written here. Same computed values, one definition.
+  ...theme.type.label,
   textTransform: "uppercase",
   color: theme.color.textMuted,
 };

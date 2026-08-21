@@ -263,13 +263,18 @@
 /* Natural-width tabs off the shared 24px inset (the drawer header's and the
    chat transcript's), the selected state keyed off `aria-selected` so the
    markup carries it once. No background — `.hot-panel-tab` owns the fill and
-   its rollover (ADR-0026). */
+   its rollover (ADR-0026).
+
+   `control-border` on the rule, not `border`: the strip is painted
+   `surface-raised`, and dark `border` *is* `surface-raised` (#222222), so the
+   separator was invisible in dark — the same ADR-0028 trap the drawer's own
+   three hairlines avoid. */
 .hot-style-tabs {
   display: flex;
   gap: 8px;
   padding: 0 24px;
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--hot-color-border);
+  border-bottom: 1px solid var(--hot-color-control-border);
   background: var(--hot-color-surface-raised);
 }
 /* Full-width tabs: each takes an equal share of the strip (inside the 24px

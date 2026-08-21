@@ -22,6 +22,7 @@ import {
   type ReactNode,
 } from "react";
 import { IconX } from "./icons/index.js";
+import { s } from "./styles.js";
 import { installCss, theme } from "./theme.js";
 
 /** Both drawers, one width. Ask AI shipped at 400 and Style at 380; the style
@@ -167,12 +168,14 @@ export function Drawer({
 // The choices the rules encode:
 //  * `z-index` 900 — under `Dialog`'s 1000. A dialog opened from inside a drawer
 //    (Share, from the preview bar) has to paint above it.
-//  * Full viewport height, over the 72px top bar — the docs assistant's geometry
-//    (`.da-panel[data-open]`), adopted deliberately after shipping the
-//    below-the-bar variant first. The cost is known and accepted: with a drawer
-//    open both panel triggers sit under it, so switching panels by pointer means
-//    closing first — the same trade the docs panel makes with its own header. The
-//    triggers stay keyboard-reachable; the drawer is non-modal and traps nothing.
+//  * It starts *below* the 72px top bar rather than at `top: 0`. The docs
+//    assistant's own geometry (`.da-panel[data-open]`) is full-height, and this
+//    panel tried that; measured, a 400px drawer then covered every top-bar
+//    control from `100vw - 400px` rightward — not just the two panel triggers,
+//    but Fork/Save, Download, the theme toggle and the account menu. That bar is
+//    a workspace toolbar, not a docs-site header: "restyle the demo, then save
+//    it" is the panel's main flow, and Ctrl+S was the only way left to finish it.
+//    Height follows, or the panel overhangs the viewport by the height of the bar.
 //  * Entrance is the docs assistant's 0.2s slide, transform-only so nothing
 //    inside reflows; `data-entered` flips one frame after mount so the
 //    transition has a painted "from" state.
@@ -184,7 +187,7 @@ export function Drawer({
 //  * `.hot-drawer-close` sets no background: it would outrank
 //    `.hot-icon-btn:hover` (ADR-0026).
 const DRAWER_CSS = `
-.hot-drawer{position:fixed;top:0;right:0;height:100%;max-width:95vw;z-index:900;display:flex;flex-direction:column;border-left:1px solid ${theme.color.controlBorder};background:${theme.color.surfaceRaised};box-shadow:${theme.shadow.panel};color:${theme.color.text};font-family:${theme.font.ui};transition:transform 0.2s ease;transform:translateX(100%)}
+.hot-drawer{position:fixed;top:${s.topBar.height}px;right:0;height:calc(100% - ${s.topBar.height}px);max-width:95vw;z-index:900;display:flex;flex-direction:column;border-left:1px solid ${theme.color.controlBorder};background:${theme.color.surfaceRaised};box-shadow:${theme.shadow.panel};color:${theme.color.text};font-family:${theme.font.ui};transition:transform 0.2s ease;transform:translateX(100%)}
 .hot-drawer[data-entered]{transform:translateX(0)}
 .hot-drawer-header{display:flex;align-items:center;justify-content:space-between;gap:${theme.space(3)};flex:0 0 auto;padding:${theme.space(3)} ${theme.space(6)};border-bottom:1px solid ${theme.color.controlBorder}}
 .hot-drawer-title{display:flex;align-items:center;gap:${theme.space(2)};margin:0;font-size:${theme.type.base.fontSize}px;line-height:${theme.type.base.lineHeight};font-weight:600;color:${theme.color.text}}

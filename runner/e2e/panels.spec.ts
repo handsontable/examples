@@ -69,31 +69,23 @@ test.describe("drawer chrome", () => {
     expect(style?.width).toBe(400);
   });
 
-  // The full-height drawer (docs-assistant geometry) covers the top bar, so with a
-  // panel open the other trigger is under it and a pointer click is intercepted —
-  // by design. The drawer traps nothing, so the triggers stay keyboard-reachable,
-  // and keyboard activation is the path these two tests now take. The mutual
-  // exclusion they prove is unchanged: App.tsx closes one panel as it opens the other.
-
   test("only one drawer is open at a time", async ({ page }) => {
     await openPlayground(page, "light");
     await page.getByRole("button", { name: "Ask AI", exact: true }).click();
     await expect(page.locator(CHAT)).toBeVisible();
 
-    await page.getByRole("button", { name: "Style", exact: true }).focus();
-    await page.keyboard.press("Enter");
+    await page.getByRole("button", { name: "Style", exact: true }).click();
     await expect(page.locator(STYLE)).toBeVisible();
     await expect(page.locator(CHAT)).toHaveCount(0);
   });
 
-  test("swapping drawers leaves focus on the trigger that was activated", async ({ page }) => {
+  test("swapping drawers leaves focus on the trigger that was clicked", async ({ page }) => {
     await openPlayground(page, "light");
     const askAi = page.getByRole("button", { name: "Ask AI", exact: true });
     const style = page.getByRole("button", { name: "Style", exact: true });
 
     await askAi.click();
-    await style.focus();
-    await page.keyboard.press("Enter");
+    await style.click();
     await expect(page.locator(STYLE)).toBeVisible();
 
     // The closing drawer used to focus *its* trigger on unmount — which happens

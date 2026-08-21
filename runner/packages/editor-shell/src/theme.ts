@@ -175,8 +175,11 @@ export const theme = {
    *  hierarchy is carried by colour and tracking, not extra sizes. Spread one of
    *  these into a style object rather than writing `fontSize` by hand — the 13px
    *  the shell shipped with was exactly the kind of drift this exists to stop.
-   *   - `base`  12/20: primary UI text — pills, tabs, buttons, body copy (48:6583)
-   *   - `small` 10/20: secondary lines — descriptions, status bar (48:6758, 48:6742)
+   *   - `base`  12/20: primary UI text — pills, tabs, buttons, body copy (48:6583),
+   *     and the secondary lines the frame draws at 10 (box description, badge
+   *     label): raised to 12 by the same decision `row` records below.
+   *   - `small` 10/20: the captions under a control — ramp step names, the brand
+   *     chip's label (48:6758, 48:6742). Nothing that has to be read as a sentence.
    *   - `row`   12/16: dense tree rows — files, dependency URLs. The frame draws
    *     these at 10 (72:16918); raised to 12 by decision — 10px file names were
    *     too small to read — with the 16px line kept so the 24px rows stay 24.

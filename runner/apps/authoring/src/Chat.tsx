@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { Drawer, IconArrowUp, IconSparkles, theme } from "@handsontable/demo-editor-shell";
 import type { FilesMap } from "@handsontable/demo-runtime";
 import { searchDocs } from "./docsSearch.js";
+import { useAutoGrow } from "./useAutoGrow.js";
 import { Markdown } from "./markdown.js";
 import { reportError } from "./sentry.js";
 
@@ -93,6 +94,8 @@ export function ChatPanel({
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // The composer grows with the question up to `.hot-chat-input`'s max-height.
+  const inputRef = useAutoGrow(input);
   // `busy` state lags a fast second click by a render; this ref does not.
   const busyRef = useRef(false);
   // A mirror of `turns` that is safe to read inside async code. Reading state
@@ -225,6 +228,7 @@ export function ChatPanel({
         onSubmit={(e) => { e.preventDefault(); void send(input); }}
       >
         <textarea
+          ref={inputRef}
           className="hot-chat-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}

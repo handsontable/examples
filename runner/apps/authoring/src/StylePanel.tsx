@@ -23,6 +23,7 @@ import {
   theme as ui,
 } from "@handsontable/demo-editor-shell";
 import { reportError } from "./sentry.js";
+import { useAutoGrow } from "./useAutoGrow.js";
 import type { FilesMap, WriteFileOptions } from "@handsontable/demo-runtime";
 import {
   buildResetChanges,
@@ -162,6 +163,8 @@ export function StylePanel({
     }
   });
   const [prompt, setPrompt] = useState("");
+  // The AI tab's composer grows with the prompt, as the chat panel's does.
+  const promptRef = useAutoGrow(prompt);
   const [thinking, setThinking] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
   // The intro blurb is a dismissible notice: once someone knows what the panel
@@ -566,14 +569,17 @@ export function StylePanel({
   }
 
   /** The AI tab's composer — visually the chat panel's (`.hot-chat-*`): a flush
-   *  textarea at the bottom of the drawer with the ↑ send inside it. The button
-   *  keeps its accessible name "Style", which is how the E2E_AI spec sends. */
+   *  textarea at the bottom of the drawer with the ↑ send inside it. The send
+   *  button is named "Send", as the chat panel's is: "Style" collided with the
+   *  top-bar trigger's name, so any page-scoped `getByRole("button", { name:
+   *  "Style", exact: true })` became ambiguous while this tab was open. */
   const aiComposer = (
     <form
       className="hot-chat-composer"
       onSubmit={(e) => { e.preventDefault(); void describe(prompt); }}
     >
       <textarea
+        ref={promptRef}
         className="hot-chat-input"
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
@@ -590,16 +596,20 @@ export function StylePanel({
         type="submit"
         className="hot-chat-send"
         disabled={thinking || !prompt.trim()}
-        aria-label="Style"
+        aria-label="Send"
       >
         <IconArrowUp />
       </button>
     </form>
   );
 
-  /** Pinned under the scroll body by `Drawer` — the panel's own actions, plus
-   *  whatever the last apply had to say about it. */
-  const footer = (
+  /** What the last apply had to say about itself. Rendered in the footer, and
+   *  again inside the AI tab's section — the AI tab swaps the whole footer out
+   *  for the composer, so on that tab these two notes had nowhere to mount
+   *  (Bugbot #248). AI styling writes the module through the same `apply`, so
+   *  an example the panel cannot wire produced a preview that did not change
+   *  and no explanation anywhere on the tab. */
+  const applyNotes = (
     <>
       {applied && !applied.linked && (
         <p style={{ ...note, marginTop: 0 }}>
@@ -614,6 +624,14 @@ export function StylePanel({
           the theme module adds the stylesheet link, so the font travels with the demo.
         </p>
       )}
+    </>
+  );
+
+  /** Pinned under the scroll body by `Drawer` — the panel's own actions, plus
+   *  whatever the last apply had to say about it. */
+  const footer = (
+    <>
+      {applyNotes}
       <div style={{ display: "flex", gap: ui.space(2), flexWrap: "wrap" }}>
         <button type="button" className="hot-btn-ghost" onClick={() => setShowCode((v) => !v)}>
           {showCode ? "Hide code" : "Copy for my app"}
@@ -712,6 +730,9 @@ export function StylePanel({
           </p>
           {aiNote && <div style={sectionNote}>{aiNote}</div>}
           {thinking && <div style={sectionNote}>Styling…</div>}
+          {/* The footer's apply notes, which this tab replaced with the composer. */}
+          {applyNotes}
+          {applied && <p style={{ ...note, marginTop: 0, marginBottom: 0 }}>Applied to the preview</p>}
         </Section>
         )}
 
@@ -1380,6 +1401,9 @@ const segmentBtn = (on: boolean): React.CSSProperties => ({
   border: `1px solid ${on ? ui.color.controlBorder : "transparent"}`,
   background: on ? ui.color.surfaceRaised : "transparent",
   color: on ? ui.color.text : ui.color.textMuted,
+  // Same weight step as `segment()` in `theme/controls.tsx` — the two draw the
+  // same control and had drifted apart on this one property.
+  fontWeight: on ? 600 : 400,
 });
 const tileRow: React.CSSProperties = { display: "flex", gap: ui.space(2), justifyContent: "space-between" };
 /** No `border-color`: `.hot-panel-tile` carries resting, hover and selected, or
