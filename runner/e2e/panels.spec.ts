@@ -86,20 +86,26 @@ async function paint(page: Page, target: string | Locator) {
 }
 
 test.describe("drawer chrome", () => {
+  // `offsetWidth`, not `boundingBox()`. The drawer keeps a `translateX` for its
+  // slide-in — `translateX(0)` once settled, but a transform all the same, so it
+  // stays on a composited layer whose rect comes back through float matrix maths.
+  // CI measured one panel at 400 and the other at 399.99993896484375 and the
+  // exact comparison failed. Layout width is what "one width" means here, and no
+  // transform can perturb it.
   test("both drawers share one width and one surface", async ({ page }) => {
     await openPlayground(page, "light");
 
     await page.getByRole("button", { name: "Ask AI", exact: true }).click();
-    const chat = await page.locator(CHAT).boundingBox();
+    const chat = await page.locator(CHAT).evaluate((el) => (el as HTMLElement).offsetWidth);
     await page.locator(CHAT).getByRole("button", { name: /^Close/ }).click();
 
     await page.getByRole("button", { name: "Style", exact: true }).click();
-    const style = await page.locator(STYLE).boundingBox();
+    const style = await page.locator(STYLE).evaluate((el) => (el as HTMLElement).offsetWidth);
 
-    expect(chat?.width).toBe(style?.width);
+    expect(chat).toBe(style);
     // `DRAWER_WIDTH`. Hard-coded rather than imported: the point is that neither
     // panel can drift back to its own number (400 and 380 before DEV-2209).
-    expect(style?.width).toBe(400);
+    expect(style).toBe(400);
   });
 
   test("only one drawer is open at a time", async ({ page }) => {
