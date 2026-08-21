@@ -26,6 +26,25 @@ async function openPlayground(page: Page, mode: "light" | "dark") {
   await expect(page.locator("html")).toHaveAttribute("data-hot-theme", mode);
 }
 
+/** WCAG contrast between two colours already in hand.
+ *
+ *  Distinct from `contrast(page, selector)` below, which finds the background by
+ *  walking up to the first fill with a non-zero alpha. That is right for an
+ *  opaque control on a drawer and wrong for a *translucent* chip: it would stop
+ *  at the chip's own `rgba(255, 255, 255, 0.16)` and measure white text against
+ *  white, when what the glyphs actually sit on is the accent showing through. */
+function contrastPair(a: string, b: string) {
+  const chan = (s: string) => s.match(/\d+/g)!.slice(0, 3).map(Number);
+  const lum = (c: number[]) =>
+    0.2126 * srgb(c[0]!) + 0.7152 * srgb(c[1]!) + 0.0722 * srgb(c[2]!);
+  const [hi, lo] = [lum(chan(a)), lum(chan(b))].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+function srgb(v: number) {
+  const s = v / 255;
+  return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+}
+
 /** `backgroundColor`, `color` and the four border colours of one element, plus
  *  the fill actually behind it — the pairing both defects are visible in.
  *
@@ -301,6 +320,46 @@ test.describe("chat transcript", () => {
     expect(drawn.parentBackground, "nothing behind the rule paints").not.toBeNull();
     expect(drawn.borderColor).not.toBe(drawn.parentBackground);
   });
+
+  // The user's own turn, which the answer-surface test above never reaches: it is
+  // an accent-filled bubble, and the two inline styles that carry their own colour
+  // were still written for the muted surface the bubble replaced. Inline `code`
+  // set no `color`, so it inherited `accentContrast` (#ffffff) onto its own
+  // `surfaceMuted` chip — white on #f7f7f9 in light; a link was `accentText`,
+  // which in light *is* `accent`, so it was the bubble. A question with an option
+  // in backticks is the common case, and it came out blank (Bugbot #248).
+  //
+  // Measured as contrast rather than inequality: the light code defect was
+  // #ffffff on #f7f7f9, two colours that are not equal and still unreadable.
+  for (const mode of ["light", "dark"] as const) {
+    test(`the user bubble keeps inline code and links readable in ${mode}`, async ({ page }) => {
+      await openPlayground(page, mode);
+      await stubOneAnswer(page);
+
+      await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+      await page.locator(`${CHAT} textarea`)
+        .fill("what does `colHeaders` do? see [docs](https://handsontable.com)");
+      await page.locator(CHAT).getByRole("button", { name: "Send" }).click();
+
+      const bubble = page.locator(`${CHAT} .hot-chat-bubble`).first();
+      await expect(bubble).toBeVisible();
+      const fill = await bubble.evaluate((el) => getComputedStyle(el).backgroundColor);
+
+      for (const [what, locator] of [
+        ["inline code", bubble.locator("code")],
+        ["link", bubble.locator("a")],
+      ] as const) {
+        const ink = await locator.first().evaluate((el) => getComputedStyle(el).color);
+        // Against the bubble itself: the code chip is translucent, so the accent
+        // is what is actually behind the glyphs.
+        expect(contrastPair(ink, fill), `${what} on the bubble`).toBeGreaterThan(4.5);
+      }
+
+      // Colour alone cannot mark a link whose only legible colour is the one the
+      // surrounding text already uses.
+      await expect(bubble.locator("a")).toHaveCSS("text-decoration-line", "underline");
+    });
+  }
 
   test("a --- between sections draws a rule, not literal dashes", async ({ page }) => {
     await openPlayground(page, "light");

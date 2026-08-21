@@ -294,7 +294,9 @@ export function ChatPanel({
 
         {turns.map((turn, i) => (
           <div key={i} className={turn.role === "user" ? "hot-chat-bubble" : "hot-chat-answer"}>
-            <Markdown text={turn.content} error={turn.error} />
+            {/* The user bubble is accent-filled, where inline code and links
+                cannot keep the colours they carry elsewhere (Bugbot #248). */}
+            <Markdown text={turn.content} error={turn.error} onAccent={turn.role === "user"} />
 
             {turn.edits && turn.edits.length > 0 && (
               <div className="hot-chat-edit-box">
