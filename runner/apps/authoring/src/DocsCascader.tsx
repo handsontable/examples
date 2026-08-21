@@ -524,7 +524,7 @@ const s = {
     // value on this button would do nothing and the search icon would sit tucked
     // against the label instead of at the pill's right edge.
     display: "flex", alignItems: "center", gap: 8, width: "100%", minWidth: 0,
-    fontFamily: theme.font.ui, fontSize: 13, padding: 0,
+    fontFamily: theme.font.ui, ...theme.type.base, padding: 0,
     border: "none", background: "transparent", cursor: "pointer", color: theme.color.text,
   },
   triggerLabel: {
@@ -539,7 +539,7 @@ const s = {
     // holds only because the trigger's wrapper is unpositioned; see the note
     // there before giving anything between here and the pill a `position`.
     width: "100%", boxSizing: "border-box",
-    display: "flex", flexDirection: "column", gap: 10,
+    display: "flex", flexDirection: "column", gap: 8,
     padding: theme.space(2),
     background: theme.color.surfaceRaised,
     border: `1px solid ${theme.color.border}`,
@@ -551,7 +551,7 @@ const s = {
   search: {
     width: "100%", height: 36, boxSizing: "border-box",
     padding: `0 ${theme.space(9)} 0 ${theme.space(3)}`,
-    fontFamily: theme.font.ui, fontSize: 13,
+    fontFamily: theme.font.ui, ...theme.type.base,
     borderRadius: theme.radius.md, border: `1px solid ${theme.color.border}`,
     background: theme.color.surface, color: theme.color.text, outline: "none",
   },
@@ -560,7 +560,7 @@ const s = {
     color: theme.color.textMuted, pointerEvents: "none",
   },
 
-  body: { display: "flex", gap: 10, alignItems: "stretch", maxHeight: BODY_MAX_HEIGHT, minHeight: 0 },
+  body: { display: "flex", gap: 8, alignItems: "stretch", maxHeight: BODY_MAX_HEIGHT, minHeight: 0 },
   // `scrollbarWidth: thin` claws back most of the ~15px a classic scrollbar
   // takes out of the 179 (Windows/Linux always; macOS when "always show
   // scrollbars" is on). The design draws no scrollbar at all because it shows 16
@@ -580,7 +580,7 @@ const s = {
   catRow: {
     display: "flex", alignItems: "center", justifyContent: "space-between", gap: theme.space(2),
     height: 32, padding: `0 ${theme.space(2)}`, borderRadius: theme.radius.sm, cursor: "pointer",
-    fontFamily: theme.font.ui, fontSize: 13, color: theme.color.text, outlineOffset: -2,
+    fontFamily: theme.font.ui, ...theme.type.base, color: theme.color.text, outlineOffset: -2,
   },
   // `accentSoft` + weight, matching `shellStyles.menuItem(true)` — the treatment
   // the already-shipped version and framework menus give their current row.
@@ -599,7 +599,7 @@ const s = {
   exItem: {
     display: "flex", alignItems: "center", height: 26, padding: `0 ${theme.space(3)}`,
     borderRadius: theme.radius.sm, cursor: "pointer",
-    fontFamily: theme.font.ui, fontSize: 13, color: theme.color.text, outlineOffset: -2,
+    fontFamily: theme.font.ui, ...theme.type.base, color: theme.color.text, outlineOffset: -2,
   },
   exItemSelected: { background: theme.color.accentSoft, fontWeight: 600 },
 
@@ -611,12 +611,12 @@ const s = {
   results: { overflowY: "auto", maxHeight: BODY_MAX_HEIGHT },
   resultRow: {
     padding: `6px ${theme.space(3)}`, borderRadius: theme.radius.sm, cursor: "pointer",
-    fontFamily: theme.font.ui, fontSize: 13, color: theme.color.text,
+    fontFamily: theme.font.ui, ...theme.type.base, color: theme.color.text,
     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", outlineOffset: -2,
   },
   sep: { color: theme.color.textMuted },
   empty: {
-    padding: `10px ${theme.space(3)}`, color: theme.color.textMuted,
-    fontFamily: theme.font.ui, fontSize: 13,
+    padding: `${theme.space(2)} ${theme.space(3)}`, color: theme.color.textMuted,
+    fontFamily: theme.font.ui, ...theme.type.base,
   },
 } satisfies Record<string, React.CSSProperties>;

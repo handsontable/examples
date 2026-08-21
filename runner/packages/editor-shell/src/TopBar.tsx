@@ -129,8 +129,6 @@ export function TopBar({
         </button>
       )}
 
-      <ThemeToggle />
-
       {/* Download is gated on having files, not on auth. The design's top-right is
           "Download (authed) / Sign in (anon)" — `72:15697` draws `Sign in` alone —
           but Download has always worked for anonymous visitors, so ADR-0023 rule 1
@@ -157,6 +155,11 @@ export function TopBar({
           Download{downloadHighlight ? " •" : ""}
         </button>
       )}
+
+      {/* After Download, before the avatar: display preference, not a workspace
+          action, so it sits at the passive end of the bar rather than between
+          Fork/Save and Download. */}
+      <ThemeToggle />
 
       {/* Sign in used to sit here, beside Download (`72:15697`). It moved to the
           preview status bar in DEV-2505: signing in is `@handsontable.com`-only
@@ -200,7 +203,7 @@ const actionButton: React.CSSProperties = {
   background: "transparent",
   color: theme.color.text,
   fontFamily: theme.font.ui,
-  fontSize: 13,
+  ...theme.type.base,
   fontWeight: 600,
   cursor: "pointer",
   whiteSpace: "nowrap",

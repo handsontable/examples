@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import CodeMirror, { type BasicSetupOptions, type EditorView, type ViewUpdate } from "@uiw/react-codemirror";
+import CodeMirror, { EditorView, Prec, type BasicSetupOptions, type ViewUpdate } from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
 import { css } from "@codemirror/lang-css";
 import { json } from "@codemirror/lang-json";
 import { vue } from "@codemirror/lang-vue";
+import { theme } from "./theme.js";
 import { useTheme } from "./useTheme.js";
 
 function languageFor(path: string) {
@@ -41,9 +42,87 @@ function languageFor(path: string) {
 const BASIC_SETUP = {
   lineNumbers: true,
   highlightActiveLine: true,
-  foldGutter: true,
+  // The designed gutter (48:6738) is line numbers alone — the fold column made it a
+  // two-column strip the design does not have. Folding itself survives: the default
+  // keymap's fold bindings don't ride on the gutter.
+  foldGutter: false,
   autocompletion: true,
 } as const satisfies BasicSetupOptions;
+
+/** The editor pane as the design draws it (Figma 48:6719 light / 31:6597 dark):
+ *  Fira Code 12/20, a 16px inset all around, and a chromeless gutter — no fill, no
+ *  divider, numbers right-aligned at 40% of the ink colour. Split from `GUTTER_INK`
+ *  below because everything here is mode-invariant or var()-resolved. `Prec.high`
+ *  is not decoration: the `theme` prop outranks plain `extensions` entries, so
+ *  without it githubDark's #0d1117 background wins over `&`'s (measured) — the
+ *  design's dark editor is `editorBg` (#19191c). */
+const CHROME = {
+  "&": { fontSize: "12px", backgroundColor: "var(--hot-color-editor-bg)" },
+  ".cm-scroller": { fontFamily: theme.font.mono, lineHeight: "20px" },
+  ".cm-content": { padding: "16px 0" },
+  ".cm-line": { padding: "0 16px" },
+  ".cm-gutters": { backgroundColor: "transparent", border: "none", paddingLeft: "16px" },
+  // Default is "0 3px 0 5px", which would break the designed 16px number→code gap.
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0" },
+  ".cm-activeLineGutter": { backgroundColor: "transparent" },
+
+  // The Mod-F search panel (@codemirror/search's stock DOM), which otherwise
+  // ships CodeMirror's UA-grey look: gradient buttons, unstyled fields, a bare ×.
+  // Restated in the shell's own idiom — `surfaceRaised` band over a hairline,
+  // controls as `surface` + `controlBorder` + 4px radius at 12/20, the same
+  // recipe as `.hot-btn-ghost` and the panel selects. All var()-resolved, so one
+  // block serves both modes. Flex + gap replaces the markup's whitespace-node
+  // spacing, which is what put every control on its own arbitrary offset.
+  ".cm-panels": { backgroundColor: "var(--hot-color-surface-raised)", color: "var(--hot-color-text)" },
+  ".cm-panels-bottom": { borderTop: "1px solid var(--hot-color-control-border)" },
+  ".cm-panel.cm-search": {
+    display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px",
+    padding: "8px 16px", paddingRight: "40px",
+    fontFamily: "var(--hot-font-ui)", fontSize: "12px", lineHeight: "20px",
+  },
+  // The markup separates its find and replace rows with a lone <br>; as a flex
+  // item that renders as nothing and the two rows shuffle together at narrow
+  // pane widths. A 100% basis turns it back into a row break.
+  ".cm-panel.cm-search br": { flexBasis: "100%", height: "0" },
+  ".cm-panel.cm-search .cm-textfield": {
+    font: "inherit", flex: "1 1 128px", width: "auto", margin: "0", padding: "4px 8px",
+    background: "var(--hot-color-surface)", color: "var(--hot-color-text)",
+    border: "1px solid var(--hot-color-control-border)", borderRadius: "4px",
+  },
+  ".cm-panel.cm-search .cm-textfield:focus": {
+    outline: "none", borderColor: "var(--hot-color-accent)",
+  },
+  ".cm-panel.cm-search .cm-button": {
+    font: "inherit", margin: "0", padding: "4px 8px", cursor: "pointer",
+    // The stock look is a grey gradient; `none` alone leaves it showing.
+    backgroundImage: "none",
+    background: "var(--hot-color-surface)", color: "var(--hot-color-text)",
+    border: "1px solid var(--hot-color-control-border)", borderRadius: "4px",
+    textTransform: "capitalize",
+  },
+  ".cm-panel.cm-search .cm-button:active": { background: "var(--hot-color-surface-muted)" },
+  ".cm-panel.cm-search label": {
+    display: "inline-flex", alignItems: "center", gap: "4px",
+    fontSize: "12px", textTransform: "capitalize", cursor: "pointer",
+  },
+  ".cm-panel.cm-search input[type=checkbox]": {
+    margin: "0", accentColor: "var(--hot-color-accent)",
+  },
+  ".cm-panel.cm-search button[name=close]": {
+    position: "absolute", top: "8px", right: "8px",
+    width: "24px", height: "24px", padding: "0",
+    display: "inline-flex", alignItems: "center", justifyContent: "center",
+    background: "transparent", border: "none", borderRadius: "4px",
+    color: "var(--hot-color-text-muted)", fontSize: "16px", cursor: "pointer",
+  },
+  ".cm-panel.cm-search button[name=close]:hover": {
+    background: "var(--hot-color-hover)", color: "var(--hot-color-text)",
+  },
+} as const;
+/** 40% of black/white per mode — the one part of the chrome no shell token or
+ *  var() covers, hence two theme instances instead of one. */
+const chromeLight = Prec.high(EditorView.theme({ ...CHROME, ".cm-lineNumbers": { color: "rgba(0, 0, 0, 0.4)" } }));
+const chromeDark = Prec.high(EditorView.theme({ ...CHROME, ".cm-lineNumbers": { color: "rgba(255, 255, 255, 0.4)" } }));
 
 /** Caret position, 1-based, as the status bar shows it. */
 export interface CursorPosition {
@@ -78,8 +157,11 @@ export function CodeEditor({
   onCursorChange,
   onCreateEditor,
 }: CodeEditorProps) {
-  const extensions = useMemo(() => languageFor(path), [path]);
   const { mode } = useTheme();
+  const extensions = useMemo(
+    () => [...languageFor(path), mode === "dark" ? chromeDark : chromeLight],
+    [path, mode],
+  );
 
   // Both handlers are insulated behind a ref, because `useCodeMirror` reconfigures the
   // whole extension set from an effect that lists `onChange` and `onUpdate` among its
@@ -121,7 +203,7 @@ export function CodeEditor({
     <CodeMirror
       value={value}
       height="100%"
-      style={{ height: "100%", fontSize: 13 }}
+      style={{ height: "100%" }}
       theme={mode === "dark" ? githubDark : githubLight}
       extensions={extensions}
       editable={!readOnly}

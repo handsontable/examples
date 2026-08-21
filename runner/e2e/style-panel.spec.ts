@@ -42,13 +42,12 @@ function state(page: Page) {
   return page.evaluate(() => JSON.parse(localStorage.getItem("hot-runner-theme") ?? "null"));
 }
 
-/** A TokenControl row, addressed by the one stable handle it has: the label
- *  span's `title`, which carries the token key (labels repeat — six rows are
- *  called "Background Color"). */
+/** A TokenControl row, addressed by `data-token` — the documented test contract
+ *  on the row (labels repeat — six rows are called "Background Color"). This
+ *  used to walk the row's internal structure (`> div > span[title]`), which the
+ *  Theme Builder relayout broke; the attribute is the hook that can't. */
 function tokenRow(page: Page, key: string) {
-  return page.locator(`${STYLE} div`).filter({
-    has: page.locator(`> div > span[title="${key}"]`),
-  }).last();
+  return page.locator(`${STYLE} [data-token="${key}"]`);
 }
 
 /** The module row landing in the file tree is the apply signal — the panel

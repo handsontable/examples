@@ -26,6 +26,9 @@ importers:
 
   apps/authoring:
     dependencies:
+      '@fontsource/fira-code':
+        specifier: ^5.3.0
+        version: 5.3.0
       '@handsontable/demo-editor-shell':
         specifier: workspace:*
         version: link:../../packages/editor-shell
@@ -824,6 +827,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@fontsource/fira-code@5.3.0':
+    resolution: {integrity: sha512-EJL968RJRkakubAj/coU8pSUaeTE5UNoRjtzAr6kGiSZ3jWuN8/AKWHwym/PFUaQL1q7IL/H+EXs4358YhrTBQ==}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -2426,6 +2432,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.1':
     optional: true
+
+  '@fontsource/fira-code@5.3.0': {}
 
   '@img/colour@1.1.0': {}
 

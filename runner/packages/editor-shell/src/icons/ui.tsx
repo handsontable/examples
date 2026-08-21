@@ -63,6 +63,7 @@ import {
   IconBook as TablerBook,
   IconBrandGithub as TablerBrandGithub,
   IconBrandReactNative as TablerBrandReactNative,
+  IconArrowUp as TablerArrowUp,
   IconChartBar as TablerChartBar,
   IconChevronDown as TablerChevronDown,
   IconChevronLeft as TablerChevronLeft,
@@ -74,6 +75,7 @@ import {
   IconDownload as TablerDownload,
   IconExternalLink as TablerExternalLink,
   IconFolderPlus as TablerFolderPlus,
+  IconInfoCircle as TablerInfoCircle,
   IconKey as TablerKey,
   IconLayoutSidebarLeftCollapse as TablerLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand as TablerLayoutSidebarLeftExpand,
@@ -116,6 +118,9 @@ export const IconBook = ui("IconBook", TablerBook);
 export const IconKey = ui("IconKey", TablerKey);
 export const IconBrandGithub = ui("IconBrandGithub", TablerBrandGithub);
 export const IconBrandReactNative = ui("IconBrandReactNative", TablerBrandReactNative);
+// The chat composer's send glyph (DEV-2047 restyle) — the docs assistant sends
+// with ↑, and the two assistants should read as one product.
+export const IconArrowUp = ui("IconArrowUp", TablerArrowUp);
 export const IconChartBar = ui("IconChartBar", TablerChartBar);
 export const IconChevronDown = ui("IconChevronDown", TablerChevronDown);
 export const IconChevronLeft = ui("IconChevronLeft", TablerChevronLeft);
@@ -127,6 +132,9 @@ export const IconDotsVertical = ui("IconDotsVertical", TablerDotsVertical);
 export const IconDownload = ui("IconDownload", TablerDownload);
 export const IconExternalLink = ui("IconExternalLink", TablerExternalLink);
 export const IconFolderPlus = ui("IconFolderPlus", TablerFolderPlus);
+// The Style panel's per-token info mark (Theme Builder's row treatment): the
+// token description moved off the row into a tooltip behind this.
+export const IconInfoCircle = ui("IconInfoCircle", TablerInfoCircle);
 export const IconLayoutSidebarLeftCollapse = ui(
   "IconLayoutSidebarLeftCollapse",
   TablerLayoutSidebarLeftCollapse,

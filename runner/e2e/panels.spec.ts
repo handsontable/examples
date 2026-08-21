@@ -26,6 +26,39 @@ async function openPlayground(page: Page, mode: "light" | "dark") {
   await expect(page.locator("html")).toHaveAttribute("data-hot-theme", mode);
 }
 
+/** Composite `fg` (which may be translucent, or fully transparent) over `bg`,
+ *  giving the colour a glyph on top of `fg` is actually read against. Alpha on
+ *  the *text* is out of scope — nothing here paints any. */
+function over(fg: string, bg: string) {
+  const parts = (s: string) => (s.match(/[\d.]+/g) ?? []).map(Number);
+  const f = parts(fg);
+  const b = parts(bg);
+  const a = f.length > 3 ? f[3]! : 1;
+  if (a === 0) return bg;
+  const mix = (i: number) => Math.round(a * f[i]! + (1 - a) * b[i]!);
+  return `rgb(${mix(0)}, ${mix(1)}, ${mix(2)})`;
+}
+
+/** WCAG contrast between two colours already in hand.
+ *
+ *  Distinct from `contrast(page, selector)` below, which finds the background by
+ *  walking up to the first fill with a non-zero alpha. That is right for an
+ *  opaque control on a drawer and wrong for a translucent chip: it would stop at
+ *  the chip's own `rgba(255, 255, 255, 0.16)` and measure white text against
+ *  white rather than against the accent showing through it. Pair this with
+ *  `over()` instead, which composites the two. */
+function contrastPair(a: string, b: string) {
+  const chan = (s: string) => s.match(/\d+/g)!.slice(0, 3).map(Number);
+  const lum = (c: number[]) =>
+    0.2126 * srgb(c[0]!) + 0.7152 * srgb(c[1]!) + 0.0722 * srgb(c[2]!);
+  const [hi, lo] = [lum(chan(a)), lum(chan(b))].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+function srgb(v: number) {
+  const s = v / 255;
+  return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+}
+
 /** `backgroundColor`, `color` and the four border colours of one element, plus
  *  the fill actually behind it — the pairing both defects are visible in.
  *
@@ -53,20 +86,26 @@ async function paint(page: Page, target: string | Locator) {
 }
 
 test.describe("drawer chrome", () => {
+  // `offsetWidth`, not `boundingBox()`. The drawer keeps a `translateX` for its
+  // slide-in — `translateX(0)` once settled, but a transform all the same, so it
+  // stays on a composited layer whose rect comes back through float matrix maths.
+  // CI measured one panel at 400 and the other at 399.99993896484375 and the
+  // exact comparison failed. Layout width is what "one width" means here, and no
+  // transform can perturb it.
   test("both drawers share one width and one surface", async ({ page }) => {
     await openPlayground(page, "light");
 
     await page.getByRole("button", { name: "Ask AI", exact: true }).click();
-    const chat = await page.locator(CHAT).boundingBox();
+    const chat = await page.locator(CHAT).evaluate((el) => (el as HTMLElement).offsetWidth);
     await page.locator(CHAT).getByRole("button", { name: /^Close/ }).click();
 
     await page.getByRole("button", { name: "Style", exact: true }).click();
-    const style = await page.locator(STYLE).boundingBox();
+    const style = await page.locator(STYLE).evaluate((el) => (el as HTMLElement).offsetWidth);
 
-    expect(chat?.width).toBe(style?.width);
+    expect(chat).toBe(style);
     // `DRAWER_WIDTH`. Hard-coded rather than imported: the point is that neither
     // panel can drift back to its own number (400 and 380 before DEV-2209).
-    expect(style?.width).toBe(400);
+    expect(style).toBe(400);
   });
 
   test("only one drawer is open at a time", async ({ page }) => {
@@ -196,7 +235,11 @@ test.describe("dark mode legibility", () => {
     await page.getByRole("button", { name: "Ask AI", exact: true }).click();
     const textarea = await paint(page, `${CHAT} textarea`);
     expect(textarea.background).not.toBe("rgb(255, 255, 255)");
-    expect(textarea.background).toBe("rgb(7, 6, 4)");
+    // Transparent by design since the docs-assistant restyle (`.da-input`): the
+    // composer is flush with the panel, so what must not be white is the fill
+    // actually behind it — the drawer's own `surfaceRaised`.
+    expect(textarea.background).toBe("rgba(0, 0, 0, 0)");
+    expect(textarea.parentBackground).toBe("rgb(34, 34, 34)");
   });
 
   test("control outlines are visible against the surface they sit on", async ({ page }) => {
@@ -281,9 +324,10 @@ test.describe("chat transcript", () => {
     const chipLocator = page.locator(`${CHAT} code`, { hasText: "src/index.tsx" });
     const chip = await paint(page, chipLocator);
     expect(chip.borderColor).toBe("rgb(53, 53, 53)");
-    // And the edit box around it — the nearest ancestor that draws a border —
-    // is the other half of the same hairline: same token, same failure mode.
-    const editBox = await paint(page, chipLocator.locator('xpath=ancestor::div[contains(@style, "border")][1]'));
+    // And the edit box around it — the card the chip sits in — is the other half
+    // of the same hairline: same token, same failure mode. By class since the
+    // panel moved off inline styles (panels.css).
+    const editBox = await paint(page, chipLocator.locator('xpath=ancestor::div[contains(@class, "hot-chat-edit-box")][1]'));
     expect(editBox.borderColor).toBe("rgb(53, 53, 53)");
     expect(editBox.borderColor).not.toBe(editBox.parentBackground);
 
@@ -296,6 +340,54 @@ test.describe("chat transcript", () => {
     expect(drawn.parentBackground, "nothing behind the rule paints").not.toBeNull();
     expect(drawn.borderColor).not.toBe(drawn.parentBackground);
   });
+
+  // The user's own turn, which the answer-surface test above never reaches: it is
+  // an accent-filled bubble, and the two inline styles that carry their own colour
+  // were still written for the muted surface the bubble replaced. Inline `code`
+  // set no `color`, so it inherited `accentContrast` (#ffffff) onto its own
+  // `surfaceMuted` chip — white on #f7f7f9 in light; a link was `accentText`,
+  // which in light *is* `accent`, so it was the bubble. A question with an option
+  // in backticks is the common case, and it came out blank (Bugbot #248).
+  //
+  // Measured as contrast rather than inequality: the light code defect was
+  // #ffffff on #f7f7f9, two colours that are not equal and still unreadable.
+  for (const mode of ["light", "dark"] as const) {
+    test(`the user bubble keeps inline code and links readable in ${mode}`, async ({ page }) => {
+      await openPlayground(page, mode);
+      await stubOneAnswer(page);
+
+      await page.getByRole("button", { name: "Ask AI", exact: true }).click();
+      await page.locator(`${CHAT} textarea`)
+        .fill("what does `colHeaders` do? see [docs](https://handsontable.com)");
+      await page.locator(CHAT).getByRole("button", { name: "Send" }).click();
+
+      const bubble = page.locator(`${CHAT} .hot-chat-bubble`).first();
+      await expect(bubble).toBeVisible();
+      const fill = await bubble.evaluate((el) => getComputedStyle(el).backgroundColor);
+
+      for (const [what, locator] of [
+        ["inline code", bubble.locator("code")],
+        ["link", bubble.locator("a")],
+      ] as const) {
+        const paint = await locator.first().evaluate((el) => {
+          const cs = getComputedStyle(el);
+          return { ink: cs.color, own: cs.backgroundColor };
+        });
+        // Composited, not measured against the bubble directly. The chip carries
+        // its own fill, so what the glyphs sit on is that fill over the accent —
+        // and the two states differ only there. The regression paints an *opaque*
+        // `surfaceMuted` chip while still inheriting white; its `color` is white
+        // either way, so a ratio taken against the bubble clears 4.5 and the
+        // defect ships green (Bugbot on db5b9ff6, which is how this read before).
+        const behind = over(paint.own, fill);
+        expect(contrastPair(paint.ink, behind), `${what} on the bubble`).toBeGreaterThan(4.5);
+      }
+
+      // Colour alone cannot mark a link whose only legible colour is the one the
+      // surrounding text already uses.
+      await expect(bubble.locator("a")).toHaveCSS("text-decoration-line", "underline");
+    });
+  }
 
   test("a --- between sections draws a rule, not literal dashes", async ({ page }) => {
     await openPlayground(page, "light");

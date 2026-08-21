@@ -12,16 +12,16 @@ import type { ReactNode } from "react";
 import { theme } from "@handsontable/demo-editor-shell";
 import { parseMarkdown, type Inline } from "./markdownParser.js";
 
-function renderInline(nodes: Inline[], keyPrefix: string): ReactNode[] {
+function renderInline(nodes: Inline[], keyPrefix: string, onAccent = false): ReactNode[] {
   return nodes.map((node, i) => {
     const key = `${keyPrefix}-${i}`;
     switch (node.kind) {
       case "code":
-        return <code key={key} style={codeStyle}>{node.text}</code>;
+        return <code key={key} style={onAccent ? codeOnAccentStyle : codeStyle}>{node.text}</code>;
       case "strong":
-        return <strong key={key}>{renderInline(node.children, key)}</strong>;
+        return <strong key={key}>{renderInline(node.children, key, onAccent)}</strong>;
       case "em":
-        return <em key={key}>{renderInline(node.children, key)}</em>;
+        return <em key={key}>{renderInline(node.children, key, onAccent)}</em>;
       case "image":
         return (
           // Clickable, because a 1,400px screenshot of the app inside a 700px reading
@@ -61,7 +61,7 @@ function renderInline(nodes: Inline[], keyPrefix: string): ReactNode[] {
             href={node.href}
             target={internal ? undefined : "_blank"}
             rel={internal ? undefined : "noreferrer"}
-            style={linkStyle}
+            style={onAccent ? linkOnAccentStyle : linkStyle}
           >
             {node.text}
           </a>
@@ -93,11 +93,15 @@ export function Markdown({
   error,
   document: asDocument,
   headingIds,
+  onAccent = false,
 }: {
   text: string;
   error?: boolean;
   document?: boolean;
   headingIds?: readonly (string | undefined)[];
+  /** Rendered inside the chat's accent-filled user bubble, where the two styles
+   *  that carry their own colour would otherwise be unreadable. */
+  onAccent?: boolean;
 }) {
   const blocks = parseMarkdown(text);
   // Counted during the map, not stored: render order is document order, so the nth
@@ -121,7 +125,7 @@ export function Markdown({
             if (!asDocument) {
               return (
                 <div key={key} style={headingStyle}>
-                  {renderInline(block.children, key)}
+                  {renderInline(block.children, key, onAccent)}
                 </div>
               );
             }
@@ -137,7 +141,7 @@ export function Markdown({
                 // sticky, so a heading scrolled to by `#id` would sit under it.
                 style={{ ...documentHeadingStyle(level), scrollMarginTop: 16 }}
               >
-                {renderInline(block.children, key)}
+                {renderInline(block.children, key, onAccent)}
               </Tag>
             );
           }
@@ -148,7 +152,7 @@ export function Markdown({
                   <thead>
                     <tr>
                       {block.header.map((cell, j) => (
-                        <th key={j} style={thStyle}>{renderInline(cell, `${key}-h${j}`)}</th>
+                        <th key={j} style={thStyle}>{renderInline(cell, `${key}-h${j}`, onAccent)}</th>
                       ))}
                     </tr>
                   </thead>
@@ -156,7 +160,7 @@ export function Markdown({
                     {block.rows.map((row, j) => (
                       <tr key={j}>
                         {row.map((cell, k) => (
-                          <td key={k} style={tdStyle}>{renderInline(cell, `${key}-${j}-${k}`)}</td>
+                          <td key={k} style={tdStyle}>{renderInline(cell, `${key}-${j}-${k}`, onAccent)}</td>
                         ))}
                       </tr>
                     ))}
@@ -169,7 +173,7 @@ export function Markdown({
             return (
               <List key={key} style={listStyle}>
                 {block.items.map((item, j) => (
-                  <li key={j} style={{ margin: "3px 0" }}>{renderInline(item, `${key}-${j}`)}</li>
+                  <li key={j} style={{ margin: `${theme.space(1)} 0` }}>{renderInline(item, `${key}-${j}`, onAccent)}</li>
                 ))}
               </List>
             );
@@ -177,7 +181,7 @@ export function Markdown({
           default:
             return (
               <p key={key} style={asDocument ? documentParagraphStyle : chatParagraphStyle}>
-                {renderInline(block.children, key)}
+                {renderInline(block.children, key, onAccent)}
               </p>
             );
         }
@@ -198,7 +202,7 @@ const imageStyle: React.CSSProperties = {
   display: "block",
   width: "100%",
   height: "auto",
-  margin: "10px 0 4px",
+  margin: `${theme.space(2)} 0 ${theme.space(1)}`,
   border: `1px solid ${theme.color.controlBorder}`,
   borderRadius: theme.radius.sm,
   background: theme.color.surfaceSunken,
@@ -213,7 +217,7 @@ const chatParagraphStyle: React.CSSProperties = { margin: "0 0 8px", whiteSpace:
  *  for reviewable diffs, and `pre-wrap` reproduced those wraps on screen — prose that
  *  broke mid-sentence at a width nobody's window happens to be. The source's line
  *  endings are a file-format detail; the reader should never see them. */
-const documentParagraphStyle: React.CSSProperties = { margin: "0 0 10px", whiteSpace: "normal" };
+const documentParagraphStyle: React.CSSProperties = { margin: `0 0 ${theme.space(2)}`, whiteSpace: "normal" };
 
 const codeStyle: React.CSSProperties = {
   fontFamily: theme.font.mono, fontSize: "0.92em", background: theme.color.surfaceMuted,
@@ -222,7 +226,8 @@ const codeStyle: React.CSSProperties = {
 };
 const preStyle: React.CSSProperties = {
   background: theme.color.editorBg, color: theme.color.text, borderRadius: theme.radius.md,
-  padding: 10, overflowX: "auto", fontFamily: theme.font.mono, fontSize: 12, margin: "0 0 8px",
+  padding: theme.space(3), overflowX: "auto", fontFamily: theme.font.mono, ...theme.type.base,
+  margin: `0 0 ${theme.space(2)}`,
 };
 
 /** In a document, most of these blocks are things you *say to Claude*, not code — so
@@ -238,11 +243,10 @@ const documentPreStyle: React.CSSProperties = {
   // meant to read as a control you type into. Light is the same value either way.
   border: `1px solid ${theme.color.controlBorder}`,
   borderRadius: theme.radius.md,
-  padding: "12px 14px",
-  margin: "0 0 12px",
+  padding: `${theme.space(3)} ${theme.space(4)}`,
+  margin: `0 0 ${theme.space(3)}`,
   fontFamily: theme.font.mono,
-  fontSize: 12.5,
-  lineHeight: 1.55,
+  ...theme.type.base,
   whiteSpace: "pre-wrap",
   overflowWrap: "anywhere",
 };
@@ -269,12 +273,39 @@ const thStyle: React.CSSProperties = {
 };
 const tdStyle: React.CSSProperties = cellStyle;
 const linkStyle: React.CSSProperties = { color: theme.color.accentText };
+/**
+ * The same two styles as they have to be *on* the accent-filled user bubble.
+ *
+ * Both carry their own colour, and both fail there: `codeStyle` sets no `color`,
+ * so it inherits the bubble's `accentContrast` (#ffffff) onto its own
+ * `surfaceMuted` chip (#f7f7f9 in light) — white on near-white; and `linkStyle`
+ * is `accentText`, which in light *is* `accent` (#1A42E8), so a link on the
+ * bubble is the bubble. A question with an option in backticks — the common
+ * case — came out blank.
+ *
+ * White-alpha rather than tokens, deliberately: `accent` is mode-invariant
+ * ("Handsontable blue — brand"), so what sits on it is mode-invariant too, and
+ * there is no token for "translucent over the accent".
+ */
+const codeOnAccentStyle: React.CSSProperties = {
+  ...codeStyle,
+  background: "rgba(255, 255, 255, 0.16)",
+  border: "1px solid rgba(255, 255, 255, 0.28)",
+  color: "inherit",
+};
+/** Underlined, because `accentContrast` is the only colour guaranteed to read on
+ *  the bubble and it is already the surrounding text's — colour alone cannot mark
+ *  the link here. */
+const linkOnAccentStyle: React.CSSProperties = {
+  color: "inherit",
+  textDecoration: "underline",
+};
 /** Every heading level at the body size, weight carrying the hierarchy. The
  *  levels used to be sized 15.5 / 14.5 / 13.5 / 12.5 — four steps, none of them on
  *  the shell's scale, inside a 400px drawer where two of them are a fraction of a
  *  pixel apart on screen anyway (DEV-2209). */
 const headingStyle: React.CSSProperties = {
-  fontSize: 13, fontWeight: 600, margin: `${theme.space(3)} 0 ${theme.space(1)}`,
+  ...theme.type.base, fontWeight: 600, margin: `${theme.space(3)} 0 ${theme.space(1)}`,
 };
 
 /** Document headings (`document` mode). Sizes step down and the space above each

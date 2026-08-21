@@ -297,7 +297,7 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
               const rows = dailyMetric(report.usage, metric);
               if (!rows.length) return null;
               return (
-                <div key={metric} style={{ marginBottom: 18 }}>
+                <div key={metric} style={{ marginBottom: 16 }}>
                   <div style={subhead}>{METRIC_LABEL[metric] ?? metric}</div>
                   <Bars rows={rows} format={int} emptyText="" />
                 </div>
@@ -444,8 +444,8 @@ function SettingsForm({
   }, [settings]);
 
   const field = (key: keyof BudgetSettings, label: string, hint: string) => (
-    <label style={{ display: "block", marginBottom: 10 }}>
-      <div style={{ fontSize: 12, marginBottom: 3 }}>{label}</div>
+    <label style={{ display: "block", marginBottom: 8 }}>
+      <div style={{ fontSize: 12, marginBottom: 4 }}>{label}</div>
       <input
         type="number"
         min={0}
@@ -454,7 +454,7 @@ function SettingsForm({
         onChange={(e) => setDraft({ ...draft, [key]: Number(e.target.value) })}
         style={input}
       />
-      <div style={{ fontSize: 11, color: theme.color.textMuted, marginTop: 2 }}>{hint}</div>
+      <div style={{ fontSize: 11, color: theme.color.textMuted, marginTop: 4 }}>{hint}</div>
     </label>
   );
 
@@ -494,7 +494,7 @@ function SettingsForm({
   const pctOf = (v: number) => (draft.limitUsd > 0 ? `${Math.round((v / draft.limitUsd) * 100)}% of the ceiling` : "");
 
   return (
-    <section style={{ marginTop: 18 }}>
+    <section style={{ marginTop: 16 }}>
       <button type="button" style={chip} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         {open ? "▾" : "▸"} Guardrail settings
         <span style={{ color: theme.color.textMuted, marginLeft: 8 }}>
@@ -505,7 +505,7 @@ function SettingsForm({
       </button>
 
       {open && (
-        <div style={{ ...card, background: theme.color.surface, borderLeftWidth: 1, marginTop: 10 }}>
+        <div style={{ ...card, background: theme.color.surface, borderLeftWidth: 1, marginTop: 8 }}>
           <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
             <div style={{ minWidth: 200, flex: "1 1 200px" }}>
               {field("limitUsd", "Monthly ceiling ($)", "The number everything else is measured against.")}
@@ -517,8 +517,8 @@ function SettingsForm({
             </div>
             <div style={{ minWidth: 200, flex: "1 1 200px" }}>
               {field("closedUsd", "Close live editing ($)", `${pctOf(draft.closedUsd)} — running sessions torn down.`)}
-              <label style={{ display: "block", marginBottom: 10 }}>
-                <div style={{ fontSize: 12, marginBottom: 3 }}>Alert thresholds ($)</div>
+              <label style={{ display: "block", marginBottom: 8 }}>
+                <div style={{ fontSize: 12, marginBottom: 4 }}>Alert thresholds ($)</div>
                 <input
                   type="text"
                   value={alertsText}
@@ -526,7 +526,7 @@ function SettingsForm({
                   placeholder="200, 500, 800"
                   style={input}
                 />
-                <div style={{ fontSize: 11, color: theme.color.textMuted, marginTop: 2 }}>
+                <div style={{ fontSize: 11, color: theme.color.textMuted, marginTop: 4 }}>
                   Notify once per month per threshold, on this runner’s own spend.
                 </div>
               </label>
@@ -634,7 +634,7 @@ function AssistantSection({ report }: { report: UsageReport }) {
         <Stat label="Failures" value={int(errors)} hint="Gateway unavailable or misconfigured" />
       </section>
 
-      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 18 }}>
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 16 }}>
         <div style={{ minWidth: 280, flex: "1 1 280px" }}>
           <div style={subhead}>Questions per day</div>
           <Bars rows={dailyMetric(usage, "chat_message")} format={int} emptyText="—" />
@@ -645,7 +645,7 @@ function AssistantSection({ report }: { report: UsageReport }) {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 18 }}>
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 16 }}>
         <div style={{ minWidth: 240, flex: "1 1 240px" }}>
           <div style={subhead}>Frameworks asked about</div>
           <Bars rows={byDimension(usage, "chat_message")} format={int} emptyText="—" />
@@ -705,12 +705,12 @@ function AudienceSection({ audience, days }: { audience: Audience; days: number 
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 18 }}>
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 16 }}>
         <TopList title="Pages" rows={audience.pages} />
         <TopList title="Demos" rows={audience.demos} />
         <TopList title="Referrers" rows={audience.referrers} />
       </div>
-      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 18 }}>
+      <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginTop: 16 }}>
         <TopList title="Countries" rows={audience.countries} upper />
         <TopList title="Devices" rows={audience.devices} />
         <TopList title="Browsers" rows={audience.browsers} />
@@ -839,7 +839,7 @@ function LiveSessionsSection({
 
   return (
     <Section title="Live sessions">
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
           <input
             type="checkbox"
@@ -925,7 +925,7 @@ function LiveSessionsSection({
       )}
 
       {page.total > page.limit && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
           <button
             type="button"
             style={chip}
@@ -1108,53 +1108,53 @@ const page: React.CSSProperties = {
   minHeight: "100%", padding: "20px 24px 60px", maxWidth: 1100, margin: "0 auto",
 };
 const head: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 10, paddingBottom: 14,
+  display: "flex", alignItems: "center", gap: 8, paddingBottom: 16,
   borderBottom: `1px solid ${theme.color.border}`, flexWrap: "wrap",
 };
 const h1: React.CSSProperties = { fontSize: 17, margin: 0, fontWeight: 600 };
-const h2: React.CSSProperties = { fontSize: 14, margin: "0 0 10px", fontWeight: 600 };
-const subhead: React.CSSProperties = { fontSize: 12, color: theme.color.textMuted, margin: "0 0 6px" };
+const h2: React.CSSProperties = { fontSize: 14, margin: "0 0 8px", fontWeight: 600 };
+const subhead: React.CSSProperties = { fontSize: 12, color: theme.color.textMuted, margin: "0 0 8px" };
 const chip: React.CSSProperties = {
   fontFamily: theme.font.ui, fontSize: 12, color: theme.color.text, background: theme.color.surfaceRaised,
-  border: `1px solid ${theme.color.border}`, borderRadius: 6, padding: "4px 9px", cursor: "pointer",
+  border: `1px solid ${theme.color.border}`, borderRadius: 6, padding: "4px 8px", cursor: "pointer",
 };
 const chipActive: React.CSSProperties = {
   background: theme.color.accent, color: theme.color.accentContrast, borderColor: theme.color.accent,
 };
 const card: React.CSSProperties = {
-  marginTop: 18, padding: 16, border: `1px solid ${theme.color.border}`,
+  marginTop: 16, padding: 16, border: `1px solid ${theme.color.border}`,
   borderLeftWidth: 4, borderRadius: theme.radius.md, background: theme.color.surfaceMuted,
 };
 const pill: React.CSSProperties = {
-  color: theme.color.accentContrast, borderRadius: 999, padding: "2px 9px", fontSize: 11.5, fontWeight: 600,
+  color: theme.color.accentContrast, borderRadius: 999, padding: "2px 8px", fontSize: 11.5, fontWeight: 600,
 };
 const meter: React.CSSProperties = {
   position: "relative", height: 10, borderRadius: 999, background: theme.color.surfaceMuted,
-  border: `1px solid ${theme.color.border}`, margin: "14px 0 10px", overflow: "hidden",
+  border: `1px solid ${theme.color.border}`, margin: "16px 0 8px", overflow: "hidden",
 };
 const meterFill: React.CSSProperties = { position: "absolute", inset: 0, borderRadius: 999 };
 const meterMark: React.CSSProperties = {
   position: "absolute", top: 0, bottom: 0, width: 1, background: theme.color.textMuted, opacity: 0.6,
 };
 const grid: React.CSSProperties = {
-  display: "grid", gap: 10, marginTop: 16,
+  display: "grid", gap: 8, marginTop: 16,
   gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
 };
 const statCard: React.CSSProperties = {
-  border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.md, padding: "10px 12px",
+  border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.md, padding: "8px 12px",
 };
 const input: React.CSSProperties = {
   width: "100%", boxSizing: "border-box", fontFamily: theme.font.ui, fontSize: 13,
-  padding: "5px 8px", border: `1px solid ${theme.color.border}`, borderRadius: 6, color: theme.color.text,
+  padding: "4px 8px", border: `1px solid ${theme.color.border}`, borderRadius: 6, color: theme.color.text,
 };
 const table: React.CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
 const th: React.CSSProperties = {
   fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4, color: theme.color.textMuted,
-  fontWeight: 600, padding: "6px 8px", borderBottom: `1px solid ${theme.color.border}`,
+  fontWeight: 600, padding: "4px 8px", borderBottom: `1px solid ${theme.color.border}`,
 };
-const td: React.CSSProperties = { padding: "6px 8px", borderBottom: `1px solid ${theme.color.surfaceMuted}` };
-const note: React.CSSProperties = { fontSize: 12, color: theme.color.textMuted, margin: "10px 0 0", maxWidth: 720 };
-const barRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "2px 0" };
+const td: React.CSSProperties = { padding: "4px 8px", borderBottom: `1px solid ${theme.color.surfaceMuted}` };
+const note: React.CSSProperties = { fontSize: 12, color: theme.color.textMuted, margin: "8px 0 0", maxWidth: 720 };
+const barRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: "4px 0" };
 const barLabel: React.CSSProperties = {
   width: 96, flex: "0 0 96px", fontSize: 11.5, color: theme.color.textMuted, fontFamily: theme.font.mono,
 };

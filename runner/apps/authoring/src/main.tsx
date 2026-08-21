@@ -1,6 +1,18 @@
 // Must stay first: initialises error reporting before any other module runs, so a
 // throw during module evaluation is still captured.
 import { Sentry } from "./sentry.js";
+// The code face the design specifies (Figma 48:6719 / 31:6597) — bundled, not a
+// CDN link, so the editor never renders a fallback face first. Loaded here, not
+// in the shell: editor-shell stays a side-effect-free source package, and the
+// `theme.font.mono` stack degrades gracefully anywhere this import is absent.
+// 700 as well as 400: `@uiw/codemirror-theme-github` sets `fontWeight: bold` on
+// several token classes, and with only the regular face bundled the browser
+// synthesises those — a smeared faux-bold on a face this precise.
+import "@fontsource/fira-code/400.css";
+import "@fontsource/fira-code/700.css";
+// The drawer panels' stylesheet (Ask AI transcript/composer, CTA tooltips) —
+// classes over inline objects; see panels.css for the rules and their reasons.
+import "./panels.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ThemeProvider } from "@handsontable/demo-editor-shell";

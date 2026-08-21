@@ -429,7 +429,9 @@ async function openWithThemeApi(page: Page, answer: unknown) {
 
 async function describeStyle(drawer: ReturnType<Page["locator"]>, prompt: string) {
   await drawer.getByLabel("Describe the style you want").fill(prompt);
-  await drawer.getByRole("button", { name: "Style", exact: true }).click();
+  // "Send", not "Style": the composer's send button was renamed off the top-bar
+  // trigger's name, which it collided with while this tab was open.
+  await drawer.getByRole("button", { name: "Send", exact: true }).click();
 }
 
 test.describe("AI styling", () => {

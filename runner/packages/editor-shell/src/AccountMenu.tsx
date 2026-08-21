@@ -240,7 +240,7 @@ const menuRow = (disabled?: boolean): CSSProperties => ({
   color: disabled ? theme.color.textMuted : theme.color.text,
   opacity: disabled ? 0.5 : 1,
   fontFamily: theme.font.ui,
-  fontSize: 13,
+  ...theme.type.base,
   textAlign: "left",
   whiteSpace: "nowrap",
   cursor: disabled ? "default" : "pointer",

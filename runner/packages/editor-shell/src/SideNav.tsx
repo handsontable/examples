@@ -105,7 +105,7 @@ export const SIDE_NAV_WIDTH = 320;
 const sideNav: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 2,
+  gap: theme.space(1),
   padding: theme.space(2),
   borderRight: `1px solid ${theme.color.border}`,
   background: theme.color.surfaceSunken,
@@ -122,7 +122,7 @@ const navRow: CSSProperties = {
   borderRadius: theme.radius.md,
   color: theme.color.text,
   fontFamily: theme.font.ui,
-  fontSize: 13,
+  ...theme.type.base,
   textAlign: "left",
   textDecoration: "none",
   cursor: "pointer",
@@ -134,7 +134,7 @@ const subNav: CSSProperties = {
   gap: 1,
   // Aligned under the parent row's label, not its icon, so the indent reads as
   // "inside Guide" rather than as a second column.
-  margin: `2px 0 ${theme.space(1)} ${theme.space(6)}`,
+  margin: `${theme.space(1)} 0 ${theme.space(1)} ${theme.space(6)}`,
   paddingLeft: theme.space(3),
   borderLeft: `1px solid ${theme.color.border}`,
 };
@@ -150,7 +150,7 @@ const subRow = (active: boolean): CSSProperties => ({
   // exists at all.
   color: active ? theme.color.accentText : theme.color.textMuted,
   fontFamily: theme.font.ui,
-  fontSize: 12.5,
+  ...theme.type.base,
   textDecoration: "none",
   // No `background` when inactive: `.hot-menu-row`'s hover lives in the app's
   // stylesheet and an inline value would outrank it (ADR-0026).

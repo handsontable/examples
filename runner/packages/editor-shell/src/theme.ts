@@ -68,7 +68,10 @@ const LIGHT_COLORS = {
   controlBorder: "#e7e7e9", // horizon/palette/100
   text: "#262624", // horizon/palette/700
   textMuted: "#727272",
-  hover: "rgba(120, 130, 150, 0.16)", // neutral row/button rollover
+  // Neutral row/button rollover. 0.10, down from 0.16: on white surfaces the
+  // old value read as a selection rather than a hover — most visibly on the
+  // Style panel's rows and its tab strip.
+  hover: "rgba(120, 130, 150, 0.1)",
 
   // Panes that wrap third-party surfaces. `editorBg` sits behind CodeMirror,
   // `previewBg` behind the demo iframe — both must track the shell, because
@@ -165,7 +168,27 @@ export const theme = {
   shadow: refs("shadow", LIGHT_SHADOWS),
   font: {
     ui: `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`,
-    mono: `"JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace`,
+    mono: `"Fira Code", "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace`,
+  },
+  /** The design's whole type scale, read off frame `48:6560` — two sizes, four
+   *  roles. Every text in the frame is one of these; nothing is 13px, and
+   *  hierarchy is carried by colour and tracking, not extra sizes. Spread one of
+   *  these into a style object rather than writing `fontSize` by hand — the 13px
+   *  the shell shipped with was exactly the kind of drift this exists to stop.
+   *   - `base`  12/20: primary UI text — pills, tabs, buttons, body copy (48:6583),
+   *     and the secondary lines the frame draws at 10 (box description, badge
+   *     label): raised to 12 by the same decision `row` records below.
+   *   - `small` 10/20: the captions under a control — ramp step names, the brand
+   *     chip's label (48:6758, 48:6742). Nothing that has to be read as a sentence.
+   *   - `row`   12/16: dense tree rows — files, dependency URLs. The frame draws
+   *     these at 10 (72:16918); raised to 12 by decision — 10px file names were
+   *     too small to read — with the 16px line kept so the 24px rows stay 24.
+   *   - `label` 10/20 +0.8px: uppercase section headers (48:6752) */
+  type: {
+    base: { fontSize: 12, lineHeight: "20px" },
+    small: { fontSize: 10, lineHeight: "20px" },
+    row: { fontSize: 12, lineHeight: "16px" },
+    label: { fontSize: 10, lineHeight: "20px", letterSpacing: "0.8px" },
   },
   radius: { sm: "4px", md: "8px", lg: "12px" },
   space: (n: number) => `${n * 4}px`,
@@ -206,20 +229,33 @@ const KEYFRAMES = `@keyframes hot-spin{to{transform:rotate(360deg)}}`;
 export const THEME_CSS = [
   block(":root", "light", LIGHT_COLORS, LIGHT_SHADOWS),
   block(`:root[${THEME_ATTR}="dark"]`, "dark", DARK_COLORS, DARK_SHADOWS),
+  // The font stacks as variables, for the same reason the colours are: component
+  // stylesheets (the app's `panels.css`, the shell's `installCss` strings) have no
+  // way to reach the TS constants, and a stack pasted into CSS drifts.
+  `:root{--hot-font-ui:${theme.font.ui};--hot-font-mono:${theme.font.mono}}`,
   KEYFRAMES,
 ].join("\n");
 
 const STYLE_ID = "hot-theme-vars";
 
+/** Inject a stylesheet once, keyed by id. The shell can't import `.css` files —
+ *  it ships as source and typechecks standalone — so components that need real
+ *  selectors (pseudo-elements, hover, attribute states) register a CSS string at
+ *  module scope with this instead. Values in those strings must be `var(--hot-…)`
+ *  references, never literals: the mode flip works by swapping variables. */
+export function installCss(id: string, css: string): void {
+  if (typeof document === "undefined") return;
+  if (document.getElementById(id)) return;
+  const el = document.createElement("style");
+  el.id = id;
+  el.textContent = css;
+  document.head.appendChild(el);
+}
+
 /** Inject `THEME_CSS` once. Called at module scope below, so the variables exist
  *  before React's first paint regardless of which module pulled `theme.ts` in. */
 export function installThemeCss(): void {
-  if (typeof document === "undefined") return;
-  if (document.getElementById(STYLE_ID)) return;
-  const el = document.createElement("style");
-  el.id = STYLE_ID;
-  el.textContent = THEME_CSS;
-  document.head.appendChild(el);
+  installCss(STYLE_ID, THEME_CSS);
 }
 
 installThemeCss();

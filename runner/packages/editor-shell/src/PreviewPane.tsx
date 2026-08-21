@@ -208,7 +208,7 @@ const overlay: CSSProperties = {
   color: theme.color.text,
 };
 
-const headline: CSSProperties = { margin: 0, fontSize: 13 };
+const headline: CSSProperties = { margin: 0, ...theme.type.base };
 
 const syncPill: CSSProperties = {
   position: "absolute",
@@ -218,7 +218,7 @@ const syncPill: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: theme.space(2),
-  padding: "4px 10px",
+  padding: `${theme.space(1)} ${theme.space(2)}`,
   borderRadius: theme.radius.md,
   background: theme.color.accent,
   color: theme.color.accentContrast,
@@ -258,7 +258,7 @@ const detailsButton: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 4,
-  padding: `2px ${theme.space(2)}`,
+  padding: `${theme.space(1)} ${theme.space(2)}`,
   border: "none",
   borderRadius: theme.radius.sm,
   background: "transparent",
@@ -300,7 +300,7 @@ const errorCard: CSSProperties = {
 
 const errorTitle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  ...theme.type.base,
   fontWeight: 600,
   color: theme.color.danger,
 };
@@ -319,7 +319,7 @@ const retryButton: CSSProperties = {
   background: theme.color.accent,
   color: theme.color.accentContrast,
   fontFamily: theme.font.ui,
-  fontSize: 13,
+  ...theme.type.base,
   fontWeight: 600,
   cursor: "pointer",
 };

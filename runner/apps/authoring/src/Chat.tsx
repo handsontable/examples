@@ -10,9 +10,10 @@
 // feature, it is a data-loss bug with good intentions.
 
 import { useEffect, useRef, useState } from "react";
-import { Drawer, IconSparkles, theme } from "@handsontable/demo-editor-shell";
+import { Drawer, IconArrowUp, IconSparkles, theme } from "@handsontable/demo-editor-shell";
 import type { FilesMap } from "@handsontable/demo-runtime";
 import { searchDocs } from "./docsSearch.js";
+import { useAutoGrow } from "./useAutoGrow.js";
 import { Markdown } from "./markdown.js";
 import { reportError } from "./sentry.js";
 
@@ -93,6 +94,8 @@ export function ChatPanel({
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // The composer grows with the question up to `.hot-chat-input`'s max-height.
+  const inputRef = useAutoGrow(input);
   // `busy` state lags a fast second click by a render; this ref does not.
   const busyRef = useRef(false);
   // A mirror of `turns` that is safe to read inside async code. Reading state
@@ -215,57 +218,74 @@ export function ChatPanel({
     reportChatEvent(apiBase, "edit_undone", framework);
   }
 
-  /** The composer, pinned under the scrolling transcript by `Drawer`. */
+  /** The composer, pinned under the scrolling transcript by `Drawer`. Full-bleed
+   *  on the panel surface with the send arrow floated inside the field — the docs
+   *  assistant's composer (`.da-input` / `.da-send`), not a padded form row. */
   const footer = (
     <>
       <form
-        style={composer}
+        className="hot-chat-composer"
         onSubmit={(e) => { e.preventDefault(); void send(input); }}
       >
         <textarea
-          style={textarea}
+          ref={inputRef}
+          className="hot-chat-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(input); }
           }}
-          placeholder="Ask about this example…"
-          rows={2}
+          placeholder="Ask a question…"
+          rows={1}
           maxLength={800}
           disabled={busy}
           aria-label="Your question"
         />
-        <button type="submit" style={{ ...primary, opacity: busy || !input.trim() ? 0.5 : 1 }} disabled={busy || !input.trim()}>
-          Send
+        <button
+          type="submit"
+          className="hot-chat-send"
+          disabled={busy || !input.trim()}
+          aria-label="Send"
+        >
+          <IconArrowUp />
         </button>
       </form>
-      <p style={{ ...muted, fontSize: 12, margin: `${theme.space(2)} 0 0` }}>
-        Answers can be wrong — check the code before you rely on it.
+      <p className="hot-chat-disclaimer">
+        AI-generated responses may be inaccurate. Verify critical information before use.
       </p>
     </>
   );
 
   return (
-    <Drawer title="Ask about this example" onClose={onClose} footer={footer}>
-      <div ref={listRef} style={list}>
+    <Drawer
+      title="Ask AI"
+      icon={<IconSparkles size={18} />}
+      label="Ask about this example"
+      onClose={onClose}
+      footer={footer}
+      footerStyle={{ padding: 0, background: theme.color.surfaceRaised }}
+    >
+      <div ref={listRef} className="hot-chat-list">
         {turns.length === 0 && (
-          <div style={{ padding: `${theme.space(1)} 0` }}>
-            <p style={{ ...muted, marginTop: 0 }}>
-              Ask what this example does, what an option means, or ask for a change —
-              answers are grounded in the Handsontable documentation, and any code change is
-              shown for you to apply.
+          <div>
+            <h3 className="hot-chat-welcome-title">How can I help?</h3>
+            <p className="hot-chat-welcome-text">
+              I answer questions about the example you have open — grounded in the
+              Handsontable docs — and any code change arrives as a proposal for you
+              to apply.
             </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: theme.space(2) }}>
+            <div className="hot-panel-menu">
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
                   type="button"
-                  className="hot-panel-suggestion"
-                  style={{ ...suggestion, opacity: busy ? 0.5 : 1 }}
+                  className="hot-panel-suggestion hot-panel-menu-item"
+                  style={{ opacity: busy ? 0.5 : 1 }}
                   disabled={busy}
                   onClick={() => void send(s)}
                 >
-                  {s}
+                  <span>{s}</span>
+                  <span className="hot-chat-arrow" aria-hidden="true">→</span>
                 </button>
               ))}
             </div>
@@ -273,36 +293,38 @@ export function ChatPanel({
         )}
 
         {turns.map((turn, i) => (
-          <div key={i} style={turn.role === "user" ? userBubble : assistantBubble}>
-            <Markdown text={turn.content} error={turn.error} />
+          <div key={i} className={turn.role === "user" ? "hot-chat-bubble" : "hot-chat-answer"}>
+            {/* The user bubble is accent-filled, where inline code and links
+                cannot keep the colours they carry elsewhere (Bugbot #248). */}
+            <Markdown text={turn.content} error={turn.error} onAccent={turn.role === "user"} />
 
             {turn.edits && turn.edits.length > 0 && (
-              <div style={editBox}>
-                <div style={{ fontSize: 12, color: theme.color.textMuted, marginBottom: theme.space(2) }}>
+              <div className="hot-chat-edit-box">
+                <div className="hot-chat-edit-head">
                   {turn.undo ? "Applied to" : "Proposed changes to"} {turn.edits.length} file
                   {turn.edits.length > 1 ? "s" : ""}
                 </div>
                 {turn.edits.map((edit) => (
                   <div key={edit.path} style={{ marginBottom: theme.space(1) }}>
-                    <code style={pathChip}>{edit.path}</code>
-                    {edit.why && <span style={{ ...muted, fontSize: 12, marginLeft: theme.space(2) }}>{edit.why}</span>}
+                    <code className="hot-chat-path-chip">{edit.path}</code>
+                    {edit.why && <span className="hot-chat-edit-why">{edit.why}</span>}
                   </div>
                 ))}
                 <div style={{ display: "flex", gap: theme.space(2), marginTop: theme.space(2) }}>
                   {turn.undo
-                    ? <button type="button" style={ghost} onClick={() => undo(i)}>Undo</button>
-                    : <button type="button" style={primary} onClick={() => apply(i)}>Apply</button>}
+                    ? <button type="button" className="hot-btn-ghost" onClick={() => undo(i)}>Undo</button>
+                    : <button type="button" className="hot-btn-primary" onClick={() => apply(i)}>Apply</button>}
                 </div>
               </div>
             )}
 
             {(turn.references?.length || turn.pages?.length) ? (
-              <div style={{ marginTop: theme.space(2), fontSize: 12 }}>
-                <div style={{ color: theme.color.textMuted, marginBottom: 2 }}>Documentation</div>
+              <div className="hot-chat-docs">
+                <div className="hot-chat-docs-label">Documentation</div>
                 {[...new Set([...(turn.references ?? []), ...(turn.pages ?? []).map((p) => p.url)])]
                   .slice(0, 6)
                   .map((url) => (
-                    <a key={url} href={url} target="_blank" rel="noreferrer" style={docLink}>
+                    <a key={url} href={url} target="_blank" rel="noreferrer" className="hot-chat-doc-link">
                       {(turn.pages ?? []).find((p) => p.url === url)?.title ?? prettyUrl(url)}
                     </a>
                   ))}
@@ -311,7 +333,7 @@ export function ChatPanel({
           </div>
         ))}
 
-        {busy && <div style={{ ...assistantBubble, ...muted }}>{status ?? "Thinking…"}</div>}
+        {busy && <div className="hot-chat-answer hot-chat-muted">{status ?? "Thinking…"}</div>}
       </div>
     </Drawer>
   );
@@ -352,15 +374,15 @@ export function AskAiButton({ open, onToggle }: { open: boolean; onToggle: () =>
       </button>
 
       {show && (
-        <span id="ask-ai-hint" role="tooltip" style={tooltip}>
-          <strong style={{ display: "block", marginBottom: theme.space(1) }}>Ask about this example</strong>
-          <span style={{ display: "block", color: theme.color.textMuted, marginBottom: theme.space(2) }}>
+        <span id="ask-ai-hint" role="tooltip" className="hot-cta-tooltip">
+          <strong>Ask about this example</strong>
+          <span className="hot-cta-tooltip-intro">
             Scoped to the code you have open — not Handsontable in general.
           </span>
-          <span style={tooltipItem}>“What does this example do?”</span>
-          <span style={tooltipItem}>“Make the first two columns frozen” — the edit arrives ready to apply</span>
-          <span style={tooltipItem}>Grounded in the Handsontable docs, with links</span>
-          <span style={{ display: "block", marginTop: theme.space(2), color: theme.color.textMuted }}>
+          <span className="hot-cta-tooltip-item">“What does this example do?”</span>
+          <span className="hot-cta-tooltip-item">“Make the first two columns frozen” — the edit arrives ready to apply</span>
+          <span className="hot-cta-tooltip-item">Grounded in the Handsontable docs, with links</span>
+          <span className="hot-cta-tooltip-note">
             Changes are never applied without you — Apply, then Undo if you don’t like it.
           </span>
         </span>
@@ -373,64 +395,10 @@ const prettyUrl = (url: string) => url.replace(/^https:\/\/handsontable\.com\/do
 
 // ---- Styles ------------------------------------------------------------------
 //
-// The drawer itself — fixed panel, header, close button, composer band — is
-// `Drawer` in the shell now, shared with the style panel (DEV-2209). What is left
-// is the transcript, on the shell's scales: `space(n)` padding, `radius.sm|md`,
-// and 13/12 type. `controlBorder` on control outlines, because the drawer is
-// painted `surfaceRaised` and dark `border` *is* `surfaceRaised`.
-
-/** The transcript is the scroller, not `Drawer`'s body: `listRef.scrollTo` has
- *  to reach the element that actually overflows. A definite `height: 100%`
- *  inside the body's flex track plus its own `overflow` keeps the scroll here
- *  and leaves the body with nothing to scroll. */
-const list: React.CSSProperties = {
-  height: "100%", overflowY: "auto",
-  padding: `${theme.space(3)} ${theme.space(4)}`, fontSize: 13,
-};
-const muted: React.CSSProperties = { color: theme.color.textMuted };
-const userBubble: React.CSSProperties = {
-  background: theme.color.surfaceMuted, borderRadius: theme.radius.md,
-  padding: `${theme.space(2)} ${theme.space(3)}`, margin: `0 0 ${theme.space(3)} auto`,
-  maxWidth: "90%", width: "fit-content",
-};
-const assistantBubble: React.CSSProperties = { padding: `0 0 ${theme.space(3)}`, maxWidth: "100%" };
-const editBox: React.CSSProperties = {
-  border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.md,
-  padding: theme.space(3), marginTop: theme.space(2), background: theme.color.surfaceMuted,
-};
-const pathChip: React.CSSProperties = {
-  fontFamily: theme.font.mono, fontSize: 12, background: theme.color.surface,
-  border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.sm,
-  padding: `1px ${theme.space(1)}`,
-};
-const docLink: React.CSSProperties = {
-  display: "block", color: theme.color.accentText, textDecoration: "none", padding: "1px 0",
-};
-const composer: React.CSSProperties = { display: "flex", gap: theme.space(2) };
-const textarea: React.CSSProperties = {
-  flex: 1, resize: "none", fontFamily: theme.font.ui, fontSize: 13,
-  padding: `${theme.space(2)} ${theme.space(2)}`,
-  border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.md,
-  // Explicit, not the UA's `field` default via `color-scheme`: every other
-  // control in the two panels is painted `surface`, and one that is not looks
-  // like a different control in dark.
-  background: theme.color.surface, color: theme.color.text,
-};
-const primary: React.CSSProperties = {
-  fontFamily: theme.font.ui, fontSize: 13, background: theme.color.accent,
-  color: theme.color.accentContrast, border: "none", borderRadius: theme.radius.sm,
-  padding: `${theme.space(2)} ${theme.space(3)}`, cursor: "pointer",
-};
-const ghost: React.CSSProperties = {
-  fontFamily: theme.font.ui, fontSize: 13, background: theme.color.surface, color: theme.color.text,
-  border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.sm,
-  padding: `${theme.space(2)} ${theme.space(3)}`, cursor: "pointer",
-};
-/** No `background`: `.hot-panel-suggestion` owns the fill and its rollover, and
- *  an inline one — `ghost`'s `surface` included — would outrank it (ADR-0026). */
-const suggestion: React.CSSProperties = {
-  ...ghost, background: undefined, textAlign: "left", color: theme.color.accentText,
-};
+// The drawer chrome is `Drawer` in the shell (DEV-2209); everything this panel
+// paints lives as classes in `panels.css` — imported once from main.tsx — with
+// only per-instance values (busy opacity, list margins) inline. The one style
+// object left is `askBtn`, the toolbar trigger.
 
 // Deliberately the same neutral treatment as every other toolbar button: this
 // used to carry the accent border and text, which read as the primary action on
@@ -447,17 +415,8 @@ const askBtn: React.CSSProperties = {
   // mark on the bar that could not follow the theme.
   display: "inline-flex", alignItems: "center", gap: theme.space(2),
   height: 36, padding: `0 ${theme.space(3)}`, flex: "0 0 auto",
-  fontFamily: theme.font.ui, fontSize: 13, fontWeight: 600,
+  fontFamily: theme.font.ui, ...theme.type.base, fontWeight: 600,
   background: "transparent", color: theme.color.text,
   border: `1px solid ${theme.color.controlBorder}`, borderRadius: theme.radius.md,
   cursor: "pointer", whiteSpace: "nowrap",
 };
-const tooltip: React.CSSProperties = {
-  position: "absolute", top: `calc(100% + ${theme.space(2)})`, left: 0, zIndex: 950, width: 320,
-  background: theme.color.surfaceRaised, border: `1px solid ${theme.color.controlBorder}`,
-  borderRadius: theme.radius.md, boxShadow: theme.shadow.popover,
-  padding: `${theme.space(2)} ${theme.space(3)}`,
-  fontFamily: theme.font.ui, fontSize: 12, color: theme.color.text,
-  textAlign: "left", whiteSpace: "normal", cursor: "default",
-};
-const tooltipItem: React.CSSProperties = { display: "block", padding: `${theme.space(1)} 0` };
