@@ -21,7 +21,7 @@ import everyoneMarkdown from "../../../docs/guide/everyone.md?raw";
 import supportMarkdown from "../../../docs/guide/support.md?raw";
 import devrelMarkdown from "../../../docs/guide/devrel.md?raw";
 import developersMarkdown from "../../../docs/guide/developers.md?raw";
-import { logout, type User } from "./auth.js";
+import { isTokenSession, logout, type User } from "./auth.js";
 import { Markdown } from "./markdown.js";
 import {
   GUIDE_TRACKS,
@@ -67,6 +67,10 @@ export function GuidePage({ apiBase, user }: GuidePageProps) {
         accountAvatarUrl={profile?.avatar_url}
         onMyDemos={() => { location.href = "/my-demos"; }}
         onSettings={() => { location.href = "/settings"; }}
+        // Disabled for a session running on an API token: tokens are fenced off
+        // token management entirely, so the row would only lead to a page that
+        // explains it cannot be used (ADR-0037, Bugbot #252).
+        onApiTokens={isTokenSession() ? undefined : () => { location.href = "/api-tokens"; }}
         onGuide={() => { location.href = "/guide"; }}
         // Public target, as on Settings: this page sends a null user to `login()`,
         // so logging out to `/guide` would walk them straight back to the broker.

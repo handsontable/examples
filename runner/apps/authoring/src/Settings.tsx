@@ -27,7 +27,7 @@ import {
   shellStyles,
   theme,
 } from "@handsontable/demo-editor-shell";
-import { logout, type User } from "./auth.js";
+import { isTokenSession, logout, type User } from "./auth.js";
 import { displayNameFromEmail } from "./displayName.js";
 import {
   removeAvatar,
@@ -185,6 +185,10 @@ export function SettingsPage({ apiBase, user }: SettingsPageProps) {
         accountAvatarUrl={profile?.avatar_url}
         onMyDemos={() => { location.href = "/my-demos"; }}
         onSettings={() => { location.href = "/settings"; }}
+        // Disabled for a session running on an API token: tokens are fenced off
+        // token management entirely, so the row would only lead to a page that
+        // explains it cannot be used (ADR-0037, Bugbot #252).
+        onApiTokens={isTokenSession() ? undefined : () => { location.href = "/api-tokens"; }}
         onGuide={() => { location.href = "/guide"; }}
         // Public target, always: this page answers a null user with `login()`,
         // so a bare reload would walk the user who just logged out straight back

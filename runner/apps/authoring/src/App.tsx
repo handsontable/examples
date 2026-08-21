@@ -47,7 +47,7 @@ import {
 } from "./docs-catalog.js";
 import { loadStarterExample, toPlaceholderEntry } from "./starter-catalog.js";
 import { DocsCascader, type CascaderLeaf } from "./DocsCascader.js";
-import { currentUser, login, logout, getToken, type User } from "./auth.js";
+import { currentUser, isTokenSession, login, logout, getToken, type User } from "./auth.js";
 import { assertApiOk, readApiJson } from "./api.js";
 import { isSessionExpired } from "./apiError.js";
 import { formFooter, ghostButton, primaryButton } from "./formStyles.js";
@@ -64,6 +64,7 @@ import { elapsedBucket } from "./sessionDiagnostics.js";
 import { Markdown } from "./markdown.js";
 import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
+import { ApiTokensPage } from "./ApiTokens.js";
 import { useProfile } from "./useProfile.js";
 import { monitorDemos, reportDemoEvent, reportError, reportingEnabled, Sentry } from "./sentry.js";
 import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
@@ -360,6 +361,7 @@ type AppRoute =
   | { mode: "myDemos" }
   | { mode: "allDemos" }
   | { mode: "settings" }
+  | { mode: "apiTokens" }
   | { mode: "guide" };
 
 function parseRoute(): AppRoute {
@@ -371,6 +373,10 @@ function parseRoute(): AppRoute {
   // serves index.html for it (`not_found_handling: "single-page-application"`),
   // so it never 404'd, it just showed the wrong thing.
   if (/^\/settings\/?$/.test(location.pathname)) return { mode: "settings" };
+  // `/api-tokens` (DEV-2583, ADR-0037). Same shape and the same hazard as
+  // `/settings`: above the editor fallthrough, or the SPA fallback renders the
+  // playground for it instead of the page.
+  if (/^\/api-tokens\/?$/.test(location.pathname)) return { mode: "apiTokens" };
   // `/guide` (DEV-2503) — the in-app how-to. Same shape as the two above: matched
   // before the editor fallthrough, which would otherwise read it as a demo id.
   // `/guide` and `/guide/<track>` (DEV-2522): one route, because the page reads the
@@ -417,6 +423,7 @@ function fullModeId(route: AppRoute): string | null {
     route.mode === "myDemos" ||
     route.mode === "allDemos" ||
     route.mode === "settings" ||
+    route.mode === "apiTokens" ||
     route.mode === "guide"
   ) return null;
   return new URLSearchParams(location.search).get("mode") === "full" ? route.id : null;
@@ -453,6 +460,8 @@ export function App() {
   if (route.mode === "allDemos") return <MyDemosRoute scope="all" />;
   // Same story as My demos: auth-gated, renders no runtime, boots no container.
   if (route.mode === "settings") return <SettingsRoute />;
+  // Same again: auth-gated, no runtime, no container.
+  if (route.mode === "apiTokens") return <ApiTokensRoute />;
   // Login-gated like the two above: the guide describes what signing in unlocks,
   // and it is the account menu that offers it.
   if (route.mode === "guide") return <GuideRoute />;
@@ -497,6 +506,24 @@ function SettingsRoute() {
   if (user === undefined) return <Splash text="Loading data …" />;
   if (user === null) return <Splash text="Sign in to change your profile…" />;
   return <SettingsPage apiBase={API_BASE} user={user} />;
+}
+
+/** `/api-tokens` (DEV-2583, ADR-0037). A token acts as one person, and the
+ *  listing is the team's, so the page needs an identity before it shows
+ *  anything — the same login-on-anonymous contract as `/settings`. */
+function ApiTokensRoute() {
+  const [user, setUser] = useState<User | null | undefined>(undefined);
+  useEffect(() => {
+    currentUser().then(setUser);
+  }, []);
+  useEffect(() => {
+    if (user === null) login(); // return_to preserves /api-tokens
+  }, [user]);
+  useDocumentTitle("API tokens");
+
+  if (user === undefined) return <Splash text="Loading data …" />;
+  if (user === null) return <Splash text="Sign in to manage API tokens…" />;
+  return <ApiTokensPage apiBase={API_BASE} user={user} />;
 }
 
 /** `/guide` and `/guide/<track>` (DEV-2503, tracks in DEV-2522). The content is the
@@ -1069,6 +1096,12 @@ function Authoring({
    *  `16.2` is a version both the pencil and `?v=` accept, and the raw-string
    *  reading this replaced found no `\d+\.` in either, answered null, and so
    *  handed a v16 core the prerelease pass-through (DEV-2571). */
+  /** Is this tab authenticated by a persistent API token rather than a login
+   *  (ADR-0037)? Read once per render rather than held in state: the value can
+   *  only change by a reload, since nothing in the app writes `hot_token` after
+   *  `currentUser()` has consumed the redirect. */
+  const tokenSession = isTokenSession();
+
   const themingSupported = (() => {
     // A ref the validator refuses is not themeable either. `selectedReleaseMajor`
     // answers null for one — the same null that waves prereleases through — so
@@ -2694,6 +2727,9 @@ function Authoring({
         // account menu that holds it renders only for an identified user.
         onUsage={() => { location.href = "/admin"; }}
         onSettings={() => { location.href = "/settings"; }}
+        // Disabled, not hidden, for a token session: the page explains itself
+        // when reached by URL, and a row that vanished would read as a bug.
+        onApiTokens={tokenSession ? undefined : () => { location.href = "/api-tokens"; }}
         onGuide={() => { location.href = "/guide"; }}
         // `edit` is auth-gated — `Gate` answers a null user with `login()`, so a
         // plain reload would bounce straight back to the broker. `play` and
@@ -2718,16 +2754,24 @@ function Authoring({
         // exactly what a shared link invites. Mutually exclusive: since DEV-2209
         // they are literally the same surface — one `Drawer`, one `DRAWER_WIDTH`
         // (400) — on the same edge of the screen.
+        // Both are hidden outright for a session running on a persistent API
+        // token: the Worker fences that credential off `/api/chat` and
+        // `/api/theme` (ADR-0037), so the controls could only ever open a panel
+        // whose first request comes back 403. A disabled pair with a tooltip
+        // would be the kinder treatment for a person, but nobody arrives in a
+        // token session by accident — they pasted the token in.
         secondaryActions={
-          <>
-            <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />
-            <StyleButton
-              open={styleOpen}
-              onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }}
-              disabled={!themingSupported}
-              disabledReason={`Theming needs Handsontable ${THEME_API_MIN_MAJOR} or newer — this demo is on ${version}.`}
-            />
-          </>
+          tokenSession ? null : (
+            <>
+              <AskAiButton open={chatOpen} onToggle={() => { setChatOpen((v) => !v); setStyleOpen(false); }} />
+              <StyleButton
+                open={styleOpen}
+                onToggle={() => { setStyleOpen((v) => !v); setChatOpen(false); }}
+                disabled={!themingSupported}
+                disabledReason={`Theming needs Handsontable ${THEME_API_MIN_MAJOR} or newer — this demo is on ${version}.`}
+              />
+            </>
+          )
         }
         // ---- chrome (T2) --------------------------------------------------
         examplePill={

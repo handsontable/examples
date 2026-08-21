@@ -46,6 +46,9 @@ export interface TopBarProps {
    *  in the account menu rather than the bar: the pre-redesign bar had it as a
    *  loose `Usage` link beside `My demos`, and My demos is now a menu row. */
   onUsage?: () => void;
+  /** `/api-tokens` — the persistent API tokens (DEV-2583, ADR-0037). Absent
+   *  leaves the menu row disabled, like the two below. */
+  onApiTokens?: () => void;
   /** `/settings` — the profile page (DEV-2166). Absent leaves the menu row
    *  disabled, which is what the anonymous-adjacent surfaces want. */
   onSettings?: () => void;
@@ -76,6 +79,7 @@ export function TopBar({
   onMyDemos,
   onUsage,
   onSettings,
+  onApiTokens,
   onGuide,
   onLogout,
   onFork,
@@ -168,6 +172,7 @@ export function TopBar({
           onMyDemos={onMyDemos}
           onUsage={onUsage}
           onSettings={onSettings}
+          onApiTokens={onApiTokens}
           onGuide={onGuide}
           onLogout={onLogout}
         />

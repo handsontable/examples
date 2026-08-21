@@ -1,21 +1,32 @@
 // Headless demo creation over the MCP service path (DEV-2501, ADR-0033).
 //
+// The imports are dynamic, behind the `.js`->`.ts` module hooks, because
+// `auth.ts` stopped being an import-free leaf when the persistent-token path
+// landed (DEV-2583): it now pulls in `token.js` / `token-store.js` by the
+// repo's NodeNext-style specifier, which bare `--experimental-strip-types`
+// cannot resolve. Nothing here drives the token path — `authenticateService` is
+// the subject — but the module graph has to load all the same.
+//
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import {
+import { register } from "node:module";
+
+register("./fixtures/worker-hooks.mjs", import.meta.url);
+
+const {
   MAX_MCP_BYTES,
   MAX_MCP_FILES,
   isMcpCreated,
   isMcpValidationError,
   isTeamEmail,
   validateMcpFiles,
-} from "../workers/api/src/mcp-create.ts";
-import { authenticateService, normalizeEmail, sameOwner } from "../workers/api/src/auth.ts";
-import { demoListQuery } from "../workers/api/src/demos-list.ts";
+} = await import("../workers/api/src/mcp-create.ts");
+const { authenticateService, normalizeEmail, sameOwner } = await import("../workers/api/src/auth.ts");
+const { demoListQuery } = await import("../workers/api/src/demos-list.ts");
 
 const ok = { "/package.json": '{"name":"demo"}', "/index.js": "console.log(1)" };
 

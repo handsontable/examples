@@ -41,6 +41,7 @@ npx wrangler d1 execute handsontable-demos --local --file=migrations/0002_buildk
 npx wrangler d1 execute handsontable-demos --local --file=migrations/0003_cost_ledger.sql -y
 npx wrangler d1 execute handsontable-demos --local --file=migrations/0004_settings_and_analytics.sql -y
 npx wrangler d1 execute handsontable-demos --local --file=migrations/0005_profiles.sql -y
+npx wrangler d1 execute handsontable-demos --local --file=migrations/0006_api_tokens.sql -y
 npx wrangler dev --port 8787                          # builds the container images
 # then run the authoring app pointing at it:
 cd ../../apps/authoring
@@ -85,6 +86,7 @@ npx wrangler d1 execute handsontable-demos --remote --file=migrations/0002_build
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0003_cost_ledger.sql -y
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0004_settings_and_analytics.sql -y
 npx wrangler d1 execute handsontable-demos --remote --file=migrations/0005_profiles.sql -y
+npx wrangler d1 execute handsontable-demos --remote --file=migrations/0006_api_tokens.sql -y
 pnpm run deploy   # wrangler deploy --routes … (attaches the demos.handsontable.com routes)
 # -> https://demos.handsontable.com (plus the account's own *.workers.dev URL)
 

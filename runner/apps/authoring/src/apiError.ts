@@ -32,6 +32,11 @@ export type ApiFailureKind = "session-expired" | "forbidden" | "other";
 export const SESSION_EXPIRED_MESSAGE = "Your session expired. Sign in again to continue.";
 export const FORBIDDEN_MESSAGE =
   "This demo belongs to someone else — only its owner can change it.";
+/** The fallback for a capability refusal that arrived without its `detail`
+ *  (DEV-2583). Every route that sends `token_forbidden` sends one, but a proxy
+ *  or a truncated body must not produce an empty toast. */
+export const CAPABILITY_DENIED_MESSAGE =
+  "An API token cannot do this. Sign in to continue.";
 
 /** Whatever JSON the Worker put in the error body. Both fields are optional
  *  because a 401 from a proxy, or a body that failed to parse, has neither. */
@@ -108,10 +113,19 @@ export function describeApiFailure(
     return new ApiError(SESSION_EXPIRED_MESSAGE, status, "session-expired", false);
   }
   if (status === 403) {
+    const detail = typeof body.detail === "string" ? body.detail.trim() : "";
+    // A persistent API token's capability fence shares the status with the
+    // ownership checks and means something else entirely: nothing belongs to
+    // anybody else, this credential simply may not do this (ADR-0037). So the
+    // detail becomes the whole sentence rather than a parenthetical on the
+    // ownership copy, and it is not reportable — the fence refusing is the fence
+    // working, not the UI and the server disagreeing about who owns a row.
+    if (body.error === "token_forbidden") {
+      return new ApiError(detail || CAPABILITY_DENIED_MESSAGE, status, "forbidden", false);
+    }
     // The ownership refusals the browser actually hits send a bare
     // `{"error":"forbidden"}` (index.ts:887 and :954), so ownership is the
     // primary sentence and `detail` — sent only by the MCP route — refines it.
-    const detail = typeof body.detail === "string" ? body.detail.trim() : "";
     const message = detail ? `${FORBIDDEN_MESSAGE} (${detail})` : FORBIDDEN_MESSAGE;
     return new ApiError(message, status, "forbidden", true);
   }

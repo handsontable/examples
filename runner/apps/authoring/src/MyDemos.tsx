@@ -42,7 +42,7 @@ import { Markdown } from "./markdown.js";
 import { filterByOwner, isOwnedBy, ownerNameFromSlug, ownerOptions } from "./demoOwners.js";
 import { assertApiOk, readApiJson } from "./api.js";
 import { isSessionExpired } from "./apiError.js";
-import { getToken, login, logout, type User } from "./auth.js";
+import { getToken, isTokenSession, login, logout, type User } from "./auth.js";
 import { displayNameFromEmail, initialFromEmail } from "./displayName.js";
 import { fieldInput, fieldLabel, formFooter, ghostButton, primaryButton } from "./formStyles.js";
 import { useProfile } from "./useProfile.js";
@@ -270,6 +270,10 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
         accountAvatarUrl={ownerAvatar}
         onMyDemos={() => { location.href = "/my-demos"; }}
         onSettings={() => { location.href = "/settings"; }}
+        // Disabled for a session running on an API token: tokens are fenced off
+        // token management entirely, so the row would only lead to a page that
+        // explains it cannot be used (ADR-0037, Bugbot #252).
+        onApiTokens={isTokenSession() ? undefined : () => { location.href = "/api-tokens"; }}
         onGuide={() => { location.href = "/guide"; }}
         // Never a bare reload here: `/my-demos` answers a null user with
         // `login()`, so logging out in place would re-enter the broker.

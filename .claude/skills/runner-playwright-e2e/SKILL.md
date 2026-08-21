@@ -1,6 +1,6 @@
 ---
 name: runner-playwright-e2e
-description: Use when writing or modifying Playwright E2E specs for the demo runner (runner/e2e/*.spec.ts) - the deterministic-by-default suite, the env-gate taxonomy (E2E_LIVE, E2E_BASE_URL, E2E_BROKER_TOKEN, E2E_AI, E2E_STARTER_MATRIX), the shared helpers, data-* test contracts, CodeMirror and Sandpack gotchas, and container-pool hygiene. NOT for pipeline unit tests (node --test in runner/pipeline/).
+description: Use when writing or modifying Playwright E2E specs for the demo runner (runner/e2e/*.spec.ts) - the deterministic-by-default suite, the env-gate taxonomy (E2E_LIVE, E2E_BASE_URL, E2E_API_TOKEN, E2E_AI, E2E_STARTER_MATRIX), the shared helpers, data-* test contracts, CodeMirror and Sandpack gotchas, and container-pool hygiene. NOT for pipeline unit tests (node --test in runner/pipeline/).
 ---
 
 # Runner Playwright E2E authoring
@@ -22,7 +22,7 @@ path.
 
 Anything that needs the real world takes the **narrowest gate** that covers the
 dependency — `E2E_LIVE` (real preview mount), `E2E_BASE_URL` (worker routes),
-`E2E_BROKER_TOKEN` (authed round-trip), `E2E_AI` (LLM spend),
+`E2E_API_TOKEN` (authed round-trip), `E2E_AI` (LLM spend),
 `E2E_STARTER_MATRIX` (container matrix). Two hard rules: the spec self-skips
 with instructions (`test.skip(cond, "set X=1 to …")`), and every gated spec is
 named in a workflow that actually runs it — in the same PR. Full taxonomy:

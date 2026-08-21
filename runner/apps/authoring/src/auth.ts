@@ -1,11 +1,22 @@
 // Handsontable Google login broker client (ADR-0007). Internal team only —
 // the broker rejects non-@handsontable.com accounts. The token is per-user,
 // per-session; kept in sessionStorage, never persisted or logged.
+//
+// Since ADR-0037 a session may instead hold a persistent API token, which the
+// broker knows nothing about — identity for one is resolved against our own API.
+// That is what lets the live share spec drive the real Share button with a
+// credential that does not expire; the cost, stated in the ADR, is that such a
+// token is a browser session in a string, so it is fenced off the AI features
+// and the admin writes on the server side.
 
 import { reportError } from "./sentry.js";
 
 const BROKER = import.meta.env.VITE_LOGIN_BROKER_URL || "https://mcp-auth-proxy-j0tb.onrender.com";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
 const TOKEN_KEY = "hot_token";
+/** Mirrors `PAT_PREFIX` in the Worker's `token.ts` — the two must agree, and a
+ *  cross-package import from the app into `workers/` does not exist. */
+const PAT_PREFIX = "hot_pat_";
 /** The cached profile (DEV-2166). Declared beside the token because it shares
  *  the token's lifetime, and because `logout()` has to know to drop it — see
  *  `profile.ts` for why the cache exists at all. */
@@ -19,6 +30,16 @@ export interface User {
 
 export function getToken(): string | null {
   return sessionStorage.getItem(TOKEN_KEY);
+}
+
+/**
+ * Is this session running on a persistent API token rather than a login?
+ *
+ * Read by the surfaces the server fences off (Ask AI, the style generator): a
+ * feature that would answer 403 is better not offered than offered and refused.
+ */
+export function isTokenSession(): boolean {
+  return getToken()?.startsWith(PAT_PREFIX) ?? false;
 }
 
 /** Resolve the current user: consume a fresh #token from the broker redirect,
@@ -41,8 +62,16 @@ export async function currentUser(): Promise<User | null> {
   }
   if (!token) return null;
 
+  // A persistent API token is ours, not the broker's, so identity comes from our
+  // own API. `GET /api/profile` already answers with the caller's verified
+  // address for any authenticated request, which is exactly what a `User` needs
+  // — hence no separate identity endpoint (ADR-0037).
+  const endpoint = token.startsWith(PAT_PREFIX)
+    ? `${API_BASE}/api/profile`
+    : `${BROKER}/broker/userinfo`;
+
   try {
-    const res = await fetch(`${BROKER}/broker/userinfo`, {
+    const res = await fetch(endpoint, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) {

@@ -7,21 +7,27 @@ import { workspaceFiles } from "./helpers";
 // (share-view.spec.ts); this is the one test that exercises the builder, R2
 // and D1 end to end.
 //
-// It needs a real broker token — there is no test bypass in the deployed
-// worker, by design (auth.ts re-validates every bearer against the broker and
-// requires @handsontable.com). Broker tokens are per-user session JWTs with an
-// expiry and no programmatic mint path, so the token arrives as a secret you
-// refresh by hand when you want this to run:
+// It needs a real credential — there is no test bypass in the deployed worker,
+// by design (auth.ts requires @handsontable.com on both of its paths). Since
+// DEV-2583 that credential is a persistent API token, which does not expire and
+// can be minted from the app, so this spec finally runs unattended:
 //
-//   1. Sign in on the deployed app, then in the console: sessionStorage.hot_token
-//   2. E2E_BROKER_TOKEN=<that> E2E_BASE_URL=https://demos.handsontable.com \
+//   1. Sign in on the deployed app, go to /api-tokens, mint one, copy it
+//   2. E2E_API_TOKEN=<that> E2E_BASE_URL=https://demos.handsontable.com \
 //        pnpm e2e e2e/share-create-live.spec.ts --workers=1
+//
+// The token goes into `sessionStorage.hot_token` exactly as a login token would
+// — the client resolves identity for it against our own API rather than the
+// broker (ADR-0037), which is what keeps this spec driving the real Share
+// button instead of being rewritten into an API script. It is also why the
+// workflow's trace scrubbing matters more than it used to: this credential has
+// no expiry to limit the damage of a leaked artifact.
 //
 // Cost and hygiene: one BuilderSandbox boot (pool of 3, shared) and one D1
 // row per run. The revoke lives in an afterEach, not the test body — see the
 // note at `demoId` below.
 
-const TOKEN = process.env.E2E_BROKER_TOKEN;
+const TOKEN = process.env.E2E_API_TOKEN;
 
 // Written by the test, read by the afterEach below. Module scope on purpose:
 // the revoke must not live in the test body's `finally` — a body that hits its
@@ -46,14 +52,16 @@ test.afterEach(async ({ request, baseURL }) => {
 
 test("a demo shared today is a page a client can open — until it is revoked", async ({ page }) => {
   test.skip(!process.env.E2E_BASE_URL, "needs a deployed API origin");
-  test.skip(!TOKEN, "set E2E_BROKER_TOKEN to a fresh sessionStorage.hot_token from a signed-in session");
+  test.skip(!TOKEN, "set E2E_API_TOKEN to a token minted on /api-tokens");
   // Headroom above the sum of the wait ceilings (30+30+300+60s) — the previous
   // 420s equalled it exactly, so a build that used its whole dialog budget
   // timed the body out before the view assertions ran (Bugbot, #186). All
   // waits below are condition-bound with ceilings, never sleeps.
   test.setTimeout(480_000);
 
-  // The real token, the real broker, no stubs.
+  // The real token, the real deployment, no stubs — and deliberately not the
+  // real broker any more: identity for a `hot_pat_` resolves against our own
+  // /api/profile (ADR-0037), which is what makes this spec runnable at all.
   await page.addInitScript((token) => sessionStorage.setItem("hot_token", token), TOKEN!);
 
   // The id is captured off the network, not the dialog: a locator throwing
@@ -72,7 +80,7 @@ test("a demo shared today is a page a client can open — until it is revoked", 
   // acting, so an expired token reads as "token expired", not a dead button.
   await expect(
     page.getByRole("button", { name: "Fork", exact: true }),
-    "no authed top bar — is E2E_BROKER_TOKEN expired?",
+    "no authed top bar — has E2E_API_TOKEN been revoked?",
   ).toBeVisible({ timeout: 30_000 });
 
   // Auth is not the only precondition: the workspace starts as an empty
