@@ -100,8 +100,13 @@ async function meteredRefs(request: APIRequestContext): Promise<string[]> {
  *  production run was also the first to feel it). A single-shot
  *  `.not.toContain()` inside that window passes leak or no leak. Sampling
  *  until the deadline is the strongest honest oracle; the positive control
- *  below proves a real key surfaces well within the same window. */
-async function expectNeverMetered(request: APIRequestContext, refs: string[], windowMs = 45_000) {
+ *  below proves a real key surfaces well within the same window.
+ *
+ *  The window mirrors the 90s ceiling the positive polls get, on purpose
+ *  (Bugbot, #255): it must exceed the documented 60s worst case with margin —
+ *  whatever propagation time a real key is allowed to take, a phantom must be
+ *  waited out for, or the gap between the two reopens the vacuity. */
+async function expectNeverMetered(request: APIRequestContext, refs: string[], windowMs = 90_000) {
   const deadline = Date.now() + windowMs;
   for (;;) {
     const metered = await meteredRefs(request);
@@ -120,7 +125,7 @@ test.describe("an abandoned create leaves nothing metered behind", () => {
   });
 
   test("a DELETE that overtakes the create does not strand a meter", async ({ request }) => {
-    test.setTimeout(120_000); // the sustained-absence window plus paged panel reads
+    test.setTimeout(240_000); // the 90s sustained-absence window plus paged panel reads
     const sessionId = mintId("race");
 
     // The tab is already gone before the create is processed.
@@ -135,7 +140,7 @@ test.describe("an abandoned create leaves nothing metered behind", () => {
   });
 
   test("repeated abandoned creates do not accumulate", async ({ request }) => {
-    test.setTimeout(120_000); // the sustained-absence window plus paged panel reads
+    test.setTimeout(240_000); // four creates, then the 90s window with paged panel reads
     // One leak is a bug; the reported symptom was 202 of them. A single-shot
     // assertion would pass against a fix that only handles the first.
     const abandoned: string[] = [];
