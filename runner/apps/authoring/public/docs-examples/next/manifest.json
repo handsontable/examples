@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-2121ad7-20260818",
-  "count": 1462,
+  "hotVersion": "0.0.0-next-29ef2bc-20260821",
+  "count": 1472,
   "examples": [
     {
       "bucket": "next",
@@ -21495,6 +21495,166 @@
       "guideTitle": "Row parent-child",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
+      "docPermalink": "/row-parent-child",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-parent-child/angular/example2.ts",
+      "file": "guides__rows__row-parent-child__angular__example2.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row parent-child"
+      ],
+      "guide": "guides/rows/row-parent-child/row-parent-child.md",
+      "guideTitle": "Row parent-child",
+      "exampleId": "example2",
+      "exampleTitle": "Methods",
+      "docPermalink": "/row-parent-child",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-parent-child/javascript/example2.js",
+      "file": "guides__rows__row-parent-child__javascript__example2.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Row parent-child"
+      ],
+      "guide": "guides/rows/row-parent-child/row-parent-child.md",
+      "guideTitle": "Row parent-child",
+      "exampleId": "example2",
+      "exampleTitle": "Methods",
+      "docPermalink": "/row-parent-child",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-parent-child/react/example2.tsx",
+      "file": "guides__rows__row-parent-child__react__example2.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Row parent-child"
+      ],
+      "guide": "guides/rows/row-parent-child/row-parent-child.md",
+      "guideTitle": "Row parent-child",
+      "exampleId": "example2",
+      "exampleTitle": "Methods",
+      "docPermalink": "/row-parent-child",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-parent-child/javascript/example2.ts",
+      "file": "guides__rows__row-parent-child__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row parent-child"
+      ],
+      "guide": "guides/rows/row-parent-child/row-parent-child.md",
+      "guideTitle": "Row parent-child",
+      "exampleId": "example2",
+      "exampleTitle": "Methods",
+      "docPermalink": "/row-parent-child",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-parent-child/vue/example2.vue",
+      "file": "guides__rows__row-parent-child__vue__example2.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Row parent-child"
+      ],
+      "guide": "guides/rows/row-parent-child/row-parent-child.md",
+      "guideTitle": "Row parent-child",
+      "exampleId": "example2",
+      "exampleTitle": "Methods",
+      "docPermalink": "/row-parent-child",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-parent-child/angular/example3.ts",
+      "file": "guides__rows__row-parent-child__angular__example3.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row parent-child"
+      ],
+      "guide": "guides/rows/row-parent-child/row-parent-child.md",
+      "guideTitle": "Row parent-child",
+      "exampleId": "example3",
+      "exampleTitle": "Jump to a row inside a collapsed branch",
+      "docPermalink": "/row-parent-child",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-parent-child/javascript/example3.js",
+      "file": "guides__rows__row-parent-child__javascript__example3.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Row parent-child"
+      ],
+      "guide": "guides/rows/row-parent-child/row-parent-child.md",
+      "guideTitle": "Row parent-child",
+      "exampleId": "example3",
+      "exampleTitle": "Jump to a row inside a collapsed branch",
+      "docPermalink": "/row-parent-child",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-parent-child/react/example3.tsx",
+      "file": "guides__rows__row-parent-child__react__example3.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Row parent-child"
+      ],
+      "guide": "guides/rows/row-parent-child/row-parent-child.md",
+      "guideTitle": "Row parent-child",
+      "exampleId": "example3",
+      "exampleTitle": "Jump to a row inside a collapsed branch",
+      "docPermalink": "/row-parent-child",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-parent-child/javascript/example3.ts",
+      "file": "guides__rows__row-parent-child__javascript__example3.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row parent-child"
+      ],
+      "guide": "guides/rows/row-parent-child/row-parent-child.md",
+      "guideTitle": "Row parent-child",
+      "exampleId": "example3",
+      "exampleTitle": "Jump to a row inside a collapsed branch",
+      "docPermalink": "/row-parent-child",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-parent-child/vue/example3.vue",
+      "file": "guides__rows__row-parent-child__vue__example3.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Row parent-child"
+      ],
+      "guide": "guides/rows/row-parent-child/row-parent-child.md",
+      "guideTitle": "Row parent-child",
+      "exampleId": "example3",
+      "exampleTitle": "Jump to a row inside a collapsed branch",
       "docPermalink": "/row-parent-child",
       "framework": "vue",
       "displayName": "Vue 3"
