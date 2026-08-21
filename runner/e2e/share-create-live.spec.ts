@@ -59,7 +59,9 @@ test("a demo shared today is a page a client can open — until it is revoked", 
   // waits below are condition-bound with ceilings, never sleeps.
   test.setTimeout(480_000);
 
-  // The real token, the real broker, no stubs.
+  // The real token, the real deployment, no stubs — and deliberately not the
+  // real broker any more: identity for a `hot_pat_` resolves against our own
+  // /api/profile (ADR-0037), which is what makes this spec runnable at all.
   await page.addInitScript((token) => sessionStorage.setItem("hot_token", token), TOKEN!);
 
   // The id is captured off the network, not the dialog: a locator throwing

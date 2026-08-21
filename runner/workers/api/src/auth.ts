@@ -45,11 +45,17 @@ export function isTokenIdentity(identity: Identity | null): boolean {
  * this feature exists to prevent: the credential gets forwarded to the broker,
  * and the fence on the anonymous-capable routes reads it as no credential at all
  * (Bugbot, #252). Two parsers would be two chances to reintroduce that.
+ *
+ * The scheme match is case-insensitive, as RFC 7235 says it is, and that is
+ * load-bearing rather than pedantry: `bearer hot_pat_...` returning null here
+ * would fall through to the `DEV_AUTH_EMAIL` bypass on a loopback host and be
+ * granted a *person* identity with no `via`, so the capability fence would not
+ * engage — the very failure the ordering below exists to prevent.
  */
 export function bearerFrom(request: Request): string | null {
   const auth = request.headers.get("Authorization");
   if (!auth) return null;
-  const match = /^Bearer[ \t]+(.+)$/.exec(auth.trim());
+  const match = /^Bearer[ \t]+(.+)$/i.exec(auth.trim());
   const value = match?.[1]?.trim();
   return value ? value : null;
 }

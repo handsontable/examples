@@ -258,6 +258,38 @@ test("extra whitespace after Bearer does not slip past the capability fence eith
   assert.equal((await res.json()).error, "token_forbidden");
 });
 
+test("a lower-case auth scheme is still a token, not a fall-through", async () => {
+  // RFC 7235 makes `auth-scheme` case-insensitive. Returning null for
+  // `bearer hot_pat_…` would drop the request through to the DEV_AUTH_EMAIL
+  // bypass on a loopback host and grant a *person* identity with no `via`, so
+  // the capability fence would not engage locally — the exact failure the
+  // ordering in `authenticate()` exists to prevent.
+  const { token } = await mintViaRoute();
+
+  for (const scheme of ["bearer", "BEARER", "BeArEr"]) {
+    brokerCalls = 0;
+    const res = await worker.fetch(
+      new Request(`${HOST}/api/demos`, { headers: { Authorization: `${scheme} ${token}` } }),
+      env,
+      ctx,
+    );
+    assert.equal(res.status, 200, `${scheme} authenticates`);
+    assert.equal(brokerCalls, 0, `${scheme} was not forwarded to the broker`);
+  }
+
+  // And the fence sees it too, on a route that admits anonymous callers.
+  const chat = await worker.fetch(
+    new Request(`${HOST}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `bearer ${token}` },
+      body: JSON.stringify({ question: "hi" }),
+    }),
+    env,
+    ctx,
+  );
+  assert.equal(chat.status, 403);
+});
+
 test("the broker path still works, beside the new one", async () => {
   const res = await worker.fetch(req("GET", "/api/demos", { headers: asPerson() }), env, ctx);
   assert.equal(res.status, 200);

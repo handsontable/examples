@@ -197,6 +197,42 @@ test.describe("/api-tokens", () => {
     expect(api.calls).toContain("DELETE /api/tokens/0123456789abcdef");
   });
 
+  test("the revoke confirmation opens on Cancel, so Enter cannot revoke unanswered", async ({ page }) => {
+    // `Dialog` focuses the content's first focusable unless something is marked
+    // `data-autofocus`, and the first control here is the destructive one. Without
+    // the marker, opening the dialog and pressing Enter revokes a live credential
+    // without the question ever being answered.
+    await signIn(page);
+    await stubProfile(page);
+    const api = await stubTokensApi(page, [row()]);
+    await page.goto("/api-tokens");
+
+    await page.getByRole("button", { name: "Revoke" }).click();
+    await expect(page.getByRole("dialog", { name: "Revoke this token?" })).toBeVisible();
+
+    await expect(
+      page.getByRole("dialog").getByRole("button", { name: "Cancel" }),
+      "focus lands on Cancel, not on Revoke",
+    ).toBeFocused();
+
+    await page.keyboard.press("Enter");
+    expect(api.calls.filter((c) => c.startsWith("DELETE")), "Enter did not revoke").toEqual([]);
+    await expect(page.getByRole("dialog")).toBeHidden();
+  });
+
+  test("a listing that fails says so instead of claiming there are no tokens", async ({ page }) => {
+    // The page's whole job is enumerating live credentials. Telling a reader
+    // "No tokens yet" when the request failed asserts the one thing it cannot know.
+    await signIn(page);
+    await stubProfile(page);
+    await page.route("**/api/tokens", (route) =>
+      route.fulfill({ status: 500, json: { error: "boom" } }));
+
+    await page.goto("/api-tokens");
+    await expect(page.getByText(/could not be loaded/i)).toBeVisible();
+    await expect(page.getByText("No tokens yet.")).toHaveCount(0);
+  });
+
   test("somebody else's token is listed, and revocable, because revocation is team-wide", async ({ page }) => {
     // The deliberate departure recorded in ADR-0037: a permanent credential only
     // its author can kill is worse than one anybody on the team can.

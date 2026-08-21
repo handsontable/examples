@@ -33,7 +33,8 @@ import {
   shellStyles,
   theme,
 } from "@handsontable/demo-editor-shell";
-import { isTokenSession, logout, type User } from "./auth.js";
+import { isTokenSession, login, logout, type User } from "./auth.js";
+import { isSessionExpired } from "./apiError.js";
 import {
   fetchTokens,
   mintApiToken,
@@ -75,6 +76,10 @@ export function ApiTokensPage({ apiBase, user }: ApiTokensPageProps) {
   const [minted, setMinted] = useState<MintedToken | null>(null);
   const [confirming, setConfirming] = useState<ApiToken | null>(null);
   const [busy, setBusy] = useState<null | "mint" | "revoke">(null);
+  // Distinct from `tokens === null`, which means "still loading". A failed read
+  // must not render the empty state: this page's whole job is enumerating live
+  // credentials, and "No tokens yet" is the one thing it then cannot know.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,8 +92,9 @@ export function ApiTokensPage({ apiBase, user }: ApiTokensPageProps) {
       .then((list) => { if (live) setTokens(list); })
       .catch((e) => {
         if (!live) return;
+        if (isSessionExpired(e)) return login();
         fail(e, "tokens-list");
-        setTokens([]);
+        setLoadFailed(true);
       });
     return () => { live = false; };
   }, [apiBase, tokenSession]);
@@ -115,6 +121,7 @@ export function ApiTokensPage({ apiBase, user }: ApiTokensPageProps) {
       const { token: _plaintext, ...row } = created;
       setTokens((current) => [row, ...(current ?? [])]);
     } catch (e) {
+      if (isSessionExpired(e)) return login();
       fail(e, "tokens-mint");
     } finally {
       setBusy(null);
@@ -136,6 +143,10 @@ export function ApiTokensPage({ apiBase, user }: ApiTokensPageProps) {
       if (minted?.id === target.id) setMinted(null);
       setConfirming(null);
     } catch (e) {
+      // Kept on this page rather than swallowed: a revoke that failed because a
+      // colleague got there first (404) or because the session went stale (401)
+      // must not read as a revoke that worked.
+      if (isSessionExpired(e)) return login();
       fail(e, "tokens-revoke");
     } finally {
       setBusy(null);
@@ -191,7 +202,7 @@ export function ApiTokensPage({ apiBase, user }: ApiTokensPageProps) {
             </p>
           )}
 
-          {error && <p style={errorText} role="alert">{error}</p>}
+          {error && !confirming && <p style={errorText} role="alert">{error}</p>}
 
           {minted && (
             <div style={callout} role="status">
@@ -245,7 +256,7 @@ export function ApiTokensPage({ apiBase, user }: ApiTokensPageProps) {
               <button
                 type="submit"
                 style={primaryButton}
-                disabled={busy !== null || !name.trim() || tokens === null}
+                disabled={busy !== null || !name.trim() || (tokens === null && !loadFailed)}
               >
                 {busy === "mint" ? <Spinner size={14} /> : "Create token"}
               </button>
@@ -255,6 +266,8 @@ export function ApiTokensPage({ apiBase, user }: ApiTokensPageProps) {
 
           {tokenSession
             ? null
+            : loadFailed
+            ? <p style={muted}>The token list could not be loaded. Reload to try again.</p>
             : tokens === null
             ? <p style={muted}><Spinner size={14} /> Loading tokens…</p>
             : tokens.length === 0
@@ -279,6 +292,7 @@ export function ApiTokensPage({ apiBase, user }: ApiTokensPageProps) {
           title="Revoke this token?"
           onClose={() => { if (busy !== "revoke") setConfirming(null); }}
         >
+          {error && <p style={errorText} role="alert">{error}</p>}
           <p style={confirmBody}>
             <strong>{confirming.name}</strong> stops working on its very next request.
             Anything using it — a nightly workflow, a script, somebody's shell — starts
@@ -293,14 +307,19 @@ export function ApiTokensPage({ apiBase, user }: ApiTokensPageProps) {
             >
               {busy === "revoke" ? "Revoking…" : "Revoke"}
             </button>
-            {/* Focus lands here, not on Revoke — the same reason My Demos orders
-                its delete confirmation this way. */}
+            {/* `data-autofocus`, not React's `autoFocus`: `Dialog` focuses the
+                content's first focusable from an effect that runs *after* the
+                layout-phase autoFocus, so it would win and land focus on Revoke
+                — where Enter or Space revokes a live credential without the
+                question having been answered. The marker is the hatch Dialog
+                documents for exactly this, and what every other destructive
+                confirm in the app uses. */}
             <button
               type="button"
               style={ghostButton}
               onClick={() => setConfirming(null)}
               disabled={busy === "revoke"}
-              autoFocus
+              data-autofocus
             >
               Cancel
             </button>
