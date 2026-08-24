@@ -365,9 +365,18 @@
 .hot-cta-tooltip {
   position: absolute;
   top: calc(100% + 8px);
-  left: 0;
+  /* Right-anchored, not `left: 0` (DEV-2593). Both triggers live in the top
+     bar's right-hand cluster with Download, the theme toggle and the account
+     menu still to their right, so a 320px panel growing rightwards ran past the
+     window on every viewport width — and nothing between here and <body>
+     scrolls, so the overflow was simply cut off. Growing leftwards from the
+     trigger's right edge keeps the whole panel on screen. */
+  right: 0;
   z-index: 950;
   width: 320px;
+  /* The other edge, for the narrow window where the cluster itself is near the
+     left: shrink rather than disappear off the left side. */
+  max-width: calc(100vw - 32px);
   background: var(--hot-color-surface-raised);
   border: 1px solid var(--hot-color-control-border);
   border-radius: 8px;

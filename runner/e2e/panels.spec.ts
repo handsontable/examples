@@ -11,6 +11,8 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 
 const CHAT = 'aside[aria-label="Ask about this example"]';
 const STYLE = 'aside[aria-label="Style this demo"]';
+// The hover CTA both toolbar buttons raise — one treatment, one class.
+const HINT = ".hot-cta-tooltip";
 
 async function openPlayground(page: Page, mode: "light" | "dark") {
   await page.addInitScript((m) => localStorage.setItem("hot-theme", m), mode);
@@ -167,6 +169,30 @@ test.describe("drawer chrome", () => {
     await page.keyboard.press("Escape");
     await expect(page.locator(CHAT)).toBeVisible();
   });
+
+  // DEV-2593: the tooltip is 320px wide and used to hang off the *left* edge of
+  // its trigger, so it ran past the right side of the window — both CTAs sit in
+  // the top bar's right-hand cluster, and no ancestor scrolls, so the overflow
+  // is simply cut off by the viewport. Measured, not screenshotted: a clipped
+  // panel and a narrow one look the same in a picture.
+  for (const trigger of ["Ask AI", "Style"]) {
+    test(`the ${trigger} tooltip stays inside the viewport`, async ({ page }) => {
+      await openPlayground(page, "light");
+      await page.getByRole("button", { name: trigger, exact: true }).hover();
+
+      const hint = page.locator(HINT);
+      await expect(hint).toBeVisible();
+
+      // `getBoundingClientRect`, not `offsetWidth`: what is under test is where
+      // the box lands relative to the window, and nothing here is transformed.
+      const box = await hint.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return { left: r.left, right: r.right, viewport: document.documentElement.clientWidth };
+      });
+      expect(box.right).toBeLessThanOrEqual(box.viewport);
+      expect(box.left).toBeGreaterThanOrEqual(0);
+    });
+  }
 });
 
 /** WCAG 2.1 contrast ratio of one element's text against its own background,
