@@ -2,7 +2,7 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-f5eb5d6-20260821",
+  "hotVersion": "0.0.0-next-5c5c33b-20260824",
   "count": 1477,
   "examples": [
     {
@@ -678,10 +678,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__angular__example1.ts.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/empty-data-state",
@@ -694,10 +694,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__javascript__example1.js.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/empty-data-state",
@@ -710,10 +710,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__react__example1.tsx.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/empty-data-state",
@@ -726,10 +726,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__javascript__example1.ts.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/empty-data-state",
@@ -742,10 +742,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__vue__example1.vue.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/empty-data-state",
@@ -758,10 +758,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__angular__example2.ts.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example2",
       "exampleTitle": "Custom configuration",
       "docPermalink": "/empty-data-state",
@@ -774,10 +774,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__javascript__example2.js.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example2",
       "exampleTitle": "Custom configuration",
       "docPermalink": "/empty-data-state",
@@ -790,10 +790,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__react__example2.tsx.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example2",
       "exampleTitle": "Custom configuration",
       "docPermalink": "/empty-data-state",
@@ -806,10 +806,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__javascript__example2.ts.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example2",
       "exampleTitle": "Custom configuration",
       "docPermalink": "/empty-data-state",
@@ -822,10 +822,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__vue__example2.vue.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example2",
       "exampleTitle": "Custom configuration",
       "docPermalink": "/empty-data-state",
@@ -838,10 +838,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__angular__example3.ts.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example3",
       "exampleTitle": "Dynamic messages based on source",
       "docPermalink": "/empty-data-state",
@@ -854,10 +854,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__javascript__example3.js.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example3",
       "exampleTitle": "Dynamic messages based on source",
       "docPermalink": "/empty-data-state",
@@ -870,10 +870,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__react__example3.tsx.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example3",
       "exampleTitle": "Dynamic messages based on source",
       "docPermalink": "/empty-data-state",
@@ -886,10 +886,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__javascript__example3.ts.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example3",
       "exampleTitle": "Dynamic messages based on source",
       "docPermalink": "/empty-data-state",
@@ -902,10 +902,10 @@
       "file": "guides__accessories-and-menus__empty-data-state__vue__example3.vue.json",
       "breadcrumb": [
         "Accessories And Menus",
-        "Empty Data State"
+        "Empty data state"
       ],
       "guide": "guides/accessories-and-menus/empty-data-state/empty-data-state.md",
-      "guideTitle": "Empty Data State",
+      "guideTitle": "Empty data state",
       "exampleId": "example3",
       "exampleTitle": "Dynamic messages based on source",
       "docPermalink": "/empty-data-state",
@@ -1163,7 +1163,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example4",
-      "exampleTitle": "Prevent CSV Injection attack",
+      "exampleTitle": "Prevent CSV injection attack",
       "docPermalink": "/export-to-csv",
       "framework": "angular",
       "displayName": "Angular"
@@ -1179,7 +1179,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example4",
-      "exampleTitle": "Prevent CSV Injection attack",
+      "exampleTitle": "Prevent CSV injection attack",
       "docPermalink": "/export-to-csv",
       "framework": "javascript",
       "displayName": "JavaScript"
@@ -1195,7 +1195,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example4",
-      "exampleTitle": "Prevent CSV Injection attack",
+      "exampleTitle": "Prevent CSV injection attack",
       "docPermalink": "/export-to-csv",
       "framework": "react",
       "displayName": "React (TS)"
@@ -1211,7 +1211,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example4",
-      "exampleTitle": "Prevent CSV Injection attack",
+      "exampleTitle": "Prevent CSV injection attack",
       "docPermalink": "/export-to-csv",
       "framework": "typescript",
       "displayName": "TypeScript"
@@ -1227,7 +1227,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example4",
-      "exampleTitle": "Prevent CSV Injection attack",
+      "exampleTitle": "Prevent CSV injection attack",
       "docPermalink": "/export-to-csv",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -5003,7 +5003,7 @@
       "guide": "guides/cell-functions/cell-renderer/cell-renderer.md",
       "guideTitle": "Cell renderer",
       "exampleId": "example2",
-      "exampleTitle": "Use the renderer component within React's Context",
+      "exampleTitle": "Use the renderer component within React's context",
       "docPermalink": "/cell-renderer",
       "framework": "angular",
       "displayName": "Angular"
@@ -5019,7 +5019,7 @@
       "guide": "guides/cell-functions/cell-renderer/cell-renderer.md",
       "guideTitle": "Cell renderer",
       "exampleId": "example2",
-      "exampleTitle": "Use the renderer component within React's Context",
+      "exampleTitle": "Use the renderer component within React's context",
       "docPermalink": "/cell-renderer",
       "framework": "react",
       "displayName": "React (TS)"
@@ -5035,7 +5035,7 @@
       "guide": "guides/cell-functions/cell-renderer/cell-renderer.md",
       "guideTitle": "Cell renderer",
       "exampleId": "example2",
-      "exampleTitle": "Use the renderer component within React's Context",
+      "exampleTitle": "Use the renderer component within React's context",
       "docPermalink": "/cell-renderer",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -5494,10 +5494,10 @@
       "file": "guides__cell-functions__custom-cells__vue__example1.vue.json",
       "breadcrumb": [
         "Cell Functions",
-        "Custom Cells"
+        "Custom cells"
       ],
       "guide": "guides/cell-functions/custom-cells/custom-cells.md",
-      "guideTitle": "Custom Cells",
+      "guideTitle": "Custom cells",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/custom-cells",
@@ -5510,10 +5510,10 @@
       "file": "guides__cell-functions__custom-cells__vue__example2.vue.json",
       "breadcrumb": [
         "Cell Functions",
-        "Custom Cells"
+        "Custom cells"
       ],
       "guide": "guides/cell-functions/custom-cells/custom-cells.md",
-      "guideTitle": "Custom Cells",
+      "guideTitle": "Custom cells",
       "exampleId": "example2",
       "exampleTitle": "Vue component renderer",
       "docPermalink": "/custom-cells",
@@ -5526,10 +5526,10 @@
       "file": "guides__cell-functions__custom-cells__vue__example3.vue.json",
       "breadcrumb": [
         "Cell Functions",
-        "Custom Cells"
+        "Custom cells"
       ],
       "guide": "guides/cell-functions/custom-cells/custom-cells.md",
-      "guideTitle": "Custom Cells",
+      "guideTitle": "Custom cells",
       "exampleId": "example3",
       "exampleTitle": "Custom editors",
       "docPermalink": "/custom-cells",
@@ -23505,10 +23505,10 @@
       "file": "guides__styling__theme-customization__angular__example1.ts.json",
       "breadcrumb": [
         "Styling",
-        "Theme Customization"
+        "Theme customization"
       ],
       "guide": "guides/styling/theme-customization/theme-customization.md",
-      "guideTitle": "Theme Customization",
+      "guideTitle": "Theme customization",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/theme-customization",
@@ -23521,10 +23521,10 @@
       "file": "guides__styling__theme-customization__javascript__example1.js.json",
       "breadcrumb": [
         "Styling",
-        "Theme Customization"
+        "Theme customization"
       ],
       "guide": "guides/styling/theme-customization/theme-customization.md",
-      "guideTitle": "Theme Customization",
+      "guideTitle": "Theme customization",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/theme-customization",
@@ -23537,10 +23537,10 @@
       "file": "guides__styling__theme-customization__react__example1.tsx.json",
       "breadcrumb": [
         "Styling",
-        "Theme Customization"
+        "Theme customization"
       ],
       "guide": "guides/styling/theme-customization/theme-customization.md",
-      "guideTitle": "Theme Customization",
+      "guideTitle": "Theme customization",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/theme-customization",
@@ -23553,10 +23553,10 @@
       "file": "guides__styling__theme-customization__javascript__example1.ts.json",
       "breadcrumb": [
         "Styling",
-        "Theme Customization"
+        "Theme customization"
       ],
       "guide": "guides/styling/theme-customization/theme-customization.md",
-      "guideTitle": "Theme Customization",
+      "guideTitle": "Theme customization",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/theme-customization",
@@ -23569,10 +23569,10 @@
       "file": "guides__styling__theme-customization__vue__example1.vue.json",
       "breadcrumb": [
         "Styling",
-        "Theme Customization"
+        "Theme customization"
       ],
       "guide": "guides/styling/theme-customization/theme-customization.md",
-      "guideTitle": "Theme Customization",
+      "guideTitle": "Theme customization",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/theme-customization",
@@ -23585,10 +23585,10 @@
       "file": "guides__styling__theme-customization__angular__example2.ts.json",
       "breadcrumb": [
         "Styling",
-        "Theme Customization"
+        "Theme customization"
       ],
       "guide": "guides/styling/theme-customization/theme-customization.md",
-      "guideTitle": "Theme Customization",
+      "guideTitle": "Theme customization",
       "exampleId": "example2",
       "exampleTitle": "Theme API example",
       "docPermalink": "/theme-customization",
@@ -23601,10 +23601,10 @@
       "file": "guides__styling__theme-customization__javascript__example2.js.json",
       "breadcrumb": [
         "Styling",
-        "Theme Customization"
+        "Theme customization"
       ],
       "guide": "guides/styling/theme-customization/theme-customization.md",
-      "guideTitle": "Theme Customization",
+      "guideTitle": "Theme customization",
       "exampleId": "example2",
       "exampleTitle": "Theme API example",
       "docPermalink": "/theme-customization",
@@ -23617,10 +23617,10 @@
       "file": "guides__styling__theme-customization__react__example2.tsx.json",
       "breadcrumb": [
         "Styling",
-        "Theme Customization"
+        "Theme customization"
       ],
       "guide": "guides/styling/theme-customization/theme-customization.md",
-      "guideTitle": "Theme Customization",
+      "guideTitle": "Theme customization",
       "exampleId": "example2",
       "exampleTitle": "Theme API example",
       "docPermalink": "/theme-customization",
@@ -23633,10 +23633,10 @@
       "file": "guides__styling__theme-customization__javascript__example2.ts.json",
       "breadcrumb": [
         "Styling",
-        "Theme Customization"
+        "Theme customization"
       ],
       "guide": "guides/styling/theme-customization/theme-customization.md",
-      "guideTitle": "Theme Customization",
+      "guideTitle": "Theme customization",
       "exampleId": "example2",
       "exampleTitle": "Theme API example",
       "docPermalink": "/theme-customization",
@@ -23649,10 +23649,10 @@
       "file": "guides__styling__theme-customization__vue__example2.vue.json",
       "breadcrumb": [
         "Styling",
-        "Theme Customization"
+        "Theme customization"
       ],
       "guide": "guides/styling/theme-customization/theme-customization.md",
-      "guideTitle": "Theme Customization",
+      "guideTitle": "Theme customization",
       "exampleId": "example2",
       "exampleTitle": "Theme API example",
       "docPermalink": "/theme-customization",
