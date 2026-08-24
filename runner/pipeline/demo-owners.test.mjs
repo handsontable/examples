@@ -72,6 +72,18 @@ test("a row with no owner is counted in the total but gets no option", () => {
   assert.deepEqual(options.slice(1).map((o) => o.value), ["dev"]);
 });
 
+test("two casings of one address are one owner, not two", () => {
+  // `created_by` has two writers (DEV-2501): the browser stores the broker's
+  // casing, the MCP path a normalised one. Options keyed on the raw value would
+  // list the same person twice, each with half their demos.
+  const options = ownerOptions(
+    [demo("Dev@Handsontable.com", "a"), demo("dev@handsontable.com", "b")],
+    displayNameFromEmail,
+  );
+  assert.deepEqual(options.map((o) => o.label), ["Everyone (2)", "Dev (2)"]);
+  assert.equal(options[1].value, "dev");
+});
+
 test("filtering matches on the slug, case-insensitively", () => {
   assert.deepEqual(filterByOwner(LIST, "marek.martuszewski").map((d) => d.id), ["a", "c", "e"]);
   assert.deepEqual(filterByOwner(LIST, "MAREK.MARTUSZEWSKI").map((d) => d.id), ["a", "c", "e"]);

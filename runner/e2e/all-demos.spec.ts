@@ -195,6 +195,22 @@ test("the owner filter shows one person's demos, and the view is a link", async 
   await expect(page).not.toHaveURL(/owner=/);
 });
 
+test("a pasted filter link filters regardless of its case", async ({ page }) => {
+  // The URL is the shareable artefact, and pasted links arrive hand-edited or
+  // autocapitalised. The slug has to match case-insensitively end to end: the
+  // grid filters AND the picker names the person — a filtered grid under an
+  // "Everyone" label would read as the whole team having two demos.
+  await stubShell(page);
+  await signIn(page);
+  await stubDemos(page);
+  await page.goto("/all-demos?owner=SOMEONE.ELSE");
+
+  await expect(card(page, "Their grid")).toBeVisible();
+  await expect(card(page, "Their second grid")).toBeVisible();
+  await expect(card(page, "My grid")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Filter demos by owner" })).toContainText("Someone Else (2)");
+});
+
 test("a filter that matches nobody says whose it was", async ({ page }) => {
   await stubShell(page);
   await signIn(page);
