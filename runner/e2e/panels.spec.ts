@@ -11,6 +11,8 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 
 const CHAT = 'aside[aria-label="Ask about this example"]';
 const STYLE = 'aside[aria-label="Style this demo"]';
+// The hover CTA both toolbar buttons raise — one treatment, one class.
+const HINT = ".hot-cta-tooltip";
 
 async function openPlayground(page: Page, mode: "light" | "dark") {
   await page.addInitScript((m) => localStorage.setItem("hot-theme", m), mode);
@@ -166,6 +168,55 @@ test.describe("drawer chrome", () => {
     });
     await page.keyboard.press("Escape");
     await expect(page.locator(CHAT)).toBeVisible();
+  });
+
+  // DEV-2593: the tooltip is 320px wide and used to hang off the *left* edge of
+  // its trigger, so it ran past the right side of the window — both CTAs sit in
+  // the top bar's right-hand cluster, and no ancestor scrolls, so the overflow
+  // is simply cut off by the viewport. Measured, not screenshotted: a clipped
+  // panel and a narrow one look the same in a picture.
+  for (const trigger of ["Ask AI", "Style"]) {
+    test(`the ${trigger} tooltip stays inside the viewport`, async ({ page }) => {
+      await openPlayground(page, "light");
+      await page.getByRole("button", { name: trigger, exact: true }).hover();
+
+      const hint = page.locator(HINT);
+      await expect(hint).toBeVisible();
+
+      // `getBoundingClientRect`, not `offsetWidth`: what is under test is where
+      // the box lands relative to the window, and nothing here is transformed.
+      const box = await hint.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return { left: r.left, right: r.right, viewport: document.documentElement.clientWidth };
+      });
+      expect(box.right).toBeLessThanOrEqual(box.viewport);
+      expect(box.left).toBeGreaterThanOrEqual(0);
+    });
+  }
+
+  // The other edge, and the reason the `max-width` next to `right: 0` is not
+  // decoration. Right-anchoring cannot push the panel off the left — the flex
+  // spacer pins the cluster to the right, so only what sits *right* of the
+  // trigger moves it, and across 320–1280px the left edge never comes within
+  // 32px of zero. What does bite below ~352px is the panel being wider than the
+  // window at all; there the clamp has to shrink it or one edge goes.
+  test("a window narrower than the tooltip shrinks it instead of clipping it", async ({ page }) => {
+    await openPlayground(page, "light");
+    await page.setViewportSize({ width: 320, height: 720 });
+    await page.getByRole("button", { name: "Style", exact: true }).hover();
+
+    const hint = page.locator(HINT);
+    await expect(hint).toBeVisible();
+
+    const box = await hint.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, right: r.right, width: r.width, viewport: document.documentElement.clientWidth };
+    });
+    expect(box.right).toBeLessThanOrEqual(box.viewport);
+    expect(box.left).toBeGreaterThanOrEqual(0);
+    // And it got there by shrinking, not by the trigger happening to sit far
+    // enough in: at its natural 320px nothing would fit a 320px window.
+    expect(box.width).toBeLessThan(320);
   });
 });
 
