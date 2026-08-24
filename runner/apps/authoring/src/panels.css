@@ -374,8 +374,12 @@
   right: 0;
   z-index: 950;
   width: 320px;
-  /* The other edge, for the narrow window where the cluster itself is near the
-     left: shrink rather than disappear off the left side. */
+  /* The left edge is not at risk from the cluster moving — the flex spacer keeps
+     it pinned right, so the trigger's distance from the *right* of the window is
+     what sets where this lands, and measured across 320–1280px the panel's left
+     edge never gets closer to zero than 32px. What is at risk below ~352px is
+     the panel simply being wider than the window: there the clamp binds (308px
+     at a 340 window, 288 at 320) and both edges stay inside. */
   max-width: calc(100vw - 32px);
   background: var(--hot-color-surface-raised);
   border: 1px solid var(--hot-color-control-border);

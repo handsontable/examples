@@ -193,6 +193,31 @@ test.describe("drawer chrome", () => {
       expect(box.left).toBeGreaterThanOrEqual(0);
     });
   }
+
+  // The other edge, and the reason the `max-width` next to `right: 0` is not
+  // decoration. Right-anchoring cannot push the panel off the left — the flex
+  // spacer pins the cluster to the right, so only what sits *right* of the
+  // trigger moves it, and across 320–1280px the left edge never comes within
+  // 32px of zero. What does bite below ~352px is the panel being wider than the
+  // window at all; there the clamp has to shrink it or one edge goes.
+  test("a window narrower than the tooltip shrinks it instead of clipping it", async ({ page }) => {
+    await openPlayground(page, "light");
+    await page.setViewportSize({ width: 320, height: 720 });
+    await page.getByRole("button", { name: "Style", exact: true }).hover();
+
+    const hint = page.locator(HINT);
+    await expect(hint).toBeVisible();
+
+    const box = await hint.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, right: r.right, width: r.width, viewport: document.documentElement.clientWidth };
+    });
+    expect(box.right).toBeLessThanOrEqual(box.viewport);
+    expect(box.left).toBeGreaterThanOrEqual(0);
+    // And it got there by shrinking, not by the trigger happening to sit far
+    // enough in: at its natural 320px nothing would fit a 320px window.
+    expect(box.width).toBeLessThan(320);
+  });
 });
 
 /** WCAG 2.1 contrast ratio of one element's text against its own background,
