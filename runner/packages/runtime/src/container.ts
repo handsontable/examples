@@ -149,20 +149,37 @@ async function readFailure(
 const TIMEOUT_STATUSES = new Set([504, 522, 524]);
 
 /**
- * What to tell the user when POST /api/session comes back not-ok, in five tiers.
+ * A 403 our Worker did not send is the edge refusing the request before it ever
+ * arrived (DEV-2631, ADR-0038). The session handler answers 400, 410, and the
+ * guardrail's 401/503 — never 403 — so on this route the status is diagnostic on
+ * its own, and `envelope: false` confirms nobody downstream of the edge spoke.
  *
- * ⚠ The wording of the two platform tiers — gateway-timeout and service-unavailable —
- * is a contract with `describeRuntimeError` in apps/authoring/src/App.tsx, whose
- * container-engine heuristic matches
+ * What earns this its own tier is not the wording but where the request dies. The
+ * Worker never runs, so there is no Sentry event, no usage row and nothing in
+ * `wrangler tail`: the only trace is the message below. It fires today because the
+ * Cloudflare Managed Ruleset blocks any body containing `<script`, and 16 of the 19
+ * frameworks ship an HTML entry that has one — so this is not a hypothetical tier,
+ * it is the shape of a live incident.
+ */
+const EDGE_BLOCK_STATUS = 403;
+
+/**
+ * What to tell the user when POST /api/session comes back not-ok, in six tiers.
+ *
+ * ⚠ The wording of the three platform tiers — gateway-timeout, service-unavailable
+ * and edge-block — is a contract with `describeRuntimeError` in
+ * apps/authoring/src/App.tsx, whose container-engine heuristic matches
  * /failed to fetch|networkerror|load failed|session start failed|fetch/i and REPLACES
  * the message with the local-dev "run the API worker, it needs Docker" text. That is
  * right for a developer whose worker is down and wrong for a visitor on
  * demos.handsontable.com whose sandbox timed out — which is exactly what production
- * users got for the 82 events of Sentry DEMOS-9 (DEV-2538). So both of those sentences
- * must contain none of those words, "fetch" above all. The connectivity tiers below
- * them keep saying "session start failed" on purpose, so they keep tripping the
- * heuristic. `pipeline/session-start-failure.test.mjs` is what holds both halves in
- * place.
+ * users got for the 82 events of Sentry DEMOS-9 (DEV-2538). So none of those three
+ * sentences may contain any of those words, "fetch" above all. The stake is highest on
+ * the edge-block one (DEV-2631): a blocked rule hits every visitor of an affected
+ * framework at once, and "install Docker" is the one answer that guarantees none of
+ * them reports the real cause. The connectivity tiers below them keep saying "session
+ * start failed" on purpose, so they keep tripping the heuristic.
+ * `pipeline/session-start-failure.test.mjs` is what holds both halves in place.
  */
 function sessionStartMessage(
   status: number,
@@ -196,6 +213,14 @@ function sessionStartMessage(
   // through would keep the App.tsx misattribution alive for exactly it.
   if (!failure.envelope && status === 503) {
     return `The sandbox service is unavailable right now (503). Nothing is wrong with the code — try "Restart preview" in a moment.`;
+  }
+  // Refused above our Worker (see EDGE_BLOCK_STATUS). The body here is whatever error
+  // page the edge served, which is worth nothing to a reader and would put a slab of
+  // Cloudflare markup in the Sentry title, so it is dropped rather than appended. No
+  // "Restart preview" hint either: a rule that refused this request will refuse the
+  // retry, and inviting one buries the cause under a loop the visitor blames on us.
+  if (!failure.envelope && status === EDGE_BLOCK_STATUS) {
+    return `The preview was blocked before it reached the demo server (${status}). Nothing is wrong with the code — a security rule at the edge refused the request.`;
   }
   // No body at all on some other status: the API is not answering usefully, which in
   // practice is a local worker that isn't running. No trailing colon introducing a

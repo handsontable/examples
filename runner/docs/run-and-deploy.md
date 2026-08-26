@@ -111,6 +111,36 @@ ADR-0011):
 
 Static shares (`/d/:id`) and docs embeds (`/embed/:id`) do **not** need this.
 
+## WAF exception for `/api/*` (one-time)
+
+A workspace posted to the runner contains an HTML entry, and 16 of the 19
+frameworks ship a `<script type="module">` tag in it. The Cloudflare Managed
+Ruleset blocks that at the edge, so Fork, Save, Embed, Tier-2 session boot, the
+Theme Builder payload and the MCP create/update paths all answer **403 with a
+Cloudflare HTML body** and never reach the Worker — no Sentry event, nothing in
+`wrangler tail`. Full reasoning, including why encoding around it does not work,
+in [ADR-0038](adr/0038-waf-exception-for-source-code-payloads.md).
+
+On the `handsontable.com` zone → **Security → WAF → Managed rules → Cloudflare
+Managed Ruleset → Add exception**. Requires *Zone WAF: Edit* on the zone.
+
+- Skip **only** rule `9c8dda9708cc4452ac76e7be7b58420b` (ruleset
+  `efb7b8c949ac4650a09736fc376e9aee`), not the whole ruleset.
+- Expression:
+  `http.host eq "demos.handsontable.com" and starts_with(http.request.uri.path, "/api/")`
+
+Scoped to `/api/*` on purpose: `/d/:id` and `/embed/:id` are the paths that serve
+HTML to a browser, and they stay behind the full ruleset.
+
+Verify — a body the Worker itself would refuse, so `401` proves the request
+arrived and `403` proves the edge ate it:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://demos.handsontable.com/api/demos \
+  -H 'Content-Type: application/json' \
+  --data '{"files":{"/index.html":"<script></script>"}}'
+```
+
 ## Cost guardrails (one-time)
 
 ```bash
