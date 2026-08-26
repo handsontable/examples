@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-5d0990f-20260825",
-  "count": 1477,
+  "hotVersion": "0.0.0-next-d2e9d8e-20260826",
+  "count": 1487,
   "examples": [
     {
       "bucket": "next",
@@ -20615,6 +20615,166 @@
       "guideTitle": "Row headers",
       "exampleId": "example3",
       "exampleTitle": "Row headers as a function",
+      "docPermalink": "/row-header",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-header/angular/example4.ts",
+      "file": "guides__rows__row-header__angular__example4.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row headers"
+      ],
+      "guide": "guides/rows/row-header/row-header.md",
+      "guideTitle": "Row headers",
+      "exampleId": "example4",
+      "exampleTitle": "Size the header to its content",
+      "docPermalink": "/row-header",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-header/javascript/example4.js",
+      "file": "guides__rows__row-header__javascript__example4.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Row headers"
+      ],
+      "guide": "guides/rows/row-header/row-header.md",
+      "guideTitle": "Row headers",
+      "exampleId": "example4",
+      "exampleTitle": "Size the header to its content",
+      "docPermalink": "/row-header",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-header/react/example4.tsx",
+      "file": "guides__rows__row-header__react__example4.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Row headers"
+      ],
+      "guide": "guides/rows/row-header/row-header.md",
+      "guideTitle": "Row headers",
+      "exampleId": "example4",
+      "exampleTitle": "Size the header to its content",
+      "docPermalink": "/row-header",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-header/javascript/example4.ts",
+      "file": "guides__rows__row-header__javascript__example4.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row headers"
+      ],
+      "guide": "guides/rows/row-header/row-header.md",
+      "guideTitle": "Row headers",
+      "exampleId": "example4",
+      "exampleTitle": "Size the header to its content",
+      "docPermalink": "/row-header",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-header/vue/example4.vue",
+      "file": "guides__rows__row-header__vue__example4.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Row headers"
+      ],
+      "guide": "guides/rows/row-header/row-header.md",
+      "guideTitle": "Row headers",
+      "exampleId": "example4",
+      "exampleTitle": "Size the header to its content",
+      "docPermalink": "/row-header",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-header/angular/example5.ts",
+      "file": "guides__rows__row-header__angular__example5.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row headers"
+      ],
+      "guide": "guides/rows/row-header/row-header.md",
+      "guideTitle": "Row headers",
+      "exampleId": "example5",
+      "exampleTitle": "Add more row header columns",
+      "docPermalink": "/row-header",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-header/javascript/example5.js",
+      "file": "guides__rows__row-header__javascript__example5.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Row headers"
+      ],
+      "guide": "guides/rows/row-header/row-header.md",
+      "guideTitle": "Row headers",
+      "exampleId": "example5",
+      "exampleTitle": "Add more row header columns",
+      "docPermalink": "/row-header",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-header/react/example5.tsx",
+      "file": "guides__rows__row-header__react__example5.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Row headers"
+      ],
+      "guide": "guides/rows/row-header/row-header.md",
+      "guideTitle": "Row headers",
+      "exampleId": "example5",
+      "exampleTitle": "Add more row header columns",
+      "docPermalink": "/row-header",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-header/javascript/example5.ts",
+      "file": "guides__rows__row-header__javascript__example5.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row headers"
+      ],
+      "guide": "guides/rows/row-header/row-header.md",
+      "guideTitle": "Row headers",
+      "exampleId": "example5",
+      "exampleTitle": "Add more row header columns",
+      "docPermalink": "/row-header",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-header/vue/example5.vue",
+      "file": "guides__rows__row-header__vue__example5.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Row headers"
+      ],
+      "guide": "guides/rows/row-header/row-header.md",
+      "guideTitle": "Row headers",
+      "exampleId": "example5",
+      "exampleTitle": "Add more row header columns",
       "docPermalink": "/row-header",
       "framework": "vue",
       "displayName": "Vue 3"
