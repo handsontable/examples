@@ -25,7 +25,7 @@
 //     error that points at this file rather than at the rule it broke.
 
 /** What kind of failure this is, from the client's point of view. */
-export type ApiFailureKind = "session-expired" | "forbidden" | "other";
+export type ApiFailureKind = "session-expired" | "forbidden" | "edge-blocked" | "other";
 
 /** The copy for the two classified branches, exported so the e2e spec can assert
  *  the exact strings rather than a regex that drifts from them. */
@@ -37,6 +37,12 @@ export const FORBIDDEN_MESSAGE =
  *  or a truncated body must not produce an empty toast. */
 export const CAPABILITY_DENIED_MESSAGE =
   "An API token cannot do this. Sign in to continue.";
+/** A 403 that never reached the Worker (DEV-2631, ADR-0038). Says the two things
+ *  the ownership copy got wrong about it: whose fault it is not, and that there is
+ *  no point trying again. */
+export const EDGE_BLOCKED_MESSAGE =
+  "Blocked before it reached the runner. A security rule at the edge refused the " +
+  "request — this is not a login or permissions problem, and retrying will not clear it.";
 
 /** Whatever JSON the Worker put in the error body. Both fields are optional
  *  because a 401 from a proxy, or a body that failed to parse, has neither. */
@@ -113,6 +119,20 @@ export function describeApiFailure(
     return new ApiError(SESSION_EXPIRED_MESSAGE, status, "session-expired", false);
   }
   if (status === 403) {
+    // A 403 with NO `error` at all did not come from the Worker: every 403 it sends
+    // carries one — `forbidden` from the ownership checks, `token_forbidden` from the
+    // capability fence — so an empty body means the request was refused above us and
+    // never ran (DEV-2631, ADR-0038). First in this branch because the ownership copy
+    // below is the default, and it is a confident, specific, wrong sentence: a WAF
+    // block on demos.handsontable.com told owners their own demo belonged to someone
+    // else, and filed a Sentry issue saying so.
+    //
+    // Reportable on purpose, and it is the *only* reason this is not silent: the Worker
+    // never runs, so there is no server-side event, no usage row and nothing in
+    // `wrangler tail`. This report is the whole telemetry for an edge block.
+    if (!body.error) {
+      return new ApiError(EDGE_BLOCKED_MESSAGE, status, "edge-blocked", true);
+    }
     const detail = typeof body.detail === "string" ? body.detail.trim() : "";
     // A persistent API token's capability fence shares the status with the
     // ownership checks and means something else entirely: nothing belongs to

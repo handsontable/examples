@@ -333,3 +333,59 @@ test("the diagnostics ride alongside the message contract, not inside it", async
   assert.equal(err.status, 503);
   assert.equal(err.diagnostics?.ray, RAY);
 });
+
+// ── The edge-block tier (DEV-2631, ADR-0038) ────────────────────────────────────
+//
+// A zone-wide Cloudflare Managed Ruleset rule blocks any request body containing
+// `<script`, and 16 of the 19 frameworks ship an HTML entry that has one. So
+// `POST /api/session` answered 403 with a Cloudflare error page for most Tier-2
+// demos at once — 28 blocks from ~25 distinct external IPs on the first day.
+//
+// Before this tier, that produced `session start failed (403): <!DOCTYPE html>…`,
+// which trips the same `describeRuntimeError` heuristic as DEMOS-9 and told every
+// one of those visitors to install Docker and run a local API worker. The Worker
+// never ran, so nothing else in the system recorded the event: no Sentry issue, no
+// usage row, no `wrangler tail` line. The message was the only evidence there was.
+
+test("a 403 with no envelope reads as an edge block, not as a broken example", async () => {
+  const page = `<!DOCTYPE html><html><head><title>Attention Required! | Cloudflare</title></head><body>${"x".repeat(4000)}</body></html>`;
+  const err = await sessionStartError(403, page);
+
+  assert.match(err.message, /blocked before it reached/i, "the cause has to be in the sentence");
+  assert.match(err.message, /403/, "the status keeps Sentry titles distinguishable");
+  assert.doesNotMatch(err.message, /<html|DOCTYPE|Cloudflare/i, "the edge's error page is not a message");
+  assert.ok(err.message.length < 300, `message should be a sentence, got ${err.message.length} chars`);
+
+  // THE SAME CONTRACT the timeout tier above is pinned against, and it matters more
+  // here: an edge block hits every visitor of an affected framework simultaneously,
+  // so "install Docker" is the one answer that guarantees nobody reports the real
+  // cause. See the note on `sessionStartMessage`.
+  assert.doesNotMatch(err.message, /session start failed/i, "would trip the App.tsx heuristic");
+  assert.doesNotMatch(err.message, /fetch/i, "would trip the App.tsx heuristic");
+  assert.doesNotMatch(err.message, /failed to fetch|networkerror|load failed/i);
+});
+
+test("the edge tier does not invite a retry", async () => {
+  // The timeout tier ends with `try "Restart preview"` and should. A rule that refused
+  // this request will refuse the retry too, so the same hint here buys a loop the
+  // visitor reads as our flakiness — and buries the one sentence naming the cause.
+  const err = await sessionStartError(403, "<html>blocked</html>");
+
+  assert.doesNotMatch(err.message, /restart preview/i);
+  assert.doesNotMatch(err.message, /try again|retry/i);
+});
+
+test("a 403 that does carry an {error} envelope keeps the server's own words", async () => {
+  // Gated on the ABSENCE of an envelope, exactly like the timeout tier. Nothing in the
+  // session handler emits a 403 today — it answers 400, 410 and the guardrail's 401/503
+  // — so this is defensive; drop the `!failure.envelope` guard and a handler that starts
+  // returning one has its explanation silently replaced by a firewall story.
+  const err = await sessionStartError(
+    403,
+    JSON.stringify({ error: "forbidden", message: "this session belongs to someone else" }),
+  );
+
+  assert.equal(err.code, "forbidden");
+  assert.match(err.message, /belongs to someone else/, "the envelope's message must survive");
+  assert.doesNotMatch(err.message, /blocked before it reached/i, "the edge tier must not swallow an envelope");
+});
