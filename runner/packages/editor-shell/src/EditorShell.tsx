@@ -263,8 +263,12 @@ export function EditorShell(props: EditorShellProps) {
         // that reclaims nothing (measured); clearing it makes the focus a real
         // transition again. In the other manifestation the blur is itself the no-op.
         // CodeMirror re-restores its own selection on focus, so neither costs state.
+        //
+        // `preventScroll` for the same reason CodeMirror's own `view.focus()` uses it:
+        // `.cm-content` is the whole document, so a bare `focus()` may scroll a long
+        // file away from the caret the user is typing at.
         view.contentDOM.blur();
-        view.contentDOM.focus();
+        view.contentDOM.focus({ preventScroll: true });
       }, 0);
     };
     window.addEventListener("blur", onWindowBlur);
