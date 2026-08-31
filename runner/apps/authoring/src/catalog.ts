@@ -1,9 +1,20 @@
 import type { Catalog, CatalogIndexEntry } from "@handsontable/demo-runtime";
 import catalogJson from "../../../catalog.json";
+import docsBucketsJson from "../../../docs-buckets.json";
 
 // The index only (~15 KB): framework rows without files. Full starter
 // artifacts are lazy-fetched per version bucket — see starter-catalog.ts.
 export const catalog = catalogJson as unknown as Catalog;
+
+/** Committed docs-example bucket keys (Sentry DEMOS-1C). Static, like
+ *  `catalog.buckets` for starters — a fetched index would reintroduce the
+ *  SPA-fallback failure class it exists to remove, and add a round trip
+ *  before the picker can render. The JSON import must live here, not in
+ *  docs-catalog.ts: pipeline/docs-catalog.test.mjs imports docs-catalog.ts
+ *  directly under --experimental-strip-types, and node cannot resolve a bare
+ *  (attribute-less) JSON import — catalog.ts is already Vite-only for
+ *  exactly this reason. */
+export const docsBuckets: string[] = docsBucketsJson.buckets;
 
 export function getEntry(framework: string): CatalogIndexEntry {
   const e = catalog.examples.find((x) => x.framework === framework);

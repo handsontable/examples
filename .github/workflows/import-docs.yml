@@ -162,6 +162,10 @@ jobs:
           merge-multiple: true
           path: runner/apps/authoring/public/docs-examples
 
+      - name: Regenerate the docs bucket index
+        working-directory: runner
+        run: node --input-type=module -e 'import("./pipeline/import-docs.mjs").then(m => m.writeDocsBucketIndex())'
+
       - name: Create or update generated-content pull request
         # SHA-pinned: this job holds contents+PR write permissions, so a retargeted
         # upstream tag must not be able to run new code here.
