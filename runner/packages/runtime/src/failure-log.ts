@@ -20,6 +20,13 @@ import { redactPreviewHosts, truncateMessage } from "./monitor.js";
 export const STDERR_MARKERS =
   /\b(error|failed|failure|exception|unhandled|cannot find|not found|econnrefused|eaddrinuse)\b/i;
 
+/** A line the runner's own boot script narrates, as opposed to anything a tool said —
+ *  `index.ts` writes `::seeding …::`, `::frozen install failed for custom metadata;
+ *  retrying non-frozen::`, and its siblings. `::error::` is excluded on purpose: the
+ *  script emits it deliberately, before `exit 1`, and it is one of `CAUSE_LINE`'s
+ *  announcing prefixes below for exactly that reason (Sentry DEMOS-5C). */
+export const RUNNER_PROGRESS_MARKER = /^::(?!error::)/;
+
 /** A line that ANNOUNCES a cause, as opposed to merely mentioning one. Anchored at the
  *  start of the line on purpose: pnpm prints its prose hints ("This error happened
  *  while installing the dependencies of …") AFTER the code line, so an unanchored scan

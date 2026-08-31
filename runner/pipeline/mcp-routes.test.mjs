@@ -39,13 +39,23 @@ register("./fixtures/worker-hooks.mjs", import.meta.url);
 const { default: worker } = await import("../workers/api/src/index.ts");
 const { demoListQuery } = await import("../workers/api/src/demos-list.ts");
 
-const FILES = { "/package.json": '{"name":"demo"}', "/index.js": "console.log(1)" };
+// devDependencies.vite satisfies the toolchain gate (validateBuildToolchain):
+// every framework these fixtures build with (react, and demoRow()'s "react")
+// runs `vite build` as the last step of its buildCommand.
+const FILES = {
+  "/package.json": JSON.stringify({ name: "demo", devDependencies: { vite: "^5.4.0" } }),
+  "/index.js": "console.log(1)",
+};
 
 const PR_URL = "https://pkg.pr.new/handsontable@13106";
 
 /** A minimal workspace whose /package.json pins Handsontable to `dep`. */
 const filesWith = (dep) => ({
-  "/package.json": JSON.stringify({ name: "demo", dependencies: { handsontable: dep } }),
+  "/package.json": JSON.stringify({
+    name: "demo",
+    dependencies: { handsontable: dep },
+    devDependencies: { vite: "^5.4.0" },
+  }),
   "/index.js": "console.log(1)",
 });
 
@@ -70,6 +80,31 @@ const patchRequest = (id, body = { files: FILES }) =>
   });
 
 // ---- create ------------------------------------------------------------------
+
+test("a manifest that cannot run the framework's build is refused before a container is booted", async () => {
+  const { env, writes, artifacts } = makeEnv();
+  const res = await worker.fetch(
+    createRequest({
+      framework: "react",
+      title: "Grid",
+      description: "A sortable grid", // every other gate satisfied on purpose
+      files: {
+        "/package.json": JSON.stringify({
+          name: "demo",
+          dependencies: { handsontable: "16.0.0", react: "18.3.1" },
+        }),
+        "/index.js": "console.log(1)",
+      },
+    }),
+    env,
+    ctx,
+  );
+  assert.equal(res.status, 400);
+  // THE discriminating assertion: refused, and refused for the right reason.
+  assert.match((await res.json()).error, /\bvite\b/);
+  assert.deepEqual(writes, [], "no D1 write for a payload that cannot build");
+  assert.deepEqual(artifacts.puts, [], "no artifact stored for a payload that cannot build");
+});
 
 test("an MCP demo without a description is refused before it is built", async () => {
   const { env, writes, artifacts } = makeEnv();

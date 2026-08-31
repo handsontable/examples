@@ -24,7 +24,7 @@ import { authenticate, authenticateService, isTokenIdentity, presentsToken, same
 import { hashToken, mintToken, normalizeTokenName } from "./token.js";
 import { createToken, listTokens, revokeToken } from "./token-store.js";
 import { MAX_TITLE, isValidationError, validateDescription, validateTitle } from "./demo-info.js";
-import { isMcpCreated, isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
+import { isMcpCreated, isMcpValidationError, validateBuildToolchain, validateMcpFiles } from "./mcp-create.js";
 import { editorVersionRef, fetchVersionCatalog, resolveHandsontableVersion } from "./ht-version.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
@@ -1045,6 +1045,12 @@ export default Sentry.withSentry(sentryOptions, {
         if (isValidationError(description)) return json(description, 400);
         const files = validateMcpFiles(body.files);
         if (isMcpValidationError(files)) return json(files, 400);
+        // Before the budget gate, same reasoning as the version check just below:
+        // the build command is fixed by BUILD_CONFIG and cannot succeed without
+        // its binary, so a manifest that omits it is refused here rather than
+        // costing a container boot on a doomed install (Sentry DEMOS-31).
+        const toolchain = validateBuildToolchain(files, cfg.buildCommand);
+        if (toolchain) return json(toolchain, 400);
         // Before the budget gate: an unusable version is a 400, not a container
         // boot spent on an install that cannot succeed (DEV-2565).
         // `trustDistTag`: a tag from this path is the model's own request, not a
@@ -1186,6 +1192,10 @@ export default Sentry.withSentry(sentryOptions, {
           if (isMcpValidationError(files)) return json(files, 400);
           const cfg = BUILD_CONFIG[row.framework];
           if (!cfg) return json({ error: `unknown framework: ${row.framework}` }, 400);
+          // A rebuild boots the same container and burns the same budget as a
+          // create — see the create handler above (Sentry DEMOS-31).
+          const toolchain = validateBuildToolchain(files, cfg.buildCommand);
+          if (toolchain) return json(toolchain, 400);
           // `row.ht_version` is a candidate, not an authority: rows created before
           // DEV-2565 hold the "latest" sentinel, which no consumer can use.
           const version = await resolveHandsontableVersion(env, {

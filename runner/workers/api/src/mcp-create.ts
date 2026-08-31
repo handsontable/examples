@@ -5,6 +5,11 @@
 // the same guarantees have to be re-established here — the request is the only thing
 // we can trust, and a build is not free.
 
+// The first runtime import this file has ever had: a spec that imports it must
+// now register the .js->.ts hook (pipeline/fixtures/worker-hooks.mjs) and import
+// it dynamically — see guide-tracks.test.mjs / ht-version-resolve.test.mjs.
+import { snapshotBuildCommand } from "./build-command.js";
+
 /** A rejected payload. Same shape as `demo-info.ts` so the route can reply uniformly. */
 export interface McpValidationError {
   error: string;
@@ -80,6 +85,77 @@ export function validateMcpFiles(files: unknown): Record<string, string> | McpVa
   // deep in a container instead of here.
   if (!out["/package.json"]) return { error: "files must include /package.json" };
   return out;
+}
+
+/** npm package name per build binary, for the binaries `BUILD_CONFIG`'s build
+ *  commands actually invoke. Not derivable from the name (`ng` ships in
+ *  `@angular/cli`, `remix` in `@remix-run/dev`), so it is a table — and
+ *  `mcp-create.test.mjs` pins that the table covers every framework in
+ *  `BUILD_CONFIG`, so adding a framework without an entry fails the suite rather
+ *  than costing a container boot in production. */
+const BUILD_TOOL_PACKAGE: Record<string, string> = {
+  vite: "vite",
+  ng: "@angular/cli",
+  next: "next",
+  astro: "astro",
+  nuxt: "nuxt",
+  remix: "@remix-run/dev",
+};
+
+/**
+ * Can this manifest run the framework's build command at all?
+ *
+ * The build command comes from the catalog, not from the payload, so a manifest
+ * that does not declare its binary installs cleanly (`pnpm install` exits 0) and
+ * then dies as `sh: 1: vite: not found` — after a container boot billed against
+ * the spend ceiling, and as a 500 rather than something the caller can act on
+ * (Sentry DEMOS-31). Decided from the request alone, so it costs nothing.
+ *
+ * `dependencies`, `devDependencies`, and `peerDependencies` all count: the
+ * builder image runs pnpm 10.34.5 with no `.npmrc` overriding it anywhere in
+ * the repo, and pnpm's `auto-install-peers` defaults to true (pnpm >=7,
+ * unchanged through the 10.x line), so the non-frozen retry this path always
+ * takes (lockfiles are refused) installs a peer-only declaration into
+ * `node_modules/.bin` just as it would a `dependencies` one. Verified
+ * empirically: `pnpm install --no-frozen-lockfile` against a manifest holding
+ * only `{"peerDependencies":{"vite":"^5.4.0"}}` produces a working
+ * `node_modules/.bin/vite`. Refusing a peer-only manifest would be a false
+ * rejection of a demo that builds fine in the real container — worse than the
+ * bug this gate exists to catch.
+ */
+export function validateBuildToolchain(
+  files: Record<string, string>,
+  buildCommand: string,
+): McpValidationError | null {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(files["/package.json"] ?? "");
+  } catch {
+    return { error: "/package.json is not valid JSON" };
+  }
+  if (typeof manifest !== "object" || manifest === null) {
+    return { error: "/package.json is not valid JSON" };
+  }
+
+  const bin = snapshotBuildCommand(buildCommand).trim().split(/\s+/)[0];
+  const pkg = bin ? BUILD_TOOL_PACKAGE[bin] : undefined;
+  // Unknown binary: never refuse a payload because our table is behind — the
+  // coverage test is what keeps the table honest, not a production 400.
+  if (!pkg) return null;
+
+  const m = manifest as {
+    dependencies?: unknown;
+    devDependencies?: unknown;
+    peerDependencies?: unknown;
+  };
+  const section = (value: unknown): Record<string, unknown> =>
+    typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const deps = section(m.dependencies);
+  const devDeps = section(m.devDependencies);
+  const peerDeps = section(m.peerDependencies);
+  if (pkg in deps || pkg in devDeps || pkg in peerDeps) return null;
+
+  return { error: `/package.json must declare "${pkg}": this demo is built with \`${bin}\`` };
 }
 
 /**
