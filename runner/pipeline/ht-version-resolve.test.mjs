@@ -16,6 +16,7 @@
 // code and can stay green through a source mutation (`pnpm test` builds first).
 import test from "node:test";
 import assert from "node:assert/strict";
+import { register } from "node:module";
 import {
   handsontableDependencyRef,
   pinHandsontableFiles,
@@ -26,7 +27,16 @@ import {
   fetchVersionCatalog,
   resolveHandsontableVersion,
 } from "../workers/api/src/ht-version.ts";
-import { MAX_MCP_BYTES, isMcpValidationError, validateMcpFiles } from "../workers/api/src/mcp-create.ts";
+
+// mcp-create.ts stopped being import-free once the build-toolchain gate landed
+// (Sentry DEMOS-31): it now pulls in build-command.js by the repo's NodeNext-
+// style specifier, which bare --experimental-strip-types cannot resolve — the
+// same reason mcp-create.test.mjs and mcp-routes.test.mjs already register the
+// .js->.ts hook before importing it dynamically.
+register("./fixtures/worker-hooks.mjs", import.meta.url);
+const { MAX_MCP_BYTES, isMcpValidationError, validateMcpFiles } = await import(
+  "../workers/api/src/mcp-create.ts"
+);
 
 const PR_URL = "https://pkg.pr.new/handsontable@13106";
 /** Captured once, before any stub is installed. */

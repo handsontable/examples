@@ -18,7 +18,7 @@ import type {
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 import { MONITOR_EVENT_CEILING, normalizeMonitorMessage, truncateMessage } from "./monitor.js";
-import { failureDetail, STDERR_MARKERS } from "./failure-log.js";
+import { failureDetail, RUNNER_PROGRESS_MARKER, STDERR_MARKERS } from "./failure-log.js";
 
 /**
  * Split a failed boot log into the one line worth titling an issue with (`cause`) and
@@ -848,7 +848,17 @@ export class ContainerRuntime implements DemoRuntime {
     for (const raw of log.replace(/\x1b\[[0-9;]*m/g, "").split("\n")) {
       if (this.stderrRelayed >= MONITOR_EVENT_CEILING) return;
       const line = raw.trim();
-      if (!line || !STDERR_MARKERS.test(line)) continue;
+      if (!line) continue;
+      // Our own boot-script narration (`index.ts` writes `::seeding …::`,
+      // `::frozen install failed for custom metadata; retrying non-frozen::`,
+      // …) is progress, not a fault — the "retrying non-frozen" line is the
+      // DESIGNED path for an edited package.json, and it matches
+      // STDERR_MARKERS only because it contains the word "failed". Relaying
+      // it reported a recovered fallback as a defect and spent one of
+      // MONITOR_EVENT_CEILING's slots doing it (Sentry DEMOS-5C). `::error::`
+      // is exempt: the script emits it deliberately, before `exit 1`.
+      if (RUNNER_PROGRESS_MARKER.test(line)) continue;
+      if (!STDERR_MARKERS.test(line)) continue;
       const message = truncateMessage(line);
       const key = normalizeMonitorMessage(message);
       if (this.stderrSeen.has(key)) continue;

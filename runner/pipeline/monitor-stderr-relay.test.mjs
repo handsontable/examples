@@ -173,3 +173,54 @@ test("a genuinely different fault still gets through", async () => {
     h.restore();
   }
 });
+
+// --- DEMOS-5C: the boot script's own recovered-install narration -------------
+//
+// `index.ts`'s boot script echoes `::frozen install failed for custom metadata;
+// retrying non-frozen::` on stdout when an edited package.json cannot match its
+// lockfile — the DESIGNED, benign, recovered fallback, not a fault. It matches
+// STDERR_MARKERS only because it contains the word "failed", so relayStderr
+// reported a recovered path as a defect and spent a MONITOR_EVENT_CEILING slot
+// doing it.
+
+test("the boot script's own recovered-install narration is not reported as a fault", async () => {
+  const h = await keptAlive();
+  try {
+    await h.serve(
+      [
+        "::seeding immutable baked dependencies::",
+        "::reconciling dependencies with pnpm::",
+        "::frozen install failed for custom metadata; retrying non-frozen::",
+        "::starting dev server::",
+        "  VITE v5.4.0  ready in 431 ms",
+      ].join("\n"),
+    );
+    // THE discriminating assertion.
+    assert.deepEqual(
+      h.relayed,
+      [],
+      "a fallback the runner narrates on its own designed path is not a defect",
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+test("the boot script's ::error:: line is still relayed", async () => {
+  // Guards the filter against being silently widened into swallowing real
+  // errors: `::error::` is the runner's own deliberate fatal marker, emitted
+  // right before `exit 1`.
+  const h = await keptAlive();
+  try {
+    await h.serve(
+      [
+        "::reconciling dependencies with pnpm::",
+        "::error::frozen install failed for generated starter metadata; refusing to modify its lockfile",
+      ].join("\n"),
+    );
+    assert.equal(h.relayed.length, 1, JSON.stringify(h.relayed));
+    assert.match(h.relayed[0], /^::error::/);
+  } finally {
+    h.restore();
+  }
+});

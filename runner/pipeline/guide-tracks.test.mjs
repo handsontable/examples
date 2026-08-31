@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { register } from "node:module";
 
 import {
   GUIDE_TRACKS,
@@ -26,11 +27,18 @@ import {
   isGuideTrackSlug,
   parseGuideRoute,
 } from "../apps/authoring/src/guideTracks.ts";
-import { MAX_MCP_BYTES, MAX_MCP_FILES } from "../workers/api/src/mcp-create.ts";
 import { MAX_DESCRIPTION } from "../workers/api/src/demo-info.ts";
 // Built output, the way version.test.mjs imports it: version.ts pulls in `semver`
 // via `./types.js` specifiers that --experimental-strip-types cannot resolve.
 import { DEFAULT_MAX_MAJOR, DEFAULT_MIN_MAJOR } from "../packages/runtime/dist/version.js";
+
+// mcp-create.ts stopped being import-free once the build-toolchain gate landed
+// (Sentry DEMOS-31): it now pulls in build-command.js by the repo's NodeNext-
+// style specifier, which bare --experimental-strip-types cannot resolve — the
+// same reason mcp-create.test.mjs and mcp-routes.test.mjs already register the
+// .js->.ts hook before importing it dynamically.
+register("./fixtures/worker-hooks.mjs", import.meta.url);
+const { MAX_MCP_BYTES, MAX_MCP_FILES } = await import("../workers/api/src/mcp-create.ts");
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const docs = path.join(here, "../docs/guide");

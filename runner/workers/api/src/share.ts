@@ -12,6 +12,7 @@ import { execFailureDetail } from "@handsontable/demo-runtime/failure-log";
 import type { Env } from "./env.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { recordContainerUsage, SESSION_INSTANCE_TYPE } from "./budget.js";
+import { snapshotBuildCommand } from "./build-command.js";
 
 type SandboxLike = {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
@@ -182,6 +183,14 @@ function patchTurbopackRuntime(rel: string, contents: ArtifactContents): Artifac
   return contents.replace(/\blet ([A-Za-z_$][\w$]*)="\/_next\/"/, 'let $1="_next/"');
 }
 
+/** A failed exec. `success` is optional in the structural `SandboxLike` above (the
+ *  SDK's own `ExecResult` requires it, ours does not), so a result carrying only a
+ *  nonzero `exitCode` used to pass `success === false` and let the build run against
+ *  an empty node_modules. Both signals count. */
+function execFailed(r: { success?: boolean; exitCode?: number }): boolean {
+  return r.success === false || (typeof r.exitCode === "number" && r.exitCode !== 0);
+}
+
 /** Run the framework build in a builder container; return { relPath -> contents }. */
 export async function runBuild(
   env: Env,
@@ -206,7 +215,7 @@ export async function runBuild(
     }
 
     let install = await sbx.exec(`sh -lc "cd ${CONTAINER_ROOT} && ${entry.installCommand}"`);
-    if (install.success === false) {
+    if (execFailed(install)) {
       // Authoring edits (e.g. re-pinning the Handsontable version) change
       // package.json without regenerating the lockfile, so a frozen install
       // can't succeed. The builder is ephemeral and never persists the
@@ -216,19 +225,18 @@ export async function runBuild(
         `sh -lc "cd ${CONTAINER_ROOT} && ${entry.installCommand.replace(" --frozen-lockfile", "")} --no-frozen-lockfile"`,
       );
     }
-    if (install.success === false) throw describeBuildFailure("install", install);
+    if (execFailed(install)) throw describeBuildFailure("install", install);
 
     // Snapshots only need the bundle, not type-checking. Strip leading
     // type-check steps (tsc / vue-tsc) that often fail in ephemeral containers
     // and don't affect the built output.
-    const buildCommand = entry.buildCommand
-      .replace(/^\s*(tsc(\s+-b)?|vue-tsc[^&]*)\s*&&\s*/i, "");
+    const buildCommand = snapshotBuildCommand(entry.buildCommand);
     // Prepend node_modules/.bin so the raw build command resolves local binaries
     // (vite, ng, next, ...) without relying on an npm script.
     const build = await sbx.exec(
       `sh -lc "cd ${CONTAINER_ROOT} && export PATH=${CONTAINER_ROOT}/node_modules/.bin:$PATH && ${buildCommand}"`,
     );
-    if (build.success === false) throw describeBuildFailure("build", build);
+    if (execFailed(build)) throw describeBuildFailure("build", build);
 
     // Resolve the output directory (angular nests under dist/<project>/browser).
     let outDir = `${CONTAINER_ROOT}/${entry.outputDir}`;
