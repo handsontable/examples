@@ -446,7 +446,13 @@ test("same docs path uses isolated next and release cache entries", async ({ pag
   ]);
 });
 
-test("a version without a bucket leaves only starters in the picker", async ({ page }) => {
+// DEMOS-1C: a version absent from the committed docs-buckets.json index must
+// never even attempt the manifest fetch — that fetch-and-fail is exactly what
+// turned this by-design absence (ADR-0021 #2/#3) into a reported Sentry error,
+// 22 times. `requests` not containing the manifest URL is the discriminating
+// assertion: it fails against pre-fix code (which always probed via fetch)
+// and only passes once the static index short-circuits before the network.
+test("a version without a bucket never fetches its manifest, leaving only starters in the picker", async ({ page }) => {
   const requests: string[] = [];
   await installRouteFixtures(page, { requests });
   await page.goto("/?example=react&v=17.1.0");
@@ -454,7 +460,7 @@ test("a version without a bucket leaves only starters in the picker", async ({ p
 
   await expect(page.getByText("Starter templates", { exact: true })).toBeVisible();
   await expect(page.getByText("Columns", { exact: true })).toHaveCount(0);
-  expect(requests).toContain("/docs-examples/17.1/manifest.json");
+  expect(requests).not.toContain("/docs-examples/17.1/manifest.json");
 });
 
 test("an open docs example with no target bucket stops preview and remains recoverable", async ({ page }) => {
@@ -464,7 +470,12 @@ test("an open docs example with no target bucket stops preview and remains recov
 
   await pickFromMenu(page, "Handsontable version", "17.1.0");
 
-  await expect(page.getByText(/No documentation examples are available for Handsontable 17\.1\.0/).first()).toBeVisible();
+  // DEMOS-1C: the visitor is told which version has docs examples, not left
+  // at a dead end that names none. Discriminating against pre-fix code, whose
+  // literal message named only the selected version and never "18.0".
+  await expect(
+    page.getByText(/No documentation examples are available for Handsontable 17\.1\.0.*available for Handsontable 18\.0/).first(),
+  ).toBeVisible();
   await expect(page.locator("section[aria-label='Preview'] iframe")).toHaveAttribute("src", "about:blank");
   await page.getByRole("button", { name: /React/ }).first().click();
   await expect(page.getByText("Starter templates", { exact: true })).toBeVisible();
@@ -476,17 +487,45 @@ test("an open docs example with no target bucket stops preview and remains recov
   await expect(reactStarter).toHaveAttribute("aria-selected", "false");
 });
 
-test("an open docs example with no target bucket is classified the same on a 404 host", async ({ page }) => {
-  // The dev server and any correctly configured host still answer 404. Keeps
-  // that path covered now that the fixture default is the deployed SPA shape.
-  await installRouteFixtures(page, { notFoundStatus: 404 });
-  await page.goto(`/?docs=${DOCS_PATH}&v=18.0.0`);
-  await expect(editor(page)).toContainText(`18.0:${DOCS_PATH}`);
+// DEMOS-1C: the other half of the fix. `18.0` IS in the static index, so an
+// open docs example switching to it must still probe the manifest — an
+// indexed bucket the deploy is actually missing is a broken deploy, not the
+// ADR-0021 steady state, and must still surface as an error, with wording
+// that does not claim "18.0" is the fix when 18.0 is what just failed.
+// `availableBuckets: ["next"]` makes the fixture answer that probe with a
+// miss either way; which *shape* of miss is picked by `notFoundStatus`
+// below. Both host shapes are live in practice (the dev server and any
+// correctly configured host answer a real 404; the deployed host's
+// `not_found_handling: "single-page-application"` answers 200 + index.html
+// instead — DEV-2535 is exactly the bug that hid behind the gap between the
+// two), so both must classify identically. Paired with "never fetches its
+// manifest" above: absent-from-index skips the network;
+// present-in-index-but-missing-on-host still hits it, on both host shapes.
+//
+// Deliberately switches mid-session (starting from `next`, which the fixture
+// keeps available) rather than deep-linking `?docs=...&v=18.0.0` directly:
+// the initial-load `NotFound` screen shows a fixed generic string regardless
+// of cause, so a direct deep link can't tell this apart from the ADR-normal
+// absence case. The mid-session error banner is where the two produce
+// different text, which is what makes this discriminating rather than a
+// guard that would pass unchanged against pre-fix code.
+for (const notFoundStatus of [200, 404] as const) {
+  test(`a version present in the index but missing on the host still fetches, and still errors (${notFoundStatus} host)`, async ({ page }) => {
+    const requests: string[] = [];
+    await installRouteFixtures(page, { availableBuckets: ["next"], notFoundStatus, latest: NEXT_VERSION, requests });
+    await page.goto(`/?docs=${DOCS_PATH}&v=${NEXT_VERSION}`);
+    await expect(editor(page)).toContainText(`next:${DOCS_PATH}`);
 
-  await pickFromMenu(page, "Handsontable version", "17.1.0");
+    await pickFromMenu(page, "Handsontable version", "18.0.0");
 
-  await expect(page.getByText(/No documentation examples are available for Handsontable 17\.1\.0/).first()).toBeVisible();
-});
+    expect(requests).toContain("/docs-examples/18.0/manifest.json");
+    await expect(page.getByText(/Could not load documentation examples for Handsontable 18\.0\.0/).first()).toBeVisible();
+    // Broken-deploy wording, not the ADR-normal absence message: naming "18.0"
+    // as the version to switch to would be nonsensical when 18.0 is the one
+    // that just failed to load.
+    await expect(page.getByText(/available for Handsontable/)).toHaveCount(0);
+  });
+}
 
 test("a deep link into a bucket-less version shows not-found, not a retry prompt", async ({ page }) => {
   await installRouteFixtures(page);
@@ -499,6 +538,10 @@ test("a deep link into a bucket-less version shows not-found, not a retry prompt
   await expect(page.getByText("Example temporarily unavailable")).toHaveCount(0);
   await expect(page.getByText(/Try again later/)).toHaveCount(0);
   await expect(page.locator("iframe")).toHaveCount(0);
+  // DEMOS-1C: the deep-link dead end (§2.5's genuinely user-visible harm) used
+  // to name no version at all ("This example may not be imported yet.").
+  // Discriminating: this text never appears against pre-fix code.
+  await expect(page.getByText(/available for Handsontable 18\.0/)).toBeVisible();
 });
 
 test("a deep link whose manifest row has no artifact shows not-found", async ({ page }) => {

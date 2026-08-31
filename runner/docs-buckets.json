@@ -1,0 +1,7 @@
+{
+  "generatedFrom": "pipeline/import-docs.mjs",
+  "buckets": [
+    "18.0",
+    "next"
+  ]
+}

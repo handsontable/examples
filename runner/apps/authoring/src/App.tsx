@@ -19,9 +19,10 @@ import {
   type SchemeMode,
 } from "@handsontable/demo-runtime/scheme";
 import {
-  deriveDocsBucketCandidate,
+  docsBucketAbsentMessage,
   isNextPrereleaseVersion,
   pinHandsontableFiles as pinToVersionRef,
+  planDocsBucket,
   resolveStarterBucket,
   selectedReleaseMajor,
   validateHandsontableVersion,
@@ -37,7 +38,7 @@ import {
 } from "@handsontable/demo-runtime/sandpack";
 import { ContainerRuntime, ContainerBootFailure, SessionStartError, isBudgetRefusal } from "@handsontable/demo-runtime/container";
 import { zipSync, strToU8 } from "fflate";
-import { catalog, getEntry, fetchVersions, checkVersionExists, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
+import { catalog, docsBuckets, getEntry, fetchVersions, checkVersionExists, VERSION_OPTIONS, DEFAULT_VERSION } from "./catalog.js";
 import {
   fetchDocsManifest,
   loadDocsExample,
@@ -840,7 +841,19 @@ function Splash({ text }: { text: string }) {
   );
 }
 
-function NotFound({ path, transient = false }: { path: string | null; transient?: boolean }) {
+function NotFound({
+  path,
+  transient = false,
+  version,
+  suggestion,
+}: {
+  path: string | null;
+  transient?: boolean;
+  /** Set only for the "bucket" not-found kind (Sentry DEMOS-1C) so the body
+   *  can name the version that has no docs examples, and what does. */
+  version?: string;
+  suggestion?: string | null;
+}) {
   return (
     <div style={centered}>
       <Logo size={40} />
@@ -850,7 +863,9 @@ function NotFound({ path, transient = false }: { path: string | null; transient?
       <p style={{ color: theme.color.textMuted, fontFamily: theme.font.ui, margin: 0 }}>
         {transient
           ? "The documentation catalog could not be loaded. Try again later."
-          : "This example may not be imported yet."}
+          : version !== undefined
+            ? docsBucketAbsentMessage(version, suggestion ?? null)
+            : "This example may not be imported yet."}
       </p>
       {path && (
         <code style={{ color: theme.color.textMuted, fontSize: 12 }}>{path}</code>
@@ -1061,6 +1076,12 @@ function Authoring({
   const [sourceLoaded, setSourceLoaded] = useState(false);
   const [docsNotFound, setDocsNotFound] = useState(false);
   const [docsNotFoundTransient, setDocsNotFoundTransient] = useState(false);
+  // Set only for the "bucket" not-found kind (Sentry DEMOS-1C): the release
+  // bucket a visitor could switch to, or null when none exists. `undefined`
+  // (the default) means "not a bucket-absence" — kept distinct from `null` so
+  // a bucket absence with no suggestion available isn't mistaken for the
+  // "path" kind's unrelated wording.
+  const [docsNotFoundSuggestion, setDocsNotFoundSuggestion] = useState<string | null | undefined>(undefined);
   const [docsRuntimeBlocked, setDocsRuntimeBlocked] = useState(!!initialDocs);
   // Starter analogue of docsRuntimeBlocked: set by the unified starter refusal
   // (below-floor major, version with no bucket, artifact fetch failure) so the
@@ -1660,7 +1681,11 @@ function Authoring({
   // in flight. Blocks the runtime-mount effect until it's settled.
   const versionPending = isNextPrereleaseVersion(version) && (!versionsResolved || versionCheckPending);
 
-  // A manifest fetch is the existence check for a derived bucket. Resolve it on
+  // A candidate bucket absent from the static index (Sentry DEMOS-1C) is a
+  // by-design outcome (ADR-0021 #2/#3, most selectable versions have no
+  // imported bucket) and must never reach the network. A manifest fetch
+  // remains the existence check only for a bucket the index claims exists —
+  // if that fetch then fails, it is a genuinely broken deploy. Resolve on
   // startup and every selected-version change, then swap or preserve an open
   // docs workspace according to its dirty state.
   useEffect(() => {
@@ -1668,7 +1693,7 @@ function Authoring({
     const requestSeq = ++docsRequestSeqRef.current;
     const openPath = docsPathRef.current;
     const initialLoad = !!initialDocs && !sourceLoadedRef.current;
-    const candidate = deriveDocsBucketCandidate(version, nextVersion);
+    const plan = planDocsBucket({ selectedVersion: version, nextVersion, bucketKeys: docsBuckets });
 
     setDocsItems([]);
     setActiveDocsBucket(null);
@@ -1681,10 +1706,17 @@ function Authoring({
       setErrorMessage(null);
     }
 
-    const failOpenDocs = (kind: "bucket" | "path" | "fetch") => {
+    // `suggestion` is `undefined` for a "bucket" failure that is NOT the
+    // ADR-normal absence — i.e. the `.catch` below, where the static index
+    // said this bucket exists but the deployed host disagrees. That case
+    // must not say "they are available for <this same bucket>": the bucket
+    // it would suggest is the one that just failed to fetch. Kept a distinct
+    // reportError tag (still "bucket", unchanged) from its display wording.
+    const failOpenDocs = (kind: "bucket" | "path" | "fetch", suggestion?: string | null) => {
       if (docsRequestSeqRef.current !== requestSeq) return;
       if (initialLoad) {
         setDocsNotFoundTransient(kind === "fetch");
+        setDocsNotFoundSuggestion(kind === "bucket" ? suggestion : undefined);
         setDocsNotFound(true);
         setSourceLoaded(true);
         sourceLoadedRef.current = true;
@@ -1692,7 +1724,9 @@ function Authoring({
       }
       if (!openPath) return;
       const message = kind === "bucket"
-        ? `No documentation examples are available for Handsontable ${version}. Choose another version or a starter.`
+        ? (suggestion !== undefined
+          ? docsBucketAbsentMessage(version, suggestion)
+          : `Could not load documentation examples for Handsontable ${version}. Try another version.`)
         : kind === "path"
           ? `This documentation example is unavailable for Handsontable ${version}. Choose another version or a starter.`
           : `Could not load documentation examples for Handsontable ${version}. Try another version.`;
@@ -1701,10 +1735,13 @@ function Authoring({
       setDocsRuntimeBlocked(true);
     };
 
-    if (!candidate) {
-      failOpenDocs("bucket");
+    if (plan.kind === "absent") {
+      // No fetch, so no reportError: an unindexed bucket is never network
+      // activity, so it is never reported as one.
+      failOpenDocs("bucket", plan.suggestion);
       return;
     }
+    const candidate = plan.bucket;
 
     let cancelled = false;
     void fetchDocsManifest(candidate)
@@ -2653,7 +2690,14 @@ function Authoring({
   // somewhere to go.
   const unsavedWork = dirty && route.mode !== "edit";
 
-  if (docsNotFound) return <NotFound path={initialDocs} transient={docsNotFoundTransient} />;
+  if (docsNotFound) return (
+    <NotFound
+      path={initialDocs}
+      transient={docsNotFoundTransient}
+      version={docsNotFoundSuggestion !== undefined ? version : undefined}
+      suggestion={docsNotFoundSuggestion ?? null}
+    />
+  );
   if (savedId && !sourceLoaded) return <Splash text="Loading data …" />;
 
   return (

@@ -357,10 +357,32 @@ function walkMd(dir, acc = []) {
   return acc;
 }
 
+/** Rewrite the committed docs bucket index from what is actually on disk
+ *  under `outDir`. Derived from the directory listing, never accumulated, so
+ *  it is correct no matter which single bucket the current run imported —
+ *  ADR-0021 #5 scopes the wipe to one bucket subtree, but the index must
+ *  describe the whole set (Sentry DEMOS-1C: an unindexed bucket is never
+ *  fetched by the client, so a stale/incomplete index would hide a real
+ *  bucket, not just fail to add a fictitious one). */
+export function writeDocsBucketIndex(outDir = OUT_DIR, indexPath = path.join(RUNNER_DIR, "docs-buckets.json")) {
+  const buckets = fs.existsSync(outDir)
+    ? fs.readdirSync(outDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(outDir, entry.name, "manifest.json")))
+      .map((entry) => entry.name)
+      .sort()
+    : [];
+  fs.writeFileSync(
+    indexPath,
+    JSON.stringify({ generatedFrom: "pipeline/import-docs.mjs", buckets }, null, 2) + "\n",
+  );
+  return buckets;
+}
+
 export async function importDocs({
   docsDir,
   docsBranch,
   outDir = OUT_DIR,
+  indexPath = path.join(RUNNER_DIR, "docs-buckets.json"),
   fetchImpl,
 }) {
   const { bucket } = normalizeDocsBranch(docsBranch);
@@ -545,6 +567,9 @@ export async function importDocs({
         problems.slice(0, 30).join("\n  - "),
     );
   }
+
+  const bucketIndex = writeDocsBucketIndex(outDir, indexPath);
+  console.log(`[import-docs] bucket index (${path.relative(REPO_ROOT, indexPath)}): ${bucketIndex.join(", ")}`);
 }
 
 async function main() {

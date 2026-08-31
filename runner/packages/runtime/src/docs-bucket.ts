@@ -37,6 +37,56 @@ export function resolveDocsBucket({
   return candidate && buckets.has(candidate) ? candidate : null;
 }
 
+/** Outcome of planning a docs-example bucket for a selected version. `absent`
+ *  is a normal outcome (ADR-0021 #2/#3 — most selectable versions have no
+ *  imported bucket, by design), not an error: no manifest fetch should ever
+ *  be attempted for it. */
+export type DocsBucketOutcome =
+  | { kind: "resolved"; bucket: string; suggestion: null }
+  | { kind: "absent"; bucket: null; suggestion: string | null };
+
+/** Highest *release* bucket in the set, ranked numerically (not lexically —
+ *  a string sort would rank "9.0" above "18.0"). Never "next": its content
+ *  targets an unreleased API, and ADR-0021 #2 forbids pointing a release
+ *  selection's fallback at it. */
+export function highestReleaseBucket(bucketKeys: Iterable<string>): string | null {
+  let best: { major: number; minor: number; key: string } | null = null;
+  for (const key of bucketKeys) {
+    const match = /^(\d+)\.(\d+)$/.exec(key);
+    if (!match) continue;
+    const major = Number(match[1]);
+    const minor = Number(match[2]);
+    if (!best || major > best.major || (major === best.major && minor > best.minor)) {
+      best = { major, minor, key };
+    }
+  }
+  return best ? best.key : null;
+}
+
+/** Resolve a selected version to a bucket outcome, and — when absent — the
+ *  release bucket a visitor could switch to instead. Callers must skip the
+ *  manifest fetch entirely on `absent`: fetching an unindexed bucket is what
+ *  turns this by-design absence into a reported error (Sentry DEMOS-1C). */
+export function planDocsBucket({
+  selectedVersion,
+  nextVersion,
+  bucketKeys,
+}: DocsBucketResolution): DocsBucketOutcome {
+  const keys = Array.isArray(bucketKeys) ? bucketKeys : [...bucketKeys];
+  const bucket = resolveDocsBucket({ selectedVersion, nextVersion, bucketKeys: keys });
+  if (bucket) return { kind: "resolved", bucket, suggestion: null };
+  return { kind: "absent", bucket: null, suggestion: highestReleaseBucket(keys) };
+}
+
+/** The visitor-facing sentence for an absent bucket. Names a version that
+ *  works whenever one exists, instead of the dead end of "choose another
+ *  version" with no version named. */
+export function docsBucketAbsentMessage(version: string, suggestion: string | null): string {
+  return suggestion
+    ? `No documentation examples are available for Handsontable ${version}. They are available for Handsontable ${suggestion} — switch versions, or start from a starter template.`
+    : `No documentation examples are available for Handsontable ${version}. Choose another version or a starter.`;
+}
+
 export interface StarterBucketResolution {
   selectedVersion: string;
   nextVersion: string;
