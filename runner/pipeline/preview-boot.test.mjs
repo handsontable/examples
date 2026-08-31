@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BOOT_WINDOW_MS, classifyPreviewBootFailure, isPortNotListening } from "../workers/api/src/preview-boot.ts";
+import {
+  BOOT_WINDOW_MS,
+  classifyPreviewBootFailure,
+  isPreviewPortUnreachable,
+} from "../workers/api/src/preview-boot.ts";
 import { errorPageHtml, errorPageResponse } from "../workers/api/src/error-page.ts";
 
 // DEV-2537. The classifier decides what an anonymous visitor sees when the
@@ -10,44 +14,87 @@ import { errorPageHtml, errorPageResponse } from "../workers/api/src/error-page.
 // — reproducing a mid-boot port refusal needs a real container caught in a
 // narrow window.
 
-/** The verbatim workerd message behind the DEMOS-K issue. */
-const WORKERD = "There has been an internal error connecting to the port.";
+// DEMOS-K. `isPreviewPortUnreachable` (renamed from `isPortNotListening`) has to
+// recognise all three workerd messages behind the throw, not just the one it
+// shipped with — see the fixtures below, verbatim from the issue's `error.value`.
+
+/** The verbatim workerd message PR #195 originally covered. */
+const WORKERD = "There has been an internal error connecting to the port";
+/** 3 of 20 DEMOS-K events, last seen 2026-08-10 — pre-deploy only. */
+const WORKERD_NOT_LISTENING = "The container is not listening in the TCP address 10.0.0.1:4321";
+/** 14 of 20 DEMOS-K events, and 5 of 5 post-deploy — the shape the old regex missed. */
+const WORKERD_NOT_RUNNING = "The container is not running, consider calling start()";
 
 const html = { isUpgrade: false, wantsHtml: true, acceptsHtml: true };
 
-test("recognises the workerd port message", () => {
-  assert.equal(isPortNotListening(new Error(WORKERD)), true);
+test("recognises the workerd port message PR #195 shipped with", () => {
+  // Silent in production for 14 days straight — a regression here is a shipped 500.
+  assert.equal(isPreviewPortUnreachable(new Error(WORKERD)), true);
 });
 
-test("recognises it through a cause chain", () => {
+test("recognises the 'not listening in the TCP address' shape", () => {
+  assert.equal(isPreviewPortUnreachable(new Error(WORKERD_NOT_LISTENING)), true);
+});
+
+test("the TCP-address matcher is not pinned to one address", () => {
+  // A second IP/port that never appeared in a fixture before this plan.
+  assert.equal(
+    isPreviewPortUnreachable(new Error("The container is not listening in the TCP address 10.0.0.2:3001")),
+    true,
+  );
+});
+
+test("recognises the 'not running, consider calling start()' shape", () => {
+  // 14 of 20 DEMOS-K events and 5 of 5 post-deploy — the shape the old regex
+  // never covered, and the entire reason this plan exists.
+  assert.equal(isPreviewPortUnreachable(new Error(WORKERD_NOT_RUNNING)), true);
+});
+
+test("recognises all three shapes through a cause chain", () => {
   const wrapped = new Error("preview forward failed", { cause: new Error(WORKERD) });
-  assert.equal(isPortNotListening(wrapped), true);
-  assert.equal(isPortNotListening(new Error("outer", { cause: wrapped })), true);
+  assert.equal(isPreviewPortUnreachable(wrapped), true);
+  assert.equal(isPreviewPortUnreachable(new Error("outer", { cause: wrapped })), true);
+
+  assert.equal(
+    isPreviewPortUnreachable(new Error("wrapped", { cause: new Error(WORKERD_NOT_LISTENING) })),
+    true,
+  );
+  assert.equal(
+    isPreviewPortUnreachable(new Error("wrapped", { cause: new Error(WORKERD_NOT_RUNNING) })),
+    true,
+  );
 });
 
 test("does not match errors that are somebody else's job", () => {
   // Handled upstream by forwardPreviewRequest, which turns it into a 500 of
   // its own. Matching it here would take over a case we have not diagnosed.
-  assert.equal(isPortNotListening(new Error("Network connection lost.")), false);
-  assert.equal(isPortNotListening(new Error("boom")), false);
-  assert.equal(isPortNotListening(new Error("no such image")), false);
+  assert.equal(isPreviewPortUnreachable(new Error("Network connection lost.")), false);
+  assert.equal(isPreviewPortUnreachable(new Error("boom")), false);
+  assert.equal(isPreviewPortUnreachable(new Error("no such image")), false);
+});
+
+test("does not match a genuine boot failure or an adjacent 'container is not …' phrasing", () => {
+  // Keeps the widening from becoming a catch-all: both of these keep today's
+  // status (a thrown 500) and today's report.
+  assert.equal(isPreviewPortUnreachable(new Error("Container failed to start: exit 137")), false);
+  assert.equal(isPreviewPortUnreachable(new Error("The container is not authorized")), false);
 });
 
 test("does not match non-errors", () => {
-  assert.equal(isPortNotListening(undefined), false);
-  assert.equal(isPortNotListening(null), false);
-  assert.equal(isPortNotListening("connecting to the port"), false);
+  assert.equal(isPreviewPortUnreachable(undefined), false);
+  assert.equal(isPreviewPortUnreachable(null), false);
+  assert.equal(isPreviewPortUnreachable("connecting to the port"), false);
 });
 
 test("terminates on a self-referencing cause", () => {
   const loop = new Error("a");
   loop.cause = loop;
-  assert.equal(isPortNotListening(loop), false);
+  assert.equal(isPreviewPortUnreachable(loop), false);
 
   const a = new Error("a");
   const b = new Error("b", { cause: a });
   a.cause = b;
-  assert.equal(isPortNotListening(a), false);
+  assert.equal(isPreviewPortUnreachable(a), false);
 });
 
 test("a WebSocket upgrade is never answered with a document", () => {

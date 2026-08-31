@@ -107,7 +107,7 @@ test("anything we have not diagnosed keeps today's 500 and today's report", () =
 });
 
 test("a reworded capacity message degrades to today's behaviour, not to silence", () => {
-  // The documented degrade direction, same as `isPortNotListening`: these
+  // The documented degrade direction, same as `isPreviewPortUnreachable`: these
   // strings are raised by the platform, not by any package here, so a match is
   // the only signal available. If Cloudflare rewords one, the predicate stops
   // matching and we go back to reporting a 500 — noisy, never silent.

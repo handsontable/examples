@@ -117,7 +117,7 @@ const NOT_RUNNING_PATTERN = /container is not running/i;
  * nobody retries either), so this is not a regression — but it is the case a
  * reviewer should expect to see in the `tier2-teardown-declined` issue.
  *
- * DEGRADE DIRECTION, documented like `isPortNotListening`: these strings come
+ * DEGRADE DIRECTION, documented like `isPreviewPortUnreachable`: these strings come
  * from the platform, not from any package in this repo, so a message match is
  * the only signal available. If Cloudflare rewords one, this predicate stops
  * matching and the case falls back to report-and-500 — noisy, never silent.

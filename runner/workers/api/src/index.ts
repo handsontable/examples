@@ -28,7 +28,7 @@ import { isMcpCreated, isMcpValidationError, validateMcpFiles } from "./mcp-crea
 import { editorVersionRef, fetchVersionCatalog, resolveHandsontableVersion } from "./ht-version.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
-import { classifyPreviewBootFailure, isPortNotListening } from "./preview-boot.js";
+import { classifyPreviewBootFailure, isPreviewPortUnreachable } from "./preview-boot.js";
 import {
   AT_CAPACITY_CODE,
   atCapacityMessage,
@@ -190,9 +190,14 @@ class SandboxBaseWithSleep extends SandboxBase {
       response = await super.fetch(request);
     } catch (err) {
       // Anything we did not diagnose keeps today's status and today's report.
-      // The intercept keys on a workerd message string, so a wording change must
-      // degrade to current behaviour, never to a swallowed error.
-      if (!isPortNotListening(err) || request.headers.get(PREVIEW_PROXY_HEADER) !== "1") throw err;
+      // The intercept keys on a table of workerd message strings, so a wording
+      // change must degrade to current behaviour, never to a swallowed error.
+      // The header gate is load-bearing: "container is not running" is also
+      // raised on non-preview paths (`exec`, `startProcess`, `exposePort`
+      // against a stopped container), and only preview traffic carries this
+      // header, so session-management failures keep throwing, keep their 500,
+      // and keep their Sentry event.
+      if (!isPreviewPortUnreachable(err) || request.headers.get(PREVIEW_PROXY_HEADER) !== "1") throw err;
       return this.previewBootFailureResponse(request, err);
     }
     // Cleared on any non-throwing return, so a dev server that dies mid-session
