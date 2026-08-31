@@ -30,9 +30,21 @@
  * (`workers/api/src/preview-boot.ts`) — rather than one fused pattern, so a wording
  * this table does not cover shows up as a new Sentry event instead of being folded
  * in silently.
+ *
+ * The Chromium row is anchored (`^...$`) rather than a loose substring match. Chromium
+ * also raises `TypeError: "Failed to fetch dynamically imported module: <url>"` for a
+ * deploy-rotated chunk served under SPA fallback — a real host defect this codebase
+ * already treats as one (`packages/runtime/src/transpile.ts`, Sentry DEMOS-15 /
+ * DEV-2569). An unanchored `/failed to fetch/i` matches that message too, silencing a
+ * defect class it has no business touching; the bare transport failure this module
+ * exists for is always the whole message, never a prefix of a longer one. Firefox and
+ * Safari stay loose: Firefox's real wording carries a trailing period
+ * (`NetworkError when attempting to fetch resource.`), so a `$`-anchored version would
+ * break the one wording it exists to match, and no over-match has been demonstrated
+ * for either engine.
  */
 const OPAQUE_TRANSPORT_MESSAGES = [
-  /failed to fetch/i, // Chrome/Chromium/Edge — verified against `route.abort("failed")` (Step 0a)
+  /^failed to fetch$/i, // Chrome/Chromium/Edge — verified against `route.abort("failed")` (Step 0a)
   /networkerror when attempting to fetch resource/i, // Firefox
   /load failed/i, // Safari
 ];

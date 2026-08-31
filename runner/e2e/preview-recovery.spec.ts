@@ -146,6 +146,23 @@ test("a starter artifact that never arrives is carded as a connection failure, w
     matched += 1;
     return r.abort("failed");
   });
+  // The starter effect's ambient second fetch (see (3) below) only fires once
+  // `/api/versions` settles — success or failure, either flips `versionsResolved`, a
+  // dependency of the same effect. Wait on that real event rather than a fixed sleep:
+  // on a slower host (a real E2E_BASE_URL run vs. this deterministic local one) a
+  // timed guess can read the ambient count too early and fail for a reason that has
+  // nothing to do with the fix. Registered before `goto` so the listener cannot miss
+  // the request; resolves on whichever of the two outcomes actually happens.
+  const versionsSettled = new Promise<void>((resolve) => {
+    const done = (req: import("@playwright/test").Request) => {
+      if (!req.url().includes("/api/versions")) return;
+      page.off("requestfinished", done);
+      page.off("requestfailed", done);
+      resolve();
+    };
+    page.on("requestfinished", done);
+    page.on("requestfailed", done);
+  });
   await page.goto("/?example=react");
   await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "error", {
     timeout: 30_000,
@@ -160,13 +177,15 @@ test("a starter artifact that never arrives is carded as a connection failure, w
 
   // (3) the button re-runs the *starter load*, not a silent runtime remount: with the
   // route still aborting, a further /starter-examples/ request proves it, and the card
-  // stays up rather than blanking into an empty preview. The starter effect also fires
-  // once on its own, ambiently, ~200ms after mount — `versionsResolved` (also unstubbed
-  // here, and also failing "Failed to fetch") is a dependency of the same effect, and
-  // flipping it re-runs the effect regardless of which way the versions fetch settled.
-  // Measured stable within 300ms across repeated runs; wait it out before pinning a
-  // baseline, or the ambient request is indistinguishable from the click's own.
-  await page.waitForTimeout(1500);
+  // stays up rather than blanking into an empty preview. The starter effect fires
+  // twice on its own before any click: once at mount, once on the batched re-render
+  // once `versionsResolved` flips (see above). Wait for that network event, then poll
+  // for the ambient pair to actually land — React still has to process the settle and
+  // re-run the effect, so the network event alone can resolve slightly before the
+  // second request does — before pinning a baseline the click's own request can be
+  // measured against.
+  await versionsSettled;
+  await expect.poll(() => matched, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
   const before = matched;
   // Pinned, not just asserted non-zero: the ambient pair is exactly two requests
   // (measured across repeated runs), so a real third request has to be the click's —

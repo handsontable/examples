@@ -43,6 +43,20 @@ test("does not classify a genuine TypeError programming fault", () => {
   assert.equal(isOpaqueNetworkFailure(new TypeError("res.json is not a function")), false);
 });
 
+test("does not classify a deploy-rotated dynamic-import chunk failure (Sentry DEMOS-15 / DEV-2569, must keep reporting)", () => {
+  // Real Chromium wording for a rotated compiler chunk under SPA fallback
+  // (packages/runtime/src/transpile.ts) — an unanchored `/failed to fetch/i` would
+  // have matched this as a substring and silenced an unrelated host defect class.
+  assert.equal(
+    isOpaqueNetworkFailure(
+      new TypeError(
+        "Failed to fetch dynamically imported module: https://demos.handsontable.com/assets/babel-CRE6e0VF.js",
+      ),
+    ),
+    false,
+  );
+});
+
 test("does not classify a non-Error value", () => {
   assert.equal(isOpaqueNetworkFailure("Failed to fetch"), false);
   assert.equal(isOpaqueNetworkFailure(null), false);
