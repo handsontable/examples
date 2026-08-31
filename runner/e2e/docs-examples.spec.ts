@@ -488,26 +488,44 @@ test("an open docs example with no target bucket stops preview and remains recov
 });
 
 // DEMOS-1C: the other half of the fix. `18.0` IS in the static index, so an
-// open docs example on it must still probe the manifest — an indexed bucket
-// the deploy is actually missing is a broken deploy, not the ADR-0021 steady
-// state, and must still surface as an error. `availableBuckets: ["next"]`
-// makes the fixture answer that probe with the SPA-fallback miss regardless
-// of `notFoundStatus` (replaces the old 404-host variant of this test, which
-// asserted a code path this fix makes unreachable for an absent bucket).
-// Paired with "never fetches its manifest" above: absent-from-index skips the
-// network; present-in-index-but-missing-on-host still hits it.
-test("a version present in the index but missing on the host still fetches, and still errors", async ({ page }) => {
-  const requests: string[] = [];
-  await installRouteFixtures(page, { availableBuckets: ["next"], requests });
-  await page.goto(`/?docs=${DOCS_PATH}&v=18.0.0`);
+// open docs example switching to it must still probe the manifest — an
+// indexed bucket the deploy is actually missing is a broken deploy, not the
+// ADR-0021 steady state, and must still surface as an error, with wording
+// that does not claim "18.0" is the fix when 18.0 is what just failed.
+// `availableBuckets: ["next"]` makes the fixture answer that probe with a
+// miss either way; which *shape* of miss is picked by `notFoundStatus`
+// below. Both host shapes are live in practice (the dev server and any
+// correctly configured host answer a real 404; the deployed host's
+// `not_found_handling: "single-page-application"` answers 200 + index.html
+// instead — DEV-2535 is exactly the bug that hid behind the gap between the
+// two), so both must classify identically. Paired with "never fetches its
+// manifest" above: absent-from-index skips the network;
+// present-in-index-but-missing-on-host still hits it, on both host shapes.
+//
+// Deliberately switches mid-session (starting from `next`, which the fixture
+// keeps available) rather than deep-linking `?docs=...&v=18.0.0` directly:
+// the initial-load `NotFound` screen shows a fixed generic string regardless
+// of cause, so a direct deep link can't tell this apart from the ADR-normal
+// absence case. The mid-session error banner is where the two produce
+// different text, which is what makes this discriminating rather than a
+// guard that would pass unchanged against pre-fix code.
+for (const notFoundStatus of [200, 404] as const) {
+  test(`a version present in the index but missing on the host still fetches, and still errors (${notFoundStatus} host)`, async ({ page }) => {
+    const requests: string[] = [];
+    await installRouteFixtures(page, { availableBuckets: ["next"], notFoundStatus, latest: NEXT_VERSION, requests });
+    await page.goto(`/?docs=${DOCS_PATH}&v=${NEXT_VERSION}`);
+    await expect(editor(page)).toContainText(`next:${DOCS_PATH}`);
 
-  await expect(page.getByText("Example not found")).toBeVisible();
-  expect(requests).toContain("/docs-examples/18.0/manifest.json");
-  // Broken-deploy wording, not the ADR-normal absence message: naming "18.0"
-  // as the version to switch to would be nonsensical when 18.0 is the one
-  // that just failed to load.
-  await expect(page.getByText(/available for Handsontable/)).toHaveCount(0);
-});
+    await pickFromMenu(page, "Handsontable version", "18.0.0");
+
+    expect(requests).toContain("/docs-examples/18.0/manifest.json");
+    await expect(page.getByText(/Could not load documentation examples for Handsontable 18\.0\.0/).first()).toBeVisible();
+    // Broken-deploy wording, not the ADR-normal absence message: naming "18.0"
+    // as the version to switch to would be nonsensical when 18.0 is the one
+    // that just failed to load.
+    await expect(page.getByText(/available for Handsontable/)).toHaveCount(0);
+  });
+}
 
 test("a deep link into a bucket-less version shows not-found, not a retry prompt", async ({ page }) => {
   await installRouteFixtures(page);
