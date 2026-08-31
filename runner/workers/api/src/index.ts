@@ -454,7 +454,7 @@ async function teardownLiveSession(env: Env, sessionId: string): Promise<void> {
     // `context: "budget-alert"` and drops nothing, so a warning arrives.
     //
     // This matters most for `container service is unreachable`, the weakest
-    // member of `isExpectedTeardownFailure`: unlike the other two it does NOT
+    // member of `isExpectedTeardownFailure`: unlike the other three it does NOT
     // imply no slot is held, so a swallowed one can leave a container billing
     // until sleepAfter. 204 is still the right answer to a caller that
     // discards the response — but only because the failure is legible
@@ -904,6 +904,12 @@ export default Sentry.withSentry(sentryOptions, {
           // The log line below is a convenience, NOT the signal:
           // `observability.head_sampling_rate` is 0.1, so nine of ten are never
           // retained.
+          //
+          // `isAtCapacityFailure` also does NOT recognise the DO "no container
+          // instance that can be provided" wording (Sentry DEMOS-32) — that
+          // pattern is teardown-only (session-lifecycle.ts): no create-path
+          // event of it exists, and telling a visitor "at capacity" for a
+          // condition we have not seen on create would be a guess.
           if (isAtCapacityFailure(err)) {
             console.warn(
               `[session] refused ${body.framework} session ${sessionId}: container pool at capacity`,
