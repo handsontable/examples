@@ -132,6 +132,76 @@ test("a version the runner refuses gets no restart button", async ({ page }) => 
   await expect(page.getByRole("button", { name: "Restart preview" })).toHaveCount(0);
 });
 
+// Sentry DEMOS-2X / DEMOS-2Y: `loadStarterExample`'s fetch never completing (the tab's own
+// network dropping, or a cancelled navigation) used to be carded identically to the
+// below-floor/no-bucket refusal above — "Try another version", no retry — which blames the
+// one thing that is not wrong and withholds the one action that would actually work. This
+// is the counterpart to the test above: a transient fetch failure is *not* a version
+// problem, and the card and its retry must say so.
+test("a starter artifact that never arrives is carded as a connection failure, with a retry", async ({
+  page,
+}) => {
+  let matched = 0;
+  await page.route("**/starter-examples/**", (r) => {
+    matched += 1;
+    return r.abort("failed");
+  });
+  // The starter effect's ambient second fetch (see (3) below) only fires once
+  // `/api/versions` settles — success or failure, either flips `versionsResolved`, a
+  // dependency of the same effect. Wait on that real event rather than a fixed sleep:
+  // on a slower host (a real E2E_BASE_URL run vs. this deterministic local one) a
+  // timed guess can read the ambient count too early and fail for a reason that has
+  // nothing to do with the fix. Registered before `goto` so the listener cannot miss
+  // the request; resolves on whichever of the two outcomes actually happens.
+  const versionsSettled = new Promise<void>((resolve) => {
+    const done = (req: import("@playwright/test").Request) => {
+      if (!req.url().includes("/api/versions")) return;
+      page.off("requestfinished", done);
+      page.off("requestfailed", done);
+      resolve();
+    };
+    page.on("requestfinished", done);
+    page.on("requestfailed", done);
+  });
+  await page.goto("/?example=react");
+  await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "error", {
+    timeout: 30_000,
+  });
+  await expect(page.getByText("The preview could not start")).toBeVisible();
+  // (1) the card must NOT blame the version — that wording belongs to the
+  //     below-floor / no-bucket refusals, and the version is not what failed.
+  await expect(page.getByText(/Try another version/)).toHaveCount(0);
+  // (2) the action that would actually work must be offered.
+  const restart = page.getByRole("button", { name: "Restart preview" });
+  await expect(restart).toBeVisible();
+
+  // (3) the button re-runs the *starter load*, not a silent runtime remount: with the
+  // route still aborting, a further /starter-examples/ request proves it, and the card
+  // stays up rather than blanking into an empty preview. The starter effect fires
+  // twice on its own before any click: once at mount, once on the batched re-render
+  // once `versionsResolved` flips (see above). Wait for that network event, then poll
+  // for the ambient pair to actually land — React still has to process the settle and
+  // re-run the effect, so the network event alone can resolve slightly before the
+  // second request does — before pinning a baseline the click's own request can be
+  // measured against.
+  await versionsSettled;
+  await expect.poll(() => matched, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+  const before = matched;
+  // Pinned, not just asserted non-zero: the ambient pair is exactly two requests
+  // (measured across repeated runs), so a real third request has to be the click's —
+  // a loose "toBeGreaterThan" with a long poll budget would also pass on a later,
+  // unrelated ambient fire and go hollow the moment a third ambient request appears.
+  expect(before, "the ambient starter-effect pair, measured").toBe(2);
+  await restart.click();
+  await expect(async () => {
+    expect(matched).toBeGreaterThan(before);
+  }).toPass({ timeout: 10_000 });
+  await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "error", {
+    timeout: 30_000,
+  });
+  await expect(page.getByText("The preview could not start")).toBeVisible();
+});
+
 // A compile the bundler sees as "no module changed" resets the preview document without
 // re-evaluating anything: a blank frame, `done` with no error, nothing in the console.
 // Two paths hit it. This is the one reachable by typing: break a line (the transpile

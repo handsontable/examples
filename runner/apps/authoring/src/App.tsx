@@ -70,6 +70,7 @@ import { useProfile } from "./useProfile.js";
 import { monitorDemos, reportDemoEvent, reportError, reportingEnabled, Sentry } from "./sentry.js";
 import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
 import { tier1Report } from "./tier1Report.js";
+import { isOpaqueNetworkFailure } from "./fetchFailure.js";
 
 const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefined;
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
@@ -1641,8 +1642,18 @@ function Authoring({
       })
       .catch((error) => {
         // Fails open onto the hardcoded VERSION_OPTIONS, so the picker silently
-        // goes stale rather than breaking — worth knowing about.
-        reportError(error, "versions-fetch");
+        // goes stale rather than breaking — worth knowing about, unless it is the
+        // visitor's own network dropping mid-request (Sentry DEMOS-2X): that shape
+        // carries nothing about our host, so it is a breadcrumb, not an issue.
+        if (isOpaqueNetworkFailure(error)) {
+          Sentry.addBreadcrumb({
+            category: "fetch",
+            level: "info",
+            message: "versions-fetch unreachable (visitor network)",
+          });
+        } else {
+          reportError(error, "versions-fetch");
+        }
         if (!cancelled) setVersionsResolved(true); // release buckets can still resolve without dist-tags.next
       });
     return () => { cancelled = true; };
@@ -1802,9 +1813,11 @@ function Authoring({
   // Starter artifacts are lazy-fetched per version bucket (DEV-2213). Fetch on
   // starter select and on bucket-crossing version changes; a same-bucket
   // version change only re-pins the open files, preserving edits (the old
-  // single-catalog behaviour). Below-floor majors, versions with no bucket,
-  // and artifact fetch failures share one refusal — deliberately the same
-  // message the mount guard uses.
+  // single-catalog behaviour). Below-floor majors and versions with no bucket
+  // share one refusal — deliberately the same message the mount guard uses. An
+  // artifact fetch failure gets its own wording and retry (Sentry DEMOS-2Y):
+  // unlike the other two, the version is not what is wrong, so blaming it and
+  // withholding the retry button was misleading the visitor about the fix.
   useEffect(() => {
     if (route.mode === "share" || savedId || docsPath) return;
     // An ad-hoc workspace — an import or a payload — owns its files the way a
@@ -1873,14 +1886,24 @@ function Authoring({
       requestedMajor != null &&
       requestedMajor < indexEntry.minCoreMajor;
 
-    const refuseStarter = () => {
+    // `"refusal"` — below-floor major or no bucket for this version: the version
+    // really is the problem, and the mount guard's wording/no-retry is correct.
+    // `"fetch"` — the artifact request itself failed to complete (Sentry DEMOS-2Y):
+    // the version is very likely fine, so the wording and the retry differ. Follows
+    // the docs path's `failOpenDocs(kind: "bucket" | "path" | "fetch")` precedent.
+    const refuseStarter = (kind: "refusal" | "fetch" = "refusal") => {
       if (starterRequestSeqRef.current !== requestSeq) return;
       setStarterRuntimeBlocked(true);
       setStatus("error");
-      setErrorMessage(
-        `Could not load this example for Handsontable ${version}. Try another version.`,
-      );
-      setRetryable(false);
+      if (kind === "fetch") {
+        setErrorMessage("Could not load this example — the connection dropped. Try again.");
+        setRetryable(true);
+      } else {
+        setErrorMessage(
+          `Could not load this example for Handsontable ${version}. Try another version.`,
+        );
+        setRetryable(false);
+      }
       // Release the mount gate so the error card renders instead of a spinner.
       setSourceLoaded(true);
       sourceLoadedRef.current = true;
@@ -1928,9 +1951,21 @@ function Authoring({
       })
       .catch((error) => {
         // A bucket that exists but lacks this framework (deep link below an
-        // old major's floor) or a transient fetch failure.
-        reportError(error, "starter-load");
-        refuseStarter();
+        // old major's floor) or a transient fetch failure. The latter (Sentry
+        // DEMOS-2Y) carries nothing about our host — a breadcrumb, not an issue —
+        // and gets the "fetch" refusal kind so the card names the real cause and
+        // offers a retry that actually re-runs the starter load.
+        const transient = isOpaqueNetworkFailure(error);
+        if (transient) {
+          Sentry.addBreadcrumb({
+            category: "fetch",
+            level: "info",
+            message: "starter-load unreachable (visitor network)",
+          });
+        } else {
+          reportError(error, "starter-load");
+        }
+        refuseStarter(transient ? "fetch" : "refusal");
       });
     return () => { cancelled = true; };
   }, [
@@ -2213,6 +2248,16 @@ function Authoring({
     setBootLog("");
     setRetryGen((g) => g + 1);
   }, []);
+
+  /** "Restart preview" for a starter refused at fetch time (Sentry DEMOS-2Y), not at
+   *  runtime-mount time. `retryPreview`'s `retryGen` sits in the mount effect's deps
+   *  (below), not the starter-load effect's — bumping it here would remount a runtime
+   *  with no artifact to mount. `selectExample` already does the pristine reload the
+   *  starter effect wants (drops `sourceLoaded`, bumps `starterGen`, clears the error),
+   *  so re-running it is the correct retry for this refusal kind. */
+  const retryStarterLoad = useCallback(() => {
+    selectExample(framework);
+  }, [selectExample, framework]);
 
   /** Container frameworks rebuild server-side (a few seconds); show feedback. */
   const showSyncing = useCallback(() => {
@@ -2719,8 +2764,21 @@ function Authoring({
         containerBoot={entry.engine === "container"}
         // Withheld while a docs bucket/path is unresolved (the mount effect refuses to run
         // at all in that state) and for pre-mount version refusals: in both cases the
-        // button would restart nothing.
-        onRetry={docsRuntimeBlocked || !retryable ? undefined : retryPreview}
+        // button would restart nothing. A starter refused at fetch time (`starterRuntimeBlocked`,
+        // `retryable=true` only for the "fetch" kind) retries the starter load, not the
+        // runtime mount — `retryPreview`'s `retryGen` is not in that effect's deps. Gated on
+        // `!docsPath` too, the same idiom the mount effect itself uses two effects up
+        // (`!docsPath && starterRuntimeBlocked`): `starterRuntimeBlocked` only clears on the
+        // *next* starter attempt, so it can still read true after the visitor has switched
+        // into a docs example — without this, a docs runtime error would wrongly call
+        // `retryStarterLoad` and yank them out of the docs example they were viewing.
+        onRetry={
+          docsRuntimeBlocked
+            ? undefined
+            : !docsPath && starterRuntimeBlocked
+              ? (retryable ? retryStarterLoad : undefined)
+              : (retryable ? retryPreview : undefined)
+        }
         syncing={syncing}
         refreshing={refreshing}
         version={version}
