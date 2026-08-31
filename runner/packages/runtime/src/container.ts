@@ -17,7 +17,7 @@ import type {
 } from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
-import { MONITOR_EVENT_CEILING, truncateMessage } from "./monitor.js";
+import { MONITOR_EVENT_CEILING, normalizeMonitorMessage, truncateMessage } from "./monitor.js";
 import { failureDetail, STDERR_MARKERS } from "./failure-log.js";
 
 /**
@@ -299,9 +299,19 @@ export class ContainerRuntime implements DemoRuntime {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly progressCbs = new Set<(log: string) => void>();
   private readonly stderrCbs = new Set<(line: string) => void>();
-  /** Dev-server stderr lines already relayed, so a message the server repeats every
-   *  keystroke is filed once. Capped by `MONITOR_EVENT_CEILING` below; the set only
-   *  ever holds what fit under it. */
+  /** Dev-server stderr lines already relayed, keyed on `normalizeMonitorMessage` —
+   *  the same fingerprint `sentry.ts` groups the Sentry issue by — so a message the
+   *  server repeats every keystroke, or with only its clock changed (a build
+   *  envelope's timestamp), is filed once. A coarser key than the raw line, on
+   *  purpose: the parent already fingerprints on the normalized message, so two raw
+   *  lines that normalize identically were always going to land in one Sentry
+   *  issue — relaying both just spent a `MONITOR_EVENT_CEILING` slot on a second
+   *  sample of a fault already reported. The honest trade: only the first variant
+   *  of a class now ever leaves the page, so no issue is lost, but sample diversity
+   *  *within* an issue narrows — `Cannot find module 'foo'` and `'bar'` used to
+   *  both reach Sentry as two events under one fingerprint; now only the first
+   *  does. Capped by `MONITOR_EVENT_CEILING` below; the set only ever holds what
+   *  fit under it. */
   private readonly stderrSeen = new Set<string>();
   private stderrRelayed = 0;
   private previewUrl = "";
@@ -827,6 +837,11 @@ export class ContainerRuntime implements DemoRuntime {
    * same lines arrive over and over; `stderrSeen` is what makes this a report per
    * fault rather than one per minute. The ceiling is the same one the in-page
    * reporter uses, for the same reason — the kill switch is a deploy away.
+   *
+   * `stderrSeen` is keyed on `normalizeMonitorMessage(message)`, not the raw line
+   * — see the field comment. The relayed payload stays the raw, truncated line: the
+   * diagnostic reaching Sentry is still the verbatim compiler output, only the
+   * dedupe key is coarsened to match what `sentry.ts:263` fingerprints on.
    */
   private relayStderr(log: string): void {
     if (this.disposed || this.stderrCbs.size === 0) return;
@@ -835,8 +850,9 @@ export class ContainerRuntime implements DemoRuntime {
       const line = raw.trim();
       if (!line || !STDERR_MARKERS.test(line)) continue;
       const message = truncateMessage(line);
-      if (this.stderrSeen.has(message)) continue;
-      this.stderrSeen.add(message);
+      const key = normalizeMonitorMessage(message);
+      if (this.stderrSeen.has(key)) continue;
+      this.stderrSeen.add(key);
       this.stderrRelayed += 1;
       for (const cb of this.stderrCbs) cb(message);
     }

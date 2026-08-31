@@ -653,6 +653,47 @@ test("normalizeMonitorMessage collapses what differs between two reports of one 
   assert.equal(a, b, "same fault must fingerprint the same");
 });
 
+// Sentry DEMOS-4G, DEMOS-4V. `normalizeMonitorMessage`'s number rule
+// (`/\b\d+(\.\d+)*\b/g`) has a trailing `\b` that fails to match where a digit run
+// abuts a letter, so an ISO timestamp's milliseconds and `Z` survived, and every
+// Tier-2 build failure minted a fresh Sentry fingerprint — 28 issues, one event
+// each, in `handsoncode/demos`.
+
+/** DEMOS-4G and DEMOS-4V: the same Angular build failure, two of the 28 issues it opened. */
+const BUNDLE_A = "Application bundle generation failed. [0.431 seconds] - 2026-08-25T18:06:09.937Z";
+const BUNDLE_B = "Application bundle generation failed. [1.595 seconds] - 2026-08-27T14:20:04.952Z";
+
+const TS1005 = "✘ [ERROR] TS1005: ',' expected. [plugin angular-compiler]"; // DEMOS-3K
+const TS2554 = "✘ [ERROR] TS2554: Expected 2 arguments, but got 1. [plugin angular-compiler]";
+const TS2555 = "✘ [ERROR] TS2555: Expected 2 arguments, but got 1. [plugin angular-compiler]";
+
+test("one build failure is one fingerprint, whatever the clock said", () => {
+  assert.equal(normalizeMonitorMessage(BUNDLE_A), normalizeMonitorMessage(BUNDLE_B));
+});
+
+test("a compiler diagnostic code survives normalisation", () => {
+  // THE discriminator. Collapsing the timestamp by relaxing the number rule's word
+  // boundaries (/\d+(\.\d+)*/g) also passes the inequality test below, because the
+  // prose differs — and silently turns every TS code into TS<n>. This assertion is
+  // what fails under that fix.
+  assert.match(normalizeMonitorMessage(TS1005), /\bTS1005\b/);
+});
+
+test("two codes with identical prose stay two issues", () => {
+  // Constructed, not observed: no two live issues share prose today. TS2554/TS2555
+  // both read "Expected N arguments, but got M", so the code is the only
+  // discriminator — exactly the case a boundary-dropping fix fails to cover.
+  assert.notEqual(normalizeMonitorMessage(TS2554), normalizeMonitorMessage(TS2555));
+});
+
+test("the other timestamp shapes a dev server prints collapse too", () => {
+  // The [T ] and offset arms of the pattern, which the Angular fixture does not reach.
+  assert.equal(
+    normalizeMonitorMessage("done 2026-08-25 18:06:09 ok"),
+    normalizeMonitorMessage("done 2026-08-27T14:20:04+02:00 ok"),
+  );
+});
+
 // ---- wired through SandpackRuntime -----------------------------------------
 //
 // The injector being correct is not the same as the runtime using it correctly. What
