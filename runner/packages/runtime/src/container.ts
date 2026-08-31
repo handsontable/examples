@@ -151,14 +151,15 @@ const TIMEOUT_STATUSES = new Set([504, 522, 524]);
 /**
  * What to tell the user when POST /api/session comes back not-ok, in five tiers.
  *
- * ⚠ The wording of the two platform tiers — gateway-timeout and service-unavailable —
- * is a contract with `describeRuntimeError` in apps/authoring/src/App.tsx, whose
- * container-engine heuristic matches
+ * ⚠ The wording of the platform tiers — gateway-timeout, service-unavailable, and the
+ * envelope-less 403 — is a contract with `describeRuntimeError` in
+ * apps/authoring/src/App.tsx, whose container-engine heuristic matches
  * /failed to fetch|networkerror|load failed|session start failed|fetch/i and REPLACES
  * the message with the local-dev "run the API worker, it needs Docker" text. That is
  * right for a developer whose worker is down and wrong for a visitor on
- * demos.handsontable.com whose sandbox timed out — which is exactly what production
- * users got for the 82 events of Sentry DEMOS-9 (DEV-2538). So both of those sentences
+ * demos.handsontable.com whose sandbox timed out, or was refused before it ever reached
+ * our Worker — which is exactly what production users got for the 82 events of Sentry
+ * DEMOS-9 (DEV-2538) and the 10 events of Sentry DEMOS-4N. So all of those sentences
  * must contain none of those words, "fetch" above all. The connectivity tiers below
  * them keep saying "session start failed" on purpose, so they keep tripping the
  * heuristic. `pipeline/session-start-failure.test.mjs` is what holds both halves in
@@ -196,6 +197,21 @@ function sessionStartMessage(
   // through would keep the App.tsx misattribution alive for exactly it.
   if (!failure.envelope && status === 503) {
     return `The sandbox service is unavailable right now (503). Nothing is wrong with the code — try "Restart preview" in a moment.`;
+  }
+  // Nor did a 403 come from our Worker: it makes no refusal at all on this route with
+  // that status — its own 403s are `json({error}, 403)` on the demo-ownership and token
+  // routes (workers/api/src/index.ts), and every refusal it makes HERE is a `json({error})`
+  // (400 for a bad body, 401/503 from the budget guardrail, 500 from its catch-all). So an
+  // envelope-less 403 was emitted above us — a platform rule refused the request before our
+  // code ran (Sentry DEMOS-4N, whose 10 events carried Cloudflare's own IE-conditional error
+  // page as the body). Gated on the envelope for the same reason as the 503 above: the body
+  // is not always empty, and letting a platform 403 that DOES carry an HTML page fall through
+  // is what titled DEMOS-4N `session start failed (403): <!DOCTYPE html>`.
+  //
+  // No "try Restart preview" here, unlike the two tiers above. A refusal of this shape is
+  // stable, and we cannot support the promise that a retry clears it.
+  if (!failure.envelope && status === 403) {
+    return `The request to start a sandbox was refused before it reached the demo service (403). Nothing is wrong with the code — retrying is unlikely to clear it.`;
   }
   // No body at all on some other status: the API is not answering usefully, which in
   // practice is a local worker that isn't running. No trailing colon introducing a

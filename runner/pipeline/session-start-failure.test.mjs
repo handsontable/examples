@@ -31,6 +31,18 @@
 // could equally have been an unreadable body rather than an empty one) do not name a
 // cause. The 503 the preview proxy emits with a bare body (workers/api/src/index.ts,
 // DEV-2537) is gated on PREVIEW_PROXY_HEADER and cannot reach this route.
+//
+// Sentry DEMOS-4N is the 403 instance of the same class. 10 events, one release, one
+// browser, all `sessionElapsedMs` under a second — an instant refusal, not a timeout.
+// The body in every event opened `<!DOCTYPE html>` with an IE conditional comment,
+// which is Cloudflare's own edge error/challenge template, not anything
+// `errorPageResponse` in workers/api/src/error-page.ts emits (that template is
+// lowercase `<!doctype html>` with no IE comments, and never answers 403 in the first
+// place — its only callers are preview-boot 503s, the share routes, and the SPA 404
+// fallback). The API worker's only 403s are enveloped `json({error}, 403)` on the
+// demo-ownership and token routes, never on POST /api/session. So this 403 was
+// refused above our Worker, same as the 503 case, and got the same "session start
+// failed (403): <!DOCTYPE html>…" treatment before the envelope-less-403 tier existed.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -238,6 +250,83 @@ test("a 503 that carries an {error} envelope keeps the server's own words", asyn
   assert.equal(err.code, "no container slots");
   assert.match(err.message, /no container slots/, "the envelope's message must survive");
   assert.doesNotMatch(err.message, /unavailable/i, "the envelope-less tier must not swallow an envelope");
+});
+
+test("an envelope-less 403 says the request was refused above us, in words the app will not swallow", async () => {
+  // Discriminating: red today. DEMOS-4N. An empty-bodied 403 currently falls through to the
+  // `!failure.message` tier and produces `session start failed (403)` — both the
+  // `doesNotMatch(/session start failed/i)` and the `^The request…` anchor below fail
+  // against that. Required alongside Case B: a fix gated on a non-empty body alone
+  // would leave this half of the defect (the empty-bodied 403) unnoticed.
+  const err = await sessionStartError(403, "");
+
+  assert.ok(err.message.trim().length > 0);
+  assert.doesNotMatch(err.message, /:\s*$/, "no dangling colon");
+  assert.match(err.message, /403/, "the status keeps Sentry titles distinguishable per status");
+  assert.match(err.message, /^The request to start a sandbox was refused/,
+    "the envelope-less tier, not the body tier");
+
+  // THE CONTRACT — the same triple the 504 and 503 tests pin. The regex lives in
+  // apps/authoring/src/App.tsx, across a package boundary, so it cannot be imported;
+  // the triple is the ceiling.
+  assert.doesNotMatch(err.message, /session start failed/i, "would trip the App.tsx heuristic");
+  assert.doesNotMatch(err.message, /fetch/i, "would trip the App.tsx heuristic");
+  assert.doesNotMatch(err.message, /failed to fetch|networkerror|load failed/i);
+
+  // Nothing observed supports naming a cause or promising a retry works.
+  assert.doesNotMatch(err.message, /took too long|timed out|capacity|VPN|proxy|extension|firewall/i,
+    "unsupported by the evidence");
+});
+
+test("a gateway page on a 403 never becomes the user's message", async () => {
+  // Discriminating: red today. DEMOS-4N reproduced: the fixture body is shaped like the real one (uppercase
+  // doctype + IE conditional comment). Red today — this yields
+  // "session start failed (403): <!DOCTYPE html>…", failing three assertions below.
+  // It is the discriminator between gating the tier on the ENVELOPE (what we ship)
+  // and gating it on `!failure.message` (which would leave exactly this case broken)
+  // — the same discriminator the 503 test above spells out.
+  const page = `<!DOCTYPE html>\n<!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]-->`
+    + `<html><head><title>Attention Required!</title></head><body>${"x".repeat(4000)}</body></html>`;
+  const err = await sessionStartError(403, page);
+
+  assert.doesNotMatch(err.message, /<!DOCTYPE|<html/i, "the page is not the user's message");
+  assert.match(err.message, /^The request to start a sandbox was refused/,
+    "the envelope-less tier, not the body tier");
+  assert.doesNotMatch(err.message, /session start failed/i, "would trip the App.tsx heuristic");
+  assert.doesNotMatch(err.message, /fetch/i);
+  assert.ok(err.message.length < 300, `message should be a sentence, got ${err.message.length} chars`);
+});
+
+test("a 403 that carries an {error} envelope keeps the server's own words", async () => {
+  // Guard: green both before and after — stated explicitly so the "fails first" claim
+  // for the two cases above is not overstated. The worker emits NO 403 on
+  // POST /api/session at all, so this tier is defensive, exactly like the existing
+  // enveloped-504 test ("Nothing in our Worker emits a 504 today … so this tier is
+  // defensive"). The body below is the real shape of the worker's only 403s —
+  // `json({ error: "forbidden", detail: … }, 403)` on the demo-ownership routes
+  // (workers/api/src/index.ts:1150) — which matters: those use `detail`, not
+  // `message`, and `readFailure` reads `body.message ?? body.error`, so the
+  // surviving text is the wire code, not the human sentence.
+  //
+  // Deliberately not asserting on "this demo belongs to someone else" — `readFailure`
+  // never reads `detail`, so that assertion would fail against the real shape.
+  //
+  // KNOWN RESIDUAL (Sentry DEMOS-4N): the message this produces still contains
+  // "session start failed", so the App.tsx heuristic still rewrites it as the
+  // local-dev Docker hint. Not fixed here — an enveloped failure came from a handler
+  // that chose its own words, and the fix for the wrapper around them is to stop
+  // wrapping in those three words at all, which would take the local-dev hint with it
+  // (see the empty-bodied 500 test below). Asserted on the server's words rather than
+  // the whole string so the wrapper stays free to change without this test blessing
+  // the misattribution.
+  const err = await sessionStartError(403, JSON.stringify({
+    error: "forbidden", detail: "this demo belongs to someone else",
+  }));
+
+  assert.equal(err.code, "forbidden");
+  assert.match(err.message, /forbidden/, "the envelope's own words must survive");
+  assert.doesNotMatch(err.message, /^The request to start a sandbox was refused/,
+    "the envelope-less tier must not swallow an envelope");
 });
 
 test("a non-timeout status still shows the body, but bounded", async () => {

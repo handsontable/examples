@@ -151,13 +151,14 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
   const msg = e instanceof Error ? e.message : String(e);
   // ⚠ This heuristic REPLACES the runtime's message, so every alternative below is a
   // contract with whoever writes those messages. `sessionStartMessage` in
-  // packages/runtime/src/container.ts phrases two tiers to miss this test deliberately
-  // — gateway-timeout (504/522/524) and service-unavailable (an envelope-less 503,
-  // DEV-2553) — and its connectivity tiers to hit it, which is what still gets a
-  // developer whose own worker is down the right answer. Widening the alternation — or
-  // letting "fetch" back into either of those sentences — tells a production visitor
-  // whose sandbox never started to install Docker and run a worker (DEV-2538/DEV-2553,
-  // Sentry DEMOS-9).
+  // packages/runtime/src/container.ts phrases three tiers to miss this test deliberately
+  // — gateway-timeout (504/522/524), service-unavailable (an envelope-less 503,
+  // DEV-2553), and refused-above-us (an envelope-less 403, Sentry DEMOS-4N) — and its
+  // connectivity tiers to hit it, which is what still gets a developer whose own worker
+  // is down the right answer. Widening the alternation — or letting "fetch" back into
+  // any of those sentences — tells a production visitor whose sandbox never started, or
+  // was refused before it reached the demo service, to install Docker and run a worker
+  // (DEV-2538/DEV-2553, Sentry DEMOS-9/DEMOS-4N).
   // `runner/pipeline/session-start-failure.test.mjs` pins the other end.
   if (engine === "container" && /failed to fetch|networkerror|load failed|session start failed|fetch/i.test(msg)) {
     return "This example runs on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
