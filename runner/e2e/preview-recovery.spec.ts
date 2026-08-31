@@ -132,6 +132,57 @@ test("a version the runner refuses gets no restart button", async ({ page }) => 
   await expect(page.getByRole("button", { name: "Restart preview" })).toHaveCount(0);
 });
 
+// Sentry DEMOS-2X / DEMOS-2Y: `loadStarterExample`'s fetch never completing (the tab's own
+// network dropping, or a cancelled navigation) used to be carded identically to the
+// below-floor/no-bucket refusal above — "Try another version", no retry — which blames the
+// one thing that is not wrong and withholds the one action that would actually work. This
+// is the counterpart to the test above: a transient fetch failure is *not* a version
+// problem, and the card and its retry must say so.
+test("a starter artifact that never arrives is carded as a connection failure, with a retry", async ({
+  page,
+}) => {
+  let matched = 0;
+  await page.route("**/starter-examples/**", (r) => {
+    matched += 1;
+    return r.abort("failed");
+  });
+  await page.goto("/?example=react");
+  await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "error", {
+    timeout: 30_000,
+  });
+  await expect(page.getByText("The preview could not start")).toBeVisible();
+  // (1) the card must NOT blame the version — that wording belongs to the
+  //     below-floor / no-bucket refusals, and the version is not what failed.
+  await expect(page.getByText(/Try another version/)).toHaveCount(0);
+  // (2) the action that would actually work must be offered.
+  const restart = page.getByRole("button", { name: "Restart preview" });
+  await expect(restart).toBeVisible();
+
+  // (3) the button re-runs the *starter load*, not a silent runtime remount: with the
+  // route still aborting, a further /starter-examples/ request proves it, and the card
+  // stays up rather than blanking into an empty preview. The starter effect also fires
+  // once on its own, ambiently, ~200ms after mount — `versionsResolved` (also unstubbed
+  // here, and also failing "Failed to fetch") is a dependency of the same effect, and
+  // flipping it re-runs the effect regardless of which way the versions fetch settled.
+  // Measured stable within 300ms across repeated runs; wait it out before pinning a
+  // baseline, or the ambient request is indistinguishable from the click's own.
+  await page.waitForTimeout(1500);
+  const before = matched;
+  // Pinned, not just asserted non-zero: the ambient pair is exactly two requests
+  // (measured across repeated runs), so a real third request has to be the click's —
+  // a loose "toBeGreaterThan" with a long poll budget would also pass on a later,
+  // unrelated ambient fire and go hollow the moment a third ambient request appears.
+  expect(before, "the ambient starter-effect pair, measured").toBe(2);
+  await restart.click();
+  await expect(async () => {
+    expect(matched).toBeGreaterThan(before);
+  }).toPass({ timeout: 10_000 });
+  await expect(previewStatus(page)).toHaveAttribute("data-preview-status", "error", {
+    timeout: 30_000,
+  });
+  await expect(page.getByText("The preview could not start")).toBeVisible();
+});
+
 // A compile the bundler sees as "no module changed" resets the preview document without
 // re-evaluating anything: a blank frame, `done` with no error, nothing in the console.
 // Two paths hit it. This is the one reachable by typing: break a line (the transpile
