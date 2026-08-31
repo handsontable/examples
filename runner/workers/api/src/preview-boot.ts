@@ -17,22 +17,28 @@
 // WHAT CAN ACTUALLY REACH HERE, read out of the SDK rather than assumed — it is
 // narrower than it looks, and the copy below depends on it.
 //
-// A preview request only reaches the throwing `tcpPort.fetch()` when the port
-// activation still belongs to the *current* container generation. `Sandbox.stop()`
-// (which `sleepAfter` invokes through the Container base's activity alarm) clears
-// both the runtime identity and the stored port activations, and `onStart()` mints
-// a fresh runtime id via `markStarted()`. So after any container restart —
-// wake-from-sleep included — `validatePreviewURLForRuntime()` answers `stale` and
-// `proxyPreviewRequest()` returns its own 410 long before anything can throw. Wake
-// from sleep is therefore NOT a source of these events; a preview URL that outlives
-// its container is already a 410, and recovering it needs a new session, not this.
+// `Sandbox.fetchPreviewIfRunning` (`@cloudflare/sandbox@0.12.3/dist/sandbox-DI6suZAc.js:8191-8197`)
+// pre-checks `container.running`, `state.status === "healthy"` and
+// `currentRuntime.isActive(runtime)` before it ever calls the throwing
+// `forwardPreviewRequest`, and 410s `STALE_PREVIEW_URL` if any of those fail. So
+// what reaches the throw below is one of two things: (i) a dead port inside a
+// live generation — the dev server process crashed, was killed, or is
+// restarting itself (a Vite config change), or the `/status` probe won the race
+// against the server actually serving; or (ii) the container being stopped
+// *between* that pre-check and the `fetch` — a race against the `sleepAfter`
+// activity alarm, an eviction, or a crash, which resolves into the SDK's own
+// 410 on the very next request. DEMOS-K is production evidence for (ii): 14 of
+// 20 events (5 of 5 post-deploy) carry workerd's "The container is not running,
+// consider calling start()", which only happens when `container.running` was
+// true at the check and false at the fetch. Both cases are transient by
+// construction, so both get the same retry-then-terminal treatment below — a
+// container-stopped race is not a reason to skip the retry page, because the
+// very next request already falls through to the SDK's 410 on its own.
 //
-// What is left is a dead port inside a live generation: the dev server process
-// crashed, was killed, or is restarting itself (a Vite config change), or the
-// `/status` probe won the race against the server actually serving. Note the probe
-// makes a cold start an unlikely visitor-facing cause on its own —
-// `packages/runtime/src/container.ts` only points the iframe at the preview URL
-// after `/status` reports a real `net.connect` success.
+// Note the `/status` probe makes a cold start an unlikely visitor-facing cause
+// of (i) on its own — `packages/runtime/src/container.ts` only points the
+// iframe at the preview URL after `/status` reports a real `net.connect`
+// success.
 //
 // Hence the neutral copy. "The demo is still starting" would be a guess dressed as
 // a fact for a container that has been serving happily for ten minutes.
@@ -56,21 +62,38 @@ export const BOOT_WINDOW_MS = 90_000;
 const MAX_CAUSE_DEPTH = 5;
 
 /**
- * Whether an error is workerd refusing to connect to the container's port.
+ * The three messages workerd raises out of `container.getTcpPort(port).fetch()`, verbatim
+ * from DEMOS-K. None of them exists in any package here — they come from the runtime — so a
+ * message match is the only signal available, and each is listed rather than generalised so a
+ * fourth shape shows up as a new Sentry event instead of being silently swallowed.
+ */
+const PORT_UNREACHABLE = [
+  /connecting to the port/i, // "There has been an internal error connecting to the port"
+  /container is not listening/i, // "The container is not listening in the TCP address 10.0.0.1:4321"
+  /container is not running/i, // "The container is not running, consider calling start()"
+];
+
+/**
+ * Whether an error is workerd failing to deliver a request to the container's port.
  *
  * Narrow on purpose. The SDK's own `isPlatformTransientError` does not cover
  * this case (it matches superseded isolates, lost network, DO storage resets),
- * and the string is raised by workerd itself rather than by any package here,
+ * and the strings are raised by workerd itself rather than by any package here,
  * so a message match is the only signal available. Everything that does not
  * match is rethrown by the caller and keeps today's status and today's report.
  */
-export function isPortNotListening(err: unknown): boolean {
+export function isPreviewPortUnreachable(err: unknown): boolean {
   const seen = new Set<unknown>();
   let current: unknown = err;
   for (let depth = 0; depth < MAX_CAUSE_DEPTH; depth += 1) {
     if (!(current instanceof Error) || seen.has(current)) return false;
     seen.add(current);
-    if (/connecting to the port/i.test(current.message)) return true;
+    // Hoisted, not read inside the callback: `current` is a mutable `unknown`, and TS
+    // discards the `instanceof Error` narrowing inside a closure body, so
+    // `re.test(current.message)` would fail `pnpm typecheck`. Today's single inline
+    // `.test` call compiles only because it is not in a callback.
+    const message = current.message;
+    if (PORT_UNREACHABLE.some((re) => re.test(message))) return true;
     current = current.cause;
   }
   return false;
