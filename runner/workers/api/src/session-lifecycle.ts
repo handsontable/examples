@@ -88,7 +88,7 @@ function messageMatches(err: unknown, pattern: RegExp): boolean {
   return false;
 }
 
-/** The pool is full. The DEMOS-1 message, and the only one of the three that
+/** The pool is full. The DEMOS-1 message, and the only one of the four that
  *  supports telling a visitor "we are at capacity". */
 const AT_CAPACITY_PATTERN = /maximum number of running container instances exceeded/i;
 
@@ -96,6 +96,16 @@ const AT_CAPACITY_PATTERN = /maximum number of running container instances excee
  *  right now" — both seen on this project, the first in the same Sentry group. */
 const SERVICE_UNREACHABLE_PATTERN = /container service is unreachable/i;
 const NOT_RUNNING_PATTERN = /container is not running/i;
+
+/** A fourth wording of the same refusal, from the DO/container allocation layer
+ *  rather than from the sandbox: "There is no container instance that can be
+ *  provided to this Durable Object, try again later" (Sentry DEMOS-32, one event
+ *  on release 36129dc5 — the same release that produced a DEMOS-33 *warning*,
+ *  which is what makes this a missed wording and not a missing fix). Like
+ *  NOT_RUNNING and AT_CAPACITY, and unlike SERVICE_UNREACHABLE, it says the
+ *  platform never handed us an instance, so there is no slot left to reclaim.
+ *  Teardown-only on purpose: see `isAtCapacityFailure` below. */
+const NO_INSTANCE_PATTERN = /no container instance that can be provided/i;
 
 /**
  * Whether a failed `destroy()` is the platform declining rather than a teardown
@@ -108,14 +118,15 @@ const NOT_RUNNING_PATTERN = /container is not running/i;
  * is only defensible because the failure stays legible in Sentry. A `console`
  * line is not that: `observability.head_sampling_rate` is 0.1 in wrangler.jsonc.
  *
- * The three messages are NOT equally strong evidence, and the weakest one is why
- * the report above is not optional. "Not running" and "maximum instances
- * exceeded" both imply there is no slot being held by whatever we failed to
- * reach — nothing to reclaim. "Service unreachable" does not: a container may
- * well be running and billing, and the teardown simply could not get to it. The
- * `sleepAfter` backstop bounds that, and it is exactly today's outcome (a 500
- * nobody retries either), so this is not a regression — but it is the case a
- * reviewer should expect to see in the `tier2-teardown-declined` issue.
+ * The four messages are NOT equally strong evidence, and the weakest one is why
+ * the report above is not optional. "Not running", "maximum instances
+ * exceeded", and "no container instance that can be provided" all imply there
+ * is no slot being held by whatever we failed to reach — nothing to reclaim.
+ * "Service unreachable" does not: a container may well be running and billing,
+ * and the teardown simply could not get to it. The `sleepAfter` backstop bounds
+ * that, and it is exactly today's outcome (a 500 nobody retries either), so
+ * this is not a regression — but it is the case a reviewer should expect to see
+ * in the `tier2-teardown-declined` issue.
  *
  * DEGRADE DIRECTION, documented like `isPreviewPortUnreachable`: these strings come
  * from the platform, not from any package in this repo, so a message match is
@@ -126,7 +137,8 @@ export function isExpectedTeardownFailure(err: unknown): boolean {
   return (
     messageMatches(err, AT_CAPACITY_PATTERN) ||
     messageMatches(err, SERVICE_UNREACHABLE_PATTERN) ||
-    messageMatches(err, NOT_RUNNING_PATTERN)
+    messageMatches(err, NOT_RUNNING_PATTERN) ||
+    messageMatches(err, NO_INSTANCE_PATTERN)
   );
 }
 
@@ -136,7 +148,10 @@ export function isExpectedTeardownFailure(err: unknown): boolean {
  * Narrower than the teardown predicate on purpose: only the capacity message
  * supports the sentence below. "The container is not running" and "the service
  * is unreachable" are different faults, and the client already has an honest
- * tier for an unavailable service (`sessionStartMessage`, DEV-2553).
+ * tier for an unavailable service (`sessionStartMessage`, DEV-2553). The DO
+ * "no container instance that can be provided" wording (Sentry DEMOS-32) is
+ * recognised on teardown and deliberately not here: no create-path event of it
+ * exists, so widening this predicate for it would be a guess dressed as a fact.
  */
 export function isAtCapacityFailure(err: unknown): boolean {
   return messageMatches(err, AT_CAPACITY_PATTERN);
