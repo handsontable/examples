@@ -162,9 +162,17 @@ test("the head injection adds no whitespace of its own", () => {
   assert.ok(injectReporterIntoHtml("<div id=root></div>").endsWith("<div id=root></div>"));
 });
 
-test("falls back to body, then to a prepend, when there is no head", () => {
+test("falls back to just before body, then to a prepend, when there is no head", () => {
+  // DEV-2724: *before* the body tag, not after it. The classic bundler slices the
+  // body out with `/<body.*>([\s\S]*)<\/body>/m`, whose greedy `.*` swallowed
+  // everything we put on the `<body>` line up to our own `<script>`'s `>` — leaving
+  // the reporter's source as the body's first text node, rendered as page text on
+  // `/share/:id`. Before the tag, the script is parsed into the implicit head, still
+  // ahead of the demo's own scripts. Pinned end-to-end against the bundler's real
+  // regex in `inject-html.test.mjs`.
   const bodyOnly = injectReporterIntoHtml("<body><div id=root></div></body>");
-  assert.ok(bodyOnly.startsWith("<body>"), "body tag stays first");
+  assert.ok(bodyOnly.endsWith("<body><div id=root></div></body>"), "the demo's body is left whole");
+  assert.ok(bodyOnly.startsWith("<script>"), "and the reporter is what precedes it");
   assert.ok(bodyOnly.includes(MONITOR_MESSAGE_TYPE));
 
   const fragment = injectReporterIntoHtml("<div id=root></div>");
