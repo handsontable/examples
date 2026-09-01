@@ -18,7 +18,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { elapsedBucket } from "../apps/authoring/src/sessionDiagnostics.ts";
+import { elapsedBucket, responseOrigin } from "../apps/authoring/src/sessionDiagnostics.ts";
 
 test("every boundary is pinned from both sides", () => {
   // A label means strictly "ms < N × 1000", so each pair below is the last value that
@@ -62,6 +62,40 @@ test("the label is always a usable tag value", () => {
     const label = elapsedBucket(ms);
     assert.equal(typeof label, "string");
     assert.ok(label.length > 0, `${ms}ms produced an empty tag value`);
+    assert.doesNotMatch(label, /undefined|NaN/);
+  }
+});
+
+// `responseOrigin` — the DEMOS-9 facet answering "where did this response come from".
+// `import { responseOrigin }` above does not exist on e614db5b, so this whole file
+// fails to load before any assertion below runs — that is this test's own discriminator.
+test("every provenance branch has a distinct label", () => {
+  const cases = [
+    ["cloudflare", { ray: "a2cee5e30f0c08c1-PRG", headersReadable: true, headerNames: ["cf-ray"] }],
+    ["cloudflare", { ray: "a2cee5e30f0c08c1-PRG", headersReadable: false, headerNames: [] }],
+    ["unreadable", { ray: null, headersReadable: false, headerNames: [] }],
+    ["headerless", { ray: null, headersReadable: true, headerNames: [] }],
+    ["foreign", { ray: null, headersReadable: true, headerNames: ["content-type"] }],
+  ];
+  for (const [expected, input] of cases) {
+    assert.equal(responseOrigin(input), expected, JSON.stringify(input));
+  }
+
+  const [cloudflare, , unreadable, headerless, foreign] = cases.map(([, input]) => responseOrigin(input));
+  const labels = [cloudflare, unreadable, headerless, foreign];
+  for (let i = 0; i < labels.length; i += 1) {
+    for (let j = i + 1; j < labels.length; j += 1) {
+      assert.notEqual(labels[i], labels[j], `${labels[i]} vs ${labels[j]} must be distinct`);
+    }
+  }
+
+  // The file's existing "always a usable tag value" discipline, repeated: an
+  // undefined tag value is silently dropped by Sentry, which would delete the
+  // very facet this exists to create.
+  for (const [, input] of cases) {
+    const label = responseOrigin(input);
+    assert.equal(typeof label, "string");
+    assert.ok(label.length > 0);
     assert.doesNotMatch(label, /undefined|NaN/);
   }
 });

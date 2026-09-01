@@ -61,7 +61,7 @@ import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
 import { GuidePage } from "./Guide.js";
 import { guideTrack, parseGuideRoute } from "./guideTracks.js";
-import { elapsedBucket } from "./sessionDiagnostics.js";
+import { elapsedBucket, responseOrigin } from "./sessionDiagnostics.js";
 import { Markdown } from "./markdown.js";
 import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
@@ -276,6 +276,17 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
     // Logs, search the ray here, and find out whether it was one of these. That gives
     // it ~one value per event, which is only acceptable because this path fires a
     // handful of times a day; it would be the wrong call on a hot one.
+    //
+    // DEMOS-9 facet analysis adds two more tags and three extras, still beside the
+    // fingerprint and never inside it (same reasoning as above — this is instrumentation,
+    // not a regroup). `session_response_origin` is the one-click answer
+    // (`sessionDiagnostics.ts`'s `responseOrigin`); `session_response_type` is the raw
+    // `res.type` input it was derived from, kept alongside so the derivation stays
+    // auditable. Header NAMES are bounded (`HEADER_NAMES_MAX` in container.ts) and go to
+    // `extra` rather than a tag — still not a tag, because an open set of names is not a
+    // useful facet even though it is a bounded one. Header VALUES (`sessionResponseServer`)
+    // are unbounded and extra-only for the same reason `sessionElapsedMs` is: Sentry tag
+    // values are meant to be faceted, not read as free text.
     const diagnostics = e.diagnostics;
     Sentry.captureException(e, {
       tags: {
@@ -287,11 +298,22 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
           ? {
               session_elapsed_bucket: elapsedBucket(diagnostics.elapsedMs),
               ...(diagnostics.ray ? { cf_ray: diagnostics.ray } : {}),
+              session_response_origin: responseOrigin(diagnostics),
+              session_response_type: diagnostics.responseType,
             }
           : {}),
       },
       fingerprint: ["tier2-session-start", String(e.status), ...(code ? [code] : [])],
-      ...(diagnostics ? { extra: { sessionElapsedMs: diagnostics.elapsedMs } } : {}),
+      ...(diagnostics
+        ? {
+            extra: {
+              sessionElapsedMs: diagnostics.elapsedMs,
+              sessionResponseHeaders: diagnostics.headerNames.join(", "),
+              sessionResponseHeaderCount: diagnostics.headerCount,
+              ...(diagnostics.server ? { sessionResponseServer: diagnostics.server } : {}),
+            },
+          }
+        : {}),
     });
     return;
   }
