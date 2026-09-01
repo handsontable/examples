@@ -33,10 +33,13 @@
 // DEV-2537) is gated on PREVIEW_PROXY_HEADER and cannot reach this route.
 //
 // The DEMOS-9 facet analysis that followed DEV-2559 found a fourth tier's worth of
-// evidence: 459 events of `session_status:504`, every one measured 35-82ms — far
-// under Cloudflare's own ~100s ceiling, so "took too long" is false — and every one
-// missing `cf-ray`, on a code path where every other status from the same deploy (403,
-// 500) carries one 11/11. Nothing timed out, and "try Restart preview" cannot help if
+// evidence: 459 events of `session_status:504`, none of them carrying `cf-ray` — 371
+// of the 459 also carry `session_elapsed_bucket` (the other 88 predate the DEV-2559
+// instrumentation deploy and have no elapsed measurement at all), and every one of
+// those 371 measured 35-82ms — far under Cloudflare's own ~100s ceiling, so "took too
+// long" is false for the events it can be checked against — on a code path where
+// every other status from the same deploy (403, 500) carries a ray, 11/11. Nothing
+// timed out, and "try Restart preview" cannot help if
 // something between the browser and this service answered instead of the edge. That
 // tier is gated on `edge.headersReadable` as well as the missing ray, because a
 // cross-origin dev setup (App.tsx's `:8787` fallback) makes every header — including
@@ -414,11 +417,12 @@ test("a 403 that does carry an {error} envelope keeps the server's own words", a
 
 // ── The interception tier (DEMOS-9 facet analysis) ──────────────────────────────
 //
-// 459 events of `session_status:504` over 90 days, all measured 35-82ms and none
-// carrying a `cf-ray`, on a code path where every other status from the same
-// deploy (11/11 events, mixed 403/500) does carry one. Nothing timed out — the
-// median is two orders of magnitude under Cloudflare's own ~100s ceiling — so
-// "took too long" is a false claim, and "try Restart preview" cannot help if
+// 459 events of `session_status:504` over 90 days, none carrying a `cf-ray` — 371 of
+// them also measured, all 35-82ms (the other 88 predate the DEV-2559 instrumentation
+// deploy and carry no elapsed measurement at all) — on a code path where every other
+// status from the same deploy (11/11 events, mixed 403/500) does carry a ray. Nothing
+// timed out — the measured median is two orders of magnitude under Cloudflare's own
+// ~100s ceiling — so "took too long" is a false claim, and "try Restart preview" cannot help if
 // something local intercepted the request before it reached our edge. This tier
 // replaces that sentence for exactly the case the evidence supports: an unreached
 // 504 whose headers we CAN read (so absence of a ray means something, rather than
