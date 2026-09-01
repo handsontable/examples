@@ -31,6 +31,18 @@
 // could equally have been an unreadable body rather than an empty one) do not name a
 // cause. The 503 the preview proxy emits with a bare body (workers/api/src/index.ts,
 // DEV-2537) is gated on PREVIEW_PROXY_HEADER and cannot reach this route.
+//
+// The DEMOS-9 facet analysis that followed DEV-2559 found a fourth tier's worth of
+// evidence: 459 events of `session_status:504`, every one measured 35-82ms — far
+// under Cloudflare's own ~100s ceiling, so "took too long" is false — and every one
+// missing `cf-ray`, on a code path where every other status from the same deploy (403,
+// 500) carries one 11/11. Nothing timed out, and "try Restart preview" cannot help if
+// something between the browser and this service answered instead of the edge. That
+// tier is gated on `edge.headersReadable` as well as the missing ray, because a
+// cross-origin dev setup (App.tsx's `:8787` fallback) makes every header — including
+// `cf-ray` — unreadable regardless of who answered, and reading that as evidence would
+// fire the tier on every developer's machine. See the tests below this file's
+// pre-existing ones.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -78,21 +90,31 @@ const FILES = {
  * the tiering under test lives in mount()'s throw, and the failure path there also
  * disposes and DELETEs the half-created session — so the stub has to survive that
  * follow-up request too (a throwing DELETE would mask the assertion).
+ *
+ * `type: "basic"` is the DEFAULT, not an omission. Production is same-origin
+ * (`.env.production` pins `VITE_API_BASE` to the app's own host), so every real
+ * failing create is a `basic` response with every header readable — that is the
+ * shape the default reproduces. An `undefined` `type` exercises a branch that
+ * exists nowhere in production, which is the exact mistake `container.ts`'s own
+ * comments (the `cf-ray` read, ~line 592-597) already warn against making for the
+ * ray. `headers` defaults to carrying the ray so the eleven pre-existing tests
+ * below keep exercising the timeout/edge tiers they were written for; the new
+ * interception tests pass `headers` without one.
  */
-async function sessionStartError(status, body) {
+async function sessionStartError(status, body, { type = "basic", headers: rawHeaders = { "cf-ray": RAY } } = {}) {
   // A real `Headers`, not a hand-rolled `{ get }`: mount() reads `cf-ray` off the
   // failing response (DEV-2559), and every test in this file goes through here, so
   // they all exercise that read rather than a guard around it. If this stub ever
   // loses its headers the fix is to give them back — NOT to make the read optional
   // in container.ts, which would leave the ray assertion below passing on nothing.
-  const headers = new Headers({ "cf-ray": RAY });
+  const headers = new Headers(rawHeaders);
   const fetchBefore = globalThis.fetch;
   const windowBefore = globalThis.window;
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   globalThis.fetch = (url, init = {}) => {
     if (url.endsWith("/api/session") && init.method === "POST") {
       // `readFailure` reads the body with res.text(), not res.json().
-      return Promise.resolve({ ok: false, status, headers, text: () => Promise.resolve(body) });
+      return Promise.resolve({ ok: false, status, type, headers, text: () => Promise.resolve(body) });
     }
     // The cleanup DELETE, and anything else the teardown reaches for.
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
@@ -388,4 +410,105 @@ test("a 403 that does carry an {error} envelope keeps the server's own words", a
   assert.equal(err.code, "forbidden");
   assert.match(err.message, /belongs to someone else/, "the envelope's message must survive");
   assert.doesNotMatch(err.message, /blocked before it reached/i, "the edge tier must not swallow an envelope");
+});
+
+// ── The interception tier (DEMOS-9 facet analysis) ──────────────────────────────
+//
+// 459 events of `session_status:504` over 90 days, all measured 35-82ms and none
+// carrying a `cf-ray`, on a code path where every other status from the same
+// deploy (11/11 events, mixed 403/500) does carry one. Nothing timed out — the
+// median is two orders of magnitude under Cloudflare's own ~100s ceiling — so
+// "took too long" is a false claim, and "try Restart preview" cannot help if
+// something local intercepted the request before it reached our edge. This tier
+// replaces that sentence for exactly the case the evidence supports: an unreached
+// 504 whose headers we CAN read (so absence of a ray means something, rather than
+// an artefact of CORS hiding all headers from us).
+//
+// The `headersReadable` conjunct is load-bearing, not decorative: local dev
+// defaults to cross-origin (`API_BASE` falls back to `:8787`), where `cors()`
+// exposes no headers, so ray-absence proves nothing there. Without this conjunct
+// the new tier would fire on every developer's machine. See T2/T4.
+
+test("an unreached 504 says the reply carries no sign of our edge, in words the app will not swallow", async () => {
+  const err = await sessionStartError(504, "", {
+    type: "basic",
+    headers: { "content-type": "text/html" },
+  });
+
+  assert.match(
+    err.message,
+    /^The sandbox service could not be reached \(504\)\./,
+    "today's message is 'The sandbox took too long to start (504)…'",
+  );
+  assert.doesNotMatch(err.message, /took too long|timed out/i, "35-82ms is not a timeout");
+
+  // Guards — pass today too (they pin the copy contract, same four calls the 504
+  // and 403 tests above already make, copied verbatim).
+  assert.doesNotMatch(err.message, /session start failed/i, "would trip the App.tsx heuristic");
+  assert.doesNotMatch(err.message, /fetch/i, "would trip the App.tsx heuristic");
+  assert.doesNotMatch(err.message, /failed to fetch|networkerror|load failed/i);
+  assert.match(err.message, /504/, "the status keeps Sentry titles distinguishable per status");
+  assert.doesNotMatch(err.message, /:\s*$/, "no dangling colon where the body should have been");
+  assert.ok(err.message.length < 300, `message should be a sentence, got ${err.message.length} chars`);
+  assert.doesNotMatch(
+    err.message,
+    /restart preview/i,
+    "whatever answered instead will answer the retry the same way",
+  );
+});
+
+test("the tier turns on where the response came from, not on the status", async () => {
+  const a = await sessionStartError(504, "", { type: "basic", headers: { "cf-ray": RAY } });
+  const b = await sessionStartError(504, "", { type: "basic", headers: { "content-type": "text/html" } });
+  const c = await sessionStartError(504, "", { type: "cors", headers: {} });
+
+  assert.notEqual(b.message, a.message, "a ray-bearing 504 is a different claim");
+  assert.notEqual(b.message, c.message, "unreadable headers are not evidence");
+
+  // The forward-compatibility guard: no production event has ever taken branch A
+  // (§2.2 of the plan — 0 of 371 post-instrumentation 504s carry a ray), so this is
+  // pinned in test only. And the cross-origin fallback: without `headersReadable`
+  // a developer pointed at :8787 would be told the request never reached us on no
+  // evidence at all.
+  assert.match(a.message, /took too long/, "a ray-bearing 504 keeps the old timeout wording");
+  assert.match(c.message, /took too long/, "an unreadable (cross-origin) response falls back too");
+});
+
+test("a failed create carries what the response's headers say about where it came from", async () => {
+  const err = await sessionStartError(504, "", {
+    type: "basic",
+    headers: { "cf-ray": RAY, server: "cloudflare", "content-type": "text/plain" },
+  });
+
+  assert.deepEqual(err.diagnostics.headerNames, ["cf-ray", "content-type", "server"]);
+  assert.equal(err.diagnostics.responseType, "basic");
+  assert.equal(err.diagnostics.headersReadable, true);
+  assert.equal(err.diagnostics.server, "cloudflare");
+  assert.equal(err.diagnostics.headerCount, 3);
+  // These survive mount()'s catch for the same non-obvious reason the ray does
+  // (see "a failed create carries the edge id and how long it took" above) — it
+  // rethrows the same instance rather than constructing a fresh one.
+});
+
+test("a cross-origin response reports that its headers were unreadable, not that they were absent", async () => {
+  const err = await sessionStartError(504, "", { type: "cors", headers: {} });
+
+  assert.equal(err.diagnostics.headersReadable, false);
+  assert.deepEqual(err.diagnostics.headerNames, []);
+  assert.equal(err.diagnostics.server, null);
+  assert.equal(err.diagnostics.ray, null);
+  // This is the shape a developer pointed straight at :8787 produces — `cors()` in
+  // workers/api exposes no headers — and the reason the copy gate carries
+  // `headersReadable` at all rather than trusting a null ray on its own.
+});
+
+test("the header-name list is capped, and says it was", async () => {
+  const many = {};
+  for (let i = 0; i < 30; i += 1) many[`x-h-${String(i).padStart(2, "0")}`] = "v";
+  const err = await sessionStartError(504, "", { type: "basic", headers: many });
+
+  assert.equal(err.diagnostics.headerNames.length, 20);
+  assert.equal(err.diagnostics.headerCount, 30, "a truncated list must be detectable as truncated");
+  // `extra` is not free — a response can carry arbitrarily many headers, and this
+  // is the same bounding discipline `FAILURE_TEXT_MAX` applies to the body.
 });
