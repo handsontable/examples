@@ -41,7 +41,7 @@ import {
 } from "./session-lifecycle.js";
 import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
-import { BuildFailure, createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
+import { BuildFailure, buildFailureTags, createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
   budgetPausedMessage,
   countEgress,
@@ -1990,7 +1990,7 @@ export default Sentry.withSentry(sentryOptions, {
       // never sees it. Report here or the error is invisible.
       if (err instanceof BuildFailure) {
         Sentry.captureException(err, {
-          tags: { context: "snapshot-build", build_phase: err.phase },
+          tags: buildFailureTags(err),
           // Without a fingerprint the cause line groups per package and per version,
           // which is the same one-defect-many-issues shape DEV-2570 exists to end,
           // only better titled. Keyed by the machine code so the group stays
