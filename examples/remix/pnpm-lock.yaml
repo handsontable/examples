@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@handsontable/react-wrapper':
         specifier: latest
-        version: 18.0.0(handsontable@18.0.0)
+        version: 18.1.0(handsontable@18.1.0)
       '@remix-run/node':
         specifier: 2.17.5
         version: 2.17.5(typescript@5.9.3)
@@ -22,7 +22,7 @@ importers:
         version: 2.17.5(typescript@5.9.3)
       handsontable:
         specifier: latest
-        version: 18.0.0
+        version: 18.1.0
       isbot:
         specifier: 5.2.0
         version: 5.2.0
@@ -673,8 +673,8 @@ packages:
     resolution: {integrity: sha512-d9zaMRSTIKDLhctzH12MtXvJKSSUhaHcjV+2Z+GK+EEY7XKpP5yR4x+N3TAcHTcu963nIr+TMcCb4DBCYX1z6Q==}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
 
-  '@handsontable/react-wrapper@18.0.0':
-    resolution: {integrity: sha512-Cy+uFLFB04WJ3YtifqAm0+4Ya65hjNS4as15bT/YDnhqxIV/LW/73zDLJ2YBC2sJ4X0sx2FL/UbTWHJA+Co/eg==}
+  '@handsontable/react-wrapper@18.1.0':
+    resolution: {integrity: sha512-yCwjgroeP9vYE76ZjjtM/I2fHb6m0L1jYbWUHnbx7jP4PgBBI65DynaH1ou0Mm+bPojrJWcRU4zM2B4M7gOeFQ==}
     peerDependencies:
       handsontable: ^18.0.0
 
@@ -2099,8 +2099,8 @@ packages:
     resolution: {integrity: sha512-4haO1M4mLO91PW57BMsDFf75UmwoRX0GkdD+Faw+Lr+r/OZrOCS0pIBwOL1xCKQqnQzbNFGgK2V2CpBUPeFNTw==}
     hasBin: true
 
-  handsontable@18.0.0:
-    resolution: {integrity: sha512-U4H6gDrwGTfjahSyoGHhFHZvOZWB7ReQ3iBvJUIcZPdqdppdZ+FSYNovw+3MH1guJfGgRIhoLYnbSm8Gd6Ft8w==}
+  handsontable@18.1.0:
+    resolution: {integrity: sha512-23S/Jny67NRevaZgTXSAonhFW28du3J6DJm/TDN35Gj5hpztUxlRMEG0SugEEf0lQxdDhLRmz81Ikkt7xvuNRA==}
 
   has-bigints@1.1.0:
     resolution: {integrity: sha512-R3pbpkcIqv2Pm3dUwgjclDRVmWpTJW2DcMzcIhEXEx1oh/CEMObMm3KLmRJOdvhM7o4uQBnwr8pzRK2sJWIqfg==}
@@ -4260,9 +4260,9 @@ snapshots:
 
   '@eslint/js@8.57.1': {}
 
-  '@handsontable/react-wrapper@18.0.0(handsontable@18.0.0)':
+  '@handsontable/react-wrapper@18.1.0(handsontable@18.1.0)':
     dependencies:
-      handsontable: 18.0.0
+      handsontable: 18.1.0
 
   '@humanwhocodes/config-array@0.13.0':
     dependencies:
@@ -6045,7 +6045,7 @@ snapshots:
       pumpify: 1.5.1
       through2: 2.0.5
 
-  handsontable@18.0.0: {}
+  handsontable@18.1.0: {}
 
   has-bigints@1.1.0: {}
 

@@ -10,10 +10,10 @@ importers:
     dependencies:
       '@handsontable/vue3':
         specifier: latest
-        version: 18.0.0(handsontable@18.0.0)(vue@3.5.39(typescript@6.0.3))
+        version: 18.1.0(handsontable@18.1.0)(vue@3.5.39(typescript@6.0.3))
       handsontable:
         specifier: latest
-        version: 18.0.0
+        version: 18.1.0
       vue:
         specifier: ^3.5.39
         version: 3.5.39(typescript@6.0.3)
@@ -71,8 +71,8 @@ packages:
   '@emnapi/wasi-threads@1.2.2':
     resolution: {integrity: sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA==}
 
-  '@handsontable/vue3@18.0.0':
-    resolution: {integrity: sha512-9YCT8cEQnKfu/jKpLlNtlZtmXL5ze5F5tOmXDmSvW60r9yGS/qbjg4Q8acOXDvXCC0S2krgpxL5VD51kcmZbVw==}
+  '@handsontable/vue3@18.1.0':
+    resolution: {integrity: sha512-l0z/nDxSMp9XgfFh/3q4DvW9Clgz2rD7vUcN7SKQTAFtS4xbmr1yemOZ9+i/kA+gCwu+KgmWbea3evdXPqTFWA==}
     peerDependencies:
       handsontable: ^18.0.0
       vue: ^3.2.22
@@ -294,8 +294,8 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
-  handsontable@18.0.0:
-    resolution: {integrity: sha512-U4H6gDrwGTfjahSyoGHhFHZvOZWB7ReQ3iBvJUIcZPdqdppdZ+FSYNovw+3MH1guJfGgRIhoLYnbSm8Gd6Ft8w==}
+  handsontable@18.1.0:
+    resolution: {integrity: sha512-23S/Jny67NRevaZgTXSAonhFW28du3J6DJm/TDN35Gj5hpztUxlRMEG0SugEEf0lQxdDhLRmz81Ikkt7xvuNRA==}
 
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
@@ -570,9 +570,9 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  '@handsontable/vue3@18.0.0(handsontable@18.0.0)(vue@3.5.39(typescript@6.0.3))':
+  '@handsontable/vue3@18.1.0(handsontable@18.1.0)(vue@3.5.39(typescript@6.0.3))':
     dependencies:
-      handsontable: 18.0.0
+      handsontable: 18.1.0
       vue: 3.5.39(typescript@6.0.3)
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
@@ -760,7 +760,7 @@ snapshots:
   fsevents@2.3.3:
     optional: true
 
-  handsontable@18.0.0: {}
+  handsontable@18.1.0: {}
 
   isexe@2.0.0: {}
 
