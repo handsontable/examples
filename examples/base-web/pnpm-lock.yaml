@@ -10,13 +10,13 @@ importers:
     dependencies:
       '@handsontable/react-wrapper':
         specifier: latest
-        version: 18.0.0(handsontable@18.0.0)
+        version: 18.1.0(handsontable@18.1.0)
       baseui:
         specifier: ^18.2.0
         version: 18.2.0(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(styletron-react@6.1.1(react@19.2.7))
       handsontable:
         specifier: latest
-        version: 18.0.0
+        version: 18.1.0
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -80,8 +80,8 @@ packages:
   '@emnapi/wasi-threads@1.2.2':
     resolution: {integrity: sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA==}
 
-  '@handsontable/react-wrapper@18.0.0':
-    resolution: {integrity: sha512-Cy+uFLFB04WJ3YtifqAm0+4Ya65hjNS4as15bT/YDnhqxIV/LW/73zDLJ2YBC2sJ4X0sx2FL/UbTWHJA+Co/eg==}
+  '@handsontable/react-wrapper@18.1.0':
+    resolution: {integrity: sha512-yCwjgroeP9vYE76ZjjtM/I2fHb6m0L1jYbWUHnbx7jP4PgBBI65DynaH1ou0Mm+bPojrJWcRU4zM2B4M7gOeFQ==}
     peerDependencies:
       handsontable: ^18.0.0
 
@@ -614,8 +614,8 @@ packages:
     resolution: {integrity: sha512-tSQXBXS/MWQOn/RKckawJ61vvsDpCom87JgxiYdGwHdOa0ht0vzUWDlfioofFCRU0L+6NGDt6XzbgoJvZkMeRQ==}
     engines: {node: '>=0.8.0'}
 
-  handsontable@18.0.0:
-    resolution: {integrity: sha512-U4H6gDrwGTfjahSyoGHhFHZvOZWB7ReQ3iBvJUIcZPdqdppdZ+FSYNovw+3MH1guJfGgRIhoLYnbSm8Gd6Ft8w==}
+  handsontable@18.1.0:
+    resolution: {integrity: sha512-23S/Jny67NRevaZgTXSAonhFW28du3J6DJm/TDN35Gj5hpztUxlRMEG0SugEEf0lQxdDhLRmz81Ikkt7xvuNRA==}
 
   hyphenate-style-name@1.1.0:
     resolution: {integrity: sha512-WDC/ui2VVRrz3jOVi+XtjqkDjiVjTtFaAGiW37k6b+ohyQ5wYDOGkvCZa8+H0nx3gyvv0+BST9xuOgIyGQ00gw==}
@@ -1067,9 +1067,9 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  '@handsontable/react-wrapper@18.0.0(handsontable@18.0.0)':
+  '@handsontable/react-wrapper@18.1.0(handsontable@18.1.0)':
     dependencies:
-      handsontable: 18.0.0
+      handsontable: 18.1.0
 
   '@mapbox/geojson-rewind@0.5.2':
     dependencies:
@@ -1510,7 +1510,7 @@ snapshots:
 
   hammerjs@2.0.8: {}
 
-  handsontable@18.0.0: {}
+  handsontable@18.1.0: {}
 
   hyphenate-style-name@1.1.0: {}
 

@@ -5,7 +5,7 @@ import {
 } from '@angular/core';
 import { PredefinedMenuItemKey } from 'handsontable/plugins/contextMenu';
 import { mainTheme } from 'handsontable/themes';
-import { HotTableModule } from '@handsontable/angular-wrapper';
+import { HotTableModule, type GridSettings } from '@handsontable/angular-wrapper';
 
 import { getData } from './utils/constants';
 import { alignHeaders, addClassesToRows } from './utils/hooks-callbacks';
@@ -21,7 +21,7 @@ import { alignHeaders, addClassesToRows } from './utils/hooks-callbacks';
 })
 export class DataGridComponent {
   initialData = getData();
-  gridSettings = {
+  gridSettings: GridSettings = {
     height: 450,
     colWidths: [180, 220, 140, 120, 120, 120, 140],
     colHeaders: [
