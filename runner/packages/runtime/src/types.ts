@@ -64,6 +64,9 @@ export type CatalogIndexEntry = Omit<
 export interface Catalog {
   generatedFrom: string;
   buckets: string[];
+  /** Bucket key → the Handsontable that bucket's artifacts are pinned to, i.e.
+   *  each manifest's `hotVersion` (DEV-2735). Includes the `next` prerelease. */
+  bucketVersions: Record<string, string>;
   tiers: Record<string, string>;
   examples: CatalogIndexEntry[];
 }

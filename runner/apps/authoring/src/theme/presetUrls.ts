@@ -2,7 +2,7 @@
 //
 // The panel is built against one pinned Handsontable (see `BUNDLED_VERSION`),
 // but a demo runs whatever the version picker says, and the presets are not
-// frozen: `tokens/main` is 262 keys at 17.0.1 and 279 at 18.0.0. A resolved
+// frozen: `tokens/main` is 262 keys at 17.0.1 and 285 at 18.1.0. A resolved
 // value shown from the wrong version is a confidently wrong number, which is
 // worse than the empty box it replaced.
 //

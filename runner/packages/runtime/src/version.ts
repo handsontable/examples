@@ -59,6 +59,48 @@ export function isNextPrereleaseVersion(value: string): boolean {
 /** Matches nightly (`0.0.0-next-<hash>-<date>`) and dotted (`19.0.0-next.1`) prereleases. */
 const ANY_NEXT_VERSION_RE = /^\d+\.\d+\.\d+-next[.-]/;
 
+/** An exact published release — no range, no dist-tag, no prerelease. */
+const EXACT_RELEASE_RE = /^\d+\.\d+\.\d+$/;
+
+/**
+ * The bucket versions worth offering as the authoring app's version-picker
+ * fallback: stable releases only, newest first (DEV-2735).
+ *
+ * Input is `catalog.json`'s `bucketVersions` — every starter bucket's pinned
+ * `hotVersion`, which the weekly re-pin keeps current. That makes it a better
+ * fallback than the hand-typed list it replaces on two counts: it cannot go
+ * stale on its own, and every entry has a bucket behind it, so switching to one
+ * cannot land on a version whose `<bucket>/<framework>.json` does not exist.
+ *
+ * `catalog.json` already holds releases only — the nightly is left out at
+ * generation time, so it cannot make a committed file stale daily. The shape
+ * filter here is deliberate belt-and-braces: this is the last step before a
+ * version reaches the picker, and a range, a dist-tag or a prerelease arriving
+ * as a plain choice is worse than a short list.
+ *
+ * Throws rather than returning an empty list, and says so in the return type so
+ * a caller can take `[0]` as the default version without a non-null assertion.
+ * An empty fallback is an empty dropdown and a version-less first visit —
+ * silent, and the same failure class as the stale pin this exists to prevent.
+ */
+export function stableBucketVersions(
+  bucketVersions: Record<string, string>,
+): [string, ...string[]] {
+  const releases =
+    bucketVersions && typeof bucketVersions === "object" && !Array.isArray(bucketVersions)
+      ? Object.values(bucketVersions).filter(
+          (v) => typeof v === "string" && EXACT_RELEASE_RE.test(v),
+        )
+      : [];
+  const [newest, ...rest] = [...new Set(releases)].sort(semver.rcompare);
+  if (newest === undefined) {
+    throw new Error(
+      `bucketVersions holds no exact release to fall back on: ${JSON.stringify(bucketVersions)}`,
+    );
+  }
+  return [newest, ...rest];
+}
+
 /**
  * Newest `-next` version by npm publish date, from a registry document's
  * `time` map — or null when none exists. The `next` dist-tag is deliberately

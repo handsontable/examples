@@ -11,7 +11,7 @@
 // These are this app's own copy — the fallback and the synchronous first render.
 // The panel resolves against the version the *demo* is pinned to, fetched at
 // runtime by `presetsFor.ts`, because the presets do move: `tokens/main` is 262
-// keys at 17.0.1 and 279 at 18.0.0. `colors/*`, `density` and `sizing` happen to
+// keys at 17.0.1 and 285 at 18.1.0. `colors/*`, `density` and `sizing` happen to
 // be byte-identical across 17 → 18, so most of what the Foundation tab shows is
 // stable either way (DEV-2560).
 
@@ -73,7 +73,7 @@ export function densitySizes(variant: DensityVariant): Record<string, string> {
  * Named because the panel says so out loud: when a demo's own version cannot be
  * loaded, the fallback note has to name the version whose numbers are on screen.
  */
-export const BUNDLED_VERSION = "18.0.0";
+export const BUNDLED_VERSION = "18.1.0";
 
 /**
  * The nine colours every theme is built from.

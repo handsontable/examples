@@ -7,6 +7,12 @@
     "18",
     "next"
   ],
+  "bucketVersions": {
+    "15": "15.3.0",
+    "16": "16.2.0",
+    "17": "17.1.0",
+    "18": "18.1.0"
+  },
   "tiers": {
     "1": "client-side (Sandpack, in-browser bundler)",
     "2": "SSR/meta-framework (Cloudflare Sandbox container)"

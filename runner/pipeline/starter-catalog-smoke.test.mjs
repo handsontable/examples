@@ -100,8 +100,23 @@ test("every starter artifact is runnable and pinned to the bucket hotVersion", (
 
 test("catalog.json is an index: buckets match dirs, entries carry no files", () => {
   const catalog = JSON.parse(fs.readFileSync(path.join(RUNNER_DIR, "catalog.json"), "utf8"));
-  const dirs = loadBucketManifests().map((b) => b.bucket).sort();
+  const buckets = loadBucketManifests();
+  const dirs = buckets.map((b) => b.bucket).sort();
   assert.deepEqual([...catalog.buckets].sort(), dirs, "index buckets match bucket directories");
+  // The authoring app reads its version-picker fallback out of this map
+  // (DEV-2735), and `theme-presets-version.test.mjs` checks the handsontable
+  // pin against it — so a hand-edited catalog.json must not be able to claim a
+  // version no bucket was actually built at. Release buckets only: the `next`
+  // nightly is left out of the index on purpose.
+  assert.deepEqual(
+    catalog.bucketVersions,
+    Object.fromEntries(
+      buckets
+        .filter((b) => /^\d+\.\d+\.\d+$/.test(b.manifest.hotVersion))
+        .map((b) => [b.bucket, b.manifest.hotVersion]),
+    ),
+    "index bucketVersions match each release manifest's hotVersion",
+  );
   assert.deepEqual(
     catalog.examples.map((e) => e.framework).sort(),
     Object.keys(FRAMEWORKS).sort(),

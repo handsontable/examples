@@ -187,6 +187,11 @@ test("the catalog index lists buckets and drops files from every entry", async (
   const catalog = writeCatalogIndex({ outDir, indexPath });
 
   assert.deepEqual(catalog.buckets, ["15", "next"]);
+  // Lifted from each release bucket's manifest — the authoring app's picker
+  // fallback is derived from this map (DEV-2735). The `next` bucket imported
+  // above is deliberately absent: it is a nightly, and a daily-moving value in
+  // a committed file goes stale under every open PR that touches it.
+  assert.deepEqual(catalog.bucketVersions, { 15: "15.3.0" });
   assert.equal(catalog.examples.length, Object.keys(FRAMEWORKS).length);
   for (const entry of catalog.examples) {
     assert.equal("files" in entry, false, `${entry.framework}: index entry must not inline files`);
