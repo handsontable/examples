@@ -4,7 +4,11 @@ import {
   ViewEncapsulation,
   CUSTOM_ELEMENTS_SCHEMA,
 } from '@angular/core';
-import { HotTableModule, HotTableComponent } from '@handsontable/angular-wrapper';
+import {
+  HotTableModule,
+  HotTableComponent,
+  type GridSettings,
+} from '@handsontable/angular-wrapper';
 import { registerAllModules } from 'handsontable/registry';
 import type {
   DataProviderQueryParameters,
@@ -60,7 +64,7 @@ export class AppComponent {
 
   private removeConfirmed = false;
 
-  settings = {
+  settings: GridSettings = {
     dataProvider: {
       rowId: 'id',
 
@@ -139,7 +143,10 @@ export class AppComponent {
       },
     },
 
-    beforeRowsMutation: (operation: 'create' | 'update' | 'remove', payload: RowMutationPayload): false | void => {
+    // `operation` is typed `string` to match Handsontable's hook signature —
+    // narrowing it to the union it actually carries ('create' | 'update' |
+    // 'remove') is rejected contravariantly under strictFunctionTypes.
+    beforeRowsMutation: (operation: string, payload: RowMutationPayload): false | void => {
       if (operation === 'remove' && !this.removeConfirmed) {
         const { rowsRemove } = payload as RowMutationRemovePayload;
         const hot = this.hotRef.hotInstance!;
@@ -180,8 +187,7 @@ export class AppComponent {
     pagination: { pageSize: 10 },
     columnSorting: true,
     filters: true,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    dropdownMenu: ['filter_by_condition', 'filter_action_bar'] as any,
+    dropdownMenu: ['filter_by_condition', 'filter_action_bar'],
     contextMenu: true,
     emptyDataState: true,
     notification: true,
