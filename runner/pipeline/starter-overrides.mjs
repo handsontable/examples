@@ -536,11 +536,13 @@ export function applyStarterOverrides(framework, files, { bucket }) {
  *
  * Three rules:
  *   - REGISTERED sites must carry the registry's literal for this bucket.
- *   - COMPLETENESS: any dateFormat/timeFormat in a file that also declares a
- *     date/time cell type and is NOT covered by a row fails generation. This is
+ *   - COMPLETENESS: any registered option in a file that also declares the
+ *     matching cell type and is NOT covered by a row fails generation. This is
  *     what stops the class returning silently — a new or edited starter that
  *     adds a date column cannot reach a bucket until someone declares its
- *     per-major shape here.
+ *     per-major shape here. Coverage is counted PER SITE, not per (file,
+ *     option): example1 owns four `numericFormat` sites in one file, so a fifth
+ *     column would otherwise inherit their coverage and ship un-linted.
  *   - STORED VALUE at 18+: a starter that declares a date/time cell must not
  *     ship slash-separated date literals. Option shape and stored value are
  *     coupled (see the header), and the first two rules only cover the option —
@@ -576,16 +578,40 @@ export function lintStarterOptionShapes(framework, files, { bucket }) {
   }
 
   const covered = new Set(rows.map((row) => `${row.file} ${row.option}`));
+  // How many sites the registry claims to own per (file, option). A row owns
+  // exactly one site — applyStarterOverrides throws otherwise — so this is
+  // directly comparable to the number of sites found in the file.
+  const declared = new Map();
+  for (const row of rows) {
+    const key = `${row.file} ${row.option}`;
+    declared.set(key, (declared.get(key) ?? 0) + 1);
+  }
   for (const [file, text] of Object.entries(files)) {
     if (typeof text !== "string") continue;
     for (const [option, markers] of Object.entries(OPTION_CELL_MARKERS)) {
       if (!markers.some((re) => re.test(text))) continue;
       if (!new RegExp(`\\b${option}\\b`).test(text)) continue;
-      if (covered.has(`${file} ${option}`)) continue;
-      problems.push(
-        `${framework}: ${file} sets \`${option}\` on a date/time cell but has no ` +
-          `starter-overrides.mjs row declaring its per-major shape (bucket ${bucket})`,
-      );
+      const key = `${file} ${option}`;
+      if (!covered.has(key)) {
+        problems.push(
+          `${framework}: ${file} sets \`${option}\` on a matching cell but has no ` +
+            `starter-overrides.mjs row declaring its per-major shape (bucket ${bucket})`,
+        );
+        continue;
+      }
+      // Registered — but for how many of the sites in this file? Matched as an
+      // ASSIGNMENT (`option:` or `option=`) rather than by bare presence, so a
+      // mention in a comment or an import cannot inflate the count and red a
+      // regen for nothing.
+      const sites = (text.match(new RegExp(`\\b${option}\\s*[:=]`, "g")) ?? []).length;
+      const owned = declared.get(key) ?? 0;
+      if (sites > owned) {
+        problems.push(
+          `${framework}: ${file} has ${sites} \`${option}\` sites but the registry declares ` +
+            `${owned} (bucket ${bucket}). A site with no row of its own is checked by nothing — ` +
+            `add a row per site, each anchored on its own column`,
+        );
+      }
     }
   }
 

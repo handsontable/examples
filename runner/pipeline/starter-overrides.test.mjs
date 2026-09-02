@@ -653,6 +653,38 @@ test("a numbro numericFormat is a problem from 17 up, an Intl one below it", () 
   }
 });
 
+test("a fifth numeric column is caught even though four are registered", () => {
+  // The granularity trap the numeric rows introduced. Coverage used to be keyed
+  // by (file, option), which was equivalent while every registered file had
+  // exactly ONE site; example1 has four, so a new column would have inherited
+  // their coverage — invisible to rule 1 (no row checks it) AND to rule 2
+  // (already "covered"), and shipping at every bucket.
+  const rogue = applyStarterOverrides("example1", example1Starter(), { bucket: "18" }).files;
+  rogue["/index.ts"] = rogue["/index.ts"].replace(
+    '      data: "cost",',
+    [
+      '      data: "rogue",',
+      '      type: "numeric",',
+      '      numericFormat: { pattern: "unvetted" },',
+      "    },",
+      "    {",
+      '      data: "cost",',
+    ].join("\n"),
+  );
+  const problems = lintStarterOptionShapes("example1", rogue, { bucket: "18" });
+  assert.equal(problems.length, 1, JSON.stringify(problems));
+  assert.match(problems[0], /has 5 `numericFormat` sites but the registry declares 4/);
+});
+
+test("a mention of an option in a comment does not inflate the site count", () => {
+  // The count matches an ASSIGNMENT, not bare presence: a false positive here
+  // reds a bucket regen for nothing, and the fix would look like weakening the
+  // lint.
+  const files = applyStarterOverrides("example1", example1Starter(), { bucket: "18" }).files;
+  files["/index.ts"] = `// numericFormat is documented at handsontable.com\n${files["/index.ts"]}`;
+  assert.deepEqual(lintStarterOptionShapes("example1", files, { bucket: "18" }), []);
+});
+
 test("an unregistered starter with a numeric column fails registry completeness", () => {
   const files = {
     "/src/Grid.vue": "columns: [{ type: 'numeric', numericFormat: { pattern: '0,0' } }]\n",
