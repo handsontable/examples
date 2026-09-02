@@ -2,7 +2,7 @@
   "bucket": "next",
   "sourceRef": "master",
   "generatedFrom": "handsontable/examples examples/",
-  "hotVersion": "0.0.0-next-962a9cf-20260902",
+  "hotVersion": "0.0.0-next-3cc9c90-20260902",
   "count": 19,
   "examples": [
     {
@@ -36,7 +36,11 @@
       "engine": "sandpack",
       "minCoreMajor": null,
       "overrides": [
-        "example1:dateFormat"
+        "example1:dateFormat",
+        "example1:cost",
+        "example1:itemQuality",
+        "example1:quantity",
+        "example1:valueStock"
       ]
     },
     {
