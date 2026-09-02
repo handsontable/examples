@@ -30,8 +30,42 @@ import { toFilesKey } from "./html-urls.js";
 const SCRIPT_TAG_ALL = /<script\b[^>]*>/gi;
 const SCRIPT_TAG = /<script\b[^>]*>/i;
 
-/** The `src` of a `<script>` open tag, single- double- or unquoted. */
-const SRC_ATTRIBUTE = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/i;
+/**
+ * The `src` of a `<script>` open tag, single- double- or unquoted.
+ *
+ * Anchored on the whitespace that separates HTML attributes rather than on `\b`, which
+ * also fires between the `-` and the `s` of `data-src` — reading a lazy-loading idiom's
+ * `data-src` as the script's real source, and refusing a document that renders fine.
+ */
+const SRC_ATTRIBUTE = /\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/i;
+
+/** `<!-- … -->`, including one that never closes (the parser discards the rest too). */
+const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
+
+/**
+ * The document with its comments removed, which is what both scans below run over.
+ *
+ * A commented-out `<script>` is the likeliest way a working demo loses its entry — an
+ * author disables the tag rather than deleting it — and it is the one input where
+ * getting this wrong is silent in both directions: counted as a script, the repair
+ * no-ops and the preview goes blank with no error; counted as a *live* src, a document
+ * whose real tag sits below the comment reads as dangling and is refused.
+ */
+function stripComments(html: string): string {
+  return html.indexOf("<!--") === -1 ? html : html.replace(HTML_COMMENT, "");
+}
+
+/**
+ * An HTML `src` reduced to the file it names: query and fragment dropped first.
+ *
+ * `src="/index.js?v=2"` is a real thing to write and resolves to `/index.js` for every
+ * bundler that reads this document. `toFilesKey` alone would hand back `/index.js?v=2`,
+ * which is in no file map — and this decides a hard refusal, not (as at `toFilesKey`'s
+ * two other call sites) whether to re-create a `<link>`.
+ */
+function scriptTarget(value: string): string | null {
+  return toFilesKey(value.replace(/[?#].*$/, ""));
+}
 
 export type EntryScriptProblem =
   /** The document holds no `<script>` at all. */
@@ -42,19 +76,19 @@ export type EntryScriptProblem =
 /** Every `src` in the document that names a file rather than a URL the browser fetches. */
 export function localScriptTargets(html: string): string[] {
   const out: string[] = [];
-  for (const tag of html.match(SCRIPT_TAG_ALL) ?? []) {
+  for (const tag of stripComments(html).match(SCRIPT_TAG_ALL) ?? []) {
     const src = SRC_ATTRIBUTE.exec(tag);
     if (!src) continue;
     const value = src[1] ?? src[2] ?? src[3] ?? "";
-    const key = toFilesKey(value);
+    const key = scriptTarget(value);
     if (key !== null) out.push(key);
   }
   return out;
 }
 
-/** True when the document carries at least one `<script>` tag of any kind. */
+/** True when the document carries at least one live `<script>` tag of any kind. */
 export function hasAnyScript(html: string): boolean {
-  return SCRIPT_TAG.test(html);
+  return SCRIPT_TAG.test(stripComments(html));
 }
 
 /**

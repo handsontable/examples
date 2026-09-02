@@ -8,7 +8,7 @@
 // The first runtime import this file has ever had: a spec that imports it must
 // now register the .js->.ts hook (pipeline/fixtures/worker-hooks.mjs) and import
 // it dynamically — see guide-tracks.test.mjs / ht-version-resolve.test.mjs.
-import { snapshotBuildCommand } from "./build-command.js";
+import { htmlEntryLoadsModule, snapshotBuildCommand } from "./build-command.js";
 import { entryScriptProblem, entryScriptTag } from "@handsontable/demo-runtime/entry-script";
 
 /** A rejected payload. Same shape as `demo-info.ts` so the route can reply uniformly. */
@@ -184,9 +184,11 @@ export function validateBuildToolchain(
  */
 export function validateHtmlEntry(
   files: Record<string, string>,
-  cfg: { entry: string; htmlEntry: string | null },
+  cfg: { entry: string; htmlEntry: string | null; buildCommand: string },
 ): McpValidationError | null {
-  if (!cfg.htmlEntry) return null;
+  // Angular's HTML entry legitimately has no script — `ng build` injects the bundle —
+  // and only a vite HTML entry names its own module. See `htmlEntryLoadsModule`.
+  if (!htmlEntryLoadsModule(cfg) || !cfg.htmlEntry) return null;
   const html = files[cfg.htmlEntry];
   if (html === undefined) {
     return { error: `files must include ${cfg.htmlEntry}: it is this framework's HTML entry` };

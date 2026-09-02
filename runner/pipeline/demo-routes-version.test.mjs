@@ -371,3 +371,20 @@ test("a browser Save of a script-less document stores the repaired index.html", 
     '<div id="grid"></div>\n<script type="module" src="/index.js"></script>\n',
   );
 });
+
+test("an Angular demo's script-less index.html is served and stored untouched", () => {
+  // The write side of the same exemption: repairing Angular would persist a
+  // `<script src="/src/main.ts">` into documents that were always correct.
+  const html = "<!doctype html><html><body><app-root></app-root></body></html>";
+  return (async () => {
+    const { env, artifacts } = makeEnv([demoRow({ framework: "angular" })], [], {
+      "demos/abc123/__source.json": JSON.stringify({
+        framework: "angular",
+        files: { "/package.json": "{}", "/src/main.ts": "export {};", "/src/index.html": html },
+      }),
+    });
+    const res = await worker.fetch(sourceRequest("abc123"), env, ctx);
+    assert.equal((await res.json()).files["/src/index.html"], html);
+    assert.deepEqual(artifacts.puts, [], "nothing may be written for an Angular demo");
+  })();
+});

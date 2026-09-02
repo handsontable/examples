@@ -15,7 +15,7 @@ import { BUILD_CONFIG } from "./frameworks.generated.js";
 import type { Env } from "./env.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { recordContainerUsage, SESSION_INSTANCE_TYPE } from "./budget.js";
-import { snapshotBuildCommand } from "./build-command.js";
+import { htmlEntryLoadsModule, snapshotBuildCommand } from "./build-command.js";
 
 type SandboxLike = {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
@@ -303,7 +303,9 @@ export async function runBuild(
     // with its own runtime patch below), Nuxt (`.output/public`), Astro and Angular
     // (`dist/*/browser`) each emit differently, and a false rejection would break
     // saving for a framework this check was never about.
-    if (isViteTier1(entry) && !rels.some((rel) => rel.endsWith(".js"))) {
+    // `.mjs`/`.cjs` count: a demo is free to ship a `vite.config` that renames the entry
+    // chunk, and `validateMcpFiles` has no opinion about that file.
+    if (isViteTier1(entry) && !rels.some((rel) => /\.[cm]?js$/i.test(rel))) {
       throw new Error(
         `build produced no JavaScript in ${outDir}: ${entry.htmlEntry ?? "the HTML entry"} `
         + `loads no module, so the demo would render as an empty page`
@@ -514,7 +516,9 @@ export function withEntryScript(
   files: Record<string, string>,
 ): Record<string, string> {
   const cfg = BUILD_CONFIG[framework];
-  if (!cfg?.htmlEntry) return files;
+  // Only a vite HTML entry declares its own module; Angular's does not, and writing a
+  // tag into it would break a document that was always correct (`htmlEntryLoadsModule`).
+  if (!cfg || !cfg.htmlEntry || !htmlEntryLoadsModule(cfg)) return files;
   const html = files[cfg.htmlEntry];
   // No HTML entry, or no module to point the tag at: not something to guess at.
   if (html === undefined || files[cfg.entry] === undefined) return files;

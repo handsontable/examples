@@ -379,3 +379,41 @@ test("an inline or CDN script is left alone", () => {
     );
   }
 });
+
+// Angular's `/src/index.html` has no `<script>` and is correct: `ng build` injects the
+// bundles listed in angular.json. Only a vite HTML entry names its own module, so the
+// gate answers to the build command — otherwise it refuses every Angular demo the MCP
+// publishes (found by Bugbot on PR #301).
+
+test("Angular's script-less HTML entry is not a refusal", () => {
+  const cfg = BUILD_CONFIG["angular"];
+  assert.equal(cfg.htmlEntry, "/src/index.html", "the row this test is about");
+  const result = validateHtmlEntry(
+    {
+      "/package.json": "{}",
+      "/src/main.ts": "export {};",
+      "/src/index.html": "<!doctype html><html><body><app-root></app-root></body></html>",
+    },
+    cfg,
+  );
+  assert.equal(result, null);
+});
+
+test("only a vite HTML entry is gated — enumerated over the whole catalog", () => {
+  // The discriminating list, not a spot check: every framework whose build command is
+  // not `vite build` must be exempt no matter what its document holds.
+  const gated = [];
+  for (const [framework, cfg] of Object.entries(BUILD_CONFIG)) {
+    const files = { "/package.json": "{}", [cfg.entry]: "export {};" };
+    if (cfg.htmlEntry) files[cfg.htmlEntry] = '<div id="grid"></div>';
+    if (isMcpValidationError(validateHtmlEntry(files, cfg))) gated.push(framework);
+  }
+  assert.deepEqual(
+    gated.sort(),
+    [
+      "ant-design", "base-web", "blank", "blank-react", "blank-ts", "example1",
+      "fluent-ui", "javascript", "mui", "react", "react-js", "typescript", "vue",
+    ],
+    "the tier-1 vite starters, and nothing else",
+  );
+});

@@ -99,3 +99,47 @@ test("the repaired tag is the one the starters emit", () => {
   assert.equal(hasAnyScript(FRAGMENT), false);
   assert.equal(hasAnyScript(DOCUMENT), true);
 });
+
+// Review findings on PR #301. Each of these is a document that renders — or fails to —
+// differently from what a naive `<script`/`src=` scan concludes.
+
+test("a commented-out entry tag does not count as loading the module", () => {
+  // The likeliest way a working demo loses its entry: the author disables the tag
+  // instead of deleting it. Counted as a script, the repair no-ops and the preview goes
+  // blank with no error anywhere.
+  const html = '<div id="grid"></div>\n<!-- <script type="module" src="/index.js"></script> -->\n';
+  assert.deepEqual(entryScriptProblem(html, FILES), { kind: "no-script" });
+  assert.equal(hasAnyScript(html), false);
+  assert.deepEqual(localScriptTargets(html), []);
+  assert.equal(
+    ensureEntryScript(html, "/index.js"),
+    `${html}<script type="module" src="/index.js"></script>\n`,
+  );
+});
+
+test("a live tag below a commented-out one is still seen", () => {
+  const html =
+    '<!-- <script src="/old.js"></script> -->\n<script type="module" src="/index.js"></script>';
+  assert.deepEqual(localScriptTargets(html), ["/index.js"]);
+  assert.equal(entryScriptProblem(html, FILES), null);
+});
+
+test("an unterminated comment swallows the rest, the way a parser does", () => {
+  const html = '<div id="grid"></div><!-- <script src="/index.js"></script>';
+  assert.equal(hasAnyScript(html), false);
+});
+
+test("data-src is not the script's src", () => {
+  // `\b` fires between the `-` and the `s`, so a lazy-loading idiom's `data-src` read as
+  // the real source turns an inline script into a dangling refusal.
+  const html = '<script type="module" data-src="lazy.js">boot()</script>';
+  assert.deepEqual(localScriptTargets(html), []);
+  assert.equal(entryScriptProblem(html, FILES), null);
+});
+
+test("a cache-busting query or fragment resolves to the file it names", () => {
+  for (const src of ["/index.js?v=2", "/index.js#main", "./index.js?t=1"]) {
+    assert.deepEqual(localScriptTargets(`<script src="${src}"></script>`), ["/index.js"], src);
+    assert.equal(entryScriptProblem(`<script src="${src}"></script>`, FILES), null, src);
+  }
+});

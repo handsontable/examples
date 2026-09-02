@@ -19,7 +19,7 @@ import type {
 } from "./types.js";
 import { isCompilerUnavailable, transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
-import { resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
+import { HTML_ENTRY_ENVS, resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
 import {
   MONITOR_COMPILE_MESSAGE_MAX,
   REPORTER_MODULE_LINE,
@@ -455,7 +455,11 @@ export class SandpackRuntime implements DemoRuntime {
    *  the same object when there is nothing to do, which is the overwhelming majority. */
   private ensureEntryScript(files: FilesMap, moduleEntry: string): FilesMap {
     const htmlPath = this.entry.htmlEntry;
-    if (!htmlPath) return files;
+    // Only where the document *is* the sandbox entry, so the bundler reads its
+    // `<script src>` tags for the module graph. On `vue-cli` the entry is the module and
+    // the document is along for the ride; a tag there would buy nothing and could load
+    // the entry twice.
+    if (!htmlPath || !this.env || !HTML_ENTRY_ENVS.has(this.env)) return files;
     const html = files[htmlPath];
     if (html === undefined || files[moduleEntry] === undefined) return files;
     const repaired = ensureEntryScript(html, moduleEntry);

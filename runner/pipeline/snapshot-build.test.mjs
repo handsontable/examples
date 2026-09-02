@@ -295,6 +295,37 @@ test("a vite build that emits a bundle is accepted", async () => {
   }
 });
 
+test("a bundle named .mjs or .cjs is JavaScript", async () => {
+  // `endsWith(".js")` is false for both, and a demo is free to ship a vite.config that
+  // renames the entry chunk — `validateMcpFiles` has no opinion about that file.
+  for (const emitted of ["assets/index-a1b2c3.mjs", "assets/index-a1b2c3.cjs"]) {
+    setSandboxFactory(buildEmitting(["index.html", emitted]));
+    try {
+      const out = await runBuild(ENV, VITE_ENTRY, { "/package.json": "{}" });
+      assert.deepEqual(Object.keys(out).sort(), [emitted, "index.html"].sort(), emitted);
+    } finally {
+      setSandboxFactory(null);
+    }
+  }
+});
+
+test("the gate reads the build command, not only the tier", async () => {
+  // Every tier-1 row in today's catalog runs `vite build`, so the tier check alone
+  // explains the case below and the buildCommand half would go unexercised. This entry
+  // is tier 1 with a builder that injects its own bundle — the Angular shape.
+  setSandboxFactory(buildEmitting(["index.html"]));
+  try {
+    const out = await runBuild(
+      ENV,
+      { ...VITE_ENTRY, buildCommand: "ng build", htmlEntry: "/src/index.html" },
+      { "/package.json": "{}" },
+    );
+    assert.deepEqual(Object.keys(out), ["index.html"]);
+  } finally {
+    setSandboxFactory(null);
+  }
+});
+
 test("the no-JavaScript check does not touch a framework whose output shape it was never verified against", async () => {
   // Next/Nuxt/Astro/Angular each emit differently (`out/`, `.output/public`,
   // `dist/*/browser`, plus patchTurbopackRuntime); a false rejection here would break
