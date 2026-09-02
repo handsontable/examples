@@ -1,5 +1,9 @@
 import { useRef, useMemo } from 'react';
-import { HotTable, HotTableRef } from '@handsontable/react-wrapper';
+import {
+  HotTable,
+  type HotTableProps,
+  type HotTableRef,
+} from '@handsontable/react-wrapper';
 import { registerAllModules } from 'handsontable/registry';
 import type {
   DataProviderQueryParameters,
@@ -46,7 +50,7 @@ export default function App() {
   const hotRef = useRef<HotTableRef>(null);
   const removeConfirmedRef = useRef(false);
 
-  const settings = useMemo(() => ({
+  const settings = useMemo<HotTableProps>(() => ({
     dataProvider: {
       rowId: 'id',
 
@@ -111,7 +115,10 @@ export default function App() {
       },
     },
 
-    beforeRowsMutation: (operation: 'create' | 'update' | 'remove', payload: RowMutationPayload): false | void => {
+    // `operation` is typed `string` to match Handsontable's hook signature —
+    // narrowing it to the union it actually carries ('create' | 'update' |
+    // 'remove') is rejected contravariantly under strictFunctionTypes.
+    beforeRowsMutation: (operation: string, payload: RowMutationPayload): false | void => {
       if (operation === 'remove' && !removeConfirmedRef.current) {
         const { rowsRemove } = payload as RowMutationRemovePayload;
         const hot = hotRef.current!.hotInstance!;
@@ -194,8 +201,7 @@ export default function App() {
 
       <div id="example1">
         {/* React wrapper spreads settings as individual props, not a 'settings' object */}
-        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-        <HotTable ref={hotRef} {...(settings as any)} />
+        <HotTable ref={hotRef} {...settings} />
       </div>
     </>
   );

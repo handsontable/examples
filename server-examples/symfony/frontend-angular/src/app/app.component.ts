@@ -4,7 +4,11 @@ import {
   ViewEncapsulation,
   CUSTOM_ELEMENTS_SCHEMA,
 } from '@angular/core';
-import { HotTableModule, HotTableComponent } from '@handsontable/angular-wrapper';
+import {
+  HotTableModule,
+  HotTableComponent,
+  type GridSettings,
+} from '@handsontable/angular-wrapper';
 import { registerAllModules } from 'handsontable/registry';
 import type {
   DataProviderQueryParameters,
@@ -69,7 +73,7 @@ export class AppComponent {
   private removeConfirmed = false;
   private totalRows = 0;
 
-  settings = {
+  settings: GridSettings = {
     dataProvider: {
       // rowId must match the primary key returned by the Symfony controller.
       rowId: 'id',
@@ -154,7 +158,10 @@ export class AppComponent {
     // attempt, show a notification with Delete/Cancel actions, and on Delete
     // re-issue the remove via the DataProvider API. The flag lets the second
     // pass through without re-prompting.
-    beforeRowsMutation: (operation: 'create' | 'update' | 'remove', payload: RowMutationPayload): false | void => {
+    // `operation` is typed `string` to match Handsontable's hook signature —
+    // narrowing it to the union it actually carries ('create' | 'update' |
+    // 'remove') is rejected contravariantly under strictFunctionTypes.
+    beforeRowsMutation: (operation: string, payload: RowMutationPayload): false | void => {
       if (operation === 'remove' && !this.removeConfirmed) {
         const { rowsRemove } = payload as RowMutationRemovePayload;
         const hot = this.hotRef.hotInstance!;

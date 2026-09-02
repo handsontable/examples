@@ -1,0 +1,143 @@
+name: server-examples — build
+
+# Builds every frontend under server-examples/. Nothing else in CI touches this
+# tree: ci.yml and the e2e workflows are scoped to runner/ and examples/, and
+# the starter matrix boots a dev server rather than `build`. That gap is how
+# DEV-2727 and DEV-2731 both shipped — a Handsontable release tightened a public
+# type, every Angular frontend stopped compiling, and no job noticed.
+#
+# These 21 projects are NOT part of the root pnpm workspace (the root
+# package.json declares no `workspaces` and there is no pnpm-workspace.yaml
+# covering them). Each carries its own npm package-lock.json, so this is a
+# per-project matrix rather than one install at the root. The matrix is
+# discovered at run time from the checkout, so adding a backend or a frontend
+# needs no edit here.
+#
+# Two jobs, because they answer different questions:
+#
+#   build         deterministic — `npm ci` against the committed lock. Guards
+#                 source edits. By construction it can NEVER see a new upstream
+#                 release, because the lock pins one.
+#   build-latest  canary — installs handsontable@latest (and the wrapper) before
+#                 building. THIS is the job that would have caught 18.1.0 on the
+#                 day it shipped. It is expected to go red on a breaking release;
+#                 that is the signal, not a flake.
+#
+# `npm run build` is deliberately what runs, rather than a hand-rolled tsc
+# invocation: it is what a contributor runs, and for the Angular projects it is
+# `ng build --configuration development`, whose AOT pass is what actually
+# type-checks the `[settings]` binding.
+
+on:
+  pull_request:
+    paths:
+      - 'server-examples/**'
+      - '.github/workflows/server-examples-build.yml'
+  schedule:
+    # Weekly, Monday 04:00 UTC. Off-peak for the CET team, and clear of the
+    # nightly e2e workflows (01:00 / 03:00) — this job needs no container pool,
+    # but there is no reason to pile onto the same window.
+    - cron: '0 4 * * 1'
+  workflow_dispatch: {}
+
+concurrency:
+  group: server-examples-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Emits the project list as a matrix. A project qualifies if it has a
+  # package-lock.json AND a `build` script — that excludes express/server and
+  # nestjs/server, which are backends with neither a build step nor a
+  # Handsontable dependency.
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      projects: ${{ steps.find.outputs.projects }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: find
+        run: |
+          projects=$(find server-examples -maxdepth 3 -name package-lock.json \
+                       -not -path '*/node_modules/*' -exec dirname {} \; \
+                     | sort \
+                     | while read -r d; do
+                         node -e "process.exit(require('./$d/package.json').scripts?.build ? 0 : 1)" \
+                           && echo "$d"
+                       done \
+                     | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "projects=$projects" >> "$GITHUB_OUTPUT"
+          echo "Discovered: $projects"
+
+  build:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      # One broken project must not mask the state of the other 20 — the whole
+      # point of this workflow is to see the full blast radius of a type change.
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(needs.discover.outputs.projects) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+
+      - run: npm ci
+
+      # Asserts, rather than reports: `npm ls` exits non-zero when the installed
+      # tree does not satisfy package.json. That is the one failure this job
+      # exists to catch and cannot see otherwise — a hand-edited or stale lock
+      # would still build fine against whatever it happened to resolve.
+      - name: Verify the lock resolves a satisfying Handsontable
+        run: npm ls handsontable --depth=0
+
+      - run: npm run build
+
+  build-latest:
+    # PRs get the deterministic job only. This one exists to detect upstream
+    # drift, which a PR cannot introduce.
+    if: github.event_name != 'pull_request'
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(needs.discover.outputs.projects) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+
+      - run: npm ci
+
+      # The wrapper differs per project family (angular / react / none), so read
+      # it out of package.json rather than hard-coding three variants.
+      - name: Install handsontable@latest
+        run: |
+          wrapper=$(node -e "
+            const d = require('./package.json').dependencies || {};
+            const w = Object.keys(d).find(k => /^@handsontable\//.test(k));
+            process.stdout.write(w ? w + '@latest' : '');
+          ")
+          echo "Installing handsontable@latest $wrapper"
+          npm install handsontable@latest $wrapper
+
+      - name: Report resolved Handsontable version
+        run: npm ls handsontable --depth=0 || true
+
+      - run: npm run build
