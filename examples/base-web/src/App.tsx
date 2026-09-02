@@ -6,7 +6,7 @@ import { getTheme, hasTheme, registerTheme } from 'handsontable/themes';
 import iconsHorizon from 'handsontable/themes/static/variables/icons/horizon';
 import tokensHorizon from 'handsontable/themes/static/variables/tokens/horizon';
 import { HotTable } from '@handsontable/react-wrapper';
-import type Handsontable from 'handsontable';
+import type { HotInstance } from 'handsontable';
 import './styles.css';
 
 registerAllModules();
@@ -42,13 +42,14 @@ const colorMap: Record<string, string> = {
 };
 
 function colorRenderer(
-  _instance: Handsontable,
+  _instance: HotInstance,
   td: HTMLTableCellElement,
   _row: number,
   _col: number,
   _prop: string | number,
-  value: string
+  value: unknown
 ) {
+  const color = String(value ?? '');
   td.textContent = '';
   td.style.whiteSpace = 'nowrap';
   td.style.color = '#111827';
@@ -60,10 +61,10 @@ function colorRenderer(
   dot.style.borderRadius = '2px';
   dot.style.marginRight = '10px';
   dot.style.verticalAlign = 'middle';
-  dot.style.background = colorMap[value] || '#9ca3af';
+  dot.style.background = colorMap[color] || '#9ca3af';
 
   const label = document.createElement('span');
-  label.textContent = String(value || '');
+  label.textContent = color;
   label.style.verticalAlign = 'middle';
 
   td.appendChild(dot);

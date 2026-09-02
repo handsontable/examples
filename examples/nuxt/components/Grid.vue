@@ -8,6 +8,7 @@
 <script setup lang="ts">
 import { defineProps, defineComponent } from 'vue';
 import { HotTable } from '@handsontable/vue3';
+import type { GridSettings } from 'handsontable/settings';
 import {
   AutoColumnSize,
   Autofill,
@@ -37,7 +38,7 @@ registerPlugin(HiddenRows);
 
 const props = defineProps(['tableData']);
 
-const hotSettings = computed(() => {
+const hotSettings = computed<GridSettings>(() => {
   return {
     theme: { ...mainTheme, colorScheme: 'light' },
     data: props.tableData,
