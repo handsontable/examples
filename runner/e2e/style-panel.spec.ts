@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { pickFromMenu, stubShell, workspaceFiles } from "./helpers";
+import { currentDocsRelease, pickFromMenu, stubShell, workspaceFiles } from "./helpers";
 
 // The Style panel itself (DEV-2203) — the highest-value spec on the task,
 // because this seam is where seven defects hid, four of them silently.
@@ -19,6 +19,14 @@ import { pickFromMenu, stubShell, workspaceFiles } from "./helpers";
 // 2. Panel state lives in `localStorage["hot-runner-theme"]` behind a 250 ms
 //    trailing debounce, and quiet file writes ride the same delay — poll with
 //    `expect(...).toPass()`, never sample once.
+
+// The two docs deep links below fetch from the *real* committed buckets (this
+// spec aborts the bundler but not the docs manifest), so a restated version
+// goes stale on the next import — 18.0 outlived the 18.1 bucket here too
+// (DEV-2736). Both fixtures are byte-identical across the two buckets apart
+// from their package.json pins, and nothing installs, so this only moves which
+// bucket is read.
+const { version: DOCS_VERSION } = currentDocsRelease();
 
 const STYLE = 'aside[aria-label="Style this demo"]';
 
@@ -257,8 +265,8 @@ test("density sizes are written per variant, including one the grid is not on", 
 // read as "fixture changed", not "product broke".
 for (const shape of [
   {
-    label: "docs react @ 18.0.0",
-    url: "/?docs=guides/styling/theme-customization/react/example1.tsx&v=18.0.0",
+    label: `docs react @ ${DOCS_VERSION}`,
+    url: `/?docs=guides/styling/theme-customization/react/example1.tsx&v=${DOCS_VERSION}`,
     file: "/src/App.tsx",
     original: 'themeName="ht-theme-main"',
     wired: "theme={customTheme}",
@@ -394,7 +402,10 @@ test("Copy for my app hands over the theme without the runner's bridge", async (
 test("a grid shape the panel does not recognise gets the manual hint, not a mangled file", async ({ page }) => {
   // This docs example builds its grid with `theme: getTheme('…').setColorScheme(…)`
   // — a computed expression wireTheme deliberately refuses to touch.
-  const drawer = await openPanel(page, "/?docs=guides/styling/themes/javascript/exampleTheme.js&v=18.0.0");
+  const drawer = await openPanel(
+    page,
+    `/?docs=guides/styling/themes/javascript/exampleTheme.js&v=${DOCS_VERSION}`,
+  );
 
   // Wait for the docs workspace to actually arrive before applying: until the
   // fetch lands, the files map is empty, and wireTheme over an empty map shows

@@ -1,4 +1,9 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+// `src`, not `dist`, the way docs-examples.spec.ts imports it: the `e2e` job
+// downloads only the authoring build and `e2e-live` skips `pnpm build`, so a
+// `dist` specifier fails at spec load. Playwright resolves the `.js` to the source.
+import { highestReleaseBucket } from "../packages/runtime/src/docs-bucket.js";
 
 // Shared helpers for the e2e suite (DEV-2203).
 //
@@ -132,4 +137,42 @@ export function trackSessions(page: Page) {
       }
     },
   };
+}
+
+/**
+ * The docs bucket a visitor on the current release lands in, and the exact
+ * version that reaches it.
+ *
+ * Every spec that deep-links `?docs=…&v=…` into the *real* committed buckets
+ * has to name a version, and restating one goes stale twice over (DEV-2736).
+ * It drifts on coverage the moment a new bucket lands — 18.0 stayed pinned
+ * after 18.1 arrived, so the container engine was only ever exercised against
+ * the previous release line, silently, because nothing asserted the bucket.
+ * And it breaks outright when the old bucket is pruned: `writeDocsBucketIndex`
+ * rebuilds `docs-buckets.json` from the directory listing and never
+ * accumulates. PR #283 converted `docs-examples.spec.ts`'s suggestion
+ * assertions the same way.
+ *
+ * `highestReleaseBucket` alone is not enough for a `?v=`: `planDocsBucket`
+ * derives the bucket through a strict `semver.parse`, which answers null for
+ * `18.1` and for `18` — a two-part `v=` lands on the not-found screen. The
+ * bucket's own `manifest.json` records the full version it was imported at, so
+ * that is read rather than synthesised as `${bucket}.0`; a bucket regenerated
+ * at a later patch stays correct.
+ */
+export function currentDocsRelease(): { bucket: string; version: string } {
+  const buckets: string[] = JSON.parse(
+    readFileSync(new URL("../docs-buckets.json", import.meta.url), "utf8"),
+  ).buckets;
+  const bucket = highestReleaseBucket(buckets);
+  if (!bucket) throw new Error("docs-buckets.json holds no release bucket");
+
+  const manifestUrl = new URL(
+    `../apps/authoring/public/docs-examples/${bucket}/manifest.json`,
+    import.meta.url,
+  );
+  const { hotVersion } = JSON.parse(readFileSync(manifestUrl, "utf8")) as { hotVersion?: string };
+  if (!hotVersion) throw new Error(`the ${bucket} docs manifest records no hotVersion`);
+
+  return { bucket, version: hotVersion };
 }

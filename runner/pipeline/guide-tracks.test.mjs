@@ -31,6 +31,7 @@ import { MAX_DESCRIPTION } from "../workers/api/src/demo-info.ts";
 // Built output, the way version.test.mjs imports it: version.ts pulls in `semver`
 // via `./types.js` specifiers that --experimental-strip-types cannot resolve.
 import { DEFAULT_MAX_MAJOR, DEFAULT_MIN_MAJOR } from "../packages/runtime/dist/version.js";
+import { highestReleaseBucket } from "../packages/runtime/dist/docs-bucket.js";
 
 // mcp-create.ts stopped being import-free once the build-toolchain gate landed
 // (Sentry DEMOS-31): it now pulls in build-command.js by the repo's NodeNext-
@@ -267,10 +268,19 @@ test("no HTML entities in the guide's markdown", () => {
 // must land on a page that exists.
 
 test("every ?docs= URL the guide prints exists in the release bucket", () => {
-  // The bucket the guide's unversioned URLs resolve to: the current release line.
+  // The bucket the guide's unversioned URLs resolve to: the current release line,
+  // resolved rather than named (DEV-2736). `writeDocsBucketIndex` rebuilds the
+  // index from the directory listing and never accumulates, so a hard-coded "18.0"
+  // here stops being a failed assertion and becomes an ENOENT the day that bucket
+  // is pruned.
+  const buckets = JSON.parse(
+    fs.readFileSync(path.join(here, "../docs-buckets.json"), "utf8"),
+  ).buckets;
+  const bucket = highestReleaseBucket(buckets);
+  assert.ok(bucket, "docs-buckets.json holds no release bucket");
   const manifest = JSON.parse(
     fs.readFileSync(
-      path.join(here, "../apps/authoring/public/docs-examples/18.0/manifest.json"),
+      path.join(here, `../apps/authoring/public/docs-examples/${bucket}/manifest.json`),
       "utf8",
     ),
   );
@@ -285,7 +295,7 @@ test("every ?docs= URL the guide prints exists in the release bucket", () => {
       const docsPath = decodeURIComponent(m[1]);
       assert.ok(
         known.has(docsPath),
-        `${name}.md prints ?docs=${docsPath}, which is not in the 18.0 bucket`,
+        `${name}.md prints ?docs=${docsPath}, which is not in the ${bucket} bucket`,
       );
     }
   }
