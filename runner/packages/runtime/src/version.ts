@@ -9,9 +9,8 @@
 //
 // Upstream `pikaday` — which the docs Pikaday recipe uses on every docs branch
 // after DEV-2180 — needs no entry here: its name does not contain "handsontable",
-// so it is left alone by the rule above. The fork entry only has to outlive the
-// docs-examples buckets that still import it, i.e. until every bucket has been
-// re-imported from a branch carrying that change.
+// so it is left alone by the rule above. The fork entry outlives the
+// `starter-examples` buckets that still declare it — see NEVER_REWRITE below.
 
 import semver from "semver";
 import type { FilesMap, HandsontableVersionRef } from "./types.js";
@@ -32,9 +31,19 @@ const NEXT_PRERELEASE_RE = /^0\.0\.0-next-[0-9a-f]+-\d{8}$/i;
 
 /**
  * Dependency never rewritten: an independently versioned Handsontable plugin.
- * Legacy — docs examples moved to upstream `pikaday`, which needs no exemption.
- * Removable once no bucket under apps/authoring/public/docs-examples/ imports
- * the fork (`grep -rl "@handsontable/pikaday"` there).
+ * Only `1.0.0` was ever published, so pinning it to a bucket's Handsontable
+ * version resolves nothing — at import time that surfaces as a hard
+ * ERR_PNPM_NO_MATCHING_VERSION out of the lockfile regeneration, not a mis-pin.
+ * The exemption covers both callers of isHandsontablePackage: the rewrite
+ * itself, and handsontableDependencyRef, which must not read the *core* version
+ * off the fork's own version line.
+ *
+ * Master's examples/javascript dropped the dead dependency in DEV-2733; the
+ * frozen prod-examples/* branches (buckets 15-18) still declare it. Removable
+ * once no prod-examples branch declares it and
+ * `grep -rl "@handsontable/pikaday" apps/authoring/public/starter-examples/`
+ * comes back empty — the *starter* buckets, not docs-examples, which went clean
+ * with DEV-2182 and is what an earlier version of this comment pointed at.
  */
 const NEVER_REWRITE = new Set(["@handsontable/pikaday"]);
 

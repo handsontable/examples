@@ -4,7 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { bucketFrameworks, importStarters, writeCatalogIndex } from "./import.mjs";
+import {
+  bucketFrameworks,
+  importStarters,
+  pinHandsontableDependencies,
+  writeCatalogIndex,
+} from "./import.mjs";
 import { applyHandsontableVersion } from "../packages/runtime/dist/version.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -81,6 +86,35 @@ test("artifacts pin every Handsontable dependency to the bucket hotVersion", asy
       }
     }
   }
+});
+
+// DEV-2733: master's examples/javascript no longer declares the fork, so the
+// artifact loop above can never reach the exemption — its `!==` guard is vacuous
+// on a master-sourced tree. The exemption is still load-bearing: the frozen
+// prod-examples/* branches feeding buckets 15-18 declare the fork, and pinning it
+// would ask pnpm for a version that was never published (only 1.0.0 exists),
+// failing the import outright rather than mis-pinning. So prove it against a
+// synthetic manifest, the way ht-version-resolve.test.mjs does for the runtime's
+// own copy of the rule.
+test("pinHandsontableDependencies pins the wrapper but leaves the pikaday fork alone", () => {
+  const files = {
+    "/package.json": JSON.stringify({
+      dependencies: {
+        "@handsontable/pikaday": "latest",
+        handsontable: "latest",
+        "@handsontable/react-wrapper": "latest",
+      },
+      devDependencies: { vite: "^8.1.1" },
+    }),
+  };
+
+  const pinned = JSON.parse(pinHandsontableDependencies(files, "15.3.0")["/package.json"]);
+
+  assert.equal(pinned.dependencies["@handsontable/pikaday"], "latest");
+  // Both of these must move, or the assertion above passes for the wrong reason.
+  assert.equal(pinned.dependencies.handsontable, "15.3.0");
+  assert.equal(pinned.dependencies["@handsontable/react-wrapper"], "15.3.0");
+  assert.equal(pinned.devDependencies.vite, "^8.1.1");
 });
 
 test("the runtime version rewrite is a byte-level no-op on emitted artifacts", async (t) => {

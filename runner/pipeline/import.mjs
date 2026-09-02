@@ -134,6 +134,12 @@ function normalizeEol(text) {
 // script stays dependency-free). import.test.mjs pins the two implementations
 // together by asserting the runtime's applyHandsontableVersion is a byte-level
 // no-op on emitted artifacts.
+//
+// The exemption now exists solely for frozen-branch sources: master's
+// examples/javascript dropped the dead fork dependency in DEV-2733, but the
+// prod-examples/* branches feeding buckets 15-18 still declare it, and pinning
+// it would ask pnpm for a version that was never published. See the
+// NEVER_REWRITE docstring in version.ts for the removal condition.
 const NEVER_REWRITE = new Set(["@handsontable/pikaday"]);
 const isHandsontablePackage = (name) => name.includes("handsontable") && !NEVER_REWRITE.has(name);
 
