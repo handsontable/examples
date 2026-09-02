@@ -309,6 +309,41 @@ test("a bundle named .mjs or .cjs is JavaScript", async () => {
   }
 });
 
+test("a CDN- or inline-script demo emits no bundle by design and is not rejected", async () => {
+  // `validateHtmlEntry` lets these through on purpose — it cannot tell a CDN demo from
+  // a mistake — so failing them here would reject on Save, after a billed container
+  // boot, a preview that already runs (found by Bugbot on PR #301).
+  for (const html of [
+    '<div id="grid"></div><script src="https://cdn.example/handsontable.js"></script>',
+    '<div id="grid"></div><script>boot()</script>',
+  ]) {
+    setSandboxFactory(buildEmitting(["index.html"]));
+    try {
+      const out = await runBuild(ENV, VITE_ENTRY, { "/package.json": "{}", "/index.html": html });
+      assert.deepEqual(Object.keys(out), ["index.html"], html);
+    } finally {
+      setSandboxFactory(null);
+    }
+  }
+});
+
+test("a document that does name a local module is still held to emitting one", async () => {
+  // The exemption is "nothing to bundle", not "no bundle" — a document pointing at a
+  // file in the map and a dist with no JavaScript in it is the defect, not a CDN demo.
+  setSandboxFactory(buildEmitting(["index.html"]));
+  try {
+    const err = await runBuild(ENV, VITE_ENTRY, {
+      "/package.json": "{}",
+      "/index.js": "export {};",
+      "/index.html": '<div id="grid"></div><script type="module" src="/index.js"></script>',
+    }).then(() => null, (e) => e);
+    assert.ok(err, "a bundle-less build of a real module must not resolve");
+    assert.match(err.message, /no JavaScript/);
+  } finally {
+    setSandboxFactory(null);
+  }
+});
+
 test("the gate reads the build command, not only the tier", async () => {
   // Every tier-1 row in today's catalog runs `vite build`, so the tier check alone
   // explains the case below and the buildCommand half would go unexercised. This entry

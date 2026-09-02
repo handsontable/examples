@@ -10,7 +10,7 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { injectSchemeIntoHtml } from "@handsontable/demo-runtime/scheme";
 import { execFailureDetail } from "@handsontable/demo-runtime/failure-log";
 import { handsontableDependencyRef } from "@handsontable/demo-runtime";
-import { ensureEntryScript } from "@handsontable/demo-runtime/entry-script";
+import { ensureEntryScript, hasAnyScript, localScriptTargets } from "@handsontable/demo-runtime/entry-script";
 import { BUILD_CONFIG } from "./frameworks.generated.js";
 import type { Env } from "./env.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
@@ -225,6 +225,21 @@ function execFailed(r: { success?: boolean; exitCode?: number }): boolean {
   return r.success === false || (typeof r.exitCode === "number" && r.exitCode !== 0);
 }
 
+/**
+ * Is this entry document expected to produce no bundle at all? (DEV-2741)
+ *
+ * True only when it carries a script and none of them names a local file — an inline
+ * boot, or a CDN `<script src>`. A document with no script whatsoever is *not* exempt:
+ * that is the defect, and by the time a build runs it has already been refused (MCP) or
+ * repaired (browser Save), so reaching the builder in that state means something
+ * upstream let it through and the loud failure is the point.
+ */
+function nothingToBundle(entry: BuildEntry, files: Record<string, string>): boolean {
+  const html = entry.htmlEntry ? files[entry.htmlEntry] : undefined;
+  if (html === undefined) return false;
+  return hasAnyScript(html) && localScriptTargets(html).length === 0;
+}
+
 /** The build shape the no-JavaScript check below is verified against: a tier-1 example
  *  bundled by `vite build` into a flat `dist/`. */
 function isViteTier1(entry: BuildEntry): boolean {
@@ -305,7 +320,13 @@ export async function runBuild(
     // saving for a framework this check was never about.
     // `.mjs`/`.cjs` count: a demo is free to ship a `vite.config` that renames the entry
     // chunk, and `validateMcpFiles` has no opinion about that file.
-    if (isViteTier1(entry) && !rels.some((rel) => /\.[cm]?js$/i.test(rel))) {
+    //
+    // And a document whose only scripts are inline or on a CDN is exempt, because it is
+    // *expected* to emit no bundle: `validateHtmlEntry` lets that shape through on
+    // purpose (it cannot tell a CDN demo from a mistake), so failing it here would
+    // reject on Save — after a billed container boot — a preview that already runs, with
+    // a message claiming the page loads no module when it plainly does.
+    if (isViteTier1(entry) && !rels.some((rel) => /\.[cm]?js$/i.test(rel)) && !nothingToBundle(entry, files)) {
       throw new Error(
         `build produced no JavaScript in ${outDir}: ${entry.htmlEntry ?? "the HTML entry"} `
         + `loads no module, so the demo would render as an empty page`
