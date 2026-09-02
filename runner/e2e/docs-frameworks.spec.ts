@@ -1,5 +1,11 @@
 import { test, expect } from "@playwright/test";
-import { expectGridRendered, isKnownNoise, previewReady, trackSessions } from "./helpers";
+import {
+  currentDocsRelease,
+  expectGridRendered,
+  isKnownNoise,
+  previewReady,
+  trackSessions,
+} from "./helpers";
 
 // The docs-example paths that need a container (DEV-2203).
 //
@@ -11,12 +17,19 @@ import { expectGridRendered, isKnownNoise, previewReady, trackSessions } from ".
 //
 // Two boots, no more. The pool holds five global slots shared with real
 // traffic, so this spec must run with --workers=1 and never grows a
-// per-example walk — the 1261-entry bucket belongs to the manifest tests and
-// the import pipeline. Fixture: the context-menu guide (react + vue variants
-// in every bucket) and the accessibility guide's Angular example.
+// per-example walk — the bucket's ~1500 entries belong to the manifest tests
+// and the import pipeline. Fixture: the context-menu guide (react + vue
+// variants in every bucket) and the accessibility guide's Angular example.
+//
+// The version is resolved from the newest imported release bucket, not restated
+// here (DEV-2736). A literal `v=18.0.0` survived the 18.1 import silently: these
+// tests assert nothing about the bucket, so instead of going red the way #283's
+// did, they kept passing while the only container-engine coverage the Vue and
+// Angular docs wrappers have drifted onto the previous release line.
+const { version: DOCS_VERSION } = currentDocsRelease();
 
-const REACT_DOCS = "/?docs=guides/accessories-and-menus/context-menu/react/example1.tsx&v=18.0.0";
-const ANGULAR_DOCS = "/?docs=guides/accessibility/accessibility/angular/example1.ts&v=18.0.0";
+const REACT_DOCS = `/?docs=guides/accessories-and-menus/context-menu/react/example1.tsx&v=${DOCS_VERSION}`;
+const ANGULAR_DOCS = `/?docs=guides/accessibility/accessibility/angular/example1.ts&v=${DOCS_VERSION}`;
 
 test.describe("docs examples on the container engine", () => {
   test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 to run live-render checks");

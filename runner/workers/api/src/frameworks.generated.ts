@@ -62,7 +62,7 @@ export const BUILD_CONFIG: Record<string, BuildConfig> = {
   "mui": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null, entry: "/src/index.tsx", htmlEntry: "/index.html" },
   "base-web": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null, entry: "/src/index.tsx", htmlEntry: "/index.html" },
   "fluent-ui": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null, entry: "/src/index.tsx", htmlEntry: "/index.html" },
-  "vue": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null, entry: "/src/main.ts", htmlEntry: "/index.html" },
+  "vue": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vue-tsc --build --force && vite build", outputDir: "dist", outputGlob: null, entry: "/src/main.ts", htmlEntry: "/index.html" },
   "angular": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "ng build", outputDir: "dist", outputGlob: "dist/*/browser", entry: "/src/main.ts", htmlEntry: "/src/index.html" },
   "next.js": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "next build", outputDir: "out", outputGlob: null, entry: "/app/page.tsx", htmlEntry: null },
   "next-shadcn.js": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "next build", outputDir: "out", outputGlob: null, entry: "/app/page.tsx", htmlEntry: null },

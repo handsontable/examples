@@ -298,7 +298,7 @@
       "entry": "/src/main.ts",
       "htmlEntry": "/index.html",
       "devCommand": null,
-      "buildCommand": "vite build",
+      "buildCommand": "vue-tsc --build --force && vite build",
       "outputDir": "dist",
       "outputGlob": null,
       "staticExport": false,

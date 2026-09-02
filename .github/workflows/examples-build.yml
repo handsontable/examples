@@ -1,0 +1,321 @@
+name: examples — build
+
+# Builds every starter under examples/ with its own `package.json` `build` script.
+# Nothing else in CI does: ci.yml's jobs are all `working-directory: runner` and
+# never enter examples/*; e2e-starter-matrix.yml boots FRAMEWORK_DEV.cmd, a dev
+# server, and explicitly skips even a workspace build; import-starters.yml only
+# ever runs `pnpm install --lockfile-only`, which resolves without building.
+#
+# That gap is how DEV-2727 and DEV-2730 both shipped — 18.1.0 tightened a public
+# type and examples/angular stopped compiling, found by a person opening the demo
+# after release. This is the examples/ half of the same job
+# server-examples-build.yml already does for server-examples/ (DEV-2737).
+#
+# Two things about the design are deliberate and easy to get wrong:
+#
+#   The oracle is the starter's own `build`, NOT the generated bucket artifact.
+#   The bucket looks like the more faithful target — it is what ships — but the
+#   only product path that runs a build (workers/api/src/share.ts) passes the
+#   command through `snapshotBuildCommand`, which strips a leading tsc / tsc -b /
+#   vue-tsc. Building what ships would reproduce the stripping and stay green on
+#   the entire class of defect this workflow exists to catch.
+#
+#   The build runs OUTSIDE the repo tree. A `types` entry resolves by walking
+#   parent directories, so a starter naming a type package it does not declare
+#   compiles in this repo (there is an untracked node_modules/@types/node at the
+#   root) and dies with TS2688 everywhere it actually runs. DEV-2730 was exactly
+#   that, and an in-tree build would have missed it. See also the static guard,
+#   runner/pipeline/starter-type-roots.test.mjs.
+#
+# Two jobs, because they answer different questions:
+#
+#   build         deterministic — frozen lockfile. Guards starter edits. Every
+#                 starter's spec is "latest", which pnpm matches against the
+#                 lock's `specifier: latest`, so this installs the committed
+#                 resolution and by construction can NEVER see a new upstream
+#                 release.
+#   build-latest  canary — installs handsontable@latest and its wrapper before
+#                 building. THIS is the job that would have caught 18.1.0 on the
+#                 day it shipped. It is expected to go red on a breaking release;
+#                 that is the signal, not a flake.
+#
+# Coverage is honest but partial, and the green tick must not be read as more
+# than it is. 10 of the 16 starters type-check on `build` (angular, base-web,
+# example1, fluent-ui, mui, next.js, next-shadcn.js, react, typescript, vue);
+# `remix` is covered by the typecheck-script step below. Genuinely uncovered:
+# ant-design, javascript, react-js (no TS surface at all — zero tsconfigs),
+# astro (ships no `astro check`), and nuxt, which cannot type-check without
+# adding vue-tsc to it — worth doing, but not in this workflow's scope.
+#
+# All 16 are built regardless, not just the type-checking ones: a curated list
+# would drift, and the six others still get their bundler and config exercised
+# for the price of one short job.
+
+on:
+  pull_request:
+    paths:
+      - 'examples/**'
+      - '.github/workflows/examples-build.yml'
+  schedule:
+    # Weekly, Monday 05:00 UTC. Behind server-examples-build.yml (04:00) and clear
+    # of the nightly e2e windows (01:00 / 03:00) — this job needs no container
+    # pool, but there is no reason to pile onto the same window.
+    - cron: '0 5 * * 1'
+  workflow_dispatch: {}
+
+concurrency:
+  group: examples-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Emits the starter list as a matrix, discovered from the checkout so adding a
+  # starter needs no edit here. A starter qualifies if it has a pnpm-lock.yaml AND
+  # a `build` script.
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      starters: ${{ steps.find.outputs.starters }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: find
+        run: |
+          starters=$(find examples -maxdepth 2 -name pnpm-lock.yaml \
+                       -not -path '*/node_modules/*' -exec dirname {} \; \
+                     | sort \
+                     | while read -r d; do
+                         # `if`, not `&&`: Actions runs `bash -e -o pipefail`, so the
+                         # loop's exit status is the last iteration's. With `&&`, a
+                         # starter that sorts LAST and is legitimately skipped would
+                         # fail this whole job.
+                         if node -e "process.exit(require('./$d/package.json').scripts?.build ? 0 : 1)"; then
+                           echo "$d"
+                         fi
+                       done \
+                     | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "starters=$starters" >> "$GITHUB_OUTPUT"
+          echo "Discovered: $starters"
+
+      # A matcher that silently found nothing would make every downstream matrix
+      # empty, and an empty matrix is a green check.
+      - name: Fail on an empty matrix
+        run: |
+          count=$(jq 'length' <<< '${{ steps.find.outputs.starters }}')
+          echo "starters: $count"
+          [ "$count" -ge 15 ] || { echo "expected at least 15 starters, found $count"; exit 1; }
+
+  build:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      # One broken starter must not mask the state of the other 15 — the point of
+      # this workflow is to see the full blast radius of a type change.
+      fail-fast: false
+      matrix:
+        starter: ${{ fromJSON(needs.discover.outputs.starters) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ${{ matrix.starter }}/package.json
+
+      # Deliberately no `cache: pnpm`. The cache restore runs before the
+      # extraction below and resolves the store relative to the workspace
+      # checkout, so an install under RUNNER_TEMP can miss it with no error and no
+      # signal. 16 cold installs is the cheaper trade. If this is ever added as an
+      # optimization, prove the hit by comparing two consecutive runs — a silent
+      # miss reads exactly like a hit.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Extract the starter outside the repo tree
+        run: |
+          mkdir -p "$RUNNER_TEMP/build"
+          # tar, not rsync — rsync is not guaranteed on the ubuntu-latest image.
+          # The `-C <dir> .` form carries dotfiles, which the install needs:
+          # examples/nuxt and examples/react each ship a .npmrc.
+          tar -c --exclude=node_modules -C "${{ matrix.starter }}" . \
+            | tar -x -C "$RUNNER_TEMP/build"
+          # The three ways the repo tree leaks back in. Any one of them restores
+          # the in-tree pass that hid DEV-2730: with the pre-fix
+          # tsconfig.node.json, examples/base-web emits dist from inside this
+          # repo and fails TS2688 from a copy under a clean parent.
+          #
+          # Checked explicitly rather than by walking to /: an unbounded walk
+          # would also hard-fail on a stray node_modules in the runner's home
+          # directory, for a reason that has nothing to do with the starter, and
+          # a gate that false-blocks gets disabled.
+          [ ! -e "$RUNNER_TEMP/build/node_modules" ] || { echo "node_modules came along in the copy"; exit 1; }
+          case "$RUNNER_TEMP/build" in
+            "$GITHUB_WORKSPACE"/*) echo "build dir is inside the checkout"; exit 1 ;;
+          esac
+          for leak in node_modules pnpm-workspace.yaml; do
+            [ ! -e "$RUNNER_TEMP/$leak" ] || { echo "$RUNNER_TEMP/$leak would leak into the build"; exit 1; }
+          done
+
+      - name: Install (frozen lockfile)
+        working-directory: ${{ runner.temp }}/build
+        run: pnpm install --frozen-lockfile --ignore-workspace
+
+      # Asserts by exit code, not by log text. A frozen install already fails on a
+      # lock/manifest mismatch, so this covers the case it cannot: an install that
+      # succeeded without the dependency being reachable from the starter.
+      - name: Verify Handsontable resolves
+        working-directory: ${{ runner.temp }}/build
+        run: |
+          # `jq -e` is the assertion — it exits non-zero on a null result, and
+          # `pnpm list` alone exits 0 even when nothing matched. Not
+          # `require('handsontable/package.json')`: handsontable's `exports` map
+          # does not expose ./package.json, so that throws
+          # ERR_PACKAGE_PATH_NOT_EXPORTED on a perfectly good install.
+          pnpm list handsontable --depth=0 --json \
+            | jq -e -r '.[0] | ((.dependencies // {}) + (.devDependencies // {})) | .handsontable.version'
+
+      - name: Build
+        working-directory: ${{ runner.temp }}/build
+        run: pnpm build
+
+      - name: Typecheck, if the starter ships a script for it
+        working-directory: ${{ runner.temp }}/build
+        run: |
+          # Covers remix, whose `remix vite:build` does not type-check — which is
+          # why it carries a separate `typecheck` script. Runs whatever the starter
+          # already declares rather than inventing a command for it.
+          script=$(node -e "const s = require('./package.json').scripts || {};
+            process.stdout.write(s.typecheck ? 'typecheck' : (s['type-check'] ? 'type-check' : ''))")
+          if [ -n "$script" ]; then
+            echo "running \`pnpm run $script\`"
+            pnpm run "$script"
+          else
+            echo "no typecheck script — build is the only type gate for this starter"
+          fi
+
+      # A zero exit is not proof of a bundle. "Breakage ships silently" is the
+      # failure mode this workflow exists to kill, so it must not be able to go
+      # green on a build that emitted nothing. Never gate on log text.
+      - name: Verify the build emitted something
+        working-directory: ${{ runner.temp }}/build
+        run: |
+          # dist: vite, astro, and angular's dist/<name>/browser. build: remix.
+          # .next / out: both Next starters. .output: nuxt.
+          for d in dist build out .next .output; do
+            if [ -d "$d" ] && [ -n "$(ls -A "$d")" ]; then
+              echo "output: $d ($(find "$d" -type f | wc -l) files)"
+              exit 0
+            fi
+          done
+          echo "build produced no output directory"
+          exit 1
+
+  build-latest:
+    # PRs get the deterministic job only. This one exists to detect upstream
+    # drift, which a PR cannot introduce.
+    if: github.event_name != 'pull_request'
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        starter: ${{ fromJSON(needs.discover.outputs.starters) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ${{ matrix.starter }}/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Extract the starter outside the repo tree
+        run: |
+          mkdir -p "$RUNNER_TEMP/build"
+          tar -c --exclude=node_modules -C "${{ matrix.starter }}" . \
+            | tar -x -C "$RUNNER_TEMP/build"
+          # Same three leak paths as the `build` lane — DEV-2730's class can
+          # recur here too, so this lane must not be the one that cannot see it.
+          [ ! -e "$RUNNER_TEMP/build/node_modules" ] || { echo "node_modules came along in the copy"; exit 1; }
+          case "$RUNNER_TEMP/build" in
+            "$GITHUB_WORKSPACE"/*) echo "build dir is inside the checkout"; exit 1 ;;
+          esac
+          for leak in node_modules pnpm-workspace.yaml; do
+            [ ! -e "$RUNNER_TEMP/$leak" ] || { echo "$RUNNER_TEMP/$leak would leak into the build"; exit 1; }
+          done
+
+      - name: Install (frozen lockfile)
+        working-directory: ${{ runner.temp }}/build
+        run: pnpm install --frozen-lockfile --ignore-workspace
+
+      - name: Move Handsontable to the current release
+        working-directory: ${{ runner.temp }}/build
+        run: |
+          # The wrapper differs per starter family (react / angular / vue3 / none),
+          # so read it out of package.json rather than hard-coding four variants.
+          # @handsontable/pikaday is excluded, mirroring NEVER_REWRITE in
+          # runner/pipeline/import.mjs — it is not versioned with the core.
+          pkgs=$(node -e "
+            const d = require('./package.json').dependencies || {};
+            const names = Object.keys(d).filter(k =>
+              (k === 'handsontable' || k.startsWith('@handsontable/')) && k !== '@handsontable/pikaday');
+            process.stdout.write(names.join(' '));
+          ")
+          [ -n "$pkgs" ] || { echo "no Handsontable dependency found in package.json"; exit 1; }
+          echo "updating $pkgs"
+          # `pnpm update --latest`, NOT `pnpm add <pkg>@latest`. Every starter's
+          # committed spec is already "latest", and `pnpm add handsontable@latest`
+          # against that spec is a no-op: measured on a copy whose lock pinned
+          # 18.0.0 with 18.1.0 on the registry, `add` reported "Already up to
+          # date" and left 18.0.0 installed. A canary that rebuilds the pinned
+          # version is worse than no canary. `update --latest` moves the lock
+          # (18.0.0 -> 18.1.0 in the same copy) and leaves the spec alone.
+          pnpm update $pkgs --latest
+
+      - name: Verify the install actually moved to the released version
+        working-directory: ${{ runner.temp }}/build
+        run: |
+          # The assertion that keeps this lane honest. Printing the resolved
+          # version proves nothing — a silent no-op prints a plausible number.
+          # Compare it to npm's dist-tag instead, so an install that failed to
+          # move fails the job rather than quietly rebuilding the committed pin.
+          #
+          # `pnpm list` alone exits 0 even when nothing matched, so `jq -e` is
+          # what catches an unresolvable dependency. Not
+          # `require('handsontable/package.json')`: handsontable's `exports` map
+          # does not expose ./package.json, so that throws
+          # ERR_PACKAGE_PATH_NOT_EXPORTED on a perfectly good install.
+          got=$(pnpm list handsontable --depth=0 --json \
+                  | jq -e -r '.[0] | ((.dependencies // {}) + (.devDependencies // {})) | .handsontable.version')
+          want=$(npm view handsontable version)
+          echo "resolved $got, npm latest $want"
+          [ "$got" = "$want" ] || { echo "install did not move to the released version"; exit 1; }
+
+      - name: Build
+        working-directory: ${{ runner.temp }}/build
+        run: pnpm build
+
+      - name: Typecheck, if the starter ships a script for it
+        working-directory: ${{ runner.temp }}/build
+        run: |
+          script=$(node -e "const s = require('./package.json').scripts || {};
+            process.stdout.write(s.typecheck ? 'typecheck' : (s['type-check'] ? 'type-check' : ''))")
+          if [ -n "$script" ]; then
+            echo "running \`pnpm run $script\`"
+            pnpm run "$script"
+          else
+            echo "no typecheck script — build is the only type gate for this starter"
+          fi
+
+      - name: Verify the build emitted something
+        working-directory: ${{ runner.temp }}/build
+        run: |
+          for d in dist build out .next .output; do
+            if [ -d "$d" ] && [ -n "$(ls -A "$d")" ]; then
+              echo "output: $d ($(find "$d" -type f | wc -l) files)"
+              exit 0
+            fi
+          done
+          echo "build produced no output directory"
+          exit 1
