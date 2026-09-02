@@ -79,6 +79,30 @@ varies. Keeping storage bucket-dependent would make a local full regen (which
 sources master for every bucket) disagree with CI (which sources the frozen
 branches).
 
+The second worked example is DEV-2734, and it shows that **the threshold is a
+property of the option, not of the registry**. `numericFormat` has the same
+bidirectional shape, but it does not turn over at the same major: 18 removed
+numbro and passes the option straight into `Intl.NumberFormat` (which ignores
+keys it does not know, so `{ pattern }` renders an unformatted number), while
+Intl support was *added* in 17.0.0, so 17 accepts either shape. Rows therefore
+declare their own `intlSince` — 17 for `numericFormat`, the default 18 for
+`dateFormat`/`timeFormat` — and bucket 17 comes out of a single pass with an
+Intl number option and a moment date string. The date rules stay on 18 on
+purpose: the storage coupling above is a property of 18's `dateValidator`, not
+of the option shape.
+
+Two further habits that ticket established:
+
+- **The types will not help you.** `numericFormat` is declared as bare `object`
+  in core, so a wrong shape type-checks clean and a starter's `tsc && vite
+  build` proves nothing. Verify a rendering option by *looking at a rendered
+  grid*, at each major.
+- **Option shape and stored value are coupled through the EDITOR too.** The
+  numeric editor is `TextEditor` unmodified and seeds itself from
+  `getSourceDataAtCell`, so a migration that rescales data to suit a renderer
+  (percent points to fractions, say) shows the raw value the moment a user
+  clicks the cell. Prefer the option that fits the data already stored.
+
 Three consequences worth knowing before relying on this:
 
 - **Bucket content becomes a two-place question** — the source ref *plus* the

@@ -411,7 +411,7 @@ new Handsontable(container, {
     {
       data: "cost",
       type: "numeric",
-      numericFormat: { pattern: "$0 0" },
+      numericFormat: { style: "currency", currency: "USD", maximumFractionDigits: 0 },
       headerClassName: "htRight",
       className: "htRight",
       width: 150,
@@ -433,7 +433,7 @@ new Handsontable(container, {
     {
       data: "itemQuality",
       type: "numeric",
-      numericFormat: { pattern: "0%" },
+      numericFormat: { style: "unit", unit: "percent" },
       headerClassName: "htRight",
       className: "htRight",
       width: 150,
@@ -448,6 +448,7 @@ new Handsontable(container, {
     {
       data: "quantity",
       type: "numeric",
+      numericFormat: { useGrouping: true },
       headerClassName: "htRight",
       className: "htRight",
       width: 150,
@@ -455,7 +456,7 @@ new Handsontable(container, {
     {
       data: "valueStock",
       type: "numeric",
-      numericFormat: { pattern: "$0 0" },
+      numericFormat: { style: "currency", currency: "USD", maximumFractionDigits: 0 },
       headerClassName: "htRight",
       className: "htRight",
       width: 150,

@@ -53,6 +53,15 @@
 // downgrade-only overlay would leave 18 broken. Set semantics is also idempotent
 // and survives future source drift on any branch.
 //
+// A SECOND OPTION CLASS, A SECOND THRESHOLD (DEV-2734). `numericFormat` has the
+// same bidirectional shape problem, but it does NOT change at the same major:
+// 18 removed numbro and feeds the option straight into Intl.NumberFormat, while
+// Intl support was ADDED in 17.0.0 (handsontable#11997), so 17 accepts either
+// shape. Rows therefore declare their own `intlSince` (default 18) rather than
+// sharing one predicate. The date rules below stay on 18 deliberately: the
+// stored-value coupling they encode is a property of 18's dateValidator, not of
+// the option shape.
+//
 // STATED LIMITATION. This is source-TEXT matching. It cannot evaluate a computed
 // value: a `dateFormat: getFormat()` would be invisible to both the rewrite and
 // the lint. It is a lint, not a proof — its job is to make the common literal
@@ -68,8 +77,24 @@
  * check would classify current dev as the oldest legacy bucket.
  */
 export function usesIntlDate(bucket) {
-  return bucket === "next" || Number(bucket) >= 18;
+  return usesIntlOptions(bucket, 18);
 }
+
+/**
+ * Is `bucket` at or past the major where an option's Intl contract starts?
+ *
+ * Split out from `usesIntlDate` because the thresholds differ per option class
+ * (see the header): dates change at 18, numbers at 17.
+ */
+function usesIntlOptions(bucket, since) {
+  return bucket === "next" || Number(bucket) >= since;
+}
+
+/** The major from which this row's Intl literal is the correct one. */
+const intlSince = (row) => row.intlSince ?? 18;
+
+/** Does this row emit its Intl literal at `bucket`? */
+const rowUsesIntl = (row, bucket) => usesIntlOptions(bucket, intlSince(row));
 
 // The same Intl.DateTimeFormatOptions literal in each starter's own quote
 // style, so an overridden line is indistinguishable from hand-written source.
@@ -136,6 +161,86 @@ export const OPTION_OVERRIDES = [
     pattern: /^([ \t]*)dateFormat:[^\n]*$/m,
     legacy: 'dateFormat: "YYYY-MM-DD",',
     intl: `dateFormat: ${INTL_DATE_DQ},`,
+  },
+  // DEV-2734. example1's numeric columns. Four rows rather than one because the
+  // three `numericFormat:` lines are not distinguishable by their own text (two
+  // are byte-identical), so each row anchors on the `data:` key of the column it
+  // owns via a lookbehind and still rewrites exactly one site.
+  //
+  // `intlSince: 17`, not the default 18: numbro is only REMOVED at 18, but Intl
+  // options are ACCEPTED from 17.0.0 (handsontable#11997), so putting 17 on the
+  // Intl side gives it the same rendering as 18 and drops the deprecation
+  // warning it logs today.
+  {
+    // At 18 `{ pattern }` reaches Intl.NumberFormat, which ignores keys it does
+    // not know, so the column renders `350,000` with no currency at all. The
+    // legacy literal is `$0,0` rather than the source's `$0 0`: numbro reads the
+    // space as a literal and emits `$ 350000`, so this CHANGES buckets 15/16 —
+    // deliberately, so every bucket renders `$350,000`.
+    id: "example1:cost",
+    framework: "example1",
+    file: "/index.ts",
+    option: "numericFormat",
+    intlSince: 17,
+    pattern: /(?<=data: "cost",\n[ \t]*type: "numeric",\n)([ \t]*)numericFormat:[^\n]*$/m,
+    legacy: 'numericFormat: { pattern: "$0,0" },',
+    intl: 'numericFormat: { style: "currency", currency: "USD", maximumFractionDigits: 0 },',
+  },
+  {
+    // itemQuality is stored as percent POINTS (87), not a fraction. numbro's
+    // `0%` multiplies by 100, so 15/16/17 render `8700%` today — this column was
+    // already wrong on every bucket, not only at 18.
+    //
+    // The Intl literal is `style: "unit"`, NOT `style: "percent"`: percent
+    // multiplies by 100 too. Rescaling the data instead was rejected because the
+    // numeric editor is TextEditor unmodified and `refreshValue()` seeds it from
+    // getSourceDataAtCell — the RAW value — so fractions would open the editor
+    // on `0.87` and make a typed `90` render `9,000%`.
+    //
+    // The cost is that 15/16 render a bare `87`: numbro cannot append a literal
+    // `%` without also scaling (`'0 %'` -> `8700 %`, `"0'%'"` -> `8700%`).
+    // Magnitude-correct everywhere beats a correct glyph on a wrong number.
+    id: "example1:itemQuality",
+    framework: "example1",
+    file: "/index.ts",
+    option: "numericFormat",
+    intlSince: 17,
+    pattern: /(?<=data: "itemQuality",\n[ \t]*type: "numeric",\n)([ \t]*)numericFormat:[^\n]*$/m,
+    legacy: 'numericFormat: { pattern: "0" },',
+    intl: 'numericFormat: { style: "unit", unit: "percent" },',
+  },
+  {
+    // The only INSERT row in the registry: no branch carries a `numericFormat`
+    // on this column, so there is no line to replace. The site is the
+    // `type: "numeric",` line and the optional group swallows an existing option
+    // line, which keeps set semantics intact — master carries the line after
+    // DEV-2734 and the frozen branches do not, and both converge on these bytes.
+    //
+    // Without an explicit option, 18 falls back to DEFAULT_INTL_FORMAT
+    // (`useGrouping: false`) while the columns above get Intl's default
+    // grouping, so one numeric column would group and another would not. Not
+    // observable at today's data (quantity tops out at 50); the row states the
+    // intent so it stays true if the dataset grows.
+    id: "example1:quantity",
+    framework: "example1",
+    file: "/index.ts",
+    option: "numericFormat",
+    intlSince: 17,
+    pattern: /(?<=data: "quantity",\n)([ \t]*)type: "numeric",(?:\n[ \t]*numericFormat:[^\n]*)?$/m,
+    legacy: 'type: "numeric",\nnumericFormat: { pattern: "0,0" },',
+    intl: 'type: "numeric",\nnumericFormat: { useGrouping: true },',
+  },
+  {
+    // Same defect and same literals as example1:cost; a separate row because
+    // every row owns exactly one site.
+    id: "example1:valueStock",
+    framework: "example1",
+    file: "/index.ts",
+    option: "numericFormat",
+    intlSince: 17,
+    pattern: /(?<=data: "valueStock",\n[ \t]*type: "numeric",\n)([ \t]*)numericFormat:[^\n]*$/m,
+    legacy: 'numericFormat: { pattern: "$0,0" },',
+    intl: 'numericFormat: { style: "currency", currency: "USD", maximumFractionDigits: 0 },',
   },
   {
     // The MIRROR defect, already shipping. This starter has minCoreMajor 17 and
@@ -264,6 +369,22 @@ const DATE_CELL_MARKERS = [
 
 const hasDateCell = (text) => DATE_CELL_MARKERS.some((re) => re.test(text));
 
+/** Cell-type markers that make a `numericFormat` load-bearing. */
+const NUMERIC_CELL_MARKERS = [/type:\s*['"]numeric['"]/, /type=['"]numeric['"]/];
+
+/**
+ * Which cell types make each option load-bearing.
+ *
+ * Per OPTION, not per file: a starter carrying both a date and a numeric column
+ * would otherwise have each option demand a registry row on the strength of the
+ * other one's cell type.
+ */
+const OPTION_CELL_MARKERS = {
+  dateFormat: DATE_CELL_MARKERS,
+  timeFormat: DATE_CELL_MARKERS,
+  numericFormat: NUMERIC_CELL_MARKERS,
+};
+
 /**
  * Files whose string literals are candidate cell VALUES. Deliberately narrow:
  * the file map also carries READMEs and lockfiles, and a prose line like
@@ -280,8 +401,16 @@ function rowsFor(list, framework) {
 
 /** Literal this row emits for `bucket`. */
 function literalFor(row, bucket) {
-  return usesIntlDate(bucket) ? row.intl : row.legacy;
+  return rowUsesIntl(row, bucket) ? row.intl : row.legacy;
 }
+
+/** Buckets on the legacy side of a row's threshold, for problem messages. */
+const legacyBucketList = (row) =>
+  ["15", "16", "17"].filter((bucket) => !rowUsesIntl(row, bucket)).join("/");
+
+/** What the legacy literal for this option IS, for problem messages. */
+const legacyShapeName = (option) =>
+  option === "numericFormat" ? "numbro pattern object" : "format string";
 
 function normalizationApplies(row, bucket) {
   return row.buckets === "all" || usesIntlDate(bucket);
@@ -302,6 +431,11 @@ function normalizationApplies(row, bucket) {
  * Balanced braces on the matched text is the cheap invariant that catches it:
  * a complete one-line site closes every brace it opens (0/0 for a quoted
  * string, 1/1 for an object literal, 2/2 for a JSX expression container).
+ *
+ * Balance, not line count, is what is actually being asserted — which is why an
+ * INSERT row (`example1:quantity`, whose pattern spans the anchor line plus an
+ * optional option line so the row is correct whether or not the source already
+ * carries it) passes this guard while a truncated site still fails it.
  */
 function assertSingleLineSite(row, site) {
   const opens = (site.match(/\{/g) ?? []).length;
@@ -345,7 +479,15 @@ export function applyStarterOverrides(framework, files, { bucket }) {
       );
     }
     assertSingleLineSite(row, matches[0]);
-    const replaced = text.replace(row.pattern, `$1${literalFor(row, bucket)}`);
+    const replaced = text.replace(row.pattern, (...args) => {
+      // A FUNCTION replacement, not a string: `example1:cost` emits
+      // `{ pattern: "$0,0" }`, and in a string replacement `String.replace`
+      // reinterprets `$`-sequences — a numbro pattern like `$'0,0'` would
+      // silently splice in the text FOLLOWING the match. Group 1 is the site's
+      // indentation, by convention shared by every row.
+      const indent = typeof args[1] === "string" ? args[1] : "";
+      return indent + literalFor(row, bucket).split("\n").join(`\n${indent}`);
+    });
     if (replaced !== text) applied.push(row.id);
     next = { ...next, [row.file]: replaced };
   }
@@ -394,11 +536,13 @@ export function applyStarterOverrides(framework, files, { bucket }) {
  *
  * Three rules:
  *   - REGISTERED sites must carry the registry's literal for this bucket.
- *   - COMPLETENESS: any dateFormat/timeFormat in a file that also declares a
- *     date/time cell type and is NOT covered by a row fails generation. This is
+ *   - COMPLETENESS: any registered option in a file that also declares the
+ *     matching cell type and is NOT covered by a row fails generation. This is
  *     what stops the class returning silently — a new or edited starter that
  *     adds a date column cannot reach a bucket until someone declares its
- *     per-major shape here.
+ *     per-major shape here. Coverage is counted PER SITE, not per (file,
+ *     option): example1 owns four `numericFormat` sites in one file, so a fifth
+ *     column would otherwise inherit their coverage and ship un-linted.
  *   - STORED VALUE at 18+: a starter that declares a date/time cell must not
  *     ship slash-separated date literals. Option shape and stored value are
  *     coupled (see the header), and the first two rules only cover the option —
@@ -418,24 +562,56 @@ export function lintStarterOptionShapes(framework, files, { bucket }) {
       continue;
     }
     const expected = literalFor(row, bucket);
-    if (!text.includes(expected)) {
+    // Line by line, because an INSERT row's literal spans the anchor line and
+    // the option line, and the emitted text carries the site's indentation
+    // between them while the registry literal does not.
+    if (!expected.split("\n").every((line) => text.includes(line))) {
       problems.push(
         `${framework}: ${row.file} must carry \`${expected}\` at bucket ${bucket} ` +
-          `(${usesIntlDate(bucket) ? "18+ needs the Intl object" : "15/16/17 need the format string"})`,
+          `(${
+            rowUsesIntl(row, bucket)
+              ? `${intlSince(row)}+ needs the Intl object`
+              : `${legacyBucketList(row)} need the ${legacyShapeName(row.option)}`
+          })`,
       );
     }
   }
 
   const covered = new Set(rows.map((row) => `${row.file} ${row.option}`));
+  // How many sites the registry claims to own per (file, option). A row owns
+  // exactly one site — applyStarterOverrides throws otherwise — so this is
+  // directly comparable to the number of sites found in the file.
+  const declared = new Map();
+  for (const row of rows) {
+    const key = `${row.file} ${row.option}`;
+    declared.set(key, (declared.get(key) ?? 0) + 1);
+  }
   for (const [file, text] of Object.entries(files)) {
-    if (typeof text !== "string" || !hasDateCell(text)) continue;
-    for (const option of ["dateFormat", "timeFormat"]) {
+    if (typeof text !== "string") continue;
+    for (const [option, markers] of Object.entries(OPTION_CELL_MARKERS)) {
+      if (!markers.some((re) => re.test(text))) continue;
       if (!new RegExp(`\\b${option}\\b`).test(text)) continue;
-      if (covered.has(`${file} ${option}`)) continue;
-      problems.push(
-        `${framework}: ${file} sets \`${option}\` on a date/time cell but has no ` +
-          `starter-overrides.mjs row declaring its per-major shape (bucket ${bucket})`,
-      );
+      const key = `${file} ${option}`;
+      if (!covered.has(key)) {
+        problems.push(
+          `${framework}: ${file} sets \`${option}\` on a matching cell but has no ` +
+            `starter-overrides.mjs row declaring its per-major shape (bucket ${bucket})`,
+        );
+        continue;
+      }
+      // Registered — but for how many of the sites in this file? Matched as an
+      // ASSIGNMENT (`option:` or `option=`) rather than by bare presence, so a
+      // mention in a comment or an import cannot inflate the count and red a
+      // regen for nothing.
+      const sites = (text.match(new RegExp(`\\b${option}\\s*[:=]`, "g")) ?? []).length;
+      const owned = declared.get(key) ?? 0;
+      if (sites > owned) {
+        problems.push(
+          `${framework}: ${file} has ${sites} \`${option}\` sites but the registry declares ` +
+            `${owned} (bucket ${bucket}). A site with no row of its own is checked by nothing — ` +
+            `add a row per site, each anchored on its own column`,
+        );
+      }
     }
   }
 

@@ -429,13 +429,20 @@ test("starterOverrideIds reports what a bucket applies", () => {
   assert.deepEqual(starterOverrideIds("react", "18"), []);
 });
 
-test("every registry row targets a distinct (file, option) site", () => {
+test("every registry row targets a distinct site", () => {
+  // Keyed on the PATTERN, not on (file, option): example1 owns four
+  // `numericFormat` sites in one file, each anchored on its own `data:` key, so
+  // (file, option) is legitimately shared. Two rows sharing a pattern would
+  // fight over the same line, and whichever ran second would win silently.
   const seen = new Set();
   for (const row of OPTION_OVERRIDES) {
-    const key = `${row.framework} ${row.file} ${row.option}`;
+    const key = `${row.framework} ${row.file} ${row.pattern.source}`;
     assert.equal(seen.has(key), false, `duplicate row for ${key}`);
     seen.add(key);
   }
+  // Ids stay unique too — they are what the manifest records.
+  const ids = [...OPTION_OVERRIDES, ...SOURCE_NORMALIZATIONS].map((row) => row.id);
+  assert.equal(new Set(ids).size, ids.length);
 });
 
 // DEV-2563. Both registries and the lint read source TEXT, so a starter that
@@ -482,4 +489,242 @@ test("the emitted angular accessor is byte-identical whatever the source ref", (
     }
   }
   assert.equal(emitted.size, 1, [...emitted].join("\n---\n"));
+});
+
+// DEV-2734. `numericFormat` is the second option class to split per major, and
+// it splits one major EARLIER than the date options: numbro was removed in 18,
+// but Intl.NumberFormat support landed in 17.0.0 (handsontable#11997), so 17
+// accepts both shapes. The rows therefore carry `intlSince: 17` while the
+// date rows keep the default 18 — the two thresholds have to coexist in one
+// registry, and in one file.
+
+const example1Starter = ({ numeric = "numbro", quantityFormat = false } = {}) => ({
+  "/index.ts": [
+    "const data = [",
+    '  { cost: 350000, itemQuality: 87, valueStock: 700000, quantity: 2, date: "2020-10-11" },',
+    "];",
+    "",
+    "const settings = {",
+    "  columns: [",
+    "    {",
+    '      data: "cost",',
+    '      type: "numeric",',
+    numeric === "numbro"
+      ? '      numericFormat: { pattern: "$0 0" },'
+      : '      numericFormat: { style: "currency", currency: "USD", maximumFractionDigits: 0 },',
+    '      className: "htRight",',
+    "    },",
+    "    {",
+    '      data: "itemQuality",',
+    '      type: "numeric",',
+    numeric === "numbro"
+      ? '      numericFormat: { pattern: "0%" },'
+      : '      numericFormat: { style: "unit", unit: "percent" },',
+    '      className: "htRight",',
+    "    },",
+    "    {",
+    '      data: "quantity",',
+    '      type: "numeric",',
+    ...(quantityFormat ? ['      numericFormat: { useGrouping: true },'] : []),
+    '      className: "htRight",',
+    "    },",
+    "    {",
+    '      data: "valueStock",',
+    '      type: "numeric",',
+    numeric === "numbro"
+      ? '      numericFormat: { pattern: "$0 0" },'
+      : '      numericFormat: { style: "currency", currency: "USD", maximumFractionDigits: 0 },',
+    '      className: "htRight",',
+    "    },",
+    "    {",
+    '      data: "date",',
+    '      type: "date",',
+    '      dateFormat: "YYYY-MM-DD",',
+    "    },",
+    "  ],",
+    "};",
+  ].join("\n"),
+  "/package.json": '{\n  "name": "example1"\n}\n',
+});
+
+/** Buckets on the numbro side of `numericFormat`'s 17.0.0 threshold. */
+const NUMBRO_BUCKETS = ["15", "16"];
+/** Buckets on the Intl side of it — note 17, which is legacy for dateFormat. */
+const INTL_NUMBER_BUCKETS = ["17", "18", "next"];
+
+test("numericFormat splits at 17 while dateFormat in the same file still splits at 18", () => {
+  // The whole reason `intlSince` exists. Bucket 17 must come out of a single
+  // pass with an Intl numericFormat AND a moment dateFormat string.
+  const { files } = applyStarterOverrides("example1", example1Starter(), { bucket: "17" });
+  assert.match(files["/index.ts"], /numericFormat: \{ style: "currency", currency: "USD", maximumFractionDigits: 0 \},/);
+  assert.match(files["/index.ts"], /dateFormat: "YYYY-MM-DD",/);
+  assert.doesNotMatch(files["/index.ts"], /pattern:/);
+});
+
+test("the numeric rows set the bucket-correct literal whatever the source says", () => {
+  // Set semantics: bucket 18 sources from prod-examples/18 (numbro pattern)
+  // while next sources from master (Intl), so neither direction may be assumed.
+  for (const numeric of ["numbro", "intl"]) {
+    for (const bucket of NUMBRO_BUCKETS) {
+      const { files } = applyStarterOverrides("example1", example1Starter({ numeric }), { bucket });
+      const source = files["/index.ts"];
+      assert.equal(source.match(/numericFormat: \{ pattern: "\$0,0" \},/g).length, 2, `${numeric} @ ${bucket}`);
+      assert.match(source, /numericFormat: \{ pattern: "0" \},/, `${numeric} @ ${bucket}`);
+      assert.doesNotMatch(source, /style:/, `${numeric} @ ${bucket}`);
+    }
+    for (const bucket of INTL_NUMBER_BUCKETS) {
+      const { files } = applyStarterOverrides("example1", example1Starter({ numeric }), { bucket });
+      const source = files["/index.ts"];
+      assert.equal(
+        source.match(/numericFormat: \{ style: "currency", currency: "USD", maximumFractionDigits: 0 \},/g).length,
+        2,
+        `${numeric} @ ${bucket}`,
+      );
+      assert.match(source, /numericFormat: \{ style: "unit", unit: "percent" \},/, `${numeric} @ ${bucket}`);
+      assert.doesNotMatch(source, /pattern:/, `${numeric} @ ${bucket}`);
+    }
+  }
+});
+
+test("a currency literal containing $ is emitted verbatim, not read as a capture reference", () => {
+  // `"$0,0"` is the first registry literal to carry a `$`. With a STRING
+  // replacement, `String.replace` would reinterpret `$'`/`$&`/`$1` sequences —
+  // and a future numbro pattern like `$'0,0'` would silently emit the text
+  // FOLLOWING the match. The replacement is a function so no such expansion
+  // can happen.
+  const { files } = applyStarterOverrides("example1", example1Starter(), { bucket: "16" });
+  assert.match(files["/index.ts"], /numericFormat: \{ pattern: "\$0,0" \},/);
+});
+
+test("the quantity row emits its option whether or not the source carries the line", () => {
+  // No branch has this line today, so the row has to INSERT it; master will
+  // carry it after this change, so the row must also be a no-op there. Both
+  // sources must converge on the same bytes.
+  const emitted = new Set();
+  for (const quantityFormat of [false, true]) {
+    for (const bucket of [...NUMBRO_BUCKETS, ...INTL_NUMBER_BUCKETS]) {
+      const { files } = applyStarterOverrides("example1", example1Starter({ quantityFormat }), {
+        bucket,
+      });
+      const block = files["/index.ts"].match(/data: "quantity",\n[\s\S]*?\n {4}\},/)[0];
+      assert.match(block, /numericFormat:/, `${quantityFormat} @ ${bucket}`);
+      emitted.add(`${bucket}\n${block}`);
+    }
+  }
+  // Two source shapes x six buckets, but only one emitted block per bucket.
+  assert.equal(emitted.size, [...NUMBRO_BUCKETS, ...INTL_NUMBER_BUCKETS].length, [...emitted].join("\n---\n"));
+});
+
+test("an inserted multi-line literal is indented to its site", () => {
+  const { files } = applyStarterOverrides("example1", example1Starter(), { bucket: "18" });
+  assert.match(files["/index.ts"], /\n {6}type: "numeric",\n {6}numericFormat: \{ useGrouping: true \},/);
+});
+
+test("applyStarterOverrides is idempotent for the numeric rows", () => {
+  for (const bucket of [...NUMBRO_BUCKETS, ...INTL_NUMBER_BUCKETS]) {
+    const once = applyStarterOverrides("example1", example1Starter(), { bucket });
+    const twice = applyStarterOverrides("example1", once.files, { bucket });
+    assert.deepEqual(twice.files, once.files, bucket);
+    assert.deepEqual(twice.applied, [], bucket);
+  }
+});
+
+test("example1's overlay output satisfies its own lint at every bucket", () => {
+  for (const numeric of ["numbro", "intl"]) {
+    for (const bucket of [...NUMBRO_BUCKETS, ...INTL_NUMBER_BUCKETS]) {
+      const { files } = applyStarterOverrides("example1", example1Starter({ numeric }), { bucket });
+      assert.deepEqual(lintStarterOptionShapes("example1", files, { bucket }), [], `${numeric} @ ${bucket}`);
+    }
+  }
+});
+
+test("a numbro numericFormat is a problem from 17 up, an Intl one below it", () => {
+  for (const bucket of INTL_NUMBER_BUCKETS) {
+    const problems = lintStarterOptionShapes("example1", example1Starter(), { bucket });
+    assert.ok(problems.length > 0, bucket);
+    assert.match(problems.join("\n"), /17\+ needs the Intl object/, bucket);
+  }
+  for (const bucket of NUMBRO_BUCKETS) {
+    const problems = lintStarterOptionShapes("example1", example1Starter({ numeric: "intl" }), {
+      bucket,
+    });
+    assert.ok(problems.length > 0, bucket);
+    assert.match(problems.join("\n"), /15\/16 need the numbro pattern object/, bucket);
+  }
+});
+
+test("a fifth numeric column is caught even though four are registered", () => {
+  // The granularity trap the numeric rows introduced. Coverage used to be keyed
+  // by (file, option), which was equivalent while every registered file had
+  // exactly ONE site; example1 has four, so a new column would have inherited
+  // their coverage — invisible to rule 1 (no row checks it) AND to rule 2
+  // (already "covered"), and shipping at every bucket.
+  const rogue = applyStarterOverrides("example1", example1Starter(), { bucket: "18" }).files;
+  rogue["/index.ts"] = rogue["/index.ts"].replace(
+    '      data: "cost",',
+    [
+      '      data: "rogue",',
+      '      type: "numeric",',
+      '      numericFormat: { pattern: "unvetted" },',
+      "    },",
+      "    {",
+      '      data: "cost",',
+    ].join("\n"),
+  );
+  const problems = lintStarterOptionShapes("example1", rogue, { bucket: "18" });
+  assert.equal(problems.length, 1, JSON.stringify(problems));
+  assert.match(problems[0], /has 5 `numericFormat` sites but the registry declares 4/);
+});
+
+test("a mention of an option in a comment does not inflate the site count", () => {
+  // The count matches an ASSIGNMENT, not bare presence: a false positive here
+  // reds a bucket regen for nothing, and the fix would look like weakening the
+  // lint.
+  const files = applyStarterOverrides("example1", example1Starter(), { bucket: "18" }).files;
+  files["/index.ts"] = `// numericFormat is documented at handsontable.com\n${files["/index.ts"]}`;
+  assert.deepEqual(lintStarterOptionShapes("example1", files, { bucket: "18" }), []);
+});
+
+test("an unregistered starter with a numeric column fails registry completeness", () => {
+  const files = {
+    "/src/Grid.vue": "columns: [{ type: 'numeric', numericFormat: { pattern: '0,0' } }]\n",
+  };
+  const problems = lintStarterOptionShapes("vue", files, { bucket: "18" });
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /numericFormat/);
+  assert.match(problems[0], /no starter-overrides\.mjs row declaring its per-major shape/);
+});
+
+test("numericFormat with no numeric cell type is not flagged", () => {
+  // A helper module that builds an option object it never attaches to a column.
+  const files = { "/src/format.ts": "export const numericFormat = { pattern: '0,0' };\n" };
+  for (const bucket of [...NUMBRO_BUCKETS, ...INTL_NUMBER_BUCKETS]) {
+    assert.deepEqual(lintStarterOptionShapes("vue", files, { bucket }), [], bucket);
+  }
+});
+
+test("a date column does not make numericFormat load-bearing, or the reverse", () => {
+  // The completeness gate is per option, not per file: mixing the two markers
+  // in one file must not make either option demand a row it does not need.
+  const dateOnly = { "/src/Grid.vue": "columns: [{ type: 'date' }]\nconst numericFormat = {};\n" };
+  assert.deepEqual(lintStarterOptionShapes("vue", dateOnly, { bucket: "18" }), []);
+
+  const numericOnly = { "/src/Grid.vue": "columns: [{ type: 'numeric' }]\nconst dateFormat = {};\n" };
+  assert.deepEqual(lintStarterOptionShapes("vue", numericOnly, { bucket: "18" }), []);
+});
+
+test("starterOverrideIds reports example1's numeric rows at every bucket", () => {
+  for (const bucket of [...NUMBRO_BUCKETS, ...INTL_NUMBER_BUCKETS]) {
+    assert.deepEqual(
+      starterOverrideIds("example1", bucket),
+      [
+        "example1:dateFormat",
+        "example1:cost",
+        "example1:itemQuality",
+        "example1:quantity",
+        "example1:valueStock",
+      ],
+      bucket,
+    );
+  }
 });
