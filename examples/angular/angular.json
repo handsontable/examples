@@ -30,11 +30,7 @@
               "src/styles.css"
             ],
             "scripts": [],
-            "allowedCommonJsDependencies": [
-              "core-js",
-              "@handsontable/pikaday",
-              "numbro"
-            ]
+            "allowedCommonJsDependencies": []
           },
           "configurations": {
             "production": {
