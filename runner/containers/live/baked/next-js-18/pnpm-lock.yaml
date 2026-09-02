@@ -9,14 +9,14 @@ importers:
   .:
     dependencies:
       '@handsontable/react-wrapper':
-        specifier: 18.0.0
-        version: 18.0.0(handsontable@18.0.0)
+        specifier: 18.1.0
+        version: 18.1.0(handsontable@18.1.0)
       '@tailwindcss/postcss':
         specifier: ^4.3.2
         version: 4.3.2
       handsontable:
-        specifier: 18.0.0
-        version: 18.0.0
+        specifier: 18.1.0
+        version: 18.1.0
       next:
         specifier: 16.2.10
         version: 16.2.10(@babel/core@7.29.7)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -173,8 +173,8 @@ packages:
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@handsontable/react-wrapper@18.0.0':
-    resolution: {integrity: sha512-Cy+uFLFB04WJ3YtifqAm0+4Ya65hjNS4as15bT/YDnhqxIV/LW/73zDLJ2YBC2sJ4X0sx2FL/UbTWHJA+Co/eg==}
+  '@handsontable/react-wrapper@18.1.0':
+    resolution: {integrity: sha512-yCwjgroeP9vYE76ZjjtM/I2fHb6m0L1jYbWUHnbx7jP4PgBBI65DynaH1ou0Mm+bPojrJWcRU4zM2B4M7gOeFQ==}
     peerDependencies:
       handsontable: ^18.0.0
 
@@ -1181,8 +1181,8 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  handsontable@18.0.0:
-    resolution: {integrity: sha512-U4H6gDrwGTfjahSyoGHhFHZvOZWB7ReQ3iBvJUIcZPdqdppdZ+FSYNovw+3MH1guJfGgRIhoLYnbSm8Gd6Ft8w==}
+  handsontable@18.1.0:
+    resolution: {integrity: sha512-23S/Jny67NRevaZgTXSAonhFW28du3J6DJm/TDN35Gj5hpztUxlRMEG0SugEEf0lQxdDhLRmz81Ikkt7xvuNRA==}
 
   has-bigints@1.1.0:
     resolution: {integrity: sha512-R3pbpkcIqv2Pm3dUwgjclDRVmWpTJW2DcMzcIhEXEx1oh/CEMObMm3KLmRJOdvhM7o4uQBnwr8pzRK2sJWIqfg==}
@@ -2074,9 +2074,9 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@handsontable/react-wrapper@18.0.0(handsontable@18.0.0)':
+  '@handsontable/react-wrapper@18.1.0(handsontable@18.1.0)':
     dependencies:
-      handsontable: 18.0.0
+      handsontable: 18.1.0
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -3144,7 +3144,7 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  handsontable@18.0.0: {}
+  handsontable@18.1.0: {}
 
   has-bigints@1.1.0: {}
 

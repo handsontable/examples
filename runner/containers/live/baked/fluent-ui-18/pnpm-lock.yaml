@@ -12,11 +12,11 @@ importers:
         specifier: ^9.74.4
         version: 9.74.4(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(scheduler@0.27.0)
       '@handsontable/react-wrapper':
-        specifier: 18.0.0
-        version: 18.0.0(handsontable@18.0.0)
+        specifier: 18.1.0
+        version: 18.1.0(handsontable@18.1.0)
       handsontable:
-        specifier: 18.0.0
-        version: 18.0.0
+        specifier: 18.1.0
+        version: 18.1.0
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -603,8 +603,8 @@ packages:
   '@griffel/style-types@1.4.2':
     resolution: {integrity: sha512-MsSghfpyxR2MpTrYdcCozISsSLkmFjNw94wNPi4bDBRLW8W43718W/ZjmUdVkoM0KXMtJPYuEkx8Mzibqb03qA==}
 
-  '@handsontable/react-wrapper@18.0.0':
-    resolution: {integrity: sha512-Cy+uFLFB04WJ3YtifqAm0+4Ya65hjNS4as15bT/YDnhqxIV/LW/73zDLJ2YBC2sJ4X0sx2FL/UbTWHJA+Co/eg==}
+  '@handsontable/react-wrapper@18.1.0':
+    resolution: {integrity: sha512-yCwjgroeP9vYE76ZjjtM/I2fHb6m0L1jYbWUHnbx7jP4PgBBI65DynaH1ou0Mm+bPojrJWcRU4zM2B4M7gOeFQ==}
     peerDependencies:
       handsontable: ^18.0.0
 
@@ -896,8 +896,8 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
-  handsontable@18.0.0:
-    resolution: {integrity: sha512-U4H6gDrwGTfjahSyoGHhFHZvOZWB7ReQ3iBvJUIcZPdqdppdZ+FSYNovw+3MH1guJfGgRIhoLYnbSm8Gd6Ft8w==}
+  handsontable@18.1.0:
+    resolution: {integrity: sha512-23S/Jny67NRevaZgTXSAonhFW28du3J6DJm/TDN35Gj5hpztUxlRMEG0SugEEf0lQxdDhLRmz81Ikkt7xvuNRA==}
 
   keyborg@2.14.1:
     resolution: {integrity: sha512-/WmmVBa6Me3hIKAOIyIq1sql+6oydQZzGMBDLNfOcJ8710byMsq3KSLS8GQhBJHOMtvnXnUBrDAIbABcZVipcg==}
@@ -2290,9 +2290,9 @@ snapshots:
     dependencies:
       csstype: 3.2.3
 
-  '@handsontable/react-wrapper@18.0.0(handsontable@18.0.0)':
+  '@handsontable/react-wrapper@18.1.0(handsontable@18.1.0)':
     dependencies:
-      handsontable: 18.0.0
+      handsontable: 18.1.0
 
   '@napi-rs/wasm-runtime@1.1.6(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)':
     dependencies:
@@ -2457,7 +2457,7 @@ snapshots:
   fsevents@2.3.3:
     optional: true
 
-  handsontable@18.0.0: {}
+  handsontable@18.1.0: {}
 
   keyborg@2.14.1: {}
 

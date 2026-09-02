@@ -23,8 +23,8 @@
   },
   "dependencies": {
     "@fluentui/react-components": "^9.74.4",
-    "@handsontable/react-wrapper": "18.0.0",
-    "handsontable": "18.0.0",
+    "@handsontable/react-wrapper": "18.1.0",
+    "handsontable": "18.1.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
