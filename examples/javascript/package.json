@@ -19,7 +19,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@handsontable/pikaday": "latest",
     "handsontable": "latest"
   },
   "devDependencies": {
