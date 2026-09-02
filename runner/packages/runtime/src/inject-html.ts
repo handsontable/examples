@@ -64,8 +64,12 @@ export function injectedScriptTag(source: string): string {
  * the module-entry injection, which is why `withInjections` does both.)
  *
  * Only documents with **no `<head>`** ever reached that branch, which is why the
- * starters never showed it and a `create_demo` demo did: its `index.html` is
- * `<!doctype html><html><body>…`.
+ * starters never showed it and a `create_demo` demo did: no `<head>`, and the body's
+ * own content starting on the line *after* `<body>` — the shape both fixtures pin
+ * (`pipeline/inject-html.test.mjs`, `e2e/preview-injection-leak.spec.ts`), and the
+ * only one the placement matters for. A document that is a single line throughout
+ * leaves the bundler's capture group empty, so it assigns the whole document and the
+ * tag survives as a real `<script>` element either way.
  *
  * Before `<body>` is also right for the browser. A classic inline script there is
  * parsed in the "before head" insertion mode, so it lands in the implicit `<head>`

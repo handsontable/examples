@@ -158,7 +158,6 @@ test("the head injection adds no whitespace of its own", () => {
   // reverted and ship a green suite.
   const out = injectReporterIntoHtml(HTML);
   assert.match(out, /<head[^>]*><script>/);
-  assert.doesNotMatch(injectReporterIntoHtml("<body><div id=root></div></body>"), /<body[^>]*>\s/);
   assert.ok(injectReporterIntoHtml("<div id=root></div>").endsWith("<div id=root></div>"));
 });
 
@@ -173,6 +172,11 @@ test("falls back to just before body, then to a prepend, when there is no head",
   const bodyOnly = injectReporterIntoHtml("<body><div id=root></div></body>");
   assert.ok(bodyOnly.endsWith("<body><div id=root></div></body>"), "the demo's body is left whole");
   assert.ok(bodyOnly.startsWith("<script>"), "and the reporter is what precedes it");
+  // The no-head half of the DEV-2580 guard, which the head half above cannot cover:
+  // whitespace between the tag and `<body>` is a text node in the implicit head, as
+  // fatal as the script element itself. Asserted here rather than after `<body>`,
+  // where nothing is inserted any more and the check could no longer fail.
+  assert.doesNotMatch(bodyOnly, /\s<body/);
   assert.ok(bodyOnly.includes(MONITOR_MESSAGE_TYPE));
 
   const fragment = injectReporterIntoHtml("<div id=root></div>");
