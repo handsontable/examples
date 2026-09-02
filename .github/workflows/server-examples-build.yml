@@ -62,8 +62,14 @@ jobs:
                        -not -path '*/node_modules/*' -exec dirname {} \; \
                      | sort \
                      | while read -r d; do
-                         node -e "process.exit(require('./$d/package.json').scripts?.build ? 0 : 1)" \
-                           && echo "$d"
+                         # `if`, not `&&`: Actions runs `bash -e -o pipefail`, so the
+                         # loop's exit status is the last iteration's. With `&&`, a
+                         # project that sorts LAST and is legitimately skipped would
+                         # fail this whole job. Today the last entry happens to have a
+                         # build script; that is luck, not a guarantee.
+                         if node -e "process.exit(require('./$d/package.json').scripts?.build ? 0 : 1)"; then
+                           echo "$d"
+                         fi
                        done \
                      | jq -R -s -c 'split("\n") | map(select(length > 0))')
           echo "projects=$projects" >> "$GITHUB_OUTPUT"
