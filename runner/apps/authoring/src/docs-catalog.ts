@@ -35,8 +35,15 @@ export function isDocsResourceMissing(error: unknown): boolean {
 
 /** Fetch JSON from the docs asset host, telling "the host has no such file"
  *  apart from "the request failed". `describe` is carried into the message, so
- *  it must name the bucket — that is what makes Sentry group per bucket (one
- *  bucket failing is user traffic, every bucket at once is a broken deploy). */
+ *  it must name the bucket.
+ *
+ *  Sentry DEMOS-1C: this fetch is only ever reached for a bucket the static
+ *  `docsBuckets` index (catalog.ts) claims exists — App.tsx's `planDocsBucket`
+ *  short-circuits everything else before it can be attempted. Most selectable
+ *  versions have no imported bucket by design (ADR-0021 #2/#3: 22 Sentry
+ *  events, 10 of ~14 dropdown versions, zero of them a broken deploy), so a
+ *  miss here is now never ordinary user traffic — it means the index and the
+ *  committed docs-examples directories disagree, i.e. a broken deploy. */
 async function fetchDocsJson<T>(url: string, describe: string): Promise<T> {
   const res = await fetch(url);
   // The dev server and any correctly configured host answer 404 here; in

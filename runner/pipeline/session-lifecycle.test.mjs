@@ -29,6 +29,8 @@ const CAPACITY =
 /** The 2026-08-07 event that Sentry grouped alongside it (same culprit). */
 const UNREACHABLE = "The container service is unreachable, try again later";
 const NOT_RUNNING = "The container is not running, consider calling start()";
+/** The DEMOS-32 event message, verbatim. Same release as a DEMOS-33 warning. */
+const NO_INSTANCE = "There is no container instance that can be provided to this Durable Object, try again later";
 
 // ---- the tombstone state machine ------------------------------------------
 
@@ -79,16 +81,21 @@ test("the marker outlives the container it guards", () => {
 
 // ---- the teardown failure classifier --------------------------------------
 
-test("the three platform messages are expected teardown failures", () => {
+test("the four platform messages are expected teardown failures", () => {
   assert.equal(isExpectedTeardownFailure(new Error(CAPACITY)), true);
   assert.equal(isExpectedTeardownFailure(new Error(UNREACHABLE)), true);
   assert.equal(isExpectedTeardownFailure(new Error(NOT_RUNNING)), true);
+  assert.equal(isExpectedTeardownFailure(new Error(NO_INSTANCE)), true);
 });
 
 test("it sees through a cause chain", () => {
   const wrapped = new Error("destroy failed", { cause: new Error(CAPACITY) });
   assert.equal(isExpectedTeardownFailure(wrapped), true);
   assert.equal(isExpectedTeardownFailure(new Error("outer", { cause: wrapped })), true);
+  assert.equal(
+    isExpectedTeardownFailure(new Error("destroy failed", { cause: new Error(NO_INSTANCE) })),
+    true,
+  );
 });
 
 test("a self-referencing cause chain terminates", () => {
@@ -107,11 +114,21 @@ test("anything we have not diagnosed keeps today's 500 and today's report", () =
 });
 
 test("a reworded capacity message degrades to today's behaviour, not to silence", () => {
-  // The documented degrade direction, same as `isPortNotListening`: these
+  // The documented degrade direction, same as `isPreviewPortUnreachable`: these
   // strings are raised by the platform, not by any package here, so a match is
   // the only signal available. If Cloudflare rewords one, the predicate stops
   // matching and we go back to reporting a 500 — noisy, never silent.
   assert.equal(isExpectedTeardownFailure(new Error("Too many container instances are running")), false);
+  // Same boundary for the fourth wording: the pattern requires the singular
+  // "instance that can be provided" contiguously, so a plural rewording of the
+  // DO message is the closest realistic miss, not a straw man. Verified with
+  // node: /no container instance that can be provided/i does not match it.
+  assert.equal(
+    isExpectedTeardownFailure(
+      new Error("There are no container instances that can be provided to this Durable Object"),
+    ),
+    false,
+  );
 });
 
 // ---- the create-side capacity classifier ----------------------------------
@@ -125,6 +142,11 @@ test("only the capacity message means 'at capacity' on create", () => {
   assert.equal(isAtCapacityFailure(new Error(UNREACHABLE)), false);
   assert.equal(isAtCapacityFailure(new Error(NOT_RUNNING)), false);
   assert.equal(isAtCapacityFailure(new Error("boom")), false);
+  // Teardown-only widening: no create-path event exists for this wording (a
+  // Sentry search over 90 days returns exactly one issue, DEMOS-32, culprit
+  // teardownLiveSession). Passes both before and after by design — this is a
+  // regression pin for the asymmetry, not the discriminator for this change.
+  assert.equal(isAtCapacityFailure(new Error(NO_INSTANCE)), false);
 });
 
 test("the at-capacity sentence never trips the App.tsx connectivity heuristic", () => {

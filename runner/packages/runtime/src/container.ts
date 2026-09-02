@@ -17,8 +17,8 @@ import type {
 } from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
-import { MONITOR_EVENT_CEILING, truncateMessage } from "./monitor.js";
-import { failureDetail, STDERR_MARKERS } from "./failure-log.js";
+import { MONITOR_EVENT_CEILING, normalizeMonitorMessage, truncateMessage } from "./monitor.js";
+import { failureDetail, RUNNER_PROGRESS_MARKER, STDERR_MARKERS } from "./failure-log.js";
 
 /**
  * Split a failed boot log into the one line worth titling an issue with (`cause`) and
@@ -80,6 +80,24 @@ export class ContainerBootFailure extends Error {
 export interface SessionStartDiagnostics {
   readonly elapsedMs: number;
   readonly ray: string | null;
+  /** `res.type` verbatim — `"basic"` same-origin, `"cors"` cross-origin. What tells
+   *  "no header" apart from "no visible header" below. */
+  readonly responseType: string;
+  /** True when `responseType` is `"basic"` or `"default"`: every header on the
+   *  response is readable, so a header's ABSENCE is a fact about the response
+   *  rather than an artefact of the CORS filter hiding it from us. Stored here
+   *  rather than re-derived at each call site so the copy tier below and the
+   *  Sentry tag in sessionDiagnostics.ts share one `basic | default` rule instead
+   *  of drifting apart. */
+  readonly headersReadable: boolean;
+  /** Readable header names, lowercased, sorted, capped at HEADER_NAMES_MAX. */
+  readonly headerNames: readonly string[];
+  /** The `Server` header's VALUE, truncated. Unbounded, so extra-only, never a
+   *  tag — see `sessionResponseServer` in App.tsx. */
+  readonly server: string | null;
+  /** How many header names there were before the cap, so a truncated list reads
+   *  as truncated rather than as a response with exactly HEADER_NAMES_MAX headers. */
+  readonly headerCount: number;
 }
 
 /** POST /api/session failed. `status` distinguishes the server's 410
@@ -109,6 +127,19 @@ export const isBudgetRefusal = (e: unknown): e is SessionStartError =>
 /** Cap for a non-envelope failure body. Shorter than the monitor's own message bound:
  *  this text is prose for a user, not a log excerpt. */
 const FAILURE_TEXT_MAX = 200;
+
+/** Cap for the number of header NAMES carried in diagnostics. `extra` is not free —
+ *  a response can carry arbitrarily many headers, the same bounding discipline
+ *  `FAILURE_TEXT_MAX` applies to the body. */
+const HEADER_NAMES_MAX = 20;
+
+/** Cap for the `Server` header's VALUE. Unbounded input, bounded output — the same
+ *  reasoning as `FAILURE_TEXT_MAX`. */
+const SERVER_HEADER_MAX = 64;
+
+/** Response types on which every header is readable, so a missing header is a fact
+ *  about the response rather than about the CORS filter (DEMOS-9). */
+const READABLE_TYPES = new Set(["basic", "default"]);
 
 /** Read a `{ error, message }` body if the server sent one, else the raw text.
  *
@@ -164,26 +195,62 @@ const TIMEOUT_STATUSES = new Set([504, 522, 524]);
 const EDGE_BLOCK_STATUS = 403;
 
 /**
- * What to tell the user when POST /api/session comes back not-ok, in six tiers.
+ * 504 whose response we could not attribute to our own edge (Sentry DEMOS-9, the
+ * facet analysis that followed DEV-2559). 371 post-instrumentation events, ALL
+ * measured 35-82ms — two orders of magnitude under Cloudflare's own ~100s ceiling —
+ * and ALL missing `cf-ray`, against 11/11 rays on every other status (403/500) from
+ * the identical code path in the identical environment. "Took too long" is false
+ * against that timing; this tier replaces it with what the evidence actually
+ * supports: the response carries no sign of having come from our servers.
  *
- * ⚠ The wording of the three platform tiers — gateway-timeout, service-unavailable
- * and edge-block — is a contract with `describeRuntimeError` in
+ * Gated on `edge.headersReadable` as well as `!edge.ray`, and that conjunct is not
+ * decorative: local dev falls back to a CROSS-ORIGIN API (`App.tsx`'s
+ * `API_BASE` defaults to `:8787`), where `cors()` in workers/api exposes no
+ * headers, so a null ray there proves nothing about who answered — it is an
+ * artefact of the CORS filter, not evidence. Without `headersReadable` this tier
+ * would fire on every developer's machine. Production is same-origin
+ * (`.env.production` pins `VITE_API_BASE` to the app's own host), so `res.type` is
+ * `"basic"` and every header is readable there.
+ *
+ * 522 and 524 stay on the old timeout tier: they have zero events in 90 days on
+ * this route (`context:tier2-session-start` returns only 403/500/503/504), so
+ * there is no case behind widening this beyond 504 — the same doctrine
+ * `sessionStartMessage`'s 502/503 comments already apply.
+ */
+const UNREACHED_STATUS = 504;
+
+/**
+ * What to tell the user when POST /api/session comes back not-ok, in seven tiers.
+ *
+ * ⚠ The wording of the platform tiers — interception, gateway-timeout,
+ * service-unavailable and edge-block — is a contract with `describeRuntimeError` in
  * apps/authoring/src/App.tsx, whose container-engine heuristic matches
  * /failed to fetch|networkerror|load failed|session start failed|fetch/i and REPLACES
  * the message with the local-dev "run the API worker, it needs Docker" text. That is
  * right for a developer whose worker is down and wrong for a visitor on
  * demos.handsontable.com whose sandbox timed out — which is exactly what production
- * users got for the 82 events of Sentry DEMOS-9 (DEV-2538). So none of those three
+ * users got for the 82 events of Sentry DEMOS-9 (DEV-2538). So none of those four
  * sentences may contain any of those words, "fetch" above all. The stake is highest on
  * the edge-block one (DEV-2631): a blocked rule hits every visitor of an affected
  * framework at once, and "install Docker" is the one answer that guarantees none of
  * them reports the real cause. The connectivity tiers below them keep saying "session
  * start failed" on purpose, so they keep tripping the heuristic.
  * `pipeline/session-start-failure.test.mjs` is what holds both halves in place.
+ *
+ * `edge` defaults to `{ ray: null, headersReadable: false }` — "we could not
+ * observe" — rather than being required, so a future caller with no `Response` in
+ * hand (the 410 poll/write sites at the bottom of this file, which build their
+ * message from `failure.message` directly and never route through here today)
+ * falls through to the existing timeout tier instead of rendering the
+ * interception copy for what might be an ordinary status-poll failure. Unlike the
+ * `?.` on the `cf-ray` read that the comment in `mount()` forbids, this default
+ * cannot hollow out the tier in practice: both Tier-1 and Tier-2 drive the create
+ * path below, which always passes `edge` explicitly.
  */
 function sessionStartMessage(
   status: number,
   failure: { code?: string; message: string; envelope: boolean },
+  edge: { ray: string | null; headersReadable: boolean } = { ray: null, headersReadable: false },
 ): string {
   // A guardrail refusal already reads as a sentence aimed at the user; wrapping it in
   // "session start failed (503): …" would bury it (and trip the heuristic above).
@@ -195,6 +262,16 @@ function sessionStartMessage(
   // below on purpose — this one HAS an envelope, so it would otherwise fall
   // through to the generic wrapper at the bottom.
   if (failure.code === "at_capacity") return failure.message;
+  // The interception tier (Sentry DEMOS-9, UNREACHED_STATUS above). Placed before
+  // TIMEOUT_STATUSES because 504 is a member of that set and this more specific gate
+  // must win. `edge.headersReadable` is required, not just `!edge.ray`: without it a
+  // cross-origin dev setup (App.tsx's `:8787` fallback) would read a CORS-hidden ray
+  // as evidence of interception, on no evidence at all. Nothing here claims WHAT
+  // answered — only that this response carries no sign of having come from our
+  // servers, which is what the 371-of-371 ray-less measurement actually supports.
+  if (!failure.envelope && status === UNREACHED_STATUS && edge.headersReadable && !edge.ray) {
+    return `The sandbox service could not be reached (${status}). Nothing is wrong with the code — this response carries no sign of having come from our servers, so something between this browser and our service may have answered instead. Trying a different network or device is the quickest way to tell.`;
+  }
   // Nothing answered in time, and no envelope means the silence came from above our
   // Worker. Nothing is wrong with the demo or with the visitor's connection, so say so
   // — "Restart preview" is the error card's own button (packages/editor-shell/src/
@@ -299,9 +376,19 @@ export class ContainerRuntime implements DemoRuntime {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly progressCbs = new Set<(log: string) => void>();
   private readonly stderrCbs = new Set<(line: string) => void>();
-  /** Dev-server stderr lines already relayed, so a message the server repeats every
-   *  keystroke is filed once. Capped by `MONITOR_EVENT_CEILING` below; the set only
-   *  ever holds what fit under it. */
+  /** Dev-server stderr lines already relayed, keyed on `normalizeMonitorMessage` —
+   *  the same fingerprint `sentry.ts` groups the Sentry issue by — so a message the
+   *  server repeats every keystroke, or with only its clock changed (a build
+   *  envelope's timestamp), is filed once. A coarser key than the raw line, on
+   *  purpose: the parent already fingerprints on the normalized message, so two raw
+   *  lines that normalize identically were always going to land in one Sentry
+   *  issue — relaying both just spent a `MONITOR_EVENT_CEILING` slot on a second
+   *  sample of a fault already reported. The honest trade: only the first variant
+   *  of a class now ever leaves the page, so no issue is lost, but sample diversity
+   *  *within* an issue narrows — `Cannot find module 'foo'` and `'bar'` used to
+   *  both reach Sentry as two events under one fingerprint; now only the first
+   *  does. Capped by `MONITOR_EVENT_CEILING` below; the set only ever holds what
+   *  fit under it. */
   private readonly stderrSeen = new Set<string>();
   private stderrRelayed = 0;
   private previewUrl = "";
@@ -583,14 +670,28 @@ export class ContainerRuntime implements DemoRuntime {
         // an unconditional read would break them. Not guarded with `?.` either: an
         // optional chain here would make the ray assertion in
         // pipeline/session-start-failure.test.mjs pass whether or not the header is
-        // ever read.
+        // ever read. Same discipline extends to `res.type` and `[...res.headers.keys()]`
+        // below (DEMOS-9) — the stubs get fixed to carry a real shape instead
+        // (pipeline/session-start-failure.test.mjs's `sessionStartError` helper).
         const ray = res.headers.get("cf-ray");
+        const responseType = res.type;
+        const headersReadable = READABLE_TYPES.has(responseType);
+        const names = [...res.headers.keys()].map((n) => n.toLowerCase()).sort();
+        const server = truncateMessage(res.headers.get("server") ?? "", SERVER_HEADER_MAX) || null;
         const failure = await readFailure(res);
         throw new SessionStartError(
           res.status,
-          sessionStartMessage(res.status, failure),
+          sessionStartMessage(res.status, failure, { ray, headersReadable }),
           failure.code,
-          { elapsedMs, ray },
+          {
+            elapsedMs,
+            ray,
+            responseType,
+            headersReadable,
+            headerNames: names.slice(0, HEADER_NAMES_MAX),
+            headerCount: names.length,
+            server,
+          },
         );
       }
       ({ previewUrl, port } = (await res.json()) as { previewUrl: string; port: number });
@@ -827,16 +928,32 @@ export class ContainerRuntime implements DemoRuntime {
    * same lines arrive over and over; `stderrSeen` is what makes this a report per
    * fault rather than one per minute. The ceiling is the same one the in-page
    * reporter uses, for the same reason — the kill switch is a deploy away.
+   *
+   * `stderrSeen` is keyed on `normalizeMonitorMessage(message)`, not the raw line
+   * — see the field comment. The relayed payload stays the raw, truncated line: the
+   * diagnostic reaching Sentry is still the verbatim compiler output, only the
+   * dedupe key is coarsened to match what `sentry.ts:263` fingerprints on.
    */
   private relayStderr(log: string): void {
     if (this.disposed || this.stderrCbs.size === 0) return;
     for (const raw of log.replace(/\x1b\[[0-9;]*m/g, "").split("\n")) {
       if (this.stderrRelayed >= MONITOR_EVENT_CEILING) return;
       const line = raw.trim();
-      if (!line || !STDERR_MARKERS.test(line)) continue;
+      if (!line) continue;
+      // Our own boot-script narration (`index.ts` writes `::seeding …::`,
+      // `::frozen install failed for custom metadata; retrying non-frozen::`,
+      // …) is progress, not a fault — the "retrying non-frozen" line is the
+      // DESIGNED path for an edited package.json, and it matches
+      // STDERR_MARKERS only because it contains the word "failed". Relaying
+      // it reported a recovered fallback as a defect and spent one of
+      // MONITOR_EVENT_CEILING's slots doing it (Sentry DEMOS-5C). `::error::`
+      // is exempt: the script emits it deliberately, before `exit 1`.
+      if (RUNNER_PROGRESS_MARKER.test(line)) continue;
+      if (!STDERR_MARKERS.test(line)) continue;
       const message = truncateMessage(line);
-      if (this.stderrSeen.has(message)) continue;
-      this.stderrSeen.add(message);
+      const key = normalizeMonitorMessage(message);
+      if (this.stderrSeen.has(key)) continue;
+      this.stderrSeen.add(key);
       this.stderrRelayed += 1;
       for (const cb of this.stderrCbs) cb(message);
     }

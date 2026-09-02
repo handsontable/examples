@@ -24,11 +24,11 @@ import { authenticate, authenticateService, isTokenIdentity, presentsToken, same
 import { hashToken, mintToken, normalizeTokenName } from "./token.js";
 import { createToken, listTokens, revokeToken } from "./token-store.js";
 import { MAX_TITLE, isValidationError, validateDescription, validateTitle } from "./demo-info.js";
-import { isMcpCreated, isMcpValidationError, validateMcpFiles } from "./mcp-create.js";
+import { isMcpCreated, isMcpValidationError, validateBuildToolchain, validateMcpFiles } from "./mcp-create.js";
 import { editorVersionRef, fetchVersionCatalog, resolveHandsontableVersion } from "./ht-version.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
-import { classifyPreviewBootFailure, isPortNotListening } from "./preview-boot.js";
+import { classifyPreviewBootFailure, isPreviewPortUnreachable } from "./preview-boot.js";
 import {
   AT_CAPACITY_CODE,
   atCapacityMessage,
@@ -41,7 +41,7 @@ import {
 } from "./session-lifecycle.js";
 import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
-import { BuildFailure, createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
+import { BuildFailure, buildFailureTags, createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
 import {
   budgetPausedMessage,
   countEgress,
@@ -190,9 +190,14 @@ class SandboxBaseWithSleep extends SandboxBase {
       response = await super.fetch(request);
     } catch (err) {
       // Anything we did not diagnose keeps today's status and today's report.
-      // The intercept keys on a workerd message string, so a wording change must
-      // degrade to current behaviour, never to a swallowed error.
-      if (!isPortNotListening(err) || request.headers.get(PREVIEW_PROXY_HEADER) !== "1") throw err;
+      // The intercept keys on a table of workerd message strings, so a wording
+      // change must degrade to current behaviour, never to a swallowed error.
+      // The header gate is load-bearing: "container is not running" is also
+      // raised on non-preview paths (`exec`, `startProcess`, `exposePort`
+      // against a stopped container), and only preview traffic carries this
+      // header, so session-management failures keep throwing, keep their 500,
+      // and keep their Sentry event.
+      if (!isPreviewPortUnreachable(err) || request.headers.get(PREVIEW_PROXY_HEADER) !== "1") throw err;
       return this.previewBootFailureResponse(request, err);
     }
     // Cleared on any non-throwing return, so a dev server that dies mid-session
@@ -449,7 +454,7 @@ async function teardownLiveSession(env: Env, sessionId: string): Promise<void> {
     // `context: "budget-alert"` and drops nothing, so a warning arrives.
     //
     // This matters most for `container service is unreachable`, the weakest
-    // member of `isExpectedTeardownFailure`: unlike the other two it does NOT
+    // member of `isExpectedTeardownFailure`: unlike the other three it does NOT
     // imply no slot is held, so a swallowed one can leave a container billing
     // until sleepAfter. 204 is still the right answer to a caller that
     // discards the response — but only because the failure is legible
@@ -899,6 +904,12 @@ export default Sentry.withSentry(sentryOptions, {
           // The log line below is a convenience, NOT the signal:
           // `observability.head_sampling_rate` is 0.1, so nine of ten are never
           // retained.
+          //
+          // `isAtCapacityFailure` also does NOT recognise the DO "no container
+          // instance that can be provided" wording (Sentry DEMOS-32) — that
+          // pattern is teardown-only (session-lifecycle.ts): no create-path
+          // event of it exists, and telling a visitor "at capacity" for a
+          // condition we have not seen on create would be a guess.
           if (isAtCapacityFailure(err)) {
             console.warn(
               `[session] refused ${body.framework} session ${sessionId}: container pool at capacity`,
@@ -1040,6 +1051,12 @@ export default Sentry.withSentry(sentryOptions, {
         if (isValidationError(description)) return json(description, 400);
         const files = validateMcpFiles(body.files);
         if (isMcpValidationError(files)) return json(files, 400);
+        // Before the budget gate, same reasoning as the version check just below:
+        // the build command is fixed by BUILD_CONFIG and cannot succeed without
+        // its binary, so a manifest that omits it is refused here rather than
+        // costing a container boot on a doomed install (Sentry DEMOS-31).
+        const toolchain = validateBuildToolchain(files, cfg.buildCommand);
+        if (toolchain) return json(toolchain, 400);
         // Before the budget gate: an unusable version is a 400, not a container
         // boot spent on an install that cannot succeed (DEV-2565).
         // `trustDistTag`: a tag from this path is the model's own request, not a
@@ -1181,6 +1198,10 @@ export default Sentry.withSentry(sentryOptions, {
           if (isMcpValidationError(files)) return json(files, 400);
           const cfg = BUILD_CONFIG[row.framework];
           if (!cfg) return json({ error: `unknown framework: ${row.framework}` }, 400);
+          // A rebuild boots the same container and burns the same budget as a
+          // create — see the create handler above (Sentry DEMOS-31).
+          const toolchain = validateBuildToolchain(files, cfg.buildCommand);
+          if (toolchain) return json(toolchain, 400);
           // `row.ht_version` is a candidate, not an authority: rows created before
           // DEV-2565 hold the "latest" sentinel, which no consumer can use.
           const version = await resolveHandsontableVersion(env, {
@@ -1969,7 +1990,7 @@ export default Sentry.withSentry(sentryOptions, {
       // never sees it. Report here or the error is invisible.
       if (err instanceof BuildFailure) {
         Sentry.captureException(err, {
-          tags: { context: "snapshot-build", build_phase: err.phase },
+          tags: buildFailureTags(err),
           // Without a fingerprint the cause line groups per package and per version,
           // which is the same one-defect-many-issues shape DEV-2570 exists to end,
           // only better titled. Keyed by the machine code so the group stays

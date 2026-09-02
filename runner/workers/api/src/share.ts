@@ -9,9 +9,11 @@
 import { getSandbox } from "@cloudflare/sandbox";
 import { injectSchemeIntoHtml } from "@handsontable/demo-runtime/scheme";
 import { execFailureDetail } from "@handsontable/demo-runtime/failure-log";
+import { handsontableDependencyRef } from "@handsontable/demo-runtime";
 import type { Env } from "./env.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { recordContainerUsage, SESSION_INSTANCE_TYPE } from "./budget.js";
+import { snapshotBuildCommand } from "./build-command.js";
 
 type SandboxLike = {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
@@ -133,12 +135,26 @@ export class BuildFailure extends Error {
   readonly phase: "install" | "build";
   readonly code: string;
   readonly log: string;
+  // Diagnostics only (Sentry DEMOS-31's theme-CSS event): which Handsontable
+  // build the container installed, and which framework the demo was. `null`,
+  // never `undefined`, when unknown — `buildFailureTags` relies on that
+  // falsy sentinel to omit rather than fabricate a tag.
+  readonly htRef: string | null;
+  readonly framework: string | null;
 
-  constructor(message: string, phase: "install" | "build", code: string, log = "") {
+  constructor(
+    message: string,
+    phase: "install" | "build",
+    code: string,
+    log = "",
+    context: { htRef?: string | null; framework?: string | null } = {},
+  ) {
     super(message);
     this.phase = phase;
     this.code = code;
     this.log = log;
+    this.htRef = context.htRef ?? null;
+    this.framework = context.framework ?? null;
   }
 }
 
@@ -147,13 +163,26 @@ export class BuildFailure extends Error {
 export function describeBuildFailure(
   phase: "install" | "build",
   r: { stdout?: string; stderr?: string },
+  context: { htRef?: string | null; framework?: string | null } = {},
 ): BuildFailure {
   const { cause, tail, code } = execFailureDetail(r, {
     keepLines: BUILD_LOG_LINES,
     maxTailChars: BUILD_LOG_MAX,
     fallback: "no output",
   });
-  return new BuildFailure(`${phase} failed: ${cause}`, phase, code, tail);
+  return new BuildFailure(`${phase} failed: ${cause}`, phase, code, tail, context);
+}
+
+/** Sentry tags for a snapshot build failure. A key is OMITTED when its value is
+ *  unknown — never emitted as `undefined` or the string "null", which faceting
+ *  cannot tell apart from a real value. Deliberately not part of the fingerprint
+ *  (see the `BuildFailure` branch in index.ts): version cardinality is unbounded,
+ *  and fingerprinting on it would shard the issue per build. */
+export function buildFailureTags(err: BuildFailure): Record<string, string> {
+  const tags: Record<string, string> = { context: "snapshot-build", build_phase: err.phase };
+  if (err.htRef) tags.ht_version = err.htRef;
+  if (err.framework) tags.framework = err.framework;
+  return tags;
 }
 
 function base64ToBytes(b64: string): Uint8Array {
@@ -182,6 +211,14 @@ function patchTurbopackRuntime(rel: string, contents: ArtifactContents): Artifac
   return contents.replace(/\blet ([A-Za-z_$][\w$]*)="\/_next\/"/, 'let $1="_next/"');
 }
 
+/** A failed exec. `success` is optional in the structural `SandboxLike` above (the
+ *  SDK's own `ExecResult` requires it, ours does not), so a result carrying only a
+ *  nonzero `exitCode` used to pass `success === false` and let the build run against
+ *  an empty node_modules. Both signals count. */
+function execFailed(r: { success?: boolean; exitCode?: number }): boolean {
+  return r.success === false || (typeof r.exitCode === "number" && r.exitCode !== 0);
+}
+
 /** Run the framework build in a builder container; return { relPath -> contents }. */
 export async function runBuild(
   env: Env,
@@ -193,6 +230,11 @@ export async function runBuild(
   // it against the cost ledger whether the build succeeded or threw.
   const startedAt = Date.now();
   try {
+    // Diagnostics only (Sentry DEMOS-31): computed once, from `files` — what the
+    // container actually installed — not from a threaded htVersion argument. For
+    // a PR build the dependency value is the full pkg.pr.new URL, and
+    // `handsontableDependencyRef` parses it back to the bare id.
+    const failureContext = { htRef: handsontableDependencyRef(files), framework: entry.framework };
     // Write source into /app.
     const dirs = new Set<string>();
     for (const p of Object.keys(files)) {
@@ -206,7 +248,7 @@ export async function runBuild(
     }
 
     let install = await sbx.exec(`sh -lc "cd ${CONTAINER_ROOT} && ${entry.installCommand}"`);
-    if (install.success === false) {
+    if (execFailed(install)) {
       // Authoring edits (e.g. re-pinning the Handsontable version) change
       // package.json without regenerating the lockfile, so a frozen install
       // can't succeed. The builder is ephemeral and never persists the
@@ -216,19 +258,18 @@ export async function runBuild(
         `sh -lc "cd ${CONTAINER_ROOT} && ${entry.installCommand.replace(" --frozen-lockfile", "")} --no-frozen-lockfile"`,
       );
     }
-    if (install.success === false) throw describeBuildFailure("install", install);
+    if (execFailed(install)) throw describeBuildFailure("install", install, failureContext);
 
     // Snapshots only need the bundle, not type-checking. Strip leading
     // type-check steps (tsc / vue-tsc) that often fail in ephemeral containers
     // and don't affect the built output.
-    const buildCommand = entry.buildCommand
-      .replace(/^\s*(tsc(\s+-b)?|vue-tsc[^&]*)\s*&&\s*/i, "");
+    const buildCommand = snapshotBuildCommand(entry.buildCommand);
     // Prepend node_modules/.bin so the raw build command resolves local binaries
     // (vite, ng, next, ...) without relying on an npm script.
     const build = await sbx.exec(
       `sh -lc "cd ${CONTAINER_ROOT} && export PATH=${CONTAINER_ROOT}/node_modules/.bin:$PATH && ${buildCommand}"`,
     );
-    if (build.success === false) throw describeBuildFailure("build", build);
+    if (execFailed(build)) throw describeBuildFailure("build", build, failureContext);
 
     // Resolve the output directory (angular nests under dist/<project>/browser).
     let outDir = `${CONTAINER_ROOT}/${entry.outputDir}`;

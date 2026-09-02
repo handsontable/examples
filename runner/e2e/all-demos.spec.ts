@@ -277,6 +277,133 @@ test("an access check that fails does not lock the owner out", async ({ page }) 
   await expect(page.getByRole("button", { name: /^Save/ })).toBeVisible();
 });
 
+/** The top bar's background profile refresh, kept alive. Unstubbed it reaches
+ *  the real `VITE_API_BASE`, 401s for the faked token, and since DEV-2534 a 401
+ *  clears the session — so any later assertion that leans on "still signed in"
+ *  would be testing a signed-out page without saying so. Same stub as the
+ *  revoke test below, hoisted for the DEV-2530 pair. */
+async function stubProfile(page: Page) {
+  await page.route("**/api/profile", (route) =>
+    route.fulfill({
+      json: {
+        email: EMAIL,
+        display_name: "Dev",
+        saved_name: null,
+        description: null,
+        avatar_url: null,
+        initial: "D",
+      },
+    }),
+  );
+}
+
+// DEV-2530. The guide sells one safety property for a share link: a shared demo
+// cannot change its version — the recipient sees exactly the build the author
+// pinned. `EditorShell` implements it as `versionLocked` on the share route and
+// `PreviewBar` renders the version as inert muted text instead of the picker,
+// but until now nothing asserted it, so the lock could be dropped without a
+// single test going red.
+
+/** The locked version pill: the bar's static "Handsontable <v>" text, where the
+ *  picker sits on every other route. The preview *status* bar prints the same
+ *  string (`aria-label="Preview status"`), so a bare `getByText` resolves to
+ *  two elements — the pill is the span that is not inside the status bar. */
+function lockedVersionPill(page: Page, version: string) {
+  return page.locator('span:not([aria-label="Preview status"] span)', {
+    hasText: new RegExp(`^Handsontable ${version.replaceAll(".", "\\.")}$`),
+  });
+}
+
+/** Pin one demo's saved metadata to a version other than `DEFAULT_VERSION`
+ *  ("18.0.0", which `stubDemos` serves): with the default, "the pill shows the
+ *  author's pin" and "the pill fell back to the app default" are the same
+ *  green. Registered after `stubDemos`, so it wins the meta GET for this id
+ *  and defers everything else (`/access`, `/source`, other ids) to the rig. */
+async function pinDemoMeta(page: Page, id: string, version: string) {
+  await page.route("**/api/demos/*", (route) => {
+    if (!new URL(route.request().url()).pathname.endsWith(`/api/demos/${id}`)) return route.fallback();
+    return route.fulfill({
+      json: { title: "Their grid", description: null, ht_version: version, created_at: null },
+    });
+  });
+}
+test("the share page locks the version: text to read, not a menu to open", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await stubDemos(page);
+  await stubProfile(page);
+  // Two versions instead of stubShell's one: interactivity is only proven by a
+  // pick that lands, and a one-option menu has nowhere to move. Registered
+  // after stubShell, so this route wins (Playwright matches newest-first).
+  await page.route("**/api/versions", (route) =>
+    route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0", "17.1.0"] } }),
+  );
+  // Three distinct versions in play — the app default (18.0.0), this visitor's
+  // playground pick (17.1.0), and the author's pin (16.1.0) — so the value on
+  // the share pill can only be the author's.
+  await pinDemoMeta(page, THEIRS, "16.1.0");
+
+  // First, the contrast that makes the lock falsifiable: on the playground the
+  // same control is a live picker under exactly these accessible names. Without
+  // this half, renaming the trigger (or the pencil) would turn every "absent on
+  // the share page" assertion below into a vacuous pass.
+  await page.goto("/?example=react");
+  const trigger = page.getByRole("button", { name: "Handsontable version", exact: true });
+  await expect(trigger).toContainText("18.0.0");
+  await trigger.click();
+  await expect(page.getByRole("listbox", { name: "Handsontable version" })).toBeVisible();
+  await page.getByRole("option", { name: "17.1.0", exact: true }).click();
+  await expect(trigger).toContainText("17.1.0");
+  // Signed in and off the share route, the custom-version pencil is offered
+  // too — seeing it here is what gives its absence on the share page teeth.
+  await expect(page.getByRole("button", { name: "Set a custom Handsontable version" })).toBeVisible();
+
+  // Now the share page, same signed-in visitor. The version is readable, and
+  // it is the author's pin — not the default this run booted with, and not the
+  // 17.1.0 this visitor just picked one navigation ago…
+  await page.goto(`/share/${THEIRS}`);
+  await expect(lockedVersionPill(page, "16.1.0")).toBeVisible();
+  // …but it is nobody's control: no picker trigger, no pencil, no free-text field.
+  await expect(page.getByRole("button", { name: "Handsontable version", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Set a custom Handsontable version" })).toHaveCount(0);
+  await expect(page.getByLabel("Custom Handsontable version")).toHaveCount(0);
+
+  // What the lock means for a user, not just for the DOM: clicking where the
+  // picker sits on every other route opens nothing. MenuButton renders its
+  // popover synchronously on the trigger's click, so if this text were still a
+  // live trigger the listbox would exist by the time the click resolves.
+  await lockedVersionPill(page, "16.1.0").click();
+  await expect(page.getByRole("listbox", { name: "Handsontable version" })).toHaveCount(0);
+  await expect(page.getByRole("option")).toHaveCount(0);
+
+  // And none of those absences were the signed-out fallback: the session is intact.
+  expect(await page.evaluate(() => sessionStorage.getItem("hot_token"))).toBe("e2e-token");
+});
+
+test("the lock belongs to the route, not the visitor: your own share page is pinned too", async ({ page }) => {
+  // The dangerous regression here is keying the lock off ownership (`/access`)
+  // instead of the route: the owner would get a live picker on the very page
+  // their recipients have open, and one switch there rewrites what everyone
+  // else is looking at. The signed-in owner on their own `/share/:id` is the
+  // only visitor who can catch that — the previous test's stranger cannot.
+  await stubShell(page);
+  await signIn(page);
+  await stubDemos(page);
+  await stubProfile(page);
+  await pinDemoMeta(page, MINE, "16.1.0");
+
+  await page.goto(`/share/${MINE}`);
+
+  // Still the share playground — owning the demo redirects nowhere…
+  await expect(page).toHaveURL(new RegExp(`/share/${MINE}$`));
+  // …and still pinned: the author's version, as text, with no picker and no pencil.
+  await expect(lockedVersionPill(page, "16.1.0")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Handsontable version", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Set a custom Handsontable version" })).toHaveCount(0);
+  // Signed in throughout, so the absences above are the lock, not a lost session.
+  expect(await page.evaluate(() => sessionStorage.getItem("hot_token"))).toBe("e2e-token");
+});
+
 // DEV-2534 / DEV-2544. Delete is only drawn on a card this page believes is
 // yours, so a 403 here is a genuine disagreement between the UI and the server —
 // which is why the message names ownership instead of echoing the wire string,

@@ -31,9 +31,16 @@ export type { ValidationResult } from "./version.js";
 export {
   deriveDocsBucketCandidate,
   resolveDocsBucket,
+  planDocsBucket,
+  highestReleaseBucket,
+  docsBucketAbsentMessage,
   deriveStarterBucketCandidate,
   resolveStarterBucket,
 } from "./docs-bucket.js";
-export type { DocsBucketResolution, StarterBucketResolution } from "./docs-bucket.js";
+export type {
+  DocsBucketResolution,
+  DocsBucketOutcome,
+  StarterBucketResolution,
+} from "./docs-bucket.js";
 
 export { mintSessionId } from "./session.js";

@@ -11,18 +11,32 @@
 // PR demo against the wrong core, which is worse than the bug being fixed.
 //
 // Run: node --experimental-strip-types --test pipeline/ht-version-resolve.test.mjs
+// — after `pnpm --filter @handsontable/demo-runtime build`: this file imports
+// the runtime's *dist*, so a direct run against a stale build tests the wrong
+// code and can stay green through a source mutation (`pnpm test` builds first).
 import test from "node:test";
 import assert from "node:assert/strict";
+import { register } from "node:module";
 import {
   handsontableDependencyRef,
   pinHandsontableFiles,
+  validateHandsontableVersion,
 } from "../packages/runtime/dist/version.js";
 import {
   editorVersionRef,
   fetchVersionCatalog,
   resolveHandsontableVersion,
 } from "../workers/api/src/ht-version.ts";
-import { MAX_MCP_BYTES, isMcpValidationError, validateMcpFiles } from "../workers/api/src/mcp-create.ts";
+
+// mcp-create.ts stopped being import-free once the build-toolchain gate landed
+// (Sentry DEMOS-31): it now pulls in build-command.js by the repo's NodeNext-
+// style specifier, which bare --experimental-strip-types cannot resolve — the
+// same reason mcp-create.test.mjs and mcp-routes.test.mjs already register the
+// .js->.ts hook before importing it dynamically.
+register("./fixtures/worker-hooks.mjs", import.meta.url);
+const { MAX_MCP_BYTES, isMcpValidationError, validateMcpFiles } = await import(
+  "../workers/api/src/mcp-create.ts"
+);
 
 const PR_URL = "https://pkg.pr.new/handsontable@13106";
 /** Captured once, before any stub is installed. */
@@ -229,6 +243,63 @@ test("the `next` dist-tag resolves to the newest nightly by publish date, not th
   const r = await resolveHandsontableVersion(env, { htVersion: "next", files: filesWith("^18.0.0") });
   assert.equal(r.ok, true);
   assert.equal(r.ref, "19.0.0-next.4");
+});
+
+// ---- the bare-numeric boundary (MIN_BARE_NUMERIC_PKG_PR_NEW_REF) ------------
+//
+// A bare integer is ambiguous: "18" is a major-only semver range, "13106" a
+// pkg.pr.new build id. The validator draws the line at 1000 (DEV-2530: the
+// guide states refs below 1000 read as majors, 1000 and up as PR builds), so
+// 999/1000 is the sharpest pair that exists. Both sides are pinned, because
+// nudging the threshold silently flips which of two wrong things happens: a
+// typoed major becomes a doomed pkg.pr.new install, or a real PR id becomes a
+// refused create.
+
+test("a bare 999 is refused as an out-of-range major, with the validator's own message", async (t) => {
+  // The boundary belongs to the validator, and its message is the contract: the
+  // API forwards it verbatim, so a paraphrase upstream would break what MCP
+  // callers and the guide both quote.
+  const refused = validateHandsontableVersion("999");
+  assert.equal(refused.ok, false);
+  assert.equal(refused.message, "handsontable-version major must be at most 19");
+
+  // Through the API path the same input is a 400 before npm is ever consulted —
+  // a doomed ref must not cost a registry roundtrip, let alone a builder
+  // container.
+  const { env, calls } = fakeEnv(t);
+  const r = await resolveHandsontableVersion(env, { htVersion: "999", files: filesWith("^18.0.0") });
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 400);
+  assert.equal(r.message, refused.message, "the route surfaces the validator's message, not its own");
+  assert.equal(calls.registry, 0);
+});
+
+test("a bare 1000 is accepted as a pkg.pr.new ref and pins the derived tarball URL", async (t) => {
+  // The first integer past the line must come out the other side whole: as a
+  // build id, not a coerced 1000.0.0.
+  assert.deepEqual(validateHandsontableVersion("1000"), {
+    ok: true,
+    value: { ref: "1000", pkgPrNew: true },
+  });
+
+  // The dependency URL is asserted literally rather than built with
+  // pkgPrNewDependencyUrl — constructing the expectation from the helper under
+  // test would let a broken helper vouch for itself.
+  const { env, calls } = fakeEnv(t);
+  const r = await resolveHandsontableVersion(env, { htVersion: "1000", files: filesWith("^18.0.0") });
+  assert.equal(r.ok, true);
+  assert.equal(r.ref, "1000");
+  assert.equal(deps(r.files).handsontable, "https://pkg.pr.new/handsontable@1000");
+  assert.equal(calls.registry, 0, "an explicit concrete ref never needs npm");
+});
+
+test("the same threshold decides what a bare integer in package.json derives", () => {
+  // handsontableDependencyRef delegates the id-vs-major call to the validator,
+  // so the boundary must hold on the derivation path too: "999" names no build
+  // (npm reads it as any 999.x, and there is nothing to preserve), while "1000"
+  // is a ref the pin must keep.
+  assert.equal(handsontableDependencyRef(filesWith("999")), null);
+  assert.equal(handsontableDependencyRef(filesWith("1000")), "1000");
 });
 
 // ---- resolution: derive, don't default -------------------------------------

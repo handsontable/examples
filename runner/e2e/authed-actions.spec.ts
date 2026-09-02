@@ -651,3 +651,175 @@ test("a background profile refresh on an expired session is silent", async ({ pa
   // account control with or without a profile.
   await expect(saveButton(page)).toBeVisible();
 });
+
+// ── DEV-2530 parity follow-ups: the revoked card, and the share dialog's links ──
+//
+// The guide sells deletion as irreversible *and visible*: the share link starts
+// answering 410 (covered live in share-create-live.spec.ts — not repeated here),
+// and the row itself stays on My demos, marked. What was uncovered is that
+// marking: the API only ever revokes — rows persist forever — and the card is
+// where a user learns their demo is really gone.
+
+/** One `GET /api/demos` row as the worker returns it (`SELECT *` around
+ *  `workers/api/src/index.ts:1236`; the client contract is `DemoListItem` in
+ *  MyDemos.tsx). Mirrors `demo()` in all-demos.spec.ts — a local copy, per the
+ *  helpers.ts rule that specs do not edit the shared file mid-flight. */
+function demoRow(id: string, title: string, revoked: 0 | 1) {
+  return {
+    id,
+    title,
+    description: null,
+    framework: "react",
+    tier: 1,
+    ht_version: "18.0.0",
+    forked_from: null,
+    visibility: "unlisted",
+    revoked,
+    created_at: "2026-08-01T10:00:00.000Z",
+    updated_at: "2026-08-01T10:00:00.000Z",
+    created_by: EMAIL,
+  };
+}
+
+/** The listing. `?` in a Playwright glob matches any single character, so the
+ *  literal query `?scope=` still matches — the same pattern all-demos.spec.ts
+ *  relies on. Distinct from `stubSavedDemo`'s `**​/api/demos/**`, which needs a
+ *  literal `/` after `demos` and so never answers this GET. */
+async function stubDemosList(page: Page, rows: ReturnType<typeof demoRow>[]) {
+  await page.route("**/api/demos?scope=*", (route) =>
+    route.fulfill({ json: { demos: rows, scope: "mine" } }),
+  );
+}
+
+// Card locators, same shape as all-demos.spec.ts: a card is the `article` whose
+// text carries the title, the kebab is its `Actions for <title>` button.
+const demoCard = (page: Page, title: string) => page.locator("article").filter({ hasText: title });
+const cardKebab = (page: Page, title: string) =>
+  demoCard(page, title).getByRole("button", { name: /Actions for/ });
+const menuItem = (page: Page, name: string) => page.getByRole("menuitem", { name, exact: true });
+
+// The revoked treatment (MyDemos.tsx ~453-475): the badge appears in the card's
+// meta row, and the kebab is not rendered at all — every action needs something
+// the revoke took away (`getDemoSource` answers null once `revoked` is set), so
+// a menu of five dead ends is withheld rather than disabled.
+//
+// The contrast between the two cards is the oracle, deliberately: a badge
+// asserted alone cannot fail when badges start rendering everywhere, and a
+// missing kebab alone cannot fail when kebabs stop rendering at all. Each card
+// is the other's control.
+test("a revoked card keeps its badge and loses its kebab; a live card, the reverse", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  await stubProfile(page);
+  await stubDemosList(page, [
+    demoRow("e2elive01", "Still here", 0),
+    demoRow("e2egone01", "Already gone", 1),
+  ]);
+
+  await page.goto("/my-demos");
+
+  // The revoked row is still a card — rows persist forever, and disappearing
+  // silently is exactly what the guide promises does not happen.
+  await expect(demoCard(page, "Already gone")).toBeVisible();
+
+  // The badge sits on the revoked card and only there. Lowercase and exact:
+  // pinning the rendered text is what makes this fail if the badge is reworded
+  // or moved onto every card.
+  await expect(demoCard(page, "Already gone").getByText("revoked", { exact: true })).toBeVisible();
+  await expect(demoCard(page, "Still here").getByText("revoked", { exact: true })).toHaveCount(0);
+
+  // No kebab on the revoked card — not a thinned menu, no menu.
+  await expect(cardKebab(page, "Already gone")).toHaveCount(0);
+
+  // …while the live card keeps the full owner's menu. Asserting all five rows is
+  // what separates "revoked lost its actions" from "actions broke everywhere".
+  await cardKebab(page, "Still here").click();
+  await expect(menuItem(page, "Open")).toHaveAttribute("href", "/edit/e2elive01");
+  await expect(menuItem(page, "Copy link")).toBeVisible();
+  await expect(menuItem(page, "Fork")).toBeVisible();
+  await expect(menuItem(page, "Rename")).toBeVisible();
+  await expect(menuItem(page, "Delete")).toBeVisible();
+});
+
+// The dialog's contract, pinned by accessible name (ShareLinks.tsx). The labels
+// are load-bearing: "Public client link:" is the naming examples#188 settled on
+// for the URL that goes to clients, and the other two rows explain themselves —
+// full-window is the demo without the editor, the embed URL works on
+// handsontable.com only. `exact: true` throughout, so a rewording fails here
+// instead of silently shipping a dialog that says something else.
+test("the share dialog is three labelled links: client, full-window, docs embed", async ({ page }) => {
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await signIn(page);
+  await stubProfile(page);
+  await page.goto(`/edit/${DEMO_ID}`);
+
+  await expect(accountAvatar(page)).toBeVisible();
+  await shareIcon(page).click();
+  const dialog = shareDialog(page);
+  await expect(dialog).toBeVisible();
+
+  // Exactly three — a fourth field or a dropped one is a dialog redesign, and
+  // this file is where that should first fail.
+  await expect(dialog.getByRole("textbox")).toHaveCount(3);
+
+  // Derived from the page rather than hardcoded, so the same assertions hold
+  // against a deployed E2E_BASE_URL run.
+  const origin = new URL(page.url()).origin;
+  const clientUrl = `${origin}/share/${DEMO_ID}`;
+  await expect(dialog.getByRole("textbox", { name: "Public client link:", exact: true }))
+    .toHaveValue(clientUrl);
+  // Full-window is the client link plus `?mode=full` — one URL, one suffix
+  // (ShareLinks.tsx builds it off `clientUrl`), and the value assertion is what keeps
+  // the two from drifting apart.
+  await expect(
+    dialog.getByRole("textbox", { name: "Full-window (the demo without the editor)", exact: true }),
+  ).toHaveValue(`${clientUrl}?mode=full`);
+  // The embed URL's host is `VITE_API_BASE` — an env concern, not this dialog's —
+  // so only the path is pinned.
+  await expect(
+    dialog.getByRole("textbox", { name: "Docs embed URL (handsontable.com only)", exact: true }),
+  ).toHaveValue(new RegExp(`/embed/${DEMO_ID}$`));
+
+  // Each field carries its own copy affordance, named for a screen reader.
+  await expect(dialog.getByRole("button", { name: "Copy public client link", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Copy full-window", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Copy docs embed url", exact: true })).toBeVisible();
+});
+
+// One URL, two surfaces: the dialog *shows* the client link, the card's kebab
+// *copies* it. They are separate implementations (App.tsx:2596 vs MyDemos.tsx's
+// `copyLink`) with no shared constant, so nothing but a test keeps them equal —
+// and a client pasted a `/d/:id` or `?mode=full` URL by one surface would get a
+// different page than the other promised.
+//
+// The clipboard is read for real (`grantPermissions`), not intercepted: the
+// app's `copyLink` swallows clipboard errors, so a recorder wrapped around
+// `writeText` could pass on intent while the actual copy silently failed.
+test("the card's Copy link copies the URL the dialog calls the public client link", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await signIn(page);
+  await stubProfile(page);
+  await stubDemosList(page, [demoRow(DEMO_ID, "Parity demo", 0)]);
+
+  // First surface: what the dialog shows for this demo.
+  await page.goto(`/edit/${DEMO_ID}`);
+  await expect(accountAvatar(page)).toBeVisible();
+  await shareIcon(page).click();
+  const clientField = shareDialog(page).getByRole("textbox", { name: "Public client link:", exact: true });
+  await expect(clientField).toHaveValue(new RegExp(`/share/${DEMO_ID}$`));
+  const dialogUrl = await clientField.inputValue();
+
+  // Second surface: what the card's menu puts on the clipboard.
+  await page.goto("/my-demos");
+  await cardKebab(page, "Parity demo").click();
+  await menuItem(page, "Copy link").click();
+
+  // Polled, because `copyLink` is fire-and-forget off the menu click — the
+  // write can land a beat after the click handler returns.
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe(dialogUrl);
+});

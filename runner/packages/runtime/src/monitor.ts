@@ -262,14 +262,26 @@ export function createMonitorBudget(ceiling: number = MONITOR_EVENT_CEILING): {
 
 /**
  * Collapse the volatile parts of a message so one broken demo files one issue
- * rather than hundreds. Numbers, quoted strings and URLs are what differ between
- * two reports of the same fault (a row index, a version, a session id).
+ * rather than hundreds. Numbers, quoted strings, URLs and timestamps are what
+ * differ between two reports of the same fault (a row index, a version, a
+ * session id, the clock a dev-server envelope was printed at).
+ *
+ * A timestamp is matched whole, ahead of the number rule, because it is one
+ * volatile token rather than a run of numbers. The number rule's word
+ * boundaries are load-bearing in the other direction: they are what keeps
+ * `TS1005` out of `TS<n>`, so a diagnostic code stays a fingerprint and two
+ * different compiler errors stay two issues — confirmed for the live
+ * `TS1005` group (Sentry DEMOS-3K), and true even when two codes share
+ * identical prose (constructed, not observed: `TS2554`/`TS2555` both read
+ * "Expected N arguments, but got M"). Relaxing the boundaries to catch the
+ * `…-25T18:…` they miss would collapse the codes too.
  *
  * Used for the Sentry fingerprint, not for the message the issue displays.
  */
 export function normalizeMonitorMessage(message: string): string {
   return message
     .replace(/https?:\/\/\S+/g, "<url>")
+    .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, "<ts>")
     .replace(/["'`][^"'`]*["'`]/g, "<str>")
     .replace(/\b\d+(\.\d+)*\b/g, "<n>")
     .replace(/\s+/g, " ")

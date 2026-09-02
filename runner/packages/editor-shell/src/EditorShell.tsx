@@ -174,6 +174,16 @@ export interface EditorShellProps {
 
 const CURSOR_ORIGIN: CursorPosition = { line: 1, col: 1 };
 
+/** How close to the last keystroke a focus grab by the preview must land to read as
+ *  theft rather than intent. What separates the two is the hand: a grab inside this
+ *  window interrupts typing — a hand on the keyboard — while a deliberate click into
+ *  the preview means the hand had already left it. Sized to the edit→re-evaluation
+ *  latency it has to cover: a Tier-1 keystroke reaches the bundler in ~50ms and the
+ *  re-run of the demo module follows within about a second (`sandpack.ts`,
+ *  `pushUpdate`), so 2s covers it with margin without hoarding grabs that arrive
+ *  long after the user stopped typing. */
+const PREVIEW_FOCUS_THEFT_WINDOW_MS = 2_000;
+
 /** The first file to open, guarding the entry that does not exist.
  *
  *  `props.entry` comes from the catalog, and it is not always a key of `files`: a
@@ -214,6 +224,56 @@ export function EditorShell(props: EditorShellProps) {
   // The views are held here for the two things that needs: reading the caret back on
   // activation, and re-measuring a pane that was hidden.
   const viewsRef = useRef(new Map<string, EditorView>());
+
+  // ---- Preview focus theft --------------------------------------------------
+  // Every Tier-1 keystroke recompiles the sandbox and re-evaluates the demo module
+  // inside the cross-origin preview iframe (`sandpack.ts`, `pushUpdate`). A demo that
+  // focuses its grid as it boots — `selectCells()`, `listen()`, any `element.focus()`
+  // — thereby pulls browser focus out of CodeMirror mid-sentence, and the rest of the
+  // keystrokes land in a grid cell. The frame is cross-origin, so the grab cannot be
+  // prevented from here; but it is observable as a window `blur` while
+  // `document.hasFocus()` stays true — focus left the top document without leaving the
+  // page, i.e. it went into a subframe. When that happens within a keystroke of
+  // typing, the grab interrupted the user's own editing, and focus goes straight back.
+  //
+  // What the handler must NOT key on is `document.activeElement`: Chromium is not
+  // consistent about it across a cross-origin grab. Sometimes it lands on the iframe
+  // element; on other builds (Chromium 149 headless, measured) it stays *stale* on the
+  // editor while every keystroke already routes into the frame. `hasFocus()` after a
+  // tick separates the two cases that matter instead — an app/tab switch also blurs
+  // the window, but there it goes false, and stealing focus back into a background
+  // window would be this bug re-created in reverse.
+  const lastKeystrokeRef = useRef(0);
+  const activeFileRef = useRef(active);
+  useEffect(() => {
+    activeFileRef.current = active;
+  }, [active]);
+
+  useEffect(() => {
+    const onWindowBlur = () => {
+      if (Date.now() - lastKeystrokeRef.current > PREVIEW_FOCUS_THEFT_WINDOW_MS) return;
+      // Deferred a tick: while `blur` dispatches, the handoff is still in flight and
+      // `hasFocus()` still reports the pre-blur state whichever way it is going.
+      window.setTimeout(() => {
+        if (!document.hasFocus()) return;
+        const view = viewsRef.current.get(activeFileRef.current);
+        if (!view) return;
+        // Blur first. In the stale-activeElement manifestation the browser still
+        // *reports* the editor as the active element, so a bare `focus()` is a no-op
+        // that reclaims nothing (measured); clearing it makes the focus a real
+        // transition again. In the other manifestation the blur is itself the no-op.
+        // CodeMirror re-restores its own selection on focus, so neither costs state.
+        //
+        // `preventScroll` for the same reason CodeMirror's own `view.focus()` uses it:
+        // `.cm-content` is the whole document, so a bare `focus()` may scroll a long
+        // file away from the caret the user is typing at.
+        view.contentDOM.blur();
+        view.contentDOM.focus({ preventScroll: true });
+      }, 0);
+    };
+    window.addEventListener("blur", onWindowBlur);
+    return () => window.removeEventListener("blur", onWindowBlur);
+  }, []);
 
   /** Open a file, or focus it if it is already open. What tree selection does. */
   const openFile = useCallback((path: string) => {
@@ -503,7 +563,14 @@ export function EditorShell(props: EditorShellProps) {
                   // Closes over `path`, never `active`. With one re-keyed editor the
                   // two were interchangeable; with every tab mounted, `active` would
                   // write each pane's edits into whichever file is showing.
-                  onChange={(v) => props.onEdit(path, v)}
+                  //
+                  // The timestamp feeds the focus-theft guard above. Any doc change
+                  // counts — paste and undo are editing just as typing is, and the
+                  // rebuild each one triggers can steal focus just the same.
+                  onChange={(v) => {
+                    lastKeystrokeRef.current = Date.now();
+                    props.onEdit(path, v);
+                  }}
                   // Only the visible pane drives the status bar. A hidden one still
                   // emits on focus changes, and would overwrite the readout.
                   onCursorChange={path === active ? setCursor : undefined}

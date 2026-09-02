@@ -24,9 +24,12 @@ const {
   isMcpValidationError,
   isTeamEmail,
   validateMcpFiles,
+  validateBuildToolchain,
 } = await import("../workers/api/src/mcp-create.ts");
 const { authenticateService, normalizeEmail, sameOwner } = await import("../workers/api/src/auth.ts");
 const { demoListQuery } = await import("../workers/api/src/demos-list.ts");
+const { BUILD_CONFIG } = await import("../workers/api/src/frameworks.generated.ts");
+const { snapshotBuildCommand } = await import("../workers/api/src/build-command.ts");
 
 const ok = { "/package.json": '{"name":"demo"}', "/index.js": "console.log(1)" };
 
@@ -226,4 +229,68 @@ test("the update route calls isMcpCreated(), not a re-inlined copy of it", () =>
     /forked_from\?*\.\s*startsWith/,
     "an inline forked_from check would no longer be what the tests import — call isMcpCreated()",
   );
+});
+
+// --- the build-toolchain gate (Sentry DEMOS-31) --------------------------------
+//
+// The build command comes from the catalog, not the payload, so a manifest
+// that omits the framework's build tool installs cleanly (pnpm exits 0 on the
+// non-frozen retry — lockfiles are always refused on this path) and then dies
+// as `sh: 1: vite: not found` after a container boot billed against the spend
+// ceiling. Decided from the request alone, so a refusal here costs nothing.
+
+test("a manifest declaring the build tool passes, in either dependency section", () => {
+  assert.equal(
+    validateBuildToolchain({ "/package.json": JSON.stringify({ dependencies: { vite: "^5.4.0" } }) }, "vite build"),
+    null,
+  );
+  assert.equal(
+    validateBuildToolchain(
+      { "/package.json": JSON.stringify({ devDependencies: { vite: "^5.4.0" } }) },
+      "vite build",
+    ),
+    null,
+  );
+});
+
+test("a peerDependencies-only declaration satisfies the check — pnpm auto-installs peers in the builder image", () => {
+  // The builder runs pnpm 10.34.5 with auto-install-peers on by default and no
+  // .npmrc overriding it, so the non-frozen retry this path always takes
+  // (lockfiles are refused) installs a peer-only declaration into
+  // node_modules/.bin just like a dependencies one. Refusing this would be a
+  // false rejection of a demo that builds fine in the real container.
+  const result = validateBuildToolchain(
+    { "/package.json": JSON.stringify({ peerDependencies: { vite: "^5.4.0" } }) },
+    "vite build",
+  );
+  assert.equal(result, null);
+});
+
+test("an unparseable manifest is refused here, not inside a container", () => {
+  const result = validateBuildToolchain({ "/package.json": "{" }, "vite build");
+  assert.ok(isMcpValidationError(result));
+  assert.match(result.error, /package\.json/);
+});
+
+test("an unmapped build binary is never a refusal", () => {
+  // The table can fall behind the catalog; when it does, the coverage test
+  // below is what fails, never a caller in production.
+  assert.equal(
+    validateBuildToolchain({ "/package.json": JSON.stringify({ dependencies: {} }) }, "somethingnew build"),
+    null,
+  );
+});
+
+test("BUILD_TOOL_PACKAGE covers every framework in BUILD_CONFIG", () => {
+  for (const [framework, entry] of Object.entries(BUILD_CONFIG)) {
+    const bin = snapshotBuildCommand(entry.buildCommand).trim().split(/\s+/)[0];
+    const result = validateBuildToolchain(
+      { "/package.json": JSON.stringify({ dependencies: {} }) },
+      entry.buildCommand,
+    );
+    assert.ok(
+      isMcpValidationError(result),
+      `BUILD_TOOL_PACKAGE has no entry for "${bin}" (framework "${framework}"), so an empty manifest was not refused`,
+    );
+  }
 });
