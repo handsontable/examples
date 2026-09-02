@@ -55,7 +55,7 @@ export const BUILD_CONFIG: Record<string, BuildConfig> = {
   "mui": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
   "base-web": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
   "fluent-ui": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
-  "vue": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
+  "vue": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vue-tsc --build --force && vite build", outputDir: "dist", outputGlob: null },
   "angular": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "ng build", outputDir: "dist", outputGlob: "dist/*/browser" },
   "next.js": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "next build", outputDir: "out", outputGlob: null },
   "next-shadcn.js": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "next build", outputDir: "out", outputGlob: null },
