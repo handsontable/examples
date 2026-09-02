@@ -277,3 +277,114 @@ test("a browser rebuild falls back to the row's previous concrete ref when the p
   assert.ok(update, "the rebuild must update the demos row");
   assert.equal(update.binds[0], "16.0.2", "the demo stays on the core it was built against");
 });
+
+// DEV-2741. A demo stored with an `index.html` that loads no module renders as an empty
+// page everywhere. The write gate refuses that payload now; these are the demos already
+// in the bucket, repaired the first time their source is read.
+//
+// Measured in production before the fix: `/api/demos/6n1lu5k2s3/source` returned
+// `/index.html` = `<div id="grid" style="height: 460px; width: 100%;"></div>\n`, and the
+// Tier-1 preview frame reported `window.__hotRunnerScheme === undefined` — the module
+// entry, where that receiver is also injected, never ran at all.
+
+const BLANK_HTML = '<div id="grid" style="height: 460px; width: 100%;"></div>\n';
+
+const blankSource = (framework = "javascript") => ({
+  "demos/abc123/__source.json": JSON.stringify({
+    framework,
+    files: {
+      "/package.json": JSON.stringify({ dependencies: { handsontable: "18.1.0" } }),
+      "/index.js": "console.log(1)",
+      "/index.html": BLANK_HTML,
+    },
+  }),
+});
+
+const sourceRequest = (id) =>
+  new Request(`https://demos.handsontable.com/api/demos/${id}/source`);
+
+test("a stored demo whose index.html loads no module is repaired on read", async () => {
+  const { env } = makeEnv([demoRow({ framework: "javascript" })], [], blankSource());
+  const res = await worker.fetch(sourceRequest("abc123"), env, ctx);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(
+    body.files["/index.html"],
+    `${BLANK_HTML}<script type="module" src="/index.js"></script>\n`,
+  );
+  // Everything else is handed back untouched.
+  assert.equal(body.files["/index.js"], "console.log(1)");
+});
+
+test("the repair is written back, so the next read does not redo it", async () => {
+  const { env, artifacts } = makeEnv([demoRow({ framework: "javascript" })], [], blankSource());
+  await worker.fetch(sourceRequest("abc123"), env, ctx);
+  const stored = artifacts.puts.filter((p) => p.key === "demos/abc123/__source.json");
+  assert.equal(stored.length, 1, "the repair is persisted once");
+  assert.match(JSON.parse(stored[0].value).files["/index.html"], /<script type="module"/);
+
+  const second = await worker.fetch(sourceRequest("abc123"), env, ctx);
+  assert.equal((await second.json()).files["/index.html"], JSON.parse(stored[0].value).files["/index.html"]);
+  assert.equal(
+    artifacts.puts.filter((p) => p.key === "demos/abc123/__source.json").length,
+    1,
+    "a source that already loads its module is not rewritten again",
+  );
+});
+
+test("a demo that already loads its module is served byte-identical and not rewritten", async () => {
+  const html = '<body><div id="grid"></div><script type="module" src="/index.js"></script></body>';
+  const { env, artifacts } = makeEnv([demoRow({ framework: "javascript" })], [], {
+    "demos/abc123/__source.json": JSON.stringify({
+      framework: "javascript",
+      files: { "/package.json": "{}", "/index.js": "x", "/index.html": html },
+    }),
+  });
+  const res = await worker.fetch(sourceRequest("abc123"), env, ctx);
+  assert.equal((await res.json()).files["/index.html"], html);
+  assert.deepEqual(artifacts.puts, [], "nothing is written for a demo that is already fine");
+});
+
+test("a browser Save of a script-less document stores the repaired index.html", async () => {
+  // The counterpart to the MCP routes' 400 (DEV-2741). A person's Save is repaired
+  // rather than refused: their preview already ran the demo — Tier 1 adds the tag to
+  // the bundler's view of the files — so failing the Save would refuse work that was
+  // visibly working, and the artifact would be built from a document with no bundle.
+  const { env, artifacts } = makeEnv();
+  const res = await worker.fetch(
+    createRequest({
+      framework: "javascript",
+      title: "Grid",
+      files: {
+        "/package.json": JSON.stringify({ dependencies: { handsontable: "18.1.0" } }),
+        "/index.js": "console.log(1)",
+        "/index.html": '<div id="grid"></div>\n',
+      },
+    }),
+    env,
+    ctx,
+  );
+  assert.equal(res.status, 201);
+  const stored = sourceSnapshot(artifacts, (await res.json()).id);
+  assert.equal(
+    stored.files["/index.html"],
+    '<div id="grid"></div>\n<script type="module" src="/index.js"></script>\n',
+  );
+});
+
+test("an Angular demo's script-less index.html is served and stored untouched", () => {
+  // The write side of the same exemption: repairing Angular would persist a
+  // `<script src="/src/main.ts">` into documents that were always correct.
+  const html = "<!doctype html><html><body><app-root></app-root></body></html>";
+  return (async () => {
+    const { env, artifacts } = makeEnv([demoRow({ framework: "angular" })], [], {
+      "demos/abc123/__source.json": JSON.stringify({
+        framework: "angular",
+        files: { "/package.json": "{}", "/src/main.ts": "export {};", "/src/index.html": html },
+      }),
+    });
+    const res = await worker.fetch(sourceRequest("abc123"), env, ctx);
+    assert.equal((await res.json()).files["/src/index.html"], html);
+    assert.deepEqual(artifacts.puts, [], "nothing may be written for an Angular demo");
+  })();
+});

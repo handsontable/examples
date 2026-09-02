@@ -25,6 +25,7 @@ const {
   isTeamEmail,
   validateMcpFiles,
   validateBuildToolchain,
+  validateHtmlEntry,
 } = await import("../workers/api/src/mcp-create.ts");
 const { authenticateService, normalizeEmail, sameOwner } = await import("../workers/api/src/auth.ts");
 const { demoListQuery } = await import("../workers/api/src/demos-list.ts");
@@ -293,4 +294,126 @@ test("BUILD_TOOL_PACKAGE covers every framework in BUILD_CONFIG", () => {
       `BUILD_TOOL_PACKAGE has no entry for "${bin}" (framework "${framework}"), so an empty manifest was not refused`,
     );
   }
+});
+
+// DEV-2741. The other way an agent payload builds into nothing: an HTML entry that
+// loads no module. Measured in production on `/share/6n1lu5k2s3` — the demo's
+// `/index.html` was `<div id="grid" ...></div>` and nothing else, so the Tier-1
+// bundler (whose entry *is* that document) and `vite build` both had no module to run,
+// and the page came out as an empty div on every surface with no error anywhere.
+
+const JS_CFG = BUILD_CONFIG["javascript"];
+
+test("BUILD_CONFIG carries the two entry paths the HTML gate needs", () => {
+  // Generated from catalog.json by scripts/prepare-container.mjs; without them the
+  // gate below silently passes everything.
+  assert.equal(JS_CFG.entry, "/index.js");
+  assert.equal(JS_CFG.htmlEntry, "/index.html");
+  for (const [framework, cfg] of Object.entries(BUILD_CONFIG)) {
+    assert.equal(typeof cfg.entry, "string", `${framework} has no entry`);
+    assert.ok(cfg.htmlEntry === null || typeof cfg.htmlEntry === "string", framework);
+  }
+});
+
+test("the reported shape — an index.html with no script — is refused", () => {
+  const result = validateHtmlEntry(
+    { "/package.json": "{}", "/index.js": "x", "/index.html": '<div id="grid"></div>\n' },
+    JS_CFG,
+  );
+  assert.ok(isMcpValidationError(result));
+  // The message has to carry the fix: the caller is a model, and "invalid" teaches it
+  // nothing it can act on.
+  assert.match(result.error, /<script type="module" src="\/index\.js"><\/script>/);
+});
+
+test("a document that loads its entry passes", () => {
+  const result = validateHtmlEntry(
+    {
+      "/package.json": "{}",
+      "/index.js": "x",
+      "/index.html": '<body><div id="grid"></div><script type="module" src="/index.js"></script></body>',
+    },
+    JS_CFG,
+  );
+  assert.equal(result, null);
+});
+
+test("a document loading a module other than the catalog entry is not a refusal", () => {
+  // It builds and renders on both paths; refusing it would be a false rejection.
+  const result = validateHtmlEntry(
+    {
+      "/package.json": "{}",
+      "/src/main.js": "x",
+      "/index.html": '<script type="module" src="/src/main.js"></script>',
+    },
+    JS_CFG,
+  );
+  assert.equal(result, null);
+});
+
+test("a script pointing at a file that was never sent is refused, naming the file", () => {
+  const result = validateHtmlEntry(
+    { "/package.json": "{}", "/index.js": "x", "/index.html": '<script src="/main.js"></script>' },
+    JS_CFG,
+  );
+  assert.ok(isMcpValidationError(result));
+  assert.match(result.error, /\/main\.js/);
+});
+
+test("a missing HTML entry is refused by name", () => {
+  const result = validateHtmlEntry({ "/package.json": "{}", "/index.js": "x" }, JS_CFG);
+  assert.ok(isMcpValidationError(result));
+  assert.match(result.error, /\/index\.html/);
+});
+
+test("a framework with no HTML entry is out of scope for the gate", () => {
+  assert.equal(validateHtmlEntry({ "/package.json": "{}" }, { entry: "/x.js", htmlEntry: null }), null);
+});
+
+test("an inline or CDN script is left alone", () => {
+  for (const html of ['<script>boot()</script>', '<script src="https://cdn.example/x.js"></script>']) {
+    assert.equal(
+      validateHtmlEntry({ "/package.json": "{}", "/index.js": "x", "/index.html": html }, JS_CFG),
+      null,
+      html,
+    );
+  }
+});
+
+// Angular's `/src/index.html` has no `<script>` and is correct: `ng build` injects the
+// bundles listed in angular.json. Only a vite HTML entry names its own module, so the
+// gate answers to the build command — otherwise it refuses every Angular demo the MCP
+// publishes (found by Bugbot on PR #301).
+
+test("Angular's script-less HTML entry is not a refusal", () => {
+  const cfg = BUILD_CONFIG["angular"];
+  assert.equal(cfg.htmlEntry, "/src/index.html", "the row this test is about");
+  const result = validateHtmlEntry(
+    {
+      "/package.json": "{}",
+      "/src/main.ts": "export {};",
+      "/src/index.html": "<!doctype html><html><body><app-root></app-root></body></html>",
+    },
+    cfg,
+  );
+  assert.equal(result, null);
+});
+
+test("only a vite HTML entry is gated — enumerated over the whole catalog", () => {
+  // The discriminating list, not a spot check: every framework whose build command is
+  // not `vite build` must be exempt no matter what its document holds.
+  const gated = [];
+  for (const [framework, cfg] of Object.entries(BUILD_CONFIG)) {
+    const files = { "/package.json": "{}", [cfg.entry]: "export {};" };
+    if (cfg.htmlEntry) files[cfg.htmlEntry] = '<div id="grid"></div>';
+    if (isMcpValidationError(validateHtmlEntry(files, cfg))) gated.push(framework);
+  }
+  assert.deepEqual(
+    gated.sort(),
+    [
+      "ant-design", "base-web", "blank", "blank-react", "blank-ts", "example1",
+      "fluent-ui", "javascript", "mui", "react", "react-js", "typescript", "vue",
+    ],
+    "the tier-1 vite starters, and nothing else",
+  );
 });

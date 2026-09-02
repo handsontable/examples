@@ -8,7 +8,8 @@
 // The first runtime import this file has ever had: a spec that imports it must
 // now register the .js->.ts hook (pipeline/fixtures/worker-hooks.mjs) and import
 // it dynamically — see guide-tracks.test.mjs / ht-version-resolve.test.mjs.
-import { snapshotBuildCommand } from "./build-command.js";
+import { htmlEntryLoadsModule, snapshotBuildCommand } from "./build-command.js";
+import { entryScriptProblem, entryScriptTag } from "@handsontable/demo-runtime/entry-script";
 
 /** A rejected payload. Same shape as `demo-info.ts` so the route can reply uniformly. */
 export interface McpValidationError {
@@ -156,6 +157,56 @@ export function validateBuildToolchain(
   if (pkg in deps || pkg in devDeps || pkg in peerDeps) return null;
 
   return { error: `/package.json must declare "${pkg}": this demo is built with \`${bin}\`` };
+}
+
+/**
+ * Will this demo's HTML entry actually run anything? (DEV-2741)
+ *
+ * `create_demo` published demos whose `/index.html` was a bare
+ * `<div id="grid"></div>` — no `<script>` at all. Nothing downstream notices: the
+ * Tier-1 bundler makes the HTML file the sandbox entry and walks its `<script src>`
+ * tags, `vite build` reads the same document, and `runBuild` only asks whether the
+ * build emitted *any* file. So the demo compiled, built, saved and served — as an
+ * empty div, on `/share`, `/edit` and `/d/:id` alike, with no error anywhere.
+ *
+ * Refused rather than repaired, for the reason the file rules above are: a payload
+ * silently turned into something the caller did not write is worse than an error the
+ * caller can act on. Demos already stored in the broken shape are a different problem
+ * and are repaired on read.
+ *
+ * The rule is "some module", not "the catalog's entry": a document loading
+ * `/src/main.js` while the catalog says `/index.js` renders perfectly well, and
+ * refusing it would be a false rejection. What cannot render is a document with no
+ * script, or one whose only local scripts name files that were never sent.
+ *
+ * Decided from the request alone, so like the toolchain check it costs nothing and
+ * runs before the budget gate.
+ */
+export function validateHtmlEntry(
+  files: Record<string, string>,
+  cfg: { entry: string; htmlEntry: string | null; buildCommand: string },
+): McpValidationError | null {
+  // Angular's HTML entry legitimately has no script — `ng build` injects the bundle —
+  // and only a vite HTML entry names its own module. See `htmlEntryLoadsModule`.
+  if (!htmlEntryLoadsModule(cfg) || !cfg.htmlEntry) return null;
+  const html = files[cfg.htmlEntry];
+  if (html === undefined) {
+    return { error: `files must include ${cfg.htmlEntry}: it is this framework's HTML entry` };
+  }
+  const problem = entryScriptProblem(html, files);
+  if (!problem) return null;
+  if (problem.kind === "dangling") {
+    return {
+      error:
+        `${cfg.htmlEntry} loads ${problem.targets.join(", ")}, which ${problem.targets.length > 1 ? "are" : "is"} not in files: ` +
+        `send the file, or point the script at ${cfg.entry}`,
+    };
+  }
+  return {
+    error:
+      `${cfg.htmlEntry} must load the entry module, or the demo renders as an empty page: ` +
+      `add ${entryScriptTag(cfg.entry)}`,
+  };
 }
 
 /**

@@ -24,7 +24,7 @@ import { authenticate, authenticateService, isTokenIdentity, presentsToken, same
 import { hashToken, mintToken, normalizeTokenName } from "./token.js";
 import { createToken, listTokens, revokeToken } from "./token-store.js";
 import { MAX_TITLE, isValidationError, validateDescription, validateTitle } from "./demo-info.js";
-import { isMcpCreated, isMcpValidationError, validateBuildToolchain, validateMcpFiles } from "./mcp-create.js";
+import { isMcpCreated, isMcpValidationError, validateBuildToolchain, validateHtmlEntry, validateMcpFiles } from "./mcp-create.js";
 import { editorVersionRef, fetchVersionCatalog, resolveHandsontableVersion } from "./ht-version.js";
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
@@ -41,7 +41,7 @@ import {
 } from "./session-lifecycle.js";
 import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
-import { BuildFailure, buildFailureTags, createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, type DemoRow } from "./share.js";
+import { BuildFailure, buildFailureTags, createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, withEntryScript, type DemoRow } from "./share.js";
 import {
   budgetPausedMessage,
   countEgress,
@@ -1057,6 +1057,11 @@ export default Sentry.withSentry(sentryOptions, {
         // costing a container boot on a doomed install (Sentry DEMOS-31).
         const toolchain = validateBuildToolchain(files, cfg.buildCommand);
         if (toolchain) return json(toolchain, 400);
+        // Same reasoning again, for the other way a payload builds into nothing: an
+        // HTML entry that loads no module compiles, builds and saves, then renders an
+        // empty page on every surface (DEV-2741).
+        const htmlEntry = validateHtmlEntry(files, cfg);
+        if (htmlEntry) return json(htmlEntry, 400);
         // Before the budget gate: an unusable version is a 400, not a container
         // boot spent on an install that cannot succeed (DEV-2565).
         // `trustDistTag`: a tag from this path is the model's own request, not a
@@ -1123,7 +1128,13 @@ export default Sentry.withSentry(sentryOptions, {
         const description = validateDescription(body.description);
         if (isValidationError(description)) return json(description, 400);
         if (!body.files || !body.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
-        const version = await resolveHandsontableVersion(env, { htVersion: body.htVersion, files: body.files });
+        // Repaired, not refused, on the browser paths (DEV-2741). The MCP routes 400 a
+        // document that loads no module because their caller is a program that can be
+        // told what to send; a person mid-edit gets the tag added instead, which is
+        // already what their preview ran — Tier 1 adds it to the bundler's view of the
+        // files too, so refusing here would fail a Save on a demo that was rendering.
+        const saveFiles = withEntryScript(body.framework, body.files);
+        const version = await resolveHandsontableVersion(env, { htVersion: body.htVersion, files: saveFiles });
         if (!version.ok) return json({ error: version.message }, version.status);
 
         // A build is a container boot too, so it answers to the same ceiling.
@@ -1202,6 +1213,10 @@ export default Sentry.withSentry(sentryOptions, {
           // create — see the create handler above (Sentry DEMOS-31).
           const toolchain = validateBuildToolchain(files, cfg.buildCommand);
           if (toolchain) return json(toolchain, 400);
+          // See the create handler (DEV-2741): a patch may be the edit that drops the
+          // entry script, and the rebuilt artifact would be an empty page.
+          const htmlEntry = validateHtmlEntry(files, cfg);
+          if (htmlEntry) return json(htmlEntry, 400);
           // `row.ht_version` is a candidate, not an authority: rows created before
           // DEV-2565 hold the "latest" sentinel, which no consumer can use.
           const version = await resolveHandsontableVersion(env, {
@@ -1328,9 +1343,10 @@ export default Sentry.withSentry(sentryOptions, {
           // are the ones it loaded — nothing re-pins them client-side on a version
           // change (App.tsx:1554 / :1700). Pinning here is what keeps the rebuilt
           // artifact and the stored ref describing the same core (DEV-2565).
+          // See the create handler: repaired, not refused, on a person's Save (DEV-2741).
           const version = await resolveHandsontableVersion(env, {
             htVersion: patch.htVersion,
-            files: patch.files,
+            files: withEntryScript(row.framework, patch.files),
             previousRef: row.ht_version,
           });
           if (!version.ok) return json({ error: version.message }, version.status);

@@ -61,6 +61,10 @@ test("BUILD_CONFIG matches catalog.json field for field", async () => {
         buildCommand: e.buildCommand,
         outputDir: e.outputDir,
         outputGlob: e.outputGlob ?? null,
+        // Carried for the worker's HTML-entry gate (DEV-2741) — same source of truth,
+        // so the drift check covers them too.
+        entry: e.entry,
+        htmlEntry: e.htmlEntry ?? null,
       },
       `${e.framework}: drifted from catalog.json — rerun scripts/prepare-container.mjs`,
     );

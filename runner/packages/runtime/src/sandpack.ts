@@ -19,7 +19,7 @@ import type {
 } from "./types.js";
 import { isCompilerUnavailable, transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
-import { resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
+import { HTML_ENTRY_ENVS, resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
 import {
   MONITOR_COMPILE_MESSAGE_MAX,
   REPORTER_MODULE_LINE,
@@ -28,6 +28,7 @@ import {
   truncateMessage,
 } from "./monitor.js";
 import { injectSchemeReceiver } from "./scheme.js";
+import { ensureEntryScript } from "./entry-script.js";
 import { injectHeadAssets, stripInjectedHeadAssets } from "./head-assets.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 
@@ -412,7 +413,18 @@ export class SandpackRuntime implements DemoRuntime {
     }
     const moduleEntry = this.env === "parcel" ? toParcelEntry(this.entry.entry) : this.entry.entry;
     if (!targets.includes(moduleEntry)) targets.push(moduleEntry);
-    const withScheme = targets.reduce((acc, path) => injectSchemeReceiver(acc, path), files);
+    // Before anything is injected: a document that loads no module at all runs nothing,
+    // and this tier is the one where that is invisible — the HTML file *is* the sandbox
+    // entry, the bundler builds its graph from the document's `<script src>` tags, and a
+    // compile with nothing in it still succeeds (DEV-2741). The API refuses that shape on
+    // the way in and repairs stored demos on the way out; this covers what neither sees —
+    // an ad-hoc `?payload=` boot, and an edit that deletes the tag mid-session.
+    //
+    // On the derived map only, like every other injection here: the authored file is what
+    // Download-zip and the exports read, and it is not this code's to rewrite. The tag
+    // names `moduleEntry`, which is the compiled name in the parcel view.
+    const repaired = this.ensureEntryScript(files, moduleEntry);
+    const withScheme = targets.reduce((acc, path) => injectSchemeReceiver(acc, path), repaired);
     const withMonitor = this.opts.monitor
       ? targets.reduce((acc, path) => injectReporter(acc, path), withScheme)
       : withScheme;
@@ -437,6 +449,21 @@ export class SandpackRuntime implements DemoRuntime {
     } catch {
       return withMonitor;
     }
+  }
+
+  /** The HTML entry with an entry `<script>` added when it has none (DEV-2741). Returns
+   *  the same object when there is nothing to do, which is the overwhelming majority. */
+  private ensureEntryScript(files: FilesMap, moduleEntry: string): FilesMap {
+    const htmlPath = this.entry.htmlEntry;
+    // Only where the document *is* the sandbox entry, so the bundler reads its
+    // `<script src>` tags for the module graph. On `vue-cli` the entry is the module and
+    // the document is along for the ride; a tag there would buy nothing and could load
+    // the entry twice.
+    if (!htmlPath || !this.env || !HTML_ENTRY_ENVS.has(this.env)) return files;
+    const html = files[htmlPath];
+    if (html === undefined || files[moduleEntry] === undefined) return files;
+    const repaired = ensureEntryScript(html, moduleEntry);
+    return repaired === html ? files : { ...files, [htmlPath]: repaired };
   }
 
   private setupFrom(files: FilesMap): SandboxSetup {

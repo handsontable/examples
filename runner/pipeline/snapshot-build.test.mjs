@@ -238,3 +238,148 @@ test("an install failure carries the same build context", async () => {
     setSandboxFactory(null);
   }
 });
+
+// DEV-2741. The other blank-demo shape, and the one the emptiness check above cannot
+// see: `vite build` reads the entry document, and a document that loads no module gives
+// it nothing to bundle. It exits 0, `dist/` holds the HTML, and the artifact is stored
+// as a successful build — which is how `/d/6n1lu5k2s3/` came to be 2.5 KB of markup with
+// no script in it.
+
+const VITE_ENTRY = {
+  framework: "javascript",
+  tier: 1,
+  installCommand: "pnpm install --frozen-lockfile",
+  buildCommand: "vite build",
+  outputDir: "dist",
+  outputGlob: null,
+  entry: "/index.js",
+  htmlEntry: "/index.html",
+};
+
+/** A sandbox whose install and build both succeed and whose `dist/` holds `emitted`. */
+function buildEmitting(emitted) {
+  return () => ({
+    mkdir: async () => {},
+    writeFile: async () => {},
+    readFile: async () => "",
+    destroy: async () => {},
+    async exec(cmd) {
+      if (cmd.includes("find . -type f")) {
+        return { success: true, exitCode: 0, stdout: emitted.map((r) => `./${r}`).join("\n") };
+      }
+      return { success: true, exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+}
+
+test("a vite build that emits HTML and no JavaScript is a failed build, not a stored artifact", async () => {
+  setSandboxFactory(buildEmitting(["index.html"]));
+  try {
+    const err = await runBuild(ENV, VITE_ENTRY, { "/package.json": "{}" }).then(() => null, (e) => e);
+    assert.ok(err, "a bundle-less build must not resolve");
+    assert.match(err.message, /no JavaScript/);
+    // Names the file the author has to fix, not just the symptom.
+    assert.match(err.message, /\/index\.html/);
+  } finally {
+    setSandboxFactory(null);
+  }
+});
+
+test("a vite build that emits a bundle is accepted", async () => {
+  setSandboxFactory(buildEmitting(["index.html", "assets/index-a1b2c3.js"]));
+  try {
+    const out = await runBuild(ENV, VITE_ENTRY, { "/package.json": "{}" });
+    assert.deepEqual(Object.keys(out).sort(), ["assets/index-a1b2c3.js", "index.html"]);
+  } finally {
+    setSandboxFactory(null);
+  }
+});
+
+test("a bundle named .mjs or .cjs is JavaScript", async () => {
+  // `endsWith(".js")` is false for both, and a demo is free to ship a vite.config that
+  // renames the entry chunk — `validateMcpFiles` has no opinion about that file.
+  for (const emitted of ["assets/index-a1b2c3.mjs", "assets/index-a1b2c3.cjs"]) {
+    setSandboxFactory(buildEmitting(["index.html", emitted]));
+    try {
+      const out = await runBuild(ENV, VITE_ENTRY, { "/package.json": "{}" });
+      assert.deepEqual(Object.keys(out).sort(), [emitted, "index.html"].sort(), emitted);
+    } finally {
+      setSandboxFactory(null);
+    }
+  }
+});
+
+test("a CDN- or inline-script demo emits no bundle by design and is not rejected", async () => {
+  // `validateHtmlEntry` lets these through on purpose — it cannot tell a CDN demo from
+  // a mistake — so failing them here would reject on Save, after a billed container
+  // boot, a preview that already runs (found by Bugbot on PR #301).
+  for (const html of [
+    '<div id="grid"></div><script src="https://cdn.example/handsontable.js"></script>',
+    '<div id="grid"></div><script>boot()</script>',
+  ]) {
+    setSandboxFactory(buildEmitting(["index.html"]));
+    try {
+      const out = await runBuild(ENV, VITE_ENTRY, { "/package.json": "{}", "/index.html": html });
+      assert.deepEqual(Object.keys(out), ["index.html"], html);
+    } finally {
+      setSandboxFactory(null);
+    }
+  }
+});
+
+test("a document that does name a local module is still held to emitting one", async () => {
+  // The exemption is "nothing to bundle", not "no bundle" — a document pointing at a
+  // file in the map and a dist with no JavaScript in it is the defect, not a CDN demo.
+  setSandboxFactory(buildEmitting(["index.html"]));
+  try {
+    const err = await runBuild(ENV, VITE_ENTRY, {
+      "/package.json": "{}",
+      "/index.js": "export {};",
+      "/index.html": '<div id="grid"></div><script type="module" src="/index.js"></script>',
+    }).then(() => null, (e) => e);
+    assert.ok(err, "a bundle-less build of a real module must not resolve");
+    assert.match(err.message, /no JavaScript/);
+  } finally {
+    setSandboxFactory(null);
+  }
+});
+
+test("the gate reads the build command, not only the tier", async () => {
+  // Every tier-1 row in today's catalog runs `vite build`, so the tier check alone
+  // explains the case below and the buildCommand half would go unexercised. This entry
+  // is tier 1 with a builder that injects its own bundle — the Angular shape.
+  setSandboxFactory(buildEmitting(["index.html"]));
+  try {
+    const out = await runBuild(
+      ENV,
+      { ...VITE_ENTRY, buildCommand: "ng build", htmlEntry: "/src/index.html" },
+      { "/package.json": "{}" },
+    );
+    assert.deepEqual(Object.keys(out), ["index.html"]);
+  } finally {
+    setSandboxFactory(null);
+  }
+});
+
+test("the no-JavaScript check does not touch a framework whose output shape it was never verified against", async () => {
+  // Next/Nuxt/Astro/Angular each emit differently (`out/`, `.output/public`,
+  // `dist/*/browser`, plus patchTurbopackRuntime); a false rejection here would break
+  // saving for a framework this check was never about.
+  const nextEntry = {
+    framework: "next.js",
+    tier: 2,
+    installCommand: "pnpm install --frozen-lockfile",
+    buildCommand: "next build",
+    outputDir: "out",
+    outputGlob: null,
+    entry: "/app/page.tsx",
+    htmlEntry: null,
+  };
+  setSandboxFactory(buildEmitting(["index.html"]));
+  try {
+    const out = await runBuild(ENV, nextEntry, { "/package.json": "{}" });
+    assert.deepEqual(Object.keys(out), ["index.html"]);
+  } finally {
+    setSandboxFactory(null);
+  }
+});

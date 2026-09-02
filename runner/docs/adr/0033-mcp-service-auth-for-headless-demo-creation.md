@@ -51,6 +51,13 @@ right price for a narrow feature.
   refused, `/package.json` required, and caps of 50 files / 256 KB. Offending payloads are
   **refused, not filtered** — quietly dropping files would build something the caller did
   not write.
+- **The payload has to be able to render**, not just to install. Two request-only gates
+  sit before the budget gate, so a doomed payload never costs a container boot: the
+  manifest must declare the binary its build command invokes (`validateBuildToolchain`,
+  Sentry DEMOS-31), and the framework's HTML entry must load a module
+  (`validateHtmlEntry`, DEV-2741). A document with no `<script>` builds and saves
+  perfectly well and then renders an empty page on `/share`, `/edit` and `/d/:id` alike,
+  because the Tier-1 bundler and `vite build` both derive the module graph from it.
 - **A description is required on this path**, though the editor treats it as optional. A
   demo created from a prompt is read by people who were not in that conversation.
 - **Ownership comparisons fold case; the broker's address is left alone.** `created_by` is

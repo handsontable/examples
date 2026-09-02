@@ -668,3 +668,37 @@ test("an empty head still receives every asset, in order", () => {
   assert.equal(appended[0].attrs.href, CDN_CORE);
   assert.equal(appended.at(-1).attrs.href, "data:text/css,%3Aroot%7B--e2e-data-sentinel%3A%209px%7D");
 });
+
+// DEV-2741. The tier where a script-less document is invisible: the HTML file is the
+// sandbox entry, the bundler derives its module graph from that document's
+// `<script src>` tags, and a compile with nothing in it still reports success. Measured
+// on `/share/6n1lu5k2s3`: `window.__hotRunnerScheme` undefined inside the preview frame,
+// because the module the receiver is injected into never ran.
+
+test("a script-less HTML entry gains the entry tag in the map the bundler sees", async () => {
+  const { runtime } = published(entryFor(), {
+    ...filesWith(),
+    "/index.html": '<div id="grid"></div>\n',
+  });
+  const derived = await runtime.sandboxFiles();
+  assert.match(derived["/index.html"], /<script type="module" src="\/index\.js"><\/script>/);
+});
+
+test("the authored map keeps the document the author wrote", async () => {
+  // The same rule as every other injection here: Download-zip, fork and the
+  // StackBlitz/CodeSandbox exports read `runtime.files`.
+  const authored = '<div id="grid"></div>\n';
+  const { runtime } = published(entryFor(), { ...filesWith(), "/index.html": authored });
+  await runtime.sandboxFiles();
+  assert.equal(runtime.files["/index.html"], authored);
+});
+
+test("a document that already loads a module gains no second entry tag", async () => {
+  // The receivers are still injected into the document (that is their own contract), so
+  // the oracle is the entry tag itself: exactly the one the author wrote.
+  const html = '<body><div id="grid"></div><script type="module" src="/index.js"></script></body>';
+  const { runtime } = published(entryFor(), { ...filesWith(), "/index.html": html });
+  const derived = await runtime.sandboxFiles();
+  const tags = derived["/index.html"].match(/<script type="module" src="\/index\.js"><\/script>/g);
+  assert.deepEqual(tags, ['<script type="module" src="/index.js"></script>']);
+});

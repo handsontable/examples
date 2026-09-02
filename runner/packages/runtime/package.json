@@ -29,6 +29,10 @@
     "./scheme": {
       "types": "./dist/scheme.d.ts",
       "default": "./dist/scheme.js"
+    },
+    "./entry-script": {
+      "types": "./dist/entry-script.d.ts",
+      "default": "./dist/entry-script.js"
     }
   },
   "scripts": {
