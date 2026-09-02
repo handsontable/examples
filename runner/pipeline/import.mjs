@@ -487,6 +487,27 @@ export function writeCatalogIndex({ outDir = OUT_DIR, indexPath = INDEX_PATH } =
   const catalog = {
     generatedFrom: "handsontable/examples examples/",
     buckets,
+    // Each release bucket's pinned Handsontable, lifted out of the manifests so
+    // the app can read it from the index it already bundles (DEV-2735). The
+    // authoring app's version-picker fallback is derived from this, which is
+    // what keeps it moving when the weekly re-pin bumps a bucket — before this
+    // the fallback was hand-typed and sat a release behind for months.
+    //
+    // Releases only: `next` is a nightly, so including it would make this file
+    // — and every open PR that touches it — go stale daily, to carry a value
+    // the picker filters back out anyway (it surfaces nightlies through its own
+    // `next` control). Filtered by shape rather than by the bucket key, so a
+    // future prerelease bucket cannot leak in either.
+    bucketVersions: Object.fromEntries(
+      buckets.flatMap((bucket) => {
+        const manifestPath = path.join(outDir, bucket, "manifest.json");
+        const { hotVersion } = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        if (!hotVersion) {
+          throw new Error(`[import] bucket ${bucket}: manifest has no hotVersion`);
+        }
+        return /^\d+\.\d+\.\d+$/.test(hotVersion) ? [[bucket, hotVersion]] : [];
+      }),
+    ),
     tiers: {
       "1": "client-side (Sandpack, in-browser bundler)",
       "2": "SSR/meta-framework (Cloudflare Sandbox container)",

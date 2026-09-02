@@ -21,6 +21,7 @@ export {
   isHandsontablePackage,
   isNextPrereleaseVersion,
   pickLatestNextVersion,
+  stableBucketVersions,
   pkgPrNewDependencyUrl,
   parsePkgPrNewFromUrl,
   DEFAULT_MAX_MAJOR,

@@ -150,7 +150,7 @@ The panel is built against one pinned Handsontable — `BUNDLED_VERSION` in
 `theme/presets.ts`, kept in step with the `apps/authoring` dependency by
 `pipeline/theme-presets-version.test.mjs` — but a demo runs whatever the version
 picker says, and the presets are not frozen: `tokens/main` is 262 keys at 17.0.1
-and 279 at 18.0.0, and two `rowHeader*` colours changed. Showing this app's
+and 285 at 18.1.0, and two `rowHeader*` colours changed. Showing this app's
 numbers for someone else's version is a confidently wrong value, which is worse
 than the empty box it replaced.
 

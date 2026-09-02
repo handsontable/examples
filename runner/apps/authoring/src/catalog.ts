@@ -1,3 +1,4 @@
+import { stableBucketVersions } from "@handsontable/demo-runtime";
 import type { Catalog, CatalogIndexEntry } from "@handsontable/demo-runtime";
 import catalogJson from "../../../catalog.json";
 import docsBucketsJson from "../../../docs-buckets.json";
@@ -22,9 +23,22 @@ export function getEntry(framework: string): CatalogIndexEntry {
   return e;
 }
 
-/** Fallback version options (used until /api/versions responds). */
-export const VERSION_OPTIONS = ["18.0.0", "17.1.0", "17.0.1"];
-export const DEFAULT_VERSION = "18.0.0";
+/**
+ * Fallback version options — what the picker shows until /api/versions responds,
+ * and what it keeps showing when that fetch fails (`App.tsx`, versions-fetch).
+ *
+ * Derived from the committed starter buckets rather than hand-typed (DEV-2735).
+ * The literal list this replaces was set once by feature work and nothing ever
+ * bumped it: it still offered 18.0.0 as the newest choice months after 18.1.0
+ * became npm `latest`, so a visitor whose /api/versions call had not landed yet
+ * could not pick the current release at all. `bucketVersions` is rewritten by
+ * the weekly bucket re-pin, so this now moves on its own — and every entry has
+ * a bucket behind it, which a hand-typed npm version does not guarantee.
+ */
+export const VERSION_OPTIONS = stableBucketVersions(catalog.bucketVersions);
+/** What an unparameterised visit starts on, and the sentinel `App.tsx` reads as
+ *  "the visitor has not chosen" before swapping in npm `latest`. */
+export const DEFAULT_VERSION = VERSION_OPTIONS[0];
 
 /** Fetch real published versions from the API (npm-backed). */
 export async function fetchVersions(
