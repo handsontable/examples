@@ -25,7 +25,7 @@
 // reason: the API worker already depends on this package, so a second copy in
 // `workers/api` would be a second set of rules to keep in sync.
 
-import { injectedScriptTag } from "./inject-html.js";
+import { injectedScriptTag, insertInjectedTag } from "./inject-html.js";
 
 /** The `postMessage` discriminator. Also the injection idempotency marker. */
 export const SCHEME_MESSAGE_TYPE = "hot-runner-scheme";
@@ -215,22 +215,14 @@ function alreadyInjected(source: string): boolean {
  * halves were measured against the remix starter; either one alone still throws
  * React #418 (DEV-2580).
  *
+ * The insertion point itself is `insertInjectedTag` — shared with the monitor, and
+ * *before* `<body>` in a document with no `<head>`, which is what DEV-2724 turned on.
+ *
  * Returns `html` unchanged when it is already injected.
  */
 export function injectSchemeIntoHtml(html: string): string {
   if (alreadyInjected(html)) return html;
-  const tag = injectedScriptTag(SCHEME_RECEIVER_SOURCE);
-  const head = /<head\b[^>]*>/i.exec(html);
-  if (head) {
-    const at = head.index + head[0].length;
-    return html.slice(0, at) + tag + html.slice(at);
-  }
-  const body = /<body\b[^>]*>/i.exec(html);
-  if (body) {
-    const at = body.index + body[0].length;
-    return html.slice(0, at) + tag + html.slice(at);
-  }
-  return tag + html;
+  return insertInjectedTag(html, injectedScriptTag(SCHEME_RECEIVER_SOURCE));
 }
 
 /**

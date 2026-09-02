@@ -114,3 +114,85 @@ test("the tag is byte-deterministic", () => {
   // `SandpackRuntime.sameFiles` skips the compile when the sandbox is unchanged.
   assert.equal(injectedScriptTag("run();"), injectedScriptTag("run();"));
 });
+
+// ---- DEV-2724: the injected tag must survive the classic bundler's body split ----
+//
+// Reported on `/share/:id`: the preview panel rendered the whole reporter as plain,
+// unstyled page text above the demo. The cause is not the reporter but *where* it was
+// inserted. The classic Tier-1 bundler splits the demo's document with its own
+// regexes and assigns the body slice as markup (`document.body.innerHTML = body`),
+// and `<body.*>` is greedy while `.` stops at a newline — so everything we put after
+// `<body>` on that same line, up to the last `>` on it, is swallowed by the match
+// itself. That `>` is our own `<script>`'s: the open tag disappears and the receiver
+// source becomes a text node.
+//
+// Only documents with no `<head>` were affected — the injectors prefer the head, and
+// `create_demo` emits `<!doctype html><html><body>…` — which is why the starters
+// never showed it.
+
+/** The deployed bundler's own head/body split, transcribed from
+ *  `2-19-8-sandpack.codesandbox.io/static/js/sandbox.8a7d01a44.js`. Verbatim on
+ *  purpose: a paraphrase would fail (or pass) for a reason the visitor never saw. */
+function getHTMLParts(html) {
+  if (html.includes("<body>")) {
+    const bodyMatcher = /<body.*>([\s\S]*)<\/body>/m;
+    const headMatcher = /<head>([\s\S]*)<\/head>/m;
+    const headMatch = html.match(headMatcher);
+    const bodyMatch = html.match(bodyMatcher);
+    return {
+      body: bodyMatch && bodyMatch[1] ? bodyMatch[1] : html,
+      head: headMatch && headMatch[1] ? headMatch[1] : "",
+    };
+  }
+  return { head: "", body: html };
+}
+
+/** The shape `create_demo` writes, and the one in the report: no `<head>`, and the
+ *  body's own content starting on the line after `<body>`. */
+const HEADLESS = `<!doctype html>
+<html>
+  <body>
+    <h3>beforeKeyDown returning false</h3>
+    <p id="status">Press Enter.</p>
+    <div id="grid"></div>
+    <script type="module" src="/index.js"></script>
+  </body>
+</html>
+`;
+
+for (const [name, inject] of [
+  ["the monitor", injectReporterIntoHtml],
+  ["the scheme receiver", injectSchemeIntoHtml],
+]) {
+  test(`${name} leaves the bundler's body slice byte-identical in a document with no head (DEV-2724)`, () => {
+    // The strongest form of "nothing of ours renders as page text": the body the
+    // bundler assigns is exactly the body the demo authored. Asserting the absence
+    // of a few strings would keep passing over a *different* fragment of the tag
+    // leaking through the same greedy match.
+    assert.equal(getHTMLParts(inject(HEADLESS)).body, getHTMLParts(HEADLESS).body);
+  });
+
+  test(`${name} still runs before the demo's own scripts in a document with no head (DEV-2724)`, () => {
+    // The insertion may not be bought by moving the tag past the demo. A classic
+    // inline script placed in the implicit head executes during head parse — before
+    // the module scripts in the body, which is the whole point of injecting early.
+    const out = inject(HEADLESS);
+    const tagAt = out.indexOf("<script>");
+    const bodyAt = out.search(/<body\b/i);
+    const demoAt = out.indexOf('src="/index.js"');
+    assert.ok(tagAt !== -1 && bodyAt !== -1 && demoAt !== -1);
+    assert.ok(tagAt < bodyAt, "the tag belongs to the implicit head, not the body");
+    assert.ok(bodyAt < demoAt, "and the demo's own body is left where it was");
+  });
+}
+
+test("both receivers coexist in a document with no head, and neither reaches the body (DEV-2724)", () => {
+  // The real Tier-1 order: the scheme receiver is unconditional and the monitor is
+  // injected into the same document behind its flag (`withInjections`). Each has to
+  // stay out of the body slice with the other already present.
+  const both = injectReporterIntoHtml(injectSchemeIntoHtml(HEADLESS));
+  assert.equal(getHTMLParts(both).body, getHTMLParts(HEADLESS).body);
+  // Counted on the prelude, not on `<script>`: the reporter body quotes the literal
+  // string `<script>` in a comment about failed resource loads.
+  assert.equal(both.split(SELF_REMOVING_PRELUDE).length - 1, 2, "both receivers present");
+});
