@@ -171,15 +171,23 @@ export function fakeKV() {
  * listing), so asserting on put *keys* alone could not tell a pinned file map
  * from the raw submitted one.
  */
-export function fakeR2() {
+export function fakeR2(seed = {}) {
   const puts = [];
+  // Seeded objects make the read paths reachable (a stored `__source.json`, DEV-2741).
+  // A put lands here too, so a route that repairs what it read can be asserted on the
+  // second read. With no seed, `get` answers null exactly as it always did.
+  const store = new Map(Object.entries(seed));
   return {
     puts,
+    store,
     async put(key, value) {
       puts.push({ key, value });
+      store.set(key, String(value));
     },
-    async get() {
-      return null;
+    async get(key) {
+      const value = store.get(key);
+      if (value === undefined) return null;
+      return { body: value, async text() { return value; } };
     },
     async list() {
       return { objects: [] };
@@ -195,9 +203,9 @@ export const AUTHOR = "dev@handsontable.com";
  * layered by the caller; none are set here so the broker path stays the one
  * under test on the browser routes.
  */
-export function makeEnv(seedRows = [], seedTokens = []) {
+export function makeEnv(seedRows = [], seedTokens = [], seedArtifacts = {}) {
   const { db, writes, demos, tokens } = fakeD1(seedRows, seedTokens);
-  const artifacts = fakeR2();
+  const artifacts = fakeR2(seedArtifacts);
   const env = {
     Sandbox: {},
     SANDBOX_BUILDER: {},

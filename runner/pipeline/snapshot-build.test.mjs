@@ -238,3 +238,82 @@ test("an install failure carries the same build context", async () => {
     setSandboxFactory(null);
   }
 });
+
+// DEV-2741. The other blank-demo shape, and the one the emptiness check above cannot
+// see: `vite build` reads the entry document, and a document that loads no module gives
+// it nothing to bundle. It exits 0, `dist/` holds the HTML, and the artifact is stored
+// as a successful build — which is how `/d/6n1lu5k2s3/` came to be 2.5 KB of markup with
+// no script in it.
+
+const VITE_ENTRY = {
+  framework: "javascript",
+  tier: 1,
+  installCommand: "pnpm install --frozen-lockfile",
+  buildCommand: "vite build",
+  outputDir: "dist",
+  outputGlob: null,
+  entry: "/index.js",
+  htmlEntry: "/index.html",
+};
+
+/** A sandbox whose install and build both succeed and whose `dist/` holds `emitted`. */
+function buildEmitting(emitted) {
+  return () => ({
+    mkdir: async () => {},
+    writeFile: async () => {},
+    readFile: async () => "",
+    destroy: async () => {},
+    async exec(cmd) {
+      if (cmd.includes("find . -type f")) {
+        return { success: true, exitCode: 0, stdout: emitted.map((r) => `./${r}`).join("\n") };
+      }
+      return { success: true, exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+}
+
+test("a vite build that emits HTML and no JavaScript is a failed build, not a stored artifact", async () => {
+  setSandboxFactory(buildEmitting(["index.html"]));
+  try {
+    const err = await runBuild(ENV, VITE_ENTRY, { "/package.json": "{}" }).then(() => null, (e) => e);
+    assert.ok(err, "a bundle-less build must not resolve");
+    assert.match(err.message, /no JavaScript/);
+    // Names the file the author has to fix, not just the symptom.
+    assert.match(err.message, /\/index\.html/);
+  } finally {
+    setSandboxFactory(null);
+  }
+});
+
+test("a vite build that emits a bundle is accepted", async () => {
+  setSandboxFactory(buildEmitting(["index.html", "assets/index-a1b2c3.js"]));
+  try {
+    const out = await runBuild(ENV, VITE_ENTRY, { "/package.json": "{}" });
+    assert.deepEqual(Object.keys(out).sort(), ["assets/index-a1b2c3.js", "index.html"]);
+  } finally {
+    setSandboxFactory(null);
+  }
+});
+
+test("the no-JavaScript check does not touch a framework whose output shape it was never verified against", async () => {
+  // Next/Nuxt/Astro/Angular each emit differently (`out/`, `.output/public`,
+  // `dist/*/browser`, plus patchTurbopackRuntime); a false rejection here would break
+  // saving for a framework this check was never about.
+  const nextEntry = {
+    framework: "next.js",
+    tier: 2,
+    installCommand: "pnpm install --frozen-lockfile",
+    buildCommand: "next build",
+    outputDir: "out",
+    outputGlob: null,
+    entry: "/app/page.tsx",
+    htmlEntry: null,
+  };
+  setSandboxFactory(buildEmitting(["index.html"]));
+  try {
+    const out = await runBuild(ENV, nextEntry, { "/package.json": "{}" });
+    assert.deepEqual(Object.keys(out), ["index.html"]);
+  } finally {
+    setSandboxFactory(null);
+  }
+});

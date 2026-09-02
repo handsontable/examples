@@ -34,32 +34,39 @@ export const FRAMEWORK_DEV: Record<string, FrameworkDev> = {
 };
 
 // Build config for the share snapshotter (all examples).
+//
+// "entry" and "htmlEntry" are the same two paths the catalog hands the browser, carried
+// here so the worker can tell whether an agent-supplied index.html actually loads a
+// module (DEV-2741). They are the demo's *authored* names — Tier 1 renames TS/JSX on
+// its own (toParcelEntry), which is no concern of the build path.
 export interface BuildConfig {
   tier: number;
   installCommand: string;
   buildCommand: string;
   outputDir: string;
   outputGlob: string | null;
+  entry: string;
+  htmlEntry: string | null;
 }
 
 export const BUILD_CONFIG: Record<string, BuildConfig> = {
-  "blank": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
-  "blank-ts": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
-  "blank-react": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
-  "example1": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc && vite build", outputDir: "dist", outputGlob: null },
-  "javascript": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
-  "typescript": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc && vite build", outputDir: "dist", outputGlob: null },
-  "react": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
-  "react-js": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
-  "ant-design": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
-  "mui": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
-  "base-web": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
-  "fluent-ui": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null },
-  "vue": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
-  "angular": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "ng build", outputDir: "dist", outputGlob: "dist/*/browser" },
-  "next.js": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "next build", outputDir: "out", outputGlob: null },
-  "next-shadcn.js": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "next build", outputDir: "out", outputGlob: null },
-  "astro": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "astro build", outputDir: "dist", outputGlob: null },
-  "nuxt": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "nuxt generate", outputDir: ".output/public", outputGlob: null },
-  "remix": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "remix vite:build", outputDir: "build/client", outputGlob: null },
+  "blank": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null, entry: "/index.js", htmlEntry: "/index.html" },
+  "blank-ts": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null, entry: "/index.ts", htmlEntry: "/index.html" },
+  "blank-react": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null, entry: "/src/index.tsx", htmlEntry: "/index.html" },
+  "example1": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc && vite build", outputDir: "dist", outputGlob: null, entry: "/index.ts", htmlEntry: "/index.html" },
+  "javascript": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null, entry: "/index.js", htmlEntry: "/index.html" },
+  "typescript": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc && vite build", outputDir: "dist", outputGlob: null, entry: "/index.ts", htmlEntry: "/index.html" },
+  "react": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null, entry: "/src/index.tsx", htmlEntry: "/index.html" },
+  "react-js": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null, entry: "/src/index.jsx", htmlEntry: "/index.html" },
+  "ant-design": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null, entry: "/src/index.jsx", htmlEntry: "/index.html" },
+  "mui": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null, entry: "/src/index.tsx", htmlEntry: "/index.html" },
+  "base-web": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null, entry: "/src/index.tsx", htmlEntry: "/index.html" },
+  "fluent-ui": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "tsc -b && vite build", outputDir: "dist", outputGlob: null, entry: "/src/index.tsx", htmlEntry: "/index.html" },
+  "vue": { tier: 1, installCommand: "pnpm install --frozen-lockfile", buildCommand: "vite build", outputDir: "dist", outputGlob: null, entry: "/src/main.ts", htmlEntry: "/index.html" },
+  "angular": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "ng build", outputDir: "dist", outputGlob: "dist/*/browser", entry: "/src/main.ts", htmlEntry: "/src/index.html" },
+  "next.js": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "next build", outputDir: "out", outputGlob: null, entry: "/app/page.tsx", htmlEntry: null },
+  "next-shadcn.js": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "next build", outputDir: "out", outputGlob: null, entry: "/app/page.tsx", htmlEntry: null },
+  "astro": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "astro build", outputDir: "dist", outputGlob: null, entry: "/src/pages/index.astro", htmlEntry: null },
+  "nuxt": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "nuxt generate", outputDir: ".output/public", outputGlob: null, entry: "/app.vue", htmlEntry: null },
+  "remix": { tier: 2, installCommand: "pnpm install --frozen-lockfile", buildCommand: "remix vite:build", outputDir: "build/client", outputGlob: null, entry: "/app/routes/_index.tsx", htmlEntry: null },
 };

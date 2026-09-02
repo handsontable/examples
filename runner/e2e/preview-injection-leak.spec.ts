@@ -32,9 +32,11 @@ const PAYLOAD_ID = "lk9x3d7q22";
 
 const TITLE = "beforeKeyDown returning false";
 
-/** The reported shape, and what `create_demo` emits: no `<head>`, and `<body>` alone
- *  on its line. A starter's `index.html` has a `<head>`, which is why every starter
- *  looked fine while a published demo did not. */
+/** The reported shape: no `<head>`, and `<body>` alone on its line. A starter's
+ *  `index.html` has a `<head>`, which is why every starter looked fine while a published
+ *  demo did not. One of two shapes `create_demo` emitted — the other is a bare fragment
+ *  with no `<script>` at all, which rendered nothing anywhere (DEV-2741,
+ *  `preview-entry-script.spec.ts`). */
 const HEADLESS_HTML = `<!doctype html>
 <html>
   <body>

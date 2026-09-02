@@ -10,6 +10,8 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { injectSchemeIntoHtml } from "@handsontable/demo-runtime/scheme";
 import { execFailureDetail } from "@handsontable/demo-runtime/failure-log";
 import { handsontableDependencyRef } from "@handsontable/demo-runtime";
+import { ensureEntryScript } from "@handsontable/demo-runtime/entry-script";
+import { BUILD_CONFIG } from "./frameworks.generated.js";
 import type { Env } from "./env.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { recordContainerUsage, SESSION_INSTANCE_TYPE } from "./budget.js";
@@ -45,7 +47,9 @@ export interface DemoRow {
   revoked_at: string | null;
 }
 
-/** Minimal catalog entry shape needed for building. */
+/** Minimal catalog entry shape needed for building. Every construction site spreads a
+ *  `BUILD_CONFIG` row, so the two entry paths ride along; only the no-JavaScript check
+ *  reads them, and only to name the file in its message. */
 export interface BuildEntry {
   framework: string;
   tier: number;
@@ -53,6 +57,8 @@ export interface BuildEntry {
   buildCommand: string;
   outputDir: string;
   outputGlob: string | null;
+  entry?: string;
+  htmlEntry?: string | null;
 }
 
 /** Bump whenever the build pipeline changes what artifacts contain (runtime
@@ -219,6 +225,12 @@ function execFailed(r: { success?: boolean; exitCode?: number }): boolean {
   return r.success === false || (typeof r.exitCode === "number" && r.exitCode !== 0);
 }
 
+/** The build shape the no-JavaScript check below is verified against: a tier-1 example
+ *  bundled by `vite build` into a flat `dist/`. */
+function isViteTier1(entry: BuildEntry): boolean {
+  return entry.tier === 1 && snapshotBuildCommand(entry.buildCommand).trim() === "vite build";
+}
+
 /** Run the framework build in a builder container; return { relPath -> contents }. */
 export async function runBuild(
   env: Env,
@@ -282,6 +294,22 @@ export async function runBuild(
     const rels = (list.stdout ?? "")
       .split("\n").map((s) => s.replace(/^\.\//, "").trim()).filter(Boolean);
     if (!rels.length) throw new Error(`build produced no files in ${outDir}`);
+    // A build that emits HTML and no JS is the other way a demo comes out blank
+    // (DEV-2741): `vite build` reads the entry document, and a document that loads no
+    // module gives it nothing to bundle. It exits 0, `dist/` is non-empty, and the
+    // artifact is stored as a success — the shape the emptiness check above cannot see.
+    //
+    // Scoped to the vite tier-1 builds whose output shape is known here. Next (`out/`,
+    // with its own runtime patch below), Nuxt (`.output/public`), Astro and Angular
+    // (`dist/*/browser`) each emit differently, and a false rejection would break
+    // saving for a framework this check was never about.
+    if (isViteTier1(entry) && !rels.some((rel) => rel.endsWith(".js"))) {
+      throw new Error(
+        `build produced no JavaScript in ${outDir}: ${entry.htmlEntry ?? "the HTML entry"} `
+        + `loads no module, so the demo would render as an empty page`
+        + (entry.entry ? ` — add <script type="module" src="${entry.entry}"></script>` : ""),
+      );
+    }
 
     const out: Record<string, ArtifactContents> = {};
     for (const rel of rels) {
@@ -448,16 +476,74 @@ export async function invalidateDemo(env: Env, id: string): Promise<void> {
   await env.CACHE.delete(`demo:${id}`);
 }
 
+export interface DemoSource {
+  framework: string;
+  files: Record<string, string>;
+}
+
+/**
+ * Repair a *stored* snapshot whose HTML entry loads no module at all (DEV-2741).
+ *
+ * `create_demo` published demos whose `/index.html` was a bare `<div id="grid"></div>`.
+ * Nothing between the request and the artifact noticed, so they were saved, built and
+ * served as an empty page — the Tier-1 bundler takes the HTML file as the sandbox entry
+ * and walks its `<script src>` tags, and `vite build` reads the same document. The write
+ * gate now refuses that payload (`validateHtmlEntry`), which does nothing for the demos
+ * already stored, so they are repaired the first time their source is read.
+ *
+ * Repairing on read rather than in a migration costs nothing for the demos that are
+ * already fine, and needs no list of the ones that are not.
+ *
+ * The `/d/:id` artifact is not repaired here — it has no bundle for the tag to point at,
+ * so it needs a real rebuild, which the next Save (or `update_demo`) performs against
+ * these repaired files.
+ */
+/**
+ * The file map with an entry `<script>` added to the HTML entry when it has none
+ * (DEV-2741) — the same object back when there is nothing to do, which is every demo
+ * that was authored correctly.
+ *
+ * `ensureEntryScript` fires only for a document with *no* script of any kind, which is
+ * never a shape that renders: the Tier-1 bundler takes the HTML file as the sandbox
+ * entry and builds its module graph from that document's `<script src>` tags, and
+ * `vite build` reads the same document on the `/d/:id` path. A demo booting some other
+ * module, or from an inline or CDN script, is returned untouched.
+ */
+export function withEntryScript(
+  framework: string,
+  files: Record<string, string>,
+): Record<string, string> {
+  const cfg = BUILD_CONFIG[framework];
+  if (!cfg?.htmlEntry) return files;
+  const html = files[cfg.htmlEntry];
+  // No HTML entry, or no module to point the tag at: not something to guess at.
+  if (html === undefined || files[cfg.entry] === undefined) return files;
+  const repaired = ensureEntryScript(html, cfg.entry);
+  return repaired === html ? files : { ...files, [cfg.htmlEntry]: repaired };
+}
+
+async function repairEntryScript(env: Env, row: DemoRow, src: DemoSource): Promise<DemoSource> {
+  const files = withEntryScript(src.framework, src.files);
+  if (files === src.files) return src;
+  const next: DemoSource = { ...src, files };
+  try {
+    await env.ARTIFACTS.put(`${row.r2_prefix}__source.json`, JSON.stringify(next), {
+      httpMetadata: { contentType: "application/json" },
+    });
+  } catch {
+    // Serving a demo that renders matters more than persisting the repair; the next
+    // read tries again.
+  }
+  return next;
+}
+
 /** Source snapshot for forking a saved demo: { framework, files }. */
-export async function getDemoSource(
-  env: Env,
-  id: string,
-): Promise<{ framework: string; files: Record<string, string> } | null> {
+export async function getDemoSource(env: Env, id: string): Promise<DemoSource | null> {
   const row = await getDemo(env, id);
   if (!row || row.revoked) return null;
   const obj = await env.ARTIFACTS.get(`${row.r2_prefix}__source.json`);
   if (!obj) return null;
-  return JSON.parse(await obj.text()) as { framework: string; files: Record<string, string> };
+  return repairEntryScript(env, row, JSON.parse(await obj.text()) as DemoSource);
 }
 
 /** Serve a built static asset for /d/:id/* (or /embed/:id/*). */

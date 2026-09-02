@@ -42,9 +42,19 @@ const { demoListQuery } = await import("../workers/api/src/demos-list.ts");
 // devDependencies.vite satisfies the toolchain gate (validateBuildToolchain):
 // every framework these fixtures build with (react, and demoRow()'s "react")
 // runs `vite build` as the last step of its buildCommand.
+//
+// `/index.html` loads `/src/index.tsx` because the HTML gate (validateHtmlEntry,
+// DEV-2741) refuses a document that runs no module, and "react" — the framework these
+// fixtures build with — declares `/index.html` as its HTML entry.
+const INDEX_HTML =
+  '<!doctype html><html><body><div id="root"></div>'
+  + '<script type="module" src="/src/index.tsx"></script></body></html>';
+
 const FILES = {
   "/package.json": JSON.stringify({ name: "demo", devDependencies: { vite: "^5.4.0" } }),
   "/index.js": "console.log(1)",
+  "/index.html": INDEX_HTML,
+  "/src/index.tsx": "export {};",
 };
 
 const PR_URL = "https://pkg.pr.new/handsontable@13106";
@@ -57,6 +67,8 @@ const filesWith = (dep) => ({
     devDependencies: { vite: "^5.4.0" },
   }),
   "/index.js": "console.log(1)",
+  "/index.html": INDEX_HTML,
+  "/src/index.tsx": "export {};",
 });
 
 const mcpHeaders = {
@@ -295,6 +307,51 @@ test("an MCP rebuild refuses an invalid explicit ref with the validator's messag
   );
   assert.equal(res.status, 400);
   assert.match((await res.json()).error, /semver-valid or a pkg\.pr\.new id\/URL/);
+  assert.deepEqual(writes, [], "a refused rebuild must not write");
+  assert.deepEqual(artifacts.puts, [], "a refused rebuild must not store artifacts");
+});
+
+test("a create whose index.html loads no module is refused before it is built", async () => {
+  // DEV-2741, at the route. The demo this reproduces was published, built and served
+  // as an empty `<div id="grid">` on /share, /edit and /d/:id alike, because nothing
+  // between the request and the artifact asks whether the entry document runs anything.
+  const { env, writes, artifacts } = makeEnv();
+  const res = await worker.fetch(
+    createRequest({
+      framework: "react",
+      title: "Grid",
+      description: "A sortable grid",
+      files: {
+        "/package.json": JSON.stringify({ name: "demo", devDependencies: { vite: "^5.4.0" } }),
+        "/src/index.tsx": "export {};",
+        "/index.html": '<div id="grid" style="height: 460px"></div>\n',
+      },
+    }),
+    env,
+    ctx,
+  );
+  assert.equal(res.status, 400);
+  // The message has to carry the fix — the caller is a model.
+  assert.match((await res.json()).error, /<script type="module" src="\/src\/index\.tsx"><\/script>/);
+  assert.deepEqual(writes, [], "no D1 write for a payload that renders nothing");
+  assert.deepEqual(artifacts.puts, [], "no artifact stored for a payload that renders nothing");
+});
+
+test("a rebuild that drops the entry script is refused and writes nothing", async () => {
+  const { env, writes, artifacts } = makeEnv([demoRow()]);
+  const res = await worker.fetch(
+    patchRequest("abc123", {
+      files: {
+        "/package.json": JSON.stringify({ name: "demo", devDependencies: { vite: "^5.4.0" } }),
+        "/src/index.tsx": "export {};",
+        "/index.html": '<div id="grid"></div>',
+      },
+    }),
+    env,
+    ctx,
+  );
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /renders as an empty page/);
   assert.deepEqual(writes, [], "a refused rebuild must not write");
   assert.deepEqual(artifacts.puts, [], "a refused rebuild must not store artifacts");
 });
