@@ -36,7 +36,11 @@
       "engine": "sandpack",
       "minCoreMajor": null,
       "overrides": [
-        "example1:dateFormat"
+        "example1:dateFormat",
+        "example1:cost",
+        "example1:itemQuality",
+        "example1:quantity",
+        "example1:valueStock"
       ]
     },
     {
