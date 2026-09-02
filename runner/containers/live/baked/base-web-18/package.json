@@ -22,9 +22,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@handsontable/react-wrapper": "18.0.0",
+    "@handsontable/react-wrapper": "18.1.0",
     "baseui": "^18.2.0",
-    "handsontable": "18.0.0",
+    "handsontable": "18.1.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "styletron-engine-atomic": "^1.6.2",

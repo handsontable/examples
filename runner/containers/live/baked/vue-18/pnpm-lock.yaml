@@ -9,14 +9,14 @@ importers:
   .:
     dependencies:
       '@handsontable/vue3':
-        specifier: 18.0.0
-        version: 18.0.0(handsontable@18.0.0)(vue@3.5.42)
+        specifier: 18.1.0
+        version: 18.1.0(handsontable@18.1.0)(vue@3.5.42)
       '@vitejs/plugin-vue':
         specifier: ^5.0.0
         version: 5.2.4(vite@5.4.21)(vue@3.5.42)
       handsontable:
-        specifier: 18.0.0
-        version: 18.0.0
+        specifier: 18.1.0
+        version: 18.1.0
       vite:
         specifier: ^5.4.0
         version: 5.4.21
@@ -181,8 +181,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@handsontable/vue3@18.0.0':
-    resolution: {integrity: sha512-9YCT8cEQnKfu/jKpLlNtlZtmXL5ze5F5tOmXDmSvW60r9yGS/qbjg4Q8acOXDvXCC0S2krgpxL5VD51kcmZbVw==}
+  '@handsontable/vue3@18.1.0':
+    resolution: {integrity: sha512-l0z/nDxSMp9XgfFh/3q4DvW9Clgz2rD7vUcN7SKQTAFtS4xbmr1yemOZ9+i/kA+gCwu+KgmWbea3evdXPqTFWA==}
     peerDependencies:
       handsontable: ^18.0.0
       vue: ^3.2.22
@@ -392,8 +392,8 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
-  handsontable@18.0.0:
-    resolution: {integrity: sha512-U4H6gDrwGTfjahSyoGHhFHZvOZWB7ReQ3iBvJUIcZPdqdppdZ+FSYNovw+3MH1guJfGgRIhoLYnbSm8Gd6Ft8w==}
+  handsontable@18.1.0:
+    resolution: {integrity: sha512-23S/Jny67NRevaZgTXSAonhFW28du3J6DJm/TDN35Gj5hpztUxlRMEG0SugEEf0lQxdDhLRmz81Ikkt7xvuNRA==}
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
@@ -542,9 +542,9 @@ snapshots:
   '@esbuild/win32-x64@0.21.5':
     optional: true
 
-  '@handsontable/vue3@18.0.0(handsontable@18.0.0)(vue@3.5.42)':
+  '@handsontable/vue3@18.1.0(handsontable@18.1.0)(vue@3.5.42)':
     dependencies:
-      handsontable: 18.0.0
+      handsontable: 18.1.0
       vue: 3.5.42
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
@@ -723,7 +723,7 @@ snapshots:
   fsevents@2.3.3:
     optional: true
 
-  handsontable@18.0.0: {}
+  handsontable@18.1.0: {}
 
   magic-string@0.30.21:
     dependencies:

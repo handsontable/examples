@@ -10,8 +10,8 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@handsontable/react-wrapper": "18.0.0",
-    "handsontable": "18.0.0",
+    "@handsontable/react-wrapper": "18.1.0",
+    "handsontable": "18.1.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.24.0",
