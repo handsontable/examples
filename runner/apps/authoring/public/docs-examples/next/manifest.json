@@ -2,7 +2,7 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-bb3c352-20260902",
+  "hotVersion": "0.0.0-next-21bc714-20260904",
   "count": 1487,
   "examples": [
     {
@@ -3554,6 +3554,86 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/cell-features/move-cells/angular/example1.ts",
+      "file": "guides__cell-features__move-cells__angular__example1.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Move cells"
+      ],
+      "guide": "guides/cell-features/move-cells/move-cells.md",
+      "guideTitle": "Move cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/move-cells",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/move-cells/javascript/example1.js",
+      "file": "guides__cell-features__move-cells__javascript__example1.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Move cells"
+      ],
+      "guide": "guides/cell-features/move-cells/move-cells.md",
+      "guideTitle": "Move cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/move-cells",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/move-cells/react/example1.tsx",
+      "file": "guides__cell-features__move-cells__react__example1.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Move cells"
+      ],
+      "guide": "guides/cell-features/move-cells/move-cells.md",
+      "guideTitle": "Move cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/move-cells",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/move-cells/javascript/example1.ts",
+      "file": "guides__cell-features__move-cells__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Move cells"
+      ],
+      "guide": "guides/cell-features/move-cells/move-cells.md",
+      "guideTitle": "Move cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/move-cells",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/move-cells/vue/example1.vue",
+      "file": "guides__cell-features__move-cells__vue__example1.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Move cells"
+      ],
+      "guide": "guides/cell-features/move-cells/move-cells.md",
+      "guideTitle": "Move cells",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/move-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/cell-features/read-only-cells/angular/example1.ts",
       "file": "guides__cell-features__read-only-cells__angular__example1.ts.json",
       "breadcrumb": [
@@ -4588,86 +4668,6 @@
       "guideTitle": "Selection",
       "exampleId": "example7",
       "exampleTitle": "Resize a selection with handles",
-      "docPermalink": "/selection",
-      "framework": "vue",
-      "displayName": "Vue 3"
-    },
-    {
-      "bucket": "next",
-      "docsPath": "guides/cell-features/selection/angular/example8.ts",
-      "file": "guides__cell-features__selection__angular__example8.ts.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Selection"
-      ],
-      "guide": "guides/cell-features/selection/selection.md",
-      "guideTitle": "Selection",
-      "exampleId": "example8",
-      "exampleTitle": "Move a selection by dragging",
-      "docPermalink": "/selection",
-      "framework": "angular",
-      "displayName": "Angular"
-    },
-    {
-      "bucket": "next",
-      "docsPath": "guides/cell-features/selection/javascript/example8.js",
-      "file": "guides__cell-features__selection__javascript__example8.js.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Selection"
-      ],
-      "guide": "guides/cell-features/selection/selection.md",
-      "guideTitle": "Selection",
-      "exampleId": "example8",
-      "exampleTitle": "Move a selection by dragging",
-      "docPermalink": "/selection",
-      "framework": "javascript",
-      "displayName": "JavaScript"
-    },
-    {
-      "bucket": "next",
-      "docsPath": "guides/cell-features/selection/react/example8.tsx",
-      "file": "guides__cell-features__selection__react__example8.tsx.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Selection"
-      ],
-      "guide": "guides/cell-features/selection/selection.md",
-      "guideTitle": "Selection",
-      "exampleId": "example8",
-      "exampleTitle": "Move a selection by dragging",
-      "docPermalink": "/selection",
-      "framework": "react",
-      "displayName": "React (TS)"
-    },
-    {
-      "bucket": "next",
-      "docsPath": "guides/cell-features/selection/javascript/example8.ts",
-      "file": "guides__cell-features__selection__javascript__example8.ts.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Selection"
-      ],
-      "guide": "guides/cell-features/selection/selection.md",
-      "guideTitle": "Selection",
-      "exampleId": "example8",
-      "exampleTitle": "Move a selection by dragging",
-      "docPermalink": "/selection",
-      "framework": "typescript",
-      "displayName": "TypeScript"
-    },
-    {
-      "bucket": "next",
-      "docsPath": "guides/cell-features/selection/vue/example8.vue",
-      "file": "guides__cell-features__selection__vue__example8.vue.json",
-      "breadcrumb": [
-        "Cell Features",
-        "Selection"
-      ],
-      "guide": "guides/cell-features/selection/selection.md",
-      "guideTitle": "Selection",
-      "exampleId": "example8",
-      "exampleTitle": "Move a selection by dragging",
       "docPermalink": "/selection",
       "framework": "vue",
       "displayName": "Vue 3"
