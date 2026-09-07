@@ -152,7 +152,11 @@
   "durable_objects": {
     "bindings": [
       { "class_name": "Sandbox", "name": "Sandbox" },
-      { "class_name": "BuilderSandbox", "name": "SANDBOX_BUILDER" }
+      { "class_name": "BuilderSandbox", "name": "SANDBOX_BUILDER" },
+      // Detached snapshot builds for the MCP service path (src/snapshot-jobs.ts).
+      // Deliberately NOT in "containers": it is a plain sqlite DO whose alarm
+      // *drives* a BuilderSandbox container, it does not front one itself.
+      { "class_name": "BuildJob", "name": "BUILD_JOBS" }
     ]
   },
   "migrations": [
@@ -170,6 +174,10 @@
         "NextShadcnSandbox", "AstroSandbox", "NuxtSandbox"
       ],
       "tag": "v2"
+    },
+    {
+      "new_sqlite_classes": ["BuildJob"],
+      "tag": "v3"
     }
   ]
 }
