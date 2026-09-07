@@ -22,7 +22,7 @@ import type { DurableObjectState } from "@cloudflare/workers-types";
 import type { Env } from "./env.js";
 import { BUILD_CONFIG } from "./frameworks.generated.js";
 import { isAtCapacityFailure } from "./session-lifecycle.js";
-import { BuildFailure, buildFailureTags, invalidateDemo, updateDemo } from "./share.js";
+import { BuildFailure, buildFailureTags, demoBuildState, getDemo, invalidateDemo, updateDemo } from "./share.js";
 
 export interface SnapshotJob {
   demoId: string;
@@ -76,7 +76,18 @@ export async function runSnapshotJob(env: Env, job: SnapshotJob): Promise<void> 
   const cfg = BUILD_CONFIG[job.framework];
   if (!cfg) throw new Error(`snapshot job for ${job.demoId}: unknown framework '${job.framework}'`);
   const obj = await env.ARTIFACTS.get(job.filesKey);
-  if (!obj) throw new Error(`snapshot job for ${job.demoId}: no payload at ${job.filesKey}`);
+  if (!obj) {
+    // The payload was written before the job was ever scheduled, so its absence
+    // means one of two things: an at-least-once re-run of an alarm whose first
+    // run finalized (and cleaned up) but was cut down before clearing its own
+    // storage — the row says 'ready', and there is nothing left to do — or the
+    // payload is genuinely gone, which is a failure. Deciding by the row is what
+    // keeps a platform retry from marking a *successful* build failed (Bugbot,
+    // PR #305).
+    const row = await getDemo(env, job.demoId);
+    if (row && demoBuildState(row, Date.now()) === "ready") return;
+    throw new Error(`snapshot job for ${job.demoId}: no payload at ${job.filesKey}`);
+  }
   const { files } = JSON.parse(await obj.text()) as { files?: Record<string, string> };
   if (!files || Object.keys(files).length === 0) {
     throw new Error(`snapshot job for ${job.demoId}: empty payload at ${job.filesKey}`);
@@ -91,7 +102,15 @@ export async function runSnapshotJob(env: Env, job: SnapshotJob): Promise<void> 
     now: new Date().toISOString(),
   });
   if (job.filesKey.endsWith("__job.json")) {
-    await env.ARTIFACTS.delete(job.filesKey);
+    // Best effort: the build has already succeeded, and a throw from cleanup
+    // would route through alarm()'s catch and record that success as a failure
+    // (Bugbot, PR #305). An orphaned __job.json is harmless — `__` paths are
+    // never served, and the next rebuild overwrites it.
+    try {
+      await env.ARTIFACTS.delete(job.filesKey);
+    } catch (err) {
+      console.warn(`[build-job] could not clean up ${job.filesKey}:`, err);
+    }
   }
 }
 

@@ -327,6 +327,107 @@ test("the alarm waits out an at-capacity pool a bounded number of times", async 
   assert.equal(state.map.size, 0);
 });
 
+test("an alarm re-run after a finished build is not a failure", async () => {
+  // At-least-once execution: the first run finalized (row ready, __job.json
+  // cleaned up) but was cut down before clearing its own storage, so the
+  // platform re-runs the alarm and it finds no payload. The row says the build
+  // landed; re-marking it failed would be worse than the crash being retried.
+  const { env, writes } = makeEnv([tier2Row({ id: "u3", build_status: "ready" })]);
+  const state = fakeDoState();
+  state.map.set("job", {
+    demoId: "u3",
+    framework: "next.js",
+    htVersion: "16.2.0",
+    filesKey: "demos/u3/__job.json",
+    attempt: 0,
+  });
+
+  await new BuildJobBase(state, env).alarm();
+
+  assert.ok(
+    !writes.some((w) => /build_status='failed'/.test(w.sql)),
+    "a finished build is never re-marked failed",
+  );
+  assert.equal(state.map.size, 0, "the leftover job is cleared");
+});
+
+test("a genuinely lost payload still fails the build", async () => {
+  const { env, writes } = makeEnv([
+    tier2Row({ id: "u5", build_status: "building", updated_at: new Date().toISOString() }),
+  ]);
+  const state = fakeDoState();
+  state.map.set("job", {
+    demoId: "u5",
+    framework: "next.js",
+    htVersion: "16.2.0",
+    filesKey: "demos/u5/__job.json",
+    attempt: 0,
+  });
+
+  await new BuildJobBase(state, env).alarm();
+
+  const failed = writes.find((w) => /build_status='failed'/.test(w.sql));
+  assert.ok(failed, "a building row with no payload anywhere is a real failure");
+  assert.match(String(failed.binds[0]), /no payload/);
+});
+
+test("a cleanup failure cannot mark a successful build failed", async () => {
+  const payload = JSON.stringify({ framework: "next.js", files: NEXT_FILES });
+  const { env, writes } = makeEnv([], [], { "demos/u4/__job.json": payload });
+  env.ARTIFACTS.delete = async () => {
+    throw new Error("r2 hiccup");
+  };
+  const state = fakeDoState();
+  state.map.set("job", {
+    demoId: "u4",
+    framework: "next.js",
+    htVersion: "16.2.0",
+    filesKey: "demos/u4/__job.json",
+    attempt: 0,
+  });
+
+  await new BuildJobBase(state, env).alarm();
+
+  assert.ok(writes.some((w) => /build_status='ready'/.test(w.sql)), "the build still finalizes");
+  assert.ok(
+    !writes.some((w) => /build_status='failed'/.test(w.sql)),
+    "a post-success cleanup throw is not a build failure",
+  );
+});
+
+test("the editor's Save answers 409 while a detached build runs", async () => {
+  const { env } = makeEnv([
+    tier2Row({ id: "abc123", build_status: "building", updated_at: new Date().toISOString() }),
+  ]);
+  await seedCatalog(env);
+
+  // The browser route authenticates against the broker; answer exactly that
+  // exchange and trip on anything else (the demo-routes-version.test.mjs stub).
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.startsWith("https://login.invalid") && init?.headers?.Authorization === "Bearer test-token") {
+      return Response.json({ email: AUTHOR, sub: "u1" });
+    }
+    throw new Error(`unexpected network fetch in mcp-async-build.test.mjs: ${url}`);
+  };
+  try {
+    const res = await worker.fetch(
+      new Request("https://demos.handsontable.com/api/demos/abc123", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" },
+        body: JSON.stringify({ files: NEXT_FILES }),
+      }),
+      env,
+      ctx,
+    );
+    assert.equal(res.status, 409);
+    assert.equal((await res.json()).error, "already_building");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("demoBuildState: absent column is ready, building goes stale into failed", () => {
   const now = Date.now();
   const fresh = new Date(now - 60_000).toISOString();

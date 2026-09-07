@@ -1471,6 +1471,22 @@ export default Sentry.withSentry(sentryOptions, {
           if (!patch.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
           const cfg = BUILD_CONFIG[row.framework];
           if (!cfg) return json({ error: `unknown framework: ${row.framework}` }, 400);
+          // Same guard as the MCP rebuild route, for the same reason: an
+          // MCP-created demo whose detached build is still running is already
+          // editable here, and a Save racing the BuildJob alarm would let
+          // whichever build finishes last overwrite the other's artifact —
+          // including the alarm replacing a person's save with the parked
+          // payload (Bugbot, PR #305). Metadata-only PATCHes stay allowed: the
+          // alarm never writes title or description.
+          if (demoBuildState(row, Date.now()) === "building") {
+            return json(
+              {
+                error: "already_building",
+                detail: "A build for this demo is already running; save again when it finishes.",
+              },
+              409,
+            );
+          }
           // The editor sends the files it holds in memory, which for a saved demo
           // are the ones it loaded — nothing re-pins them client-side on a version
           // change (App.tsx:1554 / :1700). Pinning here is what keeps the rebuilt
