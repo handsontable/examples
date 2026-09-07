@@ -215,3 +215,43 @@ test("only 403 gets the edge sentence", () => {
     assert.equal(failure.message, `save failed (${status})`);
   }
 });
+
+// ── A Save refused because the detached build is still running (ADR-0039) ───────
+//
+// The editor's rebuild branch and the MCP PATCH both answer
+// `409 {"error":"already_building","detail":<sentence>}` while a demo's BuildJob
+// alarm is mid-build. Without its own branch the default one rendered the wire
+// code `already_building` in the Save toast and reported the refusal to Sentry —
+// the guard working as designed, filed as a fault (Bugbot, PR #305).
+
+test("an already_building 409 becomes its detail sentence, never the wire code", () => {
+  const failure = describeApiFailure(
+    409,
+    { error: "already_building", detail: "A build for this demo is already running; save again when it finishes." },
+    "save failed (409)",
+  );
+
+  assert.equal(failure.status, 409);
+  assert.match(failure.message, /already running/i);
+  assert.doesNotMatch(failure.message, /already_building/, "never the wire string");
+  // Not reportable: the guard refusing is the guard working, not a UI/server
+  // disagreement worth a Sentry issue.
+  assert.equal(failure.reportable, false);
+  assert.equal(isSessionExpired(failure), false);
+});
+
+test("an already_building 409 without a detail still says something useful", () => {
+  const failure = describeApiFailure(409, { error: "already_building" }, "save failed (409)");
+
+  assert.ok(failure.message.length > 0);
+  assert.doesNotMatch(failure.message, /already_building/);
+  assert.equal(failure.reportable, false);
+});
+
+test("other 409s stay unclassified", () => {
+  // A conflict without our code is not the build guard; inventing its copy for
+  // one would hide whatever the server actually said.
+  const failure = describeApiFailure(409, { error: "conflict" }, "save failed (409)");
+  assert.equal(failure.kind, "other");
+  assert.equal(failure.reportable, true);
+});
