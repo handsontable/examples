@@ -43,3 +43,4 @@ once Accepted.
 | [0036](0036-the-api-owns-the-handsontable-version.md) | The API owns the Handsontable version — derive from the payload, never default to a dist-tag | Accepted (amends 0005 with who applies it) |
 | [0037](0037-persistent-api-tokens.md) | Persistent API tokens, verified in the Worker rather than by the broker | Accepted (DEV-2583; amends 0007) |
 | [0038](0038-waf-exception-for-source-code-payloads.md) | Source-code payloads need a WAF exception, not an encoding trick | Accepted |
+| [0039](0039-detached-tier-2-snapshot-builds.md) | Detached tier-2 snapshot builds on the MCP service path | Accepted (amends 0033) |

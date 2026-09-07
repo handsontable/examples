@@ -41,8 +41,13 @@ export function parseDemosInsert(sql, binds) {
  * D1 fake: seeded demo rows, a recorded write log, and a build_cache that
  * always hits so createDemo() takes its cached-artifact branch. Unmatched
  * reads answer empty, which the budget code treats as "no spend yet".
+ *
+ * `buildCacheHit: false` makes the cache miss instead — the steering the async
+ * MCP branch keys on (a tier-2 create/rebuild only detaches when no cached
+ * artifact exists). The sandbox stub still throws on any container ask, so a
+ * spec running with a miss is also proving its route never builds inline.
  */
-export function fakeD1(seedRows = [], seedTokens = []) {
+export function fakeD1(seedRows = [], seedTokens = [], { buildCacheHit = true } = {}) {
   const writes = [];
   const demos = new Map(seedRows.map((row) => [row.id, row]));
   const tokens = new Map(seedTokens.map((row) => [row.id, { ...row }]));
@@ -56,7 +61,9 @@ export function fakeD1(seedRows = [], seedTokens = []) {
           return row ? { ...row } : null;
         }
         if (/FROM demos WHERE id = \?/.test(sql)) return demos.get(binds[0]) ?? null;
-        if (/FROM build_cache/.test(sql)) return { r2_prefix: "demos/_prior-identical-build/" };
+        if (/FROM build_cache/.test(sql)) {
+          return buildCacheHit ? { r2_prefix: "demos/_prior-identical-build/" } : null;
+        }
         return null;
       },
       async run() {
@@ -189,10 +196,34 @@ export function fakeR2(seed = {}) {
       if (value === undefined) return null;
       return { body: value, async text() { return value; } };
     },
+    async delete(key) {
+      store.delete(key);
+    },
     async list() {
       return { objects: [] };
     },
   };
+}
+
+/**
+ * BUILD_JOBS namespace fake: records every job the routes hand to
+ * `scheduleSnapshotBuild()` (which POSTs the job to the demo's stub) and answers
+ * 202 the way BuildJobBase.fetch does. The alarm itself is exercised directly in
+ * the specs — `runSnapshotJob` / `BuildJobBase.alarm` with these same env fakes —
+ * so nothing here needs to run one.
+ */
+export function fakeBuildJobs() {
+  const scheduled = [];
+  const namespace = {
+    idFromName: (name) => name,
+    get: () => ({
+      async fetch(_url, init) {
+        scheduled.push(JSON.parse(init.body));
+        return new Response(JSON.stringify({ scheduled: true }), { status: 202 });
+      },
+    }),
+  };
+  return { namespace, scheduled };
 }
 
 export const SECRET = "test-secret";
@@ -203,12 +234,14 @@ export const AUTHOR = "dev@handsontable.com";
  * layered by the caller; none are set here so the broker path stays the one
  * under test on the browser routes.
  */
-export function makeEnv(seedRows = [], seedTokens = [], seedArtifacts = {}) {
-  const { db, writes, demos, tokens } = fakeD1(seedRows, seedTokens);
+export function makeEnv(seedRows = [], seedTokens = [], seedArtifacts = {}, opts = {}) {
+  const { db, writes, demos, tokens } = fakeD1(seedRows, seedTokens, opts);
   const artifacts = fakeR2(seedArtifacts);
+  const buildJobs = fakeBuildJobs();
   const env = {
     Sandbox: {},
     SANDBOX_BUILDER: {},
+    BUILD_JOBS: buildJobs.namespace,
     DB: db,
     CACHE: fakeKV(),
     ARTIFACTS: artifacts,
@@ -220,7 +253,7 @@ export function makeEnv(seedRows = [], seedTokens = [], seedArtifacts = {}) {
     // Not the production host, so the Sentry gate in index.ts stays inert.
     PREVIEW_HOST: "localhost:8787",
   };
-  return { env, writes, demos, artifacts, tokens };
+  return { env, writes, demos, artifacts, tokens, scheduled: buildJobs.scheduled };
 }
 
 export const ctx = {
@@ -249,6 +282,8 @@ export const demoRow = (overrides = {}) => ({
   created_at: "2026-08-17T00:00:00.000Z",
   updated_at: "2026-08-17T00:00:00.000Z",
   revoked_at: null,
+  build_status: "ready",
+  build_error: null,
   ...overrides,
 });
 

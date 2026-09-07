@@ -43,6 +43,11 @@ export const CAPABILITY_DENIED_MESSAGE =
 export const EDGE_BLOCKED_MESSAGE =
   "Blocked before it reached the runner. A security rule at the edge refused the " +
   "request — this is not a login or permissions problem, and retrying will not clear it.";
+/** The fallback for a Save refused because the demo's detached build is still
+ *  running (ADR-0039). Every route that sends `already_building` sends a
+ *  `detail`, but a truncated body must not produce a wire code in a toast. */
+export const BUILD_RUNNING_MESSAGE =
+  "A build for this demo is already running. Wait for it to finish, then save again.";
 
 /** Whatever JSON the Worker put in the error body. Both fields are optional
  *  because a 401 from a proxy, or a body that failed to parse, has neither. */
@@ -148,6 +153,14 @@ export function describeApiFailure(
     // primary sentence and `detail` — sent only by the MCP route — refines it.
     const message = detail ? `${FORBIDDEN_MESSAGE} (${detail})` : FORBIDDEN_MESSAGE;
     return new ApiError(message, status, "forbidden", true);
+  }
+  // A Save refused because the demo's detached build is still running
+  // (ADR-0039). Like `token_forbidden` above: `detail` is the whole sentence,
+  // never the wire code, and it is not reportable — the guard refusing is the
+  // guard working, not a fault worth a Sentry issue.
+  if (status === 409 && body.error === "already_building") {
+    const detail = typeof body.detail === "string" ? body.detail.trim() : "";
+    return new ApiError(detail || BUILD_RUNNING_MESSAGE, status, "other", false);
   }
   const serverMessage = options.preferFallback ? "" : (body.error ?? "");
   return new ApiError(serverMessage || resolveFallback(fallback, status), status, "other", true);

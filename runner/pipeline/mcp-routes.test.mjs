@@ -148,11 +148,13 @@ test("a created demo answers with the four links and its owner", async () => {
   // link is a breaking change of the MCP contract. `htVersion` joined the
   // response when the version catalog moved server-side (master, ht-version.ts)
   // — this assertion caught that addition, which is its job; grew, reviewed,
-  // admitted.
+  // admitted. `status` joined with the detached tier-2 builds (snapshot-jobs.ts),
+  // so a caller can tell this synchronous "ready" from the 202's "building".
   assert.deepEqual(
     Object.keys(body).sort(),
-    ["createdBy", "editUrl", "embedUrl", "htVersion", "id", "shareUrl", "url"],
+    ["createdBy", "editUrl", "embedUrl", "htVersion", "id", "shareUrl", "status", "url"],
   );
+  assert.equal(body.status, "ready");
   assert.equal(body.url, `/d/${body.id}`);
   assert.equal(body.embedUrl, `/embed/${body.id}`);
   assert.equal(body.editUrl, `/edit/${body.id}`);

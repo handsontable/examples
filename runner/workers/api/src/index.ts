@@ -41,7 +41,8 @@ import {
 } from "./session-lifecycle.js";
 import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
-import { BuildFailure, buildFailureTags, createDemo, getDemo, getDemoSource, invalidateDemo, serveDemoAsset, shortId, updateDemo, withEntryScript, type DemoRow } from "./share.js";
+import { BuildFailure, buildFailureTags, createDemo, createPendingDemo, demoBuildState, getDemo, getDemoSource, hasCachedBuild, invalidateDemo, serveDemoAsset, shortId, updateDemo, withEntryScript, type DemoRow } from "./share.js";
+import { BuildJobBase, scheduleSnapshotBuild } from "./snapshot-jobs.js";
 import {
   budgetPausedMessage,
   countEgress,
@@ -284,6 +285,14 @@ export const BuilderSandbox = Sentry.instrumentDurableObjectWithSentry(
   sentryOptions,
   BuilderSandboxWithSleep as unknown as new (state: DurableObjectState, env: Env) => never,
 ) as unknown as typeof BuilderSandboxWithSleep;
+
+// The detached-snapshot-build DO (snapshot-jobs.ts): a failure in its alarm never
+// passes through the fetch handler's error path either, so it is instrumented the
+// same way as the two container classes above.
+export const BuildJob = Sentry.instrumentDurableObjectWithSentry(
+  sentryOptions,
+  BuildJobBase as unknown as new (state: DurableObjectState, env: Env) => never,
+) as unknown as typeof BuildJobBase;
 
 const CONTAINER_ROOT = "/app";
 const BOOT_LOG = "/tmp/boot.log";
@@ -1079,6 +1088,51 @@ export default Sentry.withSentry(sentryOptions, {
         if (buildDenied) return buildDenied;
         await recordUsageEvent(env, "build", body.framework);
 
+        // A cold tier-2 build outlives the MCP clients calling this route (they
+        // abort the tool call at ~60s, cancelling the whole chain mid-build), so
+        // it runs detached: record the demo as 'building', park the payload, hand
+        // the build to the demo's BuildJob alarm, and answer now — same body as
+        // the synchronous 201 below, so an existing hot-mcp needs no change. A
+        // cached build is an R2 copy, and tier 1 finishes well inside every
+        // caller's patience, so both keep the synchronous path and its
+        // built-and-verified answer.
+        if (cfg.tier === 2 && !(await hasCachedBuild(env, body.framework, version.ref, pinnedFiles))) {
+          const pending = await createPendingDemo(env, {
+            entry: { framework: body.framework, ...cfg },
+            files: pinnedFiles,
+            htVersion: version.ref,
+            title,
+            description: description ?? null,
+            createdBy: id.email,
+            forkedFrom: `mcp:${body.framework}`,
+            now: nowIso(),
+          });
+          await scheduleSnapshotBuild(env, {
+            demoId: pending.id,
+            framework: body.framework,
+            htVersion: version.ref,
+            filesKey: `demos/${pending.id}/__source.json`,
+          });
+          await recordUsageEvent(env, "share_created", body.framework);
+          return json(
+            {
+              id: pending.id,
+              url: `/d/${pending.id}`,
+              embedUrl: `/embed/${pending.id}`,
+              editUrl: `/edit/${pending.id}`,
+              shareUrl: `/share/${pending.id}`,
+              createdBy: id.email,
+              htVersion: version.ref,
+              // The async half of the contract: the links are minted but /d
+              // serves a refreshing "still building" page until the alarm
+              // finishes. Poll GET /api/mcp/demos/:id/status to know when.
+              status: "building",
+              statusUrl: `/api/mcp/demos/${pending.id}/status`,
+            },
+            202,
+          );
+        }
+
         const created = await createDemo(env, {
           entry: { framework: body.framework, ...cfg },
           files: pinnedFiles,
@@ -1103,9 +1157,34 @@ export default Sentry.withSentry(sentryOptions, {
             // already carried. Echoed so a machine caller can see which ref won
             // instead of reporting back whatever it sent (review of PR #230).
             htVersion: version.ref,
+            status: "ready",
           },
           201,
         );
+      }
+
+      // GET /api/mcp/demos/:id/status  (service auth) — is the detached build done?
+      // The polling half of the 202 contract above. No ownership check on purpose:
+      // it reveals nothing the public /d page does not, and hot-mcp polls it for
+      // demos it just created.
+      if (request.method === "GET" && parts[0] === "api" && parts[1] === "mcp" && parts[2] === "demos" && parts[4] === "status" && parts.length === 5) {
+        const id = await authenticateService(request, env);
+        if (!id) return json({ error: "unauthorized" }, 401);
+        const row = await getDemo(env, parts[3]!);
+        if (!row) return json({ error: "not found" }, 404);
+        if (row.revoked) return json({ error: "gone" }, 410);
+        const state = demoBuildState(row, Date.now());
+        return json({
+          id: row.id,
+          status: state,
+          // A one-line cause by construction; the stale-'building' repair carries
+          // its own explanation because no failure was ever recorded for it.
+          error: state === "failed"
+            ? (row.build_error ?? "the build never finished")
+            : null,
+          url: `/d/${row.id}`,
+          htVersion: row.ht_version,
+        });
       }
 
       // POST /api/demos  (auth) — fork -> build -> R2 -> short id -> /d/:id
@@ -1229,9 +1308,62 @@ export default Sentry.withSentry(sentryOptions, {
           // See the create handler: the cap answers for the pinned map, not the sent one.
           const pinnedFiles = validateMcpFiles(version.files);
           if (isMcpValidationError(pinnedFiles)) return json(pinnedFiles, 400);
+          // One build per demo at a time: the BuildJob object keys on the demo id
+          // and last-write-wins, so a second payload accepted mid-build would race
+          // the alarm over which files the finished demo was built from. Refused,
+          // not queued — the caller can poll /status and resend. A row stuck in
+          // 'building' past the stale window reads as failed and passes.
+          if (demoBuildState(row, Date.now()) === "building") {
+            return json(
+              {
+                error: "already_building",
+                detail: "a build for this demo is already running; poll its status and retry when it finishes",
+                statusUrl: `/api/mcp/demos/${demoId}/status`,
+              },
+              409,
+            );
+          }
           const rebuildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `mcp rebuild ${row.framework}` });
           if (rebuildDenied) return rebuildDenied;
           await recordUsageEvent(env, "build", row.framework);
+
+          // Same reasoning as the create route: a cold tier-2 rebuild outlives the
+          // MCP caller, so it runs detached. The payload waits in __job.json, not
+          // __source.json — the stored source keeps matching the artifact still
+          // being served until the rebuild actually succeeds — and metadata lands
+          // now rather than riding along, so a failed build cannot eat a rename.
+          if (cfg.tier === 2 && !(await hasCachedBuild(env, row.framework, version.ref, pinnedFiles))) {
+            await env.ARTIFACTS.put(
+              `demos/${demoId}/__job.json`,
+              JSON.stringify({ framework: row.framework, files: pinnedFiles }),
+              { httpMetadata: { contentType: "application/json" } },
+            );
+            const sets = ["build_status='building'", "build_error=NULL", "updated_at=?"];
+            const binds: unknown[] = [nowIso()];
+            if (patchTitle) { sets.push("title=?"); binds.push(patchTitle); }
+            if (patchDescription !== undefined) { sets.push("description=?"); binds.push(patchDescription ?? null); }
+            await env.DB.prepare(`UPDATE demos SET ${sets.join(", ")} WHERE id=?`).bind(...binds, demoId).run();
+            await invalidateDemo(env, demoId);
+            await scheduleSnapshotBuild(env, {
+              demoId,
+              framework: row.framework,
+              htVersion: version.ref,
+              filesKey: `demos/${demoId}/__job.json`,
+            });
+            return json(
+              {
+                ok: true,
+                id: demoId,
+                url: `/d/${demoId}`,
+                editUrl: `/edit/${demoId}`,
+                rebuilt: true,
+                htVersion: version.ref,
+                status: "building",
+                statusUrl: `/api/mcp/demos/${demoId}/status`,
+              },
+              202,
+            );
+          }
           await updateDemo(env, {
             id: demoId,
             entry: { framework: row.framework, ...cfg },
@@ -1339,6 +1471,22 @@ export default Sentry.withSentry(sentryOptions, {
           if (!patch.files["/package.json"]) return json({ error: "files must include /package.json" }, 400);
           const cfg = BUILD_CONFIG[row.framework];
           if (!cfg) return json({ error: `unknown framework: ${row.framework}` }, 400);
+          // Same guard as the MCP rebuild route, for the same reason: an
+          // MCP-created demo whose detached build is still running is already
+          // editable here, and a Save racing the BuildJob alarm would let
+          // whichever build finishes last overwrite the other's artifact —
+          // including the alarm replacing a person's save with the parked
+          // payload (Bugbot, PR #305). Metadata-only PATCHes stay allowed: the
+          // alarm never writes title or description.
+          if (demoBuildState(row, Date.now()) === "building") {
+            return json(
+              {
+                error: "already_building",
+                detail: "A build for this demo is already running; save again when it finishes.",
+              },
+              409,
+            );
+          }
           // The editor sends the files it holds in memory, which for a saved demo
           // are the ones it loaded — nothing re-pins them client-side on a version
           // change (App.tsx:1554 / :1700). Pinning here is what keeps the rebuilt

@@ -45,6 +45,32 @@ export interface DemoRow {
   created_at: string;
   updated_at: string;
   revoked_at: string | null;
+  /** 'ready' | 'building' | 'failed' (0007). Optional: a KV-cached row serialized
+   *  before the migration ran has no such key, and absent must read as 'ready' —
+   *  the state every pre-migration row actually earned by finishing its build. */
+  build_status?: string | null;
+  /** One-line cause when build_status='failed'; never a log (the DEMOS-1Y rule). */
+  build_error?: string | null;
+}
+
+/** What a demo's build columns say right now, with one repair: a row stuck in
+ *  'building' longer than any build can legitimately run (the alarm's 15-minute
+ *  wall cap plus its bounded at-capacity retries) reads as failed rather than
+ *  keeping its /d page refreshing forever and its PATCH route answering 409. */
+export type DemoBuildState = "ready" | "building" | "failed";
+
+export const STALE_BUILD_MS = 30 * 60 * 1000;
+
+export function demoBuildState(
+  row: Pick<DemoRow, "build_status" | "updated_at">,
+  nowMs: number,
+): DemoBuildState {
+  const status = row.build_status ?? "ready";
+  if (status === "building") {
+    const since = Date.parse(row.updated_at);
+    return Number.isFinite(since) && nowMs - since > STALE_BUILD_MS ? "failed" : "building";
+  }
+  return status === "failed" ? "failed" : "ready";
 }
 
 /** Minimal catalog entry shape needed for building. Every construction site spreads a
@@ -372,6 +398,54 @@ export interface CreateArgs {
   visibility?: string;                  // 'unlisted' (default) | 'public'
 }
 
+/** Is an identical build already in the cache? The MCP create/update routes ask
+ *  before deciding whether the caller can be answered synchronously (a cached
+ *  artifact is an R2 copy, not a container boot). */
+export async function hasCachedBuild(
+  env: Env,
+  framework: string,
+  htVersion: string,
+  files: Record<string, string>,
+): Promise<boolean> {
+  const hash = await filesHash(files);
+  const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
+    .bind(buildCacheKey(framework, htVersion, hash)).first<{ r2_prefix: string }>();
+  return Boolean(cached);
+}
+
+/**
+ * Record a demo whose build has not run yet (the async MCP path): park the source
+ * snapshot in R2, insert the row as build_status='building', and return the id.
+ * `finalize` is the BuildJob alarm calling `updateDemo()`, which flips the row to
+ * 'ready'; until then /d and /embed serve the "still building" page. If scheduling
+ * fails after this insert, the stale rule in `demoBuildState` is what unsticks the row.
+ */
+export async function createPendingDemo(env: Env, args: CreateArgs): Promise<{ id: string }> {
+  const hash = await filesHash(args.files);
+  const id = args.id ?? shortId();
+  const r2Prefix = `demos/${id}/`;
+
+  // Parked up front — the alarm reads it, and it is the same snapshot a finished
+  // build would store, so /share/:id can show the code while the build runs.
+  await env.ARTIFACTS.put(
+    `${r2Prefix}__source.json`,
+    JSON.stringify({ framework: args.entry.framework, files: args.files }),
+    { httpMetadata: { contentType: "application/json" } },
+  );
+
+  await env.DB.prepare(
+    `INSERT OR REPLACE INTO demos (id,title,description,framework,tier,ht_version,files_hash,r2_prefix,forked_from,visibility,revoked,created_by,created_at,updated_at,build_status,build_error)
+     VALUES (?,?,?,?,?,?,?,?,?, ?, 0, ?,?,?, ?, ?)`,
+  ).bind(
+    id, args.title, args.description ?? null, args.entry.framework, args.entry.tier,
+    args.htVersion, hash, r2Prefix, args.forkedFrom ?? null, args.visibility ?? "unlisted",
+    args.createdBy, args.now, args.now, "building", null,
+  ).run();
+  await invalidateDemo(env, id);
+
+  return { id };
+}
+
 /** Build (or reuse cached build), store to R2, insert into D1, return the demo id. */
 export async function createDemo(env: Env, args: CreateArgs): Promise<{ id: string }> {
   const hash = await filesHash(args.files);
@@ -478,7 +552,10 @@ export async function updateDemo(env: Env, args: UpdateArgs): Promise<void> {
 
   // Built column by column so an absent title or description is *not written*,
   // rather than written back as whatever the row held when the rebuild started.
-  const sets = ["ht_version=?", "files_hash=?", "updated_at=?"];
+  // A completed rebuild is a ready demo whatever state preceded it, so the build
+  // columns reset unconditionally — this is also how the async path (BuildJob's
+  // alarm calls this function) flips 'building' to 'ready'.
+  const sets = ["ht_version=?", "files_hash=?", "updated_at=?", "build_status='ready'", "build_error=NULL"];
   const binds: unknown[] = [args.htVersion, hash, args.now];
   if (args.title !== undefined) { sets.push("title=?"); binds.push(args.title); }
   if (args.description !== undefined) { sets.push("description=?"); binds.push(args.description ?? null); }
@@ -621,9 +698,40 @@ export async function serveDemoAsset(
     obj = await env.ARTIFACTS.get(row.r2_prefix + c);
     if (obj) { hitPath = c; break; }
   }
-  // The row exists but the artifact doesn't — a build that never uploaded, or a
-  // path inside the demo that its framework build never emitted.
+  // The row exists but the artifact doesn't. Before 0007 that could only mean a
+  // build that never uploaded or a path the framework build never emitted; the
+  // async MCP path adds two legitimate ways to be here — the first build is still
+  // running, or it failed and there was no earlier artifact to keep serving. The
+  // build columns say which. Checked only when serving found nothing: a demo
+  // whose *rebuild* is running or just failed keeps serving its previous build,
+  // exactly as the synchronous Save always has. The status flip reaches this read
+  // because updateDemo/markSnapshotFailed both invalidate the KV row cache.
   if (!obj) {
+    const buildState = demoBuildState(row, Date.now());
+    if (buildState === "building") {
+      return html
+        ? errorPageResponse({
+            status: 503,
+            title: "This demo is still building",
+            body: "Its first build is running right now — usually a minute or two. This page refreshes itself until the demo is ready.",
+            homeUrl,
+            refreshSeconds: 10,
+          })
+        : new Response("This demo is still building. Retry shortly.", {
+            status: 503,
+            headers: { "Retry-After": "10" },
+          });
+    }
+    if (buildState === "failed") {
+      return html
+        ? errorPageResponse({
+            status: 500,
+            title: "This demo's build failed",
+            body: "The last build of this demo did not succeed, so there is nothing to serve yet. Its owner can fix the code and rebuild it — the link stays the same.",
+            homeUrl,
+          })
+        : new Response("This demo's build failed.", { status: 500 });
+    }
     return html
       ? errorPageResponse({
           status: 404,

@@ -7,6 +7,10 @@ import type { DurableObjectNamespace, D1Database, KVNamespace, R2Bucket } from "
 export interface Env {
   Sandbox: DurableObjectNamespace;
   SANDBOX_BUILDER: DurableObjectNamespace;
+  /** Detached snapshot builds for the MCP service path (snapshot-jobs.ts): a
+   *  plain sqlite DO — no container — whose alarm runs a tier-2 build after the
+   *  route has already answered. One object per demo id. */
+  BUILD_JOBS: DurableObjectNamespace;
 
   // Sharing storage.
   DB: D1Database;
