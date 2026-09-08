@@ -61,10 +61,9 @@ new Handsontable(example, {
   theme: { ...mainTheme, colorScheme: 'light' },
   layoutDirection: isArabicDemoEnabled() ? 'rtl' : 'ltr',
   language: isArabicDemoEnabled() ? arAR.languageCode : 'en-US',
-  height: 248,
-  width: 587,
+  height: 450,
   comments: true,
-  colWidths: 150,
+  colWidths: [170, 222, 130, 120, 120, 130, 156],
   colHeaders: [
     'Company name',
     'Name',
