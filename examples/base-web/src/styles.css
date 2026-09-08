@@ -27,9 +27,13 @@ body {
   font-family: inherit;
 }
 
+/* Responsive rather than a fixed 600px: a hard width on the grid stops
+   Handsontable re-measuring, so a pane narrower than the card left the content
+   spilling out of its own root and the document scrolling sideways (DEV-2841).
+   The max-width clears the 880px of declared columns. */
 .table-shell {
-  width: 600px;
-  max-width: 100%;
+  width: 100%;
+  max-width: 900px;
 }
 
 .handsontableInputHolder,
