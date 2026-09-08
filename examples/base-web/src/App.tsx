@@ -195,7 +195,7 @@ export default function App() {
         <HotTable
           theme={hotTheme}
           data={filteredRows}
-          width={600}
+          width="100%"
           // Fixed to fit all 9 rows exactly (no leftover space below the grid).
           // `height="auto"` isn't used here: this table's row count changes at
           // runtime via the filter, and "auto" watches the container for resizes,
