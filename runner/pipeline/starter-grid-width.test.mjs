@@ -85,21 +85,13 @@ function fixedWidths(source) {
   return hits;
 }
 
-/**
- * `base-web` is allowed its `width={600}` because it is not this defect.
- *
- * Its grid sits in `.table-shell`, which is itself `width: 600px` in the
- * starter's own stylesheet, so the option matches its container exactly rather
- * than clamping below it — deleting the prop changes nothing on screen, since
- * the grid would then take 100% of the same 600px shell. Measured live: grid
- * 600x304 in a 600px shell, and the preview document does not overflow.
- *
- * What it does have is 880px of declared columns inside that card, so its two
- * rightmost columns are scrolled out of view. That is a question about the
- * card's width, tracked as DEV-2841 - it is not fixed by touching this option,
- * which is why it is exempted here rather than left to fail.
- */
-const FIXED_WIDTH_BY_DESIGN = new Set(["base-web.json"]);
+// `base-web` used to be exempted here, on the reasoning that its `width={600}`
+// matched a `.table-shell` that was itself 600px, so it tracked its container
+// rather than clamping below it. That was measured at one pane width and was
+// wrong: a fixed width stops the grid re-measuring, so below 600px the shell
+// shrank and the content did not, spilling out of the root and scrolling the
+// document sideways. DEV-2841 made it `width="100%"`, so the rule below now
+// covers every starter with no special case.
 
 const buckets = readdirSync(BUCKETS).sort();
 
@@ -120,7 +112,6 @@ for (const bucket of buckets) {
 
     const offenders = [];
     for (const name of names) {
-      if (FIXED_WIDTH_BY_DESIGN.has(name)) continue;
       const artifact = JSON.parse(readFileSync(join(dir, name), "utf8"));
       for (const [path, source] of Object.entries(artifact.files)) {
         if (!SOURCE.test(path) || typeof source !== "string") continue;
@@ -161,28 +152,28 @@ for (const bucket of buckets) {
   });
 }
 
-test("the base-web exemption is still load-bearing", () => {
-  // An exemption nobody checks is dead code that goes on suppressing findings in
-  // that file forever. If base-web's card gets widened and the prop dropped, this
-  // fails and says to delete the entry rather than leave it masking a regression.
-  const stale = [];
+test("base-web sizes its grid responsively", () => {
+  // Replaces the exemption's self-check. The rule above already fails on a bare
+  // pixel width, but it cannot tell a responsive width from no width at all, and
+  // dropping the prop entirely would leave the grid at its container's width by
+  // accident rather than by statement. base-web is the starter this went wrong
+  // on, so it is the one worth naming (DEV-2841).
   for (const bucket of buckets) {
     const path = join(BUCKETS, bucket, "base-web.json");
     let artifact;
     try {
       artifact = JSON.parse(readFileSync(path, "utf8"));
     } catch {
-      continue; // base-web predates buckets 15 and 16.
+      continue; // minCoreMajor 17 keeps base-web out of buckets 15 and 16.
     }
     const app = artifact.files["/src/App.tsx"];
-    if (app && fixedWidths(app).length === 0) stale.push(bucket);
+    assert.ok(app, `${bucket}/base-web.json has no /src/App.tsx`);
+    assert.match(
+      app,
+      /^\s*width="100%"$/m,
+      `bucket ${bucket}: base-web should state a responsive width`,
+    );
   }
-  assert.deepEqual(
-    stale,
-    [],
-    "base-web no longer pins a fixed width in these buckets, so its entry in "
-      + "FIXED_WIDTH_BY_DESIGN should be removed and the general rule left to cover it",
-  );
 });
 
 test("the javascript starter sizes its columns like its siblings", () => {
