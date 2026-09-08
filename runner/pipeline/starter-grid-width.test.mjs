@@ -20,6 +20,13 @@ import { dirname, join } from "node:path";
 // Reading the artifacts is the only place all five are observable at once, so a
 // backport that lands on four branches and misses one fails here instead of
 // silently shipping a clipped grid at one major.
+//
+// KNOW WHAT THIS DOES NOT GATE. The artifacts only change on master when the
+// generated `chore/starter-example-buckets` PR merges, which happens *after* a
+// `prod-examples/<major>` merge. So this guard is a lagging indicator: it cannot
+// run against a prod-branch PR's own source at review time, and it reports a
+// missed backport once that branch's bucket is next regenerated. If it goes red,
+// the answer is the missing backport - never a weakened assertion here.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUCKETS = join(HERE, "..", "apps", "authoring", "public", "starter-examples");
@@ -153,6 +160,30 @@ for (const bucket of buckets) {
     }
   });
 }
+
+test("the base-web exemption is still load-bearing", () => {
+  // An exemption nobody checks is dead code that goes on suppressing findings in
+  // that file forever. If base-web's card gets widened and the prop dropped, this
+  // fails and says to delete the entry rather than leave it masking a regression.
+  const stale = [];
+  for (const bucket of buckets) {
+    const path = join(BUCKETS, bucket, "base-web.json");
+    let artifact;
+    try {
+      artifact = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      continue; // base-web predates buckets 15 and 16.
+    }
+    const app = artifact.files["/src/App.tsx"];
+    if (app && fixedWidths(app).length === 0) stale.push(bucket);
+  }
+  assert.deepEqual(
+    stale,
+    [],
+    "base-web no longer pins a fixed width in these buckets, so its entry in "
+      + "FIXED_WIDTH_BY_DESIGN should be removed and the general rule left to cover it",
+  );
+});
 
 test("the javascript starter sizes its columns like its siblings", () => {
   // The scalar `colWidths: 150` was the other half of the defect: seven columns
