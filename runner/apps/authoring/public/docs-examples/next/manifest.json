@@ -2,7 +2,7 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-e420653-20260907",
+  "hotVersion": "0.0.0-next-4fa5b32-20260908",
   "count": 1487,
   "examples": [
     {
