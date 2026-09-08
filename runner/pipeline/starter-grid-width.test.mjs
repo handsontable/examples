@@ -96,7 +96,7 @@ function fixedWidths(source) {
  *
  * What it does have is 880px of declared columns inside that card, so its two
  * rightmost columns are scrolled out of view. That is a question about the
- * card's width, tracked separately - it is not fixed by touching this option,
+ * card's width, tracked as DEV-2841 - it is not fixed by touching this option,
  * which is why it is exempted here rather than left to fail.
  */
 const FIXED_WIDTH_BY_DESIGN = new Set(["base-web.json"]);
