@@ -206,6 +206,29 @@ test("the boot script's own recovered-install narration is not reported as a fau
   }
 });
 
+// --- DEV-2853: identifier-ladder collapse reaches the stderr relay too ------
+//
+// `normalizeMonitorMessage` is the dedupe key here as well as the Sentry
+// fingerprint (see the field comment on `stderrSeen` in container.ts), so the
+// two new anchored rules collapse matching dev-server ReferenceErrors too.
+// Both lines below pass `STDERR_MARKERS` on "error:" — this is not testing
+// through a gate the fix ever bypasses.
+
+test("two ReferenceErrors differing only by identifier relay once", async () => {
+  const h = await keptAlive();
+  try {
+    await h.serve(
+      [
+        "[vite] Internal server error: hot is not defined",
+        "[vite] Internal server error: Handsontable is not defined",
+      ].join("\n"),
+    );
+    assert.equal(h.relayed.length, 1, JSON.stringify(h.relayed));
+  } finally {
+    h.restore();
+  }
+});
+
 test("the boot script's ::error:: line is still relayed", async () => {
   // Guards the filter against being silently widened into swallowing real
   // errors: `::error::` is the runner's own deliberate fatal marker, emitted

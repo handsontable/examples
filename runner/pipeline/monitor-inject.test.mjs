@@ -706,6 +706,92 @@ test("the other timestamp shapes a dev server prints collapse too", () => {
   );
 });
 
+// ---- DEV-2853: keystroke-prefix ladders --------------------------------
+//
+// The live editor reports every intermediate compile/eval failure while a demo
+// author is mid-keystroke. Typing `licenseKey` one character at a time used to
+// mint 13 separate Sentry issues (`l is not defined`, `li is not defined`, …),
+// because the identifier was part of the fingerprint. These tests drive the two
+// new anchored rules in `normalizeMonitorMessage`.
+
+test("a ReferenceError ladder collapses to one fingerprint", () => {
+  const licenseKeyRungs = [
+    "l",
+    "li",
+    "lic",
+    "lice",
+    "licen",
+    "licens",
+    "license",
+    "licenseK",
+    "licenseKe",
+    "licenseKey",
+    // a couple of intermediate near-misses a real editor would also emit
+    "licenseKe",
+    "licenseK",
+    "licenseKey",
+  ].map((rung) => `${rung} is not defined`);
+  const widthRungs = ["w", "wi", "wid", "widt", "width"].map((rung) => `${rung} is not defined`);
+
+  assert.equal(new Set(licenseKeyRungs.map(normalizeMonitorMessage)).size, 1, "licenseKey ladder is one issue");
+  assert.equal(new Set(widthRungs.map(normalizeMonitorMessage)).size, 1, "width ladder is one issue");
+});
+
+test("a digit-bearing identifier collapses the same as any other", () => {
+  // The ordering discriminator named in the DEV-2853 plan: if rule 1 were
+  // dropped (or never reached this identifier for some other reason), "col2 is
+  // not defined" would fall through unnormalized while "licenseKey is not
+  // defined" also stays literal — they'd differ, and the ladder for a
+  // digit-bearing identifier like `col2` would keep minting fresh issues.
+  // (Verified empirically: `\b\d+(\.\d+)*\b`'s word boundaries mean the number
+  // rule never touches the embedded "2" in "col2" either way — there is no
+  // word-class transition between "l" and "2" — so this pair does not in fact
+  // distinguish the two rules' relative order the way a digit *following* a
+  // boundary would. It still catches rule 1 being missing or mis-anchored for
+  // a digit-bearing identifier, which is the case that matters.)
+  assert.equal(
+    normalizeMonitorMessage("col2 is not defined"),
+    normalizeMonitorMessage("licenseKey is not defined"),
+  );
+});
+
+test("a language-tag ladder collapses, including the empty tail", () => {
+  const rungs = [
+    "Invalid language tag: zh-c",
+    "Invalid language tag: zh-",
+    "Invalid language tag: z",
+    "Invalid language tag: ",
+  ];
+  // `\S*`, not `\S+`: the empty-tail rung above has nothing after the trailing
+  // space, and a `\S+` rule would leave it unmatched (0 or more vs 1 or more).
+  assert.equal(new Set(rungs.map(normalizeMonitorMessage)).size, 1, JSON.stringify(rungs.map(normalizeMonitorMessage)));
+});
+
+test("'is not defined' and 'is not a function' stay different faults", () => {
+  // Guards against a sloppily-anchored lookahead (e.g. `(?= is not)` instead of
+  // `(?= is not defined\b)`) that would also swallow the "is not a function"
+  // shape — a rule this plan explicitly declines to add, because
+  // `hot.getData is not a function` names an API the demo actually calls and
+  // has real diagnostic value on its own.
+  assert.notEqual(
+    normalizeMonitorMessage("foo is not defined"),
+    normalizeMonitorMessage("foo is not a function"),
+  );
+});
+
+test("DEV-2853 accepted trade: two demos' first undefined reference now merge", () => {
+  // Decision record, not a discovery: the identifier rule is shape-scoped, not
+  // demo-scoped, so two different demos whose editor happens to fail on a
+  // different bare identifier — but is otherwise identical prose — now
+  // fingerprint the same. This was chosen deliberately (see the doc comment on
+  // `normalizeMonitorMessage`) in exchange for collapsing the ladder; it is not
+  // an accidental over-collapse to be "fixed" later.
+  assert.equal(
+    normalizeMonitorMessage("HyperFormula is not defined"),
+    normalizeMonitorMessage("RechartsDevtools is not defined"),
+  );
+});
+
 // ---- wired through SandpackRuntime -----------------------------------------
 //
 // The injector being correct is not the same as the runtime using it correctly. What
