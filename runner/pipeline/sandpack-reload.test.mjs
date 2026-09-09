@@ -353,10 +353,10 @@ test("DEV-2550: a short message is reported byte-identical", () => {
 });
 
 test("DEV-2550: the dependency-fetch message reaches describeRuntimeError intact", () => {
-  // App.tsx's `/could not fetch dependencies/i` branch rewrites this into the
-  // "check that this version is published on npm" card. The phrase leads the
-  // bundler's message, so the cap cannot reach it — pinned here rather than
-  // left to inspection.
+  // `describeDependencyFailure` (apps/authoring/src/dependencyFailure.ts) rewrites
+  // this into the "check that this version is published on npm" card. The phrase
+  // leads the bundler's message, so the cap cannot reach it — pinned here rather
+  // than left to inspection.
   const raw = "Could not fetch dependencies, please try again in a couple seconds: request to https://registry.npmjs.org/handsontable failed";
   assert.equal(showError(raw).message, raw);
   assert.match(showError(raw + " " + "x".repeat(9000)).message, /^could not fetch dependencies/i);

@@ -71,6 +71,7 @@ import { monitorDemos, reportDemoEvent, reportError, reportingEnabled, Sentry } 
 import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
 import { tier1Report } from "./tier1Report.js";
 import { isOpaqueNetworkFailure } from "./fetchFailure.js";
+import { describeDependencyFailure } from "./dependencyFailure.js";
 import {
   readFetchDiagnostics,
   apiBaseOrigin,
@@ -182,7 +183,12 @@ function docsPageUrl(framework: string, permalink: string): string {
 }
 
 /** Turn a raw runtime error into a message that explains container prerequisites. */
-function describeRuntimeError(e: unknown, engine: string, version: string): string {
+function describeRuntimeError(
+  e: unknown,
+  engine: string,
+  version: string,
+  packageJson: string | undefined,
+): string {
   // A boot-script failure explains itself: a one-line cause, with the recent boot
   // output beside it on the error object. Compose the two here — the error card
   // renders `errorMessage` and nothing else, so this is the only place a user ever
@@ -217,12 +223,15 @@ function describeRuntimeError(e: unknown, engine: string, version: string): stri
     return "This example runs on the container engine, which needs the demo server (Cloudflare Sandbox). It isn't reachable here — run the local API worker (requires Docker) or open this example on the deployed demos.handsontable.com.";
   }
   // Sandpack's own bundler message for an unresolved dependency reads like a
-  // transient hiccup worth retrying ("please try again in a couple
-  // seconds") — misleading when the actual cause is a pinned Handsontable
-  // version that was never published, which no amount of retrying fixes.
-  if (engine === "sandpack" && /could not fetch dependencies/i.test(msg)) {
-    return `Handsontable ${version} could not be fetched. Check that this exact version is published on npm.`;
-  }
+  // transient hiccup worth retrying ("please try again in a couple seconds") —
+  // misleading when the actual cause is a pinned Handsontable version that was
+  // never published, which no amount of retrying fixes. But that same wording is
+  // ALSO what Sandpack says when the authored `/package.json` doesn't parse
+  // (DEV-2872, Sentry DEMOS-15/DEMOS-85) — see `dependencyFailure.ts` for how the
+  // two are told apart and why the discriminator is our own file state, not the
+  // bundler's text.
+  const dependencyFailure = describeDependencyFailure({ engine, message: msg, version, packageJson });
+  if (dependencyFailure) return dependencyFailure;
   return msg;
 }
 
@@ -2340,7 +2349,7 @@ function Authoring({
     runtime.onError((e) => {
       if (cancelled) return;
       setStatus("error");
-      setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
+      setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref, filesRef.current["/package.json"]));
       reportRuntimeError(e, entry.engine, entry.framework);
     });
     runtimeRef.current = runtime;
@@ -2358,7 +2367,7 @@ function Authoring({
       .catch((e: unknown) => {
         if (!cancelled) {
           setStatus("error");
-          setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref));
+          setErrorMessage(describeRuntimeError(e, entry.engine, v.value.ref, filesRef.current["/package.json"]));
         }
         // Reported even when cancelled: a session the pool refused still failed,
         // and the unmount that set `cancelled` is often the user giving up on it.
