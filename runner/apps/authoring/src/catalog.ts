@@ -2,6 +2,7 @@ import { stableBucketVersions } from "@handsontable/demo-runtime";
 import type { Catalog, CatalogIndexEntry } from "@handsontable/demo-runtime";
 import catalogJson from "../../../catalog.json";
 import docsBucketsJson from "../../../docs-buckets.json";
+import { fetchWithDiagnostics, type FetchDiagnostics } from "./fetchDiagnostics.js";
 
 // The index only (~15 KB): framework rows without files. Full starter
 // artifacts are lazy-fetched per version bucket — see starter-catalog.ts.
@@ -40,13 +41,24 @@ export const VERSION_OPTIONS = stableBucketVersions(catalog.bucketVersions);
  *  "the visitor has not chosen" before swapping in npm `latest`. */
 export const DEFAULT_VERSION = VERSION_OPTIONS[0];
 
-/** Fetch real published versions from the API (npm-backed). */
+/**
+ * Fetch real published versions from the API (npm-backed).
+ *
+ * A thin caller over `fetchWithDiagnostics` (DEV-2859): the retry + timeout
+ * policy and the attempt bookkeeping live there, import-free and unit-tested;
+ * this function stays exactly what it was for the one line that a Sentry
+ * population (DEMOS-2X) already groups on — `if (!res.ok) throw new Error(...)`
+ * is byte-identical, so that grouping does not move. The `diagnostics` on the
+ * success path let the caller (App.tsx) tell a retried-then-recovered blip
+ * from a clean first try, without this module importing Sentry.
+ */
 export async function fetchVersions(
   apiBase: string,
-): Promise<{ latest: string | null; next: string | null; versions: string[] }> {
-  const res = await fetch(`${apiBase}/api/versions`);
+): Promise<{ latest: string | null; next: string | null; versions: string[]; diagnostics: FetchDiagnostics }> {
+  const { res, diagnostics } = await fetchWithDiagnostics(`${apiBase}/api/versions`);
   if (!res.ok) throw new Error(`versions ${res.status}`);
-  return (await res.json()) as { latest: string | null; next: string | null; versions: string[] };
+  const body = (await res.json()) as { latest: string | null; next: string | null; versions: string[] };
+  return { ...body, diagnostics };
 }
 
 /** Is `version` an exact published Handsontable version on npm? Used to detect

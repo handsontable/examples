@@ -10,6 +10,7 @@
 // and the admin writes on the server side.
 
 import { reportError } from "./sentry.js";
+import { applyUserContext, resetUserContext } from "./userScope.js";
 
 const BROKER = import.meta.env.VITE_LOGIN_BROKER_URL || "https://mcp-auth-proxy-j0tb.onrender.com";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
@@ -47,7 +48,10 @@ export function isTokenSession(): boolean {
 export async function currentUser(): Promise<User | null> {
   // Local dev bypass — set VITE_DEV_USER in .env.local; never set in production.
   const devUser = import.meta.env.VITE_DEV_USER as string | undefined;
-  if (devUser) return { email: devUser };
+  if (devUser) {
+    void applyUserContext({ email: devUser }, { devUser, token: getToken() });
+    return { email: devUser };
+  }
 
   const hash = new URLSearchParams(location.hash.slice(1));
   if (hash.get("error")) {
@@ -76,9 +80,12 @@ export async function currentUser(): Promise<User | null> {
     });
     if (!res.ok) {
       sessionStorage.removeItem(TOKEN_KEY);
+      resetUserContext();
       return null;
     }
-    return (await res.json()) as User;
+    const resolved = (await res.json()) as User;
+    void applyUserContext(resolved, { token });
+    return resolved;
   } catch (error) {
     // The broker being unreachable presents as "signed out" with no explanation,
     // and every write endpoint then rejects.
@@ -110,6 +117,7 @@ export function clearSession(): void {
   // network corrects it. Removed by name rather than `sessionStorage.clear()`:
   // this key is ours, the rest of the origin's storage is not.
   sessionStorage.removeItem(PROFILE_CACHE_KEY);
+  resetUserContext();
 }
 
 /**

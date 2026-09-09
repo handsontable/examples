@@ -51,8 +51,12 @@ export interface ChatPanelProps {
   docsPath: string | null;
   /** Read the editor's live files at send time, not at mount time. */
   getFiles: () => FilesMap;
-  /** Write a file back into the editor + running preview. */
-  applyEdit: (path: string, contents: string) => void;
+  /** Write a file back into the editor + running preview. `isUndo` is a pure
+   *  discriminator for the caller's own instrumentation (DEV-2859) — an Apply
+   *  and an Undo call this with the same two-argument shape otherwise, and the
+   *  App-owned wrapper needs a way to tell them apart without Chat.tsx
+   *  importing anything Sentry-related itself. */
+  applyEdit: (path: string, contents: string, isUndo?: boolean) => void;
   onClose: () => void;
 }
 
@@ -213,7 +217,7 @@ export function ChatPanel({
   function undo(index: number) {
     const turn = turnsRef.current[index];
     if (!turn?.undo) return;
-    for (const [path, contents] of Object.entries(turn.undo)) applyEdit(path, contents);
+    for (const [path, contents] of Object.entries(turn.undo)) applyEdit(path, contents, true);
     setTurns((current) => current.map((t, i) => (i === index ? { ...t, undo: undefined } : t)));
     reportChatEvent(apiBase, "edit_undone", framework);
   }
