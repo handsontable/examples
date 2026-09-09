@@ -15,7 +15,7 @@ import { errorPageHtml, errorPageResponse } from "../workers/api/src/error-page.
 // narrow window.
 
 // DEMOS-K. `isPreviewPortUnreachable` (renamed from `isPortNotListening`) has to
-// recognise all three workerd messages behind the throw, not just the one it
+// recognise all four workerd messages behind the throw, not just the one it
 // shipped with — see the fixtures below, verbatim from the issue's `error.value`.
 
 /** The verbatim workerd message PR #195 originally covered. */
@@ -24,6 +24,8 @@ const WORKERD = "There has been an internal error connecting to the port";
 const WORKERD_NOT_LISTENING = "The container is not listening in the TCP address 10.0.0.1:4321";
 /** 14 of 20 DEMOS-K events, and 5 of 5 post-deploy — the shape the old regex missed. */
 const WORKERD_NOT_RUNNING = "The container is not running, consider calling start()";
+/** DEMOS-K's post-regression wording — the shape the DEV-2537 patterns miss. */
+const WORKERD_CONTAINER_PORT = "There was an internal networking error connecting to the container port";
 
 const html = { isUpgrade: false, wantsHtml: true, acceptsHtml: true };
 
@@ -50,7 +52,13 @@ test("recognises the 'not running, consider calling start()' shape", () => {
   assert.equal(isPreviewPortUnreachable(new Error(WORKERD_NOT_RUNNING)), true);
 });
 
-test("recognises all three shapes through a cause chain", () => {
+test("recognises the 'networking error connecting to the container port' shape (DEMOS-K, DEV-2856)", () => {
+  // The regression: one event (2026-09-08) carries this wording and the three
+  // shipped patterns all return false for it.
+  assert.equal(isPreviewPortUnreachable(new Error(WORKERD_CONTAINER_PORT)), true);
+});
+
+test("recognises all four shapes through a cause chain", () => {
   const wrapped = new Error("preview forward failed", { cause: new Error(WORKERD) });
   assert.equal(isPreviewPortUnreachable(wrapped), true);
   assert.equal(isPreviewPortUnreachable(new Error("outer", { cause: wrapped })), true);
@@ -61,6 +69,10 @@ test("recognises all three shapes through a cause chain", () => {
   );
   assert.equal(
     isPreviewPortUnreachable(new Error("wrapped", { cause: new Error(WORKERD_NOT_RUNNING) })),
+    true,
+  );
+  assert.equal(
+    isPreviewPortUnreachable(new Error("wrapped", { cause: new Error(WORKERD_CONTAINER_PORT) })),
     true,
   );
 });
@@ -78,6 +90,39 @@ test("does not match a genuine boot failure or an adjacent 'container is not …
   // status (a thrown 500) and today's report.
   assert.equal(isPreviewPortUnreachable(new Error("Container failed to start: exit 137")), false);
   assert.equal(isPreviewPortUnreachable(new Error("The container is not authorized")), false);
+});
+
+test("does not fold in an unrelated networking error (DEV-2856 over-match guard)", () => {
+  // Red under a too-loose `/networking error/i` row — the "unrelated networking
+  // error stays loud" case. The new row keeps both discriminating tokens
+  // ("networking error" and "container port") for exactly this reason.
+  assert.equal(
+    isPreviewPortUnreachable(new Error("There was an internal networking error connecting to the database")),
+    false,
+  );
+});
+
+test("does not fold in the HTTPS-to-container config defect (DEV-2856 over-match guard)", () => {
+  // A real workerd string and a config defect that must stay loud — red under
+  // a too-loose `/connecting to (a|the) container/i` row.
+  assert.equal(
+    isPreviewPortUnreachable(
+      new Error("Connecting to a container using HTTPS is not currently supported; use HTTP instead."),
+    ),
+    false,
+  );
+});
+
+test("does not match the local-dev proxy wording (deliberate exclusion, DEV-2856)", () => {
+  // Same family, local-dev wording, no production event — mirrors the deliberate
+  // exclusions at session-lifecycle.test.mjs:121 and :127. Red under a too-loose
+  // `/container port/i` row.
+  assert.equal(
+    isPreviewPortUnreachable(
+      new Error("Connecting to container port through proxy-everything failed: [502] Bad Gateway"),
+    ),
+    false,
+  );
 });
 
 test("does not match non-errors", () => {

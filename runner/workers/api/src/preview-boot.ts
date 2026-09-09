@@ -35,6 +35,15 @@
 // container-stopped race is not a reason to skip the retry page, because the
 // very next request already falls through to the SDK's 410 on its own.
 //
+// That "20 events" count understates the group as of 2026-09-09: DEMOS-K
+// reached 21 events, and one of them, dated 2026-09-08, carries a fifth shape
+// ("There was an internal networking error connecting to the container port")
+// that none of the patterns below matched — the group's representative
+// wording changed post-DEV-2537-deploy, which is what "regressed" means here.
+// The other 20 are still the wordings already matched, so the group's event
+// rate drops toward zero but is not expected to hit exactly zero — see
+// `BOOT_WINDOW_MS` and its `report: true` past-window branch.
+//
 // Note the `/status` probe makes a cold start an unlikely visitor-facing cause
 // of (i) on its own — `packages/runtime/src/container.ts` only points the
 // iframe at the preview URL after `/status` reports a real `net.connect`
@@ -62,15 +71,21 @@ export const BOOT_WINDOW_MS = 90_000;
 const MAX_CAUSE_DEPTH = 5;
 
 /**
- * The three messages workerd raises out of `container.getTcpPort(port).fetch()`, verbatim
+ * The four messages workerd raises out of `container.getTcpPort(port).fetch()`, verbatim
  * from DEMOS-K. None of them exists in any package here — they come from the runtime — so a
  * message match is the only signal available, and each is listed rather than generalised so a
- * fourth shape shows up as a new Sentry event instead of being silently swallowed.
+ * fifth shape shows up as a new Sentry event instead of being silently swallowed.
  */
 const PORT_UNREACHABLE = [
   /connecting to the port/i, // "There has been an internal error connecting to the port"
   /container is not listening/i, // "The container is not listening in the TCP address 10.0.0.1:4321"
+  // Also matched by NOT_RUNNING_PATTERN (session-lifecycle.ts:98) — deliberately
+  // duplicated rather than shared. isAtCapacityFailure's rule (session-lifecycle.ts
+  // ~145-155) is that a predicate must not recognise a wording no event has produced
+  // on its own path; centralising this row would import a create-path wording into a
+  // teardown-path predicate on the strength of one coincidental overlap.
   /container is not running/i, // "The container is not running, consider calling start()"
+  /networking error connecting to the container port/i, // "There was an internal networking error connecting to the container port" (DEMOS-K, regressed 2026-09)
 ];
 
 /**
