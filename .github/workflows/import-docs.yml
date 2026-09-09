@@ -181,3 +181,4 @@ jobs:
             The workflow imported the requested Handsontable documentation bucket(s)
             with concrete npm dependency versions.
           labels: automated
+          reviewers: ${{ vars.AUTO_PR_REVIEWERS }}
