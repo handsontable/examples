@@ -74,6 +74,35 @@ export const MONITOR_COMPILE_MESSAGE_MAX = 2000;
 export const MONITOR_URL_MAX = 500;
 
 /**
+ * The exact prefix React 18 dev uses when it logs an error-boundary component
+ * stack to `console.error` — `react-dom@18.3.1/cjs/react-dom.development.js:18689-18704`
+ * (fetched verbatim) builds `componentNameMessage + "\n" + componentStack + "\n\n" +
+ * errorBoundaryMessage` and calls `console['error'](combinedMessage)` as a single
+ * string argument. Recognising it (DEV-2875, DEMOS-4P) is what lets that call be
+ * promoted from `console-error` to `error`, carrying its component stack as a real
+ * `stack` rather than losing it inside a message `send` truncates at
+ * `MONITOR_MESSAGE_MAX`.
+ *
+ * React 19 needs none of this: it calls `console.error("%o\n\n%s\n\n%s\n", error, …)`,
+ * so the Error object is an argument and `errorArgReport` already re-homes it with the
+ * real message and stack.
+ */
+export const MONITOR_REACT_BOUNDARY_PREFIX = "The above error occurred in ";
+
+/**
+ * What a React 18 error-boundary component name is replaced with in a promoted
+ * event's message.
+ *
+ * `<ExampleComponent>` and its siblings are docs-authored content, not ours — 1794
+ * occurrences under `apps/authoring/public/docs-examples/` — and this message becomes
+ * both the Sentry issue title and (via `normalizeMonitorMessage`) the fingerprint. An
+ * unredacted component name would fingerprint one bucket per authored example instead
+ * of one bucket for the defect, which is the DEV-2854 flapping-title failure this
+ * ticket exists to fix. Matches house style: `<preview>` / `<n>` / `<str>` / `<ident>`.
+ */
+export const MONITOR_COMPONENT_PLACEHOLDER = "<component>";
+
+/**
  * What a Tier-2 preview host is replaced with.
  *
  * Preview URLs are `<port>-<sandboxId>-<token>.demos.handsontable.com`, so **the
@@ -374,6 +403,8 @@ export const REPORTER_SOURCE = `(function () {
   } catch (e) { return; }
 
   var TYPE = ${JSON.stringify(MONITOR_MESSAGE_TYPE)};
+  var REACT_PREFIX = ${JSON.stringify(MONITOR_REACT_BOUNDARY_PREFIX)};
+  var COMPONENT = ${JSON.stringify(MONITOR_COMPONENT_PLACEHOLDER)};
   var CEILING = ${MONITOR_EVENT_CEILING};
   var WARN_CEILING = ${MONITOR_BREADCRUMB_CEILING};
   var MAX = ${MONITOR_MESSAGE_MAX};
@@ -497,7 +528,10 @@ export const REPORTER_SOURCE = `(function () {
   // \`instanceof\` can throw on an exotic proxy, and a cross-realm error (one raised in
   // an iframe the demo itself created) answers false. Both degrade the same way: the
   // value is not treated as an Error, so the console event is relayed as a plain
-  // \`console-error\` — the pre-DEV-2552 behaviour, never a crash.
+  // \`console-error\` — the pre-DEV-2552 behaviour, never a crash. \`reactBoundaryReport\`
+  // (DEV-2875) is the one other escape hatch off that default: React 18's
+  // error-boundary log has no Error argument for this function to find at all, so it
+  // is recognised by string shape instead, after this check has already declined.
   function isErrorLike(a) {
     try {
       return !!a && a instanceof Error;
@@ -545,6 +579,41 @@ export const REPORTER_SOURCE = `(function () {
     return null;
   }
 
+  // DEV-2875. Second re-homing path, tried after \`errorArgReport\` so React 19 (an
+  // Error argument, covered above) keeps winning. React 18's boundary log has no Error
+  // arg at all — one joined string, component stack included — so it must be
+  // recognised by shape, in-page, before \`send\` truncates the message and takes the
+  // stack with it. Four load-bearing conditions: (1) one string arg — React 19's \`%o\`
+  // form is excluded by arity; (2) REACT_PREFIX at index 0; (3) "error boundary"
+  // present; (4) >=1 \`at \`-form frame below line 1 — the condition that makes
+  // promotion conditional on actually carrying a stack, so frame-less prose stays on
+  // \`console-error\`. \`at \`-form only: Sentry's parser reads that shape, the legacy
+  // \`in X (at file:line)\` form parses to zero frames. \`else if (frames.length) break\`
+  // skips React's one leading blank line without swallowing trailing prose. Component
+  // name elided (first match only) — it is visitor-authored and would otherwise
+  // fingerprint one issue per example (DEV-2854). try/catch as in \`errorArgReport\`:
+  // runs at the call site, outside \`send\`'s own catch.
+  function reactBoundaryReport(args) {
+    try {
+      if (args.length !== 1) return null;
+      var s = args[0];
+      if (typeof s !== "string") return null;
+      if (s.indexOf(REACT_PREFIX) !== 0) return null;
+      if (s.indexOf("error boundary") === -1) return null;
+      var lines = s.split("\\n");
+      var frames = [];
+      for (var i = 1; i < lines.length; i++) {
+        if (/^\\s+at\\s+\\S/.test(lines[i])) frames.push(lines[i]);
+        else if (frames.length) break;
+      }
+      if (!frames.length) return null;
+      return {
+        message: lines[0].replace(/<[^<>]*>/, COMPONENT),
+        stack: frames.join("\\n")
+      };
+    } catch (e) { return null; }
+  }
+
   function argsToMessage(args) {
     var parts = [];
     for (var i = 0; i < args.length; i++) {
@@ -586,13 +655,20 @@ export const REPORTER_SOURCE = `(function () {
     var origError = console.error;
     var origWarn = console.warn;
     console.error = function () {
-      // See \`errorArgReport\`: an Error here belongs to the error channel, and is sent
-      // under that kind so \`send\`'s dedupe collapses it with the window listener's
-      // copy of the same throw. The passthrough is outside the branch — what the
-      // reporter does with an event must never change the demo's own console output.
+      // See \`errorArgReport\`: an Error here belongs to the error channel, so its dedupe
+      // key matches the window listener's copy of the same throw. It MUST keep winning
+      // first — that covers React 19's Error-argument form. \`reactBoundaryReport\` is
+      // the second and last escape hatch (DEV-2875): React 18's boundary log has no
+      // Error argument, so it only gets a look once the first has declined. Passthrough
+      // is outside both branches — the reporter must never change the demo's own
+      // console output.
       var report = errorArgReport(arguments);
       if (report) send("error", report.message, report.stack);
-      else send("console-error", argsToMessage(arguments), "");
+      else {
+        var boundary = reactBoundaryReport(arguments);
+        if (boundary) send("error", boundary.message, boundary.stack);
+        else send("console-error", argsToMessage(arguments), "");
+      }
       if (origError) origError.apply(console, arguments);
     };
     console.warn = function () {
@@ -688,10 +764,11 @@ export const REPORTER_SOURCE = `(function () {
  *
  * One physical line is not free, and the cost lands somewhere non-obvious: babel's code
  * frame prints the two lines above the fault verbatim, so a syntax error on authored
- * line 1 or 2 renders all 12.6 KB of this into the compile message ahead of the line
+ * line 1 or 2 renders all ~14.9 KB of this into the compile message ahead of the line
  * that is actually wrong, and `MONITOR_COMPILE_MESSAGE_MAX` then cuts the diagnostic off
- * (measured: 289 characters of usable message with the reporter inlined, 12,872 with it
- * on one line). `boundCompileMessage` in sandpack.ts therefore replaces this exact
+ * (measured after DEV-2875 grew the reporter: 294 characters of usable message with the
+ * reporter inlined, 15,486 with it on one line — was 289 / 12,872 before that ticket).
+ * `boundCompileMessage` in sandpack.ts therefore replaces this exact
  * constant with a marker before the cap runs — `stripInjectedReporter`, which is
  * coupled to this constant on purpose. Do not change the shape of this line without
  * checking that strip still fires.

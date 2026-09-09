@@ -481,6 +481,147 @@ test("DEV-2552: console.warn is not re-homed — it has no error-channel twin", 
   );
 });
 
+// ---- React 18 boundary logs get their component stack (DEV-2875, DEMOS-4P) ---
+//
+// react-dom@18.3.1 cjs/react-dom.development.js:18689-18704 builds ONE joined
+// string — componentNameMessage + "\n" + componentStack + "\n\n" +
+// errorBoundaryMessage — and passes it as a single argument. So the component
+// stack lives INSIDE the message, which `send` truncates at MONITOR_MESSAGE_MAX.
+// That is why recognition has to happen in-page rather than parent-side, and it
+// is what test 2 below pins.
+
+const REACT18_STACK =
+  "\n    at ExampleComponent (https://" + PREVIEW_HOST + "/src/App.js:20:11)" +
+  "\n    at div" +
+  "\n    at App (https://" + PREVIEW_HOST + "/src/App.js:8:3)";
+const REACT18_TAIL =
+  "Consider adding an error boundary to your tree to customize error handling behavior.\n" +
+  "Visit https://reactjs.org/link/error-boundaries to learn more about error boundaries.";
+const REACT18_BOUNDARY_LOG =
+  "The above error occurred in the <ExampleComponent> component:\n" + REACT18_STACK + "\n\n" + REACT18_TAIL;
+const PROMOTED = "The above error occurred in the <component> component:";
+
+test("DEV-2875: a React 18 boundary log is promoted with its component stack", () => {
+  const h = runReporter();
+  h.console.error(REACT18_BOUNDARY_LOG);
+
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].kind, "error", "must reach captureException, which is the only path a stack survives");
+  assert.equal(h.sent[0].message, PROMOTED);
+  assert.ok(
+    !h.sent[0].message.includes("ExampleComponent"),
+    "the component name is visitor-authored and becomes both title and fingerprint, so it is elided",
+  );
+  assert.match(h.sent[0].stack, /at ExampleComponent/);
+  assert.equal(h.passthrough.length, 1, "the demo's own console output still happens");
+});
+
+test("DEV-2875: the stack lands under the stack cap, not cut by the message cap", () => {
+  // The whole justification for recognising in-page. The joined block is one
+  // string, so parent-side the stack would already have been truncated at
+  // MONITOR_MESSAGE_MAX (500). Split in-page, it rides in `stack` under
+  // MONITOR_STACK_MAX (2000) instead.
+  const frames = [];
+  for (let i = 0; i < 40; i++) frames.push(`\n    at Component${i} (https://${PREVIEW_HOST}/src/F${i}.js:${i}:7)`);
+  const long =
+    "The above error occurred in the <Deep> component:" + frames.join("") + "\n\n" + REACT18_TAIL;
+  const h = runReporter();
+  h.console.error(long);
+
+  assert.ok(long.length > MONITOR_MESSAGE_MAX, "fixture must actually exceed the message cap");
+  assert.equal(h.sent[0].message, "The above error occurred in the <component> component:");
+  assert.ok(h.sent[0].stack.length > MONITOR_MESSAGE_MAX, "the stack outlived the message cap");
+  // `truncate` appends a 3-char ellipsis, so the bound is STACK_MAX + 3 rather
+  // than STACK_MAX. Asserted exactly: a loose `< 3000` would not notice the cap
+  // being removed, which is the thing worth pinning.
+  assert.ok(h.sent[0].stack.length <= MONITOR_STACK_MAX + 3, `unbounded stack: ${h.sent[0].stack.length}`);
+  assert.ok(h.sent[0].stack.endsWith("..."), "a stack past the cap is marked as truncated");
+});
+
+test("DEV-2875: promoted component-stack frames are host-redacted", () => {
+  // First time frames travel in `stack` from the console channel, so `send`'s
+  // redact-before-truncate has to cover this path too.
+  const h = runReporter();
+  h.console.error(REACT18_BOUNDARY_LOG);
+
+  assert.match(h.sent[0].stack, /<preview>/);
+  assert.ok(!h.sent[0].stack.includes("tok9xQ"), "the preview host token must not travel");
+});
+
+test("DEV-2875: one fault reports twice, never three times", () => {
+  // React 18 dev surfaces the throw to window.onerror via the guarded-invoke
+  // fake-event trick — hence its own wording, "The ABOVE error". So the twin is
+  // common, not absent (DEMOS-76/77 share a trace). The pair cannot be collapsed
+  // client-side: React logs the companion after the browser already saw the
+  // error, and the companion carries no error message to correlate on.
+  const h = runReporter();
+  h.fire("error", { error: new Error("boom"), message: "boom" });
+  h.console.error(REACT18_BOUNDARY_LOG);
+
+  assert.equal(h.sent.length, 2);
+  assert.deepEqual(h.sent.map((pl) => pl.kind), ["error", "error"]);
+  assert.deepEqual(h.sent.map((pl) => pl.message), ["boom", PROMOTED]);
+});
+
+test("DEV-2875 guard: an ordinary console.error is untouched", () => {
+  // Passes either way — this is the over-match boundary the whole change turns on.
+  const h = runReporter();
+  h.console.error("something");
+
+  assert.deepEqual(
+    h.sent.map((pl) => [pl.kind, pl.message]),
+    [["console-error", "something"]],
+  );
+});
+
+test("DEV-2875 guard: React prose with no frame block is not promoted", () => {
+  // Passes either way. The strongest anti-over-match rule: promotion is
+  // conditional on carrying the component stack that justifies it, so prose
+  // alone stays on the console channel.
+  const h = runReporter();
+  h.console.error("The above error occurred in the <Foo> component:\n\n" + REACT18_TAIL);
+
+  assert.equal(h.sent[0].kind, "console-error");
+});
+
+test("DEV-2875 guard: React 19's Error-argument form still wins via errorArgReport", () => {
+  // Passes either way. React 19 needs no fix — it passes the Error as an
+  // argument, so the first escape hatch re-homes it with the real message and
+  // stack. Recorded here so the ordering is not casually swapped.
+  const h = runReporter();
+  h.console.error(
+    "%o\n\n%s\n\n%s\n",
+    new Error("boom"),
+    "The above error occurred in the <Foo> component.",
+    "React will try to recreate this component tree",
+  );
+
+  assert.equal(h.sent[0].kind, "error");
+  assert.equal(h.sent[0].message, "boom");
+  assert.match(h.sent[0].stack, /Error: boom/);
+});
+
+test("DEV-2875 guard: the arity rule — a second argument declines promotion", () => {
+  // Passes either way. React 18's shape is exactly one string argument.
+  const h = runReporter();
+  h.console.error(REACT18_BOUNDARY_LOG, "extra");
+
+  assert.equal(h.sent[0].kind, "console-error");
+});
+
+test("DEV-2875 guard: repeats cost one slot, and the message is fingerprint-stable", () => {
+  // Passes either way. Today's key contains the whole block including the
+  // component stack, so a boundary looping over different components mints a new
+  // key each time; the constant message bounds that.
+  const h = runReporter();
+  h.console.error(REACT18_BOUNDARY_LOG);
+  h.console.error(REACT18_BOUNDARY_LOG);
+  h.console.error(REACT18_BOUNDARY_LOG);
+
+  assert.equal(h.sent.length, 1);
+  assert.equal(normalizeMonitorMessage(PROMOTED), PROMOTED, "no normalizer rule may reshape the constant title");
+});
+
 // ---- network events are same-origin only (DEV-2539, DEMOS-Z) ----------------
 //
 // The reporter runs inside the preview document, so `location.host` *is* the preview
