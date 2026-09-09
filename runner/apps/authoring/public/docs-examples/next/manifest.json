@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-53ad929-20260908",
-  "count": 1487,
+  "hotVersion": "0.0.0-next-5680ec8-20260909",
+  "count": 1492,
   "examples": [
     {
       "bucket": "next",
@@ -1548,6 +1548,86 @@
       "guideTitle": "How to use icons in cells",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
+      "docPermalink": "/use-icons-in-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/use-icons-in-cells/angular/example2.ts",
+      "file": "guides__accessories-and-menus__use-icons-in-cells__angular__example2.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "How to use icons in cells"
+      ],
+      "guide": "guides/accessories-and-menus/use-icons-in-cells/use-icons-in-cells.md",
+      "guideTitle": "How to use icons in cells",
+      "exampleId": "example2",
+      "exampleTitle": "Use a third-party icon set",
+      "docPermalink": "/use-icons-in-cells",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/use-icons-in-cells/javascript/example2.js",
+      "file": "guides__accessories-and-menus__use-icons-in-cells__javascript__example2.js.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "How to use icons in cells"
+      ],
+      "guide": "guides/accessories-and-menus/use-icons-in-cells/use-icons-in-cells.md",
+      "guideTitle": "How to use icons in cells",
+      "exampleId": "example2",
+      "exampleTitle": "Use a third-party icon set",
+      "docPermalink": "/use-icons-in-cells",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/use-icons-in-cells/react/example2.tsx",
+      "file": "guides__accessories-and-menus__use-icons-in-cells__react__example2.tsx.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "How to use icons in cells"
+      ],
+      "guide": "guides/accessories-and-menus/use-icons-in-cells/use-icons-in-cells.md",
+      "guideTitle": "How to use icons in cells",
+      "exampleId": "example2",
+      "exampleTitle": "Use a third-party icon set",
+      "docPermalink": "/use-icons-in-cells",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/use-icons-in-cells/javascript/example2.ts",
+      "file": "guides__accessories-and-menus__use-icons-in-cells__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "How to use icons in cells"
+      ],
+      "guide": "guides/accessories-and-menus/use-icons-in-cells/use-icons-in-cells.md",
+      "guideTitle": "How to use icons in cells",
+      "exampleId": "example2",
+      "exampleTitle": "Use a third-party icon set",
+      "docPermalink": "/use-icons-in-cells",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/use-icons-in-cells/vue/example2.vue",
+      "file": "guides__accessories-and-menus__use-icons-in-cells__vue__example2.vue.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "How to use icons in cells"
+      ],
+      "guide": "guides/accessories-and-menus/use-icons-in-cells/use-icons-in-cells.md",
+      "guideTitle": "How to use icons in cells",
+      "exampleId": "example2",
+      "exampleTitle": "Use a third-party icon set",
       "docPermalink": "/use-icons-in-cells",
       "framework": "vue",
       "displayName": "Vue 3"
