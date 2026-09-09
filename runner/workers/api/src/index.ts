@@ -32,8 +32,11 @@ import { classifyPreviewBootFailure, isPreviewPortUnreachable } from "./preview-
 import {
   AT_CAPACITY_CODE,
   atCapacityMessage,
+  CONTAINER_STARTING_CODE,
+  containerStartingMessage,
   destroyConfirmed,
   isAtCapacityFailure,
+  isContainerStartingFailure,
   isExpectedTeardownFailure,
   TOMBSTONE_ATTEMPTED,
   TOMBSTONE_DESTROYED,
@@ -679,7 +682,14 @@ async function writeFiles(sandbox: SandboxLike, files: Record<string, string>) {
   for (const dir of dirs) {
     try {
       await sandbox.mkdir(dir, { recursive: true });
-    } catch {
+    } catch (err) {
+      // "dir may exist" is the only failure this swallow was written for. A
+      // container that never started is not that, and swallowing it costs a
+      // whole extra SDK retry budget: the transport retries the 503 for ~140s,
+      // we discard the result, and the first writeFile below opens a fresh one.
+      // Sentry DEMOS-20 measured the sum — sessionElapsedMs 283943 for one
+      // POST /api/session.
+      if (isContainerStartingFailure(err)) throw err;
       /* dir may exist */
     }
   }
@@ -924,6 +934,28 @@ export default Sentry.withSentry(sentryOptions, {
               `[session] refused ${body.framework} session ${sessionId}: container pool at capacity`,
             );
             return json({ error: AT_CAPACITY_CODE, message: atCapacityMessage }, 503);
+          }
+          // DEV-2857 / Sentry DEMOS-1Z & DEMOS-20. A container that never left
+          // "starting" inside the SDK's own ~140s retry budget (see
+          // `CONTAINER_STARTING_PATTERN` in session-lifecycle.ts) is a platform
+          // refusal, not a fault of the demo's code — same family as the
+          // at-capacity branch above, degrade rather than a raw 500. Placed
+          // here, in the create handler's catch, rather than inside
+          // `writeFiles` or wrapped around this call site: this catch covers
+          // `mkdir`, `writeFile`, `startProcess` AND `exposePort` (all reach the
+          // container through the same `containerFetch`), and
+          // `closedWhileCreating()` has already run above, preserving the
+          // orphan check. `startProcess` is not idempotent, so a retry must
+          // never be added around it — see the ticket for why zero attempts
+          // were added anywhere in this fix.
+          if (isContainerStartingFailure(err)) {
+            console.warn(`[session] ${body.framework} session ${sessionId}: container never became ready`);
+            Sentry.captureException(err, {
+              level: "warning",
+              fingerprint: ["tier2-session-container-starting"],
+              tags: { context: "tier2-session-start" },
+            });
+            return json({ error: CONTAINER_STARTING_CODE, message: containerStartingMessage }, 503);
           }
           throw err;
         }

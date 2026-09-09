@@ -15,12 +15,24 @@
 // - `@cloudflare/sandbox` imports the `cloudflare:` URL scheme at load time,
 //   which only exists inside workerd. The routes under test never reach a
 //   sandbox, so a structural stub stands in for the package.
+//
+// - `@sentry/cloudflare` likewise expects a Workers runtime. Nothing under
+//   test needs live reporting (see sentry-cloudflare-stub.mjs for why), but a
+//   spec that wants to assert on a `Sentry.captureException` call needs
+//   somewhere to observe it — a plain "does not crash" stub would leave that
+//   untestable. Additive only: every symbol used in workers/api/src passes
+//   through or no-ops, so specs that assert nothing about Sentry are
+//   unaffected.
 
 const SANDBOX_STUB = new URL("./cloudflare-sandbox-stub.mjs", import.meta.url).href;
+const SENTRY_STUB = new URL("./sentry-cloudflare-stub.mjs", import.meta.url).href;
 
 export async function resolve(specifier, context, nextResolve) {
   if (specifier === "@cloudflare/sandbox") {
     return { url: SANDBOX_STUB, shortCircuit: true };
+  }
+  if (specifier === "@sentry/cloudflare") {
+    return { url: SENTRY_STUB, shortCircuit: true };
   }
   if (
     specifier.startsWith(".")

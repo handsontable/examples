@@ -306,6 +306,27 @@ test("an at-capacity refusal reaches the user as the server phrased it", async (
   assert.doesNotMatch(err.message, /unavailable/i, "the envelope-less tier must not swallow an envelope");
 });
 
+test("a container-starting refusal reaches the user as the server phrased it, DEV-2857", async () => {
+  // The trap this tier exists to close: without a `container_starting` case in
+  // `sessionStartMessage`, a 503 WITH an envelope and this unknown code falls
+  // through to the generic body tier ("session start failed (503): …"), which
+  // trips the same App.tsx heuristic every other tier in this file guards
+  // against — and for this refusal specifically, that heuristic's answer is
+  // "install Docker", the exact opposite of the truth (the container is ours,
+  // just slow). `pipeline/session-lifecycle.test.mjs` pins the sentence
+  // itself; this pins that the runtime does not wrap it.
+  const sentence =
+    "The sandbox is still starting up and did not become ready in time. Nothing is wrong with the code — try \"Restart preview\".";
+  const err = await sessionStartError(
+    503,
+    JSON.stringify({ error: "container_starting", message: sentence }),
+  );
+
+  assert.equal(err.code, "container_starting");
+  assert.equal(err.message, sentence, "the envelope's message must survive, unwrapped");
+  assert.doesNotMatch(err.message, /session start failed/i, "would trip the App.tsx heuristic");
+});
+
 test("an ordinary envelope error is unchanged", async () => {
   const err = await sessionStartError(500, JSON.stringify({ error: "boom", message: "boom" }));
 

@@ -262,6 +262,15 @@ function sessionStartMessage(
   // below on purpose — this one HAS an envelope, so it would otherwise fall
   // through to the generic wrapper at the bottom.
   if (failure.code === "at_capacity") return failure.message;
+  // DEV-2857 / Sentry DEMOS-1Z & DEMOS-20. Same reasoning as `at_capacity`
+  // immediately above: a 503 WITH an envelope and this code is the Worker's
+  // own degrade branch for a container that never finished booting, phrased
+  // for the person reading it. Without this tier the envelope-less-503
+  // fallthrough at the bottom of this function would wrap it as
+  // "session start failed (503): …", which trips the App.tsx heuristic and
+  // tells the visitor to install Docker — the exact trap this function exists
+  // to avoid for every other refusal.
+  if (failure.code === "container_starting") return failure.message;
   // The interception tier (Sentry DEMOS-9, UNREACHED_STATUS above). Placed before
   // TIMEOUT_STATUSES because 504 is a member of that set and this more specific gate
   // must win. `edge.headersReadable` is required, not just `!edge.ray`: without it a

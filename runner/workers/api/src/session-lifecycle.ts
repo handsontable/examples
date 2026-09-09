@@ -108,6 +108,32 @@ const NOT_RUNNING_PATTERN = /container is not running/i;
 const NO_INSTANCE_PATTERN = /no container instance that can be provided/i;
 
 /**
+ * The wording a *create* sees while a container is still booting, not yet
+ * refused outright: `Container is starting. Please retry in a moment.`, built
+ * by the SDK's own `containerFetch` catch as a 503 body — never by this repo.
+ * By the time it reaches `writeFiles` it is NOT a first attempt: `sandbox
+ * .mkdir`/`.writeFile` route through `BaseTransport.fetch` ->
+ * `fetchWithResponseRetry`, which already retries every 503 with
+ * `shouldRetry: r => r.status === 503` for a budget of
+ * `max(120_000, 30_000 + 90_000 + 30_000)` = 150s (~7 attempts over ~135s).
+ * The transport's own retry is what gives up on it; this pattern exists to
+ * recognise the exhausted end of that loop, not to start a new one.
+ *
+ * Deliberately narrow, like `AT_CAPACITY_PATTERN`: must NOT match
+ * `NOT_RUNNING_PATTERN`'s "the container is not running" (a different fault —
+ * that one is teardown-only, seen only after a container that WAS running
+ * stopped) or the capacity wording. A visitor whose sandbox is merely slow to
+ * boot must never be told "we are at capacity".
+ *
+ * DEGRADE DIRECTION, same as `isAtCapacityFailure` and `isPreviewPortUnreachable`:
+ * this string comes from the platform, not from any package in this repo, so a
+ * message match is the only signal available. If Cloudflare rewords it, this
+ * predicate stops matching and the case falls back to today's report-and-500 —
+ * noisy, never silent.
+ */
+const CONTAINER_STARTING_PATTERN = /container is starting/i;
+
+/**
  * Whether a failed `destroy()` is the platform declining rather than a teardown
  * regression.
  *
@@ -157,6 +183,16 @@ export function isAtCapacityFailure(err: unknown): boolean {
   return messageMatches(err, AT_CAPACITY_PATTERN);
 }
 
+/**
+ * Whether a failed *create* is a container that never finished booting inside
+ * the SDK's own retry budget — see `CONTAINER_STARTING_PATTERN` above for why
+ * this is the exhausted end of a loop this repo does not own, and never a
+ * signal to retry again ourselves.
+ */
+export function isContainerStartingFailure(err: unknown): boolean {
+  return messageMatches(err, CONTAINER_STARTING_PATTERN);
+}
+
 /** Machine-readable reason on the 503 envelope. `sessionStartMessage` in
  *  packages/runtime/src/container.ts matches this exact code to pass the
  *  sentence below through to the user unwrapped. */
@@ -178,3 +214,22 @@ export const AT_CAPACITY_CODE = "at_capacity";
  */
 export const atCapacityMessage =
   "All live-preview sandboxes are busy right now. Nothing is wrong with the code — try again in a minute.";
+
+/** Machine-readable reason on the 503 envelope. `sessionStartMessage` in
+ *  packages/runtime/src/container.ts matches this exact code to pass the
+ *  sentence below through to the user unwrapped. */
+export const CONTAINER_STARTING_CODE = "container_starting";
+
+/**
+ * What a visitor sees when a create is refused because the container never
+ * finished booting inside our retry budget.
+ *
+ * Same two constraints `atCapacityMessage` above is pinned on: it must
+ * contain none of /failed to fetch|networkerror|load failed|session start
+ * failed|fetch/i (`describeRuntimeError` in apps/authoring/src/App.tsx would
+ * otherwise replace it with "install Docker and run the local API worker"),
+ * and it must not leak an internal knob. `pipeline/session-lifecycle.test.mjs`
+ * pins both.
+ */
+export const containerStartingMessage =
+  "The sandbox is still starting up and did not become ready in time. Nothing is wrong with the code — try \"Restart preview\".";
