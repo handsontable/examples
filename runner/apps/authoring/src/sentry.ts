@@ -16,6 +16,7 @@ import {
 } from "@handsontable/demo-runtime/monitor";
 import { ApiError } from "./apiError.js";
 import { resolveReporting } from "./reportingGate.js";
+import { isEdgelessForeignSessionStart, isOfficeScannerRejection } from "./eventGate.js";
 
 const DSN = import.meta.env.VITE_SENTRY_DSN as string | undefined;
 
@@ -79,6 +80,12 @@ const DEMO_SURFACE = "demo-runtime";
  * processes every event including explicit `captureException` calls, so
  * `/Failed to fetch/` there would silently discard the offline broker and
  * `/api/versions` failures that `reportError` exists to surface.
+ *
+ * The two other NOT-OURS populations this project has classified — the Office
+ * scanner rejection (DEMOS-5F) and the edgeless-foreign session-start facet
+ * (DEMOS-9) — are NOT regexes here. They live in `eventGate.ts`, gated in
+ * `beforeSend` below, and are pinned by `pipeline/sentry-gating.test.mjs`. Adding
+ * another regex to this array for either would lose that test coverage.
  */
 const UNHANDLED_NOISE = [
   /^ResizeObserver loop/i,
@@ -151,6 +158,18 @@ if (reportingEnabled) {
     maxBreadcrumbs: 200,
     beforeSend(event) {
       if (isUnhandledNoise(event)) return null;
+      // DEMOS-5F, Office/Outlook safelink scanner (DEV-2858). Sits ahead of the
+      // DEMO_SURFACE branch, unlike isForeignUnhandled below: it requires
+      // `mechanism.handled === false`, and every relay arrives via
+      // `captureException`, which sets `handled: true` — so it cannot fire on a
+      // relayed event and needs no re-homing protection.
+      if (isOfficeScannerRejection(event)) return null;
+      // DEMOS-9, edgeless-foreign session-start facet (DEV-2858). Also sits ahead
+      // of the DEMO_SURFACE branch: it requires the `tier2-session-start` /
+      // `session_response_origin` tags that only `App.tsx`'s own
+      // `Sentry.captureException` call sets — `reportDemoEvent` (:254-260) never
+      // sets them, so this gate cannot fire on a relayed event either.
+      if (isEdgelessForeignSessionStart(event)) return null;
       // A client carries one `environment` from init, so a relayed demo event is
       // re-homed per event here. See `reportDemoEvent`.
       if (event.tags?.surface === DEMO_SURFACE) {
