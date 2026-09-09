@@ -1,6 +1,8 @@
 /**
  * Is `error` the browser's opaque transport failure — the request never completed,
- * so there is no status, no body, and nothing about our host in it?
+ * so there is no status and no body? (The message itself may still name our host —
+ * see the parenthesised-suffix note below — but nothing else about the response
+ * does.)
  *
  * Sentry DEMOS-2X / DEMOS-2Y. Deliberately shape-based and NOT gated on
  * `navigator.onLine`: unlike the Tier-1 compiler-asset branch in tier1Report.ts,
@@ -17,7 +19,8 @@
  * `--experimental-strip-types`, so `pipeline/fetch-failure.test.mjs` can pin the
  * decision without pulling in `@sentry/react` or `import.meta.env`.
  *
- * Matched on a message *substring*, not on the Sentry issue title. DEMOS-2X's title
+ * Matched on `error.message` itself (via the anchored regex below), not on the
+ * Sentry issue title. DEMOS-2X's title
  * is `TypeError: Failed to fetch (demos.handsontable.com)`, and — contrary to this
  * module's original assumption — that host suffix is NOT stripped by the time
  * `error.message` reaches this `.catch`: DEMOS-2X's latest events (2026-09-08,
