@@ -226,3 +226,29 @@ test("diagnosticExtras: host-class only, never a raw URL", () => {
     assert.equal(String(value).includes("?"), false);
   }
 });
+
+test("the attached fetchDiagnostics property is non-enumerable", async () => {
+  // Load-bearing, and previously only inferred from `name`/`message` staying
+  // intact. If this property ever became enumerable it would surface in
+  // `JSON.stringify(error)` and in any spread of the error, changing what
+  // downstream reporting sees — and an enumerable own property is the kind of
+  // thing a refactor flips without noticing. Pinned directly.
+  let caught;
+  try {
+    await fetchWithDiagnostics("https://example.test/api/versions", {
+      fetch: () => Promise.reject(new TypeError("Failed to fetch")),
+      now: (() => { let t = 0; return () => (t += 10); })(),
+      sleep: () => Promise.resolve(),
+      onLine: () => true,
+    });
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught, "expected the exhausted retry to throw");
+  const descriptor = Object.getOwnPropertyDescriptor(caught, "fetchDiagnostics");
+  assert.ok(descriptor, "fetchDiagnostics should be an own property");
+  assert.equal(descriptor.enumerable, false);
+  assert.equal("fetchDiagnostics" in JSON.parse(JSON.stringify({ ...caught })), false);
+  // And the accessor still reads it, so non-enumerable does not mean unreachable.
+  assert.ok(readFetchDiagnostics(caught));
+});

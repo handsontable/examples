@@ -1920,17 +1920,25 @@ function Authoring({
           // open. Tagged by which step failed so a missing artifact (docs linking
           // an example that was never imported) is distinguishable from a
           // transient fetch.
-          withDocsFetchDiagnostics("docs-fetch", () =>
-            reportError(error, `docs-example-load:${isMissingDocsResource(error) ? "path" : "fetch"}`),
-          );
-          failOpenDocs(isMissingDocsResource(error) ? "path" : "fetch");
+          // Only a transport failure gets the fetch diagnostics: `onlineAtStart`
+          // and `apiBaseOrigin` answer "was the visitor offline / is this build
+          // pointing at localhost", and neither means anything for a missing
+          // artifact, which is a 404 from a server we plainly reached. Tagging
+          // both would put two different faults under one `context` and defeat
+          // the filtering these tags exist for.
+          const missing = isMissingDocsResource(error);
+          if (missing) reportError(error, "docs-example-load:path");
+          else withDocsFetchDiagnostics("docs-fetch", () => reportError(error, "docs-example-load:fetch"));
+          failOpenDocs(missing ? "path" : "fetch");
         }
       })
       .catch((error) => {
-        withDocsFetchDiagnostics("docs-fetch", () =>
-          reportError(error, `docs-bucket-resolve:${isMissingDocsResource(error) ? "bucket" : "fetch"}`),
-        );
-        failOpenDocs(isMissingDocsResource(error) ? "bucket" : "fetch");
+        // Same split as the example-load catch above: diagnostics only on the
+        // transport sub-case.
+        const missing = isMissingDocsResource(error);
+        if (missing) reportError(error, "docs-bucket-resolve:bucket");
+        else withDocsFetchDiagnostics("docs-fetch", () => reportError(error, "docs-bucket-resolve:fetch"));
+        failOpenDocs(missing ? "bucket" : "fetch");
       });
     return () => { cancelled = true; };
   }, [initialDocs, loadWorkspace, nextVersion, route.mode, version, versionsResolved]);
