@@ -520,7 +520,10 @@ subdomain label are redacted.
 `sandpack.ts`, `onStderr`/`relayStderr` in `container.ts`, `injectMonitor` in the
 Worker, and `monitorDemos` / `reportDemoEvent` in `sentry.ts` plus the relay listener
 in `App.tsx`. The `beforeSend` narrowing in `sentry.ts` is **not** part of this
-feature and must stay — it is a fix in its own right. Neither is the
+feature and must stay — it is a fix in its own right. Neither are the two
+DEMOS-5F / DEMOS-9 suppression gates it also calls: they live in `eventGate.ts`,
+are pinned by `pipeline/sentry-gating.test.mjs`, and are not part of the
+monitor-removal path either. Neither is the
 `tier1-compiler-asset` branch of `tier1Report` (DEV-2569): it sits ahead of the
 `monitorDemos` gate precisely so that removing this feature does not take our own
 compiler asset failing to load down with it.
