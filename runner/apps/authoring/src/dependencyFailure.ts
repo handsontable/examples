@@ -90,7 +90,18 @@ export function describeDependencyFailure(facts: DependencyFailureFacts): string
   if (facts.packageJson !== undefined) {
     const detail = jsonSyntaxError(facts.packageJson);
     if (detail) {
-      return `/package.json is not valid JSON, so this demo's dependencies could not be installed: ${detail}. Fix the file — the preview rebuilds itself on the next clean compile.`;
+      // The sentence deliberately stops at "fix the file" and does NOT promise
+      // that the preview recovers on its own. Our half of that is verified —
+      // `sandpack.ts`'s `emitReady()` fires on any bundler `done` without a
+      // compilation error, and the editor's `writeFile` is not gated on preview
+      // status, so a corrected manifest does reach the live runtime. What is NOT
+      // verifiable from this repo is whether Sandpack re-resolves dependencies
+      // from a changed `/package.json` mid-session or only at mount. Promising
+      // self-recovery on an unverified third-party behaviour would replace one
+      // false statement (DEV-2872's npm sentence) with another, which is the
+      // whole thing this module exists to stop. If someone confirms mid-session
+      // re-resolution against a live bundler, extend the sentence then.
+      return `/package.json is not valid JSON, so this demo's dependencies could not be installed: ${detail}. Fix the file to continue.`;
     }
   }
 
