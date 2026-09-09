@@ -330,9 +330,15 @@ export function normalizeMonitorMessage(message: string): string {
     .replace(/[A-Za-z_$][\w$]*(?:\.[\w$]+)*(?= is not defined\b)/g, "<ident>")
     // DEV-2853 rule 2 — the partial locale in a RangeError from Intl, e.g.
     // `Invalid language tag: zh-c` ladders alongside `zh-`, `z`, and the
-    // empty tail `Invalid language tag: `. `\S*`, not `\S+`, so the empty
+    // empty tail `Invalid language tag: `. `[ \t]*`, not `\s*`: `\s` matches
+    // `\n`, so on a multiline input the match would run past the newline and
+    // eat the start of the next line. Both call sites are line-oriented today
+    // (`relayStderr` splits on `\n` first; `sentry.ts` passes a single-line
+    // `Error.message`), so this is defensive rather than a live bug — but it
+    // costs nothing and stops the rule depending on that staying true.
+    // `\S*`, not `\S+`, so the empty
     // tail is covered too.
-    .replace(/(Invalid language tag:)\s*\S*/g, "$1 <tag>")
+    .replace(/(Invalid language tag:)[ \t]*\S*/g, "$1 <tag>")
     .replace(/\b\d+(\.\d+)*\b/g, "<n>")
     .replace(/\s+/g, " ")
     .trim()

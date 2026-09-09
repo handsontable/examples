@@ -767,6 +767,18 @@ test("a language-tag ladder collapses, including the empty tail", () => {
   assert.equal(new Set(rungs.map(normalizeMonitorMessage)).size, 1, JSON.stringify(rungs.map(normalizeMonitorMessage)));
 });
 
+test("the language-tag rule stops at the newline, not at the next word", () => {
+  // `\s*` would match `\n` and run the tail into the following line, eating its
+  // first word: "Invalid language tag:\nSome other line" normalized to
+  // "Invalid language tag: <tag> other line". Defensive — both call sites are
+  // line-oriented today (`relayStderr` splits on `\n`; `sentry.ts` passes a
+  // single-line `Error.message`) — so this FAILS only if the character class is
+  // widened back to `\s`, which is exactly the regression it exists to catch.
+  const out = normalizeMonitorMessage("Invalid language tag:\nSome other line");
+  assert.ok(out.includes("Some other line"), out);
+  assert.ok(!out.includes("<tag> other line"), out);
+});
+
 test("'is not defined' and 'is not a function' stay different faults", () => {
   // Guards against a sloppily-anchored lookahead (e.g. `(?= is not)` instead of
   // `(?= is not defined\b)`) that would also swallow the "is not a function"
