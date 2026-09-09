@@ -206,13 +206,14 @@ const INJECTED_REPORTER_MARKER = "<hot-runner monitor>";
 /**
  * Strip the monitor's own injected line out of a compile message (DEV-2557).
  *
- * `REPORTER_MODULE_LINE` is one 12.6 KB physical line at the top of the module entry,
- * and babel's code frame prints the two lines *above* the fault verbatim — so a syntax
- * error on authored line 1 or 2 renders that whole blob into the message before the
- * offending line is reached. Measured on the vue starter's entry with an unterminated
- * string on line 1: 289 characters of usable message with a caret when the reporter was
- * still inlined, 12,872 with it on one line, and `MONITOR_COMPILE_MESSAGE_MAX` then cuts
- * at 2,000 — so the diagnostic line and its caret were gone. That is DEV-2550's
+ * `REPORTER_MODULE_LINE` is one ~14.9 KB physical line at the top of the module entry
+ * (DEV-2875 grew it from ~12.3 KB), and babel's code frame prints the two lines *above*
+ * the fault verbatim — so a syntax error on authored line 1 or 2 renders that whole blob
+ * into the message before the offending line is reached. Measured on the vue starter's
+ * entry with an unterminated string on line 1: 294 characters of usable message with a
+ * caret when the reporter was still inlined, 15,486 with it on one line, and
+ * `MONITOR_COMPILE_MESSAGE_MAX` then cuts at 2,000 — so the diagnostic line and its
+ * caret were gone. That is DEV-2550's
  * buried-diagnostic failure (DEMOS-15) coming back on the same channel, from our own
  * bytes rather than from a source map.
  *
