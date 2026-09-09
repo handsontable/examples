@@ -1,11 +1,16 @@
 /**
- * What a Tier-2 compiler-diagnostic `stderr` line becomes in Sentry (DEV-2854, Sentry
- * DEMOS-3K/3M/4F/3H and friends).
+ * What a Tier-2 `stderr` line becomes in Sentry, for the two recognised shapes:
+ *
+ *  - A **compiler diagnostic** (DEV-2854, Sentry DEMOS-3K/3M/4F/3H and friends) — esbuild/tsc
+ *    reporting a TS error against the visitor's own edited source.
+ *  - A **build-failure envelope** (DEV-2876, Sentry DEMOS-5Q/53/4Y/4W/4V) — the container's
+ *    own "the bundle did not come out the other end" line, wrapping a duration and a
+ *    wall-clock timestamp rather than a code frame.
  *
  * Split out of `sentry.ts` for the same reason as `tier1Report.ts` and `reportingGate.ts`:
  * that file pulls `@sentry/react` and reads `import.meta.env`, so `node --test` cannot
  * import it and nothing in it can be pinned by a unit test. Keep this module import-free —
- * the grouping rule is the whole of what it decides, and `pipeline/tier2-report.test.mjs`
+ * the grouping rules are the whole of what it decides, and `pipeline/tier2-report.test.mjs`
  * imports it as source.
  *
  * DEV-2854 was filed against the wrong site and asked for a change that was already made:
@@ -21,28 +26,65 @@
  *    diagnostic code — DEMOS-3M holds six distinct quoted identifiers in one issue. Keying
  *    a new fingerprint on the code would be a no-op on top of that.
  *
- * What is actually broken, and what this module fixes:
+ * What DEV-2854 actually fixed, and what DEV-2876 adds on top:
  *
- *  1. **Title flap.** A fingerprint coarser than the message, with the raw message still in
- *     the title, means the issue title names whichever sample arrived last (the same
- *     defect `tier1Report.ts` documents for `COMPILE_TITLE`). DEMOS-3K's title says
- *     `',' expected` while its newest event says `')' expected`.
- *  2. **Cross-code spread.** One bad Angular-editing session mints 20+ distinct TS codes,
- *     each its own single-event issue, because nothing groups across codes.
+ *  1. **Title flap (compiler diagnostic).** A fingerprint coarser than the message, with the
+ *     raw message still in the title, means the issue title names whichever sample arrived
+ *     last (the same defect `tier1Report.ts` documents for `COMPILE_TITLE`). DEMOS-3K's
+ *     title says `',' expected` while its newest event says `')' expected`.
+ *  2. **Cross-code spread (compiler diagnostic).** One bad Angular-editing session mints 20+
+ *     distinct TS codes, each its own single-event issue, because nothing groups across
+ *     codes.
+ *  3. **Title flap (build envelope), DEV-2876.** `normalizeMonitorMessage`'s ISO rule already
+ *     flattened the build-envelope fingerprint (commit `2464f3325`) — the collapse itself
+ *     shipped. But nothing replaced the title, and the envelope embeds both a duration and a
+ *     timestamp, so a flat fingerprint got a title that is a permanent snapshot of one
+ *     moment: DEMOS-5Q is frozen at `Application bundle generation failed. [0.505 seconds] -
+ *     2026-09-02T07:40:26.664Z` no matter which sample arrives next. Same shape, same defect,
+ *     on DEMOS-53/4Y/4W/4V.
  *
- * The fix is a flat fingerprint across every recognised diagnostic, a constant title, and
- * the code preserved as a facet (`ts_code`) rather than folded into either. That is the
- * **invariant to hold: constant title iff flat fingerprint** — a title that varies with the
- * code on a fingerprint that does not would flap exactly like today's does, which is why
- * there is no `"Tier-2 compile failed (TS1005)"` middle option here.
+ * The fix for both shapes is a flat fingerprint, a constant title, and whatever varies
+ * per-event (`ts_code`; the raw envelope line) preserved as a facet in `extra`/`tags` rather
+ * than folded into either. That is the **invariant to hold, restated once for both branches:
+ * constant title iff flat fingerprint.** A title that varies with the code, or with the
+ * envelope's duration, on a fingerprint that does not, would flap exactly like the pre-fix
+ * behaviour did — which is why there is no `"Tier-2 compile failed (TS1005)"` and no
+ * `"Tier-2 build failed (0.505s)"` middle option here.
  *
- * The recogniser below is an **allowlist on purpose**: it matches a TS diagnostic code in
- * diagnostic position and nothing else. NG codes (`NG8001`, `NG8002` — plausibly our own
- * Angular starter's `HotTableModule` wiring), `Failure reason:`, `::…::` install-failure
- * markers, vite/vue internal errors, and `Could not resolve` are all untouched **by
- * construction** — they keep reporting through the unchanged bare-message path in
- * `sentry.ts`, so nothing that should stay loud goes quiet by falling through a denylist
- * gap. `pipeline/tier2-report.test.mjs` pins every one of those as a guard against a future
+ * The two shapes get **two fingerprints**, not one shared bucket: the envelope says *that*
+ * the build failed, a compiler diagnostic says *why*. A visitor who edits their way past a
+ * TS error and then hits an envelope failure (or the reverse) would otherwise land both
+ * causes and effects in one issue, which makes both harder to read — see the "collision"
+ * paragraph below for the case where a single line can carry both shapes.
+ *
+ * Checked **in order, TS diagnostic first**, and that order is load-bearing but not because
+ * one shape is "more specific" than the other — they match disjoint prefixes in the common
+ * case. It is load-bearing because it makes the build branch *strictly additive* over the
+ * population this function classified before it existed: every message this function
+ * returned `null` for pre-DEV-2876 either isn't `stderr`, or fails the TS-diagnostic test —
+ * and the build branch only ever fires after that same TS-diagnostic test has already failed.
+ * So no message this function used to classify (as a compile diagnostic, or as `null`) can be
+ * reclassified by adding the build branch; the only messages that change behaviour are ones
+ * that were previously `null` and match the new pattern. That is a structural guarantee about
+ * the code, not a claim that the two regexes' matches never overlap.
+ *
+ * They CAN overlap, and it is reachable, not theoretical: `kind: "stderr"` is one of the
+ * fixed `MONITOR_KINDS` (`packages/runtime/src/monitor.ts`), and nothing stops a forged
+ * `postMessage` from the preview delivering a single multi-line `stderr` payload that
+ * carries a TS diagnostic line and a build-envelope line together. When that happens, the
+ * compiler-diagnostic branch wins (checked first) — the TS code is the actionable half of
+ * that combined line, and it keeps `ts_code` as a facet, whereas the envelope branch has
+ * nothing more specific to offer once a diagnostic has already been found. This has a test
+ * (`ENVELOPE_PLUS_TS` below), not a comment dismissing it as impossible.
+ *
+ * The recogniser is an **allowlist on purpose**, now with two entries: it matches a TS
+ * diagnostic code in diagnostic position, or the build-failure envelope's own opening
+ * sentence, and nothing else. NG codes (`NG8001`, `NG8002` — plausibly our own Angular
+ * starter's `HotTableModule` wiring), `Failure reason:`, `::…::` install-failure markers,
+ * vite/vue internal errors, and `Could not resolve` are all untouched **by construction** —
+ * they keep reporting through the unchanged bare-message path in `sentry.ts`, so nothing
+ * that should stay loud goes quiet by falling through a denylist gap.
+ * `pipeline/tier2-report.test.mjs` pins every one of those as a guard against a future
  * rewrite that swaps this allowlist for a denylist.
  */
 
@@ -50,6 +92,11 @@
  *  raw line it replaces rides in `extra.compileDiagnostic` instead, which takes no part in
  *  grouping or titling. */
 const TIER2_COMPILE_TITLE = "Tier-2 compile failed";
+
+/** The constant title for every recognised Tier-2 build-failure envelope, for all time. The
+ *  raw line — duration and ISO timestamp included — rides in `extra.buildFailure` instead,
+ *  which takes no part in grouping or titling. */
+const TIER2_BUILD_TITLE = "Tier-2 build failed";
 
 /** A TS diagnostic code in diagnostic position — the code immediately followed by a colon
  *  and a space, as esbuild/tsc emit it (`TS1005: ',' expected.`). Requires a word boundary
@@ -63,6 +110,17 @@ const TS_CODE_IN_DIAGNOSTIC_POSITION = /\bTS\d{4,5}:\s/;
  *  must agree on what counts as "a code", so change them together. */
 const TS_CODE_GLOBAL = /\bTS\d{4,5}(?=:\s)/g;
 
+/** The container's build-failure envelope, anchored at line start. `reportDemoEvent`'s
+ *  caller (`container.ts`'s stderr relay) trims each line before it ever reaches here, so an
+ *  anchor at `^` is safe and deliberately excludes a mid-line prose mention of the same
+ *  sentence (`BUNDLE_IN_PROSE` below). Does NOT require the trailing `[N seconds] -
+ *  <ISO timestamp>` suffix — only the opening sentence — so a toolchain version that drops
+ *  the timing still collapses into the same bucket. The literal `\.` (not `.`) means
+ *  `Application bundle generation complete.` does not match: the two sentences differ only
+ *  in that one word, and matching the wildcard would fold a success line into a failure
+ *  bucket. */
+const BUNDLE_GENERATION_FAILED = /^Application bundle generation failed\./;
+
 export interface Tier2StderrReport {
   fingerprint: string[];
   tags: Record<string, string>;
@@ -73,36 +131,65 @@ export interface Tier2StderrReport {
 /**
  * Decide how a Tier-2 `stderr` line is reported, or that it is not.
  *
- * `null` for anything other than `kind === "stderr"` with a recognised TS diagnostic code:
- * the caller keeps today's per-message fingerprint and title unchanged. Not reclassified,
- * not merged, no synthetic title — an unrecognised line needs nothing extra to keep working,
- * since `normalizeMonitorMessage`'s quoted-string rule already groups the no-code case
- * (DEMOS-3H's `Unexpected "}"` / `Unexpected ","`).
+ * `null` for anything other than `kind === "stderr"` with a recognised TS diagnostic code or
+ * a recognised build-failure envelope: the caller keeps today's per-message fingerprint and
+ * title unchanged. Not reclassified, not merged, no synthetic title — an unrecognised line
+ * needs nothing extra to keep working, since `normalizeMonitorMessage`'s rules already group
+ * the no-code case (DEMOS-3H's `Unexpected "}"` / `Unexpected ","`) and the envelope's own
+ * ISO timestamp (DEV-2876's flat-fingerprint half, already shipped).
  */
 export function tier2StderrReport(kind: string, message: string): Tier2StderrReport | null {
   if (kind !== "stderr") return null;
-  if (!TS_CODE_IN_DIAGNOSTIC_POSITION.test(message)) return null;
 
-  const codes = new Set<string>();
-  for (const match of message.matchAll(TS_CODE_GLOBAL)) codes.add(match[0]);
-  // First match wins for the tag; a line naming more than one distinct code (a repeated,
-  // truncated diagnostic block) omits the tag rather than pick arbitrarily. The
-  // fingerprint below is unaffected either way — it never carries a code.
-  const singleCode = codes.size === 1 ? [...codes][0] : undefined;
+  if (TS_CODE_IN_DIAGNOSTIC_POSITION.test(message)) {
+    const codes = new Set<string>();
+    for (const match of message.matchAll(TS_CODE_GLOBAL)) codes.add(match[0]);
+    // First match wins for the tag; a line naming more than one distinct code (a repeated,
+    // truncated diagnostic block) omits the tag rather than pick arbitrarily. The
+    // fingerprint below is unaffected either way — it never carries a code.
+    const singleCode = codes.size === 1 ? [...codes][0] : undefined;
 
-  return {
-    // Flat, never keyed on the code: per-code keying leaves ~20 issues per bad editing
-    // session and is unbounded in the TS vocabulary. `framework` / `tier` deliberately
-    // stay out too — they are already tags in `sentry.ts`, and the house rule there is
-    // that instrumentation facets go beside the fingerprint, never inside it.
-    fingerprint: ["demo-runtime", "stderr", "tier2-compile"],
-    tags: {
-      kind_class: "tier2-compile",
-      ...(singleCode ? { ts_code: singleCode } : {}),
-    },
-    // The raw line, verbatim and bounded/host-redacted upstream by `sanitizeMonitorPayload`
-    // — never in `display` or the fingerprint, which is what keeps the title constant.
-    extra: { compileDiagnostic: message },
-    display: TIER2_COMPILE_TITLE,
-  };
+    return {
+      // Flat, never keyed on the code: per-code keying leaves ~20 issues per bad editing
+      // session and is unbounded in the TS vocabulary. `framework` / `tier` deliberately
+      // stay out too — they are already tags in `sentry.ts`, and the house rule there is
+      // that instrumentation facets go beside the fingerprint, never inside it.
+      fingerprint: ["demo-runtime", "stderr", "tier2-compile"],
+      tags: {
+        kind_class: "tier2-compile",
+        ...(singleCode ? { ts_code: singleCode } : {}),
+      },
+      // The raw line, verbatim and bounded/host-redacted upstream by `sanitizeMonitorPayload`
+      // — never in `display` or the fingerprint, which is what keeps the title constant.
+      extra: { compileDiagnostic: message },
+      display: TIER2_COMPILE_TITLE,
+    };
+  }
+
+  if (BUNDLE_GENERATION_FAILED.test(message)) {
+    return {
+      // Distinct third element from `tier2-compile`'s: the envelope says *that* the build
+      // failed, a diagnostic says *why*. Keeping them separate means a visitor's TS typo and
+      // a container-side build failure never get merged into one issue that mixes cause and
+      // effect.
+      fingerprint: ["demo-runtime", "stderr", "tier2-build"],
+      tags: { kind_class: "tier2-build" },
+      // The raw line — duration and ISO timestamp included — verbatim and bounded/
+      // host-redacted upstream by `sanitizeMonitorPayload`. A distinct key from
+      // `compileDiagnostic` above so `extra` stays self-describing per bucket. Nothing here
+      // is faceted into a tag: the wall time measures how far esbuild got before erroring (a
+      // function of project size and container load, not of the defect), so a bucketed
+      // `"<1s"`/`"1-5s"` tag would be a metric wearing a tag's clothes with no named
+      // consumer — a tag has to earn its cardinality the way `ts_code` does above by
+      // slicing the bucket along a fault-class axis, and duration doesn't. The ISO
+      // timestamp is the *container's* clock at build time, not a duplicate of Sentry's own
+      // event timestamp, which is why it is kept as recoverable context in `extra` rather
+      // than dropped — but it is still not a fault-class discriminator, so it stays out of
+      // the title and the fingerprint exactly like the duration.
+      extra: { buildFailure: message },
+      display: TIER2_BUILD_TITLE,
+    };
+  }
+
+  return null;
 }

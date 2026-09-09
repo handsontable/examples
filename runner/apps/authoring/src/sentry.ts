@@ -271,12 +271,13 @@ export function reportDemoEvent(payload: MonitorPayload, context: DemoEventConte
     return;
   }
   if (!demoRelayBudget.admit(clean.kind, message, clean.stack)) return;
-  // DEV-2854: a recognised Tier-2 compiler diagnostic collapses across TS codes into one
-  // flat, constant-titled bucket instead of the per-message fingerprint below. Never fed
-  // into `demoRelayBudget.admit` above — that stays keyed on the raw message, so 20
-  // distinct diagnostics in one bad editing session still consume 20 of
-  // `MONITOR_EVENT_CEILING` rather than collapsing and losing their `extra` after the
-  // first. See `tier2Report.ts` for why.
+  // DEV-2854 / DEV-2876: a recognised Tier-2 compiler diagnostic, or a recognised Tier-2
+  // build-failure envelope, collapses into its own flat, constant-titled bucket instead of
+  // the per-message fingerprint below. Never fed into `demoRelayBudget.admit` above — that
+  // stays keyed on the raw message, so 20 distinct diagnostics in one bad editing session
+  // still consume 20 of `MONITOR_EVENT_CEILING` rather than collapsing and losing their
+  // `extra` after the first. See `tier2Report.ts` for why, and for why the two shapes get
+  // two fingerprints rather than one.
   const tier2 = tier2StderrReport(clean.kind, message);
   const tags: Record<string, string> = {
     surface: DEMO_SURFACE,

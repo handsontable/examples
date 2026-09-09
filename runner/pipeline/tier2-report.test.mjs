@@ -28,6 +28,35 @@ const TS2345_REPEATED =
 // A line naming two genuinely distinct codes.
 const TS_MULTI_CODE = `${TS1005} ${TS2304}`;
 
+// DEV-2876 / Sentry DEMOS-5Q, DEMOS-53, DEMOS-4Y, DEMOS-4W, DEMOS-4V. The build-failure
+// envelope's fingerprint was already flattened by `normalizeMonitorMessage`'s ISO rule
+// (commit `2464f3325`), but the raw line — duration and timestamp included — was still the
+// title, so each bucket was permanently named after whichever sample arrived last. DEMOS-5Q
+// is frozen at the exact `BUNDLE_5Q` string below.
+
+const BUNDLE_5Q = `Application bundle generation failed. [0.505 seconds] - 2026-09-02T07:40:26.664Z`;
+const BUNDLE_4V = `Application bundle generation failed. [1.595 seconds] - 2026-08-27T14:20:04.952Z`;
+// No timing suffix at all — a toolchain version that drops it must still collapse.
+const BUNDLE_NO_TIMING = `Application bundle generation failed.`;
+// The success sibling: differs from the failure sentence in one word, so the anchor's
+// literal `\.` (not `.`) is what keeps this from matching.
+const BUNDLE_COMPLETE = `Application bundle generation complete. [0.412 seconds] - 2026-09-02T07:41:01.112Z`;
+// A mid-line mention, not a line that opens with the sentence — the `^` anchor is what
+// excludes this, and `container.ts`'s `line = raw.trim()` is what makes anchoring safe.
+const BUNDLE_IN_PROSE = `esbuild said Application bundle generation failed. earlier`;
+// Real boot-script narration from `container.ts` (`::frozen install failed for custom
+// metadata; retrying non-frozen::`) — one of the `::…::` install-failure markers the
+// existing allowlist already excludes by construction; re-asserted here against both
+// recognisers, not just the compile one.
+const FROZEN_RETRY = `::frozen install failed for custom metadata; retrying non-frozen::`;
+// Real vite dev-server output (see `pipeline/monitor-stderr-relay.test.mjs`) — internal to
+// vite, not a TS diagnostic and not a build envelope.
+const VITE_INTERNAL = `[vite] Internal server error: hot is not defined`;
+// A single stderr line carrying both recognised shapes — reachable via a forged
+// `postMessage`, not merely theoretical (`kind: "stderr"` is one of the fixed
+// `MONITOR_KINDS`). Tie-break goes to the compile branch: it is checked first.
+const ENVELOPE_PLUS_TS = `${BUNDLE_5Q} ${TS1005}`;
+
 // --- Load-bearing: demonstrably false on master, true after ---------------------------
 
 test("TS1005 and TS2304 share one fingerprint (cross-code-spread defect)", () => {
@@ -112,4 +141,85 @@ test("guard: a bare TS code not in diagnostic position does not match", () => {
 test("guard: kind !== 'stderr' returns null even with a recognised code", () => {
   assert.equal(tier2StderrReport("console-error", TS1005), null);
   assert.equal(tier2StderrReport("error", TS1005), null);
+});
+
+// --- DEV-2876: build-failure envelope ----------------------------------------------------
+// --- Load-bearing: demonstrably false on master, true after ---------------------------
+
+test("DEMOS-5Q and DEMOS-4V share one fingerprint, equal to the tier2-build fingerprint", () => {
+  // The flat grouping itself already shipped in `2464f3325` via `normalizeMonitorMessage`'s
+  // ISO rule — this pins that the explicit fingerprint below does not re-shard what that
+  // rule already collapsed.
+  const a = tier2StderrReport("stderr", BUNDLE_5Q);
+  const b = tier2StderrReport("stderr", BUNDLE_4V);
+  assert.deepEqual(a.fingerprint, b.fingerprint);
+  assert.deepEqual(a.fingerprint, ["demo-runtime", "stderr", "tier2-build"]);
+});
+
+test("the display string is the same constant across BUNDLE_5Q / BUNDLE_4V / BUNDLE_NO_TIMING, and is not the raw message", () => {
+  const displays = [BUNDLE_5Q, BUNDLE_4V, BUNDLE_NO_TIMING].map(
+    (message) => tier2StderrReport("stderr", message).display,
+  );
+  assert.deepEqual(new Set(displays), new Set(["Tier-2 build failed"]));
+  // On master this equals the raw message (in fact tier2StderrReport returns null and
+  // `display` doesn't exist at all), so it is not constant across samples today.
+  assert.notEqual(tier2StderrReport("stderr", BUNDLE_5Q).display, BUNDLE_5Q);
+});
+
+test("the envelope fingerprint and display differ from the compile branch's", () => {
+  const build = tier2StderrReport("stderr", BUNDLE_5Q);
+  const compile = tier2StderrReport("stderr", TS1005);
+  assert.notDeepEqual(build.fingerprint, compile.fingerprint);
+  assert.notEqual(build.display, compile.display);
+});
+
+test("the raw envelope line reaches extra.buildFailure verbatim, and nowhere else", () => {
+  const r = tier2StderrReport("stderr", BUNDLE_5Q);
+  assert.equal(r.extra.buildFailure, BUNDLE_5Q);
+  assert.equal(r.display, "Tier-2 build failed");
+  assert.ok(!r.display.includes("0.505"));
+  assert.ok(!r.display.includes("2026-09-02"));
+  assert.ok(!r.fingerprint.join("|").includes("0.505"));
+  assert.ok(!r.fingerprint.join("|").includes("2026-09-02"));
+  // Pins the no-duration-tag decision so a later "helpful" addition fails here.
+  assert.equal(r.tags.build_duration, undefined);
+});
+
+test("the envelope is tagged tier2-build and carries no ts_code", () => {
+  const r = tier2StderrReport("stderr", BUNDLE_5Q);
+  assert.equal(r.tags.kind_class, "tier2-build");
+  assert.equal(r.tags.ts_code, undefined);
+});
+
+// --- Guards: pass either way today, exist to fail on a future denylist / anchor slip ----
+
+test("guard: 'Application bundle generation complete.' and a mid-line mention both return null", () => {
+  assert.equal(tier2StderrReport("stderr", BUNDLE_COMPLETE), null);
+  assert.equal(tier2StderrReport("stderr", BUNDLE_IN_PROSE), null);
+});
+
+test("guard: FROZEN_RETRY, VITE_INTERNAL, RESOLVE, NG8001, NG8002, and 'Failure reason:' all return null", () => {
+  // Deliberately overlaps the existing guards above (`:98-106`-ish): those were written
+  // against one recogniser, this re-asserts them against two.
+  assert.equal(tier2StderrReport("stderr", FROZEN_RETRY), null);
+  assert.equal(tier2StderrReport("stderr", VITE_INTERNAL), null);
+  assert.equal(tier2StderrReport("stderr", RESOLVE), null);
+  assert.equal(tier2StderrReport("stderr", NG8001), null);
+  assert.equal(tier2StderrReport("stderr", NG8002), null);
+  assert.equal(tier2StderrReport("stderr", FAILURE), null);
+});
+
+test("guard: kind other than 'stderr' returns null even with a recognised envelope", () => {
+  assert.equal(tier2StderrReport("console-error", BUNDLE_5Q), null);
+  assert.equal(tier2StderrReport("error", BUNDLE_5Q), null);
+});
+
+// --- Order guard: TS-first is load-bearing, not a specificity claim ---------------------
+
+test("order guard: a line carrying both shapes resolves as the compile branch, not the build branch", () => {
+  // Passes on revert too (still matches the TS regex on its own) — it exists to fail if
+  // someone reorders the branches so the build check runs first.
+  const r = tier2StderrReport("stderr", ENVELOPE_PLUS_TS);
+  assert.deepEqual(r.fingerprint, ["demo-runtime", "stderr", "tier2-compile"]);
+  assert.equal(r.tags.ts_code, "TS1005");
 });
