@@ -102,6 +102,29 @@ test("manifest: a 500 rejects but is NOT missing — a transient failure stays t
   assert.match(error.message, /500/);
 });
 
+// DEV-2859: `fetchDocsJson` was deliberately left untouched by that task — it
+// cannot import `fetchDiagnostics.ts` (a sibling `./x.js` specifier does not
+// resolve under `--experimental-strip-types`, which is exactly what keeps
+// this file able to import `docs-catalog.ts` at all) — so there is no retry
+// and no diagnostics bundle here, only the DEMOS-7D tagging added at the
+// App.tsx callsite. This guard pins that the one thing that *could* have
+// silently changed — how a raw transport failure (the fetch call itself
+// rejecting, never producing a Response) is classified — did not: it must
+// stay a plain, non-missing rejection, distinct from the SPA-fallback case
+// above. Fails if `fetchDocsJson` ever grows a `catch` that folds a thrown
+// fetch error into `DocsResourceMissingError`.
+test("manifest: a transport failure (fetch itself rejects) is NOT a missing bucket", async (t) => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError("Failed to fetch"); };
+  t.after(() => { globalThis.fetch = original; });
+
+  const error = await rejection(fetchDocsManifest("transport-failure-bucket"));
+
+  assert.equal(isDocsResourceMissing(error), false);
+  assert.equal(error.name, "TypeError");
+  assert.equal(error.message, "Failed to fetch");
+});
+
 /** The JSON fast path must consume the body with `res.json()`, never `res.text()`
  *  + `JSON.parse`: the release manifest is ~800 KB and the whole point of testing
  *  content-type before sniffing for `<` is to avoid that extra JS-side string copy.

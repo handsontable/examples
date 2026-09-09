@@ -1,6 +1,30 @@
 // Must stay first: initialises error reporting before any other module runs, so a
 // throw during module evaluation is still captured.
 import { Sentry } from "./sentry.js";
+// Seeds an anonymous visitor id + `auth_mode` tag synchronously, right after
+// reporting is initialised and before `createRoot` — so an early
+// module-evaluation crash is already attributable to *a* visitor, not one of
+// the `users: 0` issues that misled an earlier triage (DEV-2859). Deliberately
+// not `currentUser()`: that round-trips the Render-hosted broker and would add
+// its latency to every route, including ones that need no identity at all.
+import { seedAnonymousContext } from "./userScope.js";
+seedAnonymousContext();
+// DEMOS-1D (DEV-2859): attach the bounded editor trail to every event this
+// client sends, plus the tags derived from its most recent entry. Registered
+// unconditionally — `Sentry.addEventProcessor` is a no-op when reporting is
+// gated off (nothing is ever sent for the processor to run against) — so this
+// import stays free of a second `reportingEnabled` check.
+//
+// `surface === "demo-runtime"` events are skipped: those are relayed preview
+// failures (`reportDemoEvent` in sentry.ts), and this app's own editor
+// activity says nothing about what a demo's own code just did.
+import { snapshotEditorTrail, editorTrailTags } from "./editorTrail.js";
+Sentry.addEventProcessor((event) => {
+  if (event.tags?.surface === "demo-runtime") return event;
+  event.tags = { ...event.tags, ...editorTrailTags() };
+  event.extra = { ...event.extra, editorTrail: snapshotEditorTrail() };
+  return event;
+});
 // The code face the design specifies (Figma 48:6719 / 31:6597) — bundled, not a
 // CDN link, so the editor never renders a fallback face first. Loaded here, not
 // in the shell: editor-shell stays a side-effect-free source package, and the

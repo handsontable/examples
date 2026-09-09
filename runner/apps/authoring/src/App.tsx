@@ -71,9 +71,55 @@ import { monitorDemos, reportDemoEvent, reportError, reportingEnabled, Sentry } 
 import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
 import { tier1Report } from "./tier1Report.js";
 import { isOpaqueNetworkFailure } from "./fetchFailure.js";
+import {
+  readFetchDiagnostics,
+  apiBaseOrigin,
+  diagnosticTags,
+  diagnosticExtras,
+  netEffectiveType,
+} from "./fetchDiagnostics.js";
+import { recordEditorEvent } from "./editorTrail.js";
 
 const SANDPACK_BUNDLER_URL = import.meta.env.VITE_SANDPACK_BUNDLER_URL || undefined;
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
+
+// DEV-2859: one synthesized "versions fetch unreachable" event per page load,
+// however many times the effect below re-fires (StrictMode's double-invoke in
+// dev, or a genuine remount). Module-scope, not component state, because a
+// remount must not reset an allowance that already told the operator "this
+// visitor's session tried, and both attempts failed".
+let versionsFetchEventSent = false;
+
+/**
+ * DEMOS-7D (DEV-2859 ruling): instrument, don't suppress. `App.tsx`'s two
+ * `fetchDocsJson` catches already report *every* failure with no
+ * `isOpaqueNetworkFailure` gate, so this only adds tags to the event that was
+ * always going to be sent — no re-promotion, no fingerprint change, no new
+ * issue. `Sentry.captureException` inside `run()` picks up whatever tags this
+ * scope carries, which is what makes wrapping the existing call enough.
+ *
+ * `docs-catalog.ts`'s `fetchDocsJson` has no retry of its own to report: it
+ * cannot import `fetchDiagnostics.ts` and stay importable by
+ * `pipeline/docs-catalog.test.mjs` under `--experimental-strip-types`, which
+ * cannot resolve a sibling `./x.js` specifier (verified empirically against a
+ * throwaway probe file — the same constraint `fetchDiagnostics.ts`'s header
+ * documents). So this diagnostics bundle is deliberately thinner than the
+ * versions-fetch one: online state and the API-base classification, no
+ * attempt count or outcome (`diagnosticTags`/`diagnosticExtras` both treat
+ * those as optional for exactly this caller).
+ */
+function withDocsFetchDiagnostics(context: string, run: () => void): void {
+  Sentry.withScope((scope) => {
+    scope.setTags(
+      diagnosticTags({
+        context,
+        onlineAtStart: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+        apiBaseOrigin: apiBaseOrigin(API_BASE, location.origin),
+      }),
+    );
+    run();
+  });
+}
 
 // Framework preference (used to auto-pick a variant when an example is chosen and
 // the current one isn't available) + short labels for the framework picker.
@@ -1330,6 +1376,20 @@ function Authoring({
   /** Replace the whole workspace (entry + files + lineage) and remount. */
   const loadWorkspace = useCallback(
     (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
+      // DEV-2859: the lineage *prefix only* — the segment before the first
+      // `:` — never the full string. `import:<url>` and `docs:<bucket>:<path>`
+      // both carry visitor- or docs-authored data after that first colon; a
+      // saved-demo id (no colon at all) collapses to the constant "saved"
+      // rather than the id itself, which is the shape this redaction is aimed
+      // at (an id is not a URL, but it is still not this trail's business to
+      // carry verbatim).
+      recordEditorEvent({
+        kind: "workspace",
+        source: "load",
+        path: lineage.includes(":") ? lineage.slice(0, lineage.indexOf(":")) : "saved",
+        quiet: false,
+        size: 0,
+      });
       // Whatever workspace replaces an ad-hoc one is no longer its, so its title
       // and its skipped-files notice are cleared here — at the moment the new
       // files are installed, which a failed starter or docs load never reaches.
@@ -1652,8 +1712,19 @@ function Authoring({
   useEffect(() => {
     let cancelled = false;
     fetchVersions(API_BASE)
-      .then(({ latest, next, versions }) => {
+      .then(({ latest, next, versions, diagnostics }) => {
         if (cancelled) return;
+        // A retry that recovered is a blip, not an issue (DEV-2859) — the same
+        // "worth knowing, not worth an issue" treatment the catch branch below
+        // gives the visitor-network population, on the success side of it.
+        if ((diagnostics.attempts ?? 1) > 1) {
+          Sentry.addBreadcrumb({
+            category: "fetch",
+            level: "info",
+            message: "versions-fetch recovered on retry",
+            data: diagnosticTags({ ...diagnostics, context: "versions-fetch" }),
+          });
+        }
         setNextVersion(next ?? "");
         const opts = [...new Set([latest, ...versions, next].filter((v): v is string => !!v))];
         if (opts.length) setVersionOptions(opts);
@@ -1665,9 +1736,37 @@ function Authoring({
       .catch((error) => {
         // Fails open onto the hardcoded VERSION_OPTIONS, so the picker silently
         // goes stale rather than breaking — worth knowing about, unless it is the
-        // visitor's own network dropping mid-request (Sentry DEMOS-2X): that shape
-        // carries nothing about our host, so it is a breadcrumb, not an issue.
-        if (isOpaqueNetworkFailure(error)) {
+        // visitor's own network dropping mid-request (Sentry DEMOS-2X).
+        //
+        // `fetchDiagnostics` is read FIRST, ahead of `isOpaqueNetworkFailure`
+        // (DEV-2859): once the sibling fetchFailure.ts fix lands, that check
+        // starts matching the real production wording, and if it ran first
+        // every exhausted two-attempt failure would fall back to a silent
+        // breadcrumb — exactly the regression item 2 exists to prevent. A
+        // `!res.ok` throw and a JSON-parse failure never carry
+        // `fetchDiagnostics` (both are thrown by catalog.ts itself, not by
+        // fetchWithDiagnostics), so they fall through to the branch below
+        // unchanged from today.
+        const diag = readFetchDiagnostics(error);
+        if (diag) {
+          if (!versionsFetchEventSent) {
+            versionsFetchEventSent = true;
+            const full = {
+              ...diag,
+              context: "versions-fetch" as const,
+              apiBaseOrigin: apiBaseOrigin(API_BASE, location.origin),
+              netEffectiveType: netEffectiveType(),
+            };
+            Sentry.withScope((scope) => {
+              scope.setLevel("warning");
+              scope.setTags(diagnosticTags(full));
+              scope.setExtras(diagnosticExtras(full));
+              Sentry.captureMessage("versions fetch unreachable", {
+                fingerprint: ["versions-fetch-unreachable"],
+              });
+            });
+          }
+        } else if (isOpaqueNetworkFailure(error)) {
           Sentry.addBreadcrumb({
             category: "fetch",
             level: "info",
@@ -1821,12 +1920,16 @@ function Authoring({
           // open. Tagged by which step failed so a missing artifact (docs linking
           // an example that was never imported) is distinguishable from a
           // transient fetch.
-          reportError(error, `docs-example-load:${isMissingDocsResource(error) ? "path" : "fetch"}`);
+          withDocsFetchDiagnostics("docs-fetch", () =>
+            reportError(error, `docs-example-load:${isMissingDocsResource(error) ? "path" : "fetch"}`),
+          );
           failOpenDocs(isMissingDocsResource(error) ? "path" : "fetch");
         }
       })
       .catch((error) => {
-        reportError(error, `docs-bucket-resolve:${isMissingDocsResource(error) ? "bucket" : "fetch"}`);
+        withDocsFetchDiagnostics("docs-fetch", () =>
+          reportError(error, `docs-bucket-resolve:${isMissingDocsResource(error) ? "bucket" : "fetch"}`),
+        );
         failOpenDocs(isMissingDocsResource(error) ? "bucket" : "fetch");
       });
     return () => { cancelled = true; };
@@ -2095,6 +2198,11 @@ function Authoring({
   );
 
   const changeVersion = useCallback((next: string) => {
+    // DEV-2859: a version switch never reaches `onEdit` — it re-pins the file
+    // set (elsewhere, via `pinHandsontableFiles` + `setFiles`) rather than
+    // editing it — so it needs its own trail entry, tagged by the requested
+    // version rather than a file path.
+    recordEditorEvent({ kind: "version", source: "repin", path: next, quiet: false, size: 0 });
     docsRequestSeqRef.current += 1;
     setVersionWarning(null);
     setThemeRemoved(false);
@@ -2294,7 +2402,12 @@ function Authoring({
   // workspace itself is updated the same way regardless: `filesRef` is what Save,
   // Download, Share and the next example switch read, so nothing may ever sit
   // between an edit and this assignment.
-  const onEdit = useCallback(
+  //
+  // Split from `onEdit`/`onEditFromStyle`/`onEditFromChat` below (DEV-2859): the
+  // trail entry has to be recorded once, tagged with which surface actually
+  // triggered the write, not by this shared writer — which is why the
+  // recording lives at each App-owned callsite and this one stays undecorated.
+  const writeFile = useCallback(
     (path: string, contents: string, opts?: WriteFileOptions) => {
       const next = { ...filesRef.current, [path]: contents };
       filesRef.current = next;
@@ -2311,6 +2424,62 @@ function Authoring({
       showSyncing();
     },
     [markDirty, showSyncing],
+  );
+
+  /** Bound straight to `EditorShell`'s `onEdit` — a keystroke in the code
+   *  editor itself. DEV-2859 (Sentry DEMOS-1D): recorded into the bounded
+   *  editor trail (`editorTrail.ts`) so a render-loop crash's event carries
+   *  what was happening just before it, without the rejected
+   *  one-breadcrumb-per-edit design (see that module's header). */
+  const onEdit = useCallback(
+    (path: string, contents: string, opts?: WriteFileOptions) => {
+      recordEditorEvent({
+        kind: "edit",
+        source: "editor",
+        path,
+        quiet: Boolean(opts?.quiet),
+        size: contents.length,
+      });
+      writeFile(path, contents, opts);
+    },
+    [writeFile],
+  );
+
+  /** Passed to `StylePanel` as `applyEdit` instead of the bare `onEdit`
+   *  (DEV-2859). `opts?.quiet` is *already* how StylePanel distinguishes its
+   *  two callsites — `patchLive` writes quietly (`{ quiet: true }`), `reset`
+   *  does not — so this wrapper reuses that existing signal rather than
+   *  requiring a StylePanel.tsx change to carry a new one. */
+  const onEditFromStyle = useCallback(
+    (path: string, contents: string, opts?: WriteFileOptions) => {
+      recordEditorEvent({
+        kind: "edit",
+        source: opts?.quiet ? "style" : "style-reset",
+        path,
+        quiet: Boolean(opts?.quiet),
+        size: contents.length,
+      });
+      writeFile(path, contents, opts);
+    },
+    [writeFile],
+  );
+
+  /** Passed to `ChatPanel` as `applyEdit` instead of the bare `onEdit`
+   *  (DEV-2859). Unlike StylePanel, Chat's `apply()`/`undo()` have no existing
+   *  signal to tell them apart — `ChatPanelProps.applyEdit`'s third parameter
+   *  is new, added for exactly this. */
+  const onEditFromChat = useCallback(
+    (path: string, contents: string, isUndo?: boolean) => {
+      recordEditorEvent({
+        kind: "edit",
+        source: isUndo ? "ai-undo" : "ai",
+        path,
+        quiet: false,
+        size: contents.length,
+      });
+      writeFile(path, contents);
+    },
+    [writeFile],
   );
 
   /** Send a message into the running preview (DEV-2496: the Style panel's live theme
@@ -2378,6 +2547,11 @@ function Authoring({
    *  that rebuild is a container round trip of several seconds, and it used to say so
    *  when theme edits went out as ordinary writes. */
   const flushQuietEdits = useCallback(() => {
+    // DEV-2859: the only caller today is StylePanel (a colour-drag's quiet
+    // writes, flushed once the drag ends), hence `source: "style"` — there is
+    // no generic "flush" source in the trail's vocabulary because nothing
+    // else calls this yet.
+    recordEditorEvent({ kind: "flush-quiet", source: "style", path: "", quiet: false, size: 0 });
     try {
       runtimeRef.current?.flushQuiet?.();
       showSyncing();
@@ -3045,7 +3219,7 @@ function Authoring({
           token={getToken()}
           htVersion={version}
           getFiles={() => filesRef.current}
-          applyEdit={onEdit}
+          applyEdit={onEditFromStyle}
           postToPreview={postToPreview}
           onPreviewMessage={onPreviewMessage}
           flushQuietEdits={flushQuietEdits}
@@ -3060,7 +3234,7 @@ function Authoring({
           htVersion={version}
           docsPath={docsPath}
           getFiles={() => filesRef.current}
-          applyEdit={onEdit}
+          applyEdit={onEditFromChat}
           onClose={() => setChatOpen(false)}
         />
       )}
