@@ -276,6 +276,46 @@ export function createMonitorBudget(ceiling: number = MONITOR_EVENT_CEILING): {
  * "Expected N arguments, but got M"). Relaxing the boundaries to catch the
  * `…-25T18:…` they miss would collapse the codes too.
  *
+ * DEV-2853: the live editor's own keystroke-by-keystroke compile/eval failures
+ * were the biggest source of near-duplicate fingerprints — ~100 issues, each a
+ * "ladder" of intermediate states for one edit (typing `licenseKey` alone opens
+ * 13 issues: `l is not defined`, `li is not defined`, … `licenseKey is not
+ * defined`). Two rules below collapse these, each anchored to a specific,
+ * known prose shape rather than a blanket bare-word strip: a blanket rule would
+ * also swallow diagnostic codes and API names that carry real signal (see the
+ * `TS1005`/`TS2554`/`TS2555` guard above, and `hot.getData is not a function`,
+ * which stays its own fingerprint on purpose — it names an API the demo
+ * actually calls).
+ *
+ * Rule 1 (bare identifier before "is not defined") MUST run before the number
+ * rule below. A digit run glued to letters (`col2`) is unaffected either way —
+ * `\b\d+\b`'s word boundaries mean there is no transition between `l` and `2`
+ * to anchor on, so the number rule never touches it regardless of order. The
+ * order bites on a dotted path whose last segment is a bare number, e.g.
+ * `foo.2 is not defined`: run the number rule first and it becomes
+ * `foo.<n> is not defined`; rule 1's dotted-path group (`(?:\.[\w$]+)*`)
+ * cannot span the `<` in `<n>`, so its match backs off to `foo` alone and the
+ * lookahead — which needs the literal phrase immediately after — no longer
+ * lines up, leaving the message unnormalized and still laddering. Running
+ * rule 1 first avoids this: it also runs after the quoted-string rule, so
+ * `Invalid language tag: "zh"` (a quoted tag, already `<str>` by that point)
+ * and `Invalid language tag: zh` (the bare form) land on the same key instead
+ * of one of them dodging rule 2 by already being partway normalized.
+ *
+ * Accepted non-coverage: `foo[0] is not defined` still keys as
+ * `foo[<n>] is not defined`, because the identifier rule only matches a bare
+ * dotted-path token, not one with a subscript. Also accepted: two different
+ * demos' first undefined reference now merge if the identifier differs but
+ * everything else about the message doesn't — e.g. `HyperFormula is not
+ * defined` and `RechartsDevtools is not defined` fingerprint the same. Both
+ * were still each their own issue with a distinct, diagnosable identifier in
+ * the title before this change; now they're one issue, which is the
+ * intentional trade for collapsing the ladder (a wrong-import fault is still
+ * visible from the event body, just not from the issue count).
+ *
+ * No lookbehind anywhere in this function: it ships in the authoring bundle,
+ * which still needs to parse in Safari <16.4.
+ *
  * Used for the Sentry fingerprint, not for the message the issue displays.
  */
 export function normalizeMonitorMessage(message: string): string {
@@ -283,6 +323,22 @@ export function normalizeMonitorMessage(message: string): string {
     .replace(/https?:\/\/\S+/g, "<url>")
     .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, "<ts>")
     .replace(/["'`][^"'`]*["'`]/g, "<str>")
+    // DEV-2853 rule 1 — the bare identifier in a ReferenceError ladder
+    // (`l`, `li`, `lic`, … `licenseKey` `is not defined`). Must precede the
+    // number rule below (see the doc comment) and follow the quoted-string
+    // rule above.
+    .replace(/[A-Za-z_$][\w$]*(?:\.[\w$]+)*(?= is not defined\b)/g, "<ident>")
+    // DEV-2853 rule 2 — the partial locale in a RangeError from Intl, e.g.
+    // `Invalid language tag: zh-c` ladders alongside `zh-`, `z`, and the
+    // empty tail `Invalid language tag: `. `[ \t]*`, not `\s*`: `\s` matches
+    // `\n`, so on a multiline input the match would run past the newline and
+    // eat the start of the next line. Both call sites are line-oriented today
+    // (`relayStderr` splits on `\n` first; `sentry.ts` passes a single-line
+    // `Error.message`), so this is defensive rather than a live bug — but it
+    // costs nothing and stops the rule depending on that staying true.
+    // `\S*`, not `\S+`, so the empty
+    // tail is covered too.
+    .replace(/(Invalid language tag:)[ \t]*\S*/g, "$1 <tag>")
     .replace(/\b\d+(\.\d+)*\b/g, "<n>")
     .replace(/\s+/g, " ")
     .trim()

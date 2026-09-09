@@ -388,7 +388,15 @@ export class ContainerRuntime implements DemoRuntime {
    *  *within* an issue narrows — `Cannot find module 'foo'` and `'bar'` used to
    *  both reach Sentry as two events under one fingerprint; now only the first
    *  does. Capped by `MONITOR_EVENT_CEILING` below; the set only ever holds what
-   *  fit under it. */
+   *  fit under it.
+   *
+   *  DEV-2853 added a second instance of the same trade: `normalizeMonitorMessage`
+   *  now also collapses the bare identifier in a ReferenceError ladder (`foo is not
+   *  defined`), so two dev-server stderr lines differing only in which identifier
+   *  is undefined now relay once instead of twice. No issue is lost — the parent
+   *  fingerprint in `sentry.ts` already merged them under one issue — this is just
+   *  the point where that merge also stops a second raw line from reaching the
+   *  page at all. */
   private readonly stderrSeen = new Set<string>();
   private stderrRelayed = 0;
   private previewUrl = "";
