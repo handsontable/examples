@@ -234,16 +234,27 @@ test("the attached fetchDiagnostics property is non-enumerable", async () => {
   // downstream reporting sees — and an enumerable own property is the kind of
   // thing a refactor flips without noticing. Pinned directly.
   let caught;
+  let fetchCalls = 0;
   try {
-    await fetchWithDiagnostics("https://example.test/api/versions", {
-      fetch: () => Promise.reject(new TypeError("Failed to fetch")),
-      now: (() => { let t = 0; return () => (t += 10); })(),
-      sleep: () => Promise.resolve(),
-      onLine: () => true,
+    // Mocks go in the THIRD argument (`deps`), and the keys are `fetchFn` /
+    // `isOnline`. Passed as the second argument (`init`) with the wrong names,
+    // this ran the REAL fetch against example.test with a real 300ms sleep and a
+    // real 5s abort — and still passed, because a genuine network failure also
+    // throws with diagnostics attached. It asserted the invariant for the wrong
+    // reason and could stall or flake. Caught by Bugbot on PR #329.
+    await fetchWithDiagnostics("https://x/api/versions", undefined, {
+      fetchFn: () => { fetchCalls += 1; return Promise.reject(new TypeError("Failed to fetch")); },
+      now: fakeClock(),
+      isOnline: () => true,
+      sleep: noSleep,
     });
   } catch (error) {
     caught = error;
   }
+  // Proves the injected mock was actually used rather than the real `fetch`:
+  // two attempts means the retry ran through `fetchFn`. Without this the test
+  // could pass off a genuine network failure, which is how it shipped broken.
+  assert.equal(fetchCalls, 2);
   assert.ok(caught, "expected the exhausted retry to throw");
   const descriptor = Object.getOwnPropertyDescriptor(caught, "fetchDiagnostics");
   assert.ok(descriptor, "fetchDiagnostics should be an own property");

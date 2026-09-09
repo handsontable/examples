@@ -110,13 +110,19 @@ let versionsFetchEventSent = false;
  */
 function withDocsFetchDiagnostics(context: string, run: () => void): void {
   Sentry.withScope((scope) => {
-    scope.setTags(
-      diagnosticTags({
-        context,
-        onlineAtStart: typeof navigator !== "undefined" ? navigator.onLine : undefined,
-        apiBaseOrigin: apiBaseOrigin(API_BASE, location.origin),
-      }),
-    );
+    const { context: _population, ...tags } = diagnosticTags({
+      context,
+      onlineAtStart: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+      apiBaseOrigin: apiBaseOrigin(API_BASE, location.origin),
+    });
+    // `context` is dropped on purpose. `run()` is a `reportError` call, and that
+    // captures with `{ tags: { context } }` of its own — an event-level tag beats
+    // a scope one, so setting `context` here would be silently overwritten and
+    // this wrapper would look like it tagged something it did not. The population
+    // is still identifiable two ways that do NOT collide: `reportError`'s own
+    // `docs-example-load:fetch` / `docs-bucket-resolve:fetch` value, and the
+    // `docs_fetch_*` tag names `prefixFor` derives from the context passed above.
+    scope.setTags(tags);
     run();
   });
 }
