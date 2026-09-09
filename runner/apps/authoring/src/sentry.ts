@@ -17,6 +17,7 @@ import {
 import { ApiError } from "./apiError.js";
 import { resolveReporting } from "./reportingGate.js";
 import { isEdgelessForeignSessionStart, isOfficeScannerRejection } from "./eventGate.js";
+import { tier2StderrReport } from "./tier2Report.js";
 
 const DSN = import.meta.env.VITE_SENTRY_DSN as string | undefined;
 
@@ -270,20 +271,37 @@ export function reportDemoEvent(payload: MonitorPayload, context: DemoEventConte
     return;
   }
   if (!demoRelayBudget.admit(clean.kind, message, clean.stack)) return;
+  // DEV-2854: a recognised Tier-2 compiler diagnostic collapses across TS codes into one
+  // flat, constant-titled bucket instead of the per-message fingerprint below. Never fed
+  // into `demoRelayBudget.admit` above — that stays keyed on the raw message, so 20
+  // distinct diagnostics in one bad editing session still consume 20 of
+  // `MONITOR_EVENT_CEILING` rather than collapsing and losing their `extra` after the
+  // first. See `tier2Report.ts` for why.
+  const tier2 = tier2StderrReport(clean.kind, message);
   const tags: Record<string, string> = {
     surface: DEMO_SURFACE,
     kind: clean.kind,
     tier: String(context.tier),
     framework: context.framework,
+    ...(tier2 ? tier2.tags : {}),
   };
   if (context.demoId) tags.demo_id = context.demoId;
   const captureContext = {
     tags,
-    fingerprint: [DEMO_SURFACE, clean.kind, normalizeMonitorMessage(message)],
+    fingerprint: tier2
+      ? tier2.fingerprint
+      : [DEMO_SURFACE, clean.kind, normalizeMonitorMessage(message)],
     level: (clean.kind === "error" || clean.kind === "rejection" ? "error" : "warning") as
       | "error"
       | "warning",
-    ...(clean.url ? { extra: { url: clean.url } } : {}),
+    ...(clean.url || tier2
+      ? {
+          extra: {
+            ...(clean.url ? { url: clean.url } : {}),
+            ...(tier2 ? tier2.extra : {}),
+          },
+        }
+      : {}),
   };
 
   // An exception (with the preview's own stack) for a throw; a message for the
@@ -308,7 +326,11 @@ export function reportDemoEvent(payload: MonitorPayload, context: DemoEventConte
   // MONITOR_URL_MAX and host-redacted by `sanitizeMonitorPayload`, and because it never
   // enters the fingerprint, a crafted payload posting a thousand distinct urls still
   // produces one issue, titled with whichever arrived first.
-  const display = clean.kind === "network" && clean.url ? `${message}: ${clean.url}` : message;
+  const display = tier2
+    ? tier2.display
+    : clean.kind === "network" && clean.url
+      ? `${message}: ${clean.url}`
+      : message;
   Sentry.captureMessage(display, captureContext);
 }
 
