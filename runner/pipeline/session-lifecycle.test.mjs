@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import {
   AT_CAPACITY_CODE,
   atCapacityMessage,
+  CONTAINER_STARTING_CODE,
+  containerStartingMessage,
   destroyConfirmed,
   isAtCapacityFailure,
+  isContainerStartingFailure,
   isExpectedTeardownFailure,
   TOMBSTONE_ATTEMPTED,
   TOMBSTONE_DESTROYED,
@@ -168,4 +171,88 @@ test("the envelope code is stable", () => {
   // `sessionStartMessage` in packages/runtime/src/container.ts matches this
   // exact code to pass the sentence through unwrapped.
   assert.equal(AT_CAPACITY_CODE, "at_capacity");
+});
+
+// ---- the container-starting classifier (DEV-2857) -------------------------
+//
+// The withdrawn premise: `@cloudflare/sandbox@0.12.3` already retries a 503
+// "Container is starting" for ~150s/~7 attempts (BaseTransport.fetch ->
+// fetchWithResponseRetry, shouldRetry: r => r.status === 503) BEFORE this
+// message ever reaches workers/api/src/index.ts. So `isContainerStartingFailure`
+// recognises the EXHAUSTED end of that loop; it does not gate a retry of ours
+// — there is no retry of ours, by design (see the ticket's "Attempts added: 0").
+
+/** The SDK's own 503 body, verbatim — built in the DO's `containerFetch` catch,
+ *  never by any package in this repo. */
+const CONTAINER_STARTING = "Container is starting. Please retry in a moment.";
+
+test("the exact SDK string is recognised", () => {
+  assert.equal(isContainerStartingFailure(new Error(CONTAINER_STARTING)), true);
+});
+
+test("it sees through a cause chain", () => {
+  const wrapped = new Error("mkdir failed", { cause: new Error(CONTAINER_STARTING) });
+  assert.equal(isContainerStartingFailure(wrapped), true);
+  assert.equal(isContainerStartingFailure(new Error("outer", { cause: wrapped })), true);
+});
+
+test("a non-Error throw carrying the same words is not recognised", () => {
+  // Same reasoning `messageMatches` documents at the top of this file: workerd
+  // and the containers SDK both throw real Errors, so a bare string is
+  // somebody else's, and unrecognised is the safe direction for every caller.
+  assert.equal(isContainerStartingFailure(CONTAINER_STARTING), false);
+});
+
+test("the not-running teardown fault is a different fault and must not match", () => {
+  // THE narrowness this predicate exists to prove. "The container is not
+  // running" is NOT_RUNNING_PATTERN's teardown-only wording (a container that
+  // WAS running and stopped) — a different fault from one that never finished
+  // starting, and conflating them would let a slow-boot visitor land on the
+  // teardown path's assumptions.
+  assert.equal(
+    isContainerStartingFailure(new Error("The container is not running, consider calling start()")),
+    false,
+  );
+});
+
+test("isAtCapacityFailure stays false for the container-starting string", () => {
+  // The other half of the same narrowness requirement: a visitor whose sandbox
+  // is merely slow to boot must never be told "we are at capacity".
+  assert.equal(isAtCapacityFailure(new Error(CONTAINER_STARTING)), false);
+});
+
+test("isExpectedTeardownFailure is unaffected by the container-starting classifier", () => {
+  // This predicate is create-only (DEV-2857); the teardown classifier keeps
+  // recognising exactly the four messages it always has.
+  assert.equal(isExpectedTeardownFailure(new Error(CONTAINER_STARTING)), false);
+  assert.equal(isExpectedTeardownFailure(new Error(CAPACITY)), true);
+  assert.equal(isExpectedTeardownFailure(new Error(UNREACHABLE)), true);
+  assert.equal(isExpectedTeardownFailure(new Error(NOT_RUNNING)), true);
+  assert.equal(isExpectedTeardownFailure(new Error(NO_INSTANCE)), true);
+});
+
+test("a reworded platform string degrades to today's behaviour, not to silence", () => {
+  // The documented degrade direction, same as `isAtCapacityFailure` and
+  // `isExpectedTeardownFailure` above: if Cloudflare rewords the 503 body, this
+  // predicate stops matching and the create falls back to today's
+  // report-and-500 — noisy, never silent.
+  assert.equal(isContainerStartingFailure(new Error("The container is booting up, please wait")), false);
+});
+
+test("the container-starting envelope code is stable", () => {
+  // `sessionStartMessage` in packages/runtime/src/container.ts matches this
+  // exact code to pass the sentence below through unwrapped.
+  assert.equal(CONTAINER_STARTING_CODE, "container_starting");
+});
+
+test("the container-starting sentence never trips the App.tsx connectivity heuristic", () => {
+  // Same two constraints `atCapacityMessage` is pinned on above.
+  assert.doesNotMatch(containerStartingMessage, /session start failed/i);
+  assert.doesNotMatch(containerStartingMessage, /fetch/i);
+  assert.doesNotMatch(containerStartingMessage, /failed to fetch|networkerror|load failed/i);
+  // And it must not leak an internal knob — same shape as the max_instances
+  // guard on atCapacityMessage, even though this sentence has no analogous
+  // platform-config term to accidentally repeat.
+  assert.doesNotMatch(containerStartingMessage, /max_instances|container instances/i);
+  assert.ok(containerStartingMessage.length < 200, "a sentence, not a log excerpt");
 });
