@@ -339,9 +339,26 @@ export class SandpackRuntime implements DemoRuntime {
 
   /** Apply version dispatch, then shape files into a Sandpack sandbox setup. */
   private async buildSetup(files: FilesMap): Promise<SandboxSetup> {
-    const pinned = this.opts.version
-      ? applyHandsontableCss(applyHandsontableVersion(files, this.opts.version), this.opts.version)
-      : files;
+    let pinned = files;
+    if (this.opts.version) {
+      let deps = files;
+      try {
+        deps = applyHandsontableVersion(files, this.opts.version);
+      } catch {
+        // Only a missing or unparseable /package.json reaches here, and the file is
+        // user-editable in the live editor — every intermediate keystroke is invalid
+        // JSON (DEMOS-15). Mounting unpinned hands the failure to the bundler's own
+        // install, which names the file and the syntax error, and — unlike a rejected
+        // mount — leaves a client attached, so the next clean compile after the user
+        // closes the brace re-emits ready. `pinHandsontableFiles` (version.ts:312) and
+        // `ensureSandpackDeps` above make the same call on the same file.
+      }
+      // Not inside the try: the stylesheet rewrite never reads package.json
+      // (version.ts:406-434 keys off /index.html), and skipping it would leave a
+      // legacy stylesheet URL pinned to the wrong version in `this.files` for the
+      // rest of the session.
+      pinned = applyHandsontableCss(deps, this.opts.version);
+    }
     // `this.files` always holds the authored sources; parcel's compiled view is
     // derived from it on every (re)build and never fed back into the editor.
     this.files = sanitizeHtml(ensureSandpackDeps(pinned));
