@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-5680ec8-20260909",
-  "count": 1492,
+  "hotVersion": "0.0.0-next-24c01d6-20260909",
+  "count": 1496,
   "examples": [
     {
       "bucket": "next",
@@ -19951,6 +19951,74 @@
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/recipes/import-export/import-csv-excel",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/performance/expensive-cell-renderer/angular/example1.ts",
+      "file": "recipes__performance__expensive-cell-renderer__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Performance",
+        "Cache the output of an expensive cell renderer"
+      ],
+      "guide": "recipes/performance/expensive-cell-renderer/expensive-cell-renderer.md",
+      "guideTitle": "Cache the output of an expensive cell renderer",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/performance/expensive-cell-renderer",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/performance/expensive-cell-renderer/javascript/example1.js",
+      "file": "recipes__performance__expensive-cell-renderer__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Performance",
+        "Cache the output of an expensive cell renderer"
+      ],
+      "guide": "recipes/performance/expensive-cell-renderer/expensive-cell-renderer.md",
+      "guideTitle": "Cache the output of an expensive cell renderer",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/performance/expensive-cell-renderer",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/performance/expensive-cell-renderer/react/example1.tsx",
+      "file": "recipes__performance__expensive-cell-renderer__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Performance",
+        "Cache the output of an expensive cell renderer"
+      ],
+      "guide": "recipes/performance/expensive-cell-renderer/expensive-cell-renderer.md",
+      "guideTitle": "Cache the output of an expensive cell renderer",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/performance/expensive-cell-renderer",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/performance/expensive-cell-renderer/javascript/example1.ts",
+      "file": "recipes__performance__expensive-cell-renderer__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Performance",
+        "Cache the output of an expensive cell renderer"
+      ],
+      "guide": "recipes/performance/expensive-cell-renderer/expensive-cell-renderer.md",
+      "guideTitle": "Cache the output of an expensive cell renderer",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/performance/expensive-cell-renderer",
       "framework": "typescript",
       "displayName": "TypeScript"
     },
