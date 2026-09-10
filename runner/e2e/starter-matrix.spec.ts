@@ -173,14 +173,51 @@ for (const entry of catalog.examples) {
           .toBeGreaterThan(0);
 
         if (entry.framework === "example1") {
-          // Read every cell and assert over the SET. A `filter({ hasText })`
+          // Assert over the SET of rendered cell text. A `filter({ hasText })`
           // locator would be a strict-mode violation: Handsontable renders the
           // same logical cell again in its clone_top/clone_left overlay tables,
           // which is why every other grid assertion here counts rather than
           // matches.
-          const rendered = new Set(await cells.allInnerTexts());
+          //
+          // And read that set across the grid's whole scroll width, not just
+          // the initial viewport. The starter sizes to its container (DEV-2794
+          // dropped `width: 800`), which in this suite's Desktop Chrome
+          // viewport is a 624px pane holding four of the 150px columns, so
+          // Item Quality sits past the rendered edge. Column virtualization
+          // then decides whether its <td> exists at all: 17.1.0 and 18 render
+          // exactly one column beyond the viewport (`viewportColumnRenderingOffset:
+          // "auto"` is a fixed 1 since 17.1.0) and drop it; 15 and 16 still
+          // render enough to include it, by a hair. Sweeping the master holder
+          // makes the read independent of pane width and of which offset policy
+          // the major ships.
+          const holder = frame.locator(".ht_master .wtHolder");
+          const renderedAcrossScrollWidth = async () => {
+            const seen = new Set<string>();
+            const { clientWidth, scrollWidth } = await holder.evaluate((el) => ({
+              clientWidth: el.clientWidth,
+              scrollWidth: el.scrollWidth,
+            }));
+            for (let left = 0; left < scrollWidth; left += Math.max(clientWidth, 1)) {
+              // Walkontable re-renders inside its scroll handler, which the
+              // browser fires a frame after `scrollLeft` changes — so wait two
+              // frames before reading the DOM. `expect.poll` below re-sweeps if
+              // a render is slower than that, so this only tunes speed.
+              await holder.evaluate(
+                (el, x) =>
+                  new Promise<void>((done) => {
+                    el.scrollLeft = x;
+                    requestAnimationFrame(() => requestAnimationFrame(() => done()));
+                  }),
+                left,
+              );
+              for (const text of await cells.allInnerTexts()) seen.add(text);
+            }
+            return [...seen];
+          };
           for (const expected of example1NumericCells(major)) {
-            expect(rendered.has(expected), `numericFormat rendered ${expected} at ${major}`).toBe(true);
+            await expect
+              .poll(renderedAcrossScrollWidth, { message: `numericFormat rendered ${expected} at ${major}` })
+              .toContain(expected);
           }
         }
 
