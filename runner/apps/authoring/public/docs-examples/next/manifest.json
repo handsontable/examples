@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-56d65e4-20260910",
-  "count": 1496,
+  "hotVersion": "0.0.0-next-d2c9f7f-20260911",
+  "count": 1506,
   "examples": [
     {
       "bucket": "next",
@@ -1949,6 +1949,166 @@
       "exampleId": "example3",
       "exampleTitle": "Altering and tracking autofilled values",
       "docPermalink": "/autofill-values",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clickable-links/angular/example1.ts",
+      "file": "guides__cell-features__clickable-links__angular__example1.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clickable links"
+      ],
+      "guide": "guides/cell-features/clickable-links/clickable-links.md",
+      "guideTitle": "Clickable links",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/clickable-links",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clickable-links/javascript/example1.js",
+      "file": "guides__cell-features__clickable-links__javascript__example1.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clickable links"
+      ],
+      "guide": "guides/cell-features/clickable-links/clickable-links.md",
+      "guideTitle": "Clickable links",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/clickable-links",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clickable-links/react/example1.tsx",
+      "file": "guides__cell-features__clickable-links__react__example1.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clickable links"
+      ],
+      "guide": "guides/cell-features/clickable-links/clickable-links.md",
+      "guideTitle": "Clickable links",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/clickable-links",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clickable-links/javascript/example1.ts",
+      "file": "guides__cell-features__clickable-links__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clickable links"
+      ],
+      "guide": "guides/cell-features/clickable-links/clickable-links.md",
+      "guideTitle": "Clickable links",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/clickable-links",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clickable-links/vue/example1.vue",
+      "file": "guides__cell-features__clickable-links__vue__example1.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clickable links"
+      ],
+      "guide": "guides/cell-features/clickable-links/clickable-links.md",
+      "guideTitle": "Clickable links",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/clickable-links",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clickable-links/angular/example2.ts",
+      "file": "guides__cell-features__clickable-links__angular__example2.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clickable links"
+      ],
+      "guide": "guides/cell-features/clickable-links/clickable-links.md",
+      "guideTitle": "Clickable links",
+      "exampleId": "example2",
+      "exampleTitle": "Configure the links",
+      "docPermalink": "/clickable-links",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clickable-links/javascript/example2.js",
+      "file": "guides__cell-features__clickable-links__javascript__example2.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clickable links"
+      ],
+      "guide": "guides/cell-features/clickable-links/clickable-links.md",
+      "guideTitle": "Clickable links",
+      "exampleId": "example2",
+      "exampleTitle": "Configure the links",
+      "docPermalink": "/clickable-links",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clickable-links/react/example2.tsx",
+      "file": "guides__cell-features__clickable-links__react__example2.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clickable links"
+      ],
+      "guide": "guides/cell-features/clickable-links/clickable-links.md",
+      "guideTitle": "Clickable links",
+      "exampleId": "example2",
+      "exampleTitle": "Configure the links",
+      "docPermalink": "/clickable-links",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clickable-links/javascript/example2.ts",
+      "file": "guides__cell-features__clickable-links__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clickable links"
+      ],
+      "guide": "guides/cell-features/clickable-links/clickable-links.md",
+      "guideTitle": "Clickable links",
+      "exampleId": "example2",
+      "exampleTitle": "Configure the links",
+      "docPermalink": "/clickable-links",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clickable-links/vue/example2.vue",
+      "file": "guides__cell-features__clickable-links__vue__example2.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clickable links"
+      ],
+      "guide": "guides/cell-features/clickable-links/clickable-links.md",
+      "guideTitle": "Clickable links",
+      "exampleId": "example2",
+      "exampleTitle": "Configure the links",
+      "docPermalink": "/clickable-links",
       "framework": "vue",
       "displayName": "Vue 3"
     },
