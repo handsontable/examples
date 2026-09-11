@@ -3,7 +3,7 @@
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
   "hotVersion": "0.0.0-next-2e003a9-20260911",
-  "count": 1506,
+  "count": 1511,
   "examples": [
     {
       "bucket": "next",
@@ -23121,6 +23121,22 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/rows/rows-sorting/angular/example12.ts",
+      "file": "guides__rows__rows-sorting__angular__example12.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Rows sorting"
+      ],
+      "guide": "guides/rows/rows-sorting/rows-sorting.md",
+      "guideTitle": "Rows sorting",
+      "exampleId": "example12",
+      "exampleTitle": "Frozen rows stay out of the sort by default (2)",
+      "docPermalink": "/rows-sorting",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/rows/rows-sorting/angular/example1.ts",
       "file": "guides__rows__rows-sorting__angular__example1.ts.json",
       "breadcrumb": [
@@ -23242,7 +23258,7 @@
       "guide": "guides/rows/rows-sorting/rows-sorting.md",
       "guideTitle": "Rows sorting",
       "exampleId": "example8",
-      "exampleTitle": "Exclude rows from sorting (2)",
+      "exampleTitle": "Exclude rows that are not frozen (2)",
       "docPermalink": "/rows-sorting",
       "framework": "angular",
       "displayName": "Angular"
@@ -23466,7 +23482,7 @@
       "guide": "guides/rows/rows-sorting/rows-sorting.md",
       "guideTitle": "Rows sorting",
       "exampleId": "exampleExcludeRowsFromSorting",
-      "exampleTitle": "Exclude rows from sorting",
+      "exampleTitle": "Exclude rows that are not frozen",
       "docPermalink": "/rows-sorting",
       "framework": "javascript",
       "displayName": "JavaScript"
@@ -23482,7 +23498,7 @@
       "guide": "guides/rows/rows-sorting/rows-sorting.md",
       "guideTitle": "Rows sorting",
       "exampleId": "exampleExcludeRowsFromSorting",
-      "exampleTitle": "Exclude rows from sorting",
+      "exampleTitle": "Exclude rows that are not frozen",
       "docPermalink": "/rows-sorting",
       "framework": "react",
       "displayName": "React (TS)"
@@ -23498,7 +23514,7 @@
       "guide": "guides/rows/rows-sorting/rows-sorting.md",
       "guideTitle": "Rows sorting",
       "exampleId": "exampleExcludeRowsFromSorting",
-      "exampleTitle": "Exclude rows from sorting",
+      "exampleTitle": "Exclude rows that are not frozen",
       "docPermalink": "/rows-sorting",
       "framework": "typescript",
       "displayName": "TypeScript"
@@ -23514,7 +23530,7 @@
       "guide": "guides/rows/rows-sorting/rows-sorting.md",
       "guideTitle": "Rows sorting",
       "exampleId": "exampleExcludeRowsFromSorting",
-      "exampleTitle": "Exclude rows from sorting",
+      "exampleTitle": "Exclude rows that are not frozen",
       "docPermalink": "/rows-sorting",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -23835,6 +23851,70 @@
       "guideTitle": "Rows sorting",
       "exampleId": "exampleSortDifferentTypes",
       "exampleTitle": "Sort different types of data",
+      "docPermalink": "/rows-sorting",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/rows-sorting/javascript/exampleSortFixedRows.js",
+      "file": "guides__rows__rows-sorting__javascript__exampleSortFixedRows.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Rows sorting"
+      ],
+      "guide": "guides/rows/rows-sorting/rows-sorting.md",
+      "guideTitle": "Rows sorting",
+      "exampleId": "exampleSortFixedRows",
+      "exampleTitle": "Frozen rows stay out of the sort by default",
+      "docPermalink": "/rows-sorting",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/rows-sorting/react/exampleSortFixedRows.tsx",
+      "file": "guides__rows__rows-sorting__react__exampleSortFixedRows.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Rows sorting"
+      ],
+      "guide": "guides/rows/rows-sorting/rows-sorting.md",
+      "guideTitle": "Rows sorting",
+      "exampleId": "exampleSortFixedRows",
+      "exampleTitle": "Frozen rows stay out of the sort by default",
+      "docPermalink": "/rows-sorting",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/rows-sorting/javascript/exampleSortFixedRows.ts",
+      "file": "guides__rows__rows-sorting__javascript__exampleSortFixedRows.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Rows sorting"
+      ],
+      "guide": "guides/rows/rows-sorting/rows-sorting.md",
+      "guideTitle": "Rows sorting",
+      "exampleId": "exampleSortFixedRows",
+      "exampleTitle": "Frozen rows stay out of the sort by default",
+      "docPermalink": "/rows-sorting",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/rows-sorting/vue/exampleSortFixedRows.vue",
+      "file": "guides__rows__rows-sorting__vue__exampleSortFixedRows.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Rows sorting"
+      ],
+      "guide": "guides/rows/rows-sorting/rows-sorting.md",
+      "guideTitle": "Rows sorting",
+      "exampleId": "exampleSortFixedRows",
+      "exampleTitle": "Frozen rows stay out of the sort by default",
       "docPermalink": "/rows-sorting",
       "framework": "vue",
       "displayName": "Vue 3"
