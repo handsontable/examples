@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-2e003a9-20260911",
-  "count": 1511,
+  "hotVersion": "0.0.0-next-1bc0b4d-20260911",
+  "count": 1521,
   "examples": [
     {
       "bucket": "next",
@@ -1629,6 +1629,166 @@
       "exampleId": "example2",
       "exampleTitle": "Use a third-party icon set",
       "docPermalink": "/use-icons-in-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/sheets-bar/angular/example1.ts",
+      "file": "guides__accessories-and-menus__sheets-bar__angular__example1.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Sheets bar"
+      ],
+      "guide": "guides/accessories-and-menus/sheets-bar/sheets-bar.md",
+      "guideTitle": "Sheets bar",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/sheets-bar",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/sheets-bar/angular/example2.ts",
+      "file": "guides__accessories-and-menus__sheets-bar__angular__example2.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Sheets bar"
+      ],
+      "guide": "guides/accessories-and-menus/sheets-bar/sheets-bar.md",
+      "guideTitle": "Sheets bar",
+      "exampleId": "example2",
+      "exampleTitle": "Use formulas across sheets",
+      "docPermalink": "/sheets-bar",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/sheets-bar/javascript/example2.js",
+      "file": "guides__accessories-and-menus__sheets-bar__javascript__example2.js.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Sheets bar"
+      ],
+      "guide": "guides/accessories-and-menus/sheets-bar/sheets-bar.md",
+      "guideTitle": "Sheets bar",
+      "exampleId": "example2",
+      "exampleTitle": "Use formulas across sheets",
+      "docPermalink": "/sheets-bar",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/sheets-bar/react/example2.tsx",
+      "file": "guides__accessories-and-menus__sheets-bar__react__example2.tsx.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Sheets bar"
+      ],
+      "guide": "guides/accessories-and-menus/sheets-bar/sheets-bar.md",
+      "guideTitle": "Sheets bar",
+      "exampleId": "example2",
+      "exampleTitle": "Use formulas across sheets",
+      "docPermalink": "/sheets-bar",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/sheets-bar/javascript/example2.ts",
+      "file": "guides__accessories-and-menus__sheets-bar__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Sheets bar"
+      ],
+      "guide": "guides/accessories-and-menus/sheets-bar/sheets-bar.md",
+      "guideTitle": "Sheets bar",
+      "exampleId": "example2",
+      "exampleTitle": "Use formulas across sheets",
+      "docPermalink": "/sheets-bar",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/sheets-bar/vue/example2.vue",
+      "file": "guides__accessories-and-menus__sheets-bar__vue__example2.vue.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Sheets bar"
+      ],
+      "guide": "guides/accessories-and-menus/sheets-bar/sheets-bar.md",
+      "guideTitle": "Sheets bar",
+      "exampleId": "example2",
+      "exampleTitle": "Use formulas across sheets",
+      "docPermalink": "/sheets-bar",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/sheets-bar/javascript/example.js",
+      "file": "guides__accessories-and-menus__sheets-bar__javascript__example.js.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Sheets bar"
+      ],
+      "guide": "guides/accessories-and-menus/sheets-bar/sheets-bar.md",
+      "guideTitle": "Sheets bar",
+      "exampleId": "example",
+      "exampleTitle": "Enable the sheets bar",
+      "docPermalink": "/sheets-bar",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/sheets-bar/react/example.tsx",
+      "file": "guides__accessories-and-menus__sheets-bar__react__example.tsx.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Sheets bar"
+      ],
+      "guide": "guides/accessories-and-menus/sheets-bar/sheets-bar.md",
+      "guideTitle": "Sheets bar",
+      "exampleId": "example",
+      "exampleTitle": "Enable the sheets bar",
+      "docPermalink": "/sheets-bar",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/sheets-bar/javascript/example.ts",
+      "file": "guides__accessories-and-menus__sheets-bar__javascript__example.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Sheets bar"
+      ],
+      "guide": "guides/accessories-and-menus/sheets-bar/sheets-bar.md",
+      "guideTitle": "Sheets bar",
+      "exampleId": "example",
+      "exampleTitle": "Enable the sheets bar",
+      "docPermalink": "/sheets-bar",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/sheets-bar/vue/example.vue",
+      "file": "guides__accessories-and-menus__sheets-bar__vue__example.vue.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Sheets bar"
+      ],
+      "guide": "guides/accessories-and-menus/sheets-bar/sheets-bar.md",
+      "guideTitle": "Sheets bar",
+      "exampleId": "example",
+      "exampleTitle": "Enable the sheets bar",
+      "docPermalink": "/sheets-bar",
       "framework": "vue",
       "displayName": "Vue 3"
     },
