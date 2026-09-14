@@ -23,7 +23,7 @@ import { workspaceFiles } from "./helpers";
 // workflow's trace scrubbing matters more than it used to: this credential has
 // no expiry to limit the damage of a leaked artifact.
 //
-// Cost and hygiene: one BuilderSandbox boot (pool of 3, shared) and one D1
+// Cost and hygiene: one BuilderSandbox boot (pool of 5, shared) and one D1
 // row per run. The revoke lives in an afterEach, not the test body — see the
 // note at `demoId` below.
 

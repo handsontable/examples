@@ -115,8 +115,9 @@ export const isKnownNoise = (message: string) => NOISE.some((re) => re.test(mess
 
 /**
  * Track Tier-2 sessions a test creates so they can be torn down even when the
- * test fails: the container pool holds five global slots shared with real
- * traffic, and a leaked session squats one for its whole idle window.
+ * test fails: the container pool holds ten global slots shared with real
+ * traffic, and a leaked session squats one for its whole idle window. The pool
+ * grew from five in DEV-2909 to serve visitors, not to give tests a budget.
  *
  *   const tracked = trackSessions(page);
  *   try { ... } finally { await tracked.cleanup(request); }

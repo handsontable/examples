@@ -57,12 +57,13 @@ pnpm e2e:matrix:report /tmp/matrix-batch1.json /tmp/matrix-batch2.json ...
 
 Container-engine starters (`engine: "container"` in `catalog.json`) each boot
 a real Cloudflare Sandbox container via `POST /api/session`. Production caps
-the live-preview `Sandbox` class at **5 concurrent instances**
-(`workers/api/wrangler.jsonc`: `max_instances: 5`, separate from
-`BuilderSandbox`'s `max_instances: 3` for the unrelated demo-sharing/build
+the live-preview `Sandbox` class at **10 concurrent instances**
+(`workers/api/wrangler.jsonc`: `max_instances: 10`, separate from
+`BuilderSandbox`'s `max_instances: 5` for the unrelated demo-sharing/build
 pipeline, which this matrix never touches). The `e2e:matrix` script runs at
-`--workers=2` to leave headroom for real traffic — don't raise it without
-checking current prod load, and never run multiple `playwright test`
+`--workers=2` to leave headroom for real traffic — the DEV-2909 raise from 5 to
+10 is headroom for visitors, not a budget for this matrix, so don't raise it
+without checking current prod load, and never run multiple `playwright test`
 invocations against prod concurrently (their worker pools stack).
 
 ## What it checks, and its limits

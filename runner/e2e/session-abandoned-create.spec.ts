@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { test, expect, type APIRequestContext } from "@playwright/test";
 
 // DEV-2567. `/admin` filled with phantom Angular rows: 202 of them, spread evenly
-// from minutes to 24h old, against an instance pool capped at 5.
+// from minutes to 24h old, against an instance pool capped at 5 (10 since
+// DEV-2909 — the phantom count never had anything to do with the cap).
 //
 // The cause is an ordering, not a leak of containers. The client mints the session
 // id and registers its `pagehide` teardown BEFORE the create POST, deliberately, so

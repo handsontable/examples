@@ -145,9 +145,19 @@
   // Tier-2 live editing — Cloudflare Sandbox SDK. proxyToSandbox() requires a
   // single `Sandbox` namespace, so ONE generic image serves every framework
   // (deps installed per session). Builder runs the share snapshotter.
+  //
+  // `max_instances` is the container spend cap AND the concurrency limit for
+  // live previews: no queue sits in front of the pool, so the caller past the
+  // last slot gets Cloudflare's "maximum number of running container instances
+  // exceeded", which we turn into a 503 `at_capacity` refusal
+  // (src/session-lifecycle.ts). Raised 5/3 -> 10/5 for
+  // DEV-2909 on ~600 sessions/day against metered container spend of ~$5/mo,
+  // two orders of magnitude below the cap's own arithmetic. That arithmetic —
+  // the only thing these two numbers may not be changed without redoing — is
+  // in docs/cost-guardrails.md.
   "containers": [
-    { "class_name": "Sandbox", "image": "../../containers/live/Dockerfile", "instance_type": "standard-1", "max_instances": 5 },
-    { "class_name": "BuilderSandbox", "image": "../../containers/builder/Dockerfile", "instance_type": "standard-1", "max_instances": 3 }
+    { "class_name": "Sandbox", "image": "../../containers/live/Dockerfile", "instance_type": "standard-1", "max_instances": 10 },
+    { "class_name": "BuilderSandbox", "image": "../../containers/builder/Dockerfile", "instance_type": "standard-1", "max_instances": 5 }
   ],
   "durable_objects": {
     "bindings": [

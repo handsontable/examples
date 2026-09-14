@@ -7,7 +7,8 @@
 // whose client vanished without a clean `DELETE /api/session/:id` (a killed tab,
 // a dropped `keepalive` fetch, a bfcache eviction that never fires a second
 // `pagehide`) stayed on the panel for up to a day with its Awake and Est. cost
-// columns climbing. The reported symptom was 50 rows against a 5-instance pool.
+// columns climbing. The reported symptom was 50 rows against a 5-instance pool
+// (10 since DEV-2909; the mismatch was never about the pool size).
 // Nothing was leaking: `containers.max_instances` is a real cap and the ledger
 // is fed by keepalive flushes, not by this table. The table was the defect.
 //
