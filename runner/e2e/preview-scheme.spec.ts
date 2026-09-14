@@ -30,7 +30,7 @@ import { test, expect, type FrameLocator, type Page } from "@playwright/test";
 //
 // Tier 2 is not covered here. Its half of the bridge is the proxy rewrite, checked
 // as a response transform in `pipeline/scheme-bridge.test.mjs`; exercising it in a
-// browser would pull the 5-slot container pool and a same-origin API worker into
+// browser would pull the shared container pool and a same-origin API worker into
 // every run, for the same reason `row-striping.spec.ts` stays on Sandpack.
 
 const preview = (page: Page): FrameLocator => page.frameLocator("iframe").first();

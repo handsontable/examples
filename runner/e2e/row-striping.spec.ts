@@ -26,7 +26,7 @@ import { test, expect, type FrameLocator, type Page } from "@playwright/test";
 // Only the Sandpack starters are covered, which is why no `--workers=1` is
 // needed here: a plain `vite preview` serves them. `react-js`, `base-web` and
 // `angular` carry the same rule but are `engine: "container"`, so including them
-// would force the 5-slot `Sandbox` pool and a same-origin API worker onto every
+// would force the shared `Sandbox` pool and a same-origin API worker onto every
 // run. Check those by hand against a `vite dev` with `VITE_API_BASE` pointed at
 // its own port. `angular` is a full case in `style-apply.spec.ts` (DEV-2216): what
 // once read as "no edit reaches its preview" was a silent type-check failure in the

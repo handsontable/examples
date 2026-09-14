@@ -21,9 +21,11 @@ import { workspaceFiles } from "./helpers";
 //   E2E_LIVE=1 E2E_BASE_URL=https://demos.handsontable.com pnpm e2e e2e/style-apply.spec.ts --workers=1
 //
 // `--workers=1` whenever `astro` or `angular` is in the selection: they are the
-// Tier-2 cases and the container pool holds 5 slots (`Sandbox max_instances`).
-// At `--workers=2` the second Tier-2 case fails with the preview stuck on
-// `booting` — which reads as a product failure and is not one.
+// Tier-2 cases and the container pool is shared with production traffic
+// (`Sandbox max_instances`, 10 since DEV-2909). At `--workers=2` the second
+// Tier-2 case has failed with the preview stuck on `booting` — which reads as a
+// product failure and is not one; a bigger pool makes that less likely against
+// prod, never impossible, and says nothing about a local one-slot run.
 //
 // Sessions ARE torn down now (DEV-2547): every session this file creates is
 // deleted in `afterEach`, so a failed run no longer leaves containers squatting
@@ -40,7 +42,7 @@ const STYLE = 'aside[aria-label="Style this demo"]';
  * Tier-2 sessions this file created, so they can be deleted even when a test
  * fails (DEV-2547).
  *
- * The container pool is five global slots shared with production traffic, and a
+ * The container pool is ten global slots shared with production traffic, and a
  * leaked session holds one for its whole idle window — which is how a red run
  * poisoned the next one. Tier-1 tests create no session, so the hooks are a
  * no-op there.

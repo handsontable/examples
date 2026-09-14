@@ -8,11 +8,12 @@ import { readFileSync } from "node:fs";
 // spins ~50 real Tier-2 container sessions (the live-preview `Sandbox` class);
 // a local run at --workers=2 --retries=2 took ~36 minutes.
 //
-// Prod only allows 5 concurrent live-preview containers
-// (workers/api/wrangler.jsonc: Sandbox max_instances=5, separate from
-// BuilderSandbox max_instances=3 which this test never touches). The
-// e2e:matrix script runs at --workers=2 to leave headroom for real traffic —
-// do not raise concurrency without checking current prod load.
+// Prod only allows 10 concurrent live-preview containers
+// (workers/api/wrangler.jsonc: Sandbox max_instances=10, separate from
+// BuilderSandbox max_instances=5 which this test never touches). The
+// e2e:matrix script runs at --workers=2 to leave headroom for real traffic;
+// the DEV-2909 raise from 5 to 10 was headroom for visitors, not for this
+// matrix — do not raise concurrency without checking current prod load.
 //
 // Run: E2E_BASE_URL=https://demos.handsontable.com pnpm e2e:matrix
 // Report: pnpm e2e:matrix:report

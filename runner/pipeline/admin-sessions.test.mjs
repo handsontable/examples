@@ -16,9 +16,11 @@ import {
 } from "../workers/api/src/session-listing.ts";
 
 // DEV-2567. The /admin panel showed 50 "live" Angular sessions against a pool
-// capped at 5 instances (`containers.max_instances`, wrangler.jsonc) with a 5m
-// `sleepAfter`. Both of those numbers were and are correct; the table was wrong
-// on two counts, and this file pins the decisions that fix each.
+// capped at 5 instances (`containers.max_instances`, wrangler.jsonc — 10 since
+// DEV-2909) with a 5m `sleepAfter`. Both of those numbers were correct; the
+// table was wrong on two counts, and this file pins the decisions that fix
+// each. Nothing here depends on the pool size — the bug was that the row count
+// was unrelated to it.
 //
 //  1. A row was one `session-meter:` key, and that key lives KV_METER_TTL_SECONDS
 //     = 24h — far past the container it fronts. Every client that vanished

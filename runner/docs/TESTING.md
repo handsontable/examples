@@ -148,8 +148,9 @@ These are the proven local patterns. Reach for them before inventing one.
   documents — the DOM holds only the lines on screen. Read file contents
   through `workspaceFiles()` (`e2e/helpers.ts`); type via the CodeMirror view
   dispatch, not synthetic keystrokes into a virtualized contenteditable.
-- **Container-pool discipline.** Tier-2 sessions share five global slots with
-  real traffic. Every spec that boots one uses `trackSessions()` and cleans up
+- **Container-pool discipline.** Tier-2 sessions share ten global slots with
+  real traffic (`Sandbox max_instances`; it was five before DEV-2909, and the
+  raise is headroom for visitors, not a test budget). Every spec that boots one uses `trackSessions()` and cleans up
   in `finally` — a leaked session squats a slot for its whole idle window. The
   same arithmetic is why deployed live runs are never `cancel-in-progress`: a
   cancelled run strands its containers.

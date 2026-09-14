@@ -85,8 +85,8 @@ import { requestTheme, validateStylePrompt } from "./theme-ai.js";
 // timer, so the dev server stays warm during active use and only sleeps (stops
 // billing) once the user is truly gone. Closing the tab tears the session down
 // immediately (ContainerRuntime's pagehide dispose), so this window only covers
-// hidden tabs and crashed clients — with max_instances at 5, a long window lets
-// abandoned sessions exhaust the pool. Disk is ephemeral, so a slept container
+// hidden tabs and crashed clients — the pool is finite (max_instances, 10 since
+// DEV-2909), so a long window lets abandoned sessions exhaust it. Disk is ephemeral, so a slept container
 // cold-boots on return — the point is to avoid that mid-session, not to make
 // wake cheap.
 /**

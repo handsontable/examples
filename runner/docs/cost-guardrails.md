@@ -16,8 +16,8 @@ deployment actually runs with are configuration (`BUDGET_*`, overridable in
 
 ```jsonc
 "containers": [
-  { "class_name": "Sandbox",        "instance_type": "standard-1", "max_instances": 5 },
-  { "class_name": "BuilderSandbox", "instance_type": "standard-1", "max_instances": 3 }
+  { "class_name": "Sandbox",        "instance_type": "standard-1", "max_instances": 10 },
+  { "class_name": "BuilderSandbox", "instance_type": "standard-1", "max_instances": 5 }
 ]
 ```
 
@@ -33,15 +33,51 @@ Worst case — every slot awake 24/7 for a 730-hour month:
 
 | | container-hours | cost |
 |---|---|---|
-| Sandbox (5) | 3,650 | $139 – $270 |
-| BuilderSandbox (3) | 2,190 | $83 – $162 |
-| **Both saturated** | **5,840** | **$222 – $432** |
-| + container Durable Object duration | | ~$28 |
-| **Ceiling** | | **~$250 – $460/mo** |
+| Sandbox (10) | 7,300 | $277 – $540 |
+| BuilderSandbox (5) | 3,650 | $139 – $270 |
+| **Both saturated** | **10,950** | **$416 – $810** |
+| + container Durable Object duration | | ~$53 |
+| **Ceiling** | | **~$469 – $863/mo** |
 
-So `max_instances` is a real, Cloudflare-enforced cap sitting at roughly 25–45%
-of a $1,000 ceiling. **Leave it at 5/3** — raising it is the one change that
-invalidates this table.
+So `max_instances` is a real, Cloudflare-enforced cap, and after DEV-2909 it
+sits at roughly 47–86% of a $1,000 ceiling. **Raising it is the one change that
+invalidates this table** — redo the table in the same commit, and read the next
+section before picking a number.
+
+### Why 10/5, and what it costs (DEV-2909)
+
+It was 5/3, chosen before the runner had traffic and defended here as
+"structurally 25–45% of the ceiling". Traffic arrived: 500–900 live sessions a
+day, and the 5-slot pool started refusing visitors — Cloudflare's "maximum
+number of running container instances exceeded", surfaced as the `at_capacity`
+503 and filed in Sentry as DEMOS-33. The pool was rationing a resource we were
+barely paying for:
+
+| | metered (`cost_ledger`, `sku='container'`) |
+|---|---|
+| busiest day observed | 30k awake-seconds, **$0.42** |
+| typical day | 2–10k awake-seconds, $0.03–0.15 |
+| month | **~$5** |
+
+That is ~1% of even the old worst-case row, because the worst case assumes every
+slot awake 24/7 and real sessions sleep after 5m. Doubling the live pool and
+taking the builder from 3 to 5 buys ~2x the concurrent visitors for a worst case
+that is still below the ceiling and a *measured* cost that stays in single-digit
+dollars.
+
+What this trade gives up, stated plainly: at 5/3 the container cap was
+structurally *below* the lower half of the ceiling, so containers could never be
+the SKU that tripped it. At 10/5 the pathological end of the table (every slot at
+full 0.5 vCPU, 24/7, for a month) reaches ~86% of $1,000, so a sustained
+saturation event would now be caught by the Worker's own tiers — `new_blocked`
+at 95% — rather than by Cloudflare's cap alone. That is layer 3 doing its job,
+but it is a layer we enforce, which is weaker than one Cloudflare enforces.
+Account limits are not a constraint at this size (6 TiB memory / 1,500 vCPU
+concurrent).
+
+Cloudflare's cap is also the only thing bounding *concurrency*, not just spend:
+there is no separate queue in front of the pool, so `Sandbox.max_instances` is
+exactly the number of visitors who can hold a live preview at once.
 
 Ranked by what is actually unbounded:
 
@@ -102,7 +138,7 @@ In `wrangler.jsonc`:
 | `limits.cpu_ms: 30000` | Backstop for a runaway invocation, stated rather than defaulted. |
 | `triggers.crons: ["17 4 * * *"]` | Nightly reconciliation + optional artifact GC. |
 | `BUDGET_*` vars | The ceiling and its thresholds (below). |
-| `max_instances` unchanged | It is the container cap. |
+| `max_instances` 10/5 | It is the container cap; see the arithmetic above. |
 
 `sleepAfter` stays at 5m for live sessions (10m on the builder, which only ever
 matters if `runBuild`'s teardown never runs). Given the arithmetic above this is
@@ -274,6 +310,9 @@ the table.
   migration and a bigger call than DEV-2030.
 - **Anonymous live editing.** `anon_blocked` assumes signing in is an acceptable
   fallback. If it isn't, that tier collapses into `new_blocked`.
-- **$1000 vs reality.** Containers cap structurally at ~$460, so a $1000 in-app
-  limit will realistically only ever be tripped by egress or logs — which is
-  exactly why the meter counts those SKUs and not just container-seconds.
+- **$1000 vs reality.** Containers cap structurally at ~$863 since DEV-2909, so
+  a $1000 in-app limit is still most likely to be tripped by egress or logs —
+  which is why the meter counts those SKUs and not just container-seconds — but
+  containers are no longer arithmetically incapable of reaching it. If the pool
+  is raised again, either re-price the instance type or accept that the tiers,
+  not `max_instances`, are the cap.

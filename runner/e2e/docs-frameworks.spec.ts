@@ -15,11 +15,12 @@ import {
 // docs imports), so until now the two wrappers most likely to break on a
 // container image change had no live docs coverage at all.
 //
-// Two boots, no more. The pool holds five global slots shared with real
-// traffic, so this spec must run with --workers=1 and never grows a
-// per-example walk — the bucket's ~1500 entries belong to the manifest tests
-// and the import pipeline. Fixture: the context-menu guide (react + vue
-// variants in every bucket) and the accessibility guide's Angular example.
+// Two boots, no more. The pool holds ten global slots shared with real
+// traffic (DEV-2909; it was five), so this spec must run with --workers=1 and
+// never grows a per-example walk — the bucket's ~1500 entries belong to the
+// manifest tests and the import pipeline. Fixture: the context-menu guide
+// (react + vue variants in every bucket) and the accessibility guide's Angular
+// example.
 //
 // The version is resolved from the newest imported release bucket, not restated
 // here (DEV-2736). A literal `v=18.0.0` survived the 18.1 import silently: these

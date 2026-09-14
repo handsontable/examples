@@ -17,6 +17,8 @@ Two facts shape the answer:
    a 730-hour month costs roughly $250–$460 including container Durable Object
    duration. That is 25–45% of the $1000 line, and Cloudflare enforces it
    regardless of whether our code is correct.
+   <!-- Amended by "The pool is 10/5" below (DEV-2909): the figures are 10/5 and
+        ~$469–$863, i.e. 47–86%. The reasoning is unchanged; only the fraction is. -->
 
 What is *not* bounded: container egress (every dev-server asset and HMR frame of
 a live preview, on a public unauthenticated `POST /api/session`), Workers Logs
@@ -35,6 +37,9 @@ Three layers, in order of how much we trust them.
    = 0.1` (logs are a spike amplifier), `limits.cpu_ms`, and `max_instances` left
    at 5/3 — that pair *is* the container ceiling and raising it is the single
    change that invalidates the arithmetic above.
+   <!-- Amended by "The pool is 10/5" below (DEV-2909): the pair is 10/5, and the
+        arithmetic above was redone with it. "Raising it invalidates the table"
+        stands — it is the standing obligation, not a prohibition. -->
 3. **A ceiling the Worker enforces itself.** A `cost_ledger` table in D1 meters
    container awake-seconds, proxied egress and request counts; a nightly cron
    replaces those estimates with Cloudflare's own analytics. Crossing a fraction
@@ -68,3 +73,32 @@ deploying is a ceiling nobody adjusts during the incident that needs it.
   counts toward the same threshold. Either offset the thresholds by the
   account's existing baseline, or move the runner to its own account — the
   latter is a bigger call than DEV-2030.
+
+## Amendment — the pool is 10/5 (DEV-2909)
+
+`Sandbox` is 10 and `BuilderSandbox` is 5. `docs/cost-guardrails.md` carries the
+redone arithmetic; the decision this ADR records does not change.
+
+The 5/3 pair was set before the runner carried traffic, and it turned out to be
+rationing the cheapest thing in the ledger. Once the runner reached 500–900 live
+sessions a day the pool started refusing visitors (Sentry DEMOS-33, the
+`at_capacity` 503), while metered container spend sat at **~$5/month** — about
+1% of the worst-case row that justified the cap. The worst case assumes every
+slot awake 24/7; real sessions sleep after 5m.
+
+Two things this amendment makes explicit, because the original text conflated
+them:
+
+- **`max_instances` is doing two jobs.** It is the container spend cap *and* the
+  only limit on how many visitors can hold a live preview at once — there is no
+  queue in front of the pool. Sizing it for spend alone prices out users.
+- **Containers can now reach the ceiling on paper.** At 10/5 the pathological
+  end of the table is ~86% of $1000, where 5/3 was 46%. Layer 3 — the tiers this
+  ADR exists to justify — is what stops a sustained saturation event now, rather
+  than Cloudflare's cap making one arithmetically impossible. That is a real
+  weakening of layer 2, accepted deliberately: a cap that never binds financially
+  but refuses paying attention is not a guardrail, it is an outage.
+
+If the pool is raised again, the honest options are to re-price (a smaller
+instance type for live previews) or to state that the tiers, not
+`max_instances`, are the container cap.
