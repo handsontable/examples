@@ -44,3 +44,4 @@ once Accepted.
 | [0037](0037-persistent-api-tokens.md) | Persistent API tokens, verified in the Worker rather than by the broker | Accepted (DEV-2583; amends 0007) |
 | [0038](0038-waf-exception-for-source-code-payloads.md) | Source-code payloads need a WAF exception, not an encoding trick | Accepted |
 | [0039](0039-detached-tier-2-snapshot-builds.md) | Detached tier-2 snapshot builds on the MCP service path | Accepted (amends 0033) |
+| [0040](0040-hourly-buckets-and-pool-pressure.md) | Hour-of-day buckets, and measuring pool pressure | Accepted (extends 0022) |
