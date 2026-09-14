@@ -79,6 +79,39 @@ Cloudflare's cap is also the only thing bounding *concurrency*, not just spend:
 there is no separate queue in front of the pool, so `Sandbox.max_instances` is
 exactly the number of visitors who can hold a live preview at once.
 
+### Measuring pool pressure — [ADR-0040](adr/0040-hourly-buckets-and-pool-pressure.md)
+
+The 5 → 10 decision above was made without the number that should have decided
+it. Daily totals cannot yield peak concurrency (13,237 sessions over 30 days
+averages 0.35 concurrent, and the pool was full anyway), and `at_capacity`
+refusals were never counted server-side at all — only budget denials reach
+`usage_daily`. The evidence was a Sentry issue and an argument.
+
+ADR-0040 instruments three signals, deliberately kept separate because none of
+them substitutes for another:
+
+| signal | how | what it answers |
+|---|---|---|
+| `at_capacity` refusals | a counter beside the 503 | "is the pool too small?" — the decision-relevant one |
+| awake-seconds per hour | bucket the existing meter flush | "when is it busy?" |
+| peak concurrency | a `*/15` cron sampling `awakeCount` | "how close to the cap did we get?" |
+
+Summed awake-seconds cannot distinguish ten sequential sessions from ten
+simultaneous ones, and only the second exhausts the pool — which is why
+concurrency is sampled rather than derived. The sampler in turn can miss a spike
+shorter than its interval, which is why the refusal counter is not optional.
+
+**Retention differs from the daily counters.** Hourly rows are 24x daily ones,
+so they are pruned on their own shorter window rather than riding
+`ANALYTICS_RETENTION_DAYS` (180) — peak-hour analysis is a recent-weeks
+question. `cost_ledger` stays day-keyed regardless: its contract is that a
+`billing` row outranks the `estimate` row for the same `(day, sku)`, and
+Cloudflare reconciles per day, so an hour-keyed ledger could never be reconciled.
+
+**None of this can be backfilled.** The counters we have are daily and the raw
+events were never stored, so hour data starts at deploy — the panel labels the
+collection start date so a partial first day is not misread as a quiet one.
+
 Ranked by what is actually unbounded:
 
 1. **Container egress** — every dev-server asset and HMR frame of a Tier-2
@@ -251,6 +284,10 @@ One authenticated call to `GET /api/admin/usage?days=N` renders:
   chat feature's usage, acceptance rate and spend (see `example-chat.md`);
 - daily spend and daily activity (sessions started, builds, share/embed views,
   sessions refused by the guardrail);
+- **peak time** — hour-of-day breakdowns, both collapsed across the window
+  ("the busiest hour is 14:00 UTC") and as an hour-by-hour timeline;
+- **pool pressure** — `at_capacity` refusals and sampled peak concurrency
+  against `Sandbox.max_instances` (see below);
 - live sessions with their awake time and running cost;
 - demo inventory by framework and the most-viewed shares.
 
@@ -272,6 +309,7 @@ day/dimension/value):
 | `country` | two-letter code from the Cloudflare edge |
 | `device` / `browser` / `os` | three to six coarse buckets each |
 | `language` | primary subtag (`en`, `pl`, …) |
+| `hour` | hour of day the view landed, `00`–`23` UTC (ADR-0040) |
 | `bot` | requests identified as bots, excluded from every other bucket |
 
 **Never stored:** cookies or any client-side id, IP addresses, user-agent
