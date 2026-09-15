@@ -6,7 +6,7 @@
 // 328 ms apart, threw "Maximum number of running container instances exceeded"
 // out of `sandbox.destroy()`, through the outer catch in `index.ts`, into a 500
 // and a Sentry event. The causal story is the inverse of what it looks like: an
-// instance that cannot be allocated is not occupying one of the five slots, so a
+// instance that cannot be allocated is not occupying one of the ten slots, so a
 // failed teardown is a *symptom* of a full pool and never a contributor to one.
 // Nothing leaked. And nobody read the 500 either — `deleteSession()` in
 // packages/runtime/src/container.ts is `void fetch(…, { keepalive: true })

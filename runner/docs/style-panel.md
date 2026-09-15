@@ -280,7 +280,7 @@ the generated module against Handsontable's types; the `angular` case here is wh
 proves the compiled result also renders.
 
 Run it with **`--workers=1`** whenever `astro` or `angular` is selected. Those
-are the Tier-2 cases; the pool holds five container slots and sessions are not
+are the Tier-2 cases; the pool holds ten container slots and sessions are not
 torn down between tests, so a parallel run leaves the second preview stuck on
 `booting` — a failure that looks like the product and is not.
 
