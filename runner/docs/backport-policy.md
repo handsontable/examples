@@ -166,7 +166,7 @@ silently overwritten — it only misleads readers.
   patch releases re-pin automatically.
 - The e2e starter matrix
   (`gh workflow run e2e-starter-matrix.yml`, single job, `--workers=2`,
-  never parallelized — prod caps live previews at 5 concurrent globally)
+  never parallelized — prod caps live previews at 10 concurrent globally)
   boots every starter × major against prod and is the drift alarm for
   content that regenerated but no longer works.
 
