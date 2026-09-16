@@ -2,7 +2,7 @@
   "bucket": "18.1",
   "docsBranch": "prod-docs/18.1",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "18.1.0",
+  "hotVersion": "18.1.1",
   "count": 1477,
   "examples": [
     {
