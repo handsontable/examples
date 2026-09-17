@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-e906ba9-20260917",
-  "count": 1521,
+  "hotVersion": "0.0.0-next-7ad5dca-20260917",
+  "count": 1526,
   "examples": [
     {
       "bucket": "next",
@@ -9165,6 +9165,22 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/columns/column-filter/angular/example15.ts",
+      "file": "guides__columns__column-filter__angular__example15.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "example15",
+      "exampleTitle": "Enable filtering for individual columns (2)",
+      "docPermalink": "/column-filter",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/columns/column-filter/angular/example1.ts",
       "file": "guides__columns__column-filter__angular__example1.ts.json",
       "breadcrumb": [
@@ -9206,7 +9222,7 @@
       "guide": "guides/columns/column-filter/column-filter.md",
       "guideTitle": "Column filter",
       "exampleId": "example3",
-      "exampleTitle": "Enable filtering for individual columns (2)",
+      "exampleTitle": "Enable filtering for individual columns (4)",
       "docPermalink": "/column-filter",
       "framework": "angular",
       "displayName": "Angular"
@@ -9437,6 +9453,70 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/columns/column-filter/javascript/exampleDisableFilterForColumn.js",
+      "file": "guides__columns__column-filter__javascript__exampleDisableFilterForColumn.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleDisableFilterForColumn",
+      "exampleTitle": "Enable filtering for individual columns",
+      "docPermalink": "/column-filter",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/react/exampleDisableFilterForColumn.tsx",
+      "file": "guides__columns__column-filter__react__exampleDisableFilterForColumn.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleDisableFilterForColumn",
+      "exampleTitle": "Enable filtering for individual columns",
+      "docPermalink": "/column-filter",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/javascript/exampleDisableFilterForColumn.ts",
+      "file": "guides__columns__column-filter__javascript__exampleDisableFilterForColumn.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleDisableFilterForColumn",
+      "exampleTitle": "Enable filtering for individual columns",
+      "docPermalink": "/column-filter",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/vue/exampleDisableFilterForColumn.vue",
+      "file": "guides__columns__column-filter__vue__exampleDisableFilterForColumn.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleDisableFilterForColumn",
+      "exampleTitle": "Enable filtering for individual columns",
+      "docPermalink": "/column-filter",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/columns/column-filter/javascript/exampleEnableFilterInColumns.js",
       "file": "guides__columns__column-filter__javascript__exampleEnableFilterInColumns.js.json",
       "breadcrumb": [
@@ -9446,7 +9526,7 @@
       "guide": "guides/columns/column-filter/column-filter.md",
       "guideTitle": "Column filter",
       "exampleId": "exampleEnableFilterInColumns",
-      "exampleTitle": "Enable filtering for individual columns",
+      "exampleTitle": "Enable filtering for individual columns (3)",
       "docPermalink": "/column-filter",
       "framework": "javascript",
       "displayName": "JavaScript"
@@ -9462,7 +9542,7 @@
       "guide": "guides/columns/column-filter/column-filter.md",
       "guideTitle": "Column filter",
       "exampleId": "exampleEnableFilterInColumns",
-      "exampleTitle": "Enable filtering for individual columns",
+      "exampleTitle": "Enable filtering for individual columns (3)",
       "docPermalink": "/column-filter",
       "framework": "react",
       "displayName": "React (TS)"
@@ -9478,7 +9558,7 @@
       "guide": "guides/columns/column-filter/column-filter.md",
       "guideTitle": "Column filter",
       "exampleId": "exampleEnableFilterInColumns",
-      "exampleTitle": "Enable filtering for individual columns",
+      "exampleTitle": "Enable filtering for individual columns (3)",
       "docPermalink": "/column-filter",
       "framework": "typescript",
       "displayName": "TypeScript"
@@ -9494,7 +9574,7 @@
       "guide": "guides/columns/column-filter/column-filter.md",
       "guideTitle": "Column filter",
       "exampleId": "exampleEnableFilterInColumns",
-      "exampleTitle": "Enable filtering for individual columns",
+      "exampleTitle": "Enable filtering for individual columns (3)",
       "docPermalink": "/column-filter",
       "framework": "vue",
       "displayName": "Vue 3"
