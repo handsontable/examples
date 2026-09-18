@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-7ad5dca-20260917",
-  "count": 1526,
+  "hotVersion": "0.0.0-next-9bb5158-20260918",
+  "count": 1531,
   "examples": [
     {
       "bucket": "next",
@@ -1629,6 +1629,86 @@
       "exampleId": "example2",
       "exampleTitle": "Use a third-party icon set",
       "docPermalink": "/use-icons-in-cells",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/import-from-excel/angular/example1.ts",
+      "file": "guides__accessories-and-menus__import-from-excel__angular__example1.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Import from Excel"
+      ],
+      "guide": "guides/accessories-and-menus/import-from-excel/import-from-excel.md",
+      "guideTitle": "Import from Excel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/import-from-excel",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/import-from-excel/javascript/example1.js",
+      "file": "guides__accessories-and-menus__import-from-excel__javascript__example1.js.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Import from Excel"
+      ],
+      "guide": "guides/accessories-and-menus/import-from-excel/import-from-excel.md",
+      "guideTitle": "Import from Excel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/import-from-excel",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/import-from-excel/react/example1.tsx",
+      "file": "guides__accessories-and-menus__import-from-excel__react__example1.tsx.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Import from Excel"
+      ],
+      "guide": "guides/accessories-and-menus/import-from-excel/import-from-excel.md",
+      "guideTitle": "Import from Excel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/import-from-excel",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/import-from-excel/javascript/example1.ts",
+      "file": "guides__accessories-and-menus__import-from-excel__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Import from Excel"
+      ],
+      "guide": "guides/accessories-and-menus/import-from-excel/import-from-excel.md",
+      "guideTitle": "Import from Excel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/import-from-excel",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/accessories-and-menus/import-from-excel/vue/example1.vue",
+      "file": "guides__accessories-and-menus__import-from-excel__vue__example1.vue.json",
+      "breadcrumb": [
+        "Accessories And Menus",
+        "Import from Excel"
+      ],
+      "guide": "guides/accessories-and-menus/import-from-excel/import-from-excel.md",
+      "guideTitle": "Import from Excel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/import-from-excel",
       "framework": "vue",
       "displayName": "Vue 3"
     },
