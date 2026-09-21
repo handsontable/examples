@@ -33,11 +33,11 @@ importers:
         specifier: 22.0.6
         version: 22.0.6(@angular/common@22.0.6(@angular/core@22.0.6(@angular/compiler@22.0.6)(rxjs@7.8.2)(zone.js@0.16.2))(rxjs@7.8.2))(@angular/core@22.0.6(@angular/compiler@22.0.6)(rxjs@7.8.2)(zone.js@0.16.2))(@angular/platform-browser@22.0.6(@angular/animations@22.0.6(@angular/core@22.0.6(@angular/compiler@22.0.6)(rxjs@7.8.2)(zone.js@0.16.2)))(@angular/common@22.0.6(@angular/core@22.0.6(@angular/compiler@22.0.6)(rxjs@7.8.2)(zone.js@0.16.2))(rxjs@7.8.2))(@angular/core@22.0.6(@angular/compiler@22.0.6)(rxjs@7.8.2)(zone.js@0.16.2)))(rxjs@7.8.2)
       '@handsontable/angular-wrapper':
-        specifier: 18.1.0
-        version: 18.1.0(@angular/core@22.0.6(@angular/compiler@22.0.6)(rxjs@7.8.2)(zone.js@0.16.2))(handsontable@18.1.0)(rxjs@7.8.2)
+        specifier: 18.1.1
+        version: 18.1.1(@angular/core@22.0.6(@angular/compiler@22.0.6)(rxjs@7.8.2)(zone.js@0.16.2))(handsontable@18.1.1)(rxjs@7.8.2)
       handsontable:
-        specifier: 18.1.0
-        version: 18.1.0
+        specifier: 18.1.1
+        version: 18.1.1
       rxjs:
         specifier: ~7.8.2
         version: 7.8.2
@@ -1171,8 +1171,8 @@ packages:
     resolution: {integrity: sha512-GmzA9ckNokPypTg10pgpeHNQe7ph+iIKKmhKu3Ob9ANkswreCx7R3cKmY781K8QK3AqVL3xVh9A42JvIAbkkSA==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
-  '@handsontable/angular-wrapper@18.1.0':
-    resolution: {integrity: sha512-TgH5BZivC5eXBH7taMlQ0CEgtPIpEfGmCuc2RDWmgowmxyXKq66oeeV2bdlOXTGgRMhtWs88zngA2IpKv76RPA==}
+  '@handsontable/angular-wrapper@18.1.1':
+    resolution: {integrity: sha512-paiINuWOevybN6RFUrtSOgRv5SaFlMd5dRbBOzeLyJJzqhLW7Jg+QSy6+51FAL6FKHZPfWHYoP0F2YgNPEXYbg==}
     peerDependencies:
       '@angular/core': '>=16.0.0 <23.0.0'
       handsontable: ^18.0.0
@@ -3032,8 +3032,8 @@ packages:
   handle-thing@2.0.1:
     resolution: {integrity: sha512-9Qn4yBxelxoh2Ow62nP+Ka/kMnOXRi8BXnRaUwezLNhqelnN49xKz4F/dPP8OYLxLxq6JDtZb2i9XznUQbNPTg==}
 
-  handsontable@18.1.0:
-    resolution: {integrity: sha512-23S/Jny67NRevaZgTXSAonhFW28du3J6DJm/TDN35Gj5hpztUxlRMEG0SugEEf0lQxdDhLRmz81Ikkt7xvuNRA==}
+  handsontable@18.1.1:
+    resolution: {integrity: sha512-8vz/jp96m0aJQPRepOBoImsC/bLe9mE/O4nOB6mll9DCjN5nqXHX9LV4zu/XDpD89TKJwtA+TNhVUkFQxW+q7w==}
 
   has-flag@4.0.0:
     resolution: {integrity: sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ==}
@@ -5822,10 +5822,10 @@ snapshots:
 
   '@gar/promise-retry@1.0.3': {}
 
-  '@handsontable/angular-wrapper@18.1.0(@angular/core@22.0.6(@angular/compiler@22.0.6)(rxjs@7.8.2)(zone.js@0.16.2))(handsontable@18.1.0)(rxjs@7.8.2)':
+  '@handsontable/angular-wrapper@18.1.1(@angular/core@22.0.6(@angular/compiler@22.0.6)(rxjs@7.8.2)(zone.js@0.16.2))(handsontable@18.1.1)(rxjs@7.8.2)':
     dependencies:
       '@angular/core': 22.0.6(@angular/compiler@22.0.6)(rxjs@7.8.2)(zone.js@0.16.2)
-      handsontable: 18.1.0
+      handsontable: 18.1.1
       rxjs: 7.8.2
     optionalDependencies:
       tslib: 2.8.1
@@ -7672,7 +7672,7 @@ snapshots:
 
   handle-thing@2.0.1: {}
 
-  handsontable@18.1.0: {}
+  handsontable@18.1.1: {}
 
   has-flag@4.0.0: {}
 
