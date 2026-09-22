@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-cd3eff1-20260921",
-  "count": 1531,
+  "hotVersion": "0.0.0-next-40c2738-20260921",
+  "count": 1536,
   "examples": [
     {
       "bucket": "next",
@@ -9261,6 +9261,22 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/columns/column-filter/angular/example16.ts",
+      "file": "guides__columns__column-filter__angular__example16.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "example16",
+      "exampleTitle": "Change the order of values in the filter list (2)",
+      "docPermalink": "/column-filter",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/columns/column-filter/angular/example1.ts",
       "file": "guides__columns__column-filter__angular__example1.ts.json",
       "breadcrumb": [
@@ -9975,6 +9991,70 @@
       "guideTitle": "Column filter",
       "exampleId": "exampleFilterThroughAPI1",
       "exampleTitle": "Filter data programmatically",
+      "docPermalink": "/column-filter",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/javascript/exampleFilterValueOrder.js",
+      "file": "guides__columns__column-filter__javascript__exampleFilterValueOrder.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleFilterValueOrder",
+      "exampleTitle": "Change the order of values in the filter list",
+      "docPermalink": "/column-filter",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/react/exampleFilterValueOrder.tsx",
+      "file": "guides__columns__column-filter__react__exampleFilterValueOrder.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleFilterValueOrder",
+      "exampleTitle": "Change the order of values in the filter list",
+      "docPermalink": "/column-filter",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/javascript/exampleFilterValueOrder.ts",
+      "file": "guides__columns__column-filter__javascript__exampleFilterValueOrder.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleFilterValueOrder",
+      "exampleTitle": "Change the order of values in the filter list",
+      "docPermalink": "/column-filter",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/vue/exampleFilterValueOrder.vue",
+      "file": "guides__columns__column-filter__vue__exampleFilterValueOrder.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleFilterValueOrder",
+      "exampleTitle": "Change the order of values in the filter list",
       "docPermalink": "/column-filter",
       "framework": "vue",
       "displayName": "Vue 3"
