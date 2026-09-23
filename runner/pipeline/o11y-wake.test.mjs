@@ -15,6 +15,8 @@ import { hooks, defaultHooks } from "./fixtures/cloudflare-containers-stub.mjs";
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
 const { GrafanaBox } = await import("../workers/o11y/src/box.ts");
+const { handleGrafana } = await import("../workers/o11y/src/grafana/proxy.ts");
+const { wakingPageHtml } = await import("../workers/o11y/src/grafana/waking-page.ts");
 
 // ---- fakes ------------------------------------------------------------
 
@@ -186,7 +188,10 @@ test("drainStep pushes drained records and marks the key provisional on 2xx", as
   const gz = await (async () => {
     const record = {
       resource: { attributes: [] },
-      scopeLogs: [{ logRecords: [{ timeUnixNano: "1000000000", body: { stringValue: "hello" } }] }],
+      // F1's drain-time age filter drops anything older than ~7 days — a
+      // recent timestamp here so this test still exercises a real push,
+      // not a silently-filtered-to-nothing one.
+      scopeLogs: [{ logRecords: [{ timeUnixNano: String(BigInt(Date.now()) * 1_000_000n), body: { stringValue: "hello" } }] }],
     };
     const ndjson = JSON.stringify(record) + "\n";
     const stream = new Blob([ndjson]).stream().pipeThrough(new CompressionStream("gzip"));
@@ -208,7 +213,13 @@ test("drainStep pushes drained records and marks the key provisional on 2xx", as
 
 test("drainStep rejects a key on a 400 from Loki, with the message, and does not mark it provisional", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
-  const record = { resource: { attributes: [] }, scopeLogs: [{ logRecords: [{ timeUnixNano: "1", body: { stringValue: "x" } }] }] };
+  // An IN-WINDOW record — F1's own age filter must not remove it before the
+  // (mocked) 400 has a chance to fire; this test is about a genuine
+  // Loki-side rejection, not F1's 7-day age drop.
+  const record = {
+    resource: { attributes: [] },
+    scopeLogs: [{ logRecords: [{ timeUnixNano: String(BigInt(Date.now()) * 1_000_000n), body: { stringValue: "x" } }] }],
+  };
   const ndjson = JSON.stringify(record) + "\n";
   const stream = new Blob([ndjson]).stream().pipeThrough(new CompressionStream("gzip"));
   const gz = new Uint8Array(await new Response(stream).arrayBuffer());
@@ -297,6 +308,47 @@ test("a drain wake with an active Grafana user does not call stop()", async () =
   await box.drainStep({ wakeId: wake.wakeId });
 
   assert.equal(stopped, false, "an active Grafana user must not be SIGTERMed by a drain finishing");
+});
+
+// F2: T03-D2's other finding — a visit wake with an empty backlog SIGTERMs
+// itself ~20s after boot, because `handleGrafana` (grafana/proxy.ts) used
+// to record no activity at all for a request that only ever saw the
+// waking page (the box was still booting). Driven through the REAL
+// `handleGrafana` handler (not `box.noteVisitorActivity()` called
+// directly) — calling the box method directly would pass even with the
+// proxy-level ordering bug this fix addresses; only exercising the actual
+// route handler proves it.
+test("F2: a waking-page request (box not yet ready) still counts as visitor activity, so an empty-backlog visit wake stays up past the first drain-finish", async () => {
+  const { box, env, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [] }, env: { O11Y_ENV: "local", DEV_ADMIN: "dev@handsontable.com" } });
+  // `getGrafanaBoxStub`/`inboxWriterStub` (box.ts) both resolve their
+  // Durable Object namespace WITHOUT `.jurisdiction()` under O11Y_ENV=local
+  // (see box.ts's own comment on why: `.jurisdiction()` throws under a
+  // real local DO simulation) — reshape both env bindings to that flat
+  // `getByName` surface, and point GRAFANA_BOX at THIS test's real box
+  // instance so `handleGrafana` drives the real
+  // wake/isReady/noteVisitorActivity/stop machinery, not a second fake.
+  env.GRAFANA_BOX = { getByName: () => box };
+  env.INBOX_WRITER = { getByName: () => inboxWriterStub };
+  const req = new Request("https://o11y.example/grafana/d/abc");
+
+  // The box is not yet ready (no container-fetch router installed) — this
+  // is the browser's own meta-refresh poll landing while Loki/Grafana are
+  // still booting.
+  const wakingRes = await handleGrafana(req, env, {});
+  assert.equal(await wakingRes.text(), wakingPageHtml());
+  assert.notEqual(await box.lastGrafanaActivityMs(), null, "the waking-page request must have recorded visitor activity");
+
+  // The box becomes ready; drainStep runs its one (empty-backlog) batch and
+  // reaches the post-drain stop decision.
+  installContainerFetchRouter();
+  let stopped = false;
+  hooks.stop = async () => {
+    stopped = true;
+  };
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(stopped, false, "a visit wake whose only activity was a waking-page poll must not self-stop on the first drain-finish");
 });
 
 // ---- hardCapStop ------------------------------------------------------

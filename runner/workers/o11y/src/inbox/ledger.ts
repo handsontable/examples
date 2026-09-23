@@ -82,6 +82,7 @@ export async function resolveOverWakes(storage: StorageLike, deps: LedgerDeps): 
 
   for (const [storageKey, wake] of wakes) {
     const wakeId = wakeIdOf(storageKey);
+    const hasProvisional = await hasUnresolvedProvisionalKeys(storage, wakeId);
 
     if (!wake.over) {
       const stillRunning = await deps.isBoxRunning();
@@ -93,14 +94,24 @@ export async function resolveOverWakes(storage: StorageLike, deps: LedgerDeps): 
       // than a half-applied transaction leaving ambiguous state).
       await storage.put({ [storageKey]: { ...wake, over: true } satisfies WakeState });
       newlyOver.push(wakeId);
-    } else if (!(await hasUnresolvedProvisionalKeys(storage, wakeId))) {
+    } else if (!hasProvisional) {
       // Already over and nothing left to resolve — the common case for
       // every wake this function has already fully processed in a prior
       // call. Skip the (otherwise harmless but pointless) marker re-check.
       continue;
     }
 
-    const clean = await deps.markerExists(wakeId);
+    // F3: a wake that never pushed anything durable — no key was EVER
+    // marked `provisional` under this wakeId — is trivially clean. Loki
+    // only writes `state/wakes/<wakeId>/clean` after confirming a NEW
+    // index upload (shutdown.sh), and a Loki process that ingested zero
+    // lines this wake never produces one — requiring the marker here would
+    // count every empty backlog/visit wake as "unclean" and inflate exit
+    // criterion 12's count for a wake that lost nothing (there was nothing
+    // provisional to lose). A wake that DID push something (`hasProvisional`)
+    // still needs the real marker — T01's C1 guarantee (a new
+    // uploader-named index object) is unchanged for that case.
+    const clean = hasProvisional ? await deps.markerExists(wakeId) : true;
     const affected = await resolveProvisionalKeysForWake(storage, wakeId, clean);
     resolved.push({ wakeId, reason: wake.reason, clean, keysAffected: affected });
   }

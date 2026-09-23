@@ -17,11 +17,23 @@ async function gzip(text) {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-function record(bodyText, timeUnixNano = "1000000000") {
+/** Recent by default (F1's drain-time age filter drops anything older than
+ *  ~7 days — see `record(..., "old")` below for the deliberately-stale
+ *  case) so every pre-existing push/retry/reject test here still exercises
+ *  a real push, not a silently-empty one. */
+function record(bodyText, timeUnixNano = String(BigInt(Date.now()) * 1_000_000n)) {
   return {
     resource: { attributes: [{ key: "service.name", value: { stringValue: "demos-api" } }] },
     scopeLogs: [{ logRecords: [{ timeUnixNano, body: { stringValue: bodyText } }] }],
   };
+}
+
+/** 8 days behind "now" — past Loki's `reject_old_samples_max_age: 7d`
+ *  (containers/o11y/loki/loki-config*.yaml) and past F1's own (stricter)
+ *  drain-time cutoff. */
+function oldRecord(bodyText) {
+  const eightDaysAgoNs = BigInt(Date.now() - 8 * 24 * 60 * 60 * 1000) * 1_000_000n;
+  return record(bodyText, String(eightDaysAgoNs));
 }
 
 async function objectBytes(records) {
@@ -88,6 +100,11 @@ test("drainKey: each push is one OTLP/HTTP JSON ExportLogsServiceRequest holding
 });
 
 test("drainKey: a 400 rejects the key with Loki's message, no retry", async () => {
+  // An IN-WINDOW record (F1's own age filter must not remove it) whose 400
+  // is forced by the mock — `too_far_behind` is Loki's 60-minute
+  // out-of-order window (T03-D1), unrelated to F1's 7-day age filter, and
+  // this test's whole point is that a genuine Loki-side rejection still
+  // rejects the key.
   const key = "inbox/browser/2026-01-01/00/000000000000.ndjson.gz";
   const bytes = await objectBytes([record("boom")]);
   let pushCount = 0;
@@ -153,6 +170,79 @@ test("drainKey: a missing R2 object is rejected, not retried forever", async () 
   });
   assert.equal(outcome.outcome, "rejected");
   assert.equal(outcome.reason, "object_missing");
+});
+
+// ---- F1: drop-old-before-push --------------------------------------------
+//
+// T03-D2's other finding: one record older than Loki's own
+// `reject_old_samples_max_age: 7d` gets a 400 for the WHOLE push, and
+// `drainKey` maps every 400 to `rejected` — losing every good record in
+// that key, permanently (a rejected key is never retried). These prove the
+// fix: the old record never reaches Loki at all, the good sibling still
+// gets pushed and the key still goes `provisional`, and the drop is
+// counted on the outcome, never silent.
+
+test("F1: a record older than the 7-day reject window is dropped before push and counted, not sent to Loki", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const bytes = await objectBytes([oldRecord("ancient"), record("fresh")]);
+  const pushedBodies = [];
+  const deps = {
+    fetchObject: async () => bytes,
+    pushToLoki: async (_tenant, gz) => {
+      const stream = new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"));
+      pushedBodies.push(JSON.parse(await new Response(stream).text()));
+      return { status: 204 };
+    },
+    symbolicate: noopSymbolicate,
+  };
+
+  const outcome = await drainKey(key, new Set(), deps);
+
+  assert.equal(outcome.outcome, "provisional", "the good sibling record must still make it — not the whole key rejected");
+  assert.equal(outcome.droppedOld, 1, "the old record must be counted as dropped, never silent");
+  assert.equal(pushedBodies.length, 1);
+  assert.equal(pushedBodies[0].resourceLogs.length, 1, "only the fresh record was actually pushed to Loki");
+  assert.match(pushedBodies[0].resourceLogs[0].scopeLogs[0].logRecords[0].body.stringValue, /fresh/);
+});
+
+test("F1: a key whose every record is too old is provisional with nothing pushed (no whole-key 400, nothing lost silently)", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const bytes = await objectBytes([oldRecord("a"), oldRecord("b")]);
+  let pushCount = 0;
+  const deps = {
+    fetchObject: async () => bytes,
+    pushToLoki: async () => {
+      pushCount++;
+      return { status: 400, message: "too_far_behind" }; // must never even be called
+    },
+    symbolicate: noopSymbolicate,
+  };
+
+  const outcome = await drainKey(key, new Set(), deps);
+
+  assert.equal(outcome.outcome, "provisional");
+  assert.equal(outcome.droppedOld, 2);
+  assert.equal(pushCount, 0, "nothing left to push after the filter — Loki must never even see this key");
+});
+
+test("F1: a zero/absent timeUnixNano is never treated as an ancient (1970) timestamp and dropped", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const zeroTimestamp = record("zero", "0");
+  const bytes = await objectBytes([zeroTimestamp]);
+  let pushed = false;
+  const deps = {
+    fetchObject: async () => bytes,
+    pushToLoki: async () => {
+      pushed = true;
+      return { status: 204 };
+    },
+    symbolicate: noopSymbolicate,
+  };
+
+  const outcome = await drainKey(key, new Set(), deps);
+
+  assert.equal(outcome.droppedOld, 0);
+  assert.ok(pushed, "a record with no real timestamp must still be pushed (Loki falls back to observed time)");
 });
 
 test("drainKey: a record already in `seenHashes` is not pushed again (within-call dedupe)", async () => {

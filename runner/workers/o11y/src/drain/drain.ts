@@ -16,6 +16,73 @@ import {
 } from "@handsontable/demo-runtime/telemetry";
 import { sha256Hex } from "../gates/util.js";
 
+// ---- F1: drop records older than Loki's own reject window -----------------
+//
+// `reject_old_samples_max_age: 7d` (containers/o11y/loki/loki-config*.yaml)
+// 400s the WHOLE push if even one record in it is older than 7 days — and
+// `drainKey` (below) maps any 400 to the whole key `rejected`, which is
+// correct for a genuinely malformed push but wrong here: a backlog that
+// went stale (e.g. `drainsPaused` for over a week) can carry a handful of
+// too-old records mixed with otherwise-good ones, and the 400 would lose
+// the good records too, permanently (a `rejected` key is never retried).
+// Dropping the too-old records BEFORE the push — never silently, always
+// counted — keeps the good records flowing and turns the loss the ADR
+// already accepts (§G) into a measured number instead of an opaque
+// `rejected` key.
+const LOKI_REJECT_OLD_SAMPLES_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/** Filter stricter than Loki's own cutoff by this much, so a record that
+ *  passes our filter at drain time does not go on to age past Loki's own
+ *  cutoff by the time the push actually reaches it (retries, batching, a
+ *  slow wake) and 400 the batch anyway. */
+const DRAIN_OLD_AGE_MARGIN_MS = 15 * 60 * 1000;
+const MAX_RECORD_AGE_MS = LOKI_REJECT_OLD_SAMPLES_MAX_AGE_MS - DRAIN_OLD_AGE_MARGIN_MS;
+
+/** `timeUnixNano` is OTLP's own "unset" convention for "no client timestamp"
+ *  (§8/contract: Loki then falls back to its own observed-at time) — `"0"`,
+ *  empty, or absent must never be read as a real 1970 timestamp and dropped
+ *  as ancient. Only a genuinely parseable, positive, too-old value counts. */
+function isTooOld(timeUnixNano: string | undefined, nowMs: number): boolean {
+  if (!timeUnixNano) return false;
+  let ns: bigint;
+  try {
+    ns = BigInt(timeUnixNano);
+  } catch {
+    return false; // unparseable — not this filter's job to reject it
+  }
+  if (ns <= 0n) return false;
+  const ms = Number(ns / 1_000_000n);
+  return nowMs - ms > MAX_RECORD_AGE_MS;
+}
+
+/** Drops individual `logRecords` entries older than {@link MAX_RECORD_AGE_MS},
+ *  pruning any `scopeLogs`/`resourceLogs` container left empty — never the
+ *  whole record for one old line among several (defensive: this codebase's
+ *  own inbox always packs one record per `ResourceLogs`, §8, but the OTLP
+ *  shape itself allows more). Counted via the returned `droppedOld`, never
+ *  silent (task F1: "that loss must be counted, never silent"). */
+export function dropOldRecords(
+  records: readonly OtlpResourceLogs[],
+  nowMs: number,
+): { kept: OtlpResourceLogs[]; droppedOld: number } {
+  let droppedOld = 0;
+  const kept: OtlpResourceLogs[] = [];
+  for (const r of records) {
+    const scopeLogs = [];
+    for (const scope of r.scopeLogs) {
+      const logRecords = scope.logRecords.filter((lr) => {
+        if (isTooOld(lr.timeUnixNano, nowMs)) {
+          droppedOld++;
+          return false;
+        }
+        return true;
+      });
+      if (logRecords.length > 0) scopeLogs.push({ ...scope, logRecords });
+    }
+    if (scopeLogs.length > 0) kept.push({ ...r, scopeLogs });
+  }
+  return { kept, droppedOld };
+}
+
 export interface LokiPushResult {
   status: number;
   message?: string;
@@ -34,6 +101,10 @@ export interface DrainDeps {
   /** ADR §C.3 — exception records only; a no-op passthrough for everything
    *  else (`symbolicate.ts#symbolicateResourceLogs` already does this). */
   symbolicate(records: readonly OtlpResourceLogs[]): Promise<OtlpResourceLogs[]>;
+  /** Injectable clock for {@link dropOldRecords} (F1) — defaults to
+   *  `Date.now` when omitted, so every existing caller/test is unaffected
+   *  unless it deliberately wants a fixed "now". */
+  now?(): number;
 }
 
 export interface KeyOutcome {
@@ -42,6 +113,11 @@ export interface KeyOutcome {
   outcome: "provisional" | "rejected" | "error";
   reason?: string;
   bytesPushed: number;
+  /** F1: records dropped by {@link dropOldRecords} before this key's push —
+   *  0 when nothing was too old. Never folds into `rejected`/`error`: a
+   *  key with only-too-old records still ends `provisional` (nothing left
+   *  to push is not a failure, matching the existing all-duplicates case). */
+  droppedOld: number;
 }
 
 export interface DrainBatchResult {
@@ -135,18 +211,25 @@ async function pushChunkWithRetry(
  *  provisional, nothing left to push is not a failure. */
 export async function drainKey(key: string, seenHashes: Set<string>, deps: DrainDeps): Promise<KeyOutcome> {
   const parsed = parseInboxKey(key);
-  if (!parsed) return { key, tenant: "worker", outcome: "rejected", reason: "unparseable_key", bytesPushed: 0 };
+  if (!parsed) return { key, tenant: "worker", outcome: "rejected", reason: "unparseable_key", bytesPushed: 0, droppedOld: 0 };
   const { tenant } = parsed;
 
   const raw = await deps.fetchObject(key);
-  if (!raw) return { key, tenant, outcome: "rejected", reason: "object_missing", bytesPushed: 0 };
+  if (!raw) return { key, tenant, outcome: "rejected", reason: "object_missing", bytesPushed: 0, droppedOld: 0 };
 
   let records: OtlpResourceLogs[];
   try {
     records = decodeNdjson(await gunzip(raw));
   } catch {
-    return { key, tenant, outcome: "rejected", reason: "undecodable_object", bytesPushed: 0 };
+    return { key, tenant, outcome: "rejected", reason: "undecodable_object", bytesPushed: 0, droppedOld: 0 };
   }
+
+  // F1: drop records older than Loki's own `reject_old_samples_max_age`
+  // BEFORE symbolication/push — a stale record must never turn an
+  // otherwise-good key into a whole-key `rejected` 400 (see this file's
+  // header comment on `dropOldRecords`).
+  const { kept, droppedOld } = dropOldRecords(records, (deps.now ?? Date.now)());
+  records = kept;
 
   records = await deps.symbolicate(records);
 
@@ -163,14 +246,14 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
     const { result, bytesPushed: chunkBytes } = await pushChunkWithRetry(tenant, chunk, deps);
     bytesPushed += chunkBytes;
     if (result.status === 400) {
-      return { key, tenant, outcome: "rejected", reason: result.message ?? "loki_400", bytesPushed };
+      return { key, tenant, outcome: "rejected", reason: result.message ?? "loki_400", bytesPushed, droppedOld };
     }
     if (result.status < 200 || result.status >= 300) {
-      return { key, tenant, outcome: "error", reason: result.message ?? `loki_${result.status}`, bytesPushed };
+      return { key, tenant, outcome: "error", reason: result.message ?? `loki_${result.status}`, bytesPushed, droppedOld };
     }
   }
 
-  return { key, tenant, outcome: "provisional", bytesPushed };
+  return { key, tenant, outcome: "provisional", bytesPushed, droppedOld };
 }
 
 /** Drains `keys` in order, stopping immediately on the first `error`

@@ -88,6 +88,43 @@ test("resolveOverWakes: a newer wake already marked `over: true` by recordWake s
   assert.equal(await storage.get(inboxKeyStorageKey(key)), "committed");
 });
 
+// ---- F3: a zero-ingest wake is a clean stop --------------------------------
+//
+// T03-D2's other finding: a wake that drains nothing (an empty backlog, or a
+// visit wake nobody ever pushed data into) never produces a Loki index
+// upload, so shutdown.sh never writes the marker — every such wake was
+// counted `unclean`, inflating exit criterion 12's count for a wake that
+// lost nothing (nothing was ever provisional). This must not weaken T01's
+// C1 guarantee: a wake that DID push data still needs the real marker.
+
+test("F3: a wake with no provisional keys at all resolves clean, with no marker required", async () => {
+  const storage = memoryStorage();
+  // w1 is over, and never had ANY key marked provisional under it — the
+  // exact T03-D2 shape (Loki ingested nothing this wake, so no marker was
+  // ever going to exist).
+  await storage.put({ [wakeStorageKey("w1")]: { startedAt: 1, reason: "backlog", over: false } });
+
+  const result = await resolveOverWakes(storage, deps({ running: false, markers: new Set() /* no marker */ }));
+
+  assert.equal(result.resolved.length, 1);
+  assert.equal(result.resolved[0].clean, true, "zero provisional keys must resolve clean even without a marker");
+  assert.equal(result.resolved[0].keysAffected, 0);
+});
+
+test("F3: a wake that DID push data still requires the real marker — no weakening of T01's C1 guarantee", async () => {
+  const storage = memoryStorage();
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  await storage.put({
+    [wakeStorageKey("w1")]: { startedAt: 1, reason: "backlog", over: false },
+    [inboxKeyStorageKey(key)]: "provisional:w1",
+  });
+
+  const result = await resolveOverWakes(storage, deps({ running: false, markers: new Set() /* no marker */ }));
+
+  assert.equal(result.resolved[0].clean, false, "a wake with provisional keys and no marker must still resolve unclean");
+  assert.equal(await storage.get(inboxKeyStorageKey(key)), "written", "the un-marked data must be re-opened, not silently dropped");
+});
+
 // ---- backlog ----------------------------------------------------------
 
 test("computeBacklog counts only `written` keys and reports the oldest R2 `uploaded` time", async () => {
