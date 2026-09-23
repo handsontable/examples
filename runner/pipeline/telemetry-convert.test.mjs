@@ -61,6 +61,29 @@ test("hoistAttributes splits a merged bag into resource attrs vs structured meta
   assert.deepEqual(attributes, { "hot.demo_id": "r-react-18-0-0", "session.id": "plid-1" });
 });
 
+test("hoistAttributes also keeps T06's diagnostic tag keys as structured metadata (merge fix, T02+T06)", () => {
+  // `scrub.ts#allowlistAttributes` (via `attrs.ts#ALLOWED_ATTRIBUTE_KEYS`) has
+  // allowed `handled`/`context`/`sentry_event_id`/the `versions-fetch` tags
+  // through since T06's fix round D1, but `hoistAttributes` — the very next
+  // step in both the Faro and OTLP ingest paths — had its own narrower key
+  // set and silently dropped them again. Found merging T02 with T06.
+  const { resourceAttributes, attributes } = hoistAttributes({
+    "hot.surface": "authoring",
+    handled: "true",
+    context: "tier1-compiler-asset",
+    sentry_event_id: "abc123def456",
+    versions_fetch_outcome: "ok",
+    "not.a.contract.key": "still dropped",
+  });
+  assert.deepEqual(resourceAttributes, { "hot.surface": "authoring" });
+  assert.deepEqual(attributes, {
+    handled: "true",
+    context: "tier1-compiler-asset",
+    sentry_event_id: "abc123def456",
+    versions_fetch_outcome: "ok",
+  });
+});
+
 function faroLogItem(overrides = {}) {
   return {
     type: "log",
