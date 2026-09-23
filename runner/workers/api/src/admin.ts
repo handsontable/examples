@@ -12,6 +12,7 @@
 import type { Env } from "./env.js";
 import {
   computeBudgetState,
+  computeO11ySpend,
   containerUsdPerSecond,
   KV_METER_PREFIX,
   SESSION_INSTANCE_TYPE,
@@ -222,7 +223,7 @@ export async function adminUsage(env: Env, days: number) {
   const since = dayAgo(days);
   const monthPrefix = new Date().toISOString().slice(0, 7);
 
-  const [ledger, usage, demoTotals, demosByFramework, topDemos, budget, sessions, audience] = await Promise.all([
+  const [ledger, usage, demoTotals, demosByFramework, topDemos, budget, o11ySpend, sessions, audience] = await Promise.all([
     env.DB.prepare(
       `SELECT day, sku, source, units, usd FROM cost_ledger WHERE day >= ?1 ORDER BY day DESC, sku`,
     ).bind(since).all<LedgerRow>(),
@@ -257,6 +258,12 @@ export async function adminUsage(env: Env, days: number) {
     // not a five-minute-old copy of it.
     computeBudgetState(env),
 
+    // T04 (ADR-0041 §G): the observability-only slice of the same ledger,
+    // plus its own (smaller) cap — see `budget.ts#computeO11ySpend`'s own
+    // doc comment for why this is additive to `computeBudgetState` above,
+    // not a replacement.
+    computeO11ySpend(env),
+
     // The default view (awake only, first page). Paging and the "show the 24h
     // tail" toggle go to `GET /api/admin/sessions` instead, so neither re-runs
     // the D1 aggregates above.
@@ -284,6 +291,16 @@ export async function adminUsage(env: Env, days: number) {
       limitUsd: budget.limitUsd,
       reconciled: budget.reconciled,
       enforced: budget.enforced,
+    },
+    // T04 (ADR-0041 §G): "`/admin` shows app, observability and total."
+    // `total` equals `budget.spendUsd` above (every sku, o11y included —
+    // §G: "product tiers keep acting on the total"); `app` is the
+    // remainder, never a second D1 read.
+    o11y: {
+      spendUsd: o11ySpend.spendUsd,
+      capUsd: o11ySpend.capUsd,
+      appSpendUsd: Math.max(0, budget.spendUsd - o11ySpend.spendUsd),
+      totalSpendUsd: budget.spendUsd,
     },
     // The editable thresholds, so the panel's form starts from what is
     // actually in force rather than from a copy of the defaults.

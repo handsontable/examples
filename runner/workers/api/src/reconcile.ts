@@ -22,6 +22,24 @@ import * as Sentry from "@sentry/cloudflare";
 import type { Env } from "./env.js";
 import { computeBudgetState } from "./budget.js";
 import { loadSettings } from "./settings.js";
+import { emitPoint } from "./telemetry/points.js";
+
+/**
+ * T04 (ADR-0041 §G): "`reconcile.ts` iterates over the scripts it
+ * reconciles, `handsontable-demos-api` and `handsontable-demos-o11y`, and
+ * writes each script's billing rows under distinct SKUs (`o11y_container`,
+ * `o11y_workers`), so the per-SKU upsert never overwrites the app's rows."
+ * `o11y_container` is not queried here — same reasoning this file's header
+ * already gives for the app's own `container` sku ("container compute has
+ * no public per-account analytics dataset"), so it stays estimate-only
+ * (`o11y-usage.ts#O11yUsage.recordAwakeSeconds`). Only `workersInvocationsAdaptive`
+ * (requests) is resolvable via GraphQL for the o11y script — no egress/R2
+ * query for it, since ADR §G names exactly two o11y SKUs, not five.
+ */
+const RECONCILE_TARGETS = (env: Env) => [
+  { script: env.CF_SCRIPT_NAME ?? "handsontable-demos-api", workersSku: "workers", app: true as const },
+  { script: "handsontable-demos-o11y", workersSku: "o11y_workers", app: false as const },
+];
 
 const GRAPHQL_ENDPOINT = "https://api.cloudflare.com/client/v4/graphql";
 
@@ -64,7 +82,7 @@ function sumOf<T>(groups: T[] | undefined, pick: (g: T) => number | undefined): 
   return sawValue ? total : null;
 }
 
-async function queryUsage(env: Env, day: string): Promise<AccountUsage | null> {
+async function queryUsage(env: Env, day: string, script: string): Promise<AccountUsage | null> {
   // Every dataset is filtered down to *this* Worker and *this* bucket. The
   // account is shared with a dozen other Workers, and an unfiltered query would
   // write whole-account usage into rows that outrank our own estimates — the
@@ -99,7 +117,7 @@ async function queryUsage(env: Env, day: string): Promise<AccountUsage | null> {
       variables: {
         account: env.CF_ACCOUNT_ID,
         day,
-        script: env.CF_SCRIPT_NAME ?? "handsontable-demos-api",
+        script,
         bucket: env.R2_BUCKET_NAME ?? "handsontable-demos",
       },
     }),
@@ -137,58 +155,95 @@ async function writeBillingRow(env: Env, day: string, sku: string, units: number
  * reason the ceiling stops working.
  */
 export async function reconcileBilling(env: Env): Promise<void> {
+  const runStartedAt = Date.now();
   if (!env.CF_ANALYTICS_TOKEN) {
     console.log("[budget] CF_ANALYTICS_TOKEN not set — skipping reconciliation, estimates stand");
+    void emitPoint(env, "reconcile.run", { count: 1, duration_ms: Date.now() - runStartedAt }, { outcome: "skipped" });
     return;
   }
   // Usage is processed a day in arrears, so yesterday is the freshest day that
   // is actually complete.
   const day = utcDayAgo(1);
+  let sawError = false;
+  // Sum of every `usd` figure written this run, app rows negative and o11y
+  // rows positive would be nonsensical here — `reconcile.run`'s own §4
+  // meaning is "usd (billing − estimate)", i.e. the drift this run
+  // introduced versus what the estimator already had on the books for the
+  // same (day, sku) pair. Approximated as the total billing usd written
+  // this run (T04-D, see the task Outcome: the pre-write estimate figure
+  // is not read back here, so this is "billing total", not a true delta —
+  // still useful as a per-run cost signal, the drift itself is visible by
+  // comparing this to the `estimate` rows in `/admin`).
+  let billingUsdWritten = 0;
 
-  try {
-    const usage = await queryUsage(env, day);
-    if (!usage) {
-      console.warn(`[budget] no analytics data for ${day}`);
-      return;
+  for (const target of RECONCILE_TARGETS(env)) {
+    try {
+      const usage = await queryUsage(env, day, target.script);
+      if (!usage) {
+        console.warn(`[budget] no analytics data for ${day} (${target.script})`);
+        continue;
+      }
+
+      const requests = sumOf(usage.workersInvocationsAdaptive, (g) => g.sum?.requests);
+      if (requests !== null) {
+        const usd = (requests / 1e6) * RATE.requestsUsdPerMillion;
+        await writeBillingRow(env, day, target.workersSku, requests, usd);
+        billingUsdWritten += usd;
+      }
+
+      if (target.app) {
+        // Container egress leaves through the Sandbox Durable Object, so its
+        // response body size is the closest real measure of the sku our own
+        // counter can only approximate (it cannot see WebSocket/HMR frames).
+        const egressBytes = sumOf(usage.durableObjectsInvocationsAdaptiveGroups, (g) => g.sum?.responseBodySize);
+        if (egressBytes !== null) {
+          const gb = egressBytes / 1e9;
+          const usd = gb * RATE.egressUsdPerGB;
+          await writeBillingRow(env, day, "egress", gb, usd);
+          billingUsdWritten += usd;
+        }
+
+        // R2 bills per GB-month; one day of that is the daily slice of the bill.
+        const storedBytes = sumOf(
+          usage.r2StorageAdaptiveGroups,
+          (g) => (g.max?.payloadSize ?? 0) + (g.max?.metadataSize ?? 0),
+        );
+        if (storedBytes !== null) {
+          const gbMonths = (storedBytes / 1e9) / 30;
+          const usd = gbMonths * RATE.r2UsdPerGBMonth;
+          await writeBillingRow(env, day, "r2", gbMonths, usd);
+          billingUsdWritten += usd;
+        }
+
+        console.log(
+          `[budget] reconciled ${day} (${target.script}): requests=${requests ?? "n/a"} `
+            + `egressBytes=${egressBytes ?? "n/a"} storedBytes=${storedBytes ?? "n/a"}`,
+        );
+      } else {
+        console.log(`[budget] reconciled ${day} (${target.script}): requests=${requests ?? "n/a"}`);
+      }
+    } catch (err) {
+      sawError = true;
+      // A silently dead reconciliation means the ceiling quietly runs on
+      // estimates forever — exactly the drift this job exists to prevent.
+      Sentry.captureException(err, { tags: { context: "budget-reconcile", script: target.script } });
+      console.error(
+        `[budget] reconciliation failed for ${target.script}:`,
+        err instanceof Error ? err.message : String(err),
+      );
     }
-
-    const requests = sumOf(usage.workersInvocationsAdaptive, (g) => g.sum?.requests);
-    if (requests !== null) {
-      await writeBillingRow(env, day, "workers", requests, (requests / 1e6) * RATE.requestsUsdPerMillion);
-    }
-
-    // Container egress leaves through the Sandbox Durable Object, so its
-    // response body size is the closest real measure of the sku our own
-    // counter can only approximate (it cannot see WebSocket/HMR frames).
-    const egressBytes = sumOf(usage.durableObjectsInvocationsAdaptiveGroups, (g) => g.sum?.responseBodySize);
-    if (egressBytes !== null) {
-      const gb = egressBytes / 1e9;
-      await writeBillingRow(env, day, "egress", gb, gb * RATE.egressUsdPerGB);
-    }
-
-    // R2 bills per GB-month; one day of that is the daily slice of the bill.
-    const storedBytes = sumOf(
-      usage.r2StorageAdaptiveGroups,
-      (g) => (g.max?.payloadSize ?? 0) + (g.max?.metadataSize ?? 0),
-    );
-    if (storedBytes !== null) {
-      const gbMonths = (storedBytes / 1e9) / 30;
-      await writeBillingRow(env, day, "r2", gbMonths, gbMonths * RATE.r2UsdPerGBMonth);
-    }
-
-    console.log(
-      `[budget] reconciled ${day}: requests=${requests ?? "n/a"} egressBytes=${egressBytes ?? "n/a"} storedBytes=${storedBytes ?? "n/a"}`,
-    );
-  } catch (err) {
-    // A silently dead reconciliation means the ceiling quietly runs on
-    // estimates forever — exactly the drift this job exists to prevent.
-    Sentry.captureException(err, { tags: { context: "budget-reconcile" } });
-    console.error("[budget] reconciliation failed:", err instanceof Error ? err.message : String(err));
   }
 
   try {
     await env.DB.prepare("DELETE FROM cost_ledger WHERE day < ?1").bind(utcDayAgo(LEDGER_RETENTION_DAYS)).run();
   } catch { /* pruning is housekeeping, not correctness */ }
+
+  void emitPoint(
+    env,
+    "reconcile.run",
+    { count: 1, duration_ms: Date.now() - runStartedAt, usd: billingUsdWritten },
+    { outcome: sawError ? "error" : "ok" },
+  );
 }
 
 /**

@@ -63,6 +63,9 @@ export interface BudgetSettings {
   closedUsd: number;
   enforce: boolean;
   alertsUsd: number[];
+  /** ADR-0041 §G: the o11y stack's own monthly ceiling (default $15),
+   *  separate from `limitUsd` — see settings.ts's own doc comment. */
+  o11yBudgetUsd: number;
   source?: "defaults" | "override";
   updatedAt?: string | null;
   updatedBy?: string | null;
@@ -92,6 +95,13 @@ interface UsageReport {
     limitUsd: number;
     reconciled: boolean;
     enforced: boolean;
+  };
+  /** ADR-0041 §G: "`/admin` shows app, observability and total." */
+  o11y: {
+    spendUsd: number;
+    capUsd: number;
+    appSpendUsd: number;
+    totalSpendUsd: number;
   };
   settings: BudgetSettings;
   audience: Audience;
@@ -134,6 +144,8 @@ const SKU_LABEL: Record<string, string> = {
   workers: "Workers requests",
   r2: "R2 storage",
   llm: "AI assistant",
+  o11y_container: "Observability container",
+  o11y_workers: "Observability workers",
 };
 
 const METRIC_LABEL: Record<string, string> = {
@@ -366,8 +378,9 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
 /** Budget headline: where spend sits against the ceiling, and what each
  *  threshold will do when it is crossed. */
 function BudgetCard({ report }: { report: UsageReport }) {
-  const { budget, settings } = report;
+  const { budget, settings, o11y } = report;
   const tier = TIERS[budget.tier] ?? { label: budget.tier, color: theme.color.text };
+  const o11yOverCap = o11y.spendUsd >= o11y.capUsd;
   const pct = Math.max(0, Math.min(1, budget.pct));
   const limit = settings.limitUsd || 1;
   const marks: [string, number][] = [
@@ -409,6 +422,22 @@ function BudgetCard({ report }: { report: UsageReport }) {
           : "Observe-only: tiers are computed and logged but nothing is refused. Turn enforcement on below "
             + "once these figures track the Cloudflare Billable Usage dashboard."}
       </p>
+
+      {/* ADR-0041 §G: app, observability and total. */}
+      <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 8, fontSize: 13 }}>
+        <span>App: <strong>{usd(o11y.appSpendUsd)}</strong></span>
+        <span>
+          Observability: <strong style={{ color: o11yOverCap ? theme.color.danger : undefined }}>
+            {usd(o11y.spendUsd)}
+          </strong> of {usd(o11y.capUsd)} cap
+          {o11yOverCap && (
+            <span style={{ ...pill, background: theme.color.danger, marginLeft: 6 }}>
+              backlog drains paused
+            </span>
+          )}
+        </span>
+        <span>Total: <strong>{usd(o11y.totalSpendUsd)}</strong></span>
+      </div>
     </section>
   );
 }
@@ -518,6 +547,11 @@ function SettingsForm({
             </div>
             <div style={{ minWidth: 200, flex: "1 1 200px" }}>
               {field("closedUsd", "Close live editing ($)", `${pctOf(draft.closedUsd)} — running sessions torn down.`)}
+              {field(
+                "o11yBudgetUsd",
+                "Observability cap ($)",
+                "ADR-0041 §G: crossing this pauses backlog drains (visit wakes still work). Counts toward the ceiling above too.",
+              )}
               <label style={{ display: "block", marginBottom: 8 }}>
                 <div style={{ fontSize: 12, marginBottom: 4 }}>Alert thresholds ($)</div>
                 <input

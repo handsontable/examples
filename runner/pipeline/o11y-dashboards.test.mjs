@@ -38,6 +38,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { LOKI_LABELS, HT_MAJORS } from "../packages/runtime/dist/telemetry/index.js";
+// T04: one allowlist of Cloudflare's documented Analytics Engine SQL
+// functions, shared with `workers/o11y/src/alerts/ae-query.ts` (the alert
+// rules' own query helper) instead of two diverging copies — see that
+// file's header for the doc pages/date this set was read from. A pure,
+// import-free module, so no `o11y-worker-hooks.mjs` registration is needed
+// to load it here.
+const { ALLOWED_AE_FUNCTIONS } = await import("../workers/o11y/src/alerts/ae-query.ts");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARDS_DIR = path.join(__dirname, "..", "containers", "o11y", "grafana", "dashboards");
@@ -59,21 +66,25 @@ const KNOWN_AE_COLUMNS = new Set([
   ...Array.from({ length: ASSIGNED_DOUBLE_COUNT }, (_, i) => `double${i + 1}`),
 ]);
 
-// Cloudflare's *documented* Analytics Engine SQL API functions this task's
-// dashboards use (developers.cloudflare.com/analytics/analytics-engine/
-// sql-reference/{aggregate,date-time,type-conversion}-functions/, read
-// 2026-09-23 — see the T09 Outcome for the exact excerpts) — never a wider
-// "whatever local ClickHouse happens to accept" set, which is the whole
-// point of this lint (the task's own "Traps" section). Casing matches the
-// docs' own signatures exactly: lowercase `sum`/`avg`, exact-case
-// `quantileExactWeighted`/`toStartOfInterval`/`toUInt32` — a stray `SUM` or
-// `COUNT` is rejected the same way an undocumented function would be.
-// `quantileExactWeighted` is the documented weighted-percentile aggregate;
-// `quantileTDigestWeighted` (this file's own first draft) is a real
-// ClickHouse function but does not appear on AE's aggregate-functions page —
-// exactly the local-accepts-more trap this lint exists to catch, caught
-// against itself once real docs were read.
-const ALLOWED_AE_FUNCTIONS = new Set(["sum", "avg", "quantileExactWeighted", "toStartOfInterval", "toUInt32"]);
+// Cloudflare's *documented* Analytics Engine SQL API functions (T09-D5: read
+// against developers.cloudflare.com/analytics/analytics-engine/
+// sql-reference/{aggregate,date-time,type-conversion}-functions/,
+// 2026-09-23) — never a wider "whatever local ClickHouse happens to accept"
+// set, which is the whole point of this lint (the task's own "Traps"
+// section). Casing matches the docs' own signatures exactly: lowercase
+// `sum`/`avg`, exact-case `quantileExactWeighted`/`toStartOfInterval`/
+// `toUInt32` — a stray `SUM` or `COUNT` is rejected the same way an
+// undocumented function would be. `quantileExactWeighted` is the documented
+// weighted-percentile aggregate; `quantileTDigestWeighted` (this file's own
+// first draft) is a real ClickHouse function but does not appear on AE's
+// aggregate-functions page — exactly the local-accepts-more trap this lint
+// exists to catch, caught against itself once real docs were read.
+//
+// T04 (fix round, controller note "don't keep two diverging allowlists"):
+// imported from `alerts/ae-query.ts` above instead of a second literal Set
+// here. That module's own set adds one function this task's dashboards
+// never call (`now`) for the alert rules' time-window queries — a superset
+// is safe for a lint that only rejects what a query actually uses.
 
 const AE_KEYWORDS = new Set([
   "SELECT",

@@ -14,6 +14,7 @@ import {
   PACK_ALARM_INTERVAL_MS,
   PACK_AT_BYTES,
   wakeStorageKey,
+  type AlertState,
   type Heartbeat,
   type Tenant,
   type WakeState,
@@ -23,6 +24,19 @@ import { checkDuplicates } from "./dedupe.js";
 import { newFingerprintWrites } from "./registry.js";
 import { appendRows, commitPackedObject, packTenant, pendingRowsByTenant, ROW_SEQ_STORAGE_KEY } from "./pack.js";
 import type { StorageLike } from "./storage.js";
+import {
+  backlogOldestAgeMs,
+  newFingerprintsSince,
+  readAlertMeta,
+  readAlertState,
+  readDrainsPaused,
+  readHeartbeat,
+  rejectedKeyCount,
+  writeAlertMeta,
+  writeAlertState,
+  writeCronHeartbeat,
+  writeDrainsPaused,
+} from "../alerts/inbox-state.js";
 
 /** `this.ctx.storage` (a real `DurableObjectStorage`) adapted to
  *  {@link StorageLike} — see `storage.ts`'s header for why `get`/`getMany`
@@ -136,5 +150,54 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
       const packed = await packTenant(storage, this.env.O11Y_INBOX, tenant, rows);
       if (packed) await commitPackedObject(storage, packed);
     }
+  }
+
+  // ---- T04 additions: alerts, watchdog, the o11y spend cap ---------------
+  // Thin RPC shells only — every real rule lives in `alerts/inbox-state.ts`
+  // (pure over `StorageLike`, same split `dedupe.ts`/`registry.ts`/`pack.ts`
+  // already use), so it is unit-testable without a real Durable Object.
+
+  async heartbeat(): Promise<Heartbeat> {
+    return readHeartbeat(adaptStorage(this.ctx.storage));
+  }
+
+  async stampCronHeartbeat(nowMs: number): Promise<void> {
+    await writeCronHeartbeat(adaptStorage(this.ctx.storage), nowMs);
+  }
+
+  async backlogOldestAgeMs(): Promise<number | null> {
+    return backlogOldestAgeMs(adaptStorage(this.ctx.storage));
+  }
+
+  async rejectedKeyCount(): Promise<number> {
+    return rejectedKeyCount(adaptStorage(this.ctx.storage));
+  }
+
+  async newFingerprintsSince(sinceMs: number): Promise<string[]> {
+    return newFingerprintsSince(adaptStorage(this.ctx.storage), sinceMs);
+  }
+
+  async alertState(rule: string): Promise<AlertState | undefined> {
+    return readAlertState(adaptStorage(this.ctx.storage), rule);
+  }
+
+  async setAlertState(rule: string, state: AlertState): Promise<void> {
+    await writeAlertState(adaptStorage(this.ctx.storage), rule, state);
+  }
+
+  async getAlertMeta(key: string): Promise<string | undefined> {
+    return readAlertMeta(adaptStorage(this.ctx.storage), key);
+  }
+
+  async setAlertMeta(key: string, value: string): Promise<void> {
+    await writeAlertMeta(adaptStorage(this.ctx.storage), key, value);
+  }
+
+  async drainsPaused(): Promise<boolean> {
+    return readDrainsPaused(adaptStorage(this.ctx.storage));
+  }
+
+  async setDrainsPaused(paused: boolean): Promise<void> {
+    await writeDrainsPaused(adaptStorage(this.ctx.storage), paused);
   }
 }

@@ -26,9 +26,12 @@ import { BodyTooLargeError, readCappedBytes, readCappedText } from "./normalise/
 import { recordInvalidItem, recordOversizeDrop, respondDrop, respondIngested } from "./normalise/respond.js";
 import { writePoint } from "./normalise/points.js";
 import { findRoute, registerRoute } from "./router.js";
+import { runAlerts } from "./alerts/index.js";
+import { readHeartbeatReport } from "./heartbeat.js";
 
 export { GrafanaBox } from "./box.js";
 export { InboxWriter } from "./inbox/writer.js";
+export { O11yHeartbeat } from "./heartbeat.js";
 
 interface RouteStub {
   method: "GET" | "POST";
@@ -207,9 +210,25 @@ registerRoute("POST", "/telemetry/v1/logs", handleOtlpLogs);
 registerRoute("POST", "/telemetry/deploy", handleDeploy);
 registerRoute("POST", "/telemetry/hooks/sentry", handleSentryHook);
 
+// T04: the API worker's watchdog reaches this path over the `O11Y` service
+// binding (`o11y-watchdog.ts`). Deliberately never passed to
+// `registerRoute` — this Worker's own `--routes` flags (package.json's
+// `deploy` script) are `demos.handsontable.com/telemetry/*` and
+// `/grafana/*` only, so `/_internal/heartbeat` is unreachable from outside
+// this binding by construction, unlike the API worker's wildcard
+// `*.demos.handsontable.com/*` (see `heartbeat.ts`'s own header for why
+// that distinction matters and why the API-side entrypoint is a real named
+// `WorkerEntrypoint` instead of the same trick).
+const HEARTBEAT_INTERNAL_PATH = "/_internal/heartbeat";
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (request.method === "GET" && url.pathname === HEARTBEAT_INTERNAL_PATH) {
+      const report = await readHeartbeatReport(env);
+      return new Response(JSON.stringify(report), { headers: { "content-type": "application/json" } });
+    }
 
     const handler = findRoute(request.method, url.pathname);
     if (handler) return handler(request, env, ctx);
@@ -219,5 +238,18 @@ export default {
       return new Response("Not Implemented — route logic lands in a later o11y task.", { status: 501 });
     }
     return new Response("Not Found", { status: 404 });
+  },
+
+  // T04 PLACEHOLDER — remove at the feature-branch merge (COMMON.md
+  // controller note: "Wire it into the scheduled handler minimally... When
+  // you merge the feature branch at the end, call `runAlerts` from T03's
+  // handler and remove yours"). T03 owns the real `*/10` cron handler
+  // (backlog scan, `heartbeat.lastCron`, wake) — this exists only so
+  // `runAlerts`/the watchdog have something to drive locally before T03
+  // lands. `stampCronHeartbeat` here is likewise temporary: T03's real
+  // backlog scan is what should stamp `lastCron` in production.
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(inboxWriter(env).stampCronHeartbeat(Date.now()));
+    ctx.waitUntil(runAlerts(env, ctx).then(() => undefined));
   },
 } satisfies ExportedHandler<Env>;

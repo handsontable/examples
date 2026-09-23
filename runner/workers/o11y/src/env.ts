@@ -11,7 +11,7 @@
 // there is no runtime import cycle even though the types reference each other.
 
 import type { DurableObjectNamespace } from "@cloudflare/workers-types";
-import type { NormalisedRecord, Tenant } from "@handsontable/demo-runtime/telemetry";
+import type { AlertState, Heartbeat, NormalisedRecord, Tenant } from "@handsontable/demo-runtime/telemetry";
 import type { GrafanaBox } from "./box.js";
 import type { InboxWriter } from "./inbox/writer.js";
 
@@ -65,6 +65,66 @@ export interface InboxWriterApi {
    * violate exit criterion 4's "one duplicate point").
    */
   ingest(tenant: Tenant, arrivalMs: number, items: IngestItem[]): Promise<IngestResult>;
+
+  // ---- T04 additions (alerts, watchdog, the o11y spend cap) --------------
+  //
+  // Contract §8's `alert:<rule>`, `drainsPaused` and `heartbeat` storage
+  // keys are all read/written exclusively through these methods — nothing
+  // outside `InboxWriter` ever touches DO storage directly (same rule as
+  // `ingest`/`recordWake`). `heartbeat()` here is `InboxWriter`'s own
+  // storage read, composed by `heartbeat.ts`'s `O11yHeartbeat`
+  // `WorkerEntrypoint` (this task's "Owns" row) into the full watchdog
+  // report alongside `backlogOldestAgeMs()`.
+
+  /** `heartbeat` (§8): `lastIngest` is stamped by `ingest()` already;
+   *  `lastCron` is stamped by whichever cron currently calls
+   *  `stampCronHeartbeat` — today this task's own placeholder `scheduled()`
+   *  (COMMON.md's "wire it minimally" note), T03's real ten-minute backlog
+   *  cron after the merge. */
+  heartbeat(): Promise<Heartbeat>;
+  /** Sets `heartbeat.lastCron` to `nowMs`, preserving `lastIngest`. Exists
+   *  only so a cron tick (this task's placeholder, later T03's real one)
+   *  can prove liveness the same way `ingest()` already proves it for
+   *  `lastIngest` — never called from an ingest route. */
+  stampCronHeartbeat(nowMs: number): Promise<void>;
+
+  /** Oldest still-`written` (not yet drained) inbox key's age, in ms, or
+   *  `null` when the backlog is empty. Derived from the key's own embedded
+   *  `<yyyy-mm-dd>/<hh>` (contract §8's inbox key shape), taken as
+   *  `<hour>:59:59.999` UTC — a lower bound on the true age (T04-D, see the
+   *  task Outcome), so the backlog-age alert can only fire late, never
+   *  early. A `provisional:<wakeId>`/`committed`/`rejected:<reason>` key is
+   *  not backlog — only bare `written` counts (ADR §B.3: "`backlog()`
+   *  counts only `written` keys"). */
+  backlogOldestAgeMs(): Promise<number | null>;
+  /** Count of `key:<k> = rejected:<reason>` entries — ADR §F.3's "a
+   *  `rejected` inbox key" rule reads this, not the raw storage. */
+  rejectedKeyCount(): Promise<number>;
+
+  /** `fp:<fingerprint>` entries first seen strictly after `sinceMs` —
+   *  `demo-runtime` fingerprints are already excluded (they never reach the
+   *  registry at all: `feedsNewFingerprintAlert`, contract §7), so every
+   *  name returned here is alert-eligible by construction. */
+  newFingerprintsSince(sinceMs: number): Promise<string[]>;
+
+  /** `alert:<rule>` (§8): the exact fire-once/resolve-once state the ADR
+   *  §F.3 rule evaluator reads and writes every tick. */
+  alertState(rule: string): Promise<AlertState | undefined>;
+  setAlertState(rule: string, state: AlertState): Promise<void>;
+
+  /** Small scalar bookkeeping a rule needs beyond `firing`/`resolved` (a
+   *  last-seen count, a cursor) — not itself part of the contract's fixed
+   *  `alert:<rule>` shape, so it lives under its own `alertMeta:<key>`
+   *  prefix rather than overloading `AlertState`. */
+  getAlertMeta(key: string): Promise<string | undefined>;
+  setAlertMeta(key: string, value: string): Promise<void>;
+
+  /** `drainsPaused` (§8, ADR §G): set when the o11y spend cap is crossed,
+   *  cleared on resolve (month rollover or a raised cap). T03's wake path
+   *  reads this to refuse a *backlog* wake while paused; a Grafana visit
+   *  wake is unaffected by design (ADR §G: "visit wakes still work"). */
+  drainsPaused(): Promise<boolean>;
+  setDrainsPaused(paused: boolean): Promise<void>;
 }
 
 export interface Env {
@@ -116,6 +176,15 @@ export interface Env {
    *  rules) can point a probe `GrafanaBox` at its own bucket
    *  (e.g. `o11y-probe-t03-loki`) instead of silently targeting production. */
   LOKI_S3_BUCKET?: string;
+
+  /** T04 addition (local-mode alert queries, contract §10): local-mode
+   *  stand-in for the Analytics Engine SQL API's URL, mirroring
+   *  `workers/api/src/env.ts`'s `RUNNER_EVENTS_CLICKHOUSE_URL` (T05-D1, same
+   *  reasoning — the contract's §2 table only pins `AE_SQL_TOKEN`, not a
+   *  local ClickHouse URL var, for either worker). `.dev.vars` only, never
+   *  in the committed `wrangler.jsonc` `vars` block. Defaults to
+   *  `http://localhost:8123` when absent — see `alerts/ae-query.ts`. */
+  RUNNER_EVENTS_CLICKHOUSE_URL?: string;
 
   // Secrets: optional, matching workers/api/src/env.ts's MCP_SHARED_SECRET
   // style — a required field would force wrangler dev to typecheck against a
