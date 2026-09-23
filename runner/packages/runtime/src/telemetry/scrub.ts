@@ -201,8 +201,16 @@ function redactStringsDeep<V>(value: V): V {
     return value;
   }
   if (value !== null && typeof value === "object") {
-    for (const key of Object.keys(value as Record<string, unknown>)) {
-      (value as Record<string, unknown>)[key] = redactStringsDeep((value as Record<string, unknown>)[key]);
+    const obj = value as Record<string, unknown>;
+    // Keys too, not only values: a `MeasurementEvent.values` object's keys
+    // are metric names, JSON.stringify'd straight into the OTLP body
+    // (`convert.ts#faroBody`) without ever passing back through a value
+    // position this walk would otherwise reach.
+    for (const key of Object.keys(obj)) {
+      const redactedKey = redactPreviewHosts(key);
+      const redactedValue = redactStringsDeep(obj[key]);
+      if (redactedKey !== key) delete obj[key];
+      obj[redactedKey] = redactedValue;
     }
     return value;
   }

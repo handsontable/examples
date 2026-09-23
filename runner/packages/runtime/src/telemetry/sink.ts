@@ -41,6 +41,18 @@ export interface ClickhouseSinkOptions {
   table?: string;
   /** Injectable for tests; defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
+  /** ClickHouse HTTP user (`X-ClickHouse-User`). `"default"` if omitted, the
+   *  same default T01's `compose.yml` uses. */
+  user?: string;
+  /** ClickHouse HTTP password (`X-ClickHouse-Key`) — T01's local container
+   *  always requires one (`CLICKHOUSE_PASSWORD`, defaulting to
+   *  `local-dev-token` from `AE_SQL_TOKEN`); T02 passes `env.AE_SQL_TOKEN`.
+   *  Measured (T00-D2, revised): with no credentials sent at all, T01's
+   *  container answers the insert with a non-2xx auth error, which a version
+   *  of this sink that only checked "did `fetch` throw" swallowed —
+   *  `writeDataPoint` resolved, `SELECT count()` on the table read `0`. Omit
+   *  only against a ClickHouse that genuinely has no auth configured. */
+  password?: string;
 }
 
 /**
@@ -76,10 +88,25 @@ export interface ClickhouseSinkOptions {
  *
  * Column names are the AE slot names themselves — the same query a real
  * Analytics Engine SQL call would run, no second name mapping.
+ *
+ * **Authenticates, and rejects on a non-2xx response** — both measured
+ * against the same real container: with no `user`/`password` sent, T01's
+ * `compose.yml` container answers every insert with `403` (`Authentication
+ * failed`), and an earlier version of this function only checked whether
+ * `fetch` itself threw, so `writeDataPoint` resolved anyway — `SELECT
+ * count()` on the table read back `0`. Every non-2xx response now rejects
+ * the returned promise with the status and the first 200 bytes of the body,
+ * and the credentials (`X-ClickHouse-User` / `X-ClickHouse-Key`, ClickHouse's
+ * own HTTP header names) are sent whenever `options.user`/`.password` are
+ * given — T02 passes `env.AE_SQL_TOKEN`.
  */
 export function clickhouseSink(url: string, options: ClickhouseSinkOptions = {}): AeSink {
   const table = options.table ?? "runner_events";
   const doFetch = options.fetchImpl ?? fetch;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (options.user !== undefined) headers["X-ClickHouse-User"] = options.user;
+  if (options.password !== undefined) headers["X-ClickHouse-Key"] = options.password;
+
   return {
     writeDataPoint(point: AePoint): Promise<void> {
       const row: Record<string, string | number> = {
@@ -96,7 +123,14 @@ export function clickhouseSink(url: string, options: ClickhouseSinkOptions = {})
       const endpoint = `${url.replace(/\/$/, "")}/?query=${encodeURIComponent(
         `INSERT INTO ${table} FORMAT JSONEachRow`,
       )}`;
-      return doFetch(endpoint, { method: "POST", body: `${JSON.stringify(row)}\n` }).then(() => undefined);
+      return doFetch(endpoint, { method: "POST", headers, body: `${JSON.stringify(row)}\n` }).then(
+        async (res: { ok: boolean; status: number; text?: () => Promise<string> }) => {
+          if (!res.ok) {
+            const body = (await res.text?.()) ?? "";
+            throw new Error(`clickhouseSink: insert failed, ${res.status}: ${body.slice(0, 200)}`);
+          }
+        },
+      );
     },
   };
 }

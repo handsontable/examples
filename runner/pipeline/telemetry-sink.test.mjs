@@ -7,6 +7,13 @@
 // DDL — see `sink.ts`'s doc comment for the measured reasoning (a bare
 // Unix-seconds integer and a formatted string were both measured wrong).
 //
+// `clickhouseSink`'s credential headers and non-2xx rejection were measured
+// against the same real container, with no credentials sent: T01's
+// `compose.yml` answers every insert with a real `403`, and a version of this
+// sink that only checked whether `fetch` itself threw resolved anyway —
+// `SELECT count()` on the table read back `0`, a silent local-mode metrics
+// blackout.
+//
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
@@ -63,4 +70,39 @@ test("clickhouseSink POSTs one JSONEachRow line with T01's exact column names", 
   // friendly name (e.g. "outcome") ever appears as a JSON key.
   assert.equal(row.outcome, undefined);
   assert.equal(row.metric, undefined);
+});
+
+test("clickhouseSink sends X-ClickHouse-User/-Key when credentials are given", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true };
+  };
+  const sink = clickhouseSink("http://localhost:8123", { fetchImpl, user: "default", password: "local-dev-token" });
+  const point = toAePoint("chat.edit", { count: 1 }, { service_name: "demos-api", service_version: "x", environment: "production", outcome: "proposed" });
+  await sink.writeDataPoint(point);
+
+  assert.equal(calls[0].init.headers["X-ClickHouse-User"], "default");
+  assert.equal(calls[0].init.headers["X-ClickHouse-Key"], "local-dev-token");
+});
+
+test("clickhouseSink sends no credential headers when none are given", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true };
+  };
+  const sink = clickhouseSink("http://localhost:8123", { fetchImpl });
+  const point = toAePoint("chat.edit", { count: 1 }, { service_name: "demos-api", service_version: "x", environment: "production", outcome: "proposed" });
+  await sink.writeDataPoint(point);
+
+  assert.equal(calls[0].init.headers["X-ClickHouse-User"], undefined);
+  assert.equal(calls[0].init.headers["X-ClickHouse-Key"], undefined);
+});
+
+test("clickhouseSink rejects on a non-2xx response instead of resolving silently (the real bug: an auth failure was swallowed)", async () => {
+  const fetchImpl = async () => ({ ok: false, status: 403, text: async () => "Code: 516. DB::Exception: Authentication failed" });
+  const sink = clickhouseSink("http://localhost:8123", { fetchImpl });
+  const point = toAePoint("chat.edit", { count: 1 }, { service_name: "demos-api", service_version: "x", environment: "production", outcome: "proposed" });
+  await assert.rejects(() => sink.writeDataPoint(point), /clickhouseSink: insert failed, 403/);
 });

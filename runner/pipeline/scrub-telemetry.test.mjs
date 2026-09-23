@@ -194,6 +194,18 @@ test("scrubs an OTLP-shaped record: drops url.full and geo attributes, strips co
   assert.equal(scrubbed.body, "unknown: Unexpected token (1:10)\nat https://<preview>/src/main.js");
 });
 
+test("redacts a preview host in an object KEY, not only values (a MeasurementEvent's metric-name keys reach the OTLP body verbatim via JSON.stringify)", () => {
+  const item = {
+    type: "measurement",
+    payload: { values: { [`lcp_https://${PREVIEW_HOST}/leak`]: 1200 }, timestamp: new Date().toISOString() },
+    meta: {},
+  };
+  const scrubbed = scrubTelemetry(item);
+  const keys = Object.keys(scrubbed.payload.values);
+  assert.equal(keys.length, 1);
+  assert.equal(keys[0], "lcp_https://<preview>/leak");
+});
+
 // ---- never mutates the input ----------------------------------------------------
 
 test("never mutates its argument", () => {

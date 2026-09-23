@@ -12,10 +12,12 @@ import {
   faroItemToRecord,
   hoistAttributes,
   msToUnixNano,
+  scrubTelemetry,
 } from "../packages/runtime/dist/telemetry/index.js";
 
 const SERVICE = { name: "demos-authoring", version: "abc123def456", environment: "production" };
 const RECEIVED_AT_MS = Date.UTC(2026, 8, 23, 12, 0, 0); // fixed, so "twice" never races a clock
+const PREVIEW_HOST = "3000-sbx7f2a-tok9xQ.demos.handsontable.com";
 
 test("clampTimestampMs keeps a candidate inside the 5-minute window", () => {
   const candidate = RECEIVED_AT_MS - 60_000; // 1 minute earlier
@@ -185,4 +187,23 @@ test("beaconToRecord marks a vital beacon's hot.kind as measurement, not excepti
   const record = beaconToRecord(vital, { service: SERVICE, receivedAtMs: RECEIVED_AT_MS });
   assert.equal(record.attributes["hot.kind"], "measurement");
   assert.equal(record.body, "LCP=2200");
+});
+
+// ---- T00-D6, revised: a beacon does not typecheck as scrubTelemetry's
+// argument at all (it is neither Faro- nor OTLP-shaped) — convert, THEN
+// scrub, the opposite order from a Faro item.
+
+test("beaconToRecord -> scrubTelemetry cleans a code frame in m and a preview host in st", () => {
+  const dirty = litePayload({
+    m: "unknown: Unexpected token (1:10)\n\n> 1 | const x = ;\n    |           ^",
+    st: `at https://${PREVIEW_HOST}/src/main.js`,
+  });
+  const record = beaconToRecord(dirty, { service: SERVICE, receivedAtMs: RECEIVED_AT_MS });
+  const scrubbed = scrubTelemetry(record);
+  assert.equal(scrubbed.body, "TypeError: unknown: Unexpected token (1:10)\nat https://<preview>/src/main.js");
+});
+
+test("scrubTelemetry is a no-op on an already-clean faroItemToRecord output (idempotent at the boundary)", () => {
+  const record = faroItemToRecord(faroLogItem(), { service: SERVICE, receivedAtMs: RECEIVED_AT_MS });
+  assert.deepEqual(scrubTelemetry(record), record);
 });

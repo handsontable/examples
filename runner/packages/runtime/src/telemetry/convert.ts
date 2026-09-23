@@ -1,9 +1,25 @@
 // Observability contract §6, §9 — Faro item → OTLP log record, and lite-beacon
 // → OTLP log record. One converter, shared by T02 (Faro `/telemetry/collect`,
 // beacon `/telemetry/lite`) and T08 (the beacon sender's own reference for what
-// ingest will do with a payload). Runs on an **already-scrubbed** item (T00-D6:
-// `scrubTelemetry` first, then convert — scrubbing the richer Faro/beacon shape
+// ingest will do with a payload).
+//
+// T00-D6, revised: the scrub/convert order is **not symmetric between the two
+// functions**, because `scrubTelemetry` only accepts the Faro item shape or
+// the OTLP record shape — a `LiteBeaconPayload` (§9) is neither, and does not
+// typecheck as `scrubTelemetry`'s argument at all (confirmed with a probe,
+// `TS2345: LiteErrorPayload is not assignable to Scrubbable`).
+//
+//   - Faro:   `scrubTelemetry(item)` → `faroItemToRecord(scrubbedItem, …)`
+//   - Beacon: `beaconToRecord(payload, …)` → `scrubTelemetry(record)`
+//
+// `faroItemToRecord` trusts every string field it reads because the item
+// already went through `scrubTelemetry` (scrubbing the richer Faro shape
 // catches fields this module never looks at, such as stack-frame filenames).
+// `beaconToRecord` does **not** get that benefit — §9's beacon fields (`m`,
+// `st`) are not scrubbed before conversion, so the *caller* must run
+// `scrubTelemetry` on `beaconToRecord`'s return value before packing it into
+// the inbox, or a code frame / preview host in `m`/`st` reaches storage
+// unscrubbed.
 
 import {
   ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
