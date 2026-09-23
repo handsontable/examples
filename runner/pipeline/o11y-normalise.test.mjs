@@ -219,6 +219,57 @@ test("OTLP: a real Cloudflare invocation-log export — cf.ray survives the clou
   assert.doesNotMatch(text, /cloudflare\.ray_id/, "the raw Cloudflare key name must not survive alongside its remap");
 });
 
+// ---- T03B (d): a structured console.log(JSON.stringify(...)) line ---------
+
+test("OTLP: a Worker's own console.log(JSON.stringify(lines.ts shape)) line arrives as BODY TEXT, not attributes — the normaliser parses it and gives Loki cf.ray/session.id/hot.demo_id as structured metadata", async () => {
+  // pipeline/fixtures/otlp/json/console-log-line.json is shaped from a
+  // REAL captured Cloudflare OTLP export of workers/api/src/telemetry/
+  // lines.ts#logRequestLine's own console.log call (this task's sandbox
+  // probe, see the Outcome for the raw capture) — scrubbed of real ray/
+  // session/demo ids the same way cloudflare-invocation-log.json is. The
+  // ground truth it pins: `body.stringValue` IS the raw JSON string;
+  // `attributes` on that record carries only Cloudflare's own generic
+  // wrapper fields (`name: "log"`, `cloudflare.invocation.sequence.number`)
+  // — none of the app's own fields. Without otlp.ts#tryParseJsonBodyAttrs,
+  // cf.ray/session.id/hot.demo_id would never reach Loki as structured
+  // metadata at all, violating ADR §E.4's operational-log rule.
+  const result = await processOtlpBody(
+    new TextEncoder().encode(otlpJsonFixture("console-log-line.json")),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items.length, 1);
+  const record = result.items[0].record;
+
+  assert.equal(record.attributes?.["cf.ray"], "8a1b2c3d4e5f6789");
+  assert.equal(record.attributes?.["session.id"], "page-load-id-123");
+  assert.equal(record.attributes?.["hot.demo_id"], "r-react-18-0-0");
+  // Not one of the contract's own key names (§3/§6) — must not survive
+  // anywhere, the same "no second allowlist" rule a real OTLP attribute
+  // already follows.
+  assert.equal(record.attributes?.["route_class"], undefined);
+  assert.equal(record.attributes?.["log.kind"], undefined);
+  assert.equal(record.resourceAttributes["log.kind"], undefined);
+  // The body itself is untouched (still the raw JSON text) — this is an
+  // ADDITIVE parse, never a body rewrite.
+  assert.match(record.body, /"log\.kind":"api\.request"/);
+});
+
+test("OTLP: a plain (non-JSON) console.log body is left exactly as before — no attempted parse, no change in behaviour", async () => {
+  const result = await processOtlpBody(
+    new TextEncoder().encode(otlpJsonFixture("cloudflare-invocation-log.json")),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  // This fixture's body is a plain URL string, not JSON — must decode
+  // exactly as the existing test above already asserts (cf.ray only via
+  // the cloudflare.ray_id REMAP, not via any body-JSON parse).
+  assert.equal(result.items.length, 1);
+  assert.doesNotMatch(result.items[0].record.body, /^\{/, "body must stay untouched plain text, not JSON");
+});
+
 test("every stored record carries the contract's eight resource attributes", async () => {
   const result = await processOtlpBody(
     new TextEncoder().encode(otlpJsonFixture("basic.json")),
