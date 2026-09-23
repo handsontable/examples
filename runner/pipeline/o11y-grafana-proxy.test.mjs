@@ -85,7 +85,13 @@ test("/grafana/* with the local DEV_ADMIN bypass shows the waking page while not
   assert.equal(wakingRes.status, 200);
   const wakingBody = await wakingRes.text();
   assert.equal(wakingBody, wakingPageHtml());
-  assert.equal(notReadyBox.calls.noteVisitorActivity, 0, "a waking-page response must not count as Grafana activity");
+  // F2: a waking-page response DOES count as visitor activity now — a visit
+  // wake with an empty backlog otherwise SIGTERMs itself ~20s after boot
+  // because #finishDrain (box.ts) never sees any activity at all for a
+  // wake that only ever served the waking page. See o11y-wake.test.mjs's
+  // own F2 test for the end-to-end proof that this keeps the wake up past
+  // the first drain-finish.
+  assert.equal(notReadyBox.calls.noteVisitorActivity, 1, "a waking-page response must count as Grafana activity (F2)");
 
   const readyBox = makeBoxStub({ ready: true });
   const { env: readyEnv } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: readyBox });

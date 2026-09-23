@@ -1,16 +1,19 @@
 // Symbolication (workers/o11y/src/drain/symbolicate.ts, ADR-0041 §C.3).
 // Unit cases against hand-built maps; a real `vite build` case (exit
-// criterion 5) lives in its own test below, gated on the authoring app
-// actually having been built (skipped, not failed, when it has not — the
-// task's own Verify block runs a real build first).
+// criterion 5, F4) builds its OWN tiny fixture into a fresh temp dir below
+// — see that section's own header comment for why (it used to read
+// whatever apps/authoring/dist happened to exist on disk).
 //
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
 import path from "node:path";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
@@ -162,49 +165,88 @@ test("symbolicateResourceLogs is deterministic: two independent calls over the s
   assert.deepEqual(first, second);
 });
 
-// ---- Exit criterion 5: a real `vite build` of the authoring app --------
+// ---- F4 / Exit criterion 5: a real `vite build` of a self-built fixture --
+//
+// This used to read whatever `apps/authoring/dist` happened to exist on
+// disk: it FAILED (not skipped) when that dist existed but had no chunk
+// whose map resolved back to first-party `src/` code, and it SKIPPED
+// silently when there was no dist at all — neither is deterministic, and a
+// skip reads as green in a summary. This builds its own tiny, throwaway
+// fixture with a REAL `vite build --sourcemap` (the same `vite` the
+// authoring app itself depends on — resolved by walking its manifest,
+// `pipeline/vite-allowed-hosts.test.mjs`'s own established pattern, since
+// vite's `exports` map does not expose `./bin/vite.js` directly) into a
+// fresh temp dir, every run, never touching `apps/authoring/dist`. The
+// evidence stays real — a real bundler, real esbuild minification, a real
+// source map — just never dependent on another task's own build artifact
+// existing (or not) on disk.
 
-const AUTHORING_DIST = fileURLToPath(new URL("../apps/authoring/dist", import.meta.url));
+const require = createRequire(import.meta.url);
+const VITE_BIN = path.join(
+  path.dirname(require.resolve("vite/package.json", { paths: [new URL("../apps/authoring", import.meta.url).pathname] })),
+  "bin",
+  "vite.js",
+);
 
-test(
-  "exit criterion 5: an exception from a real vite build resolves to a src/ file and line",
-  { skip: !existsSync(AUTHORING_DIST) && "apps/authoring/dist does not exist — run `pnpm --filter authoring build` first (see the task Outcome for the measured run)" },
-  async () => {
-    const assetsDir = path.join(AUTHORING_DIST, "assets");
-    const jsFiles = readdirSync(assetsDir).filter((f) => f.endsWith(".js") && !f.startsWith("babel-"));
-    // Find a chunk whose map actually maps back to OUR source (this app's
-    // own `src/`, or a first-party package it bundles) — not just the first
-    // `.map` file alphabetically, which is as likely to be a vendored
-    // dependency's own chunk with zero first-party mappings (reproduced:
-    // `base-*.js.map`'s first mapping resolved to `node_modules/dequal`,
-    // not anything under `src/`).
+const FIXTURE_SOURCE = `export function renderWidget(x: number): number {
+  if (x < 0) throw new Error("boom");
+  return x * 2;
+}
+`;
+
+// A plain object, not \`defineConfig({...})\` from "vite" — this file has no
+// node_modules of its own (a fresh temp dir), so importing "vite" here
+// would need its own resolution setup; a plain default export needs none,
+// and vite accepts it exactly the same way.
+const FIXTURE_VITE_CONFIG = `export default {
+  logLevel: "silent",
+  build: {
+    outDir: "dist",
+    sourcemap: true,
+    minify: true,
+    lib: { entry: "./app.ts", formats: ["es"], fileName: () => "app.js" },
+  },
+};
+`;
+
+/** Builds a minimal, self-contained (one file, one function) fixture with a
+ *  REAL `vite build --sourcemap`, into a fresh temp dir — fast (one small
+ *  entry, no plugins) and fully deterministic: nothing here depends on
+ *  anything else in this repo having been built first. Caller owns
+ *  cleanup (`rm(dir, { recursive: true, force: true })`). */
+async function buildFixture() {
+  const dir = await mkdtemp(path.join(tmpdir(), "o11y-symbolicate-criterion5-"));
+  await writeFile(path.join(dir, "app.ts"), FIXTURE_SOURCE);
+  await writeFile(path.join(dir, "vite.config.mjs"), FIXTURE_VITE_CONFIG);
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [VITE_BIN, "build", "--sourcemap"], {
+      cwd: dir,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let log = "";
+    child.stdout.on("data", (d) => (log += d));
+    child.stderr.on("data", (d) => (log += d));
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`vite build exited ${code}:\n${log}`))));
+  });
+  return dir;
+}
+
+test("exit criterion 5: an exception from a real vite build (self-built fixture) resolves to a src/ file and line", async () => {
+  const dir = await buildFixture();
+  try {
     const { SourceMapConsumer } = await import("source-map-js");
-    let mapFile = null;
-    let mapText = null;
+    const mapText = readFileSync(path.join(dir, "dist", "app.js.map"), "utf8");
+    const consumer = new SourceMapConsumer(JSON.parse(mapText));
     let probe = null;
-    for (const jsFile of jsFiles) {
-      const candidate = `${jsFile}.map`;
-      const candidatePath = path.join(assetsDir, candidate);
-      if (!existsSync(candidatePath)) continue;
-      const text = readFileSync(candidatePath, "utf8");
-      const consumer = new SourceMapConsumer(JSON.parse(text));
-      let found = null;
-      consumer.eachMapping((m) => {
-        if (found || m.originalLine === null || !m.source) return;
-        if (/^(?:\.\.\/)*(?:apps\/authoring|packages\/[\w-]+)\/src\//.test(m.source)) found = m;
-      });
-      if (found) {
-        mapFile = candidate;
-        mapText = text;
-        probe = found;
-        break;
-      }
-    }
-    assert.ok(mapFile && probe, "expected at least one chunk whose map resolves back to first-party src/ code");
+    consumer.eachMapping((m) => {
+      if (probe || m.originalLine === null || !m.source) return;
+      probe = m;
+    });
+    assert.ok(probe, "expected at least one mapping back to the fixture's own app.ts");
 
-    const jsFileName = mapFile.slice(0, -".map".length);
     const frameLine = formatStackFrame({
-      filename: `https://demos.handsontable.com/assets/${jsFileName}`,
+      filename: "https://demos.handsontable.com/assets/app.js",
       function: "x",
       lineno: probe.generatedLine,
       colno: probe.generatedColumn + 1, // formatStackFrame/parseLine expect 1-based colno
@@ -215,20 +257,48 @@ test(
     const heapBefore = process.memoryUsage().heapUsed;
     const startedAt = performance.now();
     const [resolved] = await symbolicateResourceLogs([record], {
-      getMap: async (key) => (key === `sourcemaps/deadbeef1234/assets/${jsFileName}.map` ? mapText : null),
+      getMap: async (key) => (key === "sourcemaps/deadbeef1234/assets/app.js.map" ? mapText : null),
     });
     const elapsedMs = performance.now() - startedAt;
     const heapDeltaMb = (process.memoryUsage().heapUsed - heapBefore) / (1024 * 1024);
 
     const body = resolved.scopeLogs[0].logRecords[0].body.stringValue;
-    assert.match(body, /src\//, `expected a resolved src/… frame, got:\n${body}`);
+    assert.match(body, /app\.ts/, `expected a resolved app.ts frame, got:\n${body}`);
     console.log(
-      `[o11y-symbolicate] real-build probe: ${elapsedMs.toFixed(1)}ms wall, ~${heapDeltaMb.toFixed(1)}MB Node heap delta (both proxies — see the task Outcome for the platform-measured number)`,
+      `[o11y-symbolicate] real-build probe (self-built fixture): ${elapsedMs.toFixed(1)}ms wall, ~${heapDeltaMb.toFixed(1)}MB Node heap delta (both proxies — see the task Outcome for the platform-measured number)`,
     );
-    // Wall time as a CPU proxy — see the task Outcome for why this is not
-    // the authoritative measurement of the 500 ms CPU budget (Worker CPU
-    // time cannot be read from inside the isolate; the sandbox probe's
-    // platform-reported CPU is the real evidence).
+    // Wall time as a CPU proxy — Worker CPU time cannot be read from inside
+    // the isolate; the sandbox probe's platform-reported CPU is the real
+    // evidence for the 500ms budget itself (see the task Outcome).
     assert.ok(elapsedMs < 500, `resolution took ${elapsedMs}ms wall time, expected well under 500ms`);
-  },
-);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("exit criterion 5: a Babel-chunk frame from a real vite build is left unparsed even with a matching map", async () => {
+  // The fixture's OWN app.js is deliberately reused, RENAMED to a
+  // babel-*.js filename — proving `isBabelChunk`'s skip fires against a
+  // real, non-trivial map (not just the hand-built one-mapping map the
+  // unit test above this uses), the same way a real Babel compiler chunk
+  // would be skipped in production.
+  const dir = await buildFixture();
+  try {
+    const mapText = readFileSync(path.join(dir, "dist", "app.js.map"), "utf8");
+    const frameLine = formatStackFrame({
+      filename: "https://demos.handsontable.com/assets/babel-abc123.js",
+      function: "x",
+      lineno: 1,
+      colno: 1,
+    });
+    const record = exceptionRecord(["Error: babel chunk probe", frameLine]);
+
+    const [resolved] = await symbolicateResourceLogs([record], {
+      getMap: async (key) => (key === "sourcemaps/deadbeef1234/assets/babel-abc123.js.map" ? mapText : null),
+    });
+
+    assert.deepEqual(resolved, record, "a babel-*.js frame must be left byte-for-byte unparsed, even when a real map exists for it");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
