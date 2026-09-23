@@ -520,3 +520,121 @@ Commit: `3b7dcebab` — "fix(runner): T04 fix round -- rule tests, alert-eval-er
 ready-only p95". Not amended, per instruction. `feat/runner-observability` was not merged
 into this branch this round — T03 still has not merged, per the reviewer's explicit
 instruction to wait.
+
+### Merge (T03 phase A, T08, T12 → this branch)
+
+`git merge feat/runner-observability` (T03 phase A merged at `ff1643dda`, plus T08 and
+T12). Four conflicts, all in files COMMON.md's dispatch note already named as expected:
+`workers/api/src/reconcile.ts`, `workers/o11y/src/env.ts`, `workers/o11y/src/inbox/writer.ts`,
+`workers/o11y/src/index.ts`. A fifth issue, not flagged as a conflict by git (both sides
+inserted an identical key at different line numbers): a duplicate `"triggers"` block in
+`workers/o11y/wrangler.jsonc`.
+
+**`reconcile.ts`** — additive, no functional overlap: kept T04's `RECONCILE_TARGETS`
+(the per-script SKU iteration) and its `emitPoint` import alongside T12's
+`rollupExampleDaily` and its `serviceEnvironment` import. `rollupExampleDaily` is its own
+function later in the file, untouched by either side's conflict hunk.
+
+**`env.ts`** — two conflicts, both purely interleaved additions (T03's ledger/backlog RPC
+methods — `resolveWakes`, `backlog`, `nextWrittenKeys`, `markKeysProvisional`, `rejectKey`,
+`reopenWindow`, `currentWakeId` — and local-only `O11Y_LOCAL_*` envVars; T04's alert-state
+RPC methods and `RUNNER_EVENTS_CLICKHOUSE_URL`). Kept both sides in full.
+
+**`inbox/writer.ts`** — same shape: T03's ledger imports (`ledger.js`, `getGrafanaBoxStub`,
+`listInboxObjects`) and T04's alert/heartbeat imports (`alerts/inbox-state.js`) both kept;
+no method-body conflicts (T03 and T04 added distinct class methods, never touched the
+same lines).
+
+**`index.ts`** — the one conflict with a real decision. T04's placeholder `scheduled()`
+(stamped `heartbeat.lastCron`, called `runAlerts`) is **deleted entirely**. T03's real
+`handleScheduled` (the backlog scan/wake, already gated on `drainsPaused` — see below) is
+the one surviving `scheduled()` export, per Workers' one-`scheduled`-per-Worker limit; it
+now does three independent things per tick, each under its own `ctx.waitUntil` so a
+failure in one never skips another:
+1. `inboxWriter(env).stampCronHeartbeat(Date.now())` — **exactly once**. T03's own
+   backlog/wake code never writes `heartbeat.lastCron` anywhere (confirmed by
+   `grep -rn "lastCron" workers/o11y/src/inbox/` before this merge — no hits outside
+   `stampCronHeartbeat` itself); without this call the watchdog would read a permanently
+   stale `lastCron`.
+2. `handleScheduled(env, ctx)` — T03's backlog scan and conditional wake.
+3. `runAlerts(env, ctx)` — T04's alert evaluation, per COMMON.md's explicit "call
+   `runAlerts` from T03's handler" instruction.
+
+`heartbeat()` (`InboxWriter`, T04's RPC method) needed no code change to "read T03's
+`lastCron`" — it already reads the generic `HEARTBEAT_STORAGE_KEY` regardless of which
+cron wrote it; the merge just makes sure exactly one call site writes it, inside the one
+surviving `scheduled()`.
+
+**`wrangler.jsonc`'s duplicate `"triggers"` block** — the auto-merge (no conflict marker,
+since git resolves non-overlapping line insertions silently) left two
+`"triggers": { "crons": ["*/10 * * * *"] }` entries. Removed T04's (the one with the
+now-stale "T04's placeholder is the only handler" comment); kept T03's (whose comment
+already correctly says "T04 extends the same `scheduled()` handler").
+
+**Closing the "crossing the cap stops backlog wakes; a Grafana visit still wakes the
+box" acceptance criterion** (item 4): T03's `handleScheduled` already read the right
+flag going into the merge — `writer.backlog()` (T03's ledger-backed method) returns
+`drainsPaused` read from the same `DRAINS_PAUSED_STORAGE_KEY` `alerts/index.ts
+#canWakeForBacklog`/`InboxWriter.setDrainsPaused` (T04's own methods) read and write, and
+`handleScheduled` already refused the wake on `if (backlog.drainsPaused) return;`. What
+was missing was the test — this task could not write it before T03 merged, since the
+wake path did not exist. Added `pipeline/o11y-cap-wake.test.mjs` (2 cases), driving the
+REAL merged `scheduled()` handler and the REAL `handleGrafana` against a REAL `InboxWriter`
+Durable Object (not fakes of either RPC surface), proving both halves of the criterion:
+
+1. **Backlog wake refused, then wakes once resolved.** Seeds a genuinely old (2h)
+   `written` inbox key via a custom `.list()`-capable local R2 fake (the shared
+   `o11y-harness.mjs#makeR2Bucket` has no `list()` — nothing needed it before this test),
+   sets `drainsPaused` via the real DO, calls `worker.scheduled(...)` — zero wake calls.
+   Clears `drainsPaused` on the same DO, calls `scheduled()` again with the identical
+   backlog — exactly one `wake("backlog")` call.
+2. **Grafana visit wake unaffected.** Sets `drainsPaused` via the real DO (proving it's
+   truly irrelevant to this path, not merely untested), calls `handleGrafana` directly
+   (DEV_ADMIN local Access bypass) — the box still answers and `wake("visit")` still
+   fired. `grafana/proxy.ts` never reads `drainsPaused` at all, confirmed by code reading,
+   not just by this test's own pass.
+
+**Revert evidence**: temporarily changed `handleScheduled`'s `if (backlog.drainsPaused)
+return;` to `if (false && backlog.drainsPaused) return;` — `not ok 1` on the backlog-wake
+test (visit-wake test stayed green, as it should, since it never touches that line);
+reverted, both tests re-pass.
+
+**A design choice recorded, not left implicit**: `handleScheduled` was NOT changed to
+call `alerts/index.ts#canWakeForBacklog(env)` as a second, separate RPC round trip to the
+same `InboxWriter` DO. `writer.backlog()` already fetches `drainsPaused` in the same call
+that computes the backlog itself (one RPC, not two); `canWakeForBacklog` and
+`backlog().drainsPaused` read the identical `DRAINS_PAUSED_STORAGE_KEY` by construction —
+duplicating the round trip would cost a cron tick an extra DO hop for no behavioural
+difference. Documented inline at the call site (`index.ts`) rather than left as a silent
+divergence between "the function COMMON.md named" and "what actually runs".
+
+**Every "this task's own placeholder `scheduled()`" doc comment** left over from before
+the merge (`env.ts` ×2, `alerts/index.ts` ×2, `alerts/rules.ts` ×1) was swept and rewritten
+to describe the single merged handler — a stale comment claiming a deleted code path still
+exists is worse than no comment.
+
+**`pipeline/o11y-symbolicate.test.mjs`'s "exit criterion 5" reported, not fixed, per
+instruction**: it SKIPs (not fails) in this worktree —
+`# SKIP apps/authoring/dist does not exist — run 'pnpm --filter authoring build' first`.
+`apps/authoring` was never built here. A known environment issue, routed elsewhere per
+the merge instruction; not touched.
+
+**Verify — commands run raw (not `rtk proxy`, per the merge instruction), exit codes**:
+
+```
+pnpm install                                                      exit=0
+pnpm --filter @handsontable/demo-runtime build                    exit=0
+pnpm -r run typecheck                                              exit=0
+pnpm test    exit=1 (1655 tests, 1651 pass, 1 known baseline failure
+                      — theme-presets-version.test.mjs — 1 known skip
+                      — o11y-symbolicate.test.mjs's exit criterion 5,
+                      apps/authoring/dist absent — 2 todo, 0 other failures)
+( cd workers/o11y && npx wrangler deploy --dry-run )                exit=0
+( cd workers/api && npx wrangler deploy --dry-run ... )             exit=0
+node scripts/check-test-presence.mjs feat/runner-observability
+                                            exit=0 (20 source file(s) changed, matching test change)
+```
+
+Merge commit: `6b6c24fd8` — "Merge feat/runner-observability (T03 phase A, T08, T12)
+into T04", two parents (`4112b15e5` this branch, `ff1643dda`
+`feat/runner-observability`). Working tree clean afterward.
