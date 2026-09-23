@@ -509,7 +509,7 @@ export async function queryExampleEventTotals(
   if (!env.CF_ACCOUNT_ID || !env.AE_SQL_TOKEN) {
     throw new Error(
       "queryExampleEventTotals: AE_SQL_TOKEN and/or CF_ACCOUNT_ID not configured for the API worker " +
-        "(contract §2, run-and-deploy.md step 6b) — refusing to treat this as zero example.* events",
+        "(contract §2, run-and-deploy.md 'Cost guardrails (one-time)') — refusing to treat this as zero example.* events",
     );
   }
   const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/analytics_engine/sql`, {
@@ -518,8 +518,15 @@ export async function queryExampleEventTotals(
     body: sql,
   });
   if (!res.ok) throw new Error(`queryExampleEventTotals: Analytics Engine SQL API ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const body = (await res.json()) as { data?: ExampleEventRow[] };
-  return body.data ?? [];
+  const body = (await res.json()) as { data?: unknown };
+  // C-I1: a 200 with an unexpected shape (`data` missing or not an array —
+  // an API contract change, a truncated response, ...) must not silently
+  // degrade to "zero rows" either. `?? []` on a bare `undefined` would still
+  // let `writeExampleDaily`'s DELETE run against nothing to replace it.
+  if (!Array.isArray(body.data)) {
+    throw new Error(`queryExampleEventTotals: Analytics Engine SQL API returned no "data" array: ${JSON.stringify(body).slice(0, 200)}`);
+  }
+  return body.data as ExampleEventRow[];
 }
 
 /** The D1 write: a real `DELETE` for the day, then one `INSERT OR REPLACE`

@@ -11,10 +11,12 @@
 // `PRIMARY KEY (day, kind, ref, framework, ht_major)` constraint, not about a
 // mock that never enforced one.
 //
-// `queryExampleEventTotals` (the live AE/ClickHouse HTTP read) is NOT
-// exercised here — this task has no Analytics Engine credentials
-// (COMMON.md) and no live ClickHouse in this run; see the task Outcome for
-// what was and was not verified there.
+// `queryExampleEventTotals`'s live AE/ClickHouse HTTP read is NOT exercised
+// here — this task has no Analytics Engine credentials (COMMON.md) and no
+// live ClickHouse in this run; see the task Outcome for what was and was not
+// verified there. Its production PRE-FLIGHT config guard (C-I1 fix round: a
+// missing AE_SQL_TOKEN/CF_ACCOUNT_ID throws before any `fetch` happens) IS
+// exercised below, since it needs no credential or network access at all.
 //
 // Run: node --experimental-strip-types --test pipeline/example-daily-rollup.test.mjs
 
@@ -191,11 +193,33 @@ test("queryExampleEventTotals: production with no AE_SQL_TOKEN/CF_ACCOUNT_ID THR
   );
 });
 
+test("queryExampleEventTotals: production, a 200 response with no data array THROWS, never degrades to []", async () => {
+  // A response shape change or a truncated body must not read as "zero
+  // events today" either — same C-I1 rule as the missing-credential case
+  // above, one step further down the same function.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ meta: [], rows: 0 }), { status: 200 });
+  try {
+    const env = { PREVIEW_HOST: "demos.handsontable.com", AE_SQL_TOKEN: "tok", CF_ACCOUNT_ID: "acct" };
+    await assert.rejects(
+      () => queryExampleEventTotals(env, "2026-09-22 00:00:00", "2026-09-23 00:00:00"),
+      /no "data" array/,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("rollupExampleDaily: a misconfigured production read is refused loudly and never deletes the day's rows", async () => {
   const db = freshDb();
-  // Seed a prior run's row for the day, to prove it survives.
-  await writeExampleDaily({ DB: fakeD1(db) }, "2026-09-22", [
-    { day: "2026-09-22", kind: "docs", ref: "guides/x/x.md", area: "Columns", framework: "react", ht_major: "18", opens: 10, engaged: 3, forked: 0, saved: 1, shared: 0 },
+  // `rollupExampleDaily` computes its own `previousUtcDay()` internally, from
+  // the real clock — seed the row under THAT day, not a hardcoded literal,
+  // or this test would prove nothing on any date but the one it was written
+  // on (the DELETE would target a different day than the seeded row, so
+  // "the row survives" would pass whether or not the fix is present).
+  const { day } = previousUtcDay();
+  await writeExampleDaily({ DB: fakeD1(db) }, day, [
+    { day, kind: "docs", ref: "guides/x/x.md", area: "Columns", framework: "react", ht_major: "18", opens: 10, engaged: 3, forked: 0, saved: 1, shared: 0 },
   ]);
   let batchCalls = 0;
   const spyD1 = { ...fakeD1(db), batch: (...args) => { batchCalls += 1; return fakeD1(db).batch(...args); } };

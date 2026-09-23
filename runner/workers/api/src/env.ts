@@ -129,7 +129,7 @@ export interface Env {
   RUNNER_EVENTS_CLICKHOUSE_URL?: string;
   /** Local mode: ClickHouse HTTP password for the sink above (`.dev.vars`
    *  only). Production: the Analytics Engine SQL API token, a real Worker
-   *  secret (`wrangler secret put AE_SQL_TOKEN`, run-and-deploy.md step 6b) —
+   *  secret (`wrangler secret put AE_SQL_TOKEN`, run-and-deploy.md 'Cost guardrails (one-time)') —
    *  now a contract §2 API-worker row (C-I1). Read by
    *  `reconcile.ts#queryExampleEventTotals` for the nightly `example_daily`
    *  rollup (ADR-0042 §5); absent in production means that read throws
