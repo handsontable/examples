@@ -99,12 +99,25 @@ Full narrative, every command/output, and the sandbox-probe transcript are
 in `.superpowers/sdd/README/T03-report.md` (outside this directory, per
 COMMON.md) — this section is the condensed record.
 
+**Mid-task controller change**: the sandbox probe (a)–(e) below was
+dispatched and completed (with cleanup) under this task's original
+instructions before a controller message arrived splitting the work into
+"phase A: local only" (this pass) and a future "phase B: probes." The
+probe work below is therefore **already done**, not "pending phase B" —
+recorded here for the controller's own review rather than repeated. No
+new sandbox probe was started or is in flight after the split message
+arrived, per its own instruction.
+
 **Controller attention required before this is treated as accepted**:
-exit criterion 1 did not pass on the sandbox platform with the
-bucket-scoped R2 credential (see "Sandbox probe" below) — ADR-0041 §L's
-own trigger condition. Everything else (ledger, drain, symbolication, wake
-orchestration, Grafana proxy, the local mechanics of exit criterion 2, all
-tests) is built, tested and passing.
+exit criterion 1 does not pass — reproduced **both** on the sandbox
+platform with the bucket-scoped R2 credential AND locally against
+same-host MinIO (T03-D2, refined with the local reproduction's more
+precise root-cause signature below) — ADR-0041 §L's own trigger
+condition. Everything else (ledger, drain, symbolication, wake
+orchestration, Grafana proxy, Access gating, the fixture replay, the
+out-of-order-window measurement, all unit tests) is built, tested and
+passing, including fresh local, non-probe evidence gathered after the
+phase split (see "Local acceptance walkthrough" below).
 
 ### What was built
 
@@ -251,6 +264,43 @@ does not build a local Slack capture server (T03-D7).
   against production's real bucket name pattern in case something is
   bucket-name- or path-prefix-sensitive in a way this probe's shared
   single-bucket setup (T03-D8) did not exercise.
+  **Update, after the controller's phase split, from a local
+  reproduction (`containers/o11y/compose.yml`'s `minio`/`clickhouse`
+  services only, reached from `wrangler dev`'s own local Container via
+  `host.docker.internal` — see `box.ts#buildLocalEnvVars`, this pass's own
+  addition)**: the SAME symptom reproduces **locally against same-host
+  MinIO**, with `docker logs` visible this time (opaque on the sandbox).
+  `docker exec`-ing into the running box confirms real network
+  connectivity to MinIO (`wget http://host.docker.internal:<port>/minio/health/live`
+  succeeds) and Loki's own periodic `"uploading tables"` log line recurs
+  every ~30–60 s with no adjacent error. **At `docker stop` (SIGTERM,
+  matching the platform's own `stop()`), the real error finally surfaces**:
+  ```
+  level=error caller=cached_client.go:189 msg="failed to build table names cache" err="RequestCanceled: request context canceled\ncaused by: context canceled"
+  level=error caller=compactor.go:534 msg="failed to run compaction" err="failed to list tables: RequestCanceled: request context canceled\ncaused by: context canceled"
+  ```
+  immediately preceded by the querier's own scheduler-processor shutdown
+  (`"error processing requests from scheduler" err="rpc error: code = Canceled desc = context canceled"`)
+  and immediately followed by `"stopping table manager"` →
+  `"uploading tables"` (the SAME log line the periodic, apparently-
+  successful ticks produce) — but this is the shutdown-triggered final
+  flush, the ONE upload attempt that actually matters for the marker, and
+  it inherits an already-canceled context from whatever shuts down just
+  before it in Loki's own multi-module shutdown sequence. **This
+  reframes T03-D2 as very likely a genuine Loki-shutdown-sequencing bug
+  or config interaction specific to this image/version, not an R2
+  credential, network-latency, or gzip-encoding issue** — it reproduces
+  identically on same-host MinIO with zero network latency, which rules
+  those categories out far more conclusively than the sandbox evidence
+  alone could. Still not fully root-caused (which specific module's
+  shutdown ordering cancels the shared context, and why T01's own earlier
+  local testing did not hit this — plausibly a difference in how long T01's
+  own test wakes stayed open before stopping, giving a period upload a
+  clean, uncontested window that this task's shorter test wakes did not)
+  — the concrete next step is now much narrower: trace Loki's own
+  `services.Manager` shutdown order for this exact config and pin down
+  which module's context the table manager's shutdown-triggered upload is
+  (incorrectly) sharing.
 - **T03-D3 — `GrafanaBox#doWake` now fires `startAndWaitForPorts()` in the
   background.** Found on the real sandbox platform (not guessed):
   `start()` (the path `wake()` uses) never calls `state.setHealthy()` —
@@ -434,6 +484,72 @@ account `e17e41cc82bda15dfa63960aa172fb87`:
   `t03-retention-clock-test` lifecycle rule and its two objects — see (e).
 - **Not deleted**: the R2 bucket `o11y-probe-t03-loki` itself and the
   probe API token/R2 key — the user deletes these (COMMON.md).
+
+### Local acceptance walkthrough (added after the controller's phase split)
+
+Added `box.ts#buildLocalEnvVars` (this pass's own new delta, see the
+commit) so the local box reaches `containers/o11y/compose.yml`'s
+`minio`/`clickhouse` services (started standalone, without the `box`
+service, ports published to the host) via Docker's `host.docker.internal`
+— `wrangler dev`'s local Container is not on `compose.yml`'s own network.
+Verified reachable with a direct `docker exec ... wget
+http://host.docker.internal:<port>/minio/health/live` from inside the
+running box.
+
+**Verified locally, real evidence, against `pnpm o11y:dev`'s own
+`wrangler dev` process** (not simulated):
+
+- `GET /grafana/*` with no JWT and no `DEV_ADMIN` → **403**, for both
+  `/grafana/` and `POST /grafana/_o11y/reopen`.
+- With `DEV_ADMIN` set (`O11Y_ENV=local`): the waking page (exact HTML,
+  `meta refresh`) while not ready, then a real Grafana page once ready.
+  `GET /grafana/api/user` confirms `auth.proxy` signed in as
+  `dev@handsontable.com` (`"authLabels":["Auth Proxy"]`).
+- A client-supplied `x-o11y-grafana-user: attacker@evil.example` header
+  is ignored — `/grafana/api/user` still reports the verified identity.
+- `node scripts/o11y-replay-fixtures.mjs --base http://localhost:4400`:
+  every fixture (`collect` ×5, `v1/logs` ×6 including the deliberate
+  duplicate-delivery pair, `deploy`, `hooks/sentry`) answers `204`.
+- A real `docker kill -s KILL` against the running box mid-wake (exit
+  criterion 2's own required method): the container is gone immediately;
+  the next `/grafana/*` request correctly triggers a fresh wake (a new
+  `WAKE_ID` observed via `docker inspect`).
+- The out-of-order-window measurement (T03-D1) — see its own section
+  above, run via `compose.yml` directly.
+- Exit criterion 5 (symbolication) — see "Verify" below, the real
+  `vite build --sourcemap` evidence, run independent of `wrangler dev`.
+
+**Not completed locally, same root cause as T03-D2**: "wake → drain →
+LogQL at event times → stop → marker → commit on next tick" end to end.
+The drain mechanism itself is unit-tested and was confirmed pushing real
+fixture data through `InboxWriter`'s pack cycle (real R2-binding objects
+observed via `/cdn-cgi/local/explorer/api/r2/buckets/.../objects`), but
+no wake in this local environment ever produced a queryable Loki line
+*after* a stop-and-restart cycle, because — exactly like the sandbox —
+no wake ever produces a clean marker (T03-D2's local reproduction). One
+additional, separate local-only observation while chasing this: after a
+`docker kill`-induced restart, at least one subsequent wake's own
+container exited again within ~20 s without any `POST /otlp/v1/logs`
+line appearing in its own `docker logs` at all — i.e. `drainStep` reached
+`#finishDrain` (self-stop) without this task being able to confirm it
+had processed the pending written keys first. This may be a distinct,
+`wrangler dev`-local-simulation-specific timing/ordering issue on top of
+T03-D2, or it may be the SAME issue manifesting differently when a
+wake's own drain has nothing to durably persist regardless — not
+resolved given the time available; flagged for whoever next debugs this
+locally, alongside a concrete repro (fresh `.wrangler/state`, replay
+fixtures, wait for pack, wake, watch `docker logs -f` on the box
+container).
+
+Given the above, **"visitor-kept-awake box"**, **"crashed wake returns to
+backlog"**, and **criterion 15** were only re-confirmed via their own
+existing unit tests (`o11y-wake.test.mjs`'s "a drain wake with an active
+Grafana user does not call stop()" and "drainStep is a no-op once a
+newer wake has superseded…", `o11y-ledger.test.mjs`'s resolve/reopen
+cases) plus the SANDBOX probe's own real evidence (criterion 15's real
+`/loki/api/v1/labels` result, already recorded above) — not re-proven
+through a fresh full local wake cycle, since that cycle is exactly what
+T03-D2 blocks.
 
 ### Local integration
 
