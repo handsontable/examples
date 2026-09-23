@@ -10,6 +10,7 @@ import {
   isEdgelessForeignSessionStart,
   isOfficeScannerRejection,
 } from "../apps/authoring/src/eventGate.ts";
+import { resolveSentryScope, reportsDiagnosticToSentry } from "../apps/authoring/src/sentryScope.ts";
 
 // DEV-2540. Three classes of traffic reached the production Sentry project that had
 // no business being there — local dev sessions, a Playwright run pointed at
@@ -341,4 +342,39 @@ test("N6: a foreign-shaped event under a different context is reported", () => {
 test("N7: an event with no tags at all does not throw and is not dropped", () => {
   assert.equal(isEdgelessForeignSessionStart({}), false);
   assert.equal(isEdgelessForeignSessionStart({ tags: {} }), false);
+});
+
+// ── T06, contract §11 / ADR §E.3: VITE_SENTRY_SCOPE ──────────────────────────────
+//
+// `sentryScope.ts` is import-free for the same reason as `reportingGate.ts` — see
+// its own header. The truth table: `"full"` is the default for every input other
+// than the exact string `"uncaught"`, and `reportsDiagnosticToSentry` only ever
+// narrows `reportingEnabled`, never widens it.
+
+test("resolveSentryScope: only the literal 'uncaught' opens the narrow scope", () => {
+  assert.equal(resolveSentryScope("uncaught"), "uncaught");
+});
+
+test("resolveSentryScope: absent, empty, or any other string stays 'full'", () => {
+  for (const raw of [undefined, "", "Uncaught", "UNCAUGHT", "full", "off", "uncaught "]) {
+    assert.equal(resolveSentryScope(raw), "full", `raw=${JSON.stringify(raw)}`);
+  }
+});
+
+test("reportsDiagnosticToSentry: full scope + reporting enabled -> true", () => {
+  assert.equal(reportsDiagnosticToSentry(true, "full"), true);
+});
+
+test("reportsDiagnosticToSentry: uncaught scope closes it even though reporting is enabled", () => {
+  // The launch-plan flip (ADR §E.3): once this ships, a handled diagnostic no
+  // longer reaches Sentry at all, on the production host, with reporting on.
+  assert.equal(reportsDiagnosticToSentry(true, "uncaught"), false);
+});
+
+test("reportsDiagnosticToSentry: never widens a closed reportingEnabled gate", () => {
+  // The regression this guards: a scope switch must not become a second way to
+  // turn Sentry on when the production/automation gate (reportingGate.ts) is
+  // already closed — full scope on a closed gate still reports nothing.
+  assert.equal(reportsDiagnosticToSentry(false, "full"), false);
+  assert.equal(reportsDiagnosticToSentry(false, "uncaught"), false);
 });

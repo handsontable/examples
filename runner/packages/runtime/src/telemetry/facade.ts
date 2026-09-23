@@ -37,28 +37,33 @@ function mintPageLoadId(): string {
  * real, stable id — call sites that read it to tag `x-hot-session` before init
  * has run must not see an empty string.
  *
- * T02-D — the id is minted lazily, on the first `pageLoadId()` call, not
- * eagerly at module scope (see T02's task Outcome, discovered running a real
- * `wrangler dev` for `workers/o11y`, which imports this barrel transitively
- * through `@handsontable/demo-runtime/telemetry`): an eager
- * `mintPageLoadId()` at module-evaluation time called `crypto.randomUUID()`
- * before any request handler ran, and Workers refuses "asynchronous I/O …
- * and generating random values … within global scope," failing the whole
- * Worker's startup with `Disallowed operation called within global scope`.
- * Outside a Worker (the browser, plain Node) this only changes *when* the id
- * is minted, not its value or stability — `pageLoadId()` still returns the
- * same id on every call for the life of the module, per its own doc comment
- * above. This is a fix to a file outside T02's own "Owns" row
- * (`packages/runtime/src/telemetry/facade.ts`, T00's), kept minimal and
- * reported explicitly, per COMMON.md's allowance for exactly this case: a
- * real bug that blocks T02's own required `wrangler dev` verification.
+ * Lazy on purpose (T05, cross-task fix — see that task's Outcome): the first
+ * version minted the id eagerly in a module-top-level IIFE, which called
+ * `crypto.randomUUID()` at import time. That is disallowed "global scope"
+ * async/random I/O under workerd — `Uncaught Error: Disallowed operation
+ * called within global scope ... generating random values are not allowed
+ * within global scope`, thrown at Worker boot, not at a lint or a type error.
+ * Measured against a real `wrangler dev`: this module was never actually
+ * imported by a running Worker before (T00 typechecked it via throwaway probe
+ * files only), so the crash was latent until a real consumer imported the
+ * barrel. `pageLoadId()` still returns the exact same id on every call after
+ * the first — the contract above is unchanged, only *when* the mint happens.
+ *
+ * T02 independently hit and fixed the same bug running a real `wrangler dev`
+ * for `workers/o11y` (see T02's task Outcome) — T05's fix (this version) is
+ * kept on merge. T02's own regression test
+ * (`pipeline/telemetry-facade.test.mjs`) was removed on merge: it stubbed
+ * `crypto.randomUUID`, cache-busted an import, and asserted zero calls at
+ * import / one call on first `pageLoadId()` — the exact same technique and
+ * assertions as `pipeline/telemetry-facade-boot-safety.test.mjs` below,
+ * which stays as the one copy of that case.
  */
-let lazyPageLoadId: string | undefined;
+let noopPageLoadId: string | undefined;
 export const noopTelemetry: Telemetry = {
   metric() {},
   event() {},
   error() {},
-  pageLoadId: () => (lazyPageLoadId ??= mintPageLoadId()),
+  pageLoadId: () => (noopPageLoadId ??= mintPageLoadId()),
 };
 
 export interface RecordedMetricCall {

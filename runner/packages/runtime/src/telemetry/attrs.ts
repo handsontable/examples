@@ -85,6 +85,51 @@ export const STRUCTURED_METADATA_KEYS = [
 ] as const;
 export type StructuredMetadataKey = (typeof STRUCTURED_METADATA_KEYS)[number];
 
+/**
+ * §3 "Diagnostic tags" — flat, non-dotted metadata on a handled-error or
+ * diagnostic-event report only (§6). Distinct from `STRUCTURED_METADATA_KEYS`:
+ * these are not hoisted to a Loki resource attribute or a structured-metadata
+ * field by `convert.ts#hoistAttributes` (that function only recognises
+ * `RESOURCE_ATTR_KEYS` and `STRUCTURED_KEY_SET`) — this allowlist only
+ * decides whether the browser-side (and re-run, server-side) scrub keeps them
+ * at all; what ingest does with a kept-but-not-hoisted attribute is the
+ * ingest route's own decision.
+ *
+ * Each entry is a boolean flag, an opaque platform id, an enum-like/bucketed
+ * value, or a reporting call site's own name — never user or request content
+ * (controller ruling, T06 fix round D1):
+ *
+ * - `handled` — `"true"` marks a §6 `error.handled` report (set by the
+ *   browser facade's `Telemetry.error()`, contract §6).
+ * - `context` — the reporting call site's own name (e.g. `tier1-compiler-asset`,
+ *   `versions-fetch`), the same string passed to `fingerprint()`'s `context`
+ *   argument (§7). An open set of short, developer-chosen literals, not free
+ *   text.
+ * - `sentry_event_id` — the ADR §E.2 tee: Sentry's own opaque event id,
+ *   pushed as a Faro event alongside the page-load id going the other way.
+ * - `versions_fetch_attempts`, `versions_fetch_outcome`,
+ *   `versions_fetch_elapsed_bucket`, `versions_fetch_online` — the
+ *   `versions-fetch` diagnostic's own tags (`fetchDiagnostics.ts#diagnosticTags`,
+ *   prefixed by its `context`): a small integer, an enum (`ok`/`transport`/`timeout`),
+ *   a latency bucket (`<1s`, `<5s`, …), and a boolean, all as strings.
+ * - `api_base_origin` — `"same"` \| `"cross"` \| `"localhost"`
+ *   (`fetchDiagnostics.ts#apiBaseOrigin`).
+ * - `net_effective_type` — Chromium's `navigator.connection.effectiveType`
+ *   (e.g. `"4g"`), omitted elsewhere.
+ */
+export const DIAGNOSTIC_TAG_KEYS = [
+  "handled",
+  "context",
+  "sentry_event_id",
+  "versions_fetch_attempts",
+  "versions_fetch_outcome",
+  "versions_fetch_elapsed_bucket",
+  "versions_fetch_online",
+  "api_base_origin",
+  "net_effective_type",
+] as const;
+export type DiagnosticTagKey = (typeof DIAGNOSTIC_TAG_KEYS)[number];
+
 /** One row per §3 resource attribute: its OTLP key, the Loki label it promotes to
  *  (`undefined` when the contract says "no"), and the Analytics Engine blob slot
  *  it fills (`attrs.ts` and `metrics.ts` agree on these — `AE_COLUMNS` in
@@ -117,16 +162,18 @@ export const LOKI_LABELS: readonly string[] = RESOURCE_ATTRS.filter((a) => a.lok
 
 /**
  * §3's forbidden list is enforced as an allowlist, not a denylist (T00-D1, see
- * the task Outcome): `scrub.ts` keeps only `RESOURCE_ATTRS` keys and
- * `STRUCTURED_METADATA_KEYS`, and drops everything else. That satisfies both this
- * file's forbidden-attribute rule and ADR §E.4's "drop unknown attributes" —
- * every forbidden attribute (`url.full`, geo, ASN, the user pseudonym, an email,
- * an IP, a user-agent string) is simply absent from the allowlist, and a future
- * unknown attribute is dropped by the same mechanism without a code change.
+ * the task Outcome): `scrub.ts` keeps only `RESOURCE_ATTRS` keys,
+ * `STRUCTURED_METADATA_KEYS` and `DIAGNOSTIC_TAG_KEYS`, and drops everything
+ * else. That satisfies both this file's forbidden-attribute rule and ADR
+ * §E.4's "drop unknown attributes" — every forbidden attribute (`url.full`,
+ * geo, ASN, the user pseudonym, an email, an IP, a user-agent string) is
+ * simply absent from the allowlist, and a future unknown attribute is dropped
+ * by the same mechanism without a code change.
  */
 export const ALLOWED_ATTRIBUTE_KEYS: ReadonlySet<string> = new Set([
   ...RESOURCE_ATTRS.map((a) => a.key),
   ...STRUCTURED_METADATA_KEYS,
+  ...DIAGNOSTIC_TAG_KEYS,
 ]);
 
 /** §4 blob15 `device`. Only `classify.ts#deviceOf` and the `web_vital` metric use

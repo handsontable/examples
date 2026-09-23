@@ -1,0 +1,383 @@
+{
+  "uid": "o11y-tier2-sessions",
+  "title": "Tier-2 sessions",
+  "tags": [
+    "o11y",
+    "runner"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "type": "query",
+        "label": "Environment",
+        "datasource": {
+          "type": "vertamedia-clickhouse-datasource",
+          "uid": "clickhouse-runner-events"
+        },
+        "query": "SELECT DISTINCT blob3 AS environment FROM runner_events",
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      },
+      {
+        "name": "framework",
+        "type": "query",
+        "label": "Framework",
+        "datasource": {
+          "type": "vertamedia-clickhouse-datasource",
+          "uid": "clickhouse-runner-events"
+        },
+        "query": "SELECT DISTINCT blob6 AS framework FROM runner_events WHERE blob6 != ''",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "ht_major",
+        "type": "custom",
+        "label": "HT major",
+        "query": "15,16,17,18,19,next,none",
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          },
+          {
+            "text": "15",
+            "value": "15"
+          },
+          {
+            "text": "16",
+            "value": "16"
+          },
+          {
+            "text": "17",
+            "value": "17"
+          },
+          {
+            "text": "18",
+            "value": "18"
+          },
+          {
+            "text": "19",
+            "value": "19"
+          },
+          {
+            "text": "next",
+            "value": "next"
+          },
+          {
+            "text": "none",
+            "value": "none"
+          }
+        ],
+        "hide": 0,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "session.start rate by outcome",
+      "description": "ready, at_capacity, container_starting, boot_timeout, budget_denied, error.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, sum(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, outcome ORDER BY t",
+          "format": "time_series",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "session.start_ms p95 by reason (cold/warm)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, reason ORDER BY t",
+          "format": "time_series",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "container.boot_ms p95 by outcome",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'container.boot_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) GROUP BY t, outcome ORDER BY t",
+          "format": "time_series",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "session.end awake seconds, p95 by reason",
+      "description": "pagehide, sleep_after, teardown_failed, budget_closed.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, quantileExactWeighted(0.95)(double3, toUInt32(_sample_interval)) AS p95 FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.end' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) GROUP BY t, reason ORDER BY t",
+          "format": "time_series",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Pool gauge (live/builder) vs cap",
+      "description": "pool.gauge — both series in one panel: double3 (awake, by reason) and double8 (cap, overall) — I3.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, sum(_sample_interval * double3) / sum(_sample_interval) AS avg_value FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t, reason ORDER BY t",
+          "format": "time_series",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, sum(_sample_interval * double8) / sum(_sample_interval) AS cap FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t ORDER BY t",
+          "format": "time_series",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    }
+  ]
+}

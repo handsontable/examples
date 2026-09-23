@@ -115,6 +115,14 @@ Structured metadata only — never a Loki label, never an Analytics Engine index
 `hot.demo_id`, `session.id` (an in-memory page-load id), `cf.ray`, `hot.kind` (the Faro item
 kind: `exception`, `log`, `event`, `measurement`).
 
+Diagnostic tags — flat, non-dotted, never a Loki label, never an Analytics Engine
+index, and not hoisted to structured metadata either (§6): `handled`, `context`,
+`sentry_event_id`, `versions_fetch_attempts`, `versions_fetch_outcome`,
+`versions_fetch_elapsed_bucket`, `versions_fetch_online`, `api_base_origin`,
+`net_effective_type`. Each is a boolean flag, an enum-like/bucketed value, an
+opaque platform id, or the reporting call site's own name — never user or
+request content.
+
 **Never sent to the o11y stack**: the user pseudonym, an email, an IP, a user-agent
 string, a query string or fragment, authored code (including Babel code frames), chat
 text, console output, `url.full`, geo or ASN attributes.

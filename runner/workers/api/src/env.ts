@@ -95,19 +95,34 @@ export interface Env {
   ALGOLIA_INDEX?: string;
   ALGOLIA_API_KEY?: string;
 
-  // ---- Observability (ADR-0041) — scaffold-only additions (T00). Values are
-  // declared here and in wrangler.jsonc so T05 (this file's owner) wires real
-  // usage against a stable shape; nothing in this worker reads them yet.
+  // ---- Observability (ADR-0041). RUNNER_EVENTS/O11Y/SENTRY_SCOPE were T00
+  // scaffold-only additions; this worker (src/telemetry/**) now wires real
+  // usage against them (T05).
   /** Analytics Engine dataset `runner_events` (contract §4), the same binding
    *  name and dataset the o11y worker writes to. */
   RUNNER_EVENTS?: AnalyticsEngineDataset;
   /** Service binding to `handsontable-demos-o11y` — `heartbeat()` for the
-   *  watchdog cron (ADR §F.3), later `AdminReads` (ADR-0043). */
+   *  watchdog cron (ADR §F.3), later `AdminReads` (ADR-0043). Read by T04's
+   *  watchdog, dispatched from the 5-minute cron branch in `scheduled()`. */
   O11Y?: Fetcher;
   /** `full` (default) | `uncaught` (contract §11) — which handled-error
    *  reports also go to Sentry. Absent means `full`, exactly like leaving the
-   *  var out of `wrangler.jsonc` does today. */
+   *  var out of `wrangler.jsonc` does today. See `telemetry/diagnostic.ts`. */
   SENTRY_SCOPE?: "full" | "uncaught";
+  /** `service.version` (contract §2/§D): the full deploy `GITHUB_SHA`, set
+   *  only by the `deploy` script's `--var SERVICE_VERSION:$GITHUB_SHA`
+   *  (`package.json`) — absent under `wrangler dev` and a bare `wrangler
+   *  deploy`. See `telemetry/resource.ts#serviceVersion` for the fallback. */
+  SERVICE_VERSION?: string;
+  /** Local-mode `RUNNER_EVENTS` stand-in (contract §10): ClickHouse HTTP
+   *  endpoint, `.dev.vars` only, never in the committed `wrangler.jsonc` vars
+   *  block. Defaults to `http://localhost:8123` when absent. T05-D: not a
+   *  contract-pinned var name — the contract's §2 API-worker table only names
+   *  `AE_SQL_TOKEN` for the o11y worker; this worker reuses the same
+   *  credential shape for its own local writes. See `telemetry/resource.ts`. */
+  RUNNER_EVENTS_CLICKHOUSE_URL?: string;
+  /** ClickHouse HTTP password for the local sink above (`.dev.vars` only). */
+  AE_SQL_TOKEN?: string;
 
   // Index signature so we can look up a binding by generated name.
   [key: string]: unknown;

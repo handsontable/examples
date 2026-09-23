@@ -41,7 +41,12 @@
     // T02-D16 (fix round, see the task Outcome): the expected `workflow_ref`
     // OIDC claim for the deploy job — T10 must keep this in sync with the
     // real deploy workflow's file path and the ref it runs from.
-    "GITHUB_OIDC_WORKFLOW_REF": "handsontable/examples/.github/workflows/master.yml@refs/heads/master"
+    "GITHUB_OIDC_WORKFLOW_REF": "handsontable/examples/.github/workflows/master.yml@refs/heads/master",
+    // T01 phase-2 addition (env.ts has the full reasoning): duplicates the
+    // `account_id` above because a Worker has no runtime way to read its own
+    // account id, and GrafanaBox needs it to build the Loki bucket's R2 S3
+    // endpoint and the Analytics Engine SQL API URL.
+    "CLOUDFLARE_ACCOUNT_ID": "15111272c53ed0aaf84a908f0c9c7f8b"
     // SERVICE_VERSION (T02 addition, see the task Outcome) is intentionally
     // absent here: the real deploy script sets it via `--var
     // SERVICE_VERSION:$GITHUB_SHA` (the same pattern `docs/observability-contract.md`
@@ -66,24 +71,13 @@
   // `AdminReads` (ADR-0043).
   "services": [{ "binding": "API", "service": "handsontable-demos-api" }],
 
-  // `INBOX_WRITER` (T02 implements) and `GRAFANA_BOX` (T01 implements,
-  // Container-backed once `containers/o11y/` exists) — do-nothing stubs today
-  // (src/env.ts), so this dry-runs without either implementation.
+  // `INBOX_WRITER` (T02, real behaviour: dedupe, fingerprint registry,
+  // row-chunked pack/commit, `recordWake`) and `GRAFANA_BOX` (T01, real
+  // behaviour + the `containers` block below, phase 2).
   //
   // EU jurisdiction for both is a *runtime* call
   // (`env.INBOX_WRITER.jurisdiction("eu")`), not a wrangler.jsonc field — there
   // is no such key on a `durable_objects` binding.
-  //
-  // The `containers` block (image, instance type, max_instances) for
-  // `GrafanaBox` is left out (T00-D7, see the task Outcome): it names a real
-  // Dockerfile under `containers/o11y/`, which does not exist until T01.
-  // Measured: `wrangler deploy --dry-run` accepts the `durable_objects`
-  // binding below even though `GrafanaBox` (env.ts) extends `Container` with
-  // no matching `containers` entry — it just bundles
-  // `@cloudflare/containers`' runtime. A real `wrangler deploy` almost
-  // certainly still needs the entry to schedule anything; this was not
-  // deployed for real to confirm either way. T01 adds it alongside real
-  // container behaviour.
   "durable_objects": {
     "bindings": [
       { "class_name": "InboxWriter", "name": "INBOX_WRITER" },
@@ -91,6 +85,32 @@
     ]
   },
   "migrations": [{ "new_sqlite_classes": ["InboxWriter", "GrafanaBox"], "tag": "v1" }],
+
+  // T00-D7's missing half, added by T01 phase 2 alongside `box.ts`'s real
+  // behaviour. `image` is a path to the Dockerfile (not its directory) —
+  // verified against wrangler 4.136.3's own config schema
+  // (`definitions.ContainerApp.properties.image`). `constraints.jurisdiction`
+  // (not a top-level `jurisdiction` key — also read from the schema, the
+  // task file only said "look up the current wrangler key") is the EU
+  // compliance boundary (ADR-0041 §A/§H); `standard-1` = 1/2 vCPU, 4 GiB
+  // memory, 8 GB disk, matching `containers/o11y/compose.yml`'s local
+  // `deploy.resources` limits so local and real measurements mean the same
+  // thing. `max_instances: 1`: exactly one box exists at a time (ADR §A
+  // "one sleeping box"). `scheduling_policy` deliberately left unset —
+  // Cloudflare's own Containers "Get started" example for a
+  // Durable-Object-managed container (`class_name` + `image` +
+  // `max_instances`, no `scheduling_policy`) omits it too; recorded in the
+  // T01 Outcome which way `wrangler deploy --dry-run` and the sandbox probe
+  // resolved it.
+  "containers": [
+    {
+      "class_name": "GrafanaBox",
+      "image": "../../containers/o11y/Dockerfile",
+      "instance_type": "standard-1",
+      "max_instances": 1,
+      "constraints": { "jurisdiction": "eu" }
+    }
+  ],
 
   // ADR §B.5's Workers rate-limiting binding, gating `collect`/`lite`. T02-D
   // (see the task Outcome): T00 left this out believing it "needs a real

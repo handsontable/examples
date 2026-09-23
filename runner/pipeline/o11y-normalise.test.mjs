@@ -57,6 +57,30 @@ test("Faro exception with a code frame: scrubbed, fingerprinted, hot.kind=except
   assert.ok(item.ingestItem.fingerprint, "authoring surface must feed the new-fingerprint alert");
 });
 
+test("Faro: T06's diagnostic tags (handled, sentry_event_id, ...) survive scrub+hoist into the stored record (merge fix, T02+T06)", async () => {
+  const body = faroFixture("log.json");
+  body.logs[0].context = {
+    ...body.logs[0].context,
+    handled: "true",
+    context: "tier1-compiler-asset",
+    sentry_event_id: "abc123def456",
+    versions_fetch_outcome: "ok",
+    versions_fetch_elapsed_bucket: "<1s",
+  };
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.ok(item.ingestItem);
+  const attrs = item.ingestItem.record.attributes ?? {};
+  assert.equal(attrs.handled, "true");
+  assert.equal(attrs.context, "tier1-compiler-asset");
+  assert.equal(attrs.sentry_event_id, "abc123def456");
+  assert.equal(attrs.versions_fetch_outcome, "ok");
+  assert.equal(attrs.versions_fetch_elapsed_bucket, "<1s");
+  // None of the diagnostic tags belong in resourceAttributes.
+  for (const key of ["handled", "context", "sentry_event_id", "versions_fetch_outcome"]) {
+    assert.ok(!(key in item.ingestItem.record.resourceAttributes), `${key} must not become a resource attribute`);
+  }
+});
+
 test("Faro measurement: one browser metric point, stored record", async () => {
   const body = faroFixture("measurement.json");
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());

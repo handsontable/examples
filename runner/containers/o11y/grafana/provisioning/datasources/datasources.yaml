@@ -1,0 +1,62 @@
+# ADR-0041 §A, §B.5. One Loki datasource per tenant (X-Scope-OrgID), plus the
+# Altinity ClickHouse plugin against the local ClickHouse container in dev or
+# the Analytics Engine SQL API in production. Fixed `uid`s: Grafana's sqlite
+# state is disposable (a fresh DB on every wake), so a dashboard (T09) that
+# references a datasource by uid would break on every wake if these were
+# auto-generated. Grafana expands ${VAR} in provisioning files (documented
+# since v8.0) — do not hard-code an endpoint or credential here.
+apiVersion: 1
+
+datasources:
+  - name: Loki (browser)
+    uid: loki-browser
+    type: loki
+    access: proxy
+    url: http://localhost:3100
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+      maxLines: 1000
+    secureJsonData:
+      httpHeaderValue1: browser
+    editable: false
+    isDefault: false
+
+  - name: Loki (worker)
+    uid: loki-worker
+    type: loki
+    access: proxy
+    url: http://localhost:3100
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+      maxLines: 1000
+    secureJsonData:
+      httpHeaderValue1: worker
+    editable: false
+    isDefault: true
+
+  # vertamedia-clickhouse-datasource ("the Altinity plugin", ADR-0041 §A) —
+  # NOT grafana-clickhouse-datasource. Cloudflare's own Analytics Engine +
+  # Grafana docs point at this exact plugin id and this exact auth shape: a
+  # full URL plus ONE custom HTTP header, never host/port/user/password
+  # fields (the AE SQL API rejects Basic auth outright — verified against a
+  # real ClickHouse HTTP endpoint too, which 403s a bare `Bearer` scheme).
+  # Local ClickHouse and production Analytics Engine need genuinely
+  # different header shapes (ClickHouse HTTP: X-ClickHouse-User/-Key;
+  # AE SQL API: a single `Authorization: Bearer <token>`), so the header
+  # NAMES are env-driven too, not just the values — compose.yml supplies
+  # the local pair; GrafanaBox's envVars (phase 2) supply the production
+  # pair. Never hard-code either shape here.
+  - name: ClickHouse (runner_events)
+    uid: clickhouse-runner-events
+    type: vertamedia-clickhouse-datasource
+    access: proxy
+    url: ${O11Y_CLICKHOUSE_URL}
+    jsonData:
+      httpHeaderName1: ${O11Y_CLICKHOUSE_HEADER1_NAME}
+      httpHeaderName2: ${O11Y_CLICKHOUSE_HEADER2_NAME}
+      defaultDatabase: ${O11Y_CLICKHOUSE_DATABASE}
+      addCorsHeader: false
+    secureJsonData:
+      httpHeaderValue1: ${O11Y_CLICKHOUSE_HEADER1_VALUE}
+      httpHeaderValue2: ${O11Y_CLICKHOUSE_HEADER2_VALUE}
+    editable: false

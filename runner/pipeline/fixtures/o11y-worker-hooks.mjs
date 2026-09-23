@@ -1,27 +1,37 @@
-// Module hooks that make the real o11y router (workers/o11y/src/index.ts)
-// loadable under plain `node --experimental-strip-types --test` — the same
-// pattern `worker-hooks.mjs` uses for `workers/api/src/index.ts`
-// (`mcp-routes.test.mjs`), registered via `module.register()` before the
-// worker is imported. `node --test` runs each spec file in its own process,
-// so nothing here leaks into another pipeline spec.
+// Module hooks that make the real o11y worker (workers/o11y/src/index.ts,
+// and everything it re-exports: `InboxWriter` from inbox/writer.ts, T02;
+// `GrafanaBox` from box.ts, T01) loadable under plain
+// `node --experimental-strip-types --test` — the same pattern
+// `worker-hooks.mjs` uses for `workers/api/src/index.ts` (`mcp-routes.test.mjs`),
+// registered via `module.register()` before the worker is imported.
+// `node --test` runs each spec file in its own process, so nothing here
+// leaks into another pipeline spec. One shared file, not two — T01's and
+// T02's specs both import through `index.ts`, so a route spec that only
+// exercises T02's ingest routes still needs `GrafanaBox`'s stub resolvable
+// (it is re-exported even when never constructed), and a container-lifecycle
+// spec that only exercises T01's `box.ts` still needs the `.js`→`.ts` remap.
 //
-// Two obstacles, two stubs:
+// Three obstacles, three stubs:
 //
 // - The worker's modules import each other by `.js` specifier (the shape the
 //   Workers bundler resolves), but the files on disk are `.ts` — map the
 //   extension, only for relative imports inside `workers/o11y/src/`.
 //
-// - `cloudflare:workers` (the `DurableObject` base class, `InboxWriter`
-//   extends it) and `@cloudflare/containers` (`Container`, `GrafanaBox`
-//   extends it, re-exported from `index.ts`) only exist inside workerd. A
-//   structural stub stands in for each — `InboxWriter`'s real logic never
+// - `cloudflare:workers` (the `DurableObject` base class `InboxWriter`
+//   extends) only exists inside workerd. `InboxWriter`'s real logic never
 //   touches anything the base class provides beyond `this.ctx`/`this.env`
-//   (both are stored, nothing else), and no route spec constructs a
-//   `GrafanaBox` at all (it is only re-exported, never called), so an inert
-//   stub is enough.
+//   (both are stored, nothing else), so an inert stub
+//   (`o11y-cloudflare-workers-stub.mjs`) is enough.
+//
+// - `@cloudflare/containers` (`Container`, `GrafanaBox` extends it) also
+//   only exists inside workerd, and imports `cloudflare:workers` itself at
+//   load time. Unlike `InboxWriter`, T01's `GrafanaBox` container-lifecycle
+//   specs construct and drive a real `GrafanaBox` (start/stop/containerFetch),
+//   so its stub (`cloudflare-containers-stub.mjs`) is a fuller structural
+//   double, not an inert class — see that file's own header.
 
 const CLOUDFLARE_WORKERS_STUB = new URL("./o11y-cloudflare-workers-stub.mjs", import.meta.url).href;
-const CLOUDFLARE_CONTAINERS_STUB = new URL("./o11y-cloudflare-containers-stub.mjs", import.meta.url).href;
+const CLOUDFLARE_CONTAINERS_STUB = new URL("./cloudflare-containers-stub.mjs", import.meta.url).href;
 
 // `jose` and `@handsontable/demo-runtime` (any subpath) are `workers/o11y`'s
 // dependencies, not the pipeline's — a plain node resolve only succeeds when
