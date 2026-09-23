@@ -267,16 +267,45 @@ dedupe hash is computed over the decoded, scrubbed record before timestamps are 
 |---|---|
 | `seq` | last issued sequence |
 | `row:<n>` | pending records with their arrival time, ≤ 1 MB per row |
-| `key:<inbox key>` | `written` \| `provisional:<wakeId>` \| `committed` \| `rejected:<reason>` |
-| `hash:<sha256>` | first-seen epoch ms; 24 h window |
+| `key:<inbox key>` | `written` \| `provisional:<wakeId>` \| `rejected:<reason>` — **never `committed`** (see `done:`, below) |
+| `done:<inbox key>` | `1` — a **committed** key, moved OUT of `key:` on commit (same write that deletes `key:<inbox key>`) |
+| `hash:<yyyymmdd>:<sha256>` | first-seen epoch ms; 24 h window, checked across the current and previous UTC-day bucket |
 | `fp:<fingerprint>` | first-seen epoch ms (exact registry for the new-fingerprint alert) |
 | `alert:<rule>` | `{ state: firing \| resolved, since, lastNotified }` |
-| `wake:<wakeId>` | `{ startedAt, reason, over: boolean }` — over when a newer wake started or the container is not running |
+| `wake:<wakeId>` | `{ startedAt, reason, over: boolean }` — over when a newer wake started or the container is not running; **deleted once fully resolved** (see below) |
 | `drainsPaused` | boolean (o11y spend cap) |
 | `heartbeat` | `{ lastCron, lastIngest }` |
 
 Limits: records over 256 KB are dropped; requests to Loki carry at most 1 MB
 decompressed.
+
+**Bounded storage (F2 fix, final review, B-C1/A-I1 — the resolve/drain/backlog paths
+must never scan committed history):**
+- A `key:` entry only ever holds a **live** state (`written`, `provisional:<wakeId>`, or
+  a genuine `rejected:<reason>`). The moment a key is confirmed clean-committed, its
+  `key:<inbox key>` entry is deleted and a `done:<inbox key>` marker takes its place in
+  the same write — `key:` therefore never grows with committed history, only with what is
+  currently open or in flight. `done:` entries are pruned once their embedded date is
+  older than the 7-day inbox-object retention (the ten-minute cron path, via
+  `InboxWriter.backlog()`), using a bounded `start`/`end` range delete (`done:inbox/<tenant>/`
+  through the cutoff date), never a full-prefix scan.
+- A `wake:<wakeId>` entry is deleted as soon as `resolveOverWakes` fully resolves it (every
+  provisional key under it moved to `written` or `done:`) — not merely flagged. The
+  `wake:` prefix therefore only ever holds the (at most one) currently-active wake plus
+  any wake whose resolution crashed mid-way, never all-time history.
+- `hash:` is bucketed by UTC calendar day (`hash:<yyyymmdd>:<sha256>`) instead of one flat
+  set; a dedupe check reads exactly the current and previous day's buckets (the 24 h window
+  can never span more than those two), and stale buckets (2+ days old) are pruned with a
+  bounded range delete on the same cron path.
+- `fp:` keeps its flat shape (nothing reads it by date range), but is swept by a bounded,
+  cursor-paginated TTL prune (default 90 days) on the same cron path, so it does not grow
+  forever either.
+- `POST /grafana/_o11y/reopen`'s window is capped to the same 7-day retention — nothing
+  older can exist any more (`done:`/`hash:` are pruned past it, and Loki's own
+  `reject_old_samples_max_age` is 7d too) — and requires an exact `content-type:
+  application/json` (CSRF hardening: forces a CORS preflight for any cross-origin caller).
+- A manual reopen of a **committed** key reads `done:`, moves it back to `key:<inbox
+  key> = written`, and deletes the `done:` entry.
 
 ## 9. Lite beacon payload
 

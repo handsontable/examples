@@ -43,12 +43,28 @@ export function makeDurableObjectStorage(seed = new Map()) {
       for (const k of keys) if (data.delete(k)) n++;
       return n;
     },
+    // F2 fix (final review, A-I1/B-C1 pruning): a real `DurableObjectStorage.list`
+    // also accepts `start`/`end`/`limit` (ledger.ts's bounded-range prune
+    // sweeps use exactly these, never an unbounded `prefix`-only scan — see
+    // `storage.ts`'s `ListOptions` doc comment). This fake used to silently
+    // ignore all three: a call with `start`/`end` but no `prefix` fell
+    // through the `!options?.prefix` check and returned the WHOLE storage
+    // Map, so a prune call's `storage.delete([...matches])` deleted
+    // EVERYTHING in the DO, not just the intended stale range (caught by
+    // `o11y-cap-wake.test.mjs`'s backlog test going from a real `written`
+    // key to `undefined`). Always sorts ascending, matching the real
+    // binding's default (`reverse` is never requested by this codebase).
     async list(options) {
-      const out = new Map();
+      const matches = [];
       for (const [k, v] of data) {
-        if (!options?.prefix || k.startsWith(options.prefix)) out.set(k, v);
+        if (options?.prefix && !k.startsWith(options.prefix)) continue;
+        if (options?.start !== undefined && k < options.start) continue;
+        if (options?.end !== undefined && k >= options.end) continue;
+        matches.push([k, v]);
       }
-      return out;
+      matches.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+      const limited = options?.limit !== undefined ? matches.slice(0, options.limit) : matches;
+      return new Map(limited);
     },
     async transaction(closure) {
       return closure(storage);
