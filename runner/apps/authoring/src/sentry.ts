@@ -10,14 +10,16 @@ import {
   MONITOR_BREADCRUMB_CEILING,
   MONITOR_EVENT_CEILING,
   createMonitorBudget,
-  normalizeMonitorMessage,
   sanitizeMonitorPayload,
   type MonitorPayload,
 } from "@handsontable/demo-runtime/monitor";
+import { fingerprint as contractFingerprint } from "@handsontable/demo-runtime/telemetry";
 import { ApiError } from "./apiError.js";
 import { resolveReporting } from "./reportingGate.js";
 import { isEdgelessForeignSessionStart, isOfficeScannerRejection } from "./eventGate.js";
-import { tier2StderrReport } from "./tier2Report.js";
+import { resolveSentryScope, reportsDiagnosticToSentry } from "./sentryScope.js";
+import { demoEventReport, type DemoMonitorKind } from "./demoEventReport.js";
+import { telemetry } from "./telemetry/index.js";
 
 const DSN = import.meta.env.VITE_SENTRY_DSN as string | undefined;
 
@@ -51,6 +53,13 @@ const reporting = resolveReporting({
 
 export const reportingEnabled = reporting.enabled;
 
+/** Contract §11 / ADR §E.3. `sentryScope.ts` resolves the raw env string and
+ *  decides whether an explicit diagnostic report (as opposed to an uncaught
+ *  one, which always stays in Sentry — ADR §E.1) also reaches Sentry, beside
+ *  the facade, which receives it either way. */
+const SENTRY_SCOPE = resolveSentryScope(import.meta.env.VITE_SENTRY_SCOPE as string | undefined);
+export const diagnosticsGoToSentry = reportsDiagnosticToSentry(reportingEnabled, SENTRY_SCOPE);
+
 /**
  * Demo-runtime monitoring (DEV-2527). Temporary and deliberately build-time: off is
  * a one-line commit plus a deploy, which is why the in-page caps in
@@ -65,11 +74,6 @@ export const reportingEnabled = reporting.enabled;
  */
 export const monitorDemos =
   reportingEnabled && (import.meta.env.VITE_MONITOR_DEMOS as string | undefined) === "1";
-
-/** The `environment` (and tag) demo-side events are filed under, so a flood of them
- *  can be rate-limited or muted in the Sentry UI without touching the app — the only
- *  brake that works without a build. */
-const DEMO_SURFACE = "demo-runtime";
 
 /**
  * Browser noise that is never actionable: a benign layout-loop warning browsers
@@ -157,42 +161,62 @@ if (reportingEnabled) {
     // fetches. At 200 the demo's ceiling can never take more than a quarter. Raise
     // this alongside that ceiling, never one without the other.
     maxBreadcrumbs: 200,
+    // Contract §11 / ADR §E.3. `"uncaught"` narrows Sentry to exactly the global
+    // handlers plus dedupe — `Sentry.ErrorBoundary`'s own `componentDidCatch` call
+    // is unaffected by this list either way, it never goes through an
+    // integration. `"full"` (default) keeps every integration the SDK ships with
+    // today (browser tracing off already, via `tracesSampleRate: 0`).
+    ...(SENTRY_SCOPE === "uncaught"
+      ? {
+          defaultIntegrations: false,
+          integrations: [Sentry.globalHandlersIntegration(), Sentry.dedupeIntegration()],
+        }
+      : {}),
     beforeSend(event) {
       if (isUnhandledNoise(event)) return null;
       // DEMOS-5F, Office/Outlook safelink scanner (DEV-2858). Sits ahead of the
-      // DEMO_SURFACE branch, unlike isForeignUnhandled below: it requires
+      // foreign-frame check below, same reasoning as always: it requires
       // `mechanism.handled === false`, and every relay arrives via
-      // `captureException`, which sets `handled: true` — so it cannot fire on a
-      // relayed event and needs no re-homing protection.
+      // `captureException`, which sets `handled: true`.
       if (isOfficeScannerRejection(event)) return null;
-      // DEMOS-9, edgeless-foreign session-start facet (DEV-2858). Also sits ahead
-      // of the DEMO_SURFACE branch: it requires the `tier2-session-start` /
-      // `session_response_origin` tags that only `App.tsx`'s own
-      // `Sentry.captureException` call sets — `reportDemoEvent` (:254-260) never
-      // sets them, so this gate cannot fire on a relayed event either.
+      // DEMOS-9, edgeless-foreign session-start facet (DEV-2858).
       if (isEdgelessForeignSessionStart(event)) return null;
-      // A client carries one `environment` from init, so a relayed demo event is
-      // re-homed per event here. See `reportDemoEvent`.
-      if (event.tags?.surface === DEMO_SURFACE) {
-        event.environment = DEMO_SURFACE;
-        return event;
-      }
-      return isForeignUnhandled(event) ? null : event;
+      if (isForeignUnhandled(event)) return null;
+      // ADR §E.2 tee: the Faro page-load id becomes a Sentry tag, and the
+      // Sentry event id is pushed as a Faro event — both directions of the
+      // cross-reference, on every event that actually ships. No-ops safely
+      // when telemetry never initialised (`noopTelemetry.pageLoadId()` still
+      // mints and returns a real, stable id; `.event()` is a no-op).
+      event.tags = { ...event.tags, page_load_id: telemetry.pageLoadId() };
+      telemetry.event("sentry.event", { sentry_event_id: event.event_id ?? "" });
+      return event;
     },
   });
 }
 
-/** Report a caught error that would otherwise be swallowed. No-op when gated off. */
+/**
+ * Report a caught error that would otherwise be swallowed.
+ *
+ * Always reaches the facade (a no-op when telemetry is off); reaches Sentry
+ * only when `diagnosticsGoToSentry` (contract §11 / ADR §E.3) — so a local run
+ * with `VITE_TELEMETRY_LOCAL=1` still exercises the facade even off-host,
+ * where Sentry itself never initialises (`reportingGate.ts`'s production-only
+ * gate, unchanged).
+ */
 export function reportError(error: unknown, context: string): void {
-  if (!reportingEnabled) return;
   // A described failure the user is already being told about, and that says
   // nothing about this app's health, stops here (DEV-2534). One gate, rather
   // than an `if` at each of the callsites, is what retires the expired-session
   // half of DEMOS-3/-6/-7/-B/-W without touching a single `catch`. Note this is
   // deliberately narrow: an ownership 403 is still `reportable`, because the UI
-  // only offers Save and Delete on a demo it believes is the user's.
+  // only offers Save and Delete on a demo it believes is the user's. Applies to
+  // both destinations equally — a described failure says nothing about health
+  // for the facade either.
   if (error instanceof ApiError && !error.reportable) return;
-  Sentry.captureException(error, { tags: { context } });
+  telemetry.error(error, context);
+  if (diagnosticsGoToSentry) {
+    Sentry.captureException(error, { tags: { context } });
+  }
 }
 
 /**
@@ -230,9 +254,16 @@ export interface DemoEventContext {
  * anything else on the page posting the same shape) and only the fields the payload
  * type declares are read.
  *
- * Fingerprinted by kind plus a normalised message. Without it one demo stuck in a
- * throwing render shards into an issue per distinct row index — the same reasoning
- * `ContainerBootFailure` already applies to boot logs in App.tsx.
+ * ADR §E.1 "Moves to the new stack only": demo-runtime preview events leave Sentry
+ * entirely now — no `captureException`/`captureMessage`/`addBreadcrumb`, whatever
+ * `SENTRY_SCOPE` is. Every kind becomes one `preview.runtime_error` count through
+ * the facade (§5), fingerprinted with the contract's `fingerprint()` — a
+ * keystroke-ladder shape collapses to one fingerprint per shape (§7), which is
+ * what makes this "one deduplicated count" rather than one relay per keystroke.
+ * The kind→budget split (`demoEventReport.ts`) is unchanged from the pre-T06
+ * Sentry version: `console-warn` still spends the looser
+ * `MONITOR_BREADCRUMB_CEILING`, everything else the tighter
+ * `MONITOR_EVENT_CEILING` — same two caps, new destination.
  */
 export function reportDemoEvent(payload: MonitorPayload, context: DemoEventContext): void {
   if (!monitorDemos) return;
@@ -241,98 +272,24 @@ export function reportDemoEvent(payload: MonitorPayload, context: DemoEventConte
   // free client-side resource pressure, and a Tier-2 preview host inside it is a live
   // session token.
   const clean = sanitizeMonitorPayload(payload);
-  const message = clean.message;
-  // A warning is context, not a fault (DEV-2539). Handsontable's own "Theme is already
-  // registered" notice is emitted by normal re-renders, and every warning used to open
-  // a Sentry issue — a message event at `warning` level is still an issue. Filed as a
-  // breadcrumb instead, so it survives as the context attached to the next real error
-  // from the preview without being one itself.
-  //
-  // Before `demoRelayBudget.admit`, so a warning never consumes a relay slot, and after
-  // `sanitizeMonitorPayload`, so the breadcrumb is bounded and host-redacted like
-  // everything else that crossed the origin boundary.
-  //
-  // Breadcrumbs live on the Sentry scope, which outlives a preview: one recorded while
-  // example A was mounted can still be attached to an error from example B. `data`
-  // carries the tier, framework and demo id so a stale one is identifiable — cheaper
-  // and less fragile than trying to clear the buffer on every mount.
-  if (clean.kind === "console-warn") {
-    if (!demoBreadcrumbBudget.admit(clean.kind, message)) return;
-    Sentry.addBreadcrumb({
-      category: `${DEMO_SURFACE}.console`,
-      level: "warning",
-      message,
-      data: {
-        tier: context.tier,
-        framework: context.framework,
-        ...(context.demoId ? { demo_id: context.demoId } : {}),
-      },
-    });
-    return;
-  }
-  if (!demoRelayBudget.admit(clean.kind, message, clean.stack)) return;
-  // DEV-2854 / DEV-2876: a recognised Tier-2 compiler diagnostic, or a recognised Tier-2
-  // build-failure envelope, collapses into its own flat, constant-titled bucket instead of
-  // the per-message fingerprint below. Never fed into `demoRelayBudget.admit` above — that
-  // stays keyed on the raw message, so 20 distinct diagnostics in one bad editing session
-  // still consume 20 of `MONITOR_EVENT_CEILING` rather than collapsing and losing their
-  // `extra` after the first. See `tier2Report.ts` for why, and for why the two shapes get
-  // two fingerprints rather than one.
-  const tier2 = tier2StderrReport(clean.kind, message);
-  const tags: Record<string, string> = {
-    surface: DEMO_SURFACE,
-    kind: clean.kind,
-    tier: String(context.tier),
+  const report = demoEventReport({
+    kind: clean.kind as DemoMonitorKind,
+    message: clean.message,
+    tier: context.tier,
     framework: context.framework,
-    ...(tier2 ? tier2.tags : {}),
-  };
-  if (context.demoId) tags.demo_id = context.demoId;
-  const captureContext = {
-    tags,
-    fingerprint: tier2
-      ? tier2.fingerprint
-      : [DEMO_SURFACE, clean.kind, normalizeMonitorMessage(message)],
-    level: (clean.kind === "error" || clean.kind === "rejection" ? "error" : "warning") as
-      | "error"
-      | "warning",
-    ...(clean.url || tier2
-      ? {
-          extra: {
-            ...(clean.url ? { url: clean.url } : {}),
-            ...(tier2 ? tier2.extra : {}),
-          },
-        }
-      : {}),
-  };
-
-  // An exception (with the preview's own stack) for a throw; a message for the
-  // kinds that never had one. A synthesised Error is how the relayed stack reaches
-  // Sentry's parser at all — captureMessage would drop it.
-  if (clean.kind === "error" || clean.kind === "rejection") {
-    const error = new Error(message);
-    error.name = clean.kind === "rejection" ? "DemoUnhandledRejection" : "DemoError";
-    if (clean.stack) error.stack = `${error.name}: ${message}\n${clean.stack}`;
-    Sentry.captureException(error, captureContext);
-    return;
-  }
-  // Display only, and only for network events (DEV-2539/DEMOS-12). "resource failed to
-  // load" as an issue title says nothing; the URL is the whole diagnosis, and `extra`
-  // is not visible from the issue list. Deliberately NOT used for
-  // `demoRelayBudget.admit` or the fingerprint above, both of which stay on the bare
-  // `message` — so a demo with a dozen broken assets still collapses into one issue and
-  // still costs one relay slot, while the title becomes actionable.
-  //
-  // This is the first path that puts an untrusted `url` into an issue *title*, and the
-  // bare-message fingerprint is what bounds it: the url is already capped at
-  // MONITOR_URL_MAX and host-redacted by `sanitizeMonitorPayload`, and because it never
-  // enters the fingerprint, a crafted payload posting a thousand distinct urls still
-  // produces one issue, titled with whichever arrived first.
-  const display = tier2
-    ? tier2.display
-    : clean.kind === "network" && clean.url
-      ? `${message}: ${clean.url}`
-      : message;
-  Sentry.captureMessage(display, captureContext);
+    demoId: context.demoId,
+  });
+  const budget = report.budget === "breadcrumb" ? demoBreadcrumbBudget : demoRelayBudget;
+  if (!budget.admit(clean.kind, clean.message, clean.stack)) return;
+  telemetry.metric(
+    "preview.runtime_error",
+    { count: 1 },
+    {
+      ...report.attrs,
+      reason: report.reason,
+      fingerprint: contractFingerprint(report.fingerprintContext, report.fingerprintMessage),
+    },
+  );
 }
 
 export { Sentry };

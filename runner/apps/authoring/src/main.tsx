@@ -9,6 +9,12 @@ import { Sentry } from "./sentry.js";
 // its latency to every route, including ones that need no identity at all.
 import { seedAnonymousContext } from "./userScope.js";
 seedAnonymousContext();
+// Faro (T06): after Sentry, before anything else runs, same reasoning as
+// `seedAnonymousContext` above — this module resolves its own gate
+// (`resolveReporting` + the local flag/host check, contract §10), so ordering
+// relative to Sentry's init does not matter for correctness, only convention.
+import { initTelemetry, reportUncaughtError } from "./telemetry/index.js";
+initTelemetry();
 // DEMOS-1D (DEV-2859): attach the bounded editor trail to every event this
 // client sends, plus the tags derived from its most recent entry. Registered
 // unconditionally — `Sentry.addEventProcessor` is a no-op when reporting is
@@ -42,6 +48,31 @@ import { createRoot } from "react-dom/client";
 import { ThemeProvider } from "@handsontable/demo-editor-shell";
 import { App } from "./App.js";
 
+/**
+ * Test-only render-crash seam for `e2e/telemetry-faro.spec.ts` (T06 acceptance
+ * criteria: "a render crash inside the error boundary reaches both Sentry and
+ * Faro"). Nothing else in the app can trigger a deterministic render crash
+ * from outside — this is the least invasive seam that stays structurally
+ * closed off a local telemetry build: it requires the exact query param, the
+ * SAME build-time flag (`VITE_TELEMETRY_LOCAL === "1"`) that gates Faro's own
+ * local path, and the same localhost/127.0.0.1 host check
+ * (`telemetry/gate.ts`'s own rule, not re-implemented — deliberately inlined
+ * here rather than imported, so this component has no path to a production
+ * bundle through a shared import). A production build never sets the flag, so
+ * the throw is unreachable there even if the query param were guessed.
+ */
+function CrashProbe(): null {
+  if (
+    typeof window !== "undefined" &&
+    (import.meta.env.VITE_TELEMETRY_LOCAL as string | undefined) === "1" &&
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") &&
+    new URLSearchParams(window.location.search).get("__test_crash_boundary") === "1"
+  ) {
+    throw new Error("T06 e2e render-crash probe");
+  }
+  return null;
+}
+
 // A render crash in the editor shell used to leave a blank page and no record of
 // why. The boundary keeps the failure visible to the user and reports it. It sits
 // outside ThemeProvider so a crash there is caught too; ThemeProvider wraps the
@@ -58,7 +89,16 @@ createRoot(document.getElementById("root")!).render(
           </p>
         </div>
       }
+      // ADR §E.2: a render crash is "uncaught" (ADR §E.1 — React caught it, but
+      // nothing here handled it), yet it never reaches `window.onerror` on its
+      // own (React swallows it into `componentDidCatch`), so Faro's own
+      // `ErrorsInstrumentation` would otherwise never see it. Sentry already
+      // captures it through the boundary itself; this is only the Faro half of
+      // the tee. `reportUncaughtError`, not `telemetry.error()` — that method is
+      // contractually handled-only (§6), and a render crash is the opposite.
+      onError={(error) => reportUncaughtError(error)}
     >
+      <CrashProbe />
       <ThemeProvider>
         <App />
       </ThemeProvider>

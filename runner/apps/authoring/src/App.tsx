@@ -67,9 +67,11 @@ import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
 import { ApiTokensPage } from "./ApiTokens.js";
 import { useProfile } from "./useProfile.js";
-import { monitorDemos, reportDemoEvent, reportError, reportingEnabled, Sentry } from "./sentry.js";
+import { diagnosticsGoToSentry, monitorDemos, reportDemoEvent, reportError, Sentry } from "./sentry.js";
 import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
 import { tier1Report } from "./tier1Report.js";
+import { telemetry, apiHeaders } from "./telemetry/index.js";
+import type { Surface, Tier } from "@handsontable/demo-runtime/telemetry";
 import { isOpaqueNetworkFailure } from "./fetchFailure.js";
 import { describeDependencyFailure } from "./dependencyFailure.js";
 import {
@@ -258,7 +260,11 @@ function describeRuntimeError(
  * or stack parsing, which is exactly what putting it in the message got wrong.
  */
 function reportRuntimeError(e: unknown, engine: string, framework: string): void {
-  if (!reportingEnabled) return;
+  // No blanket gate here (T06): each branch below reports through the facade
+  // unconditionally (it no-ops when telemetry is off) and reaches Sentry only
+  // when `diagnosticsGoToSentry` — `reportingEnabled && SENTRY_SCOPE === "full"`
+  // (contract §11 / ADR §E.3) — so a local run with `VITE_TELEMETRY_LOCAL=1`
+  // still exercises the facade even though Sentry itself stays silent off-host.
   // Tier-1 compile and runtime errors are the "product output" case above — dropped
   // by default, reported while demo monitoring is on (DEV-2527). They arrive as
   // ordinary app-surface events rather than through `reportDemoEvent`, because this
@@ -292,12 +298,23 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
     // rather than at the failure.
     const titled = new Error(report.synthesizeAs.message, { cause: e });
     titled.name = report.synthesizeAs.name;
-    Sentry.captureException(titled, {
-      tags: report.tags,
-      fingerprint: report.fingerprint,
-      level: report.level,
-      extra: report.extra,
+    // Facade first, unconditional — contract fingerprint computed from
+    // `report.tags.context` + the synthesized title, matching what Sentry's
+    // own `report.fingerprint` groups on (both ultimately key off the same
+    // constant title/context pair per branch).
+    telemetry.error(titled, report.tags.context ?? "tier1-runtime", {
+      surface: (report.tags.surface as Surface | undefined) ?? "authoring",
+      tier: (report.tags.tier as Tier | undefined) ?? "1",
+      framework,
     });
+    if (diagnosticsGoToSentry) {
+      Sentry.captureException(titled, {
+        tags: report.tags,
+        fingerprint: report.fingerprint,
+        level: report.level,
+        extra: report.extra,
+      });
+    }
     return;
   }
   // The budget guardrail refusing a session is the guardrail working. It would
@@ -349,48 +366,62 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
     // are unbounded and extra-only for the same reason `sessionElapsedMs` is: Sentry tag
     // values are meant to be faceted, not read as free text.
     const diagnostics = e.diagnostics;
-    Sentry.captureException(e, {
-      tags: {
-        context: "tier2-session-start",
-        session_status: String(e.status),
-        framework,
-        ...(code ? { session_refusal: code } : {}),
+    telemetry.error(e, "tier2-session-start", {
+      surface: "authoring",
+      tier: "2",
+      framework,
+      reason: code ?? String(e.status),
+    });
+    if (diagnosticsGoToSentry) {
+      Sentry.captureException(e, {
+        tags: {
+          context: "tier2-session-start",
+          session_status: String(e.status),
+          framework,
+          ...(code ? { session_refusal: code } : {}),
+          ...(diagnostics
+            ? {
+                session_elapsed_bucket: elapsedBucket(diagnostics.elapsedMs),
+                ...(diagnostics.ray ? { cf_ray: diagnostics.ray } : {}),
+                session_response_origin: responseOrigin(diagnostics),
+                session_response_type: diagnostics.responseType,
+              }
+            : {}),
+        },
+        fingerprint: ["tier2-session-start", String(e.status), ...(code ? [code] : [])],
         ...(diagnostics
           ? {
-              session_elapsed_bucket: elapsedBucket(diagnostics.elapsedMs),
-              ...(diagnostics.ray ? { cf_ray: diagnostics.ray } : {}),
-              session_response_origin: responseOrigin(diagnostics),
-              session_response_type: diagnostics.responseType,
+              extra: {
+                sessionElapsedMs: diagnostics.elapsedMs,
+                sessionResponseHeaders: diagnostics.headerNames.join(", "),
+                sessionResponseHeaderCount: diagnostics.headerCount,
+                ...(diagnostics.server ? { sessionResponseServer: diagnostics.server } : {}),
+              },
             }
           : {}),
-      },
-      fingerprint: ["tier2-session-start", String(e.status), ...(code ? [code] : [])],
-      ...(diagnostics
-        ? {
-            extra: {
-              sessionElapsedMs: diagnostics.elapsedMs,
-              sessionResponseHeaders: diagnostics.headerNames.join(", "),
-              sessionResponseHeaderCount: diagnostics.headerCount,
-              ...(diagnostics.server ? { sessionResponseServer: diagnostics.server } : {}),
-            },
-          }
-        : {}),
-    });
+      });
+    }
     return;
   }
   if (e instanceof ContainerBootFailure) {
-    Sentry.captureException(e, {
-      tags: { context: "tier2-container-boot" },
-      fingerprint: ["tier2-container-boot"],
-      // Bounded upstream (the status route tails 2500 bytes, `bootFailureDetail`
-      // keeps 40 lines) and already redacted of preview hosts, so no extra cap here.
-      ...(e.log ? { extra: { bootLog: e.log } } : {}),
-    });
+    telemetry.error(e, "tier2-container-boot", { surface: "authoring", tier: "2", framework });
+    if (diagnosticsGoToSentry) {
+      Sentry.captureException(e, {
+        tags: { context: "tier2-container-boot" },
+        fingerprint: ["tier2-container-boot"],
+        // Bounded upstream (the status route tails 2500 bytes, `bootFailureDetail`
+        // keeps 40 lines) and already redacted of preview hosts, so no extra cap here.
+        ...(e.log ? { extra: { bootLog: e.log } } : {}),
+      });
+    }
     return;
   }
   // Normal teardown: dispose() races a pending message, or the tab is closing.
   if (e instanceof Error && e.message === "The session was closed.") return;
-  Sentry.captureException(e, { tags: { context: "tier2-runtime" } });
+  telemetry.error(e, "tier2-runtime", { surface: "authoring", tier: "2", framework });
+  if (diagnosticsGoToSentry) {
+    Sentry.captureException(e, { tags: { context: "tier2-runtime" } });
+  }
 }
 
 /** Pin the workspace to the version state's ref. Thin wrapper over the shared
@@ -486,7 +517,7 @@ function parseRoute(): AppRoute {
 function beacon(path: string): void {
   void fetch(`${API_BASE}/api/beacon`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ path }),
     keepalive: true,
   }).catch(() => { /* analytics must never surface to a user */ });
@@ -693,7 +724,7 @@ function FullMode({ id }: { id: string }) {
     // `invalidateDemo` clears only the worker's KV copy — nothing reaches the
     // browser cache. Without this, opening full mode right after an Edit info save
     // shows the *old* title for up to a minute, which reads as the save not landing.
-    fetch(`${API_BASE}/api/demos/${id}`, { cache: "no-store" })
+    fetch(`${API_BASE}/api/demos/${id}`, { cache: "no-store", headers: apiHeaders() })
       .then((res) => (res.ok ? res.json() : null))
       .then((meta: { title?: string; description?: string | null; ht_version?: string } | null) => {
         if (cancelled || !meta) return;
@@ -718,7 +749,7 @@ function FullMode({ id }: { id: string }) {
   // `Download` zips; without them the button hides rather than handing over an empty zip.
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE}/api/demos/${id}/source`)
+    fetch(`${API_BASE}/api/demos/${id}/source`, { headers: apiHeaders() })
       .then((res) => (res.ok ? res.json() : null))
       .then((src: { framework: string; files: FilesMap; htVersion?: string | null } | null) => {
         if (cancelled || !src) return;
@@ -865,7 +896,7 @@ function Gate({ route }: { route: { mode: "play" } | { mode: "edit"; id: string 
     let live = true;
     const token = getToken();
     fetch(`${API_BASE}/api/demos/${route.id}/access`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: apiHeaders(token ? { Authorization: `Bearer ${token}` } : undefined),
     })
       .then((res) => (res.ok ? (res.json() as Promise<{ owned?: boolean }>) : null))
       .then((body) => {
@@ -1448,10 +1479,10 @@ function Authoring({
       try {
         const res = await fetch(`${API_BASE}/api/import`, {
           method: "POST",
-          headers: {
+          headers: apiHeaders({
             "Content-Type": "application/json",
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
+          }),
           body: JSON.stringify({ url: initialImport }),
         });
         const body = (await res.json().catch(() => ({}))) as {
@@ -1555,7 +1586,9 @@ function Authoring({
     };
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/payload/${encodeURIComponent(initialPayload)}`);
+        const res = await fetch(`${API_BASE}/api/payload/${encodeURIComponent(initialPayload)}`, {
+          headers: apiHeaders(),
+        });
         const body = (await res.json().catch(() => ({}))) as {
           framework?: string;
           files?: FilesMap;
@@ -1637,14 +1670,14 @@ function Authoring({
     let cancelled = false;
     (async () => {
       const token = getToken();
-      const headers: Record<string, string> = !isShare && token ? { Authorization: `Bearer ${token}` } : {};
+      const headers = apiHeaders(!isShare && token ? { Authorization: `Bearer ${token}` } : undefined);
       try {
         const [srcRes, metaRes] = await Promise.all([
           fetch(`${API_BASE}/api/demos/${savedId}/source`, { headers }),
           // `no-store` for the same reason `FullMode` uses it (DEV-2495): the
           // metadata endpoint is cached for a minute in the browser, and this is
           // the page you land on straight after renaming the demo.
-          fetch(`${API_BASE}/api/demos/${savedId}`, { cache: "no-store" }),
+          fetch(`${API_BASE}/api/demos/${savedId}`, { cache: "no-store", headers: apiHeaders() }),
         ]);
         if (cancelled) return;
         if (!srcRes.ok) {
@@ -1713,7 +1746,7 @@ function Authoring({
   // unreachable budget endpoint must never put a warning in front of a user.
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE}/api/budget`)
+    fetch(`${API_BASE}/api/budget`, { headers: apiHeaders() })
       .then((r) => (r.ok ? r.json() : null))
       .then((state: { notice?: string | null } | null) => {
         if (!cancelled && state?.notice) setBudgetNotice(state.notice);
@@ -1772,14 +1805,22 @@ function Authoring({
               apiBaseOrigin: apiBaseOrigin(API_BASE, location.origin),
               netEffectiveType: netEffectiveType(),
             };
-            Sentry.withScope((scope) => {
-              scope.setLevel("warning");
-              scope.setTags(diagnosticTags(full));
-              scope.setExtras(diagnosticExtras(full));
-              Sentry.captureMessage("versions fetch unreachable", {
-                fingerprint: ["versions-fetch-unreachable"],
+            // Facade first, unconditional (T06): an upstream-failure-with-tags
+            // report, ADR §E.1's own named example. Sentry keeps it only under
+            // `full` scope — this call was unconditional before T06 and would
+            // otherwise still reach Sentry under `uncaught`, in violation of
+            // contract §11.
+            telemetry.event("versions_fetch_unreachable", diagnosticTags(full));
+            if (diagnosticsGoToSentry) {
+              Sentry.withScope((scope) => {
+                scope.setLevel("warning");
+                scope.setTags(diagnosticTags(full));
+                scope.setExtras(diagnosticExtras(full));
+                Sentry.captureMessage("versions fetch unreachable", {
+                  fingerprint: ["versions-fetch-unreachable"],
+                });
               });
-            });
+            }
           }
         } else if (isOpaqueNetworkFailure(error)) {
           Sentry.addBreadcrumb({
@@ -2691,7 +2732,10 @@ function Authoring({
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/demos`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: apiHeaders({
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        }),
         body: JSON.stringify({
           framework: entry.framework,
           files: filesRef.current,
@@ -2723,7 +2767,10 @@ function Authoring({
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/demos`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: apiHeaders({
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        }),
         body: JSON.stringify({
           framework: entry.framework,
           files: filesRef.current,
@@ -2769,7 +2816,10 @@ function Authoring({
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/demos/${savedId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: apiHeaders({
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        }),
         body: JSON.stringify({
           files: filesRef.current,
           htVersion: version,

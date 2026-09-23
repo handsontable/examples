@@ -107,6 +107,12 @@ export default defineConfig({
       "^/api(?:/|$)": { target: "http://localhost:8787" },
       "^/d(?:/|$)": { target: "http://localhost:8787" },
       "/embed": { target: "http://localhost:8787" },
+      // The o11y worker (T02's `workers/o11y`), same-origin reasoning as `/api`
+      // above — Faro's transport posts to same-origin `/telemetry/collect`
+      // (contract §6). Port 8788 matches T02's own local `wrangler dev`
+      // invocation (`tasks/o11y/T02-o11y-ingest.md`'s Verify block); regex, not
+      // a bare prefix, for the same `/api`-swallowing reason documented above.
+      "^/telemetry(?:/|$)": { target: "http://localhost:8788" },
     },
   },
 });
