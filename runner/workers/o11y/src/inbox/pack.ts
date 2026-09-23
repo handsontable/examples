@@ -114,17 +114,32 @@ export interface PackedObject {
   consumedRowKeys: string[];
 }
 
-/** Packs every pending row for `tenant` into one gzipped NDJSON R2 object,
- *  keyed by the **first** packed row's arrival time (T02-D, see the task
- *  Outcome: not `Date.now()` — a crash between the R2 `put` below and the
- *  ledger transaction that follows it, on retry, packs the same still-
- *  pending rows again and must land on the identical key, not a
+/** Fix round (finding A-I2): ADR §B.2 step 6's "or at 4 MB stored" was never
+ *  a real bound on the packed OBJECT itself — `packTenant` used to gzip
+ *  every pending row for a tenant in one pass, with no upper bound. A
+ *  sustained ingest flood (a legitimate burst, or an attacker at the rate
+ *  limit) fills 60 s of rows before the alarm fires; at ~100 MB/min for one
+ *  IP, a few more colos or IPs push the alarm's `list()` + in-memory gzip
+ *  past the DO's 128 MB memory, which throws — and since nothing was ever
+ *  packed, every later alarm retries against an ever-larger pending set,
+ *  silent data loss for the whole pipeline. Bounded here, decompressed, to
+ *  this constant; the caller (`writer.ts#alarm()`) loops over the leftover
+ *  rows this call did not take. */
+export const PACK_OBJECT_MAX_DECOMPRESSED_BYTES = 4 * 1024 * 1024;
+
+/** Packs pending rows for `tenant`, in order, up to
+ *  {@link PACK_OBJECT_MAX_DECOMPRESSED_BYTES} decompressed, into one gzipped
+ *  NDJSON R2 object, keyed by the **first** packed row's arrival time (T02-D,
+ *  see the task Outcome: not `Date.now()` — a crash between the R2 `put`
+ *  below and the ledger transaction that follows it, on retry, packs the
+ *  same still-pending rows again and must land on the identical key, not a
  *  later-dated one, or the retry produces two divergent objects instead of
  *  one overwrite). Returns `null` when there is nothing pending for this
- *  tenant. Writes to R2 directly (not part of any DO transaction — R2 isn't
- *  transactional with DO storage); the caller commits `seq`/`key:<key>` /row
- *  deletion in one storage transaction immediately after, per ADR §B.2 step
- *  6. */
+ *  tenant. `consumedRowKeys` may be a strict prefix of `rows` (fix round
+ *  A-I2) — the caller loops until it is empty. Writes to R2 directly (not
+ *  part of any DO transaction — R2 isn't transactional with DO storage); the
+ *  caller commits `seq`/`key:<key>`/row deletion in one storage transaction
+ *  immediately after, per ADR §B.2 step 6. */
 export async function packTenant(
   storage: StorageLike,
   bucket: R2Bucket,
@@ -134,17 +149,41 @@ export async function packTenant(
   const first = rows[0];
   if (!first) return null;
 
-  const allLogs = rows.flatMap(([, row]) => row.resourceLogs);
+  // Take rows in order (already arrival-ordered by `pendingRowsByTenant`)
+  // until the byte budget is spent. Each row is already ≤ `INBOX_ROW_MAX_BYTES`
+  // (~1 MB), so per-row granularity keeps this loop cheap and the resulting
+  // object comfortably under the budget rather than exactly at it. Always
+  // takes at least one row, even if that single row alone is over budget —
+  // an ever-growing pending set with zero progress is worse than one
+  // slightly-oversized object.
+  let budget = 0;
+  let cut = rows.length;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row) break;
+    const rowBytes = new TextEncoder().encode(encodeNdjson(row[1].resourceLogs)).length;
+    if (i > 0 && budget + rowBytes > PACK_OBJECT_MAX_DECOMPRESSED_BYTES) {
+      cut = i;
+      break;
+    }
+    budget += rowBytes;
+  }
+  const taken = rows.slice(0, cut);
+
+  const allLogs = taken.flatMap(([, row]) => row.resourceLogs);
   const ndjson = encodeNdjson(allLogs);
   const gz = await gzip(ndjson);
 
   const seq = (await storage.get<number>(SEQ_STORAGE_KEY)) ?? 0;
-  const firstArrival = new Date(first[1].arrivalMs);
+  // `taken[0]` is always `first` (the loop above always takes at least the
+  // row at index 0) — `?? first` only satisfies the type checker's
+  // (correct, in general) indexed-access uncertainty, not a real fallback.
+  const firstArrival = new Date((taken[0] ?? first)[1].arrivalMs);
   const key = inboxKey(tenant, firstArrival, seq);
 
   await bucket.put(key, gz);
 
-  return { key, bytes: gz.byteLength, consumedRowKeys: rows.map(([k]) => k) };
+  return { key, bytes: gz.byteLength, consumedRowKeys: taken.map(([k]) => k) };
 }
 
 /** Commits a {@link PackedObject}: `seq += 1`, `key:<key> = "written"`, the

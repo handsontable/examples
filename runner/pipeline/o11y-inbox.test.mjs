@@ -19,9 +19,8 @@ const { makeEnv, makeDurableObjectStorage, makeR2Bucket, ctx } = await import(".
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
 const { checkDuplicates } = await import("../workers/o11y/src/inbox/dedupe.ts");
 const { newFingerprintWrites } = await import("../workers/o11y/src/inbox/registry.ts");
-const { appendRows, pendingRowsByTenant, packTenant, commitPackedObject } = await import(
-  "../workers/o11y/src/inbox/pack.ts"
-);
+const { appendRows, pendingRowsByTenant, packTenant, commitPackedObject, PACK_OBJECT_MAX_DECOMPRESSED_BYTES } =
+  await import("../workers/o11y/src/inbox/pack.ts");
 const { memoryStorage } = await import("../workers/o11y/src/inbox/storage.ts");
 const { decodeNdjson } = await import("@handsontable/demo-runtime/telemetry");
 
@@ -118,6 +117,57 @@ test("pack: packTenant + commitPackedObject write one gzipped NDJSON object and 
   const text = await new Response(new Blob([stored]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
   const lines = decodeNdjson(text);
   assert.equal(lines.length, 2);
+});
+
+// Fix round (finding A-I2): `packTenant` must bound one object's
+// DECOMPRESSED size — the previous version packed every pending row for a
+// tenant into one in-memory gzip with no cap at all, which could exceed
+// the DO's 128 MB memory under a sustained flood. Five ~900 KB rows (4.5 MB
+// total, over PACK_OBJECT_MAX_DECOMPRESSED_BYTES's 4 MB) prove a single
+// call takes only a PREFIX and leaves the rest for the caller to pack in a
+// follow-up call (`writer.ts#alarm()`'s own loop).
+test("pack: packTenant bounds one object's decompressed size, leaving the rest for a follow-up call (finding A-I2)", async () => {
+  const storage = memoryStorage();
+  const bucket = makeR2Bucket();
+  const bigBody = "x".repeat(900_000);
+  for (let i = 0; i < 5; i++) {
+    const append = await appendRows(storage, "worker", 1000 + i, [record(bigBody, i)]);
+    await storage.put({ ...append.writes, rowSeq: append.nextRowSeq });
+  }
+
+  const byTenant = await pendingRowsByTenant(storage);
+  const allRows = byTenant.get("worker");
+  assert.equal(allRows.length, 5, "sanity: five separate pending rows");
+
+  const first = await packTenant(storage, bucket, "worker", allRows);
+  assert.ok(first);
+  assert.ok(
+    first.consumedRowKeys.length < allRows.length,
+    "one call must not consume every pending row once the budget is spent",
+  );
+
+  const firstStored = bucket.objects.get(first.key);
+  const firstText = await new Response(
+    new Blob([firstStored]).stream().pipeThrough(new DecompressionStream("gzip")),
+  ).text();
+  assert.ok(
+    new TextEncoder().encode(firstText).length <= PACK_OBJECT_MAX_DECOMPRESSED_BYTES + 1_000_000,
+    "the packed object's decompressed NDJSON must stay near the budget, not grow to the full 4.5 MB pending set",
+  );
+
+  await commitPackedObject(storage, first);
+  const remaining = await pendingRowsByTenant(storage);
+  const stillPending = remaining.get("worker") ?? [];
+  assert.ok(stillPending.length > 0, "rows left behind by the first call must still be pending");
+
+  // The caller's own loop (`writer.ts#alarm()`) keeps calling packTenant
+  // until nothing remains — proven here directly against pack.ts, without
+  // needing the real DO alarm.
+  const second = await packTenant(storage, bucket, "worker", stillPending);
+  assert.ok(second);
+  await commitPackedObject(storage, second);
+  const afterSecond = await pendingRowsByTenant(storage);
+  assert.equal((afterSecond.get("worker") ?? []).length, 0, "a second call finishes packing the leftover rows");
 });
 
 // ---- InboxWriter (real DO class): ingest, restart, recordWake ------------------

@@ -239,16 +239,41 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     }
   }
 
-  /** ADR §B.2 step 6: one gzipped NDJSON object per tenant, packed from
-   *  every pending row, `seq`/`key:<key>`/row-deletion committed atomically
-   *  per object (`pack.ts#commitPackedObject`). */
+  /** ADR §B.2 step 6: gzipped NDJSON objects per tenant, `seq`/`key:<key>`/
+   *  row-deletion committed atomically per object (`pack.ts#commitPackedObject`).
+   *
+   *  Fix round (finding A-I2, minimal touch — `pack.ts` is this fix's real
+   *  home, see that file's own doc comment): `packTenant` now bounds one
+   *  object to `PACK_OBJECT_MAX_DECOMPRESSED_BYTES` and may leave rows
+   *  behind, so this loop keeps calling it per tenant until nothing pending
+   *  remains — otherwise the object-size cap alone would still leave an
+   *  unbounded NUMBER of un-packed rows sitting in storage after one alarm.
+   *  Bounded to `MAX_OBJECTS_PER_ALARM` packed objects per invocation (a
+   *  large backlog is packed over several alarm invocations, not one
+   *  unbounded loop competing with the Worker's own CPU limit) and
+   *  reschedules immediately (`setAlarm(Date.now())`) when objects remain. */
   async alarm(): Promise<void> {
+    const MAX_OBJECTS_PER_ALARM = 25;
     const storage = adaptStorage(this.ctx.storage);
+    let packedCount = 0;
+    let more = false;
     const byTenant = await pendingRowsByTenant(storage);
     for (const [tenant, rows] of byTenant) {
-      const packed = await packTenant(storage, this.env.O11Y_INBOX, tenant, rows);
-      if (packed) await commitPackedObject(storage, packed);
+      let remaining = rows;
+      while (remaining.length > 0) {
+        if (packedCount >= MAX_OBJECTS_PER_ALARM) {
+          more = true;
+          break;
+        }
+        const packed = await packTenant(storage, this.env.O11Y_INBOX, tenant, remaining);
+        if (!packed) break;
+        await commitPackedObject(storage, packed);
+        packedCount++;
+        remaining = remaining.slice(packed.consumedRowKeys.length);
+      }
+      if (more) break;
     }
+    if (more) await storage.setAlarm(Date.now());
   }
 
   // ---- T04 additions: alerts, watchdog, the o11y spend cap ---------------
