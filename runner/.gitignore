@@ -21,6 +21,10 @@ build/
 test-results/
 playwright-report/
 .playwright/
+# telemetry e2e specs' own private preview builds (telemetry-faro.spec.ts's
+# dist-uncaught-scope, example-analytics.spec.ts's dist-example-analytics) —
+# `dist/` above only matches the literal name, not these (D-I1 fix round).
+apps/authoring/dist-*/
 
 # generated starter-matrix run reports — paste into the ticket/PR instead
 docs/reports/

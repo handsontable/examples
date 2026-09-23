@@ -83,6 +83,8 @@ only; it writes Loki data and the clean markers there. Lifecycle rules: `browser
 | `O11Y` | service binding | `handsontable-demos-o11y`, `heartbeat()` for the watchdog |
 | `SERVICE_VERSION` | `--var` in the deploy script | full `GITHUB_SHA` |
 | `SENTRY_SCOPE` | var | `full` \| `uncaught` (§11) |
+| `CF_ACCOUNT_ID` | var | GraphQL Analytics API account tag; also scopes the Analytics Engine SQL API read below |
+| `AE_SQL_TOKEN` | secret | Analytics Engine SQL API (Account Analytics Read) — production read side of the nightly `example_daily` rollup (ADR-0042 §5, C-I1). Unset means `reconcile.ts#queryExampleEventTotals` throws instead of rolling up an empty day |
 | `o11y-logs` | export destination name | referenced from `observability.logs.destinations` |
 | `*/5 * * * *` | cron | `pool.gauge`, `budget.gauge`, o11y heartbeat check |
 
@@ -202,7 +204,7 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `theme.ai` | API worker | model, outcome | count, duration_ms, usd | `answered`, `denied`, `error` |
 | `import.url` | API worker | provider, outcome, reason | count, duration_ms | `ok`, `refused`, `error` |
 | `payload.boot` | API worker | framework, outcome | count | `ok`, `error` |
-| `reconcile.run` | API worker cron | outcome | count, duration_ms, usd (billing − estimate) | `ok`, `skipped`, `error` |
+| `reconcile.run` | API worker cron | outcome | count, duration_ms, usd (billing total WRITTEN this run — not a delta against the estimate; D-M15 fix round) | `ok`, `skipped`, `error` |
 | `o11y.ingest` | o11y worker | reason, outcome | count, bytes | `accepted`, `dropped`, `duplicate`; reason = gate |
 | `o11y.drain` | o11y worker | reason, outcome | count (objects), duration_ms, bytes, value (re-opened keys) | `ok`, `partial`, `error`; reason `backlog`, `visit`, `reopen` |
 | `o11y.wake` | o11y worker | reason, outcome | count, duration_ms (to ready) | reason `backlog`, `visit`; outcome `clean`, `unclean` |

@@ -418,8 +418,8 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "reconcile.run usd drift by outcome",
-      "description": "reconcile.run double4 (billing minus estimate, §4) summed per bucket, by outcome.",
+      "title": "reconcile.run usd (billing total written) by outcome",
+      "description": "reconcile.run double4 (§4) summed per bucket, by outcome — the total billing usd WRITTEN this run, NOT billing-minus-estimate (D-M15 fix round; contract §5, reconcile.ts#billingUsdWritten).",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -437,7 +437,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, sum(_sample_interval * double4) AS usd_drift FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'reconcile.run' AND blob3 = '$environment' GROUP BY t, outcome ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, sum(_sample_interval * double4) AS usd_written FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'reconcile.run' AND blob3 = '$environment' GROUP BY t, outcome ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",

@@ -97,3 +97,26 @@ test("reportDiagnostic: with no capture argument, does not throw (falls back to 
   // without an active Sentry client.
   assert.doesNotThrow(() => reportDiagnostic(ENV_UNCAUGHT, new Error("boom"), { context: "test-site", routeClass: "api/test" }));
 });
+
+// C-I2 (fix round): the structured error line `reportDiagnostic` writes via
+// `logErrorLine` must carry the contract-fingerprint under `hot.fingerprint`
+// (contract §3 AE-only key) — otherwise the API worker's handled errors have
+// no way to reach the §F.3 new-fingerprint registry once they arrive at the
+// o11y worker as a worker-tenant OTLP export (see the F3 fix-round report for
+// the other, out-of-ownership half of the wiring).
+test("reportDiagnostic: the structured error line carries hot.fingerprint = fingerprint(context, message)", () => {
+  const lines = [];
+  const realConsoleError = console.error;
+  console.error = (...args) => lines.push(args.join(" "));
+  try {
+    const { capture } = recorder();
+    reportDiagnostic(ENV_UNCAUGHT, new Error("boom"), { context: "test-site", routeClass: "api/test" }, capture);
+  } finally {
+    console.error = realConsoleError;
+  }
+  assert.equal(lines.length, 1);
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed["log.kind"], "error");
+  assert.equal(parsed.context, "test-site");
+  assert.match(parsed["hot.fingerprint"], /^test-site:[0-9a-f]{16}$/);
+});

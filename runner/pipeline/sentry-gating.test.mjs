@@ -8,7 +8,9 @@ import {
 } from "../workers/api/src/sentry-gate.ts";
 import {
   isEdgelessForeignSessionStart,
+  isForeignUnhandled,
   isOfficeScannerRejection,
+  isUnhandledNoise,
 } from "../apps/authoring/src/eventGate.ts";
 import { resolveSentryScope, reportsDiagnosticToSentry } from "../apps/authoring/src/sentryScope.ts";
 
@@ -147,6 +149,94 @@ test("ordinary events pass through untouched", () => {
     assert.equal(out, event);
     assert.equal(out.environment, undefined);
   }
+});
+
+// ── Fix round D-I2: isUnhandledNoise / isForeignUnhandled, moved from sentry.ts ──
+//
+// Moved into `eventGate.ts` (previously private to `sentry.ts`, untestable) so
+// `telemetry/faro.ts`'s `beforeSend` can apply the SAME predicates Sentry's own
+// `beforeSend` does — contract §6's "shared noise gates" requirement. Before this
+// fix, only Sentry ever ran them.
+
+test("isUnhandledNoise: a ResizeObserver loop warning, unhandled, is noise", () => {
+  const event = {
+    exception: { values: [{ type: "Error", value: "ResizeObserver loop completed with undelivered notifications.", mechanism: { handled: false } }] },
+  };
+  assert.equal(isUnhandledNoise(event), true);
+});
+
+test("isUnhandledNoise: a navigation-abort Failed to fetch, unhandled, is noise", () => {
+  const event = {
+    exception: { values: [{ type: "TypeError", value: "Failed to fetch", mechanism: { handled: false } }] },
+  };
+  assert.equal(isUnhandledNoise(event), true);
+});
+
+test("isUnhandledNoise: the SAME message, but handled (an explicit report), is NOT noise", () => {
+  const event = {
+    exception: { values: [{ type: "TypeError", value: "Failed to fetch", mechanism: { handled: true } }] },
+  };
+  assert.equal(isUnhandledNoise(event), false, "an explicit reportError('Failed to fetch') must still be reported");
+});
+
+test("isUnhandledNoise: an unrelated unhandled error is NOT noise", () => {
+  const event = {
+    exception: { values: [{ type: "TypeError", value: "x is not a function", mechanism: { handled: false } }] },
+  };
+  assert.equal(isUnhandledNoise(event), false);
+});
+
+test("isForeignUnhandled: an unhandled error whose stack is entirely outside this origin is dropped", () => {
+  const event = {
+    exception: {
+      values: [
+        {
+          type: "TypeError",
+          value: "boom",
+          mechanism: { handled: false },
+          stacktrace: { frames: [{ filename: "https://sandpack-bundler.codesandbox.io/bundle.js" }] },
+        },
+      ],
+    },
+  };
+  assert.equal(isForeignUnhandled(event, "https://demos.handsontable.com"), true);
+});
+
+test("isForeignUnhandled: an unhandled error with an own-origin frame is NOT dropped", () => {
+  const event = {
+    exception: {
+      values: [
+        {
+          type: "TypeError",
+          value: "boom",
+          mechanism: { handled: false },
+          stacktrace: { frames: [{ filename: "https://demos.handsontable.com/assets/index.js" }] },
+        },
+      ],
+    },
+  };
+  assert.equal(isForeignUnhandled(event, "https://demos.handsontable.com"), false);
+});
+
+test("isForeignUnhandled: a HANDLED report through a foreign frame is NOT dropped", () => {
+  const event = {
+    exception: {
+      values: [
+        {
+          type: "TypeError",
+          value: "boom",
+          mechanism: { handled: true },
+          stacktrace: { frames: [{ filename: "https://sandpack-bundler.codesandbox.io/bundle.js" }] },
+        },
+      ],
+    },
+  };
+  assert.equal(isForeignUnhandled(event, "https://demos.handsontable.com"), false);
+});
+
+test("isUnhandledNoise / isForeignUnhandled: no exception values -> false, not thrown on", () => {
+  assert.equal(isUnhandledNoise({}), false);
+  assert.equal(isForeignUnhandled({ exception: { values: [] } }, "https://x"), false);
 });
 
 // ── DEV-2858. beforeSend suppression gates for two NOT-OURS populations ─────────
