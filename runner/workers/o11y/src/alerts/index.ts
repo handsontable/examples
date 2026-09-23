@@ -1,9 +1,8 @@
 // ADR-0041 §F.3's alert entry of the o11y worker's `*/10` cron —
-// `runAlerts(env, ctx)`, exported for T03's real cron handler to call
-// (COMMON.md controller note: "Wire it into the scheduled handler
-// minimally... When you merge the feature branch at the end, call
-// `runAlerts` from T03's handler and remove yours"). This task's own
-// `scheduled()` placeholder in `index.ts` calls it directly until then.
+// `runAlerts(env, ctx)`. Post-merge, `index.ts`'s single `scheduled()`
+// export calls this alongside T03's real backlog-wake handler
+// (`handleScheduled`), per COMMON.md's "call `runAlerts` from T03's
+// handler" instruction.
 
 import { bindingSink, clickhouseSink, type AeSink, type CommonResourceAttrs } from "@handsontable/demo-runtime/telemetry";
 import type { Env } from "../env.js";
@@ -83,9 +82,9 @@ const QUERY_RULES: { id: string; fn: RuleFn }[] = [
  *  (`rules.ts#alertEvalErrorRule`) is evaluated last, over exactly the
  *  errors this run collected, through the SAME fire-once/resolve-once
  *  `evaluateAndNotify` every other rule uses. This lives inside
- *  `runAlerts` itself (not the caller), so it holds for whichever cron
- *  handler calls this function — this task's own placeholder `scheduled()`
- *  today, T03's real cron after the merge, per the controller's note. */
+ *  `runAlerts` itself (not the caller), so it holds regardless of which
+ *  cron handler calls this function — post-merge, `index.ts`'s single
+ *  `scheduled()` export, alongside T03's real backlog-wake handler. */
 export async function runAlerts(env: Env, _ctx?: ExecutionContext): Promise<RunAlertsResult> {
   const writer = inboxWriter(env);
   const sink = aeSink(env);

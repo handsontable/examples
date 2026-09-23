@@ -33,15 +33,19 @@
 const CLOUDFLARE_WORKERS_STUB = new URL("./o11y-cloudflare-workers-stub.mjs", import.meta.url).href;
 const CLOUDFLARE_CONTAINERS_STUB = new URL("./cloudflare-containers-stub.mjs", import.meta.url).href;
 
-// `jose` and `@handsontable/demo-runtime` (any subpath) are `workers/o11y`'s
-// dependencies, not the pipeline's — a plain node resolve only succeeds when
-// the *importing* file lives under `workers/o11y/`, which every gate/normalise
-// module does. A test file under `pipeline/` that also wants to sign a test
-// JWT, or read `decodeNdjson`/`toAePoint` directly to assert on inbox
-// output, has no such ancestor `node_modules` entry; borrow one by resolving
-// as if the request came from inside `workers/o11y/src/` instead.
+// `jose`, `source-map-js` (T03 addition — `drain/symbolicate.ts`'s own
+// dependency, borrowed the same way for `pipeline/o11y-symbolicate.test.mjs`,
+// which needs to build a real source map with `SourceMapGenerator` to test
+// against) and `@handsontable/demo-runtime` (any subpath) are
+// `workers/o11y`'s dependencies, not the pipeline's — a plain node resolve
+// only succeeds when the *importing* file lives under `workers/o11y/`, which
+// every gate/normalise module does. A test file under `pipeline/` that also
+// wants to sign a test JWT, build a source map, or read
+// `decodeNdjson`/`toAePoint` directly to assert on inbox output, has no such
+// ancestor `node_modules` entry; borrow one by resolving as if the request
+// came from inside `workers/o11y/src/` instead.
 const WORKERS_O11Y_SRC_URL = new URL("../../workers/o11y/src/index.ts", import.meta.url).href;
-const BORROWED_SPECIFIERS = ["jose", "@handsontable/demo-runtime"];
+const BORROWED_SPECIFIERS = ["jose", "source-map-js", "@handsontable/demo-runtime"];
 
 export async function resolve(specifier, context, nextResolve) {
   if (specifier === "cloudflare:workers") {

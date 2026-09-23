@@ -349,8 +349,9 @@ export async function o11yCapRule(spend: O11ySpend): Promise<RuleResult> {
 // errors every OTHER rule in this file threw this tick, so an AE query
 // failure (a malformed query, ClickHouse/AE unreachable) is never silent.
 // Same fire-once/resolve-once machinery as every other rule (`notify.ts`),
-// so it holds regardless of which cron handler calls `runAlerts` (this
-// task's placeholder today, T03's real one after the merge).
+// so it holds regardless of which cron handler calls `runAlerts` — post-
+// merge, `index.ts`'s single `scheduled()` export, alongside T03's real
+// backlog-wake handler.
 
 export function alertEvalErrorRule(errors: Readonly<Record<string, string>>): RuleResult {
   const failing = Object.keys(errors);

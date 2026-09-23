@@ -19,7 +19,8 @@
     "check:compiler-chunk": "node scripts/check-compiler-chunk.mjs",
     "check:telemetry-leak": "node scripts/check-telemetry-leak.mjs",
     "e2e:matrix": "E2E_STARTER_MATRIX=1 PLAYWRIGHT_JSON_OUTPUT_NAME=test-results/starter-matrix.json playwright test e2e/starter-matrix.spec.ts --workers=2 --retries=2 --reporter=list,json",
-    "e2e:matrix:report": "node scripts/starter-matrix-report.mjs"
+    "e2e:matrix:report": "node scripts/starter-matrix-report.mjs",
+    "o11y:dev": "node scripts/o11y-dev.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",

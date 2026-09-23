@@ -13,6 +13,11 @@
 // Grafana access" task, explicitly out of scope here.
 
 import { Container } from "@cloudflare/containers";
+import { o11ySelfIdentity } from "./normalise/respond.js";
+import { writePointFromDo } from "./normalise/points.js";
+import { toAePoint, type HotAttrs } from "@handsontable/demo-runtime/telemetry";
+import { drainBatch, type DrainDeps } from "./drain/drain.js";
+import { symbolicateResourceLogs } from "./drain/symbolicate.js";
 import type { Env } from "./env.js";
 import { reportAwakeSeconds } from "./cost.js";
 
@@ -37,6 +42,51 @@ const DEFAULT_LOKI_BUCKET_NAME = "handsontable-demos-o11y-loki";
 
 const WAKE_STORAGE_KEY = "wake";
 const LAST_STOP_STORAGE_KEY = "lastStop";
+/** T03 addition: persisted separately from the base `Container` class's own
+ *  opaque `sleepAfterMs` idle clock (never read directly here — a real
+ *  `containerFetch` call, including the drain's own Loki pushes, always
+ *  renews that clock too, which is harmless: it only protects an in-flight
+ *  drain or an open Grafana tab from the 15-minute idle stop firing
+ *  mid-work). ADR §A's actual rule — "if no Grafana request arrived in the
+ *  last 10 minutes the Worker calls `stop()`" after a drain — needs its OWN
+ *  clock, driven only by real `/grafana/*` traffic through
+ *  {@link GrafanaBox.noteVisitorActivity}, never by the drain's own Loki
+ *  traffic. */
+const LAST_GRAFANA_STORAGE_KEY = "lastGrafanaAt";
+/** Guards `onStart`'s double-invocation (see its own doc comment) from
+ *  scheduling `drainStep` twice for the same wake. */
+const DRAIN_SCHEDULED_FOR_STORAGE_KEY = "drainScheduledFor";
+const HARD_CAP_SCHEDULE = "hardCapStop";
+const DRAIN_STEP_SCHEDULE = "drainStep";
+/** ADR §A: "after 4 hours awake regardless." */
+const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
+/** ADR §A stop protocol: "if no Grafana request arrived in the last 10
+ *  minutes the Worker calls `stop()`." */
+const GRAFANA_QUIET_STOP_MS = 10 * 60 * 1000;
+/** Objects drained per `drainStep` invocation. T03-D (see the task
+ *  Outcome): a starting value, not yet tuned against real per-object CPU —
+ *  exit criterion 7's sandbox probe measures real per-object cost and
+ *  whether this needs to change; kept well under any plausible per-object
+ *  cost times `limits.cpu_ms` so a single invocation cannot blow the
+ *  Worker's CPU budget even before that measurement exists. */
+const DRAIN_BATCH_SIZE = 10;
+/** Minimum gap before `drainStep` reschedules itself (T03-D, see the task
+ *  Outcome for the full derivation): the base `Container.alarm()` loop
+ *  fetches every due `container_schedules` row ONCE at the top of its own
+ *  invocation (`const result = this.sql\`SELECT * FROM
+ *  container_schedules\`;`) and compares each row's `time` (whole seconds)
+ *  against a `now` captured before the loop starts; scheduling the next
+ *  step for "now" risks the SAME invocation picking it back up if that
+ *  query is ever re-evaluated live rather than read from the snapshot,
+ *  which would defeat "a bounded number of objects per invocation" (exit
+ *  criterion 7 measures exactly this). A full 1000 ms gap is provably
+ *  enough regardless of that ambiguity: `schedule()` floors the target time
+ *  to whole seconds, so a row inserted at real time `T1 >= T0` (`T0` being
+ *  the loop's captured `now`) with a 1000 ms offset floors to a value
+ *  `> floor(T0) + 1 > T0`, true for any `T0` regardless of its fractional
+ *  part — a schedule 1000 ms out can never satisfy `row.time <= now` for
+ *  the `now` captured at the START of the invocation that inserted it. */
+const DRAIN_STEP_GAP_MS = 1000;
 
 type WakeReason = "backlog" | "visit";
 
@@ -99,16 +149,43 @@ function isBlockedLiveRequest(request: Request): boolean {
   return LIVE_PATH_RE.test(normalized);
 }
 
+// T03-D (see the task Outcome): both stubs below used to call
+// `.jurisdiction("eu")` unconditionally. T02-D11 (inbox/accessor.ts)
+// already measured, against a real `wrangler dev`, that Miniflare/workerd's
+// local Durable Object simulation THROWS the moment `.jurisdiction()` is
+// called at all (`Error: Jurisdiction restrictions are not implemented in
+// workerd`) — not a silent no-op. Since `wake()` calls `inboxWriterStub`
+// (via `recordWake`) on every wake, this meant `wake()` itself 500'd under
+// local dev before this fix, the same failure mode T02-D11 fixed for the
+// ingest routes. Mirrors `inbox/accessor.ts#inboxWriter`'s exact pattern —
+// production (`O11Y_ENV === "production"`) is unchanged.
 function inboxWriterStub(env: Env) {
-  return env.INBOX_WRITER.jurisdiction("eu").getByName("main");
+  const ns = env.O11Y_ENV === "local" ? env.INBOX_WRITER : env.INBOX_WRITER.jurisdiction("eu");
+  return ns.getByName("main");
 }
 
-/** Contract §2: one instance, name `box`, `.jurisdiction("eu")`. Exported
- *  for T03's future wake-trigger callers (the Grafana-visit route, the
- *  backlog cron) — never address `GRAFANA_BOX` any other way, or a second
- *  box (and a second container) gets created. */
+/** `o11y.*` self-metric write from inside `GrafanaBox` (a DO) — see
+ *  `normalise/points.ts#writePointFromDo`'s own doc comment for why a
+ *  separate DO-flavoured writer exists next to the route-handler one. */
+function writeBoxPoint(
+  env: Env,
+  ctx: DurableObjectState,
+  metric: Parameters<typeof toAePoint>[0],
+  values: Parameters<typeof toAePoint>[1],
+  attrs: HotAttrs,
+): void {
+  writePointFromDo(env, ctx, toAePoint(metric, values, { ...o11ySelfIdentity(env), ...attrs }));
+}
+
+/** Contract §2: one instance, name `box`, `.jurisdiction("eu")` in
+ *  production (see the T03-D note on `inboxWriterStub` above for why not
+ *  locally). Exported for T03's wake-trigger callers (the Grafana-visit
+ *  route, the backlog cron) and `InboxWriter.resolveWakes` (ledger.ts) —
+ *  never address `GRAFANA_BOX` any other way, or a second box (and a
+ *  second container) gets created. */
 export function getGrafanaBoxStub(env: Env) {
-  return env.GRAFANA_BOX.jurisdiction("eu").getByName("box");
+  const ns = env.O11Y_ENV === "local" ? env.GRAFANA_BOX : env.GRAFANA_BOX.jurisdiction("eu");
+  return ns.getByName("box");
 }
 
 export class GrafanaBox extends Container<Env> {
@@ -194,12 +271,88 @@ export class GrafanaBox extends Container<Env> {
     const envVars = buildEnvVars(this.env, wakeId);
     const record: WakeRecord = { wakeId, reason, startedAt: Date.now() };
     await this.ctx.storage.put(WAKE_STORAGE_KEY, record);
+    // Fix round (I1): `LAST_GRAFANA_STORAGE_KEY` is not scoped by wakeId —
+    // without this reset, a visitor's activity from the PREVIOUS wake
+    // survives into this fresh one, and `#finishDrain`'s quiet check
+    // (10 minutes) can read it as "recent" even though nothing has
+    // visited /grafana/* yet this wake, refusing to self-stop a
+    // backlog-only wake that has no visitors at all (ADR §A's quiet-stop
+    // rule, and exit criterion 7's awake-time cost). Deleted here, before
+    // `start()`, so a wake with a real visitor still renews it normally
+    // via `noteVisitorActivity()` once that visitor actually arrives, but
+    // a wake with none starts genuinely quiet.
+    await this.ctx.storage.delete(LAST_GRAFANA_STORAGE_KEY);
     // Fail closed: InboxWriter is the ledger's one owner (ADR-0041 §B.3);
     // if it cannot record this wake, the container must not start with a
     // wakeId nothing else knows about.
     await inboxWriterStub(this.env).recordWake(record.wakeId, reason);
     await this.start({ envVars });
+    // T03-D (see the task Outcome — found running a real `wrangler dev`
+    // locally, not guessed): `start()` never calls `state.setHealthy()`
+    // (only `startAndWaitForPorts()` does), so `state.status` stays
+    // `"running"`, never `"healthy"`. The base `Container.containerFetch`
+    // checks exactly that field (`state.status !== 'healthy'`) to decide
+    // whether to re-verify ports — with it permanently false, EVERY single
+    // `containerFetch` call for the rest of this wake (every drain push,
+    // every `/grafana/*` proxy request) re-ran the full
+    // `startAndWaitForPorts` port-polling machinery from scratch, observed
+    // to cost anywhere from ~10ms to 160+ SECONDS depending on contention.
+    // Fired here, deliberately NOT awaited: `wake()` itself must still
+    // return fast (the waking page's whole point is a quick response while
+    // the box boots in the background) — this just gets `state.status` to
+    // `"healthy"` in the background, once, so subsequent calls take the
+    // cheap path. Harmless if it never resolves (a wake that fails/stops
+    // before ports ever come up) — nothing awaits it, and it targets THIS
+    // wake's own container instance state, never a later wake's.
+    void this.startAndWaitForPorts({ ports: this.requiredPorts }).catch(() => {});
+    // ADR §A: "after 4 hours awake regardless." `hardCapStop` re-checks the
+    // wakeId when it fires — a wake that already stopped on its own (idle
+    // timeout, or the post-drain quiet stop) leaves nothing for this to do.
+    await this.schedule(new Date(Date.now() + WAKE_HARD_CAP_MS), HARD_CAP_SCHEDULE, { wakeId: record.wakeId });
     return record;
+  }
+
+  /** {@link HARD_CAP_SCHEDULE}'s callback. A no-op if a newer wake has
+   *  already started (a fresh wakeId in storage) or the container already
+   *  stopped on its own. */
+  async hardCapStop(payload: { wakeId: string }): Promise<void> {
+    const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    if (current?.wakeId !== payload.wakeId) return;
+    const state = await this.getState();
+    if (state.status === "running" || state.status === "healthy") await this.stop();
+  }
+
+  /** ADR §A: "The Worker renews the activity timer only on HTTP requests to
+   *  `/grafana/*`." Called by the `/grafana/*` proxy (`grafana/proxy.ts`)
+   *  after a request passes Access — never by the drain's own Loki pushes.
+   *  Also renews the base class's own idle clock (harmless — see
+   *  {@link LAST_GRAFANA_STORAGE_KEY}'s doc comment). */
+  async noteVisitorActivity(): Promise<void> {
+    await this.ctx.storage.put(LAST_GRAFANA_STORAGE_KEY, Date.now());
+    this.renewActivityTimeout();
+  }
+
+  async lastGrafanaActivityMs(): Promise<number | null> {
+    return (await this.ctx.storage.get<number>(LAST_GRAFANA_STORAGE_KEY)) ?? null;
+  }
+
+  /** `InboxWriter.resolveWakes`'s "is the box still running" signal
+   *  (`ledger.ts#LedgerDeps.isBoxRunning`). Backed by the public
+   *  `getState()` (the same check `isReady()`/`containerFetch` already use)
+   *  rather than the base class's own live `this.container.running` flag —
+   *  that field is marked `private` in `@cloudflare/containers`' own types,
+   *  genuinely inaccessible from a subclass at the type level, not merely a
+   *  style choice. T03-D (see the task Outcome): `getState()` can be stale
+   *  immediately after a host loss while this DO was evicted, until the
+   *  base class's own periodic `alarm()`/monitor reconciliation
+   *  (`syncPendingStoppedEvents`, called on every alarm tick, which this
+   *  class always has scheduled — see the base class's own "container DOs
+   *  ALWAYS need an alarm right now" comment) catches up — empirically
+   *  bounded to a few minutes in this task's SIGKILL testing (see the
+   *  Outcome), self-healing well within the cron's own 10-minute cadence. */
+  async isAwake(): Promise<boolean> {
+    const state = await this.getState();
+    return state.status === "running" || state.status === "healthy";
   }
 
   /**
@@ -263,10 +416,143 @@ export class GrafanaBox extends Container<Env> {
     return super.containerFetch(requestOrUrl, portOrInit, portParam);
   }
 
-  override onStart(): void | Promise<void> {
-    // Nothing further to do here: `wake()` already persisted the wake
-    // record and called `recordWake` before `start()` was issued. Present
-    // so the lifecycle hook is visibly accounted for, not silently unused.
+  override async onStart(): Promise<void> {
+    // T03-D (see the task Outcome): `onStart` fires as soon as the
+    // container process is issued (the base `start()` — the path `wake()`
+    // uses — calls it right after `startContainerIfNotRunning`, WITHOUT
+    // waiting for ports; only `startAndWaitForPorts` calls `setHealthy()`
+    // first). Loki/Grafana are very likely still booting at this point, so
+    // `drainStep` itself gates its first real push on `isReady()` rather
+    // than trusting this hook's timing. `this.schedule` (not overriding
+    // `alarm()` directly) is deliberate — the base class's own `alarm()`
+    // already owns the idle-timeout/`schedule()` machinery, and fighting it
+    // with a second `alarm()` override would be exactly the class of bug
+    // this task's own "riskiest" billing warrants avoiding.
+    //
+    // `onStart` fires a SECOND time for the same wake: `#doWake` also fires
+    // (unawaited) `startAndWaitForPorts()` in the background purely to flip
+    // `state.status` to `"healthy"` (see its own doc comment), and the base
+    // class calls `onStart()` again once THAT resolves. Without the guard
+    // below this would schedule `drainStep` twice per wake — harmless
+    // (idempotent, and the DO alarm loop only fetches one snapshot per
+    // invocation regardless — see `DRAIN_STEP_GAP_MS`'s doc comment) but
+    // wasteful, so skip it once already scheduled for this wakeId.
+    const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    if (!wake) return; // defensive; wake() always sets this before start()
+    if ((await this.ctx.storage.get<string>(DRAIN_SCHEDULED_FOR_STORAGE_KEY)) === wake.wakeId) return;
+    await this.ctx.storage.put(DRAIN_SCHEDULED_FOR_STORAGE_KEY, wake.wakeId);
+    await this.schedule(new Date(), DRAIN_STEP_SCHEDULE, { wakeId: wake.wakeId });
+  }
+
+  /**
+   * One bounded batch of the drain (ADR §B.3/§A "Drain" scope). Reschedules
+   * itself {@link DRAIN_STEP_GAP_MS} later (see that constant's own doc
+   * comment for why a full-second gap, not "now") until
+   * `InboxWriter.nextWrittenKeys` returns empty, then decides whether to
+   * stop (see `#finishDrain`). A no-op if a newer wake has already
+   * superseded `payload.wakeId`.
+   *
+   * `seenHashes` is a fresh `Set()` per invocation, not persisted across
+   * steps or across the wake: ADR §B.3's own "What an unclean stop costs"
+   * paragraph already accepts duplicate STORAGE from a crash-and-replay,
+   * relying on Loki's query-time dedup (identical timestamp + labels +
+   * structured metadata) to collapse it back to one result — the exact
+   * same mechanism covers a retried step re-pushing a key whose ledger
+   * commit did not land before a crash. A per-step set only needs to guard
+   * against double-processing WITHIN one call (defensive; ingest-time
+   * dedup, §B.2 step 4, already prevents the same record existing in two
+   * different packed objects under normal operation).
+   */
+  async drainStep(payload: { wakeId: string }): Promise<void> {
+    const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    if (current?.wakeId !== payload.wakeId) return;
+
+    if (!(await this.isReady())) {
+      await this.schedule(new Date(Date.now() + DRAIN_STEP_GAP_MS), DRAIN_STEP_SCHEDULE, payload);
+      return;
+    }
+
+    const writer = inboxWriterStub(this.env);
+    // ADR §B.3: "at each cron tick and at the start of each wake" — this is
+    // the wake-start call (idempotent to run again on every step: cheap,
+    // and self-correcting if a wake elsewhere just went `over`).
+    await writer.resolveWakes();
+    const keys = await writer.nextWrittenKeys(DRAIN_BATCH_SIZE);
+
+    if (keys.length === 0) {
+      await this.#finishDrain(payload.wakeId);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const deps: DrainDeps = {
+      fetchObject: async (key) => {
+        const obj = await this.env.O11Y_INBOX.get(key);
+        return obj ? new Uint8Array(await obj.arrayBuffer()) : null;
+      },
+      pushToLoki: async (tenant, gzippedNdjson) => {
+        const res = await this.containerFetch(
+          new Request("http://box/otlp/v1/logs", {
+            method: "POST",
+            headers: { "content-type": "application/json", "content-encoding": "gzip", "X-Scope-OrgID": tenant },
+            body: gzippedNdjson,
+          }),
+          3100,
+        );
+        const message = res.status >= 400 ? await res.text().catch(() => undefined) : undefined;
+        return { status: res.status, message };
+      },
+      symbolicate: (records) => symbolicateResourceLogs(records, { getMap: (key) => this.#getMap(key) }),
+    };
+
+    const result = await drainBatch(keys, new Set(), deps);
+
+    const provisionalKeys = result.outcomes.filter((o) => o.outcome === "provisional").map((o) => o.key);
+    const rejectedKeys = result.outcomes.filter((o) => o.outcome === "rejected");
+    const bytesPushed = result.outcomes.reduce((sum, o) => sum + o.bytesPushed, 0);
+
+    if (provisionalKeys.length > 0) await writer.markKeysProvisional(payload.wakeId, provisionalKeys);
+    for (const r of rejectedKeys) await writer.rejectKey(r.key, r.reason ?? "unknown");
+
+    writeBoxPoint(
+      this.env,
+      this.ctx,
+      "o11y.drain",
+      { count: result.outcomes.length, duration_ms: Date.now() - startedAt, bytes: bytesPushed },
+      { reason: current.reason, outcome: result.stoppedEarly ? "error" : rejectedKeys.length > 0 ? "partial" : "ok" },
+    );
+
+    if (result.stoppedEarly) {
+      // Everything from here on stays `written` for the next wake to
+      // retry (a possibly-recovered Loki by then) — but this wake itself
+      // is done trying, so run the same post-drain stop decision.
+      await this.#finishDrain(payload.wakeId);
+      return;
+    }
+
+    await this.schedule(new Date(Date.now() + DRAIN_STEP_GAP_MS), DRAIN_STEP_SCHEDULE, payload);
+  }
+
+  /** ADR §A stop protocol: "the drain finishes; if no Grafana request
+   *  arrived in the last 10 minutes the Worker calls `stop()` (otherwise
+   *  the idle timer does, later, so a drain never SIGTERMs someone reading
+   *  a dashboard)." A no-op if a newer wake has already superseded
+   *  `wakeId`. */
+  async #finishDrain(wakeId: string): Promise<void> {
+    const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    if (current?.wakeId !== wakeId) return;
+
+    const lastGrafana = await this.lastGrafanaActivityMs();
+    const quiet = lastGrafana === null || Date.now() - lastGrafana >= GRAFANA_QUIET_STOP_MS;
+    if (!quiet) return; // an active Grafana user — leave it to the idle timer / hard cap
+
+    const state = await this.getState();
+    if (state.status === "running" || state.status === "healthy") await this.stop();
+  }
+
+  async #getMap(key: string): Promise<string | null> {
+    const obj = await this.env.O11Y_MAPS.get(key);
+    return obj ? obj.text() : null;
   }
 
   /**
@@ -341,6 +627,8 @@ function toInspectableRequest(
  * missing — a box that cannot reach its own storage must not boot.
  */
 function buildEnvVars(env: Env, wakeId: string): Record<string, string> {
+  if (env.O11Y_ENV === "local") return buildLocalEnvVars(env, wakeId);
+
   const missing = (["LOKI_S3_ACCESS_KEY_ID", "LOKI_S3_SECRET_ACCESS_KEY"] as const).filter(
     (key) => !env[key],
   );
@@ -377,7 +665,61 @@ function buildEnvVars(env: Env, wakeId: string): Record<string, string> {
     O11Y_CLICKHOUSE_HEADER1_VALUE: env.AE_SQL_TOKEN ? `Bearer ${env.AE_SQL_TOKEN}` : "",
     O11Y_CLICKHOUSE_HEADER2_NAME: "",
     O11Y_CLICKHOUSE_HEADER2_VALUE: "",
+    // T03-D (see the task Outcome — found on the real sandbox platform, not
+    // guessed): `shutdown.sh`'s default `STOP_GRACE_SECONDS` (30, matching
+    // `compose.yml`'s own local default) is tuned for a same-host MinIO
+    // round trip. Against a REAL R2 endpoint over the real network, a stop
+    // that genuinely needed to flush a fresh index upload was repeatedly
+    // observed exceeding 30s and reporting `exitCode: 1` (shutdown.sh's own
+    // "loki did not exit within ${STOP_GRACE_SECONDS}s… giving up on a
+    // clean marker" path) even with correct credentials and a real,
+    // confirmed-successful periodic shipper upload earlier in the same
+    // wake. T01's own T01-D8 already measured `stop()` taking up to 53.7s
+    // on this same platform with dummy credentials; the platform's own
+    // documented SIGTERM→SIGKILL grace is 15 minutes (T01 Outcome), so
+    // there is ample headroom to raise this without risking an
+    // escalation. `compose.yml`'s local default (30) is untouched —
+    // local MinIO genuinely does not need this.
+    O11Y_STOP_GRACE_SECONDS: "120",
     // SLACK_WEBHOOK_URL is deliberately never included — ADR-0041 §A: "The
     // Slack webhook never enters the box."
+  };
+}
+
+/** T03-D (see the task Outcome): local-only envVars, gated exactly like
+ *  `DEV_ADMIN` (`O11Y_ENV === "local"`, fail-closed the same way — this
+ *  branch is unreachable in production, which always sets
+ *  `O11Y_ENV: "production"` from `wrangler.jsonc`'s `vars` block, never a
+ *  secret). Mirrors `containers/o11y/compose.yml`'s own MinIO/local-
+ *  ClickHouse shape. `wrangler dev`'s local Container orchestration runs
+ *  `GrafanaBox`'s container via real Docker, independently of any
+ *  `compose.yml` network — it reaches host-published services via Docker's
+ *  own `host.docker.internal` DNS name, which `scripts/o11y-dev.mjs`'s own
+ *  README section documents starting local MinIO/ClickHouse for
+ *  (`docker compose -f containers/o11y/compose.yml up minio minio-init
+ *  clickhouse`, ports published to the host — the `box` service itself is
+ *  never started locally that way; `wrangler dev` IS the box). */
+function buildLocalEnvVars(env: Env, wakeId: string): Record<string, string> {
+  const minioPort = env.O11Y_LOCAL_MINIO_PORT || "4402";
+  const clickhousePort = env.O11Y_LOCAL_CLICKHOUSE_PORT || "4404";
+  const publicOrigin = env.O11Y_LOCAL_PUBLIC_ORIGIN || "http://localhost:4400";
+
+  return {
+    WAKE_ID: wakeId,
+    STORAGE: "s3",
+    LOKI_S3_ENDPOINT: `host.docker.internal:${minioPort}`,
+    LOKI_S3_REGION: "auto",
+    LOKI_S3_ACCESS_KEY_ID: env.LOKI_S3_ACCESS_KEY_ID || "minioadmin",
+    LOKI_S3_SECRET_ACCESS_KEY: env.LOKI_S3_SECRET_ACCESS_KEY || "minioadmin",
+    LOKI_S3_BUCKET: env.LOKI_S3_BUCKET || "loki",
+    LOKI_S3_INSECURE: "true",
+    GF_SERVER_ROOT_URL: `${publicOrigin}/grafana/`,
+    O11Y_CLICKHOUSE_URL: `http://host.docker.internal:${clickhousePort}`,
+    O11Y_CLICKHOUSE_DATABASE: "default",
+    O11Y_CLICKHOUSE_HEADER1_NAME: "X-ClickHouse-User",
+    O11Y_CLICKHOUSE_HEADER1_VALUE: "default",
+    O11Y_CLICKHOUSE_HEADER2_NAME: "X-ClickHouse-Key",
+    O11Y_CLICKHOUSE_HEADER2_VALUE: env.AE_SQL_TOKEN || "local-dev-token",
+    O11Y_STOP_GRACE_SECONDS: "30",
   };
 }

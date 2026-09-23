@@ -194,7 +194,10 @@ export function fakeR2(seed = {}) {
     async get(key) {
       const value = store.get(key);
       if (value === undefined) return null;
-      return { body: value, async text() { return value; } };
+      // T08: `size` mirrors a real R2Object's byte length — `share.ts#serveDemoAsset`
+      // reads it for the `serve.d`/`serve.embed` AE point's `bytes` column on a
+      // non-HTML asset, where the body is streamed rather than re-encoded.
+      return { body: value, size: Buffer.byteLength(String(value), "utf8"), async text() { return value; } };
     },
     async delete(key) {
       store.delete(key);

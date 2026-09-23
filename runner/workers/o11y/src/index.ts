@@ -2,16 +2,27 @@
 // (every route 501) is replaced here by real routing through `router.ts`
 // (COMMON.md interface 2) for the routes this task owns —
 // `POST /telemetry/collect`, `POST /telemetry/v1/logs`, `POST /telemetry/deploy`,
-// `POST /telemetry/hooks/sentry` — every other contract path (`lite`, T08;
-// `/grafana/*` and `reopen`, T01/T03) still answers `501` until its owning
-// task registers a handler, exactly as the T00 scaffold did.
+// `POST /telemetry/hooks/sentry` — plus `/grafana/*` and
+// `POST /grafana/_o11y/reopen` (T03, registered below). Only
+// `GET /grafana/_o11y/admin/*` (ADR-0043, after launch) is still a `501`
+// stub, exactly like the T00 scaffold, until its owning task registers a
+// handler.
+//
+// `POST /telemetry/lite` (T08, ADR §C.5) registers itself: `./lite.ts` calls
+// `registerRoute` at module load, the same COMMON.md interface 2 every other
+// route here uses, and is pulled in below by its side-effect import — kept in
+// its own file (T08's "Owns" row) rather than folded into this one's handler
+// functions, since T03/T04 also touch this file and a merge conflict on a
+// route this large is worse than one extra import line.
 //
 // Durable Object classes are exported from here, as Workers requires — each
 // class itself lives in the file its owner's shared-file table row names
 // (T00-D9): `GrafanaBox` in `box.ts` (T01), `InboxWriter` in
 // `inbox/writer.ts` (T02, now real).
 
+import { toAePoint } from "@handsontable/demo-runtime/telemetry";
 import type { Env } from "./env.js";
+import "./lite.js";
 import { checkBrowserGates, checkPayloadEnvironment } from "./gates/browser.js";
 import { checkDeployGate } from "./gates/oidc.js";
 import { checkSentryHmac } from "./gates/sentry.js";
@@ -23,11 +34,14 @@ import { processFaroBody } from "./normalise/faro.js";
 import { processOtlpBody } from "./normalise/otlp.js";
 import { processSentryPayload } from "./normalise/sentry.js";
 import { BodyTooLargeError, readCappedBytes, readCappedText } from "./normalise/read-body.js";
-import { recordInvalidItem, recordOversizeDrop, respondDrop, respondIngested } from "./normalise/respond.js";
+import { recordInvalidItem, recordOversizeDrop, respondDrop, respondIngested, o11ySelfIdentity } from "./normalise/respond.js";
 import { writePoint } from "./normalise/points.js";
 import { findRoute, registerRoute } from "./router.js";
 import { runAlerts } from "./alerts/index.js";
 import { readHeartbeatReport } from "./heartbeat.js";
+import { getGrafanaBoxStub } from "./box.js";
+import { handleGrafana } from "./grafana/proxy.js";
+import { handleReopen } from "./grafana/reopen.js";
 
 export { GrafanaBox } from "./box.js";
 export { InboxWriter } from "./inbox/writer.js";
@@ -44,9 +58,6 @@ interface RouteStub {
  *  stub, exactly like the T00 scaffold, until its owning task registers one
  *  through `router.ts`. */
 const UNIMPLEMENTED_ROUTES: readonly RouteStub[] = [
-  { method: "POST", path: "/telemetry/lite" },
-  { method: "GET", path: "/grafana/*" },
-  { method: "POST", path: "/grafana/_o11y/reopen" },
   { method: "GET", path: "/grafana/_o11y/admin/*" },
 ];
 
@@ -209,6 +220,63 @@ registerRoute("POST", "/telemetry/collect", handleCollect);
 registerRoute("POST", "/telemetry/v1/logs", handleOtlpLogs);
 registerRoute("POST", "/telemetry/deploy", handleDeploy);
 registerRoute("POST", "/telemetry/hooks/sentry", handleSentryHook);
+// T03: `"*"`, not `"GET"` — Grafana's own frontend queries through
+// `POST /api/ds/query`, `POST /api/live/*` (blocked one layer down in
+// `box.ts`, never reaching here) and others under `/grafana/*`, not only
+// GET page loads. `POST /grafana/_o11y/reopen` is registered as an exact
+// route below it; `router.ts`'s own precedence rule (T02-D10: exact beats
+// prefix) means it always wins over this catch-all regardless of
+// registration order.
+registerRoute("*", "/grafana/*", handleGrafana);
+registerRoute("POST", "/grafana/_o11y/reopen", handleReopen);
+
+/** ADR §A/§B.1's ten-minute cron (`wrangler.jsonc`'s `triggers.crons`, T03's
+ *  row): reads the
+ *  backlog (which resolves over-wakes as a side effect, ADR §B.3), writes
+ *  the `o11y.backlog` self-metric, and wakes the box when the backlog is
+ *  old or large enough — never while `drainsPaused` (T04's cost cap; this
+ *  cron only reads the flag, never writes it). T03-D: `scheduled()` did not
+ *  exist on this Worker's default export before this task — a minimal,
+ *  justified addition to `index.ts` (not in this task's literal "Owns"
+ *  row, but the same class of shared-file addition T02's own route
+ *  registrations already are); T04 extends the same handler for its own
+ *  alert-evaluation cron rather than adding a second `scheduled` export
+ *  (Workers allows only one). */
+async function handleScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
+  const writer = inboxWriter(env);
+  const backlog = await writer.backlog();
+
+  writePoint(
+    env,
+    ctx,
+    toAePoint(
+      "o11y.backlog",
+      { value: backlog.oldestWrittenAgeMs / 1000, bytes: backlog.totalBytes },
+      o11ySelfIdentity(env),
+    ),
+  );
+
+  // ADR §A/§G: "never when drainsPaused" — `backlog.drainsPaused` is
+  // `writer.backlog()`'s own read of the same `drainsPaused` storage flag
+  // `alerts/index.ts#canWakeForBacklog` exposes (T04's cap rule sets it via
+  // `InboxWriter.setDrainsPaused`); read here inline rather than through a
+  // second RPC round trip to the same DO, since `backlog()` already fetched
+  // it in the same call. A Grafana VISIT wake (`grafana/proxy.ts`) never
+  // reads this flag at all — unaffected by the cap, by design.
+  if (backlog.drainsPaused) return;
+
+  const oneHourMs = 60 * 60 * 1000;
+  const sixtyFourMb = 64 * 1024 * 1024;
+  if (backlog.oldestWrittenAgeMs <= oneHourMs && backlog.totalBytes <= sixtyFourMb) return;
+
+  try {
+    await getGrafanaBoxStub(env).wake("backlog");
+  } catch (err) {
+    // A wake failure (e.g. the box is mid-`stopping`) is retried by the
+    // very next tick — nothing here needs to escalate.
+    console.warn("[o11y] cron wake failed:", err instanceof Error ? err.message : String(err));
+  }
+}
 
 // T04: the API worker's watchdog reaches this path over the `O11Y` service
 // binding (`o11y-watchdog.ts`). Deliberately never passed to
@@ -240,16 +308,22 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 
-  // T04 PLACEHOLDER — remove at the feature-branch merge (COMMON.md
-  // controller note: "Wire it into the scheduled handler minimally... When
-  // you merge the feature branch at the end, call `runAlerts` from T03's
-  // handler and remove yours"). T03 owns the real `*/10` cron handler
-  // (backlog scan, `heartbeat.lastCron`, wake) — this exists only so
-  // `runAlerts`/the watchdog have something to drive locally before T03
-  // lands. `stampCronHeartbeat` here is likewise temporary: T03's real
-  // backlog scan is what should stamp `lastCron` in production.
+  // Merge (T04 phase 2): T04's own placeholder `scheduled()` is gone —
+  // T03's ten-minute cron handler (`handleScheduled`, above) is the one
+  // real `scheduled` export, per Workers' "exactly one" limit. This single
+  // tick does three things, each independent of the other two (a failure
+  // in one must not skip the others): stamps `heartbeat.lastCron` exactly
+  // once (still `InboxWriter.stampCronHeartbeat`, T04's own RPC method —
+  // T03's backlog/wake logic never wrote this key, so the watchdog would
+  // read a stale `lastCron` forever without this call); runs the backlog
+  // scan/wake (`handleScheduled`, which already refuses a backlog wake
+  // while `drainsPaused` — see that function's own `if (backlog
+  // .drainsPaused) return;`); and evaluates every ADR §F.3 alert
+  // (`runAlerts`, T04's own cron entry, COMMON.md's "call `runAlerts` from
+  // T03's handler" instruction).
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(inboxWriter(env).stampCronHeartbeat(Date.now()));
+    ctx.waitUntil(handleScheduled(env, ctx));
     ctx.waitUntil(runAlerts(env, ctx).then(() => undefined));
   },
 } satisfies ExportedHandler<Env>;

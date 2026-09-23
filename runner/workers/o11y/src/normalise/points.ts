@@ -111,3 +111,21 @@ export function writePoint(env: Env, ctx: ExecutionContext, point: AePoint): voi
     }),
   );
 }
+
+/** T03 addition: the same fire-and-forget write, from inside a Durable
+ *  Object (`InboxWriter`'s ledger, `GrafanaBox`'s wake/drain orchestration)
+ *  rather than a route handler — a DO method never has an `ExecutionContext`
+ *  (`env`/`ctx` are only handed to a `fetch`/`scheduled` export), but
+ *  `DurableObjectState` (`this.ctx` in any DO) has its own `waitUntil` with
+ *  the identical fire-and-forget contract. Kept as a second, explicitly
+ *  narrower-typed function rather than widening {@link writePoint}'s `ctx`
+ *  parameter to a structural union: `ExecutionContext` also declares
+ *  `passThroughOnException`/`tracing`/`abort`, which `DurableObjectState`
+ *  does not have, so the two are not interchangeable at the type level. */
+export function writePointFromDo(env: Env, ctx: DurableObjectState, point: AePoint): void {
+  ctx.waitUntil(
+    Promise.resolve(aeSink(env).writeDataPoint(point)).catch((err: unknown) => {
+      console.warn("[o11y] writeDataPoint failed:", err instanceof Error ? err.message : String(err));
+    }),
+  );
+}

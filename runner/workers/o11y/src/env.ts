@@ -77,14 +77,13 @@ export interface InboxWriterApi {
   // report alongside `backlogOldestAgeMs()`.
 
   /** `heartbeat` (§8): `lastIngest` is stamped by `ingest()` already;
-   *  `lastCron` is stamped by whichever cron currently calls
-   *  `stampCronHeartbeat` — today this task's own placeholder `scheduled()`
-   *  (COMMON.md's "wire it minimally" note), T03's real ten-minute backlog
-   *  cron after the merge. */
+   *  `lastCron` is stamped by `stampCronHeartbeat`, called exactly once per
+   *  tick from the merged `scheduled()` handler (`index.ts`, post-merge:
+   *  T03's real ten-minute backlog cron and T04's alert evaluation share
+   *  one `scheduled` export, per Workers' "exactly one" limit). */
   heartbeat(): Promise<Heartbeat>;
-  /** Sets `heartbeat.lastCron` to `nowMs`, preserving `lastIngest`. Exists
-   *  only so a cron tick (this task's placeholder, later T03's real one)
-   *  can prove liveness the same way `ingest()` already proves it for
+  /** Sets `heartbeat.lastCron` to `nowMs`, preserving `lastIngest`. Proves
+   *  cron liveness the same way `ingest()` already proves it for
    *  `lastIngest` — never called from an ingest route. */
   stampCronHeartbeat(nowMs: number): Promise<void>;
 
@@ -125,6 +124,46 @@ export interface InboxWriterApi {
    *  wake is unaffected by design (ADR §G: "visit wakes still work"). */
   drainsPaused(): Promise<boolean>;
   setDrainsPaused(paused: boolean): Promise<void>;
+
+  // ---- T03 additions (COMMON.md interface 1: "further methods are added by
+  // ... T03 (ledger/backlog)"). Real logic in `inbox/ledger.ts` (pure, T03's
+  // own file); these RPC methods (`inbox/writer.ts`, T02's file — extended,
+  // not replaced) wire it against real storage/R2/the `GrafanaBox` stub. See
+  // this task's Outcome for the full reasoning.
+
+  /** ADR §B.3: resolves every wake that still owns provisional keys and is
+   *  over — a newer wake started, or the box is observed not running.
+   *  Called at every cron tick and at the start of each wake. */
+  resolveWakes(): Promise<void>;
+
+  /** `written` keys only, after running {@link resolveWakes} first (ADR
+   *  §B.3: "computed after that resolution step"). The cron reads this to
+   *  decide whether to wake the box (oldest > 60 min or total > 64 MB), and
+   *  never wakes it while `drainsPaused`. */
+  backlog(): Promise<{ oldestWrittenAgeMs: number; totalBytes: number; writtenCount: number; drainsPaused: boolean }>;
+
+  /** Up to `limit` `written` keys, in key order (re-opened keys sort first —
+   *  see `ledger.ts#nextWrittenKeys`'s doc comment for why no separate
+   *  "re-opened" flag is needed). The drain's own batch source. */
+  nextWrittenKeys(limit: number): Promise<string[]>;
+
+  /** A key becomes `provisional(wakeId)` only after every one of its
+   *  requests to Loki returned `2xx` (ADR §B.3). */
+  markKeysProvisional(wakeId: string, keys: string[]): Promise<void>;
+
+  /** A `400` from Loki (e.g. `too_far_behind`) marks the key `rejected` with
+   *  Loki's own message (ADR §B.3) — never retried by a later wake. */
+  rejectKey(key: string, reason: string): Promise<void>;
+
+  /** `POST /grafana/_o11y/reopen`'s own logic (ADR §B.3/§J): re-opens every
+   *  key whose inbox-key hour bucket overlaps `[fromMs, toMs)`, except a key
+   *  the CURRENT wake still owns provisionally. */
+  reopenWindow(fromMs: number, toMs: number): Promise<{ reopened: number }>;
+
+  /** The current not-over wake's id, or `null`. Used by the reopen route
+   *  (to protect an in-flight drain) and by `GrafanaBox`'s drain/stop
+   *  orchestration. */
+  currentWakeId(): Promise<string | null>;
 }
 
 export interface Env {
@@ -185,6 +224,19 @@ export interface Env {
    *  in the committed `wrangler.jsonc` `vars` block. Defaults to
    *  `http://localhost:8123` when absent — see `alerts/ae-query.ts`. */
   RUNNER_EVENTS_CLICKHOUSE_URL?: string;
+
+  /** T03-D (local-only envVars, see box.ts#buildLocalEnvVars): the host
+   *  port `containers/o11y/compose.yml`'s `minio`/`clickhouse` services
+   *  are published on, reached from `wrangler dev`'s Container via
+   *  `host.docker.internal`. Never set in production; only meaningful
+   *  when `O11Y_ENV === "local"`. Defaults match this task's own port
+   *  block (4400–4499). */
+  O11Y_LOCAL_MINIO_PORT?: string;
+  O11Y_LOCAL_CLICKHOUSE_PORT?: string;
+  /** The origin `wrangler dev` is actually reachable on, for Grafana's
+   *  own `GF_SERVER_ROOT_URL` — local-only, defaults to this task's own
+   *  port block. */
+  O11Y_LOCAL_PUBLIC_ORIGIN?: string;
 
   // Secrets: optional, matching workers/api/src/env.ts's MCP_SHARED_SECRET
   // style — a required field would force wrangler dev to typecheck against a

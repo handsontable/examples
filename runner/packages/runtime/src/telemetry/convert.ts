@@ -121,11 +121,45 @@ function serviceResourceAttributes(service: ServiceIdentity): Record<string, str
   };
 }
 
+/** T03 addition (ADR §C.3, symbolication at drain): renders one stack frame
+ *  in the standard V8 `    at <fn> (<file>:<line>:<col>)` shape —
+ *  `workers/o11y/src/drain/symbolicate.ts` parses this exact text back out.
+ *  A frame with no `filename` carries nothing a symbolicator could resolve
+ *  or a human could read, so it is skipped rather than rendered as a bare
+ *  `at <fn>` line (that would be ambiguous with a genuinely-anonymous,
+ *  file-less frame, which does not occur in a browser stack). */
+export function formatStackFrame(frame: { filename?: string; function?: string; lineno?: number; colno?: number }): string | null {
+  if (!frame.filename) return null;
+  const fn = frame.function || "<anonymous>";
+  const position =
+    typeof frame.lineno === "number" && typeof frame.colno === "number"
+      ? `:${frame.lineno}:${frame.colno}`
+      : "";
+  return `    at ${fn} (${frame.filename}${position})`;
+}
+
+/** T03 addition: the pre-T03 version of this function read only
+ *  `item.payload.type`/`.value`, silently dropping `item.payload.stacktrace`
+ *  — a Faro exception record therefore never carried any frame data past
+ *  ingest, and ADR §C.3's drain-time symbolicator (T03) would have had
+ *  nothing to resolve for any real exception. Stack frames are appended to
+ *  the body as plain text (the same place `beaconBody` below already puts a
+ *  beacon error's stack, §9) because `NormalisedRecord`/the OTLP log-record
+ *  shape (`inbox.ts`) has no structured per-frame field — `body` is the one
+ *  place free text lives. `symbolicate.ts` parses this exact format back out
+ *  at drain and rewrites resolved lines in place; frames it cannot resolve
+ *  (Babel-chunk, third-party, a missing map) are left exactly as rendered
+ *  here, so this function's output must already be a faithful, minified
+ *  stack, not a placeholder. */
 function faroBody(item: ScrubbableFaroItem): string {
   switch (item.type) {
     case "exception": {
       const value = item.payload.value ?? "";
-      return item.payload.type ? `${item.payload.type}: ${value}` : value;
+      const head = item.payload.type ? `${item.payload.type}: ${value}` : value;
+      const frameLines = (item.payload.stacktrace?.frames ?? [])
+        .map(formatStackFrame)
+        .filter((line): line is string => line !== null);
+      return frameLines.length > 0 ? `${head}\n${frameLines.join("\n")}` : head;
     }
     case "log":
       return item.payload.message ?? "";
