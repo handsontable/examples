@@ -26,7 +26,10 @@ import { fileURLToPath } from "node:url";
 import { register } from "node:module";
 
 register("./fixtures/worker-hooks.mjs", import.meta.url);
-const { pivotExampleDaily, previousUtcDay, writeExampleDaily } = await import("../workers/api/src/reconcile.ts");
+const { pivotExampleDaily, previousUtcDay, writeExampleDaily, queryExampleEventTotals, rollupExampleDaily } = await import(
+  "../workers/api/src/reconcile.ts"
+);
+const { captures } = await import("./fixtures/sentry-cloudflare-stub.mjs");
 
 const MIGRATION = readFileSync(
   fileURLToPath(new URL("../workers/api/migrations/0008_example_daily.sql", import.meta.url)),
@@ -176,6 +179,40 @@ test("writeExampleDaily: a group that disappears on a re-run is REMOVED, not lef
   assert.equal(rows.length, 1, "the vue3 row from the first run must be gone");
   assert.equal(rows[0].kind, "docs");
   assert.equal(rows[0].opens, 11);
+});
+
+// ---- C-I1: a misconfigured production AE SQL read must not silently wipe the day ----
+
+test("queryExampleEventTotals: production with no AE_SQL_TOKEN/CF_ACCOUNT_ID THROWS, never returns []", async () => {
+  const env = { PREVIEW_HOST: "demos.handsontable.com" }; // production, both secrets absent
+  await assert.rejects(
+    () => queryExampleEventTotals(env, "2026-09-22 00:00:00", "2026-09-23 00:00:00"),
+    /AE_SQL_TOKEN|CF_ACCOUNT_ID/,
+  );
+});
+
+test("rollupExampleDaily: a misconfigured production read is refused loudly and never deletes the day's rows", async () => {
+  const db = freshDb();
+  // Seed a prior run's row for the day, to prove it survives.
+  await writeExampleDaily({ DB: fakeD1(db) }, "2026-09-22", [
+    { day: "2026-09-22", kind: "docs", ref: "guides/x/x.md", area: "Columns", framework: "react", ht_major: "18", opens: 10, engaged: 3, forked: 0, saved: 1, shared: 0 },
+  ]);
+  let batchCalls = 0;
+  const spyD1 = { ...fakeD1(db), batch: (...args) => { batchCalls += 1; return fakeD1(db).batch(...args); } };
+  const capturesBefore = captures.length;
+
+  const env = { PREVIEW_HOST: "demos.handsontable.com", DB: spyD1 }; // production, no AE_SQL_TOKEN/CF_ACCOUNT_ID
+  const result = await rollupExampleDaily(env);
+
+  assert.equal(batchCalls, 0, "writeExampleDaily's DELETE must never run when the read was refused");
+  assert.equal(result.rows, 0);
+  assert.equal(allRows(db).length, 1, "the prior run's row for the day must survive untouched");
+  assert.equal(allRows(db)[0].opens, 10);
+
+  const newCaptures = captures.slice(capturesBefore);
+  assert.equal(newCaptures.length, 1, "the refusal must be reported loudly (Sentry)");
+  assert.equal(newCaptures[0].kind, "exception");
+  assert.deepEqual(newCaptures[0].context, { tags: { context: "example-daily-rollup" } });
 });
 
 test("writeExampleDaily: never touches a DIFFERENT day's rows", async () => {

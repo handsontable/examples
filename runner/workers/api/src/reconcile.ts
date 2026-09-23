@@ -474,9 +474,14 @@ export function previousUtcDay(now: Date = new Date()): { day: string; start: st
 
 /** The AE/ClickHouse read (production: Analytics Engine SQL API; local:
  *  the same ClickHouse container the write side already reads/writes,
- *  `telemetry/resource.ts#getSink`'s local leg). Never throws internally —
- *  the caller (`rollupExampleDaily`) is the one place that decides what a
- *  failed read means for the cron. */
+ *  `telemetry/resource.ts#getSink`'s local leg). **Always throws** on a
+ *  failed or unconfigured read — it never degrades to `[]` (fix round C-I1:
+ *  a silent `[]` here used to mean `writeExampleDaily` still ran its
+ *  unconditional `DELETE` for the day with nothing to replace it, so a
+ *  missing credential quietly erased that day's data forever). The caller
+ *  (`rollupExampleDaily`) is the one place that decides what a thrown read
+ *  means for the rest of the cron — it now means "skip the write entirely
+ *  and alert," not "write zero rows." */
 export async function queryExampleEventTotals(
   env: Env,
   dayStart: string,
@@ -498,7 +503,15 @@ export async function queryExampleEventTotals(
       .map((line) => JSON.parse(line) as ExampleEventRow);
   }
 
-  if (!env.CF_ACCOUNT_ID || !env.AE_SQL_TOKEN) return [];
+  // C-I1: production's AE SQL leg needs `CF_ACCOUNT_ID` + `AE_SQL_TOKEN`
+  // (contract §2's API-worker table). Neither is provisioned by default —
+  // throw loudly instead of silently reading as "zero events today."
+  if (!env.CF_ACCOUNT_ID || !env.AE_SQL_TOKEN) {
+    throw new Error(
+      "queryExampleEventTotals: AE_SQL_TOKEN and/or CF_ACCOUNT_ID not configured for the API worker " +
+        "(contract §2, run-and-deploy.md step 6b) — refusing to treat this as zero example.* events",
+    );
+  }
   const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/analytics_engine/sql`, {
     method: "POST",
     headers: { Authorization: `Bearer ${env.AE_SQL_TOKEN}` },
@@ -534,10 +547,16 @@ export async function writeExampleDaily(env: Env, day: string, rows: readonly Ex
  * added there, per COMMON.md's "add the rollup call in reconcile.ts
  * minimally; T04 will resolve against it later."
  *
- * Never throws: a failed AE read or D1 write here must not stop the rest of
- * the nightly cron (`reconcileBilling`/`checkCostAlerts`/
- * `gcRevokedArtifacts`), the same resilience contract every other function
- * in this file already has.
+ * Never throws OUT of this function: a failed AE read or D1 write here must
+ * not stop the rest of the nightly cron (`reconcileBilling`/
+ * `checkCostAlerts`/`gcRevokedArtifacts`), the same resilience contract every
+ * other function in this file already has. C-I1: a thrown/unconfigured read
+ * (see `queryExampleEventTotals`) is caught here BEFORE `writeExampleDaily`
+ * runs, so a bad day is skipped — never rolled up as zero and never deleted
+ * — and reported loudly via the same unconditional `Sentry.captureException`
+ * every other cron branch in this file uses (T05-D8: a cron failure inside
+ * `ctx.waitUntil()` is structurally unreachable by `@sentry/cloudflare`'s own
+ * auto-capture, so every branch here calls it explicitly).
  */
 export async function rollupExampleDaily(env: Env): Promise<{ day: string; rows: number }> {
   const { day, start, end } = previousUtcDay();
