@@ -683,25 +683,46 @@ export async function serveDemoAsset(
   const html = wantsHtmlError(subpath);
   const homeUrl = opts.embed ? undefined : "/";
 
-  // T08: `serve.d`/`serve.embed` (contract §5 — "outcome, demo_id | count,
-  // bytes"), written for every branch below, never blocking the response
-  // (`ctx.waitUntil`, the same "never block on Analytics Engine" rule every
-  // other `emitPoint` call site in this Worker follows). Emitted here, inside
-  // `share.ts`, rather than wrapping the call at its `index.ts` call site: this
-  // is the one place that knows both the real served bytes (a stream's `obj.size`,
-  // or the *final*, post-injection HTML length — a `Response`'s own
-  // `content-length` header is unset at this point either way) and the precise
-  // outcome for every early-return branch, without a second body read.
+  // T08 (fix round I1): `serve.d`/`serve.embed` (contract §5 — "outcome,
+  // demo_id | count, bytes") counts a *document* view, the same thing
+  // `index.ts`'s adjacent `noteView` counts — never an individual asset
+  // (a JS chunk, a font, a hashed image) under the same prefix, or every
+  // build would inflate the count by however many files it happens to emit.
+  // `isDocRequest` (`subpath === ""`, `noteView`'s own gate) covers every
+  // early-return branch below, where nothing about the eventual served path
+  // is known yet; the later HTML branch additionally records unconditionally
+  // for a resolved `hitPath` ending in `.html` even when `subpath` was not
+  // empty — a client-routed SPA's unknown deep link still falls through to
+  // the same `index.html` document (the `${clean}/index.html`/`index.html`
+  // fallback candidates below), and that fallback serve is still a real
+  // document view. The non-HTML branch (`return new Response(obj.body, …)`)
+  // never calls `record` at all — that is always an asset, by construction.
+  //
+  // Written here, inside `share.ts`, rather than wrapping the call at its
+  // `index.ts` call site: this is the one place that knows both the real
+  // served bytes (a stream's `obj.size`, or the *final*, post-injection HTML
+  // length — a `Response`'s own `content-length` header is unset at this
+  // point either way) and the precise outcome for every early-return branch,
+  // without a second body read. Never blocks the response (`ctx.waitUntil`,
+  // the same "never block on Analytics Engine" rule every other `emitPoint`
+  // call site in this Worker follows).
+  const isDocRequest = subpath === "";
   const metric = opts.embed ? "serve.embed" : "serve.d";
-  const record = (status: number, bytes: number): void => {
+  const record = (status: number, bytes: number, demoId: string = id): void => {
     const outcome = serveOutcome(status);
     if (!outcome) return;
-    ctx.waitUntil(emitPoint(env, metric, { count: 1, bytes }, { outcome, demo_id: id }));
+    ctx.waitUntil(emitPoint(env, metric, { count: 1, bytes }, { outcome, demo_id: demoId }));
   };
 
   const row = await getDemo(env, id);
   if (!row) {
-    record(404, 0);
+    // T08 (fix round, controller addition b): `id` is the URL-supplied,
+    // unresolved id — writing it into `demo_id` would let a crawler stuff
+    // arbitrary strings into that column, the same reasoning `index.ts`'s own
+    // `noteView` comment already gives for "only when it resolved to a real
+    // demo." An empty `demo_id` still counts the 404 view; it just never
+    // attributes it to an id nothing confirms is real.
+    if (isDocRequest) record(404, 0, "");
     return html
       ? errorPageResponse({
           status: 404,
@@ -712,7 +733,7 @@ export async function serveDemoAsset(
       : new Response("Not found", { status: 404 });
   }
   if (row.revoked) {
-    record(410, 0);
+    if (isDocRequest) record(410, 0);
     return html
       ? errorPageResponse({
           status: 410,
@@ -725,9 +746,11 @@ export async function serveDemoAsset(
 
   const clean = subpath.replace(/^\/+/, "");
   // Never serve the private source snapshot as a public asset. Stays plain text:
-  // every `__`-prefixed path is a file request, never a document one.
+  // every `__`-prefixed path is a file request, never a document one — and
+  // `isDocRequest` is always false here too (a `__`-prefixed segment requires
+  // a non-empty `subpath`), so this never records regardless.
   if (clean.split("/").some((seg) => seg.startsWith("__"))) {
-    record(404, 0);
+    if (isDocRequest) record(404, 0);
     return new Response("Not found", { status: 404 });
   }
   const candidates = clean === "" ? ["index.html"] : [clean, `${clean}/index.html`, "index.html"];
@@ -749,7 +772,7 @@ export async function serveDemoAsset(
   if (!obj) {
     const buildState = demoBuildState(row, Date.now());
     if (buildState === "building") {
-      record(503, 0);
+      if (isDocRequest) record(503, 0);
       return html
         ? errorPageResponse({
             status: 503,
@@ -764,7 +787,7 @@ export async function serveDemoAsset(
           });
     }
     if (buildState === "failed") {
-      record(500, 0);
+      if (isDocRequest) record(500, 0);
       return html
         ? errorPageResponse({
             status: 500,
@@ -774,7 +797,7 @@ export async function serveDemoAsset(
           })
         : new Response("This demo's build failed.", { status: 500 });
     }
-    record(404, 0);
+    if (isDocRequest) record(404, 0);
     return html
       ? errorPageResponse({
           status: 404,
@@ -829,10 +852,15 @@ export async function serveDemoAsset(
       ht: htMajorFromVersion(row.ht_version),
       fw: row.framework,
     });
+    // Unconditional — a resolved `.html` is a document view even when
+    // `subpath` was not empty (the client-routed-SPA fallback case above).
     record(200, new TextEncoder().encode(withLite).length);
     return new Response(withLite, { headers });
   }
-  record(200, obj.size);
+  // No `record` here on purpose (fix round I1): everything that reaches this
+  // return is a non-HTML asset — a JS chunk, a font, an image — never the
+  // document itself, and counting one point per asset would inflate
+  // `serve.d`/`serve.embed` by however many files a build happens to emit.
   return new Response(obj.body, { headers });
 }
 

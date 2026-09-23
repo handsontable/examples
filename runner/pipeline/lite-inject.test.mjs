@@ -18,11 +18,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
 import { LITE_REPORTER_MARKER, injectLiteReporterIntoHtml } from "../packages/runtime/dist/monitor.js";
+import { demoRow, makeEnv } from "./fixtures/worker-harness.mjs";
 
 register("./fixtures/worker-hooks.mjs", import.meta.url);
 
 const { htMajorFromVersion, injectLiteHtml } = await import("../workers/api/src/monitor-inject.ts");
-const { serveOutcome } = await import("../workers/api/src/share.ts");
+const { serveDemoAsset, serveOutcome } = await import("../workers/api/src/share.ts");
 
 const CONFIG = { surface: "d", demo: "r-react-18-0-0", ht: "18", fw: "react" };
 const HTML = `<!doctype html>
@@ -160,4 +161,73 @@ test("serveOutcome refuses to bucket a stray redirect rather than mis-labelling 
   // `toAePoint` a value outside its closed enum.
   assert.equal(serveOutcome(301), null);
   assert.equal(serveOutcome(308), null);
+});
+
+// ---- I1 (fix round): serve.d/serve.embed count the document, not every asset ---
+
+/** `worker-harness.mjs#makeEnv` routes Analytics Engine points at a local
+ *  ClickHouse HTTP fetch that fails in this sandbox (`getSink`'s "local"
+ *  branch — `serviceEnvironment(env)` reads `production` only when
+ *  `PREVIEW_HOST` is the real host). Neither its `env` nor its shared `ctx`
+ *  gives a test anything to capture or await, so this builds its own: a real
+ *  `RUNNER_EVENTS` binding fake (routes `getSink` down the *binding* branch)
+ *  and a `ctx.waitUntil` that queues promises a test can drain before
+ *  asserting — the same shape `pipeline/fixtures/o11y-harness.mjs` already
+ *  uses for the o11y worker's own route tests. */
+function makeCountingEnv(rows, artifacts) {
+  const { env } = makeEnv(rows, [], artifacts);
+  const points = [];
+  env.RUNNER_EVENTS = { writeDataPoint: (p) => points.push(p) };
+  env.PREVIEW_HOST = "demos.handsontable.com";
+  const pending = [];
+  const ctx = {
+    waitUntil(p) { pending.push(Promise.resolve(p).catch(() => {})); },
+    passThroughOnException() {},
+    async drain() { await Promise.all(pending); pending.length = 0; },
+  };
+  return { env, ctx, points };
+}
+
+test("serving a document plus three assets writes exactly one serve.d point", async () => {
+  const rows = [demoRow({ id: "doc1", r2_prefix: "demos/doc1/" })];
+  const artifacts = {
+    "demos/doc1/index.html": "<html><head></head><body>hi</body></html>",
+    "demos/doc1/assets/a.js": "console.log(1);",
+    "demos/doc1/assets/b.css": "body{color:red}",
+    "demos/doc1/assets/c.png": "not-really-a-png",
+  };
+  const { env, ctx, points } = makeCountingEnv(rows, artifacts);
+
+  const doc = await serveDemoAsset(env, ctx, "doc1", "", { embed: false });
+  const a = await serveDemoAsset(env, ctx, "doc1", "assets/a.js", { embed: false });
+  const b = await serveDemoAsset(env, ctx, "doc1", "assets/b.css", { embed: false });
+  const c = await serveDemoAsset(env, ctx, "doc1", "assets/c.png", { embed: false });
+  await ctx.drain();
+
+  assert.equal(doc.status, 200);
+  assert.equal(a.status, 200);
+  assert.equal(b.status, 200);
+  assert.equal(c.status, 200);
+
+  const servePoints = points.filter((p) => p.indexes[0] === "serve.d");
+  assert.equal(servePoints.length, 1, `expected exactly 1 serve.d point for 1 document + 3 assets, got ${servePoints.length}`);
+});
+
+test("an unresolved demo id still counts a document 404, with an empty demo_id", async () => {
+  const { env, ctx, points } = makeCountingEnv([], {});
+  const res = await serveDemoAsset(env, ctx, "no-such-demo", "", { embed: false });
+  await ctx.drain();
+  assert.equal(res.status, 404);
+  const servePoints = points.filter((p) => p.indexes[0] === "serve.d");
+  assert.equal(servePoints.length, 1);
+  // demo_id is blob12, index 11 (AE_COLUMNS, packages/runtime/src/telemetry/metrics.ts).
+  assert.equal(servePoints[0].blobs[11], "", "the URL-supplied, unresolved id must not reach demo_id");
+});
+
+test("an unresolved demo id requesting a non-document path writes no point at all", async () => {
+  const { env, ctx, points } = makeCountingEnv([], {});
+  const res = await serveDemoAsset(env, ctx, "no-such-demo", "assets/x.js", { embed: false });
+  await ctx.drain();
+  assert.equal(res.status, 404);
+  assert.equal(points.filter((p) => p.indexes[0] === "serve.d").length, 0);
 });

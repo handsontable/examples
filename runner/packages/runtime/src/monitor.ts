@@ -16,7 +16,7 @@ import { injectedScriptTag, insertInjectedTag } from "./inject-html.js";
 // T08 (ADR §C.5, contract §9): imported from the leaf modules directly, never
 // from `./telemetry/index.js` — `scrub.ts` and `fingerprint.ts` already import
 // `../monitor.js`, so a barrel import here would be a cycle.
-import type { LiteSurface } from "./telemetry/lite.js";
+import { LITE_PAYLOAD_MAX_BYTES, type LiteSurface } from "./telemetry/lite.js";
 import type { Framework, HtMajor } from "./telemetry/attrs.js";
 
 /** The `postMessage` discriminator. Also the injection idempotency marker. */
@@ -853,14 +853,21 @@ export function injectReporter(files: Record<string, string>, entryPath: string)
 // ADR §C.5 / contract §9. A wholly separate reporter from `REPORTER_SOURCE` above,
 // never composed with it: `REPORTER_SOURCE` only ever runs inside a Tier-1 sandbox
 // entry or a Tier-2 preview document, both framed by the authoring app, which is
-// what makes `postMessage(..., "*")` to `parent` the right transport there. `/d`
-// and `/embed` documents are never framed by our own runner — `/embed` is framed
-// by a *docs* page instead, which is not listening for that message at all — so
-// there is no "no parent frame" runtime check to make: this reporter is injected
-// only at the `share.ts` serve seam (never into a sandbox entry or a Tier-2
-// document), and it is standalone by construction, not by detection. Keeping the
-// two reporters wholly separate is also what keeps `REPORTER_SOURCE` byte-for-byte
-// unchanged, so the framed Tier-1/Tier-2 tests stay green untouched.
+// what makes `postMessage(..., "*")` to `parent` the right transport there.
+//
+// `/d`/`/embed` documents ARE sometimes framed by our own runner — the authoring
+// app's FullMode view (`App.tsx`) frames `/d/:id/` cross-origin to show a saved
+// demo's build full-window — so "no parent frame" is not a claim about every
+// request this reporter ever sees. What is still true, and is the actual reason
+// this needs no runtime parent-detection, is narrower: this reporter is injected
+// only at the `share.ts` serve seam, never into a Tier-1 sandbox entry or a Tier-2
+// preview document, so it never runs anywhere `REPORTER_SOURCE`'s `postMessage`
+// transport would be the right answer — a FullMode-framed `/d/:id/` is still just
+// the public build, standalone-transported exactly like a direct visit, and that
+// framing costs nothing (no listener there expects this reporter's beacon either
+// way). Standalone by construction, not by detection. Keeping the two reporters
+// wholly separate is also what keeps `REPORTER_SOURCE` byte-for-byte unchanged, so
+// the framed Tier-1/Tier-2 tests stay green untouched.
 //
 // It sends far less than the framed reporter: only `error`/`unhandledrejection`
 // (no console wrapping, no fetch/XHR monkey-patching — §9's payload has no
@@ -884,14 +891,30 @@ export const LITE_REPORTER_MARKER = "__hotLiteMonitor";
 export const LITE_VITALS_SAMPLE_RATE = 0.1;
 
 /**
- * Client-side truncation caps — deliberately tighter than the contract's own
- * per-field ceilings (`LITE_MESSAGE_MAX` 500 / `LITE_STACK_MAX` 2000,
- * `telemetry/lite.ts`): that module's own doc comment measures a maxed-out `st`
- * alone at ~2150 bytes, already over `LITE_PAYLOAD_MAX_BYTES` (2048) by itself,
- * and says producing a payload that actually fits is the *sender's* job. A first
- * stack frame is enough for a fingerprint; the rest is only volume this reporter
- * would otherwise have to truncate away at send time anyway.
+ * Client-side truncation caps, in **UTF-8 bytes** — deliberately tighter than
+ * the contract's own per-field ceilings (`LITE_MESSAGE_MAX` 500 chars /
+ * `LITE_STACK_MAX` 2000 chars, `telemetry/lite.ts`): that module's own doc
+ * comment measures a maxed-out `st` alone at ~2150 bytes, already over
+ * `LITE_PAYLOAD_MAX_BYTES` (2048) by itself, and says producing a payload
+ * that actually fits is the *sender's* job. A first stack frame is enough
+ * for a fingerprint; the rest is only volume this reporter would otherwise
+ * have to trim away at send time anyway.
+ *
+ * Bytes, not characters, on purpose (T08-D, fix round I2): a JS string's
+ * `.length` counts UTF-16 code units, and every non-ASCII character (a
+ * non-English error message, an emoji, a curly quote) costs 2-4 UTF-8 bytes
+ * for one `.length` unit — a char-count cap silently let a non-ASCII payload
+ * grow past `LITE_PAYLOAD_MAX_BYTES` (2048), which the ingest route then
+ * drops outright (`isValidLitePayload`'s own total-byte check), so a
+ * non-English error was reported as "sent" client-side and never actually
+ * stored. `reporterSource`'s `bt()` (byte-trim) enforces this in the shipped
+ * ES5, and `bc()` (build+send) makes a final `bl()` (byte-length) check
+ * against the whole serialized payload before ever calling `sendBeacon` —
+ * belt and braces against JSON's own escaping (`"`/`\`/control characters
+ * each cost 2+ output characters) pushing an already-trimmed payload back
+ * over budget.
  */
+export const LITE_CLIENT_NAME_MAX_BYTES = 100;
 export const LITE_CLIENT_MESSAGE_MAX = 300;
 export const LITE_CLIENT_STACK_MAX = 300;
 
@@ -995,22 +1018,25 @@ function reporterSource(config: LiteReporterConfig): string {
   return `(function(){
 try{if(window.__hotLiteMonitor)return;window.__hotLiteMonitor=true;}catch(e){return;}
 var EP=${JSON.stringify(LITE_ENDPOINT)},SURF=${JSON.stringify(config.surface)},DEMO=${JSON.stringify(config.demo)},HTM=${JSON.stringify(config.ht)},FWK=${JSON.stringify(config.fw)};
-var CEIL=${MONITOR_EVENT_CEILING},MMAX=${LITE_CLIENT_MESSAGE_MAX},SMAX=${LITE_CLIENT_STACK_MAX},RATE=${LITE_VITALS_SAMPLE_RATE};
+var CEIL=${MONITOR_EVENT_CEILING},NMAX=${LITE_CLIENT_NAME_MAX_BYTES},MMAX=${LITE_CLIENT_MESSAGE_MAX},SMAX=${LITE_CLIENT_STACK_MAX},PMAX=${LITE_PAYLOAD_MAX_BYTES},RATE=${LITE_VITALS_SAMPLE_RATE};
 var used=0,sent={};
-function tc(v,n){var s=typeof v==="string"?v:String(v==null?"":v);return s.length<=n?s:s.slice(0,n);}
+function bl(s){try{return unescape(encodeURIComponent(s)).length;}catch(e){return 1e9;}}
+function bt(s,n){while(bl(s)>n)s=s.slice(0,-1);return s;}
 function dv(){var u="";try{u=(navigator&&navigator.userAgent)||"";}catch(e){}
 return /ipad|tablet|playbook|silk/i.test(u)?"tablet":/mobi|iphone|ipod|android.*mobile|windows phone/i.test(u)?"mobile":"desktop";}
 var DEV=dv();
 function bc(t,f){try{
 var p={v:1,t:t,s:SURF,demo:DEMO,ht:HTM,fw:FWK,dev:DEV,ts:Date.now()};
 for(var k in f)p[k]=f[k];
-if(navigator&&typeof navigator.sendBeacon==="function")navigator.sendBeacon(EP,JSON.stringify(p));
+var j=JSON.stringify(p);
+if(bl(j)>PMAX)return;
+if(navigator&&typeof navigator.sendBeacon==="function")navigator.sendBeacon(EP,j);
 }catch(e){}}
 function se(n,m,st){try{
 if(used>=CEIL)return;
 used+=1;
-var f={n:tc(n||"Error",200),m:tc(m||"unknown error",MMAX),val:null};
-if(st)f.st=tc(st,SMAX);
+var f={n:bt(n||"Error",NMAX),m:bt(m||"unknown error",MMAX),val:null};
+if(st)f.st=bt(st,SMAX);
 bc("err",f);
 }catch(e){}}
 function sv(n,val){try{
@@ -1034,11 +1060,11 @@ var smp=false;
 try{smp=Math.random()<RATE;}catch(e){}
 if(smp){
 var lc=null,cls=0,inp=0,rep=false;
-function ob(t,cb,dt){try{
+var ob=function(t,cb,dt){try{
 var o=new PerformanceObserver(cb),op={type:t,buffered:true};
 if(dt)op.durationThreshold=dt;
 o.observe(op);
-}catch(e){}}
+}catch(e){}};
 ob("largest-contentful-paint",function(l){var es=l.getEntries();if(es.length)lc=es[es.length-1];});
 ob("layout-shift",function(l){var es=l.getEntries();for(var i=0;i<es.length;i++){if(!es[i].hadRecentInput)cls+=es[i].value||0;}});
 ob("event",function(l){var es=l.getEntries();for(var i=0;i<es.length;i++){var en=es[i];if(en.interactionId&&en.interactionId>0&&en.duration>inp)inp=en.duration;}},40);

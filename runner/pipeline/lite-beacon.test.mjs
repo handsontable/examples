@@ -197,9 +197,59 @@ test("message and stack are truncated well under the field caps before sending",
   const longStack = "at frame\n".repeat(600);
   h.window_.fire("error", { error: Object.assign(new Error(longMessage), { stack: longStack }) });
   const { payload } = h.sent[0];
-  assert.ok(payload.m.length <= LITE_CLIENT_MESSAGE_MAX);
-  assert.ok(payload.st.length <= LITE_CLIENT_STACK_MAX);
+  // The caps are UTF-8 *bytes* (T08-D, fix round I2), not `.length` (UTF-16
+  // code units) — ASCII text happens to make the two numbers equal, which is
+  // exactly the coincidence that let a non-ASCII payload slip past a
+  // char-count cap before this fix. `Buffer.byteLength` is the Node-side
+  // stand-in for the reporter's own `bl()`.
+  assert.ok(Buffer.byteLength(payload.m, "utf8") <= LITE_CLIENT_MESSAGE_MAX);
+  assert.ok(Buffer.byteLength(payload.st, "utf8") <= LITE_CLIENT_STACK_MAX);
   assert.ok(isValidLitePayload(payload), "a maxed-out error must still fit the 2 KB payload cap");
+});
+
+test("I2 (fix round): a non-ASCII error message/stack is byte-trimmed, never silently dropped for being over budget", () => {
+  // Before the fix, `tc()` truncated by `.length` (UTF-16 code units): a
+  // message of mostly multi-byte characters truncated to `LITE_CLIENT_
+  // MESSAGE_MAX` *characters* could still serialize to well over 2 KB of
+  // UTF-8, and the o11y route's own `isValidLitePayload` would then silently
+  // drop the whole beacon at ingest — reported as "sent" client-side, never
+  // actually stored. Chinese, Cyrillic, and an emoji together exercise 2-,
+  // 3- and 4-byte UTF-8 sequences in one message.
+  const h = runLite();
+  const nonAsciiMessage = "网格渲染失败: не удалось отрисовать таблицу 😵‍💫 ".repeat(20);
+  const nonAsciiStack = "at 渲染函数 (файл.js:1:1)\n".repeat(60);
+  h.window_.fire("error", {
+    error: Object.assign(new Error(nonAsciiMessage), { name: "渲染Error", stack: nonAsciiStack }),
+  });
+  assert.equal(h.sent.length, 1, "a non-ASCII error must still be sent, not silently swallowed");
+  const { payload } = h.sent[0];
+  assert.ok(Buffer.byteLength(payload.n, "utf8") <= 100, "name byte budget");
+  assert.ok(Buffer.byteLength(payload.m, "utf8") <= LITE_CLIENT_MESSAGE_MAX, "message byte budget");
+  assert.ok(Buffer.byteLength(payload.st, "utf8") <= LITE_CLIENT_STACK_MAX, "stack byte budget");
+  const totalBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
+  assert.ok(totalBytes <= 2048, `serialized payload is ${totalBytes} bytes, over the 2 KB contract cap`);
+  assert.ok(isValidLitePayload(payload), "must satisfy the ingest validator's own byte check");
+  // No lone surrogate or truncated multi-byte sequence — a string that fails
+  // to round-trip through JSON is the tell for a truncation cut mid-character.
+  assert.doesNotThrow(() => JSON.parse(JSON.stringify(payload)));
+});
+
+test("I2 (fix round): worst-case JSON-escaping content (all quotes and backslashes) still fits the 2 KB cap or is dropped, never sent oversize", () => {
+  // JSON.stringify expands every `"`/`\` to two output characters — the one
+  // inflation a per-field *byte* budget on the raw string does not see. This
+  // is the adversarial case `bc()`'s own final serialized-length check exists
+  // for, catching what per-field trimming alone cannot.
+  const h = runLite();
+  const adversarialMessage = '"\\'.repeat(400);
+  h.window_.fire("error", { error: Object.assign(new Error(adversarialMessage), { stack: adversarialMessage }) });
+  if (h.sent.length === 1) {
+    const totalBytes = Buffer.byteLength(JSON.stringify(h.sent[0].payload), "utf8");
+    assert.ok(totalBytes <= 2048, `serialized payload is ${totalBytes} bytes, over the 2 KB contract cap`);
+  }
+  // Either it fit and was sent (and just got asserted above), or the final
+  // check refused to send it — both are correct; sending an oversize payload
+  // is the only wrong outcome, and that's what the assertion above would
+  // have caught.
 });
 
 test("errors stop at the monitor ceiling, never more", () => {
