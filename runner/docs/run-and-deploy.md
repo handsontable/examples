@@ -710,24 +710,42 @@ walkthrough already showed.
    point per *request*, with no route/tenant dimension to split "Tier-2 container stdout"
    out from everything else the export destination carries. Read Cloudflare's own
    **Workers → Observability → Usage** view instead (account dashboard, not Grafana):
-   exported log events for the current billing period, for the `o11y-logs` destination.
-   Compare that number, after a day of real production traffic, against this projection;
+   exported log events for the current billing period, for the account. (Whether that
+   view can be filtered per export destination — isolating `o11y-logs` from anything
+   else the account exports — is not confirmed; if it cannot, this is a whole-account
+   figure, a safe over-estimate for this comparison since `o11y-logs` is presently the
+   only configured destination.) Compare that number, after a day of real production
+   traffic, against this projection;
    if it confirms the projection, lower `head_sampling_rate` (ADR §D's own named
    fallback) before the pool crosses half — do not wait for it to actually breach the
    10M/month allotment.
-7. **Exit criterion 5 (isolate CPU/memory).** Fix round D-I5: every measurement so far
-   (§L, T11) is a Node-process proxy — no task had real Workers isolate profiling access,
-   which is exactly the "stays Proposed" blocker the ADR's own header names. Push one
-   real exception from the deployed authoring build (reuse item 1's malformed-request
-   probe, or `page.evaluate(() => { throw new Error("launch-smoke isolate probe") })`
-   against the production host), then read the symbolication step's own cost for that
-   object: `wrangler tail --format pretty` on the o11y worker during the drain alarm that
-   picks it up, filtered to the `GrafanaBox` alarm invocation (or, once T03B's per-drain
-   `duration_ms`/CPU fields land on the `o11y.drain` AE point, that point's `wallTimeMs`
-   for the symbolicating key). Record the CPU-ms and peak-memory figures against §D's
-   500 ms CPU / 64 MB budget in ADR §L "Results," and flip the two exit-criteria rows
-   (5 and, once its own calendar-time check above also lands, 13) from "not yet measured
-   in a real isolate" to a dated pass/fail — this is what unblocks Proposed → Accepted.
+7. **Exit criterion 5 (symbolication CPU/memory, ADR §L).** Fix round D-I5: every
+   measurement so far (§L, T11) is a Node-process proxy — no task had real Workers
+   isolate profiling access, which is exactly the "stays Proposed" blocker the ADR's
+   own header names. Criterion 5's own wording: "an exception from a real `vite build`
+   resolves to `src/…` file and line using at most 500 ms CPU and 64 MB of isolate
+   memory; Babel-chunk frames are skipped, not parsed." This is a **Faro/browser**
+   exception specifically (§C.3: "a Faro exception's stack trace reaches the drain as
+   V8-shaped text") — item 1's malformed `POST /api/session` probe is a worker-tenant
+   line and never goes through symbolication, so it does not exercise this criterion.
+   A Playwright `page.evaluate` against the production host does not either:
+   `reportingEnabled`/Faro's own `productionReportingEnabled` both gate on
+   `navigator.webdriver !== true` (`reportingGate.ts`), which every automation harness
+   sets. Throw a real, marked error from a **real browser's devtools console** on the
+   production host instead (`throw new Error("launch-smoke isolate probe " +
+   Date.now())`), confirm it lands in the Observability-self dashboard's `o11y.drain`
+   panel (contract §5: `duration_ms`, wall time, not CPU — it is the closest number
+   this contract exposes to a per-object cost), then read the SAME drain alarm's own
+   CPU time from the Cloudflare dashboard's Workers → Observability → Logs view for the
+   `handsontable-demos-o11y` worker (per-invocation CPU time is a supported field
+   there; `wrangler tail` does not report it). Record that CPU figure against the 500 ms
+   budget. **Peak isolate memory has no supported per-invocation reading anywhere in
+   this stack** (dashboard or `wrangler tail`) — record the 64 MB half of this
+   criterion as "no exceeded-memory/OOM outcome observed for the probe object," not as
+   a measured figure, and say so explicitly in §L "Results" rather than implying a
+   number exists. Flip exit-criterion-5's row from "not yet measured in a real
+   isolate" to a dated pass/fail on that basis (13 flips separately, from its own
+   calendar-time check in item 4 above) — this is what unblocks Proposed → Accepted.
 
 ### Flipping `SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` to `uncaught`
 

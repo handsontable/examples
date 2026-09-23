@@ -713,17 +713,35 @@ where they add information beyond what §A–§L already say:
   merge priority** — a body key cannot spoof `service.name`/`deployment.environment.name`/
   any `hot.*` label (T03B, fix-round finding I2, found and fixed within T03B's own pass
   before it shipped).
-- **§B.2 ingest, worker tenant — fingerprint (fix round C-I2).** The API worker's own
-  handled-error lines (`reportDiagnostic`, `workers/api/src/telemetry/diagnostic.ts`) now
-  carry `hot.fingerprint` (contract §3 AE-only key) in the same structured JSON body the
-  bullet above describes — the exact key `readAeOnlyAttrs` already reads for the Faro/lite
-  paths (§F.3's first-seen registry). TODO(controller/F1): the READ half is not yet
-  wired — `workers/o11y/src/normalise/otlp.ts#toIngestItem` has no `readAeOnlyAttrs`-
-  equivalent step for the worker-tenant body (unlike `normalise/faro.ts`/`lite.ts`), so the
-  key survives ingest today but is not yet fed into the `fp:` registry or
-  `feedsNewFingerprintAlert`. Wiring that read (workers/o11y-owned, off limits to this fix
-  round per the controller's file split) is what closes the loop this bullet's fix half
-  opens — see the F3 fix-round report for the exact change needed.
+- **§B.2 ingest, worker tenant — fingerprint (fix round C-I2, half-closed).** The API
+  worker's own handled-error lines (`reportDiagnostic`,
+  `workers/api/src/telemetry/diagnostic.ts`) now carry `hot.fingerprint` (contract §3
+  AE-only key) in the same structured JSON body the bullet above describes. This is
+  NOT enough on its own: `hot.fingerprint` is AE-only, so `toIngestItem`'s
+  `hoistAttributes(merged)` call (this file's own note two bullets up) drops it exactly
+  the way it drops every other AE-only key — the value does not survive into
+  `attributes`/`resourceAttributes` and is not stored. TODO(controller/F1),
+  `workers/o11y/src/normalise/otlp.ts#toIngestItem` (workers/o11y-owned, off limits to
+  this fix round per the controller's file split): read
+  `bodyJsonAttrs["hot.fingerprint"]` (the pre-`hoistAttributes` bag `tryParseJsonBodyAttrs`
+  already builds) the same way `normalise/faro.ts`/`browser-attrs.ts#readAeOnlyAttrs`
+  read it for the browser path, and feed it into the `fp:` registry ONLY when ALL of:
+  the REAL resource `service.name === "demos-api"` (read from `resourceLogs.
+  resourceAttributes`/`record.attributes`, never from `bodyJsonAttrs` — a body key
+  must never be able to claim this, same rule `RESOURCE_ATTR_KEY_SET` already
+  enforces for every other resource attribute); the parsed body's `log.kind ===
+  "error"`; the value matches `^[a-z0-9-]+:[0-9a-f]{16}$` (contract §7's own
+  `<context>:<16 hex>` shape); and the record is NOT Tier-2 container stdout (F1's own
+  B cross-note asks whether that reaches this same route at all — if it does, this
+  gate must exclude it, the same way `feedsNewFingerprintAlert` excludes
+  `demo-runtime`). The naive version of this fix — gating on `hot.surface !==
+  "demo-runtime"` the way the browser path does — is NOT safe here: a worker-tenant
+  record's `hot.surface` resource attribute defaults to `"none"` when nothing sets it
+  (this file's own §B.2 ingest note), which `feedsNewFingerprintAlert` would treat as
+  "not demo-runtime" and admit — letting any body that can reach `/telemetry/v1/logs`
+  (a Worker's own `console.log`, or Tier-2 container stdout if F1's B cross-note
+  confirms it lands here) forge `fp:` entries. See the F3 fix-round report for the
+  same spec.
 - **§C.1 hops.** Faro's real browser transport posts a `TransportBody`
   (`{meta, exceptions?, logs?, measurements?, events?, traces?}`), not an array of
   self-contained items the way every contract function's own types assume — the ingest
