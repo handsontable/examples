@@ -453,3 +453,32 @@ rtk proxy node scripts/check-test-presence.mjs feat/runner-observability   (run 
 - `env.ts`'s index signature (`[key: string]: unknown`) means a typo'd env var name would
   not be caught by `tsc` anywhere in this task's new code — same pre-existing risk every
   other var in this file already carries, not new here.
+- **T02 fixed the same `facade.ts` bug in parallel.** T05 merges first; T02 resolves
+  against this version.
+
+### Fix round (post-review: three fixes with no revert-sensitive test)
+
+Commit `38af02873`. Review found (a) `reportDiagnostic`'s `sentryScopeIsFull` gate,
+(b) `cronStep`'s explicit ungated Sentry capture (T05-D8), and (c) `facade.ts`'s lazy mint
+each had no test that goes red when the fix is reverted. Fixed:
+
+- **`reportDiagnostic`** now takes an injectable `capture` param (default: the real
+  `Sentry.captureException`, every existing call site unaffected).
+  `pipeline/api-telemetry-diagnostic.test.mjs` drives it directly with a recorder (1 call
+  under `full`, 0 under `uncaught`). Revert (`if (true)` instead of the gate) → red
+  (`1 !== 0`); restored.
+- **`cronStep`** extracted from `index.ts` into `telemetry/cron-step.ts` (deliberately
+  leaner than `cron.ts` — no `../budget.js` — so it stays copy-harness-testable) with the
+  same injectable-capture pattern. `pipeline/api-telemetry-cron-step.test.mjs` asserts a
+  throwing step is captured and swallowed. Revert (comment out the `capture(...)` call) →
+  red (`0 !== 1`); restored.
+- **`facade.ts`**: `pipeline/telemetry-facade-boot-safety.test.mjs` stubs
+  `globalThis.crypto.randomUUID` before a cache-busted dynamic import and asserts the
+  import itself never calls it (the prior noop test only pinned the post-import contract,
+  which the reviewer correctly noted cannot distinguish eager from lazy). Revert (back to
+  the eager IIFE) → red (`1 !== 0`); restored byte-for-byte (diffed against a saved copy).
+
+Full fix-round verify commands/exit codes and detail are in the report
+(`.superpowers/sdd/README/T05-report.md`). `pnpm test`: 1284 tests, 1281 pass (+10 vs. the
+first round), same 1 pre-existing baseline failure, 2 todo. `check-test-presence.mjs`:
+pass (17 source files, matching test change).
