@@ -52,6 +52,9 @@ const LAST_STOP_STORAGE_KEY = "lastStop";
  *  {@link GrafanaBox.noteVisitorActivity}, never by the drain's own Loki
  *  traffic. */
 const LAST_GRAFANA_STORAGE_KEY = "lastGrafanaAt";
+/** Guards `onStart`'s double-invocation (see its own doc comment) from
+ *  scheduling `drainStep` twice for the same wake. */
+const DRAIN_SCHEDULED_FOR_STORAGE_KEY = "drainScheduledFor";
 const HARD_CAP_SCHEDULE = "hardCapStop";
 const DRAIN_STEP_SCHEDULE = "drainStep";
 /** ADR §A: "after 4 hours awake regardless." */
@@ -272,6 +275,24 @@ export class GrafanaBox extends Container<Env> {
     // wakeId nothing else knows about.
     await inboxWriterStub(this.env).recordWake(record.wakeId, reason);
     await this.start({ envVars });
+    // T03-D (see the task Outcome — found running a real `wrangler dev`
+    // locally, not guessed): `start()` never calls `state.setHealthy()`
+    // (only `startAndWaitForPorts()` does), so `state.status` stays
+    // `"running"`, never `"healthy"`. The base `Container.containerFetch`
+    // checks exactly that field (`state.status !== 'healthy'`) to decide
+    // whether to re-verify ports — with it permanently false, EVERY single
+    // `containerFetch` call for the rest of this wake (every drain push,
+    // every `/grafana/*` proxy request) re-ran the full
+    // `startAndWaitForPorts` port-polling machinery from scratch, observed
+    // to cost anywhere from ~10ms to 160+ SECONDS depending on contention.
+    // Fired here, deliberately NOT awaited: `wake()` itself must still
+    // return fast (the waking page's whole point is a quick response while
+    // the box boots in the background) — this just gets `state.status` to
+    // `"healthy"` in the background, once, so subsequent calls take the
+    // cheap path. Harmless if it never resolves (a wake that fails/stops
+    // before ports ever come up) — nothing awaits it, and it targets THIS
+    // wake's own container instance state, never a later wake's.
+    void this.startAndWaitForPorts({ ports: this.requiredPorts }).catch(() => {});
     // ADR §A: "after 4 hours awake regardless." `hardCapStop` re-checks the
     // wakeId when it fires — a wake that already stopped on its own (idle
     // timeout, or the post-drain quiet stop) leaves nothing for this to do.
@@ -395,8 +416,19 @@ export class GrafanaBox extends Container<Env> {
     // already owns the idle-timeout/`schedule()` machinery, and fighting it
     // with a second `alarm()` override would be exactly the class of bug
     // this task's own "riskiest" billing warrants avoiding.
+    //
+    // `onStart` fires a SECOND time for the same wake: `#doWake` also fires
+    // (unawaited) `startAndWaitForPorts()` in the background purely to flip
+    // `state.status` to `"healthy"` (see its own doc comment), and the base
+    // class calls `onStart()` again once THAT resolves. Without the guard
+    // below this would schedule `drainStep` twice per wake — harmless
+    // (idempotent, and the DO alarm loop only fetches one snapshot per
+    // invocation regardless — see `DRAIN_STEP_GAP_MS`'s doc comment) but
+    // wasteful, so skip it once already scheduled for this wakeId.
     const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
     if (!wake) return; // defensive; wake() always sets this before start()
+    if ((await this.ctx.storage.get<string>(DRAIN_SCHEDULED_FOR_STORAGE_KEY)) === wake.wakeId) return;
+    await this.ctx.storage.put(DRAIN_SCHEDULED_FOR_STORAGE_KEY, wake.wakeId);
     await this.schedule(new Date(), DRAIN_STEP_SCHEDULE, { wakeId: wake.wakeId });
   }
 
@@ -596,6 +628,22 @@ function buildEnvVars(env: Env, wakeId: string): Record<string, string> {
     O11Y_CLICKHOUSE_HEADER1_VALUE: env.AE_SQL_TOKEN ? `Bearer ${env.AE_SQL_TOKEN}` : "",
     O11Y_CLICKHOUSE_HEADER2_NAME: "",
     O11Y_CLICKHOUSE_HEADER2_VALUE: "",
+    // T03-D (see the task Outcome — found on the real sandbox platform, not
+    // guessed): `shutdown.sh`'s default `STOP_GRACE_SECONDS` (30, matching
+    // `compose.yml`'s own local default) is tuned for a same-host MinIO
+    // round trip. Against a REAL R2 endpoint over the real network, a stop
+    // that genuinely needed to flush a fresh index upload was repeatedly
+    // observed exceeding 30s and reporting `exitCode: 1` (shutdown.sh's own
+    // "loki did not exit within ${STOP_GRACE_SECONDS}s… giving up on a
+    // clean marker" path) even with correct credentials and a real,
+    // confirmed-successful periodic shipper upload earlier in the same
+    // wake. T01's own T01-D8 already measured `stop()` taking up to 53.7s
+    // on this same platform with dummy credentials; the platform's own
+    // documented SIGTERM→SIGKILL grace is 15 minutes (T01 Outcome), so
+    // there is ample headroom to raise this without risking an
+    // escalation. `compose.yml`'s local default (30) is untouched —
+    // local MinIO genuinely does not need this.
+    O11Y_STOP_GRACE_SECONDS: "120",
     // SLACK_WEBHOOK_URL is deliberately never included — ADR-0041 §A: "The
     // Slack webhook never enters the box."
   };
