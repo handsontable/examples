@@ -16,6 +16,8 @@ import type { Env } from "./env.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { recordContainerUsage, SESSION_INSTANCE_TYPE } from "./budget.js";
 import { htmlEntryLoadsModule, snapshotBuildCommand } from "./build-command.js";
+import { htMajorFromVersion, injectLiteHtml } from "./monitor-inject.js";
+import { emitPoint } from "./telemetry/points.js";
 
 type SandboxLike = {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
@@ -648,9 +650,28 @@ export async function getDemoSource(env: Env, id: string): Promise<DemoSource | 
   return repairEntryScript(env, row, JSON.parse(await obj.text()) as DemoSource);
 }
 
+/**
+ * §5's closed `serve.*` outcome set — `2xx`/`304`/`4xx`/`5xx`, never the
+ * generic `3xx` the API worker's own `api.request` point uses (`index.ts`'s
+ * `recordRequestSignal`): `serveDemoAsset` never itself answers a redirect
+ * (the `/d/:id` -> `/d/:id/` trailing-slash 308 is handled by its caller,
+ * before this function is even reached), so a `3xx` reaching here would be a
+ * shape this function does not expect. `null` for that case skips the point
+ * entirely (`toAePoint` would otherwise throw on an out-of-enum value) rather
+ * than mis-bucketing it.
+ */
+export function serveOutcome(status: number): "2xx" | "304" | "4xx" | "5xx" | null {
+  if (status === 304) return "304";
+  if (status >= 200 && status < 300) return "2xx";
+  if (status >= 400 && status < 500) return "4xx";
+  if (status >= 500 && status < 600) return "5xx";
+  return null;
+}
+
 /** Serve a built static asset for /d/:id/* (or /embed/:id/*). */
 export async function serveDemoAsset(
   env: Env,
+  ctx: ExecutionContext,
   id: string,
   subpath: string,
   opts: { embed: boolean },
@@ -662,8 +683,25 @@ export async function serveDemoAsset(
   const html = wantsHtmlError(subpath);
   const homeUrl = opts.embed ? undefined : "/";
 
+  // T08: `serve.d`/`serve.embed` (contract §5 — "outcome, demo_id | count,
+  // bytes"), written for every branch below, never blocking the response
+  // (`ctx.waitUntil`, the same "never block on Analytics Engine" rule every
+  // other `emitPoint` call site in this Worker follows). Emitted here, inside
+  // `share.ts`, rather than wrapping the call at its `index.ts` call site: this
+  // is the one place that knows both the real served bytes (a stream's `obj.size`,
+  // or the *final*, post-injection HTML length — a `Response`'s own
+  // `content-length` header is unset at this point either way) and the precise
+  // outcome for every early-return branch, without a second body read.
+  const metric = opts.embed ? "serve.embed" : "serve.d";
+  const record = (status: number, bytes: number): void => {
+    const outcome = serveOutcome(status);
+    if (!outcome) return;
+    ctx.waitUntil(emitPoint(env, metric, { count: 1, bytes }, { outcome, demo_id: id }));
+  };
+
   const row = await getDemo(env, id);
   if (!row) {
+    record(404, 0);
     return html
       ? errorPageResponse({
           status: 404,
@@ -674,6 +712,7 @@ export async function serveDemoAsset(
       : new Response("Not found", { status: 404 });
   }
   if (row.revoked) {
+    record(410, 0);
     return html
       ? errorPageResponse({
           status: 410,
@@ -688,6 +727,7 @@ export async function serveDemoAsset(
   // Never serve the private source snapshot as a public asset. Stays plain text:
   // every `__`-prefixed path is a file request, never a document one.
   if (clean.split("/").some((seg) => seg.startsWith("__"))) {
+    record(404, 0);
     return new Response("Not found", { status: 404 });
   }
   const candidates = clean === "" ? ["index.html"] : [clean, `${clean}/index.html`, "index.html"];
@@ -709,6 +749,7 @@ export async function serveDemoAsset(
   if (!obj) {
     const buildState = demoBuildState(row, Date.now());
     if (buildState === "building") {
+      record(503, 0);
       return html
         ? errorPageResponse({
             status: 503,
@@ -723,6 +764,7 @@ export async function serveDemoAsset(
           });
     }
     if (buildState === "failed") {
+      record(500, 0);
       return html
         ? errorPageResponse({
             status: 500,
@@ -732,6 +774,7 @@ export async function serveDemoAsset(
           })
         : new Response("This demo's build failed.", { status: 500 });
     }
+    record(404, 0);
     return html
       ? errorPageResponse({
           status: 404,
@@ -771,9 +814,25 @@ export async function serveDemoAsset(
     // following the shell would be a visible seam against the pane it came from.
     // Inert wherever nothing posts to it — `/embed/:id` on the documentation site
     // is framed by a page that never sends the message.
-    const rewritten = injectSchemeIntoHtml(rewriteHtmlRoots(await obj.text()));
-    return new Response(rewritten, { headers });
+    //
+    // T08 (ADR §C.5): the standalone lite reporter rides the same seam, last —
+    // after the scheme/root-path rewrites settle the document's final shape, so
+    // its `insertInjectedTag` head/body detection sees exactly what ships.
+    const withScheme = injectSchemeIntoHtml(rewriteHtmlRoots(await obj.text()));
+    // R2 objects `env.ARTIFACTS.put` never carry a `Content-Encoding` (this
+    // Worker's own puts never set one) — `null` is always the real answer
+    // here, not a guess; the guard still runs, the same defence-in-depth
+    // `injectMonitor` keeps for a Tier-2 proxy response that could carry one.
+    const withLite = injectLiteHtml(withScheme, headers.get("Content-Type") ?? "text/html", null, {
+      surface: opts.embed ? "embed" : "d",
+      demo: id,
+      ht: htMajorFromVersion(row.ht_version),
+      fw: row.framework,
+    });
+    record(200, new TextEncoder().encode(withLite).length);
+    return new Response(withLite, { headers });
   }
+  record(200, obj.size);
   return new Response(obj.body, { headers });
 }
 
@@ -793,4 +852,4 @@ function rewriteHtmlRoots(html: string): string {
 }
 
 // R2 types (avoid importing the heavy generated types here).
-interface R2ObjectBodyText { body: ReadableStream; text(): Promise<string>; }
+interface R2ObjectBodyText { body: ReadableStream; text(): Promise<string>; size: number; }
