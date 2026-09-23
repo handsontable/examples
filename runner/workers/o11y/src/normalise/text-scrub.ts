@@ -13,7 +13,18 @@
 // `body` (and, defensively, on Faro's converted `body` too) after
 // `scrubTelemetry`, never instead of it.
 
-const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>)]+/gi;
+import { stripQueryAndFragment } from "@handsontable/demo-runtime/telemetry";
+
+// Fix round (finding A-I3): this pass always runs AFTER `scrubTelemetry`
+// (see the file header), which has already replaced a preview host with
+// the literal `<preview>` (`redactPreviewHosts`). The original
+// `[^\s"'<>)]+` char class excludes `<`/`>`, so a URL like
+// `https://<preview>/a?token=SECRET` failed to match at all — the very
+// first character after the scheme is `<`, which the class forbids — and
+// its query string survived untouched. The optional `(?:<preview>)?` group
+// consumes that literal placeholder first, so matching can continue past
+// it into the (ordinary, `<`/`>`-free) path and query.
+const URL_PATTERN = /\bhttps?:\/\/(?:<preview>)?[^\s"'<>)]*/gi;
 
 /** Strips the query string and fragment off every absolute URL found inside
  *  free text, leaving the rest of the text untouched. Not a full URL parse
@@ -43,8 +54,48 @@ export function redactUserAgentInText(text: string): string {
   return text.replace(USER_AGENT_PATTERN, "<ua>");
 }
 
+/** Fix round (finding A-I3): contract §3's "never sent" list includes "the
+ *  user pseudonym, an email" — enforced everywhere else structurally (no
+ *  `user` meta, no free-text console output reaches the pipeline at all),
+ *  but a genuinely free-text field CAN embed one: the exact I3 probe is a
+ *  Sentry issue title, `"... user a@b.com Mozilla/5.0 ..."`. No existing
+ *  mechanism redacted an email anywhere in this codebase before this fix —
+ *  a standard, conservative address shape, blanked the same way a UA is. */
+const EMAIL_PATTERN = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+
+export function redactEmailInText(text: string): string {
+  return text.replace(EMAIL_PATTERN, "<email>");
+}
+
 /** The combined extra pass this task runs on every stored record's free
  *  body text, beyond what `scrubTelemetry` alone guarantees. */
 export function scrubBodyText(text: string): string {
-  return redactUserAgentInText(stripUrlQueriesInText(text));
+  return redactEmailInText(redactUserAgentInText(stripUrlQueriesInText(text)));
+}
+
+/** Fix round (finding A-M3, "also"): `scrubTelemetry`'s OTLP-record branch
+ *  only runs `redactPreviewHosts` over every string, including attribute
+ *  values — it never strips a query string or a UA embedded in one, the way
+ *  this module's own `scrubBodyText` already does for `body`. A query
+ *  string or a UA can end up inside an allowlisted attribute value
+ *  (`session.id` is opaque, but `context`, a diagnostic tag value, is
+ *  client-supplied — e.g. `"versions-fetch?token=SECRET"`) just as easily
+ *  as inside a message.
+ *
+ *  Uses `stripQueryAndFragment` (the finding's own named fix), not
+ *  `stripUrlQueriesInText` — an attribute value is the WHOLE field, not
+ *  free text that might merely *embed* a URL, so it gets the same
+ *  cut-at-first-`?`/`#` treatment `scrub.ts` already applies to `meta.page.url`
+ *  and a stack frame's `filename`, including its non-URL fallback (a bare
+ *  `context` value like the one above is not a well-formed absolute URL,
+ *  and must still be cut). */
+export function scrubAttributeValues(
+  attrs: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!attrs) return attrs;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(attrs)) {
+    out[key] = redactEmailInText(redactUserAgentInText(stripQueryAndFragment(value)));
+  }
+  return out;
 }

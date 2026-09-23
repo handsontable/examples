@@ -78,3 +78,19 @@ export function fingerprint(context: string, message: string): string {
 export function feedsNewFingerprintAlert(surface: Surface): boolean {
   return surface !== "demo-runtime";
 }
+
+/**
+ * §7's exact wire shape (`<context>:<16 hex chars>`) — used to validate a
+ * client-supplied fingerprint (a Faro item's own `payload.fingerprint`, or
+ * `context["hot.fingerprint"]`) before it is trusted verbatim (fix round,
+ * finding A-C2/D-I3). Without this, an attacker's arbitrary string reaches
+ * the exact first-seen `fp:` registry (`InboxWriter`) and, from there, an
+ * unescaped Slack alert line — this shape check is the first of two layers,
+ * `notify.ts`'s own mrkdwn escaping is the second (defence in depth, since
+ * other rules interpolate data into Slack text too).
+ */
+const FINGERPRINT_PATTERN = /^[a-z][a-z0-9_-]{0,63}:[0-9a-f]{16}$/;
+
+export function isValidFingerprint(value: string): boolean {
+  return FINGERPRINT_PATTERN.test(value);
+}

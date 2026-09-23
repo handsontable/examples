@@ -214,3 +214,42 @@ test("never mutates its argument", () => {
   scrubTelemetry(item);
   assert.equal(JSON.stringify(item), before);
 });
+
+// ---- fix round (finding A-M1): a malformed stack frame must never throw ---------
+
+test("scrubTelemetry does not throw on a null entry inside stacktrace.frames — the exact `500` probe from finding A-M1", () => {
+  const item = {
+    type: "exception",
+    payload: { type: "TypeError", value: "x", stacktrace: { frames: [null] } },
+    meta: {},
+  };
+  // Before the fix, `frame.filename` on the `null` entry threw a
+  // `TypeError` that escaped this function entirely — an unauthenticated
+  // `{"exceptions":[{"stacktrace":{"frames":[null]}}]}` POST to
+  // `/telemetry/collect` became an uncaught `500`.
+  assert.doesNotThrow(() => scrubTelemetry(item));
+});
+
+test("scrubTelemetry skips a non-object stack frame but still scrubs the real frames around it", () => {
+  const item = {
+    type: "exception",
+    payload: {
+      type: "TypeError",
+      value: "x",
+      stacktrace: {
+        frames: [
+          { filename: `https://${PREVIEW_HOST}/a.js?t=1` },
+          null,
+          undefined,
+          "not-an-object",
+          { filename: `https://${PREVIEW_HOST}/b.js` },
+        ],
+      },
+    },
+    meta: {},
+  };
+  const scrubbed = scrubTelemetry(item);
+  const filenames = scrubbed.payload.stacktrace.frames.map((f) => (f && typeof f === "object" ? f.filename : f));
+  assert.equal(filenames[0], "https://<preview>/a.js");
+  assert.equal(filenames[4], "https://<preview>/b.js");
+});

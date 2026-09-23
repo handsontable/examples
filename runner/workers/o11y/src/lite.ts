@@ -166,7 +166,15 @@ async function handleLite(req: Request, env: Env, ctx: ExecutionContext): Promis
   // `error.uncaught`/`web_vital`, not the `o11y.ingest` self-metric
   // `respond.ts`'s helpers write, but the sink and the `ctx.waitUntil`/never-
   // throw contract are the same for every point this Worker writes.
-  for (const point of aePoints) writePoint(env, ctx, point);
+  //
+  // Fix round (finding A-I4): only write this route's own metric point when
+  // the record was actually a NEW record — the previous unconditional write
+  // meant a duplicated beacon (a `sendBeacon` retry, a redelivered request)
+  // wrote a second `error.uncaught`/`web_vital` point even while the
+  // matching `o11y.ingest` point already said `duplicate`.
+  if (accepted > 0) {
+    for (const point of aePoints) writePoint(env, ctx, point);
+  }
 
   return respondIngested(env, ctx, "lite", { accepted, duplicate }, bytes.byteLength);
 }

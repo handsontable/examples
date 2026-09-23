@@ -15,7 +15,9 @@ import { fileURLToPath } from "node:url";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
-const { processFaroBody } = await import("../workers/o11y/src/normalise/faro.ts");
+const { processFaroBody, countFaroItems, MAX_FARO_ITEMS_PER_BODY } = await import(
+  "../workers/o11y/src/normalise/faro.ts"
+);
 const { decodeOtlpJson, processOtlpBody } = await import("../workers/o11y/src/normalise/otlp.ts");
 const { decodeOtlpProtobuf } = await import("../workers/o11y/src/normalise/otlp-protobuf.ts");
 const { hashRecord } = await import("../workers/o11y/src/normalise/hash.ts");
@@ -110,6 +112,121 @@ test("Faro log: stored record, no Analytics Engine point", async () => {
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
   assert.ok(item.ingestItem);
   assert.equal(item.aePoints.length, 0);
+});
+
+// ---- fix round (finding A-I4): a per-request item cap -------------------------
+
+test("countFaroItems sums every kind, including traces (always-invalid) — the cap check runs before any real work", () => {
+  const body = {
+    exceptions: [{}, {}],
+    logs: [{}],
+    measurements: [{}],
+    events: [{}, {}],
+    traces: [{}],
+  };
+  assert.equal(countFaroItems(body), 7);
+  assert.equal(countFaroItems({}), 0);
+  assert.equal(countFaroItems(null), 0);
+  assert.equal(countFaroItems("not an object"), 0);
+});
+
+test("MAX_FARO_ITEMS_PER_BODY is a real, generous-but-finite bound (finding A-I4: ~16.7k items measured from one 1 MB body)", () => {
+  assert.ok(MAX_FARO_ITEMS_PER_BODY > 0 && MAX_FARO_ITEMS_PER_BODY < 1000, "must be a real bound, not effectively unbounded");
+});
+
+// ---- fix round (finding A-M1): a malformed item must never crash the batch ----
+
+test("processFaroBody: a null entry inside logs never throws (the exact 500 probe from finding A-M1) and still processes the real item next to it", async () => {
+  const body = faroFixture("log.json");
+  body.logs = [null, ...body.logs];
+  const items = await Promise.resolve(processFaroBody(body, ENV, SERVICE, Date.now()));
+  assert.equal(items.length, 2);
+  assert.equal(items[0].invalid, "item is not an object");
+  assert.ok(items[1].ingestItem, "the well-formed item next to the malformed one must still be stored");
+});
+
+// ---- controller handoff: server-side noise gates (D-I2 defence in depth) ------
+
+test("Faro exception: an unhandled ResizeObserver-loop message is dropped entirely (never stored, no point, no fingerprint) — the server-side D-I2 backstop", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  body.exceptions[0].value = "ResizeObserver loop completed with undelivered notifications.";
+  body.exceptions[0].type = "Error";
+  body.exceptions[0].context.handled = "false";
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.equal(item.ingestItem, undefined, "a browser-noise shape must never be stored");
+  assert.equal(item.aePoints.length, 0, "no error.uncaught point either");
+  assert.equal(item.invalid, undefined, "a dropped-as-noise item is not an error");
+});
+
+test("Faro exception: the Office-scanner rejection text is dropped the same way", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  body.exceptions[0].value = "Object Not Found Matching Id:5, MethodName:update, ParamCount:4";
+  body.exceptions[0].type = "Error";
+  body.exceptions[0].context.handled = "false";
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.equal(item.ingestItem, undefined);
+  assert.equal(item.aePoints.length, 0);
+});
+
+test("Faro exception: an explicitly HANDLED report that merely quotes noise text is NOT dropped (mirrors eventGate.ts's own handled discriminator)", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  body.exceptions[0].value = "Failed to fetch";
+  body.exceptions[0].type = "TypeError";
+  body.exceptions[0].context.handled = "true"; // an explicit reportError call, not a global onerror
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.ok(item.ingestItem, "a handled report must never be silently dropped as noise");
+  assert.equal(item.aePoints[0].indexes[0], "error.handled");
+});
+
+test("Faro exception: an unrelated unhandled error is NOT dropped", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.ok(item.ingestItem, "a real, unrelated exception must still be stored");
+});
+
+// ---- fix round (finding D-I3, A-C2): the client's own fingerprint --------------
+
+test("Faro exception: a well-formed payload.fingerprint (Faro's own wire field, D-I3) is used verbatim, not recomputed from the stack", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  body.exceptions[0].fingerprint = "versions-fetch:0123456789abcdef";
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.ok(item.ingestItem);
+  assert.equal(item.ingestItem.fingerprint, "versions-fetch:0123456789abcdef");
+});
+
+test("Faro exception: an invalid payload.fingerprint (fix round A-C2 probe — Slack mrkdwn injection shape) is discarded, never trusted verbatim", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  body.exceptions[0].fingerprint = "<!channel> N <https://evil.example|open Grafana>";
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.ok(item.ingestItem);
+  assert.ok(item.ingestItem.fingerprint, "the surface still feeds the new-fingerprint alert with a SERVER-computed value");
+  assert.ok(
+    !item.ingestItem.fingerprint.includes("<!channel>"),
+    "the attacker's raw string must never reach the exact first-seen registry",
+  );
+  assert.match(item.ingestItem.fingerprint, /^authoring:[0-9a-f]{16}$/, "falls back to the contract's own §7 shape");
+});
+
+test("Faro exception: an invalid context['hot.fingerprint'] is discarded the same way as an invalid wire fingerprint", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  body.exceptions[0].context["hot.fingerprint"] = "<!channel> pwned";
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.ok(item.ingestItem);
+  assert.match(item.ingestItem.fingerprint, /^authoring:[0-9a-f]{16}$/);
+});
+
+// ---- fix round (finding A-M3): the assembled record gets a second scrub pass --
+
+test("Faro: a query string embedded in an allowlisted attribute value (context, a diagnostic tag) is stripped, not just redactPreviewHosts'd", async () => {
+  const body = faroFixture("log.json");
+  body.logs[0].context = {
+    ...body.logs[0].context,
+    context: "versions-fetch?token=SECRET123",
+  };
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.ok(item.ingestItem);
+  const text = JSON.stringify(item.ingestItem.record);
+  assert.doesNotMatch(text, /SECRET123/, "a query string inside an attribute value must be stripped, not stored verbatim");
 });
 
 test("hash: identical Faro item redelivered seconds apart hashes identically", async () => {
@@ -268,6 +385,169 @@ test("OTLP: a plain (non-JSON) console.log body is left exactly as before — no
   // the cloudflare.ray_id REMAP, not via any body-JSON parse).
   assert.equal(result.items.length, 1);
   assert.doesNotMatch(result.items[0].record.body, /^\{/, "body must stay untouched plain text, not JSON");
+});
+
+test("B cross-note fix: authored console output that happens to be JSON (e.g. Tier-2 SSR container stdout) is NOT parsed into attributes — only this Worker's own trusted log.kind lines are", async () => {
+  // ADR-0041's own platform facts say Tier-2 container stdout lands in the
+  // API worker's logs, the same Cloudflare export `otlp.ts` parses here.
+  // Authored SSR code that happens to `console.log(JSON.stringify({...}))`
+  // must not have its own keys hoisted into attributes/resourceAttributes
+  // the way a real `lines.ts` line does — contract §3 forbids "authored
+  // code … console output" outright.
+  const body = JSON.stringify({
+    resourceLogs: [
+      {
+        resource: { attributes: [{ key: "service.name", value: { stringValue: "handsontable-demos-api" } }] },
+        scopeLogs: [
+          {
+            logRecords: [
+              {
+                timeUnixNano: "1735689600000000000",
+                body: {
+                  stringValue: JSON.stringify({
+                    // No "log.kind" at all — an authored line, not this
+                    // Worker's own trusted shape. Tries to inject a
+                    // resource-attribute-looking key AND a structured
+                    // metadata key, neither of which must survive.
+                    "hot.demo_id": "attacker-demo",
+                    "session.id": "attacker-session",
+                    "service.name": "demos-api",
+                    userEmail: "person@example.com",
+                  }),
+                },
+                attributes: [],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const result = await processOtlpBody(new TextEncoder().encode(body), "application/json", ENV, Date.now());
+  assert.equal(result.items.length, 1);
+  const record = result.items[0].record;
+  assert.equal(record.attributes?.["hot.demo_id"], undefined, "an authored JSON key must not become structured metadata");
+  assert.equal(record.attributes?.["session.id"], undefined);
+  assert.equal(record.attributes?.userEmail, undefined);
+  // The body text itself is left untouched (still the raw authored JSON) —
+  // this fix only stops the KEY-hoisting, never rewrites the body.
+  assert.match(record.body, /attacker-demo/);
+});
+
+// ---- controller handoff (finding C-I2, read half): the API-side fingerprint feed --
+//
+// Spec (ADR §M, F3-report.md "Not fixed / handed off"): read
+// bodyJsonAttrs["hot.fingerprint"] and feed it into the fp: registry ONLY
+// when the real resource service.name === "demos-api", log.kind === "error",
+// the value matches ^[a-z0-9-]+:[0-9a-f]{16}$, and the record is not Tier-2
+// container stdout. NOTE: real Cloudflare exports carry service.name =
+// "handsontable-demos-api" (finding M2, unowned/unfixed) — these tests set
+// service.name to the contract's own "demos-api" directly to exercise the
+// gate logic itself; until M2 lands, this feed is correctly gated but does
+// not fire against real production traffic. Recorded in the report.
+
+function apiErrorLineOtlpBody(overrides = {}) {
+  const bodyObj = {
+    "log.kind": "error",
+    context: "chat-answer",
+    name: "Error",
+    message: "boom",
+    "service.version": "abc123",
+    "hot.fingerprint": "chat-answer:0123456789abcdef",
+    ...overrides.bodyExtra,
+  };
+  return JSON.stringify({
+    resourceLogs: [
+      {
+        resource: {
+          attributes: [
+            { key: "service.name", value: { stringValue: overrides.serviceName ?? "demos-api" } },
+          ],
+        },
+        scopeLogs: [
+          {
+            logRecords: [
+              {
+                timeUnixNano: "1735689600000000000",
+                body: { stringValue: JSON.stringify(bodyObj) },
+                attributes: [],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+}
+
+test("C-I2 read half: all four conditions met — the API's own hot.fingerprint feeds the exact first-seen registry", async () => {
+  const result = await processOtlpBody(
+    new TextEncoder().encode(apiErrorLineOtlpBody()),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].fingerprint, "chat-answer:0123456789abcdef");
+});
+
+test("C-I2 condition 1: a body-JSON service.name claiming demos-api does NOT feed the registry — only the REAL resource attribute counts", async () => {
+  const result = await processOtlpBody(
+    new TextEncoder().encode(apiErrorLineOtlpBody({ serviceName: "some-other-service", bodyExtra: { "service.name": "demos-api" } })),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items[0].fingerprint, undefined, "a body-claimed service.name must never satisfy this gate");
+});
+
+test("C-I2 condition 2: log.kind other than 'error' (e.g. api.request) does not feed the registry", async () => {
+  const result = await processOtlpBody(
+    new TextEncoder().encode(apiErrorLineOtlpBody({ bodyExtra: { "log.kind": "api.request" } })),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items[0].fingerprint, undefined);
+});
+
+test("C-I2 condition 3: a hot.fingerprint value outside the contract's <context>:<16 hex> shape does not feed the registry", async () => {
+  const result = await processOtlpBody(
+    new TextEncoder().encode(apiErrorLineOtlpBody({ bodyExtra: { "hot.fingerprint": "<!channel> pwned" } })),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items[0].fingerprint, undefined, "an injection-shaped value must never reach the registry");
+});
+
+test("C-I2 condition 4: authored/Tier-2-shaped JSON (no trusted log.kind at all) never even surfaces a hot.fingerprint to check — the B cross-note gate already empties bodyJsonAttrs", async () => {
+  const body = JSON.stringify({
+    resourceLogs: [
+      {
+        resource: { attributes: [{ key: "service.name", value: { stringValue: "demos-api" } }] },
+        scopeLogs: [
+          {
+            logRecords: [
+              {
+                timeUnixNano: "1735689600000000000",
+                body: {
+                  stringValue: JSON.stringify({
+                    // No "log.kind" — an authored/container-stdout shape,
+                    // trying to forge a fingerprint anyway.
+                    "hot.fingerprint": "chat-answer:0123456789abcdef",
+                  }),
+                },
+                attributes: [],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const result = await processOtlpBody(new TextEncoder().encode(body), "application/json", ENV, Date.now());
+  assert.equal(result.items[0].fingerprint, undefined);
 });
 
 test("fix round I2: a body-JSON key cannot spoof a real resource attribute (service.name, environment, hot.outcome) — the real resource value always wins", async () => {

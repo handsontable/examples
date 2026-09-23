@@ -27,14 +27,19 @@ import {
   ATTR_HOT_FRAMEWORK,
   ATTR_HOT_HT_MAJOR,
   ATTR_HOT_KIND,
+  ATTR_HOT_OUTCOME,
   ATTR_HOT_SURFACE,
   ATTR_HOT_TIER,
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
   DIAGNOSTIC_TAG_KEYS,
   HOT_KINDS,
+  HT_MAJORS,
+  isValidOpenAttrValue,
   RESOURCE_ATTRS,
   STRUCTURED_METADATA_KEYS,
+  SURFACES,
+  TIERS,
   type Environment,
   type ServiceName,
 } from "./attrs.js";
@@ -121,6 +126,53 @@ function serviceResourceAttributes(service: ServiceIdentity): Record<string, str
   };
 }
 
+/** Closed-set `hot.*` resource attributes, checked at record level (fix
+ *  round, finding A-C1). `deployment.environment.name`/`service.*` are not
+ *  listed here — those three are never taken from a client-hoisted bag at
+ *  all any more (see the spread-order fix below), so validating them here
+ *  too would be redundant. */
+const CLOSED_SET_BY_KEY: Readonly<Record<string, readonly string[]>> = {
+  [ATTR_HOT_SURFACE]: SURFACES,
+  [ATTR_HOT_TIER]: TIERS,
+  [ATTR_HOT_HT_MAJOR]: HT_MAJORS,
+};
+
+/** `hot.framework`/`hot.outcome` — open sets, but bounded (§3, A-C1). */
+const OPEN_SET_KEYS: ReadonlySet<string> = new Set([ATTR_HOT_FRAMEWORK, ATTR_HOT_OUTCOME]);
+
+/**
+ * Record-level enforcement of §3's `hot.*` value rules (fix round A-C1):
+ * every closed-set resource attribute is checked against its enum, every
+ * open-set one against {@link isValidOpenAttrValue}. A failing value is
+ * DROPPED, not replaced in place — `normalise/points.ts#withResourceAttrDefaults`
+ * (ingest's own defaulting pass, run right after this) fills the contract's
+ * own `"none"` default for a now-missing key, so a forged
+ * `hot.tier: "zzz"` or a 3000-char `hot.framework` never reaches a Loki
+ * label or an Analytics Engine blob at all, instead of being silently
+ * substituted with a value this module would have to invent itself.
+ * `service.*`/`deployment.environment.name` are not checked here — they are
+ * never taken from `resourceAttributes` (the client-hoisted bag) any more,
+ * see the callers below.
+ */
+export function sanitizeResourceAttributes(
+  resourceAttributes: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(resourceAttributes)) {
+    const closedSet = CLOSED_SET_BY_KEY[key];
+    if (closedSet) {
+      if (closedSet.includes(value)) out[key] = value;
+      continue;
+    }
+    if (OPEN_SET_KEYS.has(key)) {
+      if (isValidOpenAttrValue(value)) out[key] = value;
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
 /** T03 addition (ADR §C.3, symbolication at drain): renders one stack frame
  *  in the standard V8 `    at <fn> (<file>:<line>:<col>)` shape —
  *  `workers/o11y/src/drain/symbolicate.ts` parses this exact text back out.
@@ -205,7 +257,16 @@ export function faroItemToRecord(item: ScrubbableFaroItem, options: ConvertOptio
   return {
     body: faroBody(item),
     timeUnixNano: msToUnixNano(clampTimestampMs(faroTimestampMs(item), options.receivedAtMs)),
-    resourceAttributes: { ...serviceResourceAttributes(options.service), ...resourceAttributes },
+    // Fix round (finding A-C1): `serviceResourceAttributes` spreads LAST —
+    // a client-hoisted `context`/`attributes` value under `service.name`,
+    // `service.version` or `deployment.environment.name` must never win
+    // over the route's own identity (`options.service`, set by the ingest
+    // route, never by the client). The previous order let a same-batch
+    // item override which service/environment a record was attributed to.
+    // `sanitizeResourceAttributes` closes the matching hole for the
+    // remaining `hot.*` keys, which are NOT part of `options.service` and
+    // so cannot be fixed by spread order alone.
+    resourceAttributes: { ...sanitizeResourceAttributes(resourceAttributes), ...serviceResourceAttributes(options.service) },
     attributes,
   };
 }
@@ -227,15 +288,24 @@ export function beaconToRecord(payload: LiteBeaconPayload, options: ConvertOptio
     [ATTR_HOT_KIND]: payload.t === "err" ? "exception" : "measurement",
   };
 
+  // Fix round (finding A-C1): `s`/`ht` are already closed-set-checked by
+  // `isValidLitePayload` (`LITE_SURFACES`/`HT_MAJORS`) before this function
+  // ever runs, but `fw` is client-supplied free text at that gate — run it
+  // (and, defensively, the whole bag) through the same record-level check
+  // `faroItemToRecord` uses, rather than trusting a second, separate path.
+  const rawResourceAttributes: Record<string, string> = {
+    [ATTR_HOT_SURFACE]: payload.s,
+    [ATTR_HOT_TIER]: "static",
+    [ATTR_HOT_FRAMEWORK]: payload.fw,
+    [ATTR_HOT_HT_MAJOR]: payload.ht,
+  };
+
   return {
     body: beaconBody(payload),
     timeUnixNano: msToUnixNano(clampTimestampMs(payload.ts, options.receivedAtMs)),
     resourceAttributes: {
+      ...sanitizeResourceAttributes(rawResourceAttributes),
       ...serviceResourceAttributes(options.service),
-      [ATTR_HOT_SURFACE]: payload.s,
-      [ATTR_HOT_TIER]: "static",
-      [ATTR_HOT_FRAMEWORK]: payload.fw,
-      [ATTR_HOT_HT_MAJOR]: payload.ht,
     },
     attributes,
   };

@@ -20,7 +20,7 @@ import { register } from "node:module";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
-const { aeSink } = await import("../workers/o11y/src/normalise/points.ts");
+const { aeSink, writePoint, writePointFromDo } = await import("../workers/o11y/src/normalise/points.ts");
 
 const POINT = { indexes: ["t"], blobs: ["a"], doubles: [1] };
 
@@ -60,4 +60,47 @@ test("aeSink (local mode) falls back to :8123 when RUNNER_EVENTS_CLICKHOUSE_URL 
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+// Fix round (finding A-M1): `writeDataPoint` was called directly inside
+// `Promise.resolve(...)`'s argument position, so a SYNCHRONOUS throw from
+// the real binding (an over-limit point) escaped before `Promise.resolve`
+// ever ran — never reaching the `.catch` meant to make this "never throw
+// into the caller." A production `AnalyticsEngineDataset.writeDataPoint`
+// throws synchronously on a real over-limit point, so this is not a
+// hypothetical shape.
+test("writePoint never throws into the caller, even when the sink's writeDataPoint throws SYNCHRONOUSLY", async () => {
+  const env = {
+    O11Y_ENV: "production",
+    RUNNER_EVENTS: {
+      writeDataPoint() {
+        throw new Error("boom: point exceeds Analytics Engine's per-point size limit");
+      },
+    },
+  };
+  const waited = [];
+  const ctx = { waitUntil: (p) => waited.push(p) };
+
+  assert.doesNotThrow(() => writePoint(env, ctx, POINT), "the synchronous call itself must never throw");
+  assert.equal(waited.length, 1);
+  // The promise `ctx.waitUntil` was handed must also never reject — an
+  // unhandled rejection here would surface later as a Node warning/error,
+  // exactly the same "never throws" contract restated for the async path.
+  await assert.doesNotReject(waited[0]);
+});
+
+test("writePointFromDo never throws into the caller on a synchronous sink throw, from a DurableObjectState-shaped ctx", async () => {
+  const env = {
+    O11Y_ENV: "production",
+    RUNNER_EVENTS: {
+      writeDataPoint() {
+        throw new Error("boom");
+      },
+    },
+  };
+  const waited = [];
+  const ctx = { waitUntil: (p) => waited.push(p) };
+
+  assert.doesNotThrow(() => writePointFromDo(env, ctx, POINT));
+  await assert.doesNotReject(waited[0]);
 });

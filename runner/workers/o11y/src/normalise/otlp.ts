@@ -163,6 +163,20 @@ function remapCloudflareKeys(attrs: Record<string, string>): Record<string, stri
  *  still cannot win over the real resource attribute. */
 const RESOURCE_ATTR_KEY_SET = new Set<string>(RESOURCE_ATTRS.map((a) => a.key));
 
+/** Fix round (B cross-note): the ADR's own platform facts say plainly that
+ *  "Tier-2 container stdout lands in the API worker's logs" — the same
+ *  Cloudflare export this function parses. A Tier-2 SSR starter's authored
+ *  code can `console.log(JSON.stringify({...}))` just as easily as this
+ *  worker's own trusted `lines.ts` lines do, and before this fix that
+ *  authored JSON's keys were merged into `attributes`/`resourceAttributes`
+ *  indistinguishably from a real structured line — a breach of contract
+ *  §3's "authored code … console output" rule. `lines.ts` stamps every one
+ *  of its own lines with a closed-set `"log.kind"` sentinel
+ *  (`"api.request"` | `"error"`); a body missing that exact marker is
+ *  authored/unknown output and is left as opaque body text, exactly as it
+ *  was before `lines.ts`'s structured shape existed. */
+const TRUSTED_BODY_JSON_LOG_KINDS: ReadonlySet<string> = new Set(["api.request", "error"]);
+
 function tryParseJsonBodyAttrs(body: string): Record<string, string> {
   if (!body || body.trimStart()[0] !== "{") return {};
   let parsed: unknown;
@@ -172,8 +186,10 @@ function tryParseJsonBodyAttrs(body: string): Record<string, string> {
     return {};
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const obj = parsed as Record<string, unknown>;
+  if (!TRUSTED_BODY_JSON_LOG_KINDS.has(String(obj["log.kind"]))) return {};
   const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(obj)) {
     if (RESOURCE_ATTR_KEY_SET.has(key)) continue; // never let body content spoof a resource attribute
     if (value === null || value === undefined) continue;
     if (typeof value === "string") out[key] = value;
@@ -183,6 +199,50 @@ function tryParseJsonBodyAttrs(body: string): Record<string, string> {
     // rule a real OTLP attribute already follows.
   }
   return out;
+}
+
+/**
+ * Controller handoff (finding C-I2, read half — F3-report.md "Not fixed /
+ * handed off", same spec restated in ADR §M): F3 wired the API worker's own
+ * `error.handled`/diagnostic reports to carry `hot.fingerprint` on their
+ * structured line (`workers/api/src/telemetry/diagnostic.ts`,
+ * `lines.ts#logErrorLine`'s `"log.kind": "error"` shape). Nothing on the
+ * read side fed it into `InboxWriter`'s exact first-seen registry, so a
+ * brand-new server-side failure class notified nobody once `SENTRY_SCOPE`
+ * flips to `uncaught` — this closes that gap.
+ *
+ * Every one of these four conditions must hold, exactly as specced:
+ * - the REAL resource `service.name` is `demos-api` — read off
+ *   `finalResourceAttrs` (the resource attribute after hoisting/defaults),
+ *   never a body-JSON key: `RESOURCE_ATTR_KEY_SET` already strips any
+ *   body-supplied `service.name` before it could reach here (the same
+ *   anti-spoof guarantee every other resource attribute gets).
+ * - the parsed body's own `log.kind` is `"error"` (never `"api.request"`,
+ *   which never carries a fingerprint at all).
+ * - the value matches the contract's own `<context>:<16 hex>` shape.
+ * - the record is not Tier-2 container stdout — guaranteed by construction
+ *   here, not a separate check: `tryParseJsonBodyAttrs` (the B cross-note
+ *   fix, above) already refuses to parse ANY body whose own `log.kind` is
+ *   not one of this worker's trusted shapes, so `bodyJsonAttrs` is already
+ *   empty for authored/container output before this function ever runs.
+ *
+ * Deliberately NOT `hot.surface !== "demo-runtime"` (the browser path's own
+ * rule, `feedsNewFingerprintAlert`): a worker-tenant record's `hot.surface`
+ * defaults to `"none"` when unset, which would admit any record reaching
+ * `/telemetry/v1/logs` — forged or not — under that same test.
+ */
+const API_FINGERPRINT_LOG_KIND = "error";
+const API_FINGERPRINT_PATTERN = /^[a-z0-9-]+:[0-9a-f]{16}$/;
+
+function apiFingerprintFeed(
+  bodyJsonAttrs: Record<string, string>,
+  finalResourceAttrs: Record<string, string>,
+): string | undefined {
+  const candidate = bodyJsonAttrs["hot.fingerprint"];
+  if (finalResourceAttrs["service.name"] !== "demos-api") return undefined;
+  if (bodyJsonAttrs["log.kind"] !== API_FINGERPRINT_LOG_KIND) return undefined;
+  if (typeof candidate !== "string" || !API_FINGERPRINT_PATTERN.test(candidate)) return undefined;
+  return candidate;
 }
 
 export interface OtlpProcessResult {
@@ -236,7 +296,8 @@ async function toIngestItem(
     attributes: normalised.attributes ?? {},
     rawEventTime: rawEventTime ?? "",
   });
-  return { hash, record: normalised };
+  const fingerprint = apiFingerprintFeed(bodyJsonAttrs, finalResourceAttrs);
+  return { hash, record: normalised, fingerprint };
 }
 
 /** Decodes and processes an already-size-capped OTLP export body (JSON or

@@ -16,11 +16,12 @@
 // named in ADR §C.2's `{service, sha, cf_version_id}`), added so a Grafana
 // annotation query can filter on it without a body-text regex.
 
-import { msToUnixNano, type NormalisedRecord } from "@handsontable/demo-runtime/telemetry";
+import { msToUnixNano, scrubTelemetry, type NormalisedRecord } from "@handsontable/demo-runtime/telemetry";
 import type { Env, IngestItem } from "../env.js";
 import { hashRecord } from "./hash.js";
 import { o11ySelfIdentity } from "./respond.js";
 import { withResourceAttrDefaults } from "./points.js";
+import { scrubBodyText } from "./text-scrub.js";
 
 export interface DeployPayload {
   service: string;
@@ -51,12 +52,19 @@ export async function processDeployPayload(
     },
     env,
   );
-  const record: NormalisedRecord = {
+  let record: NormalisedRecord = {
     body: JSON.stringify({ event: "deploy", service: payload.service, sha: payload.sha, cf_version_id: payload.cf_version_id }),
     timeUnixNano: msToUnixNano(receivedAtMs),
     resourceAttributes,
     attributes: {},
   };
+  // Fix round (finding A-I3): "in both processors" — CI-controlled input is
+  // lower risk than Sentry's (`sentry.ts`'s own doc comment), but the OIDC
+  // gate authenticates the *deployer*, not the content of `service`/`sha`;
+  // running the same authoritative scrub costs nothing here and keeps every
+  // worker-tenant record on the same guarantee.
+  record = scrubTelemetry(record)!;
+  record.body = scrubBodyText(record.body);
   const hash = await hashRecord({
     body: record.body,
     resourceAttributes: record.resourceAttributes,
