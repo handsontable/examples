@@ -15,8 +15,19 @@
 // Every window/threshold below is the ADR §F.3 prose's own number. Two
 // numbers the ADR leaves unstated (a rule evaluation window is not always
 // named) are called out where chosen (T04-D, see the task Outcome).
+//
+// Fix round (I1): every AE-query rule and its shared helper now takes an
+// injectable `queryFn` (defaults to the real `runAeQuery`), so
+// `pipeline/o11y-alerts.test.mjs` can drive each rule over a synchronous
+// fake instead of a live ClickHouse/AE endpoint — the same injection shape
+// `cron-step.ts#CronCaptureFn`/`diagnostic.ts#CaptureExceptionFn` already
+// use elsewhere in this codebase for the same reason (a real transport is
+// for one live pass, not every future `pnpm test`). Column references are
+// built from the contract's own `AE_COLUMNS` map (`col()` below) rather
+// than hand-numbered `blobN`/`doubleN` literals, so a future contract slot
+// renumbering cannot silently desync this file from the columns it reads.
 
-import type { Heartbeat } from "@handsontable/demo-runtime/telemetry";
+import { AE_COLUMNS, type Heartbeat } from "@handsontable/demo-runtime/telemetry";
 import type { Env, InboxWriterApi } from "../env.js";
 import { runAeQuery, type AeRow } from "./ae-query.js";
 
@@ -28,6 +39,10 @@ export interface RuleResult {
   detail: string;
 }
 
+/** Matches `ae-query.ts#runAeQuery`'s signature — the injection point every
+ *  AE-query rule below accepts. */
+export type AeQueryFn = (env: Env, sql: string) => Promise<AeRow[]>;
+
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
@@ -35,13 +50,30 @@ function ratio(numerator: number, denominator: number): number {
   return denominator > 0 ? numerator / denominator : 0;
 }
 
-async function countByOutcome(env: Env, metric: string, windowMs: number, extraWhere = ""): Promise<Map<string, number>> {
+/** The AE slot (`blobN`/`doubleN`) for a contract column name — never a
+ *  hand-numbered literal. Throws on an unknown name (a typo here must fail
+ *  loudly, the same rule `metrics.ts#toAePoint`'s own `writeBlob` follows). */
+function col(name: keyof typeof AE_COLUMNS): string {
+  const slot = AE_COLUMNS[name];
+  if (!slot) throw new Error(`rules.ts: no AE column for "${name}"`);
+  return slot;
+}
+
+async function countByOutcome(
+  env: Env,
+  metric: string,
+  windowMs: number,
+  extraWhere = "",
+  queryFn: AeQueryFn = runAeQuery,
+): Promise<Map<string, number>> {
+  const outcomeCol = col("outcome");
+  const countCol = col("count");
   const sql =
-    `SELECT blob8 AS outcome, sum(_sample_interval * double1) AS c ` +
+    `SELECT ${outcomeCol} AS outcome, sum(_sample_interval * ${countCol}) AS c ` +
     `FROM runner_events WHERE index1 = '${metric}' ` +
     `AND timestamp >= now() - INTERVAL '${Math.round(windowMs / 1000)}' SECOND ${extraWhere} ` +
-    `GROUP BY blob8`;
-  const rows = await runAeQuery(env, sql);
+    `GROUP BY ${outcomeCol}`;
+  const rows = await queryFn(env, sql);
   const out = new Map<string, number>();
   for (const row of rows) out.set(String(row.outcome ?? ""), Number(row.c ?? 0));
   return out;
@@ -50,16 +82,19 @@ async function countByOutcome(env: Env, metric: string, windowMs: number, extraW
 async function countByGroup(
   env: Env,
   metric: string,
-  groupBlob: number,
+  groupColumn: keyof typeof AE_COLUMNS,
   windowMs: number,
   extraWhere = "",
+  queryFn: AeQueryFn = runAeQuery,
 ): Promise<Map<string, number>> {
+  const groupCol = col(groupColumn);
+  const countCol = col("count");
   const sql =
-    `SELECT blob${groupBlob} AS grp, sum(_sample_interval * double1) AS c ` +
+    `SELECT ${groupCol} AS grp, sum(_sample_interval * ${countCol}) AS c ` +
     `FROM runner_events WHERE index1 = '${metric}' ` +
     `AND timestamp >= now() - INTERVAL '${Math.round(windowMs / 1000)}' SECOND ${extraWhere} ` +
     `GROUP BY grp`;
-  const rows = await runAeQuery(env, sql);
+  const rows = await queryFn(env, sql);
   const out = new Map<string, number>();
   for (const row of rows) out.set(String(row.grp ?? ""), Number(row.c ?? 0));
   return out;
@@ -72,30 +107,41 @@ async function countByGroup(
 async function countByGroupInWindow(
   env: Env,
   metric: string,
-  groupBlob: number,
+  groupColumn: keyof typeof AE_COLUMNS,
   endAgoMs: number,
   windowMs: number,
+  queryFn: AeQueryFn = runAeQuery,
 ): Promise<Map<string, number>> {
+  const groupCol = col(groupColumn);
+  const countCol = col("count");
   const endAgoS = Math.round(endAgoMs / 1000);
   const startAgoS = Math.round((endAgoMs + windowMs) / 1000);
   const sql =
-    `SELECT blob${groupBlob} AS grp, sum(_sample_interval * double1) AS c FROM runner_events ` +
+    `SELECT ${groupCol} AS grp, sum(_sample_interval * ${countCol}) AS c FROM runner_events ` +
     `WHERE index1 = '${metric}' ` +
     `AND timestamp >= now() - INTERVAL '${startAgoS}' SECOND ` +
     `AND timestamp < now() - INTERVAL '${endAgoS}' SECOND ` +
     `GROUP BY grp`;
-  const rows = await runAeQuery(env, sql);
+  const rows = await queryFn(env, sql);
   const out = new Map<string, number>();
   for (const row of rows) out.set(String(row.grp ?? ""), Number(row.c ?? 0));
   return out;
 }
 
-async function weightedQuantile(env: Env, metric: string, windowMs: number, q: number): Promise<number | null> {
+async function weightedQuantile(
+  env: Env,
+  metric: string,
+  windowMs: number,
+  q: number,
+  extraWhere = "",
+  queryFn: AeQueryFn = runAeQuery,
+): Promise<number | null> {
+  const valueCol = col("duration_ms");
   const sql =
-    `SELECT quantileExactWeighted(${q})(double2, toUInt32(_sample_interval)) AS p ` +
+    `SELECT quantileExactWeighted(${q})(${valueCol}, toUInt32(_sample_interval)) AS p ` +
     `FROM runner_events WHERE index1 = '${metric}' ` +
-    `AND timestamp >= now() - INTERVAL '${Math.round(windowMs / 1000)}' SECOND`;
-  const rows = await runAeQuery(env, sql);
+    `AND timestamp >= now() - INTERVAL '${Math.round(windowMs / 1000)}' SECOND ${extraWhere}`;
+  const rows = await queryFn(env, sql);
   const first = rows[0];
   if (!first || first.p === undefined || first.p === null) return null;
   const n = Number(first.p);
@@ -104,8 +150,8 @@ async function weightedQuantile(env: Env, metric: string, windowMs: number, q: n
 
 // ---- at_capacity rate: above 5/h ------------------------------------------
 
-export async function atCapacityRule(env: Env): Promise<RuleResult> {
-  const counts = await countByOutcome(env, "session.start", HOUR_MS);
+export async function atCapacityRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
+  const counts = await countByOutcome(env, "session.start", HOUR_MS, "", queryFn);
   const n = counts.get("at_capacity") ?? 0;
   return {
     rule: "at-capacity-rate",
@@ -116,9 +162,9 @@ export async function atCapacityRule(env: Env): Promise<RuleResult> {
 
 // ---- api.request 5xx rate: above 1% over 15 min ---------------------------
 
-export async function fiveXxRateRule(env: Env): Promise<RuleResult> {
+export async function fiveXxRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const windowMs = 15 * 60 * 1000;
-  const counts = await countByOutcome(env, "api.request", windowMs);
+  const counts = await countByOutcome(env, "api.request", windowMs, "", queryFn);
   const total = [...counts.values()].reduce((a, b) => a + b, 0);
   const fiveXx = counts.get("5xx") ?? 0;
   const pct = ratio(fiveXx, total) * 100;
@@ -133,11 +179,12 @@ export async function fiveXxRateRule(env: Env): Promise<RuleResult> {
 
 const PREVIEW_READY_THRESHOLD_PCT: Record<string, number> = { "1": 97, "2": 95 };
 
-export async function previewReadyRateRule(env: Env): Promise<RuleResult> {
+export async function previewReadyRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
+  const tierCol = col("tier");
   const results: string[] = [];
   let anyFiring = false;
   for (const [tier, thresholdPct] of Object.entries(PREVIEW_READY_THRESHOLD_PCT)) {
-    const counts = await countByOutcome(env, "preview.ready_ms", HOUR_MS, `AND blob5 = '${tier}'`);
+    const counts = await countByOutcome(env, "preview.ready_ms", HOUR_MS, `AND ${tierCol} = '${tier}'`, queryFn);
     const total = [...counts.values()].reduce((a, b) => a + b, 0);
     const ready = counts.get("ready") ?? 0;
     const pct = total > 0 ? ratio(ready, total) * 100 : 100;
@@ -156,23 +203,33 @@ export async function previewReadyRateRule(env: Env): Promise<RuleResult> {
 // ---- session-start p95: above 20s (T04-D: window chosen as 1h, the ADR --
 // text names the threshold but not an evaluation window) -------------------
 
-export async function sessionStartP95Rule(env: Env): Promise<RuleResult> {
-  const p95 = await weightedQuantile(env, "session.start", HOUR_MS, 0.95);
+export async function sessionStartP95Rule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
+  // Controller ruling (fix round, was Minor 3): p95 over `outcome = 'ready'`
+  // only — an unfiltered read blends in `at_capacity`/`container_starting`/
+  // `budget_denied` refusals, which return almost instantly and drag the
+  // percentile down, masking a real slow-start problem during overload
+  // (exactly when this rule matters most).
+  const outcomeCol = col("outcome");
+  const p95 = await weightedQuantile(env, "session.start", HOUR_MS, 0.95, `AND ${outcomeCol} = 'ready'`, queryFn);
   const firing = p95 !== null && p95 > 20_000;
   return {
     rule: "session-start-p95",
     firing,
-    detail: p95 === null ? "no session.start samples in the last hour" : `p95 ${(p95 / 1000).toFixed(1)}s (threshold 20s)`,
+    detail: p95 === null
+      ? "no ready session.start samples in the last hour"
+      : `p95 ${(p95 / 1000).toFixed(1)}s (threshold 20s, outcome=ready only)`,
   };
 }
 
 // ---- embed error rate: above 20% with more than 50 views in 24h, per demo -
 
-export async function embedErrorRateRule(env: Env): Promise<RuleResult> {
+export async function embedErrorRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const windowMs = DAY_MS;
+  const surfaceCol = col("surface");
+  const outcomeCol = col("outcome");
   const [errorsByDemo, viewsByDemo] = await Promise.all([
-    countByGroup(env, "error.uncaught", 12, windowMs, "AND blob4 = 'embed'"),
-    countByGroup(env, "serve.embed", 12, windowMs, "AND blob8 = '2xx'"),
+    countByGroup(env, "error.uncaught", "demo_id", windowMs, `AND ${surfaceCol} = 'embed'`, queryFn),
+    countByGroup(env, "serve.embed", "demo_id", windowMs, `AND ${outcomeCol} = '2xx'`, queryFn),
   ]);
   const offenders: string[] = [];
   for (const [demoId, views] of viewsByDemo) {
@@ -193,10 +250,10 @@ export async function embedErrorRateRule(env: Env): Promise<RuleResult> {
 
 const COMPILE_ERROR_DOUBLING_FLOOR = 5;
 
-export async function compileErrorDoublingRule(env: Env): Promise<RuleResult> {
+export async function compileErrorDoublingRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const [today, yesterday] = await Promise.all([
-    countByGroupInWindow(env, "sandpack.compile_error", 7, 0, DAY_MS),
-    countByGroupInWindow(env, "sandpack.compile_error", 7, DAY_MS, DAY_MS),
+    countByGroupInWindow(env, "sandpack.compile_error", "ht_major", 0, DAY_MS, queryFn),
+    countByGroupInWindow(env, "sandpack.compile_error", "ht_major", DAY_MS, DAY_MS, queryFn),
   ]);
   const offenders: string[] = [];
   for (const [htMajor, todayCount] of today) {
@@ -216,11 +273,11 @@ export async function compileErrorDoublingRule(env: Env): Promise<RuleResult> {
 // ---- LiteLLM errors: above 5% (chat.answer + theme.ai, both gateway --
 // call sites; T04-D: window chosen as 1h, same reasoning as session-start)--
 
-export async function litellmErrorRateRule(env: Env): Promise<RuleResult> {
+export async function litellmErrorRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const windowMs = HOUR_MS;
   const [chat, theme] = await Promise.all([
-    countByOutcome(env, "chat.answer", windowMs),
-    countByOutcome(env, "theme.ai", windowMs),
+    countByOutcome(env, "chat.answer", windowMs, "", queryFn),
+    countByOutcome(env, "theme.ai", windowMs, "", queryFn),
   ]);
   const total = [...chat.values(), ...theme.values()].reduce((a, b) => a + b, 0);
   const errors = (chat.get("error") ?? 0) + (theme.get("error") ?? 0);
@@ -283,6 +340,26 @@ export async function o11yCapRule(spend: O11ySpend): Promise<RuleResult> {
     rule: "o11y-spend-cap",
     firing: spend.spendUsd >= spend.capUsd,
     detail: `observability spend $${spend.spendUsd.toFixed(2)} of $${spend.capUsd.toFixed(2)} cap`,
+  };
+}
+
+// ---- fix round (I2): the alert-evaluation-itself-failed rule ---------------
+//
+// Not an ADR §F.3 signal — a synthetic rule `runAlerts` builds from the
+// errors every OTHER rule in this file threw this tick, so an AE query
+// failure (a malformed query, ClickHouse/AE unreachable) is never silent.
+// Same fire-once/resolve-once machinery as every other rule (`notify.ts`),
+// so it holds regardless of which cron handler calls `runAlerts` (this
+// task's placeholder today, T03's real one after the merge).
+
+export function alertEvalErrorRule(errors: Readonly<Record<string, string>>): RuleResult {
+  const failing = Object.keys(errors);
+  return {
+    rule: "alert-eval-error",
+    firing: failing.length > 0,
+    detail: failing.length > 0
+      ? `${failing.length} rule(s) failed to evaluate: ${failing.map((r) => `${r} (${errors[r]})`).join("; ")}`
+      : "every rule evaluated cleanly",
   };
 }
 

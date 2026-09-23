@@ -11,6 +11,7 @@ import { inboxWriter } from "../inbox/accessor.js";
 import { readO11ySpend } from "../cost.js";
 import { evaluateAndNotify, slackPoster } from "./notify.js";
 import {
+  alertEvalErrorRule,
   atCapacityRule,
   backlogAgeRule,
   compileErrorDoublingRule,
@@ -56,10 +57,35 @@ export interface RunAlertsResult {
 
 type RuleFn = (env: Env) => Promise<RuleResult>;
 
+/** `id` matches the exact `RuleResult.rule` string the function itself
+ *  returns (fix round I2 — before this, the error map was keyed by the JS
+ *  function name, e.g. `atCapacityRule`, which never matched the rule id a
+ *  Slack line or `alert:<rule>` state uses, e.g. `at-capacity-rate`; a
+ *  failing rule's error and its ordinary fire/resolve messages named it
+ *  two different ways). */
+const QUERY_RULES: { id: string; fn: RuleFn }[] = [
+  { id: "at-capacity-rate", fn: atCapacityRule },
+  { id: "api-5xx-rate", fn: fiveXxRateRule },
+  { id: "preview-ready-rate", fn: previewReadyRateRule },
+  { id: "session-start-p95", fn: sessionStartP95Rule },
+  { id: "embed-error-rate", fn: embedErrorRateRule },
+  { id: "compile-error-doubling", fn: compileErrorDoublingRule },
+  { id: "litellm-error-rate", fn: litellmErrorRateRule },
+];
+
 /** Runs every ADR §F.3 rule this task owns, notifies on any fire/resolve
  *  transition, and — for the o11y spend cap specifically — pauses/resumes
  *  backlog drains. Never throws: a single bad rule is caught and recorded
- *  in the returned `errors` map instead of aborting the rest. */
+ *  in the returned `errors` map instead of aborting the rest.
+ *
+ *  Fix round (I2): a query/dependency failure is no longer silent past the
+ *  returned `errors` map — the synthetic `alert-eval-error` rule
+ *  (`rules.ts#alertEvalErrorRule`) is evaluated last, over exactly the
+ *  errors this run collected, through the SAME fire-once/resolve-once
+ *  `evaluateAndNotify` every other rule uses. This lives inside
+ *  `runAlerts` itself (not the caller), so it holds for whichever cron
+ *  handler calls this function — this task's own placeholder `scheduled()`
+ *  today, T03's real cron after the merge, per the controller's note. */
 export async function runAlerts(env: Env, _ctx?: ExecutionContext): Promise<RunAlertsResult> {
   const writer = inboxWriter(env);
   const sink = aeSink(env);
@@ -71,24 +97,14 @@ export async function runAlerts(env: Env, _ctx?: ExecutionContext): Promise<RunA
   const transitions: Record<string, "fired" | "resolved"> = {};
   const errors: Record<string, string> = {};
 
-  const queryRules: RuleFn[] = [
-    atCapacityRule,
-    fiveXxRateRule,
-    previewReadyRateRule,
-    sessionStartP95Rule,
-    embedErrorRateRule,
-    compileErrorDoublingRule,
-    litellmErrorRateRule,
-  ];
-
-  for (const rule of queryRules) {
+  for (const { id, fn } of QUERY_RULES) {
     try {
-      const result = await rule(env);
+      const result = await fn(env);
       results.push(result);
       const transition = await evaluateAndNotify(result, { inboxWriter: writer, postSlack, aeSink: sink, commonAttrs: attrs, nowMs });
       if (transition) transitions[result.rule] = transition;
     } catch (err) {
-      errors[rule.name] = err instanceof Error ? err.message : String(err);
+      errors[id] = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -133,6 +149,23 @@ export async function runAlerts(env: Env, _ctx?: ExecutionContext): Promise<RunA
   } catch (err) {
     errors["o11y-spend-cap"] = err instanceof Error ? err.message : String(err);
   }
+
+  // Fix round (I2): surface accumulated rule-evaluation failures through
+  // the same fire-once/resolve-once machinery, last — after every other
+  // rule has had its chance to run and add to (or, on a clean tick, not
+  // add to) `errors`. Deliberately NOT wrapped in its own try/catch: a
+  // failure building/notifying this one is exactly the kind of problem a
+  // cron log line should surface loudly, not swallow a second time.
+  const evalErrorResult = alertEvalErrorRule(errors);
+  results.push(evalErrorResult);
+  const evalErrorTransition = await evaluateAndNotify(evalErrorResult, {
+    inboxWriter: writer,
+    postSlack,
+    aeSink: sink,
+    commonAttrs: attrs,
+    nowMs,
+  });
+  if (evalErrorTransition) transitions[evalErrorResult.rule] = evalErrorTransition;
 
   return { results, transitions, errors };
 }

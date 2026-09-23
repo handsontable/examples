@@ -84,8 +84,19 @@ function writeAlertPoint(
 ): void {
   try {
     const point: AePoint = toAePoint("o11y.alert", { count: 1 }, { ...commonAttrs, reason: rule, outcome });
-    void sink.writeDataPoint(point);
+    // Fix round (I1 test run): `writeDataPoint` can return a REJECTED
+    // promise (`clickhouseSink`'s HTTP write, unreachable local ClickHouse)
+    // — `void`-ing it alone only silences a lint warning, it does not catch
+    // the rejection, which then surfaces later as an unhandled rejection
+    // (measured: `node --test` failed the whole file over exactly this,
+    // once a test pointed `RUNNER_EVENTS_CLICKHOUSE_URL` at a refused
+    // port). `Promise.resolve(...).catch()` handles both the synchronous
+    // `void` case (`bindingSink`, the real AE binding) and the async one.
+    Promise.resolve(sink.writeDataPoint(point)).catch(() => {
+      // Never let a point failure block the notification it describes.
+    });
   } catch {
-    // Never let a point failure block the notification it describes.
+    // A synchronous throw from `toAePoint` itself (an out-of-enum
+    // outcome/reason — see `metrics.ts#toAePoint`'s own doc comment).
   }
 }
