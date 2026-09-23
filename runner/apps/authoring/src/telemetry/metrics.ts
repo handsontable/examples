@@ -1,4 +1,4 @@
-// Observability contract §5 browser metric catalogue (T07 — runner/tasks/o11y/T07-browser-metrics.md).
+// Observability contract §5 browser metric catalogue (ADR-0041 §F.2, docs/observability-contract.md).
 //
 // Every emission function here takes an INJECTED `Telemetry` (the contract §6
 // interface) as a parameter, rather than importing

@@ -482,6 +482,20 @@ protobuf, so the ingest route does not need to handle it. `service.version` is
 `cloudflare.ray_id`, not a resource attribute. Do **not** enable a trace
 destination — contract §1: "There is no trace route" (ADR §C.4).
 
+**One more fact, pinned by T03B's own real captured export (answering the
+question T02 and T03 both left open):** a Worker's own `console.log(JSON.stringify(...))`
+line (`workers/api/src/telemetry/lines.ts`'s structured request/error lines)
+arrives through this export as **opaque body text** — `body.stringValue` is
+the raw JSON string, and the record's own `attributes` carry only
+Cloudflare's generic wrapper fields, never one of the app's own JSON keys.
+The o11y worker's normaliser (`normalise/otlp.ts#tryParseJsonBodyAttrs`)
+parses a JSON-object body and merges its keys into the same attribute bag a
+real OTLP attribute would land in — with every §3 resource-attribute key
+stripped from the parsed body and given the lowest merge priority, so a
+crafted body cannot spoof a real label. Nothing to configure here; recorded
+so a future change to `lines.ts`'s own JSON shape does not accidentally
+reintroduce a field this parser does not expect.
+
 > ⚠️ The dashboard's create/patch response for a destination has, in T02's own
 > probe session, twice echoed the export secret back in plaintext inside
 > `configuration.destination_conf` (not `configuration.headers`, which IS
@@ -674,11 +688,18 @@ walkthrough already showed.
    several `*/10` ticks — this is the production detector for an Analytics Engine SQL
    incompatibility (a query the AE SQL API rejects that local ClickHouse happily accepts,
    ADR §L's own named trap). If it fires, treat it as a real incompatibility, not noise.
-6. **Tier-2 container stdout volume, for real** — `docker logs`-style measurement is not
-   possible against a real Cloudflare Container the way it is locally; instead, read the
-   Observability-self dashboard's own Workers Logs volume after a day of real traffic and
-   compare it against Phase B's projection (`.superpowers/sdd/README/T11-report.md`). This
-   is the one number the local walkthrough could not close.
+6. **Tier-2 container stdout volume, confirm against the real measurement.** Locally
+   (T11, a real Tier-2 session under `wrangler dev`): a Vite-family starter (`react-js`)
+   logs 12 lines at boot and 2 lines per 60-second keepalive poll (the Sandbox SDK's own
+   structured logging of its health checks, not the dev server's own output); a
+   slower-booting starter (`angular`) logs 22 lines at boot, same 2-per-poll rate
+   afterward. Projected at the ADR's own required 10× headroom (`docs/adr/
+   0041-observability-stack.md` §D "Measured"), this pushes the **exported-logs**
+   allotment (not the raw Workers Logs pool, which still passes) over half. Read the
+   Observability-self dashboard's own exported-log volume after a day of real production
+   traffic and compare it against this projection; if it confirms the projection, lower
+   `head_sampling_rate` (ADR §D's own named fallback) before the pool crosses half — do
+   not wait for it to actually breach the 10M/month allotment.
 
 ### Flipping `SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` to `uncaught`
 

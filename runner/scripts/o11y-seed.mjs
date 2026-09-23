@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/o11y-seed.mjs
 //
-// T09 (runner/tasks/o11y/T09-dashboards.md): a synthetic generator that writes
+// A synthetic generator that writes
 // realistic contract-shaped rows to local ClickHouse (Analytics Engine stand-in,
 // docs/observability-contract.md §10) and OTLP log records straight to Loki
 // (both tenants), so the provisioned dashboards under

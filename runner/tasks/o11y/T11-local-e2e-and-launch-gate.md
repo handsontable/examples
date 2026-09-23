@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | in-progress — phases A–D done, phase E (fold + cleanup) waits for T03B to merge |
+| Status | done — phases A–E complete |
 | Size | M |
 | Depends on | T00–T10, T12 |
 | Blocks | merging `feat/runner-observability` to `master` |
@@ -426,3 +426,71 @@ up on its own process's exit — the same "manual `docker stop`" gap T07's own O
 flagged for local Tier-2 runs) removed by hand, confirmed against a `docker ps -a` snapshot
 taken before this task started — no other container left behind. `.dev.vars` (both workers,
 gitignored, never committed) and `.wrangler/`/`.wrangler-registry` state removed.
+
+### Phase E (after T03B merged, `917fe1cde`)
+
+`git merge feat/runner-observability` — clean, no conflicts (T03B touched only
+`workers/o11y/src/{box.ts,drain/drain.ts,grafana/proxy.ts,inbox/ledger.ts,
+normalise/otlp.ts}` and its own tests/fixtures, none of which this task's phase A–D
+commit touched).
+
+**Both gaps flagged in phase A–D closed with real local evidence, on the merged code:**
+
+- **Worker-tenant drain.** Rebuilt the environment, pushed fresh fixture traffic, forced a
+  real stop→rewake cycle (the F1/F2/F3 fixes make a *quiet* wake self-stop correctly, which
+  means getting a *fresh* wake to drain a key packed mid-wake now needs an explicit
+  `docker kill` + rewake, not just waiting — the drain still only replays pending keys at
+  wake start, ADR §B.3, unchanged by T03B). Result: both worker-tenant series
+  (`demos-o11y` deploy events, `demos-api` OTLP export, including a `production`-environment
+  variant from this session's own earlier watchdog test) carry all 7 labels, confirmed live
+  via Grafana's own datasource proxy.
+- **Exit criterion 2, full replay-equality, locally.** Pushed one canary Faro exception,
+  waited for pack, killed the box within ~0.4s of a fresh wake starting (before drain could
+  plausibly complete), let the ledger reopen the key, then a clean rewake replayed it. Both
+  `query_range` (`|= "canary"`) and `count_over_time(...[6h])` returned exactly one entry —
+  no duplication survived the interrupted-wake → reopen → replay cycle, independently
+  confirming T03B's own sandbox-platform result.
+
+**Tier-2 container stdout, measured (not a breakeven guess).** One real local Tier-2
+session (`react-js`, Vite family) under `wrangler dev`: 12 log lines at boot (the Sandbox
+SDK's own structured health-check logging, not the dev server's own output — file edits and
+HMR add zero lines), +2 lines per 60-second keepalive poll thereafter. A second session
+(`angular`, slower-booting) logged 22 lines at boot, same +2/poll rate. Folded into the
+projection (ADR-0041 §D "Measured," this pass): at the corrected 10× traffic scale, this
+pushes the **exported-logs allotment** over half (the raw Workers Logs pool still passes
+with margin) — a real, measured finding, not the earlier breakeven estimate. Carried into
+the Launch plan's post-deploy smoke as a concrete, comparable number.
+
+**Exit-criteria table updated** with T03B's real platform numbers (criterion 7: PASS,
+$0.21/month at 1×, $0.33/month at 10×, 28s/44s wake-to-drain; criteria 1 and 2: PASS on the
+real platform; criterion 13: still PENDING the calendar — T03B's clock started
+2026-09-23T14:15:22Z, more than 24h had not yet elapsed as of this phase). Full table now
+lives in `docs/adr/0041-observability-stack.md` §L "Results" (folded in, not duplicated
+here).
+
+**ADR fold.** Every `T<nn>-D<k>` delta reviewed; the load-bearing ones (design-level facts
+a reader needs, not implementation trivia) folded as direct edits into ADR-0041's own
+prose (§A cost and wake/stop, §B.3 drain-rejection, §C.2 labels, §D volume) plus a new §L
+"Results" table and a new §M "Implementation deltas" appendix for the rest. ADR-0042 got
+the T12 deltas (the confirmed `forked_from` format/cutoff date, the fork-landing URL
+marker, the missing `downloaded` D1 column, the missing zero-open panel). ADR-0043
+untouched (T13 not dispatched, nothing to fold). **ADR-0041 and ADR-0042 status: stay
+Proposed, not flipped to Accepted** — two exit criteria lack the evidence the flip requires:
+criterion 5 (symbolication CPU/memory, measured only via a Node proxy, never inside a real
+Workers isolate — no task had isolate profiling access) and criterion 13 (the retention
+clock has not yet reached 24h). Both are named explicitly in ADR-0041's own status line and
+in the ADR README index, not left implicit. Criterion 8's real, measured exported-logs
+finding is carried as a named pre-launch action (the ADR's own documented sampling-rate
+fallback), not treated as a blocker to the ADR's status, since it has evidence — it just
+shows a problem the design already has an answer for.
+
+`docs/adr/README.md` and `AGENTS.md`'s observability bullet updated to match (built,
+locally and sandbox-verified, not yet deployed; `SENTRY_SCOPE` still defaults to `full`
+everywhere, so nothing about today's Sentry behaviour changes yet).
+
+Final commit of this pass: `git rm -r runner/tasks/o11y` (this file included) — the task
+board's job is done; every kept fact now lives in the ADRs, the contract, or
+`docs/run-and-deploy.md`. `grep -rnE "tasks/o11y|task board|ADR-DELTAS" runner` confirmed
+clean outside the deletion itself before it landed (see
+`.superpowers/sdd/README/T11-report.md` for the exact command, output, and the final DoD
+run).
