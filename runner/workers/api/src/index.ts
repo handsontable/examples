@@ -75,6 +75,18 @@ import { loadSettings, resetSettings, saveSettings, validateSettings } from "./s
 import { checkAvatarSize, normalizeProfileInput, sniffImage, MAX_AVATAR_BYTES } from "./profile.js";
 import { putAvatar, readProfile, removeAvatar, saveProfile, serveAvatar } from "./profile-store.js";
 import { requestTheme, validateStylePrompt } from "./theme-ai.js";
+import {
+  cronStep,
+  demoIdFromPath,
+  emitBudgetGauge,
+  emitPoint,
+  emitPoolGauge,
+  logErrorLine,
+  logRequestLine,
+  reportDiagnostic,
+  routeClassOf,
+  withSpan,
+} from "./telemetry/index.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
 // so live-preview sessions all use ONE class backed by one generic image that
@@ -214,10 +226,11 @@ class SandboxBaseWithSleep extends SandboxBase {
 
   private previewBootFailureResponse(request: Request, err: unknown): Response {
     if (this.bootStartedAt === null) this.bootStartedAt = Date.now();
+    const elapsedMs = Date.now() - this.bootStartedAt;
     // `PREVIEW_PROXY_HEADERS` strips only the four `x-sandbox-preview-*` names,
     // so `Upgrade` and `Accept` are the client's own and are readable here.
     const descriptor = classifyPreviewBootFailure({
-      elapsedMs: Date.now() - this.bootStartedAt,
+      elapsedMs,
       isUpgrade: request.headers.get("Upgrade")?.toLowerCase() === "websocket",
       wantsHtml: wantsHtmlError(new URL(request.url).pathname),
       acceptsHtml: (request.headers.get("Accept") ?? "").toLowerCase().includes("text/html"),
@@ -225,14 +238,35 @@ class SandboxBaseWithSleep extends SandboxBase {
 
     if (descriptor.report && !this.bootFailureReported) {
       this.bootFailureReported = true;
-      // Fingerprinted away from the raw error. Without this the surviving
-      // events land in the same issue as the 500s this change removes, and the
-      // one signal that tells "the fix worked" from "the report never fired" —
-      // volume dropping to near zero rather than to exactly zero — is unreadable.
-      Sentry.captureException(err, {
-        fingerprint: ["preview-boot-window-exceeded"],
+      const env = this.env as Env;
+      // ADR-0041 §E.1: "the preview boot-window report" is named explicitly as
+      // a diagnostic (handled) capture — it moves to the new stack always and
+      // to Sentry only while SENTRY_SCOPE is "full". Fingerprinted away from
+      // the raw error either way: without this the surviving events land in
+      // the same issue as the 500s this change removes, and the one signal
+      // that tells "the fix worked" from "the report never fired" — volume
+      // dropping to near zero rather than to exactly zero — is unreadable.
+      reportDiagnostic(env, err, {
+        context: "preview-boot-window-exceeded",
+        routeClass: "api/session/:id/*",
         tags: { preview_boot: "terminal" },
+        sentryFingerprint: ["preview-boot-window-exceeded"],
       });
+      // `container.boot_ms`, outcome `window_exceeded` — not `session.start`'s
+      // `boot_timeout` (advisor review, second pass): this DO fetch override
+      // fires from EVERY refused preview request past the boot window,
+      // including a dev server that crashes mid-session long after its
+      // `POST /api/session` already returned "ready" (the class comment on
+      // `bootStartedAt` documents the re-stamp-on-first-refusal behaviour that
+      // makes this not a boot timeout at all in that case). Double-counting
+      // `session.start` — one `ready` point from the create, then a second,
+      // unrelated `boot_timeout` point from a later mid-session crash, for the
+      // SAME session — would corrupt `SUM(double1)` reads and any ratio T04's
+      // alerts build on `session.start`'s own outcome mix. `framework`/`reason`
+      // are not available at this call site (the DO only carries a session id,
+      // not the framework it was created with) and are left unset — optional
+      // per the metric's own blob list, not a validation error.
+      void emitPoint(env, "container.boot_ms", { duration_ms: elapsedMs }, { outcome: "window_exceeded" });
     }
 
     const response =
@@ -400,8 +434,20 @@ async function putTombstone(env: Env, sessionId: string, marker: string): Promis
  * a create still in flight from surviving the destroy, and it would be very easy
  * to write an admin-only variant that skips it and leaks the container it was
  * clicked to reclaim.
+ *
+ * `endReason` feeds `session.end` (contract §5): `"pagehide"` from the
+ * client's own teardown (the default — this function's original, only
+ * caller), `"admin"` from the panel's kill button. `"admin"` is not one of
+ * the contract's four closed `session.end` reasons, so that path emits no
+ * point (T05-D — no fitting label exists yet); `"teardown_failed"` always
+ * overrides it below when the platform declines the destroy, regardless of
+ * which caller asked for it.
  */
-async function teardownLiveSession(env: Env, sessionId: string): Promise<void> {
+async function teardownLiveSession(
+  env: Env,
+  sessionId: string,
+  endReason: "pagehide" | "admin" = "pagehide",
+): Promise<void> {
   // A session we have already watched go away answers from KV. Every sandbox
   // RPC boots a container if one isn't running, so a second teardown that
   // re-entered the sandbox would be asking for a slot in order to destroy
@@ -445,8 +491,12 @@ async function teardownLiveSession(env: Env, sessionId: string): Promise<void> {
   try {
     await sandbox.destroy();
     await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
+    if (endReason !== "admin") void emitPoint(env, "session.end", { count: 1 }, { framework: "", reason: endReason });
   } catch (err) {
     if (!isExpectedTeardownFailure(err)) throw err;
+    // The destroy itself was refused — regardless of why teardown was asked
+    // for, the session ends here as `teardown_failed`, not as `endReason`.
+    void emitPoint(env, "session.end", { count: 1 }, { framework: "", reason: "teardown_failed" });
     console.warn(
       `[session] teardown for ${sessionId} declined by the platform:`,
       err instanceof Error ? err.message : String(err),
@@ -457,13 +507,16 @@ async function teardownLiveSession(env: Env, sessionId: string): Promise<void> {
     // retained. Capacity events are rare (two in 90 days), which makes the
     // expected number of surviving log lines a fraction of one.
     //
-    // So the event still goes to Sentry — just as a `warning` that no longer
-    // fails the request, instead of the 500 it used to ride in on.
-    // Fingerprinted for the reason the preview-boot capture is, and because
-    // this project groups on the culprit `Object.fetch(index)`: without one
-    // this would land back in the same grab-bag as DEMOS-1 and be unreadable
-    // as a capacity signal. `beforeSend` (rehomeBudgetAlert) only re-homes
-    // `context: "budget-alert"` and drops nothing, so a warning arrives.
+    // So the event still goes to Sentry (while SENTRY_SCOPE is "full" — this is
+    // a handled refusal, ADR-0041 §E.1's "handled refusals" class, not an
+    // escape) — a `warning` that no longer fails the request, instead of the
+    // 500 it used to ride in on. Fingerprinted for the reason the preview-boot
+    // capture is, and because this project groups on the culprit
+    // `Object.fetch(index)`: without one this would land back in the same
+    // grab-bag as DEMOS-1 and be unreadable as a capacity signal. `beforeSend`
+    // (rehomeBudgetAlert) only re-homes `context: "budget-alert"` and drops
+    // nothing, so a warning arrives. The structured line and `error.handled`
+    // point below are the always-on signal now — see `reportDiagnostic`.
     //
     // This matters most for `container service is unreachable`, the weakest
     // member of `isExpectedTeardownFailure`: unlike the other three it does NOT
@@ -471,10 +524,12 @@ async function teardownLiveSession(env: Env, sessionId: string): Promise<void> {
     // until sleepAfter. 204 is still the right answer to a caller that
     // discards the response — but only because the failure is legible
     // somewhere, and this is that somewhere.
-    Sentry.captureException(err, {
+    reportDiagnostic(env, err, {
+      context: "tier2-teardown-declined",
+      routeClass: "api/session/:id",
       level: "warning",
-      fingerprint: ["tier2-teardown-declined"],
       tags: { context: "tier2-teardown" },
+      sentryFingerprint: ["tier2-teardown-declined"],
     });
   }
 }
@@ -527,6 +582,19 @@ const knownFramework = (value: unknown): string => {
   if (typeof value !== "string") return "other";
   if (Object.prototype.hasOwnProperty.call(BUILD_CONFIG, value)) return value;
   return KNOWN_DOC_FLAVOURS.has(value) ? value : "other";
+};
+
+/** Fold a resolved Handsontable version (or `"next"`) into the contract §3
+ *  closed set (`HT_MAJORS`) `hot.ht_major` must stay inside, or `toAePoint`
+ *  throws. Anything unparseable or out of the supported range folds to
+ *  `"none"` rather than risking a dropped point. */
+const HT_MAJOR_VALUES = ["15", "16", "17", "18", "19", "next", "none"] as const;
+type HtMajorValue = (typeof HT_MAJOR_VALUES)[number];
+const htMajorOf = (htVersion: unknown): HtMajorValue => {
+  if (typeof htVersion !== "string" || htVersion.length === 0) return "none";
+  if (htVersion === "next") return "next";
+  const major = htVersion.split(".")[0] ?? "";
+  return (HT_MAJOR_VALUES as readonly string[]).includes(major) ? (major as HtMajorValue) : "none";
 };
 
 /** How long an ad-hoc payload stays openable (DEV-2516). Long enough to survive
@@ -629,6 +697,7 @@ async function sessionSubrouteGuard(env: Env, sessionId: string): Promise<Respon
     await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
   } catch { /* best effort */ }
   console.log(`[budget] closed live session ${sessionId}: over the monthly ceiling`);
+  void emitPoint(env, "session.end", { count: 1 }, { framework: "", reason: "budget_closed" });
   return json({ error: "budget_exhausted", message: budgetPausedMessage, tier: "closed" }, 410);
 }
 
@@ -698,6 +767,39 @@ async function writeFiles(sandbox: SandboxLike, files: Record<string, string>) {
   }
 }
 
+/**
+ * ADR-0041 §D: "one structured JSON line per non-proxy request ... plus an
+ * `api.request` Analytics Engine point"; "the preview proxy path emits
+ * nothing per request." `fetch()` below keeps the proxy branch untouched
+ * (return before this ever runs) and calls this for every other request,
+ * timing it and logging/pointing the result — never blocking the response
+ * itself (`ctx.waitUntil`, matching the "never block on Analytics Engine"
+ * trap for the point half too).
+ */
+async function recordRequestSignal(
+  env: Env,
+  ctx: ExecutionContext,
+  request: Request,
+  response: Response,
+  startedAt: number,
+): Promise<void> {
+  const durationMs = Date.now() - startedAt;
+  const pathname = new URL(request.url).pathname;
+  const routeClass = routeClassOf(request.method, pathname);
+  const outcome = response.status < 300 ? "2xx" : response.status < 400 ? "3xx" : response.status < 500 ? "4xx" : "5xx";
+  logRequestLine(env, {
+    route_class: routeClass,
+    status: response.status,
+    duration_ms: durationMs,
+    cf_ray: request.headers.get("cf-ray") ?? "",
+    session_id: request.headers.get("x-hot-session") ?? "",
+    demo_id: demoIdFromPath(pathname),
+  });
+  ctx.waitUntil(
+    emitPoint(env, "api.request", { count: 1, duration_ms: durationMs }, { route_class: routeClass, outcome }),
+  );
+}
+
 export default Sentry.withSentry(sentryOptions, {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // Meter this request against the Workers-requests sku. Counting is batched
@@ -714,7 +816,9 @@ export default Sentry.withSentry(sentryOptions, {
     // monitor rewrite so its bytes are metered too.
     // Our own boot-failure page (DEV-2537) is not a dev-server document and has
     // no demo to monitor or re-theme — skip both injections, but still meter the
-    // bytes.
+    // bytes. Nothing is logged or pointed here — ADR-0041 §D, "the preview proxy
+    // path emits nothing per request" (every module request of every live
+    // preview would otherwise multiply this).
     if (proxied) {
       const body = proxied.headers.has(PREVIEW_BOOTING_HEADER)
         ? proxied
@@ -722,6 +826,16 @@ export default Sentry.withSentry(sentryOptions, {
       return countEgress(body);
     }
 
+    const startedAt = Date.now();
+    const response = await handleNonProxyRequest(request, env, ctx);
+    ctx.waitUntil(recordRequestSignal(env, ctx, request, response, startedAt));
+    return response;
+  },
+
+  scheduled: workerScheduled,
+});
+
+async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
 
     const url = new URL(request.url);
@@ -741,6 +855,17 @@ export default Sentry.withSentry(sentryOptions, {
         const cfg = BUILD_CONFIG[body.framework];
         if (!dev || !cfg) return json({ error: `Tier-2 not wired for framework: ${body.framework}` }, 400);
         const files = validateFiles(body.files);
+        // `session.start` (contract §5, "all outcomes"): one point per create
+        // attempt regardless of how it ends, timed from here.
+        const createStartedAt = Date.now();
+        const sessionHtMajor = htMajorOf(body.htVersion);
+        const emitSessionStart = (outcome: string) =>
+          emitPoint(
+            env,
+            "session.start",
+            { count: 1, duration_ms: Date.now() - createStartedAt },
+            { framework: body.framework, ht_major: sessionHtMajor, outcome },
+          );
 
         // Cost ceiling, before anything that can boot a container (every
         // sandbox RPC does). `POST /api/session` is public; the identity check
@@ -752,6 +877,7 @@ export default Sentry.withSentry(sentryOptions, {
         });
         if (denied) {
           await recordUsageEvent(env, "session_denied", body.framework);
+          void emitSessionStart("budget_denied");
           return denied;
         }
 
@@ -810,6 +936,10 @@ export default Sentry.withSentry(sentryOptions, {
         // unique per create (they are: client and server both mint a fresh
         // UUID suffix) — recreating a deleted id within the tombstone TTL
         // would be torn down by the end-of-create check.
+        // ADR-0041 §D custom span, around the create's full try/catch (every
+        // `return`/`throw` inside stays exactly as it was — `withSpan` only
+        // wraps, it does not change control flow, see `spans.ts`).
+        return await withSpan("session.start", async () => {
         try {
           // Billing starts at the first sandbox RPC, so the awake-window meter
           // starts here rather than after a successful boot — a create that
@@ -877,17 +1007,23 @@ export default Sentry.withSentry(sentryOptions, {
           // Passed out of band rather than as an `export` line inside the script:
           // the string is `shq`-quoted and runs under `set -e`, so splicing worker
           // config into it would make a bad value a boot failure.
-          await sandbox.startProcess(
-            `sh -lc ${shq(`( ${script} ) > ${BOOT_LOG} 2>&1; echo "__RUNNER_EXIT__:$?" >> ${BOOT_LOG}`)}`,
-            { env: viteAllowedHostEnv(env.PREVIEW_HOST) },
-          );
+          // ADR-0041 §D custom span, around exactly the two RPCs that boot the
+          // dev server and open its port — the SDK calls this fix is scoped to
+          // (DEV-2541/DEV-2537 above), not the file writes or budget checks
+          // around it.
+          const previewUrl = await withSpan("container.boot", async () => {
+            await sandbox.startProcess(
+              `sh -lc ${shq(`( ${script} ) > ${BOOT_LOG} 2>&1; echo "__RUNNER_EXIT__:$?" >> ${BOOT_LOG}`)}`,
+              { env: viteAllowedHostEnv(env.PREVIEW_HOST) },
+            );
 
-          // Preview URL host: the wildcard domain in production (PREVIEW_HOST), or
-          // the request host in local dev (localhost:8787 -> *.localhost:8787).
-          const previewHost = env.PREVIEW_HOST && env.PREVIEW_HOST.length ? env.PREVIEW_HOST : url.host;
-          const exposed = await sandbox.exposePort(dev.port, { hostname: previewHost });
-          const previewUrl = (exposed as { url?: string; exposedAt?: string }).url
-            ?? (exposed as { exposedAt?: string }).exposedAt;
+            // Preview URL host: the wildcard domain in production (PREVIEW_HOST), or
+            // the request host in local dev (localhost:8787 -> *.localhost:8787).
+            const previewHost = env.PREVIEW_HOST && env.PREVIEW_HOST.length ? env.PREVIEW_HOST : url.host;
+            const exposed = await sandbox.exposePort(dev.port, { hostname: previewHost });
+            return (exposed as { url?: string; exposedAt?: string }).url
+              ?? (exposed as { exposedAt?: string }).exposedAt;
+          });
 
           // Create/delete race check: if the client's DELETE landed while this
           // create was still running — or arrived before it even started — its
@@ -896,7 +1032,16 @@ export default Sentry.withSentry(sentryOptions, {
           // (KV reads are immediately consistent within a colo, and the DELETE
           // comes from the same client/colo as this POST; cross-colo lag is
           // covered by the sleepAfter backstop.)
-          return (await closedWhileCreating()) ?? json({ sessionId, previewUrl, port: dev.port });
+          const closedRace = await closedWhileCreating();
+          // "ready" here means the create request itself succeeded (the
+          // container booted enough to hand back a preview URL), not that the
+          // dev server is already serving — the client's own `session.start_ms`
+          // (browser) is what measures through to `data-preview-status="ready"`.
+          // A race with a client DELETE that arrived mid-create is not scored
+          // either way: the visitor is already gone, so neither outcome is
+          // meaningful (T05-D).
+          if (!closedRace) void emitSessionStart("ready");
+          return closedRace ?? json({ sessionId, previewUrl, port: dev.port });
         } catch (err) {
           // A create step that throws may still have left a booted container
           // behind (every sandbox RPC auto-boots one), and if the client's
@@ -933,6 +1078,10 @@ export default Sentry.withSentry(sentryOptions, {
             console.warn(
               `[session] refused ${body.framework} session ${sessionId}: container pool at capacity`,
             );
+            // ADR-0040 C.1, standing per ADR-0041 §F.1: the counter D was never
+            // kept, beside the `session.start` point ADR-0040 always wanted too.
+            await recordUsageEvent(env, "at_capacity", body.framework);
+            void emitSessionStart("at_capacity");
             return json({ error: AT_CAPACITY_CODE, message: atCapacityMessage }, 503);
           }
           // DEV-2857 / Sentry DEMOS-1Z & DEMOS-20. A container that never left
@@ -950,15 +1099,23 @@ export default Sentry.withSentry(sentryOptions, {
           // were added anywhere in this fix.
           if (isContainerStartingFailure(err)) {
             console.warn(`[session] ${body.framework} session ${sessionId}: container never became ready`);
-            Sentry.captureException(err, {
+            // Handled refusal (ADR-0041 §E.1) — was an unconditional Sentry
+            // capture; now the scope switch, plus the structured line and
+            // `error.handled` point that make it visible without Sentry too.
+            reportDiagnostic(env, err, {
+              context: "tier2-session-container-starting",
+              routeClass: "api/session",
               level: "warning",
-              fingerprint: ["tier2-session-container-starting"],
               tags: { context: "tier2-session-start" },
+              sentryFingerprint: ["tier2-session-container-starting"],
             });
+            void emitSessionStart("container_starting");
             return json({ error: CONTAINER_STARTING_CODE, message: containerStartingMessage }, 503);
           }
+          void emitSessionStart("error");
           throw err;
         }
+        });
       }
 
       // Central resurrection gate for every /api/session/:id/* subroute: a
@@ -1633,8 +1790,13 @@ export default Sentry.withSentry(sentryOptions, {
           return cors(cacheableJson(payload));
         } catch (e) {
           // The registry being unreachable silently re-pins docs examples onto a
-          // version that may not exist — actionable, so report it.
-          Sentry.captureException(e, { tags: { upstream: "npm-registry", probe: "version-exists" } });
+          // version that may not exist — actionable, so report it (diagnostic:
+          // handled here into a 502, not an escape — ADR-0041 §E.1).
+          reportDiagnostic(env, e, {
+            context: "npm-registry:version-exists",
+            routeClass: "api/versions/exists",
+            tags: { upstream: "npm-registry", probe: "version-exists" },
+          });
           return json({ error: e instanceof Error ? e.message : String(e) }, 502);
         }
       }
@@ -1647,18 +1809,39 @@ export default Sentry.withSentry(sentryOptions, {
         if (!id) return json({ error: "unauthorized" }, 401);
         const body = (await request.json().catch(() => ({}))) as { url?: string };
         if (!body.url?.trim()) return json({ error: "url is required" }, 400);
+        const importStartedAt = Date.now();
         try {
-          const imported = await importFromUrl(body.url, {
+          const imported = await withSpan("import.url", () => importFromUrl(body.url as string, {
             knownFrameworks: new Set(Object.keys(BUILD_CONFIG)),
-          });
+          }));
           await recordUsageEvent(env, "import", imported.provider);
+          void emitPoint(
+            env,
+            "import.url",
+            { count: 1, duration_ms: Date.now() - importStartedAt },
+            { provider: imported.provider, outcome: "ok" },
+          );
           return json(imported);
         } catch (error) {
           // An ImportError is the user's problem to fix (wrong host, private
           // project) or a provider format change; either way its message is
           // written to be shown. Anything else is ours, and gets reported.
-          if (error instanceof ImportError) return json({ error: error.message }, error.status);
-          Sentry.captureException(error, { tags: { upstream: "import-url" } });
+          if (error instanceof ImportError) {
+            void emitPoint(
+              env,
+              "import.url",
+              { count: 1, duration_ms: Date.now() - importStartedAt },
+              { provider: "unknown", outcome: "refused" },
+            );
+            return json({ error: error.message }, error.status);
+          }
+          reportDiagnostic(env, error, { context: "import-url", routeClass: "api/import", tags: { upstream: "import-url" } });
+          void emitPoint(
+            env,
+            "import.url",
+            { count: 1, duration_ms: Date.now() - importStartedAt },
+            { provider: "unknown", outcome: "error" },
+          );
           return json({ error: "import failed" }, 500);
         }
       }
@@ -1700,6 +1883,7 @@ export default Sentry.withSentry(sentryOptions, {
           title?: unknown;
           framework?: unknown;
         } | null;
+        return await withSpan("payload.boot", async () => {
         try {
           const { files, framework } = validatePayloadFiles(body?.files, {
             knownFrameworks: new Set(Object.keys(BUILD_CONFIG)),
@@ -1718,14 +1902,18 @@ export default Sentry.withSentry(sentryOptions, {
             { expirationTtl: PAYLOAD_TTL_SECONDS },
           );
           ctx.waitUntil(recordUsageEvent(env, "payload", framework));
+          void emitPoint(env, "payload.boot", { count: 1 }, { framework: knownFramework(framework), outcome: "ok" });
           return json({ id, framework, title }, 201);
         } catch (error) {
           // Every refusal in validatePayloadFiles is written to be shown; only a
-          // KV failure gets here as something else, and that one is ours.
+          // KV failure gets here as something else, and that one is ours — a
+          // diagnostic (handled into a 500, not an escape).
           if (error instanceof ImportError) return json({ error: error.message }, error.status);
-          Sentry.captureException(error, { tags: { route: "payload" } });
+          reportDiagnostic(env, error, { context: "payload-store", routeClass: "api/payload", tags: { route: "payload" } });
+          void emitPoint(env, "payload.boot", { count: 1 }, { framework: "other", outcome: "error" });
           return json({ error: "could not store that project" }, 500);
         }
+        });
       }
 
       // GET /api/payload/:id (public) — what the playground boots from.
@@ -1754,7 +1942,11 @@ export default Sentry.withSentry(sentryOptions, {
           return cors(cacheableJson(await fetchVersionCatalog(env)));
         } catch (e) {
           // Version picker falls back to a stale list when this fails.
-          Sentry.captureException(e, { tags: { upstream: "npm-registry", probe: "versions" } });
+          reportDiagnostic(env, e, {
+            context: "npm-registry:versions",
+            routeClass: "api/versions",
+            tags: { upstream: "npm-registry", probe: "versions" },
+          });
           return json({ error: e instanceof Error ? e.message : String(e) }, 502);
         }
       }
@@ -1773,6 +1965,7 @@ export default Sentry.withSentry(sentryOptions, {
         const limit = await checkChatRateLimit(env, ip);
         if (!limit.ok) {
           ctx.waitUntil(recordUsageEvent(env, "chat_denied", "rate_limit"));
+          void emitPoint(env, "chat.answer", { count: 1 }, { model: env.LITELLM_MODEL ?? "unknown", outcome: "denied" });
           return cors(new Response(
             JSON.stringify({ error: "rate_limited", message: "Too many questions — give it a minute." }),
             { status: 429, headers: { "Content-Type": "application/json", "Retry-After": String(limit.retryAfter) } },
@@ -1787,6 +1980,7 @@ export default Sentry.withSentry(sentryOptions, {
         });
         if (chatDenied) {
           ctx.waitUntil(recordUsageEvent(env, "chat_denied", "budget"));
+          void emitPoint(env, "chat.answer", { count: 1 }, { model: env.LITELLM_MODEL ?? "unknown", outcome: "denied" });
           return chatDenied;
         }
 
@@ -1795,8 +1989,10 @@ export default Sentry.withSentry(sentryOptions, {
 
         const question = [...parsed.value.messages].reverse().find((m) => m.role === "user")?.content ?? "";
         const pages = await searchDocPages(env, question, parsed.value.framework);
+        const chatStartedAt = Date.now();
         try {
-          const answer = await requestAnswer(env, parsed.value, pages);
+          const answer = await withSpan("chat.answer", () => requestAnswer(env, parsed.value, pages));
+          const chatDurationMs = Date.now() - chatStartedAt;
           ctx.waitUntil(Promise.all([
             recordLlmUsage(env, answer.usd),
             recordUsageEvent(env, "chat_message", knownFramework(parsed.value.framework)),
@@ -1804,6 +2000,15 @@ export default Sentry.withSentry(sentryOptions, {
               ? recordUsageEvent(env, "chat_edit", knownFramework(parsed.value.framework))
               : Promise.resolve(),
           ]).then(() => undefined));
+          void emitPoint(
+            env,
+            "chat.answer",
+            { count: 1, duration_ms: chatDurationMs, usd: answer.usd, tokens_in: answer.tokensIn, tokens_out: answer.tokensOut },
+            { model: env.LITELLM_MODEL ?? "unknown", outcome: "answered" },
+          );
+          if (answer.edits.length) {
+            void emitPoint(env, "chat.edit", { count: 1 }, { outcome: "proposed" });
+          }
           return json({
             message: answer.message,
             edits: answer.edits,
@@ -1813,7 +2018,23 @@ export default Sentry.withSentry(sentryOptions, {
         } catch (err) {
           if (err instanceof ChatUnavailableError) {
             ctx.waitUntil(recordUsageEvent(env, "chat_error", knownFramework(parsed.value.framework)));
-            // Configuration and upstream faults are already logged in chat.ts;
+            void emitPoint(
+              env,
+              "chat.answer",
+              { count: 1, duration_ms: Date.now() - chatStartedAt },
+              { model: env.LITELLM_MODEL ?? "unknown", outcome: "error" },
+            );
+            // Configuration faults (no `status`) are already logged in chat.ts;
+            // a gateway failure (`status` set) is the ADR-0041 §E.1 diagnostic —
+            // reported here, not in chat.ts, because that module is copied and
+            // imported standalone by a pipeline test (see chat.ts's own note).
+            if (err.status !== undefined) {
+              reportDiagnostic(env, err, {
+                context: "chat-gateway",
+                routeClass: "api/chat",
+                tags: { upstream: "litellm-chat", status: String(err.status), request_id: err.requestId ?? "none" },
+              });
+            }
             // the caller gets a sentence, not a stack trace.
             return json({ error: "chat_unavailable", message: err.message }, 503);
           }
@@ -1831,6 +2052,7 @@ export default Sentry.withSentry(sentryOptions, {
         const limit = await checkChatRateLimit(env, request.headers.get("cf-connecting-ip") ?? "");
         if (!limit.ok) {
           ctx.waitUntil(recordUsageEvent(env, "chat_denied", "rate_limit"));
+          void emitPoint(env, "theme.ai", { count: 1 }, { model: env.LITELLM_MODEL ?? "unknown", outcome: "denied" });
           return cors(new Response(
             JSON.stringify({ error: "rate_limited", message: "Too many requests — give it a minute." }),
             { status: 429, headers: { "Content-Type": "application/json", "Retry-After": String(limit.retryAfter) } },
@@ -1842,6 +2064,7 @@ export default Sentry.withSentry(sentryOptions, {
         });
         if (themeDenied) {
           ctx.waitUntil(recordUsageEvent(env, "chat_denied", "budget"));
+          void emitPoint(env, "theme.ai", { count: 1 }, { model: env.LITELLM_MODEL ?? "unknown", outcome: "denied" });
           return themeDenied;
         }
 
@@ -1849,16 +2072,36 @@ export default Sentry.withSentry(sentryOptions, {
         const parsed = validateStylePrompt(body);
         if (!parsed.ok) return json({ error: "invalid_request", message: parsed.error }, 400);
 
+        const themeStartedAt = Date.now();
         try {
-          const { suggestion, usd } = await requestTheme(env, parsed.prompt, body?.current ?? {});
+          const { suggestion, usd } = await withSpan("theme.ai", () => requestTheme(env, parsed.prompt, body?.current ?? {}));
           ctx.waitUntil(Promise.all([
             recordLlmUsage(env, usd),
             recordUsageEvent(env, "theme_prompt", ""),
           ]).then(() => undefined));
+          void emitPoint(
+            env,
+            "theme.ai",
+            { count: 1, duration_ms: Date.now() - themeStartedAt, usd },
+            { model: env.LITELLM_MODEL ?? "unknown", outcome: "answered" },
+          );
           return json(suggestion);
         } catch (err) {
           if (err instanceof ChatUnavailableError) {
             ctx.waitUntil(recordUsageEvent(env, "chat_error", "theme"));
+            void emitPoint(
+              env,
+              "theme.ai",
+              { count: 1, duration_ms: Date.now() - themeStartedAt },
+              { model: env.LITELLM_MODEL ?? "unknown", outcome: "error" },
+            );
+            if (err.status !== undefined) {
+              reportDiagnostic(env, err, {
+                context: "theme-gateway",
+                routeClass: "api/theme",
+                tags: { upstream: "litellm-theme", status: String(err.status), request_id: err.requestId ?? "none" },
+              });
+            }
             return json({ error: "chat_unavailable", message: err.message }, 503);
           }
           throw err;
@@ -1886,6 +2129,7 @@ export default Sentry.withSentry(sentryOptions, {
           event === "edit_applied" ? "chat_edit_applied" : "chat_edit_undone",
           knownFramework(body?.framework),
         ));
+        void emitPoint(env, "chat.edit", { count: 1 }, { outcome: event === "edit_applied" ? "applied" : "undone" });
         return cors(new Response(null, { status: 204 }));
       }
 
@@ -2155,7 +2399,7 @@ export default Sentry.withSentry(sentryOptions, {
             ? json({ error: refAmbiguousMessage }, 409)
             : json({ error: refUnknownMessage }, 404);
         }
-        await teardownLiveSession(env, resolved.sessionId);
+        await teardownLiveSession(env, resolved.sessionId, "admin");
         console.log(`[session] ${identity.email} killed session ${resolved.sessionId} from /admin`);
         return json({ ref, killed: true });
       }
@@ -2183,8 +2427,12 @@ export default Sentry.withSentry(sentryOptions, {
       // Client input validation (a 400) is not a fault — never reported.
       if (err instanceof InvalidFilePathError) return json({ error: err.message }, 400);
       // This catch turns every unexpected throw into a 500 body, so withSentry()
-      // never sees it. Report here or the error is invisible.
+      // never sees it. Report here or the error is invisible. ADR-0041 §E.1: "the
+      // fetch catch-all" is named explicitly as an uncaught-class site — stays in
+      // Sentry unconditionally in both scopes, and now also gets our own
+      // structured line (§D — "every error that escapes a handler").
       if (err instanceof BuildFailure) {
+        logErrorLine(env, "fetch-catch-all:build-failure", err, { phase: err.phase, code: err.code });
         Sentry.captureException(err, {
           tags: buildFailureTags(err),
           // Without a fingerprint the cause line groups per package and per version,
@@ -2203,29 +2451,67 @@ export default Sentry.withSentry(sentryOptions, {
         });
         return json({ error: err.message }, 500);
       }
+      logErrorLine(env, "fetch-catch-all", err);
       Sentry.captureException(err);
       return json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
-  },
+}
 
-  /**
-   * Nightly (04:17 UTC, see `triggers.crons`): replace yesterday's estimated
-   * ledger rows with Cloudflare's own figures, flush anything the in-memory
-   * meters were still holding, and — when explicitly enabled — purge the R2
-   * artifacts of long-revoked demos.
-   */
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(
-      (async () => {
-        await flushMeters(env);
-        await reconcileBilling(env);
-        // Alerts run after reconciliation so they fire on the best numbers
-        // available, not on last night's estimate.
-        await checkCostAlerts(env);
-        await gcRevokedArtifacts(env);
-        await pruneAnalytics(env, Number(env.ANALYTICS_RETENTION_DAYS ?? 180));
-      })(),
-    );
-  },
-});
+// `cronStep` (run one cron step in isolation, with its own Sentry capture)
+// moved to `telemetry/cron-step.ts` (fix round, T05 review) so it is directly
+// testable with an injected capture function — imported above.
+
+/**
+ * ADR-0041 §D's 5-minute tick: `pool.gauge`, `budget.gauge`, the o11y
+ * heartbeat check (T04). Each gets its own `cronStep` — measured live, a
+ * fresh local D1 without migrations applied throws `no such table:
+ * cost_ledger` out of `emitBudgetGauge`, and a single shared try/catch would
+ * have skipped the heartbeat check that follows it, which exists
+ * specifically to alert when something else has gone stale (ADR §F.3) —
+ * exactly the case a gauge hiccup must not itself cause.
+ */
+async function runFiveMinuteCron(env: Env): Promise<void> {
+  await cronStep(env, "cron:five-minute:pool-gauge", () => emitPoolGauge(env));
+  await cronStep(env, "cron:five-minute:budget-gauge", () => emitBudgetGauge(env));
+  // T04 fills this in (workers/api/src/o11y-watchdog.ts, `checkO11yHeartbeat`).
+  // One-line edit for T04: replace the statement below with
+  // `await cronStep(env, "cron:five-minute:heartbeat", () => checkO11yHeartbeat(env));`
+  // plus its import at the top of this file.
+  await cronStep(env, "cron:five-minute:heartbeat", () => Promise.resolve());
+}
+
+/**
+ * Nightly (04:17 UTC, see `triggers.crons`): replace yesterday's estimated
+ * ledger rows with Cloudflare's own figures, flush anything the in-memory
+ * meters were still holding, and — when explicitly enabled — purge the R2
+ * artifacts of long-revoked demos. One `cronStep`, not one per line: these
+ * five awaits are a sequential dependency chain (alerts want reconciled
+ * numbers, GC wants alerts to have run), so a failure partway through
+ * stopping the rest is the same behaviour this branch always had — only the
+ * structured line and the explicit Sentry capture are new.
+ */
+async function runNightlyCron(env: Env): Promise<void> {
+  await cronStep(env, "cron:nightly", async () => {
+    await flushMeters(env);
+    await reconcileBilling(env);
+    // Alerts run after reconciliation so they fire on the best numbers
+    // available, not on last night's estimate.
+    await checkCostAlerts(env);
+    await gcRevokedArtifacts(env);
+    await pruneAnalytics(env, Number(env.ANALYTICS_RETENTION_DAYS ?? 180));
+  });
+}
+
+/**
+ * ADR-0041 §D adds the 5-minute tick above, dispatched on `controller.cron`
+ * alongside the nightly one rather than as a separate `scheduled` export
+ * (Workers has exactly one).
+ */
+async function workerScheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  if (controller.cron === "*/5 * * * *") {
+    ctx.waitUntil(runFiveMinuteCron(env));
+    return;
+  }
+  ctx.waitUntil(runNightlyCron(env));
+}
 

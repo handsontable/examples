@@ -16,6 +16,7 @@ import { searchDocs } from "./docsSearch.js";
 import { useAutoGrow } from "./useAutoGrow.js";
 import { Markdown } from "./markdown.js";
 import { reportError } from "./sentry.js";
+import { apiHeaders } from "./telemetry/index.js";
 
 interface Edit {
   path: string;
@@ -73,7 +74,7 @@ const SUGGESTIONS = [
 function reportChatEvent(apiBase: string, event: "edit_applied" | "edit_undone", framework: string): void {
   void fetch(`${apiBase}/api/chat/event`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ event, framework }),
     keepalive: true,
   }).catch(() => {});
@@ -138,10 +139,10 @@ export function ChatPanel({
 
       const res = await fetch(`${apiBase}/api/chat`, {
         method: "POST",
-        headers: {
+        headers: apiHeaders({
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        }),
         body: JSON.stringify({
           messages: history.map(({ role, content }) => ({ role, content })),
           framework,

@@ -7,20 +7,39 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
-  // Head sampling bounds Workers Logs volume (billed per event, 20M/month
-  // included). Full fidelity is a spike *amplifier*: the traffic surge you most
-  // want to survive cheaply is exactly when logging costs the most. 10% keeps
-  // errors visible in aggregate; Sentry, not Workers Logs, is the fault channel.
-  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  // ADR-0041 §D answers the "full fidelity is a spike amplifier" worry this
+  // comment used to raise with `invocation_logs: false` and the silent preview
+  // proxy path (src/index.ts), not with a low sampling rate: `head_sampling_rate:
+  // 1.0` here is safe *because* nothing is logged per proxied preview request and
+  // every non-proxy request emits exactly one structured line, not the platform's
+  // own per-invocation logging. Loki keeps 90 days of the exported worker stream
+  // (contract §E.4); Sentry, not Workers Logs, stays the fault channel regardless
+  // (`invocation_logs: false` — an uncaught exception is reported explicitly by
+  // our own code, per §D, not relied on to show up here). Traces are sampled at
+  // 1% into Cloudflare's own dashboard only — no `destinations`, since ADR §C.4
+  // exports no trace anywhere (contract §1: "There is no trace route").
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1.0,
+      "invocation_logs": false,
+      "persist": true,
+      "destinations": ["o11y-logs"]
+    },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01, "persist": true }
+  },
 
   // Backstop for a runaway Worker invocation (default is 30s on Paid; stated
   // here so it is a decision rather than a default).
   "limits": { "cpu_ms": 30000 },
 
-  // Nightly cost reconciliation + revoked-artifact GC (src/reconcile.ts).
-  // 04:17 UTC: after Cloudflare's day-in-arrears usage processing, off the hour
-  // so it does not queue behind every other cron on the platform.
-  "triggers": { "crons": ["17 4 * * *"] },
+  // Nightly cost reconciliation + revoked-artifact GC (src/reconcile.ts), at
+  // 04:17 UTC (after Cloudflare's day-in-arrears usage processing, off the hour
+  // so it does not queue behind every other cron on the platform), plus the
+  // ADR-0041 §D `*/5` observability tick (pool.gauge, budget.gauge, the o11y
+  // heartbeat check — src/index.ts `scheduled()` dispatches on `controller.cron`).
+  "triggers": { "crons": ["17 4 * * *", "*/5 * * * *"] },
   // Keep the workers.dev URL enabled alongside the custom-domain routes
   // (attached at deploy time — see the `deploy` script and the routes note below).
   "workers_dev": true,

@@ -11,6 +11,7 @@
 
 import { reportError } from "./sentry.js";
 import { applyUserContext, resetUserContext } from "./userScope.js";
+import { apiHeaders } from "./telemetry/index.js";
 
 const BROKER = import.meta.env.VITE_LOGIN_BROKER_URL || "https://mcp-auth-proxy-j0tb.onrender.com";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
@@ -70,14 +71,20 @@ export async function currentUser(): Promise<User | null> {
   // own API. `GET /api/profile` already answers with the caller's verified
   // address for any authenticated request, which is exactly what a `User` needs
   // — hence no separate identity endpoint (ADR-0037).
-  const endpoint = token.startsWith(PAT_PREFIX)
-    ? `${API_BASE}/api/profile`
-    : `${BROKER}/broker/userinfo`;
+  const isOwnApi = token.startsWith(PAT_PREFIX);
+  const endpoint = isOwnApi ? `${API_BASE}/api/profile` : `${BROKER}/broker/userinfo`;
 
   try {
-    const res = await fetch(endpoint, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    // `x-hot-session` only for our own API — the broker is a separate origin
+    // (`mcp-auth-proxy-j0tb.onrender.com`) that knows nothing about this app's
+    // telemetry and, being cross-origin, would turn a simple request into a
+    // preflighted one for a header it will just ignore.
+    const res = await fetch(
+      endpoint,
+      isOwnApi
+        ? { headers: apiHeaders({ Authorization: `Bearer ${token}` }) }
+        : { headers: { Authorization: `Bearer ${token}` } },
+    );
     if (!res.ok) {
       sessionStorage.removeItem(TOKEN_KEY);
       resetUserContext();
