@@ -37,7 +37,32 @@ export class Container {
     this.ctx = ctx;
     this.env = env;
     this.options = options;
+    // F2 fix (B-I4 — see box.ts's `containerFetch` override): a real
+    // `DurableObjectState.container` (public, unlike the base library's own
+    // private `this.container` field) is what `box.ts` now ALSO checks
+    // before letting the base class's own auto-start path run, because a
+    // persisted `getState()` status can lag the real container by a few
+    // minutes after a host loss (its own doc comment). Every test in this
+    // repo simulates container lifecycle purely by assigning `_state`
+    // (directly, or via a `hooks.start`/`hooks.stop` override) — the setter
+    // below keeps `ctx.container.running` in lockstep with whatever `_state`
+    // a test sets, so every EXISTING test (where the two never actually
+    // diverge) keeps passing unchanged. A test that wants to model the B-I4
+    // desync itself (a stale "healthy" `_state` after the real process
+    // already exited) sets `box.ctx.container.running = false` AFTER
+    // setting `_state`, deliberately breaking the lockstep for that one
+    // assertion.
+    if (!this.ctx.container) this.ctx.container = { running: false };
     this._state = { status: "stopped", lastChange: Date.now() };
+  }
+
+  get _state() {
+    return this.__state;
+  }
+
+  set _state(value) {
+    this.__state = value;
+    this.ctx.container.running = value?.status === "running" || value?.status === "healthy";
   }
 
   async getState() {
