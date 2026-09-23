@@ -429,3 +429,94 @@ rtk proxy node scripts/check-test-presence.mjs feat/runner-observability
 the same gap at its own dispatch time) — substituted direct `wrangler dev --test-scheduled`
 against both Workers on this task's own port block, per the same precedent T09 and T05
 used. See "Live verification" above for what was run and what it showed.
+
+### Fix round (single round, per controller review)
+
+Findings I1, I2, and the controller's ruling on the deferred Minor 3 (session-start p95
+must read `outcome = 'ready'` only). Other minors deferred, per the controller's note.
+T03 still has not merged; the feature branch was not merged into this branch this round
+either, per the reviewer's explicit instruction.
+
+- **I1 — 7 of 11 rules and their shared SQL helpers had no automated tests.** Threaded an
+  injectable `queryFn: AeQueryFn = runAeQuery` through every shared helper
+  (`countByOutcome`, `countByGroup`, `countByGroupInWindow`, `weightedQuantile`) and every
+  AE-query rule (`atCapacityRule`, `fiveXxRateRule`, `previewReadyRateRule`,
+  `sessionStartP95Rule`, `embedErrorRateRule`, `compileErrorDoublingRule`,
+  `litellmErrorRateRule`) — the same injection shape `cron-step.ts#CronCaptureFn`/
+  `diagnostic.ts#CaptureExceptionFn` already use elsewhere in this codebase. Added
+  `pipeline/fixtures/fake-ae-query.mjs`: a small SQL-shape matcher (parses `index1 = `,
+  the window bound(s), `AND <slot> = '<value>'` filters, and either a grouped-count or a
+  `quantileExactWeighted` `SELECT`) that answers from a plain JS array of seeded rows —
+  no live ClickHouse/AE endpoint, fully deterministic. **Column references in `rules.ts`
+  are now built from the contract's own `AE_COLUMNS` map via a `col()` helper (throws on
+  an unknown name) instead of hand-numbered `blobN`/`doubleN` literals** — `countByGroup`/
+  `countByGroupInWindow` now take a column *name* (`"demo_id"`, `"ht_major"`), never a
+  bare slot number. 10 new test cases (one over-threshold, one under-threshold per rule,
+  plus a dedicated case proving the ready-outcome filter below), each asserting the
+  generated SQL names the right `AE_COLUMNS` slot for at least one central column.
+- **Controller ruling (was Minor 3) — `sessionStartP95Rule` now filters to
+  `outcome = 'ready'` only.** Unfiltered, fast `at_capacity`/`container_starting`/
+  `budget_denied` refusals blend into the same `session.start` metric and drag the
+  computed p95 down, masking a real slow-start problem during overload — exactly when the
+  rule matters most. Fixed with `AND ${col("outcome")} = 'ready'` appended to
+  `weightedQuantile`'s `WHERE` clause. Proven by a dedicated case: 10 `ready` rows at
+  1000ms plus one non-`ready` (`at_capacity`) row at 999999ms — firing stays `false`
+  (p95 ≈ 1000ms), proving the huge non-ready value was excluded, not merely that the SQL
+  string looks right.
+- **I2 — AE query failures were silent past the returned `errors` map.** Added
+  `rules.ts#alertEvalErrorRule(errors)`, a synthetic rule (id `alert-eval-error`, not an
+  ADR §F.3 signal) that `runAlerts` builds from whatever errors *this tick's own run*
+  collected and evaluates **last**, through the exact same fire-once/resolve-once
+  `evaluateAndNotify` every other rule uses. The logic lives inside `runAlerts` itself
+  (`alerts/index.ts`), not the caller — so it holds for whichever cron handler calls
+  `runAlerts` (this task's own placeholder `scheduled()` today, T03's real ten-minute cron
+  after the merge), per the controller's note. Also renamed the per-rule error-map keys
+  from the JS function name (e.g. `atCapacityRule`) to the exact `RuleResult.rule` id
+  (e.g. `at-capacity-rate`, via a new `QUERY_RULES: { id, fn }[]` list) — before this fix
+  the error map and every ordinary fire/resolve Slack line named the same rule two
+  different ways.
+- **A real bug found and fixed while writing the I2 integration test (not a deliberate
+  revert-proof mutation).** `notify.ts#writeAlertPoint` did `void sink.writeDataPoint(point)`
+  — `void` only silences the "unused promise" lint concern, it does not catch a rejection.
+  `clickhouseSink`'s HTTP write returns a promise that rejects on a real failure (which the
+  I2 integration test deliberately causes, pointing `RUNNER_EVENTS_CLICKHOUSE_URL` at a
+  refused local port), and that rejection surfaced later as an unhandled rejection,
+  failing the whole `o11y-alerts.test.mjs` file (`node --test`'s own "generated
+  asynchronous activity after the test ended" diagnostic — measured, not assumed). Fixed
+  by wrapping in `Promise.resolve(sink.writeDataPoint(point)).catch(() => {})`, which
+  correctly handles both the synchronous `void` case (`bindingSink`, the real AE binding)
+  and the async one.
+
+**Revert evidence (three real mutations for I1's own "show at least three tests failing"
+ask, on top of the six already recorded above — nine total across both rounds)**:
+
+| Reverted | Test | Failing test id | Reverted, re-passes |
+|---|---|---|---|
+| `rules.ts`: `previewReadyRateRule`'s `tierCol` built from `col("outcome")` instead of `col("tier")` (a swapped blob) | `o11y-alerts.test.mjs` | `not ok 26 - previewReadyRateRule: tier 1 below 97% fires...` | yes (33/33) |
+| `rules.ts`: `atCapacityRule`'s `firing: n > 5` flipped to `n > 50` | `o11y-alerts.test.mjs` | `not ok 24 - atCapacityRule: over threshold (6 > 5) fires...` | yes (33/33) |
+| `rules.ts`: `sessionStartP95Rule`'s `AND ${outcomeCol} = 'ready'` filter dropped (reverting the controller's own ruling) | `o11y-alerts.test.mjs` | `not ok 27 - sessionStartP95Rule: over 20s fires... outcome='ready' filter is real, not decorative` | yes (33/33) |
+
+`git diff --stat` on `rules.ts` after all three mutate/revert cycles matches the intended
+fix-round diff exactly (verified — no leftover mutation).
+
+**Verify — commands run, exit codes (fix round)**:
+
+```
+rtk proxy node --experimental-strip-types --test pipeline/o11y-alerts.test.mjs        exit=0 (33/33)
+rtk proxy node --experimental-strip-types --test pipeline/o11y-cost.test.mjs          exit=0 (10/10)
+rtk proxy node --experimental-strip-types --test pipeline/o11y-watchdog.test.mjs      exit=0 (5/5)
+rtk proxy node --experimental-strip-types --test pipeline/o11y-dashboards.test.mjs    exit=0 (47/47, unaffected)
+rtk proxy pnpm -r run typecheck                                                        exit=0
+rtk proxy pnpm test    exit=1 (1533 tests, 1530 pass, 1 known baseline failure
+                                — theme-presets-version.test.mjs, '18.1.0' !== '18.1.1' —
+                                2 todo, 0 other failures; +10 net new tests since phase 1)
+( cd workers/o11y && rtk proxy npx wrangler deploy --dry-run )                         exit=0
+( cd workers/api && rtk proxy npx wrangler deploy --dry-run ... )                      exit=0
+rtk proxy node scripts/check-test-presence.mjs feat/runner-observability
+                                                    exit=0 (20 source file(s) changed, matching test change)
+```
+
+Commit: `3b7dcebab` — "fix(runner): T04 fix round -- rule tests, alert-eval-error,
+ready-only p95". Not amended, per instruction. `feat/runner-observability` was not merged
+into this branch this round — T03 still has not merged, per the reviewer's explicit
+instruction to wait.
