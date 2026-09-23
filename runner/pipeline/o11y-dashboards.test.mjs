@@ -255,6 +255,7 @@ test("every dashboard under containers/o11y/grafana/dashboards/ is present", () 
   assert.deepEqual(titles, [
     "AI assist",
     "Docs embeds",
+    "Examples & features",
     "Observability self",
     "Runner overview",
     "Tier-1 playground",
