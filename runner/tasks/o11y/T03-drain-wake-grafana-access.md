@@ -650,3 +650,19 @@ new two-consecutive-wakes test in `o11y-wake.test.mjs`, confirmed failing
 without the fix and passing with it. `rtk proxy pnpm test`: 1489/1492
 pass (1 pre-existing baseline failure, 2 todo) — every `o11y-*` test,
 including the new one, passes. Commit `cd09a1ea0`.
+
+### Merge (feat/runner-observability, T07/T08/T12)
+
+Merged the integration branch (tip `e2cf0a4e4`) into this task's branch
+— full writeup in `.superpowers/sdd/README/T03-report.md`'s own "Merge"
+section. One conflict, `workers/o11y/src/index.ts`'s
+`UNIMPLEMENTED_ROUTES` stub list (both sides' own stale entries — T08's
+now-real `/telemetry/lite`, this task's own now-real `/grafana/*`/
+`reopen`); resolved to the one genuinely still-unimplemented route
+(`GET /grafana/_o11y/admin/*`), header comment updated to match. No
+other file conflicted; checked the ones the merge touched that T03's own
+code reads or shares fixtures with (`convert.ts`, `scrub.ts`, the shared
+Container/hooks stubs, `o11y-box.test.mjs`, `attrs.ts`,
+`o11y-{routes,dashboards}.test.mjs`) — no semantic clash. DoD raw, `rtk
+proxy`, all exit 0 except `pnpm test` (exit=1: 1602/1605 pass, the same
+pre-existing baseline failure, 2 todo). Commit `78159dfa2`.
