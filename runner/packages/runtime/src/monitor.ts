@@ -1013,6 +1013,17 @@ function escapeScriptClose(source: string): string {
  * All four fire together, once, at `visibilitychange` (hidden) or `pagehide`
  * — never eagerly — because LCP and CLS are only final once the page is done
  * being looked at.
+ *
+ * Fix round D-I4: `bt(s,n)` (the byte-trim helper) used to `slice(0,-1)` one
+ * character at a time, re-encoding the WHOLE string on every iteration — for
+ * an authored `Error(hugeString)` message this is quadratic in string length
+ * (measured: 10k chars ~100ms, 50k chars ~2.4s, ~40s projected at 200k),
+ * synchronous on the main thread, so it could freeze the `/d`/`/embed` host
+ * page this reporter is meant to never harm. Now cuts to at most `n`
+ * characters first (`slice(0,n)` — every char is at least one UTF-8 byte, so
+ * this can only ever need to trim further, never trim too much), THEN runs
+ * the byte loop, which is now bounded to at most `n` further iterations over
+ * a string of at most `3n` bytes.
  */
 function reporterSource(config: LiteReporterConfig): string {
   return `(function(){
@@ -1021,7 +1032,7 @@ var EP=${JSON.stringify(LITE_ENDPOINT)},SURF=${JSON.stringify(config.surface)},D
 var CEIL=${MONITOR_EVENT_CEILING},NMAX=${LITE_CLIENT_NAME_MAX_BYTES},MMAX=${LITE_CLIENT_MESSAGE_MAX},SMAX=${LITE_CLIENT_STACK_MAX},PMAX=${LITE_PAYLOAD_MAX_BYTES},RATE=${LITE_VITALS_SAMPLE_RATE};
 var used=0,sent={};
 function bl(s){try{return unescape(encodeURIComponent(s)).length;}catch(e){return 1e9;}}
-function bt(s,n){while(bl(s)>n)s=s.slice(0,-1);return s;}
+function bt(s,n){if(s.length>n)s=s.slice(0,n);while(bl(s)>n)s=s.slice(0,-1);return s;}
 function dv(){var u="";try{u=(navigator&&navigator.userAgent)||"";}catch(e){}
 return /ipad|tablet|playbook|silk/i.test(u)?"tablet":/mobi|iphone|ipod|android.*mobile|windows phone/i.test(u)?"mobile":"desktop";}
 var DEV=dv();
