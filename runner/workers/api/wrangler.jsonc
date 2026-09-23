@@ -102,8 +102,21 @@
     // DocSearch app id + index for the docs page lookup. The app id is public
     // by construction — DocSearch ships it in every docs page bundle.
     "ALGOLIA_APP_ID": "MMN6OTJMGX",
-    "ALGOLIA_INDEX": "handsontable"
+    "ALGOLIA_INDEX": "handsontable",
+
+    // ---- Observability (ADR-0041) — scaffold-only addition (T00) ---------
+    // `full` | `uncaught` (contract §11): which handled-error reports also go
+    // to Sentry. Value only — nothing in this worker reads it yet (T05 wires
+    // it). Default per the contract, so today's behaviour (everything Sentry
+    // sees today keeps reaching it) does not change by adding this var.
+    "SENTRY_SCOPE": "full"
   },
+
+  // ---- Observability (ADR-0041) — scaffold-only additions (T00) ----------
+  // Declared so T05 wires real usage against a stable binding shape; nothing
+  // in this worker writes to either yet.
+  "analytics_engine_datasets": [{ "binding": "RUNNER_EVENTS", "dataset": "runner_events" }],
+  "services": [{ "binding": "O11Y", "service": "handsontable-demos-o11y" }],
 
   // Routes on demos.handsontable.com are deliberately NOT declared here — they
   // are passed via `--routes` in the `deploy` script (package.json). When routes
