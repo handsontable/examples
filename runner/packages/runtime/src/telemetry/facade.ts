@@ -36,16 +36,26 @@ function mintPageLoadId(): string {
  * Every call is a no-op except `pageLoadId()`, which still mints and returns a
  * real, stable id — call sites that read it to tag `x-hot-session` before init
  * has run must not see an empty string.
+ *
+ * Lazy on purpose (T05, cross-task fix — see that task's Outcome): the first
+ * version minted the id eagerly in a module-top-level IIFE, which called
+ * `crypto.randomUUID()` at import time. That is disallowed "global scope"
+ * async/random I/O under workerd — `Uncaught Error: Disallowed operation
+ * called within global scope ... generating random values are not allowed
+ * within global scope`, thrown at Worker boot, not at a lint or a type error.
+ * Measured against a real `wrangler dev`: this module was never actually
+ * imported by a running Worker before (T00 typechecked it via throwaway probe
+ * files only), so the crash was latent until a real consumer imported the
+ * barrel. `pageLoadId()` still returns the exact same id on every call after
+ * the first — the contract above is unchanged, only *when* the mint happens.
  */
-export const noopTelemetry: Telemetry = (() => {
-  const pageLoadId = mintPageLoadId();
-  return {
-    metric() {},
-    event() {},
-    error() {},
-    pageLoadId: () => pageLoadId,
-  };
-})();
+let noopPageLoadId: string | undefined;
+export const noopTelemetry: Telemetry = {
+  metric() {},
+  event() {},
+  error() {},
+  pageLoadId: () => (noopPageLoadId ??= mintPageLoadId()),
+};
 
 export interface RecordedMetricCall {
   name: MetricName;
