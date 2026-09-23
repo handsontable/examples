@@ -37,7 +37,22 @@ export interface DiagnosticOptions {
   level?: "warning" | "error";
 }
 
-export function reportDiagnostic(env: Env, err: unknown, opts: DiagnosticOptions): void {
+/** The shape `Sentry.captureException` is called with — factored out so a
+ *  test can inject a recorder instead of the real SDK call (fix round: this
+ *  gate had no direct test — see `pipeline/api-telemetry-diagnostic.test.mjs`). */
+export type CaptureExceptionFn = (
+  err: unknown,
+  context: { level?: "warning" | "error"; tags?: Record<string, string>; fingerprint?: string[] },
+) => void;
+
+const defaultCapture: CaptureExceptionFn = (err, context) => Sentry.captureException(err, context);
+
+export function reportDiagnostic(
+  env: Env,
+  err: unknown,
+  opts: DiagnosticOptions,
+  capture: CaptureExceptionFn = defaultCapture,
+): void {
   const message = err instanceof Error ? err.message : String(err);
   logErrorLine(env, opts.context, err);
   void emitPoint(
@@ -47,7 +62,7 @@ export function reportDiagnostic(env: Env, err: unknown, opts: DiagnosticOptions
     { surface: "api", route_class: opts.routeClass, fingerprint: fingerprint(opts.context, message) },
   );
   if (sentryScopeIsFull(env)) {
-    Sentry.captureException(err, {
+    capture(err, {
       level: opts.level,
       ...(opts.tags ? { tags: opts.tags } : {}),
       ...(opts.sentryFingerprint ? { fingerprint: opts.sentryFingerprint } : {}),

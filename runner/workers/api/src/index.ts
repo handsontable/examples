@@ -76,6 +76,7 @@ import { checkAvatarSize, normalizeProfileInput, sniffImage, MAX_AVATAR_BYTES } 
 import { putAvatar, readProfile, removeAvatar, saveProfile, serveAvatar } from "./profile-store.js";
 import { requestTheme, validateStylePrompt } from "./theme-ai.js";
 import {
+  cronStep,
   demoIdFromPath,
   emitBudgetGauge,
   emitPoint,
@@ -83,7 +84,6 @@ import {
   logErrorLine,
   logRequestLine,
   reportDiagnostic,
-  reportUncaught,
   routeClassOf,
   withSpan,
 } from "./telemetry/index.js";
@@ -2457,31 +2457,9 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
     }
 }
 
-/**
- * Run one cron step in isolation: on failure, log our own structured line
- * (§D — "the cron handler") and report to Sentry directly (uncaught class,
- * §E.1, unconditional — never gated by `SENTRY_SCOPE`), then swallow so a
- * sibling step still runs.
- *
- * Explicit and ungated rather than "rethrow and let `Sentry.withSentry`'s own
- * `scheduled` wrapping catch it" (what `reportUncaught` alone would imply):
- * measured against the SDK's own source
- * (`instrumentations/worker/instrumentScheduled.js`), that wrapper only
- * `try/catch`es the synchronous return of the `scheduled()` call itself, and
- * `utils/instrumentContext.js` does not also wrap `ctx.waitUntil` to catch a
- * rejection handed to it later — a throw inside a `ctx.waitUntil(...)`
- * promise (which every cron branch here runs under, so the response — such as
- * it is — isn't blocked on cost reconciliation or gauge writes) never reaches
- * Sentry that way. `reportUncaught` still writes the structured line.
- */
-async function cronStep(env: Env, context: string, fn: () => Promise<void>): Promise<void> {
-  try {
-    await fn();
-  } catch (err) {
-    reportUncaught(env, err, context);
-    Sentry.captureException(err, { tags: { context } });
-  }
-}
+// `cronStep` (run one cron step in isolation, with its own Sentry capture)
+// moved to `telemetry/cron-step.ts` (fix round, T05 review) so it is directly
+// testable with an injected capture function — imported above.
 
 /**
  * ADR-0041 §D's 5-minute tick: `pool.gauge`, `budget.gauge`, the o11y
