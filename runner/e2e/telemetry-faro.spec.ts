@@ -182,6 +182,34 @@ test.describe("Faro in the authoring app (T06)", () => {
     assert(!noiseHit, "a ResizeObserver-loop warning must never reach Faro/telemetry/collect");
   });
 
+  test("D-I2: the Outlook/Office safelink scanner's injected rejection does NOT reach Faro (shared noise gate)", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+
+    const marker = "T06 e2e D-I2 scanner probe " + Date.now();
+    await page.evaluate((msg) => {
+      setTimeout(() => {
+        // eventGate.ts's INJECTED_SCANNER_MESSAGES regex, same wording DEMOS-5F
+        // classified as the Office/Outlook safelink scanner's own injected
+        // rejection (not our own code's, never authored by this app).
+        throw new Error(
+          `Non-Error promise rejection captured with value: Object Not Found Matching Id:12, MethodName:update, ParamCount:4 (${msg})`,
+        );
+      });
+    }, marker);
+
+    await page.evaluate((msg) => {
+      setTimeout(() => { throw new Error(`T06 e2e D-I2 control probe (${msg})`); });
+    }, marker);
+    await expect
+      .poll(() => captured.flatMap((b) => b.exceptions ?? []).some((e) => String(e.value ?? "").includes("control probe")))
+      .toBe(true);
+
+    const scannerHit = captured.flatMap((b) => b.exceptions ?? []).find((e) => String(e.value ?? "").includes(marker) && !String(e.value ?? "").includes("control probe"));
+    assert(!scannerHit, "the Office scanner's injected rejection must never reach Faro/telemetry/collect");
+  });
+
   test("an uncaught error reaches Faro (window.onerror, via ErrorsInstrumentation)", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);

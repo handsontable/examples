@@ -40,24 +40,29 @@ import {
   type Telemetry,
 } from "@handsontable/demo-runtime/telemetry";
 import { resolveTelemetryEnabled, telemetryEnvironment } from "./gate.js";
-import { isForeignUnhandled, isUnhandledNoise } from "../eventGate.js";
+import { isForeignUnhandled, isOfficeScannerRejection, isUnhandledNoise } from "../eventGate.js";
 
 /**
  * Fix round D-I2: contract §6 requires `beforeSend` = `scrubTelemetry` THEN
  * the shared noise gates — before this fix, only `sentry.ts`'s `beforeSend`
  * ever ran them, so every browser-noise shape Sentry has always dropped
  * (the ResizeObserver loop warning, a navigation-abort `Failed to fetch`/
- * `Load failed`, a foreign-origin extension frame) reached Faro/Loki instead,
- * and — because `surface` defaults to `authoring` and these are all
+ * `Load failed`, a foreign-origin extension frame, the Outlook/Office
+ * safelink scanner's injected rejection) reached Faro/Loki instead, and —
+ * because `surface` defaults to `authoring` and these are all
  * `handled: false` — could mint a fresh `fp:` first-seen entry and fire the
  * §F.3 new-fingerprint alert, the exact replacement ADR §E.1 promises for
  * Sentry's own "new issue" signal.
  *
- * `eventGate.ts`'s two gates are Sentry-shaped (`{ exception: { values: [...] } }`,
- * one entry per error in a chain) — a Faro `ExceptionEvent` is a single flat
- * `value`/`type`/`stacktrace`/`context`, so it is adapted into that same
- * one-entry-array shape here rather than duplicating (or Faro-ifying) the
- * gates themselves. `context.handled` is the Faro-side equivalent of
+ * `eventGate.ts`'s `ExceptionShape`-typed gates (`isUnhandledNoise`,
+ * `isOfficeScannerRejection`, `isForeignUnhandled`) are Sentry-shaped
+ * (`{ exception: { values: [...] } }`, one entry per error in a chain) — a
+ * Faro `ExceptionEvent` is a single flat `value`/`type`/`stacktrace`/
+ * `context`, so it is adapted into that same one-entry-array shape here
+ * rather than duplicating (or Faro-ifying) the gates themselves.
+ * `eventGate.ts`'s fourth gate, `isEdgelessForeignSessionStart`, reads
+ * Sentry-only `tags` Faro never carries and does not apply here.
+ * `context.handled` is the Faro-side equivalent of
  * Sentry's `mechanism.handled`: only `buildFacade().error()` below (an
  * explicit, on-purpose report) ever sets `"true"` — a raw
  * `ErrorsInstrumentation` catch (`window.onerror`/`unhandledrejection`) and
@@ -91,7 +96,11 @@ const beforeSend: BeforeSendHook = (item) => {
   if (!scrubbed) return null;
   if (scrubbed.type === "exception") {
     const shape = faroExceptionToExceptionShape(scrubbed.payload);
-    if (isUnhandledNoise(shape) || isForeignUnhandled(shape, window.location.origin)) {
+    if (
+      isUnhandledNoise(shape) ||
+      isOfficeScannerRejection(shape) ||
+      isForeignUnhandled(shape, window.location.origin)
+    ) {
       return null;
     }
   }
