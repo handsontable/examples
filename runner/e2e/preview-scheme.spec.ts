@@ -138,9 +138,10 @@ test.describe("the preview's colour scheme", () => {
     baseURL,
   }) => {
     // The `next` bucket, because that is the one master's `examples/` feeds
-    // (ADR-0029): 17 and 18 come from their frozen branches and are not pinned
-    // until this is backported there. Its Handsontable version is read from the
-    // manifest rather than written down — it is a nightly, and it moves weekly.
+    // (ADR-0029); 17 and 18 come from their frozen branches, and
+    // `pipeline/starter-scheme.test.mjs` covers their pins. Its Handsontable
+    // version is read from the manifest rather than written down — it is a
+    // nightly, and it moves weekly.
     const manifest = await request.get(`${baseURL}/starter-examples/next/manifest.json`);
     expect(manifest.ok(), "the next bucket has to be served for this to mean anything").toBe(true);
     const { hotVersion } = (await manifest.json()) as { hotVersion: string };
