@@ -123,14 +123,18 @@ the scaffolded worker. Anything this task could not decide goes into its Outcome
   the `index.ts` barrel, exported as `@handsontable/demo-runtime/telemetry` (`packages/runtime/package.json`
   `"./telemetry"` subpath, both `types` and `default`). Pure — no DOM, no Cloudflare imports.
 - `workers/o11y/` scaffold: `package.json`, `tsconfig.json`, `wrangler.jsonc`, `src/env.ts`
-  (declares `InboxWriterApi` per COMMON.md interface 1, do-nothing `InboxWriter`/`GrafanaBox`
-  stub classes), `src/index.ts` (501 on every contract §1 route), `.dev.vars.example`.
+  (declares `InboxWriterApi` per COMMON.md interface 1, plus the `Env` shape), `src/box.ts`
+  (do-nothing `GrafanaBox` stub, T01's file per the shared-file table), `src/inbox/writer.ts`
+  (do-nothing `InboxWriter` stub, T02's file), `src/index.ts` (501 on every contract §1 route,
+  re-exports the two DO classes from their real files), `.dev.vars.example`. See T00-D9.
 - `workers/api/src/analytics.ts`: `BOT_RE`/`isBot`/`deviceOf`/`browserOf`/`osOf` moved into
   `classify.ts`, byte-identical, re-exported so no importer's path changes.
 - `workers/api/src/env.ts` + `wrangler.jsonc`: scaffold-only additions the task explicitly
   scoped to T00 — `RUNNER_EVENTS` (Analytics Engine), the `O11Y` service binding, `SENTRY_SCOPE`
   var (default `"full"`, contract §11). Values only; T05 (this file's real owner) wires usage.
-- Seven `pipeline/*.test.mjs` files (69 `node --test` cases): `telemetry-contract.test.mjs`
+- `apps/authoring/package.json`: `@grafana/faro-web-sdk` added as a real dependency (not just
+  recorded) — see Dependencies below.
+- Seven `pipeline/*.test.mjs` files (73 `node --test` cases): `telemetry-contract.test.mjs`
   (required name), `scrub-telemetry.test.mjs` (required name), `telemetry-convert.test.mjs`
   (required name), `telemetry-fingerprint.test.mjs` (required name), plus
   `telemetry-metrics.test.mjs`, `telemetry-inbox.test.mjs`, `telemetry-lite.test.mjs` (not named
@@ -143,7 +147,7 @@ asked for it)
 
 | Package | Version | Where | Note |
 |---|---|---|---|
-| `@grafana/faro-web-sdk` | `2.12.1` | `apps/authoring` (not yet added to its `package.json` — T06 adds it when it starts using it; version recorded here as npm's current at task time so T06 does not have to re-check) | authoring Faro SDK |
+| `@grafana/faro-web-sdk` | `2.12.1` | `apps/authoring/package.json` (added for real, not just recorded — the task's Goal is "T00 adds every new dependency," and a version recorded but not added would have shown up as a lockfile-diff finding on T06's PR instead) | authoring Faro SDK, unused until T06 imports it |
 | `@cloudflare/containers` | `0.3.7` | `workers/o11y` | `GrafanaBox`'s base class |
 | `jose` | `6.2.12` | `workers/o11y` | Access JWT verification (T02) |
 | `source-map-js` | `1.2.1` | `workers/o11y` | drain-time symbolication (T03) |
@@ -153,11 +157,6 @@ asked for it)
 | `typescript` | `~5.6.0` | `workers/o11y` | matches the rest of the workspace, not pinned exactly (not in the task's explicit pin list) |
 | `acorn` | `8.18.0` | already a `runner/package.json` devDependency (root) | no change needed — already present |
 
-`apps/authoring/package.json`, `packages/runtime/package.json`'s own dependency list, and
-`workers/o11y/package.json` are the only manifests this task could add to concretely; Faro is
-recorded here (and will be added to `apps/authoring/package.json` by T06) rather than added
-speculatively to a package that does not use it yet, to avoid an unused dependency triggering
-its own review question.
 
 ### OTLP protobuf decoder comparison
 
@@ -250,6 +249,58 @@ Workers execution.
 - **Left out of `wrangler.jsonc`, per the controller's explicit allowance**: the Workers
   rate-limiting binding gating `collect`/`lite` (needs a real namespace id from the dashboard,
   T02's job) and the `containers` block for `GrafanaBox` (T01's job, see T00-D7).
+- **T00-D9 — `InboxWriter`/`GrafanaBox` live in their real owners' files, not `env.ts`.**
+  First draft put both do-nothing stub classes directly in `env.ts`; moved to
+  `workers/o11y/src/box.ts` (`GrafanaBox`, T01's row in COMMON.md's shared-file table) and
+  `workers/o11y/src/inbox/writer.ts` (`InboxWriter`, T02's row) after review, so each task edits
+  the file it already owns instead of also having to touch `env.ts` and `index.ts`. `env.ts` now
+  only declares `InboxWriterApi` and `Env`, importing the two classes' **types** (never their
+  values) from those files for the `DurableObjectNamespace<T>` parameters. The two files'
+  references back to `Env` and to each other's types are circular but type-only
+  (`import type`), so there is no runtime import cycle — verified with a clean `tsc --noEmit`
+  and a real `wrangler deploy --dry-run`. **T01 handoff**: edit `box.ts` in place (give
+  `GrafanaBox` real behaviour, add the `containers` block to `wrangler.jsonc` in the same
+  change per T00-D7) — nothing in `env.ts` or `index.ts` needs to change. **T02 handoff**: same,
+  for `inbox/writer.ts` and `InboxWriter`, alongside the new `pack.ts`/`dedupe.ts`/`registry.ts`
+  files in `workers/o11y/src/inbox/`.
+- **T00-D10 — `toAePoint`'s outcome/reason check is runtime-only, not a compile-time one.**
+  `HotAttrs.outcome`/`.reason` are typed `string` (§5's per-metric enums have no type-level
+  encoding), so `tsc` accepts any string at every call site; only actually calling `toAePoint`
+  validates one, by throwing. Confirmed while building the three-package typecheck probes: a
+  probe passing `outcome: "nope"` produced no compile error at all (`TS2578: Unused
+  '@ts-expect-error' directive` when one was added expecting it to fire) — the probe had to be
+  rewritten to use a wrong **type** (a `number`) instead, to prove the import resolves real
+  types and not `any`. This matters for T02: the ingest route extracts browser metrics from a
+  Faro item's `context`, which is client-controlled, and calls `toAePoint` with those values —
+  a crafted `outcome` throws at runtime. T02's route handler must catch that (or pre-validate
+  against `METRICS[metric].values` before calling), or one malformed browser metric becomes a
+  500 instead of an `o11y.ingest` `dropped` point. Documented directly on `toAePoint`'s doc
+  comment in `metrics.ts` too, not only here.
+
+### Post-review fixes (not T00-D — these are correctness fixes matching the contract, found by a
+review pass before declaring done, not open decisions)
+
+- **`toAePoint` now defaults `double1` (count) to `1` on every point**, universally, not only
+  for metrics whose own §5 "Doubles" column happens to list `count`. §4's reading rule ("1 per
+  point unless pre-aggregated," every count read as `SUM(_sample_interval * double1)`) applies
+  to every metric, the same way blob1–3 are universal regardless of a metric's own "Blobs used"
+  column. Before this fix, `preview.ready_ms`, `web_vital`, `session.start_ms`,
+  `container.boot_ms` and others always stored `double1 = 0` — every count-based query for them
+  (T04's alert thresholds, T09's panels) would have read zero forever. An explicit
+  `values.count` still overrides the default 1 for a genuinely pre-aggregated point.
+- **`faroItemToRecord` now always sets `hot.kind = item.type`** (§3's closed set:
+  `exception`/`log`/`event`/`measurement`), overwriting whatever the client's context carried
+  under that key. It was never set there at all before this fix, though `beaconToRecord` always
+  set it correctly — an asymmetry a reviewer would have caught immediately in T02/T03's own
+  dashboards (`hot.kind` present on every beacon-sourced row, absent on every Faro-sourced one).
+- **The demo-runtime console-relay marker (T00-D4) moved from `context["hot.kind"]` to
+  `context["hot.relay"]`**, a consequence of the fix above: `hot.kind`'s value set is now always
+  `item.type`, so a `"console-error"`/`"console-warn"` value stored there would never survive to
+  be checked by `isConsoleItem`. `hot.relay` is also not on `ALLOWED_ATTRIBUTE_KEYS`, so the
+  marker itself is scrubbed away even if this check ever missed one.
+- **`scrub.ts` now strips query strings/fragments from stack-frame filenames too**, not only
+  `meta.page.url` — they are URL-valued fields, and §3's rule covers "every" one; a bundler's
+  cache-busting `?t=…` query string shows up there routinely.
 
 ### Sandbox probes
 
@@ -272,6 +323,10 @@ then restored and re-verified green. Full command output is in the T00 report
 | `metrics.ts`: `toAePoint`'s `checkAllowed` disabled | the three validation cases in `telemetry-metrics.test.mjs` |
 | `inbox.ts`: `inboxKey` switched from `getUTCHours` to `getHours` | the UTC-vs-local case (and two others) in `telemetry-inbox.test.mjs`, run under `TZ=Europe/Warsaw` to force a real divergence |
 | `lite.ts`: the total-byte check short-circuited to `true` | the T00-D5 case in `telemetry-lite.test.mjs` |
+| `docs/observability-contract.md` §4 `outcome`'s slot (`blob8` → `blob9`, doc edited alone) | `telemetry-contract.test.mjs` §4 subtest |
+| `metrics.ts`: `toAePoint`'s `double1` default changed from `1` back to `0` (the post-review count fix) | the new count-default case in `telemetry-metrics.test.mjs` |
+| `convert.ts`: `attributes[ATTR_HOT_KIND] = item.type` removed from `faroItemToRecord` (the post-review `hot.kind` fix) | the hoist case and the dedicated `hot.kind` case in `telemetry-convert.test.mjs` |
+| `scrub.ts`: `stripQueryAndFragment` removed from the stack-frame filename line (the post-review query-strip fix) | the new stack-frame query-string case in `scrub-telemetry.test.mjs` |
 
 ### Verify — commands run, exit codes
 
@@ -282,23 +337,49 @@ per COMMON.md. rtk's own summaries were not trusted; exit codes and raw output w
 rtk proxy pnpm install                                           exit=0
 rtk proxy pnpm --filter @handsontable/demo-runtime build          exit=0
 rtk proxy pnpm -r run typecheck                                   exit=0  (5 of 6 workspace projects — pipeline has no typecheck script, unrelated to this task)
-rtk proxy pnpm test                                                exit=1 (1232 tests, 1229 pass, 1 pre-existing unrelated failure — see Concerns)
+rtk proxy pnpm test                                                exit=1 (1236 tests, 1233 pass, 1 pre-existing unrelated failure, 2 pre-existing todo — see Concerns)
 ( cd workers/o11y && rtk proxy npx wrangler deploy --dry-run )    exit=0
 ( cd workers/api && rtk proxy npx wrangler deploy --dry-run )     exit=0
 node scripts/check-test-presence.mjs feat/runner-observability    exit=0 ("15 source file(s) changed, with a matching test change")
 ```
 
+(This is the final run, after every fix below — including the revert-checks for them, each
+restored before this run.)
+
 Also, per the acceptance criteria's exact import line, typechecked
 `import { toAePoint, scrubTelemetry, fingerprint } from "@handsontable/demo-runtime/telemetry"`
-in `workers/api`, `workers/o11y` and `apps/authoring` via temporary probe files (each with a
-deliberate `@ts-expect-error` on a wrong-typed `toAePoint` call, to prove the import resolves
-real types and not `any`) — all three passed, then the probes were deleted (none is a file this
-task owns permanently). Also measured, then reverted: removing `"types"` from the `"./telemetry"`
-export condition did **not** break resolution under this repo's `moduleResolution: "Bundler"` —
-tsc still found the real `.d.ts` (confirmed with a "does this exported member exist" probe, not
-just an empty error log) — so the task file's stated trap does not reproduce here, though
-`types` was kept anyway (correct regardless, and other tools/resolution modes may not be as
-lenient).
+in `workers/api`, `workers/o11y` and `apps/authoring` via temporary probe files. The first
+attempt used a deliberate `@ts-expect-error` on `toAePoint("api.request", {}, { …, outcome:
+"nope" })`, expecting the per-metric outcome enum to be a compile-time error — it was not
+(`TS2578: Unused '@ts-expect-error' directive`; see T00-D10, this is real and load-bearing for
+T02, not a probe mistake). The probe was rewritten to a genuine type error instead
+(`outcome: 123`, a `number` where the type is `string`) to prove the import resolves real types
+and not `any` — all three packages passed with that version (the `@ts-expect-error` correctly
+suppressed the one real error and nothing else fired), and a control version with no
+`@ts-expect-error` at all confirmed the mismatch is real (`error TS2578` only ever appears when
+there is nothing to suppress; removing the marker line entirely instead produces the ordinary
+`TS2322` type error, confirmed for the `workers/api` probe). All three probe files were deleted
+afterward — none of `workers/api`, `apps/authoring` is a file this task owns permanently, and
+`workers/o11y/src/index.ts` stays a clean 501-stub per scope.
+
+Also measured, then reverted: removing `"types"` from the `"./telemetry"` export condition did
+**not** break resolution under this repo's `moduleResolution: "Bundler"` — tsc still found the
+real `.d.ts` (confirmed with a "does this exported member exist" probe, which correctly errored
+`TS2305`, not an empty error log that would mean silent `any`) — so the task file's stated trap
+does not reproduce here, though `types` was kept anyway (correct regardless, and other
+tools/resolution modes may not be as lenient).
+
+**Fingerprint identical in browser and Node**, measured rather than assumed: bundled
+`packages/runtime/dist/telemetry/index.js` with `esbuild --bundle --format=iife
+--target=chrome87,firefox78,safari14,edge88` (`apps/authoring/vite.config.ts` sets no explicit
+`build.target` and no legacy-browser plugin, so Vite's own default — "browsers that support
+native ES modules," roughly this same baseline — applies), then evaluated the bundle in
+`node:vm` with `TextEncoder`/`crypto` injected into the sandbox. `fingerprint("ctx","")` /
+`"a"` / `"foobar"` produced the exact same pinned hex values as the plain-Node run, and the
+demo-runtime ladder collapse still collapsed to one fingerprint. esbuild does not (cannot)
+downlevel `BigInt` literals — an unsupported target fails the build outright rather than
+silently emitting wrong values — so a successful, value-correct bundle at this target is real
+evidence, not just "the code has no browser-only APIs."
 
 ### Concerns / follow-ups
 
