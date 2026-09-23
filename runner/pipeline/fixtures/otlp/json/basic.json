@@ -1,0 +1,29 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "demos-api" } },
+          { "key": "service.version", "value": { "stringValue": "cafef00d" } },
+          { "key": "deployment.environment.name", "value": { "stringValue": "production" } }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "logRecords": [
+            {
+              "timeUnixNano": "1735689600000000000",
+              "severityText": "INFO",
+              "body": { "stringValue": "api.request route=api/demos status=200" },
+              "attributes": [
+                { "key": "hot.surface", "value": { "stringValue": "api" } },
+                { "key": "hot.outcome", "value": { "stringValue": "2xx" } },
+                { "key": "cf.ray", "value": { "stringValue": "8a1b2c3d4e5f6789" } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

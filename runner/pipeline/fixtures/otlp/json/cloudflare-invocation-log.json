@@ -1,0 +1,257 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "cloudflare.colo",
+            "value": {
+              "stringValue": "FRA"
+            }
+          },
+          {
+            "key": "faas.invoked_region",
+            "value": {
+              "stringValue": "EEUR"
+            }
+          },
+          {
+            "key": "cloudflare.script_name",
+            "value": {
+              "stringValue": "handsontable-demos-api"
+            }
+          },
+          {
+            "key": "cloud.provider",
+            "value": {
+              "stringValue": "cloudflare"
+            }
+          },
+          {
+            "key": "cloud.platform",
+            "value": {
+              "stringValue": "cloudflare.workers"
+            }
+          },
+          {
+            "key": "faas.name",
+            "value": {
+              "stringValue": "handsontable-demos-api"
+            }
+          },
+          {
+            "key": "faas.version",
+            "value": {
+              "stringValue": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "js"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "workers-observability"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "handsontable-demos-api"
+            }
+          },
+          {
+            "key": "cloudflare.script_version.id",
+            "value": {
+              "stringValue": "00000000-0000-0000-0000-000000000000"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "workers-observability"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1790166300617000000",
+              "observedTimeUnixNano": "1790166300622000000",
+              "severityNumber": 9,
+              "body": {
+                "stringValue": "GET https://demos.handsontable.com/api/demos/r-react-18-0-0"
+              },
+              "attributes": [
+                {
+                  "key": "cloudflare.execution_model",
+                  "value": {
+                    "stringValue": "stateless"
+                  }
+                },
+                {
+                  "key": "cloudflare.handler_type",
+                  "value": {
+                    "stringValue": "fetch"
+                  }
+                },
+                {
+                  "key": "faas.invocation_id",
+                  "value": {
+                    "stringValue": "00000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "cloudflare.ray_id",
+                  "value": {
+                    "stringValue": "0000000000000000"
+                  }
+                },
+                {
+                  "key": "faas.trigger",
+                  "value": {
+                    "stringValue": "http"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "https://demos.handsontable.com/api/demos/r-react-18-0-0"
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "GET"
+                  }
+                },
+                {
+                  "key": "http.request.header.accept",
+                  "value": {
+                    "stringValue": "*/*"
+                  }
+                },
+                {
+                  "key": "http.request.header.accept-encoding",
+                  "value": {
+                    "stringValue": "gzip, br"
+                  }
+                },
+                {
+                  "key": "user_agent.original",
+                  "value": {
+                    "stringValue": "Mozilla/5.0 (compatible; example)"
+                  }
+                },
+                {
+                  "key": "cloudflare.colo",
+                  "value": {
+                    "stringValue": "XXX"
+                  }
+                },
+                {
+                  "key": "cloudflare.verified_bot_category",
+                  "value": {
+                    "stringValue": ""
+                  }
+                },
+                {
+                  "key": "cloudflare.asn",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "geo.timezone",
+                  "value": {
+                    "stringValue": "Etc/UTC"
+                  }
+                },
+                {
+                  "key": "geo.continent.code",
+                  "value": {
+                    "stringValue": "EU"
+                  }
+                },
+                {
+                  "key": "geo.country.code",
+                  "value": {
+                    "stringValue": "XX"
+                  }
+                },
+                {
+                  "key": "geo.locality.name",
+                  "value": {
+                    "stringValue": ""
+                  }
+                },
+                {
+                  "key": "geo.locality.region",
+                  "value": {
+                    "stringValue": ""
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "stringValue": ""
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "demos.handsontable.com"
+                  }
+                },
+                {
+                  "key": "url.path",
+                  "value": {
+                    "stringValue": "/api/demos/r-react-18-0-0"
+                  }
+                },
+                {
+                  "key": "url.query",
+                  "value": {
+                    "stringValue": ""
+                  }
+                },
+                {
+                  "key": "url.scheme",
+                  "value": {
+                    "stringValue": "https"
+                  }
+                },
+                {
+                  "key": "network.protocol.name",
+                  "value": {
+                    "stringValue": "https"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": 404
+                  }
+                },
+                {
+                  "key": "cloudflare.invocation.sequence.number",
+                  "value": {
+                    "intValue": 1
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "flags": 1,
+              "traceId": "00000000000000000000000000000000",
+              "spanId": "0000000000000000"
+            }
+          ]
+        }
+      ],
+      "schemaUrl": ""
+    }
+  ]
+}

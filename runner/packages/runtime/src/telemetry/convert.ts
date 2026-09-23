@@ -31,6 +31,7 @@ import {
   ATTR_HOT_TIER,
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
+  DIAGNOSTIC_TAG_KEYS,
   HOT_KINDS,
   RESOURCE_ATTRS,
   STRUCTURED_METADATA_KEYS,
@@ -64,14 +65,29 @@ export function msToUnixNano(ms: number): string {
 }
 
 const RESOURCE_ATTR_KEYS = new Set(RESOURCE_ATTRS.map((a) => a.key));
-const STRUCTURED_KEY_SET = new Set<string>(STRUCTURED_METADATA_KEYS);
+// T02-D (merge fix, see T02's task Outcome): `STRUCTURED_KEY_SET` originally
+// covered only §3's four closed-set structured-metadata keys. T06 (fix round
+// D1) extended `attrs.ts#ALLOWED_ATTRIBUTE_KEYS` — what `scrub.ts`'s
+// `allowlistAttributes` keeps — with `DIAGNOSTIC_TAG_KEYS` (`handled`,
+// `context`, `sentry_event_id`, and the `versions-fetch` diagnostic tags),
+// but never updated this function to match, even though its own doc comment
+// below already claimed to work on "an already-allowlisted attribute bag."
+// Without this, `handled`/`sentry_event_id`/etc. would survive `scrubTelemetry`
+// only to be silently dropped one step later, here — found while merging T02
+// with T06 (the controller's own fix-round instruction), not by T06 itself,
+// since T06's own scrub-level tests never exercise `hoistAttributes`.
+// Diagnostic tags land in `attributes` (never `resourceAttributes` — none of
+// them is a resource attribute, and `DIAGNOSTIC_TAG_KEYS` is disjoint from
+// `RESOURCE_ATTR_KEYS`), the same bucket structured metadata already uses.
+const STRUCTURED_KEY_SET = new Set<string>([...STRUCTURED_METADATA_KEYS, ...DIAGNOSTIC_TAG_KEYS]);
 
 /**
  * Split a merged, already-allowlisted attribute bag (`scrub.ts`'s output on
  * `payload.context`/`payload.attributes`) into OTLP resource attributes
  * (`hot.surface`, `hot.tier`, … — ADR §B.2 "hoist `hot.*` and `service.*` to
  * resource attributes") and structured metadata (`hot.demo_id`, `session.id`,
- * `cf.ray`, `hot.kind` — never a resource attribute, §3).
+ * `cf.ray`, `hot.kind`, and the T06 diagnostic tag keys — never a resource
+ * attribute, §3).
  */
 export function hoistAttributes(
   merged: Record<string, string> | undefined,

@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "app": { "name": "demos-authoring", "version": "deadbeef1234" }
+  },
+  "measurements": [
+    {
+      "type": "web-vitals",
+      "values": { "lcp": 1234.5, "inp": 45, "cls": 0.02, "fcp": 900 },
+      "timestamp": "2026-01-01T00:00:00.000Z",
+      "context": {
+        "hot.surface": "share",
+        "hot.framework": "react",
+        "hot.ht_major": "18",
+        "hot.device": "mobile",
+        "hot.demo_id": "r-react-18-0-0"
+      }
+    }
+  ]
+}

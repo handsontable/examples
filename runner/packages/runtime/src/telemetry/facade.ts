@@ -48,6 +48,15 @@ function mintPageLoadId(): string {
  * files only), so the crash was latent until a real consumer imported the
  * barrel. `pageLoadId()` still returns the exact same id on every call after
  * the first — the contract above is unchanged, only *when* the mint happens.
+ *
+ * T02 independently hit and fixed the same bug running a real `wrangler dev`
+ * for `workers/o11y` (see T02's task Outcome) — T05's fix (this version) is
+ * kept on merge. T02's own regression test
+ * (`pipeline/telemetry-facade.test.mjs`) was removed on merge: it stubbed
+ * `crypto.randomUUID`, cache-busted an import, and asserted zero calls at
+ * import / one call on first `pageLoadId()` — the exact same technique and
+ * assertions as `pipeline/telemetry-facade-boot-safety.test.mjs` below,
+ * which stays as the one copy of that case.
  */
 let noopPageLoadId: string | undefined;
 export const noopTelemetry: Telemetry = {

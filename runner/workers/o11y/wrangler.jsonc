@@ -38,11 +38,20 @@
     "ACCESS_TEAM_DOMAIN": "handsontable.cloudflareaccess.com",
     "ACCESS_AUD": "",
     "GITHUB_OIDC_REPOSITORY": "handsontable/examples",
+    // T02-D16 (fix round, see the task Outcome): the expected `workflow_ref`
+    // OIDC claim for the deploy job — T10 must keep this in sync with the
+    // real deploy workflow's file path and the ref it runs from.
+    "GITHUB_OIDC_WORKFLOW_REF": "handsontable/examples/.github/workflows/master.yml@refs/heads/master",
     // T01 phase-2 addition (env.ts has the full reasoning): duplicates the
     // `account_id` above because a Worker has no runtime way to read its own
     // account id, and GrafanaBox needs it to build the Loki bucket's R2 S3
     // endpoint and the Analytics Engine SQL API URL.
     "CLOUDFLARE_ACCOUNT_ID": "15111272c53ed0aaf84a908f0c9c7f8b"
+    // SERVICE_VERSION (T02 addition, see the task Outcome) is intentionally
+    // absent here: the real deploy script sets it via `--var
+    // SERVICE_VERSION:$GITHUB_SHA` (the same pattern `docs/observability-contract.md`
+    // §2 documents for the API worker's own `SERVICE_VERSION`), not a
+    // committed `vars` value — every reader falls back to `"dev"` when unset.
   },
 
   // R2 — EU jurisdiction on every bucket (contract §2). Bucket names must exist
@@ -62,10 +71,9 @@
   // `AdminReads` (ADR-0043).
   "services": [{ "binding": "API", "service": "handsontable-demos-api" }],
 
-  // `INBOX_WRITER` (T02 implements) and `GRAFANA_BOX` (T01, real behaviour +
-  // the `containers` block below as of phase 2) — `InboxWriter` is still a
-  // do-nothing stub (src/inbox/writer.ts), so ingest/ledger calls still fail
-  // until T02 lands.
+  // `INBOX_WRITER` (T02, real behaviour: dedupe, fingerprint registry,
+  // row-chunked pack/commit, `recordWake`) and `GRAFANA_BOX` (T01, real
+  // behaviour + the `containers` block below, phase 2).
   //
   // EU jurisdiction for both is a *runtime* call
   // (`env.INBOX_WRITER.jurisdiction("eu")`), not a wrangler.jsonc field — there
@@ -102,9 +110,23 @@
       "max_instances": 1,
       "constraints": { "jurisdiction": "eu" }
     }
-  ]
+  ],
 
-  // Left out entirely, T02's job (task file, controller decision): the
-  // Workers rate-limiting binding gating `collect`/`lite` (ADR §B.5) — it
-  // needs a real namespace id from the dashboard, which does not exist yet.
+  // ADR §B.5's Workers rate-limiting binding, gating `collect`/`lite`. T02-D
+  // (see the task Outcome): T00 left this out believing it "needs a real
+  // namespace id from the dashboard" — measured false against `wrangler`'s
+  // own config schema (`ratelimits[].namespace_id` is a free-form string the
+  // deploy author picks to scope the limiter, not a dashboard-provisioned
+  // resource id) and a real `wrangler deploy --dry-run`. `1001` is this
+  // task's own choice, scoped to this Worker only — nothing else in this
+  // account uses rate-limit namespace ids, so any small integer is fine.
+  // `100` requests per `60` s per key (`cf-connecting-ip`) is a starting
+  // value, generous for a legitimate browser (Faro batches, not
+  // per-event) and tight enough to blunt an abusive client; unmeasured
+  // against real traffic (the sandbox probe's synthetic load does not
+  // represent production volume) — tune after launch like every other
+  // ADR §F.3 threshold.
+  "ratelimits": [
+    { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 100, "period": 60 } }
+  ]
 }
