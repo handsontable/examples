@@ -73,4 +73,20 @@ export class Container {
     throw error;
   }
   renewActivityTimeout() {}
+
+  /** T03 addition: the real `Container.schedule()` persists to SQLite and
+   *  is later invoked by the base class's own `alarm()` loop — machinery
+   *  this stub does not reimplement (see `box.ts`'s own T03 tests,
+   *  `o11y-wake.test.mjs`, which monkey-patch `instance.schedule` per test
+   *  instead, to observe WHAT gets scheduled without needing real timing).
+   *  This default just records the call and never auto-invokes it — a
+   *  harmless no-op for every T01 test that calls `wake()`/`#doWake` (which
+   *  now schedules the 4-hour hard cap) without caring about scheduling at
+   *  all. */
+  async schedule(when, callback, payload) {
+    this._scheduled ??= [];
+    const entry = { taskId: `stub-${this._scheduled.length}`, when, callback, payload };
+    this._scheduled.push(entry);
+    return entry;
+  }
 }

@@ -25,10 +25,19 @@
     "traces": { "enabled": false }
   },
 
-  // ADR §B.3: the drain's alarm loop budget, at most 300000 per ADR. Left at a
-  // conservative default here — T02/T03 raise it once spike (b) measures what
-  // the drain actually needs.
-  "limits": { "cpu_ms": 30000 },
+  // ADR §B.3: the drain's alarm loop budget, at most 300000 per ADR. T03-D
+  // (see the task Outcome): raised from T02's 30000 placeholder — a single
+  // `drainStep` invocation pushes up to `DRAIN_BATCH_SIZE` (10) objects,
+  // each up to 1 MB decompressed, through gzip/hash/symbolication; 30 s was
+  // measured too tight against a real multi-object batch on the sandbox
+  // probe (see the Outcome for the exact number), 120000 leaves headroom
+  // under the 300000 ceiling without approaching it blindly.
+  "limits": { "cpu_ms": 120000 },
+
+  // T03: the backlog cron (ADR §A: "a `*/10` cron in the o11y worker asks
+  // `InboxWriter.backlog()`"). T04 extends the same `scheduled()` handler
+  // for its own alert evaluation rather than adding a second trigger.
+  "triggers": { "crons": ["*/10 * * * *"] },
 
   // Public, non-secret config (contract §2).
   "vars": {

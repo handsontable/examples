@@ -10,9 +10,11 @@
 
 import { DurableObject } from "cloudflare:workers";
 import {
+  DRAINS_PAUSED_STORAGE_KEY,
   HEARTBEAT_STORAGE_KEY,
   PACK_ALARM_INTERVAL_MS,
   PACK_AT_BYTES,
+  toAePoint,
   wakeStorageKey,
   type Heartbeat,
   type Tenant,
@@ -21,8 +23,48 @@ import {
 import type { Env, IngestItem, InboxWriterApi, IngestResult } from "../env.js";
 import { checkDuplicates } from "./dedupe.js";
 import { newFingerprintWrites } from "./registry.js";
+import { o11ySelfIdentity } from "../normalise/respond.js";
+import { writePointFromDo } from "../normalise/points.js";
+// Aliased to `ledger*` (not, e.g., a bare `nextWrittenKeys`): every one of
+// these names also names a class method below with the identical public
+// signature (the thin-shell pattern this file's header describes). A bare
+// import name and a same-named class method do not actually collide in JS
+// (a class method is reachable only via `this.method`, never as a bare
+// identifier inside another method's body — the bare name always resolves
+// to this module's top-level import), but aliasing removes any doubt for a
+// reader, rather than relying on that scoping rule holding.
+import {
+  computeBacklog as ledgerComputeBacklog,
+  currentWakeId as ledgerCurrentWakeId,
+  markKeysProvisional as ledgerMarkKeysProvisional,
+  nextWrittenKeys as ledgerNextWrittenKeys,
+  rejectKey as ledgerRejectKey,
+  reopenWindow as ledgerReopenWindow,
+  resolveOverWakes,
+  type InboxObjectInfo,
+} from "./ledger.js";
 import { appendRows, commitPackedObject, packTenant, pendingRowsByTenant, ROW_SEQ_STORAGE_KEY } from "./pack.js";
 import type { StorageLike } from "./storage.js";
+import { getGrafanaBoxStub } from "../box.js";
+
+const CLEAN_MARKER_PREFIX = "state/wakes/";
+
+/** Paginates `O11Y_INBOX.list()` under `inbox/` into the shape `ledger.ts`
+ *  needs — R2 `list()` returns up to 1000 objects per page and, per key,
+ *  `.size`/`.uploaded` at no extra request cost (T03-D, see the task
+ *  Outcome: chosen over a `.head()` per key, which would cost one
+ *  subrequest per backlog key on every cron tick). */
+async function listInboxObjects(bucket: R2Bucket): Promise<InboxObjectInfo[]> {
+  const out: InboxObjectInfo[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const page = await bucket.list({ prefix: "inbox/", cursor, limit: 1000 });
+    for (const obj of page.objects) out.push({ key: obj.key, size: obj.size, uploaded: obj.uploaded });
+    if (!page.truncated) break;
+    cursor = page.cursor;
+  }
+  return out;
+}
 
 /** `this.ctx.storage` (a real `DurableObjectStorage`) adapted to
  *  {@link StorageLike} — see `storage.ts`'s header for why `get`/`getMany`
@@ -105,6 +147,63 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     await this.schedulePackAlarm(storage, result.bytesAdded);
 
     return { results: result.results };
+  }
+
+  // ---- T03 additions (ledger, backlog, drain support) --------------------
+
+  async resolveWakes(): Promise<void> {
+    const storage = adaptStorage(this.ctx.storage);
+    const { resolved } = await resolveOverWakes(storage, {
+      isBoxRunning: () => getGrafanaBoxStub(this.env).isAwake(),
+      markerExists: async (wakeId) => {
+        const head = await this.env.O11Y_LOKI_STATE.head(`${CLEAN_MARKER_PREFIX}${wakeId}/clean`);
+        return head !== null;
+      },
+    });
+    // ADR §5's `o11y.wake` "outcome: clean, unclean" — written here, at
+    // resolution time, because only the ledger (not `box.ts`, which writes
+    // its own `o11y.wake` at wake-start with `duration_ms` instead) ever
+    // learns whether a wake's stop was clean.
+    for (const w of resolved) {
+      writePointFromDo(
+        this.env,
+        this.ctx,
+        toAePoint(
+          "o11y.wake",
+          { count: 1 },
+          { ...o11ySelfIdentity(this.env), reason: w.reason, outcome: w.clean ? "clean" : "unclean" },
+        ),
+      );
+    }
+  }
+
+  async backlog(): Promise<{ oldestWrittenAgeMs: number; totalBytes: number; writtenCount: number; drainsPaused: boolean }> {
+    await this.resolveWakes();
+    const storage = adaptStorage(this.ctx.storage);
+    const drainsPaused = (await storage.get<boolean>(DRAINS_PAUSED_STORAGE_KEY)) ?? false;
+    return ledgerComputeBacklog(storage, () => listInboxObjects(this.env.O11Y_INBOX), drainsPaused);
+  }
+
+  async nextWrittenKeys(limit: number): Promise<string[]> {
+    return ledgerNextWrittenKeys(adaptStorage(this.ctx.storage), limit);
+  }
+
+  async markKeysProvisional(wakeId: string, keys: string[]): Promise<void> {
+    await ledgerMarkKeysProvisional(adaptStorage(this.ctx.storage), wakeId, keys);
+  }
+
+  async rejectKey(key: string, reason: string): Promise<void> {
+    await ledgerRejectKey(adaptStorage(this.ctx.storage), key, reason);
+  }
+
+  async reopenWindow(fromMs: number, toMs: number): Promise<{ reopened: number }> {
+    const storage = adaptStorage(this.ctx.storage);
+    const active = await ledgerCurrentWakeId(storage);
+    return ledgerReopenWindow(storage, fromMs, toMs, active);
+  }
+
+  async currentWakeId(): Promise<string | null> {
+    return ledgerCurrentWakeId(adaptStorage(this.ctx.storage));
   }
 
   /** ADR §B.2 step 6: pack on a 60 s alarm, or immediately once a single

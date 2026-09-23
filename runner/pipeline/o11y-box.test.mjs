@@ -26,6 +26,15 @@ function makeStorage() {
     async put(key, value) {
       map.set(key, value);
     },
+    // T03 fix round I1: `#doWake` now resets `LAST_GRAFANA_STORAGE_KEY` via
+    // `ctx.storage.delete()` on every wake — this fake needed the method
+    // added so every existing `wake()` test here (which all go through
+    // `#doWake`) keeps working, the same class of shared-fixture addition
+    // T03 already made to `cloudflare-containers-stub.mjs#schedule` for
+    // its own hard-cap scheduling.
+    async delete(key) {
+      return map.delete(key);
+    },
     _map: map,
   };
 }

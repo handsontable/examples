@@ -1,0 +1,350 @@
+// GrafanaBox's T03 additions (wake/drain/stop orchestration, ADR-0041 §A) —
+// driven through the REAL class, same pattern `o11y-box.test.mjs` (T01) uses.
+// `schedule()` is monkey-patched per instance (the stub Container class has
+// no scheduling machinery at all, and this suite only needs to prove WHAT
+// GrafanaBox schedules and WHEN it decides to stop — not re-test
+// Cloudflare's own alarm dispatch).
+//
+// Run: node --experimental-strip-types --test pipeline/*.test.mjs
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import { register } from "node:module";
+import { hooks, defaultHooks } from "./fixtures/cloudflare-containers-stub.mjs";
+
+register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
+
+const { GrafanaBox } = await import("../workers/o11y/src/box.ts");
+
+// ---- fakes ------------------------------------------------------------
+
+function makeStorage() {
+  const map = new Map();
+  return {
+    async get(key) {
+      return map.get(key);
+    },
+    async put(key, value) {
+      map.set(key, value);
+    },
+    async delete(key) {
+      return map.delete(key);
+    },
+    _map: map,
+  };
+}
+
+function makeInboxWriterStub(overrides = {}) {
+  const calls = { resolveWakes: 0, markKeysProvisional: [], rejectKey: [] };
+  return {
+    async recordWake() {},
+    async resolveWakes() {
+      calls.resolveWakes++;
+    },
+    async nextWrittenKeys() {
+      return overrides.writtenKeys ?? [];
+    },
+    async markKeysProvisional(wakeId, keys) {
+      calls.markKeysProvisional.push({ wakeId, keys });
+    },
+    async rejectKey(key, reason) {
+      calls.rejectKey.push({ key, reason });
+    },
+    calls,
+  };
+}
+
+function makeEnv(overrides = {}) {
+  const inboxWriterStub = overrides.inboxWriterStub ?? makeInboxWriterStub(overrides.inboxWriter);
+  const inboxWriterNamespace = { jurisdiction: () => ({ getByName: () => inboxWriterStub }) };
+  const r2Objects = overrides.r2Objects ?? new Map();
+  const O11Y_INBOX = {
+    async get(key) {
+      const bytes = r2Objects.get(key);
+      if (!bytes) return null;
+      return { async arrayBuffer() { return bytes.buffer; } };
+    },
+  };
+  const O11Y_MAPS = { async get() { return null; } };
+  const ae = { points: [], writeDataPoint(p) { this.points.push(p); } };
+
+  const env = {
+    INBOX_WRITER: inboxWriterNamespace,
+    GRAFANA_BOX: { jurisdiction: () => ({ getByName: () => ({}) }) },
+    CLOUDFLARE_ACCOUNT_ID: "test-account-id",
+    LOKI_S3_ACCESS_KEY_ID: "test-key-id",
+    LOKI_S3_SECRET_ACCESS_KEY: "test-secret",
+    AE_SQL_TOKEN: "test-ae-token",
+    O11Y_ENV: "production",
+    O11Y_INBOX,
+    O11Y_MAPS,
+    RUNNER_EVENTS: ae,
+    ...overrides.env,
+  };
+  return { env, inboxWriterStub, ae };
+}
+
+function makeBox(overrides = {}) {
+  const { env, inboxWriterStub, ae } = makeEnv(overrides);
+  const ctx = { storage: makeStorage(), waitUntil: (p) => Promise.resolve(p).catch(() => {}) };
+  const box = new GrafanaBox(ctx, env);
+  const scheduled = [];
+  box.schedule = async (when, callback, payload) => {
+    scheduled.push({ when, callback, payload });
+  };
+  return { box, ctx, env, inboxWriterStub, ae, scheduled };
+}
+
+/** Routes the stub's `containerFetch` by port/path, the way a real box
+ *  would: `/ready` (3100) and `/grafana/api/health` (3000) answer `isReady`;
+ *  `/otlp/v1/logs` (3100) is the drain's own push, controllable per test. */
+function installContainerFetchRouter({ otlp } = {}) {
+  hooks.containerFetch = async (_self, requestOrUrl, portOrInit) => {
+    const url = requestOrUrl instanceof Request ? requestOrUrl.url : String(requestOrUrl);
+    const port = typeof portOrInit === "number" ? portOrInit : undefined;
+    if (url.includes("/ready") || url.includes("/grafana/api/health")) {
+      return new Response(null, { status: 200 });
+    }
+    if (url.includes("/otlp/v1/logs")) {
+      return otlp ? otlp(requestOrUrl, port) : new Response(null, { status: 204 });
+    }
+    return new Response("unrouted", { status: 500 });
+  };
+}
+
+test.beforeEach(() => {
+  Object.assign(hooks, defaultHooks());
+  // The stub's own default `start` hook only sets state — the real
+  // `Container.start()` also calls `onStart()` (`blockConcurrencyWhile`),
+  // which GrafanaBox's own T03 addition relies on to kick off the drain.
+  // Every test below needs that real contract, not just the stub's
+  // state-only default.
+  hooks.start = async (self, _startOptions) => {
+    self._state = { status: "running", lastChange: Date.now() };
+    await self.onStart();
+  };
+});
+
+// ---- onStart --------------------------------------------------------------
+
+test("onStart schedules drainStep with the wake's own id", async () => {
+  const { box, scheduled } = makeBox();
+  await box.wake("backlog"); // -> start() -> hooks.start -> onStart(); #doWake also schedules the hard cap
+  const wake = await box.ctx.storage.get("wake");
+  const drainStepCalls = scheduled.filter((s) => s.callback === "drainStep");
+  assert.equal(drainStepCalls.length, 1);
+  assert.equal(drainStepCalls[0].payload.wakeId, wake.wakeId);
+});
+
+test("onStart also schedules the 4-hour hard cap, at wake time", async () => {
+  const { box, scheduled } = makeBox();
+  await box.wake("visit");
+  const hardCap = scheduled.find((s) => s.callback === "hardCapStop");
+  assert.ok(hardCap, "hardCapStop must be scheduled");
+  const gapMs = hardCap.when.getTime() - Date.now();
+  assert.ok(gapMs > 3.9 * 60 * 60 * 1000 && gapMs <= 4 * 60 * 60 * 1000 + 1000, `expected ~4h, got ${gapMs}ms`);
+});
+
+// ---- drainStep: readiness gate -------------------------------------------
+
+test("drainStep reschedules itself, without touching InboxWriter, while the box is not yet HTTP-ready", async () => {
+  const { box, inboxWriterStub, scheduled } = makeBox();
+  await box.wake("backlog");
+  hooks.containerFetch = async () => new Response(null, { status: 503 }); // not ready yet
+  scheduled.length = 0;
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(inboxWriterStub.calls.resolveWakes, 0, "must not call the ledger before HTTP readiness");
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].callback, "drainStep");
+});
+
+test("drainStep is a no-op once a newer wake has superseded the payload's wakeId", async () => {
+  const { box, inboxWriterStub, scheduled } = makeBox();
+  await box.wake("backlog");
+  const staleWakeId = (await box.ctx.storage.get("wake")).wakeId;
+  // Simulate the OLD wake having fully stopped by now (not merely
+  // "stopping" — wake() deliberately refuses while stopping, C1) so the
+  // next wake() call actually mints a fresh id, the real shape a superseded
+  // step sees in production.
+  box._state = { status: "stopped", lastChange: Date.now() };
+  await box.wake("backlog"); // a fresh wakeId now in storage
+  scheduled.length = 0;
+
+  await box.drainStep({ wakeId: staleWakeId });
+
+  assert.equal(inboxWriterStub.calls.resolveWakes, 0);
+  assert.equal(scheduled.length, 0, "a superseded step must not even reschedule itself");
+});
+
+// ---- drainStep: pushes and ledger updates --------------------------------
+
+test("drainStep pushes drained records and marks the key provisional on 2xx", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const gz = await (async () => {
+    const record = {
+      resource: { attributes: [] },
+      scopeLogs: [{ logRecords: [{ timeUnixNano: "1000000000", body: { stringValue: "hello" } }] }],
+    };
+    const ndjson = JSON.stringify(record) + "\n";
+    const stream = new Blob([ndjson]).stream().pipeThrough(new CompressionStream("gzip"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  })();
+  const r2Objects = new Map([[key, gz]]);
+
+  const { box, inboxWriterStub, ae } = makeBox({ inboxWriter: { writtenKeys: [key] }, r2Objects });
+  await box.wake("backlog");
+  installContainerFetchRouter({ otlp: () => new Response(null, { status: 204 }) });
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 1);
+  assert.deepEqual(inboxWriterStub.calls.markKeysProvisional[0].keys, [key]);
+  assert.ok(ae.points.some((p) => p.indexes?.[0] === "o11y.drain" || p.blobs), "an o11y.drain point should be written");
+});
+
+test("drainStep rejects a key on a 400 from Loki, with the message, and does not mark it provisional", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
+  const record = { resource: { attributes: [] }, scopeLogs: [{ logRecords: [{ timeUnixNano: "1", body: { stringValue: "x" } }] }] };
+  const ndjson = JSON.stringify(record) + "\n";
+  const stream = new Blob([ndjson]).stream().pipeThrough(new CompressionStream("gzip"));
+  const gz = new Uint8Array(await new Response(stream).arrayBuffer());
+  const r2Objects = new Map([[key, gz]]);
+
+  const { box, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [key] }, r2Objects });
+  await box.wake("backlog");
+  installContainerFetchRouter({ otlp: () => new Response("too_far_behind", { status: 400 }) });
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 0);
+  assert.equal(inboxWriterStub.calls.rejectKey.length, 1);
+  assert.equal(inboxWriterStub.calls.rejectKey[0].key, key);
+  assert.match(inboxWriterStub.calls.rejectKey[0].reason, /too_far_behind/);
+});
+
+// ---- post-drain stop decision --------------------------------------------
+
+test("an idle drain (no recent /grafana/* activity) stops right after finishing", async () => {
+  const { box } = makeBox({ inboxWriter: { writtenKeys: [] } });
+  await box.wake("backlog");
+  installContainerFetchRouter();
+  let stopped = false;
+  hooks.stop = async (self) => {
+    stopped = true;
+    self._state = { status: "stopping", lastChange: Date.now() };
+  };
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.ok(stopped, "an idle backlog drain must call stop() right after finishing");
+});
+
+test("fix round I1: a fresh backlog wake with no visitors self-stops, even right after a PREVIOUS wake had a recent visitor", async () => {
+  // Two consecutive wakes: wake 1 has a real visitor (noteVisitorActivity),
+  // then fully stops; wake 2 is a fresh backlog-only wake with NO visitor
+  // activity of its own. `LAST_GRAFANA_STORAGE_KEY` is not scoped by
+  // wakeId, so without resetting it at the start of #doWake, wake 2's own
+  // #finishDrain reads wake 1's still-recent timestamp and wrongly treats
+  // itself as "not quiet," refusing to self-stop a backlog wake nobody is
+  // visiting — exactly ADR §A's quiet-stop rule broken, and awake-time
+  // wasted (exit criterion 7). Reverting the `ctx.storage.delete(...)` in
+  // #doWake (box.ts, fix round I1) makes this fail: `stopped` stays false.
+  const { box } = makeBox({ inboxWriter: { writtenKeys: [] } });
+  installContainerFetchRouter();
+
+  // Wake 1: a real visitor.
+  await box.wake("visit");
+  await box.noteVisitorActivity();
+  const wake1 = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake1.wakeId }); // drains (nothing to do), stays up (active visitor)
+  assert.equal((await box.getState()).status, "healthy", "wake 1 must still be running (active visitor)");
+
+  // Wake 1 fully stops (simulating its own eventual idle/hard-cap stop) —
+  // not merely "stopping", so wake() mints a genuinely new id next.
+  box._state = { status: "stopped", lastChange: Date.now() };
+
+  // Wake 2: backlog-triggered, no visitor of its own.
+  await box.wake("backlog");
+  const wake2 = await box.ctx.storage.get("wake");
+  assert.notEqual(wake2.wakeId, wake1.wakeId, "wake 2 must be a genuinely new wake");
+
+  let stopped = false;
+  hooks.stop = async (self) => {
+    stopped = true;
+    self._state = { status: "stopping", lastChange: Date.now() };
+  };
+
+  await box.drainStep({ wakeId: wake2.wakeId });
+
+  assert.ok(stopped, "a fresh backlog wake with no visitors of its own must self-stop, regardless of the PREVIOUS wake's visitor activity");
+});
+
+test("a drain wake with an active Grafana user does not call stop()", async () => {
+  const { box } = makeBox({ inboxWriter: { writtenKeys: [] } });
+  await box.wake("visit");
+  installContainerFetchRouter();
+  await box.noteVisitorActivity(); // a real /grafana/* request just landed
+  let stopped = false;
+  hooks.stop = async () => { stopped = true; };
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(stopped, false, "an active Grafana user must not be SIGTERMed by a drain finishing");
+});
+
+// ---- hardCapStop ------------------------------------------------------
+
+test("hardCapStop stops a still-running wake matching its own wakeId", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  let stopped = false;
+  hooks.stop = async (self) => {
+    stopped = true;
+    self._state = { status: "stopping", lastChange: Date.now() };
+  };
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.hardCapStop({ wakeId: wake.wakeId });
+
+  assert.ok(stopped);
+});
+
+test("hardCapStop is a no-op once a newer wake has started", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  const staleWakeId = (await box.ctx.storage.get("wake")).wakeId;
+  box._state = { status: "stopped", lastChange: Date.now() };
+  await box.wake("visit");
+  let stopped = false;
+  hooks.stop = async () => { stopped = true; };
+
+  await box.hardCapStop({ wakeId: staleWakeId });
+
+  assert.equal(stopped, false);
+});
+
+// ---- isAwake / noteVisitorActivity ---------------------------------------
+
+test("isAwake reflects getState(): true while running/healthy, false otherwise", async () => {
+  const { box } = makeBox();
+  assert.equal(await box.isAwake(), false);
+  await box.wake("backlog");
+  assert.equal(await box.isAwake(), true);
+});
+
+test("noteVisitorActivity persists a timestamp lastGrafanaActivityMs reads back", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  assert.equal(await box.lastGrafanaActivityMs(), null);
+  const before = Date.now();
+  await box.noteVisitorActivity();
+  const after = await box.lastGrafanaActivityMs();
+  assert.ok(after >= before);
+});
