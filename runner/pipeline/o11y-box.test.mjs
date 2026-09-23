@@ -395,6 +395,40 @@ test("containerFetch(): refuses with 503 and never auto-starts when the box is s
   assert.equal(containerFetchCalls, 0);
 });
 
+test("F2 fix (B-I4): a STALE persisted status (healthy) with the REAL container not running is refused, never falls through to the base class's own auto-start", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  hooks.start = async (self) => {
+    self._state = { status: "healthy", lastChange: Date.now() };
+  };
+  await box.wake("visit"); // wake() itself is a no-op here (already "running"/"healthy") — just re-asserts state
+
+  // Model exactly the B-I4 scenario: `getState()` still says "healthy" (a
+  // host loss the persisted status has not caught up with yet — its own
+  // doc comment says this can lag "a few minutes"), but the REAL container
+  // process is gone. Deliberately desyncs `ctx.container.running` from
+  // `_state` — every OTHER test in this file relies on the stub's setter
+  // keeping them in lockstep automatically; this is the one place that
+  // breaks it on purpose.
+  assert.equal((await box.getState()).status, "healthy", "persisted status is still stale-healthy");
+  box.ctx.container.running = false;
+
+  let baseContainerFetchCalls = 0;
+  hooks.containerFetch = async () => {
+    baseContainerFetchCalls++;
+    return new Response("should never be reached", { status: 200 });
+  };
+
+  const res = await box.containerFetch(new Request("https://box.example/grafana/"));
+
+  assert.equal(res.status, 503);
+  assert.equal(
+    baseContainerFetchCalls,
+    0,
+    "the base class's own containerFetch (which would auto-start with empty envVars on !container.running) must never be reached",
+  );
+});
+
 // --- onStop(): records what it was told, nothing more ---------------------
 
 test("onStop(): records exactly what it received, tagged with the wake it was tracking", async () => {

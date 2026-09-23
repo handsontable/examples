@@ -412,6 +412,33 @@ export class GrafanaBox extends Container<Env> {
       // what a caller serves instead of retrying this blindly.
       return new Response("GrafanaBox is not running — call wake() first.", { status: 503 });
     }
+    // F2 fix (final review, B-I4): `getState()` is this class's own
+    // PERSISTED record and can lag the REAL container by up to a few
+    // minutes after a host loss (see `isAwake()`'s own doc comment above —
+    // the base class's periodic monitor reconciliation is what eventually
+    // catches up). A request landing in that stale window (any open tab, or
+    // `drainStep`'s own `isReady()` probe, firing every second) would pass
+    // the check above and fall through to the base class's own
+    // `containerFetch`, which restarts a container the moment it observes
+    // `!this.container.running` — regardless of what THIS override decided
+    // — using `this.envVars`, which `#doWake` never assigns (only `start()`'s
+    // own `{ envVars }` parameter carries it), so that restart boots with NO
+    // `WAKE_ID`/S3 credentials/datasource env at all. `this.ctx.container`
+    // (a real, public `DurableObjectState` field — distinct from the base
+    // library's own `this.container`, which is `private` and inaccessible
+    // from a subclass at the type level) is the live signal, so checking it
+    // here — in addition to the persisted `state.status` above — closes
+    // that window: a request arriving during it is refused (503) rather
+    // than silently starting an unminted container. Deliberately does NOT
+    // try to self-heal by calling anything on `this.container`/`envVars`
+    // here (T02's own note on the rejected fix: assigning `this.envVars` in
+    // `#doWake` risks the base class's OWN restart racing a real wake and
+    // booting a second process under the SAME `WAKE_ID`) — the base class's
+    // periodic alarm/monitor reconciliation is what closes the stale window
+    // on its own, well within the cron's 10-minute cadence.
+    if (this.ctx.container?.running !== true) {
+      return new Response("GrafanaBox is not running — call wake() first.", { status: 503 });
+    }
 
     return super.containerFetch(requestOrUrl, portOrInit, portParam);
   }

@@ -241,18 +241,55 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
     fresh.push(record);
   }
 
+  // F2 fix (final review, B cross-note "a drain 400 skips the key's
+  // remaining chunks, and Loki accepts part of a 400 — don't lose valid
+  // records"): a 400 is a PERMANENT rejection of that one chunk (a 400 is
+  // never retried, above), but it says nothing about the chunks after it —
+  // the previous version `return`ed immediately on the first 400, so any
+  // later chunk of the SAME key (a >1 MB object splits into several) was
+  // never even attempted, silently dropping records that would otherwise
+  // have pushed cleanly. Every chunk is now always attempted; a 400 is
+  // remembered (the first one, for `reason`) but does not stop the loop. A
+  // genuine outage (429/5xx exhausted) still stops immediately and reports
+  // `error` — unlike a 400, an outage is evidence the REST of this key's
+  // chunks would fail too, and `error` already tells `drainBatch` to leave
+  // the rest of the WHOLE BATCH `written` for a later wake, which is the
+  // correct behaviour for a transient failure (a 400 is not transient).
+  //
+  // Chosen semantics for the "some chunks 2xx, one chunk 400" case (see
+  // F2-report.md for the fuller reasoning the advisor review settled on):
+  // the key still ends `rejected` overall — the ledger has no per-chunk
+  // state, only per-key, so a key that had ANY genuine (not just
+  // too-old-and-filtered) rejection cannot be marked `provisional`/
+  // `committed` without a marker check that has nothing to distinguish
+  // "half this key's data is in Loki" from "committed." The already-pushed
+  // chunks' records ARE durably in Loki by this point regardless (this
+  // function does not undo a successful push) — `rejected` only means THIS
+  // key is never automatically retried; `POST /grafana/_o11y/reopen` is the
+  // existing manual escape hatch once whatever caused the 400 is fixed, and
+  // a re-push of the already-successful chunks is a harmless duplicate
+  // (query-time dedup, ADR §B.3's own "what an unclean stop costs"
+  // paragraph already relies on exactly this property). This is a
+  // deliberately conservative choice: it does not invent a new ledger
+  // state, and it never re-attempts a chunk Loki has already 400'd once.
   let bytesPushed = 0;
+  let rejectedReason: string | undefined;
   for (const chunk of chunkBySize(fresh)) {
     const { result, bytesPushed: chunkBytes } = await pushChunkWithRetry(tenant, chunk, deps);
     bytesPushed += chunkBytes;
     if (result.status === 400) {
-      return { key, tenant, outcome: "rejected", reason: result.message ?? "loki_400", bytesPushed, droppedOld };
+      rejectedReason ??= result.message ?? "loki_400";
+      continue; // keep pushing the REST of this key's chunks — don't lose them
     }
     if (result.status < 200 || result.status >= 300) {
+      // A live outage: stop this key's remaining chunks AND the batch.
       return { key, tenant, outcome: "error", reason: result.message ?? `loki_${result.status}`, bytesPushed, droppedOld };
     }
   }
 
+  if (rejectedReason !== undefined) {
+    return { key, tenant, outcome: "rejected", reason: rejectedReason, bytesPushed, droppedOld };
+  }
   return { key, tenant, outcome: "provisional", bytesPushed, droppedOld };
 }
 

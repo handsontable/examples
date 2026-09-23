@@ -26,6 +26,13 @@ function makeBoxStub(overrides = {}) {
     async isReady() {
       return overrides.ready ?? true;
     },
+    // F2 fix (B-I3): defaults to already-awake, so every EXISTING test above
+    // (none of which cares about the wake-gating change) keeps its current
+    // pass-through behaviour unchanged; only a test that explicitly sets
+    // `isAwake: false` exercises the new gate.
+    async isAwake() {
+      return overrides.isAwake ?? true;
+    },
     async noteVisitorActivity() {
       calls.noteVisitorActivity++;
     },
@@ -136,12 +143,70 @@ test("/grafana/* serves the waking page instead of erroring when wake() refuses 
   assert.equal(await res.text(), wakingPageHtml());
 });
 
+// ---- F2 fix (B-I3): only a top-level navigation may START a stopped box ---
+
+test("B-I3: a background request (sec-fetch-dest: empty) never wakes a stopped box — serves the waking page without calling wake()", async () => {
+  const box = makeBoxStub({ isAwake: false });
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  const req = new Request("https://demos.handsontable.com/grafana/api/ds/query", {
+    headers: { "sec-fetch-dest": "empty", "sec-fetch-mode": "cors" },
+  });
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), wakingPageHtml());
+  assert.deepEqual(box.calls.wake, [], "a background XHR must never mint a fresh wake on a stopped box");
+});
+
+test("B-I3: a top-level navigation (sec-fetch-dest: document) still wakes a stopped box", async () => {
+  const box = makeBoxStub({ isAwake: false, ready: true });
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  const req = new Request("https://demos.handsontable.com/grafana/d/abc", {
+    headers: { "sec-fetch-dest": "document", "sec-fetch-mode": "navigate" },
+  });
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "grafana-body");
+  assert.deepEqual(box.calls.wake, ["visit"]);
+});
+
+test("B-I3: a request with no Fetch Metadata headers at all (old browser, CLI, most tests) still wakes — fails open on absence, not on presence", async () => {
+  const box = makeBoxStub({ isAwake: false, ready: true });
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  const req = new Request("https://demos.handsontable.com/grafana/d/abc");
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(box.calls.wake, ["visit"]);
+});
+
+test("B-I3: a background request while the box IS already awake still renews activity normally (only STARTING is gated)", async () => {
+  const box = makeBoxStub({ isAwake: true, ready: true });
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  const req = new Request("https://demos.handsontable.com/grafana/api/ds/query", {
+    headers: { "sec-fetch-dest": "empty", "sec-fetch-mode": "cors" },
+  });
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "grafana-body");
+  assert.deepEqual(box.calls.wake, ["visit"], "wake() is idempotent and safe once already awake");
+});
+
 // ---- POST /grafana/_o11y/reopen --------------------------------------------
+
+const JSON_HEADERS = { "content-type": "application/json" };
 
 test("POST /grafana/_o11y/reopen requires Access too", async () => {
   const { env } = makeEnv({ o11yEnv: "production" });
   const req = new Request("https://demos.handsontable.com/grafana/_o11y/reopen", {
     method: "POST",
+    headers: JSON_HEADERS,
     body: JSON.stringify({ fromMs: 0, toMs: 1 }),
   });
   const res = await handleReopen(req, env, {});
@@ -159,6 +224,7 @@ test("POST /grafana/_o11y/reopen calls InboxWriter.reopenWindow with the given w
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", inboxWriterStub });
   const req = new Request("https://demos.handsontable.com/grafana/_o11y/reopen", {
     method: "POST",
+    headers: JSON_HEADERS,
     body: JSON.stringify({ fromMs: 1000, toMs: 2000 }),
   });
 
@@ -176,7 +242,56 @@ test("POST /grafana/_o11y/reopen rejects a malformed body with 400, never reachi
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", inboxWriterStub });
   const req = new Request("https://demos.handsontable.com/grafana/_o11y/reopen", {
     method: "POST",
+    headers: JSON_HEADERS,
     body: JSON.stringify({ fromMs: "not-a-number" }),
+  });
+
+  const res = await handleReopen(req, env, {});
+
+  assert.equal(res.status, 400);
+  assert.equal(called, false);
+});
+
+// ---- F2 fix (B-M9): CSRF hardening and the retention-window cap -----------
+
+test("B-M9: a non-application/json content-type is refused with 415, never reaching the ledger (CSRF: a cross-site 'simple' request cannot set this header)", async () => {
+  let called = false;
+  const inboxWriterStub = { async reopenWindow() { called = true; return { reopened: 0 }; } };
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", inboxWriterStub });
+  const req = new Request("https://demos.handsontable.com/grafana/_o11y/reopen", {
+    method: "POST",
+    headers: { "content-type": "text/plain" },
+    body: JSON.stringify({ fromMs: 0, toMs: 1000 }),
+  });
+
+  const res = await handleReopen(req, env, {});
+
+  assert.equal(res.status, 415);
+  assert.equal(called, false);
+});
+
+test("B-M9: application/json with parameters (charset) is still accepted", async () => {
+  const inboxWriterStub = { async reopenWindow() { return { reopened: 0 }; } };
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", inboxWriterStub });
+  const req = new Request("https://demos.handsontable.com/grafana/_o11y/reopen", {
+    method: "POST",
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ fromMs: 0, toMs: 1000 }),
+  });
+
+  const res = await handleReopen(req, env, {});
+  assert.equal(res.status, 200);
+});
+
+test("B-M9: a window wider than the 7-day retention is refused with 400, never reaching the ledger", async () => {
+  let called = false;
+  const inboxWriterStub = { async reopenWindow() { called = true; return { reopened: 0 }; } };
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", inboxWriterStub });
+  const eightDaysMs = 8 * 24 * 60 * 60 * 1000;
+  const req = new Request("https://demos.handsontable.com/grafana/_o11y/reopen", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ fromMs: 0, toMs: eightDaysMs }),
   });
 
   const res = await handleReopen(req, env, {});

@@ -153,6 +153,16 @@ export function pendingRowStorageKey(n: number): string {
 export function inboxKeyStorageKey(key: string): string {
   return `key:${key}`;
 }
+/** F2 fix (B-C1/A-I1): a `key:<inbox key>` entry that reaches `committed`
+ *  moves OUT of the `key:` prefix entirely into `done:<inbox key>` (see
+ *  contract §8) — `key:` then holds only `written`/`provisional:*`/
+ *  `rejected:*`, the live set every drain/backlog/resolve read cares about,
+ *  never the (unbounded, ever-growing) committed history. `done:` entries
+ *  are themselves pruned by retention (`ledger.ts#pruneLedger`) and are
+ *  only consulted by a manual reopen of an old window. */
+export function doneKeyStorageKey(key: string): string {
+  return `done:${key}`;
+}
 export function hashStorageKey(sha256Hex: string): string {
   return `hash:${sha256Hex}`;
 }
