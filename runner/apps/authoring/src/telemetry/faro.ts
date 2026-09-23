@@ -29,6 +29,9 @@ import {
   ATTR_HOT_METRIC_KIND,
   ATTR_HOT_REF,
   ATTR_HOT_AREA,
+  ATTR_HOT_BUCKET,
+  ATTR_HOT_REASON,
+  ATTR_HOT_FINGERPRINT,
   type EventName,
   type HotAttrs,
   type MetricName,
@@ -57,7 +60,9 @@ const beforeSend: BeforeSendHook = (item) =>
  *   (`surface`→`hot.surface` etc) — survive as §3 resource attributes/Loki
  *   labels.
  * - `kind`/`ref`/`area` → `hot.metric_kind`/`hot.ref`/`hot.area` (T12,
- *   ADR-0042) — `attrs.ts#AE_ONLY_ATTRIBUTE_KEYS`, T02-D4's AE-only channel
+ *   ADR-0042) and `bucket`/`reason`/`fingerprint` → `hot.bucket`/
+ *   `hot.reason`/`hot.fingerprint` (T07 fix round, controller ruling) —
+ *   `attrs.ts#AE_ONLY_ATTRIBUTE_KEYS`, T02-D4's AE-only channel
  *   (`workers/o11y/src/normalise/browser-attrs.ts#readAeOnlyAttrs`): these
  *   survive the allowlist too, but `convert.ts#hoistAttributes` never hoists
  *   them into a stored record — only `toAePoint` (via `readAeOnlyAttrs`) ever
@@ -80,6 +85,9 @@ const DOTTED_ATTR_KEY: Partial<Record<string, string>> = {
   kind: ATTR_HOT_METRIC_KIND,
   ref: ATTR_HOT_REF,
   area: ATTR_HOT_AREA,
+  bucket: ATTR_HOT_BUCKET,
+  reason: ATTR_HOT_REASON,
+  fingerprint: ATTR_HOT_FINGERPRINT,
 };
 
 /** Stringify a `HotAttrs` bag for Faro's `Record<string, string>`

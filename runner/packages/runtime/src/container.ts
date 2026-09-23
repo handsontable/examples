@@ -13,8 +13,15 @@ import type {
   DemoRuntime,
   FilesMap,
   HandsontableVersionRef,
+  HmrRoundtripEvent,
+  SessionStartTimingEvent,
   WriteFileOptions,
 } from "./types.js";
+// Re-exported so existing `@handsontable/demo-runtime/container` importers
+// (this task's own `apps/authoring/src/telemetry/metrics.ts`) keep working —
+// the interfaces themselves now live in `types.ts` (T07 phase 2), so
+// `DemoRuntime` can name the hook methods without a circular import.
+export type { HmrRoundtripEvent, SessionStartTimingEvent } from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 import { MONITOR_EVENT_CEILING, normalizeMonitorMessage, truncateMessage } from "./monitor.js";
@@ -326,6 +333,37 @@ const RELOAD_TIMEOUT_MS = 10_000;
 const FAILED_POLL_INTERVAL_MS = 10_000;
 const FAILED_POLLS_MAX = 12;
 
+// Observability contract §5 timing hooks (T07): `SessionStartTimingEvent`,
+// `HmrRoundtripEvent` and the `onSessionStart`/`onHmr` methods below are now
+// declared on `DemoRuntime` itself (`types.ts`), as OPTIONAL members — this
+// module implements them, never imports
+// `@handsontable/demo-runtime/telemetry`, and `apps/authoring/src/
+// telemetry/metrics.ts#wireRuntimeMetrics` is what turns the callbacks into
+// `session.start_ms`/`hmr.roundtrip_ms` points against an injected
+// `Telemetry`, through `runtime.onX?.(cb)` — no cast to the concrete class
+// needed at the call site.
+
+/**
+ * Classify a failed `POST /api/session` the same way `sessionStartMessage` already
+ * tiers it for the user-facing message, but onto `session.start`'s outcome set
+ * (§5) instead of a sentence. Mirrors that function's precedence exactly — in
+ * particular the DEMOS-9 interception case (an envelope-less, ray-less 504) is
+ * checked before the generic timeout tier, because 504 is a member of both: "the
+ * response carries no sign of having come from our servers" is not a boot timeout.
+ */
+function classifySessionStartOutcome(
+  status: number,
+  failure: { code?: string; envelope: boolean },
+  edge: { ray: string | null; headersReadable: boolean },
+): SessionStartTimingEvent["outcome"] {
+  if (failure.code?.startsWith("budget_")) return "budget_denied";
+  if (failure.code === "at_capacity") return "at_capacity";
+  if (failure.code === "container_starting") return "container_starting";
+  if (!failure.envelope && status === UNREACHED_STATUS && edge.headersReadable && !edge.ray) return "error";
+  if (!failure.envelope && TIMEOUT_STATUSES.has(status)) return "boot_timeout";
+  return "error";
+}
+
 /** The live-session API accepts only relative POSIX paths. */
 function relativeFiles(files: FilesMap): FilesMap {
   return Object.fromEntries(
@@ -385,6 +423,17 @@ export class ContainerRuntime implements DemoRuntime {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly progressCbs = new Set<(log: string) => void>();
   private readonly stderrCbs = new Set<(line: string) => void>();
+  // ---- T07 timing hooks ---------------------------------------------------
+  private readonly sessionStartCbs = new Set<(e: SessionStartTimingEvent) => void>();
+  private readonly hmrCbs = new Set<(e: HmrRoundtripEvent) => void>();
+  /** Set true for the span of an explicit `reload()` navigation, so `onFrameLoad`
+   *  does not mistake it for an HMR-driven full-page reload. */
+  private reloadInFlight = false;
+  /** When the most recent post-ready edit was flushed to the dev server (§5
+   *  `hmr.roundtrip_ms`'s dispatch clock) — set only once the preview is already
+   *  ready, by `flush()`, and consumed by the next `onFrameLoad` that is not our
+   *  own `reload()`. */
+  private lastEditFlushDispatchedAt: number | null = null;
   /** Dev-server stderr lines already relayed, keyed on `normalizeMonitorMessage` —
    *  the same fingerprint `sentry.ts` groups the Sentry issue by — so a message the
    *  server repeats every keystroke, or with only its clock changed (a build
@@ -461,6 +510,11 @@ export class ContainerRuntime implements DemoRuntime {
    */
   private readonly onFrameLoad = () => {
     if (this.disposed) return;
+    // Captured before anything below can set `didReady` — a load that arrives
+    // while the preview was already ready is a candidate HMR round trip, and this
+    // is the only navigation where that distinction is a fact about THIS load
+    // rather than about what happens after it (see the block near the end).
+    const wasReadyBeforeThisLoad = this.didReady;
     this.frameLoads += 1;
     const state = this.pendingFrameState;
     this.pendingFrameState = "unknown";
@@ -477,6 +531,16 @@ export class ContainerRuntime implements DemoRuntime {
       // meta-refresh gives us another `load` to judge.
       this.emitProgress("Dev server not answering yet — retrying…");
       return;
+    }
+    // §5 `hmr.roundtrip_ms` (T07). Non-invasive: everything below is unchanged —
+    // this only reports a timing for a load the grace-timer dance below already
+    // treats as ready (a no-op `confirmAndEmitReady`, since `didReady` is already
+    // true). Excludes our own `reload()` navigation (`reloadInFlight`) and the very
+    // first, pre-ready navigation (`wasReadyBeforeThisLoad`). See `HmrRoundtripEvent`.
+    if (wasReadyBeforeThisLoad && !this.reloadInFlight && this.lastEditFlushDispatchedAt !== null) {
+      const durationMs = Math.round(performance.now() - this.lastEditFlushDispatchedAt);
+      this.lastEditFlushDispatchedAt = null;
+      for (const cb of this.hmrCbs) cb({ durationMs });
     }
     this.graceTimer = setTimeout(() => {
       this.graceTimer = null;
@@ -566,6 +630,19 @@ export class ContainerRuntime implements DemoRuntime {
   onStderr(cb: (line: string) => void): void {
     this.stderrCbs.add(cb);
   }
+  /** §5 `session.start_ms` — fires exactly once per `mount()` call, on both the
+   *  success and the failure path (see `mount()`'s try/catch). */
+  onSessionStart(cb: (e: SessionStartTimingEvent) => void): void {
+    this.sessionStartCbs.add(cb);
+  }
+  /** §5 `hmr.roundtrip_ms` — see `HmrRoundtripEvent` for what this does and does
+   *  not observe. */
+  onHmr(cb: (e: HmrRoundtripEvent) => void): void {
+    this.hmrCbs.add(cb);
+  }
+  private emitSessionStart(elapsedMs: number, outcome: SessionStartTimingEvent["outcome"]): void {
+    for (const cb of this.sessionStartCbs) cb({ elapsedMs, outcome });
+  }
   private emitReady() {
     if (this.didReady) return;
     this.didReady = true;
@@ -645,6 +722,10 @@ export class ContainerRuntime implements DemoRuntime {
 
     let previewUrl: string;
     let port: number;
+    // Declared here, not inside the try, so the catch below can still emit §5
+    // `session.start_ms` when `fetch()` itself throws (a raw network error — no
+    // response, and so no `SessionStartError.diagnostics` to read a duration off).
+    let startedAt = performance.now();
     try {
       // Serialised BEFORE the clock starts, not inline in the fetch call below.
       // Argument expressions are evaluated after `startedAt` would have been
@@ -668,7 +749,7 @@ export class ContainerRuntime implements DemoRuntime {
       // fixed ceiling into an apparent spread, destroying the one distinction the
       // number exists to make. `performance.now()` for monotonicity: a clock step
       // must not read as a slow container.
-      const startedAt = performance.now();
+      startedAt = performance.now();
       const res = await fetch(`${this.opts.apiBase}/api/session`, {
         method: "POST",
         headers: {
@@ -712,7 +793,30 @@ export class ContainerRuntime implements DemoRuntime {
         );
       }
       ({ previewUrl, port } = (await res.json()) as { previewUrl: string; port: number });
+      // §5 `session.start_ms`, "ready" — the create POST itself succeeded. Emitted
+      // here, inside the try, so a later `disposed` check (the mid-flight-dispose
+      // race just below) cannot suppress a measurement that already happened.
+      this.emitSessionStart(elapsedMs, "ready");
     } catch (err) {
+      // §5 `session.start_ms` for the failure path, emitted BEFORE `dispose()`
+      // below clears `sessionStartCbs` — a listener added after dispose would never
+      // see it. `SessionStartError` (the res.ok-false branch above) always carries
+      // `diagnostics`; anything else reaching here is `fetch()` itself throwing (a
+      // raw network error), which has no response to read a duration or an edge id
+      // off, only the clock this function already keeps.
+      if (err instanceof SessionStartError && err.diagnostics) {
+        const envelope = typeof err.code === "string";
+        this.emitSessionStart(
+          err.diagnostics.elapsedMs,
+          classifySessionStartOutcome(
+            err.status,
+            { code: err.code, envelope },
+            { ray: err.diagnostics.ray, headersReadable: err.diagnostics.headersReadable },
+          ),
+        );
+      } else {
+        this.emitSessionStart(Math.round(performance.now() - startedAt), "error");
+      }
       // A failed create can still leave a half-created session server-side
       // (the POST handler's file writes boot the container before the step
       // that failed). Tear the runtime down and DELETE by the local id —
@@ -896,6 +1000,10 @@ export class ContainerRuntime implements DemoRuntime {
       } catch { /* a write that failed reports through onError, not through refresh */ }
     }
     if (this.disposed || !this.pointed || !this.previewUrl) return;
+    // Marks the navigation this method is about to make as "ours", so `onFrameLoad`
+    // does not mistake it for an HMR-driven full-page reload (§5 `hmr.roundtrip_ms`,
+    // T07). Cleared in `settle()`, the only way out of the promise below.
+    this.reloadInFlight = true;
     return new Promise<void>((resolve) => {
       const iframe = this.opts.iframe;
       let settled = false;
@@ -905,6 +1013,7 @@ export class ContainerRuntime implements DemoRuntime {
         clearTimeout(timer);
         iframe.removeEventListener("load", settle);
         this.reloadSettlers.delete(settle);
+        this.reloadInFlight = false;
         resolve();
       };
       // A container whose dev server died never navigates, and an unresolved promise
@@ -1021,6 +1130,10 @@ export class ContainerRuntime implements DemoRuntime {
     const batch = [...this.quietPending.entries(), ...this.pending.entries()];
     this.quietPending.clear();
     this.pending.clear();
+    // §5 `hmr.roundtrip_ms` dispatch clock (T07) — only once the preview is already
+    // ready: the buffered flush `mount()` triggers for edits made mid-create is not
+    // an HMR round trip, there is no preview yet for it to refresh.
+    if (this.didReady && batch.length > 0) this.lastEditFlushDispatchedAt = performance.now();
     for (const [path, contents] of batch) {
       // Re-check per iteration: a dispose() during an earlier await must stop
       // the rest of the batch — writes to a torn-down session are pointless
@@ -1072,6 +1185,10 @@ export class ContainerRuntime implements DemoRuntime {
     this.sessionId = null;
     this.readyCbs.clear();
     this.errorCbs.clear();
+    this.sessionStartCbs.clear();
+    this.hmrCbs.clear();
+    this.lastEditFlushDispatchedAt = null;
+    this.reloadInFlight = false;
     if (id) this.deleteSession(id);
   }
 }
