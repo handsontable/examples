@@ -105,6 +105,15 @@ test("faroItemToRecord always sets hot.kind from item.type (§3's closed set), o
   assert.equal(record.attributes["hot.kind"], "log");
 });
 
+test("faroItemToRecord throws on an item.type outside §3's closed set, e.g. 'trace' (Faro's own enum allows it; the contract does not)", () => {
+  const traceItem = { type: "trace", payload: {}, meta: {} };
+  assert.throws(() => faroItemToRecord(traceItem, { service: SERVICE, receivedAtMs: RECEIVED_AT_MS }), /not a valid hot\.kind/);
+  assert.throws(
+    () => faroItemToRecord({ ...faroLogItem(), type: "not-a-real-kind" }, { service: SERVICE, receivedAtMs: RECEIVED_AT_MS }),
+    /not a valid hot\.kind/,
+  );
+});
+
 test("faroItemToRecord clamps the event timestamp to the receive window", () => {
   const farInPast = faroLogItem({ payload: { timestamp: new Date(RECEIVED_AT_MS - 3_600_000).toISOString() } });
   const record = faroItemToRecord(farInPast, { service: SERVICE, receivedAtMs: RECEIVED_AT_MS });

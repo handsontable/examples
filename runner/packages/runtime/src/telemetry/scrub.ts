@@ -3,6 +3,21 @@
 // OTLP record (ADR §B.2 step 1). Structural types only — no `@grafana/faro-core`
 // import, so this module stays DOM/Cloudflare-free and importable from
 // `pipeline/` under plain Node (index.ts's header rule).
+//
+// Typechecked against the real `@grafana/faro-web-sdk` types (`apps/authoring`'s
+// actual dependency) with a temporary probe, not just read by eye: a concrete,
+// narrowed `TransportItem<LogEvent>` / `TransportItem<ExceptionEvent>` / etc.
+// passes into and back out of `scrubTelemetry` with zero casts — the shape
+// every real `pushLog`/`pushError`/`pushEvent`/`pushMeasurement` call site
+// produces. The one place a cast is unavoidable is wiring an actual `Config`'s
+// `beforeSend`: Faro types that hook generically over the *whole* item union,
+// `TraceEvent` included, and this module does not model traces (none are
+// exported, ADR §C.4) — modeling it would mean either importing Faro's types
+// here (against this file's own rule) or handling a kind nothing ever sends.
+// T06's wiring is expected to be:
+//
+//   const beforeSend: BeforeSendHook = (item) =>
+//     scrubTelemetry(item as unknown as ScrubbableFaroItem) as TransportItem | null;
 
 import { redactPreviewHosts, type MonitorKind } from "../monitor.js";
 import { stripCodeFrame } from "./fingerprint.js";
@@ -13,14 +28,28 @@ import { ALLOWED_ATTRIBUTE_KEYS } from "./attrs.js";
 //
 // These match `@grafana/faro-core`'s `TransportItem<P>` / `Meta` closely enough
 // that a real Faro item satisfies them structurally, without importing the
-// package. Only the fields the scrubber reads or removes are declared; anything
-// else passes through `[key: string]: unknown`.
-
-export type FaroItemType = "exception" | "log" | "measurement" | "trace" | "event";
-
+// package — verified against the installed `@grafana/faro-web-sdk` types
+// (`apps/authoring`'s real dependency) with a temporary typecheck probe, not
+// just by reading the source. Two things a first draft got wrong, both fixed
+// here:
+//
+// 1. **No `[key: string]: unknown` index signatures.** A real `TransportItem`
+//    (and its nested `LogEvent`/`ExceptionEvent`/`Meta`/`ExceptionStackFrame`)
+//    carries none, and TS requires the *source* type to also have a matching
+//    index signature when the *target* parameter type has one — so a real
+//    Faro item failed to satisfy these interfaces even though every field it
+//    needs is declared. Only the fields the scrubber reads or removes are
+//    declared; passing a richer real object still works (TS's excess-property
+//    check only applies to object literals, not to a variable of a wider
+//    type), it just cannot be read back through the removed signature.
+// 2. **`type` is `string`, not a literal union.** Faro's own `type` is the
+//    string *enum* `TransportItemType`, not a plain string-literal union —
+//    TS does not consider an enum member assignable to an unrelated literal
+//    union even though the runtime values are identical strings. Every
+//    runtime check here (`item.type === "log"`) still works against a plain
+//    `string`; only the type-level union is gone.
 export interface ScrubbableFaroStackFrame {
   filename?: string;
-  [key: string]: unknown;
 }
 
 export interface ScrubbableFaroPayload {
@@ -42,24 +71,28 @@ export interface ScrubbableFaroPayload {
   context?: Record<string, string>;
   /** `EventEvent.attributes` */
   attributes?: Record<string, string>;
-  [key: string]: unknown;
 }
 
 export interface ScrubbableFaroMeta {
   user?: unknown;
-  page?: { url?: string; [key: string]: unknown };
-  browser?: { userAgent?: string; [key: string]: unknown };
+  page?: { url?: string };
+  /** Faro's raw `userAgent` in; `reduceBrowserMeta` replaces the whole object
+   *  with just `browser`/`device` on the way out (§3, "reduce any browser
+   *  meta to the device and browser classes"). */
+  browser?: { userAgent?: string; browser?: string; device?: string };
   /** Faro's `app` config — `name`/`version`/`environment` are exactly `service.name`
    *  / `service.version` / `deployment.environment.name` (§3) under Faro's own
    *  naming, set once at `initTelemetry()` (T06). */
   app?: { name?: string; version?: string; environment?: string };
   os?: unknown;
   device?: unknown;
-  [key: string]: unknown;
 }
 
 export interface ScrubbableFaroItem {
-  type: FaroItemType;
+  /** `TransportItemType`'s runtime values (`"exception"`, `"log"`,
+   *  `"measurement"`, `"trace"`, `"event"`), typed `string` rather than that
+   *  literal union — see the file header. */
+  type: string;
   payload: ScrubbableFaroPayload;
   meta: ScrubbableFaroMeta;
 }
@@ -70,7 +103,6 @@ export interface ScrubbableOtlpRecord {
   body?: string;
   attributes?: Record<string, string>;
   resourceAttributes?: Record<string, string>;
-  [key: string]: unknown;
 }
 
 export type Scrubbable = ScrubbableFaroItem | ScrubbableOtlpRecord;

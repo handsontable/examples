@@ -15,6 +15,7 @@ import {
   ATTR_HOT_TIER,
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
+  HOT_KINDS,
   RESOURCE_ATTRS,
   STRUCTURED_METADATA_KEYS,
   type Environment,
@@ -119,8 +120,18 @@ function faroTimestampMs(item: ScrubbableFaroItem): number | undefined {
  * `log`, `event`, `measurement`"), set here rather than trusted from the
  * client — it overwrites anything the caller's own context happened to carry
  * under that key, since `hot.kind`'s contract value set is closed and
- * `item.type` is the one value the ingest route itself controls. */
+ * `item.type` is the one value the ingest route itself controls.
+ *
+ * Throws if `item.type` is not one of `HOT_KINDS` — most notably `"trace"`,
+ * which `TransportItemType` allows but this contract does not (no trace is
+ * ever exported, ADR §C.4). `POST /telemetry/collect` accepts a client-built
+ * payload, so this is reachable from untrusted input, the same T00-D10 catch
+ * obligation `toAePoint` already puts on T02's route handler. */
 export function faroItemToRecord(item: ScrubbableFaroItem, options: ConvertOptions): NormalisedRecord {
+  if (!(HOT_KINDS as readonly string[]).includes(item.type)) {
+    throw new Error(`faroItemToRecord: not a valid hot.kind: ${JSON.stringify(item.type)}`);
+  }
+
   const merged = { ...(item.payload.context ?? {}), ...(item.payload.attributes ?? {}) };
   const { resourceAttributes, attributes } = hoistAttributes(merged);
   attributes[ATTR_HOT_KIND] = item.type;

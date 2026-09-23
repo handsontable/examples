@@ -26,6 +26,14 @@ export function bindingSink(dataset: AnalyticsEngineDatasetLike): AeSink {
   };
 }
 
+/** ClickHouse's default `DateTime64` text/JSON parser accepts
+ *  `'YYYY-MM-DD HH:MM:SS.sss'` at millisecond precision — not `Date`'s own
+ *  `toISOString()` (`T` separator, `Z` suffix). Exported for
+ *  `pipeline/telemetry-sink.test.mjs`. */
+export function clickhouseTimestamp(date: Date): string {
+  return date.toISOString().replace("T", " ").replace("Z", "");
+}
+
 export interface ClickhouseSinkOptions {
   /** Table name — `runner_events` (§10) by default. */
   table?: string;
@@ -37,10 +45,15 @@ export interface ClickhouseSinkOptions {
  * Local-mode sink (§10): ClickHouse at `http://localhost:8123` (or wherever
  * `url` points), table `runner_events` with the §4 columns plus `timestamp` and
  * `_sample_interval` (always `1` locally — no real sampling), DDL in
- * `containers/o11y/local/clickhouse-init.sql` (T01). Column names are the AE
- * slot names themselves (`index1`, `blob1`…`blob20`, `double1`…`double20`,
- * T00-D2/T00-D from the task Outcome) — the same query a real Analytics Engine
- * SQL call would run, no second name mapping.
+ * `containers/o11y/local/clickhouse-init.sql` (T01, confirmed column-for-
+ * column identical to what this sink writes: `index1`, `blob1`…`blob20` as
+ * `String`, `double1`…`double20` as `Float64`, `timestamp` as
+ * `DateTime64(3)`, `_sample_interval` — T00-D2). `timestamp` is sent as a
+ * `'YYYY-MM-DD HH:MM:SS.sss'` string, not a bare Unix-seconds integer: a
+ * plain number into a `DateTime64` column is read as whole seconds, which
+ * would silently truncate the millisecond precision the column exists to
+ * hold. Column names are the AE slot names themselves — the same query a
+ * real Analytics Engine SQL call would run, no second name mapping.
  */
 export function clickhouseSink(url: string, options: ClickhouseSinkOptions = {}): AeSink {
   const table = options.table ?? "runner_events";
@@ -48,7 +61,7 @@ export function clickhouseSink(url: string, options: ClickhouseSinkOptions = {})
   return {
     writeDataPoint(point: AePoint): Promise<void> {
       const row: Record<string, string | number> = {
-        timestamp: Math.floor(Date.now() / 1000),
+        timestamp: clickhouseTimestamp(new Date()),
         _sample_interval: 1,
         index1: point.indexes[0] ?? "",
       };

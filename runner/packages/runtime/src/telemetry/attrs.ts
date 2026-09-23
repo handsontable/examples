@@ -69,6 +69,14 @@ export const ATTR_SESSION_ID = "session.id";
 export const ATTR_CF_RAY = "cf.ray";
 export const ATTR_HOT_KIND = "hot.kind";
 
+/** §3's closed value set for `hot.kind` — "the Faro item kind." `event` is
+ *  Faro's `EventEvent` kind (unrelated to this repo's own open `EventName`,
+ *  §6); `trace` is deliberately excluded — no trace is ever exported (ADR
+ *  §C.4), so a record claiming that kind is malformed, not a fourth
+ *  legitimate value. */
+export const HOT_KINDS = ["exception", "log", "event", "measurement"] as const;
+export type HotKind = (typeof HOT_KINDS)[number];
+
 export const STRUCTURED_METADATA_KEYS = [
   ATTR_HOT_DEMO_ID,
   ATTR_SESSION_ID,
