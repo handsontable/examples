@@ -696,6 +696,13 @@ where they add information beyond what §A–§L already say:
   `context` before the browser's own scrub allowlist would otherwise drop them — this
   channel needed its own allowlist extension (`AE_ONLY_ATTRIBUTE_KEYS`) before it worked
   for real, found live during T07 and T12's own work.
+- **§B.2 pack.** Fix round A-I2: the pack alarm's "at 4 MB stored" trigger (step 6
+  above) is now a real, enforced upper bound on a single packed object, not only a
+  flush-cadence hint — TODO(controller): this line describes the INTENDED outcome
+  only; confirm the exact wording against F1's landed `pack.ts` change (parallel
+  worktree, not visible to this fix round) and fold in the real mechanism (e.g.
+  whether an over-threshold burst is capped by splitting into an extra key or by
+  cutting the alarm's own accumulation short) once merged.
 - **§B.2 ingest, worker tenant.** A Worker's own `console.log(JSON.stringify(...))` line
   (the structured request/error lines §D describes) arrives through Cloudflare's real OTLP
   log export as **opaque body text**, not as OTLP attributes — confirmed with a real
@@ -706,6 +713,17 @@ where they add information beyond what §A–§L already say:
   merge priority** — a body key cannot spoof `service.name`/`deployment.environment.name`/
   any `hot.*` label (T03B, fix-round finding I2, found and fixed within T03B's own pass
   before it shipped).
+- **§B.2 ingest, worker tenant — fingerprint (fix round C-I2).** The API worker's own
+  handled-error lines (`reportDiagnostic`, `workers/api/src/telemetry/diagnostic.ts`) now
+  carry `hot.fingerprint` (contract §3 AE-only key) in the same structured JSON body the
+  bullet above describes — the exact key `readAeOnlyAttrs` already reads for the Faro/lite
+  paths (§F.3's first-seen registry). TODO(controller/F1): the READ half is not yet
+  wired — `workers/o11y/src/normalise/otlp.ts#toIngestItem` has no `readAeOnlyAttrs`-
+  equivalent step for the worker-tenant body (unlike `normalise/faro.ts`/`lite.ts`), so the
+  key survives ingest today but is not yet fed into the `fp:` registry or
+  `feedsNewFingerprintAlert`. Wiring that read (workers/o11y-owned, off limits to this fix
+  round per the controller's file split) is what closes the loop this bullet's fix half
+  opens — see the F3 fix-round report for the exact change needed.
 - **§C.1 hops.** Faro's real browser transport posts a `TransportBody`
   (`{meta, exceptions?, logs?, measurements?, events?, traces?}`), not an array of
   self-contained items the way every contract function's own types assume — the ingest
