@@ -117,6 +117,52 @@ export interface WriteFileOptions {
   quiet?: boolean;
 }
 
+// ---- T07 timing hooks (observability contract §5) --------------------------
+//
+// Declared here, not in `sandpack.ts`/`container.ts`, so `DemoRuntime` can name
+// them as optional members without a cycle (both engine files already import
+// `DemoRuntime` from this file; the reverse import would be circular). Each
+// engine implements the subset it can produce a real signal for — an optional
+// interface member needs no stub on the class that has nothing to report —
+// and `apps/authoring/src/telemetry/metrics.ts#wireRuntimeMetrics` calls every
+// one of them through an optional-chained `runtime.onX?.(cb)`, so a caller
+// holding a bare `DemoRuntime` never has to cast to the concrete engine type.
+
+export interface SandpackCompileTimingEvent {
+  readonly durationMs: number;
+  readonly outcome: "ok" | "error";
+}
+
+/** A `show-error` compile diagnostic (never a Sandpack evaluation error — a
+ *  runtime throw inside an already-evaluated module, error-reporting
+ *  territory, not this signal). `message` is already bounded through
+ *  `boundCompileMessage` in `sandpack.ts` — redacted and truncated, never raw
+ *  authored code. */
+export interface SandpackCompileErrorEvent {
+  readonly message: string;
+}
+
+/** `loadSandpackClient` itself rejected — the hosted bundler's connection
+ *  never came up, as distinct from a compile/evaluation error, both of which
+ *  only arrive once the client has connected. */
+export interface SandpackBundlerUnreachableEvent {
+  readonly durationMs: number;
+}
+
+export interface SessionStartTimingEvent {
+  readonly elapsedMs: number;
+  /** Matches `session.start`'s outcome set (contract §5: "outcomes as `session.start`"). */
+  readonly outcome: "ready" | "at_capacity" | "container_starting" | "boot_timeout" | "budget_denied" | "error";
+}
+
+/** A post-ready preview navigation that followed a real edit flush, and not
+ *  the runtime's own `reload()`. Only a dev server that does a full page
+ *  reload on an edit is observable this way — genuine in-place HMR (a module
+ *  patched without navigating the frame) stays invisible by construction. */
+export interface HmrRoundtripEvent {
+  readonly durationMs: number;
+}
+
 export interface DemoRuntime {
   mount(files: FilesMap): Promise<{ previewUrl: string }>;
   writeFile(path: string, contents: string, opts?: WriteFileOptions): void;
@@ -145,6 +191,16 @@ export interface DemoRuntime {
   reload?(): Promise<void> | void;
   onReady(cb: () => void): void;
   onError(cb: (e: Error) => void): void;
+  /** §5 `sandpack.compile_ms` (`SandpackRuntime` only). */
+  onCompileTiming?(cb: (e: SandpackCompileTimingEvent) => void): void;
+  /** §5 `sandpack.compile_error` (`SandpackRuntime` only). */
+  onCompileError?(cb: (e: SandpackCompileErrorEvent) => void): void;
+  /** §5 `sandpack.bundler_unreachable` (`SandpackRuntime` only). */
+  onBundlerUnreachable?(cb: (e: SandpackBundlerUnreachableEvent) => void): void;
+  /** §5 `session.start_ms` (`ContainerRuntime` only). */
+  onSessionStart?(cb: (e: SessionStartTimingEvent) => void): void;
+  /** §5 `hmr.roundtrip_ms` (`ContainerRuntime` only). */
+  onHmr?(cb: (e: HmrRoundtripEvent) => void): void;
   dispose(): void;
 }
 

@@ -448,22 +448,22 @@ test("/d while building is a self-refreshing 503, failed is 500, and old artifac
   ];
   const { env } = makeEnv(rows, [], { "demos/x1/index.html": "<html>previous build</html>" });
 
-  const building = await serveDemoAsset(env, "b1", "", { embed: false });
+  const building = await serveDemoAsset(env, ctx, "b1", "", { embed: false });
   assert.equal(building.status, 503);
   assert.equal(building.headers.get("Retry-After"), "10");
   assert.match(await building.text(), /still building/i);
   assert.match(building.headers.get("Content-Type") ?? "", /text\/html/);
 
   // An asset request during the build answers plainly, not with a document.
-  const asset = await serveDemoAsset(env, "b1", "assets/index-abc.js", { embed: false });
+  const asset = await serveDemoAsset(env, ctx, "b1", "assets/index-abc.js", { embed: false });
   assert.equal(asset.status, 503);
 
-  const failed = await serveDemoAsset(env, "f1", "", { embed: false });
+  const failed = await serveDemoAsset(env, ctx, "f1", "", { embed: false });
   assert.equal(failed.status, 500);
   assert.match(await failed.text(), /build failed/i);
 
   // A demo mid-rebuild (or whose rebuild failed) keeps serving what it has.
-  const serving = await serveDemoAsset(env, "x1", "", { embed: false });
+  const serving = await serveDemoAsset(env, ctx, "x1", "", { embed: false });
   assert.equal(serving.status, 200);
   assert.match(await serving.text(), /previous build/);
 });

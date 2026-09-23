@@ -15,7 +15,19 @@ import type {
   DemoRuntime,
   FilesMap,
   HandsontableVersionRef,
+  SandpackBundlerUnreachableEvent,
+  SandpackCompileErrorEvent,
+  SandpackCompileTimingEvent,
   WriteFileOptions,
+} from "./types.js";
+// Re-exported so existing `@handsontable/demo-runtime/sandpack` importers
+// (this task's own `apps/authoring/src/telemetry/metrics.ts`) keep working —
+// the interfaces themselves now live in `types.ts` (T07 phase 2), so
+// `DemoRuntime` can name the hook methods without a circular import.
+export type {
+  SandpackBundlerUnreachableEvent,
+  SandpackCompileErrorEvent,
+  SandpackCompileTimingEvent,
 } from "./types.js";
 import { isCompilerUnavailable, transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
@@ -189,6 +201,17 @@ export class SandpackEvaluationError extends Error {
   }
 }
 
+// Observability contract §5 timing hooks (T07): `SandpackCompileTimingEvent`,
+// `SandpackCompileErrorEvent`, `SandpackBundlerUnreachableEvent` and the
+// `onCompileTiming`/`onCompileError`/`onBundlerUnreachable` methods below are
+// now declared on `DemoRuntime` itself (`types.ts`), as OPTIONAL members —
+// this module implements them, never imports
+// `@handsontable/demo-runtime/telemetry`, and `apps/authoring/src/
+// telemetry/metrics.ts#wireRuntimeMetrics` is what turns the callbacks into
+// `sandpack.compile_ms`/`sandpack.compile_error`/`sandpack.bundler_unreachable`
+// points against an injected `Telemetry`, through `runtime.onX?.(cb)` —
+// no cast to the concrete class needed at the call site.
+
 const COMPILE_ERROR_FALLBACK = "Sandpack compile error";
 
 /** Inline source maps the bundler echoes back inside a compile message. A
@@ -301,6 +324,42 @@ export class SandpackRuntime implements DemoRuntime {
   private disposed = false;
   /** Our claim on the iframe, registered in `mount()` before the first await. */
   private claim: object | null = null;
+
+  // ---- T07 timing hooks ---------------------------------------------------
+  private readonly compileTimingCbs = new Set<(e: SandpackCompileTimingEvent) => void>();
+  private readonly compileErrorCbs = new Set<(e: SandpackCompileErrorEvent) => void>();
+  private readonly bundlerUnreachableCbs = new Set<(e: SandpackBundlerUnreachableEvent) => void>();
+  /** When the compile currently in flight was dispatched to the bundler — either
+   *  `loadSandpackClient`'s initial compile (mount) or `updateSandbox` (an edit or
+   *  `reload()`). Cleared once the terminal message for it arrives. Only ever one
+   *  compile is in flight at a time: `pushUpdate`'s own sequence guard means a
+   *  superseded push never reaches `updateSandbox`, and `mount()` is called once. */
+  private compileDispatchedAt: number | null = null;
+
+  /** Timing for every dispatched compile — the initial mount and every later push —
+   *  resolved once (`ok` on a clean `done`, `error` on a `SandpackCompileError`). Fires
+   *  once per real compile, never for a `sameFiles` no-op skip (nothing is dispatched,
+   *  so nothing to time) and never twice for one dispatch. */
+  onCompileTiming(cb: (e: SandpackCompileTimingEvent) => void): void {
+    this.compileTimingCbs.add(cb);
+  }
+  /** A compile diagnostic (`sandpack.compile_error`, §5) — never the evaluation-error
+   *  sibling, which is a runtime throw already reported elsewhere. */
+  onCompileError(cb: (e: SandpackCompileErrorEvent) => void): void {
+    this.compileErrorCbs.add(cb);
+  }
+  /** The hosted bundler's connection itself failed (§5 `sandpack.bundler_unreachable`) —
+   *  see the interface doc comment for what this covers. */
+  onBundlerUnreachable(cb: (e: SandpackBundlerUnreachableEvent) => void): void {
+    this.bundlerUnreachableCbs.add(cb);
+  }
+
+  private resolveCompileTiming(outcome: "ok" | "error"): void {
+    if (this.compileDispatchedAt === null) return;
+    const durationMs = Math.round(performance.now() - this.compileDispatchedAt);
+    this.compileDispatchedAt = null;
+    for (const cb of this.compileTimingCbs) cb({ durationMs, outcome });
+  }
 
   constructor(entry: CatalogEntry, opts: SandpackRuntimeOptions) {
     if (entry.engine !== "sandpack") {
@@ -532,7 +591,24 @@ export class SandpackRuntime implements DemoRuntime {
     IFRAME_OWNER.set(this.opts.iframe, claim);
 
     const setup = await this.buildSetup(files);
-    const client = await loadSandpackClient(this.opts.iframe, setup, this.clientOptions());
+    // The dispatch clock for the initial compile (§5 `sandpack.compile_ms`). Started
+    // right before `loadSandpackClient`, which both connects to the bundler AND runs
+    // the first compile — `buildSetup` above is our own transpile/injection work, not
+    // the bundler's, and must stay outside the measured window.
+    const dispatchedAt = performance.now();
+    this.compileDispatchedAt = dispatchedAt;
+    let client: SandpackClientInstance;
+    try {
+      client = await loadSandpackClient(this.opts.iframe, setup, this.clientOptions());
+    } catch (err) {
+      // The client never connected — distinct from a `SandpackCompileError`/
+      // `SandpackEvaluationError`, both of which only arrive over `onMessage` once a
+      // client exists. See `SandpackBundlerUnreachableEvent`.
+      if (this.compileDispatchedAt === dispatchedAt) this.compileDispatchedAt = null;
+      const durationMs = Math.round(performance.now() - dispatchedAt);
+      for (const cb of this.bundlerUnreachableCbs) cb({ durationMs });
+      throw err;
+    }
 
     // Both awaits above can outlive a `dispose()`. `loadSandpackClient` has by now pointed
     // the iframe at the bundler origin, so returning quietly is not enough — undo it, or a
@@ -562,7 +638,8 @@ export class SandpackRuntime implements DemoRuntime {
     switch (m.type) {
       case "done":
         // (`compilatonError` is misspelled in the upstream payload. Leave it.)
-        if (m.compilatonError) return; // error surfaced via its own message
+        if (m.compilatonError) return; // error surfaced via its own message; see "show-error"
+        this.resolveCompileTiming("ok");
         this.emitReady();
         break;
       case "action":
@@ -588,6 +665,14 @@ export class SandpackRuntime implements DemoRuntime {
           const frames = m.payload?.frames;
           const evaluated = Array.isArray(frames) && frames.length > 0;
           const message = boundCompileMessage(m.message);
+          // Only a real compile diagnostic (no frames — the module never evaluated)
+          // resolves the compile clock and reports §5 `sandpack.compile_error`. An
+          // evaluation error's compile already reached "done" (`ok`) — the module ran
+          // and threw afterwards, a runtime fault out of this task's scope (T06).
+          if (!evaluated) {
+            this.resolveCompileTiming("error");
+            for (const cb of this.compileErrorCbs) cb({ message });
+          }
           this.emitError(
             evaluated ? new SandpackEvaluationError(message) : new SandpackCompileError(message),
           );
@@ -752,6 +837,10 @@ export class SandpackRuntime implements DemoRuntime {
         // byte-identical compile this skip exists to prevent — the blank preview, back
         // again, on the rename path.
         const setup = this.setupFrom(candidate);
+        // Dispatch clock for this compile (§5 `sandpack.compile_ms`) — right before the
+        // bundler call, so `setupFrom`'s own DEV-2130 throw (caught below, not a compile
+        // dispatch at all) never starts a clock nothing will stop.
+        this.compileDispatchedAt = performance.now();
         this.client.updateSandbox(setup, false);
         this.published = candidate;
       })
@@ -780,6 +869,10 @@ export class SandpackRuntime implements DemoRuntime {
       this.client = null;
       this.readyCbs.clear();
       this.errorCbs.clear();
+      this.compileTimingCbs.clear();
+      this.compileErrorCbs.clear();
+      this.bundlerUnreachableCbs.clear();
+      this.compileDispatchedAt = null;
       // No reload bookkeeping to drain: `reload()` settles on its own transpile, and
       // `pushUpdate` always settles (it catches), so a dispose mid-refresh cannot leave a
       // promise hanging.

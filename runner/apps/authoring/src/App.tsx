@@ -71,7 +71,26 @@ import { diagnosticsGoToSentry, monitorDemos, reportDemoEvent, reportError, Sent
 import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
 import { tier1Report } from "./tier1Report.js";
 import { telemetry, apiHeaders } from "./telemetry/index.js";
-import type { Surface, Tier } from "@handsontable/demo-runtime/telemetry";
+import type { HotAttrs, Surface, Tier } from "@handsontable/demo-runtime/telemetry";
+import {
+  emitBucketResolve,
+  emitVersionSwitch,
+  htMajorOf,
+  startClock,
+  trackPreviewReady,
+  wireRuntimeMetrics,
+} from "./telemetry/metrics.js";
+import {
+  consumeForkMarker,
+  exampleActionAttrs,
+  exampleOpenAttrs,
+  exampleOpenKey,
+  exampleTaxonomy,
+  FORK_LANDING_PARAM,
+  type DocsExampleMeta,
+  type ExampleOpenReason,
+  type ExampleTaxonomy,
+} from "./exampleAnalytics.js";
 import { isOpaqueNetworkFailure } from "./fetchFailure.js";
 import { describeDependencyFailure } from "./dependencyFailure.js";
 import {
@@ -1054,6 +1073,12 @@ function Authoring({
     return catalog.examples.some((e) => e.framework === p) ? (p as string) : "react";
   });
   const hadUrlVersion = useRef<boolean>(new URLSearchParams(location.search).has("v"));
+  // ADR-0042: a bare `/` visit defaults `framework` to `"react"` with no
+  // `?example=` in the URL at all — that default landing is not the visitor
+  // reaching for the react starter, and counting it would swamp every real
+  // starter pick in the ranking. `example.open` fires on the starter's first
+  // real deep link (`?example=` present) but not on this silent default.
+  const hadUrlExample = useRef<boolean>(new URLSearchParams(location.search).has("example"));
   // The active example entry — a starter template or a docs example, both
   // lazy-loaded per version bucket. Starts as a files-less placeholder built
   // from the catalog index; the runtime-mount effect stays gated until a real
@@ -1353,6 +1378,35 @@ function Authoring({
     }
   }, []);
   const docsPathRef = useRef<string | null>(docsPath);
+  // ADR-0042: dedup key for the last `example.open` fired (`lineage` + pinned
+  // version, `exampleAnalytics.ts#exampleOpenKey`) — an effect that re-runs
+  // for an unrelated reason (a late `nextVersion` resolve, a `versionsResolved`
+  // flip) must not re-fire the same open. `currentExampleTaxonomyRef` is that
+  // open's own taxonomy, reused by the later `example.engaged`/`.forked`/
+  // `.saved`/`.shared`/`.downloaded` events for the same workspace.
+  const lastExampleOpenKeyRef = useRef<string | null>(null);
+  const currentExampleTaxonomyRef = useRef<ExampleTaxonomy | null>(null);
+  const exampleEngagedRef = useRef(false);
+
+  /** ADR-0042 §2 — `example.<action>` for the CURRENTLY open example, a
+   *  no-op before any `example.open` has fired for this workspace (an ad-hoc
+   *  bare-`/` default, or a page that has not resolved yet). */
+  const noteExampleAction = useCallback((metric: string) => {
+    const taxonomy = currentExampleTaxonomyRef.current;
+    if (!taxonomy) return;
+    telemetry.event(metric, exampleActionAttrs(taxonomy) as HotAttrs & Record<string, string>);
+  }, []);
+
+  /** `example.engaged` — "first code edit, or preview ready plus 30s"
+   *  (ADR-0042 §2), whichever comes first; fires once per workspace
+   *  (`exampleEngagedRef`, reset on every `loadWorkspace`). Called from
+   *  `markDirty` (first edit) and from the preview-ready timer below. */
+  const noteExampleEngaged = useCallback(() => {
+    if (exampleEngagedRef.current) return;
+    exampleEngagedRef.current = true;
+    noteExampleAction("example.engaged");
+  }, [noteExampleAction]);
+
   const dirtyRef = useRef(dirty);
   const sourceLoadedRef = useRef(sourceLoaded);
   const activeDocsBucketRef = useRef<string | null>(activeDocsBucket);
@@ -1383,6 +1437,10 @@ function Authoring({
    *  but nothing uses it since DEV-2495: the Edit info dialog, its only caller, now
    *  writes its own PATCH instead of staging an edit for the workspace save. */
   const markDirty = useCallback((...touched: string[]) => {
+    // ADR-0042 §2 `example.engaged`'s "first code edit" half — BEFORE
+    // `dirtyRef.current` flips, so this only ever fires on the transition
+    // from clean to dirty, not on every subsequent keystroke.
+    if (!dirtyRef.current) noteExampleEngaged();
     setDirty(true);
     dirtyRef.current = true;
     if (!touched.length) return;
@@ -1391,7 +1449,7 @@ function Authoring({
       for (const p of touched) next.add(p);
       return next;
     });
-  }, []);
+  }, [noteExampleEngaged]);
 
   /** Saved or replaced — nothing is outstanding. */
   const clearDirty = useCallback(() => {
@@ -1399,6 +1457,19 @@ function Authoring({
     dirtyRef.current = false;
     setDirtyPaths((prev) => (prev.size ? new Set() : prev));
   }, []);
+
+  // ADR-0042 §2 `example.engaged`'s "preview ready plus 30s" half. Restarts
+  // whenever `status` becomes `"ready"` again (every workspace switch passes
+  // back through `"booting"` first, so this alone is the right dependency —
+  // no separate mount-generation counter needed); `noteExampleEngaged`
+  // itself is the guard against a second workspace's timer re-firing for the
+  // first (its own `exampleEngagedRef` is reset per `loadWorkspace`, not per
+  // timer).
+  useEffect(() => {
+    if (status !== "ready") return;
+    const timer = setTimeout(() => noteExampleEngaged(), 30_000);
+    return () => clearTimeout(timer);
+  }, [status, noteExampleEngaged]);
 
   /** The single `Notice` slot in the preview bar (DEV-2173 owns its placement).
    *  Two facts can be true at once after a downgrade — the theme was removed,
@@ -1421,7 +1492,23 @@ function Authoring({
 
   /** Replace the whole workspace (entry + files + lineage) and remount. */
   const loadWorkspace = useCallback(
-    (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
+    (
+      nextEntry: CatalogEntry,
+      nextFiles: FilesMap,
+      lineage: string,
+      // ADR-0042 `example.open` — optional because a few internal callers of
+      // `loadWorkspace` (the version-repin path, etc.) reuse it for something
+      // that is not a fresh example resolve. Every real resolve call site
+      // below passes this. `version`/`bucket`/`docs` come from the CALLER,
+      // never read off component state inside this callback: `loadWorkspace`
+      // is a stable `useCallback` (deps: `[clearDirty]`), so `version` here
+      // would otherwise be whatever it was on the render that created the
+      // closure, not the version this particular resolve is actually for —
+      // the saved-demo path in particular calls `setVersion(pinnedVersion)`
+      // immediately before `loadWorkspace`, so reading component state here
+      // would race that update.
+      exampleOpen?: { reason: ExampleOpenReason; version: string; bucket?: string; docs?: DocsExampleMeta },
+    ) => {
       // DEV-2859: the lineage *prefix only* — the segment before the first
       // `:` — never the full string. `import:<url>` and `docs:<bucket>:<path>`
       // both carry visitor- or docs-authored data after that first colon; a
@@ -1464,6 +1551,44 @@ function Authoring({
       // down as `workspaceKey`, and it is the only truthful "this is a different
       // workspace now" signal the app has.
       setMountGen((g) => g + 1);
+
+      // ADR-0042 §2: every real `loadWorkspace` call is a genuine remount
+      // (`setMountGen` above already fired), so the previous workspace's
+      // engagement state is stale regardless of whether `example.open`
+      // itself gets deduped below.
+      exampleEngagedRef.current = false;
+      if (!exampleOpen) {
+        // The one caller that reaches here with no taxonomy at all: the
+        // starter effect's silent bare-`/` default (T12-D, see its call
+        // site) — no `example.open`, and nothing to attribute a later edit
+        // to either.
+        currentExampleTaxonomyRef.current = null;
+      } else {
+        const taxonomy = exampleTaxonomy({
+          lineage,
+          framework: nextEntry.framework,
+          htMajor: htMajorOf(exampleOpen.version),
+          bucket: exampleOpen.bucket,
+          docs: exampleOpen.docs,
+        });
+        currentExampleTaxonomyRef.current = taxonomy;
+
+        // `example.open` — fired once per resolved example, never on a
+        // re-render (`loadWorkspace` only runs from an explicit navigation
+        // call, and this key additionally guards an effect that re-fires
+        // this same call for an unrelated reason, e.g. a late `nextVersion`
+        // resolve). Deliberately AFTER every state setter above: an event
+        // this function throws building must never skip installing the new
+        // workspace.
+        const key = exampleOpenKey(lineage, exampleOpen.version);
+        if (lastExampleOpenKeyRef.current !== key) {
+          lastExampleOpenKeyRef.current = key;
+          telemetry.event(
+            "example.open",
+            exampleOpenAttrs(taxonomy, exampleOpen.reason) as HotAttrs & Record<string, string>,
+          );
+        }
+      }
     },
     [clearDirty],
   );
@@ -1532,7 +1657,12 @@ function Authoring({
         // response a no-op, so it cannot land on top of the import.
         starterRequestSeqRef.current += 1;
         importStarterGenRef.current = starterGenRef.current;
-        loadWorkspace(toPlaceholderEntry(indexEntry), { ...body.files }, `import:${body.provider ?? "url"}`);
+        loadWorkspace(
+          toPlaceholderEntry(indexEntry),
+          { ...body.files },
+          `import:${body.provider ?? "url"}`,
+          { reason: "deep-link", version },
+        );
         if (body.title) {
           setTitle(body.title);
           setImportedTitle(body.title);
@@ -1635,7 +1765,12 @@ function Authoring({
         // the user picks a starter themselves.
         starterRequestSeqRef.current += 1;
         importStarterGenRef.current = starterGenRef.current;
-        loadWorkspace(toPlaceholderEntry(indexEntry), { ...body.files }, "payload:theme-builder");
+        loadWorkspace(
+          toPlaceholderEntry(indexEntry),
+          { ...body.files },
+          "payload:theme-builder",
+          { reason: "deep-link", version },
+        );
         if (body.title) {
           setTitle(body.title);
           setImportedTitle(body.title);
@@ -1667,6 +1802,16 @@ function Authoring({
   // Edit/share mode: load the saved demo's source + metadata into the workspace.
   useEffect(() => {
     if (!savedId) return;
+    // ADR-0042 T12-D2 fix: read + strip the one-shot fork marker BEFORE
+    // anything async runs, so a second render of this same effect (or a
+    // manual reload of the now-stripped URL) never re-reads it —
+    // `consumeForkMarker`'s own doc comment has the full reasoning for why
+    // this has to be a URL param rather than an in-memory flag or browser
+    // storage.
+    const { isFork: isForkLanding, search: strippedSearch } = consumeForkMarker(location.search);
+    if (isForkLanding) {
+      history.replaceState(null, "", location.pathname + strippedSearch + location.hash);
+    }
     let cancelled = false;
     (async () => {
       const token = getToken();
@@ -1725,7 +1870,19 @@ function Authoring({
           hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
           setVersion(pinnedVersion);
         }
-        loadWorkspace(toPlaceholderEntry(getEntry(src.framework)), src.files, savedId);
+        loadWorkspace(
+          toPlaceholderEntry(getEntry(src.framework)),
+          src.files,
+          savedId,
+          // ADR-0042 kind "saved". `entry` is `fork` when `isForkLanding`
+          // (the one-shot URL marker `onFork` left behind, read and
+          // stripped above) — `deep-link` otherwise: every other saved-demo
+          // landing is a direct navigation to `/edit/:id`/`/share/:id`, or a
+          // browser reload of one. `pinnedVersion ?? version`, not the
+          // (stale) `version` closure variable: `setVersion(pinnedVersion)`
+          // two lines above has not committed yet.
+          { reason: isForkLanding ? "fork" : "deep-link", version: pinnedVersion ?? version },
+        );
         setSourceLoaded(true);
       } catch (error) {
         // A share/edit link that no longer resolves: missing D1 row, unreadable R2
@@ -1932,7 +2089,18 @@ function Authoring({
     const candidate = plan.bucket;
 
     let cancelled = false;
-    void fetchDocsManifest(candidate)
+    const manifestPromise = fetchDocsManifest(candidate);
+    // §5 `bucket.resolve_ms` (T07) — same reasoning as the starter-bucket site:
+    // a separate `.then(ok, err)` on the raw promise, kept apart from the
+    // app-logic chain below so a downstream throw cannot double-report this
+    // resolve. `fetchDocsManifest` caches per bucket (`docs-catalog.ts`), so a
+    // re-visit of an already-resolved bucket reports a near-zero duration.
+    const stopBucketClock = startClock();
+    manifestPromise.then(
+      () => emitBucketResolve(telemetry, { bucket: candidate, outcome: "ok", durationMs: stopBucketClock() }),
+      () => emitBucketResolve(telemetry, { bucket: candidate, outcome: "error", durationMs: stopBucketClock() }),
+    );
+    void manifestPromise
       .then(async (manifest) => {
         if (cancelled || docsRequestSeqRef.current !== requestSeq) return;
         setDocsItems(manifest.examples);
@@ -1964,7 +2132,17 @@ function Authoring({
           const nextFiles = manifest.hotVersion === version
             ? { ...docsEntry.files }
             : pinHandsontableFiles({ ...docsEntry.files }, version);
-          loadWorkspace(docsEntry, nextFiles, `docs:${candidate}:${openPath}`);
+          loadWorkspace(docsEntry, nextFiles, `docs:${candidate}:${openPath}`, {
+            // The very first successful load this page-load ever makes is a
+            // deep link (`?docs=`); every later run of this same effect is
+            // this docs path being re-resolved against a version/bucket
+            // change (`version-switch`) — a picker or framework-switch click
+            // goes through `selectDocs` instead, not through this effect.
+            reason: initialLoad ? "deep-link" : "version-switch",
+            version,
+            bucket: candidate,
+            docs: { guide: docsEntry.guide, area: docsEntry.breadcrumb[0] ?? "", framework: docsEntry.framework },
+          });
           setDocsPath(openPath);
           docsPathRef.current = openPath;
           setVersionWarning(null);
@@ -2124,8 +2302,35 @@ function Authoring({
       }
     }
 
+    // ADR-0042 `entry`: the first successful load this page-load ever makes
+    // is a deep link only when `?example=` was actually in the URL — the
+    // bare-`/` default (no `example.open` at all, see `hadUrlExample`) is
+    // not a visitor reaching for anything. Once something is loaded, this
+    // same effect only runs again for either a picker pick (`selectExample`
+    // changed `framework`) or a bucket-crossing version change for the SAME
+    // framework (`version-switch`).
+    const starterIsInitialLoad = !sourceLoadedRef.current;
+    const starterOpenReason: ExampleOpenReason = starterIsInitialLoad
+      ? "deep-link"
+      : entry.framework === framework
+        ? "version-switch"
+        : "picker";
+
     let cancelled = false;
-    void loadStarterExample(bucket, framework)
+    const starterPromise = loadStarterExample(bucket, framework);
+    // §5 `bucket.resolve_ms` (T07). A SEPARATE `.then(ok, err)` on the raw
+    // promise, not chained onto the app-logic pipeline below: that pipeline's
+    // own `.catch` also catches whatever throws inside its `.then` (e.g.
+    // `loadWorkspace`), which would double-report one resolve as `ok` and then
+    // `error`. Note for the Outcome: `loadStarterExample` caches by bucket +
+    // framework, so a re-pick of an already-fetched bucket reports a near-zero
+    // duration — a real cache hit, not a measurement bug.
+    const stopBucketClock = startClock();
+    starterPromise.then(
+      () => emitBucketResolve(telemetry, { bucket, outcome: "ok", durationMs: stopBucketClock() }),
+      () => emitBucketResolve(telemetry, { bucket, outcome: "error", durationMs: stopBucketClock() }),
+    );
+    void starterPromise
       .then((starter) => {
         if (cancelled || starterRequestSeqRef.current !== requestSeq) return;
         const nextFiles = starter.htCoreRange === v.value.ref
@@ -2133,7 +2338,14 @@ function Authoring({
           : pinHandsontableFiles({ ...starter.files }, version);
         activeStarterBucketRef.current = bucket;
         setStarterRuntimeBlocked(false);
-        loadWorkspace(starter, nextFiles, `catalog:${framework}`);
+        loadWorkspace(
+          starter,
+          nextFiles,
+          `catalog:${framework}`,
+          starterIsInitialLoad && !hadUrlExample.current
+            ? undefined // the silent bare-`/` default — no example.open
+            : { reason: starterOpenReason, version, bucket },
+        );
         setVersionWarning(null);
         setSourceLoaded(true);
         sourceLoadedRef.current = true;
@@ -2225,7 +2437,7 @@ function Authoring({
 
   /** Open a documentation-guide example (lazy-loaded by its docs content path). */
   const selectDocs = useCallback(
-    async (dp: string) => {
+    async (dp: string, reason: Extract<ExampleOpenReason, "picker" | "switch"> = "picker") => {
       const bucket = activeDocsBucketRef.current;
       const manifest = activeDocsManifestRef.current;
       if (!bucket || !manifest || !manifest.examples.some((item) => item.docsPath === dp)) {
@@ -2244,7 +2456,12 @@ function Authoring({
           : pinHandsontableFiles({ ...e.files }, version);
         setDocsPath(dp);
         docsPathRef.current = dp;
-        loadWorkspace(e, nextFiles, `docs:${bucket}:${dp}`);
+        loadWorkspace(e, nextFiles, `docs:${bucket}:${dp}`, {
+          reason,
+          version,
+          bucket,
+          docs: { guide: e.guide, area: e.breadcrumb[0] ?? "", framework: e.framework },
+        });
         setVersionWarning(null);
         setDocsRuntimeBlocked(false);
       } catch (error) {
@@ -2267,6 +2484,16 @@ function Authoring({
     // editing it — so it needs its own trail entry, tagged by the requested
     // version rather than a file path.
     recordEditorEvent({ kind: "version", source: "repin", path: next, quiet: false, size: 0 });
+    // §5 `version.switch` (T07). Before `setVersion`, so `version` here is still
+    // the FROM ref; `bucket` is whichever kind of workspace is open right now
+    // (docs or starter), read off the same refs the bucket-resolve effects keep
+    // current.
+    emitVersionSwitch(telemetry, {
+      framework,
+      toRef: next,
+      fromRef: version,
+      bucket: (docsPathRef.current ? activeDocsBucketRef.current : activeStarterBucketRef.current) ?? undefined,
+    });
     docsRequestSeqRef.current += 1;
     setVersionWarning(null);
     setThemeRemoved(false);
@@ -2281,7 +2508,7 @@ function Authoring({
       setErrorMessage(null);
     }
     setVersion(next);
-  }, []);
+  }, [framework, version]);
 
   // Dispose and visibly clear a preview while its target bucket/artifact is
   // unresolved or unavailable — docs or starter alike. The version picker and
@@ -2366,6 +2593,26 @@ function Authoring({
       framework: entry.framework,
       demoId: savedIdRef.current,
     });
+    // T07: §5 browser metric catalogue. `wireRuntimeMetrics` reads
+    // `runtime.onCompileTiming?`/`onSessionStart?`/etc through optional chains — it
+    // is the same call for either engine, no `entry.engine` branch needed here.
+    // `trackPreviewReady`'s `tier` reuses `demoContext()`'s own engine-derived value
+    // (never `entry.tier`, the catalog tier — the two disagree for the five
+    // UI-library starters, `react-js` and siblings: catalog tier 1, `engine:
+    // "container"`). `telemetry` is read here, live, not captured earlier — T06's
+    // `initTelemetry()` reassigns the binding after init.
+    wireRuntimeMetrics(runtime, { framework: entry.framework, versionRef: v.value.ref }, telemetry);
+    const previewTracker = trackPreviewReady(
+      runtime,
+      {
+        surface: isShare ? "share" : "authoring",
+        tier: demoContext().tier,
+        framework: entry.framework,
+        versionRef: v.value.ref,
+        bucket: (docsPath ? activeDocsBucketRef.current : activeStarterBucketRef.current) ?? undefined,
+      },
+      telemetry,
+    );
     if (entry.engine === "container") {
       (runtime as ContainerRuntime).onProgress((log) => !cancelled && setBootLog(log));
       // Post-boot dev-server faults (DEV-2527). Not gated on `cancelled`: a dev
@@ -2395,8 +2642,12 @@ function Authoring({
     });
     runtimeRef.current = runtime;
     setPreviewUrl("");
-    runtime
-      .mount(filesRef.current)
+    // Captured once, in a variable: `previewTracker.observe` and the `.then`/
+    // `.catch` chain below both read this SAME promise. `mount()` itself is
+    // called exactly once, same as before this task — `observe` only listens.
+    const mountPromise = runtime.mount(filesRef.current);
+    previewTracker.observe(mountPromise);
+    mountPromise
       .then(({ previewUrl: url }) => {
         // Container only. Tier 1 hands back whatever `iframe.src` happens to be
         // at mount time, which is Sandpack's *bundler* origin — not an address
@@ -2416,6 +2667,10 @@ function Authoring({
       });
     return () => {
       cancelled = true;
+      // A switch away (version, example) or an unmount before this preview
+      // settled — a no-op once ready/error/timeout already reported (§5
+      // `preview.ready_ms` outcome `abandoned`).
+      previewTracker.abandon();
       window.removeEventListener("message", onPreviewMessage);
       runtime.dispose();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
@@ -2720,7 +2975,8 @@ function Authoring({
   /** Download the current (possibly-edited) workspace as a .zip. */
   const downloadZip = useCallback(() => {
     downloadWorkspaceZip(filesRef.current, title || entry.displayName);
-  }, [title, entry.displayName]);
+    noteExampleAction("example.downloaded"); // ADR-0042 §2
+  }, [title, entry.displayName, noteExampleAction]);
 
   /** Create an embeddable (docs-only) version from the current playground code
    *  and show its embed URL — the logged-in path to embed a public example. */
@@ -2747,6 +3003,7 @@ function Authoring({
       const { id } = await readApiJson<{ id: string }>(res, `embed failed (${res.status})`);
       setLinksId(id);
       setShareLinksOpen(true);
+      noteExampleAction("example.shared"); // ADR-0042 §2 — the mint-a-link half of "shared"
     } catch (e) {
       // The dialog answers this one; a `<pre>` full of prose with no button
       // would not (DEV-2534). `finally` still clears the in-flight state.
@@ -2756,7 +3013,7 @@ function Authoring({
     } finally {
       setEmbedding(false);
     }
-  }, [user, entry, version, forkedFrom, importedTitle]);
+  }, [user, entry, version, forkedFrom, importedTitle, noteExampleAction]);
 
   /** Fork the current playground code into a new saved demo, then open its edit page. */
   const onFork = useCallback(async () => {
@@ -2782,7 +3039,13 @@ function Authoring({
         }),
       });
       const { id } = await readApiJson<{ id: string }>(res, `fork failed (${res.status})`);
-      location.href = `/edit/${id}`; // boot into the edit page for the new demo
+      noteExampleAction("example.forked"); // ADR-0042 §2, before navigating away
+      // ADR-0042 T12-D2 fix: a one-shot URL marker for the new demo's own
+      // `example.open`, since this is a full reload — no in-memory flag
+      // survives it (`exampleAnalytics.ts#consumeForkMarker`'s own doc
+      // comment has the full reasoning). The saved-demo load effect reads
+      // and strips it.
+      location.href = `/edit/${id}?${FORK_LANDING_PARAM}=1`; // boot into the edit page for the new demo
     } catch (e) {
       // First statement, before any branch. There is no `finally` here on
       // purpose — the success path navigates away and clearing `forking` first
@@ -2795,7 +3058,7 @@ function Authoring({
       reportError(e, "demo-fork");
       setErrorMessage(e instanceof Error ? e.message : String(e));
     }
-  }, [user, entry, version, forkedFrom, importedTitle]);
+  }, [user, entry, version, forkedFrom, importedTitle, noteExampleAction]);
 
   /** Save the saved-demo edits: the code, which rebuilds the snapshot.
    *
@@ -2827,6 +3090,7 @@ function Authoring({
       });
       await assertApiOk(res, `save failed (${res.status})`);
       clearDirty();
+      noteExampleAction("example.saved"); // ADR-0042 §2
     } catch (e) {
       // Losing a save is the worst outcome in the app — the user's edits are only
       // in this tab's memory until the PATCH lands. Which is exactly why an
@@ -2840,7 +3104,7 @@ function Authoring({
     } finally {
       setSaving(false);
     }
-  }, [savedId, isShare, version, clearDirty]);
+  }, [savedId, isShare, version, clearDirty, noteExampleAction]);
 
   /**
    * The preview bar's share icon, mode-aware (ADR-0025). `edit` has a saved demo
@@ -3214,7 +3478,7 @@ function Authoring({
         // is briefly one control short.
         onSignIn={accountPending ? undefined : login}
         frameworks={frameworks}
-        onFrameworkChange={(docsPathKey) => void selectDocs(docsPathKey)}
+        onFrameworkChange={(docsPathKey) => void selectDocs(docsPathKey, "switch")}
         docsUrl={currentDocsMeta ? docsPageUrl(framework, currentDocsMeta.docPermalink) : undefined}
         // Play only, as before. A saved demo's source is the demo itself, not
         // the starter it was forked from, so pointing at the starter repo there

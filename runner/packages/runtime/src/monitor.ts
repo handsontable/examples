@@ -13,6 +13,11 @@
 // into workers/api — a second copy is a second set of caps to keep in sync.
 
 import { injectedScriptTag, insertInjectedTag } from "./inject-html.js";
+// T08 (ADR §C.5, contract §9): imported from the leaf modules directly, never
+// from `./telemetry/index.js` — `scrub.ts` and `fingerprint.ts` already import
+// `../monitor.js`, so a barrel import here would be a cycle.
+import { LITE_PAYLOAD_MAX_BYTES, type LiteSurface } from "./telemetry/lite.js";
+import type { Framework, HtMajor } from "./telemetry/attrs.js";
 
 /** The `postMessage` discriminator. Also the injection idempotency marker. */
 export const MONITOR_MESSAGE_TYPE = "hot-runner-monitor";
@@ -841,4 +846,265 @@ export function injectReporter(files: Record<string, string>, entryPath: string)
     ? injectReporterIntoHtml(source)
     : REPORTER_MODULE_LINE + "\n" + source;
   return { ...files, [entryPath]: injected };
+}
+
+// ---- T08: the lite beacon — standalone mode for `/d` and `/embed` -------------
+//
+// ADR §C.5 / contract §9. A wholly separate reporter from `REPORTER_SOURCE` above,
+// never composed with it: `REPORTER_SOURCE` only ever runs inside a Tier-1 sandbox
+// entry or a Tier-2 preview document, both framed by the authoring app, which is
+// what makes `postMessage(..., "*")` to `parent` the right transport there.
+//
+// `/d`/`/embed` documents ARE sometimes framed by our own runner — the authoring
+// app's FullMode view (`App.tsx`) frames `/d/:id/` cross-origin to show a saved
+// demo's build full-window — so "no parent frame" is not a claim about every
+// request this reporter ever sees. What is still true, and is the actual reason
+// this needs no runtime parent-detection, is narrower: this reporter is injected
+// only at the `share.ts` serve seam, never into a Tier-1 sandbox entry or a Tier-2
+// preview document, so it never runs anywhere `REPORTER_SOURCE`'s `postMessage`
+// transport would be the right answer — a FullMode-framed `/d/:id/` is still just
+// the public build, standalone-transported exactly like a direct visit, and that
+// framing costs nothing (no listener there expects this reporter's beacon either
+// way). Standalone by construction, not by detection. Keeping the two reporters
+// wholly separate is also what keeps `REPORTER_SOURCE` byte-for-byte unchanged, so
+// the framed Tier-1/Tier-2 tests stay green untouched.
+//
+// It sends far less than the framed reporter: only `error`/`unhandledrejection`
+// (no console wrapping, no fetch/XHR monkey-patching — §9's payload has no
+// `console`/`network` kind at all) and four sampled web vitals, each as its own
+// `navigator.sendBeacon` POST to same-origin `/telemetry/lite` (contract §1: on
+// the same `demos.handsontable.com` zone as `/d` and `/embed` themselves, so this
+// is same-origin regardless of who frames the page).
+
+/** Same-origin beacon target (contract §9). */
+export const LITE_ENDPOINT = "/telemetry/lite";
+
+/** The injection idempotency marker — distinct from `MONITOR_MESSAGE_TYPE`
+ *  (never sent in a beacon payload; §9's payload has no such field at all).
+ *  Deliberately the same string as the reporter's own double-injection guard
+ *  property (`window.__hotLiteMonitor`) below, so the marker costs no extra
+ *  bytes in the shipped script — one string, two jobs, matched by the test
+ *  that pins `injectLiteReporterIntoHtml`'s idempotency. */
+export const LITE_REPORTER_MARKER = "__hotLiteMonitor";
+
+/** §9: "Vitals are sampled at 10% per page view, decided once per page." */
+export const LITE_VITALS_SAMPLE_RATE = 0.1;
+
+/**
+ * Client-side truncation caps, in **UTF-8 bytes** — deliberately tighter than
+ * the contract's own per-field ceilings (`LITE_MESSAGE_MAX` 500 chars /
+ * `LITE_STACK_MAX` 2000 chars, `telemetry/lite.ts`): that module's own doc
+ * comment measures a maxed-out `st` alone at ~2150 bytes, already over
+ * `LITE_PAYLOAD_MAX_BYTES` (2048) by itself, and says producing a payload
+ * that actually fits is the *sender's* job. A first stack frame is enough
+ * for a fingerprint; the rest is only volume this reporter would otherwise
+ * have to trim away at send time anyway.
+ *
+ * Bytes, not characters, on purpose (T08-D, fix round I2): a JS string's
+ * `.length` counts UTF-16 code units, and every non-ASCII character (a
+ * non-English error message, an emoji, a curly quote) costs 2-4 UTF-8 bytes
+ * for one `.length` unit — a char-count cap silently let a non-ASCII payload
+ * grow past `LITE_PAYLOAD_MAX_BYTES` (2048), which the ingest route then
+ * drops outright (`isValidLitePayload`'s own total-byte check), so a
+ * non-English error was reported as "sent" client-side and never actually
+ * stored. `reporterSource`'s `bt()` (byte-trim) enforces this in the shipped
+ * ES5, and `bc()` (build+send) makes a final `bl()` (byte-length) check
+ * against the whole serialized payload before ever calling `sendBeacon` —
+ * belt and braces against JSON's own escaping (`"`/`\`/control characters
+ * each cost 2+ output characters) pushing an already-trimmed payload back
+ * over budget.
+ */
+export const LITE_CLIENT_NAME_MAX_BYTES = 100;
+export const LITE_CLIENT_MESSAGE_MAX = 300;
+export const LITE_CLIENT_STACK_MAX = 300;
+
+/**
+ * Size budget for the *injected script itself* — distinct from
+ * `LITE_PAYLOAD_MAX_BYTES` (`telemetry/lite.ts`), which bounds one beacon
+ * body.
+ *
+ * T08-D (see the task Outcome): the task's own Goal prose reads "a script
+ * under 2 KB." Measured (`pipeline/lite-beacon.test.mjs`) at ~2.8 KB for the
+ * `<script>` element's own content with a realistic config, after cutting
+ * every inline comment and all non-essential whitespace from the shipped
+ * string (the rationale that would normally sit beside this code moved to
+ * `reporterSource`'s own doc comment instead, which costs no shipped bytes).
+ * What is left is `sendBeacon` transport, truncation, the per-page-once
+ * sampling coin flip, and three `PerformanceObserver` registrations (LCP,
+ * CLS, INP) each wrapped in its own defensive `try`/`catch` — none of it
+ * dead weight. Getting under 2 KB from here means either accepting a
+ * correctness cut (documented alternatives considered and rejected: reading
+ * `layout-shift`/`event`/`largest-contentful-paint` once via
+ * `performance.getEntriesByType` instead of a live, buffered
+ * `PerformanceObserver` is the standard *incorrect* shortcut — those entry
+ * types are not reliably in the global timeline buffer without an active
+ * observer, which this reporter cannot verify without a real browser) or a
+ * minifier in the injection path, which this feature does not have. This
+ * constant is set from the measured size with headroom for a longer
+ * `demo`/`fw` string, not the Goal's literal figure — flagged for the
+ * controller in the task's Outcome/Concerns.
+ */
+export const LITE_REPORTER_MAX_BYTES = 3072;
+
+/** Baked into the injected script at the `share.ts` serve seam — one build's
+ *  worth of context the client cannot otherwise know (its own demo id, pinned
+ *  Handsontable major, and framework). */
+export interface LiteReporterConfig {
+  surface: LiteSurface;
+  demo: string;
+  ht: HtMajor;
+  fw: Framework;
+}
+
+/** Defence in depth for embedding `config`'s (allow-listed, but not worth
+ *  trusting blindly) strings inside an inline `<script>` body: a literal
+ *  `</script` in the JSON would otherwise close the tag early. None of §9's
+ *  `demo`/`ht`/`fw` values can contain this today (a `shortId()`, a closed
+ *  `HT_MAJORS` member, a `config/frameworks.json` key) — this is a backstop
+ *  against that staying true, not a defence this reporter currently needs. */
+function escapeScriptClose(source: string): string {
+  return source.replace(/<\/(script)/gi, "<\\/$1");
+}
+
+/**
+ * The standalone reporter, as ES5 source — hand-written for the same reason
+ * `REPORTER_SOURCE` is (`pipeline/lite-beacon.test.mjs` parses it with `acorn`
+ * `ecmaVersion: 5` and *executes* it against a fake DOM, never just reads it).
+ *
+ * Every browser API it touches — `window`, `document`, `navigator`,
+ * `performance`, `PerformanceObserver`, `Blob`, `Math`, `Date` — is referenced
+ * as a bare global, exactly like `REPORTER_SOURCE`'s `window`/`parent`/etc.: in
+ * production these resolve to the real globals; a test can shadow every one of
+ * them with `new Function("window", "document", ..., SOURCE)(fakeWindow, ...)`,
+ * which is what makes the sampling test able to fix `Math.random()` without
+ * touching the real global `Math` (a shared, mutable, cross-test resource).
+ *
+ * Self-defence rules, same as `REPORTER_SOURCE`: every hook body is wrapped so
+ * a throw cannot break the page it observes, and `__hotLiteMonitor` makes a
+ * double injection a no-op.
+ *
+ * Written with no inline comments and minimal whitespace — the shipped script
+ * itself has a size budget (`LITE_REPORTER_MAX_BYTES`, `pipeline/lite-beacon.
+ * test.mjs`) distinct from the 2 KB *payload* cap; the rationale that would
+ * normally sit beside this code lives here instead, where it costs no bytes:
+ *
+ * - **LCP**: reports the *last* `largest-contentful-paint` candidate observed
+ *   before the page hides, not the first — candidates keep arriving until the
+ *   first user interaction, and the first one is reliably an under-estimate.
+ * - **CLS**: summed for the page's lifetime, not session-windowed. The real
+ *   CLS algorithm groups shifts into gap/limit-bounded sessions and reports
+ *   the worst window; this is a simpler running total, so it can overstate a
+ *   page with several small, separated shifts.
+ * - **INP approximation** (documented per the task's Outcome, ADR §C.5): the
+ *   longest single `event`-timing entry's `duration` observed during the
+ *   page's life, filtered to real interactions (`interactionId > 0`) at the
+ *   same 40 ms `durationThreshold` the `web-vitals` library defaults to. This
+ *   is *not* the spec metric — real INP groups one interaction's several
+ *   events (pointerdown/pointerup/click) into a single duration and reports
+ *   the 98th percentile across every interaction in the page's life; this
+ *   reports one number, the single longest event seen, unweighted and
+ *   ungrouped. It trends the same direction as real INP (a page with one slow
+ *   handler shows a high value; a smooth page shows a low one) but is not
+ *   comparable to a real-INP number from another source.
+ * - **TTFB**: `PerformanceNavigationTiming.responseStart`, the one vital here
+ *   that is not an observer/approximation — read once, synchronously, at
+ *   report time.
+ *
+ * All four fire together, once, at `visibilitychange` (hidden) or `pagehide`
+ * — never eagerly — because LCP and CLS are only final once the page is done
+ * being looked at.
+ */
+function reporterSource(config: LiteReporterConfig): string {
+  return `(function(){
+try{if(window.__hotLiteMonitor)return;window.__hotLiteMonitor=true;}catch(e){return;}
+var EP=${JSON.stringify(LITE_ENDPOINT)},SURF=${JSON.stringify(config.surface)},DEMO=${JSON.stringify(config.demo)},HTM=${JSON.stringify(config.ht)},FWK=${JSON.stringify(config.fw)};
+var CEIL=${MONITOR_EVENT_CEILING},NMAX=${LITE_CLIENT_NAME_MAX_BYTES},MMAX=${LITE_CLIENT_MESSAGE_MAX},SMAX=${LITE_CLIENT_STACK_MAX},PMAX=${LITE_PAYLOAD_MAX_BYTES},RATE=${LITE_VITALS_SAMPLE_RATE};
+var used=0,sent={};
+function bl(s){try{return unescape(encodeURIComponent(s)).length;}catch(e){return 1e9;}}
+function bt(s,n){while(bl(s)>n)s=s.slice(0,-1);return s;}
+function dv(){var u="";try{u=(navigator&&navigator.userAgent)||"";}catch(e){}
+return /ipad|tablet|playbook|silk/i.test(u)?"tablet":/mobi|iphone|ipod|android.*mobile|windows phone/i.test(u)?"mobile":"desktop";}
+var DEV=dv();
+function bc(t,f){try{
+var p={v:1,t:t,s:SURF,demo:DEMO,ht:HTM,fw:FWK,dev:DEV,ts:Date.now()};
+for(var k in f)p[k]=f[k];
+var j=JSON.stringify(p);
+if(bl(j)>PMAX)return;
+if(navigator&&typeof navigator.sendBeacon==="function")navigator.sendBeacon(EP,j);
+}catch(e){}}
+function se(n,m,st){try{
+if(used>=CEIL)return;
+used+=1;
+var f={n:bt(n||"Error",NMAX),m:bt(m||"unknown error",MMAX),val:null};
+if(st)f.st=bt(st,SMAX);
+bc("err",f);
+}catch(e){}}
+function sv(n,val){try{
+if(sent[n])return;
+if(typeof val!=="number"||!isFinite(val))return;
+sent[n]=true;
+bc("vital",{n:n,val:val});
+}catch(e){}}
+try{
+window.addEventListener("error",function(ev){try{
+if(!ev||(!ev.error&&ev.target&&ev.target!==window))return;
+var er=ev.error;
+se((er&&er.name)||"Error",(er&&er.message)||(ev&&ev.message)||"unknown error",er&&er.stack);
+}catch(e){}},true);
+window.addEventListener("unhandledrejection",function(ev){try{
+var r=ev&&ev.reason;
+se((r&&r.name)||"UnhandledRejection",r&&r.message?r.message:String(r),r&&r.stack);
+}catch(e){}});
+}catch(e){}
+var smp=false;
+try{smp=Math.random()<RATE;}catch(e){}
+if(smp){
+var lc=null,cls=0,inp=0,rep=false;
+var ob=function(t,cb,dt){try{
+var o=new PerformanceObserver(cb),op={type:t,buffered:true};
+if(dt)op.durationThreshold=dt;
+o.observe(op);
+}catch(e){}};
+ob("largest-contentful-paint",function(l){var es=l.getEntries();if(es.length)lc=es[es.length-1];});
+ob("layout-shift",function(l){var es=l.getEntries();for(var i=0;i<es.length;i++){if(!es[i].hadRecentInput)cls+=es[i].value||0;}});
+ob("event",function(l){var es=l.getEntries();for(var i=0;i<es.length;i++){var en=es[i];if(en.interactionId&&en.interactionId>0&&en.duration>inp)inp=en.duration;}},40);
+var rp=function(){
+if(rep)return;
+rep=true;
+try{if(lc)sv("LCP",lc.renderTime||lc.loadTime||0);}catch(e){}
+sv("CLS",cls);
+if(inp>0)sv("INP",inp);
+try{
+var nv=performance&&performance.getEntriesByType&&performance.getEntriesByType("navigation")[0];
+if(nv&&typeof nv.responseStart==="number")sv("TTFB",nv.responseStart);
+}catch(e){}
+};
+try{
+document.addEventListener("visibilitychange",function(){try{if(document.visibilityState==="hidden")rp();}catch(e){}});
+window.addEventListener("pagehide",rp);
+}catch(e){}
+}
+})();
+`;
+}
+
+/** True when `html` already carries the lite reporter (`LITE_REPORTER_MARKER`
+ *  survives the JSON-escaping of the source, same as `MONITOR_MESSAGE_TYPE`
+ *  does for the framed reporter — see `alreadyInjected` above). */
+function liteAlreadyInjected(html: string): boolean {
+  return html.indexOf(LITE_REPORTER_MARKER) !== -1;
+}
+
+/**
+ * Insert the standalone lite reporter into a `/d`/`/embed` document, exactly
+ * where `injectReporterIntoHtml` inserts the framed one (`insertInjectedTag`)
+ * and with the same DEV-2580 self-removing tag (`injectedScriptTag`) — the
+ * same Remix hydration constraint applies here: a `/d`/`/embed` build can be
+ * any of the same SSR frameworks.
+ *
+ * Idempotent: returns `html` unchanged when already injected.
+ */
+export function injectLiteReporterIntoHtml(html: string, config: LiteReporterConfig): string {
+  if (liteAlreadyInjected(html)) return html;
+  return insertInjectedTag(html, injectedScriptTag(escapeScriptClose(reporterSource(config))));
 }
