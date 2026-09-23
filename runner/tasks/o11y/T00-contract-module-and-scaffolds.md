@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | todo |
+| Status | done |
 | Size | M |
 | Depends on | — |
 | Blocks | T02–T09 (T01 may run in parallel) |
@@ -116,4 +116,206 @@ the scaffolded worker. Anything this task could not decide goes into its Outcome
 
 ## Outcome
 
-_Filled in when done._
+### What was built
+
+- `packages/runtime/src/telemetry/` — ten files (`attrs.ts`, `metrics.ts`, `fingerprint.ts`,
+  `scrub.ts`, `classify.ts`, `inbox.ts`, `lite.ts`, `sink.ts`, `facade.ts`, `convert.ts`) plus
+  the `index.ts` barrel, exported as `@handsontable/demo-runtime/telemetry` (`packages/runtime/package.json`
+  `"./telemetry"` subpath, both `types` and `default`). Pure — no DOM, no Cloudflare imports.
+- `workers/o11y/` scaffold: `package.json`, `tsconfig.json`, `wrangler.jsonc`, `src/env.ts`
+  (declares `InboxWriterApi` per COMMON.md interface 1, do-nothing `InboxWriter`/`GrafanaBox`
+  stub classes), `src/index.ts` (501 on every contract §1 route), `.dev.vars.example`.
+- `workers/api/src/analytics.ts`: `BOT_RE`/`isBot`/`deviceOf`/`browserOf`/`osOf` moved into
+  `classify.ts`, byte-identical, re-exported so no importer's path changes.
+- `workers/api/src/env.ts` + `wrangler.jsonc`: scaffold-only additions the task explicitly
+  scoped to T00 — `RUNNER_EVENTS` (Analytics Engine), the `O11Y` service binding, `SENTRY_SCOPE`
+  var (default `"full"`, contract §11). Values only; T05 (this file's real owner) wires usage.
+- Seven `pipeline/*.test.mjs` files (69 `node --test` cases): `telemetry-contract.test.mjs`
+  (required name), `scrub-telemetry.test.mjs` (required name), `telemetry-convert.test.mjs`
+  (required name), `telemetry-fingerprint.test.mjs` (required name), plus
+  `telemetry-metrics.test.mjs`, `telemetry-inbox.test.mjs`, `telemetry-lite.test.mjs` (not named
+  by the acceptance criteria, added because `toAePoint`'s runtime validation, the inbox
+  key/NDJSON helpers and the lite payload's byte cap all have real logic the contract test
+  does not exercise).
+
+### Dependencies added (each verified on npm at time of task, pinned exactly where the task
+asked for it)
+
+| Package | Version | Where | Note |
+|---|---|---|---|
+| `@grafana/faro-web-sdk` | `2.12.1` | `apps/authoring` (not yet added to its `package.json` — T06 adds it when it starts using it; version recorded here as npm's current at task time so T06 does not have to re-check) | authoring Faro SDK |
+| `@cloudflare/containers` | `0.3.7` | `workers/o11y` | `GrafanaBox`'s base class |
+| `jose` | `6.2.12` | `workers/o11y` | Access JWT verification (T02) |
+| `source-map-js` | `1.2.1` | `workers/o11y` | drain-time symbolication (T03) |
+| `@bufbuild/protobuf` | `2.15.0` | `workers/o11y` | OTLP protobuf decoder — see comparison below |
+| `wrangler` | `4.136.3` | `workers/o11y` | exact pin |
+| `@cloudflare/workers-types` | `5.20260923.1` | `workers/o11y` | exact pin; see concern below |
+| `typescript` | `~5.6.0` | `workers/o11y` | matches the rest of the workspace, not pinned exactly (not in the task's explicit pin list) |
+| `acorn` | `8.18.0` | already a `runner/package.json` devDependency (root) | no change needed — already present |
+
+`apps/authoring/package.json`, `packages/runtime/package.json`'s own dependency list, and
+`workers/o11y/package.json` are the only manifests this task could add to concretely; Faro is
+recorded here (and will be added to `apps/authoring/package.json` by T06) rather than added
+speculatively to a package that does not use it yet, to avoid an unused dependency triggering
+its own review question.
+
+### OTLP protobuf decoder comparison
+
+Built two minimal esbuild bundles (`--bundle --minify --format=esm --platform=neutral`) using
+only each library's low-level wire-format Reader/Writer (not full reflective `.proto` decoding
+— both a hand-rolled OTLP decoder and this comparison stay at the wire-primitive level; see
+below for why the reflective mode is a Workers disqualifier for one of them):
+
+| Candidate | Minified | Gzipped |
+|---|---|---|
+| `protobufjs/minimal` (`Reader`/`Writer` only) | 44.0 kB | 12.76 kB |
+| `@bufbuild/protobuf/wire` (`BinaryReader`/`BinaryWriter`) | 10.7 kB | 3.67 kB |
+
+`@bufbuild/protobuf` is ~4× smaller at both stages. Both round-trip a synthetic encode/decode
+correctly at the wire level (verified with a plain Node script, not just a type check).
+
+**Eval disqualifier for protobufjs's full API** (not just a size preference): `protobufjs`'s
+reflective decode/encode/verify methods (`Root.fromJSON`/`Type#decode`, the path a generic
+"decode this arbitrary OTLP shape" implementation would reach for) are generated at runtime via
+`util/codegen.js`'s `Function.apply(...)` / `Function(source)()` (confirmed by reading the
+installed package source, `eslint-disable-line no-new-func` comments and all). Workers disallow
+dynamic code evaluation by default ("Code generation from strings disallowed for this
+context"). `protobufjs/minimal`'s bare `Reader`/`Writer` avoid this (no codegen at all), but
+`@bufbuild/protobuf` avoids it **and** is smaller **and** its normal (non-`/wire`) generated-message
+API is also eval-free by construction (protobuf-es codegen produces static methods, never
+`new Function`), so a hand-rolled wire-level decoder is not the only option later if the
+ingest route ends up wanting full generated OTLP message types. **Decision: pin
+`@bufbuild/protobuf`.** Not smoke-tested under a real `wrangler dev` request (T02's decode path
+does not exist yet); the eval-safety claim rests on the source-code grep, not a runtime
+Workers execution.
+
+### Deviations (T00-D)
+
+- **T00-D1 — scrub attribute rule.** The task text says "drop the forbidden attributes of
+  contract §3"; ADR §E.4 says "drop unknown attributes." Implemented as one allowlist
+  (`attrs.ts#ALLOWED_ATTRIBUTE_KEYS` = `RESOURCE_ATTRS` ∪ `STRUCTURED_METADATA_KEYS`) that
+  `scrub.ts#allowlistAttributes` applies to every attribute/context bag — satisfies both
+  readings at once (every §3-forbidden key is simply absent from the allowlist, and a future
+  unknown key is dropped by the same mechanism with no code change).
+- **T00-D2 — AE point shape and local-mode column names.** `toAePoint` always returns a
+  fixed-width point (20 blobs, 20 doubles), unused slots `""`/`0`; the three universal resource
+  attrs (`service_name`, `service_version`, `environment`, blob1–3) are always filled and are
+  **not** part of any metric's own `blobs` list in the §5 registry (they are universal, not
+  metric-specific — confirmed against the doc: no §5 row ever mentions them). The local
+  ClickHouse table's columns are named identically to the AE slot names (`index1`, `blob1`…
+  `blob20`, `double1`…`double20`) plus `timestamp`/`_sample_interval`, so a query written against
+  real Analytics Engine and against the local shim differ only in endpoint — T01's
+  `containers/o11y/local/clickhouse-init.sql` must use these exact column names.
+- **T00-D3 — fingerprint internals.** FNV-1a 64 runs over the UTF-8 bytes of the normalised
+  message (the natural choice for a JS string; pinned against the published test vectors:
+  `""`→`cbf29ce484222325`, `"a"`→`af63dc4c8601ec8c`, `"foobar"`→`85944171f73967e8`).
+  `stripCodeFrame` runs **before** `normalizeMonitorMessage`, not after — the doc's "the
+  normalisation is `normalizeMonitorMessage` plus `stripCodeFrame`" names both but not an order,
+  and `normalizeMonitorMessage`'s whitespace collapse destroys the line-anchored gutter/caret
+  shape `stripCodeFrame` matches if it runs first.
+- **T00-D4 — console-item tagging convention.** `scrub.ts#isConsoleItem` drops a Faro `log`
+  item only when `payload.context["hot.kind"]` is `"console-error"` or `"console-warn"` (the
+  existing `MonitorKind` vocabulary from `monitor.ts`). Faro's own console instrumentation is
+  off per ADR §E.4, so this only matters if T06/T07 relay the demo-runtime console-warn/error
+  bridge into Faro as a manual `pushLog` — if they do, they must tag it this way for the drop
+  rule to find it; if they don't, this rule is inert (a console item never arrives) and costs
+  nothing.
+- **T00-D5 — lite beacon size cap.** "≤ 2 KB" (§9) is enforced as `LITE_PAYLOAD_MAX_BYTES = 2048`
+  bytes of the serialised JSON body (`TextEncoder`-counted, not `.length` characters), and it is
+  the **decisive** cap: `isValidLitePayload` rejects a payload that satisfies both inherited
+  per-field caps (`LITE_MESSAGE_MAX = 500`, `LITE_STACK_MAX = 2000`, copied from `monitor.ts`'s
+  `MONITOR_MESSAGE_MAX`/`MONITOR_STACK_MAX`) but whose total exceeds 2048 — measured
+  (`pipeline/telemetry-lite.test.mjs`) that `st` alone at `LITE_STACK_MAX`, with every other
+  field minimal, already runs ~2150 bytes, over budget by itself. T08's sender must truncate
+  `st` well below its own field cap (documented in `lite.ts`) and re-validate, not just stay
+  under `LITE_STACK_MAX`.
+- **T00-D6 — scrub-then-convert order.** `convert.ts`'s `faroItemToRecord`/`beaconToRecord` both
+  assume an **already-scrubbed** input (`scrubTelemetry` first, then convert), not the reverse.
+  Scrubbing the richer Faro/beacon shape first catches fields `convert.ts` never looks at (e.g.
+  stack-frame filenames); converting first and scrubbing the flat OTLP shape after would miss
+  them. T02's route handler must call them in this order.
+- **T00-D7 — `GrafanaBox`'s base class and the missing `containers` block.** `GrafanaBox`
+  extends `@cloudflare/containers`' `Container<Env>` (matching the contract), with no
+  `containers` entry in `wrangler.jsonc` yet — `containers/o11y/`'s Dockerfile does not exist
+  until T01. Measured: `wrangler deploy --dry-run` accepts this combination (the bundle grows
+  from ~2 KiB to ~54 KiB, pulling in `@cloudflare/containers`' runtime, but lists the binding
+  same as any other) — it was **not** deployed for real, so whether a real `wrangler deploy`
+  also accepts a `Container` subclass with no matching `containers` entry is unconfirmed. T01
+  adds the entry alongside real container behaviour; if a real deploy turns out to reject it,
+  that is T01's problem to discover, not a T00 regression (dry-run, the task's own acceptance
+  criterion, passes either way).
+- **T00-D8 — Access placeholders.** `ACCESS_TEAM_DOMAIN` (`"handsontable.cloudflareaccess.com"`,
+  a plausible-convention guess) and `ACCESS_AUD` (`""`) are placeholders — the real Access
+  application does not exist yet. T03 creates it and fills in both.
+- **Left out of `wrangler.jsonc`, per the controller's explicit allowance**: the Workers
+  rate-limiting binding gating `collect`/`lite` (needs a real namespace id from the dashboard,
+  T02's job) and the `containers` block for `GrafanaBox` (T01's job, see T00-D7).
+
+### Sandbox probes
+
+None — T00 is not one of T01/T02/T03, no probe section applies.
+
+### Test-failing-when-reverted evidence
+
+Every new test file was run once green on first write, then deliberately broken by reverting
+the implementation (not the test) and re-run to confirm a red failure for the right reason,
+then restored and re-verified green. Full command output is in the T00 report
+(`.superpowers/sdd/README/T00-report.md`); summary:
+
+| File / rule reverted | Test(s) that went red |
+|---|---|
+| `docs/observability-contract.md` §5 outcome value (doc edited alone) | `telemetry-contract.test.mjs` §5 subtest |
+| `metrics.ts` §5 outcome value (module edited alone) | `telemetry-contract.test.mjs` §5 subtest |
+| `fingerprint.ts`: `stripCodeFrame` removed from `fingerprint()` | the code-frame case in `telemetry-fingerprint.test.mjs` |
+| `convert.ts`: `msToUnixNano` back to `ms * 1e6` | the boundary-precision case in `telemetry-convert.test.mjs` |
+| `scrub.ts`: each of 9 individual rules (console drop, drop user, reduce browser meta, page-url scrub, stack-frame redact, message scrub, context allowlist, OTLP body scrub, OTLP attrs allowlist) disabled one at a time | exactly the case(s) written to prove that rule, in `scrub-telemetry.test.mjs` |
+| `metrics.ts`: `toAePoint`'s `checkAllowed` disabled | the three validation cases in `telemetry-metrics.test.mjs` |
+| `inbox.ts`: `inboxKey` switched from `getUTCHours` to `getHours` | the UTC-vs-local case (and two others) in `telemetry-inbox.test.mjs`, run under `TZ=Europe/Warsaw` to force a real divergence |
+| `lite.ts`: the total-byte check short-circuited to `true` | the T00-D5 case in `telemetry-lite.test.mjs` |
+
+### Verify — commands run, exit codes
+
+All run via `rtk proxy <command>; echo "exit=$?"` from `runner/` (or the named subdirectory),
+per COMMON.md. rtk's own summaries were not trusted; exit codes and raw output were.
+
+```
+rtk proxy pnpm install                                           exit=0
+rtk proxy pnpm --filter @handsontable/demo-runtime build          exit=0
+rtk proxy pnpm -r run typecheck                                   exit=0  (5 of 6 workspace projects — pipeline has no typecheck script, unrelated to this task)
+rtk proxy pnpm test                                                exit=1 (1232 tests, 1229 pass, 1 pre-existing unrelated failure — see Concerns)
+( cd workers/o11y && rtk proxy npx wrangler deploy --dry-run )    exit=0
+( cd workers/api && rtk proxy npx wrangler deploy --dry-run )     exit=0
+node scripts/check-test-presence.mjs feat/runner-observability    exit=0 ("15 source file(s) changed, with a matching test change")
+```
+
+Also, per the acceptance criteria's exact import line, typechecked
+`import { toAePoint, scrubTelemetry, fingerprint } from "@handsontable/demo-runtime/telemetry"`
+in `workers/api`, `workers/o11y` and `apps/authoring` via temporary probe files (each with a
+deliberate `@ts-expect-error` on a wrong-typed `toAePoint` call, to prove the import resolves
+real types and not `any`) — all three passed, then the probes were deleted (none is a file this
+task owns permanently). Also measured, then reverted: removing `"types"` from the `"./telemetry"`
+export condition did **not** break resolution under this repo's `moduleResolution: "Bundler"` —
+tsc still found the real `.d.ts` (confirmed with a "does this exported member exist" probe, not
+just an empty error log) — so the task file's stated trap does not reproduce here, though
+`types` was kept anyway (correct regardless, and other tools/resolution modes may not be as
+lenient).
+
+### Concerns / follow-ups
+
+- The one `pnpm test` failure (`the pin tracks its own major's starter bucket`) is pre-existing
+  on `feat/runner-observability` before this task's changes — confirmed by running the baseline
+  suite before writing any code (same single failure, same test name). Unrelated to telemetry;
+  not investigated further as out of scope.
+- `workers/api`'s existing `@cloudflare/workers-types` pin (`^4.20250101.0`) is behind what its
+  own `wrangler@4.108.0` actually wants as a peer (`^5.20260706.1` — visible as a pnpm peer-
+  dependency warning during `pnpm install`, pre-existing, not caused by this task).
+  `workers/o11y` was pinned to the current `5.20260923.1` instead, so the two workers now carry
+  different major versions of the same types package. Not fixed here — `workers/api/package.json`
+  is T05's file, and this is pre-existing drift, not a T00 regression.
+- The OTLP decoder choice (`@bufbuild/protobuf`) is backed by a source-code eval-safety check
+  and a bundle-size measurement, not a real `wrangler dev` request — T02 should smoke-test its
+  first real decode call under `wrangler dev` before leaning on the "no eval" claim in
+  production.
+- `GrafanaBox extends Container<Env>` with no `containers` block (T00-D7) was only proven safe
+  under `--dry-run`; T01 should confirm a real deploy accepts it too, or drop back to a plain
+  `DurableObject` stub if not.
