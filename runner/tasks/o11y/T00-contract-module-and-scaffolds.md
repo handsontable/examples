@@ -134,7 +134,7 @@ the scaffolded worker. Anything this task could not decide goes into its Outcome
   var (default `"full"`, contract §11). Values only; T05 (this file's real owner) wires usage.
 - `apps/authoring/package.json`: `@grafana/faro-web-sdk` added as a real dependency (not just
   recorded) — see Dependencies below.
-- Eight `pipeline/*.test.mjs` files (77 `node --test` cases): `telemetry-contract.test.mjs`
+- Eight `pipeline/*.test.mjs` files (79 `node --test` cases): `telemetry-contract.test.mjs`
   (required name), `scrub-telemetry.test.mjs` (required name), `telemetry-convert.test.mjs`
   (required name), `telemetry-fingerprint.test.mjs` (required name), plus
   `telemetry-metrics.test.mjs`, `telemetry-inbox.test.mjs`, `telemetry-lite.test.mjs`,
@@ -274,13 +274,17 @@ Workers execution.
   **(b)** the controller's instruction (COMMON.md interface 1) was to type `INBOX_WRITER` as
   `DurableObjectNamespace<InboxWriterApi>` directly. It is typed as
   `DurableObjectNamespace<InboxWriter>` instead (the stub class, which `implements
-  InboxWriterApi`) — `DurableObjectNamespace<T>` requires `T` to extend the ambient
-  `Rpc.DurableObjectBranded` type, which a bare interface does not satisfy; only a real
-  `DurableObject` subclass does. This was verified as a real compiler constraint, not a
-  preference (a `@ts-expect-error` probe against `DurableObjectNamespace<InboxWriterApi>`
-  directly is unnecessary to prove — the interface literally lacks the required brand, so no
-  workaround inside the interface itself exists). `InboxWriterApi` is still exactly what T01
-  and T02 code the RPC shape against, unchanged.
+  InboxWriterApi`). Measured, not assumed: a direct probe (`type Probe =
+  DurableObjectNamespace<InboxWriterApi>`, `@cloudflare/workers-types` 5.20260923.1) fails with
+
+  ```
+  error TS2344: Type 'InboxWriterApi' does not satisfy the constraint 'DurableObjectBranded'.
+    Property '[__DURABLE_OBJECT_BRAND]' is missing in type 'InboxWriterApi' but required in type
+    'DurableObjectBranded'.
+  ```
+
+  confirming the deviation is required, not a preference. `InboxWriterApi` is still exactly what
+  T01 and T02 code the RPC shape against, unchanged.
 - **T00-D10 — `toAePoint`'s outcome/reason check is runtime-only, not a compile-time one.**
   `HotAttrs.outcome`/`.reason` are typed `string` (§5's per-metric enums have no type-level
   encoding), so `tsc` accepts any string at every call site; only actually calling `toAePoint`
@@ -317,16 +321,43 @@ Workers execution.
   module does not model (no traces, same ADR §C.4 reason as T00-D10's `faroItemToRecord` guard) —
   wiring the real hook needs exactly one `as unknown as ScrubbableFaroItem` / `as TransportItem |
   null` cast pair at that one boundary, which is expected, not a defect.
-- **ClickHouse `timestamp` format, cross-checked against T01's actual schema.** T01 (running in
-  parallel) had already committed `containers/o11y/local/clickhouse-init.sql` by the time this
-  was checked — read directly from T01's worktree, read-only, per COMMON.md. Every column name
-  matches `clickhouseSink`'s insert exactly (`index1`, `blob1`–`blob20` as `String`,
-  `double1`–`double20` as `Float64`, `_sample_interval` — T00-D2 held), but T01's `timestamp`
-  column is `DateTime64(3)` (millisecond precision) while `clickhouseSink` was sending a bare
-  Unix-seconds integer, which a `DateTime64` column reads as whole seconds — not malformed, but
-  silently truncating the precision the column exists to hold. Fixed: `clickhouseSink` now sends
-  `'YYYY-MM-DD HH:MM:SS.sss'` (`clickhouseTimestamp`, exported, tested in
-  `pipeline/telemetry-sink.test.mjs`), ClickHouse's own default `DateTime64` text/JSON format.
+- **ClickHouse `timestamp` format, measured against a real container running T01's actual
+  schema — three iterations, not one.** T01 (running in parallel) had already committed
+  `containers/o11y/local/clickhouse-init.sql` — read directly from T01's worktree, read-only, per
+  COMMON.md. Column names matched exactly (`index1`, `blob1`–`blob20` `String`, `double1`–`double20`
+  `Float64`, `_sample_interval` — T00-D2 held); `timestamp` is `DateTime64(3)`. What actually
+  reaches that column was measured, not guessed, with a throwaway `clickhouse/clickhouse-server:
+  24.10-alpine` container (T01's own pinned tag) on port 4123 (this task's port block), running
+  T01's DDL unmodified, torn down after:
+  - **v1, a bare Unix-seconds integer** (the original code): **wrong**, and not merely imprecise as
+    first assumed — ClickHouse does not read a plain integer into `DateTime64(3)` as seconds at
+    all, it reads it as raw milliseconds at the column's own declared scale. `1758628800` (meant
+    as seconds) landed on `1970-01-21 08:30:28.800`, off by 1000×, confirmed via
+    `toUnixTimestamp64Milli`.
+  - **v2, a `'YYYY-MM-DD HH:MM:SS.sss'` string**: round-tripped exactly correct under the
+    container's own UTC timezone — but a same-query check with `session_timezone=Asia/Tokyo` on
+    the identical string produced a value 9 hours off. A naive datetime string is parsed in the
+    server's configured timezone, which nothing here pins, so this was not safe to ship either.
+  - **v3, a raw epoch-millisecond integer** (`Date.getTime()`, what `clickhouseSink` sends now):
+    round-tripped byte-for-byte identical via `toUnixTimestamp64Milli`, and being a pure tick
+    count it cannot be timezone-dependent by construction — no server-timezone pin needed.
+  `clickhouseTimestamp` (exported, tested in `pipeline/telemetry-sink.test.mjs`) implements v3.
+  The throwaway container (`docker run --name t00-ch-probe ... clickhouse/clickhouse-server:24.10-alpine`,
+  port 4123) was removed afterward (`docker rm -f t00-ch-probe`, confirmed absent).
+- **`redactPreviewHosts` now runs on every string in a scrubbed record, not only the fields named
+  individually.** A third review pass found the Scope line "`redactPreviewHosts` on every string"
+  was only implemented for five specific fields (`meta.page.url`, stack-frame filenames, message,
+  value, OTLP body) — an allowlisted attribute value (`session.id`, `hot.framework`, both
+  client-supplied) or `payload.type` could still carry a preview host through untouched.
+  `scrubTelemetry` now walks every string leaf of the whole clone with `redactPreviewHosts` as a
+  final pass, after the targeted rules (idempotent, so order does not matter) — covered by two
+  new isolated cases in `scrub-telemetry.test.mjs` (a preview host inside `session.id`, and inside
+  `payload.type`), each reverted and seen red.
+- **`HOT_KINDS`, added for the guard above, is now also pinned by
+  `telemetry-contract.test.mjs`** — the same doc-parses-itself rule as every other closed set: it
+  extracts the four backtick values after `` `hot.kind` `` in the §3 "Structured metadata only"
+  paragraph and compares them to `attrs.ts#HOT_KINDS`, reverted (a doc-only edit adding a fifth
+  value) and seen red.
 
 ### Post-review fixes (not T00-D — these are correctness fixes matching the contract, found by a
 review pass before declaring done, not open decisions)
@@ -378,8 +409,11 @@ then restored and re-verified green. Full command output is in the T00 report
 | `metrics.ts`: `toAePoint`'s `double1` default changed from `1` back to `0` (the post-review count fix) | the new count-default case in `telemetry-metrics.test.mjs` |
 | `convert.ts`: `attributes[ATTR_HOT_KIND] = item.type` removed from `faroItemToRecord` (the post-review `hot.kind` fix) | the hoist case and the dedicated `hot.kind` case in `telemetry-convert.test.mjs` |
 | `scrub.ts`: `stripQueryAndFragment` removed from the stack-frame filename line (the post-review query-strip fix) | the new stack-frame query-string case in `scrub-telemetry.test.mjs` |
-| `sink.ts`: `clickhouseTimestamp` reverted to `Math.floor(Date.now()/1000)` (post-review ClickHouse fix) | `telemetry-sink.test.mjs`, `not ok 3` |
+| `sink.ts`: `clickhouseTimestamp` v2 (string) reverted to v1 (bare Unix-seconds) | `telemetry-sink.test.mjs`, `not ok 3` |
 | `convert.ts`: the `HOT_KINDS` guard removed from `faroItemToRecord` (post-review `hot.kind` guard) | `telemetry-convert.test.mjs`, `not ok 9` |
+| `sink.ts`: `clickhouseTimestamp` v3 (raw ms integer) reverted to v2 (seconds via `Math.floor(.../1000)`) — the measured-wrong-again case | `telemetry-sink.test.mjs`, `not ok 2` and `not ok 3` |
+| `scrub.ts`: the final `redactStringsDeep` walk removed from both branches | `scrub-telemetry.test.mjs`, `not ok 14` and `not ok 15` |
+| `docs/observability-contract.md` §3 `hot.kind` parenthetical (a 5th value added, doc edited alone) | `telemetry-contract.test.mjs` §3 subtest |
 
 ### Verify — commands run, exit codes
 
@@ -390,7 +424,7 @@ per COMMON.md. rtk's own summaries were not trusted; exit codes and raw output w
 rtk proxy pnpm install                                           exit=0
 rtk proxy pnpm --filter @handsontable/demo-runtime build          exit=0
 rtk proxy pnpm -r run typecheck                                   exit=0  (5 of 6 workspace projects — pipeline has no typecheck script, unrelated to this task)
-rtk proxy pnpm test                                                exit=1 (1240 tests, 1237 pass, 1 pre-existing unrelated failure, 2 pre-existing todo — see Concerns)
+rtk proxy pnpm test                                                exit=1 (1242 tests, 1239 pass, 1 pre-existing unrelated failure, 2 pre-existing todo — see Concerns; all 79 telemetry cases pass)
 rtk proxy pnpm install --frozen-lockfile                           exit=0 (CI's install mode)
 ( cd workers/o11y && rtk proxy npx wrangler deploy --dry-run )    exit=0
 ( cd workers/api && rtk proxy npx wrangler deploy --dry-run )     exit=0
