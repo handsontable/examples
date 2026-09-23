@@ -21,15 +21,78 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const O11Y_DIR = join(__dirname, "..", "containers", "o11y");
+const WORKER_DIR = join(__dirname, "..", "workers", "o11y");
+const RUNNER_ROOT = join(__dirname, "..");
 
 function readText(relPath) {
   return readFileSync(join(O11Y_DIR, relPath), "utf8");
+}
+
+// String-aware JSONC comment stripper (`//` and `/* */`, respecting quoted
+// strings and escaped quotes) — zero-dependency, matching this file's own
+// house rule (T00 owns adding any package; wrangler.jsonc is JSONC, not
+// plain JSON, so `JSON.parse` alone cannot read it).
+function stripJsonComments(text) {
+  let result = "";
+  let inString = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (inLineComment) {
+      if (c === "\n") {
+        inLineComment = false;
+        result += c;
+      }
+      continue;
+    }
+    if (inBlockComment) {
+      if (c === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (inString) {
+      result += c;
+      if (c === "\\") {
+        result += next;
+        i++;
+        continue;
+      }
+      if (c === "\"") inString = false;
+      continue;
+    }
+    if (c === "\"") {
+      inString = true;
+      result += c;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    result += c;
+  }
+  return result;
+}
+
+function readWranglerConfig() {
+  const raw = readFileSync(join(WORKER_DIR, "wrangler.jsonc"), "utf8");
+  return JSON.parse(stripJsonComments(raw));
 }
 
 function parseJsonWithEnvPlaceholders(text) {
@@ -365,4 +428,53 @@ test("r2-lifecycle-rules.json: matches the real R2 lifecycle API body shape, one
     assert.equal(rule.deleteObjectsTransition.condition.type, "Age", `${prefix} uses an Age condition`);
     assert.equal(rule.deleteObjectsTransition.condition.maxAge, maxAge, `${prefix} maxAge is ${maxAge}s`);
   }
+});
+
+// --- workers/o11y/wrangler.jsonc: the `containers` block (T00-D7 / T01 phase 2) ---
+
+test("wrangler.jsonc: the GrafanaBox containers block is pinned and its Dockerfile exists", () => {
+  const config = readWranglerConfig();
+
+  assert.ok(Array.isArray(config.containers) && config.containers.length === 1, "exactly one containers entry");
+  const [entry] = config.containers;
+
+  assert.equal(entry.class_name, "GrafanaBox", "containers entry targets the GrafanaBox Durable Object");
+  assert.equal(entry.instance_type, "standard-1", "standard-1 (ADR-0041 §A)");
+  assert.equal(entry.max_instances, 1, "exactly one box exists at a time (ADR-0041 §A, \"one sleeping box\")");
+  assert.equal(entry.constraints?.jurisdiction, "eu", "EU compliance boundary (ADR-0041 §A/§H)");
+
+  // The `image` path is relative to wrangler.jsonc's own directory
+  // (workers/o11y/) — resolve it from there and confirm it really points at
+  // the Dockerfile this task owns, not a typo'd path that would only be
+  // caught by a real `wrangler deploy --dry-run`.
+  assert.ok(typeof entry.image === "string" && entry.image.length > 0, "image path is set");
+  const dockerfilePath = join(WORKER_DIR, entry.image);
+  assert.ok(existsSync(dockerfilePath), `containers[0].image resolves to a real file: ${dockerfilePath}`);
+  assert.equal(
+    dockerfilePath,
+    join(RUNNER_ROOT, "containers", "o11y", "Dockerfile"),
+    "the containers block's image path resolves to exactly containers/o11y/Dockerfile",
+  );
+
+  // The durable_objects binding for GRAFANA_BOX must reference the same
+  // class the containers entry does, and a migration must declare it — a
+  // real deploy fails without either, but neither depends on the other in
+  // the JSON shape, so pin both instead of only one.
+  const grafanaBoxBinding = config.durable_objects?.bindings?.find((b) => b.name === "GRAFANA_BOX");
+  assert.equal(grafanaBoxBinding?.class_name, "GrafanaBox");
+  const migratedClasses = (config.migrations ?? []).flatMap((m) => m.new_sqlite_classes ?? []);
+  assert.ok(migratedClasses.includes("GrafanaBox"), "GrafanaBox is declared in a migration's new_sqlite_classes");
+});
+
+test("wrangler.jsonc: CLOUDFLARE_ACCOUNT_ID is present and matches the top-level account_id", () => {
+  const config = readWranglerConfig();
+  assert.ok(
+    typeof config.vars?.CLOUDFLARE_ACCOUNT_ID === "string" && config.vars.CLOUDFLARE_ACCOUNT_ID.length > 0,
+    "vars.CLOUDFLARE_ACCOUNT_ID is set (box.ts needs it at runtime — a Worker cannot read its own account id otherwise)",
+  );
+  assert.equal(
+    config.vars.CLOUDFLARE_ACCOUNT_ID,
+    config.account_id,
+    "the runtime-visible copy must never drift from the deploy-time account_id",
+  );
 });

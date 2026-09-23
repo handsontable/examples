@@ -44,6 +44,14 @@ export interface Env {
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   GITHUB_OIDC_REPOSITORY: string;
+  /** T01-D (phase 2, minimal touch per COMMON.md — recorded in the T01
+   *  Outcome, contract doc untouched): duplicates wrangler.jsonc's top-level
+   *  `account_id`. Workers do not get their own account id at runtime, and
+   *  `GrafanaBox` needs it to build the Loki bucket's R2 S3 endpoint
+   *  (`https://<account-id>.eu.r2.cloudflarestorage.com`, ADR-0041 §A) and
+   *  the Analytics Engine SQL API URL for the ClickHouse datasource
+   *  (`https://api.cloudflare.com/client/v4/accounts/<account-id>/analytics_engine/sql`). */
+  CLOUDFLARE_ACCOUNT_ID: string;
 
   // Secrets: optional, matching workers/api/src/env.ts's MCP_SHARED_SECRET
   // style — a required field would force wrangler dev to typecheck against a
