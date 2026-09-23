@@ -635,3 +635,18 @@ specifically was completed given (a)'s time cost).
 - Local `pnpm o11y:dev` is functionally wired but was not proven
   reliably fast in this session's own sandboxed Docker environment; the
   code path is real (confirmed on the actual sandbox platform).
+
+### Fix round (phase A review)
+
+One Important finding, fixed — full writeup in
+`.superpowers/sdd/README/T03-report.md`'s own "Fix round" section.
+
+**I1** — `LAST_GRAFANA_STORAGE_KEY` was never reset per wake, so a
+visitor's activity in one wake could make the NEXT (visitor-less)
+backlog wake's `#finishDrain` quiet check wrongly read as "not quiet,"
+breaking ADR §A's self-stop rule and costing awake time (exit criterion
+7). Fixed: `#doWake` now deletes that key before `start()`. Covered by a
+new two-consecutive-wakes test in `o11y-wake.test.mjs`, confirmed failing
+without the fix and passing with it. `rtk proxy pnpm test`: 1489/1492
+pass (1 pre-existing baseline failure, 2 todo) — every `o11y-*` test,
+including the new one, passes. Commit `cd09a1ea0`.
