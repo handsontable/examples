@@ -270,6 +270,36 @@ test("OTLP: a plain (non-JSON) console.log body is left exactly as before — no
   assert.doesNotMatch(result.items[0].record.body, /^\{/, "body must stay untouched plain text, not JSON");
 });
 
+test("fix round I2: a body-JSON key cannot spoof a real resource attribute (service.name, environment, hot.outcome) — the real resource value always wins", async () => {
+  // pipeline/fixtures/otlp/json/console-log-line-spoof-attempt.json: a
+  // real resource carries service.name=handsontable-demos-api,
+  // deployment.environment.name=production; the body's OWN JSON tries to
+  // set service.name=spoof, deployment.environment.name=spoof-env, and
+  // hot.outcome=spoof-outcome (a metric-scoped attr, included to prove
+  // the guard isn't limited to just the two most obvious keys). None of
+  // these must survive — tryParseJsonBodyAttrs strips every
+  // RESOURCE_ATTRS key from its own output, AND the merge at the call
+  // site gives body-JSON attrs the lowest priority, so even if a future
+  // RESOURCE_ATTRS addition were missed by the strip, a real resource/
+  // OTLP attribute still could not be overridden by body content.
+  const result = await processOtlpBody(
+    new TextEncoder().encode(otlpJsonFixture("console-log-line-spoof-attempt.json")),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items.length, 1);
+  const record = result.items[0].record;
+
+  assert.equal(record.resourceAttributes["service.name"], "handsontable-demos-api", "the REAL service.name must survive, never the body's spoofed value");
+  assert.equal(record.resourceAttributes["deployment.environment.name"], "production", "the REAL environment must survive, never the body's spoofed value");
+  assert.notEqual(record.resourceAttributes["hot.outcome"], "spoof-outcome", "hot.outcome must never be set from body content at all");
+  // cf.ray (NOT a RESOURCE_ATTRS key — structured metadata) is legitimate
+  // body-JSON content and must still come through, proving the fix is a
+  // targeted strip, not a wholesale disabling of F(d)'s own feature.
+  assert.equal(record.attributes?.["cf.ray"], "8a1b2c3d4e5f6789");
+});
+
 test("every stored record carries the contract's eight resource attributes", async () => {
   const result = await processOtlpBody(
     new TextEncoder().encode(otlpJsonFixture("basic.json")),
