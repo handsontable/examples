@@ -306,16 +306,13 @@ test("POST /telemetry/hooks/sentry: a correct HMAC signature passes, a wrong one
 });
 
 // ---- unregistered contract routes still 501/404 -----------------------------------
-
-test("POST /telemetry/lite (T08's route) still answers 501 — not yet registered", async () => {
-  const { env } = freshEnv();
-  const res = await worker.fetch(
-    new Request("https://demos.handsontable.com/telemetry/lite", { method: "POST" }),
-    env,
-    ctx,
-  );
-  assert.equal(res.status, 501);
-});
+//
+// `POST /telemetry/lite` was this file's own placeholder for "not yet
+// registered" until T08 (ADR §C.5) implemented it — `workers/o11y/src/lite.ts`,
+// registered through the same `router.ts` this file drives its assertions
+// through. Its real behaviour (status codes, gates, the stored shape) is
+// `pipeline/lite-beacon.test.mjs`'s job now, the same split every other T02
+// route already has with its own dedicated fixtures.
 
 test("an unknown path answers 404", async () => {
   const { env } = freshEnv();

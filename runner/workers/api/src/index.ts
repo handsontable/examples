@@ -1625,10 +1625,38 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       }
 
       // GET /api/demos/:id  (public) — metadata; 410 if revoked
+      //
+      // T08 (contract §5, ADR §F.2 "Share & build"): this is `serve.share`'s
+      // point — the one server-owned request the public `/share/:id` chrome
+      // fires exactly once per page mount (`App.tsx`'s edit/share loader, and
+      // `FullMode`, both fetch it alongside `/source`) and the closest analogue
+      // this Worker has to "serving the share surface," since `/share/:id`
+      // itself is the authoring SPA's own client route, served by a different
+      // deployable entirely (T08-D, see the task Outcome — flagged as a
+      // concern: `/source` fires alongside this on the same mount and is not
+      // counted, and the edge cache on this route (`cacheableJson`, 60s
+      // `stale-while-revalidate`) means a repeat view within that window never
+      // reaches this point at all, so this undercounts real page views).
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts.length === 3) {
-        const row = await getDemo(env, parts[2]!);
-        if (!row) return json({ error: "not found" }, 404);
-        if (row.revoked) return json({ error: "revoked" }, 410);
+        const demoId = parts[2]!;
+        const row = await getDemo(env, demoId);
+        if (!row) {
+          ctx.waitUntil(emitPoint(env, "serve.share", { count: 1, bytes: 0 }, { outcome: "4xx", demo_id: demoId }));
+          return json({ error: "not found" }, 404);
+        }
+        if (row.revoked) {
+          ctx.waitUntil(emitPoint(env, "serve.share", { count: 1, bytes: 0 }, { outcome: "4xx", demo_id: demoId }));
+          return json({ error: "revoked" }, 410);
+        }
+        const body = JSON.stringify(publicView(row));
+        ctx.waitUntil(
+          emitPoint(
+            env,
+            "serve.share",
+            { count: 1, bytes: new TextEncoder().encode(body).length },
+            { outcome: "2xx", demo_id: demoId },
+          ),
+        );
         return cors(cacheableJson(publicView(row)));
       }
 
@@ -1752,7 +1780,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         if (sub === "" && !url.pathname.endsWith("/")) {
           return Response.redirect(`${url.origin}${url.pathname}/${url.search}`, 308);
         }
-        const asset = await serveDemoAsset(env, demoId, sub, { embed });
+        const asset = await serveDemoAsset(env, ctx, demoId, sub, { embed });
         // Count the page load only, and only when it resolved to a real demo:
         // counting unresolved ids would let a crawler write arbitrary rows.
         //

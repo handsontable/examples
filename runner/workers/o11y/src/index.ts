@@ -2,9 +2,16 @@
 // (every route 501) is replaced here by real routing through `router.ts`
 // (COMMON.md interface 2) for the routes this task owns —
 // `POST /telemetry/collect`, `POST /telemetry/v1/logs`, `POST /telemetry/deploy`,
-// `POST /telemetry/hooks/sentry` — every other contract path (`lite`, T08;
-// `/grafana/*` and `reopen`, T01/T03) still answers `501` until its owning
+// `POST /telemetry/hooks/sentry` — every other contract path
+// (`/grafana/*` and `reopen`, T01/T03) still answers `501` until its owning
 // task registers a handler, exactly as the T00 scaffold did.
+//
+// `POST /telemetry/lite` (T08, ADR §C.5) registers itself: `./lite.ts` calls
+// `registerRoute` at module load, the same COMMON.md interface 2 every other
+// route here uses, and is pulled in below by its side-effect import — kept in
+// its own file (T08's "Owns" row) rather than folded into this one's handler
+// functions, since T03/T04 also touch this file and a merge conflict on a
+// route this large is worse than one extra import line.
 //
 // Durable Object classes are exported from here, as Workers requires — each
 // class itself lives in the file its owner's shared-file table row names
@@ -12,6 +19,7 @@
 // `inbox/writer.ts` (T02, now real).
 
 import type { Env } from "./env.js";
+import "./lite.js";
 import { checkBrowserGates, checkPayloadEnvironment } from "./gates/browser.js";
 import { checkDeployGate } from "./gates/oidc.js";
 import { checkSentryHmac } from "./gates/sentry.js";
@@ -41,7 +49,6 @@ interface RouteStub {
  *  stub, exactly like the T00 scaffold, until its owning task registers one
  *  through `router.ts`. */
 const UNIMPLEMENTED_ROUTES: readonly RouteStub[] = [
-  { method: "POST", path: "/telemetry/lite" },
   { method: "GET", path: "/grafana/*" },
   { method: "POST", path: "/grafana/_o11y/reopen" },
   { method: "GET", path: "/grafana/_o11y/admin/*" },
