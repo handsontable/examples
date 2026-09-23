@@ -579,3 +579,99 @@ test("an ordinary mid-edit transpile failure still reaches nobody", async () => 
   assert.equal(client.pushes.length, 0);
   assert.deepEqual(runtime.published, injectSchemeReceiver({ ...FILES }, ENTRY.entry), "the last good sandbox stays published");
 });
+
+// ---------------------------------------------------------------------------
+// T07 — the compile-timing hooks (`onCompileTiming`/`onCompileError`), driven
+// against the real runtime rather than a fake (`pipeline/browser-metrics.test.mjs`
+// covers `apps/authoring/src/telemetry/metrics.ts`'s own emission logic; this
+// covers whether sandpack.ts's own hooks fire — once, paired to the right
+// dispatch, and only for a real compile diagnostic).
+//
+// `onBundlerUnreachable` (the `loadSandpackClient` rejection inside `mount()`) is
+// NOT covered here: `loadSandpackClient` is a direct top-level import, and Node's
+// `node:test` module mocking needs `--experimental-test-module-mocks`, which
+// `pnpm test`'s script does not pass. It is covered against a fake hook in
+// `pipeline/browser-metrics.test.mjs` instead — see the T07 Outcome.
+
+test("onCompileTiming: an edit that reaches the bundler and comes back done reports ok, once", async () => {
+  const { runtime, client } = mounted();
+  const events = [];
+  runtime.onCompileTiming((e) => events.push(e));
+
+  runtime.writeFile("/src/main.js", "console.log('edited');");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(client.pushes.length, 1, "sanity: the edit must have dispatched");
+  assert.equal(events.length, 0, "not resolved until the bundler answers");
+
+  runtime.onMessage({ type: "done" });
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].outcome, "ok");
+  assert.ok(events[0].durationMs >= 0);
+
+  // A `done` with nothing dispatched must not re-fire.
+  runtime.onMessage({ type: "done" });
+  assert.equal(events.length, 1, "guard: an already-resolved compile clock must not re-emit");
+});
+
+test("onCompileTiming: a no-change compile (the sameFiles skip) never dispatches, so it never times", async () => {
+  const { runtime } = mounted();
+  const events = [];
+  runtime.onCompileTiming((e) => events.push(e));
+
+  // Byte-identical to what `mounted()` already published — the sameFiles skip.
+  runtime.writeFile("/src/main.js", FILES["/src/main.js"]);
+  await new Promise((resolve) => setImmediate(resolve));
+  // Even if the bundler still answers something for an unrelated reason, there is
+  // no dispatch clock running for this handler to pair it with.
+  runtime.onMessage({ type: "done" });
+
+  assert.equal(events.length, 0, "guard: nothing was dispatched, so nothing may be timed");
+});
+
+test("onCompileTiming + onCompileError: a show-error with no frames (a real compile diagnostic) reports error once and fires onCompileError", async () => {
+  const { runtime, client } = mounted();
+  const timing = [];
+  const errors = [];
+  runtime.onCompileTiming((e) => timing.push(e));
+  runtime.onCompileError((e) => errors.push(e));
+
+  runtime.writeFile("/src/main.js", "const broken = (");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(client.pushes.length, 1);
+
+  runtime.onMessage({ type: "action", action: "show-error", message: "SyntaxError: Unexpected token" });
+
+  assert.equal(timing.length, 1);
+  assert.equal(timing[0].outcome, "error");
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /SyntaxError/);
+});
+
+test("onCompileTiming + onCompileError: an evaluation error (frames present) does not re-resolve an already-ok compile, and is not a compile_error", async () => {
+  const { runtime } = mounted();
+  const timing = [];
+  const errors = [];
+  runtime.onCompileTiming((e) => timing.push(e));
+  runtime.onCompileError((e) => errors.push(e));
+
+  runtime.writeFile("/src/main.js", "console.log('edited');");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // The module compiled fine (done, ok) …
+  runtime.onMessage({ type: "done" });
+  assert.equal(timing.length, 1);
+  assert.equal(timing[0].outcome, "ok");
+
+  // … and only then threw at runtime — DEV-2552's evaluation-error split, reported
+  // through the same show-error channel, with frames.
+  runtime.onMessage({
+    type: "action",
+    action: "show-error",
+    message: "TypeError: x is not a function",
+    payload: { frames: [{}] },
+  });
+
+  assert.equal(timing.length, 1, "guard: an evaluation error must not re-resolve an already-ok compile");
+  assert.equal(errors.length, 0, "guard: sandpack.compile_error is for compile diagnostics, not runtime throws (T06's territory)");
+});
