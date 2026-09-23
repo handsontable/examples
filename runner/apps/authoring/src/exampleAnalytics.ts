@@ -145,6 +145,41 @@ export function exampleActionAttrs(taxonomy: ExampleTaxonomy): Record<string, st
   return out;
 }
 
+/**
+ * ADR-0042 T12-D2 fix — the one-shot URL marker `onFork`'s navigation to
+ * `/edit/:id` leaves behind, so the saved-demo load effect can classify
+ * that landing's `example.open` as `fork` rather than `deep-link`.
+ *
+ * `onFork` does a full `location.href` navigation — the same hard-reload
+ * pattern `App.tsx` already uses for every other route change (`/my-demos`,
+ * `/admin`, `/guide`, …), never client-side routing — which destroys every
+ * in-memory flag (React state, a module-level ref, all of it) before the
+ * new page's first render. The contract also keeps this path off browser
+ * storage (no `localStorage`/`sessionStorage`), so a URL param, read once
+ * and stripped immediately, is the only signal that survives the
+ * navigation exactly once.
+ */
+export const FORK_LANDING_PARAM = "fork";
+
+/**
+ * Reads whether `search` (a `location.search`-shaped string, with or
+ * without the leading `?`) carries the one-shot fork marker, and returns
+ * `search` with it removed. The caller writes that back via
+ * `history.replaceState` immediately — before anything async runs — so a
+ * manual reload of the same URL, or a second run of the same effect, never
+ * re-reads it (idempotent: calling this again on the already-stripped
+ * `search` returns `isFork: false` and the same string back unchanged).
+ * Pure — no `URL`/`history` access — so this is unit-testable without a
+ * browser (`pipeline/example-analytics-taxonomy.test.mjs`).
+ */
+export function consumeForkMarker(search: string): { isFork: boolean; search: string } {
+  const params = new URLSearchParams(search);
+  if (!params.has(FORK_LANDING_PARAM)) return { isFork: false, search };
+  params.delete(FORK_LANDING_PARAM);
+  const rest = params.toString();
+  return { isFork: true, search: rest ? `?${rest}` : "" };
+}
+
 /** Dedup key for "one `example.open` per resolved example, none on
  *  re-render" — an effect that re-runs for an unrelated reason (a
  *  `nextVersion` resolve, a `versionsResolved` flip) must not re-fire the

@@ -1,7 +1,7 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { stubShell } from "./helpers.js";
+import { signIn, stubShell } from "./helpers.js";
 
 // T12 — ADR-0042 example analytics: `example.open` at the App.tsx
 // example-resolve path.
@@ -245,4 +245,51 @@ test("a docs example opened from the picker fires one example.open with entry=pi
   expect(open.attributes?.["hot.reason"]).toBe("picker");
   expect(open.attributes?.["hot.metric_kind"]).toBe("docs");
   expect(open.attributes?.["hot.ref"]).toBe(DOCS_ENTRY.guide);
+});
+
+// T12-D2 fix round: a post-fork landing on the new demo's own `/edit/:id`
+// must classify as `entry=fork`, not `deep-link` — `onFork` does a full
+// `location.href` reload (no in-memory flag survives it), so the signal is
+// a one-shot URL marker (`?fork=1`) the saved-demo load effect reads and
+// strips (`exampleAnalytics.ts#consumeForkMarker`). Stubs the saved-demo
+// source/meta pair the same way `e2e/description-markdown.spec.ts#stubSavedDemo`
+// does — this spec never actually calls `onFork` itself (that needs a real
+// POST /api/demos), it simulates landing on the fork's OWN destination URL,
+// which is the half `consumeForkMarker` is responsible for.
+const FORKED_DEMO_ID = "e2efork01";
+const FORKED_DEMO_FILES = {
+  "/src/App.tsx": "export default function App() { return null; }\n",
+  "/index.html": '<div id="root"></div>',
+  "/package.json": JSON.stringify({ dependencies: { handsontable: "18.0.0" } }, null, 2),
+};
+
+async function stubForkedDemo(page: Page) {
+  await page.route("**/api/demos/**", (route: Route) =>
+    route.fulfill({
+      json: new URL(route.request().url()).pathname.endsWith("/source")
+        ? { framework: "react", files: FORKED_DEMO_FILES }
+        : { title: "Fork of React", description: null, ht_version: "18.0.0", created_at: "2026-09-23T00:00:00.000Z" },
+    }),
+  );
+}
+
+test("landing on /edit/:id?fork=1 (onFork's own destination) fires example.open with entry=fork, and strips the marker", async ({
+  page,
+}) => {
+  await stubShell(page);
+  await signIn(page);
+  await stubForkedDemo(page);
+  const events = captureTelemetryEvents(page);
+
+  await page.goto(`${BASE_URL}/edit/${FORKED_DEMO_ID}?fork=1`);
+
+  await expect.poll(() => events.filter((e) => e.name === "example.open").length).toBe(1);
+  const [open] = events.filter((e) => e.name === "example.open");
+  expect(open.attributes?.["hot.reason"]).toBe("fork");
+  expect(open.attributes?.["hot.metric_kind"]).toBe("saved");
+  expect(open.attributes?.["hot.ref"]).toBe(FORKED_DEMO_ID);
+
+  // One-shot: the marker is gone from the URL once it has been read, so a
+  // manual reload of this same address is a plain deep-link, not a fork.
+  await expect(page).toHaveURL(new RegExp(`/edit/${FORKED_DEMO_ID}$`));
 });

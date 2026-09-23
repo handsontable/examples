@@ -8,6 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  consumeForkMarker,
   exampleActionAttrs,
   exampleOpenAttrs,
   exampleOpenKey,
@@ -125,4 +126,44 @@ test("exampleOpenKey: same lineage + same version is the same key; a version cha
   const c = exampleOpenKey("docs:18.1:guides/x/x/react/example1.tsx", "18.1.3");
   assert.equal(a, b);
   assert.notEqual(a, c);
+});
+
+// ---- consumeForkMarker (T12-D2 fix round: entry=fork) ---------------------------
+//
+// onFork navigates with a full `location.href` reload (App.tsx's own
+// established pattern for every route change — /my-demos, /admin, /guide,
+// etc. — never client-side routing), which destroys every in-memory flag, so
+// the one-shot signal has to survive in the URL itself, stripped on read.
+// Never localStorage/sessionStorage (the contract keeps this path off
+// browser storage).
+
+test("consumeForkMarker: detects the marker and strips it down to an empty search", () => {
+  const { isFork, search } = consumeForkMarker("?fork=1");
+  assert.equal(isFork, true);
+  assert.equal(search, "");
+});
+
+test("consumeForkMarker: strips only the marker, keeps other params", () => {
+  const { isFork, search } = consumeForkMarker("?v=18.0.0&fork=1");
+  assert.equal(isFork, true);
+  assert.equal(search, "?v=18.0.0");
+});
+
+test("consumeForkMarker: no marker present -> isFork false, search returned unchanged", () => {
+  const { isFork, search } = consumeForkMarker("?v=18.0.0");
+  assert.equal(isFork, false);
+  assert.equal(search, "?v=18.0.0");
+});
+
+test("consumeForkMarker: empty search -> isFork false, still an empty search", () => {
+  const { isFork, search } = consumeForkMarker("");
+  assert.equal(isFork, false);
+  assert.equal(search, "");
+});
+
+test("consumeForkMarker: one-shot -- reading the stripped search a second time no longer counts as fork", () => {
+  const first = consumeForkMarker("?fork=1");
+  const second = consumeForkMarker(first.search);
+  assert.equal(first.isFork, true);
+  assert.equal(second.isFork, false, "a manual reload of the same (already-stripped) URL must not re-count as a fork");
 });

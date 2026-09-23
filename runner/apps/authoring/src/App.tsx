@@ -81,10 +81,12 @@ import {
   wireRuntimeMetrics,
 } from "./telemetry/metrics.js";
 import {
+  consumeForkMarker,
   exampleActionAttrs,
   exampleOpenAttrs,
   exampleOpenKey,
   exampleTaxonomy,
+  FORK_LANDING_PARAM,
   type DocsExampleMeta,
   type ExampleOpenReason,
   type ExampleTaxonomy,
@@ -1800,6 +1802,16 @@ function Authoring({
   // Edit/share mode: load the saved demo's source + metadata into the workspace.
   useEffect(() => {
     if (!savedId) return;
+    // ADR-0042 T12-D2 fix: read + strip the one-shot fork marker BEFORE
+    // anything async runs, so a second render of this same effect (or a
+    // manual reload of the now-stripped URL) never re-reads it —
+    // `consumeForkMarker`'s own doc comment has the full reasoning for why
+    // this has to be a URL param rather than an in-memory flag or browser
+    // storage.
+    const { isFork: isForkLanding, search: strippedSearch } = consumeForkMarker(location.search);
+    if (isForkLanding) {
+      history.replaceState(null, "", location.pathname + strippedSearch + location.hash);
+    }
     let cancelled = false;
     (async () => {
       const token = getToken();
@@ -1862,15 +1874,14 @@ function Authoring({
           toPlaceholderEntry(getEntry(src.framework)),
           src.files,
           savedId,
-          // ADR-0042 kind "saved". `entry` is always "deep-link" here — a
-          // saved demo is only ever reached by direct navigation to
-          // `/edit/:id`/`/share/:id` (or a browser reload of one); `fork`
-          // is not distinguished from a plain deep-link landing on the new
-          // demo's own `/edit/:id` (documented simplification, T12-D).
-          // `pinnedVersion ?? version`, not the (stale) `version` closure
-          // variable: `setVersion(pinnedVersion)` two lines above has not
-          // committed yet.
-          { reason: "deep-link", version: pinnedVersion ?? version },
+          // ADR-0042 kind "saved". `entry` is `fork` when `isForkLanding`
+          // (the one-shot URL marker `onFork` left behind, read and
+          // stripped above) — `deep-link` otherwise: every other saved-demo
+          // landing is a direct navigation to `/edit/:id`/`/share/:id`, or a
+          // browser reload of one. `pinnedVersion ?? version`, not the
+          // (stale) `version` closure variable: `setVersion(pinnedVersion)`
+          // two lines above has not committed yet.
+          { reason: isForkLanding ? "fork" : "deep-link", version: pinnedVersion ?? version },
         );
         setSourceLoaded(true);
       } catch (error) {
@@ -3029,7 +3040,12 @@ function Authoring({
       });
       const { id } = await readApiJson<{ id: string }>(res, `fork failed (${res.status})`);
       noteExampleAction("example.forked"); // ADR-0042 §2, before navigating away
-      location.href = `/edit/${id}`; // boot into the edit page for the new demo
+      // ADR-0042 T12-D2 fix: a one-shot URL marker for the new demo's own
+      // `example.open`, since this is a full reload — no in-memory flag
+      // survives it (`exampleAnalytics.ts#consumeForkMarker`'s own doc
+      // comment has the full reasoning). The saved-demo load effect reads
+      // and strips it.
+      location.href = `/edit/${id}?${FORK_LANDING_PARAM}=1`; // boot into the edit page for the new demo
     } catch (e) {
       // First statement, before any branch. There is no `finally` here on
       // purpose — the success path navigates away and clearing `forking` first

@@ -150,13 +150,23 @@ call sites). Full repo typecheck + `pnpm test` re-run clean after the merge
   `hadUrlVersion`). Empirically load-bearing, not just a nicety: the picker
   e2e test's own `example.open` count would have been ambiguous without it
   (see the e2e commit's revert-evidence note).
-- **T12-D2 — `entry=fork` is not distinguished.** A post-fork landing on the
-  new demo's own `/edit/:id` reads as a plain `deep-link` (a fresh URL
-  navigation, same mechanism as any other direct deep link), not the ADR's
-  separate `fork` reason — would need a URL/sessionStorage marker `onFork`
-  sets before its `location.href` navigation. Not implemented (not tested by
-  the acceptance criteria); `example.forked` itself (the action metric) is
-  unaffected and fires correctly.
+- **T12-D2 — FIXED in the fix round (review finding).** Originally: a
+  post-fork landing on the new demo's own `/edit/:id` read as a plain
+  `deep-link`, not the ADR's closed `fork` value — skewing the §6
+  deep-link-share panel. Fixed with a one-shot URL marker, never browser
+  storage (the contract keeps this path off `localStorage`/`sessionStorage`):
+  `onFork` appends `?fork=1` to its `location.href` navigation (a full
+  reload — the same hard-navigation pattern this app already uses for every
+  other route change, so no in-memory flag survives it either, which is why
+  the "client-side" branch the review's fix instructions offered does not
+  apply here). `exampleAnalytics.ts#consumeForkMarker` (new, pure — reads
+  and strips the marker from a `location.search`-shaped string, unit-tested
+  in `pipeline/example-analytics-taxonomy.test.mjs`) is called at the top of
+  the saved-demo load effect, synchronously, before the async fetch —
+  stripped via `history.replaceState` immediately, so a manual reload of the
+  same URL is never re-read as a fork. `example.forked` itself (the action
+  metric on the demo `onFork` is forking FROM) was already correct and is
+  unaffected. See "Fix round" below for tests and revert evidence.
 - **T12-D3 — `example_daily` has no `downloaded` column.** ADR-0042 §5 names
   the table's five counters as `opens, engaged, forked, saved, shared` — for
   six `example.*` metrics. Followed the ADR literally (migration `0008`
@@ -302,9 +312,81 @@ rtk proxy pnpm check:telemetry-leak                                exit=0 (plain
   an extra, unused `"entry"` value from what looks like a contract-table
   parenthetical-parsing artifact — harmless, not fixed, out of this task's
   Owns row.
-- T12-D2: `entry=fork` is not distinguished from `deep-link` for a
-  post-fork `/edit/:id` landing.
+- T12-D2: fixed in the fix round — see below.
 - The `demos.forked_from` ↔ `/d`/`/embed`-view join ADR-0042's Decision 3
   describes has no code in this task (see the `forked_from` section above) —
   read as ADR-0043 groundwork, not a T12 deliverable; the confirmed format
   and cutoff date are recorded above for whoever builds it.
+
+## Fix round (review finding: `entry=fork` never emitted)
+
+Single finding, T12-D2 promoted from a documented deviation to a real gap:
+"folding forks into deep-link skews the §6 deep-link-share panel." Fixed —
+see T12-D2 above for the mechanism.
+
+### What changed
+
+- `apps/authoring/src/exampleAnalytics.ts`: new `FORK_LANDING_PARAM` const
+  and `consumeForkMarker(search)` — pure, reads/strips a `?fork=1`-shaped
+  URL marker, idempotent (a second call on the already-stripped search
+  returns `isFork: false`).
+- `apps/authoring/src/App.tsx`:
+  - `onFork` appends `?fork=1` to its `location.href` destination.
+  - The saved-demo load effect calls `consumeForkMarker(location.search)`
+    synchronously at the top (before the async fetch), strips the marker via
+    `history.replaceState` immediately when present, and passes
+    `reason: isForkLanding ? "fork" : "deep-link"` to `loadWorkspace`'s
+    `exampleOpen` parameter (previously always `"deep-link"`).
+- `pipeline/example-analytics-taxonomy.test.mjs`: 5 new tests for
+  `consumeForkMarker` (detect+strip, preserves other params, no-marker
+  passthrough, empty search, one-shot/idempotent).
+- `e2e/example-analytics.spec.ts`: one new test — lands directly on
+  `/edit/:id?fork=1` (a stubbed saved demo, same recipe as
+  `e2e/description-markdown.spec.ts#stubSavedDemo`) and asserts
+  `hot.reason=fork`, `hot.metric_kind=saved`, and that the URL no longer
+  carries `fork` after the landing (the one-shot strip).
+
+Considered and rejected: an in-memory one-shot flag (the review's other
+offered option, for a client-side navigation). Does not apply here —
+`onFork`'s `location.href = ...` is a full page reload, the SAME
+hard-navigation pattern this app already uses for every other route change
+(`/my-demos`, `/admin`, `/guide`, `/api-tokens`, …, confirmed by grep — never
+client-side routing to `/edit/:id`). A full reload destroys every in-memory
+flag before the new page's first render, so only a URL marker (never
+`localStorage`/`sessionStorage`, per the review's own constraint) can survive
+it.
+
+### Tests — shown failing before the fix, then green
+
+- `pipeline/example-analytics-taxonomy.test.mjs`'s 5 new `consumeForkMarker`
+  cases: written and run BEFORE `consumeForkMarker` existed — failed with
+  `SyntaxError: ... does not provide an export named 'consumeForkMarker'`
+  (the whole file, 1 test reported, fail). Implemented; re-ran: 14/14 pass.
+- `e2e/example-analytics.spec.ts`'s new fork-landing test: passed once
+  written (the implementation was already in place by then), so reverted
+  the App.tsx classification line back to the unconditional `"deep-link"`
+  and re-ran — failed for exactly the right reason (`Expected: "fork",
+  Received: "deep-link"`); restored, re-ran: 3/3 pass.
+
+### Verify — fix round, exit codes
+
+```
+rtk proxy node --experimental-strip-types --test
+  pipeline/example-analytics-taxonomy.test.mjs                       exit=0 (14/14)
+rtk proxy pnpm -r run typecheck                                      exit=0
+rtk proxy pnpm test                                                  exit=1 (1516 tests, 1513 pass,
+                                                                        1 pre-existing baseline failure
+                                                                        — theme-presets-version.test.mjs,
+                                                                        same as before — 2 todo)
+E2E_TELEMETRY=1 pnpm exec playwright test
+  e2e/example-analytics.spec.ts                                      exit=0 (3/3)
+rtk proxy node scripts/check-test-presence.mjs
+  feat/runner-observability                                          exit=0
+rtk proxy pnpm --filter @handsontable/demo-authoring build            exit=0
+rtk proxy pnpm check:compiler-chunk                                  exit=0
+rtk proxy pnpm check:telemetry-leak                                  exit=0 (plain build, 0 sentinels)
+```
+
+No worker source touched this round (App.tsx/exampleAnalytics.ts/pipeline/e2e
+only) — the two `wrangler deploy --dry-run` runs from the main pass are
+unaffected and were not re-run.
