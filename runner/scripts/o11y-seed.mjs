@@ -404,19 +404,35 @@ async function seedAePoints() {
   return chunks.length;
 }
 
+// C-D3 (controller ruling on T09-D3): the real `/telemetry/deploy` body T02
+// builds to, and this generator's annotation query must match — worker
+// tenant, resource `service.name=demos-o11y`, `hot.surface=o11y`, body a
+// JSON string `{"event":"deploy","service":…,"sha":…,"cf_version_id":…}`.
+// This file's first draft invented `"actor":"ci"` instead; that field is
+// gone now, matching the ruling exactly rather than a superset of it.
+const DEPLOYABLE_SERVICES = ["handsontable-demos-api", "handsontable-demos-authoring", "handsontable-demos-o11y"];
+function fakeCfVersionId() {
+  return `${hex(8)}-${hex(4)}-${hex(4)}-${hex(4)}-${hex(12)}`;
+}
+
 function deployAnnotationRecords() {
   // Runner overview's deploy annotations: a Loki `worker`-tenant log line
   // tagged `service_name=demos-o11y`, `hot_surface=o11y`, with a JSON body
-  // carrying `event: "deploy"` — the shape a future `/telemetry/deploy`
-  // handler is expected to write (contract §1 route table; T02 owns the
-  // real handler, not yet built). Spread across the last few minutes of
-  // `LOKI_RECENT_WINDOW_MS` (see its comment) rather than the full window.
+  // carrying `event: "deploy"` — the shape C-D3 pins (above), which T02's
+  // real `/telemetry/deploy` handler (not yet built) is told to match.
+  // Spread across the last few minutes of `LOKI_RECENT_WINDOW_MS` (see its
+  // comment) rather than the full window.
   const records = [];
   const stepMs = Math.max(60_000, Math.floor(LOKI_RECENT_WINDOW_MS / 5));
   for (let t = now; t > now - LOKI_RECENT_WINDOW_MS; t -= stepMs) {
     records.push(
       normalisedRecord({
-        body: JSON.stringify({ event: "deploy", sha: hex(7), actor: "ci" }),
+        body: JSON.stringify({
+          event: "deploy",
+          service: pick(DEPLOYABLE_SERVICES),
+          sha: hex(7),
+          cf_version_id: fakeCfVersionId(),
+        }),
         timestampMs: t,
         resourceAttrs: {
           "service.name": "demos-o11y",

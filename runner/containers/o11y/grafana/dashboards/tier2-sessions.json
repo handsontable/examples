@@ -321,6 +321,7 @@
       "id": 5,
       "type": "timeseries",
       "title": "Pool gauge (live/builder) vs cap",
+      "description": "pool.gauge — both series in one panel: double3 (awake, by reason) and double8 (cap, overall) — I3.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -339,6 +340,18 @@
             "uid": "clickhouse-runner-events"
           },
           "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, sum(_sample_interval * double3) / sum(_sample_interval) AS avg_value FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t, reason ORDER BY t",
+          "format": "time_series",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, sum(_sample_interval * double8) / sum(_sample_interval) AS cap FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",

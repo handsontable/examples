@@ -98,14 +98,18 @@ pnpm test
 - Error rate (uncaught + handled) [timeseries] — AE (`error.uncaught` + `error.handled`, by `index1`)
 - Pool gauge vs cap [timeseries] — AE (`pool.gauge` `double3`, sampling-correct avg, by `blob9` reason)
 - Pool cap [timeseries] — AE (`pool.gauge` `double8`, by reason)
-- Deploys [dashboard annotation] — Loki (`worker` tenant, `{hot_surface="o11y"}` filtered on the `"event":"deploy"` body — see T09-D3)
+- api.request 5xx rate by route_class [timeseries] — AE (fix round I4: count, outcome=5xx, by `blob10`)
+- api.request p95 duration_ms by route_class [timeseries] — AE (fix round I4: `double2` weighted quantile, by `blob10`)
+- Deploys [dashboard annotation] — Loki (`worker` tenant, `{hot_surface="o11y"}` filtered on the `"event":"deploy"` body — see T09-D3, C-D3)
 
 **Tier-2 sessions** (`tier2-sessions.json`)
 - session.start rate by outcome [timeseries] — AE
 - session.start_ms p95 by reason (cold/warm) [timeseries] — AE
 - container.boot_ms p95 by outcome [timeseries] — AE
 - session.end awake seconds, p95 by reason [timeseries] — AE (`double3` value, weighted quantile)
-- Pool gauge (live/builder) vs cap [timeseries] — AE
+- Pool gauge (live/builder) vs cap [timeseries] — AE (fix round I3: now two targets in one panel —
+  `double3` by `blob9` reason **and** `double8` cap, aliased `cap` — the panel previously never
+  selected `double8` despite its title)
 
 **Tier-1 playground** (`tier1-playground.json`)
 - sandpack.compile_ms p95 by framework [timeseries] — AE
@@ -143,6 +147,8 @@ which have no dedicated dashboard of their own (T09-D6)
 - o11y.wake rate by outcome [timeseries] — AE
 - o11y.backlog oldest age (s) [timeseries] — AE (sampling-correct avg gauge)
 - o11y.alert fired/resolved [timeseries] — AE
+- reconcile.run rate by outcome [timeseries] — AE (fix round I4: count, by `blob8` outcome)
+- reconcile.run usd drift by outcome [timeseries] — AE (fix round I4: `double4` sum, by outcome)
 - o11y worker log stream [logs] — Loki (`worker` tenant, `{service_name="demos-o11y"}`)
 
 Template variables on every dashboard: `environment` (query, `SELECT DISTINCT blob3 FROM
@@ -232,13 +238,20 @@ directly (`allTargets`) — see the file for the full list (39 tests total).
   was always `authoring`. Fixed by moving the pick inside the loop (`pickSurface`/
   `pickTier`, weighted). Both reproduced and confirmed fixed by direct ClickHouse
   queries before/after (see the session's tool history).
-- **T09-D3**: the Runner overview deploy-annotation Loki line
+- **T09-D3** (updated by the fix round's controller ruling, C-D3): the Runner overview
+  deploy-annotation Loki line was originally shaped
   (`service_name=demos-o11y`, `hot_surface=o11y`, body `{"event":"deploy","sha":…,
-  "actor":"ci"}`) is a shape this task invented — `POST /telemetry/deploy`'s real
-  handler is T02's, not yet built, and the contract doesn't pin a body shape for it
-  beyond "deploy event from CI" (§1). **T02 must either match this shape or this
-  annotation query needs updating in the same PR that changes it**; flagging for the
-  controller to route.
+  "actor":"ci"}`) as an invented guess — `POST /telemetry/deploy`'s real handler is
+  T02's, not yet built, and the contract doesn't pin a body shape for it beyond
+  "deploy event from CI" (§1). The controller ruled the real shape (and told T02 the
+  same): worker tenant, `service.name=demos-o11y`, `hot.surface=o11y`, body
+  `{"event":"deploy","service":…,"sha":…,"cf_version_id":…}` — no `actor` field.
+  `scripts/o11y-seed.mjs#deployAnnotationRecords` now emits exactly that shape
+  (`service` from a small list of real deployable script names, `cf_version_id` a
+  fake UUID via `fakeCfVersionId()`); the annotation query itself
+  (`{hot_surface="o11y"} |= `"event":"deploy"``) needed no change, since it only ever
+  matched on the `event` field. Re-rendered and confirmed live (Observability self's
+  "o11y worker log stream" panel shows the new shape verbatim, no `actor`).
 - **T09-D4**: the lint's original `aeTargetsOf`/`lokiTargetsOf` only inspected
   `target.datasource`, silently skipping (from both the label check and the "names its
   tenant" check) any target that relies on the panel-level datasource — a shape Grafana
@@ -299,11 +312,85 @@ directly (`allTargets`) — see the file for the full list (39 tests total).
   real Analytics Engine account (no credentials in this task); only local ClickHouse and
   the documented AE surface were checked. T11's real-traffic re-check is where this
   either confirms clean or surfaces a mismatch.
-- **T09-D3's invented deploy-annotation shape** needs T02 to either adopt it or this
-  dashboard's annotation query updated alongside whatever shape T02 actually ships.
+- **T09-D3 is resolved as of the fix round** (C-D3, controller ruling): the deploy body
+  shape is now `{"event":"deploy","service":…,"sha":…,"cf_version_id":…}`, told to T02
+  the same way, and `scripts/o11y-seed.mjs` matches it exactly (verified live — see
+  "Fix round" below). No longer an open concern.
 
 ### What's still ADR-scoped elsewhere
 
 Cost dashboard: ADR-0043/T13. Examples & features dashboard: T12. Alert *rules*: T04
 (none exist in Grafana, per §F.3 — confirmed by the lint's "carries no Grafana alert
 rule" test on all 7).
+
+### Fix round (single round, per review findings T09-fix-findings.md)
+
+Findings I1–I4 and C-D3 fixed; minors deferred to the final review, per the controller's
+instruction.
+
+- **I1 — `templating.list[]` AE queries bypassed the lint.** `allTargets()` only ever
+  walked `panel.targets`; a variable's own query (`environment`'s
+  `SELECT DISTINCT blob3 FROM runner_events`, `framework`'s equivalent) never reached
+  `validateAeQuery`. Added `templatingAeTargetsOf()`, folded into `aeTargetsOf()`, plus
+  `DISTINCT` to `AE_KEYWORDS` (the two real variable queries need it). New self-test
+  proves the mechanism (a variable query referencing the friendly `outcome` name instead
+  of `blob8` is caught). **Revert evidence against a real file**: mutated
+  `ai-assist.json`'s `environment` variable query (`blob3` → `blob99`) — the "every
+  Analytics Engine query passes the AE lint" test failed; reverted, re-passes.
+- **I2 — `ht_major` options hand-duplicated across all 7 dashboards.** Added a per-
+  dashboard test comparing each `ht_major` variable's non-"All" option values against
+  the real `HT_MAJORS` export (`packages/runtime/src/telemetry/attrs.ts`, via the built
+  `dist`). **Revert evidence against a real file**: mutated `ai-assist.json`'s last
+  `ht_major` option value to `"20"` — the new test failed; reverted, re-passes.
+- **I3 — Tier-2 sessions' "Pool gauge (live/builder) vs cap" never selected `double8`.**
+  Extended `timeseriesPanel` to accept `queries` (plural) for a multi-target panel and
+  gave `gaugeAvgTimeSeries` a `valueAlias` parameter; the panel now carries two targets
+  — `double3` by reason (live/builder) and `double8` aliased `cap` — in one panel, so the
+  title's "vs cap" is literally true. Confirmed live: the re-rendered panel's legend
+  shows `builder`, `live`, **and** `cap` together.
+- **I4 — controller-ruled additional panels.** Runner overview: "api.request 5xx rate by
+  route_class" (count, `blob8='5xx'`, grouped by `blob10`) and "api.request p95
+  duration_ms by route_class" (weighted quantile of `double2`, grouped by `blob10`).
+  Observability self: "reconcile.run rate by outcome" (count by `blob8`) and
+  "reconcile.run usd drift by outcome" (`double4` sum by outcome — §4: "usd (billing −
+  estimate)", already a signed drift value, so a plain `sum` is the correct read, not a
+  quantile). All four pass the same lint rules as every other panel (same
+  `metricFilters()` helper, same `sum(_sample_interval * double1)`/weighted-quantile
+  patterns) and were confirmed live (screenshots).
+- **C-D3 — deploy record shape, controller ruling.** The invented shape
+  (`{"event":"deploy","sha":…,"actor":"ci"}`) is replaced with the ruled one:
+  `{"event":"deploy","service":…,"sha":…,"cf_version_id":…}` (no `actor`).
+  `scripts/o11y-seed.mjs#deployAnnotationRecords` now emits `service` from a small list
+  of real deployable script names (`handsontable-demos-{api,authoring,o11y}`) and
+  `cf_version_id` from a new `fakeCfVersionId()` (UUID-shaped). The annotation query
+  itself needed no change (it only ever matched the `event` field). Confirmed live:
+  Observability self's "o11y worker log stream" panel shows lines like
+  `{"event":"deploy","service":"handsontable-demos-o11y","sha":"f3c5e61",
+  "cf_version_id":"c5f748f2-5351-90c5-298a-633184f64eee"}` — no `actor` anywhere.
+  T09-D3 above is updated accordingly and no longer an open concern.
+
+**Regenerated/re-verified**: dashboards rebuilt from the (uncommitted) generator script,
+copied over the 3 affected files (`runner-overview.json`, `tier2-sessions.json`,
+`observability-self.json` — `ai-assist.json`, `docs-embeds.json`, `tier1-playground.json`,
+`version-health.json` untouched by this round, confirmed via `git diff --stat`); box
+rebuilt (`docker compose ... up -d --build`), reseeded, all three changed dashboards
+re-screenshotted (zero "No data", zero query errors) at the same
+`.superpowers/sdd/README/T09-screenshots/` paths (overwritten in place). Stack torn
+down (`docker compose down -v`) afterward; `docker ps` confirms clean.
+
+**Test runs** (`rtk proxy`, exit codes captured explicitly, not via a piped `tail`):
+
+```
+rtk proxy node --experimental-strip-types --test pipeline/o11y-dashboards.test.mjs
+# exit=0 — 47 tests, 47 pass (was 39 before this round; +8: the templating-AE-lint
+# self-test, the per-dashboard ht_major-options test ×7... counted as one test name
+# repeated per dashboard, so +7, plus the templating self-test = +8)
+
+rtk proxy pnpm test
+# exit=1 (pnpm's own semantics: any failing test fails the script) — 1308 tests,
+# 1305 pass, 1 known baseline failure (theme-presets-version.test.mjs,
+# '18.1.0' !== '18.1.1', controller-verified unrelated), 2 todo
+
+rtk proxy node scripts/check-test-presence.mjs feat/runner-observability
+# exit=0 — pass, no runner/{apps,packages,workers} source touched
+```

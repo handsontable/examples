@@ -37,7 +37,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { LOKI_LABELS } from "../packages/runtime/dist/telemetry/index.js";
+import { LOKI_LABELS, HT_MAJORS } from "../packages/runtime/dist/telemetry/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARDS_DIR = path.join(__dirname, "..", "containers", "o11y", "grafana", "dashboards");
@@ -98,6 +98,7 @@ const AE_KEYWORDS = new Set([
   "NULL",
   "TRUE",
   "FALSE",
+  "DISTINCT",
 ]);
 
 /** Strips string literals (ClickHouse `'...'`) and Grafana/vertamedia macros
@@ -207,10 +208,25 @@ function allTargets(dashboard) {
   return targets;
 }
 
+/** Template-variable queries (`dashboard.templating.list[]`) whose datasource
+ *  is the ClickHouse plugin (I1 — `allTargets()` only ever walked
+ *  `panel.targets`, so a variable's own AE query, e.g. `environment`'s
+ *  `SELECT DISTINCT blob3 FROM runner_events`, bypassed the lint entirely:
+ *  a bad column or a disallowed function there would go straight to
+ *  production undetected, same risk as a panel query). */
+function templatingAeTargetsOf(dashboard) {
+  return (dashboard.templating?.list ?? [])
+    .filter((v) => v.datasource?.type === "vertamedia-clickhouse-datasource")
+    .map((v) => ({ panel: `templating:${v.name}`, query: v.query }));
+}
+
 function aeTargetsOf(dashboard) {
-  return allTargets(dashboard)
-    .filter(({ datasource }) => datasource.type === "vertamedia-clickhouse-datasource")
-    .map(({ panel, target }) => ({ panel, query: target.query }));
+  return [
+    ...allTargets(dashboard)
+      .filter(({ datasource }) => datasource.type === "vertamedia-clickhouse-datasource")
+      .map(({ panel, target }) => ({ panel, query: target.query })),
+    ...templatingAeTargetsOf(dashboard),
+  ];
 }
 
 function lokiTargetsOf(dashboard) {
@@ -261,6 +277,18 @@ for (const { file, dashboard } of dashboards) {
         `${file} / panel "${panel}": target has no resolvable known datasource (got ${JSON.stringify(datasource)})`,
       );
     }
+  });
+
+  test(`${file}: ht_major variable options equal the contract's HT_MAJORS (attrs.ts), not a hand-duplicated copy`, () => {
+    // I2: "15,16,17,18,19,next,none" + one options entry per value was
+    // hand-typed into all 7 dashboards. This pins every dashboard's copy
+    // against the one real source (HT_MAJORS), so a future contract change
+    // (§3 is append-only, but a new major still lands here) is a failing
+    // test in 7 places instead of a silent drift in some of them.
+    const htMajorVar = dashboard.templating.list.find((v) => v.name === "ht_major");
+    assert.ok(htMajorVar, `${file} has no "ht_major" template variable`);
+    const optionValues = htMajorVar.options.map((o) => o.value).filter((v) => v !== "$__all");
+    assert.deepEqual(optionValues, [...HT_MAJORS]);
   });
 
   test(`${file}: every Analytics Engine query passes the AE lint`, () => {
@@ -351,6 +379,28 @@ test("the lint fails on a high-cardinality Loki label (session.id / cf.ray shape
       `expected a disallowed-label violation for ${label}, got: ${JSON.stringify(violations)}`,
     );
   }
+});
+
+test("the lint fails on a bad templating-variable AE query (I1: variable queries were invisible to aeTargetsOf)", () => {
+  const dashboard = {
+    templating: {
+      list: [
+        {
+          name: "environment",
+          datasource: { type: "vertamedia-clickhouse-datasource", uid: "clickhouse-runner-events" },
+          query: "SELECT DISTINCT outcome FROM runner_events", // "outcome" is the friendly name, not blob8
+        },
+      ],
+    },
+    panels: [],
+  };
+  const targets = aeTargetsOf(dashboard);
+  assert.equal(targets.length, 1, "expected the templating-variable query to be picked up");
+  const violations = validateAeQuery(targets[0].query);
+  assert.ok(
+    violations.some((v) => v.includes('"outcome"')),
+    `expected an unknown-column violation for "outcome", got: ${JSON.stringify(violations)}`,
+  );
 });
 
 test("the lint passes a clean AE query (sanity: the lint isn't vacuously failing everything)", () => {
