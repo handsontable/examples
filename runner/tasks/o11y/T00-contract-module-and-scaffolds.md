@@ -134,7 +134,7 @@ the scaffolded worker. Anything this task could not decide goes into its Outcome
   var (default `"full"`, contract §11). Values only; T05 (this file's real owner) wires usage.
 - `apps/authoring/package.json`: `@grafana/faro-web-sdk` added as a real dependency (not just
   recorded) — see Dependencies below.
-- Eight `pipeline/*.test.mjs` files (79 `node --test` cases): `telemetry-contract.test.mjs`
+- Eight `pipeline/*.test.mjs` files (85 `node --test` cases): `telemetry-contract.test.mjs`
   (required name), `scrub-telemetry.test.mjs` (required name), `telemetry-convert.test.mjs`
   (required name), `telemetry-fingerprint.test.mjs` (required name), plus
   `telemetry-metrics.test.mjs`, `telemetry-inbox.test.mjs`, `telemetry-lite.test.mjs`,
@@ -229,11 +229,17 @@ Workers execution.
   field minimal, already runs ~2150 bytes, over budget by itself. T08's sender must truncate
   `st` well below its own field cap (documented in `lite.ts`) and re-validate, not just stay
   under `LITE_STACK_MAX`.
-- **T00-D6 — scrub-then-convert order.** `convert.ts`'s `faroItemToRecord`/`beaconToRecord` both
-  assume an **already-scrubbed** input (`scrubTelemetry` first, then convert), not the reverse.
-  Scrubbing the richer Faro/beacon shape first catches fields `convert.ts` never looks at (e.g.
-  stack-frame filenames); converting first and scrubbing the flat OTLP shape after would miss
-  them. T02's route handler must call them in this order.
+- **T00-D6 — scrub/convert order, corrected: not symmetric between the two functions.** First
+  draft said "scrub, then convert" for both. Wrong for beacons: a `LiteBeaconPayload` does not
+  typecheck as `scrubTelemetry`'s argument at all (confirmed with a probe: `TS2345`, neither
+  Faro- nor OTLP-shaped). The real order is **Faro**: `scrubTelemetry(item)` →
+  `faroItemToRecord(scrubbedItem, …)` (scrubbing the richer Faro shape first catches fields
+  `convert.ts` never looks at, e.g. stack-frame filenames) — **beacon**: `beaconToRecord(payload,
+  …)` → `scrubTelemetry(record)` (the beacon's `m`/`st` are unscrubbed until the OTLP record
+  exists). T02's route handler must call them in these two different orders. Also: a
+  `MeasurementEvent`'s metric-name keys (`payload.values`' object keys) reach the OTLP body
+  verbatim via `JSON.stringify` — `scrubTelemetry`'s deep redaction walk now redacts object keys
+  too, not only string values, or a preview host in a key would survive.
 - **T00-D7 — `GrafanaBox`'s base class and the missing `containers` block.** `GrafanaBox`
   extends `@cloudflare/containers`' `Container<Env>` (matching the contract), with no
   `containers` entry in `wrangler.jsonc` yet — `containers/o11y/`'s Dockerfile does not exist
@@ -344,6 +350,16 @@ Workers execution.
   `clickhouseTimestamp` (exported, tested in `pipeline/telemetry-sink.test.mjs`) implements v3.
   The throwaway container (`docker run --name t00-ch-probe ... clickhouse/clickhouse-server:24.10-alpine`,
   port 4123) was removed afterward (`docker rm -f t00-ch-probe`, confirmed absent).
+- **`clickhouseSink` was silently writing nothing against T01's actual stack.** T01's
+  `compose.yml` sets `CLICKHOUSE_PASSWORD` (default `local-dev-token`); a second throwaway
+  container measurement (same image/port, torn down after) confirmed: with no credentials sent,
+  every insert answered `403`, but the sink only checked whether `fetch()` itself threw, so
+  `writeDataPoint` resolved anyway and `SELECT count()` on the table read back `0` — a silent
+  local-mode metrics blackout `T11`'s launch gate would have hit. Fixed: `ClickhouseSinkOptions`
+  gains `user`/`password`, sent as `X-ClickHouse-User`/`X-ClickHouse-Key` (T02 passes
+  `env.AE_SQL_TOKEN`); every non-2xx response now rejects the promise with the status and body.
+  Verified end to end against the real container: with credentials, the row lands with the
+  exact blob/double values the point carried.
 - **`redactPreviewHosts` now runs on every string in a scrubbed record, not only the fields named
   individually.** A third review pass found the Scope line "`redactPreviewHosts` on every string"
   was only implemented for five specific fields (`meta.page.url`, stack-frame filenames, message,
@@ -424,7 +440,7 @@ per COMMON.md. rtk's own summaries were not trusted; exit codes and raw output w
 rtk proxy pnpm install                                           exit=0
 rtk proxy pnpm --filter @handsontable/demo-runtime build          exit=0
 rtk proxy pnpm -r run typecheck                                   exit=0  (5 of 6 workspace projects — pipeline has no typecheck script, unrelated to this task)
-rtk proxy pnpm test                                                exit=1 (1242 tests, 1239 pass, 1 pre-existing unrelated failure, 2 pre-existing todo — see Concerns; all 79 telemetry cases pass)
+rtk proxy pnpm test                                                exit=1 (1248 tests, 1245 pass, 1 pre-existing unrelated failure, 2 pre-existing todo — see Concerns; all 85 telemetry cases pass)
 rtk proxy pnpm install --frozen-lockfile                           exit=0 (CI's install mode)
 ( cd workers/o11y && rtk proxy npx wrangler deploy --dry-run )    exit=0
 ( cd workers/api && rtk proxy npx wrangler deploy --dry-run )     exit=0
