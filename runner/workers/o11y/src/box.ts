@@ -490,12 +490,12 @@ export class GrafanaBox extends Container<Env> {
         const obj = await this.env.O11Y_INBOX.get(key);
         return obj ? new Uint8Array(await obj.arrayBuffer()) : null;
       },
-      pushToLoki: async (tenant, gzippedNdjson) => {
+      pushToLoki: async (tenant, gzippedBody) => {
         const res = await this.containerFetch(
           new Request("http://box/otlp/v1/logs", {
             method: "POST",
             headers: { "content-type": "application/json", "content-encoding": "gzip", "X-Scope-OrgID": tenant },
-            body: gzippedNdjson,
+            body: gzippedBody,
           }),
           3100,
         );
