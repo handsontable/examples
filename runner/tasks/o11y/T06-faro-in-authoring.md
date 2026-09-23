@@ -354,7 +354,11 @@ E2E_TELEMETRY=1 pnpm e2e e2e/telemetry-faro.spec.ts        # 7 tests, 6 pass, 1 
                                                              #   see above; last in file so mode:"serial"
                                                              #   does not skip the other 6)
 pnpm check:compiler-chunk                                   # exit 0
-node scripts/check-test-presence.mjs feat/runner-observability   # run after commit — see commit
+node scripts/check-test-presence.mjs feat/runner-observability
+  # pass (base feat/runner-observability) — 18 source file(s) changed,
+  # with a matching test change. (Run after committing 0778ea21b — the
+  # first attempt, on the uncommitted tree, said "no runner source
+  # changed", which only reflects that the script diffs against commits.)
 ```
 
 All `rtk`-wrapped commands were judged by their printed output/exit reasoning,
