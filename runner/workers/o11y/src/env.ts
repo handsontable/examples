@@ -65,6 +65,46 @@ export interface InboxWriterApi {
    * violate exit criterion 4's "one duplicate point").
    */
   ingest(tenant: Tenant, arrivalMs: number, items: IngestItem[]): Promise<IngestResult>;
+
+  // ---- T03 additions (COMMON.md interface 1: "further methods are added by
+  // ... T03 (ledger/backlog)"). Real logic in `inbox/ledger.ts` (pure, T03's
+  // own file); these RPC methods (`inbox/writer.ts`, T02's file — extended,
+  // not replaced) wire it against real storage/R2/the `GrafanaBox` stub. See
+  // this task's Outcome for the full reasoning.
+
+  /** ADR §B.3: resolves every wake that still owns provisional keys and is
+   *  over — a newer wake started, or the box is observed not running.
+   *  Called at every cron tick and at the start of each wake. */
+  resolveWakes(): Promise<void>;
+
+  /** `written` keys only, after running {@link resolveWakes} first (ADR
+   *  §B.3: "computed after that resolution step"). The cron reads this to
+   *  decide whether to wake the box (oldest > 60 min or total > 64 MB), and
+   *  never wakes it while `drainsPaused`. */
+  backlog(): Promise<{ oldestWrittenAgeMs: number; totalBytes: number; writtenCount: number; drainsPaused: boolean }>;
+
+  /** Up to `limit` `written` keys, in key order (re-opened keys sort first —
+   *  see `ledger.ts#nextWrittenKeys`'s doc comment for why no separate
+   *  "re-opened" flag is needed). The drain's own batch source. */
+  nextWrittenKeys(limit: number): Promise<string[]>;
+
+  /** A key becomes `provisional(wakeId)` only after every one of its
+   *  requests to Loki returned `2xx` (ADR §B.3). */
+  markKeysProvisional(wakeId: string, keys: string[]): Promise<void>;
+
+  /** A `400` from Loki (e.g. `too_far_behind`) marks the key `rejected` with
+   *  Loki's own message (ADR §B.3) — never retried by a later wake. */
+  rejectKey(key: string, reason: string): Promise<void>;
+
+  /** `POST /grafana/_o11y/reopen`'s own logic (ADR §B.3/§J): re-opens every
+   *  key whose inbox-key hour bucket overlaps `[fromMs, toMs)`, except a key
+   *  the CURRENT wake still owns provisionally. */
+  reopenWindow(fromMs: number, toMs: number): Promise<{ reopened: number }>;
+
+  /** The current not-over wake's id, or `null`. Used by the reopen route
+   *  (to protect an in-flight drain) and by `GrafanaBox`'s drain/stop
+   *  orchestration. */
+  currentWakeId(): Promise<string | null>;
 }
 
 export interface Env {

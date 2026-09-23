@@ -11,6 +11,7 @@
 // (T00-D9): `GrafanaBox` in `box.ts` (T01), `InboxWriter` in
 // `inbox/writer.ts` (T02, now real).
 
+import { toAePoint } from "@handsontable/demo-runtime/telemetry";
 import type { Env } from "./env.js";
 import { checkBrowserGates, checkPayloadEnvironment } from "./gates/browser.js";
 import { checkDeployGate } from "./gates/oidc.js";
@@ -23,9 +24,12 @@ import { processFaroBody } from "./normalise/faro.js";
 import { processOtlpBody } from "./normalise/otlp.js";
 import { processSentryPayload } from "./normalise/sentry.js";
 import { BodyTooLargeError, readCappedBytes, readCappedText } from "./normalise/read-body.js";
-import { recordInvalidItem, recordOversizeDrop, respondDrop, respondIngested } from "./normalise/respond.js";
+import { recordInvalidItem, recordOversizeDrop, respondDrop, respondIngested, o11ySelfIdentity } from "./normalise/respond.js";
 import { writePoint } from "./normalise/points.js";
 import { findRoute, registerRoute } from "./router.js";
+import { getGrafanaBoxStub } from "./box.js";
+import { handleGrafana } from "./grafana/proxy.js";
+import { handleReopen } from "./grafana/reopen.js";
 
 export { GrafanaBox } from "./box.js";
 export { InboxWriter } from "./inbox/writer.js";
@@ -42,8 +46,6 @@ interface RouteStub {
  *  through `router.ts`. */
 const UNIMPLEMENTED_ROUTES: readonly RouteStub[] = [
   { method: "POST", path: "/telemetry/lite" },
-  { method: "GET", path: "/grafana/*" },
-  { method: "POST", path: "/grafana/_o11y/reopen" },
   { method: "GET", path: "/grafana/_o11y/admin/*" },
 ];
 
@@ -206,6 +208,56 @@ registerRoute("POST", "/telemetry/collect", handleCollect);
 registerRoute("POST", "/telemetry/v1/logs", handleOtlpLogs);
 registerRoute("POST", "/telemetry/deploy", handleDeploy);
 registerRoute("POST", "/telemetry/hooks/sentry", handleSentryHook);
+// T03: `"*"`, not `"GET"` — Grafana's own frontend queries through
+// `POST /api/ds/query`, `POST /api/live/*` (blocked one layer down in
+// `box.ts`, never reaching here) and others under `/grafana/*`, not only
+// GET page loads. `POST /grafana/_o11y/reopen` is registered as an exact
+// route below it; `router.ts`'s own precedence rule (T02-D10: exact beats
+// prefix) means it always wins over this catch-all regardless of
+// registration order.
+registerRoute("*", "/grafana/*", handleGrafana);
+registerRoute("POST", "/grafana/_o11y/reopen", handleReopen);
+
+/** ADR §A/§B.1's ten-minute cron (`wrangler.jsonc`'s `triggers.crons`, T03's
+ *  row): reads the
+ *  backlog (which resolves over-wakes as a side effect, ADR §B.3), writes
+ *  the `o11y.backlog` self-metric, and wakes the box when the backlog is
+ *  old or large enough — never while `drainsPaused` (T04's cost cap; this
+ *  cron only reads the flag, never writes it). T03-D: `scheduled()` did not
+ *  exist on this Worker's default export before this task — a minimal,
+ *  justified addition to `index.ts` (not in this task's literal "Owns"
+ *  row, but the same class of shared-file addition T02's own route
+ *  registrations already are); T04 extends the same handler for its own
+ *  alert-evaluation cron rather than adding a second `scheduled` export
+ *  (Workers allows only one). */
+async function handleScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
+  const writer = inboxWriter(env);
+  const backlog = await writer.backlog();
+
+  writePoint(
+    env,
+    ctx,
+    toAePoint(
+      "o11y.backlog",
+      { value: backlog.oldestWrittenAgeMs / 1000, bytes: backlog.totalBytes },
+      o11ySelfIdentity(env),
+    ),
+  );
+
+  if (backlog.drainsPaused) return; // ADR §A: "never when drainsPaused"
+
+  const oneHourMs = 60 * 60 * 1000;
+  const sixtyFourMb = 64 * 1024 * 1024;
+  if (backlog.oldestWrittenAgeMs <= oneHourMs && backlog.totalBytes <= sixtyFourMb) return;
+
+  try {
+    await getGrafanaBoxStub(env).wake("backlog");
+  } catch (err) {
+    // A wake failure (e.g. the box is mid-`stopping`) is retried by the
+    // very next tick — nothing here needs to escalate.
+    console.warn("[o11y] cron wake failed:", err instanceof Error ? err.message : String(err));
+  }
+}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -219,5 +271,8 @@ export default {
       return new Response("Not Implemented — route logic lands in a later o11y task.", { status: 501 });
     }
     return new Response("Not Found", { status: 404 });
+  },
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(handleScheduled(env, ctx));
   },
 } satisfies ExportedHandler<Env>;

@@ -50,6 +50,26 @@ import { ALLOWED_ATTRIBUTE_KEYS } from "./attrs.js";
 //    `string`; only the type-level union is gone.
 export interface ScrubbableFaroStackFrame {
   filename?: string;
+  /** T03 addition (drain-time symbolication, ADR §C.3): the real
+   *  `@grafana/faro-core` `ExceptionStackFrame` (`api/exceptions/types.d.ts`)
+   *  already carries `function`/`lineno`/`colno` on every frame at runtime —
+   *  `structuredClone` in `scrubTelemetry` below has always copied them
+   *  through unchanged, only this *type* never declared them, so nothing
+   *  downstream could read them. Without these three fields a symbolicator
+   *  has no line/column to resolve and no minified function name to fall
+   *  back to — `convert.ts#faroItemToRecord` needs all three to embed a
+   *  stack trace in the record body at all (T03-D, see that task's Outcome
+   *  for the full reasoning: the pre-T03 `faroBody()` dropped
+   *  `payload.stacktrace` entirely, so a Faro exception record carried no
+   *  frame data anywhere and criterion 5 could not be satisfied by any
+   *  drain-time code). No new redaction rule needed: `function` is a JS
+   *  identifier (or empty string for an anonymous frame), never a URL;
+   *  `lineno`/`colno` are numbers. `filename` already goes through
+   *  `redactPreviewHosts`/`stripQueryAndFragment` a few lines below,
+   *  unchanged. */
+  function?: string;
+  lineno?: number;
+  colno?: number;
 }
 
 export interface ScrubbableFaroPayload {
