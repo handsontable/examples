@@ -31,6 +31,7 @@
     "max_line_size": "256KB",
     "otlp_config": {
       "resource_attributes": {
+        "ignore_defaults": true,
         "attributes_config": [
           {
             "action": "index_label",

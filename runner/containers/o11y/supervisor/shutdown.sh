@@ -41,6 +41,25 @@
 # small for the life of the bucket, and searching for this instance's own
 # uploader name distinguishes "we uploaded something" from "some other wake,
 # maybe running concurrently, uploaded something."
+#
+# T01 fix round 1, C1: an uploader-name match alone is not enough. The
+# shipper also uploads on a periodic ~15-minute schedule while Loki runs, so
+# on any wake at least that long, an uploader-named object can already exist
+# in the bucket from an EARLIER, successful mid-wake upload — checking only
+# "does one exist" after exit would pass even if the FINAL shutdown-time
+# upload silently failed (fails open, the opposite of this design's intent).
+# The check now snapshots the uploader-named keys under both day prefixes
+# BEFORE sending SIGTERM, and after Loki exits requires at least one
+# uploader-named key that was NOT in that snapshot — a genuinely new upload,
+# not just "some upload happened at some point this wake."
+#
+# The inverse risk, noted for the record: if something removed an
+# already-uploaded object between the snapshot and the after-listing (the
+# compactor deleting a superseded file mid-shutdown, say), this check could
+# see no net-new key and refuse a marker for a stop that was, in fact, clean
+# — a false "unclean". That is the safe direction to fail in (a replay of
+# already-committed data costs a duplicate that query-time dedupe collapses,
+# ADR-0041 §B.3), so it is accepted rather than engineered around here.
 
 STOP_GRACE_SECONDS="${O11Y_STOP_GRACE_SECONDS:-30}"
 
@@ -60,6 +79,21 @@ run_stop_protocol() {
     fi
     if [ -z "$uploader_name" ] && [ "${STORAGE:-s3}" = "s3" ]; then
       log "could not read /loki/tsdb-index/uploader/name before stop — index upload cannot be confirmed"
+    fi
+
+    # Snapshot BEFORE sending SIGTERM (C1 fix): a periodic ~15-minute
+    # shipper upload can already have written an uploader-named object this
+    # wake, so "does one exist" after exit is not evidence the FINAL,
+    # shutdown-time upload also happened — only a key that is new since
+    # this snapshot is.
+    local day_now day_prev before_keys=""
+    if [ "${STORAGE:-s3}" = "s3" ] && [ -n "$uploader_name" ]; then
+      day_now=$(( $(date -u +%s) / 86400 ))
+      day_prev=$((day_now - 1))
+      for day in "$day_now" "$day_prev"; do
+        before_keys="${before_keys}$(r2_list_prefix "index/index/${day}/" || true)
+"
+      done
     fi
 
     log "sending SIGTERM to loki (pid $LOKI_PID)"
@@ -83,26 +117,22 @@ run_stop_protocol() {
       loki_exit=1
     fi
 
-    # --- 2. confirm THIS instance's index objects landed in R2 -----------
+    # --- 2. confirm THIS instance uploaded a NEW index object ------------
     if [ "$loki_exit" -eq 0 ] && [ -n "${WAKE_ID:-}" ] && [ "${STORAGE:-s3}" = "s3" ] && [ -n "$uploader_name" ]; then
-      local day_now day_prev found=""
-      day_now=$(( $(date -u +%s) / 86400 ))
-      day_prev=$((day_now - 1))
+      local after_keys="" day
       for day in "$day_now" "$day_prev"; do
-        local keys
-        keys="$(r2_list_prefix "index/index/${day}/" || true)"
-        local match
-        match="$(printf '%s\n' "$keys" | grep -F "$uploader_name" || true)"
-        if [ -n "$match" ]; then
-          found="$match"
-          log "index upload confirmed for table ${day}: $(printf '%s' "$match" | tr '\n' ' ')"
-          break
-        fi
+        after_keys="${after_keys}$(r2_list_prefix "index/index/${day}/" || true)
+"
       done
-      if [ -n "$found" ]; then
+      local before_matches after_matches new_matches
+      before_matches="$(printf '%s\n' "$before_keys" | grep -F "$uploader_name" | sort -u || true)"
+      after_matches="$(printf '%s\n' "$after_keys" | grep -F "$uploader_name" | sort -u || true)"
+      new_matches="$(comm -13 <(printf '%s\n' "$before_matches") <(printf '%s\n' "$after_matches"))"
+      if [ -n "$new_matches" ]; then
+        log "new index upload confirmed (not present before SIGTERM): $(printf '%s' "$new_matches" | tr '\n' ' ')"
         marker_ok=0
       else
-        log "no index object bearing uploader name '${uploader_name}' found under index/index/{${day_now},${day_prev}}/ after graceful stop — not writing a marker (plan B territory, see ADR-0041 exit criterion 1)"
+        log "no index object bearing uploader name '${uploader_name}' is new since before SIGTERM under index/index/{${day_now},${day_prev}}/ — not writing a marker (plan B territory, see ADR-0041 exit criterion 1)"
         marker_ok=1
       fi
     else

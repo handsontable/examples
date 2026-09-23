@@ -80,10 +80,18 @@ for (const configFile of ["loki/loki-config.yaml", "loki/loki-config.filesystem.
     const raw = readText(configFile);
     const config = parseJsonWithEnvPlaceholders(raw);
 
+    // I2 (fix round 1): multi-tenancy is not optional here — flip this to
+    // false and both tenants collapse into Loki's single `fake` tenant,
+    // silently merging browser and worker streams.
+    assert.equal(config.auth_enabled, true, "auth_enabled (browser/worker tenant isolation)");
+
     assert.equal(config.ingester.wal.flush_on_shutdown, true, "ingester.wal.flush_on_shutdown");
     assert.equal(config.ingester.max_chunk_age, "2h", "ingester.max_chunk_age");
 
     assert.equal(config.limits_config.shard_streams.enabled, false, "limits_config.shard_streams.enabled");
+    // M6 (fix round 1): the boolean gate, not just its paired max-age — a
+    // false here makes reject_old_samples_max_age a no-op.
+    assert.equal(config.limits_config.reject_old_samples, true, "limits_config.reject_old_samples");
     assert.equal(
       config.limits_config.reject_old_samples_max_age,
       "7d",
@@ -106,19 +114,38 @@ for (const configFile of ["loki/loki-config.yaml", "loki/loki-config.filesystem.
     );
   });
 
-  test(`${configFile}: otlp_config promotes exactly the contract §3 resource attributes`, () => {
+  test(`${configFile}: otlp_config promotes EXACTLY the contract §3 resource attributes`, () => {
     const raw = readText(configFile);
     const config = parseJsonWithEnvPlaceholders(raw);
 
-    const attributesConfig = config.limits_config.otlp_config.resource_attributes.attributes_config;
+    const resourceAttributes = config.limits_config.otlp_config.resource_attributes;
+
+    // P1 (fix round 1): Loki ships a BUILT-IN default promotion list
+    // (service.name, service.namespace, service.instance.id,
+    // deployment.environment, cloud.region, cloud.availability_zone, and a
+    // run of k8s.*/container.* keys — confirmed via
+    // `loki -help` -> `-distributor.otlp.default_resource_attributes_as_
+    // index_labels`) that applies ON TOP OF `attributes_config` unless
+    // explicitly turned off. Exit criterion 15 needs the EXACT contract
+    // label set, so a subset-plus-exclusions check is not enough — a
+    // record carrying `deployment.environment` (note: not the contract's
+    // `deployment.environment.name`) would silently pick up a label this
+    // config never asked for. `ignore_defaults: true` disables that list;
+    // verified with a real push carrying `service.namespace` and
+    // `deployment.environment` (T01 report) that neither becomes a label
+    // once this is set.
+    assert.equal(resourceAttributes.ignore_defaults, true, "resource_attributes.ignore_defaults");
+
+    const attributesConfig = resourceAttributes.attributes_config;
     assert.ok(Array.isArray(attributesConfig) && attributesConfig.length > 0, "attributes_config is non-empty");
 
     const indexLabelEntries = attributesConfig.filter((entry) => entry.action === "index_label");
     assert.ok(indexLabelEntries.length > 0, "at least one index_label entry");
     const promoted = new Set(indexLabelEntries.flatMap((entry) => entry.attributes));
 
-    // docs/observability-contract.md §3: these MUST become Loki labels.
-    for (const attr of [
+    // docs/observability-contract.md §3: EXACTLY this set becomes a Loki
+    // label — not a subset, not a superset.
+    const expectedLabels = [
       "service.name",
       "deployment.environment.name",
       "hot.surface",
@@ -126,13 +153,17 @@ for (const configFile of ["loki/loki-config.yaml", "loki/loki-config.filesystem.
       "hot.framework",
       "hot.ht_major",
       "hot.outcome",
-    ]) {
-      assert.ok(promoted.has(attr), `${attr} is promoted to a label`);
-    }
+    ];
+    assert.deepEqual(
+      [...promoted].sort(),
+      [...expectedLabels].sort(),
+      "the promoted-attribute set is exactly the contract §3 label set",
+    );
 
     // §3 says these are NEVER labels: service.version ("no" in the Loki-label
-    // column), and the structured-metadata-only set.
-    for (const attr of ["service.version", "hot.demo_id", "session.id", "cf.ray"]) {
+    // column), and the structured-metadata-only set (hot.kind included —
+    // the Faro item kind, §3's last structured-metadata-only entry).
+    for (const attr of ["service.version", "hot.demo_id", "session.id", "cf.ray", "hot.kind"]) {
       assert.ok(!promoted.has(attr), `${attr} must NOT be promoted to a label`);
     }
   });
@@ -172,8 +203,13 @@ test("grafana.ini: sub-path, Live and auth.proxy are pinned", () => {
 
   assert.equal(ini.users.auto_assign_org_role, "Viewer", "[users] auto_assign_org_role (auto sign-up as Viewer)");
 
-  // Grafana Live disabled (ADR-0041 §A) — 0 refuses every websocket.
-  assert.equal(ini.live.max_connections, "0", "[live] max_connections disables Grafana Live");
+  // Grafana Live disabled for Grafana's OWN frontend (ADR-0041 §A, T01-D1
+  // updated in fix round 1): `GET /api/frontend/settings` reports
+  // `liveEnabled: false` with this set — checked behaviourally in
+  // local/stop-roundtrip.mjs. It does not refuse a raw client dialing
+  // `/api/live/ws` directly (grafana/grafana#72072); that enforcement is
+  // GrafanaBox.containerFetch's job in phase 2, not this config.
+  assert.equal(ini.live.max_connections, "0", "[live] max_connections disables Grafana Live for its own frontend");
 });
 
 test("grafana.ini: auth.proxy is the ONLY trusted identity — basic auth and the admin fallback are off", () => {
@@ -190,39 +226,76 @@ test("grafana.ini: auth.proxy is the ONLY trusted identity — basic auth and th
   );
 });
 
-test("grafana.ini: serve_from_sub_path and root_url agree (the documented silent-break trap)", () => {
-  const ini = parseIni(readText("grafana/grafana.ini"));
-  assert.equal(ini.server.serve_from_sub_path, "true");
-  assert.ok(ini.server.root_url.includes("/grafana/"), "root_url carries the same /grafana/ sub-path");
+// M10 (fix round 1): the previous "serve_from_sub_path and root_url agree"
+// test asserted exactly what "sub-path, Live and auth.proxy are pinned"
+// above already covers (serve_from_sub_path === "true", root_url ending in
+// /grafana/) — a duplicate, not a second real check. Removed rather than
+// kept as dead weight.
+
+// --- Grafana provisioning: containers/o11y/grafana/provisioning/datasources
+// -------------------------------------------------------------------------
+
+test("datasources.yaml: fixed uids and tenant headers are pinned (T09 depends on the uids)", () => {
+  const raw = readText("grafana/provisioning/datasources/datasources.yaml");
+
+  // I2 (fix round 1): Grafana's sqlite state is disposable — a fresh DB on
+  // every wake — so a dashboard (T09) that references a datasource by uid
+  // breaks on every wake if these drift or go back to auto-generated ids.
+  for (const uid of ["loki-browser", "loki-worker", "clickhouse-runner-events"]) {
+    // End-of-line anchored, not just a trailing \b: "loki-browser-x" also
+    // has a word boundary right after "loki-browser" (word char -> "-"),
+    // so \b alone would still match a renamed/suffixed uid.
+    assert.match(raw, new RegExp(`uid:\\s*${uid}\\s*$`, "m"), `datasource uid ${uid} is pinned`);
+  }
+
+  // The whole point of two Loki datasources is that they carry DIFFERENT
+  // X-Scope-OrgID values — assert each one is paired with its own tenant,
+  // not just that both tenant strings appear somewhere in the file.
+  const browserBlock = raw.slice(raw.indexOf("uid: loki-browser"), raw.indexOf("uid: loki-worker"));
+  const workerBlock = raw.slice(raw.indexOf("uid: loki-worker"), raw.indexOf("uid: clickhouse-runner-events"));
+  assert.match(browserBlock, /httpHeaderValue1:\s*browser\b/, "loki-browser datasource sends X-Scope-OrgID: browser");
+  assert.match(workerBlock, /httpHeaderValue1:\s*worker\b/, "loki-worker datasource sends X-Scope-OrgID: worker");
 });
 
 // --- compose.yml: no GF_* env var may silently override a pinned key -------
 
 test("compose.yml: no GF_* override for the pinned grafana.ini keys", () => {
   const compose = readText("compose.yml");
-  const boxServiceMatch = compose.match(/^\s{2}box:[\s\S]*?(?=^\s{2}\S|\Z)/m);
+  // M7 (fix round 1): `\Z` is not a recognized escape in a JS RegExp — it
+  // matched a literal capital "Z", not "end of string". `box` happens not
+  // to be followed by one in this file, so the lookahead's second branch
+  // was accidentally dead rather than wrong, but it was still a bug.
+  // `$(?![\s\S])` is the correct "true end of string" alternative to pair
+  // with the "next top-level service" lookahead.
+  const boxServiceMatch = compose.match(/^\s{2}box:[\s\S]*?(?=^\s{2}\S|$(?![\s\S]))/m);
   assert.ok(boxServiceMatch, "compose.yml has a `box` service block");
   const boxBlock = boxServiceMatch[0];
 
-  const forbidden = [
-    "GF_SERVER_SERVE_FROM_SUB_PATH",
-    "GF_AUTH_PROXY_ENABLED",
-    "GF_AUTH_PROXY_HEADER_NAME",
-    "GF_LIVE_MAX_CONNECTIONS",
-    "GF_USERS_AUTO_ASSIGN_ORG_ROLE",
-  ];
-  for (const name of forbidden) {
-    assert.ok(!boxBlock.includes(name), `compose.yml must not set ${name} (would silently override grafana.ini)`);
-  }
-  // The one GF_* override compose.yml IS allowed (and expected) to set: the
-  // host-varying root_url.
-  assert.ok(boxBlock.includes("GF_SERVER_ROOT_URL"), "compose.yml sets GF_SERVER_ROOT_URL (host:port varies per run)");
+  // M4 (fix round 1): an explicit denylist only catches names someone
+  // thought to list. Every GF_* token in the box block must be exactly
+  // GF_SERVER_ROOT_URL — the one override this file is allowed to make.
+  const gfVars = new Set([...boxBlock.matchAll(/\bGF_[A-Z0-9_]+\b/g)].map(([m]) => m));
+  assert.deepEqual(
+    [...gfVars],
+    ["GF_SERVER_ROOT_URL"],
+    "the only GF_* token in the box block is GF_SERVER_ROOT_URL (host:port varies per run)",
+  );
 });
 
 test("compose.yml: every box/minio/clickhouse host port is env-overridable (COMMON.md rule 5)", () => {
   const compose = readText("compose.yml");
   const portLines = [...compose.matchAll(/^\s*- "127\.0\.0\.1:\$\{([A-Z0-9_]+):-(\d+)\}:(\d+)"/gm)];
-  assert.ok(portLines.length >= 4, "at least 4 published host ports (grafana, loki, minio api, minio console)");
+  // M5 (fix round 1): every `- "..."` line under any service's `ports:`
+  // must be one of these env-overridable lines — not just "at least 4 of
+  // them exist somewhere". A `9000:9000` slipped in verbatim for a fifth
+  // service would previously still pass this test.
+  const allPublishedPortLines = compose.split("\n").filter((line) => /^\s*- "[\d.]+:/.test(line));
+  assert.equal(
+    portLines.length,
+    allPublishedPortLines.length,
+    "every published host port line matches the env-overridable 127.0.0.1:${VAR:-default}:port shape",
+  );
+  assert.equal(portLines.length, 6, "box (2) + minio (2) + clickhouse (2) published ports");
   for (const [, envVar] of portLines) {
     assert.match(envVar, /^O11Y_/, `${envVar} follows the O11Y_* naming convention`);
   }
@@ -234,6 +307,7 @@ test("compose.yml: every box/minio/clickhouse host port is env-overridable (COMM
   const byVar = new Map(portLines.map(([, envVar, def]) => [envVar, def]));
   assert.equal(byVar.get("O11Y_GRAFANA_PORT"), "3000", "Grafana host port defaults to the contract's 3000");
   assert.equal(byVar.get("O11Y_LOKI_PORT"), "3100", "Loki host port defaults to the contract's 3100");
+  assert.equal(byVar.get("O11Y_CLICKHOUSE_PORT"), "8123", "ClickHouse host port defaults to the contract's 8123");
 });
 
 // --- Dockerfile: pins that the right config files are actually loaded ------
@@ -247,7 +321,15 @@ test("Dockerfile: loads the same config files this test pins (source-grep pin)",
   assert.match(dockerfile, /grafana\/provisioning/, "COPYs the Grafana provisioning directory");
   // No secret baked into the image (ADR-0041 traps): the S3 credential env
   // names must never appear as a literal ENV/ARG default in the Dockerfile.
-  assert.doesNotMatch(dockerfile, /LOKI_S3_SECRET_ACCESS_KEY\s*=/, "no baked secret default");
+  // M8 (fix round 1): `KEY\s*=` alone misses Dockerfile's space-separated
+  // `ENV KEY value` form (no `=` at all) — check both shapes for ENV and
+  // ARG. A bare `ARG LOKI_S3_SECRET_ACCESS_KEY` with no value is not
+  // matched (that only declares the name, it does not bake a value).
+  assert.doesNotMatch(
+    dockerfile,
+    /^\s*(ENV|ARG)\s+LOKI_S3_SECRET_ACCESS_KEY(\s*=\s*\S+|\s+\S+)/m,
+    "no baked secret default (ENV/ARG, = or space form)",
+  );
 });
 
 // --- r2-lifecycle-rules.json: shape T10 applies via wrangler ---------------

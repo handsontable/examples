@@ -227,8 +227,26 @@ async function main() {
     console.log(`local boot: ${readyMs}ms`);
   }
 
-  const pushedBrowser = ["roundtrip-browser-a", "roundtrip-browser-b", "roundtrip-browser-c"];
-  const pushedWorker = ["roundtrip-worker-a", "roundtrip-worker-b"];
+  // I1 (fix round 1): behavioural check that [live] max_connections=0
+  // actually turns Live off for Grafana's own frontend — `liveEnabled` in
+  // /api/frontend/settings is what the shipped Grafana UI reads before ever
+  // opening a socket. This does NOT check the raw /api/live/ws endpoint
+  // itself (that remains reachable — see grafana.ini's T01-D1 note); it
+  // checks the one surface the product actually consults.
+  {
+    const res = await fetch(`http://localhost:${GRAFANA_PORT}/grafana/api/frontend/settings`, {
+      headers: { "X-O11Y-GRAFANA-USER": "roundtrip-probe@handsontable.com" },
+    });
+    const body = res.status === 200 ? await res.json() : null;
+    record(
+      "run1: /api/frontend/settings reports liveEnabled=false",
+      res.status === 200 && body?.liveEnabled === false,
+      `HTTP ${res.status} liveEnabled=${body?.liveEnabled}`,
+    );
+  }
+
+  const pushedBrowser = [`roundtrip-browser-a-${RUN_ID}`, `roundtrip-browser-b-${RUN_ID}`, `roundtrip-browser-c-${RUN_ID}`];
+  const pushedWorker = [`roundtrip-worker-a-${RUN_ID}`, `roundtrip-worker-b-${RUN_ID}`];
   const pushStart = Date.now();
   const bStatus = await pushLines("browser", pushedBrowser, { "hot.demo_id": "r-roundtrip" });
   const wStatus = await pushLines("worker", pushedWorker, { "hot.demo_id": "r-roundtrip" });
@@ -285,7 +303,7 @@ async function main() {
   const readyMs3 = await waitReadyForBox();
   record("run2: box became ready", readyMs3 >= 0, `${readyMs3}ms`);
   const killPushStart = Date.now();
-  const killPushStatus = await pushLines("browser", ["roundtrip-kill-canary"], { "hot.demo_id": "r-roundtrip" });
+  const killPushStatus = await pushLines("browser", [`roundtrip-kill-canary-${RUN_ID}`], { "hot.demo_id": "r-roundtrip" });
   record("run2: canary push accepted", killPushStatus === 204, `HTTP ${killPushStatus}`);
   await sleep(300);
 
@@ -320,16 +338,124 @@ async function main() {
   record("run2 restart: browser query 200", killQueryStatus === 200, `HTTP ${killQueryStatus}`);
   record(
     "run2 restart: the SIGKILL'd canary line is genuinely lost (never uploaded)",
-    !killQueryLines.includes("roundtrip-kill-canary"),
+    !killQueryLines.includes(`roundtrip-kill-canary-${RUN_ID}`),
     `got ${JSON.stringify(killQueryLines)}`,
   );
+
+  // ---- C1 negative control: a failed FINAL index upload writes no marker ----
+  //
+  // The bug this proves fixed: the pre-fix-round-1 check only asked "does an
+  // uploader-named index object exist after Loki exits?" — but the shipper
+  // also uploads on its own ~15-minute schedule while Loki is still running,
+  // so on any wake at least that long, an object can already exist from an
+  // EARLIER, successful mid-wake upload. That check would then pass even if
+  // the LAST, shutdown-time upload silently failed. This test reproduces
+  // exactly that shape: seed a fake uploader-named object under today's
+  // table (standing in for an earlier successful periodic upload), then run
+  // the box against a MinIO user whose policy denies PutObject on `index/*`
+  // only (`state/*`, `browser/*`, `worker/*` stay writable — the production
+  // credential is scoped to the Loki bucket as a whole, ADR-0041 exit
+  // criterion 1, and this narrows it further to isolate just the index
+  // write). SIGTERM: Loki's real shutdown-time upload attempt now fails, so
+  // no NEW uploader-named object appears — the fixed check (which diffs
+  // against a snapshot taken before SIGTERM) must refuse the marker.
+  console.log("\n== C1 negative control: failed final index upload ==");
+  const RESTRICTED_USER = `restricted-${RUN_ID}`;
+  const RESTRICTED_PASSWORD = `restricted-pw-${RUN_ID}`;
+  const RESTRICTED_POLICY = `deny-index-put-${RUN_ID}`;
+  setupRestrictedMinioUser(RESTRICTED_USER, RESTRICTED_PASSWORD, RESTRICTED_POLICY);
+
+  const wakeIdC1 = `roundtrip-c1-${RUN_ID}`;
+  sh("docker", [
+    "compose", "-p", PROJECT, "-f", "compose.yml",
+    "up", "-d", "--no-deps", "--force-recreate", "box",
+  ], {
+    env: {
+      O11Y_WAKE_ID: wakeIdC1,
+      O11Y_LOKI_S3_ACCESS_KEY_ID: RESTRICTED_USER,
+      O11Y_LOKI_S3_SECRET_ACCESS_KEY: RESTRICTED_PASSWORD,
+    },
+  });
+  const readyMsC1 = await waitReadyForBox();
+  record("C1: box (restricted S3 credential) became ready", readyMsC1 >= 0, `${readyMsC1}ms`);
+
+  const containerIdC1 = boxContainerId();
+  const uploaderName = sh("docker", [
+    "exec", containerIdC1, "cat", "/loki/tsdb-index/uploader/name",
+  ], { allowFail: true }).stdout.trim();
+  record("C1: read this instance's uploader name", Boolean(uploaderName), uploaderName || "(empty)");
+
+  // Seed a fake "earlier successful upload" using the ADMIN credential
+  // (curlS3 signs with MINIO_USER/MINIO_PASSWORD, not the box's restricted
+  // pair) — the restricted user could not have written this itself, which
+  // is exactly the point: it stands in for an upload that happened before
+  // the restriction (or, in the real check's terms, before the pre-SIGTERM
+  // snapshot) rather than one this test is trying to produce.
+  const dayNow = Math.floor(Date.now() / 1000 / 86400);
+  const seededKey = `index/index/${dayNow}/9999999999-${uploaderName}-seeded.tsdb.gz`;
+  const seedRes = curlS3(["-o", "/dev/null", "-w", "%{http_code}", "-X", "PUT", "--data", "seed",
+    `http://localhost:${MINIO_PORT}/loki/${seededKey}`]);
+  record("C1: seeded a pre-existing uploader-named index object (admin credential)", seedRes.stdout.trim() === "200", `HTTP ${seedRes.stdout.trim()} key=${seededKey}`);
+
+  await pushLines("browser", [`roundtrip-c1-line-${RUN_ID}`], { "hot.demo_id": "r-roundtrip" });
+  await sleep(300);
+
+  sh("docker", ["kill", "-s", "TERM", containerIdC1]);
+  sh("docker", ["wait", containerIdC1]);
+  const exitCodeC1 = sh("docker", ["inspect", containerIdC1, "--format", "{{.State.ExitCode}}"]).stdout.trim();
+  record(
+    "C1: no marker written when the final index upload is blocked, despite a pre-existing uploader-named object",
+    !markerExists(wakeIdC1),
+    `state/wakes/${wakeIdC1}/clean, box exit=${exitCodeC1}`,
+  );
+
+  // Revert evidence lives in the T01 report (fix round 1): the same
+  // seed-then-SIGTERM sequence run against the pre-fix "does one exist"
+  // check (no before/after snapshot) DOES write a marker here — that run is
+  // done by hand against a temporarily reverted shutdown.sh, not by this
+  // script, so a passing check above is never silently the only evidence.
 
   console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);
   process.exitCode = failures === 0 ? 0 : 1;
 
+  // M13 (fix round 1): tear the stack down when done, so a run of this
+  // script never leaves containers/networks for the operator to notice and
+  // clean up by hand. Set O11Y_ROUNDTRIP_KEEP=1 to skip this while
+  // debugging a failure.
+  if (process.env.O11Y_ROUNDTRIP_KEEP !== "1") {
+    console.log("\n== tearing down (set O11Y_ROUNDTRIP_KEEP=1 to skip) ==");
+    compose("down", "-v");
+  } else {
+    console.log("\nO11Y_ROUNDTRIP_KEEP=1 set — stack left running.");
+  }
+
   async function waitReadyForBox() {
     return waitReady();
   }
+}
+
+function setupRestrictedMinioUser(user, password, policyName) {
+  const policy = JSON.stringify({
+    Version: "2012-10-17",
+    Statement: [
+      { Effect: "Allow", Action: ["s3:*"], Resource: ["arn:aws:s3:::loki", "arn:aws:s3:::loki/*"] },
+      { Effect: "Deny", Action: ["s3:PutObject"], Resource: ["arn:aws:s3:::loki/index/*"] },
+    ],
+  });
+  const script = [
+    `mc alias set c1 http://minio:9000 "${MINIO_USER}" "${MINIO_PASSWORD}" >/dev/null`,
+    `cat > /tmp/policy.json <<'EOF'\n${policy}\nEOF`,
+    `mc admin policy create c1 ${policyName} /tmp/policy.json`,
+    `mc admin user add c1 ${user} "${password}"`,
+    `mc admin policy attach c1 ${policyName} --user ${user}`,
+  ].join(" && ");
+  const res = sh("docker", [
+    "run", "--rm", "--network", `${PROJECT}_default`,
+    "--entrypoint", "/bin/sh",
+    "quay.io/minio/mc:RELEASE.2024-11-05T11-29-45Z",
+    "-c", script,
+  ], { allowFail: true });
+  record("C1: restricted MinIO user/policy created (deny PutObject on index/*)", res.status === 0, res.stdout.trim().split("\n").pop());
 }
 
 main().catch((err) => {

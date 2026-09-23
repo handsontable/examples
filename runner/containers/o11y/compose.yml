@@ -31,8 +31,16 @@ services:
       STORAGE: s3
       LOKI_S3_ENDPOINT: minio:9000
       LOKI_S3_REGION: auto
-      LOKI_S3_ACCESS_KEY_ID: ${O11Y_MINIO_ROOT_USER:-minioadmin}
-      LOKI_S3_SECRET_ACCESS_KEY: ${O11Y_MINIO_ROOT_PASSWORD:-minioadmin}
+      # Independent from MinIO's own root credentials (not just an alias for
+      # O11Y_MINIO_ROOT_USER/PASSWORD): the C1 negative control
+      # (local/stop-roundtrip.mjs) runs the box against a deliberately
+      # restricted MinIO user whose policy denies PutObject on index/* —
+      # approximating the production token, which is scoped to the Loki
+      # bucket only (ADR-0041 exit criterion 1) — while leaving MinIO's own
+      # root user free for admin/mc operations. Defaults match MinIO's own
+      # default root credentials so a plain `docker compose up` still works.
+      LOKI_S3_ACCESS_KEY_ID: ${O11Y_LOKI_S3_ACCESS_KEY_ID:-minioadmin}
+      LOKI_S3_SECRET_ACCESS_KEY: ${O11Y_LOKI_S3_SECRET_ACCESS_KEY:-minioadmin}
       LOKI_S3_BUCKET: loki
       LOKI_S3_INSECURE: "true"
       GF_SERVER_ROOT_URL: http://localhost:${O11Y_GRAFANA_PORT:-3000}/grafana/
@@ -40,13 +48,22 @@ services:
       # pair for local ClickHouse (X-ClickHouse-User/-Key) — a different
       # shape than production's single `Authorization: Bearer` header
       # (GrafanaBox envVars, phase 2). See grafana/provisioning/datasources.
+      #
+      # T01 fix round 1, P2: contract §2 says AE_SQL_TOKEN "reaches Grafana
+      # via env", but nothing in datasources.yaml ever read a bare
+      # `AE_SQL_TOKEN` variable — only `O11Y_CLICKHOUSE_HEADER2_VALUE` is
+      # wired into the datasource's secureJsonData. A standalone `AE_SQL_TOKEN`
+      # env var on the box was therefore dead: present, but unread. Dropped
+      # it; the token reaches Grafana by being the VALUE of
+      # O11Y_CLICKHOUSE_HEADER2_VALUE below (locally) and, in phase 2, by
+      # GrafanaBox building that same env var as `Bearer <AE_SQL_TOKEN>` from
+      # its own secret — never a second, redundant copy on the box.
       O11Y_CLICKHOUSE_URL: http://clickhouse:8123
       O11Y_CLICKHOUSE_DATABASE: default
       O11Y_CLICKHOUSE_HEADER1_NAME: X-ClickHouse-User
       O11Y_CLICKHOUSE_HEADER1_VALUE: default
       O11Y_CLICKHOUSE_HEADER2_NAME: X-ClickHouse-Key
       O11Y_CLICKHOUSE_HEADER2_VALUE: ${AE_SQL_TOKEN:-local-dev-token}
-      AE_SQL_TOKEN: ${AE_SQL_TOKEN:-local-dev-token}
       O11Y_STOP_GRACE_SECONDS: ${O11Y_STOP_GRACE_SECONDS:-30}
     ports:
       - "127.0.0.1:${O11Y_GRAFANA_PORT:-3000}:3000"
@@ -54,7 +71,16 @@ services:
     # Must exceed O11Y_STOP_GRACE_SECONDS (the supervisor's own bound on
     # waiting for Loki to exit) by enough margin that the stop protocol's
     # remaining steps (index check, marker PUT+HEAD, stopping Grafana) can
-    # still run before Docker escalates to SIGKILL.
+    # still run before Docker escalates to SIGKILL. These two numbers are
+    # coupled by hand, not derived — raise O11Y_STOP_GRACE_SECONDS and this
+    # value together. M12 (fix round 1): the default 30s is what was
+    # measured (~2.3s) flushing a couple of short-lived local test streams;
+    # `max_chunk_age: 2h` (loki-config.yaml) means a wake that has been
+    # ingesting for a while can be flushing much larger in-memory chunks on
+    # shutdown, so 30s may be tight in production at real traffic volume —
+    # this needs a production-shaped measurement (ADR-0041 exit criterion 7,
+    # phase 2 sandbox probe), not just this local number, before treating it
+    # as validated for anything beyond this repo's own test traffic.
     stop_grace_period: 45s
     # `standard-1` (docs.cloudflare.com/containers/platform-details/limits):
     # 1/2 vCPU, 4 GiB memory, 8 GB disk — so local boot-time and memory
