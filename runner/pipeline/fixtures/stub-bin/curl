@@ -1,0 +1,57 @@
+#!/bin/bash
+# A minimal `curl` stand-in for pipeline/o11y-shutdown-snapshot.test.mjs.
+# Ignores its real arguments entirely (the test only needs to control the
+# RESPONSE `r2_list_prefix`/`snapshot_index_keys` see, not exercise real
+# S3-sigv4 request construction — that is exercised for real by
+# `containers/o11y/local/stop-roundtrip.mjs`). Behaviour is driven by two
+# env vars the test sets:
+#   STUB_CURL_MODES   comma-separated modes, one per successive invocation
+#                      (clamped to the last entry once exhausted):
+#                        fail      -> exit 22, no output (curl -f on a
+#                                     network/5xx failure)
+#                        empty     -> a valid, empty <ListBucketResult>
+#                        haskey    -> a valid listing with one
+#                                     pre-existing uploader-named <Key>
+#                        malformed -> HTTP 200 but not real S3 XML (a proxy
+#                                     error page)
+#   STUB_CURL_COUNTER_FILE  a file this script increments (one line per
+#                      call) so the test can also assert call counts.
+set -u
+counter_file="${STUB_CURL_COUNTER_FILE:?STUB_CURL_COUNTER_FILE not set}"
+call_index="$(wc -l < "$counter_file" 2>/dev/null || echo 0)"
+printf 'x\n' >> "$counter_file"
+
+modes="${STUB_CURL_MODES:-empty}"
+IFS=',' read -r -a mode_array <<< "$modes"
+mode_count=${#mode_array[@]}
+if [ "$call_index" -ge "$mode_count" ]; then
+  mode="${mode_array[$((mode_count - 1))]}"
+else
+  mode="${mode_array[$call_index]}"
+fi
+
+case "$mode" in
+  fail)
+    exit 22
+    ;;
+  empty)
+    printf '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>loki</Name><IsTruncated>false</IsTruncated></ListBucketResult>'
+    exit 0
+    ;;
+  haskey)
+    printf '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated><Contents><Key>index/index/19999/1700000000-uploaderA-abc.tsdb.gz</Key></Contents></ListBucketResult>'
+    exit 0
+    ;;
+  truncated)
+    printf '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>true</IsTruncated><Contents><Key>index/index/19999/1700000000-uploaderA-abc.tsdb.gz</Key></Contents></ListBucketResult>'
+    exit 0
+    ;;
+  malformed)
+    printf '<html><body>502 Bad Gateway</body></html>'
+    exit 0
+    ;;
+  *)
+    echo "stub curl: unknown STUB_CURL_MODES entry '$mode'" >&2
+    exit 99
+    ;;
+esac
