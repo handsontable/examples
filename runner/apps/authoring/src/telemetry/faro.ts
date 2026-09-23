@@ -40,13 +40,63 @@ import {
   type Telemetry,
 } from "@handsontable/demo-runtime/telemetry";
 import { resolveTelemetryEnabled, telemetryEnvironment } from "./gate.js";
+import { isForeignUnhandled, isUnhandledNoise } from "../eventGate.js";
+
+/**
+ * Fix round D-I2: contract §6 requires `beforeSend` = `scrubTelemetry` THEN
+ * the shared noise gates — before this fix, only `sentry.ts`'s `beforeSend`
+ * ever ran them, so every browser-noise shape Sentry has always dropped
+ * (the ResizeObserver loop warning, a navigation-abort `Failed to fetch`/
+ * `Load failed`, a foreign-origin extension frame) reached Faro/Loki instead,
+ * and — because `surface` defaults to `authoring` and these are all
+ * `handled: false` — could mint a fresh `fp:` first-seen entry and fire the
+ * §F.3 new-fingerprint alert, the exact replacement ADR §E.1 promises for
+ * Sentry's own "new issue" signal.
+ *
+ * `eventGate.ts`'s two gates are Sentry-shaped (`{ exception: { values: [...] } }`,
+ * one entry per error in a chain) — a Faro `ExceptionEvent` is a single flat
+ * `value`/`type`/`stacktrace`/`context`, so it is adapted into that same
+ * one-entry-array shape here rather than duplicating (or Faro-ifying) the
+ * gates themselves. `context.handled` is the Faro-side equivalent of
+ * Sentry's `mechanism.handled`: only `buildFacade().error()` below (an
+ * explicit, on-purpose report) ever sets `"true"` — a raw
+ * `ErrorsInstrumentation` catch (`window.onerror`/`unhandledrejection`) and
+ * `reportUncaughtError`'s render-crash relay both leave it unset, exactly
+ * mirroring which events carry Sentry's `mechanism.handled === false`.
+ */
+function faroExceptionToExceptionShape(payload: ScrubbableFaroItem["payload"]) {
+  return {
+    exception: {
+      values: [
+        {
+          value: payload.value,
+          type: payload.type,
+          mechanism: { handled: payload.context?.handled === "true" },
+          stacktrace: payload.stacktrace,
+        },
+      ],
+    },
+  };
+}
 
 /** Every item passes through the one contract scrubber before transport
  *  (ADR §E.4) — the exact cast pair T00-D11 documents as the unavoidable
  *  boundary between Faro's real item union (which includes `TraceEvent`,
- *  never exported here) and this module's narrower `ScrubbableFaroItem`. */
-const beforeSend: BeforeSendHook = (item) =>
-  scrubTelemetry(item as unknown as ScrubbableFaroItem) as TransportItem | null;
+ *  never exported here) and this module's narrower `ScrubbableFaroItem`.
+ *  D-I2: an `exception` item is then run through the shared noise gates,
+ *  same as Sentry's own `beforeSend` — AFTER scrubbing, so a gate never
+ *  reads pre-scrub content. */
+const beforeSend: BeforeSendHook = (item) => {
+  const scrubbed = scrubTelemetry(item as unknown as ScrubbableFaroItem) as ScrubbableFaroItem | null;
+  if (!scrubbed) return null;
+  if (scrubbed.type === "exception") {
+    const shape = faroExceptionToExceptionShape(scrubbed.payload);
+    if (isUnhandledNoise(shape) || isForeignUnhandled(shape, window.location.origin)) {
+      return null;
+    }
+  }
+  return scrubbed as unknown as TransportItem;
+};
 
 /**
  * `scrub.ts#allowlistAttributes` keeps only the allowlisted keys

@@ -149,6 +149,39 @@ test.describe("Faro in the authoring app (T06)", () => {
     return bodies;
   }
 
+  // Fix round D-I2: `beforeSend` must apply the shared noise gates
+  // (contract §6) to Faro exception items, same as Sentry's own
+  // `beforeSend` already did — otherwise a benign ResizeObserver-loop
+  // warning (or any of the other `isUnhandledNoise`/`isForeignUnhandled`
+  // shapes) reaches Loki AND mints a fresh §F.3 `fp:` first-seen entry,
+  // paging on noise Sentry has always filtered.
+  test("D-I2: an unhandled ResizeObserver-loop warning does NOT reach Faro (shared noise gate)", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+
+    const marker = "T06 e2e D-I2 noise probe " + Date.now();
+    await page.evaluate((msg) => {
+      setTimeout(() => {
+        throw new Error(`ResizeObserver loop completed with undelivered notifications. (${msg})`);
+      });
+    }, marker);
+
+    // A real, non-noise probe right after, on the same page — proves the
+    // page (and Faro transport) is still alive and would have captured the
+    // noise probe too if the gate had not dropped it, rather than this
+    // being a false pass from nothing having run yet.
+    await page.evaluate((msg) => {
+      setTimeout(() => { throw new Error(`T06 e2e D-I2 control probe (${msg})`); });
+    }, marker);
+    await expect
+      .poll(() => captured.flatMap((b) => b.exceptions ?? []).some((e) => String(e.value ?? "").includes("control probe")))
+      .toBe(true);
+
+    const noiseHit = captured.flatMap((b) => b.exceptions ?? []).find((e) => String(e.value ?? "").includes(marker) && !String(e.value ?? "").includes("control probe"));
+    assert(!noiseHit, "a ResizeObserver-loop warning must never reach Faro/telemetry/collect");
+  });
+
   test("an uncaught error reaches Faro (window.onerror, via ErrorsInstrumentation)", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
