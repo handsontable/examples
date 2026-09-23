@@ -34,6 +34,17 @@ function record(body, i = 0) {
 }
 
 // ---- dedupe.ts -----------------------------------------------------------------
+//
+// F2 fix (final review, A-I1 "hash: entries are never deleted"): the storage
+// key is now day-bucketed (`hash:<yyyymmdd>:<sha256>`, see dedupe.ts's own
+// header) so stale buckets can be pruned with a bounded range delete —
+// `checkDuplicates`'s BEHAVIOUR (24h window, within-batch collapse) is
+// unchanged, but a test that asserted the exact key string must bucket by
+// "today" (UTC) the same way the implementation does.
+
+function todayBucket(ms = Date.now()) {
+  return new Date(ms).toISOString().slice(0, 10).replace(/-/g, "");
+}
 
 test("dedupe: a hash seen within the 24h window is a duplicate; an unseen one is not", async () => {
   const storage = memoryStorage();
@@ -43,7 +54,7 @@ test("dedupe: a hash seen within the 24h window is a duplicate; an unseen one is
 
   const second = await checkDuplicates(storage, ["h1", "h3"], Date.now() + 5000);
   assert.deepEqual([...second.duplicates], ["h1"]);
-  assert.ok("hash:h3" in second.writes, "the unseen hash must get a write entry");
+  assert.ok(`hash:${todayBucket()}:h3` in second.writes, "the unseen hash must get a write entry, bucketed by today's UTC date");
 });
 
 test("dedupe: a hash repeated within one batch is a duplicate on its second occurrence", async () => {
@@ -55,9 +66,24 @@ test("dedupe: a hash repeated within one batch is a duplicate on its second occu
 test("dedupe: a hash outside the 24h window is treated as new again", async () => {
   const storage = memoryStorage();
   const dayAgo = Date.now() - 25 * 60 * 60 * 1000;
-  await storage.put({ "hash:h1": dayAgo });
+  await storage.put({ [`hash:${todayBucket(dayAgo)}:h1`]: dayAgo });
   const result = await checkDuplicates(storage, ["h1"], Date.now());
   assert.deepEqual([...result.duplicates], [], "an expired hash must not be treated as a duplicate");
+});
+
+test("dedupe: a hash from a DIFFERENT UTC-day bucket, still within 24h, is found via the two-bucket check", async () => {
+  const storage = memoryStorage();
+  // Force `nowMs` to just after a UTC midnight, so a hash written 1 minute
+  // earlier lands in YESTERDAY's bucket while still being well within the
+  // 24h window — this is the exact case the two-bucket lookup exists for.
+  const midnight = Date.UTC(2026, 5, 15, 0, 0, 0);
+  const nowMs = midnight + 60_000;
+  const writtenMs = midnight - 60_000;
+  await storage.put({ [`hash:${todayBucket(writtenMs)}:hY`]: writtenMs });
+
+  const result = await checkDuplicates(storage, ["hY"], nowMs);
+
+  assert.deepEqual([...result.duplicates], ["hY"], "a hash from yesterday's UTC bucket, still within 24h, must be found");
 });
 
 // ---- registry.ts -----------------------------------------------------------------

@@ -12,14 +12,20 @@
 // structurally typed instead (same arrangement as `rehomeBudgetAlert` in
 // `workers/api/src/sentry-gate.ts:82-84`).
 
-/** The `exception` shape both gates below read from `Sentry.ErrorEvent` — declared
- *  locally, not imported, so this file stays resolvable by a bare `node --test`. */
+/** The `exception` shape every gate below reads — declared locally, not
+ *  imported, so this file stays resolvable by a bare `node --test`.
+ *  `Sentry.ErrorEvent` satisfies this structurally already; a Faro
+ *  `ExceptionEvent` (fix round D-I2, always exactly one error, no `values`
+ *  array of its own) is adapted into this same one-entry-array shape at its
+ *  call site (`telemetry/faro.ts`) so both surfaces share these predicates
+ *  instead of drifting apart. */
 interface ExceptionShape {
   exception?: {
     values?: {
       value?: string;
       type?: string;
       mechanism?: { handled?: boolean };
+      stacktrace?: { frames?: { filename?: string }[] };
     }[];
   };
 }
@@ -28,6 +34,69 @@ interface ExceptionShape {
  *  same import-free reason as `ExceptionShape` above. */
 interface TaggedEvent {
   tags?: Record<string, unknown>;
+}
+
+// ── Gate 0: browser noise that is never actionable ───────────────────────────────
+//
+// A benign layout-loop warning browsers surface as an error, plus the shapes an
+// in-flight request takes when the user navigates away mid-fetch (`Failed to
+// fetch` in Chrome, `Load failed` in Safari). Fix round D-I2: moved here from
+// `sentry.ts` (unchanged in substance) so `telemetry/faro.ts`'s Faro `beforeSend`
+// can apply the exact same rule Sentry's `beforeSend` already does — contract §6
+// requires "the shared noise gates" for both, and until this fix round only
+// Sentry ever saw them; every one of these shapes reached Faro/Loki AND, worse,
+// could mint a fresh `fp:` entry and fire the §F.3 new-fingerprint alert.
+//
+// These must not go in a Sentry `ignoreErrors`-style pre-filter that runs before
+// `handled` is known: that would silently discard the offline broker and
+// `/api/versions` failures that `reportError`/`buildFacade().error` exist to
+// surface on purpose.
+const UNHANDLED_NOISE = [
+  /^ResizeObserver loop/i,
+  /^AbortError/i,
+  /Failed to fetch/i,
+  /Load failed/i,
+];
+
+/**
+ * True for a global `onerror`/`onunhandledrejection` (or an ErrorBoundary render
+ * crash — see `telemetry/faro.ts#reportUncaughtError`) event whose message is
+ * known noise. `mechanism.handled === false` is what distinguishes those from
+ * anything reported on purpose (an explicit `captureException`/facade `.error()`
+ * call sets `handled: true`), matching every gate in this file.
+ */
+export function isUnhandledNoise(event: ExceptionShape): boolean {
+  const values = event.exception?.values ?? [];
+  return values.some(
+    (v) =>
+      v.mechanism?.handled === false &&
+      UNHANDLED_NOISE.some((re) => re.test(v.value ?? "") || re.test(v.type ?? "")),
+  );
+}
+
+// ── Gate 0b: cross-origin frames — the preview iframe / an injected script ──────
+//
+// The preview iframe runs arbitrary authored and imported example code, so a typo
+// there is product output, not an application fault. Being cross-origin, the
+// iframe cannot reach this window's error handlers at all; this is the backstop
+// for whatever does arrive that way (the Sandpack bundler, a container preview
+// host, an injected extension script). Fix round D-I2: moved here from
+// `sentry.ts`, same reasoning as Gate 0 above.
+//
+// Scoped to `mechanism.handled === false`, same discriminator as every gate here
+// — applied to every event, it would silently discard explicit `reportError`/
+// ErrorBoundary reports whose stack merely *passed through* a foreign frame.
+// `originOrigin` is passed in rather than read from `window.location.origin`
+// directly, so this stays resolvable by a bare `node --test`.
+export function isForeignUnhandled(event: ExceptionShape, originOrigin: string): boolean {
+  const values = event.exception?.values ?? [];
+  return values.some(
+    (v) =>
+      v.mechanism?.handled === false &&
+      (v.stacktrace?.frames ?? []).some(
+        (f) => f.filename?.startsWith("http") && !f.filename.startsWith(originOrigin),
+      ),
+  );
 }
 
 // ── Gate 1: DEMOS-5F — Microsoft Outlook/Office safelink scanner ────────────────
@@ -55,7 +124,7 @@ const INJECTED_SCANNER_MESSAGES = [
  * True for an *unhandled* rejection/error whose text is the Office scanner's own
  * injected failure.
  *
- * Both conjuncts required, mirroring `isUnhandledNoise` in `sentry.ts`:
+ * Both conjuncts required, mirroring `isUnhandledNoise` above (this file):
  * `mechanism.handled === false` is what distinguishes an unhandled global-handler
  * event from anything reported on purpose (`captureException` sets
  * `handled: true`), and the message/type must match the scanner's wording. Without

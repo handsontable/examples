@@ -17,7 +17,12 @@ import {
 import { fingerprint as contractFingerprint } from "@handsontable/demo-runtime/telemetry";
 import { ApiError } from "./apiError.js";
 import { resolveReporting } from "./reportingGate.js";
-import { isEdgelessForeignSessionStart, isOfficeScannerRejection } from "./eventGate.js";
+import {
+  isEdgelessForeignSessionStart,
+  isForeignUnhandled,
+  isOfficeScannerRejection,
+  isUnhandledNoise,
+} from "./eventGate.js";
 import { resolveSentryScope, reportsDiagnosticToSentry } from "./sentryScope.js";
 import { demoEventReport, type DemoMonitorKind } from "./demoEventReport.js";
 import { tier2StderrReport } from "./tier2Report.js";
@@ -124,74 +129,6 @@ export const monitorDemos =
 const DEMO_SURFACE = "demo-runtime";
 
 /**
- * Browser noise that is never actionable: a benign layout-loop warning browsers
- * surface as an error, plus the shapes an in-flight request takes when the user
- * navigates away mid-fetch (`Failed to fetch` in Chrome, `Load failed` in Safari).
- *
- * These are matched ONLY against unhandled errors — see `isUnhandledNoise`. They
- * must not go in `ignoreErrors`: that runs in the event-filters integration, which
- * processes every event including explicit `captureException` calls, so
- * `/Failed to fetch/` there would silently discard the offline broker and
- * `/api/versions` failures that `reportError` exists to surface.
- *
- * The two other NOT-OURS populations this project has classified — the Office
- * scanner rejection (DEMOS-5F) and the edgeless-foreign session-start facet
- * (DEMOS-9) — are NOT regexes here. They live in `eventGate.ts`, gated in
- * `beforeSend` below, and are pinned by `pipeline/sentry-gating.test.mjs`. Adding
- * another regex to this array for either would lose that test coverage.
- */
-const UNHANDLED_NOISE = [
-  /^ResizeObserver loop/i,
-  /^AbortError/i,
-  /Failed to fetch/i,
-  /Load failed/i,
-];
-
-/**
- * True for a global `onerror` / `onunhandledrejection` event whose message is
- * known noise. `mechanism.handled === false` is what distinguishes those from
- * anything we reported on purpose (`captureException` sets `handled: true`), and
- * it is populated before `beforeSend` runs.
- */
-function isUnhandledNoise(event: Sentry.ErrorEvent): boolean {
-  const values = event.exception?.values ?? [];
-  return values.some(
-    (v) =>
-      v.mechanism?.handled === false &&
-      UNHANDLED_NOISE.some((re) => re.test(v.value ?? "") || re.test(v.type ?? "")),
-  );
-}
-
-/**
- * True for an *unhandled* event whose stack points outside this app's origin.
- *
- * The preview iframe runs arbitrary authored and imported example code, so a typo
- * there is product output, not an application fault — see `reportRuntimeError` in
- * App.tsx. Being cross-origin, the iframe cannot reach this window's error handlers
- * at all; this is the backstop for whatever does arrive that way (the Sandpack
- * bundler, a container preview host, an injected extension script).
- *
- * Scoped to `mechanism.handled === false` — the same discriminator
- * `isUnhandledNoise` uses, and for the same reason. Applied to every event, as it
- * was, it silently discarded explicit `reportError` and ErrorBoundary reports whose
- * stack merely *passed through* a foreign frame: precisely the failure the
- * `UNHANDLED_NOISE` note above avoids by keeping those regexes out of
- * `ignoreErrors`. `reportDemoEvent`'s relays are exempted at the callsite too —
- * they carry preview-origin frames by definition, so a future change to how they
- * are captured must not be able to re-break ingest through this path.
- */
-function isForeignUnhandled(event: Sentry.ErrorEvent): boolean {
-  const values = event.exception?.values ?? [];
-  return values.some(
-    (v) =>
-      v.mechanism?.handled === false &&
-      (v.stacktrace?.frames ?? []).some(
-        (f) => f.filename?.startsWith("http") && !f.filename.startsWith(window.location.origin),
-      ),
-  );
-}
-
-/**
  * Everything a `Sentry.init()` call needs beyond `dsn`/`transport` — shared by
  * the real production init and the fix-round-I3 local test-capture init below,
  * so the two paths cannot drift apart (the whole point of I3's e2e proof is
@@ -249,7 +186,7 @@ function sharedSentryOptions(environment: string): Sentry.BrowserOptions {
         event.environment = DEMO_SURFACE;
         return event;
       }
-      if (isForeignUnhandled(event)) return null;
+      if (isForeignUnhandled(event, window.location.origin)) return null;
       // ADR §E.2 tee: the Faro page-load id becomes a Sentry tag, and the
       // Sentry event id is pushed as a Faro event — both directions of the
       // cross-reference, on every event that actually ships. No-ops safely

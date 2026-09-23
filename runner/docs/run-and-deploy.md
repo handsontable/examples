@@ -172,6 +172,15 @@ cd workers/api
 #   Account -> Account Analytics -> Read.  Nothing else.
 npx wrangler secret put CF_ANALYTICS_TOKEN
 
+# Analytics Engine SQL API token (same token SHAPE as CF_ANALYTICS_TOKEN
+# above — Account -> Account Analytics -> Read — but a SEPARATE credential:
+# this one is the production read side of the nightly `example_daily`
+# rollup (ADR-0042 §5, contract §2, `reconcile.ts#queryExampleEventTotals`),
+# not the billing GraphQL reconciliation CF_ANALYTICS_TOKEN feeds. Also set
+# on the o11y worker (step 6) for Grafana's own ClickHouse datasource — the
+# two workers need their own copies, they do not share a binding.
+npx wrangler secret put AE_SQL_TOKEN
+
 # Example chat (DEV-2047) — see docs/example-chat.md:
 npx wrangler secret put LITELLM_API_KEY   # LiteLLM virtual key; absent -> /api/chat 503s
 npx wrangler secret put ALGOLIA_API_KEY   # Algolia search key; absent -> no doc page links
@@ -695,11 +704,48 @@ walkthrough already showed.
    slower-booting starter (`angular`) logs 22 lines at boot, same 2-per-poll rate
    afterward. Projected at the ADR's own required 10× headroom (`docs/adr/
    0041-observability-stack.md` §D "Measured"), this pushes the **exported-logs**
-   allotment (not the raw Workers Logs pool, which still passes) over half. Read the
-   Observability-self dashboard's own exported-log volume after a day of real production
-   traffic and compare it against this projection; if it confirms the projection, lower
-   `head_sampling_rate` (ADR §D's own named fallback) before the pool crosses half — do
-   not wait for it to actually breach the 10M/month allotment.
+   allotment (not the raw Workers Logs pool, which still passes) over half. **Fix round
+   D-I6:** the Observability-self dashboard has no panel for exported-log volume, and
+   cannot get one cheaply — `o11y.ingest` (the only ingest-side AE point) aggregates one
+   point per *request*, with no route/tenant dimension to split "Tier-2 container stdout"
+   out from everything else the export destination carries. Read Cloudflare's own
+   **Workers → Observability → Usage** view instead (account dashboard, not Grafana):
+   exported log events for the current billing period, for the account. (Whether that
+   view can be filtered per export destination — isolating `o11y-logs` from anything
+   else the account exports — is not confirmed; if it cannot, this is a whole-account
+   figure, a safe over-estimate for this comparison since `o11y-logs` is presently the
+   only configured destination.) Compare that number, after a day of real production
+   traffic, against this projection;
+   if it confirms the projection, lower `head_sampling_rate` (ADR §D's own named
+   fallback) before the pool crosses half — do not wait for it to actually breach the
+   10M/month allotment.
+7. **Exit criterion 5 (symbolication CPU/memory, ADR §L).** Fix round D-I5: every
+   measurement so far (§L, T11) is a Node-process proxy — no task had real Workers
+   isolate profiling access, which is exactly the "stays Proposed" blocker the ADR's
+   own header names. Criterion 5's own wording: "an exception from a real `vite build`
+   resolves to `src/…` file and line using at most 500 ms CPU and 64 MB of isolate
+   memory; Babel-chunk frames are skipped, not parsed." This is a **Faro/browser**
+   exception specifically (§C.3: "a Faro exception's stack trace reaches the drain as
+   V8-shaped text") — item 1's malformed `POST /api/session` probe is a worker-tenant
+   line and never goes through symbolication, so it does not exercise this criterion.
+   A Playwright `page.evaluate` against the production host does not either:
+   `reportingEnabled`/Faro's own `productionReportingEnabled` both gate on
+   `navigator.webdriver !== true` (`reportingGate.ts`), which every automation harness
+   sets. Throw a real, marked error from a **real browser's devtools console** on the
+   production host instead (`throw new Error("launch-smoke isolate probe " +
+   Date.now())`), confirm it lands in the Observability-self dashboard's `o11y.drain`
+   panel (contract §5: `duration_ms`, wall time, not CPU — it is the closest number
+   this contract exposes to a per-object cost), then read the SAME drain alarm's own
+   CPU time from the Cloudflare dashboard's Workers → Observability → Logs view for the
+   `handsontable-demos-o11y` worker (per-invocation CPU time is a supported field
+   there; `wrangler tail` does not report it). Record that CPU figure against the 500 ms
+   budget. **Peak isolate memory has no supported per-invocation reading anywhere in
+   this stack** (dashboard or `wrangler tail`) — record the 64 MB half of this
+   criterion as "no exceeded-memory/OOM outcome observed for the probe object," not as
+   a measured figure, and say so explicitly in §L "Results" rather than implying a
+   number exists. Flip exit-criterion-5's row from "not yet measured in a real
+   isolate" to a dated pass/fail on that basis (13 flips separately, from its own
+   calendar-time check in item 4 above) — this is what unblocks Proposed → Accepted.
 
 ### Flipping `SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` to `uncaught`
 
@@ -714,8 +760,12 @@ projection) — but against real production data, not the local stack:
    whole cron → rule → notify → Slack path works against real infrastructure, not just this
    task's local capture server.
 3. **Volume sits inside the projection** — the Observability-self dashboard's real numbers,
-   after at least a few days of production traffic, are under half of every allotment (§D),
-   matching or beating Phase B's projected figures. If real Tier-2 stdout volume turns out
+   after at least a few days of production traffic, are under half of every allotment (§D)
+   the dashboard covers, matching or beating Phase B's projected figures. **Fix round
+   D-I6:** the exported-logs allotment specifically is NOT on that dashboard (see the
+   post-deploy smoke's item 6 above for why) — read it from Cloudflare's own Workers →
+   Observability → Usage view instead, same place, same number, this time "at least a
+   few days" rather than "one day." If real Tier-2 stdout volume turns out
    to exceed the breakeven Phase B computed, do not flip the scope until the fallback
    (lowering `head_sampling_rate`, ADR §D's own named escape hatch) has brought it back
    under half.

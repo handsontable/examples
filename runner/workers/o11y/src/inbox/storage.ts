@@ -12,12 +12,34 @@
 // `durableObjectStorageAdapter` below, a few lines of glue rather than
 // fighting TypeScript's overload-assignability rules for no real benefit.
 
+/** `start`/`end`/`limit` (F2 fix, B-C1): a real `DurableObjectStorage.list`
+ *  already accepts these — added here so `ledger.ts`'s bounded-per-call
+ *  pruning sweeps (`hash:`/`done:` range deletes) can ask for "at most
+ *  `limit` rows in `[start, end)`" instead of a full-prefix scan, and
+ *  `memoryStorage()` below honours them the same way for `node --test`.
+ *  Never combined with `prefix` by any caller in this codebase (real DO
+ *  behaviour when both are given together is not exercised here), so
+ *  `memoryStorage()`'s combination semantics (AND of whichever are given)
+ *  are untested against the real binding — only `start`/`end`/`limit`
+ *  alone, or `prefix` alone, are used. */
+export interface ListOptions {
+  prefix?: string;
+  /** Inclusive: only keys `>= start`. */
+  start?: string;
+  /** Exclusive: only keys `< end`. */
+  end?: string;
+  limit?: number;
+}
+
 export interface StorageLike {
   get<T = unknown>(key: string): Promise<T | undefined>;
   getMany<T = unknown>(keys: string[]): Promise<Map<string, T>>;
   put<T>(entries: Record<string, T>): Promise<void>;
   delete(keys: string[]): Promise<number>;
-  list<T = unknown>(options?: { prefix?: string }): Promise<Map<string, T>>;
+  /** Always returns entries in ascending key order (matches
+   *  `DurableObjectStorage.list`'s default, `reverse` never requested
+   *  here). */
+  list<T = unknown>(options?: ListOptions): Promise<Map<string, T>>;
   transaction<T>(closure: (txn: StorageLike) => Promise<T>): Promise<T>;
   getAlarm(): Promise<number | null>;
   setAlarm(scheduledTime: number): Promise<void>;
@@ -51,12 +73,21 @@ export function memoryStorage(): StorageLike {
       for (const k of keys) if (data.delete(k)) n++;
       return n;
     },
-    async list<T>(options?: { prefix?: string }) {
-      const out = new Map<string, T>();
+    async list<T>(options?: ListOptions) {
+      const matches: [string, T][] = [];
       for (const [k, v] of data) {
-        if (!options?.prefix || k.startsWith(options.prefix)) out.set(k, v as T);
+        if (options?.prefix && !k.startsWith(options.prefix)) continue;
+        if (options?.start !== undefined && k < options.start) continue;
+        if (options?.end !== undefined && k >= options.end) continue;
+        matches.push([k, v as T]);
       }
-      return out;
+      // A real `DurableObjectStorage.list` always returns ascending key
+      // order; `data` (a `Map`) iterates in insertion order, which callers
+      // must not rely on — sort explicitly so a fake behaves like the real
+      // binding for range-delete/pagination logic (`ledger.ts#pruneLedger`).
+      matches.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+      const limited = options?.limit !== undefined ? matches.slice(0, options.limit) : matches;
+      return new Map(limited);
     },
     async transaction(closure) {
       return closure(self);

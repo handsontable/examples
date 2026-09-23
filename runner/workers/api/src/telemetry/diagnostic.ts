@@ -16,9 +16,18 @@
 // response body, a user's question) — only short tags and the thrown error's
 // own message, which every call site already writes to be safe to show or log
 // (see `chat.ts`/`theme-ai.ts`, `import-url.ts`'s `ImportError`).
+//
+// Fix round C-I2: `reportDiagnostic`'s structured error line now also carries
+// `hot.fingerprint` (contract §3 AE-only key), so the API worker's own
+// handled-error fingerprint is present on the wire once this line reaches the
+// o11y worker as a worker-tenant OTLP export. Wiring the OTHER half — reading
+// that key out of the parsed body and feeding it into the §F.3 new-fingerprint
+// registry the same way `normalise/faro.ts` already does for the browser path
+// — is `workers/o11y/src/normalise/otlp.ts#toIngestItem`'s job, out of this
+// worker's ownership (see the F3 fix-round report for the exact change).
 
 import * as Sentry from "@sentry/cloudflare";
-import { fingerprint } from "@handsontable/demo-runtime/telemetry";
+import { ATTR_HOT_FINGERPRINT, fingerprint } from "@handsontable/demo-runtime/telemetry";
 import type { Env } from "../env.js";
 import { logErrorLine } from "./lines.js";
 import { emitPoint } from "./points.js";
@@ -54,12 +63,23 @@ export function reportDiagnostic(
   capture: CaptureExceptionFn = defaultCapture,
 ): void {
   const message = err instanceof Error ? err.message : String(err);
-  logErrorLine(env, opts.context, err);
+  const fp = fingerprint(opts.context, message);
+  // C-I2 (fix round): a handled error's contract fingerprint (contract §7)
+  // is already computed for the `error.handled` AE point below — also carry
+  // it on the structured error line itself, under the AE-only `hot.fingerprint`
+  // key (contract §3's `AE_ONLY_ATTRIBUTE_KEYS`, already an allowed key on
+  // every ingest path). This is what lets a worker-tenant ingest that reads
+  // it (see this file's own header note / the F3 report for the exact
+  // wiring still needed in `workers/o11y/src/normalise/otlp.ts`) feed the
+  // §F.3 new-fingerprint registry with a real fingerprint instead of never
+  // reaching it at all — the replacement ADR §E.1 promises for Sentry's
+  // "new issue" signal once `SENTRY_SCOPE` flips to `uncaught`.
+  logErrorLine(env, opts.context, err, { [ATTR_HOT_FINGERPRINT]: fp });
   void emitPoint(
     env,
     "error.handled",
     { count: 1 },
-    { surface: "api", route_class: opts.routeClass, fingerprint: fingerprint(opts.context, message) },
+    { surface: "api", route_class: opts.routeClass, fingerprint: fp },
   );
   if (sentryScopeIsFull(env)) {
     capture(err, {

@@ -207,6 +207,27 @@ test("message and stack are truncated well under the field caps before sending",
   assert.ok(isValidLitePayload(payload), "a maxed-out error must still fit the 2 KB payload cap");
 });
 
+test("D-I4 (fix round): a huge (1 MB) error message is trimmed in well under 50ms, not quadratic time", () => {
+  // Before the fix, `bt(s,n)` re-encoded the WHOLE string on every
+  // `slice(0,-1)` iteration — quadratic in string length. Measured against
+  // the exact pre-fix function: 10k chars ~100ms, 50k chars ~2.4s, ~40s
+  // projected at 200k. A demo throwing `new Error(hugeString)` (a message
+  // embedding a data dump or a large JSON value) would then freeze the
+  // main thread of the `/d`/`/embed` host page synchronously, in the
+  // capturing `error` listener — exactly the "never harms the page it
+  // observes" rule this reporter exists to uphold.
+  const h = runLite();
+  const hugeMessage = "x".repeat(1_000_000);
+  const start = performance.now();
+  h.window_.fire("error", { error: Object.assign(new Error(hugeMessage), { name: "TypeError" }) });
+  const elapsedMs = performance.now() - start;
+  assert.ok(elapsedMs < 50, `trimming a 1 MB message took ${elapsedMs}ms, expected well under 50ms`);
+  assert.equal(h.sent.length, 1);
+  const { payload } = h.sent[0];
+  assert.ok(Buffer.byteLength(payload.m, "utf8") <= LITE_CLIENT_MESSAGE_MAX);
+  assert.ok(isValidLitePayload(payload));
+});
+
 test("I2 (fix round): a non-ASCII error message/stack is byte-trimmed, never silently dropped for being over budget", () => {
   // Before the fix, `tc()` truncated by `.length` (UTF-16 code units): a
   // message of mostly multi-byte characters truncated to `LITE_CLIENT_

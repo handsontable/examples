@@ -63,6 +63,45 @@
 
 STOP_GRACE_SECONDS="${O11Y_STOP_GRACE_SECONDS:-30}"
 
+# F2 fix (final review, B-I2): the snapshot-diff decision, extracted into its
+# own testable functions (previously inlined in `run_stop_protocol`, which
+# needs a real `LOKI_PID`/`GRAFANA_PID` to exercise at all). See
+# `pipeline/o11y-shutdown-snapshot.test.mjs` for the direct, deterministic
+# proof (stubbed `curl`) that a failed listing is now refused rather than
+# silently read as empty.
+
+# snapshot_index_keys <day_now> <day_prev>  — every uploader-named key under
+# both day prefixes, one per line. Prints nothing and returns 1 if EITHER
+# day's listing could not be confirmed (r2_list_prefix itself fails closed —
+# see lib.sh) — the caller MUST treat that as "cannot confirm," never as
+# "confirmed empty."
+snapshot_index_keys() {
+  local day_now="$1" day_prev="$2"
+  local keys="" day listing
+  for day in "$day_now" "$day_prev"; do
+    if ! listing="$(r2_list_prefix "index/index/${day}/")"; then
+      return 1
+    fi
+    keys="${keys}${listing}
+"
+  done
+  printf '%s' "$keys"
+  return 0
+}
+
+# confirm_new_upload <uploader_name> <before_keys> <after_keys>  — true (0)
+# iff at least one key bearing <uploader_name> is present in <after_keys>
+# but was NOT present in <before_keys> (T01 fix round 1, C1: an
+# uploader-name match alone is not enough — see this file's header).
+confirm_new_upload() {
+  local uploader_name="$1" before_keys="$2" after_keys="$3"
+  local before_matches after_matches new_matches
+  before_matches="$(printf '%s\n' "$before_keys" | grep -F "$uploader_name" | sort -u || true)"
+  after_matches="$(printf '%s\n' "$after_keys" | grep -F "$uploader_name" | sort -u || true)"
+  new_matches="$(comm -13 <(printf '%s\n' "$before_matches") <(printf '%s\n' "$after_matches"))"
+  [ -n "$new_matches" ]
+}
+
 run_stop_protocol() {
   local marker_ok=1
 
@@ -85,15 +124,19 @@ run_stop_protocol() {
     # shipper upload can already have written an uploader-named object this
     # wake, so "does one exist" after exit is not evidence the FINAL,
     # shutdown-time upload also happened — only a key that is new since
-    # this snapshot is.
-    local day_now day_prev before_keys=""
+    # this snapshot is. F2 fix (B-I2): `snapshot_ok` tracks whether this
+    # snapshot can actually be trusted — a FAILED listing (network blip,
+    # timeout, 5xx) is no longer silently read as an empty one (see
+    # `r2_list_prefix`'s own doc comment in lib.sh).
+    local day_now day_prev before_keys="" snapshot_ok=0
     if [ "${STORAGE:-s3}" = "s3" ] && [ -n "$uploader_name" ]; then
       day_now=$(( $(date -u +%s) / 86400 ))
       day_prev=$((day_now - 1))
-      for day in "$day_now" "$day_prev"; do
-        before_keys="${before_keys}$(r2_list_prefix "index/index/${day}/" || true)
-"
-      done
+      if before_keys="$(snapshot_index_keys "$day_now" "$day_prev")"; then
+        snapshot_ok=1
+      else
+        log "pre-SIGTERM index listing failed — cannot confirm a new upload this wake; will refuse the marker"
+      fi
     fi
 
     log "sending SIGTERM to loki (pid $LOKI_PID)"
@@ -118,21 +161,22 @@ run_stop_protocol() {
     fi
 
     # --- 2. confirm THIS instance uploaded a NEW index object ------------
-    if [ "$loki_exit" -eq 0 ] && [ -n "${WAKE_ID:-}" ] && [ "${STORAGE:-s3}" = "s3" ] && [ -n "$uploader_name" ]; then
-      local after_keys="" day
-      for day in "$day_now" "$day_prev"; do
-        after_keys="${after_keys}$(r2_list_prefix "index/index/${day}/" || true)
-"
-      done
-      local before_matches after_matches new_matches
-      before_matches="$(printf '%s\n' "$before_keys" | grep -F "$uploader_name" | sort -u || true)"
-      after_matches="$(printf '%s\n' "$after_keys" | grep -F "$uploader_name" | sort -u || true)"
-      new_matches="$(comm -13 <(printf '%s\n' "$before_matches") <(printf '%s\n' "$after_matches"))"
-      if [ -n "$new_matches" ]; then
-        log "new index upload confirmed (not present before SIGTERM): $(printf '%s' "$new_matches" | tr '\n' ' ')"
-        marker_ok=0
+    # F2 fix (B-I2): requires `snapshot_ok` too now — a stop that could not
+    # even confirm the BEFORE state must never write a marker, no matter how
+    # the after-listing or Loki's own exit code turn out (the fail-open bug
+    # this whole block fixes).
+    if [ "$loki_exit" -eq 0 ] && [ -n "${WAKE_ID:-}" ] && [ "${STORAGE:-s3}" = "s3" ] && [ -n "$uploader_name" ] && [ "$snapshot_ok" -eq 1 ]; then
+      local after_keys
+      if after_keys="$(snapshot_index_keys "$day_now" "$day_prev")"; then
+        if confirm_new_upload "$uploader_name" "$before_keys" "$after_keys"; then
+          log "new index upload confirmed (not present before SIGTERM)"
+          marker_ok=0
+        else
+          log "no index object bearing uploader name '${uploader_name}' is new since before SIGTERM under index/index/{${day_now},${day_prev}}/ — not writing a marker (plan B territory, see ADR-0041 exit criterion 1)"
+          marker_ok=1
+        fi
       else
-        log "no index object bearing uploader name '${uploader_name}' is new since before SIGTERM under index/index/{${day_now},${day_prev}}/ — not writing a marker (plan B territory, see ADR-0041 exit criterion 1)"
+        log "post-exit index listing failed — cannot confirm a new upload this wake; treating this stop as unclean"
         marker_ok=1
       fi
     else

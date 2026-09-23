@@ -7,14 +7,27 @@ import { signIn, stubShell } from "./helpers.js";
 // example-resolve path.
 //
 // Gated: needs a dist built with VITE_TELEMETRY_LOCAL=1 (contract §10), same
-// pattern as T06's `e2e/telemetry-faro.spec.ts` — that spec's own port
-// (4711/4712) is a DIFFERENT worktree's, so this one uses T12's own port
-// block (5300–5399, COMMON.md), never 4173/4711/4712. No o11y worker
-// needed: `/telemetry/collect` is captured with `page.route`, exactly as
-// T06's spec does.
+// pattern as T06's `e2e/telemetry-faro.spec.ts`. No o11y worker needed:
+// `/telemetry/collect` is captured with `page.route`, exactly as T06's spec
+// does.
 //
-//   VITE_TELEMETRY_LOCAL=1 pnpm --filter @handsontable/demo-authoring build
 //   E2E_TELEMETRY=1 pnpm e2e e2e/example-analytics.spec.ts
+//
+// (No separate manual build step — unlike telemetry-faro.spec.ts, this spec
+// builds itself, into its OWN `--outDir` below.)
+//
+// Fix round D-I1: this spec used to be ungated (ran under plain `pnpm e2e`,
+// no `test.skip`) AND rebuilt `apps/authoring/dist` itself with no
+// `--outDir`, in place. That broke three ways: (a) `ci.yml`'s `e2e` job has
+// no `@handsontable/demo-runtime` dist and no telemetry build step, so
+// `beforeAll` threw there; (b) `e2e-telemetry` runs this file and
+// `telemetry-faro.spec.ts` together (`fullyParallel`), and this spec
+// emptying/rebuilding the shared `dist/` mid-run raced telemetry-faro's own
+// `:4711` preview into flaky 404s; (c) a local `pnpm e2e` left a
+// telemetry-flagged, `.env.local`-poisoned `dist/` behind for every later
+// spec (and a manual deploy) to pick up. Gating like every other telemetry
+// spec, and building into a private `dist-example-analytics` the way
+// telemetry-faro's own uncaught-scope block already does, closes all three.
 //
 // The docs catalog itself is fully stubbed (same recipe as
 // `e2e/docs-picker.spec.ts#installDocsCatalog`) rather than the real
@@ -24,9 +37,18 @@ import { signIn, stubShell } from "./helpers.js";
 // resolves to (currently 18.0.0 → bucket "18.0"), read back from the SAME
 // fixture this file defines, never a literal written into an assertion.
 
-const PORT = 5301;
+test.skip(
+  process.env.E2E_TELEMETRY !== "1",
+  "set E2E_TELEMETRY=1 first — this spec builds its own VITE_TELEMETRY_LOCAL=1 dist",
+);
+
+// F3 fix-round port block (final review wave, COMMON.md) — never 4173/4711/
+// 4712 (other specs' shared/own preview ports) and never another fixer's
+// concurrent worktree block.
+const PORT = 5701;
 const BASE_URL = `http://localhost:${PORT}`;
 const AUTHORING_DIR = fileURLToPath(new URL("../apps/authoring", import.meta.url));
+const OUT_DIR = "dist-example-analytics";
 
 function waitForServer(url: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -171,16 +193,34 @@ test.describe.configure({ mode: "serial" });
 let server: ChildProcess;
 
 test.beforeAll(async () => {
-  execSync("pnpm exec vite build", {
+  // Fail loudly rather than silently reusing whatever already answers on
+  // this port — same trap AGENTS.md warns about for the shared :4173.
+  const already = await fetch(BASE_URL).then(() => true).catch(() => false);
+  if (already) {
+    throw new Error(
+      `something is already answering on :${PORT} — kill it first (lsof -ti :${PORT} | xargs kill)`,
+    );
+  }
+  // D-I1: built into its OWN --outDir, never the shared apps/authoring/dist
+  // other specs' :4173 webServer (playwright.config.ts) or a manual deploy
+  // could pick up.
+  execSync("node_modules/.bin/vite build --outDir " + OUT_DIR, {
     cwd: AUTHORING_DIR,
     env: { ...process.env, VITE_TELEMETRY_LOCAL: "1" },
-    stdio: "inherit",
+    stdio: "pipe",
   });
-  server = spawn("pnpm", ["exec", "vite", "preview", "--port", String(PORT), "--strictPort"], {
-    cwd: AUTHORING_DIR,
-    stdio: "inherit",
-  });
-  await waitForServer(BASE_URL, 30_000);
+  server = spawn(
+    "node_modules/.bin/vite",
+    ["preview", "--outDir", OUT_DIR, "--port", String(PORT), "--strictPort"],
+    { cwd: AUTHORING_DIR, stdio: "pipe" },
+  );
+  let stderr = "";
+  server.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+  try {
+    await waitForServer(BASE_URL, 30_000);
+  } catch (err) {
+    throw new Error(`preview server on :${PORT} never came up: ${stderr || String(err)}`);
+  }
 });
 
 test.afterAll(() => {

@@ -73,7 +73,10 @@ export interface Env {
   ANALYTICS_RETENTION_DAYS?: string;
   /** Days after revocation before a demo's R2 artifacts are purged. 0 = off. */
   BUDGET_R2_GC_DAYS?: string;
-  /** Account tag for the GraphQL Analytics API (same id as wrangler.jsonc). */
+  /** Account tag for the GraphQL Analytics API (same id as wrangler.jsonc).
+   *  Reused, alongside `AE_SQL_TOKEN` below, by `reconcile.ts`'s production
+   *  Analytics Engine SQL API read for the nightly `example_daily` rollup
+   *  (C-I1). */
   CF_ACCOUNT_ID?: string;
   /** This Worker's script name + its R2 bucket. The nightly reconciliation
    *  scopes every analytics query to them, so a shared account's other
@@ -119,12 +122,18 @@ export interface Env {
   SERVICE_VERSION?: string;
   /** Local-mode `RUNNER_EVENTS` stand-in (contract §10): ClickHouse HTTP
    *  endpoint, `.dev.vars` only, never in the committed `wrangler.jsonc` vars
-   *  block. Defaults to `http://localhost:8123` when absent. T05-D: not a
-   *  contract-pinned var name — the contract's §2 API-worker table only names
-   *  `AE_SQL_TOKEN` for the o11y worker; this worker reuses the same
-   *  credential shape for its own local writes. See `telemetry/resource.ts`. */
+   *  block. Defaults to `http://localhost:8123` when absent. Not a
+   *  contract-pinned var name of its own — reuses `AE_SQL_TOKEN`'s
+   *  credential shape below for this worker's own local writes. See
+   *  `telemetry/resource.ts`. */
   RUNNER_EVENTS_CLICKHOUSE_URL?: string;
-  /** ClickHouse HTTP password for the local sink above (`.dev.vars` only). */
+  /** Local mode: ClickHouse HTTP password for the sink above (`.dev.vars`
+   *  only). Production: the Analytics Engine SQL API token, a real Worker
+   *  secret (`wrangler secret put AE_SQL_TOKEN`, run-and-deploy.md 'Cost guardrails (one-time)') —
+   *  now a contract §2 API-worker row (C-I1). Read by
+   *  `reconcile.ts#queryExampleEventTotals` for the nightly `example_daily`
+   *  rollup (ADR-0042 §5); absent in production means that read throws
+   *  rather than silently returning zero rows and deleting the day. */
   AE_SQL_TOKEN?: string;
 
   // Index signature so we can look up a binding by generated name.

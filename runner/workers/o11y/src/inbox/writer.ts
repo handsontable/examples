@@ -39,12 +39,16 @@ import {
   currentWakeId as ledgerCurrentWakeId,
   markKeysProvisional as ledgerMarkKeysProvisional,
   nextWrittenKeys as ledgerNextWrittenKeys,
+  pruneLedger,
   rejectKey as ledgerRejectKey,
   reopenWindow as ledgerReopenWindow,
+  reopenWindowExceedsRetention,
   resolveOverWakes,
   type InboxObjectInfo,
 } from "./ledger.js";
 import { appendRows, commitPackedObject, packTenant, pendingRowsByTenant, ROW_SEQ_STORAGE_KEY } from "./pack.js";
+import { pruneHashBuckets } from "./dedupe.js";
+import { pruneFingerprintRegistry } from "./registry.js";
 import type { StorageLike } from "./storage.js";
 import {
   backlogOldestAgeMs,
@@ -62,6 +66,10 @@ import {
 import { getGrafanaBoxStub } from "../box.js";
 
 const CLEAN_MARKER_PREFIX = "state/wakes/";
+/** Where `pruneStorage` persists `pruneFingerprintRegistry`'s resume cursor
+ *  between cron ticks — not a contract-named key (internal housekeeping
+ *  state only, like `pack.ts`'s own `rowSeq`). */
+const FP_PRUNE_CURSOR_STORAGE_KEY = "fpPruneCursor";
 
 /** Paginates `O11Y_INBOX.list()` under `inbox/` into the shape `ledger.ts`
  *  needs — R2 `list()` returns up to 1000 objects per page and, per key,
@@ -194,8 +202,41 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
   async backlog(): Promise<{ oldestWrittenAgeMs: number; totalBytes: number; writtenCount: number; drainsPaused: boolean }> {
     await this.resolveWakes();
     const storage = adaptStorage(this.ctx.storage);
+    // F2 fix (A-I1): housekeeping runs from the cron path (`backlog()`),
+    // never the pack alarm (which only fires on ingest and would starve
+    // pruning during a quiet period — see `ledger.ts#pruneLedger`'s doc
+    // comment). Each call is individually bounded (a `start`/`end` range
+    // read, never a full-prefix scan) and wrapped so a housekeeping failure
+    // can never fail the backlog read itself, which the cron/drain loop
+    // depends on.
+    await this.pruneStorage(storage);
     const drainsPaused = (await storage.get<boolean>(DRAINS_PAUSED_STORAGE_KEY)) ?? false;
     return ledgerComputeBacklog(storage, () => listInboxObjects(this.env.O11Y_INBOX), drainsPaused);
+  }
+
+  /** A-I1: bounded housekeeping for the three storage prefixes the final
+   *  review flagged as never-deleted (`key:`/`done:`, `hash:`, `fp:`). Each
+   *  sweep is independently try/caught — one failing must never prevent the
+   *  others from running, or prevent `backlog()` from answering. */
+  private async pruneStorage(storage: StorageLike): Promise<void> {
+    const nowMs = Date.now();
+    try {
+      await pruneLedger(storage, nowMs);
+    } catch (err) {
+      console.error(JSON.stringify({ event: "o11y.prune.error", target: "ledger", message: String(err) }));
+    }
+    try {
+      await pruneHashBuckets(storage, nowMs);
+    } catch (err) {
+      console.error(JSON.stringify({ event: "o11y.prune.error", target: "hash", message: String(err) }));
+    }
+    try {
+      const cursor = (await storage.get<string | null>(FP_PRUNE_CURSOR_STORAGE_KEY)) ?? null;
+      const result = await pruneFingerprintRegistry(storage, nowMs, undefined, cursor);
+      await storage.put({ [FP_PRUNE_CURSOR_STORAGE_KEY]: result.nextCursor });
+    } catch (err) {
+      console.error(JSON.stringify({ event: "o11y.prune.error", target: "fingerprint", message: String(err) }));
+    }
   }
 
   async nextWrittenKeys(limit: number): Promise<string[]> {
@@ -210,7 +251,16 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     await ledgerRejectKey(adaptStorage(this.ctx.storage), key, reason);
   }
 
+  /** B-M9: a window wider than {@link KEY_RETENTION_MS} is refused outright
+   *  (defense in depth alongside `grafana/reopen.ts`'s own check — see that
+   *  file's doc comment): nothing that old can exist any more (`done:`
+   *  entries and Loki's own `reject_old_samples_max_age` are both 7d), so a
+   *  wider request would otherwise scan for nothing while still paying the
+   *  full `done:`/`key:` read cost. */
   async reopenWindow(fromMs: number, toMs: number): Promise<{ reopened: number }> {
+    if (reopenWindowExceedsRetention(fromMs, toMs)) {
+      throw new Error("reopenWindow: window exceeds the 7-day retention cap");
+    }
     const storage = adaptStorage(this.ctx.storage);
     const active = await ledgerCurrentWakeId(storage);
     return ledgerReopenWindow(storage, fromMs, toMs, active);

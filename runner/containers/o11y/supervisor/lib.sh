@@ -27,12 +27,55 @@ r2_curl_base() {
 # the S3 ListObjectsV2 XML API. Used to prove the index actually landed in
 # the bucket rather than trusting a local directory or a 202-style response
 # ("POST /flush returns before anything is written" — ADR-0041 traps).
+#
+# F2 fix (final review, B-I2 "shutdown.sh fails open when the pre-SIGTERM
+# listing fails"): the previous version piped `curl -fsS | grep -o | sed`
+# straight through with no `set -o pipefail` and no check on curl's own exit
+# status — a network blip, a timeout, or a 5xx made `curl -f` fail, but the
+# pipeline's overall exit code was whatever `sed` returned (0, on empty
+# input), so the caller (shutdown.sh, via `$(r2_list_prefix ... || true)`)
+# read a FAILED listing as a CONFIRMED-EMPTY one. shutdown.sh's own C1 diff
+# then treated a pre-existing, mid-wake periodic upload as "new" once the
+# (successful) after-listing ran, and wrote a marker for a stop whose FINAL
+# upload was never actually confirmed. Fixed here, not by adding
+# `set -o pipefail` (which has its own trap — see the test file's own note:
+# a genuinely EMPTY, successful listing makes `grep -o` exit 1 too, for "no
+# match", which `pipefail` would then also read as failure, breaking the
+# very first wake of every UTC day before any index object exists yet):
+#   1. Capture curl's own body and exit status explicitly (`|| return 1`) —
+#      a curl failure is now a hard, unambiguous function failure.
+#   2. Require the body to actually contain a `<ListBucketResult` root
+#      before treating it as a real listing — an error response (S3
+#      `<Error>...</Error>` XML) or a non-XML proxy error page must not be
+#      silently parsed as "zero keys."
+#   3. Refuse a truncated listing (`<IsTruncated>true</IsTruncated>`) rather
+#      than silently returning a partial (and therefore wrong for a "does
+#      X exist" check) key set — see this file's own header note on why an
+#      unpaginated whole-`index/` listing was rejected in the first place;
+#      the same reasoning applies to a single day prefix once it grows past
+#      1000 keys.
+# Every caller must check this function's OWN exit status (never
+# `$(... || true)`) and treat a failure as "cannot confirm," not as "found
+# nothing" — see shutdown.sh's `snapshot_index_keys`.
 r2_list_prefix() {
   local prefix="$1"
   r2_curl_base
-  curl -fsS --max-time 15 "${R2_SIGV4_ARGS[@]}" \
-    "${R2_BASE_URL}/?list-type=2&prefix=$(printf '%s' "$prefix" | sed 's/\//%2F/g')" \
-    | grep -o '<Key>[^<]*</Key>' | sed -e 's/<Key>//' -e 's#</Key>##'
+  local body
+  body="$(curl -fsS --max-time 15 "${R2_SIGV4_ARGS[@]}" \
+    "${R2_BASE_URL}/?list-type=2&prefix=$(printf '%s' "$prefix" | sed 's/\//%2F/g')")" || return 1
+  case "$body" in
+    *"<ListBucketResult"*) ;;
+    *)
+      log "r2_list_prefix: response for prefix '${prefix}' has no <ListBucketResult> root — treating as a failure, not an empty listing"
+      return 1
+      ;;
+  esac
+  if printf '%s' "$body" | grep -q '<IsTruncated>true</IsTruncated>'; then
+    log "r2_list_prefix: truncated listing for prefix '${prefix}' (over 1000 keys) — cannot confirm the full set"
+    return 1
+  fi
+  printf '%s' "$body" | grep -o '<Key>[^<]*</Key>' | sed -e 's/<Key>//' -e 's#</Key>##'
+  return 0
 }
 
 # r2_put <key> <file>  — PUT then HEAD to confirm (200s only; never trust
