@@ -157,6 +157,19 @@ export interface Env {
    *  (e.g. `o11y-probe-t03-loki`) instead of silently targeting production. */
   LOKI_S3_BUCKET?: string;
 
+  /** T03-D (local-only envVars, see box.ts#buildLocalEnvVars): the host
+   *  port `containers/o11y/compose.yml`'s `minio`/`clickhouse` services
+   *  are published on, reached from `wrangler dev`'s Container via
+   *  `host.docker.internal`. Never set in production; only meaningful
+   *  when `O11Y_ENV === "local"`. Defaults match this task's own port
+   *  block (4400–4499). */
+  O11Y_LOCAL_MINIO_PORT?: string;
+  O11Y_LOCAL_CLICKHOUSE_PORT?: string;
+  /** The origin `wrangler dev` is actually reachable on, for Grafana's
+   *  own `GF_SERVER_ROOT_URL` — local-only, defaults to this task's own
+   *  port block. */
+  O11Y_LOCAL_PUBLIC_ORIGIN?: string;
+
   // Secrets: optional, matching workers/api/src/env.ts's MCP_SHARED_SECRET
   // style — a required field would force wrangler dev to typecheck against a
   // secret that only exists in .dev.vars, and would let a gate assume

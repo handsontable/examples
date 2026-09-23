@@ -592,6 +592,8 @@ function toInspectableRequest(
  * missing — a box that cannot reach its own storage must not boot.
  */
 function buildEnvVars(env: Env, wakeId: string): Record<string, string> {
+  if (env.O11Y_ENV === "local") return buildLocalEnvVars(env, wakeId);
+
   const missing = (["LOKI_S3_ACCESS_KEY_ID", "LOKI_S3_SECRET_ACCESS_KEY"] as const).filter(
     (key) => !env[key],
   );
@@ -646,5 +648,43 @@ function buildEnvVars(env: Env, wakeId: string): Record<string, string> {
     O11Y_STOP_GRACE_SECONDS: "120",
     // SLACK_WEBHOOK_URL is deliberately never included — ADR-0041 §A: "The
     // Slack webhook never enters the box."
+  };
+}
+
+/** T03-D (see the task Outcome): local-only envVars, gated exactly like
+ *  `DEV_ADMIN` (`O11Y_ENV === "local"`, fail-closed the same way — this
+ *  branch is unreachable in production, which always sets
+ *  `O11Y_ENV: "production"` from `wrangler.jsonc`'s `vars` block, never a
+ *  secret). Mirrors `containers/o11y/compose.yml`'s own MinIO/local-
+ *  ClickHouse shape. `wrangler dev`'s local Container orchestration runs
+ *  `GrafanaBox`'s container via real Docker, independently of any
+ *  `compose.yml` network — it reaches host-published services via Docker's
+ *  own `host.docker.internal` DNS name, which `scripts/o11y-dev.mjs`'s own
+ *  README section documents starting local MinIO/ClickHouse for
+ *  (`docker compose -f containers/o11y/compose.yml up minio minio-init
+ *  clickhouse`, ports published to the host — the `box` service itself is
+ *  never started locally that way; `wrangler dev` IS the box). */
+function buildLocalEnvVars(env: Env, wakeId: string): Record<string, string> {
+  const minioPort = env.O11Y_LOCAL_MINIO_PORT || "4402";
+  const clickhousePort = env.O11Y_LOCAL_CLICKHOUSE_PORT || "4404";
+  const publicOrigin = env.O11Y_LOCAL_PUBLIC_ORIGIN || "http://localhost:4400";
+
+  return {
+    WAKE_ID: wakeId,
+    STORAGE: "s3",
+    LOKI_S3_ENDPOINT: `host.docker.internal:${minioPort}`,
+    LOKI_S3_REGION: "auto",
+    LOKI_S3_ACCESS_KEY_ID: env.LOKI_S3_ACCESS_KEY_ID || "minioadmin",
+    LOKI_S3_SECRET_ACCESS_KEY: env.LOKI_S3_SECRET_ACCESS_KEY || "minioadmin",
+    LOKI_S3_BUCKET: env.LOKI_S3_BUCKET || "loki",
+    LOKI_S3_INSECURE: "true",
+    GF_SERVER_ROOT_URL: `${publicOrigin}/grafana/`,
+    O11Y_CLICKHOUSE_URL: `http://host.docker.internal:${clickhousePort}`,
+    O11Y_CLICKHOUSE_DATABASE: "default",
+    O11Y_CLICKHOUSE_HEADER1_NAME: "X-ClickHouse-User",
+    O11Y_CLICKHOUSE_HEADER1_VALUE: "default",
+    O11Y_CLICKHOUSE_HEADER2_NAME: "X-ClickHouse-Key",
+    O11Y_CLICKHOUSE_HEADER2_VALUE: env.AE_SQL_TOKEN || "local-dev-token",
+    O11Y_STOP_GRACE_SECONDS: "30",
   };
 }
