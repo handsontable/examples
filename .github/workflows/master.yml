@@ -166,10 +166,29 @@ jobs:
       # `sourcemaps/<service.version>/<original asset path>.map`, matched key
       # for key). No maps means SENTRY_* wasn't configured (a PR build, or a
       # push where only api/o11y changed) — the loop is then a no-op.
+      #
+      # Fix round (review finding I1): this step used to authenticate with
+      # the account-wide CLOUDFLARE_API_TOKEN, which the runbook then had to
+      # widen with a blanket R2: Edit grant — a token that can write to any
+      # bucket in the account, sitting in the one job that never otherwise
+      # needs Cloudflare API access at all. Uses a dedicated R2 S3 credential
+      # instead (Object Read & Write, scoped to `handsontable-demos-o11y-maps`
+      # only — one-time setup step 2 in docs/run-and-deploy.md, the same
+      # mechanism as the Loki-only token in step 3), through the S3 API via
+      # `aws s3 cp` — the AWS CLI ships preinstalled on GitHub-hosted Ubuntu
+      # runners (actions/runner-images), so this adds no new dependency.
+      # `CLOUDFLARE_API_TOKEN` is no longer read anywhere in this job.
       - name: Upload source maps to R2, then remove them from dist
         if: needs.changes.outputs.authoring == 'true'
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_MAPS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_MAPS_SECRET_ACCESS_KEY }}
+          # Required by the SDK/CLI's request signing; R2 does not use it
+          # (contract: the region for an R2 bucket's S3 API is always "auto").
+          AWS_DEFAULT_REGION: auto
+          # EU jurisdiction (contract §2 — same value workers/o11y/wrangler.jsonc's
+          # own account_id + box.ts's Loki-bucket endpoint use), not a secret.
+          R2_MAPS_ENDPOINT: https://15111272c53ed0aaf84a908f0c9c7f8b.eu.r2.cloudflarestorage.com
         run: |
           set -o pipefail
           mapfile -t maps < <(find apps/authoring/dist -name '*.map')
@@ -180,9 +199,8 @@ jobs:
               rel="${f#apps/authoring/dist/}"
               key="sourcemaps/${GITHUB_SHA}/${rel}"
               echo "uploading ${rel} -> ${key}"
-              npx -y wrangler@4.108.0 r2 object put "handsontable-demos-o11y-maps/${key}" \
-                --file "$f" --remote -J eu --content-type application/json \
-                --config workers/o11y/wrangler.jsonc
+              aws s3 cp "$f" "s3://handsontable-demos-o11y-maps/${key}" \
+                --endpoint-url "$R2_MAPS_ENDPOINT" --content-type application/json
               rm -f "$f"
             done
           fi
@@ -269,6 +287,12 @@ jobs:
         # be reachable yet.
         if: always() && steps.deploy.outcome == 'success'
         working-directory: .
+        # Fix round (controller note): VERSION_ID passed through env, the same
+        # way GITHUB_SHA already is — never spliced with ${{ }} straight into
+        # the script, which would let an unexpectedly-shaped value (e.g. one
+        # containing a quote) break out of the JSON string it's built into.
+        env:
+          VERSION_ID: ${{ steps.deploy.outputs.version_id }}
         run: |
           oidc_token=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://demos.handsontable.com/telemetry/deploy" \
@@ -279,7 +303,7 @@ jobs:
           fi
           code=$(curl -sf -o /dev/null -w '%{http_code}' -X POST https://demos.handsontable.com/telemetry/deploy \
             -H "Authorization: Bearer ${oidc_token}" -H 'Content-Type: application/json' \
-            --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-authoring\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${{ steps.deploy.outputs.version_id }}\"}") \
+            --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-authoring\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${VERSION_ID}\"}") \
             || true
           echo "deploy-event response: ${code:-<none>}"
           [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-authoring did not return 200 (${code:-<none>})"
@@ -389,6 +413,8 @@ jobs:
       - name: Report the deploy to the o11y worker (T10, ADR §C.2)
         if: always() && steps.deploy.outcome == 'success'
         working-directory: .
+        env:
+          VERSION_ID: ${{ steps.deploy.outputs.version_id }}
         run: |
           oidc_token=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://demos.handsontable.com/telemetry/deploy" \
@@ -399,7 +425,7 @@ jobs:
           fi
           code=$(curl -sf -o /dev/null -w '%{http_code}' -X POST https://demos.handsontable.com/telemetry/deploy \
             -H "Authorization: Bearer ${oidc_token}" -H 'Content-Type: application/json' \
-            --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-api\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${{ steps.deploy.outputs.version_id }}\"}") \
+            --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-api\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${VERSION_ID}\"}") \
             || true
           echo "deploy-event response: ${code:-<none>}"
           [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-api did not return 200 (${code:-<none>})"
@@ -471,6 +497,8 @@ jobs:
       - name: Report the deploy to the o11y worker (T10, ADR §C.2)
         if: always() && steps.deploy.outcome == 'success'
         working-directory: .
+        env:
+          VERSION_ID: ${{ steps.deploy.outputs.version_id }}
         run: |
           oidc_token=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://demos.handsontable.com/telemetry/deploy" \
@@ -481,7 +509,7 @@ jobs:
           fi
           code=$(curl -sf -o /dev/null -w '%{http_code}' -X POST https://demos.handsontable.com/telemetry/deploy \
             -H "Authorization: Bearer ${oidc_token}" -H 'Content-Type: application/json' \
-            --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-o11y\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${{ steps.deploy.outputs.version_id }}\"}") \
+            --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-o11y\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${VERSION_ID}\"}") \
             || true
           echo "deploy-event response: ${code:-<none>}"
           [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-o11y did not return 200 (${code:-<none>})"

@@ -271,7 +271,13 @@ uploads each one to R2 bucket `handsontable-demos-o11y-maps` at key
 `sourcemaps/<sha>/<original asset path>.map` (matching
 `workers/o11y/src/drain/symbolicate.ts`'s own `mapKeyFor`, `<sha>` = the full
 `GITHUB_SHA`, same value as `VITE_SENTRY_RELEASE`/`SERVICE_VERSION`), then
-deletes it from `dist/`. Two leak checks run only after that deletion (a map's
+deletes it from `dist/`. **This step authenticates with the dedicated,
+maps-bucket-only S3 credential (`R2_MAPS_ACCESS_KEY_ID`/`R2_MAPS_SECRET_ACCESS_KEY`,
+one-time setup step 2 below), through the S3 API (`aws s3 cp`), never
+`CLOUDFLARE_API_TOKEN`** — that token is account-wide, and this job otherwise
+never needs Cloudflare API access at all; a bucket-scoped credential is the
+same principle the Loki-only token (step 3) already uses for the box. Two
+leak checks run only after that deletion (a map's
 `sourcesContent` embeds `localhost:8787` and `VITE_DEV_USER` literally, which
 would false-fire the first check if it ran before the maps were gone):
 `grep -rl "localhost:8787\|VITE_DEV_USER\|dev@handsontable.com" apps/authoring/dist`
@@ -299,11 +305,13 @@ Auth: repo secret **`CLOUDFLARE_API_TOKEN`** (account id is read from
 
 1. Cloudflare dashboard → **My Profile → API Tokens → Create Token** → start from
    **"Edit Cloudflare Workers"**, scoped to the **Handsontable Account**; ensure
-   **Workers Scripts: Edit**, the Containers/registry push permission, **R2:
-   Edit** (T10's source-map upload) and **Workers Observability: Edit** (the
-   export-destination setup below). The token this repo already uses predates
-   T10 — widen its scopes rather than minting a second one, and re-save the
-   GitHub secret if the dashboard issues a new value.
+   **Workers Scripts: Edit** and the Containers/registry push permission. No
+   R2 scope needed here — the source-map upload uses its own bucket-scoped S3
+   credential (`R2_MAPS_ACCESS_KEY_ID`/`R2_MAPS_SECRET_ACCESS_KEY`, one-time
+   setup step 2), never this token, precisely so this account-wide token never
+   has to be able to write to R2 at all. The export destination (step 4) is
+   created by hand in the dashboard, under the operator's own login — nothing
+   in CI calls that API, so this token needs no Observability scope either.
 2. GitHub → repo **Settings → Secrets and variables → Actions → New repository
    secret**: name `CLOUDFLARE_API_TOKEN`, value = the token. (Never commit it.)
 
@@ -394,7 +402,29 @@ npx wrangler r2 bucket lifecycle add handsontable-demos-o11y-inbox inbox-7d -J e
 npx wrangler r2 bucket lifecycle add handsontable-demos-o11y-maps  maps-30d -J eu --expire-days 30
 ```
 
-### 2. Loki S3 token (`LOKI_S3_ACCESS_KEY_ID` / `LOKI_S3_SECRET_ACCESS_KEY`)
+### 2. R2 S3 credential scoped to the maps bucket only (CI source-map upload)
+
+Dashboard → **R2 → Manage R2 API Tokens → Create API Token**, scope
+**Object Read & Write**, restricted to the single bucket
+`handsontable-demos-o11y-maps` — the same "one bucket, nothing else" shape as
+the Loki token in step 3 below, and for the same reason: the only thing that
+ever needs to write here is `master.yml`'s own source-map upload step
+(`docs/run-and-deploy.md` §"Source maps (T10, ADR §C.3)" above), and it has
+no business being able to touch the inbox or Loki buckets, let alone anything
+outside this account's o11y resources. Review finding I1 (T10's fix round):
+this step used to piggyback on the account-wide `CLOUDFLARE_API_TOKEN`
+instead, widened with a blanket R2: Edit grant — replaced with this
+bucket-scoped credential so that token never needs R2 access at all.
+
+Add the two values as **repository** secrets (GitHub → repo **Settings →
+Secrets and variables → Actions → New repository secret**), not Worker
+secrets — the o11y Worker itself never reads them; only the CI job's `aws s3
+cp` step does, as `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`:
+
+- `R2_MAPS_ACCESS_KEY_ID`
+- `R2_MAPS_SECRET_ACCESS_KEY`
+
+### 3. Loki S3 token (`LOKI_S3_ACCESS_KEY_ID` / `LOKI_S3_SECRET_ACCESS_KEY`)
 
 Dashboard → **R2 → Manage R2 API Tokens → Create API Token**, scope
 **Object Read & Write**, restricted to the single bucket
@@ -414,7 +444,7 @@ npx wrangler secret put LOKI_S3_ACCESS_KEY_ID
 npx wrangler secret put LOKI_S3_SECRET_ACCESS_KEY
 ```
 
-### 3. Export destination (`o11y-logs`) + `O11Y_EXPORT_SECRET`
+### 4. Export destination (`o11y-logs`) + `O11Y_EXPORT_SECRET`
 
 The API worker's own `wrangler.jsonc` already names the destination
 (`observability.logs.destinations: ["o11y-logs"]`) — it does not exist until
@@ -454,7 +484,7 @@ destination — contract §1: "There is no trace route" (ADR §C.4).
 > `wrangler secret put` + re-editing the destination's header with the new
 > value) and only then continue.
 
-### 4. Access application for `/grafana/*`
+### 5. Access application for `/grafana/*`
 
 Zero Trust dashboard → **Access → Applications → Add an application → Self-hosted**.
 
@@ -471,16 +501,16 @@ currently the placeholder `""` (T00-D8/T03), and the worker fails closed
 is already the real value (`handsontable.cloudflareaccess.com`) and needs no
 change unless the Zero Trust team domain itself is renamed.
 
-### 5. Every o11y worker secret (contract §2)
+### 6. Every o11y worker secret (contract §2)
 
 ```bash
 cd workers/o11y
-npx wrangler secret put O11Y_EXPORT_SECRET          # step 3 above
-npx wrangler secret put SENTRY_HOOK_SECRET           # step 7 below
+npx wrangler secret put O11Y_EXPORT_SECRET          # step 4 above
+npx wrangler secret put SENTRY_HOOK_SECRET           # step 8 below
 npx wrangler secret put AE_SQL_TOKEN                 # step below
-npx wrangler secret put LOKI_S3_ACCESS_KEY_ID        # step 2 above
-npx wrangler secret put LOKI_S3_SECRET_ACCESS_KEY    # step 2 above
-npx wrangler secret put SLACK_WEBHOOK_URL            # step 6 below
+npx wrangler secret put LOKI_S3_ACCESS_KEY_ID        # step 3 above
+npx wrangler secret put LOKI_S3_SECRET_ACCESS_KEY    # step 3 above
+npx wrangler secret put SLACK_WEBHOOK_URL            # step 7 below
 ```
 
 `AE_SQL_TOKEN` is the Analytics Engine SQL API token — same token shape as the
@@ -494,27 +524,27 @@ the Worker deploys with that binding present. `O11Y_STOP_GRACE_SECONDS` also
 needs no setup here — it is not a Worker var at all, but a hardcoded container
 `envVars` value in `box.ts` (120s in production; T03-D4).
 
-### 6. Slack webhook
+### 7. Slack webhook
 
 Slack → an **Incoming Webhook** app pointed at the alert channel. Paste the
-webhook URL into `SLACK_WEBHOOK_URL` (step 5). The o11y worker posts one line
+webhook URL into `SLACK_WEBHOOK_URL` (step 6). The o11y worker posts one line
 per alert-rule fire/resolve transition (`slackPoster`, T04) and no-ops
 silently without this secret — alerts still land as InboxWriter state and
 Grafana annotations either way, just without the Slack ping.
 
-### 7. Sentry internal integration (issue-alert webhook)
+### 8. Sentry internal integration (issue-alert webhook)
 
 Sentry → project settings → **Integrations → Internal Integrations → New
 Internal Integration**. No scopes are needed (this integration only *receives*
 a webhook, it never calls the Sentry API back) — just enable **Alert Rule
 Action**, add a **Webhook URL** of `https://demos.handsontable.com/telemetry/hooks/sentry`,
 save, and copy the generated **Client Secret** into `SENTRY_HOOK_SECRET` (step
-5). Then, in the Sentry project's own alert rules, add this internal
+6). Then, in the Sentry project's own alert rules, add this internal
 integration as an action on whichever issue alerts should mirror into o11y.
 The route verifies Sentry's `sentry-hook-signature` header, an HMAC-SHA256 of
 the raw request body under this same secret (`workers/o11y/src/gates/sentry.ts`).
 
-### 8. GitHub OIDC trust
+### 9. GitHub OIDC trust
 
 Nothing to configure on GitHub's side beyond `id-token: write` on the deploying
 jobs (already in `master.yml`) — GitHub's OIDC provider issues a token for its
@@ -532,7 +562,7 @@ and a stale value makes every CI deploy event fall through to the
 `O11Y_EXPORT_SECRET` fallback (harmless, since that secret is also configured,
 but worth knowing rather than discovering silently).
 
-### 9. WAF exception for `/telemetry/*`
+### 10. WAF exception for `/telemetry/*`
 
 Extends the same exception "WAF exception for `/api/*` (one-time)" above
 already created, on the same rule (`9c8dda9708cc4452ac76e7be7b58420b`,

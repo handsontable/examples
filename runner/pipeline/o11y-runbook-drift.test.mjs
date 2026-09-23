@@ -107,6 +107,23 @@ test("every o11y config name in env.ts is documented in run-and-deploy.md", () =
   assert.deepEqual(missing, [], `not documented as a backtick-wrapped name in docs/run-and-deploy.md: ${missing.join(", ")}`);
 });
 
+// Fix round (review finding I1): the source-map upload authenticates with a
+// dedicated R2 S3 credential, scoped to the maps bucket only, instead of the
+// account-wide CLOUDFLARE_API_TOKEN. Those two secret names live in
+// master.yml's `secrets.*` context and GitHub's own repo-secrets store —
+// never in workers/o11y/src/env.ts, since the o11y Worker itself never reads
+// them (only the CI job's `aws s3 cp` step does). `configFieldNames` above
+// therefore cannot see them, so they need their own small, explicit list
+// here rather than falling out of the Env-interface parse — the same
+// "a renamed/dropped name must fail this test" guarantee, extended to the
+// one pair of secrets that sits outside the Worker's own config surface.
+const CI_ONLY_SECRET_NAMES = ["R2_MAPS_ACCESS_KEY_ID", "R2_MAPS_SECRET_ACCESS_KEY"];
+
+test("the CI-only R2 maps-upload secrets are documented in run-and-deploy.md", () => {
+  const missing = CI_ONLY_SECRET_NAMES.filter((name) => !runbook.includes(`\`${name}\``));
+  assert.deepEqual(missing, [], `not documented as a backtick-wrapped name in docs/run-and-deploy.md: ${missing.join(", ")}`);
+});
+
 test("configFieldNames ignores resource-binding types and comment-only mentions", () => {
   const fixture = `
     // secrets and vars
