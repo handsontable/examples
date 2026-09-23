@@ -510,6 +510,10 @@ export class GrafanaBox extends Container<Env> {
     const provisionalKeys = result.outcomes.filter((o) => o.outcome === "provisional").map((o) => o.key);
     const rejectedKeys = result.outcomes.filter((o) => o.outcome === "rejected");
     const bytesPushed = result.outcomes.reduce((sum, o) => sum + o.bytesPushed, 0);
+    // F1: records dropped for being older than Loki's `reject_old_samples_max_age`
+    // (ADR §G accepts this loss, but it must be counted, never silent) —
+    // `value` (§4/§5) is otherwise unused by `o11y.drain`.
+    const droppedOld = result.outcomes.reduce((sum, o) => sum + o.droppedOld, 0);
 
     if (provisionalKeys.length > 0) await writer.markKeysProvisional(payload.wakeId, provisionalKeys);
     for (const r of rejectedKeys) await writer.rejectKey(r.key, r.reason ?? "unknown");
@@ -518,7 +522,7 @@ export class GrafanaBox extends Container<Env> {
       this.env,
       this.ctx,
       "o11y.drain",
-      { count: result.outcomes.length, duration_ms: Date.now() - startedAt, bytes: bytesPushed },
+      { count: result.outcomes.length, duration_ms: Date.now() - startedAt, bytes: bytesPushed, value: droppedOld },
       { reason: current.reason, outcome: result.stoppedEarly ? "error" : rejectedKeys.length > 0 ? "partial" : "ok" },
     );
 

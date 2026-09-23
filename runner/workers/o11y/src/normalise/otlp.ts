@@ -19,6 +19,7 @@ import {
   hoistAttributes,
   INBOX_RECORD_MAX_BYTES,
   msToUnixNano,
+  RESOURCE_ATTRS,
   scrubTelemetry,
   type NormalisedRecord,
   type ScrubbableOtlpRecord,
@@ -127,6 +128,63 @@ function remapCloudflareKeys(attrs: Record<string, string>): Record<string, stri
   return out;
 }
 
+/** T03B (d): a Worker's own structured `console.log(JSON.stringify({...}))`
+ *  line (`workers/api/src/telemetry/lines.ts`'s own shape: `log.kind`,
+ *  `cf.ray`, `session.id`, `hot.demo_id`, ...) arrives through Cloudflare's
+ *  real OTLP log export as opaque BODY TEXT — confirmed against a real
+ *  captured export (this task's sandbox probe, see the Outcome), never
+ *  parsed into `attributes`. `attributes` on that record carries only
+ *  Cloudflare's own generic wrapper fields (`name: "log"`,
+ *  `cloudflare.invocation.sequence.number`), not one of the app's own
+ *  fields — without this, `cf.ray`/`session.id`/`hot.demo_id` would never
+ *  reach Loki as queryable structured metadata at all, which is exactly
+ *  what ADR §E.4's operational-log rule requires for every operational
+ *  log line. Parsed here and merged into the SAME attribute bag a true
+ *  OTLP attribute would land in — `hoistAttributes`'s existing
+ *  allowlist/label/structured-metadata split decides what happens to each
+ *  key from there, never a second, parallel allowlist for this shape.
+ *  A no-op for anything that is not a JSON object body (a plain
+ *  `console.log` string, the auto-generated Cloudflare invocation-log
+ *  line, ...) — those keep their pre-existing behaviour, unparsed body
+ *  text, unchanged.
+ *
+ *  Fix round I2: a body-JSON key must never be able to SPOOF a real
+ *  resource attribute (`service.name`, `deployment.environment.name`,
+ *  `hot.*`, ...) — those are Loki labels/AE index slots, promoted from
+ *  the RESOURCE, never from a log record's own content; letting body text
+ *  set them would let anything that can reach `/telemetry/v1/logs` (a
+ *  Worker's own `console.log`, which is app code, not this pipeline's
+ *  own trusted resource metadata) forge which service/environment a line
+ *  is attributed to. Every `RESOURCE_ATTRS` key is stripped from this
+ *  function's own output — belt AND suspenders alongside the merge-order
+ *  fix at the call site below (`toIngestItem`), which additionally gives
+ *  the body-JSON bag the LOWEST merge priority so even a future
+ *  `RESOURCE_ATTRS` addition this function does not yet know to strip
+ *  still cannot win over the real resource attribute. */
+const RESOURCE_ATTR_KEY_SET = new Set<string>(RESOURCE_ATTRS.map((a) => a.key));
+
+function tryParseJsonBodyAttrs(body: string): Record<string, string> {
+  if (!body || body.trimStart()[0] !== "{") return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return {};
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (RESOURCE_ATTR_KEY_SET.has(key)) continue; // never let body content spoof a resource attribute
+    if (value === null || value === undefined) continue;
+    if (typeof value === "string") out[key] = value;
+    else if (typeof value === "number" || typeof value === "boolean") out[key] = String(value);
+    // Nested objects/arrays inside the JSON body (none in lines.ts's own
+    // shape today) are skipped — attributes are flat strings only, same
+    // rule a real OTLP attribute already follows.
+  }
+  return out;
+}
+
 export interface OtlpProcessResult {
   items: IngestItem[];
   /** Records decoded but dropped (over the 256 KB cap) — accounted as
@@ -141,7 +199,13 @@ async function toIngestItem(
   env: Env,
   receivedAtMs: number,
 ): Promise<IngestItem | "oversize"> {
-  const merged = remapCloudflareKeys({ ...resourceLogs.resourceAttributes, ...record.attributes });
+  // Fix round I2: `bodyJsonAttrs` merges with the LOWEST priority of the
+  // three — a real resource attribute or a real OTLP record attribute
+  // must always win over anything inferred from body text, never the
+  // other way around (RESOURCE_ATTR_KEY_SET above is the second,
+  // independent layer of that same guarantee).
+  const bodyJsonAttrs = tryParseJsonBodyAttrs(record.body ?? "");
+  const merged = remapCloudflareKeys({ ...bodyJsonAttrs, ...resourceLogs.resourceAttributes, ...record.attributes });
   const { resourceAttributes, attributes } = hoistAttributes(merged);
 
   const scrubbable: ScrubbableOtlpRecord = { body: record.body, attributes, resourceAttributes };

@@ -24,19 +24,37 @@ export const handleGrafana: RouteHandler = async (req, env) => {
   try {
     // Idempotent: an already-running box returns its existing wake record;
     // `wake()` itself refuses (throws) only while `container is stopping`
-    // (T01 fix round C1) — the waking page's own meta-refresh retries.
+    // (T01 fix round C1) — the waking page's own meta-refresh retries. No
+    // activity is noted here: nothing actually started (or is still
+    // running from before), so there is no wake to keep alive yet.
     await box.wake("visit");
   } catch {
     return wakingPageResponse();
   }
 
-  if (!(await box.isReady())) return wakingPageResponse();
+  if (!(await box.isReady())) {
+    // F2 fix: a request that only ever saw the waking page still counts as
+    // visitor activity. Before this, a visit wake with an empty backlog
+    // SIGTERMed itself ~20s after boot: `#finishDrain`'s quiet check
+    // (box.ts) read `lastGrafanaActivityMs() === null` — nobody had ever
+    // "visited" — and stopped the box the person just opened, because this
+    // branch recorded nothing. The waking page's own `meta refresh` poll IS
+    // a real HTTP request to `/grafana/*` (ADR §A's own renewal wording),
+    // so it counts the same way a proxied request does. Called AFTER
+    // `wake()` (never before): `#doWake` resets this same storage key at
+    // wake-start (fix round I1), so noting activity before that call would
+    // just be wiped — this is what actually keeps it set on every
+    // subsequent poll while the box boots.
+    await box.noteVisitorActivity();
+    return wakingPageResponse();
+  }
 
-  // Renew activity only now — a request that only ever saw the waking page
-  // (the box was asleep or still booting) never counted as Grafana traffic,
-  // matching ADR §A's "renews the activity timer only on HTTP requests to
-  // `/grafana/*`" read narrowly: a request Grafana itself never answered is
-  // not a Grafana request yet.
+  // Renews activity again now that a real request is about to reach
+  // Grafana itself — once the box is up, this (an actual proxied
+  // `/grafana/*` request) is what keeps the "renew only on HTTP requests"
+  // rule honest; a stale waking-page hit from before boot does not linger
+  // on its own (each call just records "last activity now", not a
+  // standing grant).
   await box.noteVisitorActivity();
 
   // Reuse the ORIGINAL request's URL verbatim (Host, path, query

@@ -293,6 +293,51 @@ async function main() {
     `expected ${JSON.stringify(pushedWorker)} got ${JSON.stringify(wLines)}`,
   );
 
+  // ---- run 1b: zero-ingest wake (T03B, F3) -------------------------------
+  //
+  // T03-D2's other finding: a wake that pushes NOTHING to Loki never
+  // produces a new uploader-named index object, so shutdown.sh (correctly,
+  // UNCHANGED by F3) writes no marker for it. The fix for "every such wake
+  // was counted unclean" lives entirely on the Worker side
+  // (workers/o11y/src/inbox/ledger.ts#resolveOverWakes: a wake with zero
+  // provisional keys resolves clean without needing the marker at all) —
+  // this container-level script has no Worker/ledger in the loop, so what
+  // it can and must pin is the half of the contract the ledger fix
+  // actually depends on: a zero-ingest wake never writes a marker (nothing
+  // was uploaded — the ledger's "clean" here comes from having nothing
+  // provisional to lose, never from a marker that doesn't exist).
+  //
+  // T03B-D1: measured here for the first time — a Loki that never received
+  // ANY write this wake (no stream, no WAL segment at all) exits 1 on
+  // SIGTERM, not 0 (every OTHER run in this script pushes at least one
+  // line first, and exits 0). shutdown.sh already only checks the upload
+  // when `loki_exit -eq 0` (so a truly-empty Loki takes the SAME
+  // no-marker path as a failed upload, just via a different branch), and
+  // box.ts's `onStop` records whatever exit code the platform reports
+  // purely for bookkeeping — the ledger never reads it, only the marker
+  // and the provisional-key count — so this does not change F3's
+  // correctness. Recorded as evidence, not asserted to be 0.
+  console.log("\n== run 1b (zero ingest): no OTLP push at all ==");
+  const wakeIdZero = `roundtrip-zero-${RUN_ID}`;
+  sh("docker", [
+    "compose", "-p", PROJECT, "-f", "compose.yml",
+    "up", "-d", "--no-deps", "--force-recreate", "box",
+  ], { env: { O11Y_WAKE_ID: wakeIdZero } });
+  const readyMsZero = await waitReadyForBox();
+  record("run1b: box became ready", readyMsZero >= 0, `${readyMsZero}ms`);
+
+  const containerIdZero = boxContainerId();
+  record("run1b: box container found", Boolean(containerIdZero));
+  sh("docker", ["kill", "-s", "TERM", containerIdZero]);
+  sh("docker", ["wait", containerIdZero]);
+  const exitCodeZero = sh("docker", ["inspect", containerIdZero, "--format", "{{.State.ExitCode}}"]).stdout.trim();
+  record("run1b: SIGTERM completed and exit code recorded (T03B-D1: a truly-untouched Loki exits 1, not 0 — informational, not asserted)", true, `exit=${exitCodeZero}`);
+  record(
+    "run1b: no marker written for a zero-ingest wake (shutdown.sh's own contract — the ledger, not this script, is what now treats this as clean)",
+    !markerExists(wakeIdZero),
+    `state/wakes/${wakeIdZero}/clean`,
+  );
+
   // ---- run 2: negative control — SIGKILL writes no marker ---------------
   console.log("\n== run 2 (negative control): SIGKILL ==");
   const wakeIdKill = `roundtrip-kill-${RUN_ID}`;

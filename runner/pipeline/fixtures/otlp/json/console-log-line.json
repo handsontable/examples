@@ -1,0 +1,30 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "handsontable-demos-api" } },
+          { "key": "telemetry.sdk.name", "value": { "stringValue": "workers-observability" } }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": { "name": "workers-observability" },
+          "logRecords": [
+            {
+              "timeUnixNano": "1735689600000000000",
+              "severityNumber": 9,
+              "body": {
+                "stringValue": "{\"log.kind\":\"api.request\",\"route_class\":\"api/demos\",\"status\":200,\"duration_ms\":42,\"cf.ray\":\"8a1b2c3d4e5f6789\",\"session.id\":\"page-load-id-123\",\"hot.demo_id\":\"r-react-18-0-0\",\"service.version\":\"cafef00d\"}"
+              },
+              "attributes": [
+                { "key": "name", "value": { "stringValue": "log" } },
+                { "key": "cloudflare.invocation.sequence.number", "value": { "intValue": 1 } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
