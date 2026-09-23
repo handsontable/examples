@@ -34,17 +34,29 @@ datasources:
     editable: false
     isDefault: true
 
+  # vertamedia-clickhouse-datasource ("the Altinity plugin", ADR-0041 §A) —
+  # NOT grafana-clickhouse-datasource. Cloudflare's own Analytics Engine +
+  # Grafana docs point at this exact plugin id and this exact auth shape: a
+  # full URL plus ONE custom HTTP header, never host/port/user/password
+  # fields (the AE SQL API rejects Basic auth outright — verified against a
+  # real ClickHouse HTTP endpoint too, which 403s a bare `Bearer` scheme).
+  # Local ClickHouse and production Analytics Engine need genuinely
+  # different header shapes (ClickHouse HTTP: X-ClickHouse-User/-Key;
+  # AE SQL API: a single `Authorization: Bearer <token>`), so the header
+  # NAMES are env-driven too, not just the values — compose.yml supplies
+  # the local pair; GrafanaBox's envVars (phase 2) supply the production
+  # pair. Never hard-code either shape here.
   - name: ClickHouse (runner_events)
     uid: clickhouse-runner-events
-    type: grafana-clickhouse-datasource
+    type: vertamedia-clickhouse-datasource
     access: proxy
+    url: ${O11Y_CLICKHOUSE_URL}
     jsonData:
-      host: ${O11Y_CLICKHOUSE_HOST}
-      port: ${O11Y_CLICKHOUSE_PORT}
-      protocol: ${O11Y_CLICKHOUSE_PROTOCOL}
+      httpHeaderName1: ${O11Y_CLICKHOUSE_HEADER1_NAME}
+      httpHeaderName2: ${O11Y_CLICKHOUSE_HEADER2_NAME}
       defaultDatabase: ${O11Y_CLICKHOUSE_DATABASE}
-      username: ${O11Y_CLICKHOUSE_USER}
-      tlsSkipVerify: true
+      addCorsHeader: false
     secureJsonData:
-      password: ${AE_SQL_TOKEN}
+      httpHeaderValue1: ${O11Y_CLICKHOUSE_HEADER1_VALUE}
+      httpHeaderValue2: ${O11Y_CLICKHOUSE_HEADER2_VALUE}
     editable: false

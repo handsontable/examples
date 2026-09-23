@@ -70,64 +70,73 @@ function parseIni(text) {
   return sections;
 }
 
-// --- Loki config: containers/o11y/loki/loki-config.yaml --------------------
+// --- Loki config: both loki-config.yaml (S3) and loki-config.filesystem.yaml
+// (the STORAGE=filesystem escape hatch, T01-D2) carry the full §B.4 key set
+// — the filesystem file is a second, otherwise-unpinned copy of every key
+// below, and it IS built into the image and boot-tested (see T01 report).
 
-test("loki-config.yaml: ADR-0041 §B.4 keys are pinned", () => {
-  const raw = readText("loki/loki-config.yaml");
-  const config = parseJsonWithEnvPlaceholders(raw);
+for (const configFile of ["loki/loki-config.yaml", "loki/loki-config.filesystem.yaml"]) {
+  test(`${configFile}: ADR-0041 §B.4 keys are pinned`, () => {
+    const raw = readText(configFile);
+    const config = parseJsonWithEnvPlaceholders(raw);
 
-  assert.equal(config.ingester.wal.flush_on_shutdown, true, "ingester.wal.flush_on_shutdown");
-  assert.equal(config.ingester.max_chunk_age, "2h", "ingester.max_chunk_age");
+    assert.equal(config.ingester.wal.flush_on_shutdown, true, "ingester.wal.flush_on_shutdown");
+    assert.equal(config.ingester.max_chunk_age, "2h", "ingester.max_chunk_age");
 
-  assert.equal(config.limits_config.shard_streams.enabled, false, "limits_config.shard_streams.enabled");
-  assert.equal(
-    config.limits_config.reject_old_samples_max_age,
-    "7d",
-    "limits_config.reject_old_samples_max_age",
-  );
-  assert.ok(config.limits_config.ingestion_rate_mb >= 16, "limits_config.ingestion_rate_mb >= 16");
-  assert.ok(config.limits_config.ingestion_burst_size_mb >= 32, "limits_config.ingestion_burst_size_mb >= 32");
-  assert.equal(config.limits_config.max_line_size, "256KB", "limits_config.max_line_size");
+    assert.equal(config.limits_config.shard_streams.enabled, false, "limits_config.shard_streams.enabled");
+    assert.equal(
+      config.limits_config.reject_old_samples_max_age,
+      "7d",
+      "limits_config.reject_old_samples_max_age",
+    );
+    assert.ok(config.limits_config.ingestion_rate_mb >= 16, "limits_config.ingestion_rate_mb >= 16");
+    assert.ok(config.limits_config.ingestion_burst_size_mb >= 32, "limits_config.ingestion_burst_size_mb >= 32");
+    assert.equal(config.limits_config.max_line_size, "256KB", "limits_config.max_line_size");
 
-  // query_ingesters_within lives under `querier`, not `limits_config` — Loki
-  // 3.3.2 rejects it under limits_config (verified with `-verify-config`,
-  // see the T01 report).
-  assert.equal(config.querier.query_ingesters_within, "168h", "querier.query_ingesters_within");
+    // query_ingesters_within lives under `querier`, not `limits_config` — Loki
+    // 3.3.2 rejects it under limits_config (verified with `-verify-config`,
+    // see the T01 report).
+    assert.equal(config.querier.query_ingesters_within, "168h", "querier.query_ingesters_within");
 
-  assert.equal(config.runtime_config.file, "/etc/loki/runtime-config.yaml", "runtime_config.file");
-  assert.equal(config.compactor.retention_enabled, false, "compactor.retention_enabled (R2 lifecycle owns retention)");
-});
+    assert.equal(config.runtime_config.file, "/etc/loki/runtime-config.yaml", "runtime_config.file");
+    assert.equal(
+      config.compactor.retention_enabled,
+      false,
+      "compactor.retention_enabled (R2 lifecycle owns retention)",
+    );
+  });
 
-test("loki-config.yaml: otlp_config promotes exactly the contract §3 resource attributes", () => {
-  const raw = readText("loki/loki-config.yaml");
-  const config = parseJsonWithEnvPlaceholders(raw);
+  test(`${configFile}: otlp_config promotes exactly the contract §3 resource attributes`, () => {
+    const raw = readText(configFile);
+    const config = parseJsonWithEnvPlaceholders(raw);
 
-  const attributesConfig = config.limits_config.otlp_config.resource_attributes.attributes_config;
-  assert.ok(Array.isArray(attributesConfig) && attributesConfig.length > 0, "attributes_config is non-empty");
+    const attributesConfig = config.limits_config.otlp_config.resource_attributes.attributes_config;
+    assert.ok(Array.isArray(attributesConfig) && attributesConfig.length > 0, "attributes_config is non-empty");
 
-  const indexLabelEntries = attributesConfig.filter((entry) => entry.action === "index_label");
-  assert.ok(indexLabelEntries.length > 0, "at least one index_label entry");
-  const promoted = new Set(indexLabelEntries.flatMap((entry) => entry.attributes));
+    const indexLabelEntries = attributesConfig.filter((entry) => entry.action === "index_label");
+    assert.ok(indexLabelEntries.length > 0, "at least one index_label entry");
+    const promoted = new Set(indexLabelEntries.flatMap((entry) => entry.attributes));
 
-  // docs/observability-contract.md §3: these MUST become Loki labels.
-  for (const attr of [
-    "service.name",
-    "deployment.environment.name",
-    "hot.surface",
-    "hot.tier",
-    "hot.framework",
-    "hot.ht_major",
-    "hot.outcome",
-  ]) {
-    assert.ok(promoted.has(attr), `${attr} is promoted to a label`);
-  }
+    // docs/observability-contract.md §3: these MUST become Loki labels.
+    for (const attr of [
+      "service.name",
+      "deployment.environment.name",
+      "hot.surface",
+      "hot.tier",
+      "hot.framework",
+      "hot.ht_major",
+      "hot.outcome",
+    ]) {
+      assert.ok(promoted.has(attr), `${attr} is promoted to a label`);
+    }
 
-  // §3 says these are NEVER labels: service.version ("no" in the Loki-label
-  // column), and the structured-metadata-only set.
-  for (const attr of ["service.version", "hot.demo_id", "session.id", "cf.ray"]) {
-    assert.ok(!promoted.has(attr), `${attr} must NOT be promoted to a label`);
-  }
-});
+    // §3 says these are NEVER labels: service.version ("no" in the Loki-label
+    // column), and the structured-metadata-only set.
+    for (const attr of ["service.version", "hot.demo_id", "session.id", "cf.ray"]) {
+      assert.ok(!promoted.has(attr), `${attr} must NOT be promoted to a label`);
+    }
+  });
+}
 
 test("loki-config.yaml: S3 storage is env-driven, never a baked credential", () => {
   const raw = readText("loki/loki-config.yaml");
@@ -167,6 +176,20 @@ test("grafana.ini: sub-path, Live and auth.proxy are pinned", () => {
   assert.equal(ini.live.max_connections, "0", "[live] max_connections disables Grafana Live");
 });
 
+test("grafana.ini: auth.proxy is the ONLY trusted identity — basic auth and the admin fallback are off", () => {
+  const ini = parseIni(readText("grafana/grafana.ini"));
+  // T01-D1's sibling finding: unlike Live, this one IS fully enforced by
+  // Grafana itself — verified with `curl -u admin:admin` returning 401
+  // once these are set (200 beforehand). A Viewer-only, proxy-authenticated
+  // design must not have a second, unrelated way in.
+  assert.equal(ini["auth.basic"].enabled, "false", "[auth.basic] enabled must be false");
+  assert.equal(
+    ini.security.disable_initial_admin_creation,
+    "true",
+    "[security] disable_initial_admin_creation (no admin/admin fallback once basic auth is off)",
+  );
+});
+
 test("grafana.ini: serve_from_sub_path and root_url agree (the documented silent-break trap)", () => {
   const ini = parseIni(readText("grafana/grafana.ini"));
   assert.equal(ini.server.serve_from_sub_path, "true");
@@ -203,9 +226,14 @@ test("compose.yml: every box/minio/clickhouse host port is env-overridable (COMM
   for (const [, envVar] of portLines) {
     assert.match(envVar, /^O11Y_/, `${envVar} follows the O11Y_* naming convention`);
   }
-  // The contract's own defaults (docs/observability-contract.md §1).
-  assert.match(compose, /O11Y_GRAFANA_PORT:-3000/, "Grafana host port defaults to the contract's 3000");
-  assert.match(compose, /O11Y_LOKI_PORT:-3100/, "Loki host port defaults to the contract's 3100");
+  // The contract's own defaults (docs/observability-contract.md §1), read
+  // from THIS specific published-port line's own captured default — not a
+  // free-floating match anywhere in the file, which the Grafana line alone
+  // would satisfy vacuously via its OWN unrelated GF_SERVER_ROOT_URL
+  // occurrence of the same substring.
+  const byVar = new Map(portLines.map(([, envVar, def]) => [envVar, def]));
+  assert.equal(byVar.get("O11Y_GRAFANA_PORT"), "3000", "Grafana host port defaults to the contract's 3000");
+  assert.equal(byVar.get("O11Y_LOKI_PORT"), "3100", "Loki host port defaults to the contract's 3100");
 });
 
 // --- Dockerfile: pins that the right config files are actually loaded ------
@@ -213,10 +241,46 @@ test("compose.yml: every box/minio/clickhouse host port is env-overridable (COMM
 test("Dockerfile: loads the same config files this test pins (source-grep pin)", () => {
   const dockerfile = readText("Dockerfile");
   assert.match(dockerfile, /loki\/loki-config\.yaml/, "COPYs loki-config.yaml");
+  assert.match(dockerfile, /loki\/loki-config\.filesystem\.yaml/, "COPYs loki-config.filesystem.yaml (STORAGE=filesystem)");
   assert.match(dockerfile, /loki\/runtime-config\.yaml/, "COPYs runtime-config.yaml");
   assert.match(dockerfile, /grafana\/grafana\.ini/, "COPYs grafana.ini");
   assert.match(dockerfile, /grafana\/provisioning/, "COPYs the Grafana provisioning directory");
   // No secret baked into the image (ADR-0041 traps): the S3 credential env
   // names must never appear as a literal ENV/ARG default in the Dockerfile.
   assert.doesNotMatch(dockerfile, /LOKI_S3_SECRET_ACCESS_KEY\s*=/, "no baked secret default");
+});
+
+// --- r2-lifecycle-rules.json: shape T10 applies via wrangler ---------------
+
+test("r2-lifecycle-rules.json: matches the real R2 lifecycle API body shape, one rule per real key prefix", () => {
+  const raw = readText("r2-lifecycle-rules.json");
+  const doc = JSON.parse(raw);
+  // Only "rules" at the top level — verified against Cloudflare's own R2
+  // "update bucket lifecycle configuration" API reference
+  // (developers.cloudflare.com/api/resources/r2/.../lifecycle/methods/update),
+  // applied with `wrangler r2 bucket lifecycle set <bucket> --file <path>`.
+  // An extra field here (a "_comment", say) risks the API or wrangler
+  // rejecting the whole document, so this test also pins the top-level key
+  // set, not just parseability.
+  assert.deepEqual(Object.keys(doc), ["rules"], "only a top-level `rules` key");
+  assert.ok(Array.isArray(doc.rules) && doc.rules.length === 4, "exactly 4 rules");
+
+  const byPrefix = new Map(doc.rules.map((r) => [r.conditions.prefix, r]));
+  // Prefixes matched against the REAL key layout Loki 3.3.2 writes,
+  // confirmed by the T01 spike (containers/o11y/local/stop-roundtrip.mjs):
+  // browser/<fp>/..., worker/<fp>/..., index/index/<table>/...,
+  // state/wakes/<wakeId>/clean.
+  const expectedAgeSeconds = {
+    "browser/": 30 * 24 * 3600,
+    "worker/": 90 * 24 * 3600,
+    "index/": 90 * 24 * 3600,
+    "state/": 30 * 24 * 3600,
+  };
+  for (const [prefix, maxAge] of Object.entries(expectedAgeSeconds)) {
+    const rule = byPrefix.get(prefix);
+    assert.ok(rule, `a rule exists for prefix ${prefix}`);
+    assert.equal(rule.enabled, true, `${prefix} rule is enabled`);
+    assert.equal(rule.deleteObjectsTransition.condition.type, "Age", `${prefix} uses an Age condition`);
+    assert.equal(rule.deleteObjectsTransition.condition.maxAge, maxAge, `${prefix} maxAge is ${maxAge}s`);
+  }
 });

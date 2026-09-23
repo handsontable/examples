@@ -284,7 +284,9 @@ async function main() {
   ], { env: { O11Y_WAKE_ID: wakeIdKill } });
   const readyMs3 = await waitReadyForBox();
   record("run2: box became ready", readyMs3 >= 0, `${readyMs3}ms`);
-  await pushLines("browser", ["roundtrip-kill-canary"], { "hot.demo_id": "r-roundtrip" });
+  const killPushStart = Date.now();
+  const killPushStatus = await pushLines("browser", ["roundtrip-kill-canary"], { "hot.demo_id": "r-roundtrip" });
+  record("run2: canary push accepted", killPushStatus === 204, `HTTP ${killPushStatus}`);
   await sleep(300);
 
   const containerId2 = boxContainerId();
@@ -298,6 +300,28 @@ async function main() {
     "run2: the earlier clean-run marker is untouched",
     markerExists(wakeIdClean),
     `state/wakes/${wakeIdClean}/clean`,
+  );
+
+  // Data-loss proof: recreate the box (a fresh container, nothing local
+  // survives) and confirm the canary — pushed but never index-uploaded
+  // because it was SIGKILLed mid-ingest — is genuinely gone. This is also
+  // the negative control for the "restart" section's positive query above:
+  // if a stale in-memory cache or a leftover local volume were serving that
+  // query instead of R2, this line would still show up.
+  console.log("\n== restart after SIGKILL (data-loss negative control) ==");
+  const wakeIdAfterKill = `roundtrip-after-kill-${RUN_ID}`;
+  sh("docker", [
+    "compose", "-p", PROJECT, "-f", "compose.yml",
+    "up", "-d", "--no-deps", "--force-recreate", "box",
+  ], { env: { O11Y_WAKE_ID: wakeIdAfterKill } });
+  const readyMs4 = await waitReadyForBox();
+  record("run2 restart: box became ready", readyMs4 >= 0, `${readyMs4}ms`);
+  const { status: killQueryStatus, lines: killQueryLines } = await queryLines("browser", "demos-authoring", killPushStart);
+  record("run2 restart: browser query 200", killQueryStatus === 200, `HTTP ${killQueryStatus}`);
+  record(
+    "run2 restart: the SIGKILL'd canary line is genuinely lost (never uploaded)",
+    !killQueryLines.includes("roundtrip-kill-canary"),
+    `got ${JSON.stringify(killQueryLines)}`,
   );
 
   console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);

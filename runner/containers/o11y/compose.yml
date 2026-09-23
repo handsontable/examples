@@ -21,7 +21,13 @@ services:
     build:
       context: .
     environment:
-      WAKE_ID: ${O11Y_WAKE_ID:-local-dev}
+      # No default: an empty WAKE_ID makes the supervisor REFUSE to write a
+      # marker (shutdown.sh). A convenience default like "local-dev" would
+      # let a later SIGKILL under the same unset-WAKE_ID default find the
+      # PREVIOUS clean run's marker and read as clean — exactly the T11
+      # criterion-2 failure mode. Every caller (stop-roundtrip.mjs, a human
+      # `docker compose up`) must set O11Y_WAKE_ID explicitly.
+      WAKE_ID: ${O11Y_WAKE_ID:-}
       STORAGE: s3
       LOKI_S3_ENDPOINT: minio:9000
       LOKI_S3_REGION: auto
@@ -30,17 +36,26 @@ services:
       LOKI_S3_BUCKET: loki
       LOKI_S3_INSECURE: "true"
       GF_SERVER_ROOT_URL: http://localhost:${O11Y_GRAFANA_PORT:-3000}/grafana/
-      O11Y_CLICKHOUSE_HOST: clickhouse
-      O11Y_CLICKHOUSE_PORT: "8123"
-      O11Y_CLICKHOUSE_PROTOCOL: http
+      # vertamedia-clickhouse-datasource needs a full URL plus ONE header
+      # pair for local ClickHouse (X-ClickHouse-User/-Key) — a different
+      # shape than production's single `Authorization: Bearer` header
+      # (GrafanaBox envVars, phase 2). See grafana/provisioning/datasources.
+      O11Y_CLICKHOUSE_URL: http://clickhouse:8123
       O11Y_CLICKHOUSE_DATABASE: default
-      O11Y_CLICKHOUSE_USER: default
+      O11Y_CLICKHOUSE_HEADER1_NAME: X-ClickHouse-User
+      O11Y_CLICKHOUSE_HEADER1_VALUE: default
+      O11Y_CLICKHOUSE_HEADER2_NAME: X-ClickHouse-Key
+      O11Y_CLICKHOUSE_HEADER2_VALUE: ${AE_SQL_TOKEN:-local-dev-token}
       AE_SQL_TOKEN: ${AE_SQL_TOKEN:-local-dev-token}
       O11Y_STOP_GRACE_SECONDS: ${O11Y_STOP_GRACE_SECONDS:-30}
     ports:
       - "127.0.0.1:${O11Y_GRAFANA_PORT:-3000}:3000"
       - "127.0.0.1:${O11Y_LOKI_PORT:-3100}:3100"
-    stop_grace_period: 30s
+    # Must exceed O11Y_STOP_GRACE_SECONDS (the supervisor's own bound on
+    # waiting for Loki to exit) by enough margin that the stop protocol's
+    # remaining steps (index check, marker PUT+HEAD, stopping Grafana) can
+    # still run before Docker escalates to SIGKILL.
+    stop_grace_period: 45s
     # `standard-1` (docs.cloudflare.com/containers/platform-details/limits):
     # 1/2 vCPU, 4 GiB memory, 8 GB disk — so local boot-time and memory
     # measurements mean the same thing the sandbox probe will measure.

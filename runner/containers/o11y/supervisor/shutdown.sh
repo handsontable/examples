@@ -5,10 +5,9 @@
 #
 # ADR-0041 §A stop protocol, in order:
 #   1. stop Loki gracefully (SIGTERM, wait for real exit — a 0 exit code)
-#   2. confirm the TSDB index for this wake is uploaded to R2 (bucket
-#      listing under the index/ prefix, before vs. after — never trust a
-#      local directory being empty, and never trust POST /flush: it answers
-#      before anything is written, ADR-0041 "Traps")
+#   2. confirm THIS instance's TSDB index objects are uploaded to R2 (never
+#      trust a local directory being empty, and never trust POST /flush: it
+#      answers before anything is written, ADR-0041 "Traps")
 #   3. only then write state/wakes/<wakeId>/clean into the Loki bucket
 #   4. stop Grafana
 #
@@ -21,11 +20,28 @@
 # real push -> SIGTERM -> bucket-listing round trip against MinIO
 # (containers/o11y/local/stop-roundtrip.mjs). Plan A is what ships; Plan B
 # (wait for the next 15-minute index rotation) is documented but not wired,
-# because Plan A's own listing check already fails closed if some future
-# Loki upgrade regresses that behaviour — see the T01 report for the
-# decisive log line ("uploading table ... finished uploading table").
+# because Plan A's own upload-confirmation check already fails closed if
+# some future Loki upgrade regresses that behaviour — see the T01 report for
+# the decisive log line ("uploading table ... finished uploading table").
+#
+# Index check design: the TSDB shipper writes each period's table at
+# index/index/<day>/<uploaderName>-<file>.tsdb.gz, where <day> is days since
+# the Unix epoch (schema_config period = 24h) and <uploaderName> is this
+# Loki instance's own stable id, on disk at
+# /loki/tsdb-index/uploader/name (read while Loki is still running — the
+# shipper deletes local index files right after a successful upload, so
+# reading it after exit is not reliable). A whole-prefix "any new key under
+# index/" diff was tried first and rejected: R2's ListObjectsV2 caps a
+# listing at 1000 keys in lexicographic order, and this bucket accumulates
+# index objects across a 90-day retention window (§H) — once it holds over
+# 1000, an unpaginated listing of the bare index/ prefix silently stops
+# seeing the newest (highest-sorting) keys, and every future stop would read
+# as unclean. Scoping the listing to today's (and, for a wake that straddles
+# UTC midnight, yesterday's) single-day table prefix keeps each listing
+# small for the life of the bucket, and searching for this instance's own
+# uploader name distinguishes "we uploaded something" from "some other wake,
+# maybe running concurrently, uploaded something."
 
-INDEX_PREFIX="index/"
 STOP_GRACE_SECONDS="${O11Y_STOP_GRACE_SECONDS:-30}"
 
 run_stop_protocol() {
@@ -38,9 +54,12 @@ run_stop_protocol() {
   # --- 1. stop Loki gracefully -------------------------------------------
   local loki_exit=1
   if [ -n "${LOKI_PID:-}" ] && kill -0 "$LOKI_PID" 2>/dev/null; then
-    local before_index
-    if [ "${STORAGE:-s3}" = "s3" ]; then
-      before_index="$(r2_list_prefix "$INDEX_PREFIX" || true)"
+    local uploader_name=""
+    if [ -r /loki/tsdb-index/uploader/name ]; then
+      uploader_name="$(cat /loki/tsdb-index/uploader/name 2>/dev/null || true)"
+    fi
+    if [ -z "$uploader_name" ] && [ "${STORAGE:-s3}" = "s3" ]; then
+      log "could not read /loki/tsdb-index/uploader/name before stop — index upload cannot be confirmed"
     fi
 
     log "sending SIGTERM to loki (pid $LOKI_PID)"
@@ -64,16 +83,26 @@ run_stop_protocol() {
       loki_exit=1
     fi
 
-    # --- 2. confirm the index actually landed in R2 ----------------------
-    if [ "$loki_exit" -eq 0 ] && [ -n "${WAKE_ID:-}" ] && [ "${STORAGE:-s3}" = "s3" ]; then
-      local after_index new_keys
-      after_index="$(r2_list_prefix "$INDEX_PREFIX" || true)"
-      new_keys="$(comm -13 <(printf '%s\n' "$before_index" | sort) <(printf '%s\n' "$after_index" | sort))"
-      if [ -n "$new_keys" ]; then
-        log "index upload confirmed: $(printf '%s' "$new_keys" | tr '\n' ' ')"
+    # --- 2. confirm THIS instance's index objects landed in R2 -----------
+    if [ "$loki_exit" -eq 0 ] && [ -n "${WAKE_ID:-}" ] && [ "${STORAGE:-s3}" = "s3" ] && [ -n "$uploader_name" ]; then
+      local day_now day_prev found=""
+      day_now=$(( $(date -u +%s) / 86400 ))
+      day_prev=$((day_now - 1))
+      for day in "$day_now" "$day_prev"; do
+        local keys
+        keys="$(r2_list_prefix "index/index/${day}/" || true)"
+        local match
+        match="$(printf '%s\n' "$keys" | grep -F "$uploader_name" || true)"
+        if [ -n "$match" ]; then
+          found="$match"
+          log "index upload confirmed for table ${day}: $(printf '%s' "$match" | tr '\n' ' ')"
+          break
+        fi
+      done
+      if [ -n "$found" ]; then
         marker_ok=0
       else
-        log "no new index object found under ${INDEX_PREFIX} after graceful stop — not writing a marker (plan B territory, see ADR-0041 exit criterion 1)"
+        log "no index object bearing uploader name '${uploader_name}' found under index/index/{${day_now},${day_prev}}/ after graceful stop — not writing a marker (plan B territory, see ADR-0041 exit criterion 1)"
         marker_ok=1
       fi
     else

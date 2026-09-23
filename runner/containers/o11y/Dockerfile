@@ -22,20 +22,37 @@ FROM grafana/grafana:11.4.0
 
 USER root
 
-# Pinned so a Grafana Labs catalog change never silently rewrites what runs
-# in production. Community-signed; no allow-unsigned flag needed for it.
-ARG CLICKHOUSE_PLUGIN_VERSION=4.21.3
+# The Altinity ClickHouse plugin (ADR-0041 §A), NOT grafana/clickhouse-
+# datasource: Cloudflare's own Analytics Engine + Grafana docs
+# (developers.cloudflare.com/analytics/analytics-engine/grafana/) point at
+# `vertamedia-clickhouse-datasource` specifically — the AE SQL API answers a
+# ClickHouse-HTTP-shaped endpoint authenticated with a single custom
+# `Authorization: Bearer <token>` header, which is this plugin's supported
+# shape (grafana/clickhouse-datasource expects host/port/user/password and
+# a native or different HTTP auth handshake instead). Pinned so a catalog
+# change never silently rewrites what runs in production; community-signed
+# (ships its own MANIFEST.txt), no allow-unsigned flag needed.
+ARG CLICKHOUSE_PLUGIN_VERSION=3.5.0
 RUN grafana cli --pluginsDir /var/lib/grafana/plugins plugins install \
-    grafana-clickhouse-datasource ${CLICKHOUSE_PLUGIN_VERSION}
+    vertamedia-clickhouse-datasource ${CLICKHOUSE_PLUGIN_VERSION}
 
 COPY --from=loki /usr/bin/loki /usr/bin/loki
 
 RUN mkdir -p \
       /loki/wal /loki/chunks /loki/tsdb-index /loki/tsdb-cache \
       /loki/compactor /loki/rules /loki/rules-temp \
-    && chown -R grafana:root /loki /var/lib/grafana
+    && chown -R grafana:root /loki
+# Deliberately NOT chown -R'd on /var/lib/grafana: that would copy-on-write
+# the whole plugin tree a second time (it roughly doubled the image size in
+# an earlier build — measured 865 MB -> 1.22 GB uncompressed for this one
+# `chown`). The plugin's own files come out of `grafana cli ... install`
+# world-readable/executable (0644/0755) even when the install RUN runs as
+# root, so the non-root `grafana` user (472:0) can load them without it —
+# verified by booting the image and hitting /grafana/api/health after
+# switching to USER grafana below.
 
 COPY loki/loki-config.yaml /etc/loki/loki-config.yaml
+COPY loki/loki-config.filesystem.yaml /etc/loki/loki-config.filesystem.yaml
 COPY loki/runtime-config.yaml /etc/loki/runtime-config.yaml
 COPY grafana/grafana.ini /etc/grafana/grafana.ini
 COPY grafana/provisioning /etc/grafana/provisioning
