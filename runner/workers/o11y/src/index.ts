@@ -30,7 +30,7 @@ import { checkExportSecret } from "./gates/secret.js";
 import { COLLECT_MAX_BYTES, OTLP_MAX_BYTES, SMALL_JSON_MAX_BYTES } from "./gates/limits.js";
 import { inboxWriter } from "./inbox/accessor.js";
 import { isDeployPayload, processDeployPayload } from "./normalise/deploy.js";
-import { processFaroBody } from "./normalise/faro.js";
+import { countFaroItems, MAX_FARO_ITEMS_PER_BODY, processFaroBody } from "./normalise/faro.js";
 import { processOtlpBody } from "./normalise/otlp.js";
 import { processSentryPayload } from "./normalise/sentry.js";
 import { BodyTooLargeError, readCappedBytes, readCappedText } from "./normalise/read-body.js";
@@ -92,28 +92,67 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
   const envGate = checkPayloadEnvironment(declaredEnv, env);
   if (!envGate.ok) return respondDrop(env, ctx, envGate);
 
+  // Fix round (finding A-I4): bound the whole batch before doing any real
+  // work on it — a real Faro `TransportBody` never approaches this many
+  // items (the SDK's own batch limit is 50); an unbounded batch is what let
+  // one 1 MB body inflate to ~16.7k stored records and AE points.
+  if (countFaroItems(body) > MAX_FARO_ITEMS_PER_BODY) {
+    return respondDrop(env, ctx, { ok: false, reason: "too_many_items", status: 400 });
+  }
+
   const receivedAtMs = Date.now();
+  const rawVersion = (body as { meta?: { app?: { version?: string } } })?.meta?.app?.version;
   const service = {
     name: "demos-authoring" as const,
-    version: (body as { meta?: { app?: { version?: string } } })?.meta?.app?.version ?? "unknown",
+    // Fix round (finding A-M1): `meta.app.version` is client-supplied and
+    // was unbounded — it becomes `service.version`, a Loki-queried (if not
+    // labeled) field and an AE blob, and `writePoint`'s "never throws" gap
+    // was reachable through exactly this kind of unbounded string turning a
+    // point over Analytics Engine's per-point size limit.
+    version: typeof rawVersion === "string" && rawVersion.length > 0 ? rawVersion.slice(0, 64) : "unknown",
     environment: env.O11Y_ENV,
   };
 
-  const processed = await processFaroBody(body, env, service, receivedAtMs);
-
   let accepted = 0;
   let duplicate = 0;
-  const ingestItems = processed.filter((p) => p.ingestItem).map((p) => p.ingestItem!);
+  try {
+    const processed = await processFaroBody(body, env, service, receivedAtMs);
 
-  for (const p of processed) {
-    if (p.invalid) recordInvalidItem(env, ctx, p.invalid);
-    if (p.oversize) recordOversizeDrop(env, ctx, "Faro record exceeds 256 KB");
-    for (const point of p.aePoints) writePoint(env, ctx, point);
-  }
+    const ingestItems = processed.filter((p) => p.ingestItem).map((p) => p.ingestItem!);
 
-  if (ingestItems.length > 0) {
-    const result = await inboxWriter(env).ingest("browser", receivedAtMs, ingestItems);
-    for (const r of result.results) r.outcome === "duplicate" ? duplicate++ : accepted++;
+    for (const p of processed) {
+      if (p.invalid) recordInvalidItem(env, ctx, p.invalid);
+      if (p.oversize) recordOversizeDrop(env, ctx, "Faro record exceeds 256 KB");
+      // Fix round (finding A-I4): only an item with no stored record (an
+      // `example.*` event) writes its point unconditionally — anything with
+      // an `ingestItem` is gated below on the actual dedupe outcome, so a
+      // retried/redelivered batch cannot double-count a browser metric.
+      if (!p.ingestItem) {
+        for (const point of p.aePoints) writePoint(env, ctx, point);
+      }
+    }
+
+    if (ingestItems.length > 0) {
+      const result = await inboxWriter(env).ingest("browser", receivedAtMs, ingestItems);
+      const outcomeByHash = new Map(result.results.map((r) => [r.hash, r.outcome]));
+      for (const r of result.results) r.outcome === "duplicate" ? duplicate++ : accepted++;
+      for (const p of processed) {
+        if (!p.ingestItem) continue;
+        if (outcomeByHash.get(p.ingestItem.hash) === "accepted") {
+          for (const point of p.aePoints) writePoint(env, ctx, point);
+        }
+      }
+    }
+  } catch (err) {
+    // Fix round (finding A-M1): `handleCollect` had no boundary of its own
+    // around body processing — any exception that escaped `processFaroBody`
+    // or `InboxWriter.ingest` became an uncaught `500`. Every known throw
+    // site is fixed at its root (see `normalise/faro.ts`/`scrub.ts`), but
+    // this stays as the route's own backstop, so a still-unknown shape
+    // degrades to one accounted drop, never an unhandled exception.
+    console.warn("[o11y] handleCollect failed:", err instanceof Error ? err.message : String(err));
+    recordInvalidItem(env, ctx, "handleCollect: unhandled batch failure");
+    return respondIngested(env, ctx, "collect", { accepted, duplicate }, bytes.byteLength);
   }
 
   return respondIngested(env, ctx, "collect", { accepted, duplicate }, bytes.byteLength);

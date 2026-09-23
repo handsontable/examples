@@ -84,6 +84,52 @@ test("POST /telemetry/collect: a wrong Origin is refused with the host gate", as
   assert.equal(res.status, 403);
 });
 
+test("POST /telemetry/collect: a batch over MAX_FARO_ITEMS_PER_BODY is refused outright, never partially processed (finding A-I4)", async () => {
+  const { env, doStorage } = freshEnv();
+  const body = withFreshTimestamp(faroFixture("log.json"));
+  // Inflate one legitimate log item into 300 — well over the 200 cap —
+  // the same shape the finding's own measured probe describes (a giant
+  // batch inflating AE points and DO dedupe-check load).
+  const one = body.logs[0];
+  body.logs = Array.from({ length: 300 }, () => ({ ...one }));
+
+  const req = new Request("https://demos.handsontable.com/telemetry/collect", {
+    method: "POST",
+    headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const res = await worker.fetch(req, env, ctx);
+  await ctx.drain();
+  assert.equal(res.status, 400);
+  assert.equal(
+    [...doStorage._data.keys()].some((k) => k.startsWith("row:")),
+    false,
+    "an over-cap batch must never reach storage, not even partially",
+  );
+});
+
+test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count the browser metric point — only the dedupe-accepted copy writes error.uncaught (finding A-I4)", async () => {
+  const { env, ae } = freshEnv();
+  const body = withFreshTimestamp(faroFixture("exception-code-frame.json"));
+  const req = () =>
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const first = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(first.status >= 200 && first.status < 300);
+
+  const second = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(second.status >= 200 && second.status < 300, "a duplicate delivery must still answer 2xx");
+
+  const errorPoints = ae.points.filter((p) => p.indexes[0] === "error.uncaught");
+  assert.equal(errorPoints.length, 1, "a redelivered batch must write exactly one error.uncaught point, not two");
+});
+
 test("POST /telemetry/v1/logs: the x-o11y-secret gate — wrong secret is 401, correct secret is 2xx", async () => {
   const { env } = freshEnv();
   const body = otlpJsonFixture("basic.json");
@@ -303,6 +349,50 @@ test("POST /telemetry/hooks/sentry: a correct HMAC signature passes, a wrong one
   );
   await ctx.drain();
   assert.equal(bad.status, 401);
+});
+
+test("POST /telemetry/hooks/sentry: fix round A-I3 — a title embedding a preview host, a query string, an email and a user-agent is scrubbed before storage, not stored verbatim", async () => {
+  const { env, r2 } = freshEnv();
+  // The exact probe from the finding: a correctly-signed hook whose title
+  // carries a preview host (a session credential), a query string, an
+  // email and a user-agent — all on contract §3's "never sent" list.
+  const payload = {
+    action: "created",
+    data: {
+      issue: {
+        id: "987654321",
+        title:
+          "TypeError: Failed to fetch (https://8787-abc-tok3n.demos.handsontable.com/a?token=SECRET) user a@b.com Mozilla/5.0 (X11; Linux) Chrome/1",
+        permalink: "https://handsoncode.sentry.io/issues/987654321/?referrer=slack",
+      },
+    },
+  };
+  const body = JSON.stringify(payload);
+  const sig = await hmacSha256Hex(env.SENTRY_HOOK_SECRET, body);
+
+  const res = await worker.fetch(
+    new Request("https://demos.handsontable.com/telemetry/hooks/sentry", {
+      method: "POST",
+      headers: { "sentry-hook-signature": sig, "content-type": "application/json" },
+      body,
+    }),
+    env,
+    ctx,
+  );
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300);
+
+  const inboxWriter = env.INBOX_WRITER.get();
+  await inboxWriter.alarm();
+  assert.equal(r2.objects.size, 1);
+  const [, bytes] = [...r2.objects.entries()][0];
+  const text = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+
+  assert.doesNotMatch(text, /8787-abc-tok3n/, "no preview hostname (session credential) survives");
+  assert.doesNotMatch(text, /token=SECRET/, "no query string survives");
+  assert.doesNotMatch(text, /a@b\.com/, "no email survives");
+  assert.doesNotMatch(text, /Mozilla\/5\.0/, "no user-agent survives");
+  assert.doesNotMatch(text, /referrer=slack/, "no query string on the permalink survives");
 });
 
 // ---- unregistered contract routes still 501/404 -----------------------------------

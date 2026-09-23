@@ -22,6 +22,7 @@ import {
   faroItemToRecord,
   feedsNewFingerprintAlert,
   INBOX_RECORD_MAX_BYTES,
+  isValidFingerprint,
   METRICS,
   scrubTelemetry,
   toAePoint,
@@ -38,7 +39,33 @@ import type { Env, IngestItem } from "../env.js";
 import { readAeOnlyAttrs } from "./browser-attrs.js";
 import { hashRecord } from "./hash.js";
 import { withResourceAttrDefaults } from "./points.js";
-import { scrubBodyText } from "./text-scrub.js";
+import { scrubAttributeValues, scrubBodyText } from "./text-scrub.js";
+
+/** Fix round (finding A-I4): a real Faro `TransportBody` batch is bounded
+ *  (the SDK's own batch limit is 50 items); nothing enforced any bound
+ *  server-side before this, so an unauthenticated client could inflate one
+ *  request's Analytics Engine points and DO dedupe-check load arbitrarily —
+ *  measured at ~16.7k items in one 1 MB body. Generous headroom over the
+ *  SDK's own limit, not a tight fit to it. `handleCollect` (`index.ts`)
+ *  rejects the whole request above this, the same way it already rejects
+ *  an oversized body — a partially-processed giant batch is not a
+ *  meaningfully safer middle ground than rejecting it outright. */
+export const MAX_FARO_ITEMS_PER_BODY = 200;
+
+/** Total item count across every unpacked kind (`traces` included, since a
+ *  trace item still counts toward the cap even though it is always
+ *  rejected as invalid) — used by `index.ts#handleCollect` before this
+ *  module does any real work on the batch. */
+export function countFaroItems(body: unknown): number {
+  if (typeof body !== "object" || body === null) return 0;
+  const wire = body as Record<string, unknown>;
+  let count = 0;
+  for (const key of ["exceptions", "logs", "measurements", "events", "traces"]) {
+    const list = wire[key];
+    if (Array.isArray(list)) count += list.length;
+  }
+  return count;
+}
 
 const ITEM_KIND_BY_BODY_KEY: Readonly<Record<string, ScrubbableFaroItem["type"]>> = {
   exceptions: "exception",
@@ -59,6 +86,15 @@ export interface ProcessedFaroItem {
    *  `item.type`/`toAePoint` input, T00-D10), an oversize record, or an
    *  `example.*` event (AE points only, never stored, §6). */
   ingestItem?: IngestItem;
+  /** Fix round (finding A-I4): when {@link ingestItem} is set, the caller
+   *  (`index.ts#handleCollect`) must write these points only for a hash
+   *  `InboxWriter.ingest` reports as `"accepted"`, never `"duplicate"` — a
+   *  retried/redelivered batch must not double-count `error.uncaught`,
+   *  `error.handled`, or any browser metric point the way the underlying
+   *  log record already avoids double-storage. When {@link ingestItem} is
+   *  absent (an `example.*` event, or an item that never reached storage at
+   *  all), these points have no hash to gate on and are written
+   *  unconditionally, same as before. */
   aePoints: AePoint[];
   /** Set when this item could not be converted/validated at all — the caller
    *  writes one `invalid_item` `o11y.ingest` point and moves on (never a
@@ -154,6 +190,33 @@ function processExampleEvent(
   ];
 }
 
+/** Fix round (findings A-C2, D-I3): picks the fingerprint a client offered,
+ *  validated, or falls back to computing it server-side.
+ *
+ * - `wireFingerprint` is Faro's own `payload.fingerprint` (the browser
+ *   facade's `contractFingerprint(context, message)`, §7's exact shape,
+ *   never over the stack) — preferred, since it is the one value that
+ *   actually distinguishes two call sites reporting the same message
+ *   (D-I3: `computeFingerprint` below only ever sees `hot.surface`, not the
+ *   call site).
+ * - `aeOnlyFingerprint` (`context["hot.fingerprint"]`) is the fallback a
+ *   caller may already be sending; same validation.
+ * - Neither trusted verbatim (A-C2): a value that does not match §7's
+ *   `<context>:<16 hex>` shape is discarded — an attacker cannot inject
+ *   arbitrary text into the exact first-seen registry or, from there, an
+ *   unescaped Slack line this way.
+ */
+function resolveFingerprint(
+  wireFingerprint: string | undefined,
+  aeOnlyFingerprint: string | undefined,
+  surface: string,
+  bodyText: string,
+): string {
+  if (wireFingerprint !== undefined && isValidFingerprint(wireFingerprint)) return wireFingerprint;
+  if (aeOnlyFingerprint !== undefined && isValidFingerprint(aeOnlyFingerprint)) return aeOnlyFingerprint;
+  return computeFingerprint(surface, bodyText);
+}
+
 function processException(
   bodyText: string,
   resourceAttributes: Record<string, string>,
@@ -161,9 +224,10 @@ function processException(
   handled: boolean,
   aeOnly: ReturnType<typeof readAeOnlyAttrs>,
   service: ServiceIdentity,
+  wireFingerprint: string | undefined,
 ): { points: AePoint[]; fingerprint?: string } {
   const surface = (resourceAttributes[ATTR_HOT_SURFACE] as Surface | undefined) ?? "authoring";
-  const fp = aeOnly.fingerprint ?? computeFingerprint(surface, bodyText);
+  const fp = resolveFingerprint(wireFingerprint, aeOnly.fingerprint, surface, bodyText);
   const common = { service_name: service.name, service_version: service.version, environment: service.environment };
   const point = handled
     ? toAePoint("error.handled", { count: 1 }, { ...common, surface, route_class: aeOnly.route_class, fingerprint: fp })
@@ -211,15 +275,42 @@ async function processOneItem(
   service: ServiceIdentity,
   receivedAtMs: number,
 ): Promise<ProcessedFaroItem> {
+  // Fix round (finding A-M1): an untrusted client can put a `null`/
+  // non-object entry inside a Faro batch array (`{"logs":[null]}` is valid
+  // JSON) — the destructure below (`payload["context"]`) threw a
+  // `TypeError` on that shape, escaping as an uncaught `500`. Caught as an
+  // ordinary invalid item instead, the same as any other malformed one.
+  if (typeof payload !== "object" || payload === null) {
+    return { aePoints: [], invalid: "item is not an object" };
+  }
+
   const rawContext = {
     ...((payload["context"] as Record<string, string> | undefined) ?? {}),
     ...((payload["attributes"] as Record<string, string> | undefined) ?? {}),
   };
   const aeOnly = readAeOnlyAttrs(rawContext);
   const handled = rawContext["handled"] === "true";
+  // Fix round (finding D-I3): Faro's own `pushError({ fingerprint })` option
+  // lands in `payload.fingerprint`, a sibling of `context`/`attributes`, not
+  // inside either — `readAeOnlyAttrs` (which only reads `context`) never
+  // sees it. Read here, validated together with `aeOnly.fingerprint` in
+  // `resolveFingerprint` (A-C2). Length-capped defensively before that
+  // regex runs against untrusted input.
+  const rawWireFingerprint = payload["fingerprint"];
+  const wireFingerprint =
+    typeof rawWireFingerprint === "string" && rawWireFingerprint.length <= 128 ? rawWireFingerprint : undefined;
 
   const item: ScrubbableFaroItem = { type, payload: payload as never, meta: meta as never };
-  const scrubbed = scrubTelemetry(item);
+  let scrubbed: ScrubbableFaroItem | null;
+  try {
+    scrubbed = scrubTelemetry(item);
+  } catch (err) {
+    // Fix round (finding A-M1): `scrubTelemetry` itself can throw on a
+    // malformed nested shape (the stacktrace-frame case is now fixed at
+    // the root in `scrub.ts`, but this per-item boundary stays as the
+    // "never a 500" backstop for whatever shape is discovered next).
+    return { aePoints: [], invalid: err instanceof Error ? err.message : String(err) };
+  }
   if (scrubbed === null) return { aePoints: [] }; // console item, intentionally dropped (§3)
 
   let record;
@@ -241,10 +332,26 @@ async function processOneItem(
   // stored sees the defaulted bag.
   const clientResourceAttributes = { ...record.resourceAttributes };
   withResourceAttrDefaults(record.resourceAttributes, env);
+  // Fix round (finding A-M3): the Faro path ran `scrubTelemetry` only on
+  // the raw item, never on the assembled OTLP record — `stripCodeFrame`
+  // (via `scrubText`) and the attribute allowlist never got a second pass
+  // over fields `faroItemToRecord` itself builds (exception `type`, event
+  // `name`, stack-frame `function` text folded into `body`). Run it again
+  // here, the OTLP-record branch, exactly like `lite.ts`/`otlp.ts` already
+  // do for their own converted records — it never returns `null` for that
+  // branch (only a Faro item can be dropped as a console item).
+  record = scrubTelemetry(record)!;
   // T02-D (see the task Outcome, `text-scrub.ts`): `scrubTelemetry` strips
   // query strings only from discrete URL fields, never from an embedded URL
   // inside the built body text — this task's own extra pass closes that gap.
   record.body = scrubBodyText(record.body);
+  // Fix round (finding A-M3, "also"): an allowlisted attribute/resource-
+  // attribute value only got `redactPreviewHosts` inside `scrubTelemetry` —
+  // a query string or an embedded user-agent in `context`/a diagnostic tag
+  // value survived otherwise. Same extra pass `body` gets, applied to every
+  // attribute value.
+  record.attributes = scrubAttributeValues(record.attributes);
+  record.resourceAttributes = scrubAttributeValues(record.resourceAttributes) ?? record.resourceAttributes;
   const demoId = record.attributes?.[ATTR_HOT_DEMO_ID];
 
   // Metric extraction (T00-D10: a crafted `outcome`/`reason`/attribute value
@@ -266,7 +373,15 @@ async function processOneItem(
     } else if (type === "measurement") {
       aePoints = processMeasurement(payload, clientResourceAttributes, demoId, aeOnly, service);
     } else if (type === "exception") {
-      const ex = processException(record.body, clientResourceAttributes, demoId, handled, aeOnly, service);
+      const ex = processException(
+        record.body,
+        clientResourceAttributes,
+        demoId,
+        handled,
+        aeOnly,
+        service,
+        wireFingerprint,
+      );
       aePoints = ex.points;
       itemFingerprint = ex.fingerprint;
     }

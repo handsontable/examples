@@ -163,6 +163,20 @@ function remapCloudflareKeys(attrs: Record<string, string>): Record<string, stri
  *  still cannot win over the real resource attribute. */
 const RESOURCE_ATTR_KEY_SET = new Set<string>(RESOURCE_ATTRS.map((a) => a.key));
 
+/** Fix round (B cross-note): the ADR's own platform facts say plainly that
+ *  "Tier-2 container stdout lands in the API worker's logs" — the same
+ *  Cloudflare export this function parses. A Tier-2 SSR starter's authored
+ *  code can `console.log(JSON.stringify({...}))` just as easily as this
+ *  worker's own trusted `lines.ts` lines do, and before this fix that
+ *  authored JSON's keys were merged into `attributes`/`resourceAttributes`
+ *  indistinguishably from a real structured line — a breach of contract
+ *  §3's "authored code … console output" rule. `lines.ts` stamps every one
+ *  of its own lines with a closed-set `"log.kind"` sentinel
+ *  (`"api.request"` | `"error"`); a body missing that exact marker is
+ *  authored/unknown output and is left as opaque body text, exactly as it
+ *  was before `lines.ts`'s structured shape existed. */
+const TRUSTED_BODY_JSON_LOG_KINDS: ReadonlySet<string> = new Set(["api.request", "error"]);
+
 function tryParseJsonBodyAttrs(body: string): Record<string, string> {
   if (!body || body.trimStart()[0] !== "{") return {};
   let parsed: unknown;
@@ -172,8 +186,10 @@ function tryParseJsonBodyAttrs(body: string): Record<string, string> {
     return {};
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const obj = parsed as Record<string, unknown>;
+  if (!TRUSTED_BODY_JSON_LOG_KINDS.has(String(obj["log.kind"]))) return {};
   const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(obj)) {
     if (RESOURCE_ATTR_KEY_SET.has(key)) continue; // never let body content spoof a resource attribute
     if (value === null || value === undefined) continue;
     if (typeof value === "string") out[key] = value;

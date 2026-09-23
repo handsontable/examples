@@ -110,6 +110,25 @@ export function aeSink(env: Env): AeSink {
   return sink;
 }
 
+/** Fix round (finding A-M1): `aeSink(env).writeDataPoint(point)` was called
+ *  directly inside `Promise.resolve(...)`'s argument position — a
+ *  SYNCHRONOUS throw from the real binding (an over-limit point, per the
+ *  finding) happens before `Promise.resolve` ever runs, so it escapes as an
+ *  uncaught exception, not a rejected promise the `.catch` below could
+ *  reach. Wrapped in a `try` so both a synchronous throw and an async
+ *  rejection land in the same `never throws into the caller` contract this
+ *  function's doc comment already promised. */
+function writeDataPointSafely(sink: AeSink, point: AePoint): Promise<void> {
+  try {
+    return Promise.resolve(sink.writeDataPoint(point)).catch((err: unknown) => {
+      console.warn("[o11y] writeDataPoint failed:", err instanceof Error ? err.message : String(err));
+    });
+  } catch (err) {
+    console.warn("[o11y] writeDataPoint threw synchronously:", err instanceof Error ? err.message : String(err));
+    return Promise.resolve();
+  }
+}
+
 /** Writes one point, never throwing into the caller: a local ClickHouse
  *  outage (or any sink failure) must not fail ingest (§B.1: "ingest never
  *  waits for the box" — the metrics path has the same obligation toward its
@@ -117,11 +136,7 @@ export function aeSink(env: Env): AeSink {
  *  path; the `.catch` is what stops a rejected promise from becoming an
  *  unhandled rejection the runtime logs as an error on every local run. */
 export function writePoint(env: Env, ctx: ExecutionContext, point: AePoint): void {
-  ctx.waitUntil(
-    Promise.resolve(aeSink(env).writeDataPoint(point)).catch((err: unknown) => {
-      console.warn("[o11y] writeDataPoint failed:", err instanceof Error ? err.message : String(err));
-    }),
-  );
+  ctx.waitUntil(writeDataPointSafely(aeSink(env), point));
 }
 
 /** T03 addition: the same fire-and-forget write, from inside a Durable
@@ -135,9 +150,5 @@ export function writePoint(env: Env, ctx: ExecutionContext, point: AePoint): voi
  *  `passThroughOnException`/`tracing`/`abort`, which `DurableObjectState`
  *  does not have, so the two are not interchangeable at the type level. */
 export function writePointFromDo(env: Env, ctx: DurableObjectState, point: AePoint): void {
-  ctx.waitUntil(
-    Promise.resolve(aeSink(env).writeDataPoint(point)).catch((err: unknown) => {
-      console.warn("[o11y] writeDataPoint failed:", err instanceof Error ? err.message : String(err));
-    }),
-  );
+  ctx.waitUntil(writeDataPointSafely(aeSink(env), point));
 }

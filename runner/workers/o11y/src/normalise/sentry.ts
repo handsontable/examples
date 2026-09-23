@@ -8,10 +8,11 @@
 // (this task's fixture) is hand-built, not captured from a real Sentry
 // account.
 
-import { msToUnixNano, type NormalisedRecord } from "@handsontable/demo-runtime/telemetry";
+import { msToUnixNano, scrubTelemetry, type NormalisedRecord } from "@handsontable/demo-runtime/telemetry";
 import type { Env, IngestItem } from "../env.js";
 import { hashRecord } from "./hash.js";
 import { withResourceAttrDefaults } from "./points.js";
+import { scrubBodyText } from "./text-scrub.js";
 
 function str(v: unknown, fallback = "unknown"): string {
   return typeof v === "string" && v.length > 0 ? v : fallback;
@@ -43,12 +44,20 @@ export async function processSentryPayload(
     { "service.name": "demos-api", "service.version": release === "unknown" ? "unknown" : release },
     env,
   );
-  const record: NormalisedRecord = {
+  let record: NormalisedRecord = {
     body: `sentry ${action}: ${title} [${issueId}] release=${release}${link ? ` ${link}` : ""}`,
     timeUnixNano: msToUnixNano(receivedAtMs),
     resourceAttributes,
     attributes: {},
   };
+  // Fix round (finding A-I3): this record was stored with NO scrubbing at
+  // all — Sentry's own issue `title`/`permalink` routinely embed a preview
+  // host (a session credential), a query string, an email or a user-agent,
+  // none of which contract §3 allows. Run the same authoritative pass every
+  // other ingest path runs (`lite.ts`'s own order: convert, then
+  // `scrubTelemetry`, then this worker's own extra text pass).
+  record = scrubTelemetry(record)!;
+  record.body = scrubBodyText(record.body);
   const hash = await hashRecord({
     body: record.body,
     resourceAttributes: record.resourceAttributes,

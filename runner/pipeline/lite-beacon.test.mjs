@@ -513,6 +513,27 @@ test("POST /telemetry/lite: an accepted web_vital beacon writes a web_vital AE p
   assert.equal(point.doubles[2], 2500); // value, double3
 });
 
+test("POST /telemetry/lite: a duplicated beacon (identical payload, redelivered) does not double-count its error.uncaught point (finding A-I4)", async () => {
+  const { env, ae } = freshEnv();
+  const payload = litePayload();
+  const first = await worker.fetch(liteRequest(payload), env, ctx);
+  await ctx.drain();
+  assert.ok(first.status >= 200 && first.status < 300);
+
+  const second = await worker.fetch(liteRequest(payload), env, ctx);
+  await ctx.drain();
+  assert.ok(second.status >= 200 && second.status < 300, "a duplicate beacon must still answer 2xx");
+
+  const errorPoints = ae.points.filter((p) => p.indexes[0] === "error.uncaught");
+  assert.equal(errorPoints.length, 1, "a redelivered beacon must write exactly one error.uncaught point, not two");
+
+  const ingestPoints = ae.points.filter((p) => p.indexes[0] === "o11y.ingest");
+  assert.ok(
+    ingestPoints.some((p) => p.blobs[7] === "duplicate"),
+    "the second delivery's o11y.ingest point must say duplicate, matching the (now correct) single error.uncaught count",
+  );
+});
+
 test("POST /telemetry/lite: an accepted error beacon writes an error.uncaught point with a fingerprint", async () => {
   const { env, ae } = freshEnv();
   await worker.fetch(liteRequest(litePayload()), env, ctx);
