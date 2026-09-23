@@ -52,6 +52,14 @@ export interface Env {
    *  the Analytics Engine SQL API URL for the ClickHouse datasource
    *  (`https://api.cloudflare.com/client/v4/accounts/<account-id>/analytics_engine/sql`). */
   CLOUDFLARE_ACCOUNT_ID: string;
+  /** T01-D (phase 2 fix round, I4): the Loki bucket name `GrafanaBox` tells
+   *  the container to write to. Optional, not a var with a required
+   *  presence check — box.ts falls back to the production bucket name
+   *  when this is unset, so `wrangler.jsonc` need not set it at all. Exists
+   *  so a throwaway sandbox-probe config (never committed, COMMON.md probe
+   *  rules) can point a probe `GrafanaBox` at its own bucket
+   *  (e.g. `o11y-probe-t03-loki`) instead of silently targeting production. */
+  LOKI_S3_BUCKET?: string;
 
   // Secrets: optional, matching workers/api/src/env.ts's MCP_SHARED_SECRET
   // style — a required field would force wrangler dev to typecheck against a

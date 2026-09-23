@@ -21,12 +21,18 @@ import type { Env } from "./env.js";
  *  has no other source at runtime, this string never varies). */
 const PUBLIC_ORIGIN = "https://demos.handsontable.com";
 
-/** Matches the observability contract §1's bucket-name table; also
- *  hardcoded rather than read from the `O11Y_LOKI_STATE` R2 binding (an
- *  `R2Bucket` object has no `.name` the Worker can read at runtime) — the
- *  same pattern `containers/o11y/compose.yml` already uses for its own
- *  MinIO bucket name. */
-const LOKI_BUCKET_NAME = "handsontable-demos-o11y-loki";
+/** Matches the observability contract §1's bucket-name table. Used as the
+ *  DEFAULT only (fix round I4) — `env.LOKI_S3_BUCKET` overrides it when
+ *  set. Not read from the `O11Y_LOKI_STATE` R2 binding: an `R2Bucket`
+ *  object has no `.name` the Worker can read at runtime, the same reason
+ *  `containers/o11y/compose.yml` hardcodes its own MinIO bucket name.
+ *  Before this fix the name was hardcoded outright, so a sandbox probe's
+ *  container silently targeted the PRODUCTION bucket name instead of the
+ *  probe bucket it actually created — see the T01 report's fix-round
+ *  section for what that confounded. A future probe (T03's, say) sets
+ *  `vars.LOKI_S3_BUCKET` in its own throwaway `wrangler.probe.jsonc` to
+ *  its own bucket (e.g. `o11y-probe-t03-loki`) instead. */
+const DEFAULT_LOKI_BUCKET_NAME = "handsontable-demos-o11y-loki";
 
 const WAKE_STORAGE_KEY = "wake";
 const LAST_STOP_STORAGE_KEY = "lastStop";
@@ -52,20 +58,29 @@ interface StopRecord {
  * opening a socket (confirmed via `liveEnabled: false`); a raw client that
  * dials the endpoint directly still gets a full Centrifuge connection
  * regardless of that setting (reproduced on 11.4.0, grafana/grafana#72072).
- * This is therefore the one place that actually refuses it. */
-const LIVE_PATH_RE = /^\/(?:grafana\/)?api\/live(?:\/|$)/;
+ * This is therefore the one place that actually refuses it. Case
+ * insensitive (fix round I3): nothing about HTTP path matching guarantees
+ * a proxy or client normalizes case before this ever sees the request. */
+const LIVE_PATH_RE = /^\/(?:grafana\/)?api\/live(?:\/|$)/i;
 
-function normalizedPathname(url: URL): string {
-  // Percent-decode each segment and collapse repeated slashes before
-  // matching — a route matched on the raw, undecoded pathname is a known
-  // way to smuggle a blocked path past a naive string/regex check.
+/**
+ * Percent-decodes each segment and collapses repeated slashes before
+ * matching — a route matched on the raw, undecoded pathname is a known way
+ * to smuggle a blocked path past a naive string/regex check. Returns
+ * `null` on an unparseable percent-encoding (fix round I3: the previous
+ * version returned the RAW, still-encoded pathname on failure, which the
+ * regex then tested and typically did NOT match — e.g.
+ * `/grafana/api/%6Cive%ZZ/ws` decodes as a whole to neither a valid string
+ * nor anything containing literal "live", so it slipped through unblocked.
+ * `null` is a distinct sentinel the caller fails closed on, not a
+ * fallback value that happens to usually still match.)
+ */
+function normalizedPathname(url: URL): string | null {
   let decoded: string;
   try {
     decoded = decodeURIComponent(url.pathname);
   } catch {
-    // An unparseable percent-encoding is suspicious on its own; treat it as
-    // matching (fail closed) rather than let it through un-normalized.
-    return url.pathname;
+    return null;
   }
   return decoded.replace(/\/{2,}/g, "/");
 }
@@ -77,7 +92,10 @@ function isBlockedLiveRequest(request: Request): boolean {
     return true;
   }
   const url = new URL(request.url);
-  return LIVE_PATH_RE.test(normalizedPathname(url));
+  const normalized = normalizedPathname(url);
+  // Fail closed: an unparseable path is refused, not let through.
+  if (normalized === null) return true;
+  return LIVE_PATH_RE.test(normalized);
 }
 
 function inboxWriterStub(env: Env) {
@@ -149,17 +167,37 @@ export class GrafanaBox extends Container<Env> {
         `GrafanaBox.wake: container state is "${state.status}" but no wake record is stored`,
       );
     }
+    if (state.status === "stopping") {
+      // Fix round (C1): falling through to #doWake here mints a wakeId and
+      // calls recordWake — marking the still-draining wake `over: true` in
+      // InboxWriter's ledger before its own marker exists — while
+      // @cloudflare/containers' own start() fast path may not actually
+      // restart a process that is mid-shutdown, or deliver the new
+      // WAKE_ID to it. The eventual onStop for the OLD process then tags
+      // its report with the NEW wakeId, since onStop reads whatever is
+      // currently in WAKE_STORAGE_KEY. Refuse instead: the caller (T03's
+      // waking page) already polls/refreshes, so a rejected wake here is
+      // retried by the next request rather than corrupting the ledger.
+      throw new Error("GrafanaBox.wake: container is stopping — retry shortly");
+    }
     return this.#doWake(reason);
   }
 
   async #doWake(reason: WakeReason): Promise<WakeRecord> {
-    const record: WakeRecord = { wakeId: crypto.randomUUID(), reason, startedAt: Date.now() };
+    const wakeId = crypto.randomUUID();
+    // Fix round (I2): build AND VALIDATE envVars first, as a pure
+    // synchronous step with no side effects yet. If a required secret is
+    // missing this throws here — before any storage write and before
+    // InboxWriter.recordWake — so a failed wake never leaves the ledger
+    // believing a wake started that never actually will.
+    const envVars = buildEnvVars(this.env, wakeId);
+    const record: WakeRecord = { wakeId, reason, startedAt: Date.now() };
     await this.ctx.storage.put(WAKE_STORAGE_KEY, record);
     // Fail closed: InboxWriter is the ledger's one owner (ADR-0041 §B.3);
     // if it cannot record this wake, the container must not start with a
     // wakeId nothing else knows about.
     await inboxWriterStub(this.env).recordWake(record.wakeId, reason);
-    await this.start({ envVars: buildEnvVars(this.env, record.wakeId) });
+    await this.start({ envVars });
     return record;
   }
 
@@ -199,7 +237,11 @@ export class GrafanaBox extends Container<Env> {
     portParam?: number,
   ): Promise<Response> {
     const request = toInspectableRequest(requestOrUrl, portOrInit);
-    if (request && isBlockedLiveRequest(request)) {
+    // Fail closed (fix round I3): the old `request &&` check let a request
+    // this code couldn't even construct into a `Request` to inspect skip
+    // the block entirely — silence read as "not live" instead of "unknown,
+    // so refuse". If it cannot be inspected, it cannot be proven safe.
+    if (!request || isBlockedLiveRequest(request)) {
       // Refused before touching container state or renewing the activity
       // timer — an idle tab hammering this path must not count as activity
       // even though Live cannot be disabled at the Grafana-config layer.
@@ -294,7 +336,7 @@ function buildEnvVars(env: Env, wakeId: string): Record<string, string> {
     LOKI_S3_REGION: "auto",
     LOKI_S3_ACCESS_KEY_ID: env.LOKI_S3_ACCESS_KEY_ID as string,
     LOKI_S3_SECRET_ACCESS_KEY: env.LOKI_S3_SECRET_ACCESS_KEY as string,
-    LOKI_S3_BUCKET: LOKI_BUCKET_NAME,
+    LOKI_S3_BUCKET: env.LOKI_S3_BUCKET || DEFAULT_LOKI_BUCKET_NAME,
     // Real R2, real TLS — "true" is only ever correct for local MinIO
     // (containers/o11y/compose.yml).
     LOKI_S3_INSECURE: "false",

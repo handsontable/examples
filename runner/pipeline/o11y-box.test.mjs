@@ -125,6 +125,41 @@ test("wake(): idempotent while already running/healthy — no second recordWake,
   assert.equal(inboxWriterCalls.length, 1, "recordWake is called exactly once");
 });
 
+test("wake(): refuses while the container is \"stopping\" — never mints a second wakeId over a draining one (C1)", async () => {
+  const { box, inboxWriterCalls } = makeBox();
+  let startCalls = 0;
+  hooks.start = async (self) => {
+    startCalls++;
+    self._state = { status: "running", lastChange: Date.now() };
+  };
+
+  const first = await box.wake("visit");
+  assert.equal(inboxWriterCalls.length, 1);
+
+  // The stub's own default `stop` hook (cloudflare-containers-stub.mjs)
+  // already models the platform's "stopping" state — this is exactly the
+  // window a second wake() call can observe while the real
+  // @cloudflare/containers stop() is still in flight (SIGTERM sent, the
+  // container not yet actually exited).
+  await box.stop();
+  assert.equal((await box.getState()).status, "stopping");
+
+  await assert.rejects(() => box.wake("backlog"), /stopping/);
+
+  // The bug this guards: falling through to #doWake here would mint a
+  // SECOND wakeId and call recordWake again, marking the FIRST (still
+  // draining) wake `over: true` in InboxWriter's ledger before its own
+  // marker exists — while start()'s own fast path may not even restart a
+  // mid-shutdown process or deliver the new WAKE_ID to it. So: still only
+  // the one recordWake call from the original wake, still only the one
+  // start() call, and the persisted wake record must still be the FIRST
+  // wake's, not a second one.
+  assert.equal(inboxWriterCalls.length, 1, "no second recordWake while stopping");
+  assert.equal(startCalls, 1, "no second start() while stopping");
+  const stillTracked = await box.ctx.storage.get("wake");
+  assert.equal(stillTracked.wakeId, first.wakeId, "the persisted wake record is still the draining wake's, not a new one");
+});
+
 test("wake(): concurrent calls on a stopped box collapse into ONE start (in-flight promise)", async () => {
   const { box, inboxWriterCalls } = makeBox();
   let startCalls = 0;
@@ -163,13 +198,20 @@ test("wake(): recordWake rejecting means start() is never called (fail closed)",
 });
 
 test("wake(): missing LOKI_S3_* credentials refuses to start, and never calls recordWake with a doomed wakeId first turning into a started container", async () => {
-  const { box } = makeBox({ env: { LOKI_S3_ACCESS_KEY_ID: undefined } });
+  const { box, inboxWriterCalls } = makeBox({ env: { LOKI_S3_ACCESS_KEY_ID: undefined } });
   let startCalls = 0;
   hooks.start = async () => {
     startCalls++;
   };
   await assert.rejects(() => box.wake("visit"), /LOKI_S3_ACCESS_KEY_ID/);
   assert.equal(startCalls, 0);
+  // Fix round I2: envVars are built and validated BEFORE the storage write
+  // and the recordWake call, so a missing-secret throw must leave the
+  // ledger untouched — no wake was ever recorded that will never start.
+  // Reverting the fix (validating inside/after the recordWake call, the
+  // original order) makes this assertion fail: recordWake fires once
+  // before buildEnvVars ever gets a chance to throw.
+  assert.equal(inboxWriterCalls.length, 0, "recordWake must not be called when envVars validation fails");
 });
 
 test("wake(): envVars never include SLACK_WEBHOOK_URL, and the only GF_* key is GF_SERVER_ROOT_URL", async () => {
@@ -205,6 +247,27 @@ test("wake(): production ClickHouse envVars use the single Authorization: Bearer
   assert.match(envVars.O11Y_CLICKHOUSE_URL, /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/.+\/analytics_engine\/sql$/);
   assert.match(envVars.LOKI_S3_ENDPOINT, /\.eu\.r2\.cloudflarestorage\.com$/);
   assert.equal(envVars.LOKI_S3_INSECURE, "false", "production R2 is always real TLS");
+  assert.equal(
+    envVars.LOKI_S3_BUCKET,
+    "handsontable-demos-o11y-loki",
+    "defaults to the production bucket name when env.LOKI_S3_BUCKET is unset",
+  );
+});
+
+test("wake(): LOKI_S3_BUCKET env override reaches the container (I4 — a throwaway probe must be able to target its own bucket)", async () => {
+  const { box } = makeBox({ env: { LOKI_S3_BUCKET: "o11y-probe-t03-loki" } });
+  let envVars;
+  hooks.start = async (self, startOptions) => {
+    envVars = startOptions.envVars;
+    self._state = { status: "running", lastChange: Date.now() };
+  };
+  await box.wake("visit");
+
+  assert.equal(
+    envVars.LOKI_S3_BUCKET,
+    "o11y-probe-t03-loki",
+    "env.LOKI_S3_BUCKET overrides the production default — a probe's own bucket name reaches the container, not a hardcoded production one",
+  );
 });
 
 // --- containerFetch(): the live block and the no-auto-start gate ---------
@@ -233,6 +296,34 @@ test("containerFetch(): bare /api/live/ and a percent-encoded variant are also r
   }
 });
 
+test("containerFetch(): a malformed percent-escape in the path is refused (fail closed), not silently let through (I3)", async () => {
+  const { box } = makeBox();
+  let containerFetchCalls = 0;
+  hooks.containerFetch = async () => {
+    containerFetchCalls++;
+    return new Response("should not be reached", { status: 200 });
+  };
+
+  // "%ZZ" is not a valid percent-escape, so decodeURIComponent throws on
+  // the whole path. The pre-fix code caught that and returned the RAW,
+  // still-encoded pathname, which then did NOT match the live-path regex
+  // (it contains literal "%6Cive%ZZ", not "live") — this exact path was
+  // let through unblocked. It must now be refused instead.
+  const res = await box.containerFetch(new Request("https://box.example/grafana/api/%6Cive%ZZ/ws"));
+  assert.equal(res.status, 404);
+  assert.equal(containerFetchCalls, 0, "an unparseable path must never reach the container");
+});
+
+test("containerFetch(): the live path is blocked case-insensitively (I3)", async () => {
+  const { box } = makeBox();
+  hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
+
+  for (const path of ["/GRAFANA/API/LIVE/ws", "/Grafana/Api/Live/", "/api/LIVE"]) {
+    const res = await box.containerFetch(new Request(`https://box.example${path}`));
+    assert.equal(res.status, 404, `expected 404 for ${path}`);
+  }
+});
+
 test("containerFetch(): any websocket Upgrade request is refused regardless of path", async () => {
   const { box } = makeBox();
   hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
@@ -241,6 +332,28 @@ test("containerFetch(): any websocket Upgrade request is refused regardless of p
     new Request("https://box.example/grafana/", { headers: { upgrade: "websocket" } }),
   );
   assert.equal(res.status, 404);
+});
+
+test("containerFetch(): a requestOrUrl argument that cannot even be constructed into a Request is refused, not silently let through (I3)", async () => {
+  const { box } = makeBox();
+  let containerFetchCalls = 0;
+  hooks.containerFetch = async () => {
+    containerFetchCalls++;
+    return new Response("should not be reached", { status: 200 });
+  };
+
+  // toInspectableRequest's catch-all returns null for an unconstructable
+  // Request; the pre-fix `if (request && isBlockedLiveRequest(request))`
+  // short-circuited to false on a null request, skipping the live-path
+  // defense-in-depth layer entirely (it then fell through to the
+  // not-running gate below, which happens to also refuse here — but for
+  // an unrelated reason, and would NOT save a request arriving while the
+  // box is genuinely running). Asserting 404 specifically (not just "not
+  // 200") is what catches the regression: reverting the fix flips this to
+  // 503 from the not-running gate instead.
+  const res = await box.containerFetch("not a valid url");
+  assert.equal(res.status, 404, "refused by the live-path check itself, not by an unrelated gate");
+  assert.equal(containerFetchCalls, 0, "an uninspectable request must never reach the container");
 });
 
 test("containerFetch(): a non-live path still reaches the container once it is running", async () => {

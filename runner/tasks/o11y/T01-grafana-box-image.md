@@ -195,7 +195,7 @@ report. Every probe route gated by a shared secret header.
 | 6 — cold start | ≤ 90 s, worst of 5 | **46.5 s worst** (25.6, 29.3, 29.0, 46.5, 44.9 s), confirmed "stopped" between each run |
 | 9 — idle tab | stops at 15 min idle | **stopped after 1059 s (17.65 min)** with zero requests made during the wait (state polling used `getState()` only, which never touches `containerFetch`/the activity timer) |
 | 10 — EU placement | `.jurisdiction("eu")` accepted, instance in an EU region | Accepted; `wrangler containers instances` showed `LOCATION: mxp04` (Milan) — EU |
-| 12 — stop semantics | `onStop` report recorded; no SIGKILL before the marker for a Worker-initiated stop | `stop()`: exit in 5 s (a separate earlier run: 53.7 s — see T01-D8), `onStop → {exitCode:1, reason:"exit"}` (index upload correctly failed closed — see T01-D7). **`destroy()` (SIGKILL): `onStop → {exitCode:0, reason:"exit"}`** — empirically confirms ADR-0041 §A's own claim that a host loss is indistinguishable from a clean exit at the `onStop` layer; the marker, never `onStop`, is what the ledger must trust. Platform's own documented SIGTERM→SIGKILL grace: **15 minutes** (developers.cloudflare.com/containers/concepts/architecture/), far above this box's own ~30–45 s internal grace, so the platform is never the constraint |
+| 12 — stop semantics | `onStop` report recorded; no SIGKILL before the marker for a Worker-initiated stop | `stop()`: exit in 5 s (a separate earlier run: 53.7 s — see T01-D8), `onStop → {exitCode:1, reason:"exit"}` (index upload correctly failed closed — see T01-D7, **caveat**: the probe's target bucket was also, at the time, hardcoded to a nonexistent-on-sandbox production name, so this run does not cleanly isolate "failed because of the credential" from "failed because of the bucket" — both are now fixable independently via `LOKI_S3_BUCKET`, T01-D9). **`destroy()` (SIGKILL): `onStop → {exitCode:0, reason:"exit"}`** — empirically confirms ADR-0041 §A's own claim that a host loss is indistinguishable from a clean exit at the `onStop` layer; the marker, never `onStop`, is what the ledger must trust. This part of the measurement does not depend on the bucket/credential confound above. Platform's own documented SIGTERM→SIGKILL grace: **15 minutes** (developers.cloudflare.com/containers/concepts/architecture/), far above this box's own ~30–45 s internal grace, so the platform is never the constraint |
 | 14 — image size | ≤ 1 GB compressed | **212.9 MB** (linux/amd64, `docker buildx build --platform linux/amd64`, the real target platform — not the 203.3 MB arm64 local-dev number) |
 | 1 — clean stop, production-scoped token | 100% queryable + marker, **production-scoped R2 token** | **Not measured with a production-scoped token — see T01-D7.** Loki push (204), Grafana health/live-block, and R2 lifecycle-rule apply-and-read-back all verified against the real platform; local criterion 1 (Phase 1, MinIO, exact-line-set + SIGKILL negative control) still stands as the only full round-trip evidence |
 | 13 (config half) | R2 lifecycle rules file applies | `wrangler r2 bucket lifecycle set --file r2-lifecycle-rules.json` on the probe bucket, read back via `lifecycle list`: all 4 rules present with the right prefixes/ages — the same file T10 applies to the real bucket |
@@ -235,13 +235,42 @@ report. Every probe route gated by a shared secret header.
   instruction. Consequence: the sandbox `GrafanaBox` ran with dummy
   `LOKI_S3_ACCESS_KEY_ID`/`SECRET`, so every index-upload attempt failed
   closed by design (no marker ever written, `onStop` correctly reported
-  `exitCode:1` for a Worker-initiated `stop()`) — this is *evidence the
-  fail-closed design holds under real Cloudflare Container conditions*,
-  not merely local Docker, but it does not reprove the full clean-marker
-  round trip on the real platform. That remains local-only evidence
-  (Phase 1). Whoever picks up a follow-up token-minting task needs either
-  an account owner with `Edit API Tokens` (or the dashboard UI) on the
-  sandbox account, or a differently-scoped credential.
+  `exitCode:1` for a Worker-initiated `stop()`). **Caveat, added in the
+  phase-2 fix round (finding I4):** the probe's `LOKI_S3_BUCKET` was ALSO,
+  at the time, an unconditionally hardcoded constant set to the
+  *production* bucket name (`handsontable-demos-o11y-loki`) — a bucket
+  that was never provisioned on the sandbox account at all (the sandbox
+  bucket actually created and later deleted was `o11y-probe-t01-loki`,
+  never referenced by the running container). So the observed fail-closed
+  result is genuine and correctly attributed to *a* failure in the S3 path,
+  but was **not cleanly isolated to the credential problem alone** — a
+  nonexistent target bucket would have produced an identical symptom
+  (every PUT rejected, no marker, `onStop` non-zero) even with valid
+  credentials. Both are still "the S3 write path failed, and the box
+  correctly refused a marker for it", which is the property that matters,
+  but the specific narrower claim "verified fail-closed against an
+  authentication rejection specifically" is not supported by this run.
+  Fixed for any future probe: `LOKI_S3_BUCKET` is no longer hardcoded
+  (`box.ts`'s `buildEnvVars` now reads `env.LOKI_S3_BUCKET`, falling back
+  to the production name only when unset — T01-D9), so a follow-up probe
+  can set `vars.LOKI_S3_BUCKET` to its own real bucket and get a clean,
+  single-variable measurement. This is *evidence the fail-closed design
+  holds under real Cloudflare Container conditions* for at least one
+  concrete S3 failure mode, not merely local Docker, but it does not
+  reprove the full clean-marker round trip on the real platform. That
+  remains local-only evidence (Phase 1). Whoever picks up a follow-up
+  token-minting task needs either an account owner with `Edit API Tokens`
+  (or the dashboard UI) on the sandbox account, or a differently-scoped
+  credential — and should now also create and point `LOKI_S3_BUCKET` at a
+  real probe bucket before drawing conclusions from the S3 path.
+- **T01-D9 (phase-2 fix round, I4) — `LOKI_S3_BUCKET` is now env-driven.**
+  `box.ts` previously hardcoded the Loki bucket name outright
+  (`LOKI_BUCKET_NAME`); it is now `env.LOKI_S3_BUCKET || DEFAULT_LOKI_BUCKET_NAME`,
+  with the production name as the only default (so `wrangler.jsonc` needs
+  no new `vars` entry — production behaviour is unchanged). A throwaway
+  probe config sets `vars.LOKI_S3_BUCKET` to its own bucket instead of
+  silently targeting production's bucket name. `Env.LOKI_S3_BUCKET?: string`
+  added to `env.ts` for this.
 - **T01-D8 — `stop()` timing varied 5 s vs. 53.7 s across two sandbox
   runs**, both with the same failing (dummy-credential) index-upload path.
   Not investigated further within phase 2's scope — plausibly S3
@@ -271,3 +300,33 @@ prefixed `o11y-probe-t01`, all confirmed deleted after measurement:
 - 3 Worker secrets (`LOKI_S3_ACCESS_KEY_ID`, `LOKI_S3_SECRET_ACCESS_KEY`,
   `AE_SQL_TOKEN`, all dummy values) — removed with the Worker.
 - No API token was created (T01-D7) — nothing to delete there.
+
+### Phase 2 fix round (reviewer findings)
+
+A review of phase 2 found four real issues in `box.ts`, all fixed:
+
+- **C1 (critical)** — `wake()` during a `"stopping"` container state fell
+  through to mint a second wakeId and call `recordWake` again, marking the
+  still-draining wake `over: true` in InboxWriter's ledger before its own
+  marker existed, while the underlying `start()` may not even restart a
+  mid-shutdown process or deliver the new `WAKE_ID` to it — the eventual
+  `onStop` for the OLD process would then be tagged with the NEW wakeId.
+  Fixed: `wake()` now refuses (throws) while `"stopping"`, leaving the
+  caller (T03's waking page) to retry.
+- **I2** — `recordWake` ran before `buildEnvVars` validated required
+  secrets, so a missing-secret throw left the ledger believing a wake had
+  started that never would. Fixed: `buildEnvVars` runs first, synchronously,
+  before any storage write or `recordWake` call.
+- **I3** — the live-path block had two fail-open edges: a malformed
+  percent-escape made `normalizedPathname` fall back to the raw,
+  still-encoded path (which then did not match the regex), and a
+  `requestOrUrl` argument `containerFetch` could not construct into a
+  `Request` skipped the block entirely (`request && ...`). Both now fail
+  closed (`null`/no-request → blocked). The regex also gained a case-
+  insensitive flag.
+- **I4** — `LOKI_S3_BUCKET` was an unconditionally hardcoded production
+  bucket name, which the sandbox probe silently inherited — see the T01-D7
+  caveat added above and T01-D9.
+
+Full details, the revert-evidence table and commands/outputs are in the
+report's "Phase 2 fix round" section.
