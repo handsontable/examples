@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | done — T03B (part B): fixes F1–F4 shipped with tests, and the sandbox probe re-run (T03-D11..D16) confirms exit criterion 1 now PASSES on the real platform — T03-D2's root cause (the drain's NDJSON-vs-OTLP-envelope bug) was fixed on this branch's own base before this pass started; criteria 2, 7, 13 also verified on the real platform, see Outcome |
+| Status | done — T03B (part B): fixes F1–F4 shipped with tests, and the sandbox probe re-run confirms exit criterion 1 now PASSES on the real platform (T03-D2's root cause, the drain's NDJSON-vs-OTLP-envelope bug, was fixed on this branch's own base before this pass started); criteria 2, 13 also verified on the real platform. Fix round (findings I1/I2): criterion 7 re-run at the corrected real-traffic scale (T05's own measured 23 lines/session, not 1/session — still PASSES, $0.21–0.33/month), and the (d) fix's merge order no longer lets body-JSON content spoof a real resource attribute — see Outcome |
 | Size | L |
 | Depends on | T01, T02 |
 | Blocks | T09 (live data path), T10, T11 |
@@ -628,43 +628,64 @@ box's Loki directly:
   Both equal a single clean replay — no duplication survived the real
   SIGKILL-mid-drain + reopen + replay cycle.
 
-**(c) Exit criterion 7 — PASSES at both 1× and 10×.** Interpretation used
-(traffic-baseline.md explicitly asks this be stated): the `worker`
-tenant's volume driver is `workers/api/src/telemetry/lines.ts#logRequestLine`
-— one line per non-proxy API request. The baseline's own countable
-non-proxy request types (sessions started + builds + share/embed views +
-AI questions) sum to ≈454/day ≈ 19/hour; rounded to 20/hour as the 1×
-figure, 200/hour at 10×. Both pushed as synthetic OTLP records spread in
-EVENT-TIME order across a 60-minute window (T03-D1: Loki's out-of-order
-window is 60 minutes relative to the stream's own high-water mark — a
-non-monotonic or too-old-behind push would 400).
-  - 1× (20 records, one 657-byte packed object): wake-to-drain-complete
-    **43s**.
-  - 10× (200 records, one 3166-byte packed object — still nowhere near
-    the 1 MB per-push cap): wake-to-drain-complete **49s**.
-  Both comfortably inside the 5-minute budget; wake-to-ready time (~9–18s)
-  dominates over drain time, matching T01's own prior finding — 10×
-  the record count added only ~6s. `wrangler tail --format json` during
-  the 10× run captured real per-invocation CPU: max 14ms (an `isAwake`
-  RPC call), DO alarm ticks (`drainStep`) up to 8ms — both far under the
-  `120000` `limits.cpu_ms` ceiling. Caveat: this capture includes this
-  probe's OWN diagnostic polling overhead (23 `/probe/backlog` calls
-  etc.), not only what a real wake would generate — the real per-wake
-  invocation count is smaller than what was captured.
+**(c) Exit criterion 7 — PASSES at both 1× and 10×, corrected scale
+(fix round I1).** The original pass modeled 1× as one Loki line per
+SESSION (≈20/hr) — wrong: `lines.ts#logRequestLine` writes one line per
+non-proxy REQUEST, and a session generates many. **Corrected derivation**,
+per T05's own measured "23 lines/session" (5-minute, 10-edit session,
+`tasks/o11y/T05-api-worker-signals.md`'s own "Measured lines, points and
+spans" table) and T06/T07's own web-vitals fixture shape
+(`pipeline/fixtures/faro/web-vitals.json`: one Faro "measurement" item
+bundles LCP/INP/CLS/FCP together, and `normalise/faro.ts` stores exactly
+one Loki line per measurement item — never four):
+
+```
+worker (T05):  446 sessions/day × 23 lines/session / 24h ≈ 427.4/hr
+browser (T06/T07): 121 page views/day × 1 line/page-view / 24h ≈ 5.0/hr
+                                                    1× total ≈ 432/hr
+```
+
+Non-session API traffic (share/embed views, T05's own note that
+chat/theme/import/payload calls "already counted as a request" within a
+session) adds a negligible amount (<0.01/hr from traffic-baseline.md's
+own share+embed counter) — not separately itemised. Pushed as
+427 worker-tenant OTLP records + 5 browser-tenant Faro `web-vitals` items
+at 1×, ×10 (4270 + 50) at 10×, both tenants together — this is >20× the
+volume the first pass tested — in EVENT-TIME order across a 60-minute
+window (T03-D1: Loki's 60-minute out-of-order window).
+
+  - **1×** (432 records, packed into 2 objects — one worker 6922 B, one
+    browser — 2 tenants both exercised): wake-to-drain-complete **28s**.
+  - **10×** (4320 records, 2 objects, 57850 B total — still nowhere near
+    the 1 MB per-push cap): wake-to-drain-complete **44s**.
+  Both comfortably inside the 5-minute budget — even at 20× the
+  previously-tested volume, wake-to-ready time still dominates over drain
+  time (drain itself adds ~16s from 1× to 10×, a 10× byte increase). Both
+  markers confirmed present (`{"present":true}`).
+  `wrangler tail --format json` captured real per-invocation CPU at both
+  rates: 1× max 19ms (an `isAwake` RPC — probe polling overhead, not
+  drain work itself); 10× max 150ms (same kind of call, likely a
+  cold-start/compile artifact), with every one of the 21 real DO alarm
+  ticks (`drainStep`'s own reschedule loop, which is what actually pushes
+  the packed objects to Loki) costing 0–4ms CPU each. All far under the
+  `120000` `limits.cpu_ms` ceiling — even the highest single-invocation
+  spike (150ms) is 0.125% of it.
   - **Cost model** (`workers/api/src/budget.ts#RATE`/`INSTANCE`,
     `standard-1`: 4 GiB mem, 0.5 vCPU, 8 GB disk; mem+disk bill on
     provisioned size for every awake second, CPU on actual use):
     mem+disk ≈ 4×0.0000025 + 8×0.00000007 ≈ $0.00001056/awake-second.
     At ~720 hourly-triggered wakes/month (the 60-minute backlog-age
-    threshold dominates wake FREQUENCY, not volume — 10× the data did
-    not meaningfully change wake count, only added ~6s/wake):
-    1×: 720 × 43s × $0.00001056 ≈ **$0.33/month**.
-    10×: 720 × 49s × $0.00001056 ≈ **$0.37/month**.
-    CPU cost is negligible against this (sub-cent/month at the measured
-    per-invocation rates). Both are far under the $10/month limit, at
-    either volume — criterion 7 passes with large headroom. (Egress and
-    Workers-request costs are also negligible at this record/byte scale,
-    not itemised separately.)
+    threshold still dominates wake FREQUENCY, not volume — even 10×
+    this corrected volume stays far under the 64 MB size trigger, so
+    wake count is unchanged; only the ~16s/wake drain-time delta moves):
+    1×: 720 × 28s × $0.00001056 ≈ **$0.21/month**.
+    10×: 720 × 44s × $0.00001056 ≈ **$0.33/month**.
+    CPU cost is negligible against this even using the highest observed
+    single-invocation spike (sub-cent/month). Both are far under the
+    $10/month limit, at either volume — criterion 7 passes with large
+    headroom, even at the corrected (>20×) real-traffic scale. (Egress
+    and Workers-request costs are also negligible at this record/byte
+    scale, not itemised separately.)
 
 **(d)** — see "T03B: (d)" above (answered with a real captured export,
 fix shipped).
@@ -718,6 +739,45 @@ added.
   rule and its two objects (phase A's, see (e) above) — left for T11.
 - **Not deleted**: the R2 bucket `o11y-probe-t03-loki` itself and the
   probe API token/R2 key — the user deletes these (COMMON.md).
+
+### Fix round (controller review, findings I1/I2 — minors deferred)
+
+**I1 — exit criterion 7 was tested at ~20× under the real 1× volume.**
+The `(c)` section above is REPLACED (not appended) with the corrected
+1×/432-lines/hr, 10×/4320-lines/hr re-run — both tenants, both markers
+confirmed, wall time and cost model corrected. Full derivation and
+numbers there.
+
+**I2 — the (d) fix's own merge order let body-JSON content spoof a real
+resource attribute.** `otlp.ts#toIngestItem` spread `bodyJsonAttrs`
+AFTER `resourceLogs.resourceAttributes`, so a body key like
+`"service.name"` or `"deployment.environment.name"` inside a Worker's
+own `console.log` JSON would override the REAL resource attribute — a
+Loki label/AE index slot that must only ever come from the trusted OTLP
+resource. Fixed two ways: `tryParseJsonBodyAttrs` now strips every
+`RESOURCE_ATTRS` key from its own output, AND the merge at the call site
+gives body-JSON attrs the LOWEST priority (spread first) — so even a
+future `RESOURCE_ATTRS` addition the strip has not yet been taught about
+still cannot win. New test
+(`pipeline/fixtures/otlp/json/console-log-line-spoof-attempt.json`): a
+body trying to set `service.name=spoof`,
+`deployment.environment.name=spoof-env`, `hot.outcome=spoof-outcome`
+leaves the real values intact, while `cf.ray` (a legitimate,
+non-`RESOURCE_ATTRS` structured-metadata key) still comes through —
+confirmed red with both the strip and the merge-order reverted.
+
+Verify (raw, `rtk proxy`, from `runner/`):
+
+```
+pnpm test                     exit=1 (1663 pass / 1 known baseline
+                                failure / 2 todo)
+pnpm -r run typecheck                                        exit=0
+node scripts/check-test-presence.mjs feat/runner-observability
+                                                                exit=0
+```
+
+Full narrative, sandbox transcript and commands/output in
+`.superpowers/sdd/README/T03B-report.md`'s own "Fix round" section.
 
 ### Local acceptance walkthrough (added after the controller's phase split)
 
