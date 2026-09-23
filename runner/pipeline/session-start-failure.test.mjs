@@ -537,3 +537,238 @@ test("the header-name list is capped, and says it was", async () => {
   // `extra` is not free — a response can carry arbitrarily many headers, and this
   // is the same bounding discipline `FAILURE_TEXT_MAX` applies to the body.
 });
+
+// ---------------------------------------------------------------------------
+// T07 — `onSessionStart` (§5 `session.start_ms`). `pipeline/browser-metrics.test.mjs`
+// covers `apps/authoring/src/telemetry/metrics.ts`'s own emission logic against a
+// fake hook; this covers whether `container.ts`'s classification and the
+// create-clock reuse are correct against the REAL `mount()`.
+
+/**
+ * Drive `mount()` through a fake `POST /api/session` and return what
+ * `onSessionStart` saw. `respond(url, init)` answers the create POST; every other
+ * request (the status poll `mount()` kicks off right after returning, the cleanup
+ * DELETE on a failure) gets a quiet default that ends polling without further
+ * network activity. `window`/`fetch` are restored and the runtime disposed in
+ * `finally`, mirroring `sessionStartError` above.
+ */
+async function mountAndCollectSessionStart(respond) {
+  const fetchBefore = globalThis.fetch;
+  const windowBefore = globalThis.window;
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  globalThis.fetch = (url, init = {}) => {
+    if (url.endsWith("/api/session") && init.method === "POST") return Promise.resolve(respond(url, init));
+    // 410 stops the status-poll loop outright — the simplest "nothing more
+    // happens" shape for a unit test; a bare `ok:true` also serves the cleanup DELETE.
+    return Promise.resolve({ ok: false, status: 410, headers: new Headers(), text: () => Promise.resolve("") });
+  };
+
+  const runtime = new ContainerRuntime(ENTRY, { iframe: {}, apiBase: "https://api.test" });
+  const events = [];
+  runtime.onSessionStart((e) => events.push(e));
+  try {
+    await runtime.mount({ ...FILES }).catch(() => {});
+    return events;
+  } finally {
+    runtime.dispose();
+    globalThis.fetch = fetchBefore;
+    globalThis.window = windowBefore;
+  }
+}
+
+test("onSessionStart: a successful create reports outcome ready, once, with the create-clock's own elapsed time", async () => {
+  const events = await mountAndCollectSessionStart(() => ({
+    ok: true,
+    status: 200,
+    type: "basic",
+    headers: new Headers(),
+    json: () => Promise.resolve({ previewUrl: "https://1234-sess-tok.demos.handsontable.com", port: 3000 }),
+  }));
+
+  assert.equal(events.length, 1, "guard: exactly one session.start_ms per mount(), not one per internal step");
+  assert.equal(events[0].outcome, "ready");
+  assert.ok(events[0].elapsedMs >= 0, "reuses the same create-POST clock as SessionStartDiagnostics.elapsedMs");
+});
+
+test("onSessionStart: each refusal code maps to its own outcome, and fires before dispose() clears the listener", async () => {
+  const cases = [
+    { code: "at_capacity", status: 503, outcome: "at_capacity" },
+    { code: "container_starting", status: 503, outcome: "container_starting" },
+    { code: "budget_exhausted", status: 410, outcome: "budget_denied" },
+    { code: "budget_login_required", status: 401, outcome: "budget_denied" },
+  ];
+  for (const { code, status, outcome } of cases) {
+    const events = await mountAndCollectSessionStart(() => ({
+      ok: false,
+      status,
+      type: "basic",
+      headers: new Headers(),
+      text: () => Promise.resolve(JSON.stringify({ error: code, message: "refused" })),
+    }));
+    // If `dispose()` (called inside `mount()`'s own catch) cleared `sessionStartCbs`
+    // before this emission, `events` would be empty — the guard this asserts.
+    assert.equal(events.length, 1, `${code}: guard: emission must land before dispose() clears the listener`);
+    assert.equal(events[0].outcome, outcome, `${code} should map to ${outcome}`);
+  }
+});
+
+test("onSessionStart: an envelope-less timeout maps to boot_timeout", async () => {
+  const events = await mountAndCollectSessionStart(() => ({
+    ok: false,
+    status: 522,
+    type: "basic",
+    headers: new Headers({ "cf-ray": RAY }),
+    text: () => Promise.resolve(""),
+  }));
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].outcome, "boot_timeout");
+});
+
+test("onSessionStart: the DEMOS-9 interception 504 (envelope-less, ray-less, headers readable) maps to error, not boot_timeout", async () => {
+  // Mirrors `classifySessionStartOutcome`'s own precedence, checked before the
+  // generic timeout tier since 504 is a member of both sets: "the response
+  // carries no sign of having come from our servers" is not a boot timeout.
+  const events = await mountAndCollectSessionStart(() => ({
+    ok: false,
+    status: 504,
+    type: "basic",
+    headers: new Headers(),
+    text: () => Promise.resolve(""),
+  }));
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].outcome, "error", "guard: DEMOS-9 interception must not read as our own boot timing out");
+});
+
+test("onSessionStart: an enveloped 504 (our own words) still reads as a generic error, not boot_timeout", async () => {
+  // An envelope means the response came from our own Worker, not from the
+  // platform above it — `classifySessionStartOutcome`'s timeout/interception
+  // tiers are both gated on `!envelope`.
+  const events = await mountAndCollectSessionStart(() => ({
+    ok: false,
+    status: 504,
+    type: "basic",
+    headers: new Headers(),
+    text: () => Promise.resolve(JSON.stringify({ error: "boom", message: "the pool is full" })),
+  }));
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].outcome, "error");
+});
+
+test("onSessionStart: fetch() itself throwing (no response at all) still reports outcome error with a real elapsed time", async () => {
+  const events = await mountAndCollectSessionStart(() => {
+    throw new TypeError("Failed to fetch");
+  });
+
+  assert.equal(events.length, 1, "guard: a network error with no SessionStartError must still emit exactly once");
+  assert.equal(events[0].outcome, "error");
+  assert.ok(events[0].elapsedMs >= 0);
+});
+
+// ---------------------------------------------------------------------------
+// T07 — `onHmr` (§5 `hmr.roundtrip_ms`). Drives the private `onFrameLoad` handler
+// directly (the same style `sandpack-reload.test.mjs` drives `onMessage`) rather
+// than through a full `poll()`/iframe simulation — see `HmrRoundtripEvent`'s own
+// doc comment for what this hook does and does not observe (only a dev server
+// that does a full page reload on an edit; genuine in-place HMR never fires an
+// iframe `load` at all and stays invisible either way).
+
+/** `dispose()` unconditionally reaches for `window.removeEventListener` — needed
+ *  even though these tests never call `mount()` (which is what normally stubs it).
+ *  Restores `window` only after `fn()`'s promise settles, not synchronously after
+ *  it returns one — the last of these tests disposes inside a `.finally()`. */
+async function withFakeWindow(fn) {
+  const windowBefore = globalThis.window;
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  try {
+    return await fn();
+  } finally {
+    globalThis.window = windowBefore;
+  }
+}
+
+test("onHmr: a post-ready frame load following an edit flush reports the flush-to-load duration", () =>
+  withFakeWindow(() => {
+    const runtime = new ContainerRuntime(ENTRY, { iframe: {} });
+    const events = [];
+    runtime.onHmr((e) => events.push(e));
+    runtime.didReady = true;
+    runtime.lastEditFlushDispatchedAt = performance.now() - 25;
+
+    runtime.onFrameLoad();
+
+    assert.equal(events.length, 1);
+    assert.ok(events[0].durationMs >= 0);
+    runtime.dispose();
+  }));
+
+test("onHmr: the very first (pre-ready) navigation never reports — that is the boot page, not an edit", () =>
+  withFakeWindow(() => {
+    const runtime = new ContainerRuntime(ENTRY, { iframe: {} });
+    const events = [];
+    runtime.onHmr((e) => events.push(e));
+    // didReady is still false: this is the initial pointing navigation.
+    runtime.lastEditFlushDispatchedAt = performance.now() - 25;
+
+    runtime.onFrameLoad();
+
+    assert.equal(events.length, 0, "guard: the pre-ready navigation must not be mistaken for an HMR round trip");
+    runtime.dispose();
+  }));
+
+test("onHmr: our own reload() navigation does not report", () =>
+  withFakeWindow(() => {
+    const runtime = new ContainerRuntime(ENTRY, { iframe: {} });
+    const events = [];
+    runtime.onHmr((e) => events.push(e));
+    runtime.didReady = true;
+    runtime.reloadInFlight = true;
+    runtime.lastEditFlushDispatchedAt = performance.now() - 25;
+
+    runtime.onFrameLoad();
+
+    assert.equal(events.length, 0, "guard: an explicit refresh must not read as a dev-server HMR reload");
+    runtime.dispose();
+  }));
+
+test("onHmr: a post-ready load with no preceding edit flush does not report (nothing to time)", () =>
+  withFakeWindow(() => {
+    const runtime = new ContainerRuntime(ENTRY, { iframe: {} });
+    const events = [];
+    runtime.onHmr((e) => events.push(e));
+    runtime.didReady = true;
+    // lastEditFlushDispatchedAt stays null — no edit was made.
+
+    runtime.onFrameLoad();
+
+    assert.equal(events.length, 0);
+    runtime.dispose();
+  }));
+
+test("flush() only starts the HMR dispatch clock once the preview is already ready", () =>
+  withFakeWindow(() => {
+    const runtime = new ContainerRuntime(ENTRY, { iframe: {} });
+    // Simulate the pre-ready buffered flush mount() triggers for edits made mid-create.
+    runtime.mounted = true;
+    runtime.sessionId = "sess-test";
+    runtime.pending.set("/src/main.ts", "x");
+    const before = runtime.lastEditFlushDispatchedAt;
+
+    const fetchBefore = globalThis.fetch;
+    globalThis.fetch = () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    return runtime
+      .flush()
+      .then(() => {
+        assert.equal(
+          runtime.lastEditFlushDispatchedAt,
+          before,
+          "guard: a pre-ready flush must not start the HMR clock — didReady is still false",
+        );
+      })
+      .finally(() => {
+        globalThis.fetch = fetchBefore;
+        runtime.dispose();
+      });
+  }));
