@@ -11,19 +11,60 @@
 // there is no runtime import cycle even though the types reference each other.
 
 import type { DurableObjectNamespace } from "@cloudflare/workers-types";
+import type { NormalisedRecord, Tenant } from "@handsontable/demo-runtime/telemetry";
 import type { GrafanaBox } from "./box.js";
 import type { InboxWriter } from "./inbox/writer.js";
 
 /**
+ * T02 addition to the pinned interface (COMMON.md interface 1 explicitly
+ * allows T02 to add ingest methods here): one item the route handler hands to
+ * `InboxWriter.ingest` after ADR §B.2 steps 1–3 (decode/scrub, hash, stamp).
+ * `hash` is computed over the pre-stamp record (T02-D1, see this task's
+ * Outcome) so a redelivered body hashes identically regardless of arrival
+ * time. `fingerprint` is set only for exception/error records whose surface
+ * feeds the new-fingerprint alert (`feedsNewFingerprintAlert`, §7) — absent
+ * otherwise, so `InboxWriter` never has to re-derive that decision.
+ */
+export interface IngestItem {
+  hash: string;
+  record: NormalisedRecord;
+  fingerprint?: string;
+}
+
+export type IngestOutcome = "accepted" | "duplicate";
+
+export interface IngestItemResult {
+  hash: string;
+  outcome: IngestOutcome;
+}
+
+export interface IngestResult {
+  results: IngestItemResult[];
+}
+
+/**
  * `InboxWriter`'s RPC surface, pinned by the controller (COMMON.md interface 1).
- * Further methods (ingest, ledger/backlog, alert state) are added by T02–T04 on
- * this same interface — never a second one.
+ * Further methods (ledger/backlog, alert state) are added by T03/T04 on this
+ * same interface — never a second one.
  */
 export interface InboxWriterApi {
   /** Writes contract §8 `wake:<wakeId> = { startedAt, reason, over: false }` and
    *  marks every earlier wake `over: true`. Called by `GrafanaBox` (T01) at
    *  container start. */
   recordWake(wakeId: string, reason: "backlog" | "visit"): Promise<void>;
+
+  /**
+   * ADR §B.2 steps 4–5, T02: dedupe each item's `hash` against the 24 h window
+   * (`hash:<sha256>`), append every non-duplicate record to storage rows ≤ 1 MB
+   * (arrival time on the row, never in the record), update the exact
+   * fingerprint first-seen registry (`fp:<fingerprint>`) and the
+   * `heartbeat.lastIngest` marker, and answer only after the transaction
+   * commits. Returns the per-item outcome so the route handler can write
+   * aggregated `o11y.ingest` `accepted`/`duplicate` points (one point per
+   * request, per T02-D — see the task Outcome for why per-record points would
+   * violate exit criterion 4's "one duplicate point").
+   */
+  ingest(tenant: Tenant, arrivalMs: number, items: IngestItem[]): Promise<IngestResult>;
 }
 
 export interface Env {
@@ -45,6 +86,13 @@ export interface Env {
   ACCESS_AUD: string;
   GITHUB_OIDC_REPOSITORY: string;
 
+  /** T02 addition to `wrangler.jsonc`'s `vars` (see the task Outcome): the
+   *  `o11y.ingest` self-metric (`normalise/respond.ts`) needs the o11y
+   *  worker's own `service.version`, the same way the API worker's deploy
+   *  script sets `SERVICE_VERSION` (contract §2). Optional — `wrangler dev`
+   *  sets no such var, so every reader falls back to `"dev"`. */
+  SERVICE_VERSION?: string;
+
   // Secrets: optional, matching workers/api/src/env.ts's MCP_SHARED_SECRET
   // style — a required field would force wrangler dev to typecheck against a
   // secret that only exists in .dev.vars, and would let a gate assume
@@ -62,4 +110,12 @@ export interface Env {
    *  (`verifyAccess`, T02, `workers/o11y/src/gates/access.ts`). Optional is
    *  load-bearing: absent in production, so the bypass fails closed there. */
   DEV_ADMIN?: string;
+
+  /** ADR §B.5: the Workers rate-limiting binding gating `collect`/`lite`. T00
+   *  left this out of `wrangler.jsonc` pending "a real namespace id from the
+   *  dashboard" — measured false (T02-D, see the task Outcome): a rate-limit
+   *  binding's `namespace_id` is a self-chosen scoping id, not a
+   *  dashboard-provisioned resource, confirmed against `wrangler`'s own
+   *  config schema and a real `wrangler deploy --dry-run`. Added here. */
+  RATE_LIMITER: RateLimit;
 }

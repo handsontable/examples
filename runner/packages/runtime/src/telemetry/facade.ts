@@ -36,16 +36,30 @@ function mintPageLoadId(): string {
  * Every call is a no-op except `pageLoadId()`, which still mints and returns a
  * real, stable id — call sites that read it to tag `x-hot-session` before init
  * has run must not see an empty string.
+ *
+ * T02-D — the id is minted lazily, on the first `pageLoadId()` call, not
+ * eagerly at module scope (see T02's task Outcome, discovered running a real
+ * `wrangler dev` for `workers/o11y`, which imports this barrel transitively
+ * through `@handsontable/demo-runtime/telemetry`): an eager
+ * `mintPageLoadId()` at module-evaluation time called `crypto.randomUUID()`
+ * before any request handler ran, and Workers refuses "asynchronous I/O …
+ * and generating random values … within global scope," failing the whole
+ * Worker's startup with `Disallowed operation called within global scope`.
+ * Outside a Worker (the browser, plain Node) this only changes *when* the id
+ * is minted, not its value or stability — `pageLoadId()` still returns the
+ * same id on every call for the life of the module, per its own doc comment
+ * above. This is a fix to a file outside T02's own "Owns" row
+ * (`packages/runtime/src/telemetry/facade.ts`, T00's), kept minimal and
+ * reported explicitly, per COMMON.md's allowance for exactly this case: a
+ * real bug that blocks T02's own required `wrangler dev` verification.
  */
-export const noopTelemetry: Telemetry = (() => {
-  const pageLoadId = mintPageLoadId();
-  return {
-    metric() {},
-    event() {},
-    error() {},
-    pageLoadId: () => pageLoadId,
-  };
-})();
+let lazyPageLoadId: string | undefined;
+export const noopTelemetry: Telemetry = {
+  metric() {},
+  event() {},
+  error() {},
+  pageLoadId: () => (lazyPageLoadId ??= mintPageLoadId()),
+};
 
 export interface RecordedMetricCall {
   name: MetricName;
