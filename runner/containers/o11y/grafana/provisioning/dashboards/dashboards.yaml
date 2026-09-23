@@ -1,0 +1,15 @@
+# Empty dashboards provider — T09 (`runner/tasks/o11y/T09-dashboards.md`) adds
+# JSON dashboards under containers/o11y/grafana/dashboards/. T01 owns only this
+# provider file; T01 does not own the dashboards/** directory's contents.
+apiVersion: 1
+
+providers:
+  - name: default
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards
