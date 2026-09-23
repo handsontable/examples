@@ -184,7 +184,9 @@ node scripts/check-test-presence.mjs feat/runner-observability
 
 ### Deviations (T06-D)
 
-- **T06-D1 — BLOCKING, outside this task's Owns rows.** `scrub.ts#allowlistAttributes`
+- **T06-D1 — FIXED in the fix round** (see "Fix round" below for the commit
+  and revert evidence). Originally blocking, outside this task's Owns rows:
+  `scrub.ts#allowlistAttributes`
   (owned by T00, `packages/runtime/src/telemetry/attrs.ts`'s
   `ALLOWED_ATTRIBUTE_KEYS`) keeps only the dotted OTLP resource-attribute keys
   and the four structured-metadata keys — it has no entry for a bare `handled`
@@ -207,15 +209,18 @@ node scripts/check-test-presence.mjs feat/runner-observability
   maps the six `HotAttrs` fields that DO have a dotted equivalent
   (`surface`→`hot.surface`, `tier`→`hot.tier`, `framework`→`hot.framework`,
   `ht_major`→`hot.ht_major`, `outcome`→`hot.outcome`, `demo_id`→`hot.demo_id`)
-  before sending; every other field (including `handled` and `reason`) is sent
-  bare/unmapped, forward-compatible with an ingest-side allowlist fix that
-  needs no browser-side change. **Not fixed**: extending
-  `ALLOWED_ATTRIBUTE_KEYS`/the contract doc's §3 table is a policy change
-  under ADR §E.4 ("drop unknown attributes") in a file this task does not own
-  and that T02 codes against — left for the controller. `e2e/telemetry-faro.spec.ts`'s
-  last test is deliberately KEPT RED to encode this (see below), per
-  docs/TESTING.md: the expectation is correct, the code this task does not own
-  is wrong.
+  before sending; every other field (including `reason`) still travels bare.
+  **Now also fixed**: the fix round extended `ALLOWED_ATTRIBUTE_KEYS` with
+  `DIAGNOSTIC_TAG_KEYS` (`handled`, `context`, `sentry_event_id`, and the
+  `versions-fetch` diagnostic's own tags) — a controller ruling, in its own
+  `fix(contract): ...` commit against the T00-owned module, doc and test
+  together. `e2e/telemetry-faro.spec.ts`'s `reportError` test now asserts
+  `context.handled === "true"` directly and is green — see "Fix round" below.
+  `reason`/`fingerprint`/`route_class`/etc. (the fields `preview.runtime_error`
+  and T07/T12's own metrics need) remain unmapped/bare — out of this fix
+  round's named scope (D1 only asked for `handled`, `sentry_event_id`, and
+  `versions_fetch_unreachable`'s own tags), flagged for T07/T12 to hit the
+  same wall and extend the same allowlist further if needed.
 - **T06-D2 — the demo-runtime-ladder "one deduplicated count" claim is proven
   at the unit level only.** `monitorDemos` (`sentry.ts`, DEV-2540, pre-existing)
   is `reportingEnabled && VITE_MONITOR_DEMOS==="1"`, and `reportingEnabled`
@@ -228,7 +233,14 @@ node scripts/check-test-presence.mjs feat/runner-observability
   `"a keystroke ladder collapses to one fingerprint (the actual contract
   dedupe)"` test, which runs the REAL contract `fingerprint()` (T00's, not a
   re-implementation) over a 4-rung ladder and asserts one shared fingerprint
-  plus a genuinely-different failure NOT collapsing into it.
+  plus a genuinely-different failure NOT collapsing into it. **Partially
+  narrowed by the fix round's I3**: `window.__t06ReportDemoEvent` (a
+  `localTestSentryEnabled()`-gated test hook, see "Fix round" below) now lets
+  `e2e/telemetry-faro.spec.ts` drive `reportDemoEvent`'s full reporting logic
+  live — including the Sentry-reaches-under-`full`/facade-only-under-`uncaught`
+  claims — for a SINGLE message. The ladder-specific "many messages collapse
+  to one fingerprint" claim is still unit-only; driving an actual multi-rung
+  ladder live was not in the fix round's named scope.
 - **T06-D3 — `CrashProbe` test seam in `main.tsx`.** No existing mechanism in
   the app can trigger a deterministic React render crash from outside; adding
   one was necessary to test the acceptance criterion "a render crash inside
@@ -239,26 +251,24 @@ node scripts/check-test-presence.mjs feat/runner-observability
   probe" dist/assets/*.js` on a plain `.env.local`-absent build returns 0 for
   every file — Rollup's dead-code elimination removes the whole branch (and
   its string literals) once `import.meta.env.VITE_TELEMETRY_LOCAL` is
-  statically `undefined`, stronger than the runtime gate alone.
-- **T06-D4 — deleting the Sentry environment re-homing changes where Tier-1
-  compile-branch events land.** The task Scope explicitly says "delete the
-  environment re-homing" for `reportDemoEvent`. `tier1Report.ts`'s
-  `sandpack-compile` branch (reached from `App.tsx`'s `reportRuntimeError`,
-  still Sentry-eligible under `full` scope) also tagged `surface:
-  "demo-runtime"` and, before this change, hit the SAME re-homing branch in
-  `beforeSend` and landed in the `demo-runtime` Sentry environment. With the
-  branch deleted, those events now land in `authoring-production` (or
-  `authoring-local`) like any other event, still carrying the
-  `surface: "demo-runtime"` *tag* for filtering. If an existing Sentry saved
-  search/alert keys on the `demo-runtime` *environment* specifically, it needs
-  updating to filter on the tag instead — flagged for the controller/T11's
-  launch gate, not fixed here (no such search is committed to this repo to
-  update).
-- **T06-D5 — `tier2Report.ts` and the demo-console-warning breadcrumb path are
-  no longer called from `reportDemoEvent`.** Both are now dead from
-  `sentry.ts`'s perspective (their own files, `tier2-report.test.mjs`, and
-  `tier1Report.ts` are untouched and still pass their own tests — nothing here
-  deletes them, just stops importing `tier2StderrReport`).
+  statically `undefined`, stronger than the runtime gate alone. **Formalised
+  by the fix round's I2** as a real, durable script
+  (`scripts/check-telemetry-leak.mjs`, `pnpm check:telemetry-leak`) instead of
+  an ad hoc one-off `grep` — see "Fix round" below.
+- **T06-D4 — SUPERSEDED by the fix round's I1 (controller ruling).** Originally:
+  deleting the Sentry environment re-homing per the task Scope's literal
+  "delete the environment re-homing" line. The fix round's controller ruling
+  holds ADR §E.3 binding over that line instead: `reportDemoEvent` now keeps
+  the re-homing under `full` scope (restored, byte-identical to pre-T06) and
+  it is simply unreachable under `uncaught` scope (nothing tagged
+  `DEMO_SURFACE` is ever sent to `beforeSend` in that scope) — "the re-homing
+  disappears once the scope flips" (ADR Consequences), not on T06 landing.
+  See the Fix round section below for the restored behaviour and its revert
+  evidence.
+- **T06-D5 — SUPERSEDED by the fix round's I1.** Originally: `tier2Report.ts`
+  and the demo-console-warning breadcrumb path were dead from `sentry.ts`'s
+  perspective. Both are back in use under `full` scope — `reportDemoEvent`
+  restored its exact pre-T06 Sentry behaviour, `tier2StderrReport` included.
 - **T06-D6 — `sentryScope.ts`, `demoEventReport.ts` and their two pipeline
   tests are new files not literally named in this task's Owns row.** Same
   precedent as T00-D9 (creating `box.ts`/`writer.ts` as scaffolding for files
@@ -366,3 +376,134 @@ not the `rtk` wrapper's own trailing summary (COMMON.md: "rtk lies" — the e2e
 run above is the concrete case: `rtk`'s wrapper printed `exit=0` after
 Playwright itself printed `1 failed` / `ELIFECYCLE Command failed with exit
 code 1`).
+
+### Fix round (controller review, findings D1/I1/I2/I3 — minors deferred)
+
+Reviewer: sonnet medium. Findings file: `T06-fix-findings.md`. Required: D1, I1,
+I2, I3.
+
+**D1 — fixed, in its own commit (`fix(contract): ...`) against the T00-owned
+module.** Extended `packages/runtime/src/telemetry/attrs.ts`'s allowlist with a
+third category, `DIAGNOSTIC_TAG_KEYS` (flat, non-dotted — distinct from
+`STRUCTURED_METADATA_KEYS`, which stays dotted-only and hoists differently in
+`convert.ts`): `handled`, `context`, `sentry_event_id`,
+`versions_fetch_attempts`, `versions_fetch_outcome`,
+`versions_fetch_elapsed_bucket`, `versions_fetch_online`, `api_base_origin`,
+`net_effective_type` — every one a boolean, an opaque platform id, an
+enum/bucketed value, or a reporting call site's own name, never user or
+request content (controller ruling). `docs/observability-contract.md` §3 gains
+a new "Diagnostic tags" paragraph; `pipeline/telemetry-contract.test.mjs` gains
+a parsing test pinning the two together (reverted: added a bogus 5th tag to
+the doc only, 1 of 5 tests failed; restored). `telemetry/faro.ts` untouched —
+D1's own ruling was explicit that scrub must not be worked around in `faro.ts`
+since it re-runs at ingest. `e2e/telemetry-faro.spec.ts`'s `reportError` test
+now asserts `context.handled === "true"` directly (previously the spec's
+KNOWN RED case) — green.
+
+**I1 — fixed (controller ruling: ADR §E.3 is binding over the task file's
+"leave Sentry" line).** `reportDemoEvent` restored to its exact pre-T06 Sentry
+behaviour (`captureException`/`captureMessage`/`addBreadcrumb`,
+`tier2Report.ts`'s classification, the `DEMO_SURFACE` re-homing in
+`beforeSend`) under `full` scope (default), gated on `diagnosticsGoToSentry`;
+under `uncaught` scope none of that runs and the re-homing branch is simply
+never reached (nothing tagged `DEMO_SURFACE` is ever sent). The facade call
+(`preview.runtime_error`) is unconditional in both scopes, split from the
+Sentry-gated body via a new internal `reportDemoEventUnguarded` (also fix
+round I3's e2e hook target — see below). T06-D4 and D5 updated below.
+Truth-table coverage: the shared `reportsDiagnosticToSentry` decision already
+has 5 pipeline tests; `reportDemoEvent`'s OWN adherence to it is proven live
+by I3's two "demo-runtime" e2e tests (full → Sentry + re-homed; uncaught → not
+Sentry, still facade) — `sentry.ts` cannot be unit-tested (imports
+`@sentry/react`, reads `import.meta.env`), so a live proof is the only kind
+available, same constraint the module's own header documents.
+
+**I2 — added.** `scripts/check-telemetry-leak.mjs` (+ `pnpm check:telemetry-leak`,
+`package.json`, next to `check:compiler-chunk`). Builds nothing; greps
+`apps/authoring/dist/assets/*.js` for 5 sentinels: `__test_crash_boundary` /
+`T06 e2e render-crash probe` (`CrashProbe`), `VITE_TELEMETRY_LOCAL` (the raw
+env-var name), `__t06SentryCapture` / `__t06ReportDemoEvent` (I3's new hooks,
+added to the sentinel list in the same commit that introduces them). Measured
+both directions: plain build → `ok, no local-path sentinel found across 7 JS
+asset(s)`; `VITE_TELEMETRY_LOCAL=1` build → fails, lists all 4 reachable
+sentinels (the env-var-name sentinel never fires either way — Vite always
+replaces the read, never leaves the name as a string). T10 wires it into CI
+per the finding.
+
+**I3 — added.** Acceptance says "an uncaught error reaches Sentry (transport
+spy)" — untestable against the real production gate (`reportingEnabled`
+requires the production host, unreachable from any local/e2e run). Implemented
+the finding's offered alternative: a second, e2e-only `Sentry.init()` in
+`sentry.ts`, gated by a new `localTestSentryEnabled()` (the exact same
+build-time+host conditions as `CrashProbe` — `VITE_TELEMETRY_LOCAL === "1"` +
+localhost/127.0.0.1), mutually exclusive with the real production init
+(`reportingEnabled` is production-only). Shares `sharedSentryOptions()` — the
+same scope/`beforeSend` logic production uses, factored out so the two init
+call sites cannot drift — differing only in `dsn` (a syntactically valid,
+non-routable placeholder) and `transport` (appends every envelope to
+`window.__t06SentryCapture` instead of sending it). A second hook,
+`window.__t06ReportDemoEvent` (= `reportDemoEventUnguarded`, I1's split-out
+function), lets the deterministic spec drive `reportDemoEvent`'s reporting
+logic without a real (`E2E_LIVE`-gated) preview mount. Six new e2e tests
+across two `describe` blocks — the second builds and serves an entirely
+separate `VITE_SENTRY_SCOPE=uncaught` dist (`dist-uncaught-scope`, port 4712;
+`VITE_SENTRY_SCOPE` is a build-time read, not per-request-overridable):
+
+| Test | Build (port) | Asserts |
+|---|---|---|
+| uncaught → Sentry | full (4711) | an uncaught `throw` is captured |
+| reportError → Sentry | full (4711) | `context: "versions-fetch"` captured |
+| demo-runtime → Sentry, re-homed | full (4711) | `surface: "demo-runtime"` captured, `environment === "demo-runtime"` |
+| uncaught → Sentry | uncaught (4712) | still captured (ADR §E.1: always) |
+| reportError → Sentry | uncaught (4712) | NOT captured, but still reaches the facade |
+| demo-runtime → Sentry | uncaught (4712) | NOT captured, but still reaches the facade |
+
+**Revert evidence for the fix round** (all restored after):
+- D1: added a bogus 5th tag to the doc paragraph only → `§3 diagnostic tag keys
+  match DIAGNOSTIC_TAG_KEYS` failed (1 of 5 `telemetry-contract.test.mjs` tests).
+- I1: forced `reportDemoEventUnguarded`'s Sentry branch to always `return`
+  early → `I3: a demo-runtime event reaches Sentry under full scope` failed
+  (0 Sentry events captured, timeout).
+- I3 (the real bug this fix round found and fixed): first implementation
+  gated `diagnosticsGoToSentry` on `reportingEnabled` directly (unchanged from
+  before this fix round) instead of the new `sentryActive` — `I3: reportError
+  reaches Sentry under full scope` failed for real (0 events; `reportError`
+  never called `Sentry.captureException` at all, because the gate that decides
+  whether to call it was still production-only even though a Sentry client was
+  now actually listening locally). Reverting `sentryActive` back to bare
+  `reportingEnabled` reproduces this exact failure on demand — confirmed live,
+  not inferred.
+
+**Bundle size, re-measured after the fix round** (plain production build,
+`.env.local` absent, same base as before):
+
+| | Base (pre-T06) | T06 (fix round) | Delta |
+|---|---|---|---|
+| Raw | 1,419.84 kB | 1,553.96 kB | **+134.12 kB** |
+| Gzip | 450.74 kB | 495.40 kB | **+44.66 kB** |
+
+Small increase over the original T06 delta (+132.32 kB / +44.03 kB gzip) —
+`sharedSentryOptions()` and the two gate functions
+(`localTestSentryEnabled`/`sentryActive`) ship in every build (they gate a
+branch, they are not the branch); only the local-test `Sentry.init()` call and
+its transport are dead-code-eliminated.
+
+**Verify block, full re-run after the fix round:**
+
+```
+pnpm --filter @handsontable/demo-runtime build            # exit 0
+pnpm --filter @handsontable/demo-authoring typecheck       # exit 0
+pnpm test                                                   # 1272 tests, 1269 pass, 1 fail
+                                                              #   (same pre-existing baseline failure)
+pnpm --filter @handsontable/demo-authoring build             # plain prod build, exit 0
+grep -rl "localhost:8787\|VITE_DEV_USER\|dev@handsontable.com" dist   # OK (no match)
+pnpm check:telemetry-leak                                    # ok, 0 sentinels — plain build
+pnpm check:compiler-chunk                                    # exit 0
+VITE_TELEMETRY_LOCAL=1 pnpm --filter @handsontable/demo-authoring build   # exit 0
+pnpm check:telemetry-leak                                    # FAILS as designed — 4 sentinels found
+                                                               #   in the flag build (I2's own acceptance)
+E2E_TELEMETRY=1 pnpm e2e e2e/telemetry-faro.spec.ts          # 12 tests, 12 pass (2 workers, 2 describe
+                                                               #   blocks/ports — no KNOWN RED left)
+```
+
+Status stays `done` — no test is deliberately left red anymore; D1's fix
+closed the last gap that had one.
