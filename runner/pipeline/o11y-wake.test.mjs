@@ -27,6 +27,9 @@ function makeStorage() {
     async put(key, value) {
       map.set(key, value);
     },
+    async delete(key) {
+      return map.delete(key);
+    },
     _map: map,
   };
 }
@@ -240,6 +243,46 @@ test("an idle drain (no recent /grafana/* activity) stops right after finishing"
   await box.drainStep({ wakeId: wake.wakeId });
 
   assert.ok(stopped, "an idle backlog drain must call stop() right after finishing");
+});
+
+test("fix round I1: a fresh backlog wake with no visitors self-stops, even right after a PREVIOUS wake had a recent visitor", async () => {
+  // Two consecutive wakes: wake 1 has a real visitor (noteVisitorActivity),
+  // then fully stops; wake 2 is a fresh backlog-only wake with NO visitor
+  // activity of its own. `LAST_GRAFANA_STORAGE_KEY` is not scoped by
+  // wakeId, so without resetting it at the start of #doWake, wake 2's own
+  // #finishDrain reads wake 1's still-recent timestamp and wrongly treats
+  // itself as "not quiet," refusing to self-stop a backlog wake nobody is
+  // visiting — exactly ADR §A's quiet-stop rule broken, and awake-time
+  // wasted (exit criterion 7). Reverting the `ctx.storage.delete(...)` in
+  // #doWake (box.ts, fix round I1) makes this fail: `stopped` stays false.
+  const { box } = makeBox({ inboxWriter: { writtenKeys: [] } });
+  installContainerFetchRouter();
+
+  // Wake 1: a real visitor.
+  await box.wake("visit");
+  await box.noteVisitorActivity();
+  const wake1 = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake1.wakeId }); // drains (nothing to do), stays up (active visitor)
+  assert.equal((await box.getState()).status, "healthy", "wake 1 must still be running (active visitor)");
+
+  // Wake 1 fully stops (simulating its own eventual idle/hard-cap stop) —
+  // not merely "stopping", so wake() mints a genuinely new id next.
+  box._state = { status: "stopped", lastChange: Date.now() };
+
+  // Wake 2: backlog-triggered, no visitor of its own.
+  await box.wake("backlog");
+  const wake2 = await box.ctx.storage.get("wake");
+  assert.notEqual(wake2.wakeId, wake1.wakeId, "wake 2 must be a genuinely new wake");
+
+  let stopped = false;
+  hooks.stop = async (self) => {
+    stopped = true;
+    self._state = { status: "stopping", lastChange: Date.now() };
+  };
+
+  await box.drainStep({ wakeId: wake2.wakeId });
+
+  assert.ok(stopped, "a fresh backlog wake with no visitors of its own must self-stop, regardless of the PREVIOUS wake's visitor activity");
 });
 
 test("a drain wake with an active Grafana user does not call stop()", async () => {

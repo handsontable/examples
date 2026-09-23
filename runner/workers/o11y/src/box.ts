@@ -270,6 +270,17 @@ export class GrafanaBox extends Container<Env> {
     const envVars = buildEnvVars(this.env, wakeId);
     const record: WakeRecord = { wakeId, reason, startedAt: Date.now() };
     await this.ctx.storage.put(WAKE_STORAGE_KEY, record);
+    // Fix round (I1): `LAST_GRAFANA_STORAGE_KEY` is not scoped by wakeId —
+    // without this reset, a visitor's activity from the PREVIOUS wake
+    // survives into this fresh one, and `#finishDrain`'s quiet check
+    // (10 minutes) can read it as "recent" even though nothing has
+    // visited /grafana/* yet this wake, refusing to self-stop a
+    // backlog-only wake that has no visitors at all (ADR §A's quiet-stop
+    // rule, and exit criterion 7's awake-time cost). Deleted here, before
+    // `start()`, so a wake with a real visitor still renews it normally
+    // via `noteVisitorActivity()` once that visitor actually arrives, but
+    // a wake with none starts genuinely quiet.
+    await this.ctx.storage.delete(LAST_GRAFANA_STORAGE_KEY);
     // Fail closed: InboxWriter is the ledger's one owner (ADR-0041 §B.3);
     // if it cannot record this wake, the container must not start with a
     // wakeId nothing else knows about.
