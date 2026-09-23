@@ -87,6 +87,13 @@ import {
   routeClassOf,
   withSpan,
 } from "./telemetry/index.js";
+import { checkO11yHeartbeat } from "./o11y-watchdog.js";
+
+// T04's "register the usage entrypoint" (this file's Shared row): a real
+// `WorkerEntrypoint`, not an HTTP route — see `o11y-usage.ts`'s own header
+// for why. `workers/o11y/wrangler.jsonc` binds `API` to this exact name via
+// `"entrypoint": "O11yUsage"`.
+export { O11yUsage } from "./o11y-usage.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
 // so live-preview sessions all use ONE class backed by one generic image that
@@ -2501,11 +2508,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
 async function runFiveMinuteCron(env: Env): Promise<void> {
   await cronStep(env, "cron:five-minute:pool-gauge", () => emitPoolGauge(env));
   await cronStep(env, "cron:five-minute:budget-gauge", () => emitBudgetGauge(env));
-  // T04 fills this in (workers/api/src/o11y-watchdog.ts, `checkO11yHeartbeat`).
-  // One-line edit for T04: replace the statement below with
-  // `await cronStep(env, "cron:five-minute:heartbeat", () => checkO11yHeartbeat(env));`
-  // plus its import at the top of this file.
-  await cronStep(env, "cron:five-minute:heartbeat", () => Promise.resolve());
+  await cronStep(env, "cron:five-minute:heartbeat", () => checkO11yHeartbeat(env));
 }
 
 /**

@@ -37,12 +37,15 @@ import { BodyTooLargeError, readCappedBytes, readCappedText } from "./normalise/
 import { recordInvalidItem, recordOversizeDrop, respondDrop, respondIngested, o11ySelfIdentity } from "./normalise/respond.js";
 import { writePoint } from "./normalise/points.js";
 import { findRoute, registerRoute } from "./router.js";
+import { runAlerts } from "./alerts/index.js";
+import { readHeartbeatReport } from "./heartbeat.js";
 import { getGrafanaBoxStub } from "./box.js";
 import { handleGrafana } from "./grafana/proxy.js";
 import { handleReopen } from "./grafana/reopen.js";
 
 export { GrafanaBox } from "./box.js";
 export { InboxWriter } from "./inbox/writer.js";
+export { O11yHeartbeat } from "./heartbeat.js";
 
 interface RouteStub {
   method: "GET" | "POST";
@@ -253,7 +256,14 @@ async function handleScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
     ),
   );
 
-  if (backlog.drainsPaused) return; // ADR §A: "never when drainsPaused"
+  // ADR §A/§G: "never when drainsPaused" — `backlog.drainsPaused` is
+  // `writer.backlog()`'s own read of the same `drainsPaused` storage flag
+  // `alerts/index.ts#canWakeForBacklog` exposes (T04's cap rule sets it via
+  // `InboxWriter.setDrainsPaused`); read here inline rather than through a
+  // second RPC round trip to the same DO, since `backlog()` already fetched
+  // it in the same call. A Grafana VISIT wake (`grafana/proxy.ts`) never
+  // reads this flag at all — unaffected by the cap, by design.
+  if (backlog.drainsPaused) return;
 
   const oneHourMs = 60 * 60 * 1000;
   const sixtyFourMb = 64 * 1024 * 1024;
@@ -268,9 +278,25 @@ async function handleScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
   }
 }
 
+// T04: the API worker's watchdog reaches this path over the `O11Y` service
+// binding (`o11y-watchdog.ts`). Deliberately never passed to
+// `registerRoute` — this Worker's own `--routes` flags (package.json's
+// `deploy` script) are `demos.handsontable.com/telemetry/*` and
+// `/grafana/*` only, so `/_internal/heartbeat` is unreachable from outside
+// this binding by construction, unlike the API worker's wildcard
+// `*.demos.handsontable.com/*` (see `heartbeat.ts`'s own header for why
+// that distinction matters and why the API-side entrypoint is a real named
+// `WorkerEntrypoint` instead of the same trick).
+const HEARTBEAT_INTERNAL_PATH = "/_internal/heartbeat";
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (request.method === "GET" && url.pathname === HEARTBEAT_INTERNAL_PATH) {
+      const report = await readHeartbeatReport(env);
+      return new Response(JSON.stringify(report), { headers: { "content-type": "application/json" } });
+    }
 
     const handler = findRoute(request.method, url.pathname);
     if (handler) return handler(request, env, ctx);
@@ -281,7 +307,23 @@ export default {
     }
     return new Response("Not Found", { status: 404 });
   },
+
+  // Merge (T04 phase 2): T04's own placeholder `scheduled()` is gone —
+  // T03's ten-minute cron handler (`handleScheduled`, above) is the one
+  // real `scheduled` export, per Workers' "exactly one" limit. This single
+  // tick does three things, each independent of the other two (a failure
+  // in one must not skip the others): stamps `heartbeat.lastCron` exactly
+  // once (still `InboxWriter.stampCronHeartbeat`, T04's own RPC method —
+  // T03's backlog/wake logic never wrote this key, so the watchdog would
+  // read a stale `lastCron` forever without this call); runs the backlog
+  // scan/wake (`handleScheduled`, which already refuses a backlog wake
+  // while `drainsPaused` — see that function's own `if (backlog
+  // .drainsPaused) return;`); and evaluates every ADR §F.3 alert
+  // (`runAlerts`, T04's own cron entry, COMMON.md's "call `runAlerts` from
+  // T03's handler" instruction).
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(inboxWriter(env).stampCronHeartbeat(Date.now()));
     ctx.waitUntil(handleScheduled(env, ctx));
+    ctx.waitUntil(runAlerts(env, ctx).then(() => undefined));
   },
 } satisfies ExportedHandler<Env>;

@@ -66,6 +66,9 @@ export interface Env {
   BUDGET_ENFORCE?: string;
   /** Comma-separated dollar figures for the in-app spend alerts. */
   BUDGET_ALERTS_USD?: string;
+  /** ADR-0041 §G default for `settings.ts#o11yBudgetUsd` ($15/month) — the
+   *  o11y stack's own spend ceiling, separate from `BUDGET_MONTHLY_USD`. */
+  O11Y_BUDGET_USD?: string;
   /** Days of anonymous audience data to keep (visitor hashes). */
   ANALYTICS_RETENTION_DAYS?: string;
   /** Days after revocation before a demo's R2 artifacts are purged. 0 = off. */

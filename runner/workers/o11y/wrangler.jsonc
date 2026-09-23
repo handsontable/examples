@@ -77,8 +77,15 @@
   "analytics_engine_datasets": [{ "binding": "RUNNER_EVENTS", "dataset": "runner_events" }],
 
   // `handsontable-demos-api` — o11y usage metering, o11y spend, later
-  // `AdminReads` (ADR-0043).
-  "services": [{ "binding": "API", "service": "handsontable-demos-api" }],
+  // `AdminReads` (ADR-0043). T04: bound to the named `O11yUsage`
+  // `WorkerEntrypoint` (`workers/api/src/o11y-usage.ts`), not the default
+  // export — a named RPC entrypoint has no HTTP route on any host, which is
+  // what keeps `recordAwakeSeconds`/`o11ySpend` unreachable from outside
+  // this binding even though the API worker's own deploy routes are the
+  // wildcard `*.demos.handsontable.com/*` (see that file's header). This is
+  // a small, necessary edit to a file this task does not otherwise own —
+  // T04's Outcome documents it (not in this task's "Owns" row).
+  "services": [{ "binding": "API", "service": "handsontable-demos-api", "entrypoint": "O11yUsage" }],
 
   // `INBOX_WRITER` (T02, real behaviour: dedupe, fingerprint registry,
   // row-chunked pack/commit, `recordWake`) and `GRAFANA_BOX` (T01, real

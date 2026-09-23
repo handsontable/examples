@@ -19,6 +19,7 @@ import { toAePoint, type HotAttrs } from "@handsontable/demo-runtime/telemetry";
 import { drainBatch, type DrainDeps } from "./drain/drain.js";
 import { symbolicateResourceLogs } from "./drain/symbolicate.js";
 import type { Env } from "./env.js";
+import { reportAwakeSeconds } from "./cost.js";
 
 /** ADR-0041 §B.1: every request reaches the o11y worker on this hostname,
  *  never a per-deploy variable — hardcoded rather than a new `vars` entry
@@ -565,13 +566,36 @@ export class GrafanaBox extends Container<Env> {
    */
   override async onStop(params: { exitCode?: number; reason?: string }): Promise<void> {
     const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    const at = Date.now();
     const record: StopRecord = {
       wakeId: wake?.wakeId ?? null,
       exitCode: params.exitCode,
       reason: params.reason,
-      at: Date.now(),
+      at,
     };
     await this.ctx.storage.put(LAST_STOP_STORAGE_KEY, record);
+
+    // T04 addition (ADR-0041 §G, "the o11y worker reports `GrafanaBox`
+    // awake seconds over the `API` binding") — a small, necessary edit to
+    // this file, not otherwise T04's own (see the T04 Outcome). `wake`'s
+    // own `startedAt` to this stop's `at` is the same awake-window measure
+    // `onStop`'s own doc comment already treats as "bookkeeping, not the
+    // ledger's source of truth" — good enough for a cost estimate, exactly
+    // like every other sku in `budget.ts` is an estimate until the nightly
+    // reconciliation. No `wake` record (this class never produces that
+    // itself, per `#wakeInner`'s own invariant) means nothing to report.
+    //
+    // Awaited directly rather than `this.ctx.waitUntil(...)` (T04-D, found
+    // by this task's own test run — see the Outcome): `onStop` has already
+    // run past the point anything is waiting on a response, so there is no
+    // request to unblock, and `waitUntil` is not guaranteed to exist on
+    // every `DurableObjectState` a caller (a test double, an older
+    // workerd) hands this hook — `reportAwakeSeconds` itself never throws,
+    // so awaiting it here costs nothing but a few milliseconds of `onStop`.
+    if (wake) {
+      const awakeSeconds = Math.max(0, (at - wake.startedAt) / 1000);
+      await reportAwakeSeconds(this.env, awakeSeconds);
+    }
   }
 
   /** For the sandbox probe and any future diagnostic route — not part of
