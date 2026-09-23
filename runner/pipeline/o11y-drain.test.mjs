@@ -124,6 +124,72 @@ test("drainKey: a 400 rejects the key with Loki's message, no retry", async () =
   assert.equal(pushCount, 1, "a 400 must never be retried");
 });
 
+// F2 fix (final review, B cross-note): a 400 on one chunk used to make
+// `drainKey` return immediately, so any LATER chunk of the same (>1 MB,
+// multi-chunk) object was never even attempted — silently dropping records
+// that would otherwise have pushed cleanly. Two ~700 KB records force
+// `chunkBySize` to split into two separate ~1 MB pushes (the drain's own
+// per-request cap, ADR §B.3).
+test("F2 fix: a 400 on the FIRST chunk of a multi-chunk key does not skip the remaining chunks — they are still pushed", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const bigBody = "x".repeat(700_000);
+  const records = [record(bigBody + "-first"), record(bigBody + "-second")];
+  const bytes = await objectBytes(records);
+  const pushedBodies = [];
+  let pushCount = 0;
+  const deps = {
+    fetchObject: async () => bytes,
+    pushToLoki: async (_tenant, gz) => {
+      pushCount++;
+      const stream = new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"));
+      const body = await new Response(stream).text();
+      pushedBodies.push(body);
+      // Only the FIRST push (the chunk carrying "-first") 400s; every
+      // later chunk succeeds.
+      if (body.includes("-first")) return { status: 400, message: "too_far_behind" };
+      return { status: 204 };
+    },
+    symbolicate: noopSymbolicate,
+  };
+
+  const outcome = await drainKey(key, new Set(), deps);
+
+  assert.equal(pushCount, 2, "both chunks must be attempted — the second must not be skipped because the first 400'd");
+  assert.ok(pushedBodies.some((b) => b.includes("-second")), "the second chunk's records must actually reach Loki");
+  assert.equal(outcome.outcome, "rejected", "the key still ends rejected overall (see drain.ts's own doc comment on why)");
+  assert.equal(outcome.reason, "too_far_behind");
+  assert.ok(outcome.bytesPushed > 0, "bytes from the successfully-pushed second chunk must still be counted");
+});
+
+test("F2 fix: a 400 on a LATER chunk still lets an EARLIER chunk's push stand — no retry of the already-successful one", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
+  const bigBody = "x".repeat(700_000);
+  const records = [record(bigBody + "-first"), record(bigBody + "-second")];
+  const bytes = await objectBytes(records);
+  let firstPushCount = 0;
+  let secondPushCount = 0;
+  const deps = {
+    fetchObject: async () => bytes,
+    pushToLoki: async (_tenant, gz) => {
+      const stream = new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"));
+      const body = await new Response(stream).text();
+      if (body.includes("-first")) {
+        firstPushCount++;
+        return { status: 204 };
+      }
+      secondPushCount++;
+      return { status: 400, message: "too_far_behind" };
+    },
+    symbolicate: noopSymbolicate,
+  };
+
+  const outcome = await drainKey(key, new Set(), deps);
+
+  assert.equal(firstPushCount, 1, "the already-successful first chunk must be pushed exactly once, never retried");
+  assert.equal(secondPushCount, 1, "a 400 is still never retried");
+  assert.equal(outcome.outcome, "rejected");
+});
+
 test("drainKey: a 5xx is retried, and succeeds if a later attempt returns 2xx", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const bytes = await objectBytes([record("retry-me")]);
