@@ -13,8 +13,15 @@ import type {
   DemoRuntime,
   FilesMap,
   HandsontableVersionRef,
+  HmrRoundtripEvent,
+  SessionStartTimingEvent,
   WriteFileOptions,
 } from "./types.js";
+// Re-exported so existing `@handsontable/demo-runtime/container` importers
+// (this task's own `apps/authoring/src/telemetry/metrics.ts`) keep working —
+// the interfaces themselves now live in `types.ts` (T07 phase 2), so
+// `DemoRuntime` can name the hook methods without a circular import.
+export type { HmrRoundtripEvent, SessionStartTimingEvent } from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 import { MONITOR_EVENT_CEILING, normalizeMonitorMessage, truncateMessage } from "./monitor.js";
@@ -326,27 +333,15 @@ const RELOAD_TIMEOUT_MS = 10_000;
 const FAILED_POLL_INTERVAL_MS = 10_000;
 const FAILED_POLLS_MAX = 12;
 
-/**
- * Observability contract §5 timing hooks (T07), in the same style as the existing
- * `onProgress`/`onStderr` extension points — engine-specific, not on the shared
- * `DemoRuntime` interface. This module never imports
- * `@handsontable/demo-runtime/telemetry`: `apps/authoring/src/telemetry/metrics.ts`
- * turns these callbacks into `session.start_ms`/`hmr.roundtrip_ms` points against
- * an injected `Telemetry`.
- */
-export interface SessionStartTimingEvent {
-  readonly elapsedMs: number;
-  /** Matches `session.start`'s outcome set (contract §5: "outcomes as `session.start`"). */
-  readonly outcome: "ready" | "at_capacity" | "container_starting" | "boot_timeout" | "budget_denied" | "error";
-}
-
-/** A post-ready preview navigation that followed a real edit flush, and not our own
- *  `reload()` (T07 Outcome: only a dev server that does a full page reload on an edit
- *  is observable this way — genuine in-place HMR, React Fast Refresh included, never
- *  fires an iframe `load` at all and stays invisible here). */
-export interface HmrRoundtripEvent {
-  readonly durationMs: number;
-}
+// Observability contract §5 timing hooks (T07): `SessionStartTimingEvent`,
+// `HmrRoundtripEvent` and the `onSessionStart`/`onHmr` methods below are now
+// declared on `DemoRuntime` itself (`types.ts`), as OPTIONAL members — this
+// module implements them, never imports
+// `@handsontable/demo-runtime/telemetry`, and `apps/authoring/src/
+// telemetry/metrics.ts#wireRuntimeMetrics` is what turns the callbacks into
+// `session.start_ms`/`hmr.roundtrip_ms` points against an injected
+// `Telemetry`, through `runtime.onX?.(cb)` — no cast to the concrete class
+// needed at the call site.
 
 /**
  * Classify a failed `POST /api/session` the same way `sessionStartMessage` already

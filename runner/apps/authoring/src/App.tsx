@@ -72,6 +72,13 @@ import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
 import { tier1Report } from "./tier1Report.js";
 import { telemetry, apiHeaders } from "./telemetry/index.js";
 import type { Surface, Tier } from "@handsontable/demo-runtime/telemetry";
+import {
+  emitBucketResolve,
+  emitVersionSwitch,
+  startClock,
+  trackPreviewReady,
+  wireRuntimeMetrics,
+} from "./telemetry/metrics.js";
 import { isOpaqueNetworkFailure } from "./fetchFailure.js";
 import { describeDependencyFailure } from "./dependencyFailure.js";
 import {
@@ -1932,7 +1939,18 @@ function Authoring({
     const candidate = plan.bucket;
 
     let cancelled = false;
-    void fetchDocsManifest(candidate)
+    const manifestPromise = fetchDocsManifest(candidate);
+    // §5 `bucket.resolve_ms` (T07) — same reasoning as the starter-bucket site:
+    // a separate `.then(ok, err)` on the raw promise, kept apart from the
+    // app-logic chain below so a downstream throw cannot double-report this
+    // resolve. `fetchDocsManifest` caches per bucket (`docs-catalog.ts`), so a
+    // re-visit of an already-resolved bucket reports a near-zero duration.
+    const stopBucketClock = startClock();
+    manifestPromise.then(
+      () => emitBucketResolve(telemetry, { bucket: candidate, outcome: "ok", durationMs: stopBucketClock() }),
+      () => emitBucketResolve(telemetry, { bucket: candidate, outcome: "error", durationMs: stopBucketClock() }),
+    );
+    void manifestPromise
       .then(async (manifest) => {
         if (cancelled || docsRequestSeqRef.current !== requestSeq) return;
         setDocsItems(manifest.examples);
@@ -2125,7 +2143,20 @@ function Authoring({
     }
 
     let cancelled = false;
-    void loadStarterExample(bucket, framework)
+    const starterPromise = loadStarterExample(bucket, framework);
+    // §5 `bucket.resolve_ms` (T07). A SEPARATE `.then(ok, err)` on the raw
+    // promise, not chained onto the app-logic pipeline below: that pipeline's
+    // own `.catch` also catches whatever throws inside its `.then` (e.g.
+    // `loadWorkspace`), which would double-report one resolve as `ok` and then
+    // `error`. Note for the Outcome: `loadStarterExample` caches by bucket +
+    // framework, so a re-pick of an already-fetched bucket reports a near-zero
+    // duration — a real cache hit, not a measurement bug.
+    const stopBucketClock = startClock();
+    starterPromise.then(
+      () => emitBucketResolve(telemetry, { bucket, outcome: "ok", durationMs: stopBucketClock() }),
+      () => emitBucketResolve(telemetry, { bucket, outcome: "error", durationMs: stopBucketClock() }),
+    );
+    void starterPromise
       .then((starter) => {
         if (cancelled || starterRequestSeqRef.current !== requestSeq) return;
         const nextFiles = starter.htCoreRange === v.value.ref
@@ -2267,6 +2298,16 @@ function Authoring({
     // editing it — so it needs its own trail entry, tagged by the requested
     // version rather than a file path.
     recordEditorEvent({ kind: "version", source: "repin", path: next, quiet: false, size: 0 });
+    // §5 `version.switch` (T07). Before `setVersion`, so `version` here is still
+    // the FROM ref; `bucket` is whichever kind of workspace is open right now
+    // (docs or starter), read off the same refs the bucket-resolve effects keep
+    // current.
+    emitVersionSwitch(telemetry, {
+      framework,
+      toRef: next,
+      fromRef: version,
+      bucket: (docsPathRef.current ? activeDocsBucketRef.current : activeStarterBucketRef.current) ?? undefined,
+    });
     docsRequestSeqRef.current += 1;
     setVersionWarning(null);
     setThemeRemoved(false);
@@ -2281,7 +2322,7 @@ function Authoring({
       setErrorMessage(null);
     }
     setVersion(next);
-  }, []);
+  }, [framework, version]);
 
   // Dispose and visibly clear a preview while its target bucket/artifact is
   // unresolved or unavailable — docs or starter alike. The version picker and
@@ -2366,6 +2407,26 @@ function Authoring({
       framework: entry.framework,
       demoId: savedIdRef.current,
     });
+    // T07: §5 browser metric catalogue. `wireRuntimeMetrics` reads
+    // `runtime.onCompileTiming?`/`onSessionStart?`/etc through optional chains — it
+    // is the same call for either engine, no `entry.engine` branch needed here.
+    // `trackPreviewReady`'s `tier` reuses `demoContext()`'s own engine-derived value
+    // (never `entry.tier`, the catalog tier — the two disagree for the five
+    // UI-library starters, `react-js` and siblings: catalog tier 1, `engine:
+    // "container"`). `telemetry` is read here, live, not captured earlier — T06's
+    // `initTelemetry()` reassigns the binding after init.
+    wireRuntimeMetrics(runtime, { framework: entry.framework, versionRef: v.value.ref }, telemetry);
+    const previewTracker = trackPreviewReady(
+      runtime,
+      {
+        surface: isShare ? "share" : "authoring",
+        tier: demoContext().tier,
+        framework: entry.framework,
+        versionRef: v.value.ref,
+        bucket: (docsPath ? activeDocsBucketRef.current : activeStarterBucketRef.current) ?? undefined,
+      },
+      telemetry,
+    );
     if (entry.engine === "container") {
       (runtime as ContainerRuntime).onProgress((log) => !cancelled && setBootLog(log));
       // Post-boot dev-server faults (DEV-2527). Not gated on `cancelled`: a dev
@@ -2395,8 +2456,12 @@ function Authoring({
     });
     runtimeRef.current = runtime;
     setPreviewUrl("");
-    runtime
-      .mount(filesRef.current)
+    // Captured once, in a variable: `previewTracker.observe` and the `.then`/
+    // `.catch` chain below both read this SAME promise. `mount()` itself is
+    // called exactly once, same as before this task — `observe` only listens.
+    const mountPromise = runtime.mount(filesRef.current);
+    previewTracker.observe(mountPromise);
+    mountPromise
       .then(({ previewUrl: url }) => {
         // Container only. Tier 1 hands back whatever `iframe.src` happens to be
         // at mount time, which is Sandpack's *bundler* origin — not an address
@@ -2416,6 +2481,10 @@ function Authoring({
       });
     return () => {
       cancelled = true;
+      // A switch away (version, example) or an unmount before this preview
+      // settled — a no-op once ready/error/timeout already reported (§5
+      // `preview.ready_ms` outcome `abandoned`).
+      previewTracker.abandon();
       window.removeEventListener("message", onPreviewMessage);
       runtime.dispose();
       if (runtimeRef.current === runtime) runtimeRef.current = null;

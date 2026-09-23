@@ -25,8 +25,7 @@ import {
   htMajorOf,
   startClock,
   trackPreviewReady,
-  wireContainerMetrics,
-  wireSandpackMetrics,
+  wireRuntimeMetrics,
 } from "../apps/authoring/src/telemetry/metrics.ts";
 
 const SERVICE = { service_name: "demos-authoring", service_version: "abc123", environment: "production" };
@@ -224,7 +223,7 @@ const SANDPACK_CTX = { framework: "vue", versionRef: "17.1.0" };
 test("sandpack.compile_ms: reports the hook's own duration and outcome, tier fixed to 1", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeSandpackRuntime();
-  wireSandpackMetrics(runtime, SANDPACK_CTX, telemetry);
+  wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry);
 
   runtime.fireCompileTiming({ durationMs: 123, outcome: "ok" });
 
@@ -241,7 +240,7 @@ test("sandpack.compile_ms: reports the hook's own duration and outcome, tier fix
 test("sandpack.compile_error: fingerprinted, no authored text in the recorded attrs", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeSandpackRuntime();
-  wireSandpackMetrics(runtime, SANDPACK_CTX, telemetry);
+  wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry);
 
   const message = "SyntaxError: Unexpected token (2:7) in /src/App.vue";
   runtime.fireCompileError({ message });
@@ -261,7 +260,7 @@ test("sandpack.compile_error: fingerprinted, no authored text in the recorded at
 test("sandpack.compile_error: the same fingerprint (a keystroke ladder) reports once, not once per keystroke", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeSandpackRuntime();
-  wireSandpackMetrics(runtime, SANDPACK_CTX, telemetry);
+  wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry);
 
   runtime.fireCompileError({ message: "'t' is not defined" });
   runtime.fireCompileError({ message: "'tr' is not defined" });
@@ -277,7 +276,7 @@ test("sandpack.compile_error: the same fingerprint (a keystroke ladder) reports 
 test("sandpack.compile_error: a genuinely different message gets its own point", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeSandpackRuntime();
-  wireSandpackMetrics(runtime, SANDPACK_CTX, telemetry);
+  wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry);
 
   runtime.fireCompileError({ message: "'t' is not defined" });
   runtime.fireCompileError({ message: "Unexpected token }" });
@@ -289,7 +288,7 @@ test("sandpack.compile_error: a genuinely different message gets its own point",
 test("sandpack.bundler_unreachable: reports duration, ht_major only", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeSandpackRuntime();
-  wireSandpackMetrics(runtime, SANDPACK_CTX, telemetry);
+  wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry);
 
   runtime.fireBundlerUnreachable({ durationMs: 9001 });
 
@@ -327,7 +326,7 @@ const CONTAINER_CTX = { framework: "next", versionRef: "18.2.0" };
 test("session.start_ms: reports elapsed/outcome, and never sets reason (T07-D2 â€” no cold/warm signal exists)", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeContainerRuntime();
-  wireContainerMetrics(runtime, CONTAINER_CTX, telemetry);
+  wireRuntimeMetrics(runtime, CONTAINER_CTX, telemetry);
 
   runtime.fireSessionStart({ elapsedMs: 4200, outcome: "ready" });
 
@@ -343,7 +342,7 @@ test("session.start_ms: reports elapsed/outcome, and never sets reason (T07-D2 â
 test("session.start_ms: every session.start outcome value round-trips through toAePoint", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeContainerRuntime();
-  wireContainerMetrics(runtime, CONTAINER_CTX, telemetry);
+  wireRuntimeMetrics(runtime, CONTAINER_CTX, telemetry);
 
   for (const outcome of ["ready", "at_capacity", "container_starting", "boot_timeout", "budget_denied", "error"]) {
     runtime.fireSessionStart({ elapsedMs: 1, outcome });
@@ -356,7 +355,7 @@ test("session.start_ms: every session.start outcome value round-trips through to
 test("hmr.roundtrip_ms: reports the hook's own duration", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeContainerRuntime();
-  wireContainerMetrics(runtime, CONTAINER_CTX, telemetry);
+  wireRuntimeMetrics(runtime, CONTAINER_CTX, telemetry);
 
   runtime.fireHmr({ durationMs: 87 });
 
@@ -371,7 +370,7 @@ test("hmr.roundtrip_ms: reports the hook's own duration", () => {
 
 // ---- version.switch / bucket.resolve_ms ------------------------------------------
 
-test("version.switch: to-version closed-set, from-version as a free reason label", () => {
+test("version.switch: both to- and from-version go through the ht_major closed set, not the raw ref", () => {
   const telemetry = recordingTelemetry();
   emitVersionSwitch(telemetry, { framework: "react", toRef: "18.1.0", fromRef: "17.1.0", bucket: "18.1" });
 
@@ -379,8 +378,20 @@ test("version.switch: to-version closed-set, from-version as a free reason label
   const [call] = telemetry.metrics;
   assert.equal(call.name, "version.switch");
   assert.equal(call.attrs.ht_major, "18");
-  assert.equal(call.attrs.reason, "17.1.0");
+  assert.equal(call.attrs.reason, "17");
   assert.equal(call.attrs.bucket, "18.1");
+  assertValidAgainstRegistry(telemetry);
+});
+
+test("version.switch: a pkg.pr.new fromRef never lands raw in the reason blob (guard against unbounded AE data)", () => {
+  const telemetry = recordingTelemetry();
+  emitVersionSwitch(telemetry, {
+    framework: "react",
+    toRef: "18.1.0",
+    fromRef: "https://pkg.pr.new/handsontable/handsontable@7940",
+  });
+
+  assert.equal(telemetry.metrics[0].attrs.reason, "next");
   assertValidAgainstRegistry(telemetry);
 });
 

@@ -15,7 +15,19 @@ import type {
   DemoRuntime,
   FilesMap,
   HandsontableVersionRef,
+  SandpackBundlerUnreachableEvent,
+  SandpackCompileErrorEvent,
+  SandpackCompileTimingEvent,
   WriteFileOptions,
+} from "./types.js";
+// Re-exported so existing `@handsontable/demo-runtime/sandpack` importers
+// (this task's own `apps/authoring/src/telemetry/metrics.ts`) keep working —
+// the interfaces themselves now live in `types.ts` (T07 phase 2), so
+// `DemoRuntime` can name the hook methods without a circular import.
+export type {
+  SandpackBundlerUnreachableEvent,
+  SandpackCompileErrorEvent,
+  SandpackCompileTimingEvent,
 } from "./types.js";
 import { isCompilerUnavailable, transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
@@ -189,39 +201,16 @@ export class SandpackEvaluationError extends Error {
   }
 }
 
-/**
- * Observability contract §5 timing hooks (T07), in the same style as the
- * `onProgress`/`onStderr` extension points `ContainerRuntime` already adds beyond
- * `DemoRuntime` — engine-specific, not on the shared interface. This module never
- * imports `@handsontable/demo-runtime/telemetry`: it only reports timings and
- * outcomes through these callbacks, and `apps/authoring/src/telemetry/metrics.ts`
- * is what turns them into `preview.ready_ms`/`sandpack.compile_ms`/
- * `sandpack.compile_error`/`sandpack.bundler_unreachable` points against an
- * injected `Telemetry`.
- */
-export interface SandpackCompileTimingEvent {
-  readonly durationMs: number;
-  readonly outcome: "ok" | "error";
-}
-
-/** A `show-error` compile diagnostic (never `SandpackEvaluationError` — that is a
- *  runtime throw inside an already-evaluated module, T06/error-reporting territory,
- *  out of this task's scope). `message` is already bounded through
- *  `boundCompileMessage` — redacted and truncated, never raw authored code. */
-export interface SandpackCompileErrorEvent {
-  readonly message: string;
-}
-
-/** `loadSandpackClient` itself rejected — the hosted bundler's connection never
- *  came up, as distinct from a `SandpackCompileError`/`SandpackEvaluationError`,
- *  both of which only arrive over `onMessage` *after* the client connected. See
- *  the T07 Outcome for what this does and does not cover: no timeout/unreachable
- *  signal was found inside `@codesandbox/sandpack-client` itself, so this only
- *  fires for a `buildSetup`-successful mount whose `loadSandpackClient` call
- *  throws or rejects. */
-export interface SandpackBundlerUnreachableEvent {
-  readonly durationMs: number;
-}
+// Observability contract §5 timing hooks (T07): `SandpackCompileTimingEvent`,
+// `SandpackCompileErrorEvent`, `SandpackBundlerUnreachableEvent` and the
+// `onCompileTiming`/`onCompileError`/`onBundlerUnreachable` methods below are
+// now declared on `DemoRuntime` itself (`types.ts`), as OPTIONAL members —
+// this module implements them, never imports
+// `@handsontable/demo-runtime/telemetry`, and `apps/authoring/src/
+// telemetry/metrics.ts#wireRuntimeMetrics` is what turns the callbacks into
+// `sandpack.compile_ms`/`sandpack.compile_error`/`sandpack.bundler_unreachable`
+// points against an injected `Telemetry`, through `runtime.onX?.(cb)` —
+// no cast to the concrete class needed at the call site.
 
 const COMPILE_ERROR_FALLBACK = "Sandpack compile error";
 

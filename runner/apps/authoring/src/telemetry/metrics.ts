@@ -1,17 +1,20 @@
 // Observability contract §5 browser metric catalogue (T07 — runner/tasks/o11y/T07-browser-metrics.md).
 //
-// PHASE 1 (current): every emission function here takes an INJECTED `Telemetry`
-// (the contract §6 interface) as a parameter. This file does not import
-// `apps/authoring/src/telemetry/index.ts` — that is T06's facade, not created by
-// this task in Phase 1 (COMMON.md: T06 owns App.tsx's reporting regions and lands
-// first). Phase 2 wires these functions to T06's real `telemetry` export at each
-// call site in App.tsx once T06 is merged.
+// Every emission function here takes an INJECTED `Telemetry` (the contract §6
+// interface) as a parameter, rather than importing
+// `apps/authoring/src/telemetry/index.ts` (T06's facade) itself — the caller
+// (`App.tsx`) passes its own live `telemetry` binding at each call site. That
+// binding is a reassignable `let` (T06's `initTelemetry()` swaps `noopTelemetry`
+// for the real facade after init), so a caller must read `telemetry` at the call
+// site, never capture it once into a constant.
 //
 // The runtime engines (`packages/runtime/src/sandpack.ts`, `container.ts`) expose
-// timing through engine-specific callbacks — `onCompileTiming`/`onCompileError`/
-// `onBundlerUnreachable` on `SandpackRuntime`, `onSessionStart`/`onHmr` on
-// `ContainerRuntime` — in the same style as the existing `onProgress`/`onStderr`
-// extension points, not on the shared `DemoRuntime` interface. Neither runtime
+// timing through hooks declared as OPTIONAL members on the shared `DemoRuntime`
+// interface (`packages/runtime/src/types.ts`, T07 phase 2) —
+// `onCompileTiming`/`onCompileError`/`onBundlerUnreachable` (`SandpackRuntime`
+// only), `onSessionStart`/`onHmr` (`ContainerRuntime` only). `wireRuntimeMetrics`
+// below calls every one of them through `runtime.onX?.(cb)`, so a caller holding
+// a bare `DemoRuntime` never casts to the concrete engine type. Neither runtime
 // file imports `@handsontable/demo-runtime/telemetry`; this module is where the
 // hook payloads become `toAePoint`-shaped metric calls.
 //
@@ -23,23 +26,11 @@
 // time too — `@handsontable/demo-runtime/telemetry`'s `fingerprint` resolves
 // through the workspace symlink to `packages/runtime/dist/telemetry/index.js`
 // (built by `pnpm test`'s own build step), same as every other package import
-// here. `DemoRuntime`/`SandpackRuntime`/`ContainerRuntime` and their event types
-// are imported `type`-only, so they are erased entirely and never need runtime
-// resolution.
+// here. `DemoRuntime` and the hook event types are imported `type`-only, so they
+// are erased entirely and never need runtime resolution.
 
 import type { DemoRuntime } from "@handsontable/demo-runtime";
 import { isNextPrereleaseVersion, selectedReleaseMajor } from "@handsontable/demo-runtime";
-import type {
-  SandpackBundlerUnreachableEvent,
-  SandpackCompileErrorEvent,
-  SandpackCompileTimingEvent,
-  SandpackRuntime,
-} from "@handsontable/demo-runtime/sandpack";
-import type {
-  ContainerRuntime,
-  HmrRoundtripEvent,
-  SessionStartTimingEvent,
-} from "@handsontable/demo-runtime/container";
 import { fingerprint } from "@handsontable/demo-runtime/telemetry";
 import { HT_MAJORS, type HotAttrs, type HtMajor, type Surface, type Telemetry } from "@handsontable/demo-runtime/telemetry";
 
@@ -67,6 +58,14 @@ export function htMajorOf(ref: string | null | undefined): HtMajor {
 
 export interface PreviewResolveContext {
   surface: Surface;
+  /** Derive from `entry.engine === "container" ? 2 : 1` — the SAME derivation
+   *  `App.tsx`'s own `demoContext()`/`reportRuntimeError` already use — never
+   *  from the catalog's `entry.tier`. The two disagree for the five
+   *  UI-library starters (`react-js` and siblings): catalog tier 1, but
+   *  `engine: "container"` (`engine-smoke.spec.ts` pins this). Using the
+   *  catalog tier there would give a live container boot the 30s Tier-1
+   *  timeout instead of the 180s Tier-2 one, latching `timeout` on an
+   *  in-progress cold boot. */
   tier: 1 | 2;
   framework: string;
   /** The version ref the preview is being resolved against — converted to the
@@ -164,57 +163,23 @@ export function trackPreviewReady(
   };
 }
 
-// ---- sandpack.compile_ms / compile_error / bundler_unreachable --------------------
+// ---- sandpack.compile_ms/compile_error/bundler_unreachable, session.start_ms, hmr.roundtrip_ms --
 
 /**
- * Wire a `SandpackRuntime`'s compile timing hooks to §5's Tier-1 compile metrics.
- * `sandpack.compile_error` is deduped by fingerprint for the life of `runtime` — a
- * babel error the visitor has not fixed yet re-fires on every keystroke that still
- * fails to parse (`pushUpdate`'s own transpile-failure path never even reaches the
- * bundler for those), and without a dedupe this would turn one authored typo into
- * one point per keystroke instead of one point per distinct diagnostic.
- */
-export function wireSandpackMetrics(
-  runtime: SandpackRuntime,
-  ctx: { framework: string; versionRef: string },
-  telemetry: Telemetry,
-): void {
-  const htMajor = htMajorOf(ctx.versionRef);
-  const seenFingerprints = new Set<string>();
-
-  runtime.onCompileTiming((event: SandpackCompileTimingEvent) => {
-    telemetry.metric(
-      "sandpack.compile_ms",
-      { duration_ms: event.durationMs },
-      { tier: "1", framework: ctx.framework, ht_major: htMajor, outcome: event.outcome },
-    );
-  });
-
-  runtime.onCompileError((event: SandpackCompileErrorEvent) => {
-    const fp = fingerprint("sandpack.compile_error", event.message);
-    if (seenFingerprints.has(fp)) return;
-    seenFingerprints.add(fp);
-    telemetry.metric(
-      "sandpack.compile_error",
-      {},
-      { framework: ctx.framework, ht_major: htMajor, fingerprint: fp },
-    );
-  });
-
-  runtime.onBundlerUnreachable((event: SandpackBundlerUnreachableEvent) => {
-    telemetry.metric(
-      "sandpack.bundler_unreachable",
-      { duration_ms: event.durationMs },
-      { ht_major: htMajor },
-    );
-  });
-}
-
-// ---- session.start_ms / hmr.roundtrip_ms -----------------------------------------
-
-/**
- * Wire a `ContainerRuntime`'s session-start and HMR timing hooks to §5's Tier-2
- * metrics.
+ * Wire whichever of the §5 timing hooks `runtime` actually implements — the
+ * Tier-1 compile metrics (`SandpackRuntime`) or the Tier-2 session/HMR metrics
+ * (`ContainerRuntime`) — to their contract points. One function for both
+ * engines, called unconditionally from the mount effect: every hook is read
+ * through an optional chain (`runtime.onX?.(cb)`), so wiring a `ContainerRuntime`
+ * simply registers nothing for the three Sandpack-only hooks, and vice versa —
+ * no engine branch, no cast to a concrete class needed at the call site.
+ *
+ * `sandpack.compile_error` is deduped by fingerprint for the life of `runtime` —
+ * a babel error the visitor has not fixed yet re-fires on every keystroke that
+ * still fails to parse (`pushUpdate`'s own transpile-failure path never even
+ * reaches the bundler for those), and without a dedupe this would turn one
+ * authored typo into one point per keystroke instead of one point per distinct
+ * diagnostic.
  *
  * T07-D2 — `session.start_ms`'s `reason` (cold/warm) is intentionally never set.
  * `toAePoint` accepts the metric with `reason` omitted (every `HotAttrs` field is
@@ -230,14 +195,42 @@ export function wireSandpackMetrics(
  * T05/the API worker should add a `cold`/`warm` field to the create response
  * (it already knows this — the pool it drew from is server state).
  */
-export function wireContainerMetrics(
-  runtime: ContainerRuntime,
+export function wireRuntimeMetrics(
+  runtime: DemoRuntime,
   ctx: { framework: string; versionRef: string },
   telemetry: Telemetry,
 ): void {
   const htMajor = htMajorOf(ctx.versionRef);
+  const seenFingerprints = new Set<string>();
 
-  runtime.onSessionStart((event: SessionStartTimingEvent) => {
+  runtime.onCompileTiming?.((event) => {
+    telemetry.metric(
+      "sandpack.compile_ms",
+      { duration_ms: event.durationMs },
+      { tier: "1", framework: ctx.framework, ht_major: htMajor, outcome: event.outcome },
+    );
+  });
+
+  runtime.onCompileError?.((event) => {
+    const fp = fingerprint("sandpack.compile_error", event.message);
+    if (seenFingerprints.has(fp)) return;
+    seenFingerprints.add(fp);
+    telemetry.metric(
+      "sandpack.compile_error",
+      {},
+      { framework: ctx.framework, ht_major: htMajor, fingerprint: fp },
+    );
+  });
+
+  runtime.onBundlerUnreachable?.((event) => {
+    telemetry.metric(
+      "sandpack.bundler_unreachable",
+      { duration_ms: event.durationMs },
+      { ht_major: htMajor },
+    );
+  });
+
+  runtime.onSessionStart?.((event) => {
     telemetry.metric(
       "session.start_ms",
       { duration_ms: event.elapsedMs },
@@ -245,7 +238,7 @@ export function wireContainerMetrics(
     );
   });
 
-  runtime.onHmr((event: HmrRoundtripEvent) => {
+  runtime.onHmr?.((event) => {
     telemetry.metric(
       "hmr.roundtrip_ms",
       { duration_ms: event.durationMs },
@@ -257,10 +250,12 @@ export function wireContainerMetrics(
 // ---- version.switch / bucket.resolve_ms ------------------------------------------
 
 /** §5 `version.switch` — call from the version-picker change handler, before the
- *  remount effect tears down the old preview. `reason` carries the FROM version as
- *  a free-form label (the metric's §5 row has no closed set for it — only `ht_major`,
- *  the TO version, is enumerable); `null`/absent reads as `"none"`, matching the
- *  `ht_major` convention for "no version attached". */
+ *  remount effect tears down the old preview. `reason` carries the FROM version's
+ *  `ht_major` — the same closed conversion as the TO version (`htMajorOf`), not
+ *  the raw ref: `fromRef` traces back to the user-controlled `?v=` URL parameter,
+ *  and a raw pkg.pr.new URL or an arbitrary string landing in an Analytics Engine
+ *  blob unbounded is exactly what the closed set exists to prevent. `null`/absent
+ *  reads as `"none"`, matching `ht_major`'s own "no version attached" value. */
 export function emitVersionSwitch(
   telemetry: Telemetry,
   params: { framework: string; toRef: string; fromRef?: string | null; bucket?: string },
@@ -268,7 +263,7 @@ export function emitVersionSwitch(
   const attrs: HotAttrs = {
     framework: params.framework,
     ht_major: htMajorOf(params.toRef),
-    reason: params.fromRef ?? "none",
+    reason: htMajorOf(params.fromRef),
   };
   if (params.bucket !== undefined) attrs.bucket = params.bucket;
   telemetry.metric("version.switch", {}, attrs);
