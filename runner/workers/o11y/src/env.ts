@@ -44,6 +44,22 @@ export interface Env {
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   GITHUB_OIDC_REPOSITORY: string;
+  /** T01-D (phase 2, minimal touch per COMMON.md — recorded in the T01
+   *  Outcome, contract doc untouched): duplicates wrangler.jsonc's top-level
+   *  `account_id`. Workers do not get their own account id at runtime, and
+   *  `GrafanaBox` needs it to build the Loki bucket's R2 S3 endpoint
+   *  (`https://<account-id>.eu.r2.cloudflarestorage.com`, ADR-0041 §A) and
+   *  the Analytics Engine SQL API URL for the ClickHouse datasource
+   *  (`https://api.cloudflare.com/client/v4/accounts/<account-id>/analytics_engine/sql`). */
+  CLOUDFLARE_ACCOUNT_ID: string;
+  /** T01-D (phase 2 fix round, I4): the Loki bucket name `GrafanaBox` tells
+   *  the container to write to. Optional, not a var with a required
+   *  presence check — box.ts falls back to the production bucket name
+   *  when this is unset, so `wrangler.jsonc` need not set it at all. Exists
+   *  so a throwaway sandbox-probe config (never committed, COMMON.md probe
+   *  rules) can point a probe `GrafanaBox` at its own bucket
+   *  (e.g. `o11y-probe-t03-loki`) instead of silently targeting production. */
+  LOKI_S3_BUCKET?: string;
 
   // Secrets: optional, matching workers/api/src/env.ts's MCP_SHARED_SECRET
   // style — a required field would force wrangler dev to typecheck against a
