@@ -1,0 +1,332 @@
+{
+  "uid": "o11y-version-health",
+  "title": "Version health",
+  "tags": [
+    "o11y",
+    "runner"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "type": "custom",
+        "label": "Environment",
+        "query": "local,production",
+        "current": {
+          "text": "local",
+          "value": "local"
+        },
+        "options": [
+          {
+            "text": "local",
+            "value": "local",
+            "selected": true
+          },
+          {
+            "text": "production",
+            "value": "production",
+            "selected": false
+          }
+        ],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "framework",
+        "type": "custom",
+        "label": "Framework",
+        "query": "react,vue3,angular,vanilla-js,next",
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          },
+          {
+            "text": "react",
+            "value": "react"
+          },
+          {
+            "text": "vue3",
+            "value": "vue3"
+          },
+          {
+            "text": "angular",
+            "value": "angular"
+          },
+          {
+            "text": "vanilla-js",
+            "value": "vanilla-js"
+          },
+          {
+            "text": "next",
+            "value": "next"
+          }
+        ],
+        "hide": 0,
+        "includeAll": true,
+        "multi": true
+      },
+      {
+        "name": "ht_major",
+        "type": "custom",
+        "label": "HT major",
+        "query": "15,16,17,18,19,next,none",
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          },
+          {
+            "text": "15",
+            "value": "15"
+          },
+          {
+            "text": "16",
+            "value": "16"
+          },
+          {
+            "text": "17",
+            "value": "17"
+          },
+          {
+            "text": "18",
+            "value": "18"
+          },
+          {
+            "text": "19",
+            "value": "19"
+          },
+          {
+            "text": "next",
+            "value": "next"
+          },
+          {
+            "text": "none",
+            "value": "none"
+          }
+        ],
+        "hide": 0,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "preview.ready_ms by framework × ht_major",
+      "description": "\"next\" is a real ht_major value here, not a separate column — sort/filter on it to highlight the channel.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT blob6 AS framework, blob7 AS ht_major, SUM(_sample_interval * double1) AS samples, 100 * SUM(_sample_interval * double1 * (blob8 = 'ready')) / SUM(_sample_interval * double1) AS ready_pct, quantileTDigestWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95_ms FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'preview.ready_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY framework, ht_major ORDER BY framework, ht_major",
+          "format": "table",
+          "database": "default",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "sandpack.compile_error rate by ht_major",
+      "description": "Day-over-day comparability per ht_major; \"next\" highlighted via a series override.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL $interval SECOND) AS t, blob7 AS ht_major, SUM(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'sandpack.compile_error' AND blob3 = '$environment' AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, ht_major ORDER BY t",
+          "format": "time_series",
+          "database": "default",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "next"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "version.switch count by ht_major (to)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL $interval SECOND) AS t, blob7 AS ht_major, SUM(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'version.switch' AND blob3 = '$environment' AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, ht_major ORDER BY t",
+          "format": "time_series",
+          "database": "default",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "next"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,473 @@
+{
+  "uid": "o11y-runner-overview",
+  "title": "Runner overview",
+  "tags": [
+    "o11y",
+    "runner"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "type": "custom",
+        "label": "Environment",
+        "query": "local,production",
+        "current": {
+          "text": "local",
+          "value": "local"
+        },
+        "options": [
+          {
+            "text": "local",
+            "value": "local",
+            "selected": true
+          },
+          {
+            "text": "production",
+            "value": "production",
+            "selected": false
+          }
+        ],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "framework",
+        "type": "custom",
+        "label": "Framework",
+        "query": "react,vue3,angular,vanilla-js,next",
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          },
+          {
+            "text": "react",
+            "value": "react"
+          },
+          {
+            "text": "vue3",
+            "value": "vue3"
+          },
+          {
+            "text": "angular",
+            "value": "angular"
+          },
+          {
+            "text": "vanilla-js",
+            "value": "vanilla-js"
+          },
+          {
+            "text": "next",
+            "value": "next"
+          }
+        ],
+        "hide": 0,
+        "includeAll": true,
+        "multi": true
+      },
+      {
+        "name": "ht_major",
+        "type": "custom",
+        "label": "HT major",
+        "query": "15,16,17,18,19,next,none",
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          },
+          {
+            "text": "15",
+            "value": "15"
+          },
+          {
+            "text": "16",
+            "value": "16"
+          },
+          {
+            "text": "17",
+            "value": "17"
+          },
+          {
+            "text": "18",
+            "value": "18"
+          },
+          {
+            "text": "19",
+            "value": "19"
+          },
+          {
+            "text": "next",
+            "value": "next"
+          },
+          {
+            "text": "none",
+            "value": "none"
+          }
+        ],
+        "hide": 0,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "name": "Deploys",
+        "datasource": {
+          "type": "loki",
+          "uid": "loki-worker"
+        },
+        "enable": true,
+        "iconColor": "blue",
+        "expr": "{hot_surface=\"o11y\"} |= `\"event\":\"deploy\"`",
+        "titleFormat": "Deploy",
+        "textFormat": "{{__line__}}"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Preview-ready rate by tier",
+      "description": "preview.ready_ms — share of previews that reached outcome=ready, by hot.tier. AE, SUM(_sample_interval*double1) weighted.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL $interval SECOND) AS t, blob5 AS tier, 100 * SUM(_sample_interval * double1 * (blob8 = 'ready')) / SUM(_sample_interval * double1) AS pct FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'preview.ready_ms' AND blob3 = '$environment' GROUP BY t, tier ORDER BY t",
+          "format": "time_series",
+          "database": "default",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Preview-ready p95 by tier",
+      "description": "preview.ready_ms duration_ms, weighted quantile, by hot.tier.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL $interval SECOND) AS t, blob5 AS tier, quantileTDigestWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'preview.ready_ms' AND blob3 = '$environment' GROUP BY t, tier ORDER BY t",
+          "format": "time_series",
+          "database": "default",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Session start rate by outcome",
+      "description": "session.start (API worker) count by outcome.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL $interval SECOND) AS t, blob8 AS outcome, SUM(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start' AND blob3 = '$environment' GROUP BY t, outcome ORDER BY t",
+          "format": "time_series",
+          "database": "default",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Error rate (uncaught + handled)",
+      "description": "error.uncaught and error.handled counts.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL $interval SECOND) AS t, index1 AS metric, SUM(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 IN ('error.uncaught','error.handled') AND blob3 = '$environment' GROUP BY t, metric ORDER BY t",
+          "format": "time_series",
+          "database": "default",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Pool gauge vs cap",
+      "description": "pool.gauge — awake containers (double3) against the cap (double8), by reason (live/builder). Gauge: AVG, not the count-sampling formula.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL $interval SECOND) AS t, blob9 AS reason, AVG(double3) AS avg_value FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t, reason ORDER BY t",
+          "format": "time_series",
+          "database": "default",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Pool cap",
+      "description": "pool.gauge — the configured cap (double8), by reason.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL $interval SECOND) AS t, blob9 AS reason, AVG(double8) AS avg_value FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t, reason ORDER BY t",
+          "format": "time_series",
+          "database": "default",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    }
+  ]
+}
