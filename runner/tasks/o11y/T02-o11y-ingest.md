@@ -139,8 +139,9 @@ node scripts/o11y-replay-fixtures.mjs --base http://localhost:8788
   `SERVICE_VERSION`.
 - `workers/o11y/wrangler.jsonc` (T02's row: "the DO/R2/AE/rate-limit parts"): added the
   `ratelimits` binding (T02-D8) and a comment on `SERVICE_VERSION`'s absence.
-- `workers/o11y/wrangler.probe.jsonc` — the sandbox-probe-only config (kept, committed, for
-  reproducibility; deploys nothing on its own).
+- `workers/o11y/wrangler.probe.jsonc` — **not in the tree** (removed in the fix round per the
+  controller: probe configs are throwaway and should not be committed, and the first version
+  carried a plaintext probe secret). See "Fix round" below for how the probe was actually run.
 - Fixtures: `pipeline/fixtures/faro/{exception-code-frame,measurement,web-vitals,example-open,log}.json`
   (real `TransportBody` wire shape); `pipeline/fixtures/otlp/json/{basic,zero-timestamp,forbidden-attrs}.json`;
   `pipeline/fixtures/otlp/protobuf/{basic,zero-timestamp}.bin` + the hand-rolled
@@ -318,20 +319,20 @@ both a 404 on an unknown path and a real `POST /telemetry/v1/logs` round trip (`
 the deployed probe's own ingest pipeline works for real on Cloudflare, not just under
 `wrangler dev`.
 
-**Blocked**: could not create a Cloudflare "Workers Observability Telemetry Destination"
-(`POST /accounts/{id}/workers/observability/destinations`, `logpushDataset:
-"opentelemetry-logs"`) — every attempt (the `cloudflare` MCP tool's `execute`, and a raw
-`curl` using wrangler's own stored OAuth token, which *did* successfully create the R2
-bucket and deploy the Worker moments earlier) returned `{"success":false,"errors":[{"code":10000,"message":"Authentication error"}]}`.
-Wrangler's OAuth token scope list (`~/Library/Preferences/.wrangler/config/default.toml`)
-has no `workers_observability`-shaped scope at all — confirmed a missing-scope/plan
-limitation, not a transient error, before stopping (COMMON.md: "record exactly what
-failed and continue with the local work; do not improvise around it on another account").
-Without a real destination, no real Cloudflare OTLP export body could be captured, so
-content type, real batch sizing, and the forced-5xx/forced-timeout exporter behaviour
-(the probe section's other asks) are **not measured** — the fixtures in
-`pipeline/fixtures/otlp/` are hand-built against the OTLP proto/JSON spec, not captured
-traffic. T02-D15 documents the resulting risk on the protobuf decoder specifically.
+**Originally blocked, then unblocked and re-run — see "Fix round: sandbox probe re-run"
+below for the full transcript.** The first pass could not create a Cloudflare "Workers
+Observability Telemetry Destination" (`POST /accounts/{id}/workers/observability/destinations`)
+with wrangler's own OAuth token, which lacked the scope — confirmed a missing-scope
+limitation, not a transient error, and reported as blocked per COMMON.md at the time. The
+user subsequently created a properly-scoped sandbox API token (COMMON.md's "Probe
+credentials" section), and the probe was re-run to completion in the fix round: a real
+export destination, a real captured Cloudflare OTLP export body (content type, batch
+sizing, attribute placement, forced-5xx exporter behaviour all measured), two real
+contract-conformance bugs found and fixed (T02-D16, T02-D17), and exit criterion 15
+re-confirmed against the real captured (scrubbed) data. The hand-built fixtures in
+`pipeline/fixtures/otlp/` remain as the deliberate edge-case set (zero-timestamp, oversize,
+forbidden-attributes); `pipeline/fixtures/otlp/json/cloudflare-invocation-log.json` is the
+new real-captured-and-scrubbed one, added in the fix round.
 
 **Deleted afterward, confirmed absent**: the probe Worker (`wrangler delete`, then
 `wrangler deployments list` → `10007: This Worker does not exist`) and the R2 bucket
@@ -441,8 +442,240 @@ across tenants, valid `ResourceLogs` lines, contract resource attributes populat
   no other pin in the codebase; **T06 must use these exact names** or ADR-0042/session
   metrics silently never reach Analytics Engine (the record would still store fine — only
   the AE point would come back empty of that field, easy to miss in review).
-- T02-D15: the protobuf decoder's `array_value`/`kvlist_value` gap is unverified against
-  real Cloudflare export traffic — revisit if/when a destination can be created.
-- The `o11y_probe_t02_events` Analytics Engine dataset (sandbox account) could not be
-  deleted (no delete API); harmless, noted for completeness per COMMON.md's "list what was
-  created and deleted."
+- T02-D15: the protobuf decoder's `array_value`/`kvlist_value` gap is still unverified
+  against real Cloudflare export traffic — every real sample captured in the fix round's
+  probe re-run was `application/json` (gzip-encoded), never protobuf; see the Fix round
+  section.
+- The `o11y_probe_t02_events` Analytics Engine dataset (sandbox account, first probe pass)
+  could not be deleted (no delete API); harmless, noted for completeness per COMMON.md's
+  "list what was created and deleted." The fix round's re-run used a differently-named
+  dataset region (its own `RUNNER_EVENTS` binding pointed at the real `runner_events`
+  local-mode fallback was not exercised — the probe never wrote to Analytics Engine in the
+  second pass, only R2).
+- **Open question for T05**: whether the API worker's own hand-authored `console.log`
+  JSON line (ADR §D's structured line, meant to carry `route_class`/`status`/`duration`/
+  `cf.ray`/`session.id`/`hot.demo_id`/`service.version`) arrives at this Worker's
+  `/telemetry/v1/logs` with those fields as real OTLP record **attributes** (this task's
+  `hoistAttributes`-based decode would then find them), or embedded only inside
+  `body.stringValue` as opaque JSON text (in which case none of them would reach storage as
+  attributes at all, and T05's own console.log call would need to change shape, or this
+  task's `otlp.ts` would need a body-JSON-parsing step). A deliberate test of this (a
+  temporary probe Worker with one `console.log(JSON.stringify({...}))` call, attached to
+  the same real export destination) was set up in the fix round but could not be completed
+  — the sandbox account's automation guardrails declined a further background polling
+  command against cloud resources mid-experiment ("Modify Shared Resources"), and per that
+  guardrail's own instruction this was not worked around. Every other real capture in this
+  task (Cloudflare's own automatic `invocation_logs` summaries, captured extensively) is
+  conclusively answered; this one console.log-specific question is not. T05 should
+  either resolve this with its own probe before assuming `hoistAttributes` sees its fields,
+  or send the required fields as real OTLP attributes explicitly (not relying on this being
+  parsed from body text, which `otlp.ts` does not do).
+
+## Fix round (controller review)
+
+Findings I1–I3 plus a controller addition (remove `wrangler.probe.jsonc`) and a follow-up
+message unblocking the sandbox probe with a properly-scoped API token. Commit `735ea1e4d`.
+
+### I1 — GitHub OIDC gate missing the `workflow` check
+
+ADR §B.5's `deploy` row names four checks ("issuer, audience, repository, workflow"); the
+first pass implemented only three. Fixed in `gates/oidc.ts`: `checkGithubOidc` now also
+compares the token's `workflow_ref` claim against a new `env.GITHUB_OIDC_WORKFLOW_REF`
+(added to `env.ts`, `wrangler.jsonc`'s `vars`, and the test harness/fixtures), exact match.
+
+**T02-D16 — the expected `workflow_ref` value.** GitHub's OIDC `workflow_ref` claim shape
+is `<owner>/<repo>/<workflow file path>@<ref>`; for a workflow that runs directly (not via
+`workflow_call`) this equals `job_workflow_ref` too, so `workflow_ref` alone is checked.
+Pinned value: `handsontable/examples/.github/workflows/master.yml@refs/heads/master` — a
+var, not a secret, so T10 can read it back and must request its `id-token` from exactly
+this workflow/ref or every deploy event falls through to the `x-o11y-secret` fallback.
+
+**A real test-validity bug, found by the revert check itself, not by inspection.**
+`gates/oidc.ts#githubJwks()` caches the remote JWKS fetcher in a `Map` keyed by the
+constant issuer string. `jose`'s remote key set has its own ~30 s no-refetch cooldown on a
+`kid` miss. The gate test file signs a *fresh* RS256 key pair per test case — so every test
+after the first was reusing an earlier test's now-wrong cached key set, and would fail JWT
+verification with `JWKSNoMatchingKey` (an unrelated reason) while still asserting
+`ok: false` / `reason: "oidc"`, passing whether or not the actual `workflow_ref`/`repository`
+check under test was even present. Caught during I1's own revert check: commenting out the
+new workflow check kept the "wrong workflow" test green. Fixed with an exported
+`_resetGithubJwksCacheForTests()`, called at the top of every `signGithubToken()` call in
+`o11y-gates.test.mjs`. After the fix, the same revert (workflow check removed) turned the
+test red for the right reason (`true !== false`).
+
+### I2 — the Faro ingest path never enforced the 256 KB record cap
+
+`normalise/otlp.ts` already dropped records over `INBOX_RECORD_MAX_BYTES` before this fix
+(§B.2 step 1: "drop records over 256 KB"); `normalise/faro.ts` did not, even though
+`pack.ts`'s row-chunking and the contract's own §8 rule assume normalise enforces this on
+every path. Fixed: `processOneItem` now checks the serialized record size the same way
+`otlp.ts` does, returning `{ aePoints, oversize: true }` instead of an `ingestItem` when
+over the cap. `ProcessedFaroItem` gained an `oversize` field, distinct from `invalid` (see
+I3). `index.ts`'s `handleCollect` now checks `p.oversize` alongside `p.invalid`.
+
+### I3 — oversize drops were recorded as `invalid_item`, not `size`
+
+Both paths' oversize drops went through `recordInvalidItem` (`reason: "invalid_item"`),
+even though the task's own Scope text and `otlp.ts`'s own doc comment already said
+`reason=size`. A real observability gap: an operator querying `o11y.ingest` filtered on
+`reason="size"` to watch for oversized payloads would have seen nothing. Fixed:
+`normalise/respond.ts#recordOversizeDrop` (new), writing `reason: "size"`; both
+`handleCollect`'s Faro-oversize branch and `handleOtlpLogs`'s `droppedOversize` loop now
+call it instead of `recordInvalidItem`.
+
+### Controller addition — `wrangler.probe.jsonc` removed from the tree
+
+`git rm`'d. Probe configs are throwaway (COMMON.md) and this one carried a plaintext probe
+secret in its first version. The fix round's probe re-run (below) used a temporary,
+never-committed config (`workers/o11y/.probe-scratch/`, deleted at the end of the session)
+and a real `wrangler secret put` for its export secret instead of a plaintext var.
+
+### Fix round: sandbox probe re-run (unblocked)
+
+The user created a sandbox API token scoped for Workers Scripts, Workers Observability, R2
+and Containers (COMMON.md's "Probe credentials" section, `~/.config/o11y-probe/env`,
+sourced per command, never printed, per its own rules). Re-ran the previously-blocked
+half of the probe:
+
+**Setup** (all prefixed `o11y-probe-t02`, all sandbox account
+`e17e41cc82bda15dfa63960aa172fb87`): a real ingest-routes Worker
+(`handsontable-demos-o11y-probe-t02`, this task's actual `src/index.ts`, `workers_dev:
+true`, `observability.logs.invocation_logs: true` — diverging from production's `false` on
+purpose, to generate real exportable content, since this task's own routes never
+`console.log` on well-formed traffic by design) with its `O11Y_EXPORT_SECRET` set via a
+real `wrangler secret put` (piped from a freshly generated value, never printed); a
+separate, minimal raw-capture Worker (`o11y-probe-t02-capture`, not this task's code at
+all — just stores whatever bytes/headers it receives into R2) as the actual destination
+target, so captured bodies are Cloudflare's real wire format, untouched by this task's own
+scrub pipeline; a Workers Observability Telemetry Destination
+(`POST /accounts/{id}/workers/observability/destinations`, `logpushDataset:
+"opentelemetry-logs"`, `skipPreflightCheck: true`) pointed at the capture Worker with the
+same secret as an `x-o11y-secret` header, attached to the source Worker via its
+`observability.logs.destinations` config field (confirmed attached via
+`GET /workers/scripts/.../settings`, not just assumed from the wrangler config).
+
+**A credential-handling mistake, corrected.** Twice, the destination-create/patch API
+response's `configuration.destination_conf` field (not `configuration.headers`, which was
+correctly redacted both times) embedded the export secret in plaintext as a URL query
+parameter, and a redaction filter that only stripped `headers` let it print to the
+transcript both times. Both times the secret was rotated immediately afterward (a fresh
+`wrangler secret put` + a `PATCH` of the destination with the new value) before continuing,
+and the destination and both probe Workers were deleted at the end of the session regardless
+(see Cleanup) — no persisting resource was ever reachable with the leaked value. Recorded
+here in full rather than omitted, per the "never print" rule this violated.
+
+**Real findings, content type and shape:**
+
+- Every captured export body was `Content-Type: application/json`, `Content-Encoding:
+  gzip` — never protobuf in any sample (7 real captures, one forced-error, one
+  console.log-JSON-line probe). Confirms `normalise/read-body.ts#readCappedBytes`'s
+  transparent gzip handling on the ingest side was necessary, not defensive over-caution.
+- Real batch sizes: one `resourceLogs` entry per Worker invocation (never batched under one
+  shared `resource`), 5–13 records per delivered object across bursts of 15–30 requests —
+  batching correlates with recent volume/time, not a fixed count; a genuine "batches per
+  minute" figure needs sustained production-shaped load this synthetic burst does not
+  represent.
+- `timeUnixNano` and `observedTimeUnixNano` are both always present with real nanosecond
+  precision on every captured record; `severityNumber` (e.g. `9`) is present,
+  `severityText` is always absent (`null`) — `normalise/otlp.ts` already treats
+  `severityText` as optional, so no change needed there.
+- **Attribute placement, confirmed real**: `url.full`, `user_agent.original`, `geo.timezone`,
+  `geo.continent.code`, `geo.country.code`, `geo.locality.name`, `geo.locality.region`,
+  `cloudflare.asn` all arrive as **record** attributes (not resource), and none of them
+  match a contract-allowlisted key — confirmed correctly dropped by `hoistAttributes`
+  already, no change needed. Resource attributes never include *any* `hot.*` key or
+  `service.version` — Cloudflare's own automatic export has no way to know either;
+  `withResourceAttrDefaults` filling both is the actual, load-bearing mechanism for exit
+  criterion 15 on this source, not a defensive nicety (T02-D5 is now measured-necessary,
+  not assumed).
+- **T02-D17 (new) — `cloudflare.ray_id`, not `cf.ray`.** The real ray id arrives under the
+  Cloudflare semantic-convention key `cloudflare.ray_id`; the contract's own key
+  (`cf.ray`) never appears. Without a remap, `hoistAttributes` (which only recognises the
+  contract's own key names) silently dropped it — a real gap, since `cf.ray` is explicitly
+  named as structured metadata every record should carry when available (§3). Fixed:
+  `normalise/otlp.ts#CLOUDFLARE_KEY_REMAP`/`remapCloudflareKeys`, applied before
+  `hoistAttributes`. Only this one key was found needing a remap in the captured samples.
+- **T02-D18 (new) — `service.version` is never present in a real Cloudflare export.**
+  Confirmed directly (not inferred): every one of the 7 real captures' resource attributes
+  omitted `service.version` entirely, even though `service.name` was always present.
+  `withResourceAttrDefaults` (`normalise/points.ts`) now defaults it to `"unknown"`, the
+  same pattern as the other seven §3 keys it already defaulted (T02-D5).
+- **Forced 5xx, real exporter behaviour**: redeployed the capture Worker to always answer
+  `500`, generated traffic against the source Worker, and within about 90 seconds the
+  destination's `jobStatus` recorded `last_error: "2026-09-23T12:26:53Z"`,
+  `error_message: "error 500: error pushing: error uploading to https: status:500"` — a
+  clear, timestamped, single-attempt failure record (not a crash, not a silent drop).
+  Forced-timeout behaviour (a capture Worker that hangs 30 s) was implemented
+  (`FAIL_MODE=hang` in the scratch capture worker) but not exercised before cleanup — no
+  `jobStatus` change was observed for it; unmeasured, noted as a gap.
+- One captured sample was Cloudflare's own destination-creation "pre-flight check" ping
+  (`service.name: cloudflare-workers-observability`, body `"Hello from Cloudflare 👋
+  (o11y-probe-t02-dest)"`), sent automatically even with `skipPreflightCheck: true` in the
+  create request — informational, not used as a fixture.
+
+**Real fixture added**: `pipeline/fixtures/otlp/json/cloudflare-invocation-log.json` — one
+real captured `resourceLogs` entry, scrubbed (script name → `handsontable-demos-api`,
+version ids → zeroed placeholders, ray id/invocation id → zeroed placeholders, `url.full`/
+`server.address`/`url.path` repointed at a fictitious demo URL, `user_agent.original` →
+a generic placeholder, `geo.*`/`cloudflare.asn` → generic/zeroed, `cloudflare.colo` in the
+*log record* → `"XXX"`; the *resource*-level `cloudflare.colo: "FRA"` — the serving
+datacenter, not visitor-identifying — was left as captured). Exercised by a new
+`o11y-normalise.test.mjs` case proving the `cloudflare.ray_id` remap, the `service.version`
+default, and that every forbidden field is still dropped, all against this real-shaped
+input, not just hand-built ones.
+
+**Exit criterion 15, re-confirmed against real data.** Ran this task's own
+`processOtlpBody` over the real (scrubbed) fixture, built the resulting `ResourceLogs`, and
+pushed it into a second throwaway local `grafana/loki` container (same `otlp_config` as the
+first local check). `GET /loki/api/v1/labels` returned exactly the eight contract keys;
+the series carried `service_version: "unknown"` and `hot_tier`/`hot_framework`/
+`hot_ht_major`/`hot_outcome: "none"` — the T02-D5/D18 defaults, correctly surfacing as real
+labels. `cf_ray` appeared inline on the queried line (structured metadata) but was absent
+from `/labels` — confirmed not a label. Container removed afterward.
+
+**Cleanup — everything created, everything deleted, confirmed:**
+
+| Resource | Action | Confirmed |
+|---|---|---|
+| Export destination `o11y-probe-t02-dest` | `DELETE /workers/observability/destinations/o11y-probe-t02-dest` | `GET` list → `[]` |
+| Worker `o11y-probe-t02-capture` | `DELETE /workers/scripts/o11y-probe-t02-capture` | `GET` scripts list → absent |
+| Worker `o11y-probe-t02-consolelog` | `DELETE /workers/scripts/o11y-probe-t02-consolelog` | `GET` scripts list → absent |
+| Worker `handsontable-demos-o11y-probe-t02` | `DELETE /workers/scripts/handsontable-demos-o11y-probe-t02` | `GET` scripts list → absent |
+| R2 bucket `o11y-probe-t02-capture` | objects deleted, then `DELETE /r2/buckets/o11y-probe-t02-capture` | `GET` buckets list → absent |
+| R2 bucket `o11y-probe-t02-inbox` | objects deleted, then `DELETE /r2/buckets/o11y-probe-t02-inbox` | `GET` buckets list → absent |
+| Local scratch (`workers/o11y/.probe-scratch/`, capture files, temp secret file) | `rm -rf` | not committed, not present in the tree |
+| Shared bucket `o11y-probe-t03-loki` (COMMON.md's) | **not touched** — this probe never needed Loki S3 storage | n/a |
+
+**Console-log attribute-placement experiment — incomplete, documented as an open question
+for T05** (see Concerns above): a temporary probe Worker with a `console.log(JSON.stringify(...))`
+call was deployed and attached to the same destination, but the session's own automation
+guardrails declined a further background polling command against sandbox resources before a
+delivery could be captured and inspected. Not retried. The Worker
+(`o11y-probe-t02-consolelog`) was still deleted in cleanup above.
+
+### Revert evidence (fix round)
+
+| Reverted | Test(s) that went red |
+|---|---|
+| `gates/oidc.ts`: the `workflow_ref` check removed | the new "wrong workflow" case in `o11y-gates.test.mjs` (initially stayed green due to the JWKS-cache bug above; red after that bug was also fixed) |
+| `normalise/faro.ts`: the 256 KB size check removed | the new Faro-oversize case in `o11y-normalise.test.mjs`, and the route-level "reason=size" case in `o11y-routes.test.mjs` |
+| `index.ts`: both `recordOversizeDrop` calls reverted to `recordInvalidItem` | both new route-level "reason=size, not invalid_item" cases in `o11y-routes.test.mjs` |
+| `normalise/otlp.ts`: `CLOUDFLARE_KEY_REMAP` lookup bypassed | the new real-fixture case in `o11y-normalise.test.mjs` ("cf.ray survives the cloudflare.ray_id remap …") |
+| `normalise/points.ts`: the `service.version` default removed | the same real-fixture case |
+
+Every revert was applied in place (not via `git checkout`, after an earlier `git checkout --`
+in this same session accidentally discarded an in-progress uncommitted fix — noted so the
+mistake isn't repeated), confirmed red for the stated reason, then restored and reconfirmed
+green before moving on.
+
+### Fix round — verify, exit codes
+
+```
+rtk proxy pnpm --filter @handsontable/demo-runtime build          exit=0
+rtk proxy pnpm -r run typecheck                                   exit=0
+rtk proxy pnpm test                                                exit=1 (1304 tests, 1301 pass, 1 pre-existing baseline failure, 2 todo)
+( cd workers/o11y && npx wrangler deploy --dry-run )               exit=0
+( cd workers/api && npx wrangler deploy --dry-run )                exit=0
+node scripts/check-test-presence.mjs feat/runner-observability     exit=0 (30 source files, matching test change)
+node --experimental-strip-types --test pipeline/o11y-*.test.mjs pipeline/telemetry-facade.test.mjs   exit=0 (56/56)
+```
