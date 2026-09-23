@@ -21,6 +21,7 @@
 //     everything else so the numbers mean something.
 
 import type { Env } from "./env.js";
+import { BOT_RE, isBot, deviceOf, browserOf, osOf } from "@handsontable/demo-runtime/telemetry";
 
 const SALT_TTL_SECONDS = 60 * 60 * 48;
 const FLUSH_AT_EVENTS = 100;
@@ -40,35 +41,10 @@ const utcDay = (): string => new Date().toISOString().slice(0, 10);
 
 // ---- Bucketing ---------------------------------------------------------------
 
-const BOT_RE = /bot|crawler|spider|crawling|slurp|bingpreview|headlesschrome|lighthouse|curl\/|wget\/|python-requests|node-fetch|axios\/|monitoring|uptime|pingdom|semrush|ahrefs|facebookexternalhit|whatsapp|telegrambot|preview/i;
-
-export const isBot = (userAgent: string): boolean => BOT_RE.test(userAgent);
-
-/** Coarse device class. Deliberately three buckets — anything finer starts to
- *  look like a fingerprint. */
-function deviceOf(ua: string): string {
-  if (/ipad|tablet|playbook|silk/i.test(ua)) return "tablet";
-  if (/mobi|iphone|ipod|android.*mobile|windows phone/i.test(ua)) return "mobile";
-  return "desktop";
-}
-
-function browserOf(ua: string): string {
-  if (/edg\//i.test(ua)) return "edge";
-  if (/opr\/|opera/i.test(ua)) return "opera";
-  if (/chrome|crios|chromium/i.test(ua)) return "chrome";
-  if (/firefox|fxios/i.test(ua)) return "firefox";
-  if (/safari/i.test(ua)) return "safari";
-  return "other";
-}
-
-function osOf(ua: string): string {
-  if (/windows/i.test(ua)) return "windows";
-  if (/iphone|ipad|ipod|ios/i.test(ua)) return "ios";
-  if (/mac os x|macintosh/i.test(ua)) return "macos";
-  if (/android/i.test(ua)) return "android";
-  if (/linux|x11|cros/i.test(ua)) return "linux";
-  return "other";
-}
+// `BOT_RE` and the UA classifiers moved to the telemetry contract module (T00),
+// which the o11y ingest gates (ADR §B.5) share the same definitions with. Byte-
+// identical regexes, re-exported here so no other importer's path changes.
+export { BOT_RE, isBot, deviceOf, browserOf, osOf };
 
 /** Referring *hostname* only. A full referrer URL can carry a search query or
  *  a private path, so the path and query never leave this function. */

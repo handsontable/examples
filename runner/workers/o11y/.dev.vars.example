@@ -1,0 +1,19 @@
+# Copy to .dev.vars (gitignored) for `wrangler dev`. Never commit real values.
+
+# Fail-closed local bypass of the Access check (contract §2, verifyAccess in
+# workers/o11y/src/gates/access.ts, T02) — honoured only when O11Y_ENV=local.
+DEV_ADMIN=
+
+# Secrets — set with `wrangler secret put <NAME>` for a real deploy; for local
+# dev, values here are enough to exercise the gates without hitting anything
+# real.
+O11Y_EXPORT_SECRET=
+SENTRY_HOOK_SECRET=
+AE_SQL_TOKEN=
+LOKI_S3_ACCESS_KEY_ID=
+LOKI_S3_SECRET_ACCESS_KEY=
+SLACK_WEBHOOK_URL=
+
+# Local-mode override (contract §10) — falls back to "production" from
+# wrangler.jsonc's vars block otherwise.
+O11Y_ENV=local

@@ -1,4 +1,11 @@
-import type { DurableObjectNamespace, D1Database, KVNamespace, R2Bucket } from "@cloudflare/workers-types";
+import type {
+  AnalyticsEngineDataset,
+  DurableObjectNamespace,
+  D1Database,
+  Fetcher,
+  KVNamespace,
+  R2Bucket,
+} from "@cloudflare/workers-types";
 
 // Tier-2 container sessions. `Sandbox` is the single live-preview namespace
 // required by proxyToSandbox; `SANDBOX_BUILDER` runs the share snapshotter.
@@ -87,6 +94,20 @@ export interface Env {
   ALGOLIA_APP_ID?: string;
   ALGOLIA_INDEX?: string;
   ALGOLIA_API_KEY?: string;
+
+  // ---- Observability (ADR-0041) — scaffold-only additions (T00). Values are
+  // declared here and in wrangler.jsonc so T05 (this file's owner) wires real
+  // usage against a stable shape; nothing in this worker reads them yet.
+  /** Analytics Engine dataset `runner_events` (contract §4), the same binding
+   *  name and dataset the o11y worker writes to. */
+  RUNNER_EVENTS?: AnalyticsEngineDataset;
+  /** Service binding to `handsontable-demos-o11y` — `heartbeat()` for the
+   *  watchdog cron (ADR §F.3), later `AdminReads` (ADR-0043). */
+  O11Y?: Fetcher;
+  /** `full` (default) | `uncaught` (contract §11) — which handled-error
+   *  reports also go to Sentry. Absent means `full`, exactly like leaving the
+   *  var out of `wrangler.jsonc` does today. */
+  SENTRY_SCOPE?: "full" | "uncaught";
 
   // Index signature so we can look up a binding by generated name.
   [key: string]: unknown;
