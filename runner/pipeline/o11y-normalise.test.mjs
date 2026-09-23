@@ -145,6 +145,45 @@ test("processFaroBody: a null entry inside logs never throws (the exact 500 prob
   assert.ok(items[1].ingestItem, "the well-formed item next to the malformed one must still be stored");
 });
 
+// ---- controller handoff: server-side noise gates (D-I2 defence in depth) ------
+
+test("Faro exception: an unhandled ResizeObserver-loop message is dropped entirely (never stored, no point, no fingerprint) — the server-side D-I2 backstop", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  body.exceptions[0].value = "ResizeObserver loop completed with undelivered notifications.";
+  body.exceptions[0].type = "Error";
+  body.exceptions[0].context.handled = "false";
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.equal(item.ingestItem, undefined, "a browser-noise shape must never be stored");
+  assert.equal(item.aePoints.length, 0, "no error.uncaught point either");
+  assert.equal(item.invalid, undefined, "a dropped-as-noise item is not an error");
+});
+
+test("Faro exception: the Office-scanner rejection text is dropped the same way", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  body.exceptions[0].value = "Object Not Found Matching Id:5, MethodName:update, ParamCount:4";
+  body.exceptions[0].type = "Error";
+  body.exceptions[0].context.handled = "false";
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.equal(item.ingestItem, undefined);
+  assert.equal(item.aePoints.length, 0);
+});
+
+test("Faro exception: an explicitly HANDLED report that merely quotes noise text is NOT dropped (mirrors eventGate.ts's own handled discriminator)", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  body.exceptions[0].value = "Failed to fetch";
+  body.exceptions[0].type = "TypeError";
+  body.exceptions[0].context.handled = "true"; // an explicit reportError call, not a global onerror
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.ok(item.ingestItem, "a handled report must never be silently dropped as noise");
+  assert.equal(item.aePoints[0].indexes[0], "error.handled");
+});
+
+test("Faro exception: an unrelated unhandled error is NOT dropped", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.ok(item.ingestItem, "a real, unrelated exception must still be stored");
+});
+
 // ---- fix round (finding D-I3, A-C2): the client's own fingerprint --------------
 
 test("Faro exception: a well-formed payload.fingerprint (Faro's own wire field, D-I3) is used verbatim, not recomputed from the stack", async () => {
@@ -393,6 +432,122 @@ test("B cross-note fix: authored console output that happens to be JSON (e.g. Ti
   // The body text itself is left untouched (still the raw authored JSON) —
   // this fix only stops the KEY-hoisting, never rewrites the body.
   assert.match(record.body, /attacker-demo/);
+});
+
+// ---- controller handoff (finding C-I2, read half): the API-side fingerprint feed --
+//
+// Spec (ADR §M, F3-report.md "Not fixed / handed off"): read
+// bodyJsonAttrs["hot.fingerprint"] and feed it into the fp: registry ONLY
+// when the real resource service.name === "demos-api", log.kind === "error",
+// the value matches ^[a-z0-9-]+:[0-9a-f]{16}$, and the record is not Tier-2
+// container stdout. NOTE: real Cloudflare exports carry service.name =
+// "handsontable-demos-api" (finding M2, unowned/unfixed) — these tests set
+// service.name to the contract's own "demos-api" directly to exercise the
+// gate logic itself; until M2 lands, this feed is correctly gated but does
+// not fire against real production traffic. Recorded in the report.
+
+function apiErrorLineOtlpBody(overrides = {}) {
+  const bodyObj = {
+    "log.kind": "error",
+    context: "chat-answer",
+    name: "Error",
+    message: "boom",
+    "service.version": "abc123",
+    "hot.fingerprint": "chat-answer:0123456789abcdef",
+    ...overrides.bodyExtra,
+  };
+  return JSON.stringify({
+    resourceLogs: [
+      {
+        resource: {
+          attributes: [
+            { key: "service.name", value: { stringValue: overrides.serviceName ?? "demos-api" } },
+          ],
+        },
+        scopeLogs: [
+          {
+            logRecords: [
+              {
+                timeUnixNano: "1735689600000000000",
+                body: { stringValue: JSON.stringify(bodyObj) },
+                attributes: [],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+}
+
+test("C-I2 read half: all four conditions met — the API's own hot.fingerprint feeds the exact first-seen registry", async () => {
+  const result = await processOtlpBody(
+    new TextEncoder().encode(apiErrorLineOtlpBody()),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].fingerprint, "chat-answer:0123456789abcdef");
+});
+
+test("C-I2 condition 1: a body-JSON service.name claiming demos-api does NOT feed the registry — only the REAL resource attribute counts", async () => {
+  const result = await processOtlpBody(
+    new TextEncoder().encode(apiErrorLineOtlpBody({ serviceName: "some-other-service", bodyExtra: { "service.name": "demos-api" } })),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items[0].fingerprint, undefined, "a body-claimed service.name must never satisfy this gate");
+});
+
+test("C-I2 condition 2: log.kind other than 'error' (e.g. api.request) does not feed the registry", async () => {
+  const result = await processOtlpBody(
+    new TextEncoder().encode(apiErrorLineOtlpBody({ bodyExtra: { "log.kind": "api.request" } })),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items[0].fingerprint, undefined);
+});
+
+test("C-I2 condition 3: a hot.fingerprint value outside the contract's <context>:<16 hex> shape does not feed the registry", async () => {
+  const result = await processOtlpBody(
+    new TextEncoder().encode(apiErrorLineOtlpBody({ bodyExtra: { "hot.fingerprint": "<!channel> pwned" } })),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items[0].fingerprint, undefined, "an injection-shaped value must never reach the registry");
+});
+
+test("C-I2 condition 4: authored/Tier-2-shaped JSON (no trusted log.kind at all) never even surfaces a hot.fingerprint to check — the B cross-note gate already empties bodyJsonAttrs", async () => {
+  const body = JSON.stringify({
+    resourceLogs: [
+      {
+        resource: { attributes: [{ key: "service.name", value: { stringValue: "demos-api" } }] },
+        scopeLogs: [
+          {
+            logRecords: [
+              {
+                timeUnixNano: "1735689600000000000",
+                body: {
+                  stringValue: JSON.stringify({
+                    // No "log.kind" — an authored/container-stdout shape,
+                    // trying to forge a fingerprint anyway.
+                    "hot.fingerprint": "chat-answer:0123456789abcdef",
+                  }),
+                },
+                attributes: [],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const result = await processOtlpBody(new TextEncoder().encode(body), "application/json", ENV, Date.now());
+  assert.equal(result.items[0].fingerprint, undefined);
 });
 
 test("fix round I2: a body-JSON key cannot spoof a real resource attribute (service.name, environment, hot.outcome) — the real resource value always wins", async () => {

@@ -81,6 +81,51 @@ const LITE_VITAL_KEYS: Readonly<Record<string, string>> = {
   ttfb: "TTFB",
 };
 
+/**
+ * Controller handoff (defence in depth for finding D-I2's server-side half,
+ * F3-report.md "Not fixed / handed off"): F3 applied the shared noise gates
+ * to Faro's browser-side `beforeSend`
+ * (`apps/authoring/src/eventGate.ts#isUnhandledNoise`/`isOfficeScannerRejection`),
+ * which already closes the failure scenario the finding names for a normal
+ * client. This is the server-side backstop for a client that skips or
+ * bypasses that gate — the same two message/type-shaped rules, re-checked
+ * here on the scrubbed item before it can mint an `error.uncaught` point or
+ * an `fp:` registry entry.
+ *
+ * Deliberately duplicated, not imported: `apps/authoring` and `workers/o11y`
+ * are separate pnpm workspace packages with no dependency between them (the
+ * shared code both surfaces import from is `@handsontable/demo-runtime`,
+ * `packages/runtime`, not `apps/authoring/src`), so a cross-package source
+ * import would not resolve. Keep these two lists in sync with
+ * `eventGate.ts#UNHANDLED_NOISE`/`INJECTED_SCANNER_MESSAGES` by hand.
+ *
+ * Not reimplemented here: `isForeignUnhandled` (needs the request's own
+ * origin plus per-frame URLs, a browser-side concept with no clean
+ * server-side analogue once frames are already rendered into `record.body`
+ * text) and `isEdgelessForeignSessionStart` (reads Sentry-only session tags
+ * this ingest path never receives). Both stay browser-gate-only, same as
+ * F3's own scope decision for D-I2.
+ */
+const SERVER_SIDE_UNHANDLED_NOISE: readonly RegExp[] = [
+  /^ResizeObserver loop/i,
+  /^AbortError/i,
+  /Failed to fetch/i,
+  /Load failed/i,
+];
+const SERVER_SIDE_INJECTED_SCANNER_MESSAGES: readonly RegExp[] = [
+  /Object Not Found Matching Id/i, // Microsoft Outlook/Office safelink scanner
+];
+
+/** True for an unhandled exception item whose message/type matches one of
+ *  the shared noise gates — mirrors `eventGate.ts`'s own
+ *  `mechanism.handled === false` discriminator (an explicit, handled report
+ *  that merely quotes this text must never be silently dropped). */
+function isServerSideNoiseException(value: string | undefined, type: string | undefined, handled: boolean): boolean {
+  if (handled) return false;
+  const patterns = [...SERVER_SIDE_UNHANDLED_NOISE, ...SERVER_SIDE_INJECTED_SCANNER_MESSAGES];
+  return patterns.some((re) => re.test(value ?? "") || re.test(type ?? ""));
+}
+
 export interface ProcessedFaroItem {
   /** Absent for a console-dropped item, an unrecoverable item (a bad
    *  `item.type`/`toAePoint` input, T00-D10), an oversize record, or an
@@ -312,6 +357,17 @@ async function processOneItem(
     return { aePoints: [], invalid: err instanceof Error ? err.message : String(err) };
   }
   if (scrubbed === null) return { aePoints: [] }; // console item, intentionally dropped (§3)
+
+  // Controller handoff (D-I2 server-side backstop, see SERVER_SIDE_UNHANDLED_NOISE's
+  // own doc comment): dropped exactly like a console item — no stored
+  // record, no AE point, no fingerprint — the same thing Sentry/Faro's own
+  // `beforeSend` returning `null` would have done browser-side.
+  if (
+    type === "exception" &&
+    isServerSideNoiseException(scrubbed.payload.value, scrubbed.payload.type, handled)
+  ) {
+    return { aePoints: [] };
+  }
 
   let record;
   try {

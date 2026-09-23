@@ -201,6 +201,50 @@ function tryParseJsonBodyAttrs(body: string): Record<string, string> {
   return out;
 }
 
+/**
+ * Controller handoff (finding C-I2, read half — F3-report.md "Not fixed /
+ * handed off", same spec restated in ADR §M): F3 wired the API worker's own
+ * `error.handled`/diagnostic reports to carry `hot.fingerprint` on their
+ * structured line (`workers/api/src/telemetry/diagnostic.ts`,
+ * `lines.ts#logErrorLine`'s `"log.kind": "error"` shape). Nothing on the
+ * read side fed it into `InboxWriter`'s exact first-seen registry, so a
+ * brand-new server-side failure class notified nobody once `SENTRY_SCOPE`
+ * flips to `uncaught` — this closes that gap.
+ *
+ * Every one of these four conditions must hold, exactly as specced:
+ * - the REAL resource `service.name` is `demos-api` — read off
+ *   `finalResourceAttrs` (the resource attribute after hoisting/defaults),
+ *   never a body-JSON key: `RESOURCE_ATTR_KEY_SET` already strips any
+ *   body-supplied `service.name` before it could reach here (the same
+ *   anti-spoof guarantee every other resource attribute gets).
+ * - the parsed body's own `log.kind` is `"error"` (never `"api.request"`,
+ *   which never carries a fingerprint at all).
+ * - the value matches the contract's own `<context>:<16 hex>` shape.
+ * - the record is not Tier-2 container stdout — guaranteed by construction
+ *   here, not a separate check: `tryParseJsonBodyAttrs` (the B cross-note
+ *   fix, above) already refuses to parse ANY body whose own `log.kind` is
+ *   not one of this worker's trusted shapes, so `bodyJsonAttrs` is already
+ *   empty for authored/container output before this function ever runs.
+ *
+ * Deliberately NOT `hot.surface !== "demo-runtime"` (the browser path's own
+ * rule, `feedsNewFingerprintAlert`): a worker-tenant record's `hot.surface`
+ * defaults to `"none"` when unset, which would admit any record reaching
+ * `/telemetry/v1/logs` — forged or not — under that same test.
+ */
+const API_FINGERPRINT_LOG_KIND = "error";
+const API_FINGERPRINT_PATTERN = /^[a-z0-9-]+:[0-9a-f]{16}$/;
+
+function apiFingerprintFeed(
+  bodyJsonAttrs: Record<string, string>,
+  finalResourceAttrs: Record<string, string>,
+): string | undefined {
+  const candidate = bodyJsonAttrs["hot.fingerprint"];
+  if (finalResourceAttrs["service.name"] !== "demos-api") return undefined;
+  if (bodyJsonAttrs["log.kind"] !== API_FINGERPRINT_LOG_KIND) return undefined;
+  if (typeof candidate !== "string" || !API_FINGERPRINT_PATTERN.test(candidate)) return undefined;
+  return candidate;
+}
+
 export interface OtlpProcessResult {
   items: IngestItem[];
   /** Records decoded but dropped (over the 256 KB cap) — accounted as
@@ -252,7 +296,8 @@ async function toIngestItem(
     attributes: normalised.attributes ?? {},
     rawEventTime: rawEventTime ?? "",
   });
-  return { hash, record: normalised };
+  const fingerprint = apiFingerprintFeed(bodyJsonAttrs, finalResourceAttrs);
+  return { hash, record: normalised, fingerprint };
 }
 
 /** Decodes and processes an already-size-capped OTLP export body (JSON or
