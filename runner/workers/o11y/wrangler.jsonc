@@ -1,0 +1,89 @@
+{
+  // The observability Worker (ADR-0041 rev. 3) — o11y worker + InboxWriter DO +
+  // GrafanaBox DO/Container. Deployed to the main Handsontable Cloudflare
+  // account (NOT the sandbox), same account as workers/api.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "handsontable-demos-o11y",
+  "account_id": "15111272c53ed0aaf84a908f0c9c7f8b",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+
+  // No workers.dev URL, no preview URLs (contract §1) — every request reaches
+  // this Worker through the `--routes` flags in the `deploy` script
+  // (package.json), never a Cloudflare-issued subdomain.
+  "workers_dev": false,
+  "preview_urls": false,
+
+  // ADR §B.6, restated from the task file's "§B.4" (a typo for §B.6, per the
+  // controller): the observer does not observe itself — no exported Workers
+  // Logs, no traces, invocation logs off. Its own `o11y.*` self-metrics go to
+  // Analytics Engine like every other metric, never through its own ingest
+  // routes.
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": false, "persist": true, "destinations": [] },
+    "traces": { "enabled": false }
+  },
+
+  // ADR §B.3: the drain's alarm loop budget, at most 300000 per ADR. Left at a
+  // conservative default here — T02/T03 raise it once spike (b) measures what
+  // the drain actually needs.
+  "limits": { "cpu_ms": 30000 },
+
+  // Public, non-secret config (contract §2).
+  "vars": {
+    "O11Y_ENV": "production",
+    // Placeholders (T00-D8, see the task Outcome): the real Access application
+    // does not exist yet — T03 creates it and fills in both values.
+    "ACCESS_TEAM_DOMAIN": "handsontable.cloudflareaccess.com",
+    "ACCESS_AUD": "",
+    "GITHUB_OIDC_REPOSITORY": "handsontable/examples"
+  },
+
+  // R2 — EU jurisdiction on every bucket (contract §2). Bucket names must exist
+  // once R2 is enabled for this account (`wrangler r2 bucket create --jurisdiction eu <name>`),
+  // the same one-time step `AGENTS.md` notes for the API worker's bucket.
+  "r2_buckets": [
+    { "binding": "O11Y_INBOX", "bucket_name": "handsontable-demos-o11y-inbox", "jurisdiction": "eu" },
+    { "binding": "O11Y_LOKI_STATE", "bucket_name": "handsontable-demos-o11y-loki", "jurisdiction": "eu" },
+    { "binding": "O11Y_MAPS", "bucket_name": "handsontable-demos-o11y-maps", "jurisdiction": "eu" }
+  ],
+
+  // Analytics Engine — `runner_events` (contract §4), shared with the API
+  // worker's own `RUNNER_EVENTS` binding.
+  "analytics_engine_datasets": [{ "binding": "RUNNER_EVENTS", "dataset": "runner_events" }],
+
+  // `handsontable-demos-api` — o11y usage metering, o11y spend, later
+  // `AdminReads` (ADR-0043).
+  "services": [{ "binding": "API", "service": "handsontable-demos-api" }],
+
+  // `INBOX_WRITER` (T02 implements) and `GRAFANA_BOX` (T01 implements,
+  // Container-backed once `containers/o11y/` exists) — do-nothing stubs today
+  // (src/env.ts), so this dry-runs without either implementation.
+  //
+  // EU jurisdiction for both is a *runtime* call
+  // (`env.INBOX_WRITER.jurisdiction("eu")`), not a wrangler.jsonc field — there
+  // is no such key on a `durable_objects` binding.
+  //
+  // The `containers` block (image, instance type, max_instances) for
+  // `GrafanaBox` is left out (T00-D7, see the task Outcome): it names a real
+  // Dockerfile under `containers/o11y/`, which does not exist until T01.
+  // Measured: `wrangler deploy --dry-run` accepts the `durable_objects`
+  // binding below even though `GrafanaBox` (env.ts) extends `Container` with
+  // no matching `containers` entry — it just bundles
+  // `@cloudflare/containers`' runtime. A real `wrangler deploy` almost
+  // certainly still needs the entry to schedule anything; this was not
+  // deployed for real to confirm either way. T01 adds it alongside real
+  // container behaviour.
+  "durable_objects": {
+    "bindings": [
+      { "class_name": "InboxWriter", "name": "INBOX_WRITER" },
+      { "class_name": "GrafanaBox", "name": "GRAFANA_BOX" }
+    ]
+  },
+  "migrations": [{ "new_sqlite_classes": ["InboxWriter", "GrafanaBox"], "tag": "v1" }]
+
+  // Left out entirely, T02's job (task file, controller decision): the
+  // Workers rate-limiting binding gating `collect`/`lite` (ADR §B.5) — it
+  // needs a real namespace id from the dashboard, which does not exist yet.
+}
