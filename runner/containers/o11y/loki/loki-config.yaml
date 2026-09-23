@@ -1,0 +1,93 @@
+{
+  "auth_enabled": true,
+  "server": {
+    "http_listen_port": 3100,
+    "grpc_listen_port": 9095,
+    "log_level": "info"
+  },
+  "common": {
+    "path_prefix": "/loki",
+    "replication_factor": 1,
+    "ring": {
+      "kvstore": { "store": "inmemory" }
+    }
+  },
+  "ingester": {
+    "wal": {
+      "enabled": true,
+      "dir": "/loki/wal",
+      "flush_on_shutdown": true
+    },
+    "chunk_idle_period": "1h",
+    "chunk_retain_period": "30s",
+    "max_chunk_age": "2h"
+  },
+  "limits_config": {
+    "shard_streams": { "enabled": false },
+    "reject_old_samples": true,
+    "reject_old_samples_max_age": "7d",
+    "ingestion_rate_mb": 16,
+    "ingestion_burst_size_mb": 32,
+    "max_line_size": "256KB",
+    "otlp_config": {
+      "resource_attributes": {
+        "attributes_config": [
+          {
+            "action": "index_label",
+            "attributes": [
+              "service.name",
+              "deployment.environment.name",
+              "hot.surface",
+              "hot.tier",
+              "hot.framework",
+              "hot.ht_major",
+              "hot.outcome"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "runtime_config": {
+    "file": "/etc/loki/runtime-config.yaml"
+  },
+  "schema_config": {
+    "configs": [
+      {
+        "from": "2024-01-01",
+        "store": "tsdb",
+        "object_store": "s3",
+        "schema": "v13",
+        "index": { "prefix": "index/", "period": "24h" }
+      }
+    ]
+  },
+  "storage_config": {
+    "tsdb_shipper": {
+      "active_index_directory": "/loki/tsdb-index",
+      "cache_location": "/loki/tsdb-cache",
+      "resync_interval": "5m"
+    },
+    "aws": {
+      "endpoint": "${LOKI_S3_ENDPOINT}",
+      "region": "${LOKI_S3_REGION}",
+      "access_key_id": "${LOKI_S3_ACCESS_KEY_ID}",
+      "secret_access_key": "${LOKI_S3_SECRET_ACCESS_KEY}",
+      "bucketnames": "${LOKI_S3_BUCKET}",
+      "s3forcepathstyle": true,
+      "insecure": ${LOKI_S3_INSECURE}
+    }
+  },
+  "compactor": {
+    "working_directory": "/loki/compactor",
+    "retention_enabled": false,
+    "delete_request_store": "s3"
+  },
+  "querier": {
+    "max_concurrent": 10,
+    "query_ingesters_within": "168h"
+  },
+  "analytics": {
+    "reporting_enabled": false
+  }
+}

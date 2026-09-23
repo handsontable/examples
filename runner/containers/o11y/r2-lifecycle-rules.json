@@ -1,0 +1,37 @@
+{
+  "_comment": "ADR-0041 §B.4, §H. Applied by T10 to the Loki bucket (handsontable-demos-o11y-loki) via `wrangler r2 bucket lifecycle` / the R2 API. Retention through R2 lifecycle, not the Loki compactor (compactor.retention_enabled stays false — its markers would live on ephemeral disk). Age is in seconds. Confirmed against the real key layout Loki 3.3.2 writes (T01 spike, containers/o11y/local/stop-roundtrip.mjs): browser/<fp>/..., worker/<fp>/..., index/index/<table>/..., state/wakes/<wakeId>/clean.",
+  "rules": [
+    {
+      "id": "o11y-loki-browser-chunks-30d",
+      "enabled": true,
+      "conditions": { "prefix": "browser/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 2592000 }
+      }
+    },
+    {
+      "id": "o11y-loki-worker-chunks-90d",
+      "enabled": true,
+      "conditions": { "prefix": "worker/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 7776000 }
+      }
+    },
+    {
+      "id": "o11y-loki-index-90d",
+      "enabled": true,
+      "conditions": { "prefix": "index/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 7776000 }
+      }
+    },
+    {
+      "id": "o11y-loki-state-30d",
+      "enabled": true,
+      "conditions": { "prefix": "state/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 2592000 }
+      }
+    }
+  ]
+}

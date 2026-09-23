@@ -1,0 +1,50 @@
+# ADR-0041 §A, §B.5. One Loki datasource per tenant (X-Scope-OrgID), plus the
+# Altinity ClickHouse plugin against the local ClickHouse container in dev or
+# the Analytics Engine SQL API in production. Fixed `uid`s: Grafana's sqlite
+# state is disposable (a fresh DB on every wake), so a dashboard (T09) that
+# references a datasource by uid would break on every wake if these were
+# auto-generated. Grafana expands ${VAR} in provisioning files (documented
+# since v8.0) — do not hard-code an endpoint or credential here.
+apiVersion: 1
+
+datasources:
+  - name: Loki (browser)
+    uid: loki-browser
+    type: loki
+    access: proxy
+    url: http://localhost:3100
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+      maxLines: 1000
+    secureJsonData:
+      httpHeaderValue1: browser
+    editable: false
+    isDefault: false
+
+  - name: Loki (worker)
+    uid: loki-worker
+    type: loki
+    access: proxy
+    url: http://localhost:3100
+    jsonData:
+      httpHeaderName1: X-Scope-OrgID
+      maxLines: 1000
+    secureJsonData:
+      httpHeaderValue1: worker
+    editable: false
+    isDefault: true
+
+  - name: ClickHouse (runner_events)
+    uid: clickhouse-runner-events
+    type: grafana-clickhouse-datasource
+    access: proxy
+    jsonData:
+      host: ${O11Y_CLICKHOUSE_HOST}
+      port: ${O11Y_CLICKHOUSE_PORT}
+      protocol: ${O11Y_CLICKHOUSE_PROTOCOL}
+      defaultDatabase: ${O11Y_CLICKHOUSE_DATABASE}
+      username: ${O11Y_CLICKHOUSE_USER}
+      tlsSkipVerify: true
+    secureJsonData:
+      password: ${AE_SQL_TOKEN}
+    editable: false

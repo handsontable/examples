@@ -1,0 +1,109 @@
+# containers/o11y/compose.yml — local stand-in for the Grafana box (ADR-0041
+# §I, docs/observability-contract.md §10). No `container_name`, no named
+# volumes, no fixed network name: other tasks (T03, T11) run this same file
+# under their own `COMPOSE_PROJECT_NAME` and port block (see
+# .superpowers/sdd/README/COMMON.md rule 5), and compose already namespaces
+# everything by project.
+#
+# Run it with (T01's own port block is 4200-4299; every other task uses its
+# own block from COMMON.md):
+#   COMPOSE_PROJECT_NAME=o11y-t01 \
+#   O11Y_GRAFANA_PORT=4200 O11Y_LOKI_PORT=4201 O11Y_MINIO_PORT=4202 \
+#   O11Y_MINIO_CONSOLE_PORT=4203 O11Y_CLICKHOUSE_PORT=4204 O11Y_CLICKHOUSE_NATIVE_PORT=4205 \
+#   docker compose -f containers/o11y/compose.yml up
+#
+# With no env overrides, every host port defaults to the contract's own
+# defaults (docs/observability-contract.md §1: 3000, 3100, 8123) so
+# `pnpm o11y:dev` (added by later tasks) works with zero configuration.
+
+services:
+  box:
+    build:
+      context: .
+    environment:
+      WAKE_ID: ${O11Y_WAKE_ID:-local-dev}
+      STORAGE: s3
+      LOKI_S3_ENDPOINT: minio:9000
+      LOKI_S3_REGION: auto
+      LOKI_S3_ACCESS_KEY_ID: ${O11Y_MINIO_ROOT_USER:-minioadmin}
+      LOKI_S3_SECRET_ACCESS_KEY: ${O11Y_MINIO_ROOT_PASSWORD:-minioadmin}
+      LOKI_S3_BUCKET: loki
+      LOKI_S3_INSECURE: "true"
+      GF_SERVER_ROOT_URL: http://localhost:${O11Y_GRAFANA_PORT:-3000}/grafana/
+      O11Y_CLICKHOUSE_HOST: clickhouse
+      O11Y_CLICKHOUSE_PORT: "8123"
+      O11Y_CLICKHOUSE_PROTOCOL: http
+      O11Y_CLICKHOUSE_DATABASE: default
+      O11Y_CLICKHOUSE_USER: default
+      AE_SQL_TOKEN: ${AE_SQL_TOKEN:-local-dev-token}
+      O11Y_STOP_GRACE_SECONDS: ${O11Y_STOP_GRACE_SECONDS:-30}
+    ports:
+      - "127.0.0.1:${O11Y_GRAFANA_PORT:-3000}:3000"
+      - "127.0.0.1:${O11Y_LOKI_PORT:-3100}:3100"
+    stop_grace_period: 30s
+    # `standard-1` (docs.cloudflare.com/containers/platform-details/limits):
+    # 1/2 vCPU, 4 GiB memory, 8 GB disk — so local boot-time and memory
+    # measurements mean the same thing the sandbox probe will measure.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 4g
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_started
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-11-07T00-52-20Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${O11Y_MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${O11Y_MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "127.0.0.1:${O11Y_MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${O11Y_MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # One-shot: creates the Loki bucket, then exits. `box` waits on this
+  # completing successfully so Loki never races an empty alias/missing
+  # bucket on a cold `up`. Waits for minio's own healthcheck (not just
+  # "container started") so a fresh `up` never races the server socket.
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2024-11-05T11-29-45Z
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mc alias set local http://minio:9000 "$${O11Y_MINIO_ROOT_USER:-minioadmin}" "$${O11Y_MINIO_ROOT_PASSWORD:-minioadmin}"
+        mc mb -p local/loki || true
+    environment:
+      O11Y_MINIO_ROOT_USER: ${O11Y_MINIO_ROOT_USER:-minioadmin}
+      O11Y_MINIO_ROOT_PASSWORD: ${O11Y_MINIO_ROOT_PASSWORD:-minioadmin}
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  # Analytics Engine stand-in (docs/observability-contract.md §10): a
+  # `runner_events` table shaped exactly like the real AE SQL API response
+  # (index1, blob1-20, double1-20, timestamp, _sample_interval), queried
+  # through the same allowlisting helper the o11y worker uses in production.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.10-alpine
+    environment:
+      CLICKHOUSE_DB: default
+      # The Grafana datasource always sends a password (jsonData mirrors the
+      # production AE_SQL_TOKEN shape); give the local default user the same
+      # value so the health check exercises real authentication, not an
+      # empty-password special case.
+      CLICKHOUSE_PASSWORD: ${AE_SQL_TOKEN:-local-dev-token}
+    volumes:
+      - ./local/clickhouse-init.sql:/docker-entrypoint-initdb.d/clickhouse-init.sql:ro
+    ports:
+      - "127.0.0.1:${O11Y_CLICKHOUSE_PORT:-8123}:8123"
+      - "127.0.0.1:${O11Y_CLICKHOUSE_NATIVE_PORT:-9009}:9000"
