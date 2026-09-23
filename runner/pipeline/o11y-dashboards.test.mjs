@@ -59,13 +59,21 @@ const KNOWN_AE_COLUMNS = new Set([
   ...Array.from({ length: ASSIGNED_DOUBLE_COUNT }, (_, i) => `double${i + 1}`),
 ]);
 
-// Every function this task's own dashboards actually use — SUM for the §4
-// count-reading rule, quantileTDigestWeighted for a weighted percentile, AVG
-// for an already-absolute gauge reading (never a count, see the dashboards'
-// own "Gauges... AVG, not the count-sampling formula" panel descriptions),
-// toStartOfInterval/toUInt32 as their supporting casts. A future dashboard
-// that needs one more function adds it here, deliberately, in the same PR.
-const ALLOWED_AE_FUNCTIONS = new Set(["SUM", "AVG", "quantileTDigestWeighted", "toStartOfInterval", "toUInt32"]);
+// Cloudflare's *documented* Analytics Engine SQL API functions this task's
+// dashboards use (developers.cloudflare.com/analytics/analytics-engine/
+// sql-reference/{aggregate,date-time,type-conversion}-functions/, read
+// 2026-09-23 — see the T09 Outcome for the exact excerpts) — never a wider
+// "whatever local ClickHouse happens to accept" set, which is the whole
+// point of this lint (the task's own "Traps" section). Casing matches the
+// docs' own signatures exactly: lowercase `sum`/`avg`, exact-case
+// `quantileExactWeighted`/`toStartOfInterval`/`toUInt32` — a stray `SUM` or
+// `COUNT` is rejected the same way an undocumented function would be.
+// `quantileExactWeighted` is the documented weighted-percentile aggregate;
+// `quantileTDigestWeighted` (this file's own first draft) is a real
+// ClickHouse function but does not appear on AE's aggregate-functions page —
+// exactly the local-accepts-more trap this lint exists to catch, caught
+// against itself once real docs were read.
+const ALLOWED_AE_FUNCTIONS = new Set(["sum", "avg", "quantileExactWeighted", "toStartOfInterval", "toUInt32"]);
 
 const AE_KEYWORDS = new Set([
   "SELECT",
@@ -179,27 +187,36 @@ function loadDashboards() {
     }));
 }
 
-function aeTargetsOf(dashboard) {
+/** Every panel target's *effective* datasource — `target.datasource`, falling
+ *  back to `panel.datasource` exactly the way Grafana itself resolves a
+ *  target that doesn't repeat the panel's own datasource (a completely valid,
+ *  common shape this repo's own generator does not happen to produce, but a
+ *  future hand-edit could). Missing entirely — no target-level and no
+ *  panel-level datasource, i.e. Grafana's implicit "default" datasource — is
+ *  surfaced as `{ type: undefined, uid: undefined }`, never silently skipped:
+ *  that is exactly the "doesn't name its tenant" shape the Loki check must
+ *  catch, and the AE check must not quietly pass over either. */
+function allTargets(dashboard) {
   const targets = [];
   for (const panel of dashboard.panels ?? []) {
     for (const target of panel.targets ?? []) {
-      if (target.datasource?.type === "vertamedia-clickhouse-datasource") {
-        targets.push({ panel: panel.title, query: target.query });
-      }
+      const datasource = target.datasource ?? panel.datasource ?? {};
+      targets.push({ panel: panel.title, target, datasource });
     }
   }
   return targets;
 }
 
+function aeTargetsOf(dashboard) {
+  return allTargets(dashboard)
+    .filter(({ datasource }) => datasource.type === "vertamedia-clickhouse-datasource")
+    .map(({ panel, target }) => ({ panel, query: target.query }));
+}
+
 function lokiTargetsOf(dashboard) {
-  const targets = [];
-  for (const panel of dashboard.panels ?? []) {
-    for (const target of panel.targets ?? []) {
-      if (target.datasource?.type === "loki") {
-        targets.push({ panel: panel.title, uid: target.datasource.uid, expr: target.expr });
-      }
-    }
-  }
+  const targets = allTargets(dashboard)
+    .filter(({ datasource }) => datasource.type === "loki")
+    .map(({ panel, target, datasource }) => ({ panel, uid: datasource.uid, expr: target.expr }));
   for (const ann of dashboard.annotations?.list ?? []) {
     if (ann.datasource?.type === "loki") {
       targets.push({ panel: `annotation:${ann.name}`, uid: ann.datasource.uid, expr: ann.expr });
@@ -209,6 +226,7 @@ function lokiTargetsOf(dashboard) {
 }
 
 const KNOWN_LOKI_UIDS = new Set(["loki-browser", "loki-worker"]);
+const KNOWN_DATASOURCE_UIDS = new Set(["clickhouse-runner-events", "loki-browser", "loki-worker"]);
 
 // =============================================================================
 // The dashboards this repo actually ships
@@ -230,6 +248,21 @@ test("every dashboard under containers/o11y/grafana/dashboards/ is present", () 
 });
 
 for (const { file, dashboard } of dashboards) {
+  test(`${file}: every panel target resolves (with the panel-level fallback) to a known datasource uid`, () => {
+    // Closes the gap a target-only check would miss: a target that omits its
+    // own `datasource` and relies on the panel's (a shape Grafana itself
+    // resolves the same way, T09-D4) must still land on one of the three
+    // uids this box provisions, never on an implicit/unnamed default —
+    // exactly the "names its tenant datasource" rule, generalized to every
+    // target, not only ones that happen to already say `type: "loki"`.
+    for (const { panel, datasource } of allTargets(dashboard)) {
+      assert.ok(
+        KNOWN_DATASOURCE_UIDS.has(datasource.uid),
+        `${file} / panel "${panel}": target has no resolvable known datasource (got ${JSON.stringify(datasource)})`,
+      );
+    }
+  });
+
   test(`${file}: every Analytics Engine query passes the AE lint`, () => {
     const targets = aeTargetsOf(dashboard);
     assert.ok(targets.length > 0, `${file} has no ClickHouse/AE panel — expected at least one`);
@@ -323,8 +356,8 @@ test("the lint fails on a high-cardinality Loki label (session.id / cf.ray shape
 test("the lint passes a clean AE query (sanity: the lint isn't vacuously failing everything)", () => {
   assert.deepEqual(
     validateAeQuery(
-      "SELECT toStartOfInterval(timestamp, INTERVAL $interval SECOND) AS t, blob5 AS tier, " +
-        "SUM(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) " +
+      "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob5 AS tier, " +
+        "sum(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) " +
         "AND index1 = 'preview.ready_ms' AND blob3 = '$environment' GROUP BY t, tier ORDER BY t",
     ),
     [],
@@ -333,4 +366,38 @@ test("the lint passes a clean AE query (sanity: the lint isn't vacuously failing
 
 test("the lint passes a clean Loki expr (sanity)", () => {
   assert.deepEqual(validateLokiExpr('{hot_surface="demo-runtime", service_name="demos-authoring"}'), []);
+});
+
+test("the datasource check fails on a target with no datasource at all (target-only check would miss this)", () => {
+  const dashboard = {
+    panels: [
+      {
+        title: "No datasource anywhere",
+        // No panel-level datasource either — this is Grafana's implicit
+        // "default" datasource, which a target-only scan (this file's first
+        // draft) silently skipped instead of flagging (T09-D4).
+        targets: [{ refId: "A", expr: '{hot_surface="o11y"}' }],
+      },
+    ],
+  };
+  const resolved = allTargets(dashboard);
+  assert.equal(resolved.length, 1);
+  assert.ok(
+    !KNOWN_DATASOURCE_UIDS.has(resolved[0].datasource.uid),
+    "expected the unnamed-datasource target to NOT resolve to a known uid",
+  );
+});
+
+test("the datasource check accepts a target that only names its datasource at the panel level", () => {
+  const dashboard = {
+    panels: [
+      {
+        title: "Panel-level datasource, target omits it",
+        datasource: { type: "loki", uid: "loki-worker" },
+        targets: [{ refId: "A", expr: '{hot_surface="o11y"}' }],
+      },
+    ],
+  };
+  const resolved = allTargets(dashboard);
+  assert.equal(resolved[0].datasource.uid, "loki-worker");
 });

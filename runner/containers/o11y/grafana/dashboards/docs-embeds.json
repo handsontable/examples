@@ -18,70 +18,38 @@
     "list": [
       {
         "name": "environment",
-        "type": "custom",
+        "type": "query",
         "label": "Environment",
-        "query": "local,production",
-        "current": {
-          "text": "local",
-          "value": "local"
+        "datasource": {
+          "type": "vertamedia-clickhouse-datasource",
+          "uid": "clickhouse-runner-events"
         },
-        "options": [
-          {
-            "text": "local",
-            "value": "local",
-            "selected": true
-          },
-          {
-            "text": "production",
-            "value": "production",
-            "selected": false
-          }
-        ],
-        "hide": 0,
+        "query": "SELECT DISTINCT blob3 AS environment FROM runner_events",
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
         "includeAll": false,
-        "multi": false
+        "current": {}
       },
       {
         "name": "framework",
-        "type": "custom",
+        "type": "query",
         "label": "Framework",
-        "query": "react,vue3,angular,vanilla-js,next",
+        "datasource": {
+          "type": "vertamedia-clickhouse-datasource",
+          "uid": "clickhouse-runner-events"
+        },
+        "query": "SELECT DISTINCT blob6 AS framework FROM runner_events WHERE blob6 != ''",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
         "current": {
           "text": "All",
           "value": [
             "$__all"
           ]
-        },
-        "options": [
-          {
-            "text": "All",
-            "value": "$__all",
-            "selected": true
-          },
-          {
-            "text": "react",
-            "value": "react"
-          },
-          {
-            "text": "vue3",
-            "value": "vue3"
-          },
-          {
-            "text": "angular",
-            "value": "angular"
-          },
-          {
-            "text": "vanilla-js",
-            "value": "vanilla-js"
-          },
-          {
-            "text": "next",
-            "value": "next"
-          }
-        ],
-        "hide": 0,
-        "includeAll": true,
-        "multi": true
+        }
       },
       {
         "name": "ht_major",
@@ -154,7 +122,7 @@
     {
       "id": 1,
       "type": "timeseries",
-      "title": "serve.embed outcome rate",
+      "title": "serve.share / serve.d / serve.embed rate by outcome",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -172,9 +140,8 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL $interval SECOND) AS t, blob8 AS outcome, SUM(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'serve.embed' AND blob3 = '$environment' GROUP BY t, outcome ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, sum(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 IN ('serve.share','serve.d','serve.embed') AND blob3 = '$environment' GROUP BY t, outcome ORDER BY t",
           "format": "time_series",
-          "database": "default",
           "table": "runner_events",
           "round": "0s",
           "intervalFactor": 1
@@ -204,8 +171,7 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "web_vital by vital (embed/d surfaces)",
-      "description": "LCP, INP, CLS, TTFB — weighted quantile of double3 (value).",
+      "title": "snapshot.build rate by outcome",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -223,9 +189,8 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL $interval SECOND) AS t, blob9 AS vital, quantileTDigestWeighted(0.75)(double3, toUInt32(_sample_interval)) AS p75 FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'web_vital' AND blob4 IN ('embed','d') AND blob3 = '$environment' GROUP BY t, vital ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, sum(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'snapshot.build' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) GROUP BY t, outcome ORDER BY t",
           "format": "time_series",
-          "database": "default",
           "table": "runner_events",
           "round": "0s",
           "intervalFactor": 1
@@ -254,6 +219,56 @@
     },
     {
       "id": 3,
+      "type": "timeseries",
+      "title": "web_vital by vital (embed/d surfaces)",
+      "description": "LCP, INP, CLS, TTFB — weighted quantile of double3 (value).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS vital, quantileExactWeighted(0.75)(double3, toUInt32(_sample_interval)) AS p75 FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'web_vital' AND blob4 IN ('embed','d') AND blob3 = '$environment' GROUP BY t, vital ORDER BY t",
+          "format": "time_series",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
       "type": "table",
       "title": "Broken embeds by demo id (error.uncaught, surface=embed)",
       "gridPos": {
@@ -273,9 +288,8 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT blob12 AS demo_id, SUM(_sample_interval * double1) AS errors FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'error.uncaught' AND blob4 = 'embed' AND blob3 = '$environment' GROUP BY demo_id ORDER BY errors DESC LIMIT 20",
+          "query": "SELECT blob12 AS demo_id, sum(_sample_interval * double1) AS errors FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'error.uncaught' AND blob4 = 'embed' AND blob3 = '$environment' GROUP BY demo_id ORDER BY errors DESC LIMIT 20",
           "format": "table",
-          "database": "default",
           "table": "runner_events",
           "round": "0s",
           "intervalFactor": 1
@@ -288,7 +302,7 @@
       "options": {}
     },
     {
-      "id": 4,
+      "id": 5,
       "type": "logs",
       "title": "Recent embed errors",
       "gridPos": {
