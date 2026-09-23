@@ -26,12 +26,14 @@ export function bindingSink(dataset: AnalyticsEngineDatasetLike): AeSink {
   };
 }
 
-/** ClickHouse's default `DateTime64` text/JSON parser accepts
- *  `'YYYY-MM-DD HH:MM:SS.sss'` at millisecond precision — not `Date`'s own
- *  `toISOString()` (`T` separator, `Z` suffix). Exported for
- *  `pipeline/telemetry-sink.test.mjs`. */
-export function clickhouseTimestamp(date: Date): string {
-  return date.toISOString().replace("T", " ").replace("Z", "");
+/**
+ * `date` as raw epoch milliseconds — the value to send a `DateTime64(3)`
+ * column over JSONEachRow (T00-D2, revised; see `clickhouseSink`'s doc
+ * comment for the measured reasoning). Exported for
+ * `pipeline/telemetry-sink.test.mjs`.
+ */
+export function clickhouseTimestamp(date: Date): number {
+  return date.getTime();
 }
 
 export interface ClickhouseSinkOptions {
@@ -48,12 +50,32 @@ export interface ClickhouseSinkOptions {
  * `containers/o11y/local/clickhouse-init.sql` (T01, confirmed column-for-
  * column identical to what this sink writes: `index1`, `blob1`…`blob20` as
  * `String`, `double1`…`double20` as `Float64`, `timestamp` as
- * `DateTime64(3)`, `_sample_interval` — T00-D2). `timestamp` is sent as a
- * `'YYYY-MM-DD HH:MM:SS.sss'` string, not a bare Unix-seconds integer: a
- * plain number into a `DateTime64` column is read as whole seconds, which
- * would silently truncate the millisecond precision the column exists to
- * hold. Column names are the AE slot names themselves — the same query a
- * real Analytics Engine SQL call would run, no second name mapping.
+ * `DateTime64(3)`, `_sample_interval` — T00-D2).
+ *
+ * `timestamp` is sent as a raw epoch-millisecond integer (`clickhouseTimestamp`),
+ * not a formatted string — measured against a real, throwaway
+ * `clickhouse/clickhouse-server:24.10-alpine` container running T01's exact DDL
+ * (the image tag T01's `compose.yml` pins), read via `toUnixTimestamp64Milli`:
+ *
+ * - A bare Unix-**seconds** integer (the first version of this sink) is not
+ *   read as seconds at all: ClickHouse reads a plain integer into a
+ *   `DateTime64(3)` column as raw **milliseconds** ticks — the column's own
+ *   declared scale — so `1758628800` (meant as seconds) landed on
+ *   `1970-01-21 08:30:28.800`, off by a factor of 1000. A wrong guess, not
+ *   truncated precision as an earlier version of this comment claimed.
+ * - A `'YYYY-MM-DD HH:MM:SS.sss'` **string** (this sink's second version)
+ *   round-trips exactly correct under a UTC server timezone, but is parsed in
+ *   the server's configured timezone — under a `session_timezone` override to
+ *   `Asia/Tokyo` in the same measurement, the identical string parsed 9 hours
+ *   off. Not safe to ship without pinning the container's timezone, which
+ *   nothing here does.
+ * - A raw **epoch-millisecond integer** (`Date.getTime()`, this version) is a
+ *   pure tick count — `toUnixTimestamp64Milli` returned it back byte-for-byte
+ *   identical, and being unit-less it cannot be timezone-dependent by
+ *   construction. This is what `clickhouseTimestamp` sends.
+ *
+ * Column names are the AE slot names themselves — the same query a real
+ * Analytics Engine SQL call would run, no second name mapping.
  */
 export function clickhouseSink(url: string, options: ClickhouseSinkOptions = {}): AeSink {
   const table = options.table ?? "runner_events";

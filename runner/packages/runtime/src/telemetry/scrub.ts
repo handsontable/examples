@@ -184,6 +184,32 @@ function scrubText(value: string | undefined): string | undefined {
 }
 
 /**
+ * §3: "`redactPreviewHosts` on every string" — not only the message/URL
+ * fields the targeted rules above already cover. A preview URL is a session
+ * credential (`monitor.ts`'s own words), so it must never survive in an
+ * allowlisted attribute value, a resource attribute (`hot.framework` is
+ * client-supplied and becomes a Loki label), or any other string this
+ * scrubber does not name individually. Walks every string leaf of a plain
+ * object/array tree in place; `redactPreviewHosts` is a pure regex replace,
+ * so re-applying it to a string already handled above is a no-op — this can
+ * safely run last, after every targeted rule, regardless of order.
+ */
+function redactStringsDeep<V>(value: V): V {
+  if (typeof value === "string") return redactPreviewHosts(value) as V;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) value[i] = redactStringsDeep(value[i]);
+    return value;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      (value as Record<string, unknown>)[key] = redactStringsDeep((value as Record<string, unknown>)[key]);
+    }
+    return value;
+  }
+  return value;
+}
+
+/**
  * The one scrubber (ADR §E.4). Never mutates its argument; returns a scrubbed
  * clone, or `null` when the whole record must be dropped (a console item).
  *
@@ -193,7 +219,10 @@ function scrubText(value: string | undefined): string | undefined {
  * Babel code frames from message-bearing text; allowlist `attributes` /
  * `resourceAttributes` / `context` (§3's forbidden attributes — `url.full`, geo,
  * ASN, the user pseudonym, an email, an IP, a user-agent string — are simply
- * never on the allowlist, T00-D1).
+ * never on the allowlist, T00-D1); finally, `redactPreviewHosts` on every
+ * remaining string in the record, not only the fields named above — an
+ * allowlisted attribute value (`session.id`, `hot.framework`) is still
+ * client-supplied and can carry a preview host too.
  */
 export function scrubTelemetry<T extends Scrubbable>(record: T): T | null {
   const clone = structuredClone(record) as T;
@@ -222,6 +251,8 @@ export function scrubTelemetry<T extends Scrubbable>(record: T): T | null {
     clone.payload.context = allowlistAttributes(clone.payload.context);
     clone.payload.attributes = allowlistAttributes(clone.payload.attributes);
 
+    redactStringsDeep(clone.payload);
+    redactStringsDeep(clone.meta);
     return clone;
   }
 
@@ -229,5 +260,6 @@ export function scrubTelemetry<T extends Scrubbable>(record: T): T | null {
   otlp.body = scrubText(otlp.body);
   otlp.attributes = allowlistAttributes(otlp.attributes);
   otlp.resourceAttributes = allowlistAttributes(otlp.resourceAttributes);
+  redactStringsDeep(otlp);
   return clone;
 }

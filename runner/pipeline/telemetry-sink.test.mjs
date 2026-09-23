@@ -1,7 +1,11 @@
 // `AeSink` (observability contract §4/§10) — `memorySink`, and `clickhouseSink`'s
 // wire format against T01's actual `containers/o11y/local/clickhouse-init.sql`
 // schema (confirmed column-for-column: index1, blob1-20 String, double1-20
-// Float64, timestamp DateTime64(3), _sample_interval).
+// Float64, timestamp DateTime64(3), _sample_interval). The `timestamp` shape
+// (raw epoch-millisecond integer) was cross-checked against a real, throwaway
+// `clickhouse/clickhouse-server:24.10-alpine` container running T01's exact
+// DDL — see `sink.ts`'s doc comment for the measured reasoning (a bare
+// Unix-seconds integer and a formatted string were both measured wrong).
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
@@ -20,9 +24,10 @@ test("memorySink collects every point written, in order", () => {
   assert.deepEqual(sink.points, [a, b]);
 });
 
-test("clickhouseTimestamp is 'YYYY-MM-DD HH:MM:SS.sss', not toISOString's T/Z shape", () => {
+test("clickhouseTimestamp is a raw epoch-millisecond integer, not a formatted string", () => {
   const date = new Date(Date.UTC(2026, 8, 23, 12, 0, 0, 123));
-  assert.equal(clickhouseTimestamp(date), "2026-09-23 12:00:00.123");
+  assert.equal(clickhouseTimestamp(date), 1790164800123);
+  assert.equal(typeof clickhouseTimestamp(date), "number");
 });
 
 test("clickhouseSink POSTs one JSONEachRow line with T01's exact column names", async () => {
@@ -45,7 +50,8 @@ test("clickhouseSink POSTs one JSONEachRow line with T01's exact column names", 
   assert.match(url.searchParams.get("query"), /INSERT INTO runner_events FORMAT JSONEachRow/);
 
   const row = JSON.parse(calls[0].init.body.trim());
-  assert.ok(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/.test(row.timestamp), `timestamp shape: ${row.timestamp}`);
+  assert.equal(typeof row.timestamp, "number");
+  assert.ok(row.timestamp > 1_700_000_000_000, `timestamp looks like epoch ms: ${row.timestamp}`);
   assert.equal(row._sample_interval, 1);
   assert.equal(row.index1, "api.request");
   assert.equal(row.blob1, "demos-api");

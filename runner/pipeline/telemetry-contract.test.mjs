@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import {
   AE_COLUMNS,
   ENVIRONMENTS,
+  HOT_KINDS,
   HT_MAJORS,
   METRICS,
   METRIC_NAMES,
@@ -136,6 +137,13 @@ test("§3 structured-metadata-only keys match STRUCTURED_METADATA_KEYS", () => {
   const paragraph = doc.slice(start, paragraphEnd === -1 ? undefined : paragraphEnd);
   const keys = backtickTokens(paragraph).filter((t) => /^[a-z]+\.[a-z_]+$/.test(t));
   assert.deepEqual(new Set(keys), new Set(STRUCTURED_METADATA_KEYS));
+
+  // "`hot.kind` (the Faro item kind: `exception`, `log`, `event`, `measurement`)"
+  // — HOT_KINDS is attrs.ts's closed set for this key; pin it to the doc too.
+  const hotKindIdx = paragraph.indexOf("`hot.kind`");
+  assert.notEqual(hotKindIdx, -1, "hot.kind not found in the structured-metadata paragraph");
+  const hotKindValues = backtickTokens(paragraph.slice(hotKindIdx + "`hot.kind`".length));
+  assert.deepEqual(new Set(hotKindValues), new Set(HOT_KINDS));
 });
 
 // ---- §4: Analytics Engine layout ----------------------------------------------

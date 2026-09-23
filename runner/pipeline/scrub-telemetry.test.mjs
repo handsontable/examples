@@ -155,6 +155,26 @@ test("drops forbidden Faro context attributes (url.full, geo), keeps allowlisted
   assert.deepEqual(scrubbed.payload.context, { "hot.surface": "authoring" });
 });
 
+// ---- redactPreviewHosts on every string, not only the fields named above -------
+
+test("redacts a preview host inside an allowlisted context value (session.id), which no targeted rule above touches", () => {
+  const item = faroLog({
+    payload: { context: { "session.id": `plid-from-https://${PREVIEW_HOST}/leaked` } },
+  });
+  const scrubbed = scrubTelemetry(item);
+  assert.equal(scrubbed.payload.context["session.id"], "plid-from-https://<preview>/leaked");
+});
+
+test("redacts a preview host inside payload.type (an exception's error-class name), a field no targeted rule names", () => {
+  const item = {
+    type: "exception",
+    payload: { type: `Error<https://${PREVIEW_HOST}>`, value: "boom" },
+    meta: {},
+  };
+  const scrubbed = scrubTelemetry(item);
+  assert.equal(scrubbed.payload.type, "Error<https://<preview>>");
+});
+
 // ---- the OTLP-shape branch (ingest, on an already-normalised record) -----------
 
 test("scrubs an OTLP-shaped record: drops url.full and geo attributes, strips code frame and preview host from the body", () => {
