@@ -8,7 +8,7 @@ import { bindingSink, clickhouseSink, type AeSink, type CommonResourceAttrs } fr
 import type { Env } from "../env.js";
 import { inboxWriter } from "../inbox/accessor.js";
 import { readO11ySpend } from "../cost.js";
-import { evaluateAndNotify, slackPoster } from "./notify.js";
+import { evaluateAndNotify, notifyFingerprintEvent, slackPoster } from "./notify.js";
 import {
   alertEvalErrorRule,
   atCapacityRule,
@@ -126,11 +126,17 @@ export async function runAlerts(env: Env, _ctx?: ExecutionContext): Promise<RunA
     errors["rejected-inbox-key"] = err instanceof Error ? err.message : String(err);
   }
 
+  // Fix round (C cross-note): new-fingerprint is notify-only, not a
+  // fire/resolve alert (see `notify.ts#notifyFingerprintEvent`'s own doc
+  // comment for why) — deliberately NOT `evaluateAndNotify`, and it writes
+  // no `alert:<rule>` state at all, so it never contributes a `transitions`
+  // entry.
   try {
     const result = await newFingerprintRule(writer, nowMs);
     results.push(result);
-    const transition = await evaluateAndNotify(result, { inboxWriter: writer, postSlack, aeSink: sink, commonAttrs: attrs, nowMs });
-    if (transition) transitions[result.rule] = transition;
+    if (result.firing) {
+      await notifyFingerprintEvent(postSlack, sink, attrs, result.rule, result.detail);
+    }
   } catch (err) {
     errors["new-fingerprint"] = err instanceof Error ? err.message : String(err);
   }

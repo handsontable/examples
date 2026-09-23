@@ -16,7 +16,9 @@ register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
 const inboxState = await import("../workers/o11y/src/alerts/inbox-state.ts");
 const { memoryStorage } = await import("../workers/o11y/src/inbox/storage.ts");
-const { evaluateAndNotify, slackPoster } = await import("../workers/o11y/src/alerts/notify.ts");
+const { evaluateAndNotify, slackPoster, escapeSlackMrkdwn, notifyFingerprintEvent } = await import(
+  "../workers/o11y/src/alerts/notify.ts"
+);
 const {
   atCapacityRule,
   fiveXxRateRule,
@@ -241,9 +243,25 @@ test("rejectedKeyRule: fires on any rejected key, resolves at zero", async () =>
   assert.equal((await rejectedKeyRule(writerSome)).firing, true);
 });
 
-test("newFingerprintRule: fires when a new fingerprint appears since the cursor, advances the cursor", async () => {
+// Fix round (C cross-note): the cursor now lags `nowMs` by a fixed grace
+// period rather than advancing all the way to `nowMs` — see `rules.ts`'s
+// own doc comment on `CURSOR_GRACE_MS` for the race this closes (a
+// fingerprint whose `InboxWriter` write commits after a tick's list() call,
+// but was stamped before that tick's `nowMs`, must never permanently fall
+// below the cursor). Realistic epoch-scale `nowMs` values here, not small
+// integers, so `nowMs - CURSOR_GRACE_MS` behaves the way it does in
+// production.
+const REALISTIC_NOW_MS = 1_700_000_000_000;
+const CURSOR_GRACE_MS = 2 * 60 * 1000;
+
+test("newFingerprintRule: fires when a new fingerprint appears since the cursor, advances the cursor by nowMs minus the grace period (not to nowMs itself)", async () => {
   let cursor;
   const seen = [];
+  // Comfortably OUTSIDE the grace window (500s before nowMs, grace is
+  // 120s) — the second call's cursor must have advanced past this by
+  // then, so it does not reappear (unlike the dedicated grace-window test
+  // below, which deliberately places a fingerprint INSIDE the window).
+  const fingerprintFirstSeenMs = REALISTIC_NOW_MS - 500_000;
   const writer = {
     async getAlertMeta() {
       return cursor;
@@ -253,18 +271,120 @@ test("newFingerprintRule: fires when a new fingerprint appears since the cursor,
     },
     async newFingerprintsSince(since) {
       seen.push(since);
-      return since === undefined || Number(since) < 5000 ? ["fp-a"] : [];
+      return Number(since) < fingerprintFirstSeenMs ? ["fp-a"] : [];
     },
   };
-  const first = await newFingerprintRule(writer, 10_000);
+  const first = await newFingerprintRule(writer, REALISTIC_NOW_MS);
   assert.equal(first.firing, true);
   assert.match(first.detail, /fp-a/);
-  assert.equal(cursor, "10000", "cursor must advance to nowMs");
+  // Without the grace-period fix this reverts to asserting `cursor ===
+  // String(REALISTIC_NOW_MS)` — the exact assertion the previous (buggy)
+  // version of this test made.
+  assert.equal(
+    cursor,
+    String(REALISTIC_NOW_MS - CURSOR_GRACE_MS),
+    "cursor advances to nowMs minus the grace period, not to nowMs itself",
+  );
 
-  // Cursor is now 10000, so the same underlying data source, queried again,
-  // reports nothing new.
-  const second = await newFingerprintRule(writer, 20_000);
+  // A full ten-minute cron interval later — comfortably past the grace
+  // period — the same underlying data source reports nothing new.
+  const second = await newFingerprintRule(writer, REALISTIC_NOW_MS + 10 * 60 * 1000);
   assert.equal(second.firing, false);
+});
+
+test("newFingerprintRule: never advances the cursor past nowMs - CURSOR_GRACE_MS, so a fingerprint stamped inside the grace window is not permanently missed on the next tick", async () => {
+  // Simulates the exact race the finding describes: a fingerprint with
+  // firstSeen inside the last CURSOR_GRACE_MS of tick N is still visible
+  // (not silently dropped) on tick N+1's query, because the cursor tick N
+  // wrote never advanced past it. Without the fix (cursor = nowMs), this
+  // fingerprint's firstSeen would already be <= the advanced cursor and
+  // `newFingerprintsSince` would never be asked about it again.
+  let cursor;
+  const fingerprintFirstSeenMs = REALISTIC_NOW_MS - 30_000; // 30s before tick N's nowMs
+  const writer = {
+    async getAlertMeta() {
+      return cursor;
+    },
+    async setAlertMeta(_k, v) {
+      cursor = v;
+    },
+    async newFingerprintsSince(since) {
+      return Number(since) < fingerprintFirstSeenMs ? ["fp-late"] : [];
+    },
+  };
+  await newFingerprintRule(writer, REALISTIC_NOW_MS); // tick N
+  assert.ok(
+    Number(cursor) < fingerprintFirstSeenMs,
+    "tick N's cursor must stay below the fingerprint's firstSeen, not jump past it",
+  );
+  const nextTick = await newFingerprintRule(writer, REALISTIC_NOW_MS + 10 * 60 * 1000); // tick N+1
+  assert.equal(nextTick.firing, true, "the fingerprint must still be visible on the very next tick");
+});
+
+test("newFingerprintRule: caps the Slack detail at 10 names, with an overflow count", async () => {
+  const names = Array.from({ length: 15 }, (_, i) => `authoring:${i.toString(16).padStart(16, "0")}`);
+  let cursor;
+  const writer = {
+    async getAlertMeta() {
+      return cursor;
+    },
+    async setAlertMeta(_k, v) {
+      cursor = v;
+    },
+    async newFingerprintsSince() {
+      return names;
+    },
+  };
+  const result = await newFingerprintRule(writer, REALISTIC_NOW_MS);
+  assert.equal(result.firing, true);
+  for (const name of names.slice(0, 10)) assert.match(result.detail, new RegExp(name));
+  assert.ok(!result.detail.includes(names[14]), "the 15th name must not appear verbatim");
+  assert.match(result.detail, /\+5 more/);
+});
+
+test("notifyFingerprintEvent posts unconditionally and never writes alert:<rule> state (notify-only, not fire/resolve — C cross-note)", async () => {
+  const posted = [];
+  const postSlack = async (text) => posted.push(text);
+  const aeSink = { writeDataPoint() {} };
+  const commonAttrs = { service_name: "demos-o11y", service_version: "abc", environment: "production" };
+
+  await notifyFingerprintEvent(postSlack, aeSink, commonAttrs, "new-fingerprint", "new fingerprint(s): fp-a");
+  await notifyFingerprintEvent(postSlack, aeSink, commonAttrs, "new-fingerprint", "new fingerprint(s): fp-b");
+
+  // The bug this fixes: routing this rule through `evaluateAndNotify` meant
+  // a SECOND batch of new fingerprints while still "firing" produced no
+  // Slack line at all (fire-once masking). Notify-only posts every time
+  // there is something to report.
+  assert.equal(posted.length, 2, "every call with something to report must post, not just the first");
+  assert.match(posted[0], /fp-a/);
+  assert.match(posted[1], /fp-b/);
+});
+
+test("escapeSlackMrkdwn escapes &, < and > in Slack's own order (fix round A-C2)", () => {
+  assert.equal(escapeSlackMrkdwn("<!channel> A & B <https://evil.example|link>"), "&lt;!channel&gt; A &amp; B &lt;https://evil.example|link&gt;");
+  assert.equal(escapeSlackMrkdwn("plain text"), "plain text");
+});
+
+test("evaluateAndNotify escapes an untrusted rule detail before posting to Slack (fix round A-C2)", async () => {
+  const posted = [];
+  const postSlack = async (text) => posted.push(text);
+  const inboxWriter = {
+    async alertState() {
+      return undefined;
+    },
+    async setAlertState() {},
+  };
+  const aeSink = { writeDataPoint() {} };
+  const commonAttrs = { service_name: "demos-o11y", service_version: "abc", environment: "production" };
+
+  await evaluateAndNotify(
+    { rule: "new-fingerprint", firing: true, detail: "new fingerprint(s): <!channel> pwned" },
+    { inboxWriter, postSlack, aeSink, commonAttrs },
+  );
+
+  assert.equal(posted.length, 1);
+  assert.ok(!posted[0].includes("<!channel>"), "raw Slack mrkdwn markup must never reach the posted text");
+  assert.match(posted[0], /&lt;!channel&gt;/);
 });
 
 test("o11yCapRule: fires at or above the cap, not below it", async () => {

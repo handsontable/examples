@@ -37,6 +37,21 @@ export function slackPoster(webhookUrl: string | undefined, fetchImpl: typeof fe
   };
 }
 
+/**
+ * Slack's own mrkdwn escaping rule, applied to every value this module
+ * interpolates into a Slack `text` field (fix round, finding A-C2): `&`
+ * first, then `<`/`>` — every rule's `detail` is built at least partly from
+ * data an unauthenticated client can influence (an AE query result grouped
+ * by a client-tagged column, or — the confirmed case — the exact
+ * first-seen fingerprint registry, which stored a client-supplied string
+ * verbatim before the companion fix in `normalise/faro.ts`). Without this,
+ * `<!channel>` and a masked `<https://evil|link>` post as live Slack markup
+ * under the team's own alert bot.
+ */
+export function escapeSlackMrkdwn(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export interface NotifyDeps {
   inboxWriter: InboxWriterApi;
   postSlack: PostSlack;
@@ -63,17 +78,47 @@ export async function evaluateAndNotify(
 
   if (result.firing && !wasFiring) {
     await deps.inboxWriter.setAlertState(result.rule, { state: "firing", since: now, lastNotified: now });
-    await deps.postSlack(`:rotating_light: [o11y] *${result.rule}* firing — ${result.detail}`);
+    await deps.postSlack(
+      `:rotating_light: [o11y] *${escapeSlackMrkdwn(result.rule)}* firing — ${escapeSlackMrkdwn(result.detail)}`,
+    );
     writeAlertPoint(deps.aeSink, deps.commonAttrs, result.rule, "fired");
     return "fired";
   }
   if (!result.firing && wasFiring) {
     await deps.inboxWriter.setAlertState(result.rule, { state: "resolved", since: now, lastNotified: now });
-    await deps.postSlack(`:white_check_mark: [o11y] *${result.rule}* resolved`);
+    await deps.postSlack(`:white_check_mark: [o11y] *${escapeSlackMrkdwn(result.rule)}* resolved`);
     writeAlertPoint(deps.aeSink, deps.commonAttrs, result.rule, "resolved");
     return "resolved";
   }
   return undefined;
+}
+
+/**
+ * Fix round (C cross-note): new-fingerprint is not a fire/resolve alert —
+ * it reports a stream of individual events (one Slack line per batch of
+ * genuinely new fingerprints), not a stateful condition. Forcing it through
+ * {@link evaluateAndNotify}'s fire-once/resolve-once machinery caused two
+ * bugs at once: while the synthetic "firing" state stayed set, a second
+ * batch of new fingerprints arriving before the cursor caught up produced
+ * NO notification at all (fire-once masking real new errors behind a
+ * sustained stream); and the very next clean tick then posted a pointless
+ * "resolved" line for a rule that was never a condition to resolve.
+ * Notifies unconditionally when `rules.ts#newFingerprintRule` found
+ * something new — that rule's own cursor is what makes repeat calls
+ * idempotent, not stored fire/resolve state (there is none here). Writes
+ * the same `o11y.alert` `outcome: "fired"` point every other rule does, so
+ * the existing dashboard panel still has something to show; never writes
+ * `"resolved"` — there is no matching transition for an event stream.
+ */
+export async function notifyFingerprintEvent(
+  postSlack: PostSlack,
+  aeSink: AeSink,
+  commonAttrs: CommonResourceAttrs,
+  rule: string,
+  detail: string,
+): Promise<void> {
+  await postSlack(`:rotating_light: [o11y] *${escapeSlackMrkdwn(rule)}* — ${escapeSlackMrkdwn(detail)}`);
+  writeAlertPoint(aeSink, commonAttrs, rule, "fired");
 }
 
 function writeAlertPoint(

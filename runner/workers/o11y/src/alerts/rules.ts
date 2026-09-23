@@ -316,15 +316,61 @@ export async function rejectedKeyRule(inboxWriter: InboxWriterApi): Promise<Rule
 
 const NEW_FINGERPRINT_CURSOR_META_KEY = "newFingerprintCursorMs";
 
+/** Fix round (C cross-note, PLAUSIBLE double/missed report): the cursor used
+ *  to advance to `nowMs` — this rule's OWN wall-clock time at the start of
+ *  a cron tick — but a fingerprint's `firstSeen` is stamped in the
+ *  stateless route handler, independently of when its `InboxWriter` write
+ *  actually commits (which is what makes it visible to this rule's
+ *  `list()`-backed `newFingerprintsSince`). A write that committed AFTER
+ *  this tick's list() call, but whose `firstSeen` was stamped before
+ *  `nowMs`, would satisfy `firstSeen <= nextCursor` on every later tick —
+ *  permanently missed, not merely delayed.
+ *
+ *  Lagging the advanced cursor by this margin closes that hole: the cursor
+ *  never advances past a `firstSeen` that could still be "in flight" from
+ *  an in-progress request. Every real write's DO transaction commits
+ *  synchronously inside the SAME request that stamped `firstSeen`, before
+ *  that request answers `2xx` — comfortably under this margin even under
+ *  load, and this rule's own ten-minute cron cadence gives further headroom.
+ *  The remaining trade-off is a bounded, self-correcting DOUBLE report for
+ *  a fingerprint whose `firstSeen` lands inside the last `CURSOR_GRACE_MS`
+ *  of one tick (reported that tick and, at most, once more the next tick,
+ *  never a third time, never silently) — a much smaller cost than a
+ *  permanently missed report.
+ *
+ *  This is a partial mitigation, not "a cursor on the commit order" (the
+ *  finding's own suggested fix): the full fix keys `fp:` entries by a
+ *  monotonic sequence assigned inside the same `InboxWriter` transaction
+ *  that commits them (the way `pack.ts`'s row/seq counters already do),
+ *  which needs a storage-schema change inside `inbox/writer.ts#ingest` —
+ *  outside this fix round's file ownership (F2's territory). See the
+ *  report. */
+const CURSOR_GRACE_MS = 2 * 60 * 1000;
+
+/** How many fingerprint names one Slack line lists before truncating (fix
+ *  round A-C2: "cap how many names one Slack message lists" — an
+ *  attacker's flood of forged-then-validated-away fingerprints, or simply a
+ *  large legitimate batch, must not grow one Slack message without bound). */
+const MAX_FINGERPRINTS_LISTED = 10;
+
 export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Date.now()): Promise<RuleResult> {
   const cursorRaw = await inboxWriter.getAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY);
   const cursor = cursorRaw ? Number(cursorRaw) : nowMs - HOUR_MS; // first run: look back one hour
   const fresh = await inboxWriter.newFingerprintsSince(cursor);
-  await inboxWriter.setAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY, String(nowMs));
+  // Never advance past `nowMs - CURSOR_GRACE_MS` (see that constant's doc
+  // comment); `Math.max` guards the first-run case, where the initial
+  // cursor (`nowMs - HOUR_MS`) already sits well below the lagged value.
+  const nextCursor = Math.max(cursor, nowMs - CURSOR_GRACE_MS);
+  await inboxWriter.setAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY, String(nextCursor));
+  const shown = fresh.slice(0, MAX_FINGERPRINTS_LISTED);
+  const overflow = fresh.length - shown.length;
   return {
     rule: "new-fingerprint",
     firing: fresh.length > 0,
-    detail: fresh.length > 0 ? `new fingerprint(s): ${fresh.join(", ")}` : "no new fingerprints",
+    detail:
+      fresh.length > 0
+        ? `new fingerprint(s): ${shown.join(", ")}${overflow > 0 ? ` (+${overflow} more)` : ""}`
+        : "no new fingerprints",
   };
 }
 
