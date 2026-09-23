@@ -1,6 +1,6 @@
 // pipeline/o11y-dashboards.test.mjs
 //
-// T09 (runner/tasks/o11y/T09-dashboards.md): the lint gate for every
+// The lint gate for every
 // provisioned dashboard under containers/o11y/grafana/dashboards/. Local
 // ClickHouse accepts far more SQL than Workers Analytics Engine does (T09's
 // own "Traps" section) — this is the one place that difference is enforced,

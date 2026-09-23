@@ -1,6 +1,19 @@
 # ADR-0041: Observability on Cloudflare — a sleeping Loki + Grafana box, OTLP inward, Sentry for uncaught errors
 
-**Status:** Proposed — design approved 2026-09-23 (revision 3); becomes Accepted when every exit criterion in §L passes. Supersedes ADR-0040 decisions A, B, C.2 and C.3; amends ADR-0022 (o11y spend cap, per-script billing rows), ADR-0038 (WAF exception extended to `/telemetry/*`); deviates from ADR-0007 for the operator UI; adds routes under ADR-0020. ADR-0042 ships with this ADR; ADR-0043 follows after launch.
+**Status:** Proposed — design approved 2026-09-23 (revision 3), implemented (T00–T12,
+T03B), local end-to-end walkthrough and every task's sandbox probe complete (§L
+"Results," T11). 13 of 15 exit criteria pass with real evidence; the design's own §L
+trigger (criterion 1, 2 or 7 failing) is not engaged. **Stays Proposed, not Accepted,
+pending exactly two items**: exit criterion 5's CPU/memory measurement inside a real
+Workers isolate (every measurement so far is a Node-process proxy — no task had isolate
+profiling access), and exit criterion 13's real-object retention expiry (a 1-day R2
+lifecycle test is running against real objects; calendar time has not yet passed as of
+T11's own pass — see `docs/run-and-deploy.md`'s Launch plan for how to close both).
+Supersedes ADR-0040 decisions A, B, C.2 and C.3; amends ADR-0022 (o11y spend cap,
+per-script billing rows), ADR-0038 (WAF exception extended to `/telemetry/*`); deviates
+from ADR-0007 for the operator UI; adds routes under ADR-0020. ADR-0042 ships with this
+ADR, and stays at the same status (Proposed) until this one flips to Accepted.
+ADR-0043 follows after launch (T13, not yet dispatched).
 
 ## Context
 
@@ -127,9 +140,13 @@ box.
 
 **Wake.** Two triggers only:
 
-1. A Grafana visit through Access. The Worker renews the activity timer only on HTTP
-   requests to `/grafana/*`; the box stops after 15 idle minutes, and after 4 hours awake
-   regardless (the next request shows the waking page).
+1. A Grafana visit through Access. The Worker renews the activity timer on every HTTP
+   request to `/grafana/*`, **including the waking page's own `meta refresh` poll while
+   the box is still booting** (T03B, F2 — the original implementation only counted a
+   request once the box was ready, so a visit wake with nothing yet in the backlog could
+   SIGTERM itself around 20s into boot, before the person who opened it ever saw
+   Grafana); the box stops after 15 idle minutes, and after 4 hours awake regardless (the
+   next request shows the waking page).
 2. A backlog: a `*/10` cron in the o11y worker asks `InboxWriter.backlog()` and wakes the
    box when the oldest uncommitted object is older than 60 minutes or the backlog exceeds
    64 MB. The cron never wakes the box when drains are paused (§G).
@@ -141,7 +158,12 @@ container's shutdown script stops Loki gracefully, confirms the index is uploade
 and only then writes a **clean-shutdown marker** `state/wakes/<wakeId>/clean` into the Loki
 bucket, the one bucket its credentials reach. The o11y worker reads `state/` through an R2
 binding on the same bucket; no lifecycle rule touches that prefix except a 30-day expiry.
-The marker, not `onStop`, is what the ledger trusts (§B.3).
+The marker, not `onStop`, is what the ledger trusts (§B.3). **Exception (T03B, F3):** a
+wake that ends without ever having a `provisional` key (an empty backlog, or a
+Grafana-visit-only wake with nothing to drain) never gets an index upload and so never
+gets a marker — that is expected, not an unclean stop, and the ledger now resolves such a
+wake as clean without requiring one. A wake that *did* push data still requires the real
+marker.
 
 **Waking page**: the Handsontable logo, one line of text, `<meta http-equiv="refresh"
 content="3">`, no script, served by the Worker while the box is not ready.
@@ -149,7 +171,11 @@ content="3">`, no script, served by the Worker while the box is not ready.
 **Cost model**: drain wakes × measured drain-wake duration + visit hours, at
 $0.038–0.074 per awake hour on `standard-1`. The target is ≈ $5–8/month at current
 traffic; exit criterion L.7 recomputes it from the measured drain-wake duration and
-fails above $10.
+fails above $10. **Measured (T03B, real sandbox platform, corrected 1×/10× traffic scale,
+§L.7): $0.21/month at 1×, $0.33/month at 10×** — the design's own $5–8 target was itself a
+conservative upper estimate; drain-wake frequency is capped by the 60-minute backlog-age
+trigger, not by traffic volume, so 20× more records only adds ~16s of drain time per wake,
+not 20× the awake-hour cost.
 
 ### B. Ingest never waits for the box
 
@@ -224,9 +250,14 @@ describes, so backlog and state are readable without starting the container. Eac
   records pushed to Loki's `/otlp/v1/logs` with the tenant header in requests of at most
   1 MB decompressed. A key becomes `provisional(wakeId)` only after every one of its
   requests returned `2xx`. `429` and `5xx` are retried with backoff within the wake; a
-  `400` (for example `too_far_behind`) is logged with Loki's message, marks the key
-  `rejected`, and raises an alert (§F.3). Within one wake, a per-record hash set
-  guarantees no record is pushed twice.
+  `400` (for example `too_far_behind`) is logged with Loki's message. **Corrected by
+  implementation (T03B, F1):** a single too-old record inside an otherwise-good packed
+  object no longer 400s (and so rejects) the whole key — `drainKey` drops individual log
+  records older than `reject_old_samples_max_age` minus a margin *before* pushing, counts
+  the dropped ones on the `o11y.drain` point, and still pushes the good siblings in the
+  same key. A key is marked `rejected` only when the push itself still 400s after that
+  filtering (a genuine, not-just-stale, rejection), which raises an alert (§F.3). Within
+  one wake, a per-record hash set guarantees no record is pushed twice.
 - **What an unclean stop costs.** The whole wake's keys are replayed on the next wake.
   Data that Loki had already indexed before the crash is then stored twice, in different
   chunks; queries return it once, because timestamps, labels and structured metadata are
@@ -281,8 +312,15 @@ not a loop: they never pass through its own ingest routes.
 
 **C.2 Attributes, identity and time.** Every record carries `service.name`,
 `service.version`, `deployment.environment.name` and the `hot.*` set (`surface`, `tier`,
-`framework`, `ht_major`, `outcome`) as **resource attributes**, so Loki can label them;
-exit criterion 15 checks that they arrive as labels. The exact names, allowed values and
+`framework`, `ht_major`, `outcome`) as **resource attributes**. **Corrected by
+implementation and by exit criterion 15's own precise wording (T11):** Loki labels
+`service.name`, `deployment.environment.name` and every `hot.*` key — seven of the eight —
+from `containers/o11y/loki/loki-config.yaml`'s own `otlp_config.resource_attributes`
+promotion list. `service.version` is a resource attribute (queryable, present on every
+record) but is **deliberately never promoted to a label**: it is per-deploy-SHA, and a
+label with that cardinality would fragment Loki's index into one stream per deploy. Exit
+criterion 15 checks exactly this seven-key set arrives as labels, confirmed live against
+the real committed config for all four sources (§L). The exact names, allowed values and
 Analytics Engine slots live in
 [`docs/observability-contract.md`](../observability-contract.md).
 `hot.demo_id`, `session.id` and `cf.ray` are structured metadata only; never labels, never
@@ -351,6 +389,20 @@ embeds are identified by demo id.
   counted in the first. Because every count and alert reads Analytics Engine, which is not
   sampled at ingest, lowering the log sampling rate is the fallback that costs text, never
   alerts.
+  **Measured (T11, projected from real per-session/per-request counts × `traffic-baseline.md`,
+  at the ADR's own required 10× headroom): Analytics Engine points pass comfortably
+  (≈4.14M of the 10M dataset, well under half). The raw Workers Logs pool also passes
+  (≈6.6M of 20M, under half) — but the exported-logs allotment does not clear its own half
+  at 10×: real measured Tier-2 container stdout (12–22 lines for a Vite-family starter's
+  boot alone, ~22 for a webpack/Angular-family starter's boot, plus 2 lines per 60-second
+  keepalive poll — Cloudflare's own Sandbox SDK's structured logging of its own health
+  checks, not the dev server's own output) pushes the projected 10× total to ≈6.6M/month
+  against the 5M half of the 10M exported-logs allotment.** This is exactly the situation
+  this paragraph's own fallback exists for: lower `head_sampling_rate` before or during
+  launch if real production volume confirms this projection, which drops exported/logged
+  text but never drops a count, an Analytics Engine point, or an alert. See
+  `docs/run-and-deploy.md`'s Launch plan for the concrete pre-launch measurement and the
+  sampling-rate action.
 - The comment at `wrangler.jsonc:10-13` ("full fidelity is a spike amplifier") is answered
   by `invocation_logs: false`, the silent proxy path and the budget above, not reversed.
 
@@ -591,6 +643,116 @@ end-to-end walkthrough and launch.
 If criterion 1, 2 or 7 fails with its plan B, the design is rewritten toward the
 serverless store before more is built.
 
+**Results (T11, local end-to-end pass plus every task's sandbox probe):**
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Clean stop, production-scoped token | **PASS** — sandbox probe with a real bucket-scoped R2 token (T03B), local `compose`/`wrangler dev` both pass (T03-D2 fixed: the drain now posts a real OTLP `resourceLogs` envelope, not bare NDJSON) |
+| 2 | Unclean stop, reopen | **PASS, fully** — real SIGKILL mid-drain on the sandbox platform (T03B): reopen, replay, `count_over_time` and a log query both equal one clean replay. Independently reproduced locally (T11): an interrupted wake's canary record reopens and replays to exactly one Loki line, both query forms agreeing |
+| 3 | Event time | **PASS** (local) — clamped browser timestamps, un-clamped OTLP `time_unix_nano` (T02); a real, old-dated captured OTLP fixture was genuinely rejected by Loki's 7-day window this pass, which is only possible if its stored timestamp preserved real event time |
+| 4 | Duplicate delivery | **PASS** (local) — the same body delivered twice produces one copy; re-confirmed live and repeatedly this pass (`o11y.ingest` outcome `duplicate`) |
+| 5 | Symbolication | **PASS at the local/Node level; not verified inside a real Workers isolate** — every measurement (T03, T11) uses a Node-process CPU/memory proxy, explicitly labelled as a proxy; no task had a way to profile a real Workers isolate |
+| 6 | Cold start | **PASS** — sandbox: 46.5s worst-of-5 (T01), 3–22s after the T03-D3 fix (T03) |
+| 7 | Drain wake (time + cost) | **PASS at the corrected traffic scale** — sandbox (T03B): 28s wake-to-drain-complete at 1× (≈432 records/hr, T05's own per-session line count), 44s at 10× (≈4325/hr); cost $0.21/month at 1×, $0.33/month at 10× — both far under the $10 ceiling |
+| 8 | Volume | **Mixed, measured, not a breakeven guess** — Analytics Engine points and the raw Workers Logs pool both pass at 10× with real margin; the **exported-logs allotment does not** (§D above has the numbers and the fallback) |
+| 9 | Idle tab | **PASS by mechanism** — sandbox (T01): the box's own quiet-timer stopped it after 17.65 minutes with zero HTTP requests, which is what an idle tab with Grafana Live disabled also produces; never independently reproduced with a literal open browser tab |
+| 10 | Placement | **PASS** — sandbox: EU region `mxp04` (Milan) |
+| 11 | Worker errors → structured line | **PASS** — fetch-handler and cron paths confirmed live (T05, T11); the DO-alarm path is unit/pipeline-tested (T01–T03) but not independently reproduced live |
+| 12 | Stop semantics | **PASS** — `onStop` is recorded and, by design, claims nothing about cleanliness (T01); "no SIGKILL before the clean marker" is the same platform behaviour criteria 1 and 2 already confirm |
+| 13 | Retention | **Mechanism PASS, real expiry PENDING the calendar** — R2 lifecycle rules apply and read back correctly (T01, T10); T03B's own 1-day retention-clock test (`t03-retention-clock-test/`, `o11y-probe-t03-loki`) started 2026-09-23T14:15:22Z and has not yet reached 24h as of this pass |
+| 14 | Image size | **PASS** — 212.9 MB compressed, real `linux/amd64` build (T01), under the 1 GB bound; uncompressed size against the `standard-1` 8 GB disk was not separately recorded by any task |
+| 15 | Labels | **PASS, all four sources, both tenants** — confirmed live against the real committed `loki-config.yaml`: Faro (`demos-authoring`) and the lite beacon (`demos-embed`), browser tenant; the Cloudflare export (`demos-api`) and deploy events (`demos-o11y`), worker tenant — all seven labels populated, `service.version` present as a resource attribute but deliberately never promoted to a label (see §C.2), `hot.demo_id`/`session.id`/`cf.ray` never labels |
+
+§L's own trigger (criterion 1, 2 or 7 failing its plan B) is **not** engaged — all three pass.
+Two items keep this ADR at **Proposed** rather than **Accepted** (below): criterion 5's
+real-isolate measurement (no task had Workers isolate profiling access) and criterion 13's
+calendar-pending retention confirmation. Criterion 8's exported-logs finding is real and
+measured, not a missing-evidence gap; it is carried as a named pre-launch action in
+`docs/run-and-deploy.md` rather than as a blocker to this ADR's status, because the ADR's
+own §D already names the exact fallback (lower `head_sampling_rate`) for exactly this
+situation.
+
+### M. Implementation deltas (folded from T00–T12, T03B; full detail in git history under
+the deleted `runner/tasks/o11y/` and `.superpowers/sdd/README/T*-report.md`)
+
+Deltas already folded as direct edits above (§A cost, §A wake/stop, §B.3 drain-rejection,
+§C.2 labels, §D volume, §L results) are not repeated here. The rest, grouped by section,
+where they add information beyond what §A–§L already say:
+
+- **§B.2 ingest.** Hashing (step 2) uses each record's own raw, un-clamped source
+  timestamp alongside its body and attributes — not the clamped `time_unix_nano` a later
+  step computes — so two real deliveries of the same content at different real times still
+  hash differently, and the same body redelivered still dedupes (T02-D1). One aggregated
+  `o11y.ingest` point is written per *request* (not per record), so a batch of N duplicate
+  records reads as one `duplicate` point with `count = N`, not N separate points (T02-D3).
+  Every §3 resource attribute a source has no natural value for defaults to `"none"`
+  (`"unknown"` for `service.version` specifically, confirmed against real Cloudflare
+  export samples that never carry it at all) — this default is what makes exit criterion
+  15 pass for worker-origin sources, not a defensive fallback (T02-D5, D18). A real
+  Cloudflare OTLP export's ray id arrives as `cloudflare.ray_id`, remapped to the
+  contract's own `cf.ray` (T02-D17). `HotAttrs` fields with no dotted `hot.*` resource-
+  attribute counterpart (`bucket`, `reason`, `fingerprint`, and others T02-D4 named but no
+  browser call site emits yet) travel over an AE-only channel, read from a Faro item's raw
+  `context` before the browser's own scrub allowlist would otherwise drop them — this
+  channel needed its own allowlist extension (`AE_ONLY_ATTRIBUTE_KEYS`) before it worked
+  for real, found live during T07 and T12's own work.
+- **§B.2 ingest, worker tenant.** A Worker's own `console.log(JSON.stringify(...))` line
+  (the structured request/error lines §D describes) arrives through Cloudflare's real OTLP
+  log export as **opaque body text**, not as OTLP attributes — confirmed with a real
+  captured export (T03B, answering the open question T02 and T03 both left). The o11y
+  worker now parses a JSON-object body and merges its keys into the same attribute bag a
+  real OTLP attribute would land in, through the existing allowlist, with every
+  §3 resource-attribute key **stripped from the parsed body first and given the lowest
+  merge priority** — a body key cannot spoof `service.name`/`deployment.environment.name`/
+  any `hot.*` label (T03B, fix-round finding I2, found and fixed within T03B's own pass
+  before it shipped).
+- **§C.1 hops.** Faro's real browser transport posts a `TransportBody`
+  (`{meta, exceptions?, logs?, measurements?, events?, traces?}`), not an array of
+  self-contained items the way every contract function's own types assume — the ingest
+  route reconstructs items from the four typed arrays (T02-D6).
+- **§C.3 symbolication.** A Faro exception's stack trace reaches the drain as V8-shaped
+  text in the record body — the pre-implementation contract had no field carrying frame
+  data for this to resolve at all (T03, a touch to the shared `convert.ts`/`scrub.ts`
+  module outside T03's own file ownership, minimal and justified per COMMON.md).
+- **§D Worker signals.** `container.boot_ms` (not `session.start`'s own `boot_timeout`
+  outcome) is what fires when the Tier-2 boot window is exceeded — the original design
+  would have double-counted a session that later times out after already reporting
+  `session.start` `ready` once (T05-D4, a design correction made before shipping, not
+  after). Several §5 metrics remain real but never observed in practice: `pool.gauge`
+  `reason="builder"` (no signal tracks `BuilderSandbox` concurrency the way live sessions
+  are tracked), `snapshot.build` `reason="inline"` (only the detached build path is
+  instrumented), `session.end` `reason="sleep_after"` (nothing observes the Sandbox SDK's
+  own idle-timeout stop) — all named gaps, not silently dropped (T05-D5/D6/D7). A cron
+  failure inside `ctx.waitUntil()` is structurally unreachable by `@sentry/cloudflare`'s
+  own auto-capture (its `scheduled` instrumentation only wraps the synchronous handler
+  invocation) — every cron branch now calls `Sentry.captureException` explicitly in its own
+  catch (T05-D8, confirmed live: the pre-fix code produced zero Sentry envelopes for a
+  forced cron failure, the post-fix code produced exactly one).
+- **§E Sentry.** The full call-site inventory (T06) found one real §11 violation the
+  original Scope text missed: `App.tsx`'s `versions-fetch` diagnostic was unconditional
+  before this ADR's switch existed, exactly the shape §E.1 already names as "handled." A
+  controller ruling holds §E.3 binding over an earlier task-file instruction to "leave
+  Sentry" for demo-runtime preview events: `reportDemoEvent` keeps its full pre-ADR Sentry
+  behaviour (including the `DEMO_SURFACE` environment re-homing) under `full` scope,
+  unreachable under `uncaught` — "the re-homing disappears once the scope flips" is
+  literally true only after the flip, not at implementation time.
+- **§F metering.** ADR-0042's `example.*` events needed the same AE-only attribute-channel
+  extension as §B.2 above (`kind`→`hot.metric_kind`, since `hot.kind` is reserved for the
+  Faro item kind, `ref`, `area`) before `kind`/`ref`/`area` survived the browser scrub at
+  all (T12). A post-fork landing needs a one-shot, non-storage URL marker (`?fork=1`,
+  stripped via `history.replaceState` on read) to classify as `entry="fork"` rather than
+  `"deep-link"`, because `onFork`'s navigation is a full page reload — the same
+  hard-navigation pattern the rest of the app already uses for every route change, which
+  destroys any in-memory alternative (T12-D2).
+- **§H access.** `ACCESS_AUD` is still the committed `""` placeholder as of this ADR's own
+  fold — no task minted a real Access application; `docs/run-and-deploy.md`'s Launch plan
+  names this as the first pre-condition to confirm before any real deploy (T00-D8, carried
+  through every task since).
+- **§I local development.** `wrangler dev`'s local Container reaches `compose.yml`'s
+  standalone `minio`/`clickhouse` services (started without the `box` service) via
+  Docker's own `host.docker.internal`, since the two are never on the same Docker network
+  (T03, `box.ts#buildLocalEnvVars`).
+
 ## Consequences
 
 - **ADR-0040** decisions A (hour dimension) and B (`usage_hourly`) are not built;
@@ -619,4 +781,10 @@ serverless store before more is built.
   until lifecycle; embeds have no docs page attribution; handled errors have no issue
   grouping; the non-EU items listed in §H.
 - **Cost**: ≈ $5–8/month target, $10 exit ceiling, reported separately, capped
-  separately, summed under the same product ceiling.
+  separately, summed under the same product ceiling. **Measured (T03B, real platform,
+  §A/§L.7): $0.21/month at 1× traffic, $0.33/month at 10×** — both far under target.
+- **Volume**: Analytics Engine and the raw Workers Logs pool both pass exit criterion 8 at
+  10× with real margin; the exported-logs allotment does not, measured (T11, §D) —
+  `docs/run-and-deploy.md`'s Launch plan carries the pre-launch action (a real Tier-2
+  stdout measurement to confirm or refine the projection, and the `head_sampling_rate`
+  fallback if it holds).

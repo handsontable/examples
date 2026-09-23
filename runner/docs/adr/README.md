@@ -45,6 +45,6 @@ once Accepted.
 | [0038](0038-waf-exception-for-source-code-payloads.md) | Source-code payloads need a WAF exception, not an encoding trick | Accepted |
 | [0039](0039-detached-tier-2-snapshot-builds.md) | Detached tier-2 snapshot builds on the MCP service path | Accepted (amends 0033) |
 | [0040](0040-hourly-buckets-and-pool-pressure.md) | Hour-of-day buckets, and measuring pool pressure | Accepted (extends 0022; A, B, C.2, C.3 superseded by 0041; C.1 stands) |
-| [0041](0041-observability-stack.md) | Observability on Cloudflare — a sleeping Loki + Grafana box, OTLP inward, Sentry for uncaught errors | Proposed, design approved (rev. 3; exit criteria in §L; supersedes part of 0040; amends 0022, 0038; deviates from 0007 for the operator UI) |
-| [0042](0042-example-analytics.md) | Count which examples people open, by docs guide and starter | Proposed, design approved (rev. 2; ships with 0041) |
+| [0041](0041-observability-stack.md) | Observability on Cloudflare — a sleeping Loki + Grafana box, OTLP inward, Sentry for uncaught errors | Proposed, implemented, 13/15 exit criteria pass with evidence (rev. 3; §L "Results"; two items pending — criterion 5's real-isolate measurement, criterion 13's calendar-pending retention; supersedes part of 0040; amends 0022, 0038; deviates from 0007 for the operator UI) |
+| [0042](0042-example-analytics.md) | Count which examples people open, by docs guide and starter | Proposed, implemented (rev. 2; ships with 0041, same status) |
 | [0043](0043-admin-cutover-to-grafana.md) | `/admin` reads move to Grafana; the writes stay on `/admin/controls` | Proposed, design approved (rev. 2; after 0041's launch; amends 0022) |

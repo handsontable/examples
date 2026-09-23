@@ -236,13 +236,19 @@ the "See in documentation" link.
   `E2E_TELEMETRY=1 pnpm e2e e2e/telemetry-faro.spec.ts e2e/example-analytics.spec.ts`
   — both specs are self-contained (their own preview server, `page.route`
   interception of `/telemetry/collect`, no o11y worker or API worker needed),
-  so they fit the deterministic PR suite. **Not wired in here:**
-  `e2e/telemetry-metrics.spec.ts` additionally needs `E2E_LIVE=1` and a real
-  local `wrangler dev` API worker with a live Tier-2 container — that is the
-  same "everything local, real traffic" shape T11's
-  `e2e/o11y-local.spec.ts` (`E2E_O11Y_LOCAL=1`) is scoped to build and decide a
-  CI/nightly home for; wiring it here ahead of T11 would either duplicate that
-  decision or fight it over the same job.
+  so they fit the deterministic PR suite. **Not wired in here, decided by T11:**
+  `e2e/telemetry-metrics.spec.ts` and `e2e/o11y-local.spec.ts`
+  (`E2E_LIVE=1`/`E2E_O11Y_LOCAL=1`) both need infrastructure a per-PR runner
+  should not own — a real local API worker with a live Tier-2 container for the
+  first, that plus a real o11y worker, local ClickHouse/MinIO (Docker) and
+  applied D1 migrations for the second. This is `docs/TESTING.md`'s own named
+  exception to "every gate needs a workflow home" (a spec whose prerequisite
+  stack costs more than a PR job should), not a silent gap: run both locally,
+  by hand, before any change that touches the ingest path (`workers/o11y/src/
+  normalise/**`, `apps/authoring/src/telemetry/**`, `packages/runtime/src/
+  telemetry/**`) and before every launch — `e2e/o11y-local.spec.ts`'s own file
+  header has the exact setup commands. A future task may still give these a
+  scheduled (not per-PR) CI home; that decision is left open, not taken here.
 
 ### Authoring app (frontend)
 
@@ -476,6 +482,20 @@ protobuf, so the ingest route does not need to handle it. `service.version` is
 `cloudflare.ray_id`, not a resource attribute. Do **not** enable a trace
 destination — contract §1: "There is no trace route" (ADR §C.4).
 
+**One more fact, pinned by T03B's own real captured export (answering the
+question T02 and T03 both left open):** a Worker's own `console.log(JSON.stringify(...))`
+line (`workers/api/src/telemetry/lines.ts`'s structured request/error lines)
+arrives through this export as **opaque body text** — `body.stringValue` is
+the raw JSON string, and the record's own `attributes` carry only
+Cloudflare's generic wrapper fields, never one of the app's own JSON keys.
+The o11y worker's normaliser (`normalise/otlp.ts#tryParseJsonBodyAttrs`)
+parses a JSON-object body and merges its keys into the same attribute bag a
+real OTLP attribute would land in — with every §3 resource-attribute key
+stripped from the parsed body and given the lowest merge priority, so a
+crafted body cannot spoof a real label. Nothing to configure here; recorded
+so a future change to `lines.ts`'s own JSON shape does not accidentally
+reintroduce a field this parser does not expect.
+
 > ⚠️ The dashboard's create/patch response for a destination has, in T02's own
 > probe session, twice echoed the export secret back in plaintext inside
 > `configuration.destination_conf` (not `configuration.headers`, which IS
@@ -604,6 +624,125 @@ The same order applies to a throwaway sandbox probe of either worker
 (COMMON.md's probe rules): stand up the probe o11y worker (or a stub) before
 the probe API worker if the probe exercises the mutual binding at all.
 
+## Launch plan (ADR-0041 §L, T11)
+
+The order above ("First deploy, in order") is the mechanical dependency; this
+section is the gate around it — what must be true before deploying at all,
+what to check right after, and the two decisions ("flip the Sentry scope",
+"roll back") that come later, not at deploy time.
+
+### Pre-conditions — confirm every one before the first real deploy
+
+These are carried from the tasks that found them, not newly discovered here:
+
+- **`ACCESS_AUD` is still the committed `""` placeholder** (`workers/o11y/wrangler.jsonc`,
+  T00-D8/T03). Paste the real Access application audience tag in before deploying — see
+  "One-time setup" step 5 above. Until this is real, every `/grafana/*` request fails
+  closed in production (safe, but Grafana is simply unreachable).
+- **`ACCESS_TEAM_DOMAIN`** (`handsontable.cloudflareaccess.com`) is a plausible-convention
+  guess (T00-D8), never independently confirmed against the real Access application.
+  Confirm it matches the domain created in step 5.
+- **T09-D5's "no per-panel ClickHouse `database` field" decision has not been checked
+  against the real Analytics Engine SQL API** — only local ClickHouse and AE's documented
+  SQL surface were checked. If a query returns "unknown table" in production Grafana where
+  it worked locally, this is the first thing to check (T09's own Outcome flags it too).
+- **The `aws s3 cp` step for the R2 source-map upload (`master.yml`'s `build` job) has never
+  run against a real R2 credential** (T10's own Outcome) — only simulated with `wrangler`
+  replaced by `echo`. Watch the first real `build` job's logs for this step specifically.
+- **The deploy-event steps' `Current Version ID:` grep has never run against a real
+  (non-dry-run) deploy** (T10) — an empty capture degrades to an empty `cf_version_id`
+  rather than failing the job. Spot-check the first real deploy's `/telemetry/deploy`
+  payload (visible as a Runner-overview annotation, or in `o11y worker log stream`) for a
+  real, non-empty `cf_version_id`.
+- **The export destination's forced-timeout behaviour is unmeasured** (T02's own probe
+  exercised a forced-500, not a hang) — if Cloudflare's log export ever stops making
+  progress rather than erroring cleanly, that failure mode has no prior data point.
+- **`smoke`'s job (`master.yml`) has no `/telemetry/*` or `/grafana/*` coverage** — it only
+  ever checked `/api/health` and the authoring bundle hash. The post-deploy smoke list below
+  is what stands in for that until (if ever) a task adds real `@smoke`-tagged coverage.
+
+### Post-deploy smoke (run once, right after the first real deploy of all three Workers)
+
+Everything below is either a criterion this task could only test locally, or a criterion
+this task could not test at all (calendar time, real Cloudflare Analytics Engine
+credentials). None of it blocks the deploy — it confirms the deploy did what the local
+walkthrough already showed.
+
+1. **A malformed `POST /api/session`** against the real API worker — expect the fetch
+   catch-all's structured error line + a real Sentry event (exit criterion 11's Worker leg,
+   local-only until now; also a safe way to forced-fire the catch-all in production without
+   touching anything real).
+2. **Exit criterion 15, worker tenant, against a real Cloudflare export** — T02's own probe
+   already did this once (sandbox account); repeat once against the production o11y worker's
+   real Workers Logs export destination and confirm the same 7 labels + `cloudflare.ray_id`
+   remap + `service.version` default.
+3. **Exit criterion 9 (idle tab)** — open `/grafana/*`, leave the tab genuinely idle (no
+   dashboard auto-refresh) for 16 minutes, confirm the box stops. Not tested by any task
+   with a real open tab; T01's own evidence used zero requests, not an idle tab.
+4. **Exit criterion 13 (retention)** — check T03B's own 1-day retention-clock test
+   (`t03-retention-clock-test/` prefix, `o11y-probe-t03-loki`, sandbox account): the two
+   objects should be gone and the lifecycle rule should still be listed. If more than a few
+   days have passed since T03B ran it, this has almost certainly already resolved either
+   way — check R2's own lifecycle-rule application/audit log rather than re-deriving timing.
+5. **`alert-eval-error` never fires** in the real Observability-self dashboard for the first
+   several `*/10` ticks — this is the production detector for an Analytics Engine SQL
+   incompatibility (a query the AE SQL API rejects that local ClickHouse happily accepts,
+   ADR §L's own named trap). If it fires, treat it as a real incompatibility, not noise.
+6. **Tier-2 container stdout volume, confirm against the real measurement.** Locally
+   (T11, a real Tier-2 session under `wrangler dev`): a Vite-family starter (`react-js`)
+   logs 12 lines at boot and 2 lines per 60-second keepalive poll (the Sandbox SDK's own
+   structured logging of its health checks, not the dev server's own output); a
+   slower-booting starter (`angular`) logs 22 lines at boot, same 2-per-poll rate
+   afterward. Projected at the ADR's own required 10× headroom (`docs/adr/
+   0041-observability-stack.md` §D "Measured"), this pushes the **exported-logs**
+   allotment (not the raw Workers Logs pool, which still passes) over half. Read the
+   Observability-self dashboard's own exported-log volume after a day of real production
+   traffic and compare it against this projection; if it confirms the projection, lower
+   `head_sampling_rate` (ADR §D's own named fallback) before the pool crosses half — do
+   not wait for it to actually breach the 10M/month allotment.
+
+### Flipping `SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` to `uncaught`
+
+All three conditions below must hold, evidenced the same way this task's own local
+walkthrough evidenced them (Grafana dashboards, a fired-and-resolved alert, the volume
+projection) — but against real production data, not the local stack:
+
+1. **Data seen end to end in Grafana** — every §F.2 journey that gets real production
+   traffic shows real points on its dashboard (not "No data"), for at least a full day.
+2. **Alerts have fired at least once** — at least one real alert (any rule) has gone
+   `fired` → `resolved` in production and posted to the real Slack channel, confirming the
+   whole cron → rule → notify → Slack path works against real infrastructure, not just this
+   task's local capture server.
+3. **Volume sits inside the projection** — the Observability-self dashboard's real numbers,
+   after at least a few days of production traffic, are under half of every allotment (§D),
+   matching or beating Phase B's projected figures. If real Tier-2 stdout volume turns out
+   to exceed the breakeven Phase B computed, do not flip the scope until the fallback
+   (lowering `head_sampling_rate`, ADR §D's own named escape hatch) has brought it back
+   under half.
+
+**Who flips it**: whoever owns the o11y stack operationally at launch time (the same person
+or team who would triage an `alert-eval-error` or a stale-heartbeat page) — a role, not a
+name fixed here; confirm with the user before the first flip. The mechanism is two `--var`
+flags (`SENTRY_SCOPE` on the API worker's deploy, `VITE_SENTRY_SCOPE` on the authoring
+build), both currently defaulting to `full` in every committed config.
+
+### Rollback
+
+- **Drop the export destinations** (Workers Logs → o11y ingest) if the o11y stack itself is
+  the problem — this stops new data from reaching Loki/the inbox without touching the app.
+- **Revert the `observability` block** (`workers/api/wrangler.jsonc`'s
+  `observability.logs`/`.traces`) to pre-o11y values if the volume itself is the problem —
+  this is a config-only revert, no code change.
+- **The `SENTRY_SCOPE`/`VITE_SENTRY_SCOPE` flip needs no revert plan of its own** (ADR
+  Consequences, and the "Error monitoring" section below repeats this) — it only ever
+  narrows what reaches Sentry, never widens it past what the production gates already allow,
+  so reverting it just means flipping the same two `--var` flags back to `full`.
+- The o11y worker and the Grafana box can be torn down entirely (delete the Worker, the
+  Container application, the three R2 buckets) without touching the API worker or authoring
+  app at all — they have no hard dependency in that direction (the API worker's own
+  `env.O11Y` calls degrade to the watchdog's own unreachable-heartbeat path, already
+  live-tested by this task, not a crash).
+
 ## Error monitoring (Sentry)
 
 Errors only — no tracing, no session replay, no profiling. One Sentry project
@@ -635,10 +774,9 @@ today's dashboards, saved searches and on-call habits keep working unchanged.
 `window.onerror`/`unhandledrejection`/`Sentry.ErrorBoundary`; Worker
 fetch-catch-all/DO alarms/cron/snapshot-job failures) plus the budget-alert
 `captureMessage` — everything else goes to o11y alone. **Do not flip this
-switch as part of T10 or any one-time setup step above** — T11's launch plan
-is what decides when (after data is seen end to end in Grafana, alerts have
-fired at least once, and measured volume sits inside the projection) and who
-does it; it needs no revert plan of its own either way, since it only ever
+switch as part of T10 or any one-time setup step above** — see "Launch plan
+(ADR-0041 §L, T11)" above for the exact three conditions and who flips it; it
+needs no revert plan of its own either way, since it only ever
 narrows Sentry, never widens it beyond what `reportingGate.ts`/`sentry-gate.ts`
 already allow.
 

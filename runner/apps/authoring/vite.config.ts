@@ -116,10 +116,19 @@ export default defineConfig({
     // `--routes` flags in workers/api/package.json), so the bare prefix was
     // always wider here than on the deployment it stands in for. `/embed` has
     // the same shape but nothing is named as a sibling of it today.
+    // T11: the three targets below were a bare hardcoded ":8787" (the API
+    // worker's own wrangler default). Every other o11y task's port block
+    // (COMMON.md) runs the API worker on its own 52xx/48xx/etc. port, so a
+    // walkthrough that needs both the API worker AND this proxy (to reach
+    // `/d`/`/embed` and exercise real, non-mocked `/api/*` traffic) could not
+    // honour its own port block without this. Same minimal-and-justified class
+    // of touch as T02-D14/T04-D4: `API_DEV_PORT` mirrors `O11Y_DEV_PORT`
+    // immediately below and defaults to the original ":8787" so nothing else
+    // changes behaviour.
     proxy: {
-      "^/api(?:/|$)": { target: "http://localhost:8787" },
-      "^/d(?:/|$)": { target: "http://localhost:8787" },
-      "/embed": { target: "http://localhost:8787" },
+      "^/api(?:/|$)": { target: `http://localhost:${process.env.API_DEV_PORT ?? "8787"}` },
+      "^/d(?:/|$)": { target: `http://localhost:${process.env.API_DEV_PORT ?? "8787"}` },
+      "/embed": { target: `http://localhost:${process.env.API_DEV_PORT ?? "8787"}` },
       // The o11y worker (`workers/o11y`), same-origin reasoning as `/api` above
       // — Faro's transport posts to same-origin `/telemetry/collect` (contract
       // §6). T06-D8 flagged the old hardcoded port 8788 as a guess pinned to a

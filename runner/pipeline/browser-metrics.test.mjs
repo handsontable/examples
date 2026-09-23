@@ -1,4 +1,4 @@
-// Observability contract §5 browser metric catalogue (T07 — runner/tasks/o11y/T07-browser-metrics.md).
+// Observability contract §5 browser metric catalogue (ADR-0041 §F.2, docs/observability-contract.md).
 //
 // Drives `apps/authoring/src/telemetry/metrics.ts` against a FAKE `DemoRuntime`
 // (onReady/onError only — `trackPreviewReady` needs nothing more) and a

@@ -548,7 +548,20 @@ function cors(resp: Response): Response {
   // dev proxy are both same-origin, so its absence never surfaced — but a dev
   // pointing VITE_API_BASE straight at :8787 fails preflight without it.
   h.set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  h.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // `x-hot-session` (T11): T05/T06 wired `apiHeaders()` onto nearly every
+  // fetch call site in `apps/authoring/src` (the o11y session join, contract
+  // §6) after this list was last written — same "prod/the vite proxy are
+  // same-origin, so it never surfaced" blind spot as the PUT comment above.
+  // Found live running this task's own required local walkthrough (not by
+  // reading source): a direct cross-origin `VITE_API_BASE` build (the same
+  // shape `e2e/telemetry-metrics.spec.ts` already uses) failed CORS
+  // preflight on `/api/profile`, `/api/versions`, `/api/budget`,
+  // `/api/beacon` and, load-bearing for this task's own Fork+Save flow, the
+  // demo-save endpoint — every one of those calls now sends `x-hot-session`.
+  // T07's own passing telemetry-metrics.spec.ts run never caught this: none
+  // of its assertions depend on those particular calls succeeding, so the
+  // preflight failures were silent background console errors.
+  h.set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-hot-session");
   return new Response(resp.body, { status: resp.status, headers: h });
 }
 

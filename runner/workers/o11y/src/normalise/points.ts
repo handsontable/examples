@@ -82,17 +82,29 @@ export function withResourceAttrDefaults(
 const sinkByEnv = new WeakMap<Env, AeSink>();
 
 /** Production: `bindingSink(env.RUNNER_EVENTS)`. Local (`O11Y_ENV ===
- *  "local"`): `clickhouseSink` against `http://localhost:8123`
- *  (`AE_SQL_TOKEN` doubles as the ClickHouse password, matching
- *  `containers/o11y/compose.yml`'s `CLICKHOUSE_PASSWORD` default — T01's
- *  convention, `sink.ts`'s own doc comment). Cached per `env` object (cheap,
- *  and `clickhouseSink` holds no connection state to go stale). */
+ *  "local"`): `clickhouseSink` against `env.RUNNER_EVENTS_CLICKHOUSE_URL`,
+ *  falling back to `http://localhost:8123` when unset — the same var and the
+ *  same default `alerts/ae-query.ts#runAnalyticsEngineSqlApi` already reads
+ *  for the QUERY side (T04-D). Found live (T11's own required local
+ *  walkthrough, not by reading source): this WRITE side hardcoded
+ *  `http://localhost:8123` unconditionally, so a local ClickHouse on any
+ *  other port silently received zero browser-metric points while alert
+ *  queries against `RUNNER_EVENTS_CLICKHOUSE_URL` read an empty table —
+ *  T04's own tests never caught it because they inject `queryFn` directly
+ *  and never exercise `aeSink` itself. `AE_SQL_TOKEN` doubles as the
+ *  ClickHouse password, matching `containers/o11y/compose.yml`'s
+ *  `CLICKHOUSE_PASSWORD` default — T01's convention, `sink.ts`'s own doc
+ *  comment. Cached per `env` object (cheap, and `clickhouseSink` holds no
+ *  connection state to go stale). */
 export function aeSink(env: Env): AeSink {
   const cached = sinkByEnv.get(env);
   if (cached) return cached;
   const sink =
     env.O11Y_ENV === "local"
-      ? clickhouseSink("http://localhost:8123", { user: "default", password: env.AE_SQL_TOKEN })
+      ? clickhouseSink(env.RUNNER_EVENTS_CLICKHOUSE_URL ?? "http://localhost:8123", {
+          user: "default",
+          password: env.AE_SQL_TOKEN,
+        })
       : bindingSink(env.RUNNER_EVENTS);
   sinkByEnv.set(env, sink);
   return sink;
