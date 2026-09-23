@@ -63,6 +63,29 @@ export function recordInvalidItem(env: Env, ctx: ExecutionContext, detail: strin
   console.warn("[o11y] dropped invalid item:", detail);
 }
 
+/** One well-formed record dropped only for being over `INBOX_RECORD_MAX_BYTES`
+ *  (256 KB, ADR §B.2 step 1) inside an otherwise-accepted batch — distinct
+ *  from {@link recordInvalidItem} (fix round, I3): the task's own Scope text
+ *  ("drop records over 256 KB") and the doc comment on `otlp.ts#OtlpProcessResult`
+ *  both already called this `reason=size`, but the route handler was writing
+ *  it through `recordInvalidItem` (`reason: "invalid_item"`) instead — a real
+ *  observability gap, since an operator querying `o11y.ingest` by
+ *  `reason="size"` to watch for oversized payloads would have seen nothing.
+ *  Used by both the OTLP and Faro ingest paths (I2 added the Faro-side size
+ *  check this shares with). */
+export function recordOversizeDrop(env: Env, ctx: ExecutionContext, detail: string): void {
+  writePoint(
+    env,
+    ctx,
+    toAePoint(
+      "o11y.ingest",
+      { count: 1, bytes: 0 },
+      { ...o11ySelfIdentity(env), reason: "size", outcome: "dropped" },
+    ),
+  );
+  console.warn("[o11y] dropped oversize record:", detail);
+}
+
 /** Answers an accepted request after the `InboxWriter` commit, writing one
  *  `accepted` point (if any records were newly stored) and one `duplicate`
  *  point (if any were deduped) — `reason` is the route's short name

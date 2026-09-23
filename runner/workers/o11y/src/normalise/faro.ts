@@ -21,6 +21,7 @@ import {
   fingerprint as computeFingerprint,
   faroItemToRecord,
   feedsNewFingerprintAlert,
+  INBOX_RECORD_MAX_BYTES,
   METRICS,
   scrubTelemetry,
   toAePoint,
@@ -55,15 +56,23 @@ const LITE_VITAL_KEYS: Readonly<Record<string, string>> = {
 
 export interface ProcessedFaroItem {
   /** Absent for a console-dropped item, an unrecoverable item (a bad
-   *  `item.type`/`toAePoint` input, T00-D10) or an `example.*` event (AE
-   *  points only, never stored, §6). */
+   *  `item.type`/`toAePoint` input, T00-D10), an oversize record, or an
+   *  `example.*` event (AE points only, never stored, §6). */
   ingestItem?: IngestItem;
   aePoints: AePoint[];
   /** Set when this item could not be converted/validated at all — the caller
    *  writes one `invalid_item` `o11y.ingest` point and moves on (never a
-   *  500). Unset for a console-drop or an `example.*` event: those are
-   *  intentional, not a failure. */
+   *  500). Unset for a console-drop, an oversize record or an `example.*`
+   *  event: those are intentional, not a failure. */
   invalid?: string;
+  /** Set when the built record alone (well-formed, otherwise storable)
+   *  exceeds `INBOX_RECORD_MAX_BYTES` (ADR §B.2 step 1, "drop records over
+   *  256 KB") — fix round I2: the OTLP path already had this check
+   *  (`otlp.ts`'s `droppedOversize`); the Faro path did not, even though
+   *  `pack.ts`'s row-chunking assumes normalise already enforces the cap.
+   *  Distinct from `invalid` so the caller writes a `reason: "size"` point
+   *  (I3), not `reason: "invalid_item"`. */
+  oversize?: boolean;
 }
 
 function metricValuesFromPayload(values: Record<string, number> | undefined): MetricValues {
@@ -273,6 +282,15 @@ async function processOneItem(
   }
 
   if (!storeRecord) return { aePoints };
+
+  // I2 (fix round, see the task Outcome): the OTLP path already dropped
+  // records over `INBOX_RECORD_MAX_BYTES` before this fix; the Faro path
+  // did not, even though `pack.ts`'s row-chunking (and the contract's own
+  // "records over 256 KB are dropped" rule, §8) assumes normalise already
+  // enforces this everywhere, not just on one ingest path.
+  if (new TextEncoder().encode(JSON.stringify(record)).length > INBOX_RECORD_MAX_BYTES) {
+    return { aePoints, oversize: true };
+  }
 
   const hash = await hashRecord({
     body: record.body,

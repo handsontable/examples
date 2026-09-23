@@ -24,7 +24,9 @@ const { SignJWT, exportJWK, generateKeyPair } = await import("jose");
 const { checkBrowserGates, checkPayloadEnvironment } = await import("../workers/o11y/src/gates/browser.ts");
 const { checkExportSecret } = await import("../workers/o11y/src/gates/secret.ts");
 const { checkSentryHmac } = await import("../workers/o11y/src/gates/sentry.ts");
-const { checkDeployGate, O11Y_GITHUB_OIDC_AUDIENCE } = await import("../workers/o11y/src/gates/oidc.ts");
+const { checkDeployGate, O11Y_GITHUB_OIDC_AUDIENCE, _resetGithubJwksCacheForTests } = await import(
+  "../workers/o11y/src/gates/oidc.ts"
+);
 const { verifyAccess } = await import("../workers/o11y/src/gates/access.ts");
 const { hmacSha256Hex } = await import("../workers/o11y/src/gates/util.ts");
 
@@ -34,6 +36,7 @@ function baseEnv(overrides = {}) {
     ACCESS_TEAM_DOMAIN: "handsontable.cloudflareaccess.com",
     ACCESS_AUD: "test-aud",
     GITHUB_OIDC_REPOSITORY: "handsontable/examples",
+    GITHUB_OIDC_WORKFLOW_REF: "handsontable/examples/.github/workflows/master.yml@refs/heads/master",
     O11Y_EXPORT_SECRET: "top-secret",
     SENTRY_HOOK_SECRET: "sentry-secret",
     RATE_LIMITER: { limit: async () => ({ success: true }) },
@@ -173,13 +176,26 @@ test("sentry HMAC gate: a correct signature passes, a wrong one fails", async ()
 
 // ---- oidc.ts: GitHub OIDC + secret fallback -------------------------------------
 
-async function signGithubToken({ repository = "handsontable/examples", audience = O11Y_GITHUB_OIDC_AUDIENCE } = {}) {
+const EXPECTED_WORKFLOW_REF = "handsontable/examples/.github/workflows/master.yml@refs/heads/master";
+
+async function signGithubToken({
+  repository = "handsontable/examples",
+  audience = O11Y_GITHUB_OIDC_AUDIENCE,
+  workflow_ref = EXPECTED_WORKFLOW_REF,
+} = {}) {
+  // Each call signs a fresh RS256 key pair — the module-level JWKS cache in
+  // oidc.ts must be cleared first, or a later call reuses an earlier call's
+  // (now wrong) cached key set under jose's no-refetch cooldown and fails
+  // JWT verification for an unrelated reason, making a wrong-claim test pass
+  // whether or not the claim check itself is even present. See oidc.ts's
+  // `_resetGithubJwksCacheForTests` doc comment.
+  _resetGithubJwksCacheForTests();
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk = await exportJWK(publicKey);
   jwk.kid = "test-key";
   jwk.alg = "RS256";
   jwk.use = "sig";
-  const token = await new SignJWT({ repository })
+  const token = await new SignJWT({ repository, workflow_ref })
     .setProtectedHeader({ alg: "RS256", kid: "test-key" })
     .setIssuer("https://token.actions.githubusercontent.com")
     .setAudience(audience)
@@ -222,6 +238,22 @@ test("deploy gate: a token for the wrong repository is a hard 401, never the sec
   });
   const result = await checkDeployGate(req, baseEnv());
   assert.equal(result.ok, false, "a wrong-repository token must not fall through to a valid secret");
+  assert.equal(result.reason, "oidc");
+});
+
+test("deploy gate: a token for the right repository but wrong workflow is a hard 401, never the secret fallback (I1)", async (t) => {
+  const { token, jwks } = await signGithubToken({ workflow_ref: "handsontable/examples/.github/workflows/some-other.yml@refs/heads/master" });
+  const realFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  globalThis.fetch = async () => new Response(JSON.stringify(jwks), { headers: { "content-type": "application/json" } });
+
+  const req = new Request("https://demos.handsontable.com/telemetry/deploy", {
+    headers: { authorization: `Bearer ${token}`, "x-o11y-secret": "top-secret" },
+  });
+  const result = await checkDeployGate(req, baseEnv());
+  assert.equal(result.ok, false, "a wrong-workflow token must not fall through to a valid secret");
   assert.equal(result.reason, "oidc");
 });
 

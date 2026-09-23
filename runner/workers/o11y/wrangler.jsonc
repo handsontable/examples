@@ -37,7 +37,11 @@
     // does not exist yet — T03 creates it and fills in both values.
     "ACCESS_TEAM_DOMAIN": "handsontable.cloudflareaccess.com",
     "ACCESS_AUD": "",
-    "GITHUB_OIDC_REPOSITORY": "handsontable/examples"
+    "GITHUB_OIDC_REPOSITORY": "handsontable/examples",
+    // T02-D16 (fix round, see the task Outcome): the expected `workflow_ref`
+    // OIDC claim for the deploy job — T10 must keep this in sync with the
+    // real deploy workflow's file path and the ref it runs from.
+    "GITHUB_OIDC_WORKFLOW_REF": "handsontable/examples/.github/workflows/master.yml@refs/heads/master"
     // SERVICE_VERSION (T02 addition, see the task Outcome) is intentionally
     // absent here: the real deploy script sets it via `--var
     // SERVICE_VERSION:$GITHUB_SHA` (the same pattern `docs/observability-contract.md`

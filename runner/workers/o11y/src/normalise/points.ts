@@ -16,6 +16,7 @@ import {
   ATTR_HOT_SURFACE,
   ATTR_HOT_TIER,
   ATTR_SERVICE_NAME,
+  ATTR_SERVICE_VERSION,
   bindingSink,
   clickhouseSink,
   type AeSink,
@@ -44,12 +45,21 @@ const SURFACE_BY_SERVICE_NAME: Readonly<Record<string, string>> = {
  * worker log line with no natural outcome carries a syntactically valid
  * placeholder rather than an absent label. `deployment.environment.name`
  * falls back to `env.O11Y_ENV`; `hot.surface` falls back to the
- * `service.name`-keyed table above.
+ * `service.name`-keyed table above. `service.version` falls back to
+ * `"unknown"` — a real finding, not a defensive guess (T02-D, see the task
+ * Outcome, sandbox probe re-run): a real Cloudflare automatic invocation-log
+ * export carries `service.name` (the deployed script name) but **never**
+ * `service.version` at all — Cloudflare has no way to know an application's
+ * own `SERVICE_VERSION` var — so every worker-origin record that reaches
+ * this function through `otlp.ts` would otherwise store an empty
+ * `service.version`, even though every metric registry row implicitly
+ * expects it filled (T00-D2: blob1–3 are universal on every record).
  */
 export function withResourceAttrDefaults(
   mutable: Record<string, string>,
   env: Env,
 ): Record<string, string> {
+  mutable[ATTR_SERVICE_VERSION] ??= "unknown";
   mutable[ATTR_DEPLOYMENT_ENVIRONMENT_NAME] ??= env.O11Y_ENV;
   mutable[ATTR_HOT_SURFACE] ??= SURFACE_BY_SERVICE_NAME[mutable[ATTR_SERVICE_NAME] ?? ""] ?? "api";
   mutable[ATTR_HOT_TIER] ??= "none";

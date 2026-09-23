@@ -23,7 +23,7 @@ import { processFaroBody } from "./normalise/faro.js";
 import { processOtlpBody } from "./normalise/otlp.js";
 import { processSentryPayload } from "./normalise/sentry.js";
 import { BodyTooLargeError, readCappedBytes, readCappedText } from "./normalise/read-body.js";
-import { recordInvalidItem, respondDrop, respondIngested } from "./normalise/respond.js";
+import { recordInvalidItem, recordOversizeDrop, respondDrop, respondIngested } from "./normalise/respond.js";
 import { writePoint } from "./normalise/points.js";
 import { findRoute, registerRoute } from "./router.js";
 
@@ -93,6 +93,7 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
 
   for (const p of processed) {
     if (p.invalid) recordInvalidItem(env, ctx, p.invalid);
+    if (p.oversize) recordOversizeDrop(env, ctx, "Faro record exceeds 256 KB");
     for (const point of p.aePoints) writePoint(env, ctx, point);
   }
 
@@ -131,7 +132,7 @@ async function handleOtlpLogs(req: Request, env: Env, ctx: ExecutionContext): Pr
   let duplicate = 0;
   if (processed.droppedOversize > 0) {
     for (let i = 0; i < processed.droppedOversize; i++) {
-      recordInvalidItem(env, ctx, "record exceeds 256 KB");
+      recordOversizeDrop(env, ctx, "OTLP record exceeds 256 KB");
     }
   }
   if (processed.items.length > 0) {

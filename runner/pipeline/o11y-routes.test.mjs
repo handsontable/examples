@@ -128,6 +128,54 @@ test("POST /telemetry/v1/logs: protobuf content-type is decoded via the protobuf
   assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
 });
 
+test("POST /telemetry/v1/logs: an oversize record writes an o11y.ingest point with reason=size, not invalid_item (I3)", async () => {
+  const { env, ae } = freshEnv();
+  const huge = "x".repeat(300_000);
+  const body = JSON.stringify({
+    resourceLogs: [
+      {
+        resource: { attributes: [{ key: "service.name", value: { stringValue: "demos-api" } }] },
+        scopeLogs: [{ logRecords: [{ timeUnixNano: "1735689600000000000", body: { stringValue: huge } }] }],
+      },
+    ],
+  });
+  const res = await worker.fetch(
+    new Request("https://demos.handsontable.com/telemetry/v1/logs", {
+      method: "POST",
+      headers: { "x-o11y-secret": env.O11Y_EXPORT_SECRET, "content-type": "application/json" },
+      body,
+    }),
+    env,
+    ctx,
+  );
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300, "the batch itself still answers 2xx");
+
+  const ingestPoints = ae.points.filter((p) => p.indexes[0] === "o11y.ingest");
+  const reasons = ingestPoints.map((p) => p.blobs[8]); // reason = blob9, index 8
+  assert.ok(reasons.includes("size"), `expected a reason="size" point, got reasons: ${JSON.stringify(reasons)}`);
+  assert.ok(!reasons.includes("invalid_item"), "an oversize drop must not be recorded as invalid_item");
+});
+
+test("POST /telemetry/collect: an oversize Faro record writes an o11y.ingest point with reason=size (I2 + I3)", async () => {
+  const { env, ae } = freshEnv();
+  const body = withFreshTimestamp(faroFixture("log.json"));
+  body.logs[0].message = "x".repeat(300_000);
+  const req = new Request("https://demos.handsontable.com/telemetry/collect", {
+    method: "POST",
+    headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const res = await worker.fetch(req, env, ctx);
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300, "the batch itself still answers 2xx");
+
+  const ingestPoints = ae.points.filter((p) => p.indexes[0] === "o11y.ingest");
+  const reasons = ingestPoints.map((p) => p.blobs[8]);
+  assert.ok(reasons.includes("size"), `expected a reason="size" point, got reasons: ${JSON.stringify(reasons)}`);
+  assert.ok(!reasons.includes("invalid_item"), "an oversize drop must not be recorded as invalid_item");
+});
+
 // ---- Exit criterion 4: duplicate delivery -------------------------------------
 
 test("exit criterion 4: the same OTLP export body posted twice, seconds apart, including a zero-timestamp record, yields one stored copy and one duplicate point", async (t) => {

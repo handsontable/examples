@@ -113,6 +113,7 @@ export function makeEnv(InboxWriterClass, overrides = {}) {
     ACCESS_TEAM_DOMAIN: "handsontable.cloudflareaccess.com",
     ACCESS_AUD: "test-aud",
     GITHUB_OIDC_REPOSITORY: "handsontable/examples",
+    GITHUB_OIDC_WORKFLOW_REF: "handsontable/examples/.github/workflows/master.yml@refs/heads/master",
     O11Y_EXPORT_SECRET: SECRET,
     SENTRY_HOOK_SECRET: SENTRY_SECRET,
     AE_SQL_TOKEN: "test-ae-token",

@@ -165,6 +165,36 @@ test("OTLP: forbidden attributes and body text are scrubbed over the whole recor
   assert.doesNotMatch(text, /8787-abc123-tok3n/, "no preview hostname survives");
 });
 
+test("OTLP: a real Cloudflare invocation-log export — cf.ray survives the cloudflare.ray_id remap, service.version defaults to unknown, forbidden fields are dropped", async () => {
+  // pipeline/fixtures/otlp/json/cloudflare-invocation-log.json is captured
+  // real output (scrubbed) from this task's sandbox-probe re-run against a
+  // throwaway Worker with `observability.logs.invocation_logs: true` — see
+  // the task Outcome. Two real findings this fixture pins:
+  //   - the ray id arrives as `cloudflare.ray_id`, not the contract's
+  //     `cf.ray` (otlp.ts#CLOUDFLARE_KEY_REMAP);
+  //   - Cloudflare's own automatic export never sends `service.version` at
+  //     all (points.ts#withResourceAttrDefaults now defaults it).
+  const result = await processOtlpBody(
+    new TextEncoder().encode(otlpJsonFixture("cloudflare-invocation-log.json")),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items.length, 1);
+  const record = result.items[0].record;
+
+  assert.equal(record.attributes?.["cf.ray"], "0000000000000000", "cloudflare.ray_id must remap to cf.ray");
+  assert.equal(record.resourceAttributes["service.version"], "unknown");
+
+  const text = JSON.stringify(record);
+  assert.doesNotMatch(text, /url\.full/i);
+  assert.doesNotMatch(text, /user_agent/i);
+  assert.doesNotMatch(text, /Mozilla\//, "no user-agent string survives");
+  assert.doesNotMatch(text, /geo\./i);
+  assert.doesNotMatch(text, /cloudflare\.asn/i);
+  assert.doesNotMatch(text, /cloudflare\.ray_id/, "the raw Cloudflare key name must not survive alongside its remap");
+});
+
 test("every stored record carries the contract's eight resource attributes", async () => {
   const result = await processOtlpBody(
     new TextEncoder().encode(otlpJsonFixture("basic.json")),
@@ -200,4 +230,13 @@ test("records over 256 KB are dropped, not stored", async () => {
   const result = await processOtlpBody(new TextEncoder().encode(body), "application/json", ENV, Date.now());
   assert.equal(result.items.length, 0);
   assert.equal(result.droppedOversize, 1);
+});
+
+test("Faro: a record over 256 KB is dropped, not stored (I2 — the Faro path lacked this check)", async () => {
+  const body = faroFixture("log.json");
+  body.logs[0].message = "x".repeat(300_000);
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.equal(item.ingestItem, undefined, "an oversize Faro record must not be stored");
+  assert.equal(item.oversize, true);
+  assert.equal(item.invalid, undefined, "oversize is distinct from invalid (I3: different o11y.ingest reason)");
 });

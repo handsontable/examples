@@ -85,6 +85,13 @@ export interface Env {
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   GITHUB_OIDC_REPOSITORY: string;
+  /** T02-D16 addition (fix round, see the task Outcome): ADR §B.5's `deploy`
+   *  row names "issuer, audience, repository, **workflow**" — the workflow
+   *  claim was missing from the first pass. GitHub's OIDC `workflow_ref`
+   *  claim, exact match, `<owner>/<repo>/<workflow file path>@<ref>`. T10
+   *  must keep this in sync with the real deploy workflow's path/ref if it
+   *  ever moves. */
+  GITHUB_OIDC_WORKFLOW_REF: string;
 
   /** T02 addition to `wrangler.jsonc`'s `vars` (see the task Outcome): the
    *  `o11y.ingest` self-metric (`normalise/respond.ts`) needs the o11y

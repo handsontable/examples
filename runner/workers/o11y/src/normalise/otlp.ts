@@ -102,6 +102,31 @@ function isRealTimestamp(v: string | undefined): v is string {
   return v !== undefined && v !== "" && v !== "0";
 }
 
+/** T02-D — real Cloudflare semantic-convention key → this contract's own key
+ *  name (see the task Outcome, sandbox probe re-run): captured real
+ *  `handsontable-demos-o11y-probe-t02` invocation-log exports carry the ray
+ *  id under `cloudflare.ray_id`, not the contract's `cf.ray` — without this
+ *  remap, `hoistAttributes` (which only recognises the contract's own key
+ *  names) silently drops it, even though `cf.ray` is explicitly named as
+ *  structured metadata every record should carry when available (§3). Only
+ *  `cloudflare.ray_id` was found to need this in the captured samples;
+ *  nothing else Cloudflare's automatic export sends maps onto a contract key
+ *  (`url.full`, `user_agent.original`, `geo.*`, `cloudflare.asn` are all
+ *  correctly dropped as forbidden, not renamed). Applied before
+ *  `hoistAttributes`, so it works whether the source key arrived as a
+ *  resource or a record attribute. */
+const CLOUDFLARE_KEY_REMAP: Readonly<Record<string, string>> = {
+  "cloudflare.ray_id": "cf.ray",
+};
+
+function remapCloudflareKeys(attrs: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(attrs)) {
+    out[CLOUDFLARE_KEY_REMAP[key] ?? key] = value;
+  }
+  return out;
+}
+
 export interface OtlpProcessResult {
   items: IngestItem[];
   /** Records decoded but dropped (over the 256 KB cap) — accounted as
@@ -116,7 +141,7 @@ async function toIngestItem(
   env: Env,
   receivedAtMs: number,
 ): Promise<IngestItem | "oversize"> {
-  const merged = { ...resourceLogs.resourceAttributes, ...record.attributes };
+  const merged = remapCloudflareKeys({ ...resourceLogs.resourceAttributes, ...record.attributes });
   const { resourceAttributes, attributes } = hoistAttributes(merged);
 
   const scrubbable: ScrubbableOtlpRecord = { body: record.body, attributes, resourceAttributes };
