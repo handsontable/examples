@@ -53,6 +53,40 @@ test("drainKey: all-2xx pushes -> provisional, one push per chunk", async () => 
   assert.equal(pushes[0].tenant, "worker");
 });
 
+// T03-D2: Loki's `/otlp/v1/logs` decodes the body as ONE OTLP/HTTP JSON
+// `ExportLogsServiceRequest` (`{"resourceLogs":[...]}`). The drain used to
+// send the inbox's own NDJSON (one bare ResourceLogs per line) instead;
+// Loki answered 204 and ingested nothing, so no chunk was flushed, no TSDB
+// table was built, no index object was uploaded on SIGTERM and shutdown.sh
+// (correctly) never wrote the clean marker. Reproduced against the real
+// Loki 3.3.2 in containers/o11y/compose.yml (see the T03-D2 report).
+test("drainKey: each push is one OTLP/HTTP JSON ExportLogsServiceRequest holding every record", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const records = [record("line-a"), record("line-b"), record("line-c")];
+  const bytes = await objectBytes(records);
+  const bodies = [];
+  const deps = {
+    fetchObject: async () => bytes,
+    pushToLoki: async (_tenant, gz) => {
+      const stream = new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"));
+      bodies.push(await new Response(stream).text());
+      return { status: 204 };
+    },
+    symbolicate: noopSymbolicate,
+  };
+
+  const outcome = await drainKey(key, new Set(), deps);
+
+  assert.equal(outcome.outcome, "provisional");
+  assert.equal(bodies.length, 1);
+  let parsed;
+  assert.doesNotThrow(() => {
+    parsed = JSON.parse(bodies[0]);
+  }, "the decompressed body must be a single JSON document, not NDJSON");
+  assert.deepEqual(Object.keys(parsed), ["resourceLogs"]);
+  assert.deepEqual(parsed.resourceLogs, records);
+});
+
 test("drainKey: a 400 rejects the key with Loki's message, no retry", async () => {
   const key = "inbox/browser/2026-01-01/00/000000000000.ndjson.gz";
   const bytes = await objectBytes([record("boom")]);
@@ -131,7 +165,7 @@ test("drainKey: a record already in `seenHashes` is not pushed again (within-cal
     pushToLoki: async (_tenant, gz) => {
       const stream = new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"));
       const text = await new Response(stream).text();
-      pushedRecords.push(...text.trim().split("\n"));
+      pushedRecords.push(...JSON.parse(text).resourceLogs);
       return { status: 204 };
     },
     symbolicate: noopSymbolicate,

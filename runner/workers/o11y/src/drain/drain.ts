@@ -9,7 +9,6 @@
 
 import {
   decodeNdjson,
-  encodeNdjson,
   LOKI_REQUEST_MAX_BYTES,
   parseInboxKey,
   type OtlpResourceLogs,
@@ -28,9 +27,10 @@ export interface DrainDeps {
    *  `InboxWriter`'s pack step deletes the *pending rows* that produced
    *  them). */
   fetchObject(key: string): Promise<Uint8Array | null>;
-  /** One push of ≤ {@link LOKI_REQUEST_MAX_BYTES} decompressed, gzipped
-   *  NDJSON, `X-Scope-OrgID: <tenant>`. */
-  pushToLoki(tenant: Tenant, gzippedNdjson: Uint8Array): Promise<LokiPushResult>;
+  /** One push of ≤ {@link LOKI_REQUEST_MAX_BYTES} decompressed: a gzipped
+   *  OTLP/HTTP JSON `ExportLogsServiceRequest` (see {@link encodeLokiPush}),
+   *  `X-Scope-OrgID: <tenant>`. */
+  pushToLoki(tenant: Tenant, gzippedBody: Uint8Array): Promise<LokiPushResult>;
   /** ADR §C.3 — exception records only; a no-op passthrough for everything
    *  else (`symbolicate.ts#symbolicateResourceLogs` already does this). */
   symbolicate(records: readonly OtlpResourceLogs[]): Promise<OtlpResourceLogs[]>;
@@ -71,20 +71,35 @@ async function gunzip(bytes: Uint8Array): Promise<string> {
   return new Response(stream).text();
 }
 
+/** The body Loki's `/otlp/v1/logs` actually decodes: ONE OTLP/HTTP JSON
+ *  `ExportLogsServiceRequest`. The inbox stores NDJSON (one bare
+ *  ResourceLogs per line), and pushing that as-is is the T03-D2 bug: Loki
+ *  3.3.2 answers `204` to it and ingests nothing — no stream, no chunk, no
+ *  TSDB table, so nothing is uploaded on SIGTERM and shutdown.sh (correctly)
+ *  never writes the clean marker. */
+function encodeLokiPush(records: readonly OtlpResourceLogs[]): string {
+  return JSON.stringify({ resourceLogs: records });
+}
+
+/** `{"resourceLogs":[` + `]}` — the envelope bytes {@link encodeLokiPush}
+ *  adds around the comma-joined records. */
+const PUSH_ENVELOPE_BYTES = encodeLokiPush([]).length;
+
 /** Chunks `records` into pushes of at most {@link LOKI_REQUEST_MAX_BYTES}
  *  decompressed bytes — the same row-chunking rule `inbox/pack.ts#appendRows`
  *  uses for its own 1 MB row cap, applied here to the drain's own 1 MB
- *  per-request cap (ADR §B.3: "requests of at most 1 MB decompressed"). */
+ *  per-request cap (ADR §B.3: "requests of at most 1 MB decompressed"),
+ *  counting the {@link encodeLokiPush} envelope and the separating commas. */
 function chunkBySize(records: readonly OtlpResourceLogs[]): OtlpResourceLogs[][] {
   const chunks: OtlpResourceLogs[][] = [];
   let current: OtlpResourceLogs[] = [];
-  let currentBytes = 0;
+  let currentBytes = PUSH_ENVELOPE_BYTES;
   for (const record of records) {
-    const size = new TextEncoder().encode(JSON.stringify(record)).length;
+    const size = new TextEncoder().encode(JSON.stringify(record)).length + (current.length > 0 ? 1 : 0);
     if (currentBytes + size > LOKI_REQUEST_MAX_BYTES && current.length > 0) {
       chunks.push(current);
       current = [];
-      currentBytes = 0;
+      currentBytes = PUSH_ENVELOPE_BYTES;
     }
     current.push(record);
     currentBytes += size;
@@ -98,8 +113,7 @@ async function pushChunkWithRetry(
   chunk: readonly OtlpResourceLogs[],
   deps: DrainDeps,
 ): Promise<{ result: LokiPushResult; bytesPushed: number }> {
-  const ndjson = encodeNdjson(chunk);
-  const gz = await gzip(ndjson);
+  const gz = await gzip(encodeLokiPush(chunk));
   let result: LokiPushResult = { status: 0 };
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     result = await deps.pushToLoki(tenant, gz);
