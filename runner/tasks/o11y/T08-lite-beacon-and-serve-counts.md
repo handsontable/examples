@@ -196,7 +196,7 @@ pnpm test                                                              # 1523 te
                                                                         #  controller-verified pre-existing failure)
 ( cd workers/api && npx wrangler deploy --dry-run )                   # exit=0
 ( cd workers/o11y && npx wrangler deploy --dry-run )                  # exit=0
-node scripts/check-test-presence.mjs feat/runner-observability        # pass (coverage-present)
+node scripts/check-test-presence.mjs feat/runner-observability        # pass (6 source files, matching test change)
 ```
 
 `pipeline/lite-beacon.test.mjs`: 27 tests — acorn `ecmaVersion:5` parse, the script size
