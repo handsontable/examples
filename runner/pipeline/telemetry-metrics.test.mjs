@@ -35,9 +35,29 @@ test("toAePoint places each value at its AE_COLUMNS slot", () => {
   assert.equal(point.blobs[blobIndex("outcome")], "ready");
   assert.equal(point.blobs[blobIndex("bucket")], "18.1");
   assert.equal(point.doubles[doubleIndex("duration_ms")], 1234);
-  // Untouched slots stay at the documented defaults.
+  // Untouched blob slots stay at the documented default — but double1 (count)
+  // is never "untouched": see the dedicated tests below.
   assert.equal(point.blobs[blobIndex("reason")], "");
-  assert.equal(point.doubles[doubleIndex("count")], 0);
+});
+
+test("toAePoint defaults double1 (count) to 1, even for a metric whose own §5 row never lists count", () => {
+  // preview.ready_ms's Doubles column is just duration_ms (§5) — count is
+  // still universal (§4's reading rule: "1 per point unless pre-aggregated"),
+  // or every count-based query (T04's alert thresholds, T09's panels) reads
+  // zero for this metric forever.
+  const point = toAePoint(
+    "preview.ready_ms",
+    { duration_ms: 1234 },
+    { ...SERVICE, surface: "authoring", tier: "1", framework: "react", ht_major: "18", outcome: "ready" },
+  );
+  const doubleIndex = (col) => Number(AE_COLUMNS[col].replace("double", "")) - 1;
+  assert.equal(point.doubles[doubleIndex("count")], 1);
+});
+
+test("toAePoint lets an explicit count override the default 1 (a pre-aggregated point)", () => {
+  const point = toAePoint("sandpack.compile_error", { count: 5 }, { ...SERVICE, framework: "react", ht_major: "18" });
+  const doubleIndex = (col) => Number(AE_COLUMNS[col].replace("double", "")) - 1;
+  assert.equal(point.doubles[doubleIndex("count")], 5);
 });
 
 test("toAePoint rejects an outcome not in the metric's allowed set", () => {

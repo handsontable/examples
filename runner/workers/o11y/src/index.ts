@@ -2,11 +2,15 @@
 // (T00): every contract route answers `501`, no gates, no ingest, no drain —
 // wave-1 tasks (T02–T09) register real handlers through `router.ts` (T02).
 //
-// Durable Object classes are exported from here, as Workers requires.
+// Durable Object classes are exported from here, as Workers requires — each
+// class itself lives in the file its owner's shared-file table row names
+// (T00-D9): `GrafanaBox` in `box.ts` (T01), `InboxWriter` in
+// `inbox/writer.ts` (T02).
 
 import type { Env } from "./env.js";
 
-export { InboxWriter, GrafanaBox } from "./env.js";
+export { GrafanaBox } from "./box.js";
+export { InboxWriter } from "./inbox/writer.js";
 
 interface RouteStub {
   method: "GET" | "POST";

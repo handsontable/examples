@@ -103,15 +103,23 @@ export function stripQueryAndFragment(value: string): string {
 
 /** Faro's console instrumentation is disabled (ADR §E.4), but a demo-runtime
  *  `console-error`/`console-warn` relay (`monitor.ts`) can still surface as a
- *  Faro log item, tagged by whoever pushes it with `context["hot.kind"]` set to
- *  one of those two `MonitorKind`s (T00-D4 — the tagging convention T06/T07
- *  must use for this check to find them). §3 forbids console output outright,
- *  so such an item is dropped, not scrubbed. */
+ *  Faro log item, tagged by whoever pushes it with `context["hot.relay"]` set
+ *  to one of those two `MonitorKind`s (T00-D4 — the tagging convention
+ *  T06/T07 must use for this check to find them). Deliberately **not**
+ *  `context["hot.kind"]`: that key's contract value set is the Faro item kind
+ *  (`exception`/`log`/`event`/`measurement`, §3) and `convert.ts` always
+ *  overwrites it with `item.type` regardless of what the client sent — a
+ *  console-tagged value there would never survive to be checked. `hot.relay`
+ *  is also not on `ALLOWED_ATTRIBUTE_KEYS`, so even if this check somehow
+ *  missed one, the marker itself is scrubbed away, never stored.
+ *
+ *  §3 forbids console output outright, so a matching item is dropped, not
+ *  scrubbed. */
 const CONSOLE_KINDS: ReadonlySet<MonitorKind> = new Set(["console-error", "console-warn"]);
 
 function isConsoleItem(item: ScrubbableFaroItem): boolean {
   if (item.type !== "log") return false;
-  const kind = item.payload.context?.["hot.kind"];
+  const kind = item.payload.context?.["hot.relay"];
   return typeof kind === "string" && CONSOLE_KINDS.has(kind as MonitorKind);
 }
 
@@ -169,7 +177,12 @@ export function scrubTelemetry<T extends Scrubbable>(record: T): T | null {
     }
 
     for (const frame of clone.payload.stacktrace?.frames ?? []) {
-      if (frame.filename !== undefined) frame.filename = redactPreviewHosts(frame.filename);
+      // A stack frame's `filename` is a URL-valued field too (a bundler's
+      // cache-busting `?t=`/`?v=` query string shows up here as often as on
+      // `meta.page.url`), so it gets the same two rules.
+      if (frame.filename !== undefined) {
+        frame.filename = redactPreviewHosts(stripQueryAndFragment(frame.filename));
+      }
     }
 
     clone.payload.message = scrubText(clone.payload.message);

@@ -376,6 +376,16 @@ function slotOffset(slot: string): number {
  * or a repo-wide closed set like `surface`/`tier`/`ht_major`). This is a producer
  * contract, enforced on our own call sites, not a scrub of untrusted input — see
  * `scrub.ts` for that.
+ *
+ * **T00-D10, load-bearing for T02**: this check is runtime-only. `HotAttrs.outcome`
+ * is typed `string` (§5's per-metric enums have no type-level encoding), so
+ * `tsc` accepts any string at every call site — only calling this function
+ * actually validates one. T02's ingest route extracts browser metrics from a
+ * Faro item's `context`/`attributes`, which is client-controlled: a crafted
+ * payload with `outcome: "anything"` reaches `toAePoint` and throws. The route
+ * handler must catch that (or pre-validate against `METRICS[metric].values`
+ * before calling), or a single malformed browser metric turns into a 500
+ * instead of an `o11y.ingest` `dropped` point.
  */
 export function toAePoint(
   metric: MetricName,
@@ -428,7 +438,16 @@ export function toAePoint(
     writeBlob(column, value);
   }
 
+  // double1 = count: universal, "1 per point unless pre-aggregated" (§4's
+  // reading rule — `SUM(_sample_interval * double1)` is how every count is
+  // read, so a point that never sets it reads back as zero regardless of how
+  // many really happened). This holds for every metric, not only the ones
+  // whose own §5 row happens to list "count" among its Doubles — the
+  // double-side analogue of blob1–3 being universal (T00-D2).
+  doubles[slotOffset(AE_COLUMNS["count"] as string)] = valueBag["count"] ?? 1;
+
   for (const column of def.doubles) {
+    if (column === "count") continue; // handled above, universally
     const value = valueBag[column];
     if (value === undefined) continue;
     const slot = AE_COLUMNS[column];

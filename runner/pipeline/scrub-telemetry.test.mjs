@@ -41,7 +41,7 @@ function faroLog(overrides = {}) {
 // ---- console items are dropped ------------------------------------------------
 
 test("drops a Faro log item tagged as relayed console output", () => {
-  const item = faroLog({ payload: { context: { "hot.kind": "console-error" } } });
+  const item = faroLog({ payload: { context: { "hot.relay": "console-error" } } });
   assert.equal(scrubTelemetry(item), null);
 });
 
@@ -92,7 +92,7 @@ test("stripQueryAndFragment falls back to a cut at the first ?/# for a non-URL v
 
 // ---- redact preview hosts, on a field the query-stripping rule never touches ---
 
-test("redacts a real Tier-2 preview host in a stack-frame filename (no query string involved)", () => {
+test("redacts a real Tier-2 preview host in a stack-frame filename with no query string", () => {
   const item = {
     type: "exception",
     payload: {
@@ -103,6 +103,19 @@ test("redacts a real Tier-2 preview host in a stack-frame filename (no query str
   };
   const scrubbed = scrubTelemetry(item);
   assert.equal(scrubbed.payload.stacktrace.frames[0].filename, "https://<preview>/src/main.js");
+});
+
+test("strips a bundler cache-busting query string from a stack-frame filename too", () => {
+  const item = {
+    type: "exception",
+    payload: {
+      value: "boom",
+      stacktrace: { frames: [{ filename: "https://demos.handsontable.com/src/main.js?t=1758625200001", function: "render" }] },
+    },
+    meta: {},
+  };
+  const scrubbed = scrubTelemetry(item);
+  assert.equal(scrubbed.payload.stacktrace.frames[0].filename, "https://demos.handsontable.com/src/main.js");
 });
 
 test("redacts a preview host on meta.page.url together with the query strip", () => {

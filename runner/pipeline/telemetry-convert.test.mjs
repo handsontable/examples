@@ -92,7 +92,17 @@ test("faroItemToRecord hoists hot.* to resourceAttributes and adds the service.*
   // Structured metadata never lands as a resource attribute.
   assert.equal(record.resourceAttributes["hot.demo_id"], undefined);
   assert.equal(record.resourceAttributes["session.id"], undefined);
-  assert.deepEqual(record.attributes, { "hot.demo_id": "r-react-18-0-0", "session.id": "plid-abc" });
+  assert.deepEqual(record.attributes, {
+    "hot.demo_id": "r-react-18-0-0",
+    "session.id": "plid-abc",
+    "hot.kind": "log",
+  });
+});
+
+test("faroItemToRecord always sets hot.kind from item.type (§3's closed set), overwriting a client-sent value", () => {
+  const item = faroLogItem({ payload: { context: { "hot.kind": "not-a-real-kind" } } });
+  const record = faroItemToRecord(item, { service: SERVICE, receivedAtMs: RECEIVED_AT_MS });
+  assert.equal(record.attributes["hot.kind"], "log");
 });
 
 test("faroItemToRecord clamps the event timestamp to the receive window", () => {

@@ -113,16 +113,23 @@ function faroTimestampMs(item: ScrubbableFaroItem): number | undefined {
 }
 
 /** Faro item → normalised OTLP log record (§6). `item` must already be scrubbed
- *  (T00-D6) — this function trusts every string field it reads. */
+ *  (T00-D6) — this function trusts every string field it reads.
+ *
+ * `hot.kind` is always `item.type` (§3: "the Faro item kind: `exception`,
+ * `log`, `event`, `measurement`"), set here rather than trusted from the
+ * client — it overwrites anything the caller's own context happened to carry
+ * under that key, since `hot.kind`'s contract value set is closed and
+ * `item.type` is the one value the ingest route itself controls. */
 export function faroItemToRecord(item: ScrubbableFaroItem, options: ConvertOptions): NormalisedRecord {
   const merged = { ...(item.payload.context ?? {}), ...(item.payload.attributes ?? {}) };
   const { resourceAttributes, attributes } = hoistAttributes(merged);
+  attributes[ATTR_HOT_KIND] = item.type;
 
   return {
     body: faroBody(item),
     timeUnixNano: msToUnixNano(clampTimestampMs(faroTimestampMs(item), options.receivedAtMs)),
     resourceAttributes: { ...serviceResourceAttributes(options.service), ...resourceAttributes },
-    attributes: Object.keys(attributes).length > 0 ? attributes : undefined,
+    attributes,
   };
 }
 
