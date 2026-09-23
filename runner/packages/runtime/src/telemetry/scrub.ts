@@ -266,6 +266,13 @@ export function scrubTelemetry<T extends Scrubbable>(record: T): T | null {
     }
 
     for (const frame of clone.payload.stacktrace?.frames ?? []) {
+      // Fix round (finding A-M1): an untrusted client can send a `null`/
+      // non-object entry inside `stacktrace.frames` (`{"stacktrace":
+      // {"frames":[null]}}` is valid JSON) — `frame.filename` on a `null`
+      // threw a `TypeError` that escaped every caller as an uncaught `500`,
+      // contradicting this module's own "never a 500" contract. Skipped,
+      // not scrubbed: there is nothing in a non-object frame to redact.
+      if (!frame || typeof frame !== "object") continue;
       // A stack frame's `filename` is a URL-valued field too (a bundler's
       // cache-busting `?t=`/`?v=` query string shows up here as often as on
       // `meta.page.url`), so it gets the same two rules.

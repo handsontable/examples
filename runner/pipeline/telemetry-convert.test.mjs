@@ -11,7 +11,9 @@ import {
   clampTimestampMs,
   faroItemToRecord,
   hoistAttributes,
+  isValidOpenAttrValue,
   msToUnixNano,
+  sanitizeResourceAttributes,
   scrubTelemetry,
 } from "../packages/runtime/dist/telemetry/index.js";
 
@@ -82,6 +84,77 @@ test("hoistAttributes also keeps T06's diagnostic tag keys as structured metadat
     sentry_event_id: "abc123def456",
     versions_fetch_outcome: "ok",
   });
+});
+
+// ---- Fix round (finding A-C1): label/service forgery on the ingest path ----
+
+test("sanitizeResourceAttributes drops an out-of-enum closed-set value, keeps a valid one", () => {
+  const out = sanitizeResourceAttributes({
+    "hot.surface": "o11y",
+    "hot.tier": "zzz", // not in TIERS
+    "hot.ht_major": "18",
+  });
+  assert.deepEqual(out, { "hot.surface": "o11y", "hot.ht_major": "18" });
+});
+
+test("sanitizeResourceAttributes drops an over-length/bad-charset open-set value (hot.framework, hot.outcome)", () => {
+  const tooLong = "F".repeat(3000);
+  const out = sanitizeResourceAttributes({ "hot.framework": tooLong, "hot.outcome": "attacker-<script>" });
+  assert.deepEqual(out, {});
+});
+
+test("isValidOpenAttrValue accepts real framework/outcome shapes, rejects the forged ones from the A-C1 probe", () => {
+  assert.equal(isValidOpenAttrValue("react"), true);
+  assert.equal(isValidOpenAttrValue("react-18"), true);
+  assert.equal(isValidOpenAttrValue("none"), true);
+  assert.equal(isValidOpenAttrValue("F".repeat(3000)), false);
+  assert.equal(isValidOpenAttrValue(""), false);
+});
+
+test("faroItemToRecord: the route's service identity always wins over a client-hoisted service.*/environment — spoof probe from finding A-C1", () => {
+  // The exact probe from the finding: a single item whose own `context`
+  // tries to override `service.name` and `deployment.environment.name`.
+  const spoofed = faroLogItem({
+    payload: {
+      context: {
+        "service.name": "demos-api",
+        "deployment.environment.name": "local",
+        "hot.surface": "o11y",
+        "hot.tier": "zzz",
+        "hot.framework": "F".repeat(3000),
+        "hot.outcome": "<script>document.cookie</script>",
+      },
+    },
+  });
+  const record = faroItemToRecord(spoofed, { service: SERVICE, receivedAtMs: RECEIVED_AT_MS });
+  // The route's own identity, never the client's.
+  assert.equal(record.resourceAttributes["service.name"], "demos-authoring");
+  assert.equal(record.resourceAttributes["deployment.environment.name"], "production");
+  // Out-of-enum / over-length hot.* values are dropped, not stored verbatim.
+  assert.equal(record.resourceAttributes["hot.tier"], undefined);
+  assert.equal(record.resourceAttributes["hot.framework"], undefined);
+  assert.equal(record.resourceAttributes["hot.outcome"], undefined);
+  // A legitimate closed-set value survives untouched.
+  assert.equal(record.resourceAttributes["hot.surface"], "o11y");
+});
+
+test("beaconToRecord: an over-length hot.framework (fw) is dropped, not stored verbatim — same A-C1 probe, lite path", () => {
+  const record = beaconToRecord(
+    {
+      v: 1,
+      s: "embed",
+      demo: "r-react-18-0-0",
+      ht: "18",
+      fw: "F".repeat(3000),
+      n: "TypeError",
+      m: "x",
+      val: null,
+      dev: "desktop",
+      ts: RECEIVED_AT_MS,
+    },
+    { service: SERVICE, receivedAtMs: RECEIVED_AT_MS },
+  );
+  assert.equal(record.resourceAttributes["hot.framework"], undefined);
 });
 
 function faroLogItem(overrides = {}) {

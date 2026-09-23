@@ -50,6 +50,22 @@ export type Framework = string;
  *  see `metrics.ts`. */
 export type Outcome = string;
 
+/**
+ * Fix round (finding A-C1): `hot.framework` and `hot.outcome` are open sets
+ * by contract, but "open" never meant "free text, any length" — nothing
+ * enforced a bound before this, so a client could hoist a multi-kilobyte
+ * `hot.framework` into a Loki label (risking `max_label_value_length`
+ * rejections that reject a whole packed key, ADR §B.4) or an arbitrary
+ * string into `hot.outcome`. Short, lowercase, dot/underscore/hyphen —
+ * every real value in `config/frameworks.json`, the docs-example framework
+ * ids, and every §5 outcome literal already fits comfortably inside this.
+ */
+export const OPEN_ATTR_VALUE_PATTERN = /^[a-z0-9][a-z0-9._-]{0,47}$/;
+
+export function isValidOpenAttrValue(value: string): boolean {
+  return OPEN_ATTR_VALUE_PATTERN.test(value);
+}
+
 // ---- Resource attribute keys (OTLP), §3 ---------------------------------------
 
 export const ATTR_SERVICE_NAME = "service.name";

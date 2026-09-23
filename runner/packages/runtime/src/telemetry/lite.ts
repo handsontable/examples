@@ -2,7 +2,14 @@
 // standalone mode (ADR §C.5) from `/d` and `/embed`, `navigator.sendBeacon`,
 // `application/json`, at most 2 KB.
 
-import { HT_MAJORS, DEVICE_CLASSES, type DeviceClass, type Framework, type HtMajor } from "./attrs.js";
+import {
+  HT_MAJORS,
+  DEVICE_CLASSES,
+  isValidOpenAttrValue,
+  type DeviceClass,
+  type Framework,
+  type HtMajor,
+} from "./attrs.js";
 
 export const LITE_SURFACES = ["embed", "d"] as const;
 export type LiteSurface = (typeof LITE_SURFACES)[number];
@@ -100,7 +107,11 @@ export function isValidLitePayload(data: unknown): data is LiteBeaconPayload {
   if (!isLiteSurface(d["s"])) return false;
   if (typeof d["demo"] !== "string" || d["demo"].length === 0) return false;
   if (!isHtMajor(d["ht"])) return false;
-  if (typeof d["fw"] !== "string" || d["fw"].length === 0) return false;
+  // Fix round (finding A-C1): `fw` was only checked for "non-empty string",
+  // with no upper bound — a client could hoist a multi-kilobyte value into
+  // the `hot.framework` Loki label. Same bounded charset every other §3
+  // `hot.*` open-set value now uses (`convert.ts#sanitizeResourceAttributes`).
+  if (typeof d["fw"] !== "string" || !isValidOpenAttrValue(d["fw"])) return false;
   if (!isDeviceClass(d["dev"])) return false;
   if (typeof d["ts"] !== "number" || !Number.isFinite(d["ts"])) return false;
   if (d["m"] !== undefined && (typeof d["m"] !== "string" || d["m"].length > LITE_MESSAGE_MAX)) return false;
