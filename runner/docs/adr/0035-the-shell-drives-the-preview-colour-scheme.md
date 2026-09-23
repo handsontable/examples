@@ -81,4 +81,5 @@ the authored file map.
 - `examples/` on master feeds only the `next` bucket. Buckets 17 and 18 source from the frozen
   `prod-examples/17` and `/18` branches, so the starter half of this decision does not reach
   production until it is backported there (ADR-0029). The runner half — the bridge — ships from
-  master to every bucket at once.
+  master to every bucket at once. Backported: `prod-examples/17` (e983b943e) and `/18`
+  (df1c6c5da).

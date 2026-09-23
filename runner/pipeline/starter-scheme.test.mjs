@@ -22,17 +22,17 @@ const BUCKETS = join(HERE, "..", "apps", "authoring", "public", "starter-example
  * string `themeName` plus the shipped stylesheet, whose `.ht-theme-main` rule
  * already pins `color-scheme: light`. Nothing to declare, nothing to check.
  *
- * 17 and 18 are `todo`, and the reason is structural rather than an excuse.
- * `examples/` on master feeds only the `next` bucket; those two source from the
+ * `examples/` on master feeds only the `next` bucket; 17 and 18 source from the
  * frozen `prod-examples/17` and `/18` branches, which a master PR cannot reach
- * (ADR-0029). They are listed rather than omitted so the gap is on the record and
- * turns into a real failure the moment someone drops the flag after backporting.
+ * (ADR-0029). DEV-2561 was backported to both, so all three are real gates.
+ *
+ * That makes this a lagging indicator for 17 and 18: the artifacts only change
+ * when the generated `chore/starter-example-buckets` PR merges, after the
+ * `prod-examples/<major>` merge. A future scheme change that misses one of those
+ * branches goes red here once its bucket is regenerated. The answer then is the
+ * missing backport, never a `todo` put back on the bucket.
  */
-const THEME_API_BUCKETS = [
-  { bucket: "next" },
-  { bucket: "17", todo: "pending the prod-examples/17 backport (ADR-0029)" },
-  { bucket: "18", todo: "pending the prod-examples/18 backport (ADR-0029)" },
-];
+const THEME_API_BUCKETS = ["next", "17", "18"];
 
 /** How a scheme can legitimately be stated. The spread is what the general-purpose
  *  starters use; `setColorScheme` and a `colorScheme:` key are what the ones that
@@ -46,11 +46,11 @@ function declaresScheme(artifact) {
   );
 }
 
-for (const { bucket, todo } of THEME_API_BUCKETS) {
+for (const bucket of THEME_API_BUCKETS) {
   const dir = join(BUCKETS, bucket);
   const names = readdirSync(dir).filter((n) => n.endsWith(".json") && n !== "manifest.json");
 
-  test(`bucket ${bucket}: every starter declares a colour scheme`, { todo }, () => {
+  test(`bucket ${bucket}: every starter declares a colour scheme`, () => {
     const missing = [];
     for (const name of names) {
       const artifact = JSON.parse(readFileSync(join(dir, name), "utf8"));

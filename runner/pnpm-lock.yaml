@@ -45,8 +45,8 @@ importers:
         specifier: ^0.8.2
         version: 0.8.3
       handsontable:
-        specifier: 18.1.0
-        version: 18.1.0
+        specifier: 18.1.1
+        version: 18.1.1
       react:
         specifier: ^19.0.0
         version: 19.2.7
@@ -1839,8 +1839,8 @@ packages:
     resolution: {integrity: sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==}
     engines: {node: 18 || 20 || >=22}
 
-  handsontable@18.1.0:
-    resolution: {integrity: sha512-23S/Jny67NRevaZgTXSAonhFW28du3J6DJm/TDN35Gj5hpztUxlRMEG0SugEEf0lQxdDhLRmz81Ikkt7xvuNRA==}
+  handsontable@18.1.1:
+    resolution: {integrity: sha512-8vz/jp96m0aJQPRepOBoImsC/bLe9mE/O4nOB6mll9DCjN5nqXHX9LV4zu/XDpD89TKJwtA+TNhVUkFQxW+q7w==}
 
   hono@4.12.28:
     resolution: {integrity: sha512-YwUvVpSF7m1yOblFPrU3Hbo8XhPheBoiyfGuII6z19LnOr6JpDnyyp7LFNrfV56wS8tpvtBFGRISHN02pDdLOA==}
@@ -3645,7 +3645,7 @@ snapshots:
       minipass: 7.1.3
       path-scurry: 2.0.2
 
-  handsontable@18.1.0: {}
+  handsontable@18.1.1: {}
 
   hono@4.12.28: {}
 
