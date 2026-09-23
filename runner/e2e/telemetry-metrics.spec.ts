@@ -200,6 +200,14 @@ test.describe("Browser metrics catalogue, live (T07)", () => {
     expect(point?.context?.["hot.tier"]).toBe("1");
     expect(point?.context?.["hot.framework"]).toBe("react");
     expect(point?.context?.["hot.outcome"]).toBe("ready");
+    // T07 fix round: hot.bucket now survives the real browser scrub — a
+    // non-empty string proves it reached the wire, not the `attrs.ts` unit
+    // test's own literal input (this is the one attribute this Tier-1 flow
+    // naturally sets; `reason`/`fingerprint` are proven against the real
+    // `scrubTelemetry`/`toAePoint` functions in
+    // `pipeline/telemetry-ae-only-attrs.test.mjs`, since neither a version
+    // switch nor a compile error is part of this spec's flow).
+    expect(typeof point?.context?.["hot.bucket"] === "string" && point.context["hot.bucket"].length > 0).toBe(true);
     const durationMs = point?.values?.duration_ms;
     expect(typeof durationMs === "number" && durationMs >= 0).toBe(true);
     test.info().annotations.push({

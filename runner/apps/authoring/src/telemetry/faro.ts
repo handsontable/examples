@@ -26,6 +26,9 @@ import {
   ATTR_HOT_HT_MAJOR,
   ATTR_HOT_OUTCOME,
   ATTR_HOT_DEMO_ID,
+  ATTR_HOT_BUCKET,
+  ATTR_HOT_REASON,
+  ATTR_HOT_FINGERPRINT,
   type EventName,
   type HotAttrs,
   type MetricName,
@@ -43,18 +46,29 @@ const beforeSend: BeforeSendHook = (item) =>
   scrubTelemetry(item as unknown as ScrubbableFaroItem) as TransportItem | null;
 
 /**
- * `scrub.ts#allowlistAttributes` keeps only the dotted OTLP keys
+ * `scrub.ts#allowlistAttributes` keeps only the allowlisted keys
  * (`attrs.ts#ALLOWED_ATTRIBUTE_KEYS`) — a bare `HotAttrs` key like `surface`
  * is not one of them and is silently dropped by the scrubber that runs in
  * `beforeSend`, BEFORE the request ever leaves the browser (confirmed with a
  * live capture against a real `vite preview` build, not assumed — see T06-D1
- * in the task Outcome). This maps the six `HotAttrs` fields that DO have a
- * dotted resource-attribute equivalent onto it, so they survive; every other
- * `HotAttrs` field (`reason`, `fingerprint`, `route_class`, `model`,
- * `provider`, `device`, `bucket`, `kind`, `ref`, `area`) has no such
- * equivalent today and is sent anyway, unmapped, for T00-D1's own reason
- * (forward-compatible: an ingest-side allowlist fix needs no browser-side
- * change) — T06-D1 documents this as a blocking gap for the controller.
+ * in the task Outcome). This maps:
+ *
+ * - the six `HotAttrs` fields with a dotted RESOURCE-attribute equivalent
+ *   (`surface`→`hot.surface` etc) — survive as §3 resource attributes/Loki
+ *   labels.
+ * - `bucket`/`reason`/`fingerprint` → `hot.bucket`/`hot.reason`/
+ *   `hot.fingerprint` (T07 fix round, controller ruling) —
+ *   `attrs.ts#AE_ONLY_ATTRIBUTE_KEYS`, T02-D4's AE-only channel
+ *   (`workers/o11y/src/normalise/browser-attrs.ts#readAeOnlyAttrs`): these
+ *   survive the allowlist too, but `convert.ts#hoistAttributes` never hoists
+ *   them into a stored record — only `toAePoint` (via `readAeOnlyAttrs`) ever
+ *   reads them. NOT a resource attribute, NOT a Loki label — see
+ *   `AE_ONLY_ATTRIBUTE_KEYS`'s own doc comment for why.
+ *
+ * Every other `HotAttrs` field (`route_class`, `model`, `provider`, `device`,
+ * `kind`, `ref`, `area`) still has no equivalent and is sent unmapped — none
+ * of them has a browser call site yet (T02-D4's remaining six AE-only
+ * columns), so extending the allowlist for them now would be untested.
  */
 const DOTTED_ATTR_KEY: Partial<Record<string, string>> = {
   surface: ATTR_HOT_SURFACE,
@@ -63,6 +77,9 @@ const DOTTED_ATTR_KEY: Partial<Record<string, string>> = {
   ht_major: ATTR_HOT_HT_MAJOR,
   outcome: ATTR_HOT_OUTCOME,
   demo_id: ATTR_HOT_DEMO_ID,
+  bucket: ATTR_HOT_BUCKET,
+  reason: ATTR_HOT_REASON,
+  fingerprint: ATTR_HOT_FINGERPRINT,
 };
 
 /** Stringify a `HotAttrs` bag for Faro's `Record<string, string>`

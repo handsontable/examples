@@ -465,4 +465,110 @@ E2E_LIVE=1 E2E_TELEMETRY=1 npx playwright test e2e/telemetry-metrics.spec.ts exi
 - The `hmr.roundtrip_ms` Angular row is a static-config read, not a live
   measurement (time budget). The table says so.
 
+### Fix round — the confirmed attribute drop
+
+Merged `feat/runner-observability` once more first (T02 had landed since Phase
+2: `ccc3d7679`, "Merge T02: o11y Worker ingest"). Clean merge, no conflicts.
+
+**Root cause, read from T02-D4 (`runner/tasks/o11y/T02-o11y-ingest.md`) and
+`workers/o11y/src/normalise/browser-attrs.ts`.** `HotAttrs` fields with no §3
+resource-attribute/structured-metadata slot (`bucket`, `reason`, `fingerprint`,
+and six more T02-D4 named but no browser call site emits yet) have an
+AE-only transport: the o11y worker reads them off a Faro item's raw wire
+`context`/`attributes` under a `hot.<column>` key, BEFORE its own re-run of
+`scrubTelemetry`. But `apps/authoring/src/telemetry/faro.ts#DOTTED_ATTR_KEY`
+never mapped `bucket`/`reason`/`fingerprint` to that `hot.<column>` form — they
+went out as bare `bucket`/`reason`/`fingerprint` keys, which
+`attrs.ts#ALLOWED_ATTRIBUTE_KEYS` has never listed in any form. Faro's
+`beforeSend` (the browser's own `scrubTelemetry` pass) therefore stripped all
+three before the request ever left the browser — the request body itself
+never carried them, so nothing server-side could have recovered them either.
+
+**The fix, exactly per the controller's ruling — not a resource attribute, not
+a Loki label:**
+
+- `packages/runtime/src/telemetry/attrs.ts`: new `ATTR_HOT_BUCKET`/
+  `ATTR_HOT_REASON`/`ATTR_HOT_FINGERPRINT` (`"hot.bucket"`/`"hot.reason"`/
+  `"hot.fingerprint"` — the exact strings `browser-attrs.ts#AE_ONLY_KEYS`
+  already reads) and a new `AE_ONLY_ATTRIBUTE_KEYS` closed set, added to
+  `ALLOWED_ATTRIBUTE_KEYS` alongside `RESOURCE_ATTRS`/`STRUCTURED_METADATA_KEYS`/
+  `DIAGNOSTIC_TAG_KEYS` — the same non-hoisted-but-scrub-surviving treatment
+  `DIAGNOSTIC_TAG_KEYS`'s own doc comment already established (T06 fix round
+  D1): `convert.ts#hoistAttributes` only recognises `RESOURCE_ATTR_KEYS` and
+  `STRUCTURED_KEY_SET`, so these three keys survive the scrub allowlist (both
+  passes) but are never hoisted into a stored `resourceAttributes`/
+  `attributes` field — confirmed by reading `hoistAttributes`, not assumed.
+  Scoped to only the three fields this fix round needs; the other six of
+  T02-D4's nine AE-only columns (`route_class`, `model`, `provider`, `device`,
+  `ref`, `area`) have no browser emitter yet, so adding them now would be
+  untested allowlist surface.
+- `apps/authoring/src/telemetry/faro.ts`: `DOTTED_ATTR_KEY` gains
+  `bucket: ATTR_HOT_BUCKET`, `reason: ATTR_HOT_REASON`,
+  `fingerprint: ATTR_HOT_FINGERPRINT`.
+- **Not touched**: `docs/observability-contract.md` — per the controller's
+  ruling ("edit the contract doc in the same commit only if a documented name
+  changes"), and none of these three names was previously documented in §3's
+  prose (they are §4/§5 `HotAttrs`/AE-column concepts gaining a transport path,
+  not new resource attributes or Loki labels the doc's attribute table would
+  need to grow). `pipeline/telemetry-contract.test.mjs` needed no change and
+  stays green — its existing §3 assertions each check one specific, unchanged
+  paragraph/set pair and none of them examines `ALLOWED_ATTRIBUTE_KEYS`'s full
+  membership.
+
+**New test — `pipeline/telemetry-ae-only-attrs.test.mjs`** (2 cases, both
+driving real functions, no mocks):
+
+1. `scrubTelemetry` (the exact function Faro's `beforeSend` runs in the
+   browser, and the o11y worker re-runs at ingest, T00-D6's order) on a
+   Faro-item-shaped object whose context already carries the dotted
+   `hot.bucket`/`hot.reason`/`hot.fingerprint` keys `faro.ts#attrsToContext`
+   now produces — proves the scrub keeps them. `apps/authoring/src/telemetry/
+   faro.ts` itself cannot be imported under `node --test` (pulls in
+   `@grafana/faro-web-sdk` + `import.meta.env` — the same constraint
+   `pipeline/faro-config.test.mjs`'s own header documents), so this is the
+   real "facade → beforeSend/scrub" path as far as `node --test` can drive it;
+   `attrsToContext`'s own remap (the one line upstream of `scrubTelemetry`)
+   is a reviewed, one-line mapping the test's literal `hot.*` context keys
+   stand in for. The LIVE browser half of this same proof is in
+   `e2e/telemetry-metrics.spec.ts`'s Tier-1 case (below).
+2. The scrubbed context through the real ingest conversion —
+   `readAeOnlyAttrs` (`workers/o11y`, T02-D4's channel) → `toAePoint` —
+   asserting the resulting `AePoint`'s blobs directly: `bucket` in `blob16`
+   (index 15, `preview.ready_ms`), `reason` in `blob9` (index 8,
+   `version.switch`), `fingerprint` in `blob11` (index 10,
+   `sandpack.compile_error`).
+
+**Shown failing before the fix**: reverted `AE_ONLY_ATTRIBUTE_KEYS` out of
+`ALLOWED_ATTRIBUTE_KEYS`, rebuilt, re-ran — both cases failed for the right
+reason (test 1: `scrubbed.payload.context["hot.bucket"]` etc came back
+`undefined`; test 2: cascaded into `readAeOnlyAttrs` returning `{}` for these
+fields, and `toAePoint`'s blob16/blob9/blob11 landing at `""`, the
+default-unfilled-slot value) — then restored, rebuilt, re-ran clean.
+
+**Real browser path, live**: extended `e2e/telemetry-metrics.spec.ts`'s Tier-1
+case with an assertion that the captured `preview.ready_ms` payload's
+`context["hot.bucket"]` is a non-empty string — re-ran live
+(`E2E_LIVE=1 E2E_TELEMETRY=1`, own port block + local `wrangler dev`): passed,
+confirming `hot.bucket` now actually reaches `/telemetry/collect` from a real
+built bundle, not only the pipeline test's direct function calls.
+`reason`/`fingerprint` are not independently E2E-verified (neither a version
+switch nor a compile error is part of this spec's existing flow, and adding
+either was out of proportion for a single fix round) — the scrub mechanism
+that was broken is identical for all three keys (one shared
+`ALLOWED_ATTRIBUTE_KEYS` allowlist), so the `bucket` live proof plus test 1's
+direct `scrubTelemetry` proof for all three together cover the fix.
+
+**Verify — commands run, exit codes** (`rtk proxy <command>; echo "exit=$?"`,
+from `runner/`):
+
+```
+rtk proxy pnpm --filter @handsontable/demo-runtime build                      exit=0
+rtk proxy pnpm -r run typecheck                                                exit=0
+rtk proxy pnpm test                                                            exit=1 (1485 tests, 1482 pass, 1 pre-existing baseline failure, 2 pre-existing todo — every T07 case passes)
+rtk proxy node --experimental-strip-types --test pipeline/telemetry-ae-only-attrs.test.mjs pipeline/telemetry-contract.test.mjs pipeline/scrub-telemetry.test.mjs pipeline/o11y-normalise.test.mjs pipeline/browser-metrics.test.mjs pipeline/faro-config.test.mjs   exit=0 (73/73)
+( cd workers/o11y && rtk proxy npx wrangler deploy --dry-run )                 exit=0
+rtk proxy node scripts/check-test-presence.mjs feat/runner-observability       exit=0 (6 source files, matching test change)
+E2E_LIVE=1 E2E_TELEMETRY=1 npx playwright test e2e/telemetry-metrics.spec.ts -g "Tier-1"   exit=0 (hot.bucket confirmed on the live captured payload)
+```
+
 Status: **done**.
