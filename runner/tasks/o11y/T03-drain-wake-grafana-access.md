@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | done — see Outcome: T03-D2 (exit criterion 1 fails on the sandbox platform) needs controller escalation before ADR-0041 is treated as accepted |
+| Status | done — T03B (part B): fixes F1–F4 shipped with tests, and the sandbox probe re-run (T03-D11..D16) confirms exit criterion 1 now PASSES on the real platform — T03-D2's root cause (the drain's NDJSON-vs-OTLP-envelope bug) was fixed on this branch's own base before this pass started; criteria 2, 7, 13 also verified on the real platform, see Outcome |
 | Size | L |
 | Depends on | T01, T02 |
 | Blocks | T09 (live data path), T10, T11 |
@@ -99,25 +99,31 @@ Full narrative, every command/output, and the sandbox-probe transcript are
 in `.superpowers/sdd/README/T03-report.md` (outside this directory, per
 COMMON.md) — this section is the condensed record.
 
-**Mid-task controller change**: the sandbox probe (a)–(e) below was
-dispatched and completed (with cleanup) under this task's original
-instructions before a controller message arrived splitting the work into
-"phase A: local only" (this pass) and a future "phase B: probes." The
-probe work below is therefore **already done**, not "pending phase B" —
-recorded here for the controller's own review rather than repeated. No
-new sandbox probe was started or is in flight after the split message
-arrived, per its own instruction.
+**Phase A / Phase B split**: the sandbox probe (a)–(e) below was first
+dispatched and run under this task's original instructions (phase A),
+before a controller message split the work into "phase A: local only"
+and "phase B: probes" — recorded then as done under the pre-split
+instructions. **T03B (this section's second update)** is phase B proper:
+four follow-up fixes (F1–F4, see "T03B: fixes F1–F4" below) plus a full
+re-run of the sandbox probe (a)–(e) against the real platform, now that
+T03-D2's root cause (below) is fixed. The (a)/(b)/(c)/(d)/(e) content
+below is REPLACED with this re-run's real results, not appended
+alongside the phase-A attempt, which never got past T03-D2.
 
-**Controller attention required before this is treated as accepted**:
-exit criterion 1 does not pass — reproduced **both** on the sandbox
-platform with the bucket-scoped R2 credential AND locally against
-same-host MinIO (T03-D2, refined with the local reproduction's more
-precise root-cause signature below) — ADR-0041 §L's own trigger
-condition. Everything else (ledger, drain, symbolication, wake
-orchestration, Grafana proxy, Access gating, the fixture replay, the
-out-of-order-window measurement, all unit tests) is built, tested and
-passing, including fresh local, non-probe evidence gathered after the
-phase split (see "Local acceptance walkthrough" below).
+**T03-D2 status, corrected**: exit criterion 1 **now passes** on the
+sandbox platform. The phase-A/local investigation below is kept for the
+record — it correctly identified the mechanism (the drain sent Loki bare
+NDJSON instead of one OTLP `{"resourceLogs":[...]}` envelope, so Loki
+accepted the push with 204 but ingested nothing) — but its own closing
+paragraph ("very likely a Loki-shutdown-sequencing bug or config
+interaction") was WRONG: T03-D2's own separate investigation (fix commit
+`466e34b7a`, already merged into this branch's base before T03B started)
+confirmed and fixed the real cause — the request body, not Loki's
+shutdown ordering. The "context canceled" lines this section describes
+are shutdown noise present on every passing run too, exactly as T03-D2's
+report says. T03B's own real-platform re-run (T03-D11 below) confirms
+this directly: a real wake produces a real new `index/index/.../...tsdb.gz`
+object and a real `state/wakes/<id>/clean` marker.
 
 ### What was built
 
@@ -387,6 +393,103 @@ does not build a local Slack capture server (T03-D7).
   either). Flagged for whoever next needs that distinction (most likely
   T04's alerting, or a future Observability-self dashboard panel).
 
+### T03B: fixes F1–F4 (phase B, part 1)
+
+Worktree `/Users/amedrygal/Code/examples-wt/T03B`, branch
+`feat/o11y/T03B-probes`. Full narrative and every command/output in
+`.superpowers/sdd/README/T03B-report.md`.
+
+- **F1 (`drain/drain.ts#dropOldRecords`)**: T03-D2's other finding — one
+  record older than Loki's `reject_old_samples_max_age: 7d` 400s the
+  WHOLE push, and `drainKey` maps every 400 to `rejected` (never
+  retried), losing every good record in that key too. `drainKey` now
+  drops individual `logRecords` older than 7d minus a 15-minute margin
+  BEFORE pushing, counts them on the (previously-unused) `value` double
+  of the `o11y.drain` point — no metric-registry edit needed — and still
+  pushes the good siblings. A `"0"`/absent `timeUnixNano` is never
+  treated as an ancient 1970 timestamp (Loki falls back to observed
+  time). Tests in `pipeline/o11y-drain.test.mjs` (3 new), confirmed red
+  with the fix reverted.
+- **F2 (`grafana/proxy.ts`)**: a visit wake with an empty backlog SIGTERMed
+  itself ~20s after boot, because a request that only ever saw the
+  waking page (box still booting) recorded no activity at all —
+  `#finishDrain`'s quiet check (box.ts) read `lastGrafanaActivityMs() ===
+  null` and stopped the box the person just opened. `handleGrafana` now
+  calls `box.noteVisitorActivity()` in the not-ready (waking-page) branch
+  too — the browser's own `meta refresh` poll IS a real HTTP request to
+  `/grafana/*`. Proven with a NEW end-to-end test in `o11y-wake.test.mjs`
+  driven through the REAL `handleGrafana` handler (not a direct
+  `noteVisitorActivity()` call, which would pass even with the bug) —
+  confirmed red with the fix reverted, alongside the existing
+  `o11y-grafana-proxy.test.mjs` assertion, flipped from asserting the old
+  (wrong) behaviour.
+- **F3 (`inbox/ledger.ts#resolveOverWakes`)**: every wake that ingests
+  nothing (an empty backlog/visit wake) never gets a Loki index upload,
+  so shutdown.sh correctly never writes the marker — but the ledger
+  counted every one of these as "unclean," inflating exit criterion 12's
+  count for a wake that lost nothing (nothing was ever provisional). A
+  wake with zero provisional keys EVER now resolves clean without
+  requiring the marker; a wake that DID push data still requires the
+  real marker (T01's C1 guarantee unchanged). `containers/o11y/local/
+  stop-roundtrip.mjs` gained a "run 1b (zero ingest)" case proving the
+  container-level half of this contract (no push at all → still no
+  marker, confirmed unaffected by F3). T03B-D1: a Loki that received
+  literally zero writes this wake exits 1 on SIGTERM (every other case
+  in that script exits 0) — recorded as evidence, not asserted, since the
+  ledger never reads the container's exit code.
+- **F4 (`pipeline/o11y-symbolicate.test.mjs`)**: the exit-criterion-5 test
+  used to read whatever `apps/authoring/dist` happened to exist —
+  skipped (silently green) when absent, failed when present but mapless.
+  It now builds its own minimal one-file fixture with a real
+  `vite build --sourcemap` into a fresh temp dir every run (resolving
+  the authoring app's own `vite` via its manifest, the same pattern
+  `pipeline/vite-allowed-hosts.test.mjs` already uses) — deterministic,
+  fast (~120–150ms including the real build), and verified to still pass
+  with `apps/authoring/dist` absent entirely. Added a second real-build
+  case proving the Babel-chunk skip against a real (non-trivial) map, not
+  only the hand-built one-mapping map the existing unit test uses.
+
+Verify (from `runner/`, all `rtk proxy`): `pnpm install` exit=0;
+`pnpm --filter @handsontable/demo-runtime build` exit=0; `pnpm -r run
+typecheck` exit=0; `pnpm test` exit=1 (1662 pass / 1 known baseline
+failure `theme-presets-version` / 2 todo — every o11y-* test, including
+every new one, passes); `node scripts/check-test-presence.mjs
+feat/runner-observability` exit=0 ("5 source file(s) changed, with a
+matching test change"); `( cd workers/o11y && npx wrangler deploy
+--dry-run )` exit=0.
+
+### T03B: (d) — a console.log JSON line through Cloudflare's OTLP export
+
+**Answer, from a real captured export (not inferred)**: a Worker's own
+`console.log(JSON.stringify({...}))` line (`workers/api/src/telemetry/
+lines.ts#logRequestLine`'s exact shape) arrives through Cloudflare's real
+OTLP log export as **opaque body TEXT** — `body.stringValue` is the raw
+JSON string. `attributes` on that log record carries ONLY Cloudflare's
+own generic wrapper fields (`name: "log"`,
+`cloudflare.invocation.sequence.number`), never one of the app's own
+fields. Before this fix, T02's normaliser (`hoistAttributes`) would never
+see `cf.ray`/`session.id`/`hot.demo_id` at all for this shape — silently
+violating ADR §E.4's own operational-log rule ("operational logs may
+carry a page-load id, a demo id and a cf-ray as structured metadata").
+
+Captured via a real Workers Observability logs destination, created
+through the API (`POST /accounts/.../workers/observability/destinations`,
+never the dashboard — the dashboard-only path the docs describe was
+avoided on purpose so this is reproducible from a script), pointed back
+at the probe worker's own raw-capture route, so the body Loki-bound is
+literally what Cloudflare's export sent, before this Worker's own
+normalise/otlp.ts ever touches it.
+
+**Fix**: `normalise/otlp.ts#tryParseJsonBodyAttrs` parses a JSON-object
+body and merges its keys into the SAME attribute bag a real OTLP
+attribute would land in — the existing `hoistAttributes` allowlist (never
+a second, parallel one) decides label vs. structured metadata vs.
+dropped. A no-op for a non-JSON-object body (a plain `console.log`
+string, the auto-generated invocation-log line), unchanged. Test +
+scrubbed real-shape fixture in `pipeline/o11y-normalise.test.mjs` /
+`pipeline/fixtures/otlp/json/console-log-line.json`, confirmed red with
+the fix reverted.
+
 ### Sandbox probe
 
 Deployed `o11y-probe-t03` to the sandbox account
@@ -482,6 +585,137 @@ account `e17e41cc82bda15dfa63960aa172fb87`:
   needed.
 - **Not deleted, by design** (dispatch override): the
   `t03-retention-clock-test` lifecycle rule and its two objects — see (e).
+- **Not deleted**: the R2 bucket `o11y-probe-t03-loki` itself and the
+  probe API token/R2 key — the user deletes these (COMMON.md).
+
+### T03B: sandbox probe re-run (phase B) — criteria 1, 2, 7, 13
+
+Deployed `o11y-probe-t03b` to the sandbox account
+(`e17e41cc82bda15dfa63960aa172fb87`), `--config wrangler.probe.jsonc`
+(throwaway, never committed — deleted at the end of this pass, along with
+`probe-index.ts`), after `wrangler whoami`. `O11Y_ENV: "production"` (not
+`"local"` — `"local"` routes the container's S3 endpoint at
+`host.docker.internal`, which does not exist on the sandbox platform).
+The same single bucket `o11y-probe-t03-loki` for all three R2 bindings
+(T03-D8's precedent). Real credentials from `~/.config/o11y-probe/env`
+used only for probe commands, never printed (one self-chosen probe
+secret was accidentally echoed in an API response mid-session and
+rotated immediately — see the T03B report).
+
+**(a) Exit criterion 1 — PASSES.** Pushed 12 real records through
+`/telemetry/v1/logs` (the real gates/normalise/pack pipeline, not a
+shortcut), waited for pack, woke the box (`backlog`), let the drain run
+to completion. Result: a genuinely NEW index object
+(`index/index/20719/1790181658-cloudchamber-....tsdb.gz`) and the clean
+marker (`state/wakes/<wakeId>/clean`), both confirmed present via a
+direct R2 listing. Wake-to-drain-complete: 18s; box fully stopped by 24s.
+This directly confirms T03-D2's fix (already on this branch's base)
+holds on the real platform, not just locally.
+
+**(b) Exit criterion 2 — PASSES, fully (mechanism AND the replay-equality
+check phase A could not reach).** Pushed 6 canary records (one packed
+object), woke the box, polled until the key was marked `provisional`
+(written-keys emptied) but the box had NOT yet stopped, and called
+`destroy()` (real SIGKILL) in that window. `resolveWakes()` afterward
+correctly found no marker and reopened the key back to `written`. A
+fresh wake then drained it cleanly (marker present). Queried the real
+box's Loki directly:
+  - Plain log query (`{service_name="demos-api"} |= "c2kill"`): exactly
+    6 streams, one value each — 6 lines total, matching the 6 pushed
+    records exactly once.
+  - `count_over_time({service_name="demos-api"} |= "c2kill" [6h])`: 6
+    series, summing to 6.0.
+  Both equal a single clean replay — no duplication survived the real
+  SIGKILL-mid-drain + reopen + replay cycle.
+
+**(c) Exit criterion 7 — PASSES at both 1× and 10×.** Interpretation used
+(traffic-baseline.md explicitly asks this be stated): the `worker`
+tenant's volume driver is `workers/api/src/telemetry/lines.ts#logRequestLine`
+— one line per non-proxy API request. The baseline's own countable
+non-proxy request types (sessions started + builds + share/embed views +
+AI questions) sum to ≈454/day ≈ 19/hour; rounded to 20/hour as the 1×
+figure, 200/hour at 10×. Both pushed as synthetic OTLP records spread in
+EVENT-TIME order across a 60-minute window (T03-D1: Loki's out-of-order
+window is 60 minutes relative to the stream's own high-water mark — a
+non-monotonic or too-old-behind push would 400).
+  - 1× (20 records, one 657-byte packed object): wake-to-drain-complete
+    **43s**.
+  - 10× (200 records, one 3166-byte packed object — still nowhere near
+    the 1 MB per-push cap): wake-to-drain-complete **49s**.
+  Both comfortably inside the 5-minute budget; wake-to-ready time (~9–18s)
+  dominates over drain time, matching T01's own prior finding — 10×
+  the record count added only ~6s. `wrangler tail --format json` during
+  the 10× run captured real per-invocation CPU: max 14ms (an `isAwake`
+  RPC call), DO alarm ticks (`drainStep`) up to 8ms — both far under the
+  `120000` `limits.cpu_ms` ceiling. Caveat: this capture includes this
+  probe's OWN diagnostic polling overhead (23 `/probe/backlog` calls
+  etc.), not only what a real wake would generate — the real per-wake
+  invocation count is smaller than what was captured.
+  - **Cost model** (`workers/api/src/budget.ts#RATE`/`INSTANCE`,
+    `standard-1`: 4 GiB mem, 0.5 vCPU, 8 GB disk; mem+disk bill on
+    provisioned size for every awake second, CPU on actual use):
+    mem+disk ≈ 4×0.0000025 + 8×0.00000007 ≈ $0.00001056/awake-second.
+    At ~720 hourly-triggered wakes/month (the 60-minute backlog-age
+    threshold dominates wake FREQUENCY, not volume — 10× the data did
+    not meaningfully change wake count, only added ~6s/wake):
+    1×: 720 × 43s × $0.00001056 ≈ **$0.33/month**.
+    10×: 720 × 49s × $0.00001056 ≈ **$0.37/month**.
+    CPU cost is negligible against this (sub-cent/month at the measured
+    per-invocation rates). Both are far under the $10/month limit, at
+    either volume — criterion 7 passes with large headroom. (Egress and
+    Workers-request costs are also negligible at this record/byte scale,
+    not itemised separately.)
+
+**(d)** — see "T03B: (d)" above (answered with a real captured export,
+fix shipped).
+
+**(e) Exit criterion 13 (retention)** — the phase-A `t03-retention-clock-test`
+lifecycle rule and its two objects (created 2026-09-23T14:15:22Z, 1-day
+expiry) are still active and present as of this pass
+(2026-09-23T19:29:33Z — the rule has not yet had a full day to act).
+Confirmed via `wrangler r2 bucket lifecycle list --config
+wrangler.probe.jsonc --jurisdiction eu` (rule present, enabled) and a
+direct R2 listing (`t03-retention-clock-test/probe-1.txt`,
+`t03-retention-clock-test/probe-2.txt`, both still present, sizes
+unchanged). Left in place for T11 to check after
+~2026-09-24T14:15Z, per the original dispatch override — no new rule
+added.
+
+**Resources created and deleted this pass** (all prefixed
+`o11y-probe-t03b`, sandbox account `e17e41cc82bda15dfa63960aa172fb87`):
+- Worker `o11y-probe-t03b` — deleted (`DELETE /workers/scripts/o11y-probe-t03b?force=true`
+  → success; confirmed via a follow-up request to its own `workers.dev`
+  URL, now 404).
+- Container application `o11y-probe-t03b-grafanabox`
+  (`a0381226-e35e-4164-8857-99eebfefbdbc`) — deleted (`DELETE
+  /containers/applications/<id>` → 200, "has been deleted").
+- Registry image (same tag) — **not confirmed deletable**: `wrangler
+  containers images list` returned `Forbidden` with this token, same as
+  phase A's own finding — the container application referencing it is
+  gone.
+- Workers Observability logs destination `o11y-probe-t03b-selftest`
+  (created via `POST /workers/observability/destinations`, an
+  `opentelemetry-logs` logpush job) — deleted (`DELETE
+  /workers/observability/destinations/o11y-probe-t03b-selftest` →
+  success).
+- R2 objects: every object this pass wrote (`inbox/*` ×4, `index/*` ×4,
+  `state/*` ×4, `worker/*` ×4 — Loki's own chunk-store objects, a
+  category phase A's cleanup did not need to touch since it never got a
+  successful ingest — `probe-capture/otlp/*` ×152 from the (d)
+  self-export capture) — all deleted via a bulk-delete probe route,
+  confirmed by a follow-up listing showing ONLY the two
+  `t03-retention-clock-test/` objects remaining.
+- 4 Worker secrets (`LOKI_S3_ACCESS_KEY_ID`, `LOKI_S3_SECRET_ACCESS_KEY`,
+  `O11Y_EXPORT_SECRET`, `PROBE_SECRET`) — removed with the Worker.
+- Analytics Engine dataset `o11y_probe_t03b_events` — **not deletable**
+  (no delete API, same precedent as T02/T03 phase A), holds only
+  synthetic probe points, ages out under AE's own retention.
+- Rate-limit namespace id `3003` — not a provisioned resource.
+- `wrangler.probe.jsonc`, `probe-index.ts` (local files, never
+  `git add`ed) — deleted from the worktree at the end of this pass;
+  `git status --porcelain` confirmed clean.
+- **Not deleted, by design**: the `t03-retention-clock-test` lifecycle
+  rule and its two objects (phase A's, see (e) above) — left for T11.
 - **Not deleted**: the R2 bucket `o11y-probe-t03-loki` itself and the
   probe API token/R2 key — the user deletes these (COMMON.md).
 
@@ -619,22 +853,38 @@ specifically was completed given (a)'s time cost).
 
 ### Concerns / follow-ups for the controller
 
-- **T03-D2 is the headline concern** — see above. This task's own
-  Verify block and every acceptance criterion phrased as "all through
-  `pnpm o11y:dev`" pass at the *mechanism* level (ledger, drain retry/
-  rejection logic, symbolication, proxy, waking page — all real,
-  platform-tested where the sandbox probe reached them) but the
-  *durability* half of exit criterion 1 does not hold on the one real
-  platform test that exists.
-- Exit criterion 7's cost model is unmeasured at real scale (time
-  constraint, not a design gap) and moot pending T03-D2.
-- The (d) OTLP-JSON-console.log question remains open from T02.
-- `wrangler.jsonc`'s `limits.cpu_ms` (raised to 120000) is an informed
-  guess from partial CPU-per-call data, not a full-batch measurement —
-  revisit once T03-D2 unblocks a real one-hour drain.
-- Local `pnpm o11y:dev` is functionally wired but was not proven
-  reliably fast in this session's own sandboxed Docker environment; the
-  code path is real (confirmed on the actual sandbox platform).
+**Resolved by T03B (part B)**: T03-D2 (exit criterion 1 now passes on
+the real platform), exit criterion 2's full replay-equality check,
+exit criterion 7's cost model (measured at 1× and 10×, both far under
+$10/month), and the (d) OTLP-JSON-console.log question (answered with a
+real captured export, fix shipped). See the T03B sections above and
+`.superpowers/sdd/README/T03B-report.md` for full detail.
+
+- `wrangler.jsonc`'s `limits.cpu_ms` (raised to 120000) is still an
+  informed-guess ceiling, not tuned against a full-batch measurement —
+  T03B's own real batches (20/200 records, one packed object each) used
+  well under 1% of it (max observed per-invocation CPU 14ms). A packed
+  object approaching the 1 MB cap, or many packed objects in one wake,
+  would be a more demanding measurement than this pass's synthetic
+  traffic produced — worth revisiting if real production volume ever
+  approaches that shape.
+- Local `pnpm o11y:dev` is functionally wired but was not re-verified
+  for speed in this pass (T03B worked entirely against the sandbox
+  platform and `node --test`, not `wrangler dev`); the prior finding
+  (code path real, sandboxed-Docker-specific slowness on this dev
+  machine) is unchanged and unre-tested here.
+- T03B's own probe work surfaced one new finding, T03B-D1: a Loki
+  process that received literally zero writes in a wake exits 1 on
+  SIGTERM (every wake that pushed at least one line exits 0) — harmless
+  to the ledger (F3 never reads the container's exit code), but worth
+  knowing if a future task ever adds exit-code-based logic to
+  `shutdown.sh` or `box.ts#onStop`.
+- Exit criterion 7's cost model interpretation (worker-tenant hourly
+  volume derived from sessions+builds+share/embed+AI-questions, since
+  total API request count is not directly measured — see
+  traffic-baseline.md's own caveat) should be revisited once real
+  production `api.request` volume is actually measurable end to end
+  (post-launch, via Loki itself).
 
 ### Fix round (phase A review)
 
