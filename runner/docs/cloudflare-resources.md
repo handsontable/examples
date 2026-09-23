@@ -37,7 +37,7 @@ meta-framework — remix, angular, next, next-shadcn, astro, nuxt — plus a
 `buildersandbox` that runs the static build snapshotter.
 
 Deploy with `npx wrangler deploy` from `workers/api/` and `apps/authoring/`, or
-let the `deploy-runner-*` workflows do it on merge to `master`. See
+let `master.yml`'s path-gated deploy jobs do it on merge to `master`. See
 [run-and-deploy.md](run-and-deploy.md).
 
 ### Preview URLs need a wildcard domain
@@ -48,6 +48,38 @@ Live Tier-2 sessions hand the browser a per-container preview URL of the shape
 does not support wildcards — without the custom domain, static shares still work
 (they are built in the builder container and served from R2) but live Tier-2
 preview does not.
+
+## Observability (o11y worker, Grafana box)
+
+A third Worker, **`handsontable-demos-o11y`** (`workers/o11y/`), owns the
+`/telemetry/*` and `/grafana/*` routes on the same `demos.handsontable.com`
+host — `workers_dev: false`, `preview_urls: false` (contract §1: everything
+reaches it through the deploy script's `--routes` flags, never a Cloudflare
+subdomain). Full setup — buckets, lifecycle, secrets, the Access application,
+the export destination, deploy ordering — is in
+[run-and-deploy.md](run-and-deploy.md#one-time-setup); this is the
+resource inventory.
+
+| Kind | Name | Binding | Notes |
+|------|------|---------|-------|
+| Durable Object | `InboxWriter` | `INBOX_WRITER` | one instance `main`, EU jurisdiction; ingest dedupe, ledger, fingerprint registry, alert state |
+| Durable Object + Container | `GrafanaBox` | `GRAFANA_BOX` | one instance `box`, EU jurisdiction; runs the Loki+Grafana image, woken on demand |
+| R2 (EU) | `handsontable-demos-o11y-inbox` | `O11Y_INBOX` | normalised OTLP records awaiting drain; 7-day lifecycle |
+| R2 (EU) | `handsontable-demos-o11y-loki` | `O11Y_LOKI_STATE` (read-only in the Worker; the box itself reaches it over S3) | Loki's own chunk/index storage + `state/` clean markers; prefix-scoped lifecycle (T01) |
+| R2 (EU) | `handsontable-demos-o11y-maps` | `O11Y_MAPS` | source maps, `sourcemaps/<sha>/<asset path>.map`; 30-day lifecycle |
+| Analytics Engine | `runner_events` | `RUNNER_EVENTS` | shared with the API worker's own binding of the same dataset |
+| Service binding | `handsontable-demos-api`, entrypoint `O11yUsage` | `API` | o11y usage metering / spend cap RPC, not an HTTP route |
+| Rate limiting | namespace `1001` | `RATE_LIMITER` | self-chosen scoping id, provisioned automatically on deploy — no dashboard step |
+
+The API worker gains one addition of its own: an `O11Y` service binding to
+`handsontable-demos-o11y` (the watchdog heartbeat call) and a shared
+`RUNNER_EVENTS` Analytics Engine binding to the same `runner_events` dataset.
+
+The Grafana box (`containers/o11y/`) is a single container application — Loki
++ Grafana only, no Tier-2 Sandbox SDK involved — woken by a request to
+`/grafana/*` or the `*/10` backlog cron, and stopped again after an idle
+window. It is a different container mechanism from the 7 Tier-2 application
+images above (`@cloudflare/containers`, not `@cloudflare/sandbox`).
 
 ## Cost guardrails
 

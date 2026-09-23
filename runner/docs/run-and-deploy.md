@@ -51,13 +51,36 @@ printf 'VITE_DEV_USER=dev@handsontable.com\nVITE_API_BASE=http://localhost:5173\
 npx vite --port 5173
 ```
 
+**Observability worker, local (contract §10).** `pnpm o11y:dev` (from `runner/`)
+starts the o11y worker under `wrangler dev` — Miniflare's local R2/DO/cron,
+plus wrangler's own local Container orchestration for `GrafanaBox`, against
+the SAME Dockerfile the real deploy uses. It bootstraps
+`workers/o11y/.dev.vars` from `.dev.vars.example` on first run (`O11Y_ENV` set to
+`local`,
+`DEV_ADMIN` for the local Access bypass, and empty placeholders for the six
+production secrets — good enough to exercise the gates without hitting
+anything real) and defaults to port `O11Y_DEV_PORT=4200`
+(`O11Y_DEV_INSPECTOR_PORT=4201`) — the authoring app's own dev proxy
+(`apps/authoring/vite.config.ts`) reads the same `O11Y_DEV_PORT` env var for
+its `/telemetry` target, so the two stay in sync by construction rather than by
+a hardcoded number on each side. `containers/o11y/compose.yml` (MinIO +
+local ClickHouse, for `RUNNER_EVENTS_CLICKHOUSE_URL`'s local stand-in) is a
+**separate**, optional local stack — `wrangler dev` never starts it itself, and
+running both fights over the same image/ports for no benefit; start only the
+backing services with `docker compose -f containers/o11y/compose.yml up minio
+minio-init clickhouse`, published to the host, and `wrangler dev`'s own
+Container reaches them via Docker's `host.docker.internal` (`O11Y_LOCAL_MINIO_PORT`,
+`O11Y_LOCAL_CLICKHOUSE_PORT`, `O11Y_LOCAL_PUBLIC_ORIGIN` in `.dev.vars` if you
+need non-default ports). Replay the OTLP export fixtures once it's up:
+`node scripts/o11y-replay-fixtures.mjs --base http://localhost:4200`.
+
 Migrations are listed one file at a time on purpose. Do **not** substitute
 `wrangler d1 migrations apply --local`: local bookkeeping starts empty, so an
 apply re-runs every file, and `0003_cost_ledger.sql` ends in a bare
 `ALTER TABLE demos ADD COLUMN artifacts_purged_at` with no `IF NOT EXISTS` —
 which fails the second time. (Remote is a different story: CI has applied
 migrations through the framework since before `0003` landed, so its bookkeeping
-is populated and `deploy-runner-api.yml` applies new files automatically.)
+is populated and `master.yml`'s `deploy-api` job applies new files automatically.)
 
 `.dev.vars` and `.env.local` are gitignored dev-only bypasses — never used in prod.
 `PREVIEW_HOST="localhost:8787"` overrides the `wrangler.jsonc` default
@@ -165,65 +188,421 @@ nightly job (reconciliation, spend alerts, GC, analytics prune) on demand.
 
 ## Continuous deployment
 
-Merges to `master` deploy automatically via two path-gated GitHub Actions
-workflows in `.github/workflows/`, both authenticating with the single repo
-secret **`CLOUDFLARE_API_TOKEN`** (account id is read from each `wrangler.jsonc`).
+Merges to `master` deploy automatically from **`.github/workflows/master.yml`**,
+a single path-gated workflow with three independent deploy jobs (authoring, API,
+o11y), all authenticating with the single repo secret **`CLOUDFLARE_API_TOKEN`**
+(account id is read from each `wrangler.jsonc`). `.github/workflows/ci.yml` is
+the separate PR-gate workflow (below); `master.yml` does not run it — a master
+push has already passed it on the PR, and verifies PRODUCTION afterwards
+instead (the `smoke` job).
+
+> History: an earlier pair of workflows, `deploy-runner-authoring.yml` and
+> `deploy-runner-api.yml`, did the same two deploys separately; they were
+> merged into `master.yml` so a single push range's `changes` job can gate a
+> third deploy (o11y, T10) off the same diff without a third redundant
+> checkout+diff. There is no dashboard Git integration (Cloudflare Workers
+> Builds) — that requires one-time setup by someone with Cloudflare access and
+> silently deploys nothing until then; GitHub Actions needs only the existing
+> repo secret.
 
 ### Tests (CI)
 
-`.github/workflows/ci.yml` runs on every PR + on `master`: typecheck, unit +
-catalog-smoke tests (`pnpm test` → `node --test pipeline/*.test.mjs`, validating
-the wrapper output and that every committed `docs-examples` artifact is runnable),
-an authoring build, and Playwright **e2e** (`pnpm e2e`) covering the picker,
-cascader drill-down, framework switching, and the "See in documentation" link.
+`.github/workflows/ci.yml` runs on every PR: typecheck (`pnpm typecheck` →
+`pnpm -r run typecheck`, which already reaches `workers/o11y` — it is a normal
+workspace package, no extra wiring needed), unit + catalog-smoke tests
+(`pnpm test` → builds `@handsontable/demo-runtime` then
+`node --test pipeline/*.test.mjs`, which already runs every `pipeline/o11y-*`
+and `pipeline/telemetry-*` file glob-matched the same way as every other
+pipeline test — validating the wrapper output, that every committed
+`docs-examples` artifact is runnable, and the o11y worker's own gates/normalise/
+inbox/drain/alert logic), an authoring build, and Playwright **e2e**
+(`pnpm e2e`) covering the picker, cascader drill-down, framework switching, and
+the "See in documentation" link.
 
 - Live-render e2e (needs the external Sandpack bundler) is gated behind
   `E2E_LIVE=1`, kept off in PR CI to stay deterministic.
 - Run e2e against production (real live render):
   `E2E_BASE_URL=https://demos.handsontable.com E2E_LIVE=1 pnpm e2e`.
-- The API deploy workflow also does a post-deploy smoke (`GET /api/health` on
-  `demos.handsontable.com` must return 200).
+- `master.yml`'s `deploy-api` job does a post-deploy smoke (`GET /api/health` on
+  `demos.handsontable.com` must return 200); `deploy-authoring` checks the
+  served bundle hash; the shared `smoke` job then runs a `@smoke`-tagged e2e
+  subset against production once either deploy succeeds.
 - A separate, opt-in starter compatibility matrix (`pnpm e2e:matrix`, gated
   behind `E2E_STARTER_MATRIX=1`) boots every starter at every supported
   Handsontable major against a live instance — not part of CI, run manually.
   See `docs/starter-compat-matrix.md`.
+- **`e2e-telemetry`** (T10): builds the authoring app a SECOND time, with
+  `VITE_TELEMETRY_LOCAL=1` (contract §10), and runs
+  `E2E_TELEMETRY=1 pnpm e2e e2e/telemetry-faro.spec.ts e2e/example-analytics.spec.ts`
+  — both specs are self-contained (their own preview server, `page.route`
+  interception of `/telemetry/collect`, no o11y worker or API worker needed),
+  so they fit the deterministic PR suite. **Not wired in here:**
+  `e2e/telemetry-metrics.spec.ts` additionally needs `E2E_LIVE=1` and a real
+  local `wrangler dev` API worker with a live Tier-2 container — that is the
+  same "everything local, real traffic" shape T11's
+  `e2e/o11y-local.spec.ts` (`E2E_O11Y_LOCAL=1`) is scoped to build and decide a
+  CI/nightly home for; wiring it here ahead of T11 would either duplicate that
+  decision or fight it over the same job.
 
-### Authoring app (frontend) → GitHub Actions
+### Authoring app (frontend)
 
-`.github/workflows/deploy-runner-authoring.yml` runs on push to `master`
-touching `runner/apps/authoring/**`, `runner/packages/**`, `runner/config/**`,
-or `runner/catalog.json` (the authoring build imports `catalog.json` at compile
-time, so a catalog-only change — e.g. after `pnpm import` — must redeploy the
-app). It gates on the CI workflow, builds the workspace packages + the app, and
-`wrangler deploy`s `handsontable-demos-authoring` (Workers Assets, no Docker).
-`VITE_API_BASE` is read from committed `.env.production`. A post-deploy smoke
-check verifies `demos.handsontable.com` serves the freshly built bundle.
-`workflow_dispatch` allows manual runs.
+`master.yml`'s `deploy-authoring` job runs when the push touches
+`runner/apps/authoring/**`, `runner/packages/**`, `runner/config/**`,
+`runner/catalog.json` (the authoring build imports it at compile time, so a
+catalog-only change — e.g. after `pnpm import` — must redeploy the app), or
+either workflow file. It downloads the `authoring-dist` artifact the shared
+`build` job already produced and `wrangler deploy`s
+`handsontable-demos-authoring` (Workers Assets, no Docker). `VITE_API_BASE` is
+read from committed `.env.production`. A post-deploy smoke check verifies
+`demos.handsontable.com` serves the freshly built bundle.
+`workflow_dispatch`'s `deploy_authoring` checkbox allows a manual run.
 
-> History: this briefly moved to Cloudflare Workers Builds (dashboard Git
-> integration), but that requires one-time dashboard setup by someone with
-> Cloudflare access and silently deploys nothing until then — prod served a
-> stale frontend. GitHub Actions needs only the existing repo secret.
+**Source maps (T10, ADR §C.3).** The `build` job's authoring build step passes
+`SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` (repo secret + vars) and
+`VITE_SENTRY_SCOPE: full` — those three secrets present is what
+`apps/authoring/vite.config.ts` reads as "this is the real production build",
+which is what turns maps on (`sourcemap: "hidden"`, no `sourceMappingURL`
+comment in the served JS — Workers Assets' SPA fallback, DEV-2569, answers any
+path it does not recognise with `200 text/html`, which a browser trying to
+follow a real map pointer would choke on) and enables the `sentryVitePlugin`'s
+own upload (it now injects Sentry debug IDs but no longer deletes the maps
+itself). The next step in `build` walks `apps/authoring/dist/**/*.map`,
+uploads each one to R2 bucket `handsontable-demos-o11y-maps` at key
+`sourcemaps/<sha>/<original asset path>.map` (matching
+`workers/o11y/src/drain/symbolicate.ts`'s own `mapKeyFor`, `<sha>` = the full
+`GITHUB_SHA`, same value as `VITE_SENTRY_RELEASE`/`SERVICE_VERSION`), then
+deletes it from `dist/`. **This step authenticates with the dedicated,
+maps-bucket-only S3 credential (`R2_MAPS_ACCESS_KEY_ID`/`R2_MAPS_SECRET_ACCESS_KEY`,
+one-time setup step 2 below), through the S3 API (`aws s3 cp`), never
+`CLOUDFLARE_API_TOKEN`** — that token is account-wide, and this job otherwise
+never needs Cloudflare API access at all; a bucket-scoped credential is the
+same principle the Loki-only token (step 3) already uses for the box. Two
+leak checks run only after that deletion (a map's
+`sourcesContent` embeds `localhost:8787` and `VITE_DEV_USER` literally, which
+would false-fire the first check if it ran before the maps were gone):
+`grep -rl "localhost:8787\|VITE_DEV_USER\|dev@handsontable.com" apps/authoring/dist`
+(AGENTS.md's dev-bypass check, now automated here — see "Prod build config"
+there for what each string catches) and `pnpm check:telemetry-leak`
+(`scripts/check-telemetry-leak.mjs`, contract §10 — fails if the local
+telemetry path's sentinels survive DCE into a production bundle). A PR build
+(`ci.yml`) sets none of the three Sentry secrets, so `uploadEnabled` is false
+there, no maps are ever written, and both leak-check commands still run
+(harmlessly, over an unmapped `dist/`) as a standing regression net.
 
-### API worker + Tier-2 image → GitHub Actions (Docker required)
+### API worker + Tier-2 image (Docker required)
 
-`.github/workflows/deploy-runner-api.yml` runs on push to `master` touching
-`runner/workers/api/**`, `runner/containers/**`, `runner/scripts/**`, etc. On the
-Docker-capable runner, `wrangler deploy` builds + pushes the `containers/live`
-image (Vue baked) to the Cloudflare registry and deploys `handsontable-demos-api`.
-`workflow_dispatch` allows manual runs.
+`master.yml`'s `deploy-api` job runs when the push touches
+`runner/workers/api/**`, `runner/containers/**`, `runner/scripts/**`,
+`runner/config/**`, `runner/packages/**`, `runner/pnpm-lock.yaml`, or either
+workflow file. On the Docker-capable runner, `pnpm run deploy` (never a bare
+`wrangler deploy` — see the ⚠️ under "Error monitoring" below) builds + pushes
+the `containers/live` image to the Cloudflare registry and deploys
+`handsontable-demos-api`, then applies pending D1 migrations first.
+`workflow_dispatch`'s `deploy_api` checkbox allows a manual run.
 
 Auth: repo secret **`CLOUDFLARE_API_TOKEN`** (account id is read from
 `wrangler.jsonc`). Create it once:
 
 1. Cloudflare dashboard → **My Profile → API Tokens → Create Token** → start from
    **"Edit Cloudflare Workers"**, scoped to the **Handsontable Account**; ensure
-   **Workers Scripts: Edit** and the Containers/registry push permission.
+   **Workers Scripts: Edit** and the Containers/registry push permission. No
+   R2 scope needed here — the source-map upload uses its own bucket-scoped S3
+   credential (`R2_MAPS_ACCESS_KEY_ID`/`R2_MAPS_SECRET_ACCESS_KEY`, one-time
+   setup step 2), never this token, precisely so this account-wide token never
+   has to be able to write to R2 at all. The export destination (step 4) is
+   created by hand in the dashboard, under the operator's own login — nothing
+   in CI calls that API, so this token needs no Observability scope either.
 2. GitHub → repo **Settings → Secrets and variables → Actions → New repository
    secret**: name `CLOUDFLARE_API_TOKEN`, value = the token. (Never commit it.)
 
 If routes move out of `wrangler.jsonc` into the deploy command (ADR-0020), add
-the corresponding `--route` flags to the API workflow's `wrangler deploy` step.
+the corresponding `--route` flags to the relevant `deploy` script.
+
+### Observability worker (o11y + Grafana box) — GitHub Actions
+
+`master.yml`'s `deploy-o11y` job runs when the push touches
+`runner/workers/o11y/**`, `runner/containers/o11y/**`, `runner/packages/**`
+(the shared `@handsontable/demo-runtime/telemetry` module lives under
+`packages/runtime/src/telemetry/`, but other files under `packages/` reach it
+transitively — e.g. `scrub.ts` imports `redactPreviewHosts` from
+`packages/runtime/src/monitor.ts` — so the gate is the whole directory, the
+same width the authoring/API gates already use), `runner/pnpm-lock.yaml`, or
+either workflow file. `pnpm run deploy` (`workers/o11y/package.json`) builds +
+pushes the Grafana box container image and attaches the `/telemetry/*` and
+`/grafana/*` routes via `--routes` (never in `wrangler.jsonc` — ADR-0020), plus
+`--var SERVICE_VERSION:$GITHUB_SHA`. `workflow_dispatch`'s `deploy_o11y`
+checkbox allows a manual run.
+
+**Deploy events (ADR §C.2, contract §1).** Every deploy job that actually ran
+(`deploy-authoring`, `deploy-api`, `deploy-o11y`) posts one event to
+`POST /telemetry/deploy` after its own `wrangler deploy`/`pnpm run deploy`
+step, authenticated with a GitHub OIDC token (job permission `id-token:
+write`; requested with the audience `workers/o11y/src/gates/oidc.ts` pins,
+`https://demos.handsontable.com/telemetry/deploy` — the route falls back to
+`x-o11y-secret` only when no bearer token is presented at all, so a malformed
+one is a hard `401`, never a silent fallback):
+
+```bash
+oidc_token=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+  "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://demos.handsontable.com/telemetry/deploy" \
+  | jq -r '.value')
+curl -sf -o /dev/null -w '%{http_code}\n' -X POST https://demos.handsontable.com/telemetry/deploy \
+  -H "Authorization: Bearer $oidc_token" -H 'Content-Type: application/json' \
+  --data "{\"event\":\"deploy\",\"service\":\"<worker name>\",\"sha\":\"$GITHUB_SHA\",\"cf_version_id\":\"<from the deploy step's own output>\"}"
+```
+
+`<worker name>` is the deploying Worker's own `wrangler.jsonc` `name`
+(`handsontable-demos-authoring` / `handsontable-demos-api` /
+`handsontable-demos-o11y` — this is also the string the Runner-overview
+dashboard's Deploys annotation shows verbatim, `containers/o11y/grafana/dashboards/runner-overview.json`'s
+`textFormat: "{{__line__}}"`). `<cf_version_id>` comes from the deploy step's
+own stdout — `wrangler deploy` prints a trailing `Current Version ID: <uuid>`
+line; capture it with `pnpm run deploy | tee deploy.log` (`set -o pipefail` is
+on, so a piped deploy failure still fails the job) and
+`grep -oE 'Current Version ID:.*' deploy.log | awk '{print $NF}'`. **This step
+never fails the job on its own** (`-f` fails the curl on a non-2xx exit, but
+its own exit code is deliberately not checked with `set -e` in force — a
+warning line is emitted instead): a deploy that shipped correctly must not be
+marked red because the *reporting* of it hiccuped, and on the very first
+merge of this feature the o11y route may not be reachable yet for the
+authoring/API jobs' own deploy events.
+
+**DAG note.** `deploy-api`'s job also `needs: deploy-o11y` (in addition to
+`build`) and proceeds when that job is `success` **or skipped** (`if: always()
+&& needs.deploy-o11y.result != 'failure'`) — see "First deploy, in order"
+below for why.
+
+## One-time setup
+
+Everything in this section is done once, by hand, against the real Cloudflare
+account, before the first `master.yml` run that touches `runner/workers/o11y/**`
+can work end to end. **T10 does not run any of it** — see the task's own "Out"
+line; this is the checklist for whoever performs the actual production launch
+(T11). Every `wrangler` command below needs `CLOUDFLARE_API_TOKEN` (or an
+authenticated `wrangler login`) and `-J eu`/`--jurisdiction eu` where shown —
+the o11y buckets are all EU (contract §2).
+
+### 1. R2 buckets + lifecycle rules
+
+```bash
+cd workers/o11y
+npx wrangler r2 bucket create handsontable-demos-o11y-inbox -J eu
+npx wrangler r2 bucket create handsontable-demos-o11y-loki  -J eu
+npx wrangler r2 bucket create handsontable-demos-o11y-maps  -J eu
+
+# Loki bucket: browser/ 30d, worker/ 90d, index/ 90d, state/ 30d — the
+# committed rule file (T01, containers/o11y/r2-lifecycle-rules.json). `set`
+# REPLACES the whole rule set, so this is the only command needed for that
+# bucket, run once and again whenever the file changes.
+npx wrangler r2 bucket lifecycle set handsontable-demos-o11y-loki -J eu \
+  --file ../../containers/o11y/r2-lifecycle-rules.json
+
+# Inbox and maps buckets are flat (no prefix rules) — one rule each.
+npx wrangler r2 bucket lifecycle add handsontable-demos-o11y-inbox inbox-7d -J eu --expire-days 7
+npx wrangler r2 bucket lifecycle add handsontable-demos-o11y-maps  maps-30d -J eu --expire-days 30
+```
+
+### 2. R2 S3 credential scoped to the maps bucket only (CI source-map upload)
+
+Dashboard → **R2 → Manage R2 API Tokens → Create API Token**, scope
+**Object Read & Write**, restricted to the single bucket
+`handsontable-demos-o11y-maps` — the same "one bucket, nothing else" shape as
+the Loki token in step 3 below, and for the same reason: the only thing that
+ever needs to write here is `master.yml`'s own source-map upload step
+(`docs/run-and-deploy.md` §"Source maps (T10, ADR §C.3)" above), and it has
+no business being able to touch the inbox or Loki buckets, let alone anything
+outside this account's o11y resources. Review finding I1 (T10's fix round):
+this step used to piggyback on the account-wide `CLOUDFLARE_API_TOKEN`
+instead, widened with a blanket R2: Edit grant — replaced with this
+bucket-scoped credential so that token never needs R2 access at all.
+
+Add the two values as **repository** secrets (GitHub → repo **Settings →
+Secrets and variables → Actions → New repository secret**), not Worker
+secrets — the o11y Worker itself never reads them; only the CI job's `aws s3
+cp` step does, as `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`:
+
+- `R2_MAPS_ACCESS_KEY_ID`
+- `R2_MAPS_SECRET_ACCESS_KEY`
+
+### 3. Loki S3 token (`LOKI_S3_ACCESS_KEY_ID` / `LOKI_S3_SECRET_ACCESS_KEY`)
+
+Dashboard → **R2 → Manage R2 API Tokens → Create API Token**, scope
+**Object Read & Write**, restricted to the single bucket
+`handsontable-demos-o11y-loki` (contract §2: "the box writes Loki data and the
+`state/` clean markers there" — nothing else needs S3 access to this bucket;
+the Worker's own `O11Y_LOKI_STATE` R2 binding is a separate, narrower path that
+only ever *reads* `state/wakes/<wakeId>/clean` markers, never the S3
+credential). `LOKI_S3_BUCKET` itself is **not** set in `wrangler.jsonc` —
+`box.ts` falls back to `handsontable-demos-o11y-loki` when it is absent, which
+is exactly the bucket this token is scoped to; only a throwaway sandbox-probe
+config would ever need to override it, and if it ever is overridden the token
+must be re-scoped to match, or every Loki write comes back `403`.
+
+```bash
+cd workers/o11y
+npx wrangler secret put LOKI_S3_ACCESS_KEY_ID
+npx wrangler secret put LOKI_S3_SECRET_ACCESS_KEY
+```
+
+### 4. Export destination (`o11y-logs`) + `O11Y_EXPORT_SECRET`
+
+The API worker's own `wrangler.jsonc` already names the destination
+(`observability.logs.destinations: ["o11y-logs"]`) — it does not exist until
+created once, in the dashboard: **Workers & Pages → Observability →
+Telemetry → Add destination**.
+
+- Destination Name: `o11y-logs`
+- Destination Type: **Logs**
+- OTLP Endpoint: `https://demos.handsontable.com/telemetry/v1/logs`
+- Custom Headers: `x-o11y-secret: <the same value as the O11Y_EXPORT_SECRET
+  secret below>` — Cloudflare's own export sends **no** OIDC token, so this
+  header is not optional the way it is on the CI deploy-event route (ADR §B.5:
+  "x-o11y-secret" is the *only* gate on `/telemetry/v1/logs`).
+
+Generate the secret first, then paste the same value into both places:
+
+```bash
+cd workers/o11y
+npx wrangler secret put O11Y_EXPORT_SECRET   # generate with `openssl rand -hex 32`, never print it
+```
+
+**Facts pinned by T02's real sandbox-probe capture (see its Outcome), not
+assumed:** the export is always `Content-Type: application/json`,
+`Content-Encoding: gzip` — Cloudflare has never been observed sending
+protobuf, so the ingest route does not need to handle it. `service.version` is
+**absent** from the export (every worker-origin record instead falls back to
+`env.SERVICE_VERSION ?? "unknown"` inside the o11y worker's own normalisation,
+`workers/o11y/src/normalise/points.ts`). The ray id arrives as the attribute
+`cloudflare.ray_id`, not a resource attribute. Do **not** enable a trace
+destination — contract §1: "There is no trace route" (ADR §C.4).
+
+> ⚠️ The dashboard's create/patch response for a destination has, in T02's own
+> probe session, twice echoed the export secret back in plaintext inside
+> `configuration.destination_conf` (not `configuration.headers`, which IS
+> redacted) — never paste that response into a shared terminal, log, or
+> screenshot. If it happens, rotate `O11Y_EXPORT_SECRET` immediately (a fresh
+> `wrangler secret put` + re-editing the destination's header with the new
+> value) and only then continue.
+
+### 5. Access application for `/grafana/*`
+
+Zero Trust dashboard → **Access → Applications → Add an application → Self-hosted**.
+
+- Application domain: `demos.handsontable.com/grafana`
+- Policy: **Allow**, rule **Emails ending in** `@handsontable.com`
+- Session duration: the team default is fine — the o11y worker verifies the
+  Access JWT itself on every request (`workers/o11y/src/gates/access.ts`); it
+  does not trust the edge unconditionally.
+
+Copy the **Application Audience (AUD) tag** the dashboard shows after saving,
+and commit it — `ACCESS_AUD` in `workers/o11y/wrangler.jsonc`'s `vars` block is
+currently the placeholder `""` (T00-D8/T03), and the worker fails closed
+(`verifyAccess` rejects every request) while it stays empty. `ACCESS_TEAM_DOMAIN`
+is already the real value (`handsontable.cloudflareaccess.com`) and needs no
+change unless the Zero Trust team domain itself is renamed.
+
+### 6. Every o11y worker secret (contract §2)
+
+```bash
+cd workers/o11y
+npx wrangler secret put O11Y_EXPORT_SECRET          # step 4 above
+npx wrangler secret put SENTRY_HOOK_SECRET           # step 8 below
+npx wrangler secret put AE_SQL_TOKEN                 # step below
+npx wrangler secret put LOKI_S3_ACCESS_KEY_ID        # step 3 above
+npx wrangler secret put LOKI_S3_SECRET_ACCESS_KEY    # step 3 above
+npx wrangler secret put SLACK_WEBHOOK_URL            # step 7 below
+```
+
+`AE_SQL_TOKEN` is the Analytics Engine SQL API token — same token shape as the
+API worker's own `CF_ANALYTICS_TOKEN` (Account → Account Analytics → Read),
+passed to the box as `GrafanaBox`'s ClickHouse datasource credential.
+
+`RATE_LIMITER` needs no dashboard step — a Workers rate-limiting binding's
+`namespace_id` (`1001`, already in `wrangler.jsonc`) is a self-chosen scoping
+id, not a Cloudflare-provisioned resource (T02-D8); it is created the moment
+the Worker deploys with that binding present. `O11Y_STOP_GRACE_SECONDS` also
+needs no setup here — it is not a Worker var at all, but a hardcoded container
+`envVars` value in `box.ts` (120s in production; T03-D4).
+
+### 7. Slack webhook
+
+Slack → an **Incoming Webhook** app pointed at the alert channel. Paste the
+webhook URL into `SLACK_WEBHOOK_URL` (step 6). The o11y worker posts one line
+per alert-rule fire/resolve transition (`slackPoster`, T04) and no-ops
+silently without this secret — alerts still land as InboxWriter state and
+Grafana annotations either way, just without the Slack ping.
+
+### 8. Sentry internal integration (issue-alert webhook)
+
+Sentry → project settings → **Integrations → Internal Integrations → New
+Internal Integration**. No scopes are needed (this integration only *receives*
+a webhook, it never calls the Sentry API back) — just enable **Alert Rule
+Action**, add a **Webhook URL** of `https://demos.handsontable.com/telemetry/hooks/sentry`,
+save, and copy the generated **Client Secret** into `SENTRY_HOOK_SECRET` (step
+6). Then, in the Sentry project's own alert rules, add this internal
+integration as an action on whichever issue alerts should mirror into o11y.
+The route verifies Sentry's `sentry-hook-signature` header, an HMAC-SHA256 of
+the raw request body under this same secret (`workers/o11y/src/gates/sentry.ts`).
+
+### 9. GitHub OIDC trust
+
+Nothing to configure on GitHub's side beyond `id-token: write` on the deploying
+jobs (already in `master.yml`) — GitHub's OIDC provider issues a token for its
+own workflow run to any job that requests one; there is no separate "trust"
+relationship to establish, unlike a cloud provider's IAM OIDC federation. The
+whole trust boundary lives on the **o11y worker's** side, and is already
+committed: `GITHUB_OIDC_REPOSITORY` (`handsontable/examples`) and
+`GITHUB_OIDC_WORKFLOW_REF`
+(`handsontable/examples/.github/workflows/master.yml@refs/heads/master`) in
+`workers/o11y/wrangler.jsonc`'s `vars` block. **If `master.yml` is ever renamed
+or moved, or the default branch changes, `GITHUB_OIDC_WORKFLOW_REF` must be
+updated in the same PR** — `workers/o11y/src/gates/oidc.ts` checks the OIDC
+token's `workflow_ref` claim against it with an exact string match (T02-D16),
+and a stale value makes every CI deploy event fall through to the
+`O11Y_EXPORT_SECRET` fallback (harmless, since that secret is also configured,
+but worth knowing rather than discovering silently).
+
+### 10. WAF exception for `/telemetry/*`
+
+Extends the same exception "WAF exception for `/api/*` (one-time)" above
+already created, on the same rule (`9c8dda9708cc4452ac76e7be7b58420b`,
+ruleset `efb7b8c949ac4650a09736fc376e9aee`) — Faro payloads
+(`/telemetry/collect`) and the Cloudflare OTLP export
+(`/telemetry/v1/logs`) both carry arbitrary JSON bodies that can contain a
+`<script` substring (a stack trace frame, a console message) exactly the way
+an authored demo's HTML entry does (ADR-0038). Edit the existing exception's
+expression to:
+
+```
+http.host eq "demos.handsontable.com" and (starts_with(http.request.uri.path, "/api/") or starts_with(http.request.uri.path, "/telemetry/"))
+```
+
+Verify the same way as the `/api/*` exception — a body the Worker itself
+refuses, so `401`/`400` proves the request arrived and `403` proves the edge
+still ate it:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://demos.handsontable.com/telemetry/collect \
+  -H 'Content-Type: application/json' --data '{"malformed": "<script>should 400, not 403</script>"}'
+```
+
+### First deploy, in order
+
+The o11y worker's `services` binding (`API`, entrypoint `O11yUsage`) and the
+API worker's `O11Y` binding are **mutual** — each names the other's Worker.
+Deploy the o11y worker **first**: its own binding resolves lazily (a Workers
+service binding is not validated against the target actually existing at
+*deploy* time), but `O11yUsage.recordAwakeSeconds`/`o11ySpend` calls from
+`GrafanaBox` will fail until the API worker is deployed too, and the API
+worker's own `env.O11Y` calls (the watchdog heartbeat) fail the same way in
+the other direction until the o11y worker exists. Deploying o11y first means
+there is only ever one direction of "the other side isn't up yet" instead of
+two. `master.yml` encodes this ordering automatically — `deploy-api` needs
+`deploy-o11y` and proceeds once it is `success` or was skipped (unrelated
+push) — so from the first merge onward this is handled without a manual step.
+The same order applies to a throwaway sandbox probe of either worker
+(COMMON.md's probe rules): stand up the probe o11y worker (or a stub) before
+the probe API worker if the probe exercises the mutual binding at all.
 
 ## Error monitoring (Sentry)
 
@@ -242,6 +621,26 @@ The first two are no longer hardcoded literals; they are derived (from the hostn
 and from a deploy-time var respectively), with the production strings unchanged.
 Anything keying on them Sentry-side — alert rules, saved searches, dashboards —
 keeps working.
+
+**`SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` — full vs. uncaught (contract §11, ADR
+§E.3).** Sentry now sits beside the o11y stack described in "Observability"
+above, not in front of it, and this switch controls how much overlap the two
+keep. `full` (the default — both vars are absent from every committed config
+today, and `resolveSentryScope`/the API worker's own fallback both treat
+absent-or-anything-but-`"uncaught"` as `full`) sends every explicit diagnostic
+report — `reportError`, the Tier-1/Tier-2 branches of `reportRuntimeError`, the
+Worker's own handled-error lines — to **both** Sentry and the o11y facade, so
+today's dashboards, saved searches and on-call habits keep working unchanged.
+`uncaught` narrows Sentry to only what escapes a handler outright (browser
+`window.onerror`/`unhandledrejection`/`Sentry.ErrorBoundary`; Worker
+fetch-catch-all/DO alarms/cron/snapshot-job failures) plus the budget-alert
+`captureMessage` — everything else goes to o11y alone. **Do not flip this
+switch as part of T10 or any one-time setup step above** — T11's launch plan
+is what decides when (after data is seen end to end in Grafana, alerts have
+fired at least once, and measured volume sits inside the projection) and who
+does it; it needs no revert plan of its own either way, since it only ever
+narrows Sentry, never widens it beyond what `reportingGate.ts`/`sentry-gate.ts`
+already allow.
 
 **The DSN is committed, in two places**, because a DSN is a write-only ingest
 endpoint that ships inside the JS bundle by construction — hiding it buys nothing,
@@ -285,8 +684,8 @@ two small import-free modules, `apps/authoring/src/reportingGate.ts` and
 > `--var SENTRY_ENVIRONMENT:api-production` flag lives in that script, and without
 > it the deployed Worker comes up with error reporting silently off — nothing
 > errors, events just stop arriving. That is the fail-closed direction working as
-> intended, but it is invisible, so it is worth knowing. `.github/workflows/deploy-runner-api.yml`
-> calls `pnpm run deploy`, so CI is fine. Verify a change to the flag with
+> intended, but it is invisible, so it is worth knowing. `master.yml`'s `deploy-api`
+> job calls `pnpm run deploy`, so CI is fine. Verify a change to the flag with
 > `pnpm exec wrangler deploy --dry-run --outdir /tmp/x --var SENTRY_ENVIRONMENT:api-production`
 > and check the binding table; a flag-supplied var prints as `(hidden)`, which is a
 > display convention, not a broken binding.
@@ -561,10 +960,11 @@ Slugs, not the numeric ids in the DSN (`o95873` / `4511806997135360`).
 
 **Create all three together, or none.** `vite.config.ts` enables the plugin only
 when all three are present, because a token with no org/project has no upload
-target. All three are attached to the authoring build step of
-`deploy-runner-authoring.yml` only; the `test` job reuses `ci.yml` and gets none of
-them, so PR builds neither emit source maps nor create a release. With upload off,
-`build.sourcemap` is off too, so no `.map` files are produced or published.
+target. All three are attached to `master.yml`'s `build` job's authoring build
+step only; `ci.yml`'s own `authoring` job builds the same app again for PR e2e
+and gets none of them, so PR builds neither emit source maps nor create a
+release. With upload off, `build.sourcemap` is off too, so no `.map` files are
+produced or published.
 
 Note that a *failed* upload (bad token, wrong slug) does **not** fail the build —
 `sentry-cli` logs the error and vite still exits 0. The symptom is unreadable

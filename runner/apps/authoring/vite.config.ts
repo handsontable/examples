@@ -29,10 +29,18 @@ export default defineConfig({
   },
   build: {
     // Only emitted when there is somewhere to upload them. A build without upload
-    // (local, PR CI) would otherwise leave ~12 MB of .map files in dist/ that the
-    // plugin's post-upload cleanup never runs to remove — and a manual
-    // `wrangler deploy` would publish them.
-    sourcemap: uploadEnabled,
+    // (local, PR CI) would otherwise leave ~12 MB of .map files in dist/ that would
+    // need their own cleanup — and a manual `wrangler deploy` would publish them.
+    // "hidden" (T10): the map is still built and uploaded, but no
+    // `//# sourceMappingURL=` comment is written into the served JS — Workers
+    // Assets' SPA fallback (DEV-2569) answers any path it does not recognise,
+    // including a stray `.map` request, with `200 text/html`, so a browser that
+    // tried to follow a real sourceMappingURL would decode that HTML as JSON and
+    // fail. The maps never ship in `dist/` at all (T10's CI step uploads them to
+    // Sentry via this plugin and to R2, then deletes them before the Workers
+    // Assets deploy), so this only removes a dead pointer, but it is the same
+    // "hidden" setting Sentry's own docs recommend for exactly this shape.
+    sourcemap: uploadEnabled ? "hidden" : false,
     // ⚠ Do not give the @babel/standalone chunk a hash-free name (reverted from #249,
     // DEV-2569). The intent was sound — Workers Assets serves this app with
     // `not_found_handling: "single-page-application"`, so a deploy rotates the hashed chunk
@@ -63,7 +71,12 @@ export default defineConfig({
       authToken: process.env.SENTRY_AUTH_TOKEN,
       disable: !uploadEnabled,
       release: RELEASE ? { name: RELEASE } : undefined,
-      sourcemaps: { filesToDeleteAfterUpload: ["dist/**/*.map"] },
+      // T10: no `filesToDeleteAfterUpload` here — the maps must still be on disk
+      // after this plugin's own Sentry upload finishes, because the deploy
+      // workflow's own next step uploads the SAME files to R2
+      // (`sourcemaps/<sha>/<original asset path>.map`, ADR §C.3) before deleting
+      // them from `dist/` itself. Deleting inside the plugin would race that step.
+      sourcemaps: {},
     }),
   ],
   resolve: {
@@ -107,12 +120,15 @@ export default defineConfig({
       "^/api(?:/|$)": { target: "http://localhost:8787" },
       "^/d(?:/|$)": { target: "http://localhost:8787" },
       "/embed": { target: "http://localhost:8787" },
-      // The o11y worker (T02's `workers/o11y`), same-origin reasoning as `/api`
-      // above — Faro's transport posts to same-origin `/telemetry/collect`
-      // (contract §6). Port 8788 matches T02's own local `wrangler dev`
-      // invocation (`tasks/o11y/T02-o11y-ingest.md`'s Verify block); regex, not
-      // a bare prefix, for the same `/api`-swallowing reason documented above.
-      "^/telemetry(?:/|$)": { target: "http://localhost:8788" },
+      // The o11y worker (`workers/o11y`), same-origin reasoning as `/api` above
+      // — Faro's transport posts to same-origin `/telemetry/collect` (contract
+      // §6). T06-D8 flagged the old hardcoded port 8788 as a guess pinned to a
+      // base T02 was never merged into; the real target is `pnpm o11y:dev`'s own
+      // `wrangler dev`, whose port is `scripts/o11y-dev.mjs`'s
+      // `O11Y_DEV_PORT` (default 4200, T01's own port block) — read the same env
+      // var here so the two stay in sync instead of drifting again. Regex, not a
+      // bare prefix, for the same `/api`-swallowing reason documented above.
+      "^/telemetry(?:/|$)": { target: `http://localhost:${process.env.O11Y_DEV_PORT ?? "4200"}` },
     },
   },
 });

@@ -210,3 +210,65 @@ jobs:
             runner/test-results/
           retention-days: 7
           if-no-files-found: warn
+
+  # T10 — the CI home the local telemetry path (contract §10) never had
+  # (T06-D8/T07: E2E_TELEMETRY specs were flagged but never wired). Its own
+  # build, separate from the `authoring`/`e2e` jobs above: VITE_TELEMETRY_LOCAL=1
+  # must never reach the real authoring-dist artifact those jobs share (the
+  # post-build leak check in master.yml exists specifically to catch that), so
+  # this job builds its own dist and never uploads it. Both specs are
+  # self-contained — their own preview server (telemetry-faro.spec.ts: 4711,
+  # example-analytics.spec.ts: 5301), `page.route` interception of
+  # `/telemetry/collect`, no o11y worker or API worker — so they fit the
+  # deterministic PR suite unlike e2e/telemetry-metrics.spec.ts (E2E_LIVE +
+  # a local API worker + a live Tier-2 container — see docs/run-and-deploy.md's
+  # "Tests (CI)" section for why that one stays with T11 instead).
+  e2e-telemetry:
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Download the runtime build
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime-dist
+          path: runner/packages/runtime/dist/
+
+      - name: Build authoring with the local telemetry path (contract §10)
+        run: pnpm --filter @handsontable/demo-authoring build
+        env:
+          VITE_TELEMETRY_LOCAL: '1'
+
+      - name: E2E — Faro in the authoring app + example-analytics (T06, T12)
+        env:
+          E2E_TELEMETRY: '1'
+        run: pnpm e2e e2e/telemetry-faro.spec.ts e2e/example-analytics.spec.ts
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-telemetry
+          path: |
+            runner/playwright-report/
+            runner/test-results/
+          retention-days: 7
+          if-no-files-found: warn
