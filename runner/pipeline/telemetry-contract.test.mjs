@@ -18,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   AE_COLUMNS,
+  DIAGNOSTIC_TAG_KEYS,
   ENVIRONMENTS,
   HOT_KINDS,
   HT_MAJORS,
@@ -144,6 +145,23 @@ test("§3 structured-metadata-only keys match STRUCTURED_METADATA_KEYS", () => {
   assert.notEqual(hotKindIdx, -1, "hot.kind not found in the structured-metadata paragraph");
   const hotKindValues = backtickTokens(paragraph.slice(hotKindIdx + "`hot.kind`".length));
   assert.deepEqual(new Set(hotKindValues), new Set(HOT_KINDS));
+});
+
+// T06 fix round D1 (controller ruling): a third §3 category, flat/non-dotted,
+// distinct from STRUCTURED_METADATA_KEYS — see attrs.ts's own doc comment on
+// DIAGNOSTIC_TAG_KEYS for why these are not hoisted the way structured
+// metadata is.
+test("§3 diagnostic tag keys match DIAGNOSTIC_TAG_KEYS", () => {
+  const marker = "Diagnostic tags";
+  const start = doc.indexOf(marker);
+  assert.notEqual(start, -1, "diagnostic-tags paragraph not found");
+  const paragraphEnd = doc.indexOf("\n\n", start);
+  const paragraph = doc.slice(start, paragraphEnd === -1 ? undefined : paragraphEnd);
+  // Flat, non-dotted keys only (excludes the structured-metadata paragraph's
+  // dotted `hot.*`/`session.id`/`cf.ray` keys by construction — they never
+  // match this shape).
+  const keys = backtickTokens(paragraph).filter((t) => /^[a-z][a-z_]*$/.test(t));
+  assert.deepEqual(new Set(keys), new Set(DIAGNOSTIC_TAG_KEYS));
 });
 
 // ---- §4: Analytics Engine layout ----------------------------------------------

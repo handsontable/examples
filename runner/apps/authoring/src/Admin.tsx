@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from "react";
 import { theme, logoUrl } from "@handsontable/demo-editor-shell";
 import { assertApiOk, readApiJson } from "./api.js";
 import { reportError } from "./sentry.js";
+import { apiHeaders } from "./telemetry/index.js";
 
 interface LedgerRow { day: string; sku: string; source: string; units: number; usd: number }
 interface UsageRow { day: string; metric: string; dimension: string; count: number }
@@ -167,7 +168,7 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
     (window: number) => {
       setError(null);
       fetch(`${apiBase}/api/admin/usage?days=${window}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: apiHeaders(token ? { Authorization: `Bearer ${token}` } : undefined),
       })
         .then(async (r) => {
           if (!r.ok) throw new Error(`usage request failed (${r.status})`);
@@ -464,10 +465,10 @@ function SettingsForm({
     try {
       const res = await fetch(`${apiBase}/api/admin/settings`, {
         method,
-        headers: {
+        headers: apiHeaders({
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        }),
         body: method === "PUT"
           ? JSON.stringify({
               ...draft,
@@ -776,7 +777,7 @@ function LiveSessionsSection({
    *  indistinguishable 8-hex digest, so a misclick is easy and unrecoverable. */
   const [confirming, setConfirming] = useState<string | null>(null);
 
-  const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const authHeaders = apiHeaders(token ? { Authorization: `Bearer ${token}` } : undefined);
 
   const fetchPage = useCallback(
     async (next: { awakeOnly: boolean; offset: number }) => {
