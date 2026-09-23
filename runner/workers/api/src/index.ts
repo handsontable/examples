@@ -60,7 +60,7 @@ import {
   sessionDenial,
   startSessionMeter,
 } from "./budget.js";
-import { checkCostAlerts, gcRevokedArtifacts, reconcileBilling } from "./reconcile.js";
+import { checkCostAlerts, gcRevokedArtifacts, reconcileBilling, rollupExampleDaily } from "./reconcile.js";
 import { flushUsage, noteView, recordUsageEvent } from "./usage.js";
 import { flushAnalytics, normalisePage, notePageView, pruneAnalytics } from "./analytics.js";
 import { adminSessions, adminUsage, lookupSessionRef } from "./admin.js";
@@ -2499,6 +2499,10 @@ async function runNightlyCron(env: Env): Promise<void> {
     await checkCostAlerts(env);
     await gcRevokedArtifacts(env);
     await pruneAnalytics(env, Number(env.ANALYTICS_RETENTION_DAYS ?? 180));
+    // ADR-0042 (T12): the previous full UTC day's example_daily rollup.
+    // Independent of the billing chain above (own try/catch, own Sentry
+    // tag) — added minimally here per COMMON.md; T04 resolves against it.
+    await rollupExampleDaily(env);
   });
 }
 

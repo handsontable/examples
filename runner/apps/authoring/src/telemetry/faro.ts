@@ -26,6 +26,9 @@ import {
   ATTR_HOT_HT_MAJOR,
   ATTR_HOT_OUTCOME,
   ATTR_HOT_DEMO_ID,
+  ATTR_HOT_METRIC_KIND,
+  ATTR_HOT_REF,
+  ATTR_HOT_AREA,
   ATTR_HOT_BUCKET,
   ATTR_HOT_REASON,
   ATTR_HOT_FINGERPRINT,
@@ -56,19 +59,21 @@ const beforeSend: BeforeSendHook = (item) =>
  * - the six `HotAttrs` fields with a dotted RESOURCE-attribute equivalent
  *   (`surface`→`hot.surface` etc) — survive as §3 resource attributes/Loki
  *   labels.
- * - `bucket`/`reason`/`fingerprint` → `hot.bucket`/`hot.reason`/
- *   `hot.fingerprint` (T07 fix round, controller ruling) —
+ * - `kind`/`ref`/`area` → `hot.metric_kind`/`hot.ref`/`hot.area` (T12,
+ *   ADR-0042) and `bucket`/`reason`/`fingerprint` → `hot.bucket`/
+ *   `hot.reason`/`hot.fingerprint` (T07 fix round, controller ruling) —
  *   `attrs.ts#AE_ONLY_ATTRIBUTE_KEYS`, T02-D4's AE-only channel
  *   (`workers/o11y/src/normalise/browser-attrs.ts#readAeOnlyAttrs`): these
  *   survive the allowlist too, but `convert.ts#hoistAttributes` never hoists
  *   them into a stored record — only `toAePoint` (via `readAeOnlyAttrs`) ever
- *   reads them. NOT a resource attribute, NOT a Loki label — see
- *   `AE_ONLY_ATTRIBUTE_KEYS`'s own doc comment for why.
+ *   reads them. NOT a resource attribute, NOT a Loki label. `kind` in
+ *   particular cannot use the bare dotted name `hot.kind` — that key is
+ *   already reserved for the Faro item kind and always overwritten
+ *   server-side (T02-D4) — hence `hot.metric_kind`.
  *
- * Every other `HotAttrs` field (`route_class`, `model`, `provider`, `device`,
- * `kind`, `ref`, `area`) still has no equivalent and is sent unmapped — none
- * of them has a browser call site yet (T02-D4's remaining six AE-only
- * columns), so extending the allowlist for them now would be untested.
+ * Every other `HotAttrs` field (`route_class`, `model`, `provider`, `device`)
+ * still has no equivalent and is sent unmapped — no browser call site needs
+ * one yet (T02-D4's remaining AE-only columns).
  */
 const DOTTED_ATTR_KEY: Partial<Record<string, string>> = {
   surface: ATTR_HOT_SURFACE,
@@ -77,6 +82,9 @@ const DOTTED_ATTR_KEY: Partial<Record<string, string>> = {
   ht_major: ATTR_HOT_HT_MAJOR,
   outcome: ATTR_HOT_OUTCOME,
   demo_id: ATTR_HOT_DEMO_ID,
+  kind: ATTR_HOT_METRIC_KIND,
+  ref: ATTR_HOT_REF,
+  area: ATTR_HOT_AREA,
   bucket: ATTR_HOT_BUCKET,
   reason: ATTR_HOT_REASON,
   fingerprint: ATTR_HOT_FINGERPRINT,
