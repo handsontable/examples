@@ -745,6 +745,18 @@ where they add information beyond what §A–§L already say:
   top-level calls) — chunking alone, without that, would let a crash between chunks
   leave a partial write (an orphaned `provisional:<wakeId>` key whose `wake:<id>` is
   already gone).
+- **§B.3 drain reads whole objects.** Rereview row 20 (F1/F2/F3 fix round): documented
+  here, since it previously existed only in a fixer's own report, not the ADR. Each
+  drained key's packed object is read into memory whole before its records are pushed
+  to Loki — this is bounded, not unbounded, because the object it reads was itself
+  capped at write time (A-I2's `PACK_OBJECT_MAX_DECOMPRESSED_BYTES`, ~4 MB), plus at
+  most one further oversized single row (`INBOX_ROW_MAX_BYTES`, ~1 MB) packed alone
+  when it alone exceeds the object budget. So one drain-time read is bounded to roughly
+  4–5 MB, never the whole tenant's backlog at once. This bound is a property of the
+  PACK side (`inbox/pack.ts`, owned by a concurrent task in this fix round — see that
+  task's own report for its current shape) and is restated here only as the
+  drain-side consequence rereview row 20 asked to have written down, not as a claim
+  about `drain.ts`'s own internals.
 - **§B.2 ingest, worker tenant.** A Worker's own `console.log(JSON.stringify(...))` line
   (the structured request/error lines §D describes) arrives through Cloudflare's real OTLP
   log export as **opaque body text**, not as OTLP attributes — confirmed with a real
@@ -755,33 +767,62 @@ where they add information beyond what §A–§L already say:
   merge priority** — a body key cannot spoof `service.name`/`deployment.environment.name`/
   any `hot.*` label (T03B, fix-round finding I2, found and fixed within T03B's own pass
   before it shipped).
-- **§B.2 ingest, worker tenant — fingerprint (fix round C-I2, now closed).** The API
-  worker's own handled-error lines (`reportDiagnostic`,
+- **§B.2 ingest, worker tenant — fingerprint (fix round C-I2, live at merge, second
+  wave).** The API worker's own handled-error lines (`reportDiagnostic`,
   `workers/api/src/telemetry/diagnostic.ts`) carry `hot.fingerprint` (contract §3
   AE-only key) in the same structured JSON body the bullet above describes. The read
-  half (`workers/o11y/src/normalise/otlp.ts#toIngestItem`/`apiFingerprintFeed`) now
-  reads `bodyJsonAttrs["hot.fingerprint"]` (the pre-`hoistAttributes` bag
+  half (`workers/o11y/src/normalise/otlp.ts#toIngestItem`/`apiFingerprintFeed`) reads
+  `bodyJsonAttrs["hot.fingerprint"]` (the pre-`hoistAttributes` bag
   `tryParseJsonBodyAttrs` already builds) and feeds it into the `fp:` registry only
   when ALL of: the REAL resource `service.name === "demos-api"` (read from
   `finalResourceAttrs`, the resource attribute after hoisting/defaults — never from
   `bodyJsonAttrs`, the same anti-spoof rule `RESOURCE_ATTR_KEY_SET` already enforces
   for every other resource attribute); the parsed body's `log.kind === "error"`; the
-  value matches `^[a-z0-9-]+:[0-9a-f]{16}$` (contract §7's own `<context>:<16 hex>`
-  shape). The fourth condition — not Tier-2 container stdout — holds by construction,
-  not as a separate check: the B cross-note fix (two bullets below) already makes
-  `tryParseJsonBodyAttrs` refuse to parse ANY body whose own `log.kind` is not one of
-  this worker's trusted shapes, so `bodyJsonAttrs` is already empty for
-  authored/container output before this function runs. Deliberately NOT `hot.surface
-  !== "demo-runtime"` (the browser path's own rule) — a worker-tenant record's
-  `hot.surface` resource attribute defaults to `"none"` when nothing sets it, which
-  would admit any body reaching `/telemetry/v1/logs`, forged or not.
+  value matches contract §7's own shape, via `isValidFingerprint` — ONE shared
+  validator, also used by the browser path's `resolveFingerprint`, never a second,
+  independently drifting copy (fix round finding N1, second wave: the first version of
+  this gate, and `normalise/faro.ts`'s own separate copy, both anchored on the FIRST
+  `:` and rejected the `:`-joined call-site paths `reportDiagnostic`'s own real callers
+  send — `"npm-registry:version-exists"`, `"npm-registry:versions"` — so neither could
+  ever satisfy this condition before N1 landed, gate aside).
 
-  **Known gap, separate from this fix round:** finding M2 (unowned, unfixed) means a
-  real Cloudflare OTLP export's resource `service.name` is `handsontable-demos-api`,
-  not the contract's `demos-api` — so this gate, exactly as specced above, does not
-  fire against real production traffic today. It is unit-tested and behaves correctly
-  once `service.name` is normalised (M2's fix); until then it is a correctly-gated
-  no-op, not a silent bypass.
+  **Two preconditions, both now landed in this fix round, not just one:**
+  1. Finding **M2**: a real Cloudflare OTLP export's resource `service.name` is the
+     deployed script's own name (`handsontable-demos-api`), not the contract's short
+     `demos-api` — `normalise/otlp.ts#remapCloudflareServiceName` strips the shared
+     `handsontable-` script-name prefix whenever what remains is one of the contract's
+     own `SERVICE_NAMES`, applied before `hoistAttributes`, general across every
+     deployable. Confirmed against the captured real-export fixtures
+     (`pipeline/fixtures/otlp/json/console-log-line*.json`,
+     `cloudflare-invocation-log.json`), every one of which carries the raw script name.
+  2. Finding **N1**: the shared validator now accepts a `:`-joined `context`, so
+     `reportDiagnostic`'s own real call sites' fingerprints pass the shape check at
+     all — see above.
+
+  Without BOTH, this gate is a correctly-gated no-op against real production traffic,
+  not a silent bypass; with both, it fires for real. **This makes it LIVE at merge**
+  (the o11y worker's `*/10` new-fingerprint cron runs unconditionally, regardless of
+  `SENTRY_SCOPE`/`VITE_SENTRY_SCOPE` — those only gate whether a moved report ALSO
+  reaches Sentry, §E.3), not gated behind any later `SENTRY_SCOPE` flip —
+  `docs/run-and-deploy.md`'s runbook is updated with this as an explicit precondition
+  check, not just a flip-time one.
+
+  The fourth condition — not Tier-2 container stdout — is attempted by construction,
+  not guaranteed: the B cross-note fix (two bullets below) makes `tryParseJsonBodyAttrs`
+  refuse to parse ANY body whose own `log.kind` isn't one of this worker's trusted
+  shapes, so `bodyJsonAttrs` is empty for a body with no matching sentinel — but the
+  sentinel is body TEXT, not a resource attribute, and (per finding N6, investigated
+  this fix round, not fully resolved — see `normalise/otlp.ts#tryParseJsonBodyAttrs`'s
+  own doc comment for the full investigation) nothing in this pipeline can currently
+  tell a genuine `lines.ts` line apart from a Tier-2 container's own authored stdout
+  that happens to print the same shape, since both would share this Worker's
+  `service.name` once M2 normalises it. Accepted, bounded residual: a forged line can
+  only mint a `fp:` entry and a notify-only, mrkdwn-escaped (A-C2) Slack line, the same
+  noise class N7 already accepts for the browser path — never Sentry, PII or code
+  execution. Deliberately NOT `hot.surface !== "demo-runtime"` (the browser path's own
+  rule) — a worker-tenant record's `hot.surface` resource attribute defaults to
+  `"none"` when nothing sets it, which would admit any body reaching
+  `/telemetry/v1/logs`, forged or not.
 - **§C.1 hops.** Faro's real browser transport posts a `TransportBody`
   (`{meta, exceptions?, logs?, measurements?, events?, traces?}`), not an array of
   self-contained items the way every contract function's own types assume — the ingest

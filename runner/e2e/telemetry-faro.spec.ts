@@ -19,8 +19,36 @@ import { stubShell } from "./helpers.js";
 // interferes with, whatever `dist` another spec run left behind.
 
 const PORT = 4711;
-const BASE_URL = `http://localhost:${PORT}`;
+// 127.0.0.1, not "localhost": in CI (the Playwright container job) this
+// spec's own `fetch("http://localhost:…")` readiness poll failed outright
+// ("TypeError: fetch failed", cause unlogged — see `formatFetchFailure`
+// below, added so the next failure says which) while `vite preview` itself
+// bound the default, unqualified host with no startup error. The leading
+// theory is a dual-stack "localhost" resolution mismatch between the bind
+// and the poller (invisible on a machine where ::1 and 127.0.0.1 both work),
+// but this has not been reproduced locally — pinning both sides to the same
+// literal IPv4 address removes that whole axis of ambiguity regardless of
+// the exact mechanism.
+const BASE_URL = `http://127.0.0.1:${PORT}`;
 const AUTHORING_DIR = fileURLToPath(new URL("../apps/authoring", import.meta.url));
+
+/** Node's `fetch` (undici) reports a connection failure as a bare
+ *  `TypeError: fetch failed` — the useful part (ECONNREFUSED vs ENETUNREACH,
+ *  which address/port it actually tried) is one level down in `.cause`,
+ *  which a plain `String(err)` drops. This is exactly the CI failure that
+ *  motivated this helper: the logged line said nothing more than "fetch
+ *  failed". */
+function formatFetchFailure(err: unknown): string {
+  if (err instanceof Error) {
+    const cause = (err as { cause?: unknown }).cause;
+    if (cause && typeof cause === "object") {
+      const c = cause as { code?: string; address?: string; port?: number; message?: string };
+      return `${err.message} (cause: ${c.code ?? "?"} ${c.address ?? ""}${c.port ? `:${c.port}` : ""} ${c.message ?? ""})`.trim();
+    }
+    return err.message;
+  }
+  return String(err);
+}
 
 function waitForServer(url: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -35,6 +63,26 @@ function waitForServer(url: string, timeoutMs: number): Promise<void> {
     };
     attempt();
   });
+}
+
+/** Wires a spawned preview server's stdout+stderr (and a hard spawn failure,
+ *  which fires on `"error"` rather than either stream — e.g. the vite binary
+ *  missing — plus an early exit) into one string, so a `waitForServer`
+ *  timeout's thrown error explains what happened instead of just restating
+ *  the timeout. Stdout matters as much as stderr here: vite's own
+ *  `➜ Local: http://…` bind line — which address it actually listened on —
+ *  goes to stdout, and that line is exactly what would have told the CI
+ *  failure apart from a genuine startup error. */
+function captureServerDiagnostics(child: ChildProcess): { get(): string } {
+  let text = "";
+  child.stdout?.on("data", (chunk) => { text += String(chunk); });
+  child.stderr?.on("data", (chunk) => { text += String(chunk); });
+  child.on("error", (err) => { text += `\n[spawn error] ${String(err)}`; });
+  child.on("exit", (code, signal) => {
+    if (code !== 0 && code !== null) text += `\n[exited early with code ${code}]`;
+    else if (signal) text += `\n[killed by signal ${signal}]`;
+  });
+  return { get: () => text.trim() };
 }
 
 /** One decoded Faro transport body — the shape `FetchTransport` posts to
@@ -121,15 +169,14 @@ test.describe("Faro in the authoring app (T06)", () => {
     }
     server = spawn(
       "node_modules/.bin/vite",
-      ["preview", "--port", String(PORT), "--strictPort"],
+      ["preview", "--host", "127.0.0.1", "--port", String(PORT), "--strictPort"],
       { cwd: AUTHORING_DIR, stdio: "pipe" },
     );
-    let stderr = "";
-    server.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+    const diagnostics = captureServerDiagnostics(server);
     try {
       await waitForServer(BASE_URL, 30_000);
     } catch (err) {
-      throw new Error(`preview server on :${PORT} never came up: ${stderr || String(err)}`);
+      throw new Error(`preview server on :${PORT} never came up: fetch: ${formatFetchFailure(err)} | server output: ${diagnostics.get() || "(none)"}`);
     }
   });
 
@@ -439,7 +486,7 @@ test.describe("Sentry scope switch = uncaught (fix round I1/I3)", () => {
   test.describe.configure({ mode: "serial" });
 
   const UNCAUGHT_PORT = 4712;
-  const UNCAUGHT_BASE_URL = `http://localhost:${UNCAUGHT_PORT}`;
+  const UNCAUGHT_BASE_URL = `http://127.0.0.1:${UNCAUGHT_PORT}`;
   const OUT_DIR = "dist-uncaught-scope";
   test.use({ baseURL: UNCAUGHT_BASE_URL });
 
@@ -462,15 +509,14 @@ test.describe("Sentry scope switch = uncaught (fix round I1/I3)", () => {
     });
     server = spawn(
       "node_modules/.bin/vite",
-      ["preview", "--outDir", OUT_DIR, "--port", String(UNCAUGHT_PORT), "--strictPort"],
+      ["preview", "--outDir", OUT_DIR, "--host", "127.0.0.1", "--port", String(UNCAUGHT_PORT), "--strictPort"],
       { cwd: AUTHORING_DIR, stdio: "pipe" },
     );
-    let stderr = "";
-    server.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+    const diagnostics = captureServerDiagnostics(server);
     try {
       await waitForServer(UNCAUGHT_BASE_URL, 30_000);
     } catch (err) {
-      throw new Error(`preview server on :${UNCAUGHT_PORT} never came up: ${stderr || String(err)}`);
+      throw new Error(`preview server on :${UNCAUGHT_PORT} never came up: fetch: ${formatFetchFailure(err)} | server output: ${diagnostics.get() || "(none)"}`);
     }
   });
 

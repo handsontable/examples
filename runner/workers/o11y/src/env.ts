@@ -24,10 +24,17 @@ import type { InboxWriter } from "./inbox/writer.js";
  * time. `fingerprint` is set only for exception/error records whose surface
  * feeds the new-fingerprint alert (`feedsNewFingerprintAlert`, §7) — absent
  * otherwise, so `InboxWriter` never has to re-derive that decision.
+ *
+ * `record` is optional (fix round, A-I4 remainder, closed second wave):
+ * absent for an `example.*` Faro event, which still needs `ingest`'s own
+ * hash/dedupe transaction (a redelivered batch must not double-count its AE
+ * point) but must never be stored (§6, unchanged) — `ingest`/`appendRows`
+ * skip a `record`-less item's row entirely, so `hash`/`fingerprint`
+ * dedupe/registry bookkeeping still runs for it, nothing else does.
  */
 export interface IngestItem {
   hash: string;
-  record: NormalisedRecord;
+  record?: NormalisedRecord;
   fingerprint?: string;
 }
 
@@ -55,14 +62,17 @@ export interface InboxWriterApi {
 
   /**
    * ADR §B.2 steps 4–5, T02: dedupe each item's `hash` against the 24 h window
-   * (`hash:<sha256>`), append every non-duplicate record to storage rows ≤ 1 MB
-   * (arrival time on the row, never in the record), update the exact
-   * fingerprint first-seen registry (`fp:<fingerprint>`) and the
-   * `heartbeat.lastIngest` marker, and answer only after the transaction
-   * commits. Returns the per-item outcome so the route handler can write
-   * aggregated `o11y.ingest` `accepted`/`duplicate` points (one point per
-   * request, per T02-D — see the task Outcome for why per-record points would
-   * violate exit criterion 4's "one duplicate point").
+   * (`hash:<sha256>`), append every non-duplicate ITEM WITH A `record` to
+   * storage rows ≤ 1 MB (arrival time on the row, never in the record) —
+   * a `record`-less item (A-I4 remainder, §6's `example.*` events) still
+   * runs through the same dedupe/fingerprint bookkeeping but produces no
+   * row — update the exact fingerprint first-seen registry
+   * (`fp:<fingerprint>`) and the `heartbeat.lastIngest` marker, and answer
+   * only after the transaction commits. Returns the per-item outcome so the
+   * route handler can write aggregated `o11y.ingest` `accepted`/`duplicate`
+   * points (one point per request, per T02-D — see the task Outcome for why
+   * per-record points would violate exit criterion 4's "one duplicate
+   * point").
    */
   ingest(tenant: Tenant, arrivalMs: number, items: IngestItem[]): Promise<IngestResult>;
 

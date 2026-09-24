@@ -18,6 +18,7 @@ import {
   wakeStorageKey,
   type AlertState,
   type Heartbeat,
+  type NormalisedRecord,
   type Tenant,
   type WakeState,
 } from "@handsontable/demo-runtime/telemetry";
@@ -138,11 +139,16 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
       const dedupe = await checkDuplicates(txn, hashes, arrivalMs);
       const accepted = items.filter((i) => !dedupe.duplicates.has(i.hash));
 
+      // A-I4 remainder (closed, second wave): a `record`-less item (an
+      // `example.*` Faro event, `normalise/faro.ts`) still goes through the
+      // dedupe/fingerprint bookkeeping above — the whole point is giving it
+      // the same hash/dedupe transaction every other item gets — but must
+      // never produce a `row:` entry (§6: AE points only, never stored).
       const append = await appendRows(
         txn,
         tenant,
         arrivalMs,
-        accepted.map((i) => i.record),
+        accepted.map((i) => i.record).filter((r): r is NormalisedRecord => r !== undefined),
       );
 
       const fingerprints = accepted.map((i) => i.fingerprint).filter((fp): fp is string => Boolean(fp));

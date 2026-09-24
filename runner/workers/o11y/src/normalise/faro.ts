@@ -128,18 +128,23 @@ function isServerSideNoiseException(value: string | undefined, type: string | un
 
 export interface ProcessedFaroItem {
   /** Absent for a console-dropped item, an unrecoverable item (a bad
-   *  `item.type`/`toAePoint` input, T00-D10), an oversize record, or an
-   *  `example.*` event (AE points only, never stored, §6). */
+   *  `item.type`/`toAePoint` input, T00-D10), or an oversize record.
+   *  Fix round (A-I4 remainder, closed second wave): an `example.*` event
+   *  now ALSO carries an `ingestItem` — a hash-only one, `record` absent —
+   *  purely so `InboxWriter.ingest`'s own dedupe transaction covers it too;
+   *  §6's "AE points only, never stored" is unchanged, since
+   *  `InboxWriter.ingest`/`appendRows` skip a `record`-less item entirely. */
   ingestItem?: IngestItem;
   /** Fix round (finding A-I4): when {@link ingestItem} is set, the caller
    *  (`index.ts#handleCollect`) must write these points only for a hash
    *  `InboxWriter.ingest` reports as `"accepted"`, never `"duplicate"` — a
    *  retried/redelivered batch must not double-count `error.uncaught`,
-   *  `error.handled`, or any browser metric point the way the underlying
-   *  log record already avoids double-storage. When {@link ingestItem} is
-   *  absent (an `example.*` event, or an item that never reached storage at
-   *  all), these points have no hash to gate on and are written
-   *  unconditionally, same as before. */
+   *  `error.handled`, any browser metric point, or (A-I4 remainder) an
+   *  `example.*` analytics counter, the way a stored log record already
+   *  avoids double-storage. When {@link ingestItem} is absent (an item that
+   *  never reached even hash-only ingest, e.g. an oversize/unrecoverable
+   *  one), these points have no hash to gate on and are written
+   *  unconditionally. */
   aePoints: AePoint[];
   /** Set when this item could not be converted/validated at all — the caller
    *  writes one `invalid_item` `o11y.ingest` point and moves on (never a
@@ -250,20 +255,48 @@ function processExampleEvent(
  *   `<context>:<16 hex>` shape is discarded — an attacker cannot inject
  *   arbitrary text into the exact first-seen registry or, from there, an
  *   unescaped Slack line this way.
+ * - `fallbackMessage` (fix round, finding D-I3 remainder, second wave) is
+ *   the LAST resort, used only when NEITHER of the above is present — this
+ *   is exactly the raw `window.onerror`/`unhandledrejection`/render-crash
+ *   path (`ErrorsInstrumentation`, `reportUncaughtError`), since every
+ *   explicit, on-purpose `Telemetry.error()` call already sets
+ *   `payload.fingerprint` (`apps/authoring/src/telemetry/faro.ts`'s
+ *   `buildFacade().error`). It must be the contract-normalised `type: value`
+ *   head ONLY (see `exceptionFingerprintMessage` at the call site below) —
+ *   never `record.body`, which also carries the rendered stack-frame lines
+ *   (`convert.ts#faroBody`'s exception branch). A minified production
+ *   bundle's chunk hash and line:col shift on every deploy even when the
+ *   thrown error is identical, so hashing the stack churned a genuinely
+ *   recurring defect into a fresh `fp:` entry (and Slack "new fingerprint"
+ *   post) on every single release — the D-I3 failure this closes.
  */
 function resolveFingerprint(
   wireFingerprint: string | undefined,
   aeOnlyFingerprint: string | undefined,
   surface: string,
-  bodyText: string,
+  fallbackMessage: string,
 ): string {
   if (wireFingerprint !== undefined && isValidFingerprint(wireFingerprint)) return wireFingerprint;
   if (aeOnlyFingerprint !== undefined && isValidFingerprint(aeOnlyFingerprint)) return aeOnlyFingerprint;
-  return computeFingerprint(surface, bodyText);
+  return computeFingerprint(surface, fallbackMessage);
+}
+
+/** The `type: value` head of a Faro exception payload, with NO stack —
+ *  deliberately mirrors `convert.ts#faroBody`'s own exception-head
+ *  construction (that function is outside this task's file ownership;
+ *  duplicated here rather than touched there — see this module's own doc
+ *  comment style for the same tradeoff elsewhere, e.g.
+ *  `SERVER_SIDE_UNHANDLED_NOISE`'s hand-copy of `eventGate.ts`'s lists).
+ *  `pipeline/telemetry-contract.test.mjs`/`o11y-normalise.test.mjs` pin this
+ *  shape directly, so a future drift between the two shows up as a failing
+ *  test, not a silent mismatch. */
+function exceptionFingerprintMessage(payload: { type?: string; value?: string }): string {
+  const value = payload.value ?? "";
+  return payload.type ? `${payload.type}: ${value}` : value;
 }
 
 function processException(
-  bodyText: string,
+  fallbackMessage: string,
   resourceAttributes: Record<string, string>,
   demoId: string | undefined,
   handled: boolean,
@@ -272,7 +305,7 @@ function processException(
   wireFingerprint: string | undefined,
 ): { points: AePoint[]; fingerprint?: string } {
   const surface = (resourceAttributes[ATTR_HOT_SURFACE] as Surface | undefined) ?? "authoring";
-  const fp = resolveFingerprint(wireFingerprint, aeOnly.fingerprint, surface, bodyText);
+  const fp = resolveFingerprint(wireFingerprint, aeOnly.fingerprint, surface, fallbackMessage);
   const common = { service_name: service.name, service_version: service.version, environment: service.environment };
   const point = handled
     ? toAePoint("error.handled", { count: 1 }, { ...common, surface, route_class: aeOnly.route_class, fingerprint: fp })
@@ -430,7 +463,7 @@ async function processOneItem(
       aePoints = processMeasurement(payload, clientResourceAttributes, demoId, aeOnly, service);
     } else if (type === "exception") {
       const ex = processException(
-        record.body,
+        exceptionFingerprintMessage(scrubbed.payload),
         clientResourceAttributes,
         demoId,
         handled,
@@ -452,7 +485,27 @@ async function processOneItem(
     aePoints = [];
   }
 
-  if (!storeRecord) return { aePoints };
+  if (!storeRecord) {
+    // A-I4 remainder (rereview.md, closed second wave): an `example.*`
+    // event skipped row storage (§6: AE points only, correct — unchanged
+    // below) but was ALSO skipping `InboxWriter.ingest`'s own hash/dedupe
+    // transaction entirely, so a retried/redelivered batch double-counted
+    // its AE point the same way A-I4's original fix already closed for
+    // every other item type. Reuses the exact hash shape `hashRecord`
+    // computes for a stored record below (same fields, including the raw
+    // client `timestamp` — not the clamped one — so two genuine clicks a
+    // browser reports with distinct timestamps never collapse into one)
+    // purely for dedupe: no `record` is attached, so
+    // `InboxWriter.ingest`/`appendRows` (`inbox/writer.ts`, `inbox/pack.ts`)
+    // skip a `record`-less item entirely — nothing is ever stored for it.
+    const hash = await hashRecord({
+      body: record.body,
+      resourceAttributes: record.resourceAttributes,
+      attributes: record.attributes ?? {},
+      rawEventTime: scrubbed.payload.timestamp ?? "",
+    });
+    return { aePoints, ingestItem: { hash } };
+  }
 
   // I2 (fix round, see the task Outcome): the OTLP path already dropped
   // records over `INBOX_RECORD_MAX_BYTES` before this fix; the Faro path

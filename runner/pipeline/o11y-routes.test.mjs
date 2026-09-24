@@ -185,6 +185,40 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
   assert.equal(errorPoints.length, 1, "a redelivered batch must write exactly one error.uncaught point, not two");
 });
 
+// A-I4 remainder (closed, second wave): `example.*` events used to bypass
+// InboxWriter.ingest's dedupe transaction entirely (no ingestItem at all),
+// so a retried/redelivered batch inflated ADR-0042's analytics counts on
+// every replay — unlike every other item type, which A-I4's original fix
+// already protected. `normalise/faro.ts` now gives an example.* event a
+// hash-only ingestItem (no `record`, so it is still never stored, §6)
+// purely so it flows through the SAME dedupe-gated point-write logic
+// `index.ts#handleCollect` already has for everything else.
+test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count an example.* analytics point (A-I4 remainder)", async () => {
+  const { env, ae, doStorage } = freshEnv();
+  const body = withFreshTimestamp(faroFixture("example-open.json"));
+  const req = () =>
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const first = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(first.status >= 200 && first.status < 300);
+
+  const second = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(second.status >= 200 && second.status < 300, "a duplicate delivery must still answer 2xx");
+
+  const examplePoints = ae.points.filter((p) => p.indexes[0] === "example.open");
+  assert.equal(examplePoints.length, 1, "a redelivered example.* batch must write exactly one point, not two");
+
+  // §6 must still hold: an example.* event is never stored, redelivered or not.
+  const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
+  assert.equal(rowKeys.length, 0, "an example.* event must never produce a row: entry");
+});
+
 test("POST /telemetry/v1/logs: the x-o11y-secret gate — wrong secret is 401, correct secret is 2xx", async () => {
   const { env } = freshEnv();
   const body = otlpJsonFixture("basic.json");

@@ -248,6 +248,19 @@ is `normalizeMonitorMessage` plus `stripCodeFrame`. For `hot.surface = demo-runt
 keystroke-ladder shapes (`"<identifier> is not defined"` and similar) collapse to one
 fingerprint per shape. Demo-runtime fingerprints never feed the new-fingerprint alert.
 
+`context` is caller-chosen (typically `hot.surface` or a metric name) and MAY itself
+contain further `:`-separated segments, e.g. `docs-example-load:fetch` or
+`npm-registry:version-exists` — a call-site path, not always a single flat token. A
+client-supplied fingerprint (Faro's own `payload.fingerprint` wire field, or
+`context["hot.fingerprint"]`) is trusted only when it passes the ONE shared validator
+(`isValidFingerprint`, `packages/runtime/src/telemetry/fingerprint.ts` — also used by
+`normalise/faro.ts`'s `resolveFingerprint` and `normalise/otlp.ts`'s
+`apiFingerprintFeed`, never a second, independently drifting copy of the shape):
+anchor on the LAST `:`, followed by exactly 16 lowercase hex characters, with zero or
+more earlier `:`-separated segments in `context`, each drawn from `[a-z][a-z0-9._-]*`;
+the whole `context` half is capped at 128 characters. A value that does not match is
+discarded, never stored or forwarded to Slack verbatim.
+
 ## 8. Inbox
 
 Normalised records are OTLP JSON log records (`resourceLogs` shape), one tenant per
