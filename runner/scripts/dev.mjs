@@ -41,6 +41,16 @@ import {
   redactArgsForLog,
   PORT_DEFAULTS,
 } from "./dev-lib.mjs";
+// dev-persist task's own additions — a separate import statement (rather
+// than folded into the block above) so a parallel edit to that block's own
+// import list merges cleanly.
+import {
+  composeDownArgs,
+  o11yDevDataModeLine,
+  resetO11yLocalState,
+  detectO11yStateDivergence,
+  formatO11yDivergenceWarning,
+} from "./dev-lib.mjs";
 
 const COLORS = {
   app: "\x1b[36m", // cyan
@@ -110,7 +120,7 @@ function runWranglerCapture(cwd, args) {
 }
 
 async function main() {
-  const { help, tier, replay, resetLocalDb, errors } = parseArgs(process.argv.slice(2));
+  const { help, tier, replay, resetLocalDb, fresh, errors } = parseArgs(process.argv.slice(2));
   if (help) {
     console.log(HELP_TEXT);
     process.exit(0);
@@ -302,6 +312,34 @@ async function main() {
       O11Y_CLICKHOUSE_NATIVE_PORT: String(ports.O11Y_CLICKHOUSE_NATIVE_PORT),
       AE_SQL_TOKEN: "local-dev-token",
     };
+
+    // execFileSync wrapper for `resetO11yLocalState`'s injectable — always
+    // runs from RUNNER_ROOT with the compose stack's own env, stdio
+    // inherited (live `docker compose down -v` output), and lets a caller's
+    // own `{ env }` win for the compose call specifically.
+    const runDocker = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: RUNNER_ROOT, stdio: "inherit", ...opts });
+
+    if (fresh) {
+      resetO11yLocalState({
+        o11yDir,
+        composeFile,
+        composeEnv,
+        execFileSyncImpl: runDocker,
+        log: (line) => log("dev", line),
+      });
+    } else {
+      // Cheap (local file read) unless there's actually something to warn
+      // about — see detectO11yStateDivergence's own doc comment for why
+      // MinIO (not ClickHouse) is the volume this checks.
+      const divergence = await detectO11yStateDivergence({
+        composeProjectName,
+        o11yDir,
+        execFileSyncImpl: (cmd, args) => execFileSync(cmd, args),
+      });
+      if (divergence.divergent) log("dev", formatO11yDivergenceWarning(divergence.committedCount));
+    }
+    log("dev", o11yDevDataModeLine(fresh));
+
     log("compose", `starting minio + clickhouse (project ${composeProjectName})`);
     execFileSync("docker", ["compose", "-f", composeFile, "up", "-d", "minio", "minio-init", "clickhouse"], {
       cwd: RUNNER_ROOT,
@@ -309,9 +347,13 @@ async function main() {
       stdio: "inherit",
     });
     teardownSteps.push(() => {
-      log("compose", "tearing down minio + clickhouse");
+      log("compose", "tearing down minio + clickhouse (data kept — named volumes; use --fresh next run to wipe)");
       try {
-        execFileSync("docker", ["compose", "-f", composeFile, "down"], {
+        // Never `-v` here: Ctrl-C is the KEEP path — see composeDownArgs's
+        // own doc comment and o11yDevDataModeLine above. --fresh's own wipe
+        // (resetO11yLocalState) already ran, if at all, before this run's
+        // compose stack was even started.
+        execFileSync("docker", composeDownArgs(composeFile), {
           cwd: RUNNER_ROOT,
           env: composeEnv,
           stdio: "inherit",

@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import {
+  HELP_TEXT,
   parseArgs,
   resolvePorts,
   PORT_DEFAULTS,
@@ -55,6 +56,18 @@ import {
   SHUTDOWN_SIGNALS,
   o11yLocalPublicOrigin,
 } from "../scripts/dev-lib.mjs";
+// dev-persist task's own additions — a separate import statement so a
+// parallel edit to the block above merges cleanly.
+import {
+  composeDownArgs,
+  o11yDevDataModeLine,
+  resetO11yLocalState,
+  o11yLedgerCommittedKeyCount,
+  findComposeVolume,
+  detectO11yStateDivergence,
+  formatO11yDivergenceWarning,
+} from "../scripts/dev-lib.mjs";
+import { DatabaseSync } from "node:sqlite";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER_ROOT = path.join(HERE, "..");
@@ -959,6 +972,189 @@ test("buildPlan: tier=full's o11y spawn injects O11Y_LOCAL_PUBLIC_ORIGIN matchin
 });
 
 // ---------------------------------------------------------------------------
+// --fresh (dev-persist task): compose.yml's minio/clickhouse now use named
+// volumes; --fresh wipes them + workers/o11y/.wrangler/state together.
+// ---------------------------------------------------------------------------
+
+test("parseArgs: --fresh is only valid with --tier=full", () => {
+  assert.equal(parseArgs(["--tier=full", "--fresh"]).errors.length, 0);
+  assert.equal(parseArgs(["--tier=full", "--fresh"]).fresh, true);
+  assert.equal(parseArgs(["--tier=1", "--fresh"]).errors.length, 1);
+  assert.equal(parseArgs(["--tier=2", "--fresh"]).errors.length, 1);
+  // Allowed with --help and no --tier (mirrors --replay/--reset-local-db).
+  assert.equal(parseArgs(["--help", "--fresh"]).errors.length, 0);
+});
+
+test("parseArgs: --fresh defaults to false", () => {
+  assert.equal(parseArgs(["--tier=full"]).fresh, false);
+});
+
+test("composeDownArgs: no -v by default (the Ctrl-C/kept-data path); -v only when fresh", () => {
+  const plain = composeDownArgs("/x/compose.yml");
+  assert.deepEqual(plain, ["compose", "-f", "/x/compose.yml", "down"]);
+  assert.ok(!plain.includes("-v"));
+
+  const fresh = composeDownArgs("/x/compose.yml", { fresh: true });
+  assert.deepEqual(fresh, ["compose", "-f", "/x/compose.yml", "down", "-v"]);
+});
+
+test("o11yDevDataModeLine: exact startup mode line for both cases", () => {
+  assert.equal(o11yDevDataModeLine(false), "o11y local data: kept (MinIO/ClickHouse volumes + o11y worker state)");
+  assert.equal(o11yDevDataModeLine(true), "o11y local data: fresh");
+});
+
+test("resetO11yLocalState: runs `docker compose down -v` scoped to the given project, and removes only <o11yDir>/.wrangler/state", () => {
+  withTmpDir((dir) => {
+    const o11yDir = path.join(dir, "workers", "o11y");
+    const otherDir = path.join(dir, "workers", "api"); // must never be touched
+    mkdirSync(path.join(o11yDir, ".wrangler", "state", "v3", "do"), { recursive: true });
+    writeFileSync(path.join(o11yDir, ".wrangler", "state", "v3", "do", "marker.txt"), "x");
+    // A file directly under o11yDir (a sibling of .wrangler/, not under it)
+    // — this is what actually catches a rm-path widened to o11yDir itself
+    // (or to `dir`): the `.wrangler/state` assertion below stays trivially
+    // true either way (a deleted parent takes every child path down with
+    // it), this one does not.
+    writeFileSync(path.join(o11yDir, ".dev.vars"), "O11Y_ENV=local\n");
+    mkdirSync(path.join(otherDir, ".wrangler", "state"), { recursive: true });
+    writeFileSync(path.join(otherDir, ".wrangler", "state", "keep-me.txt"), "x");
+
+    const calls = [];
+    const execFileSyncImpl = (cmd, args, opts) => calls.push({ cmd, args, opts });
+    const composeFile = "/x/compose.yml";
+    const composeEnv = { COMPOSE_PROJECT_NAME: "o11y-q1-test" };
+
+    const result = resetO11yLocalState({ o11yDir, composeFile, composeEnv, execFileSyncImpl });
+
+    assert.equal(calls.length, 1, "exactly one docker invocation");
+    assert.equal(calls[0].cmd, "docker");
+    assert.ok(calls[0].args.includes("-v"), "down -v (the whole point of --fresh)");
+    assert.deepEqual(calls[0].args, ["compose", "-f", composeFile, "down", "-v"]);
+    assert.equal(calls[0].opts.env.COMPOSE_PROJECT_NAME, "o11y-q1-test", "scoped to the right project only");
+
+    assert.equal(result.composeDownRan, true);
+    assert.equal(result.stateDirRemoved, true);
+    assert.equal(existsSync(path.join(o11yDir, ".wrangler", "state")), false, "o11y worker state dir removed");
+    assert.equal(existsSync(path.join(o11yDir, ".dev.vars")), true, "rm scoped to .wrangler/state, not all of o11yDir");
+    assert.equal(existsSync(path.join(otherDir, ".wrangler", "state", "keep-me.txt")), true, "workers/api's own state untouched");
+  });
+});
+
+test("resetO11yLocalState: without composeFile/composeEnv (o11y:dev's own --fresh), no docker call is made at all", () => {
+  withTmpDir((dir) => {
+    const o11yDir = path.join(dir, "workers", "o11y");
+    mkdirSync(path.join(o11yDir, ".wrangler", "state"), { recursive: true });
+    const execFileSyncImpl = () => {
+      throw new Error("must not be called — o11y:dev never runs docker compose");
+    };
+    const result = resetO11yLocalState({ o11yDir, execFileSyncImpl });
+    assert.equal(result.composeDownRan, false);
+    assert.equal(result.stateDirRemoved, true);
+    assert.equal(existsSync(path.join(o11yDir, ".wrangler", "state")), false);
+  });
+});
+
+test("resetO11yLocalState: logs 'nothing to delete' when there is no o11y worker state at all (never throws)", () => {
+  withTmpDir((dir) => {
+    const o11yDir = path.join(dir, "workers", "o11y");
+    const lines = [];
+    const result = resetO11yLocalState({ o11yDir, log: (l) => lines.push(l) });
+    assert.equal(result.stateDirRemoved, false);
+    assert.ok(lines.some((l) => l.includes("nothing to delete")));
+  });
+});
+
+// Revert evidence for the two tests above: dropping the `-v` push in
+// `composeDownArgs({ fresh: true })`'s branch makes the first assertion in
+// "runs `docker compose down -v` scoped..." fail (`args.includes("-v")` is
+// false); widening `resetO11yLocalState`'s rm target from
+// `path.join(o11yDir, ".wrangler", "state")` to `o11yDir` itself (or to
+// `dir`) makes "workers/api's own state untouched" fail, since `otherDir`
+// sits next to `o11yDir` under the same tmp root.
+
+test("o11yLedgerCommittedKeyCount: counts only 'done:' keys in the InboxWriter DO's real SQLite storage, across multiple .sqlite files", async () => {
+  await withTmpDir(async (dir) => {
+    const o11yDir = path.join(dir, "workers", "o11y");
+    const inboxDir = path.join(o11yDir, ".wrangler", "state", "v3", "do", "handsontable-demos-o11y-InboxWriter");
+    mkdirSync(inboxDir, { recursive: true });
+
+    function makeKvSqlite(fileName, rows) {
+      const db = new DatabaseSync(path.join(inboxDir, fileName));
+      db.exec("CREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB) WITHOUT ROWID");
+      for (const key of rows) db.prepare("INSERT INTO _cf_KV (key, value) VALUES (?, ?)").run(key, Buffer.from("1"));
+      db.close();
+    }
+    makeKvSqlite("aaa.sqlite", ["done:inbox/tenant/2026-09-24/one", "done:inbox/tenant/2026-09-24/two", "hash:20260924:abc", "wake:xyz"]);
+    makeKvSqlite("bbb.sqlite", ["done:inbox/tenant/2026-09-24/three"]);
+    // metadata.sqlite (real wrangler layout) never has a _cf_KV table — must
+    // be skipped, not counted as an error.
+    const metaDb = new DatabaseSync(path.join(inboxDir, "metadata.sqlite"));
+    metaDb.exec("CREATE TABLE something_else (id INTEGER)");
+    metaDb.close();
+
+    const count = await o11yLedgerCommittedKeyCount(o11yDir);
+    assert.equal(count, 3);
+  });
+});
+
+test("o11yLedgerCommittedKeyCount: 0 (never throws) when there's no o11y worker state yet", async () => {
+  await withTmpDir(async (dir) => {
+    const count = await o11yLedgerCommittedKeyCount(path.join(dir, "workers", "o11y"));
+    assert.equal(count, 0);
+  });
+});
+
+test("findComposeVolume: null when docker finds nothing for that project+key; the resolved name otherwise", () => {
+  const found = findComposeVolume({
+    composeProjectName: "o11y-q1",
+    volumeKey: "minio-data",
+    execFileSyncImpl: () => "o11y-q1_minio-data\n",
+  });
+  assert.equal(found, "o11y-q1_minio-data");
+
+  const missing = findComposeVolume({
+    composeProjectName: "o11y-q1",
+    volumeKey: "minio-data",
+    execFileSyncImpl: () => "",
+  });
+  assert.equal(missing, null);
+});
+
+test("detectO11yStateDivergence: never touches docker when the ledger has zero committed keys (cheap path first)", async () => {
+  const result = await detectO11yStateDivergence({
+    composeProjectName: "o11y-q1",
+    o11yDir: "/does/not/matter",
+    execFileSyncImpl: () => {
+      throw new Error("must not be called — nothing to warn about");
+    },
+    countCommittedLedgerKeys: async () => 0,
+  });
+  assert.deepEqual(result, { divergent: false, committedCount: 0 });
+});
+
+test("detectO11yStateDivergence: divergent when the ledger has committed keys but the MinIO volume is gone (the warning fires)", async () => {
+  const result = await detectO11yStateDivergence({
+    composeProjectName: "o11y-q1",
+    o11yDir: "/does/not/matter",
+    execFileSyncImpl: () => "", // docker volume ls -q finds nothing
+    countCommittedLedgerKeys: async () => 7,
+  });
+  assert.equal(result.divergent, true);
+  assert.equal(result.committedCount, 7);
+  assert.match(formatO11yDivergenceWarning(result.committedCount), /--fresh/);
+  assert.match(formatO11yDivergenceWarning(result.committedCount), /7/);
+});
+
+test("detectO11yStateDivergence: NOT divergent when committed keys exist but the MinIO volume also exists (normal case, not just fewer bytes)", async () => {
+  const result = await detectO11yStateDivergence({
+    composeProjectName: "o11y-q1",
+    o11yDir: "/does/not/matter",
+    execFileSyncImpl: () => "o11y-q1_minio-data\n",
+    countCommittedLedgerKeys: async () => 7,
+  });
+  assert.equal(result.divergent, false);
+});
+
+// ---------------------------------------------------------------------------
 // drift: every env var / flag the script reads is documented
 // ---------------------------------------------------------------------------
 
@@ -997,12 +1193,16 @@ test("drift: every env var read by dev.mjs/dev-lib.mjs/o11y-dev.mjs is documente
   assert.deepEqual(missing, [], `env var(s) not documented (as a backtick-wrapped name) in run-and-deploy.md's Run locally section: ${missing.join(", ")}`);
 });
 
-test("drift: --tier, --replay, and --help are documented in run-and-deploy.md's Run locally section", () => {
+test("drift: --tier, --replay, --fresh, and --help are documented in run-and-deploy.md's Run locally section", () => {
   const doc = readFileSync(path.join(RUNNER_ROOT, "docs", "run-and-deploy.md"), "utf8");
   const section = extractSection(doc, "## Run locally");
-  for (const flag of ["--tier", "--replay", "--help"]) {
+  for (const flag of ["--tier", "--replay", "--fresh", "--help"]) {
     assert.match(section, new RegExp(flag.replace("-", "\\-")), `${flag} not documented in the Run locally section`);
   }
+});
+
+test("drift: --fresh is documented in dev.mjs --help (HELP_TEXT)", () => {
+  assert.match(HELP_TEXT, /--fresh/);
 });
 
 test("drift: pnpm dev / dev:live / dev:full / o11y:dev are all documented in run-and-deploy.md's Run locally section", () => {

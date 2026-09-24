@@ -1,8 +1,36 @@
 # containers/o11y/compose.yml — local stand-in for the Grafana box (ADR-0041
-# §I, docs/observability-contract.md §10). No `container_name`, no named
-# volumes, no fixed network name: other tasks (T03, T11) run this same file
-# under their own `COMPOSE_PROJECT_NAME` and port block, and compose already
-# namespaces everything by project.
+# §I, docs/observability-contract.md §10). No `container_name`, no fixed
+# network name: other tasks (T03, T11) run this same file under their own
+# `COMPOSE_PROJECT_NAME` and port block, and compose already namespaces
+# everything — containers, networks, AND the two named volumes below — by
+# project, so two projects never share data even though both reference the
+# same short volume keys (`minio-data`/`clickhouse-data`).
+#
+# dev-persist task: `minio-data`/`clickhouse-data` are NAMED volumes (below)
+# so a plain `docker compose ... down` (no `-v`) — what `dev.mjs`'s Ctrl-C
+# teardown runs — keeps them: MinIO holds every Loki chunk/index (the local
+# Analytics Engine's log side), ClickHouse holds `runner_events`. Without
+# this, every dev-stack restart silently lost all local logs/metrics while
+# the o11y worker's own Durable Object state (the inbox ledger, dedupe
+# hashes) survived in `workers/o11y/.wrangler/state` — the two stores would
+# then permanently disagree (ledger keys marked "committed" that no longer
+# exist anywhere; dedupe hashes blocking a fixture replay from ever refilling
+# the now-empty stores). `dev.mjs --fresh` wipes both together instead (see
+# `dev-lib.mjs#resetO11yLocalState`) so they can never diverge that way.
+# Grafana itself stays deliberately ephemeral (no volume on `box`) — nothing
+# about its own state needs to survive a restart.
+#
+# Deliberately NOT given an explicit `name:` (which would need its own
+# `${COMPOSE_PROJECT_NAME}` interpolation, with its own fallback-default
+# footgun if a caller ever passes `-p` instead of the env var and the two
+# disagree) — compose's own automatic `<project>_<key>` naming already gives
+# each project's volumes a distinct name for free, the same guarantee the
+# rest of this file already relies on for containers/networks. Find a given
+# project's volumes with
+# `docker volume ls --filter label=com.docker.compose.project=<project>`
+# (compose labels every resource it creates with the project name — this is
+# also how `dev-lib.mjs`'s divergence check finds them without guessing the
+# resolved name).
 #
 # Run it with (T01's own port block is 4200-4299; every other task uses its
 # own dedicated block):
@@ -101,6 +129,8 @@ services:
     environment:
       MINIO_ROOT_USER: ${O11Y_MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${O11Y_MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio-data:/data
     ports:
       - "127.0.0.1:${O11Y_MINIO_PORT:-9000}:9000"
       - "127.0.0.1:${O11Y_MINIO_CONSOLE_PORT:-9001}:9001"
@@ -144,6 +174,15 @@ services:
       CLICKHOUSE_PASSWORD: ${AE_SQL_TOKEN:-local-dev-token}
     volumes:
       - ./local/clickhouse-init.sql:/docker-entrypoint-initdb.d/clickhouse-init.sql:ro
+      # Only runs the init script above on a genuinely empty data dir (same
+      # convention the image inherits from the postgres/mysql entrypoint
+      # pattern) — on a persisted volume from a prior run, `runner_events`
+      # already exists and this is skipped, which is exactly the point.
+      - clickhouse-data:/var/lib/clickhouse
     ports:
       - "127.0.0.1:${O11Y_CLICKHOUSE_PORT:-8123}:8123"
       - "127.0.0.1:${O11Y_CLICKHOUSE_NATIVE_PORT:-9009}:9000"
+
+volumes:
+  minio-data:
+  clickhouse-data:

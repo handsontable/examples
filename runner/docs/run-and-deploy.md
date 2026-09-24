@@ -187,11 +187,40 @@ hand with `curl "http://localhost:<O11Y_DEV_PORT>/cdn-cgi/local/scheduled"`,
 or replay the fixtures, which trips the new-fingerprint rule on first run)
 shows up locally instead of needing a real Slack webhook.
 
+**Local o11y data persists across a restart.** `containers/o11y/compose.yml`
+gives MinIO and ClickHouse named volumes (Grafana itself stays ephemeral by
+design), and `workers/o11y/.wrangler/state` (the InboxWriter ledger, dedupe
+hashes, local R2 inbox objects) was already kept across a restart before
+this. So a plain Ctrl-C + `pnpm dev:full` again keeps your local
+logs/metrics AND the ledger that tracks them, together — `dev.mjs` prints
+one line at startup either way: `o11y local data: kept (MinIO/ClickHouse
+volumes + o11y worker state)`, or `o11y local data: fresh` when you passed
+`--fresh`.
+
+**`--fresh`** wipes all of that local o11y state together in one shot:
+`docker compose ... down -v` for this project's minio/clickhouse volumes,
+AND `workers/o11y/.wrangler/state`. It prints exactly what it removed.
+Wiping only one half (e.g. `docker volume rm` by hand) is what causes the
+stack to look "broken" after a restart: a `done:` (committed) ledger key
+whose MinIO data is gone is never re-drained on its own, and a fixture
+replay's dedupe hashes can then block the same data from ever refilling the
+now-empty store. If `dev.mjs` finds exactly that mismatch (the MinIO volume
+is gone but the ledger still has committed keys) it prints a warning
+recommending `--fresh` — or, if you'd rather keep what R2 still has (7-day
+retention), `POST /grafana/_o11y/reopen` once the worker is up. `--fresh`
+never touches `workers/api`'s local D1 — that's `--reset-local-db`, a
+different flag for a different store. `pnpm o11y:dev` also accepts
+`--fresh`, for just its own half (workers/o11y's worker state) — it never
+runs `docker compose` itself, so it can't wipe the compose volumes; see that
+command's own startup log for the divergence risk if you're also running
+`dev:full`'s compose stack.
+
 **What Ctrl-C actually cleans up.** Every `wrangler dev`/`vite`/capture-server
 child is spawned in its own process group and signalled as a group on
 Ctrl-C (SIGINT — also SIGTERM and SIGHUP), with an 8s grace period before
 escalating to SIGKILL, and `dev:full` also runs `docker compose ... down`
-for the minio/clickhouse stack it started.
+(never `-v` — see above) for the minio/clickhouse stack it started, keeping
+its named volumes for next time.
 
 What it does **not** do: stop a Tier-2 Sandbox/GrafanaBox container on your
 behalf. Measured for this task: Ctrl-C does not make wrangler's own

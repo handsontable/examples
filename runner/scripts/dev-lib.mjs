@@ -47,6 +47,22 @@ Options:
                     applied-migrations record before starting, then run every
                     migration fresh. Passing this flag IS the confirmation —
                     it prints what it deleted and does not prompt.
+  --fresh           (--tier=full only) wipe ALL local o11y state together
+                    before starting: docker compose ... down -v for this
+                    project's minio/clickhouse (named volumes — logs and
+                    runner_events) AND workers/o11y/.wrangler/state (the
+                    InboxWriter ledger, dedupe hashes, local R2 inbox
+                    objects). Without --fresh, both are KEPT across a
+                    restart on purpose — see docs/run-and-deploy.md's "Run
+                    locally" section for why they must be wiped together,
+                    never separately (the API worker's D1 is untouched
+                    either way; that's --reset-local-db). Prints exactly
+                    what it removed. pnpm o11y:dev also accepts --fresh,
+                    for just the workers/o11y/.wrangler/state half (it never
+                    runs docker compose itself — see that command's own
+                    startup log for the divergence risk if you've also got
+                    a dev:full compose stack's volumes still holding data
+                    from before).
   -h, --help        Print this help and exit 0.
 
 Port overrides (env vars — defaults match the ones documented in
@@ -80,6 +96,7 @@ export function parseArgs(argv) {
   let tier = null;
   let replay = false;
   let resetLocalDb = false;
+  let fresh = false;
   let help = false;
   for (const arg of argv) {
     if (arg === "-h" || arg === "--help") {
@@ -88,6 +105,8 @@ export function parseArgs(argv) {
       replay = true;
     } else if (arg === "--reset-local-db") {
       resetLocalDb = true;
+    } else if (arg === "--fresh") {
+      fresh = true;
     } else if (arg.startsWith("--tier=")) {
       const value = arg.slice("--tier=".length);
       if (value !== "1" && value !== "2" && value !== "full") {
@@ -108,7 +127,10 @@ export function parseArgs(argv) {
   if (resetLocalDb && tier !== "2" && tier !== "full" && tier !== null) {
     errors.push("--reset-local-db is only valid with --tier=2 or --tier=full");
   }
-  return { help, tier, replay, resetLocalDb, errors };
+  if (fresh && tier !== "full" && tier !== null) {
+    errors.push("--fresh is only valid with --tier=full");
+  }
+  return { help, tier, replay, resetLocalDb, fresh, errors };
 }
 
 // ---------------------------------------------------------------------------
@@ -1028,4 +1050,256 @@ export function buildPlan(tier, ports, opts = {}) {
  *  the plan for each tier is built from. */
 export function planNames(tier, ports) {
   return buildPlan(tier, ports).map((p) => p.name);
+}
+
+// ---------------------------------------------------------------------------
+// --fresh (dev-persist task): compose.yml's minio/clickhouse now use named
+// volumes (see that file's own header comment) so a plain restart KEEPS
+// logs/metrics — but `workers/o11y/.wrangler/state` (the InboxWriter
+// ledger/dedupe hashes/local R2 inbox) was ALREADY persisted across a
+// restart before this task. `--fresh` is what wipes both together, so they
+// can never diverge into "ledger says committed, but the data it points at
+// is gone" (a committed key is never re-drained; a dedupe hash blocks a
+// fixture replay from ever refilling the now-empty stores). See
+// `resetO11yLocalState` and `detectO11yStateDivergence` below.
+// ---------------------------------------------------------------------------
+
+/** The exact `docker compose ... down` argv, with `-v` appended only when
+ *  `fresh` — factored out so `dev.mjs`'s normal (kept-data) Ctrl-C teardown
+ *  and `resetO11yLocalState`'s `--fresh` wipe are provably running the same
+ *  command shape with only the one intentional difference, instead of two
+ *  independently-typed argv literals that could silently drift apart. */
+export function composeDownArgs(composeFile, { fresh = false } = {}) {
+  const args = ["compose", "-f", composeFile, "down"];
+  if (fresh) args.push("-v");
+  return args;
+}
+
+/** One line, printed once at startup for `--tier=full` (`dev.mjs`) — the
+ *  point-3 "startup mode line" the task/report needs to be able to point at
+ *  verbatim. */
+export function o11yDevDataModeLine(fresh) {
+  return fresh ? "o11y local data: fresh" : "o11y local data: kept (MinIO/ClickHouse volumes + o11y worker state)";
+}
+
+/**
+ * `--fresh`'s whole job: wipe compose's named volumes (minio/clickhouse —
+ * only when `composeFile`/`composeEnv` are given) AND
+ * `workers/o11y/.wrangler/state` (the InboxWriter ledger, dedupe hashes,
+ * local R2 inbox objects) TOGETHER, so the two local stores this repo now
+ * persists across a restart never diverge (see this section's header
+ * comment). Leaves the API worker's local D1 (`workers/api/.wrangler/state`)
+ * completely alone — that is `--reset-local-db`'s job, a different flag for
+ * a different store.
+ *
+ * `composeFile`/`composeEnv` are optional: `scripts/o11y-dev.mjs` never runs
+ * `docker compose` itself (see that file's own doc comment — it starts only
+ * the o11y worker, not compose's minio/clickhouse), so its own `--fresh`
+ * omits both and this wipes ONLY the o11y worker state. Passing them scopes
+ * the `down -v` to exactly `composeEnv.COMPOSE_PROJECT_NAME` — the same
+ * project-isolation every other compose call in this module already relies
+ * on (compose itself enforces it; this never touches another project's, or
+ * another worktree's, volumes) — and never any other compose project.
+ *
+ * `o11yDir` is a worktree-local path (derived from `RUNNER_ROOT`, which is
+ * resolved from THIS script's own file location — see the top of this
+ * module), so the state-dir removal can never reach another worktree's
+ * `workers/o11y/.wrangler/state` either.
+ *
+ * @param {object} opts
+ * @param {string} opts.o11yDir
+ * @param {string} [opts.composeFile]
+ * @param {NodeJS.ProcessEnv} [opts.composeEnv]
+ * @param {(cmd: string, args: string[], opts?: object) => void} opts.execFileSyncImpl
+ *   real callers pass `(cmd, args, o) => execFileSync(cmd, args, { cwd: RUNNER_ROOT, env: composeEnv, stdio: "inherit", ...o })`
+ * @param {typeof defaultFs} [opts.fs]
+ * @param {(line: string) => void} [opts.log]
+ * @returns {{ composeDownRan: boolean, stateDirRemoved: boolean, stateDir: string }}
+ */
+export function resetO11yLocalState({ o11yDir, composeFile, composeEnv, execFileSyncImpl, fs = defaultFs, log = () => {} }) {
+  let composeDownRan = false;
+  if (composeFile) {
+    log(`--fresh: docker compose down -v (project ${composeEnv?.COMPOSE_PROJECT_NAME ?? "?"})`);
+    execFileSyncImpl("docker", composeDownArgs(composeFile, { fresh: true }), { env: composeEnv });
+    composeDownRan = true;
+  }
+  const stateDir = path.join(o11yDir, ".wrangler", "state");
+  const stateDirRemoved = fs.existsSync(stateDir);
+  if (stateDirRemoved) {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    log(`--fresh: deleted ${stateDir} (InboxWriter ledger, dedupe hashes, local R2 inbox objects)`);
+  } else {
+    log(`--fresh: no ${stateDir} found — nothing to delete there`);
+  }
+  return { composeDownRan, stateDirRemoved, stateDir };
+}
+
+/**
+ * Reads the committed-key count straight out of the InboxWriter DO's local
+ * SQLite storage (wrangler's local dev backing store — confirmed against a
+ * real dev session: `workers/o11y/.wrangler/state/v3/do/<name-containing-InboxWriter>/<id>.sqlite`,
+ * table `_cf_KV(key, value)`, one row per DO storage key). A `done:<key>`
+ * entry (`ledger.ts`'s `DONE_PREFIX`) is a key already resolved as
+ * COMMITTED — the ledger considers it drained and will never look at it
+ * again on its own (only a manual `POST /grafana/_o11y/reopen` moves it back
+ * — see `ledger.ts`'s "Manual reopen" section). If the data those keys point
+ * at (Loki chunks in MinIO) is gone, this count is exactly what makes that
+ * silent — nothing else ever re-checks a `done:` key.
+ *
+ * Best-effort by design: this is a startup convenience check, not a
+ * correctness gate. Returns 0 (never throws) if `node:sqlite` isn't
+ * available, the state dir doesn't exist, or a `.sqlite` file can't be
+ * opened (e.g. locked by a `wrangler dev` still shutting down) — a false
+ * "0" just means the divergence warning below doesn't fire, which is the
+ * safe direction to fail in for a warning-only check.
+ *
+ * @param {string} o11yDir
+ * @param {typeof defaultFsWithReaddir} [fs]
+ * @returns {Promise<number>}
+ */
+export async function o11yLedgerCommittedKeyCount(o11yDir, fs = defaultFsWithReaddir) {
+  const doDir = path.join(o11yDir, ".wrangler", "state", "v3", "do");
+  if (!fs.existsSync(doDir)) return 0;
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = await import("node:sqlite"));
+  } catch {
+    return 0;
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(doDir);
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries.filter((name) => name.includes("InboxWriter"))) {
+    const dir = path.join(doDir, entry);
+    let files;
+    try {
+      files = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!file.endsWith(".sqlite") || file === "metadata.sqlite") continue;
+      let db;
+      try {
+        db = new DatabaseSync(path.join(dir, file), { readOnly: true });
+        const row = db.prepare(`SELECT count(*) as c FROM _cf_KV WHERE key LIKE '${DONE_PREFIX_SQL_LIKE}'`).get();
+        total += Number(row?.c ?? 0);
+      } catch {
+        // Not this DO's storage shape, or the file is locked/corrupt —
+        // best-effort, skip it.
+      } finally {
+        try {
+          db?.close();
+        } catch {
+          // already closed/never opened
+        }
+      }
+    }
+  }
+  return total;
+}
+
+/** `ledger.ts`'s `DONE_PREFIX` ("done:"), as a SQL `LIKE` pattern — kept as
+ *  its own named constant (rather than string-building `"done:" + "%"`
+ *  inline) so it reads as the same contract value that file documents, not
+ *  an ad hoc string. */
+const DONE_PREFIX_SQL_LIKE = "done:%";
+
+/** Finds the real docker volume name compose created for `volumeKey` (a
+ *  short key in compose.yml's top-level `volumes:` block, e.g.
+ *  `"minio-data"`) under project `composeProjectName` — via compose's own
+ *  `com.docker.compose.project`/`com.docker.compose.volume` labels, never by
+ *  guessing compose's own project-name sanitization/prefixing rule (which
+ *  compose.yml deliberately does NOT pin down with an explicit `name:` — see
+ *  that file's header comment). Returns `null` if no such volume exists
+ *  (never created yet, or removed by `docker compose down -v` / a manual
+ *  `docker volume rm`) — every caller here treats that the same as "no
+ *  data", not as an error.
+ * @param {(cmd: string, args: string[]) => Buffer|string} execFileSyncImpl
+ */
+export function findComposeVolume({ composeProjectName, volumeKey, execFileSyncImpl }) {
+  const out = execFileSyncImpl("docker", [
+    "volume",
+    "ls",
+    "-q",
+    "--filter",
+    `label=com.docker.compose.project=${composeProjectName}`,
+    "--filter",
+    `label=com.docker.compose.volume=${volumeKey}`,
+  ])
+    .toString()
+    .trim();
+  if (!out) return null;
+  return out.split("\n")[0].trim();
+}
+
+/**
+ * The divergent case the task calls out: named volumes empty (or gone —
+ * `docker volume rm`, a manual `docker compose down -v` outside `--fresh`,
+ * a volume that was simply never created yet) while the o11y worker's own
+ * ledger still has `done:` (committed) keys pointing at data that isn't
+ * there anymore. Checked in this order (cheapest first): the ledger read is
+ * a local file read, so a worktree with no o11y worker state yet (the
+ * common case — nothing to warn about) never touches `docker` at all.
+ *
+ * Deliberately checks MinIO only, not ClickHouse: `runner_events` (the
+ * Analytics Engine stand-in) is written directly by the worker via
+ * `RUNNER_EVENTS_CLICKHOUSE_URL` — outside the inbox ledger entirely (see
+ * `normalise/points.ts#aeSink`) — so nothing about a `done:` ledger key ever
+ * points at ClickHouse. MinIO is what the ledger's `done:` keys are actually
+ * about: they mark an R2 inbox object as already drained into Loki, whose
+ * chunks/index live in MinIO (`containers/o11y/compose.yml`'s own header
+ * comment). Existence, not "is it empty", is the check: `minio-init`
+ * creates the bucket as part of every successful `up`, so a volume that
+ * exists has necessarily been used — the divergent case this warns about is
+ * specifically the volume being GONE while the ledger thinks otherwise, not
+ * a volume that merely has less in it than the ledger expects.
+ *
+ * Chose "warn and point at --fresh" over an automatic ledger reopen
+ * (`POST /grafana/_o11y/reopen`, `ledger.ts`'s own escape hatch) here on
+ * purpose: this check runs from `dev.mjs`'s `main()` BEFORE the o11y worker
+ * is even started (it decides whether to start compose first), so an
+ * automatic reopen would need its own separate post-startup step, an HTTP
+ * round trip, and a guessed reopen window — real complexity for a dev
+ * convenience script. `--fresh` is a one-flag fix that's already needed for
+ * the "someone ran `docker volume rm` by hand" case this same check exists
+ * to catch; the warning below also names the manual `/grafana/_o11y/reopen`
+ * route as a lighter-weight alternative once the worker is up, for anyone
+ * who'd rather keep what's still in R2 (7-day retention) than start over.
+ *
+ * @param {object} opts
+ * @param {string} opts.composeProjectName
+ * @param {string} opts.o11yDir
+ * @param {(cmd: string, args: string[]) => Buffer|string} opts.execFileSyncImpl
+ * @param {typeof defaultFsWithReaddir} [opts.fs]
+ * @param {(o11yDir: string, fs: typeof defaultFsWithReaddir) => Promise<number>} [opts.countCommittedLedgerKeys]
+ * @returns {Promise<{ divergent: boolean, committedCount: number }>}
+ */
+export async function detectO11yStateDivergence({
+  composeProjectName,
+  o11yDir,
+  execFileSyncImpl,
+  fs = defaultFsWithReaddir,
+  countCommittedLedgerKeys = o11yLedgerCommittedKeyCount,
+}) {
+  const committedCount = await countCommittedLedgerKeys(o11yDir, fs);
+  if (committedCount === 0) return { divergent: false, committedCount: 0 };
+  const minioVolume = findComposeVolume({ composeProjectName, volumeKey: "minio-data", execFileSyncImpl });
+  return { divergent: minioVolume === null, committedCount };
+}
+
+/** The warning line `dev.mjs` prints when {@link detectO11yStateDivergence}
+ *  finds the divergent case. */
+export function formatO11yDivergenceWarning(committedCount) {
+  return (
+    `warning: workers/o11y's local ledger has ${committedCount} committed key(s) marking data as already drained, ` +
+    `but this project's MinIO volume doesn't exist (removed by hand, e.g. \`docker volume rm\`?) — that data is gone ` +
+    `and these keys will NEVER be re-drained on their own. Run \`node scripts/dev.mjs --tier=full --fresh\` to wipe ` +
+    `the o11y worker state too so both stores agree again, or — to keep what R2 still has (7-day retention) instead ` +
+    `of starting over — once the worker is up: POST /grafana/_o11y/reopen for the affected time window.`
+  );
 }
