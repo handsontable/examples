@@ -24,6 +24,8 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { scrubSecrets } from "../containers/o11y/local/redact.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const O11Y_DIR = join(__dirname, "..", "containers", "o11y");
@@ -497,6 +499,28 @@ test("stop-roundtrip.mjs, dev.mjs and the e2e-o11y-local workflow never use quay
   }
 });
 
+// B-I3: `e2e/telemetry-metrics.spec.ts` boots a real local API worker
+// (workers/api) and asserts directly against it; both e2e-o11y-local.yml
+// specs also exercise the shared @handsontable/demo-runtime telemetry code
+// under packages/** (workers/api/src/analytics.ts and monitor-inject.ts
+// import from it) — the same reasoning master.yml's own o11y deploy-gate
+// comment gives for gating on the whole packages/ directory. Without these
+// two subtrees in the pull_request path filter, a regression there is only
+// caught by the nightly run or a manual dispatch, not by the PR that
+// introduces it. Fails without the fix: reverting either added line makes
+// the matching assertion below fail.
+test("e2e-o11y-local.yml: the PR path filter also covers workers/api/** and packages/** (B-I3)", () => {
+  const workflowPath = join(RUNNER_ROOT, "..", ".github", "workflows", "e2e-o11y-local.yml");
+  const code = readFileSync(workflowPath, "utf8");
+  const pathsStart = code.indexOf("pull_request:");
+  assert.ok(pathsStart > -1, "the pull_request trigger must exist");
+  const pathsEnd = code.indexOf("\npermissions:", pathsStart);
+  const pathsBlock = code.slice(pathsStart, pathsEnd > -1 ? pathsEnd : undefined);
+
+  assert.match(pathsBlock, /^\s*- 'runner\/workers\/api\/\*\*'\s*$/m, "must gate on runner/workers/api/**");
+  assert.match(pathsBlock, /^\s*- 'runner\/packages\/\*\*'\s*$/m, "must gate on runner/packages/**");
+});
+
 // --- Dockerfile: pins that the right config files are actually loaded ------
 
 test("Dockerfile: loads the same config files this test pins (source-grep pin)", () => {
@@ -660,4 +684,115 @@ test("logo markup: the waking page's LOGO_SVG and containers/o11y/waking/logo.sv
 
   assert.ok(servedPaths.length > 0, "must find at least one <path d=...> in waking-page.ts's LOGO_SVG");
   assert.deepEqual(servedPaths, assetPaths, "the served LOGO_SVG and the documentation asset copy must carry identical path data, in the same order");
+});
+
+// A-I1: on a failed docker-exec, `sh()` used to print the full command
+// line unredacted, including the plain-text root MINIO_PASSWORD and the
+// restricted test user's generated password — both land in stdout/CI logs.
+// Structural check (matches this file's own "read source, assert on
+// shape" house style): `compose()` must be able to forward a `redact` list
+// through to `sh()` (a trailing options object), `sh()`'s own
+// console.error must run every printed piece (cmd, stdout, stderr) through
+// `scrubSecrets` (imported from `./redact.mjs`, unit-tested separately
+// below since stop-roundtrip.mjs itself runs `main()` at module scope), and
+// the one call site that execs `mc admin ...` with credentials embedded in
+// the script must pass its own per-run password into `redact`.
+test("A-I1: stop-roundtrip.mjs's sh() scrubs every printed failure line via ./redact.mjs, and setupRestrictedMinioUser passes its password to redact", () => {
+  const code = readFileSync(join(O11Y_DIR, "local", "stop-roundtrip.mjs"), "utf8");
+
+  assert.match(code, /import\s*\{\s*scrubSecrets\s*\}\s*from\s*"\.\/redact\.mjs"/, "must import scrubSecrets from ./redact.mjs");
+
+  assert.match(
+    code,
+    /function compose\(\.\.\.args\)\s*\{[\s\S]{0,400}?opts\s*=\s*args\.pop\(\)/,
+    "compose(...) must pop a trailing options object and forward it to sh(), so a caller can pass { redact } through",
+  );
+
+  const shFnMatch = code.match(/function sh\([\s\S]*?\n\}/);
+  assert.ok(shFnMatch, "sh() must exist");
+  assert.match(shFnMatch[0], /MINIO_USER,\s*MINIO_PASSWORD,\s*\.\.\.redactValues/, "sh() must always scrub MINIO_USER and MINIO_PASSWORD, plus any caller-supplied redact values");
+  assert.match(shFnMatch[0], /scrub\(`\$\{cmd\} \$\{args\.join\(" "\)\}`\)/, "the printed command line itself must be scrubbed");
+  assert.match(shFnMatch[0], /scrub\(res\.stdout\)/, "printed stdout must be scrubbed");
+  assert.match(shFnMatch[0], /scrub\(res\.stderr\)/, "printed stderr must be scrubbed");
+
+  const setupFnMatch = code.match(/function setupRestrictedMinioUser\([\s\S]*?\n\}/);
+  assert.ok(setupFnMatch, "setupRestrictedMinioUser must exist");
+  assert.match(
+    setupFnMatch[0],
+    /compose\(\s*"exec",\s*"-T",\s*"minio",\s*"\/bin\/sh",\s*"-c",\s*script,\s*\{\s*redact:\s*\[password\]/,
+    "the mc-admin exec (embeds MINIO_PASSWORD and the restricted user's password in plain text) must pass { redact: [password] } " +
+      "— without it, a real failure there would still print the restricted user's own generated password unredacted",
+  );
+});
+
+// A-I1: real behavioural tests for the extracted scrub function (as opposed
+// to the structural test above, which only pins that stop-roundtrip.mjs
+// WIRES it in correctly). Fails without the fix: reverting redact.mjs's
+// `if (secret)` guard back to an unconditional split/join makes the last
+// test below fail (an empty/undefined secret would corrupt the text).
+test("A-I1: scrubSecrets replaces every occurrence of every given secret, and is a no-op for values that don't appear", () => {
+  const text = "mc alias set c1 http://localhost:9000 \"minioadmin\" \"minioadmin\"\nerror: minioadmin rejected";
+  const out = scrubSecrets(text, ["minioadmin"]);
+  assert.doesNotMatch(out, /minioadmin/, "every occurrence of the secret must be gone");
+  assert.match(out, /<redacted>/, "must actually replace it with a visible redaction marker, not just delete it");
+  assert.equal((out.match(/<redacted>/g) ?? []).length, 3, "must replace ALL three occurrences, not just the first");
+});
+
+test("A-I1: scrubSecrets redacts multiple distinct secrets in the same pass (root creds AND a restricted user's password)", () => {
+  const text = 'mc alias set c1 http://localhost:9000 "minioadmin" "minioadmin" && mc admin user add c1 restricted-abc "restricted-pw-abc"';
+  const out = scrubSecrets(text, ["minioadmin", "restricted-pw-abc"]);
+  assert.doesNotMatch(out, /minioadmin/);
+  assert.doesNotMatch(out, /restricted-pw-abc/);
+  assert.match(out, /restricted-abc/, "the username (not a secret here) must survive untouched");
+});
+
+test("A-I1: scrubSecrets leaves text alone when a secret is empty/undefined (never corrupts the message)", () => {
+  const text = "command failed: docker compose exec minio /bin/sh -c 'mc admin policy create ...'";
+  assert.equal(scrubSecrets(text, ["", undefined, null]), text);
+});
+
+// A-M1: `main()`'s up-front `down -v` wipes whatever project the script
+// resolves to. compose.yml's own header comment documents "o11y-t01" as
+// the T01 developer convention for a manual/persistent run of this exact
+// compose file, and dev.mjs/dev-lib.mjs default the real dev stack to
+// "o11y-dev" — this script's own default must collide with neither, or a
+// developer who happens to run their persistent stack under one of those
+// names loses its data the next time they run this script with no
+// override.
+test("A-M1: stop-roundtrip.mjs's default COMPOSE_PROJECT_NAME never collides with the dev-stack default or the compose.yml-documented manual convention", () => {
+  const code = readFileSync(join(O11Y_DIR, "local", "stop-roundtrip.mjs"), "utf8");
+  const devLibCode = readFileSync(join(RUNNER_ROOT, "scripts", "dev.mjs"), "utf8");
+
+  const defaultMatch = code.match(/COMPOSE_PROJECT_NAME\s*\|\|\s*"([^"]+)"/);
+  assert.ok(defaultMatch, "stop-roundtrip.mjs must fall back to a literal default project name");
+  const defaultProject = defaultMatch[1];
+
+  assert.notEqual(defaultProject, "o11y-t01", "must not reuse compose.yml's documented manual/T01 project-name convention");
+
+  const devDefaultMatch = devLibCode.match(/COMPOSE_PROJECT_NAME\s*\|\|\s*"([^"]+)"/);
+  assert.ok(devDefaultMatch, "dev.mjs must have its own literal default project name to compare against");
+  assert.notEqual(defaultProject, devDefaultMatch[1], "must not reuse dev.mjs's own dev-stack default project name");
+});
+
+// A-M1 (fix round 2): a differing DEFAULT alone does not protect a
+// developer who has `COMPOSE_PROJECT_NAME=o11y-dev` exported in their shell
+// (e.g. left over from working on the dev stack directly) — the env var
+// still wins over this script's own default, and `down -v` would still
+// wipe the real dev stack's named volumes. Behavioural CLI test (real
+// `node` spawn, no docker needed — refusal must happen before any docker
+// call): fails without the fix (reverting the refusal block) because the
+// script would instead try to run `docker compose ... down -v`, which
+// either succeeds (data loss) or fails with a docker-shaped error, never
+// this specific refusal message.
+test("A-M1: stop-roundtrip.mjs refuses to run when COMPOSE_PROJECT_NAME is explicitly set to dev.mjs's own dev-stack default", () => {
+  const script = join(O11Y_DIR, "local", "stop-roundtrip.mjs");
+  const result = spawnSync(process.execPath, [script], {
+    encoding: "utf8",
+    timeout: 10000,
+    env: { ...process.env, COMPOSE_PROJECT_NAME: "o11y-dev", PATH: "/nonexistent" },
+  });
+  assert.notEqual(result.status, 0);
+  const output = `${result.stdout}${result.stderr}`;
+  assert.match(output, /refusing to run under this project name/i);
+  assert.match(output, /o11y-dev/);
 });

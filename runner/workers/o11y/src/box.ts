@@ -151,6 +151,42 @@ function normalizedPathname(url: URL): string | null {
  *  numeric id if that form was used, 3 = `<rest>`. */
 const DATASOURCE_PROXY_RE = /^\/(?:grafana\/)?api\/datasources\/proxy\/(?:uid\/([^/]+)|(\d+))\/(.*)$/i;
 
+/** A-I2: Grafana's MODERN resource-proxy route —
+ *  `/api/datasources/uid/<uid>/resources/<rest>` or the numeric-id form
+ *  `/api/datasources/<id>/resources/<rest>` — reaches the Loki datasource
+ *  plugin's Go `CallResource` handler, which (confirmed live against this
+ *  box's own real Grafana 11.4 + Loki plugin, COMMON.md port-block rule,
+ *  project o11y-x1, see the task report) does NOT limit itself to a small
+ *  registered set of names the way the earlier version of this comment
+ *  claimed: reading the box's own container logs (`docker compose logs
+ *  box`, `logger=tsdb.loki endpoint=callResource ... resourcePath=...`)
+ *  shows the plugin builds the REAL outbound Loki request as literally
+ *  `/loki/api/v1/<rest>` for whatever `<rest>` the client sent — e.g.
+ *  `resources/config` really does reach Loki at `/loki/api/v1/config`
+ *  (Loki's own 404, not Grafana's) — and forwards the response back
+ *  verbatim. So this route is not "unregistered names can't reach Loki at
+ *  all"; it is "everything is forwarded under the fixed `/loki/api/v1/`
+ *  prefix". `resources/flush`/`resources/shutdown`/`resources/config` fail
+ *  ONLY because Loki's real admin/config endpoints live OUTSIDE that
+ *  prefix (Loki's bare root, e.g. `/flush`), a coincidence of Loki's own
+ *  URL layout, not something Grafana enforces; `resources/push` reaches
+ *  Loki's real `/loki/api/v1/push` and gets a genuine `405` from Loki
+ *  itself (regardless of the client's own GET/POST — the plugin's
+ *  outbound call does not appear to forward the client's HTTP method for
+ *  this resource). A `--path-as-is` `../` traversal attempt at
+ *  `resources/../otlp/v1/logs` (targeting the drain's own OTLP ingest
+ *  path, which — unlike flush/shutdown — genuinely IS under Loki's root,
+ *  not `/loki/api/v1/`) reached Loki as the literal, uncleaned string
+ *  `/loki/api/v1/../otlp/v1/logs` and 404'd there too — Loki's own router
+ *  does not resolve `..` segments either, so this specific escape did not
+ *  work, but nothing about the mechanism *rules it out* for a future Loki
+ *  version. Given all of this, the allowlist below is not defense in
+ *  depth against something already structurally impossible — it is the
+ *  actual boundary: this route is a real, live, working forward into
+ *  Loki's `/loki/api/v1/*` namespace, gated here the same way the legacy
+ *  proxy route is. */
+const DATASOURCE_RESOURCE_RE = /^\/(?:grafana\/)?api\/datasources\/(?:uid\/([^/]+)\/resources|(\d+)\/resources)\/(.*)$/i;
+
 /** Loki's own read/query HTTP API (`/loki/api/v1/*`) — everything a
  *  dashboard panel or Explore can legitimately need through the legacy
  *  proxy path (this box's own live check, `dev:full` against a real Grafana
@@ -162,39 +198,61 @@ const DATASOURCE_PROXY_RE = /^\/(?:grafana\/)?api\/datasources\/proxy\/(?:uid\/(
 const LOKI_ALLOWED_QUERY_RE =
   /^loki\/api\/v1\/(?:query|query_range|labels|label\/[^/]+\/values|series|index\/stats|index\/volume(?:_range)?|patterns|detected_labels|detected_fields|tail|format_query)\/?$/i;
 
-/** `true` for a datasource-proxy request that is not on the Loki read/query
- *  allowlist above (minor triage item 2). Identification is by the
- *  SELECTOR, not by `<rest>` — the opposite of an allowlist keyed on the
+/** A-I2: the SAME logical read/query set as {@link LOKI_ALLOWED_QUERY_RE},
+ *  without the `loki/api/v1/` prefix — the modern resource route's `<rest>`
+ *  is the bare Go handler name (`labels`, `series`, `index/stats`, ...),
+ *  confirmed live: `resources/query`/`resources/series`/`resources/labels`/
+ *  `resources/index/stats`/`resources/detected_labels`/
+ *  `resources/label/<name>/values`/`resources/query_range`/
+ *  `resources/tail`/`resources/format_query` all answer normally against
+ *  this box's real Grafana+Loki; `resources/patterns` 404s on THIS plugin
+ *  build specifically (kept in the allowlist regardless — an
+ *  unimplemented-but-allowed name is harmless, it still 404s inside
+ *  Grafana; the risk this gate exists for is an implemented name that
+ *  shouldn't be reachable, not the reverse). */
+const LOKI_ALLOWED_RESOURCE_RE =
+  /^(?:query|query_range|labels|label\/[^/]+\/values|series|index\/stats|index\/volume(?:_range)?|patterns|detected_labels|detected_fields|detected_fields\/[^/]+\/values|tail|format_query)\/?$/i;
+
+/** `true` if `uid`/`numericId` (as extracted from either the legacy proxy
+ *  or the modern resource route) identifies a request this gate must hold
+ *  to an allowlist at all — a `loki-*` uid, or the numeric-id form
+ *  (default-deny, see below). `false` (untouched by this gate) for any
+ *  other uid, e.g. ClickHouse's `clickhouse-runner-events`. */
+function isGatedDatasourceSelector(uid: string | undefined, numericId: string | undefined): boolean {
+  if (uid !== undefined) return /^loki-/i.test(uid); // a non-Loki uid (e.g. ClickHouse) — untouched
+  return numericId !== undefined; // the numeric-id form cannot be resolved back to an identity
+  // here, so it gets the SAME strict allowlist unconditionally — nothing
+  // provisioned needs it (see DATASOURCE_PROXY_RE's own doc comment), so
+  // default-deny is the safe choice for it, including for what would
+  // otherwise be a legitimate ClickHouse query issued through a numeric id
+  // instead of its uid.
+}
+
+/** `true` for a datasource-proxy OR datasource-resource request that is not
+ *  on the Loki read/query allowlist above (minor triage item 2; A-I2
+ *  extends this to the modern `/resources/` route). Identification is by
+ *  the SELECTOR, not by `<rest>` — the opposite of an allowlist keyed on the
  *  forwarded path would risk missing an unenumerated Loki endpoint (e.g.
  *  the drain's own ingest path, `/otlp/v1/logs`, is also served at Loki's
  *  bare root and is NOT under `/loki/...` — a `<rest>`-shape denylist would
- *  never catch it):
- *  - `uid/<uid>` where `<uid>` (decoded, case-folded) starts with `loki-` —
- *    both provisioned Loki datasources match, and so would any future one
- *    that keeps this naming convention — gets the strict allowlist.
- *  - any OTHER uid (ClickHouse's `clickhouse-runner-events`, or anything
- *    else) is never touched by this gate at all.
- *  - the numeric-id form cannot be resolved back to a datasource identity
- *    here, so it gets the SAME strict allowlist unconditionally — nothing
- *    provisioned needs it (see this file's own doc comment above), so
- *    default-deny is the safe choice for it, including for what would
- *    otherwise be a legitimate ClickHouse query issued through a numeric id
- *    instead of its uid. */
+ *  never catch it). */
 function isBlockedLokiProxyPath(normalized: string): boolean {
   // `normalized` is already fully percent-decoded and slash-collapsed by
   // this function's one caller (`isBlockedContainerRequest`, via
   // `normalizedPathname`) — `uid`/`rest` below need no further decoding.
-  const match = DATASOURCE_PROXY_RE.exec(normalized);
-  if (!match) return false;
-  const [, uid, numericId, rest] = match;
-  if (uid !== undefined) {
-    if (!/^loki-/i.test(uid)) return false; // a non-Loki uid (e.g. ClickHouse) — untouched
-  } else if (numericId === undefined) {
-    return false; // unreachable given the regex, but keeps this exhaustive
+  const proxyMatch = DATASOURCE_PROXY_RE.exec(normalized);
+  if (proxyMatch) {
+    const [, uid, numericId, rest] = proxyMatch;
+    if (!isGatedDatasourceSelector(uid, numericId)) return false;
+    return !LOKI_ALLOWED_QUERY_RE.test(rest ?? "");
   }
-  // Either a `loki-*` uid, or the numeric-id form (default-deny) — both
-  // held to the same strict read/query allowlist.
-  return !LOKI_ALLOWED_QUERY_RE.test(rest ?? "");
+  const resourceMatch = DATASOURCE_RESOURCE_RE.exec(normalized);
+  if (resourceMatch) {
+    const [, uid, numericId, rest] = resourceMatch;
+    if (!isGatedDatasourceSelector(uid, numericId)) return false;
+    return !LOKI_ALLOWED_RESOURCE_RE.test(rest ?? "");
+  }
+  return false;
 }
 
 function isBlockedContainerRequest(request: Request): boolean {

@@ -53,6 +53,7 @@ import {
   resetO11yLocalState,
   detectO11yStateDivergence,
   formatO11yDivergenceWarning,
+  bringUpO11yCompose,
 } from "./dev-lib.mjs";
 
 const COLORS = {
@@ -144,17 +145,29 @@ async function main() {
     process.exit(1);
   }
 
-  if (resetLocalDb) {
-    resetLocalD1(path.join(RUNNER_ROOT, "workers", "api"), undefined, (line) => log("dev", line));
-  }
-
+  // B-9: the Docker-availability check used to run AFTER --reset-local-db,
+  // so `dev.mjs --tier=2 --reset-local-db` with Docker not running deleted
+  // workers/api's local D1 state (`.wrangler/state/v3/d1` + the
+  // applied-migrations record) and then immediately exited on the
+  // Docker-not-running error — a surprising side effect for a run that
+  // otherwise did nothing. `--reset-local-db` is only ever valid alongside
+  // `--tier=2`/`--tier=full` (parseArgs above already enforces this), the
+  // same tiers that need Docker, so checking Docker first and resetting
+  // only after it is confirmed available costs nothing and removes that
+  // surprise.
   let containersBefore = new Set();
   if (tier === "2" || tier === "full") {
     if (!isDockerAvailable((cmd, args) => execFileSync(cmd, args, { stdio: "ignore" }))) {
       console.error(`error: ${DOCKER_NOT_RUNNING_MESSAGE}`);
       process.exit(1);
     }
+  }
 
+  if (resetLocalDb) {
+    resetLocalD1(path.join(RUNNER_ROOT, "workers", "api"), undefined, (line) => log("dev", line));
+  }
+
+  if (tier === "2" || tier === "full") {
     // Pre-pull gate (dev-prepull task): every container base image this
     // tier's Dockerfiles declare must be present BEFORE any worker starts.
     // Without this, `wrangler dev`'s own local container build can fail
@@ -380,10 +393,22 @@ async function main() {
     // MINIO_DEFAULT_BUCKETS before its healthcheck goes green, so `--wait`
     // (block until every named service is healthy/running) replaces waiting
     // on the old init container's exit code.
-    execFileSync("docker", ["compose", "-f", composeFile, "up", "-d", "--wait", "minio", "clickhouse"], {
-      cwd: RUNNER_ROOT,
-      env: composeEnv,
-      stdio: "inherit",
+    //
+    // B-I2: brings the stack up and, if `up` itself throws (`--wait` above
+    // makes that a real possibility — a healthcheck that never goes green —
+    // where the old `up -d` essentially never threw here), tears the SAME
+    // project back down (no `-v`, data kept) before rethrowing — see
+    // `bringUpO11yCompose`'s own doc comment in dev-lib.mjs for why this
+    // needed to be pulled out of `main()` (a throw here happens BEFORE this
+    // stack's own teardown step, further down, is ever pushed onto
+    // `teardownSteps`, and propagates straight past the readiness-wait
+    // try/catch to `main().catch`, which only logs and `process.exit(1)`s —
+    // no cleanup at all).
+    bringUpO11yCompose({
+      composeFile,
+      composeEnv,
+      execFileSyncImpl: (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: RUNNER_ROOT, stdio: "inherit", ...opts }),
+      log: (line) => log("compose", line),
     });
     teardownSteps.push(() => {
       log("compose", "tearing down minio + clickhouse (data kept — named volumes; use --fresh next run to wipe)");

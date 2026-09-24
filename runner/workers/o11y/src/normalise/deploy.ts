@@ -66,8 +66,33 @@ export async function processDeployPayload(
     },
     env,
   );
+  // B-I1: `cf_version_id` can arrive as `""` — `isDeployPayload` only checks
+  // it is a string, and `master.yml`'s own `version_id=$(grep ...) || true`
+  // deliberately lets a wrangler wording change through as an empty string
+  // rather than failing the deploy job after the deploy already shipped
+  // (that workflow now also emits its own `::warning::` for this — see
+  // B-I1's fix in `.github/workflows/master.yml`). This ingest path must
+  // NEVER reject the event over it (the deploy still happened and is still
+  // worth recording), but an empty version id silently corrupts the ADR
+  // §C.2 deploy-correlation record — mark it both ways: a `console.warn`
+  // (reaches Workers Logs -> Loki, same as every other anomaly in this
+  // file) and a body field (NOT a §4/§5 `attributes` key — that bag is a
+  // fixed, contract-governed schema via `ALLOWED_ATTRIBUTE_KEYS`, which
+  // `scrubTelemetry` below strips anything off of; the body is free JSON,
+  // so a marker there survives scrubbing and is still queryable in
+  // Loki/Grafana via a body filter, e.g. `cf_version_id_missing":true`).
+  const versionIdMissing = payload.cf_version_id.length === 0;
+  if (versionIdMissing) {
+    console.warn(`[o11y] deploy event for "${payload.service}" (sha ${payload.sha}) arrived with an empty cf_version_id`);
+  }
   let record: NormalisedRecord = {
-    body: JSON.stringify({ event: "deploy", service: payload.service, sha: payload.sha, cf_version_id: payload.cf_version_id }),
+    body: JSON.stringify({
+      event: "deploy",
+      service: payload.service,
+      sha: payload.sha,
+      cf_version_id: payload.cf_version_id,
+      ...(versionIdMissing ? { cf_version_id_missing: true } : {}),
+    }),
     timeUnixNano: msToUnixNano(receivedAtMs),
     resourceAttributes,
     attributes: {},

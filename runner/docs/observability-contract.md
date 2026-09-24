@@ -94,7 +94,7 @@ only; it writes Loki data and the clean markers there. Lifecycle rules: `browser
 | Name | Kind | Value / purpose |
 |---|---|---|
 | `RUNNER_EVENTS` | Analytics Engine | dataset `runner_events` |
-| `O11Y` | service binding | `handsontable-demos-o11y`, `heartbeat()` for the watchdog |
+| `O11Y` | service binding, entrypoint `O11yHeartbeat` | `handsontable-demos-o11y`, `heartbeat()` RPC for the watchdog (not an HTTP route — A-C1) |
 | `SERVICE_VERSION` | `--var` in the deploy script | full `GITHUB_SHA` |
 | `SENTRY_SCOPE` | var | `full` \| `uncaught` (§11) |
 | `CF_ACCOUNT_ID` | var | GraphQL Analytics API account tag; also scopes the Analytics Engine SQL API read below |

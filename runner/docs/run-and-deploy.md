@@ -862,14 +862,15 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://demos.handsontable.com/
 ### First deploy, in order
 
 The o11y worker's `services` binding (`API`, entrypoint `O11yUsage`) and the
-API worker's `O11Y` binding are **mutual** — each names the other's Worker.
-Deploy the o11y worker **first**: its own binding resolves lazily (a Workers
-service binding is not validated against the target actually existing at
-*deploy* time), but `O11yUsage.recordAwakeSeconds`/`o11ySpend` calls from
-`GrafanaBox` will fail until the API worker is deployed too, and the API
-worker's own `env.O11Y` calls (the watchdog heartbeat) fail the same way in
-the other direction until the o11y worker exists. Deploying o11y first means
-there is only ever one direction of "the other side isn't up yet" instead of
+API worker's `O11Y` binding (entrypoint `O11yHeartbeat`) are **mutual** —
+each names the other's Worker's named RPC entrypoint. Deploy the o11y worker
+**first**: its own binding resolves lazily (a Workers service binding is not
+validated against the target actually existing at *deploy* time), but
+`O11yUsage.recordAwakeSeconds`/`o11ySpend` calls from `GrafanaBox` will fail
+until the API worker is deployed too, and the API worker's own
+`env.O11Y.heartbeat()` RPC calls (the watchdog heartbeat) fail the same way
+in the other direction until the o11y worker exists. Deploying o11y first
+means there is only ever one direction of "the other side isn't up yet" instead of
 two. `master.yml` encodes this ordering automatically — `deploy-api` needs
 `deploy-o11y` and proceeds once it is `success` or was skipped (unrelated
 push) — so from the first merge onward this is handled without a manual step.
@@ -913,9 +914,14 @@ These are carried from the tasks that found them, not newly discovered here:
   replaced by `echo`. Watch the first real `build` job's logs for this step specifically.
 - **The deploy-event steps' `Current Version ID:` grep has never run against a real
   (non-dry-run) deploy** (T10) — an empty capture degrades to an empty `cf_version_id`
-  rather than failing the job. Spot-check the first real deploy's `/telemetry/deploy`
-  payload (visible as a Runner-overview annotation, or in `o11y worker log stream`) for a
-  real, non-empty `cf_version_id`.
+  rather than failing the job. B-I1 (focused review fix round) added a mitigation, not a
+  fix of the underlying grep: `master.yml` now emits `::warning::` when the parse comes
+  back empty, and the o11y worker's ingest path (`normalise/deploy.ts`) marks the record
+  with `cf_version_id_missing: true` in its body (never rejecting it — the deploy already
+  shipped) plus a `console.warn`, so the gap is visible in the Actions run and queryable in
+  Loki even if nobody is watching CI logs in real time. Spot-check the first real deploy's
+  `/telemetry/deploy` payload (visible as a Runner-overview annotation, or in `o11y worker
+  log stream`) for a real, non-empty `cf_version_id` regardless.
 - **The export destination's forced-timeout behaviour is unmeasured** (T02's own probe
   exercised a forced-500, not a hang) — if Cloudflare's log export ever stops making
   progress rather than erroring cleanly, that failure mode has no prior data point.

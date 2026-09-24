@@ -89,6 +89,59 @@ test("RUNNER_EVENTS and O11Y bindings are wired (not just declared)", () => {
   assert.equal(wrangler.services[0].service, "handsontable-demos-o11y");
 });
 
+// A-C1: without `entrypoint`, `env.O11Y` resolves to the o11y worker's
+// *default* export (its public `fetch()` router), not the named
+// `O11yHeartbeat` `WorkerEntrypoint` — the o11y worker's default export no
+// longer answers `/_internal/heartbeat` at all (RPC-only, W1), so that
+// binding shape is permanently, silently broken in production (the watchdog
+// latches "stale" forever after its first false page). This test would have
+// caught the regression on its own: `wrangler.services[0]` had no
+// `entrypoint` key at all before this fix.
+test("A-C1: the O11Y service binding targets the named O11yHeartbeat RPC entrypoint, not the o11y worker's default export", () => {
+  assert.equal(
+    wrangler.services[0].entrypoint,
+    "O11yHeartbeat",
+    "env.O11Y must bind to entrypoint: \"O11yHeartbeat\" — without it, env.O11Y resolves to the o11y " +
+      "worker's default export, which no longer serves /_internal/heartbeat (RPC-only since W1)",
+  );
+});
+
+// Structural cross-check (the fix the A-review asked for): every declared
+// `entrypoint` on a service binding this Worker owns must be a real named
+// export of the target worker's own `index.ts` — a config/code drift here
+// is exactly what let A-C1 through (the binding and the RPC class it names
+// were changed by two different tasks, in two different worktrees, and
+// nothing re-verified the seam once both landed).
+test("A-C1: every O11Y* service binding's declared entrypoint is a real named export of the o11y worker", () => {
+  const o11yIndexPath = fileURLToPath(new URL("../workers/o11y/src/index.ts", import.meta.url));
+  const o11yIndexSrc = fs.readFileSync(o11yIndexPath, "utf8");
+  for (const svc of wrangler.services) {
+    if (svc.service !== "handsontable-demos-o11y") continue;
+    assert.ok(svc.entrypoint, `services[] entry for "${svc.service}" (binding ${svc.binding}) must declare an entrypoint`);
+    const exportRe = new RegExp(`export\\s*\\{[^}]*\\b${svc.entrypoint}\\b[^}]*\\}|export\\s+class\\s+${svc.entrypoint}\\b`);
+    assert.match(
+      o11yIndexSrc,
+      exportRe,
+      `workers/o11y/src/index.ts does not export "${svc.entrypoint}", which ${svc.binding}'s entrypoint names`,
+    );
+  }
+});
+
+// A-C1: the watchdog must call the RPC method directly, never `.fetch()` on
+// the binding — a `.fetch()` call would silently regress to the broken
+// pre-fix shape (the o11y worker's default export no longer answers
+// `/_internal/heartbeat` over HTTP at all).
+test("A-C1: o11y-watchdog.ts calls the heartbeat() RPC method, never .fetch(), on the O11Y binding", () => {
+  const watchdogPath = fileURLToPath(new URL("../workers/api/src/o11y-watchdog.ts", import.meta.url));
+  const watchdogSrc = fs.readFileSync(watchdogPath, "utf8");
+  assert.match(watchdogSrc, /\.heartbeat\(\)/, "o11y-watchdog.ts must call the named RPC method heartbeat()");
+  assert.doesNotMatch(
+    watchdogSrc,
+    /o11y\.fetch\(/,
+    "o11y-watchdog.ts must never call .fetch() on the O11Y binding — that path is RPC-only since W1",
+  );
+});
+
 test("SENTRY_SCOPE defaults to full (contract §11)", () => {
   assert.equal(wrangler.vars.SENTRY_SCOPE, "full");
 });

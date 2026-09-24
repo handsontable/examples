@@ -133,9 +133,19 @@
 
   // ---- Observability (ADR-0041) — scaffold-only additions (T00) ----------
   // Declared so T05 wires real usage against a stable binding shape; nothing
-  // in this worker writes to either yet.
+  // in this worker writes to RUNNER_EVENTS yet.
   "analytics_engine_datasets": [{ "binding": "RUNNER_EVENTS", "dataset": "runner_events" }],
-  "services": [{ "binding": "O11Y", "service": "handsontable-demos-o11y" }],
+  // `entrypoint: "O11yHeartbeat"` targets the o11y worker's named
+  // `WorkerEntrypoint` (workers/o11y/src/heartbeat.ts) directly. Without it,
+  // `env.O11Y` resolves to the o11y worker's *default* export (its public
+  // `fetch()` router), which 404s `/_internal/heartbeat` since that route
+  // was removed in favour of RPC-only access (see o11y-watchdog.ts) — this
+  // is the mirror of workers/o11y/wrangler.jsonc's own `API` binding,
+  // which already targets `entrypoint: "O11yUsage"` the same way. Grepped:
+  // `env.O11Y` has exactly one reader in this Worker (o11y-watchdog.ts), so
+  // no other caller depends on this binding's old (unnamed/default-export)
+  // shape.
+  "services": [{ "binding": "O11Y", "service": "handsontable-demos-o11y", "entrypoint": "O11yHeartbeat" }],
 
   // Routes on demos.handsontable.com are deliberately NOT declared here — they
   // are passed via `--routes` in the `deploy` script (package.json). When routes

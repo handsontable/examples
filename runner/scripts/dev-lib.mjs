@@ -1529,6 +1529,52 @@ export function resetO11yLocalState({ o11yDir, composeFile, composeEnv, execFile
 }
 
 /**
+ * B-I2: brings up `minio`/`clickhouse` via `docker compose ... up -d --wait`
+ * for `dev.mjs --tier=full`, and — if that call itself throws — tears the
+ * SAME compose project back down (`down`, never `-v`: this is a startup
+ * FAILURE, not `--fresh`'s deliberate wipe, so any data either service did
+ * manage to write stays) before rethrowing, instead of leaving whichever of
+ * the two DID start orphaned with no teardown ever invoked.
+ *
+ * Why this needs its own function/test rather than just a try/catch inline
+ * in `dev.mjs`: `--wait` (T1) made the `up` call genuinely able to throw on
+ * a real condition (a named service's healthcheck never going green) —
+ * before T1's `--wait`, the old `up -d` call essentially never threw here,
+ * so nothing exercised the "up failed, orphaning containers" path. A throw
+ * from `up` happens BEFORE `dev.mjs`'s own `teardownSteps.push(...)` for
+ * this compose stack is ever reached (`main()`'s SIGINT/SIGTERM teardown,
+ * `cleanup()`), and it propagates straight past the try/catch around the
+ * readiness wait further down to `main().catch`, which only logs and
+ * `process.exit(1)`s — no cleanup at all. Injectable `execFileSyncImpl`
+ * mirrors {@link resetO11yLocalState}'s own pattern, so this is
+ * unit-testable with a stub instead of a real `docker compose` (and,
+ * before this extraction, the only way to exercise `dev.mjs`'s own
+ * try/catch was a slow CLI-level `spawnSync` test that ran real `wrangler`
+ * D1 migrations to get there — see `pipeline/dev-script.test.mjs`'s own
+ * test for this).
+ *
+ * @param {object} opts
+ * @param {string} opts.composeFile
+ * @param {NodeJS.ProcessEnv} opts.composeEnv
+ * @param {(cmd: string, args: string[], opts?: object) => void} opts.execFileSyncImpl
+ *   real callers pass `(cmd, args, o) => execFileSync(cmd, args, { cwd: RUNNER_ROOT, stdio: "inherit", ...o })`
+ * @param {(line: string) => void} [opts.log]
+ */
+export function bringUpO11yCompose({ composeFile, composeEnv, execFileSyncImpl, log = () => {} }) {
+  try {
+    execFileSyncImpl("docker", ["compose", "-f", composeFile, "up", "-d", "--wait", "minio", "clickhouse"], { env: composeEnv });
+  } catch (err) {
+    log(`startup failed (${err.message}) — tearing down minio + clickhouse (data kept)`);
+    try {
+      execFileSyncImpl("docker", composeDownArgs(composeFile), { env: composeEnv });
+    } catch (downErr) {
+      log(`teardown after startup failure also failed: ${downErr.message}`);
+    }
+    throw err;
+  }
+}
+
+/**
  * Reads the committed-key count straight out of the InboxWriter DO's local
  * SQLite storage (wrangler's local dev backing store — confirmed against a
  * real dev session: `workers/o11y/.wrangler/state/v3/do/<name-containing-InboxWriter>/<id>.sqlite`,

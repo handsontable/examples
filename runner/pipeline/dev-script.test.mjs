@@ -62,6 +62,7 @@ import {
   composeDownArgs,
   o11yDevDataModeLine,
   resetO11yLocalState,
+  bringUpO11yCompose,
   o11yLedgerCommittedKeyCount,
   findComposeVolume,
   detectO11yStateDivergence,
@@ -856,6 +857,111 @@ test("isDockerAvailable: false when `docker info` throws", () => {
 test("DOCKER_NOT_RUNNING_MESSAGE: names the fix (start Docker), not just the symptom", () => {
   assert.match(DOCKER_NOT_RUNNING_MESSAGE, /docker info/);
   assert.match(DOCKER_NOT_RUNNING_MESSAGE, /Start Docker/);
+});
+
+// B-I2: `--wait` (T1) makes `docker compose ... up -d --wait minio
+// clickhouse` block-and-FAIL on a real condition (a named service's
+// healthcheck never goes green) — before this fix, that throw happened
+// BEFORE this call's own teardown step was ever pushed onto
+// `teardownSteps`, and propagated straight past the try/catch around the
+// readiness wait further down to `main().catch`, which only logs and
+// `process.exit(1)`s — no cleanup, no `docker compose down`, orphaning
+// whichever of minio/clickhouse DID start under `up -d`. `bringUpO11yCompose`
+// (extracted to dev-lib.mjs specifically so this is unit-testable with a
+// stub, matching `resetO11yLocalState`'s own pattern — a real CLI-level
+// `spawnSync` test would otherwise be the only way to exercise this, and
+// would have to run real `wrangler` D1 migrations just to reach the compose
+// section, contradicting this file's own header comment). Fails without
+// the fix: reverting `bringUpO11yCompose`'s try/catch back to a bare
+// `execFileSyncImpl("docker", [...up...])` makes the "down" call never
+// happen — the down-args assertion below fails.
+test("bringUpO11yCompose: tears down (no -v, data kept) when the compose up itself throws, then rethrows", () => {
+  const calls = [];
+  const execFileSyncImpl = (cmd, args, opts) => {
+    calls.push({ cmd, args, opts });
+    if (args[3] === "up") throw new Error("container minio did not become healthy");
+    return "";
+  };
+  assert.throws(
+    () => bringUpO11yCompose({ composeFile: "/x/compose.yml", composeEnv: { COMPOSE_PROJECT_NAME: "o11y-test" }, execFileSyncImpl }),
+    /container minio did not become healthy/,
+    "must rethrow the original up failure, not swallow it",
+  );
+  assert.equal(calls.length, 2, "must call docker exactly twice: the failed up, then a down");
+  assert.deepEqual(calls[0].args, ["compose", "-f", "/x/compose.yml", "up", "-d", "--wait", "minio", "clickhouse"]);
+  assert.deepEqual(calls[1].args, composeDownArgs("/x/compose.yml"), "the teardown must be composeDownArgs' own no -v shape");
+  assert.doesNotMatch(calls[1].args.join(" "), /-v/, "must never pass -v here — only --fresh's own explicit wipe does that");
+});
+
+test("bringUpO11yCompose: a successful up calls docker exactly once, no teardown", () => {
+  const calls = [];
+  const execFileSyncImpl = (cmd, args, opts) => {
+    calls.push({ cmd, args, opts });
+    return "";
+  };
+  bringUpO11yCompose({ composeFile: "/x/compose.yml", composeEnv: {}, execFileSyncImpl });
+  assert.equal(calls.length, 1, "must not attempt a teardown when up itself succeeds");
+});
+
+test("bringUpO11yCompose: still rethrows the original up error even if the teardown attempt ALSO fails", () => {
+  const execFileSyncImpl = (cmd, args) => {
+    if (args[3] === "up") throw new Error("up failed");
+    throw new Error("down also failed");
+  };
+  assert.throws(() => bringUpO11yCompose({ composeFile: "/x/compose.yml", composeEnv: {}, execFileSyncImpl }), /up failed/);
+});
+
+// B-9: `--reset-local-db` used to run BEFORE the Docker-availability check,
+// so `dev.mjs --tier=2 --reset-local-db` with Docker not running deleted
+// workers/api's local D1 state and then immediately exited on the
+// Docker-not-running error — a surprising side effect for a run that
+// otherwise did nothing. `resetLocalD1`'s call site in dev.mjs (unlike its
+// unit-tested form above) is hardcoded to the real `workers/api` dir, so
+// this test seeds and inspects that REAL (gitignored, disposable)
+// `.wrangler/state/v3/d1` directory directly rather than a temp one. Fails
+// without the fix: reverting the ordering in scripts/dev.mjs's `main()`
+// (moving the Docker check below the `if (resetLocalDb)` block again)
+// makes the marker file disappear even though `docker info` fails.
+test("CLI: `dev.mjs --tier=2 --reset-local-db` does NOT wipe local D1 state when Docker is not running (Docker check runs first)", () => {
+  const stubBinDir = path.join(HERE, "fixtures", "stub-bin");
+  const devScript = path.join(RUNNER_ROOT, "scripts", "dev.mjs");
+  const apiDir = path.join(RUNNER_ROOT, "workers", "api");
+  const d1StateDir = path.join(apiDir, ".wrangler", "state", "v3", "d1");
+  const markerPath = path.join(d1StateDir, "b9-test-marker.txt");
+  // SAFETY: `d1StateDir` is REAL local wrangler/D1 state for this worktree
+  // (this worktree may genuinely have some already, e.g. from an earlier
+  // `--tier=2`/`--tier=full` run or migrations applied by another test) —
+  // this must never destroy it. Record whether it pre-existed; the
+  // `finally` below removes only what THIS test itself added (the marker
+  // file, or — only if the whole directory did not exist before — the
+  // directory this test's own `mkdirSync` created).
+  const preExisted = existsSync(d1StateDir);
+  mkdirSync(d1StateDir, { recursive: true });
+  writeFileSync(markerPath, "b9 marker\n");
+  try {
+    const result = spawnSync(process.execPath, [devScript, "--tier=2", "--reset-local-db"], {
+      cwd: RUNNER_ROOT,
+      encoding: "utf8",
+      timeout: 10000,
+      env: {
+        ...process.env,
+        PATH: `${stubBinDir}:${process.env.PATH}`,
+        STUB_DOCKER_MODE: "fail",
+      },
+    });
+    const output = `${result.stdout}${result.stderr}`;
+    assert.notEqual(result.status, 0);
+    assert.match(output, /Start Docker/, "must fail on the Docker check");
+    assert.doesNotMatch(output, /reset-local-db: deleted/, "must never actually run the reset once Docker is confirmed unavailable");
+    assert.equal(existsSync(markerPath), true, "local D1 state must survive a run that fails the Docker check");
+  } finally {
+    // Only remove what this test added — never the real pre-existing state.
+    if (preExisted) {
+      rmSync(markerPath, { force: true });
+    } else {
+      rmSync(d1StateDir, { recursive: true, force: true });
+    }
+  }
 });
 
 test("CLI: `dev.mjs --tier=2` fails fast with the Docker message when `docker info` fails, before spawning anything else", () => {

@@ -501,6 +501,115 @@ test("containerFetch(): percent-encoding and case variants are blocked the same 
   }
 });
 
+// --- containerFetch(): the Loki datasource-RESOURCE block (A-I2) ----------
+//
+// `/api/datasources/uid/<uid>/resources/<rest>` (and the numeric-id form)
+// is Grafana's MODERN route. Live-verified against a real Grafana 11.4 +
+// Loki plugin (COMMON.md port block, project o11y-x1, see the task
+// report and box.ts's own doc comment on `DATASOURCE_RESOURCE_RE` for the
+// full write-up): reading the box's container logs shows the plugin
+// forwards `<rest>` to REAL Loki as `/loki/api/v1/<rest>` — a genuine,
+// working proxy into that URL namespace, not a small fixed set of
+// "registered handlers" the way an earlier draft of this comment claimed.
+// `resources/flush`/`resources/shutdown` fail only because Loki's real
+// admin endpoints live OUTSIDE `/loki/api/v1/`, and `resources/push`
+// independently 405s from Loki itself; a `--path-as-is` `../` traversal at
+// the drain's own ingest path did not escape that prefix either (Loki's
+// own router doesn't resolve `..` segments). None of that makes this
+// gate optional — it is the real boundary, symmetric with the legacy
+// proxy route above. Reverting the `DATASOURCE_RESOURCE_RE`/
+// `LOKI_ALLOWED_RESOURCE_RE` wiring in `isBlockedLokiProxyPath` makes every
+// "refused" assertion below fail (200 instead of 403/404) — this test file
+// had no coverage of `/resources/` at all before A-I2.
+
+test("containerFetch(): Loki push/flush/shutdown/config/otlp-ingest are refused through the modern uid-form resource route", async () => {
+  const { box } = makeBox();
+  hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
+
+  for (const path of [
+    // Bare names (no loki/api/v1/ prefix): the REAL forwarding shape,
+    // live-confirmed via the box's own container logs — the plugin builds
+    // the outbound Loki request as `/loki/api/v1/<rest>` for exactly these.
+    "/grafana/api/datasources/uid/loki-worker/resources/push",
+    "/grafana/api/datasources/uid/loki-browser/resources/flush",
+    "/grafana/api/datasources/uid/loki-worker/resources/shutdown",
+    "/grafana/api/datasources/uid/loki-worker/resources/config",
+    // Legacy-proxy-shaped guesses too (never a real forwarding shape for
+    // THIS route, but must still be refused — the allowlist is on the
+    // whole `<rest>`, not just the bare names above).
+    "/grafana/api/datasources/uid/loki-worker/resources/loki/api/v1/push",
+    "/grafana/api/datasources/uid/loki-worker/resources/ingester/shutdown",
+    "/grafana/api/datasources/uid/loki-worker/resources/otlp/v1/logs",
+  ]) {
+    const res = await box.containerFetch(new Request(`https://box.example${path}`));
+    assert.ok(res.status === 403 || res.status === 404, `expected 403/404 for ${path}, got ${res.status}`);
+  }
+});
+
+test("containerFetch(): the same resource paths are refused through the NUMERIC-id form too (default-deny)", async () => {
+  const { box } = makeBox();
+  hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
+
+  for (const path of [
+    "/api/datasources/1/resources/loki/api/v1/push",
+    "/api/datasources/2/resources/flush",
+    "/api/datasources/2/resources/otlp/v1/logs",
+  ]) {
+    const res = await box.containerFetch(new Request(`https://box.example${path}`));
+    assert.ok(res.status === 403 || res.status === 404, `expected 403/404 for ${path}, got ${res.status}`);
+  }
+});
+
+test("containerFetch(): Loki's own read/query resource handlers still reach the container (Explore/dashboard label-value variables)", async () => {
+  const { box } = makeBox();
+  hooks.start = async (self) => {
+    self._state = { status: "running", lastChange: Date.now() };
+  };
+  hooks.containerFetch = async () => new Response("ok", { status: 200 });
+  await box.wake("visit");
+
+  for (const path of [
+    "/grafana/api/datasources/uid/loki-worker/resources/labels",
+    "/grafana/api/datasources/uid/loki-browser/resources/label/env/values",
+    "/grafana/api/datasources/uid/loki-worker/resources/series",
+    "/grafana/api/datasources/uid/loki-worker/resources/index/stats",
+    "/grafana/api/datasources/uid/loki-worker/resources/detected_labels",
+    "/grafana/api/datasources/uid/loki-worker/resources/query_range",
+    "/api/datasources/1/resources/query",
+  ]) {
+    const res = await box.containerFetch(new Request(`https://box.example${path}`));
+    assert.equal(res.status, 200, `expected the query resource path to reach the container: ${path}`);
+  }
+});
+
+test("containerFetch(): the ClickHouse datasource's own resource route (if any) is completely untouched by the Loki gate", async () => {
+  const { box } = makeBox();
+  hooks.start = async (self) => {
+    self._state = { status: "running", lastChange: Date.now() };
+  };
+  hooks.containerFetch = async () => new Response("ok", { status: 200 });
+  await box.wake("visit");
+
+  const res = await box.containerFetch(
+    new Request("https://box.example/grafana/api/datasources/uid/clickhouse-runner-events/resources/anything"),
+  );
+  assert.equal(res.status, 200, "ClickHouse's own uid must never be blocked on the resource route either");
+});
+
+test("containerFetch(): percent-encoding and case variants of the resource route are blocked the same way", async () => {
+  const { box } = makeBox();
+  hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
+
+  for (const path of [
+    "/GRAFANA/API/DATASOURCES/UID/loki-worker/RESOURCES/LOKI/API/V1/PUSH",
+    "/grafana/api/datasources/uid/loki-worker/resources/%6Coki/api/v1/push",
+    "//grafana//api//datasources//uid//loki-worker//resources//flush",
+  ]) {
+    const res = await box.containerFetch(new Request(`https://box.example${path}`));
+    assert.ok(res.status === 403 || res.status === 404, `expected 403/404 for ${path}, got ${res.status}`);
+  }
+});
+
 test("containerFetch(): /api/ds/query (the real backend query path Explore/dashboards use) is never touched by this gate", async () => {
   const { box } = makeBox();
   hooks.start = async (self) => {

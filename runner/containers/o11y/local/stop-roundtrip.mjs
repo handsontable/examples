@@ -24,11 +24,41 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { scrubSecrets } from "./redact.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const O11Y_DIR = join(__dirname, "..");
 
-const PROJECT = process.env.COMPOSE_PROJECT_NAME || "o11y-t01";
+// A-M1: this script's own up-front `down -v` (below) wipes whatever project
+// name it resolves to, INCLUDING the named volumes dev-persist relies on
+// (minio-data/clickhouse-data). The default used to be "o11y-t01" — the
+// same name compose.yml's own header comment recommends for a T01
+// developer's persistent manual/dev stack — so running this script with no
+// override could silently wipe that stack's data. The default here must
+// never collide with a persistent stack's own default or documented
+// convention: `dev.mjs`/`dev-lib.mjs` default to "o11y-dev", and
+// compose.yml's header comment's example uses "o11y-t01" — this script gets
+// a name distinct from both.
+//
+// A distinct DEFAULT alone is not enough, though: if a developer has
+// `COMPOSE_PROJECT_NAME=o11y-dev` exported in their shell (e.g. left over
+// from working on the dev stack directly) when they run this script, the
+// env var wins over the default the same way it always does, and the `down
+// -v` below would still wipe the real dev stack. "Never reuse the dev
+// stack's [project name]" therefore has to be a hard refusal, not just a
+// differing default.
+const DEV_STACK_DEFAULT_PROJECT = "o11y-dev";
+const REQUESTED_PROJECT = process.env.COMPOSE_PROJECT_NAME || "o11y-stop-roundtrip";
+if (REQUESTED_PROJECT === DEV_STACK_DEFAULT_PROJECT) {
+  console.error(
+    `error: COMPOSE_PROJECT_NAME="${DEV_STACK_DEFAULT_PROJECT}" is dev.mjs's own persistent dev-stack project name ` +
+      `(scripts/dev-lib.mjs's default) — this script's own \`down -v\` would wipe its named volumes ` +
+      `(minio-data/clickhouse-data). Refusing to run under this project name; set COMPOSE_PROJECT_NAME to ` +
+      `something else (or unset it to use this script's own "o11y-stop-roundtrip" default).`,
+  );
+  process.exit(1);
+}
+const PROJECT = REQUESTED_PROJECT;
 const GRAFANA_PORT = process.env.O11Y_GRAFANA_PORT || "4200";
 const LOKI_PORT = process.env.O11Y_LOKI_PORT || "4201";
 const MINIO_PORT = process.env.O11Y_MINIO_PORT || "4202";
@@ -62,8 +92,18 @@ const BASE_ENV = {
   O11Y_MINIO_ROOT_PASSWORD: MINIO_PASSWORD,
 };
 
+// A-I1: MINIO_USER/MINIO_PASSWORD (root creds) are always scrubbed from a
+// failure log, regardless of caller — `opts.redact` lets a specific call
+// site (e.g. `setupRestrictedMinioUser`) add its own per-run secrets (a
+// restricted user's generated password) to the same scrub pass, since `sh`
+// has no way to know about those on its own. The task asked for output to
+// be redacted, not suppressed: a failure here still prints (developers need
+// the diagnostic — this is a local/CI test-only script), it just never
+// prints a real credential. `scrubSecrets` lives in `./redact.mjs` so it is
+// unit-testable in isolation (this file runs `main()` unconditionally at
+// module scope, so it cannot itself be imported from a test).
 function sh(cmd, args, opts = {}) {
-  const { env: extraEnv, ...restOpts } = opts;
+  const { env: extraEnv, redact: redactValues = [], ...restOpts } = opts;
   const res = spawnSync(cmd, args, {
     cwd: O11Y_DIR,
     encoding: "utf8",
@@ -71,13 +111,27 @@ function sh(cmd, args, opts = {}) {
     ...restOpts,
   });
   if (res.status !== 0 && !opts.allowFail) {
-    console.error(`command failed: ${cmd} ${args.join(" ")}\n${res.stdout}\n${res.stderr}`);
+    const secrets = [MINIO_USER, MINIO_PASSWORD, ...redactValues];
+    const scrub = (text) => scrubSecrets(text ?? "", secrets);
+    console.error(`command failed: ${scrub(`${cmd} ${args.join(" ")}`)}\n${scrub(res.stdout)}\n${scrub(res.stderr)}`);
   }
   return res;
 }
 
+// A-I1 / regression from removing `allowFail`: `compose(...)` used to take
+// only positional docker-compose args, with no way for a caller to pass
+// `{ allowFail: true }` (or `redact`) through to `sh()` — the pre-T1 code
+// called `sh(...)` directly with `{ allowFail: true }` for exactly this
+// exec-into-minio path. A trailing plain-object argument is now treated as
+// options for `sh()` and popped off before building the compose args, so
+// every existing call site (which only ever passes strings) is unaffected.
 function compose(...args) {
-  return sh("docker", ["compose", "-p", PROJECT, "-f", "compose.yml", ...args]);
+  let opts = {};
+  const last = args[args.length - 1];
+  if (last !== null && typeof last === "object" && !Array.isArray(last)) {
+    opts = args.pop();
+  }
+  return sh("docker", ["compose", "-p", PROJECT, "-f", "compose.yml", ...args], opts);
 }
 
 // --- S3-signed helpers against the MinIO bucket, mirroring lib.sh ---------
@@ -624,7 +678,20 @@ function setupRestrictedMinioUser(
     `mc admin user add c1 ${user} "${password}"`,
     `mc admin policy attach c1 ${policyName} --user ${user}`,
   ].join(" && ");
-  const res = compose("exec", "-T", "minio", "/bin/sh", "-c", script);
+  // A-I1: this call used to go through `sh(..., { allowFail: true })`
+  // directly (pre-T1), silently swallowing any failure here with no log at
+  // all. T1's replacement (`compose("exec", ...)`) dropped `allowFail`
+  // through `compose()`'s then-options-less signature, so a transient
+  // failure (stale RUN_ID collision, docker exec hiccup, MinIO not yet
+  // warmed) printed the FULL `mc admin ...` command line unredacted —
+  // embedding both the root MINIO_PASSWORD and this restricted user's
+  // `password` in plain text. Fixed here by redacting rather than
+  // suppressing: `sh()` (now, always) scrubs MINIO_USER/MINIO_PASSWORD from
+  // any failure it does print; `redact: [password]` adds this call's own
+  // per-run secret to that same pass, so a genuine failure still surfaces a
+  // useful diagnostic (the developer needs to see it — this is a
+  // local/CI-only test script) with no credential in it.
+  const res = compose("exec", "-T", "minio", "/bin/sh", "-c", script, { redact: [password] });
   record(label, res.status === 0, res.stdout.trim().split("\n").pop());
 }
 

@@ -17,19 +17,25 @@ const { checkO11yHeartbeat } = await import("../workers/api/src/o11y-watchdog.ts
 
 const FRESH_MS = 30 * 60 * 1000;
 
+// A-C1 fix: the fake `O11Y` binding below deliberately exposes ONLY
+// `heartbeat()` — no `fetch()` at all — mirroring the real RPC-entrypoint
+// shape (`entrypoint: "O11yHeartbeat"` in workers/api/wrangler.jsonc, see
+// that file's comment). If `o11y-watchdog.ts` ever regresses to calling
+// `env.O11Y.fetch(...)` (the pre-fix shape, which silently 404s in
+// production once the o11y worker's default export stopped answering
+// `/_internal/heartbeat`), every test below fails with a real
+// "o11y.fetch is not a function" TypeError instead of passing — so this
+// file cannot go green against that regression the way the old
+// fetch-shaped fake could.
 function makeEnv(heartbeatResponder) {
   return {
     CACHE: fakeKV(),
     O11Y: {
-      async fetch() {
+      async heartbeat() {
         return heartbeatResponder();
       },
     },
   };
-}
-
-function okResponse(body) {
-  return { ok: true, json: async () => body };
 }
 
 function captureSpy() {
@@ -40,7 +46,7 @@ function captureSpy() {
 
 test("checkO11yHeartbeat: fresh heartbeat -> no capture", async () => {
   const now = 10_000_000;
-  const env = makeEnv(() => okResponse({ lastCron: now - 1000, lastIngest: now - 1000, backlogOldestAgeMs: 0 }));
+  const env = makeEnv(() => ({ lastCron: now - 1000, lastIngest: now - 1000, backlogOldestAgeMs: 0 }));
   const { calls, capture } = captureSpy();
   await checkO11yHeartbeat(env, capture, now);
   assert.equal(calls.length, 0);
@@ -48,7 +54,7 @@ test("checkO11yHeartbeat: fresh heartbeat -> no capture", async () => {
 
 test("checkO11yHeartbeat: stale lastCron -> exactly one capture, error level", async () => {
   const now = 10_000_000;
-  const env = makeEnv(() => okResponse({ lastCron: now - FRESH_MS - 1, lastIngest: now, backlogOldestAgeMs: 0 }));
+  const env = makeEnv(() => ({ lastCron: now - FRESH_MS - 1, lastIngest: now, backlogOldestAgeMs: 0 }));
   const { calls, capture } = captureSpy();
   await checkO11yHeartbeat(env, capture, now);
   assert.equal(calls.length, 1);
@@ -69,7 +75,7 @@ test("checkO11yHeartbeat: an unreachable o11y worker counts as stale", async () 
 
 test("checkO11yHeartbeat: stays firing across ticks -> only ONE capture, not one per tick", async () => {
   const now = 10_000_000;
-  const env = makeEnv(() => okResponse({ lastCron: now - FRESH_MS - 1, lastIngest: now, backlogOldestAgeMs: 0 }));
+  const env = makeEnv(() => ({ lastCron: now - FRESH_MS - 1, lastIngest: now, backlogOldestAgeMs: 0 }));
   const { calls, capture } = captureSpy();
   await checkO11yHeartbeat(env, capture, now);
   await checkO11yHeartbeat(env, capture, now + 5 * 60 * 1000);
@@ -81,11 +87,9 @@ test("checkO11yHeartbeat: recovery after staleness -> exactly one more capture, 
   const now = 10_000_000;
   let stale = true;
   const env = makeEnv(() =>
-    okResponse(
-      stale
-        ? { lastCron: now - FRESH_MS - 1, lastIngest: now, backlogOldestAgeMs: 0 }
-        : { lastCron: now, lastIngest: now, backlogOldestAgeMs: 0 },
-    ),
+    stale
+      ? { lastCron: now - FRESH_MS - 1, lastIngest: now, backlogOldestAgeMs: 0 }
+      : { lastCron: now, lastIngest: now, backlogOldestAgeMs: 0 },
   );
   const { calls, capture } = captureSpy();
   await checkO11yHeartbeat(env, capture, now); // fires
