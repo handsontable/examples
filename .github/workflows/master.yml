@@ -94,7 +94,14 @@ jobs:
           # at build time; scripts/ and containers/ are api-only).
           authoring=false; api=false; o11y=false
           grep -qE '^runner/(apps/authoring/|packages/|config/|catalog\.json$|pnpm-lock\.yaml$)|^\.github/workflows/(master|ci)\.yml$' /tmp/changed.txt && authoring=true
-          grep -qE '^runner/(workers/api/|containers/|scripts/|config/|packages/|pnpm-lock\.yaml$)|^\.github/workflows/(master|ci)\.yml$' /tmp/changed.txt && api=true
+          # Minor triage item 4 (C-M5): `containers/` used to match ALL of
+          # it, including a Grafana-box image edit under containers/o11y/ —
+          # any such edit also redeployed the API worker and rebuilt/pushed
+          # the unrelated Tier-2 image. Narrowed to the two containers/
+          # subtrees the API worker's own deploy actually builds/pushes
+          # (containers/live/, containers/builder/); containers/o11y/ stays
+          # gated on the o11y line below only.
+          grep -qE '^runner/(workers/api/|containers/(live|builder)/|scripts/|config/|packages/|pnpm-lock\.yaml$)|^\.github/workflows/(master|ci)\.yml$' /tmp/changed.txt && api=true
           # T10: workers/o11y (the worker itself), containers/o11y (the Grafana
           # box image) and packages/ (the shared telemetry module — gated on the
           # whole directory, not just packages/runtime/src/telemetry/, since
@@ -285,7 +292,12 @@ jobs:
         run: |
           set -o pipefail
           npx -y wrangler@4.108.0 deploy | tee /tmp/deploy-authoring.log
-          version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-authoring.log | awk '{print $NF}')
+          # Minor triage item 3 (C-M3): `|| true` so a wording change in
+          # wrangler's own "Current Version ID:" line (grep finds nothing,
+          # exits 1) can't fail this step — under `set -o pipefail` that
+          # would fail the whole job AFTER the deploy already shipped,
+          # skipping the deploy-event report and the smoke test below it.
+          version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-authoring.log | awk '{print $NF}') || true
           echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
 
       - name: Report the deploy to the o11y worker (T10, ADR §C.2)
@@ -415,7 +427,9 @@ jobs:
         run: |
           set -o pipefail
           pnpm run deploy | tee /tmp/deploy-api.log
-          version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-api.log | awk '{print $NF}')
+          # Minor triage item 3 (C-M3): see the matching comment in
+          # deploy-authoring — same reasoning, same fix.
+          version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-api.log | awk '{print $NF}') || true
           echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
 
       - name: Report the deploy to the o11y worker (T10, ADR §C.2)
@@ -499,7 +513,9 @@ jobs:
         run: |
           set -o pipefail
           pnpm run deploy | tee /tmp/deploy-o11y.log
-          version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-o11y.log | awk '{print $NF}')
+          # Minor triage item 3 (C-M3): see the matching comment in
+          # deploy-authoring — same reasoning, same fix.
+          version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-o11y.log | awk '{print $NF}') || true
           echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
 
       - name: Report the deploy to the o11y worker (T10, ADR §C.2)

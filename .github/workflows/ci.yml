@@ -238,6 +238,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Minor triage item 5 (C-M7/D-M8): the leak checks used to run ONLY
+      # post-merge, in master.yml, after the production authoring bundle had
+      # already been built there — a regression that broke dead-code
+      # elimination of the local telemetry seam (or the dev-login bypass
+      # sentinel check itself) was only caught after merge, as a blocked
+      # deploy. actionlint here too, so a workflow-YAML mistake in either
+      # fix is itself caught in PR CI, not just by reading the diff.
+      - name: actionlint (workflow YAML)
+        uses: reviewdog/action-actionlint@v1
+        with:
+          fail_level: error
+
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: runner/package.json
@@ -256,10 +268,48 @@ jobs:
           name: runtime-dist
           path: runner/packages/runtime/dist/
 
+      # Production-mode build (no VITE_TELEMETRY_LOCAL) — the same shape
+      # master.yml's `build` job ships, built here too so both leak checks
+      # run in PR CI, not only after merge.
+      - name: Build authoring in production mode
+        run: pnpm --filter @handsontable/demo-authoring build
+
+      # Same check as master.yml's "Leak check — dev-login bypass must not
+      # reach the production bundle" step (AGENTS.md's own sanity check),
+      # now also gating the PR instead of only a post-merge deploy.
+      - name: Leak check — dev-login bypass must not reach the production bundle
+        run: |
+          if grep -rl "localhost:8787\|VITE_DEV_USER\|dev@handsontable.com" apps/authoring/dist; then
+            echo "::error::dev-login bypass leaked into the production bundle — rebuild with .env.local absent (AGENTS.md)"
+            exit 1
+          fi
+          echo "ok: no dev-bypass sentinel found"
+
+      # Same check as master.yml's "Leak check — local telemetry path must
+      # not reach the production bundle" step (contract §10).
+      - name: Leak check — local telemetry path must not reach the production bundle
+        run: pnpm check:telemetry-leak
+
       - name: Build authoring with the local telemetry path (contract §10)
         run: pnpm --filter @handsontable/demo-authoring build
         env:
           VITE_TELEMETRY_LOCAL: '1'
+
+      # Negative control (minor triage item 5 / D-M8): nothing in CI
+      # previously proved `check:telemetry-leak` can actually FAIL — only
+      # that it passes against builds where the sentinels are already
+      # absent. Assert it fails against a build made WITH the local
+      # telemetry path enabled; if the checker itself regresses (a
+      # dead-code-elimination change, a sentinel string edit) and stops
+      # detecting the leak, this step turns red instead of the check quietly
+      # passing everything forever.
+      - name: Leak check negative control — check:telemetry-leak must FAIL against a VITE_TELEMETRY_LOCAL=1 build
+        run: |
+          if pnpm check:telemetry-leak; then
+            echo "::error::check:telemetry-leak passed against a VITE_TELEMETRY_LOCAL=1 build — the leak check itself is broken"
+            exit 1
+          fi
+          echo "ok: check:telemetry-leak correctly failed against the flag build"
 
       - name: E2E — Faro in the authoring app + example-analytics (T06, T12)
         env:

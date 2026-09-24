@@ -57,6 +57,17 @@ export function makeFakeAeQuery(rows) {
       candidates = candidates.filter((r) => String(r[logical] ?? "") === value);
     }
 
+    // Set-exclusion filters: `AND blobN NOT IN ('a', 'b', ...)` — minor
+    // triage item 6 (`fiveXxRateRule`'s route-class exclusion).
+    const notInRe = /AND (blob\d+|double\d+) NOT IN \(([^)]*)\)/g;
+    let nim;
+    while ((nim = notInRe.exec(sql))) {
+      const logical = SLOT_TO_NAME[nim[1]];
+      if (!logical) throw new Error(`fake-ae-query: unknown slot in NOT IN filter: ${nim[1]}`);
+      const excluded = new Set([...nim[2].matchAll(/'([^']*)'/g)].map((m) => m[1]));
+      candidates = candidates.filter((r) => !excluded.has(String(r[logical] ?? "")));
+    }
+
     // `quantileExactWeighted(q)(<col>, toUInt32(_sample_interval)) AS p`
     const qm = /quantileExactWeighted\(([\d.]+)\)\((double\d+),/.exec(sql);
     if (qm) {

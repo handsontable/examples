@@ -81,6 +81,7 @@ import {
   emitBudgetGauge,
   emitPoint,
   emitPoolGauge,
+  logCronTickLine,
   logErrorLine,
   logRequestLine,
   reportDiagnostic,
@@ -2535,6 +2536,15 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
  * exactly the case a gauge hiccup must not itself cause.
  */
 async function runFiveMinuteCron(env: Env): Promise<void> {
+  // Minor triage item 2 (C-M2): a structured line every tick, so o11y's
+  // `heartbeat.lastIngest` watchdog check is a true end-to-end signal even
+  // during a real quiet period with no user traffic — see
+  // `telemetry/lines.ts#logCronTickLine`'s doc comment for why no W1-side
+  // normaliser change was needed.
+  await cronStep(env, "cron:five-minute:tick", () => {
+    logCronTickLine(env);
+    return Promise.resolve();
+  });
   await cronStep(env, "cron:five-minute:pool-gauge", () => emitPoolGauge(env));
   await cronStep(env, "cron:five-minute:budget-gauge", () => emitBudgetGauge(env));
   await cronStep(env, "cron:five-minute:heartbeat", () => checkO11yHeartbeat(env));
@@ -2544,11 +2554,21 @@ async function runFiveMinuteCron(env: Env): Promise<void> {
  * Nightly (04:17 UTC, see `triggers.crons`): replace yesterday's estimated
  * ledger rows with Cloudflare's own figures, flush anything the in-memory
  * meters were still holding, and — when explicitly enabled — purge the R2
- * artifacts of long-revoked demos. One `cronStep`, not one per line: these
- * five awaits are a sequential dependency chain (alerts want reconciled
- * numbers, GC wants alerts to have run), so a failure partway through
- * stopping the rest is the same behaviour this branch always had — only the
- * structured line and the explicit Sentry capture are new.
+ * artifacts of long-revoked demos. One `cronStep` for the billing chain,
+ * not one per line: these four awaits are a sequential dependency chain
+ * (alerts want reconciled numbers, GC wants alerts to have run), so a
+ * failure partway through stopping the rest is the same behaviour this
+ * branch always had — only the structured line and the explicit Sentry
+ * capture are new.
+ *
+ * Minor triage item 1 (C-M1): the ADR-0042 (T12) `example_daily` rollup
+ * used to sit as a fifth `await` INSIDE that same billing `cronStep` call,
+ * with a comment claiming it was "independent" and had "its own try/catch"
+ * — neither was true: a throw anywhere earlier in the chain (e.g.
+ * `reconcileBilling`) skipped `rollupExampleDaily` for the whole night with
+ * no independent retry. It now gets its OWN `cronStep`, run unconditionally
+ * after the billing chain (not nested inside it), so a billing-side failure
+ * can no longer take the rollup down with it.
  */
 async function runNightlyCron(env: Env): Promise<void> {
   await cronStep(env, "cron:nightly", async () => {
@@ -2559,9 +2579,11 @@ async function runNightlyCron(env: Env): Promise<void> {
     await checkCostAlerts(env);
     await gcRevokedArtifacts(env);
     await pruneAnalytics(env, Number(env.ANALYTICS_RETENTION_DAYS ?? 180));
-    // ADR-0042 (T12): the previous full UTC day's example_daily rollup.
-    // Independent of the billing chain above (own try/catch, own Sentry
-    // tag) — added minimally here per COMMON.md; T04 resolves against it.
+  });
+  // ADR-0042 (T12): the previous full UTC day's example_daily rollup — its
+  // own independent cronStep (minor triage item 1), so an upstream throw in
+  // the billing chain above can't skip it.
+  await cronStep(env, "cron:nightly:rollup", async () => {
     await rollupExampleDaily(env);
   });
 }

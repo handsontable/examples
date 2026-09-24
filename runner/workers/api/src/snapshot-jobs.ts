@@ -147,7 +147,10 @@ export async function markSnapshotFailed(env: Env, job: SnapshotJob, err: unknow
   // one structured line here regardless of which branch below runs. §E.1:
   // snapshot-job failures "stay in Sentry in both scopes" — the captures below
   // are unconditional, unlike `reportDiagnostic`'s scope-gated ones.
-  logErrorLine(env, "snapshot-job:alarm", err, { demo_id: job.demoId });
+  // Minor triage item 7 (C-M14): the contract's own key for a demo id on a
+  // structured line is `hot.demo_id` (`telemetry/lines.ts#logRequestLine`'s
+  // own shape) — this line used the stale, un-prefixed `demo_id` name.
+  logErrorLine(env, "snapshot-job:alarm", err, { "hot.demo_id": job.demoId });
   try {
     await env.DB.prepare("UPDATE demos SET build_status='failed', build_error=?, updated_at=? WHERE id=?")
       .bind(cause.slice(0, BUILD_ERROR_MAX), new Date().toISOString(), job.demoId)

@@ -623,6 +623,49 @@ test("o11yCapRule: fires at or above the cap, not below it", async () => {
   assert.equal(over.firing, true);
 });
 
+// Minor triage item 9 (C-findings.md T04: "no rollover test for alert
+// state ... month rollover of the cap is a plain month-prefix LIKE"). The
+// LEDGER half of the rollover (last month's spend never leaking into this
+// month's `computeO11ySpend` read) is pinned directly in
+// `pipeline/o11y-cost.test.mjs` against the real month-prefix LIKE query.
+// This pins the ALERT-STATE half: over-cap spend right before the calendar
+// rolls over, then near-zero spend right after — the exact `spendUsd`
+// values a real `env.API.o11ySpend()` read would answer either side of the
+// boundary (`computeO11ySpend` has no explicit "reset" step; the LIKE
+// filter alone produces this before/after shape) — must drive
+// `o11yCapRule` + `evaluateAndNotify` through a genuine fired -> resolved
+// transition, write `alert:o11y-spend-cap` = "resolved", and (through
+// `runAlerts`'s own level-triggered wiring, minor triage item 7) unpause
+// drains. `alert:<rule>` state itself carries no month key at all (C-
+// findings.md's own "fixed per rule" observation) — this is exactly why a
+// bug that made spend NOT reset (or a `notify.ts` regression that stopped
+// resolving) would otherwise leave a September breach paged forever.
+test("o11yCapRule + evaluateAndNotify: alert state correctly resolves when spend resets across a month rollover", async () => {
+  const writer = fakeInboxWriter();
+  const sink = fakeAeSink();
+  const posted = [];
+  const postSlack = async (text) => posted.push(text);
+
+  // "Before the rollover": last month's spend was well over the cap.
+  const beforeRollover = await o11yCapRule({ spendUsd: 42, capUsd: 15 });
+  assert.equal(beforeRollover.firing, true);
+  const fired = await evaluateAndNotify(beforeRollover, { inboxWriter: writer, postSlack, aeSink: sink, commonAttrs: COMMON_ATTRS, nowMs: 1000 });
+  assert.equal(fired, "fired");
+  assert.equal(posted.length, 1);
+  assert.match(posted[0], /o11y-spend-cap/);
+
+  // "After the rollover": the month-prefix LIKE read now sums only the new
+  // month's (so far near-zero) rows — nothing about `alert:<rule>` state
+  // itself changed; only the spend value the caller reads did.
+  const afterRollover = await o11yCapRule({ spendUsd: 0.10, capUsd: 15 });
+  assert.equal(afterRollover.firing, false);
+  const resolved = await evaluateAndNotify(afterRollover, { inboxWriter: writer, postSlack, aeSink: sink, commonAttrs: COMMON_ATTRS, nowMs: 2000 });
+  assert.equal(resolved, "resolved", "the alert must actually resolve, not stay stuck firing forever across the boundary");
+  assert.equal(posted.length, 2);
+  assert.match(posted[1], /resolved/);
+  assert.equal((await writer.alertState("o11y-spend-cap")).state, "resolved");
+});
+
 // ---- Through the REAL InboxWriter Durable Object (not just the pure -----
 // helpers) — proves the RPC wiring in writer.ts, the same "route-level
 // proof through the real class" rule o11y-routes.test.mjs/o11y-box.test.mjs
@@ -724,6 +767,75 @@ test("fiveXxRateRule: over threshold (5%) fires; under threshold (0.5%) does not
   ]);
   const underResult = await fiveXxRateRule({}, under.queryFn);
   assert.equal(underResult.firing, false);
+});
+
+// Minor triage item 6 (C-M9). Two techniques, matching `rules.ts`'s own doc
+// comment on `fiveXxRateRule`:
+//  - at_capacity/container_starting (api/session) and chat_unavailable
+//    (api/chat, api/theme) are subtracted as EXACT counts, read from
+//    session.start/chat.answer/theme.ai's own outcome breakdown — every
+//    other 5xx on those same route classes still counts.
+//  - the "still building" placeholder (d/:id, embed/:id) has no matching
+//    exact count anywhere, so those two route classes are excluded
+//    wholesale (a real "build failed" 500 there is excluded too — the
+//    documented residual gap, see rules.ts's own comment and the task
+//    report).
+test("fiveXxRateRule: excludes deliberate refusals via exact counts, and still-building routes wholesale, on an otherwise-healthy tick", async () => {
+  const rows = [
+    // Real, healthy traffic: 0.1% 5xx on its own.
+    { metric: "api.request", route_class: "api/demos", outcome: "2xx", count: 999 },
+    { metric: "api.request", route_class: "api/demos", outcome: "5xx", count: 1 },
+    // Capacity surge on api/session, exactly matched by session.start.
+    { metric: "api.request", route_class: "api/session", outcome: "5xx", count: 500 },
+    { metric: "session.start", outcome: "at_capacity", count: 300 },
+    { metric: "session.start", outcome: "container_starting", count: 200 },
+    // Gateway outage on api/chat + api/theme, exactly matched.
+    { metric: "api.request", route_class: "api/chat", outcome: "5xx", count: 300 },
+    { metric: "chat.answer", outcome: "error", count: 300 },
+    { metric: "api.request", route_class: "api/theme", outcome: "5xx", count: 200 },
+    { metric: "theme.ai", outcome: "error", count: 200 },
+    // Build backlog: "still building" 503s on the two route-excluded classes.
+    { metric: "api.request", route_class: "d/:id", outcome: "5xx", count: 500 },
+    { metric: "api.request", route_class: "embed/:id", outcome: "5xx", count: 500 },
+  ];
+  const fake = makeFakeAeQuery(rows);
+  const result = await fiveXxRateRule({}, fake.queryFn);
+  assert.equal(result.firing, false, "fully-matched deliberate degradations must not push the rate over threshold");
+  assert.match(result.detail, /^0\.10% 5xx over the last 15 min \(1\/1000/);
+  assert.ok(fake.calls[0].includes(AE_COLUMNS.route_class), "SQL must filter on the route_class column");
+});
+
+test("fiveXxRateRule: a genuine api/session 500 with NO matching session.start refusal count still counts (not hidden by exclusion)", async () => {
+  const rows = [
+    { metric: "api.request", route_class: "api/demos", outcome: "2xx", count: 999 },
+    // A real fault in the session-create handler — session.start is either
+    // absent or its own "error" outcome, never at_capacity/container_starting,
+    // so nothing here is eligible for the exact-count subtraction.
+    { metric: "api.request", route_class: "api/session", outcome: "5xx", count: 15 },
+    { metric: "session.start", outcome: "error", count: 15 },
+  ];
+  const fake = makeFakeAeQuery(rows);
+  const result = await fiveXxRateRule({}, fake.queryFn);
+  assert.equal(result.firing, true, "a genuine api/session fault must still be able to fire the rule");
+  assert.match(result.detail, /^1\.48% 5xx over the last 15 min \(15\/1014/);
+});
+
+test("fiveXxRateRule: a real problem on a normal route still fires even alongside a full load of excluded degradation noise", async () => {
+  const rows = [
+    // A genuine 5% error rate on an ordinary route.
+    { metric: "api.request", route_class: "api/demos", outcome: "2xx", count: 95 },
+    { metric: "api.request", route_class: "api/demos", outcome: "5xx", count: 5 },
+    // Heavy, fully-matched degradation noise across every excluded shape.
+    { metric: "api.request", route_class: "api/session", outcome: "5xx", count: 1000 },
+    { metric: "session.start", outcome: "at_capacity", count: 1000 },
+    { metric: "api.request", route_class: "api/chat", outcome: "5xx", count: 1000 },
+    { metric: "chat.answer", outcome: "error", count: 1000 },
+    { metric: "api.request", route_class: "d/:id", outcome: "5xx", count: 1000 },
+  ];
+  const fake = makeFakeAeQuery(rows);
+  const result = await fiveXxRateRule({}, fake.queryFn);
+  assert.equal(result.firing, true, "the excluded noise must not mask a real problem on a normal route");
+  assert.match(result.detail, /^5\.00% 5xx over the last 15 min \(5\/100/);
 });
 
 test("previewReadyRateRule: tier 1 below 97% fires, tier 2 within threshold does not (mixed)", async () => {
@@ -1027,4 +1139,74 @@ test("runAlerts: a failed setDrainsPaused RPC on the firing tick recovers on the
   const second = await runAlerts(env);
   assert.equal(second.transitions["o11y-spend-cap"], undefined, "fire-once: no new transition on tick 2, still firing");
   assert.equal(await inboxWriterInstance.drainsPaused(), true, "level-triggered: tick 2 must re-derive and re-apply paused=true from firing, with no transition needed");
+});
+
+// Minor triage item 9 (T04's own "no self-resolve test for new-fingerprint
+// rule" gap). `notify.ts#notifyFingerprintEvent`'s own doc comment says
+// new-fingerprint is notify-only, not fire/resolve — this drives the REAL
+// composition inside `runAlerts` (not just `newFingerprintRule` in
+// isolation, already covered above) to prove that composition actually
+// holds: one Slack line when a genuinely new fingerprint arrives, then
+// SILENCE on the next clean tick — no repeat post, no spurious "resolved"
+// line, and no `alert:new-fingerprint` state ever written at all (unlike
+// every fire/resolve rule, which DOES write `alert:<rule>` state — see the
+// `alertEvalErrorRule`/`o11y-spend-cap` tests above). Reverting `alerts/
+// index.ts` back to routing new-fingerprint through `evaluateAndNotify` (the
+// bug C-M10's fix round describes) makes the tick-2 assertions below fail: a
+// second "resolved" Slack line would post, and `alertState("new-fingerprint")`
+// would come back a real fire/resolve record instead of `undefined`.
+test("runAlerts: new-fingerprint self-resolves via its own cursor — one Slack line on tick 1, then silence (no 'resolved' line, no alert state) on a clean tick 2", async () => {
+  const { env } = makeEnv(InboxWriter, {
+    env: {
+      SLACK_WEBHOOK_URL: "https://hooks.example.test/webhook",
+      // Well under cap, so o11yCapRule stays clean and quiet — this test is
+      // about new-fingerprint's own isolation, not the spend cap.
+      API: { fetch: async () => new Response(null, { status: 204 }), o11ySpend: async () => ({ spendUsd: 0, capUsd: 100 }) },
+    },
+  });
+  const writer = env.INBOX_WRITER.jurisdiction("eu").get();
+
+  // `runAlerts` computes its own `nowMs = Date.now()` internally (not
+  // injectable), so the seeded fingerprint's timestamp must be relative to
+  // REAL wall-clock time — comfortably inside newFingerprintRule's one-hour
+  // no-cursor fallback window, and comfortably outside CURSOR_GRACE_MS.
+  const fingerprintMs = Date.now() - 500_000;
+  await writer.ingest("worker", fingerprintMs, [{ hash: "h1", fingerprint: "self-resolve-fp" }]);
+
+  const posted = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const href = typeof url === "string" ? url : url.toString();
+    if (href.includes("hooks.example.test")) {
+      posted.push(JSON.parse(init.body).text);
+      return new Response(null, { status: 200 });
+    }
+    // Any other fetch this tick makes (the Analytics Engine SQL API, for the
+    // unrelated QUERY_RULES) — answer with an empty result set; irrelevant
+    // to what this test asserts.
+    return new Response(JSON.stringify({ data: [] }), { status: 200 });
+  };
+  try {
+    const first = await runAlerts(env);
+    const firstResult = first.results.find((r) => r.rule === "new-fingerprint");
+    assert.equal(firstResult.firing, true);
+    assert.match(firstResult.detail, /self-resolve-fp/);
+    assert.equal(posted.length, 1, "exactly one Slack line for the new fingerprint");
+    assert.match(posted[0], /self-resolve-fp/);
+    assert.equal(first.transitions["new-fingerprint"], undefined, "new-fingerprint is notify-only — never a fire/resolve transition");
+
+    // Tick 2: nothing new since the cursor advanced past it on tick 1 — the
+    // rule itself reports firing:false ("self-resolves"), and — because it
+    // was never routed through evaluateAndNotify — there is no stored
+    // "firing" state to transition out of, so nothing is posted at all.
+    const second = await runAlerts(env);
+    const secondResult = second.results.find((r) => r.rule === "new-fingerprint");
+    assert.equal(secondResult.firing, false);
+    assert.equal(posted.length, 1, "tick 2 must post NOTHING — no repeat, and no spurious 'resolved' line");
+    assert.equal(second.transitions["new-fingerprint"], undefined);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  assert.equal(await writer.alertState("new-fingerprint"), undefined, "new-fingerprint must never write alert:<rule> state at all");
 });
