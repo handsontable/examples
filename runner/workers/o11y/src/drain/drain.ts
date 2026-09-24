@@ -120,8 +120,16 @@ export interface KeyOutcome {
   bytesPushed: number;
   /** F1: records dropped by {@link dropOldRecords} before this key's push —
    *  0 when nothing was too old. Never folds into `rejected`/`error`: a
-   *  key with only-too-old records still ends `provisional` (nothing left
-   *  to push is not a failure, matching the existing all-duplicates case). */
+   *  key with only-too-old records still ends `provisional` here (nothing
+   *  left to push is not a failure, matching the existing all-duplicates
+   *  case) — this `outcome` field itself is unchanged by minor triage item
+   *  3. What changed is downstream, in `box.ts#drainStep`: a `provisional`
+   *  outcome with `bytesPushed === 0` (this all-dropped/all-duplicate case)
+   *  is now routed to `InboxWriterApi#commitKeys` instead of
+   *  `#markKeysProvisional`, committing it directly rather than entering
+   *  `provisional:<wakeId>` — see `ledger.ts#commitKeys`'s own doc comment
+   *  for why (the endless re-wake loop a zero-byte key stuck waiting on a
+   *  marker that will never exist used to cause). */
   droppedOld: number;
 }
 
@@ -212,8 +220,14 @@ async function pushChunkWithRetry(
  *  push in ≤ 1 MB chunks. A key becomes eligible for `provisional` only
  *  after every one of its chunks returns `2xx` — including the
  *  zero-chunk case (every record in this object was already pushed earlier
- *  in the same wake, e.g. a retried step re-fetching the same key): still
- *  provisional, nothing left to push is not a failure. */
+ *  in the same wake, e.g. a retried step re-fetching the same key, OR every
+ *  record was too old / already deduped, `bytesPushed` staying 0 either
+ *  way): still provisional, nothing left to push is not a failure. Minor
+ *  triage item 3: `box.ts#drainStep` treats the `bytesPushed === 0` case of
+ *  THIS `provisional` outcome specially (commits it directly rather than
+ *  marking it `provisional:<wakeId>`) — see {@link KeyOutcome.droppedOld}'s
+ *  own doc comment. Nothing about that reclassification changes what this
+ *  function itself returns. */
 export async function drainKey(key: string, seenHashes: Set<string>, deps: DrainDeps): Promise<KeyOutcome> {
   const parsed = parseInboxKey(key);
   if (!parsed) return { key, tenant: "worker", outcome: "rejected", reason: "unparseable_key", bytesPushed: 0, droppedOld: 0 };

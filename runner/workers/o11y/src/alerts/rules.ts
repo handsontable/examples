@@ -185,7 +185,15 @@ export async function previewReadyRateRule(env: Env, queryFn: AeQueryFn = runAeQ
   let anyFiring = false;
   for (const [tier, thresholdPct] of Object.entries(PREVIEW_READY_THRESHOLD_PCT)) {
     const counts = await countByOutcome(env, "preview.ready_ms", HOUR_MS, `AND ${tierCol} = '${tier}'`, queryFn);
-    const total = [...counts.values()].reduce((a, b) => a + b, 0);
+    // Minor triage item 10: `abandoned` (the user simply navigated away
+    // before the preview finished) excluded from BOTH the numerator (it was
+    // never `ready`, so already excluded there by construction) and the
+    // denominator — counting it against readiness let a burst of ordinary
+    // navigation-aways fire an alert about preview reliability that never
+    // actually had a problem.
+    const total = [...counts.entries()]
+      .filter(([outcome]) => outcome !== "abandoned")
+      .reduce((sum, [, c]) => sum + c, 0);
     const ready = counts.get("ready") ?? 0;
     const pct = total > 0 ? ratio(ready, total) * 100 : 100;
     if (total > 0 && pct < thresholdPct) {
@@ -279,7 +287,15 @@ export async function litellmErrorRateRule(env: Env, queryFn: AeQueryFn = runAeQ
     countByOutcome(env, "chat.answer", windowMs, "", queryFn),
     countByOutcome(env, "theme.ai", windowMs, "", queryFn),
   ]);
-  const total = [...chat.values(), ...theme.values()].reduce((a, b) => a + b, 0);
+  // Minor triage item 10: `denied` (a rate-limit/budget refusal at
+  // `index.ts`'s own gate — see its `outcome: "denied"` emits for both
+  // `chat.answer`/`theme.ai`) never reaches the LiteLLM gateway at all, so
+  // it must not dilute the GATEWAY error rate this rule measures. A burst of
+  // denials (nothing to do with LiteLLM's own health) used to shrink the
+  // ratio and could hide a real >5% gateway failure rate underneath it.
+  const total = [...chat.entries(), ...theme.entries()]
+    .filter(([outcome]) => outcome !== "denied")
+    .reduce((sum, [, c]) => sum + c, 0);
   const errors = (chat.get("error") ?? 0) + (theme.get("error") ?? 0);
   const pct = ratio(errors, total) * 100;
   return {

@@ -25,6 +25,7 @@ const {
   computeBacklog,
   nextWrittenKeys,
   markKeysProvisional,
+  commitKeys,
   rejectKey,
   recordPartialReject,
   recentRejectionCount,
@@ -282,6 +283,65 @@ test("markKeysProvisional / rejectKey write the exact ledger states ADR §B.3 de
 
   await rejectKey(storage, key, "too_far_behind");
   assert.equal(await storage.get(inboxKeyStorageKey(key)), "rejected:too_far_behind");
+});
+
+// ---- commitKeys (minor triage item 3) ------------------------------------
+
+test("commitKeys moves a key straight written -> done:, with no wake/marker involved", async () => {
+  const storage = memoryStorage();
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  await storage.put({ [inboxKeyStorageKey(key)]: "written" });
+
+  await commitKeys(storage, [key]);
+
+  assert.equal(await storage.get(inboxKeyStorageKey(key)), undefined, "must leave key: entirely");
+  assert.equal(await storage.get(doneKeyStorageKey(key)), 1, "and land under done:");
+});
+
+test("commitKeys is a no-op for an empty list (same guard markKeysProvisional uses)", async () => {
+  const storage = memoryStorage();
+  await assert.doesNotReject(commitKeys(storage, []));
+  assert.deepEqual([...(await storage.list({}))], []);
+});
+
+// B-M4 (minor triage item 3): the actual bug this fixes, proven end to end
+// at the ledger level — contrast directly with the "re-opens a key (back to
+// written) when the marker is absent" test just above, which shows the OLD
+// behavior a PROVISIONAL key gets when no marker was ever written. A key
+// committed via `commitKeys` never enters `provisional:<wakeId>` in the
+// first place, so `resolveOverWakes` has nothing to resolve for it — it
+// stays `done:`, permanently, through as many "unclean" wake resolutions as
+// run afterward. Routing the SAME key through `markKeysProvisional` instead
+// (the reverted, pre-fix behavior box.ts used for every `provisional`
+// outcome regardless of `bytesPushed`) reproduces exactly the endless
+// re-wake loop: `nextWrittenKeys` would return the key again, forever.
+test("commitKeys: a zero-byte key never re-enters the written backlog, even across a wake that resolves as unclean (no re-wake loop)", async () => {
+  const storage = memoryStorage();
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  await storage.put({
+    [wakeStorageKey("w1")]: { startedAt: 1, reason: "backlog", over: false },
+    [inboxKeyStorageKey(key)]: "written",
+  });
+
+  // box.ts#drainStep's own call for a bytesPushed === 0 outcome: commit
+  // directly, never markKeysProvisional.
+  await commitKeys(storage, [key]);
+
+  // The wake resolves as unclean (no marker — nothing was ever pushed to
+  // Loki for this key, so no index/marker was ever going to exist either).
+  const result = await resolveOverWakes(storage, deps({ running: false, markers: new Set() }));
+
+  assert.deepEqual(result.newlyOver, ["w1"]);
+  assert.equal(await storage.get(inboxKeyStorageKey(key)), undefined, "must NOT reappear in key: (the old bug: back to written)");
+  assert.equal(await storage.get(doneKeyStorageKey(key)), 1, "must stay committed under done:");
+  assert.deepEqual(await nextWrittenKeys(storage, 10), [], "the backlog cron must never see this key again");
+
+  // A second, later "unclean" resolution pass (a subsequent cron tick, or a
+  // fresh wake also resolving as unclean) must not disturb it either —
+  // there is nothing left in `key:` for `resolveOverWakes` to even find.
+  await storage.put({ [wakeStorageKey("w2")]: { startedAt: 2, reason: "backlog", over: false } });
+  await resolveOverWakes(storage, deps({ running: false, markers: new Set() }));
+  assert.deepEqual(await nextWrittenKeys(storage, 10), []);
 });
 
 // ---- reopenWindow -------------------------------------------------------

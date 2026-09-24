@@ -189,6 +189,14 @@ jobs:
           # EU jurisdiction (contract §2 — same value workers/o11y/wrangler.jsonc's
           # own account_id + box.ts's Loki-bucket endpoint use), not a secret.
           R2_MAPS_ENDPOINT: https://15111272c53ed0aaf84a908f0c9c7f8b.eu.r2.cloudflarestorage.com
+          # A modern AWS CLI defaults to a CRC32 trailing checksum on every
+          # request and validates one on every response; R2's S3 API doesn't
+          # implement that trailer, so the upload can be rejected outright
+          # (minor triage C-M6). Both must be "when_required" (only send/
+          # validate when the operation explicitly requires it) so `aws s3 cp`
+          # against R2 works with whatever CLI version the runner image ships.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
         run: |
           set -o pipefail
           mapfile -t maps < <(find apps/authoring/dist -name '*.map')
@@ -352,7 +360,7 @@ jobs:
     # see "First deploy, in order" in docs/run-and-deploy.md.
     needs: [changes, build, deploy-o11y]
     if: >-
-      always() &&
+      !cancelled() &&
       needs.changes.outputs.api == 'true' &&
       needs.build.result == 'success' &&
       needs.deploy-o11y.result != 'failure'

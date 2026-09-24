@@ -42,12 +42,46 @@ export function routeClassOf(method: string, pathname: string): string {
   return `api/${parts.slice(1, 2).join("/")}` || "api";
 }
 
+/** Minor triage item 8 (C-M11's request-line sub-item): the shape a REAL demo
+ *  id takes — `share.ts#shortId()`'s own alphabet (8 random bytes, each
+ *  `.toString(36)`, joined and sliced to 10 — lowercase alphanumeric) or a
+ *  legacy "fixed id (render-ms compat)" one (`share.ts`'s `args.id`, same
+ *  doc comment) — both stay inside a conservative alphanumeric-plus-
+ *  hyphen/underscore shape, well under this bound. A raw, unresolved path
+ *  segment (a crawler probing `/d/<garbage>`, `/d/';DROP TABLE--`, a stray
+ *  `<script>`, or just an implausibly long guess) almost never matches this
+ *  shape, so it is rejected here the same way the share-view 404 path
+ *  already rejects an unresolved id — without a KV/D1 lookup on every
+ *  request line just to log `hot.demo_id`. */
+const DEMO_ID_SHAPE_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
 /** Best-effort `hot.demo_id` extraction from the same route shapes, when the
- *  path names one. Never throws, never guesses past the routes above. */
+ *  path names one. Never throws, never guesses past the routes above, and
+ *  never returns a path segment that isn't even shaped like a real demo id
+ *  (minor triage item 8). */
 export function demoIdFromPath(pathname: string): string {
   const parts = pathname.split("/").filter(Boolean);
-  if ((parts[0] === "d" || parts[0] === "embed") && parts[1]) return parts[1];
-  if (parts[0] === "api" && parts[1] === "demos" && parts[2]) return parts[2];
-  if (parts[0] === "api" && parts[1] === "mcp" && parts[2] === "demos" && parts[3]) return parts[3];
-  return "";
+  let candidate = "";
+  if ((parts[0] === "d" || parts[0] === "embed") && parts[1]) candidate = parts[1];
+  else if (parts[0] === "api" && parts[1] === "demos" && parts[2]) candidate = parts[2];
+  else if (parts[0] === "api" && parts[1] === "mcp" && parts[2] === "demos" && parts[3]) candidate = parts[3];
+  return DEMO_ID_SHAPE_RE.test(candidate) ? candidate : "";
+}
+
+/** Minor triage item 8 (`x-hot-session` half): the shape `x-hot-session` is
+ *  allowed to take — the browser facade's page-load id
+ *  (`packages/runtime/src/telemetry/facade.ts#mintPageLoadId`) is either a
+ *  `crypto.randomUUID()` v4 UUID, or its defensive `plid-<base36>-<base36>`
+ *  fallback for a runtime without Web Crypto. Anything else is a
+ *  client-controlled header value up to the header size limit, not a real
+ *  session id, and must not land verbatim in Loki structured metadata.
+ *  Lives here (not `lines.ts`, which imports `./resource.js` and so cannot
+ *  be `node --test`-imported directly — see this file's own header) so it
+ *  stays unit-testable the same way `demoIdFromPath` is. */
+const SESSION_ID_RE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|plid-[0-9a-z]+-[0-9a-z]+)$/;
+
+/** Keeps `raw` (the `x-hot-session` header value) only when it matches the
+ *  facade's own page-load id shape — `""` (never logged) otherwise. */
+export function validSessionId(raw: string | null): string {
+  return raw !== null && SESSION_ID_RE.test(raw) ? raw : "";
 }

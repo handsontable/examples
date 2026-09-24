@@ -183,6 +183,12 @@ export interface InboxWriterApi {
    *  requests to Loki returned `2xx` (ADR §B.3). */
   markKeysProvisional(wakeId: string, keys: string[]): Promise<void>;
 
+  /** B-M4 fix (minor triage item 3): commits a key straight `written` →
+   *  `done:` with no wake/marker involved — only valid for a key whose
+   *  drain pushed zero bytes (nothing durable could be lost). See
+   *  `ledger.ts#commitKeys`'s own doc comment. */
+  commitKeys(keys: string[]): Promise<void>;
+
   /** A `400` from Loki (e.g. `too_far_behind`) marks the key `rejected` with
    *  Loki's own message (ADR §B.3) — never retried by a later wake. */
   rejectKey(key: string, reason: string): Promise<void>;

@@ -149,8 +149,21 @@ export async function runAlerts(env: Env, _ctx?: ExecutionContext): Promise<RunA
     results.push(result);
     const transition = await evaluateAndNotify(result, { inboxWriter: writer, postSlack, aeSink: sink, commonAttrs: attrs, nowMs });
     if (transition) transitions[result.rule] = transition;
-    if (transition === "fired") await writer.setDrainsPaused(true);
-    if (transition === "resolved") await writer.setDrainsPaused(false);
+    // Minor triage item 7: LEVEL-triggered, not edge-triggered — set from
+    // `result.firing` on EVERY tick, not only on a `fired`/`resolved`
+    // transition. The previous edge-triggered version only ever called
+    // `setDrainsPaused` on the tick the rule's own state actually flipped —
+    // if that one `setDrainsPaused` RPC threw right after the rule fired
+    // (already inside this same `try`, so the throw lands in `errors` below
+    // and the NEXT tick's `evaluateAndNotify` sees no transition at all,
+    // because the alert state itself already recorded `firing`), drains
+    // stayed paused (or unpaused) for the rest of the month with no retry —
+    // nothing ever asked it to converge again. Calling it unconditionally
+    // makes every tick self-correcting: a transient RPC failure here just
+    // means the CURRENT tick's `errors` entry surfaces it (same as any
+    // other rule failure), and the very next tick re-derives and re-applies
+    // the correct paused state from `result.firing`, no transition needed.
+    await writer.setDrainsPaused(result.firing);
   } catch (err) {
     errors["o11y-spend-cap"] = err instanceof Error ? err.message : String(err);
   }

@@ -47,7 +47,7 @@ function makeStorage() {
 }
 
 function makeInboxWriterStub(overrides = {}) {
-  const calls = { resolveWakes: 0, markKeysProvisional: [], rejectKey: [], recordPartialReject: [] };
+  const calls = { resolveWakes: 0, markKeysProvisional: [], commitKeys: [], rejectKey: [], recordPartialReject: [] };
   return {
     async recordWake() {},
     async resolveWakes() {
@@ -58,6 +58,11 @@ function makeInboxWriterStub(overrides = {}) {
     },
     async markKeysProvisional(wakeId, keys) {
       calls.markKeysProvisional.push({ wakeId, keys });
+    },
+    // B-M4 fix (minor triage item 3): see box.ts#drainStep and
+    // ledger.ts#commitKeys — a zero-bytes-pushed key commits directly.
+    async commitKeys(keys) {
+      calls.commitKeys.push(keys);
     },
     async rejectKey(key, reason) {
       calls.rejectKey.push({ key, reason });
@@ -306,6 +311,116 @@ test("drainStep: a key with one accepted chunk and one permanently-400 chunk sta
   const drainPoint = ae.points.find((p) => p.indexes?.[0] === "o11y.drain");
   assert.ok(drainPoint, "an o11y.drain point must be written");
   assert.equal(outcomeOf(drainPoint), "partial", "a partial-400 key must not report outcome: ok");
+});
+
+// B-M4 fix (minor triage item 3): a key whose only record is too old
+// (dropped by F1's `dropOldRecords` before any push is even attempted) ends
+// `provisional` with `bytesPushed: 0` — `drainKey`'s own zero-chunk case.
+// Before this fix, `drainStep` routed EVERY `provisional` outcome through
+// `markKeysProvisional`, which requires the wake's own Loki marker to ever
+// resolve to `done:`. A wake whose only provisional keys are all zero-byte
+// never gets that marker (nothing was pushed), so `resolveOverWakes` reads
+// it as unclean and bounces the key back to `written` — re-adding it to the
+// backlog and re-waking the box roughly every 10 minutes, forever, even
+// though nothing was ever at risk of being lost. Reverting the `zeroByteKeys`
+// split in box.ts (routing this case back through `markKeysProvisional`
+// alone) makes this test fail: `commitKeys` would never be called and
+// `markKeysProvisional` would be called instead.
+test("drainStep commits a zero-bytes-pushed key directly, never marking it provisional (no re-wake loop)", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000003.ndjson.gz";
+  // Older than Loki's `reject_old_samples_max_age` (7d) minus the drain's
+  // own safety margin — F1's `dropOldRecords` drops it before any push is
+  // attempted, so `drainKey` never even calls `pushToLoki` for this key.
+  const ancientNano = String(BigInt(Date.now() - 8 * 24 * 60 * 60 * 1000) * 1_000_000n);
+  const record = {
+    resource: { attributes: [] },
+    scopeLogs: [{ logRecords: [{ timeUnixNano: ancientNano, body: { stringValue: "too old" } }] }],
+  };
+  const ndjson = JSON.stringify(record) + "\n";
+  const stream = new Blob([ndjson]).stream().pipeThrough(new CompressionStream("gzip"));
+  const gz = new Uint8Array(await new Response(stream).arrayBuffer());
+  const r2Objects = new Map([[key, gz]]);
+
+  const { box, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [key] }, r2Objects });
+  await box.wake("backlog");
+  installContainerFetchRouter({
+    otlp: () => {
+      throw new Error("pushToLoki must never be called for an all-dropped key");
+    },
+  });
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 0, "a zero-byte key must never enter provisional:<wakeId>");
+  assert.equal(inboxWriterStub.calls.commitKeys.length, 1);
+  assert.deepEqual(inboxWriterStub.calls.commitKeys[0], [key]);
+  assert.equal(inboxWriterStub.calls.rejectKey.length, 0);
+});
+
+// B-M2 fix (minor triage item 4): before this fix, `drainStep` had no
+// try/finally around its body — a throw from `InboxWriter.nextWrittenKeys`
+// (or any other RPC, or `fetchObject`, or symbolication) propagated straight
+// out of `drainStep`, silently ending the drain for the rest of this wake:
+// nothing rescheduled it, nothing was recorded, and the box just sat there
+// idle-timer-bound having quietly given up mid-drain. Reverting the
+// try/catch in box.ts (back to calling `#drainStepBody`'s logic inline, with
+// no handler) makes this test fail: the `await box.drainStep(...)` call
+// itself rejects instead of resolving.
+test("drainStep records an o11y.drain error point and still runs the post-drain stop decision when a step throws (B-M2)", async () => {
+  const inboxWriterStub = makeInboxWriterStub({ writtenKeys: ["inbox/worker/2026-01-01/00/000000000004.ndjson.gz"] });
+  inboxWriterStub.nextWrittenKeys = async () => {
+    throw new Error("simulated InboxWriter RPC failure");
+  };
+  const { box, ae } = makeBox({ inboxWriterStub });
+  await box.wake("backlog");
+  installContainerFetchRouter();
+  let stopped = false;
+  hooks.stop = async (self) => {
+    stopped = true;
+    self._state = { status: "stopping", lastChange: Date.now() };
+  };
+
+  const wake = await box.ctx.storage.get("wake");
+  await assert.doesNotReject(box.drainStep({ wakeId: wake.wakeId }), "a throw inside the drain must never escape drainStep");
+
+  const drainPoint = ae.points.find((p) => p.indexes?.[0] === "o11y.drain");
+  assert.ok(drainPoint, "an o11y.drain point must still be written on a throw");
+  assert.equal(outcomeOf(drainPoint), "error");
+  assert.ok(stopped, "the post-drain stop decision must still run after a throw (idle backlog wake -> stop())");
+});
+
+// Advisor follow-up on B-M2: the catch handler's OWN work (`writeBoxPoint`,
+// then `#finishDrain`) can itself throw — most plausibly the very same
+// outage that took down `#drainStepBody` in the first place (a DO
+// storage/RPC failure affects every call in the isolate, not just one).
+// "always reschedule or finish" must hold even then. Reverting the nested
+// try/catch in `drainStep` (back to calling `#finishDrain` unguarded inside
+// the outer catch) makes this test fail: `drainStep` itself would reject.
+test("drainStep falls back to a plain reschedule when the error-handling path ITSELF throws (#finishDrain failing too)", async () => {
+  const inboxWriterStub = makeInboxWriterStub({ writtenKeys: ["inbox/worker/2026-01-01/00/000000000005.ndjson.gz"] });
+  inboxWriterStub.nextWrittenKeys = async () => {
+    throw new Error("simulated InboxWriter RPC failure");
+  };
+  const { box, scheduled } = makeBox({ inboxWriterStub });
+  await box.wake("backlog");
+  installContainerFetchRouter();
+  // #finishDrain calls stop() (quiet, running, backlog wake with no
+  // visitor) — make THAT throw too, simulating the outage taking down the
+  // stop path as well as the drain itself.
+  hooks.stop = async () => {
+    throw new Error("simulated stop() failure");
+  };
+  scheduled.length = 0;
+
+  const wake = await box.ctx.storage.get("wake");
+  await assert.doesNotReject(
+    box.drainStep({ wakeId: wake.wakeId }),
+    "a throw from BOTH the drain body and the error-handling path must never escape drainStep",
+  );
+
+  const rescheduled = scheduled.filter((s) => s.callback === "drainStep");
+  assert.equal(rescheduled.length, 1, "must fall back to rescheduling drainStep rather than silently stalling");
 });
 
 // ---- post-drain stop decision --------------------------------------------

@@ -295,6 +295,36 @@ export async function markKeysProvisional(storage: StorageLike, wakeId: string, 
   });
 }
 
+/** B-M4 fix (minor triage item 3): a key whose drain pushed ZERO bytes to
+ *  Loki (every record was already deduped or too old — `drain.ts#drainKey`'s
+ *  zero-chunk `provisional` case) has nothing that could be lost by an
+ *  unclean stop, so it never needs the wake-marker durability check
+ *  `provisional:<wakeId>` → {@link finalizeWakeResolution} exists for.
+ *  Routing it through `markKeysProvisional` instead was the actual bug: a
+ *  wake whose ONLY provisional keys are all zero-byte never gets a Loki
+ *  index/marker written for it (nothing was ever pushed), so
+ *  `resolveOverWakes` reads that wake as unclean and bounces every one of
+ *  those keys back to `written` — which re-adds them to the backlog, wakes
+ *  the box again ~10 minutes later, drains them again (still zero bytes),
+ *  and repeats forever. This moves such a key straight `written` → `done:`,
+ *  exactly like a normal key's CLEAN commit path
+ *  ({@link finalizeWakeResolution}'s `clean` branch), skipping the
+ *  provisional/marker step entirely — safe because there is nothing durable
+ *  riding on it. */
+export async function commitKeys(storage: StorageLike, keys: readonly string[]): Promise<void> {
+  if (keys.length === 0) return;
+  await storage.transaction(async (txn) => {
+    const doneWrites: Record<string, 1> = {};
+    for (const key of keys) doneWrites[doneKeyStorageKey(key)] = 1;
+    await putChunked<unknown>(txn, doneWrites);
+    // N2: chunked to the real 128-key DO limit, same as `finalizeWakeResolution`.
+    await deleteChunked(
+      txn,
+      keys.map((key) => inboxKeyStorageKey(key)),
+    );
+  });
+}
+
 // ---- backlog() ---------------------------------------------------------------
 
 export interface InboxObjectInfo {

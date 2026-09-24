@@ -85,6 +85,7 @@ import {
   logRequestLine,
   reportDiagnostic,
   routeClassOf,
+  validSessionId,
   withSpan,
 } from "./telemetry/index.js";
 import { checkO11yHeartbeat } from "./o11y-watchdog.js";
@@ -812,7 +813,12 @@ async function recordRequestSignal(
     status: response.status,
     duration_ms: durationMs,
     cf_ray: request.headers.get("cf-ray") ?? "",
-    session_id: request.headers.get("x-hot-session") ?? "",
+    // Minor triage item 8: kept only when shaped like a real page-load id
+    // (`telemetry/lines.ts#validSessionId`'s own doc comment) — an arbitrary
+    // client-controlled header value must not land verbatim in Loki
+    // structured metadata. `demoIdFromPath` (`route-class.ts`) does the
+    // matching shape check for `hot.demo_id` internally.
+    session_id: validSessionId(request.headers.get("x-hot-session")),
     demo_id: demoIdFromPath(pathname),
   });
   ctx.waitUntil(
@@ -2081,6 +2087,12 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
                 context: "chat-gateway",
                 routeClass: "api/chat",
                 tags: { upstream: "litellm-chat", status: String(err.status), request_id: err.requestId ?? "none" },
+                // Minor triage item 9: without this, Sentry's default
+                // message-based grouping fingerprints every request
+                // separately (a `request_id` in `err.message`), so a LiteLLM
+                // outage becomes one ungrouped issue per request instead of
+                // one issue per status code.
+                sentryFingerprint: ["litellm-gateway", String(err.status)],
               });
             }
             // the caller gets a sentence, not a stack trace.
@@ -2148,6 +2160,10 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
                 context: "theme-gateway",
                 routeClass: "api/theme",
                 tags: { upstream: "litellm-theme", status: String(err.status), request_id: err.requestId ?? "none" },
+                // Minor triage item 9: same reasoning as the chat-gateway
+                // call site above — group by gateway + status, not by
+                // message (which carries a unique `request_id`).
+                sentryFingerprint: ["litellm-gateway", String(err.status)],
               });
             }
             return json({ error: "chat_unavailable", message: err.message }, 503);

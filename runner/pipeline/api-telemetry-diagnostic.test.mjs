@@ -120,3 +120,38 @@ test("reportDiagnostic: the structured error line carries hot.fingerprint = fing
   assert.equal(parsed.context, "test-site");
   assert.match(parsed["hot.fingerprint"], /^test-site:[0-9a-f]{16}$/);
 });
+
+// Minor triage item 9. `index.ts`'s chat-gateway and theme-gateway
+// `reportDiagnostic` calls live inside the main worker's `fetch` handler
+// (a route match deep inside a ~2000-line switch), not something this suite
+// can invoke directly without a full request/env — same constraint
+// `pipeline/mcp-create.test.mjs`'s own "the update route calls
+// isMcpCreated()" test documents for the same file. Structural, same style:
+// the route source is read as text and the exact `sentryFingerprint` shape
+// is asserted for each call site — a passing `reportDiagnostic` fingerprint-
+// passthrough test elsewhere proves the FUNCTION honours `sentryFingerprint`
+// when given one; this proves each call site actually PASSES one. Reverting
+// either fix (dropping the `sentryFingerprint` line from either
+// `reportDiagnostic` call) makes the matching assertion below fail.
+test("the chat-gateway and theme-gateway reportDiagnostic calls set a status-grouped sentryFingerprint (C-M13)", () => {
+  const root = join(import.meta.dirname, "..");
+  const source = readFileSync(join(root, "workers/api/src/index.ts"), "utf8");
+
+  const chatStart = source.indexOf('context: "chat-gateway"');
+  assert.ok(chatStart > -1, "the chat-gateway reportDiagnostic call exists in index.ts");
+  const chatCall = source.slice(chatStart, source.indexOf("});", chatStart));
+  assert.match(
+    chatCall,
+    /sentryFingerprint:\s*\["litellm-gateway",\s*String\(err\.status\)\]/,
+    "chat-gateway must fingerprint by gateway + status, not by the default message-based grouping (which carries a unique request_id)",
+  );
+
+  const themeStart = source.indexOf('context: "theme-gateway"');
+  assert.ok(themeStart > -1, "the theme-gateway reportDiagnostic call exists in index.ts");
+  const themeCall = source.slice(themeStart, source.indexOf("});", themeStart));
+  assert.match(
+    themeCall,
+    /sentryFingerprint:\s*\["litellm-gateway",\s*String\(err\.status\)\]/,
+    "theme-gateway must fingerprint by gateway + status too",
+  );
+});
