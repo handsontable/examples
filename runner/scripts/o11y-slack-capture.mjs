@@ -62,7 +62,11 @@ export function createSlackCaptureServer(port) {
       res.end("ok");
     });
   });
-  server.listen(port);
+  // NB7 (re-review 2): no host meant `server.listen(port)` bound every
+  // interface, so `GET /_captured` (alert text, no auth of its own) was
+  // reachable from the LAN, not just this machine. This is a local-only
+  // dev convenience, never anything else — loopback only.
+  server.listen(port, "127.0.0.1");
   return {
     server,
     captured,

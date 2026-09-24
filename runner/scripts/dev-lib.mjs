@@ -282,6 +282,41 @@ export function checkDevVarsPortDrift(devVarsPath, key, expectedPort, fs = defau
   );
 }
 
+/**
+ * Re-review 2, NB8: an `workers/o11y/.dev.vars` bootstrapped BEFORE this
+ * task's `DEV_ADMIN`/`O11Y_SESSION_SECRET` handling existed (e.g. by the old
+ * standalone `o11y-dev.mjs`, which copied `.dev.vars.example` verbatim) has
+ * both declared EMPTY: `DEV_ADMIN=` and `O11Y_SESSION_SECRET=`. Neither
+ * `bootstrapDevVars` (only acts on a FRESH file) nor the `O11Y_ENV=local`
+ * check above catches this — the run starts, looks normal, and then
+ * `/grafana/_o11y/login` answers 500 (the declared-but-empty
+ * `O11Y_SESSION_SECRET` line silently wins over this run's own `--var`, the
+ * same `.dev.vars`-always-wins quirk `checkDevVarsPortDrift` guards
+ * elsewhere) with the local session bypass ALSO off (`DEV_ADMIN` empty).
+ * Warns for either case; does not fix the file itself — same "advisory, not
+ * fatal" posture as `checkDevVarsPortDrift`.
+ * @returns {string[]} zero or more warning lines
+ */
+export function checkO11yDevVarsStaleness(devVarsPath, fs = defaultFs) {
+  const warnings = [];
+  const devAdmin = readDevVarsLine(devVarsPath, "DEV_ADMIN", fs);
+  if (devAdmin === "") {
+    warnings.push(
+      `${devVarsPath} declares DEV_ADMIN= (empty) — the local session bypass is OFF. ` +
+        `Edit the file to set DEV_ADMIN=dev@handsontable.com, or delete it and re-run for a fresh bootstrap.`,
+    );
+  }
+  const sessionSecret = readDevVarsLine(devVarsPath, "O11Y_SESSION_SECRET", fs);
+  if (sessionSecret === "") {
+    warnings.push(
+      `${devVarsPath} declares O11Y_SESSION_SECRET= (empty) — this silently overrides this run's own ephemeral ` +
+        `--var (wrangler: .dev.vars always wins), so /grafana/_o11y/login will answer 500. Remove that line from ` +
+        `${devVarsPath}, or delete the file and re-run for a fresh bootstrap.`,
+    );
+  }
+  return warnings;
+}
+
 /** Reads one `KEY=value` line out of a `.dev.vars`-shaped file (quotes
  *  stripped), or `undefined` if absent/the file doesn't exist. Used for the
  *  O11Y_ENV=local sanity check (o11y) and the PREVIEW_HOST port-drift
@@ -314,6 +349,35 @@ export function o11yLocalPublicOrigin(ports) {
  *  injected only via `--var`/env, never written to a file. */
 export function ephemeralSecret(bytes = 32) {
   return randomBytes(bytes).toString("hex");
+}
+
+/** `--var NAME:value` argument names whose value must never be echoed back
+ *  to the log line `dev.mjs` prints for each spawned child (re-review 2,
+ *  NB6) — this run's own ephemeral `O11Y_SESSION_SECRET` is the only one
+ *  today, but a future ephemeral local secret should be added here rather
+ *  than growing a second ad hoc check. Does not (and cannot, from here)
+ *  keep the value out of `ps` output — an argv is visible to any local
+ *  process by nature — only out of dev.mjs's own terminal/log line. */
+const REDACT_VAR_NAMES = ["O11Y_SESSION_SECRET"];
+
+/** Returns `args` with the value half of every `--var NAME:value` pair
+ *  named in {@link REDACT_VAR_NAMES} replaced by `<redacted>`, for
+ *  `dev.mjs`'s own "spawning: ..." log line only — the real `args` array
+ *  passed to `spawn()` is never touched, only a copy built for display. */
+export function redactArgsForLog(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (args[i - 1] === "--var" && typeof arg === "string") {
+      const [name] = arg.split(":", 1);
+      if (REDACT_VAR_NAMES.includes(name)) {
+        out.push(`${name}:<redacted>`);
+        continue;
+      }
+    }
+    out.push(arg);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

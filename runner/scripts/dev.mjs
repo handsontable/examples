@@ -23,6 +23,7 @@ import {
   o11yDevVarsPatch,
   O11Y_DEVVARS_STRIP_KEYS,
   checkDevVarsPortDrift,
+  checkO11yDevVarsStaleness,
   readDevVarsLine,
   ephemeralSecret,
   migrationRecordPath,
@@ -34,6 +35,7 @@ import {
   listRunningContainers,
   reportLeftoverContainers,
   SHUTDOWN_SIGNALS,
+  redactArgsForLog,
   PORT_DEFAULTS,
 } from "./dev-lib.mjs";
 
@@ -204,6 +206,10 @@ async function main() {
     }
     const slackDrift = checkDevVarsPortDrift(devVarsPath, "SLACK_WEBHOOK_URL", ports.O11Y_SLACK_CAPTURE_PORT);
     if (slackDrift) log("o11y", `warning: ${slackDrift}`);
+    // NB8 (re-review 2): only fires for an EXISTING .dev.vars (a fresh one
+    // just got DEV_ADMIN patched in and O11Y_SESSION_SECRET stripped, above)
+    // — a stale pre-K1 file otherwise fails closed silently.
+    for (const warning of checkO11yDevVarsStaleness(devVarsPath)) log("o11y", `warning: ${warning}`);
 
     const composeFile = path.join(RUNNER_ROOT, "containers", "o11y", "compose.yml");
     const composeProjectName = process.env.COMPOSE_PROJECT_NAME || "o11y-dev";
@@ -318,7 +324,10 @@ async function main() {
     if (wranglerRegistryPath && (proc.name === "api" || proc.name === "o11y")) {
       env.WRANGLER_REGISTRY_PATH = wranglerRegistryPath;
     }
-    log(proc.name, `spawning: ${proc.bin} ${proc.args.join(" ")}`);
+    // NB6 (re-review 2): the real args (below, `spawn`) still carry the
+    // ephemeral O11Y_SESSION_SECRET value in full — this only keeps it out
+    // of dev.mjs's own printed log line.
+    log(proc.name, `spawning: ${proc.bin} ${redactArgsForLog(proc.args).join(" ")}`);
     const child = spawn(proc.bin, proc.args, {
       cwd,
       env,

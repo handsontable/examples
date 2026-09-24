@@ -29,6 +29,7 @@ import {
   o11yDevVarsPatch,
   O11Y_DEVVARS_STRIP_KEYS,
   checkDevVarsPortDrift,
+  checkO11yDevVarsStaleness,
   readDevVarsLine,
   migrationRecordPath,
   planMigrations,
@@ -39,6 +40,7 @@ import {
   buildPlan,
   planNames,
   ephemeralSecret,
+  redactArgsForLog,
   possiblyLeftoverContainers,
   reportLeftoverContainers,
   SHUTDOWN_SIGNALS,
@@ -257,9 +259,50 @@ test("readDevVarsLine / checkDevVarsPortDrift: detects a port mismatch and repor
   });
 });
 
+test("checkO11yDevVarsStaleness (NB8): warns when a pre-existing .dev.vars declares DEV_ADMIN or O11Y_SESSION_SECRET empty", () => {
+  withTmpDir((dir) => {
+    const devVarsPath = path.join(dir, ".dev.vars");
+
+    // A healthy, freshly-bootstrapped file: no warnings.
+    writeFileSync(devVarsPath, "O11Y_ENV=local\nDEV_ADMIN=dev@handsontable.com\n");
+    assert.deepEqual(checkO11yDevVarsStaleness(devVarsPath), []);
+
+    // The exact NB8 shape: an old .dev.vars from before this task's
+    // DEV_ADMIN/O11Y_SESSION_SECRET handling existed, both declared empty.
+    writeFileSync(devVarsPath, "O11Y_ENV=local\nDEV_ADMIN=\nO11Y_SESSION_SECRET=\n");
+    const warnings = checkO11yDevVarsStaleness(devVarsPath);
+    assert.equal(warnings.length, 2, "both the bypass and the secret must each get their own warning");
+    assert.ok(warnings.some((w) => w.includes("DEV_ADMIN")));
+    assert.ok(warnings.some((w) => w.includes("O11Y_SESSION_SECRET")));
+
+    // O11Y_SESSION_SECRET simply ABSENT (the normal, freshly-stripped case)
+    // must never warn — only DECLARED-but-empty is the problem.
+    writeFileSync(devVarsPath, "O11Y_ENV=local\nDEV_ADMIN=dev@handsontable.com\n");
+    assert.deepEqual(checkO11yDevVarsStaleness(devVarsPath), []);
+  });
+});
+
 test("ephemeralSecret: never the same value twice, and never written by bootstrapDevVars", () => {
   assert.notEqual(ephemeralSecret(), ephemeralSecret());
   assert.equal(ephemeralSecret().length, 64); // 32 bytes, hex
+});
+
+test("redactArgsForLog (NB6): O11Y_SESSION_SECRET's --var value is redacted for dev.mjs's own log line", () => {
+  const secret = ephemeralSecret();
+  const args = [
+    "dev",
+    "--port",
+    "4200",
+    "--var",
+    `O11Y_SESSION_SECRET:${secret}`,
+    "--var",
+    "O11Y_LOCAL_MINIO_PORT:9000",
+  ];
+  const redacted = redactArgsForLog(args);
+  assert.ok(!redacted.join(" ").includes(secret), "the secret value must never appear in the redacted args");
+  assert.deepEqual(redacted, ["dev", "--port", "4200", "--var", "O11Y_SESSION_SECRET:<redacted>", "--var", "O11Y_LOCAL_MINIO_PORT:9000"]);
+  // The real spawn() args are untouched — only a copy for display is redacted.
+  assert.ok(args.join(" ").includes(secret), "the original args array passed to spawn() must be unaffected");
 });
 
 // ---------------------------------------------------------------------------
