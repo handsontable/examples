@@ -327,8 +327,8 @@
     {
       "id": 6,
       "type": "table",
-      "title": "Funnel: open → engaged → saved → shared, by area (docs)",
-      "description": "ADR-0042 §2's engagement events, joined by area via the boolean-multiply sum trick (version-health.json's own convention) rather than a second panel per metric.",
+      "title": "Funnel: open → engaged → saved → shared → forked → downloaded, by area (docs)",
+      "description": "ADR-0042 §2's engagement events, joined by area via the boolean-multiply sum trick (version-health.json's own convention) rather than a second panel per metric. forked/downloaded added — controller audit finding: emitted but previously unread.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -346,7 +346,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT blob19 AS area, sum(_sample_interval * double1 * (index1 = 'example.open')) AS opens, sum(_sample_interval * double1 * (index1 = 'example.engaged')) AS engaged, sum(_sample_interval * double1 * (index1 = 'example.saved')) AS saved, sum(_sample_interval * double1 * (index1 = 'example.shared')) AS shared FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 IN ('example.open', 'example.engaged', 'example.saved', 'example.shared') AND blob17 = 'docs' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY area ORDER BY opens DESC",
+          "query": "SELECT blob19 AS area, sum(_sample_interval * double1 * (index1 = 'example.open')) AS opens, sum(_sample_interval * double1 * (index1 = 'example.engaged')) AS engaged, sum(_sample_interval * double1 * (index1 = 'example.saved')) AS saved, sum(_sample_interval * double1 * (index1 = 'example.shared')) AS shared, sum(_sample_interval * double1 * (index1 = 'example.forked')) AS forked, sum(_sample_interval * double1 * (index1 = 'example.downloaded')) AS downloaded FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 IN ('example.open', 'example.engaged', 'example.saved', 'example.shared', 'example.forked', 'example.downloaded') AND blob17 = 'docs' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY area ORDER BY opens DESC",
           "format": "table",
           "table": "runner_events",
           "round": "0s",

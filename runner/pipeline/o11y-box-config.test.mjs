@@ -289,6 +289,30 @@ test("grafana.ini: auth.proxy is the ONLY trusted identity — basic auth and th
   );
 });
 
+test("grafana.ini: viewers_can_edit is on (Explore for Viewers), but provisioning still refuses a save (P1-logs)", () => {
+  const ini = parseIni(readText("grafana/grafana.ini"));
+  // Grafana gates Explore on viewers_can_edit, not on role — a signed-in
+  // Viewer with this off cannot open Explore at all. Flipping it on is safe
+  // ONLY because the two assertions below hold: no UI save can persist a
+  // dashboard change, and no datasource is editable.
+  assert.equal(ini.users.viewers_can_edit, "true", "[users] viewers_can_edit (Explore for Viewers)");
+
+  const dashboardsYaml = readText("grafana/provisioning/dashboards/dashboards.yaml");
+  assert.match(dashboardsYaml, /allowUiUpdates:\s*false\s*$/m, "provisioned dashboards refuse a UI save");
+
+  const datasourcesYaml = readText("grafana/provisioning/datasources/datasources.yaml");
+  // Every provisioned datasource block must say `editable: false` — a bare
+  // count check (not per-block) is enough here because a missing line for
+  // any one datasource would fail this, and the file has no other
+  // legitimate "editable:" occurrence.
+  const editableLines = [...datasourcesYaml.matchAll(/^\s*editable:\s*(\S+)\s*$/gm)].map((m) => m[1]);
+  assert.ok(editableLines.length >= 3, `expected an editable: line per datasource, got ${editableLines.length}`);
+  assert.ok(
+    editableLines.every((v) => v === "false"),
+    `every datasource must be editable: false, got ${JSON.stringify(editableLines)}`,
+  );
+});
+
 // M10 (fix round 1): the previous "serve_from_sub_path and root_url agree"
 // test asserted exactly what "sub-path, Live and auth.proxy are pinned"
 // above already covers (serve_from_sub_path === "true", root_url ending in

@@ -204,6 +204,19 @@ hand with `curl "http://localhost:<O11Y_DEV_PORT>/cdn-cgi/local/scheduled"`,
 or replay the fixtures, which trips the new-fingerprint rule on first run)
 shows up locally instead of needing a real Slack webhook.
 
+**Browsing logs.** Sign into Grafana (`http://localhost:<O11Y_DEV_PORT>/grafana/` —
+`DEV_ADMIN` logs you in automatically in local mode) and open the **Logs**
+dashboard for API-worker lines, authoring/embed/demo-runtime browser errors,
+and a free-text/`cf.ray`/`session.id`/demo-id search across every service in
+one place — it's linked from the Runner overview and Observability self
+dashboards too. Every signed-in user is a Grafana Viewer, but Viewers now
+also get **Explore** (`/grafana/explore`): pick the `Loki (browser)` or
+`Loki (worker)` datasource and run a LogQL query directly against either
+tenant, without needing a dashboard panel for it. Neither capability lets a
+Viewer save a change back to a provisioned dashboard or datasource — those
+stay read-only, and Grafana's state is disposable anyway (a fresh DB on
+every wake).
+
 **Local o11y data persists across a restart.** `containers/o11y/compose.yml`
 gives MinIO and ClickHouse named volumes (Grafana itself stays ephemeral by
 design), and `workers/o11y/.wrangler/state` (the InboxWriter ledger, dedupe

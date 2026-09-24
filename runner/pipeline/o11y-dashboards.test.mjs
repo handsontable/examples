@@ -172,11 +172,24 @@ function validateAeQuery(query) {
 const LOKI_LABEL_SET = new Set(LOKI_LABELS);
 
 /** Every violation found in a LogQL selector/expr — empty means clean. */
+/** Strips `${varName}`/`${varName:format}` Grafana template-variable macros
+ *  before the label scan below — mirroring `stripLiteralsAndMacros`'s own
+ *  macro-stripping for AE queries (P1-logs fix: a `${service_name:regex}`
+ *  value's own embedded `}` was fooling `/\{([^}]*)\}/`'s non-greedy match
+ *  into treating that macro's closing brace as the SELECTOR's closing
+ *  brace, silently skipping every label listed after it — verified: without
+ *  this strip, `validateLokiExpr('{service_name=~"${service_name:regex}",
+ *  session_id="x"}')` returned `[]` instead of flagging `session_id`). */
+function stripLokiMacros(expr) {
+  return expr.replace(/\$\{[^}]*\}/g, "MACRO");
+}
+
 function validateLokiExpr(expr) {
   const violations = [];
+  const stripped = stripLokiMacros(expr);
   const re = /\{([^}]*)\}/g;
   let m;
-  while ((m = re.exec(expr))) {
+  while ((m = re.exec(stripped))) {
     for (const part of m[1].split(",").map((s) => s.trim()).filter(Boolean)) {
       const lm = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*(=~|!=|=|!~)/.exec(part);
       if (!lm) continue;
@@ -255,6 +268,53 @@ function lokiTargetsOf(dashboard) {
 const KNOWN_LOKI_UIDS = new Set(["loki-browser", "loki-worker"]);
 const KNOWN_DATASOURCE_UIDS = new Set(["clickhouse-runner-events", "loki-browser", "loki-worker"]);
 
+// ---- P1-logs: a panel/target may name its datasource by a template
+// variable (`"${tenant}"`) instead of a literal uid — the Logs dashboard's
+// `tenant` variable ("browser"/"worker") IS how it lets a viewer pick which
+// Loki tenant a panel queries. A bare allowlist entry for the literal string
+// `"${tenant}"` would let ANY dashboard reference an undeclared variable and
+// still pass; instead, a `${varName}` uid is only accepted when the SAME
+// dashboard actually declares a template variable named `varName` of
+// `type: "datasource"` — and, for the Loki-specific check, one scoped to the
+// `loki` datasource type (`query: "loki"`), never the ClickHouse one. ------
+
+/** `${varName}` or `$varName` -> `varName`, else `null` (not a template ref). */
+function templateVarRefName(uid) {
+  const m = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$|^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(uid ?? "");
+  return m ? (m[1] ?? m[2]) : null;
+}
+
+/** Names of this dashboard's `type: "datasource"` template variables, optionally
+ *  narrowed to ones whose `query` (the plugin type filter) matches `pluginQuery`. */
+function templateDatasourceVarNames(dashboard, pluginQuery) {
+  return new Set(
+    (dashboard.templating?.list ?? [])
+      .filter((v) => v.type === "datasource" && (pluginQuery === undefined || v.query === pluginQuery))
+      .map((v) => v.name),
+  );
+}
+
+/** Returns `null` when `uid` resolves to a known datasource — either a literal
+ *  member of `knownUids`, or a `${varName}` reference to a `type:
+ *  "datasource"` template variable this SAME dashboard declares (optionally
+ *  scoped to `pluginQuery`, e.g. "loki") — otherwise a violation string. The
+ *  ONE place this resolution logic lives: both the real per-dashboard checks
+ *  below AND the synthetic tests exercise this exact function, so a synthetic
+ *  test that breaks it is real revert evidence, not an assertion against a
+ *  second, hand-duplicated copy of the same rule. */
+function resolveDatasourceUid(dashboard, uid, knownUids, pluginQuery) {
+  const varName = templateVarRefName(uid);
+  if (varName !== null) {
+    const datasourceVars = templateDatasourceVarNames(dashboard, pluginQuery);
+    if (!datasourceVars.has(varName)) {
+      return `datasource uid "${uid}" references an undeclared (or wrongly plugin-scoped) template variable "${varName}"`;
+    }
+    return null;
+  }
+  if (!knownUids.has(uid)) return `datasource uid "${JSON.stringify(uid)}" is not a known/named datasource`;
+  return null;
+}
+
 // =============================================================================
 // The dashboards this repo actually ships
 // =============================================================================
@@ -267,6 +327,7 @@ test("every dashboard under containers/o11y/grafana/dashboards/ is present", () 
     "AI assist",
     "Docs embeds",
     "Examples & features",
+    "Logs",
     "Observability self",
     "Runner overview",
     "Tier-1 playground",
@@ -284,10 +345,8 @@ for (const { file, dashboard } of dashboards) {
     // exactly the "names its tenant datasource" rule, generalized to every
     // target, not only ones that happen to already say `type: "loki"`.
     for (const { panel, datasource } of allTargets(dashboard)) {
-      assert.ok(
-        KNOWN_DATASOURCE_UIDS.has(datasource.uid),
-        `${file} / panel "${panel}": target has no resolvable known datasource (got ${JSON.stringify(datasource)})`,
-      );
+      const violation = resolveDatasourceUid(dashboard, datasource.uid, KNOWN_DATASOURCE_UIDS);
+      assert.equal(violation, null, `${file} / panel "${panel}": ${violation}`);
     }
   });
 
@@ -314,7 +373,8 @@ for (const { file, dashboard } of dashboards) {
 
   test(`${file}: every Loki query uses only contract labels and a named tenant datasource`, () => {
     for (const { panel, uid, expr } of lokiTargetsOf(dashboard)) {
-      assert.ok(KNOWN_LOKI_UIDS.has(uid), `${file} / panel "${panel}": datasource uid "${uid}" is not a named Loki tenant`);
+      const violation = resolveDatasourceUid(dashboard, uid, KNOWN_LOKI_UIDS, "loki");
+      assert.equal(violation, null, `${file} / panel "${panel}": ${violation}`);
       const violations = validateLokiExpr(expr);
       assert.deepEqual(violations, [], `${file} / panel "${panel}": ${violations.join("; ")}\nexpr: ${expr}`);
     }
@@ -393,6 +453,14 @@ test("the lint fails on a high-cardinality Loki label (session.id / cf.ray shape
   }
 });
 
+test("the lint fails on a disallowed label placed AFTER a ${var:regex} macro in the same selector (P1-logs: the macro's own closing brace was fooling the non-greedy {...} match)", () => {
+  const violations = validateLokiExpr('{service_name=~"${service_name:regex}", session_id="x"}');
+  assert.ok(
+    violations.some((v) => v.includes('"session_id"')),
+    `expected a disallowed-label violation for session_id after the macro, got: ${JSON.stringify(violations)}`,
+  );
+});
+
 test("the lint fails on a bad templating-variable AE query (I1: variable queries were invisible to aeTargetsOf)", () => {
   const dashboard = {
     templating: {
@@ -462,4 +530,83 @@ test("the datasource check accepts a target that only names its datasource at th
   };
   const resolved = allTargets(dashboard);
   assert.equal(resolved[0].datasource.uid, "loki-worker");
+});
+
+// ---- P1-logs: the `${varName}` template-datasource-reference lint ---------
+
+test('templateVarRefName: recognizes "${tenant}" and "$tenant", rejects a literal uid', () => {
+  assert.equal(templateVarRefName("${tenant}"), "tenant");
+  assert.equal(templateVarRefName("$tenant"), "tenant");
+  assert.equal(templateVarRefName("loki-worker"), null);
+});
+
+test("resolveDatasourceUid rejects a ${var} reference to an UNDECLARED template variable — calling the SAME function the real per-dashboard checks call", () => {
+  const dashboard = { templating: { list: [] } }; // no "tenant" datasource variable declared
+  const violation = resolveDatasourceUid(dashboard, "${tenant}", KNOWN_DATASOURCE_UIDS);
+  assert.ok(violation && violation.includes('"tenant"'), `expected a violation naming "tenant", got: ${violation}`);
+});
+
+test("resolveDatasourceUid accepts a declared `type: \"datasource\"` template variable's uid reference, scoped to the right plugin", () => {
+  const dashboard = { templating: { list: [{ name: "tenant", type: "datasource", query: "loki" }] } };
+  assert.equal(resolveDatasourceUid(dashboard, "${tenant}", KNOWN_DATASOURCE_UIDS), null);
+  assert.equal(resolveDatasourceUid(dashboard, "${tenant}", KNOWN_LOKI_UIDS, "loki"), null);
+  // A "tenant" variable scoped to a DIFFERENT plugin (e.g. the ClickHouse
+  // one) must not satisfy the Loki-specific check — never widen past what
+  // the dashboard actually declared.
+  const chDashboard = { templating: { list: [{ name: "tenant", type: "datasource", query: "vertamedia-clickhouse-datasource" }] } };
+  assert.notEqual(resolveDatasourceUid(chDashboard, "${tenant}", KNOWN_LOKI_UIDS, "loki"), null);
+});
+
+test("logs.json: the tenant-templated datasource resolves via resolveDatasourceUid on the REAL dashboard (revert evidence: removing the ${var} branch from resolveDatasourceUid must break this)", () => {
+  const { dashboard } = dashboards.find((d) => d.file === "logs.json");
+  assert.ok(dashboard, "logs.json must exist and be loaded");
+  assert.ok(
+    templateDatasourceVarNames(dashboard).has("tenant"),
+    'logs.json must declare a "tenant" datasource-type variable',
+  );
+  for (const { panel, datasource } of allTargets(dashboard)) {
+    const violation = resolveDatasourceUid(dashboard, datasource.uid, KNOWN_DATASOURCE_UIDS);
+    assert.equal(violation, null, `panel "${panel}": ${violation}`);
+  }
+});
+
+// =============================================================================
+// P1-logs (coordinator addendum): metrics emitted but previously unread by
+// any dashboard. Each assertion below fails if the corresponding panel is
+// removed — verified by reverting each one in turn during development.
+// =============================================================================
+
+test("budget.gauge, bucket.resolve_ms, example.forked and example.downloaded are each read by SOME dashboard's AE query", () => {
+  const allAeQueries = dashboards.flatMap(({ dashboard }) => aeTargetsOf(dashboard).map((t) => t.query));
+  for (const metric of ["budget.gauge", "bucket.resolve_ms", "example.forked", "example.downloaded"]) {
+    assert.ok(
+      allAeQueries.some((q) => q.includes(`'${metric}'`)),
+      `no dashboard's AE query references index1 = '${metric}' — this metric is emitted but unread`,
+    );
+  }
+});
+
+test("logs.json: has the Sentry issues panel (|= \"sentry \" line filter) and the top-fingerprints table (blob11)", () => {
+  const { dashboard } = dashboards.find((d) => d.file === "logs.json");
+  const lokiExprs = lokiTargetsOf(dashboard).map((t) => t.expr);
+  assert.ok(
+    lokiExprs.some((e) => e.includes('|= "sentry "')),
+    "logs.json has no panel filtering worker-tenant lines for the Sentry webhook's own body shape",
+  );
+  const aeQueries = aeTargetsOf(dashboard).map((t) => t.query);
+  assert.ok(
+    aeQueries.some((q) => q.includes("blob11")),
+    "logs.json has no AE panel reading blob11 (fingerprint) — the top-error-fingerprints table",
+  );
+});
+
+test("runner-overview.json and observability-self.json each link to the Logs dashboard", () => {
+  for (const file of ["runner-overview.json", "observability-self.json"]) {
+    const { dashboard } = dashboards.find((d) => d.file === file);
+    const links = dashboard.links ?? [];
+    assert.ok(
+      links.some((l) => l.url === "/d/o11y-logs/logs"),
+      `${file} has no dashboard link to /d/o11y-logs/logs`,
+    );
+  }
 });
