@@ -67,6 +67,19 @@ import {
   detectO11yStateDivergence,
   formatO11yDivergenceWarning,
 } from "../scripts/dev-lib.mjs";
+// dev-prepull task's own additions — a separate import statement so a
+// parallel edit to the blocks above merges cleanly.
+import {
+  readContainerDockerfilePaths,
+  parseDockerfileBaseImages,
+  containerWranglerConfigsForTier,
+  collectTierBaseImages,
+  shouldCheckContainerImages,
+  isImagePresent,
+  pullImageWithRetry,
+  ensureContainerImagesPresent,
+  formatImagePullFailure,
+} from "../scripts/dev-lib.mjs";
 import { DatabaseSync } from "node:sqlite";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -754,6 +767,293 @@ test("CLI: `dev.mjs --tier=2` fails fast with the Docker message when `docker in
   const output = `${result.stdout}${result.stderr}`;
   assert.match(output, /docker info/);
   assert.match(output, /Start Docker/);
+});
+
+// ---------------------------------------------------------------------------
+// Container base-image pre-pull (dev-prepull task)
+// ---------------------------------------------------------------------------
+
+test("parseDockerfileBaseImages: single-stage FROM", () => {
+  const dockerfile = `FROM docker.io/cloudflare/sandbox:0.12.3\nWORKDIR /app\n`;
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["docker.io/cloudflare/sandbox:0.12.3"]);
+});
+
+test("parseDockerfileBaseImages: multi-stage build — a later FROM referencing an earlier stage's alias is excluded", () => {
+  const dockerfile = [
+    "FROM golang:1.20 AS build",
+    "RUN go build ./...",
+    "FROM build AS test",
+    "RUN go test ./...",
+    "FROM alpine:3.19",
+    "COPY --from=test /bin/app /app",
+  ].join("\n");
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["golang:1.20", "alpine:3.19"]);
+});
+
+test("parseDockerfileBaseImages: matches containers/o11y/Dockerfile's real shape — two real images, no stage-name leakage", () => {
+  const dockerfile = ["FROM grafana/loki:3.3.2 AS loki", "FROM grafana/grafana:11.4.0", "COPY --from=loki /usr/bin/loki /usr/bin/loki"].join("\n");
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["grafana/loki:3.3.2", "grafana/grafana:11.4.0"]);
+});
+
+test("parseDockerfileBaseImages: FROM scratch is excluded (never pulled)", () => {
+  const dockerfile = ["FROM golang:1.20 AS build", "RUN go build -o /app", "FROM scratch", "COPY --from=build /app /app"].join("\n");
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["golang:1.20"]);
+});
+
+test("parseDockerfileBaseImages: ARG-based FROM resolves against the ARG's own default", () => {
+  const dockerfile = ["ARG BASE_IMAGE=alpine:3.19", "FROM ${BASE_IMAGE}", "RUN echo hi"].join("\n");
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["alpine:3.19"]);
+});
+
+test("parseDockerfileBaseImages: dedupes an image reused across stages", () => {
+  const dockerfile = ["FROM node:20 AS a", "FROM node:20 AS b", "FROM node:20"].join("\n");
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["node:20"]);
+});
+
+test("containerWranglerConfigsForTier: tier=1 needs none, tier=2 needs only the API worker, tier=full needs API + o11y", () => {
+  const root = "/runner";
+  assert.deepEqual(containerWranglerConfigsForTier("1", root), []);
+  assert.deepEqual(containerWranglerConfigsForTier("2", root), [path.join(root, "workers", "api", "wrangler.jsonc")]);
+  assert.deepEqual(containerWranglerConfigsForTier("full", root), [
+    path.join(root, "workers", "api", "wrangler.jsonc"),
+    path.join(root, "workers", "o11y", "wrangler.jsonc"),
+  ]);
+});
+
+test("readContainerDockerfilePaths: reads containers[].image from the real workers/api/wrangler.jsonc", () => {
+  const paths = readContainerDockerfilePaths(path.join(RUNNER_ROOT, "workers", "api", "wrangler.jsonc"));
+  assert.equal(paths.length, 2);
+  assert.ok(paths.some((p) => p.endsWith(path.join("containers", "live", "Dockerfile"))));
+  assert.ok(paths.some((p) => p.endsWith(path.join("containers", "builder", "Dockerfile"))));
+  for (const p of paths) assert.equal(existsSync(p), true);
+});
+
+test("collectTierBaseImages: tier=2 against the real repo resolves the shared sandbox base image once", () => {
+  const refs = collectTierBaseImages("2", RUNNER_ROOT);
+  assert.deepEqual(refs, ["docker.io/cloudflare/sandbox:0.12.3"]);
+});
+
+test("collectTierBaseImages: tier=full also pulls in the o11y worker's two real base images", () => {
+  const refs = collectTierBaseImages("full", RUNNER_ROOT);
+  assert.deepEqual(refs, ["docker.io/cloudflare/sandbox:0.12.3", "grafana/loki:3.3.2", "grafana/grafana:11.4.0"]);
+});
+
+test("shouldCheckContainerImages: true for tier 2/full unless --skip-image-check; always false for tier 1", () => {
+  assert.equal(shouldCheckContainerImages("2", false), true);
+  assert.equal(shouldCheckContainerImages("full", false), true);
+  assert.equal(shouldCheckContainerImages("2", true), false);
+  assert.equal(shouldCheckContainerImages("full", true), false);
+  assert.equal(shouldCheckContainerImages("1", false), false);
+  assert.equal(shouldCheckContainerImages("1", true), false);
+});
+
+test("parseArgs: --skip-image-check is only valid with --tier=2 or --tier=full", () => {
+  assert.equal(parseArgs(["--tier=2", "--skip-image-check"]).errors.length, 0);
+  assert.equal(parseArgs(["--tier=2", "--skip-image-check"]).skipImageCheck, true);
+  assert.equal(parseArgs(["--tier=full", "--skip-image-check"]).errors.length, 0);
+  assert.equal(parseArgs(["--tier=1", "--skip-image-check"]).errors.length, 1);
+  assert.equal(parseArgs(["--help", "--skip-image-check"]).errors.length, 0);
+});
+
+test("parseArgs: --skip-image-check defaults to false", () => {
+  assert.equal(parseArgs(["--tier=2"]).skipImageCheck, false);
+});
+
+test("isImagePresent: true when `docker image inspect` succeeds", () => {
+  assert.equal(
+    isImagePresent("alpine:3.19", () => {}),
+    true,
+  );
+});
+
+test("isImagePresent: false when `docker image inspect` throws (image missing locally)", () => {
+  assert.equal(
+    isImagePresent("alpine:3.19", () => {
+      throw new Error("No such image");
+    }),
+    false,
+  );
+});
+
+test("ensureContainerImagesPresent: a PRESENT image is never pulled", async () => {
+  const calls = [];
+  const result = await ensureContainerImagesPresent({
+    refs: ["alpine:3.19"],
+    execFileSyncImpl: (cmd, args) => {
+      calls.push(args);
+      if (args[0] === "image" && args[1] === "inspect") return "ok";
+      throw new Error(`unexpected call: docker ${args.join(" ")}`);
+    },
+    sleep: () => Promise.resolve(),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(
+    calls.some((a) => a[0] === "pull"),
+    false,
+    "a present image must never trigger docker pull",
+  );
+});
+
+test("ensureContainerImagesPresent: a MISSING image is pulled exactly once (succeeds first try)", async () => {
+  const calls = [];
+  const result = await ensureContainerImagesPresent({
+    refs: ["alpine:3.19"],
+    execFileSyncImpl: (cmd, args) => {
+      calls.push(args);
+      if (args[0] === "image" && args[1] === "inspect") throw new Error("No such image");
+      if (args[0] === "pull") return "ok";
+      throw new Error(`unexpected call: docker ${args.join(" ")}`);
+    },
+    sleep: () => Promise.resolve(),
+  });
+  assert.equal(result.ok, true);
+  const pullCalls = calls.filter((a) => a[0] === "pull");
+  assert.equal(pullCalls.length, 1);
+  assert.deepEqual(pullCalls[0], ["pull", "alpine:3.19"]);
+});
+
+test("pullImageWithRetry: retries up to maxAttempts with backoff, then reports the last error line", async () => {
+  let attempts = 0;
+  const sleeps = [];
+  const result = await pullImageWithRetry({
+    ref: "alpine:3.19",
+    execFileSyncImpl: () => {
+      attempts += 1;
+      const err = new Error("pull failed");
+      err.stderr = Buffer.from(`Error response from daemon: Get "https://registry-1.docker.io/v2/": net/http: TLS handshake timeout\n`);
+      throw err;
+    },
+    maxAttempts: 3,
+    backoffMs: 10,
+    sleep: (ms) => {
+      sleeps.push(ms);
+      return Promise.resolve();
+    },
+  });
+  assert.equal(attempts, 3);
+  assert.equal(sleeps.length, 2); // no sleep after the last attempt
+  assert.equal(result.ok, false);
+  assert.match(result.lastErrorLine, /TLS handshake timeout/);
+});
+
+test("pullImageWithRetry: a real `docker pull` writes progress to stdout and the actual failure to stderr — the stderr line must win, not stdout's later one", async () => {
+  const result = await pullImageWithRetry({
+    ref: "docker.io/cloudflare/sandbox:0.12.3",
+    execFileSyncImpl: () => {
+      const err = new Error("pull failed");
+      // Matches real `docker pull` output shape: per-layer progress on
+      // stdout keeps writing lines AFTER stderr's own last write (the
+      // process failing mid-pull, not at the very start) — a naive
+      // "concat stdout after stderr, take the last line" extraction would
+      // report the harmless stdout progress line instead of this error.
+      err.stdout = Buffer.from("0.12.3: Pulling from cloudflare/sandbox\nabc123: Downloading  [==>  ]  12MB/48MB\n");
+      err.stderr = Buffer.from("error pulling image configuration: download failed after attempts=6: context deadline exceeded\n");
+      throw err;
+    },
+    maxAttempts: 1,
+    sleep: () => Promise.resolve(),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.lastErrorLine, /context deadline exceeded/);
+  assert.doesNotMatch(result.lastErrorLine, /Downloading/);
+});
+
+test("ensureContainerImagesPresent: a pull that fails every attempt stops before checking any later ref", async () => {
+  const calls = [];
+  const result = await ensureContainerImagesPresent({
+    refs: ["alpine:3.19", "busybox:1.36"],
+    execFileSyncImpl: (cmd, args) => {
+      calls.push(args);
+      if (args[0] === "image" && args[1] === "inspect") throw new Error("No such image");
+      if (args[0] === "pull") {
+        const err = new Error("pull failed");
+        err.stderr = Buffer.from("Error response from daemon: some network error\n");
+        throw err;
+      }
+      throw new Error(`unexpected call: docker ${args.join(" ")}`);
+    },
+    maxAttempts: 3,
+    backoffMs: 5,
+    sleep: () => Promise.resolve(),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.ref, "alpine:3.19");
+  assert.match(result.lastErrorLine, /some network error/);
+  assert.ok(
+    calls.every((a) => a[a.length - 1] !== "busybox:1.36"),
+    "the second ref must never be checked once the first one exhausts its retries",
+  );
+});
+
+test("formatImagePullFailure: names the image, the last error line, the retry command, and the escape hatch", () => {
+  const message = formatImagePullFailure({ ref: "docker.io/cloudflare/sandbox:0.12.3", lastErrorLine: "TLS handshake timeout" });
+  assert.match(message, /docker\.io\/cloudflare\/sandbox:0\.12\.3/);
+  assert.match(message, /TLS handshake timeout/);
+  assert.match(message, /docker pull docker\.io\/cloudflare\/sandbox:0\.12\.3/);
+  assert.match(message, /--skip-image-check/);
+});
+
+test("CLI: `dev.mjs --tier=2` stops before spawning any worker when a required base image fails to pull after every retry", () => {
+  const stubBinDir = path.join(HERE, "fixtures", "stub-bin");
+  const devScript = path.join(RUNNER_ROOT, "scripts", "dev.mjs");
+  const result = spawnSync(process.execPath, [devScript, "--tier=2"], {
+    cwd: RUNNER_ROOT,
+    encoding: "utf8",
+    timeout: 30000,
+    env: {
+      ...process.env,
+      PATH: `${stubBinDir}:${process.env.PATH}`,
+      STUB_DOCKER_MODE: "ok",
+      STUB_DOCKER_IMAGE_PRESENT: "0",
+      STUB_DOCKER_PULL_MODE: "fail",
+    },
+  });
+  assert.notEqual(result.status, 0);
+  const output = `${result.stdout}${result.stderr}`;
+  assert.match(output, /could not pull required container base image/);
+  assert.match(output, /docker pull docker\.io\/cloudflare\/sandbox:0\.12\.3/);
+  assert.match(output, /attempt 3\/3/, "the bounded retry must actually run through the real CLI, not just report ok:false");
+  assert.doesNotMatch(output, /spawning:/, "no worker should ever be spawned once the image pull gate fails");
+  // The stub docker has no "ps" handler (the very next docker call after
+  // the image gate, listing containers) — its catch-all reply is "stub
+  // docker: unsupported subcommand ps". Its ABSENCE here is what actually
+  // proves this run stopped at the image gate and never reached that next
+  // step, not merely that it exited non-zero for some other reason.
+  assert.doesNotMatch(output, /unsupported subcommand/, "the run must stop at the image gate, never reaching the next docker call (docker ps)");
+});
+
+test("CLI: `dev.mjs --tier=2 --skip-image-check` never calls `docker image inspect`/`pull` even when they'd fail", () => {
+  const stubBinDir = path.join(HERE, "fixtures", "stub-bin");
+  const devScript = path.join(RUNNER_ROOT, "scripts", "dev.mjs");
+  // `docker info` (the tier's own Docker-availability check, ahead of the
+  // image gate this test targets) succeeds via STUB_DOCKER_MODE=ok. The
+  // stub doesn't implement `docker ps` (the leftover-container baseline
+  // that runs right after the image gate), so this run dies there — fine,
+  // and fast: everything this test needs to observe (the skip line, and
+  // the absence of any image inspect/pull attempt) has already happened by
+  // then, and it proves nothing past the gate got anywhere near a real
+  // `wrangler`/pnpm build.
+  const result = spawnSync(process.execPath, [devScript, "--tier=2", "--skip-image-check"], {
+    cwd: RUNNER_ROOT,
+    encoding: "utf8",
+    timeout: 10000,
+    env: {
+      ...process.env,
+      PATH: `${stubBinDir}:${process.env.PATH}`,
+      STUB_DOCKER_MODE: "ok",
+      STUB_DOCKER_IMAGE_PRESENT: "0",
+      STUB_DOCKER_PULL_MODE: "fail",
+    },
+  });
+  const output = `${result.stdout}${result.stderr}`;
+  assert.doesNotMatch(output, /could not pull required container base image/);
+  assert.match(output, /--skip-image-check: skipping/);
+  // Proves this run DID proceed past the (skipped) gate, all the way to
+  // the next docker call the stub doesn't implement (`docker ps`) — the
+  // control for the test above: same env (a pull would fail if attempted),
+  // but with --skip-image-check the run gets past the gate instead of
+  // stopping at it.
+  assert.match(output, /unsupported subcommand/, "the run must proceed past the (skipped) gate to the next docker call");
 });
 
 // ---------------------------------------------------------------------------

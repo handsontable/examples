@@ -1,8 +1,11 @@
 #!/bin/bash
-# A minimal `docker` stand-in for pipeline/dev-script.test.mjs's
-# Docker-missing CLI test. Only understands `docker info` (what
-# dev-lib.mjs#isDockerAvailable actually shells out to) — anything else
-# exits 1 unconditionally, since no test here should ever get that far.
+# A minimal `docker` stand-in for pipeline/dev-script.test.mjs's CLI-level
+# tests. Understands `docker info` (dev-lib.mjs#isDockerAvailable),
+# `docker image inspect <ref>` and `docker pull <ref>` (dev-lib.mjs's
+# container base-image pre-pull gate — isImagePresent/pullImageWithRetry) —
+# anything else exits 1 unconditionally, since no test here should ever get
+# that far (each CLI test is designed to have observed everything it needs
+# before reaching an unstubbed subcommand).
 set -u
 if [ "${1:-}" = "info" ]; then
   if [ "${STUB_DOCKER_MODE:-ok}" = "fail" ]; then
@@ -10,6 +13,22 @@ if [ "${1:-}" = "info" ]; then
     exit 1
   fi
   echo "stub docker info: ok"
+  exit 0
+fi
+if [ "${1:-}" = "image" ] && [ "${2:-}" = "inspect" ]; then
+  if [ "${STUB_DOCKER_IMAGE_PRESENT:-1}" = "1" ]; then
+    echo "stub docker image inspect: present (${3:-})"
+    exit 0
+  fi
+  echo "Error: No such image: ${3:-}" >&2
+  exit 1
+fi
+if [ "${1:-}" = "pull" ]; then
+  if [ "${STUB_DOCKER_PULL_MODE:-ok}" = "fail" ]; then
+    echo "Error response from daemon: Get \"https://registry-1.docker.io/v2/\": net/http: TLS handshake timeout" >&2
+    exit 1
+  fi
+  echo "stub docker pull: ok for ${2:-}"
   exit 0
 fi
 echo "stub docker: unsupported subcommand $*" >&2
