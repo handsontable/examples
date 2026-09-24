@@ -34,9 +34,9 @@ in its deploy script (ADR-0020), never in `wrangler.jsonc`:
 | `POST /telemetry/v1/logs` | Cloudflare OTLP log export | `x-o11y-secret` |
 | `POST /telemetry/deploy` | deploy event from CI | GitHub OIDC token, `x-o11y-secret` fallback |
 | `POST /telemetry/hooks/sentry` | Sentry issue-alert webhook | `sentry-hook-signature` HMAC |
-| `GET /grafana/_o11y/login` | start a broker sign-in | none; mints the `o11y_login` nonce cookie |
-| `GET /grafana/_o11y/callback` | broker return; static page, no server-side check of its own | none (fix round M6: the `o11y_login` cookie + the live `/broker/userinfo` call happen on the `session` row below, not here — this route only serves a hash-pinned static page) |
-| `POST /grafana/_o11y/session` | mint the `o11y_session` cookie | `o11y_login` cookie (nonce bound), same-origin `Origin`, `@handsontable.com` broker identity |
+| `GET /grafana/_o11y/login` | start a broker sign-in | per-IP rate limit; mints the `__Host-o11y_login` nonce cookie |
+| `GET /grafana/_o11y/callback` | broker return; static page, no server-side check of its own | none (fix round M6: the `__Host-o11y_login` cookie + the live `/broker/userinfo` call happen on the `session` row below, not here — this route only serves a hash-pinned static page) |
+| `POST /grafana/_o11y/session` | mint the `__Host-o11y_session` cookie | per-IP rate limit; `__Host-o11y_login` cookie (nonce bound), same-origin `Origin`, `@handsontable.com` broker identity |
 | `GET /grafana/_o11y/logout` | a same-origin sign-out page (fix round M5) | none; the page itself fires the `POST` below |
 | `POST /grafana/_o11y/logout` | clear both cookies | same-origin `Origin` |
 | `/grafana/*` | Grafana UI, waking page | the Worker's own session cookie (`O11Y_SESSION_SECRET`, K1 — not Access) |
@@ -73,7 +73,7 @@ Ports inside the Grafana box, reached only through `GrafanaBox.containerFetch`:
 | `AE_SQL_TOKEN` | secret | Analytics Engine SQL API (alert cron; passed to the box for Grafana) |
 | `LOKI_S3_ACCESS_KEY_ID`, `LOKI_S3_SECRET_ACCESS_KEY` | secrets | R2 S3 credentials, passed to the box as `envVars` |
 | `SLACK_WEBHOOK_URL` | secret | alert channel; never passed to the box |
-| `O11Y_SESSION_SECRET` | secret | HMAC key for the Worker's own `o11y_session`/`o11y_login` cookies (K1); rotating it logs every signed-in person out at once |
+| `O11Y_SESSION_SECRET` | secret | HMAC key for the Worker's own `__Host-o11y_session`/`__Host-o11y_login` cookies (K1); rotating it logs every signed-in person out at once |
 | `DEV_ADMIN` | `.dev.vars` only | fail-closed local bypass of the session check |
 
 The box reaches the Loki bucket over S3 at
@@ -99,10 +99,14 @@ only; it writes Loki data and the clean markers there. Lifecycle rules: `browser
 for a production build; `VITE_SENTRY_SCOPE` = `full` | `uncaught` (§11).
 
 **Headers**: `x-hot-session` (page-load id, browser → API worker), `x-o11y-secret`,
-`sentry-hook-signature`, the `o11y_session`/`o11y_login` cookies (K1 — `/grafana/*`'s own
-session, never forwarded to the container), `x-o11y-grafana-user` (set by the o11y
-worker for Grafana `auth.proxy`; stripped from every client request), `X-Scope-OrgID`
-(Loki tenant: `browser` \| `worker`).
+`sentry-hook-signature`, the `__Host-o11y_session`/`__Host-o11y_login` cookies (K1 —
+`/grafana/*`'s own session, never forwarded to the container). Both cookies use `Path=/`
+(the `__Host-` prefix requires it), so the browser also sends them to `/api`, `/d` and
+the authoring app — none of those read them (the API worker reads only
+`Authorization`/`X-MCP-Secret`; authoring is static), but it means the cookie header
+itself must be stripped before proxying to the box (see `/grafana/*`'s gate row above).
+`x-o11y-grafana-user` (set by the o11y worker for Grafana `auth.proxy`; stripped from
+every client request), `X-Scope-OrgID` (Loki tenant: `browser` \| `worker`).
 
 ## 3. Attributes
 
@@ -324,10 +328,15 @@ must never scan committed history):**
 - `fp:` keeps its flat shape (nothing reads it by date range), but is swept by a bounded,
   cursor-paginated TTL prune (default 90 days) on the same cron path, so it does not grow
   forever either.
-- `POST /grafana/_o11y/reopen`'s window is capped to the same 7-day retention — nothing
-  older can exist any more (`done:`/`hash:` are pruned past it, and Loki's own
-  `reject_old_samples_max_age` is 7d too) — and requires an exact `content-type:
-  application/json` (CSRF hardening: forces a CORS preflight for any cross-origin caller).
+- `POST /grafana/_o11y/reopen`'s window WIDTH (`toMs - fromMs`) is capped to the same
+  7-day retention (`ledger.ts#reopenWindowExceedsRetention`) — a wider request is
+  refused up front. This does not require the window itself to be recent: a `[from, to)`
+  pair from long ago, 7 days wide or narrower, is accepted too, it just finds nothing to
+  reopen, since `done:`/`hash:` past the retention window are already pruned (Loki's own
+  `reject_old_samples_max_age` is 7d too). The route also accepts a request whose
+  `content-type` merely contains `application/json` as a parameter (e.g. with a charset),
+  not only an exact match — still enough to force a CORS preflight for any cross-origin
+  caller (the CSRF hardening this exists for).
 - A manual reopen of a **committed** key reads `done:`, moves it back to `key:<inbox
   key> = written`, and deletes the `done:` entry.
 
@@ -357,7 +366,8 @@ must never scan committed history):**
   `rejected:` `key:` entries are now pruned too, past the same 7-day retention (filtered
   by value, since `key:` mixes live and rejected states chronologically — see
   `ledger.ts#pruneLedger`).
-- **Drain partial-400 durability (rereview.md row 19).** A key with at least one chunk
+- **Drain partial-400 durability (final review, second wave — "accepted chunks skip
+  §B.3").** A key with at least one chunk
   accepted (2xx) and at least one chunk permanently rejected (400) now stays
   `provisional` (not `rejected`) — its accepted content follows the normal
   written→provisional→committed path, so an unclean stop before Loki's local flush

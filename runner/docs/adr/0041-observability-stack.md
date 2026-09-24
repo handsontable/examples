@@ -570,9 +570,11 @@ day; an embed above 20 % errors with more than 50 views in 24 h; backlog older t
   `auth.proxy`. This **conforms to ADR-0007 rather than deviating from it**. The earlier
   claim in this section — that the broker "hands a JWT to a SPA and cannot gate a proxied
   third-party HTML application" — was wrong: hot-mcp's own `create_app` runtime gates a
-  proxied app the identical way, and the production broker was probed live and confirmed
-  to accept this callback host (see §M's K1 delta for the evidence and the one risk this
-  design inherits rather than fixes, DEV-3088).
+  proxied app the identical way, and a point-in-time production probe (§M's K1 delta has
+  the exact curl command and its `302` result, dated 2026-09-24) confirmed the callback
+  host was allowed as of that date — expected to still hold, but re-run that probe before
+  launch rather than assuming it (see §M's K1 delta also for the one risk this design
+  inherits rather than fixes, DEV-3088).
 - **EU-pinned**: the container (`jurisdiction: "eu"`), both Durable Objects, the inbox,
   Loki and maps buckets.
 - **Deploy order** for the mutual service bindings: the o11y worker first (binding the
@@ -702,7 +704,7 @@ own §D already names the exact fallback (lower `head_sampling_rate`) for exactl
 situation.
 
 ### M. Implementation deltas (folded from T00–T12, T03B; full detail in git history under
-the deleted `runner/tasks/o11y/` and `.superpowers/sdd/README/T*-report.md`)
+the deleted `runner/tasks/o11y/`)
 
 Deltas already folded as direct edits above (§A cost, §A wake/stop, §B.3 drain-rejection,
 §C.2 labels, §D volume, §L results) are not repeated here. The rest, grouped by section,
@@ -743,8 +745,8 @@ where they add information beyond what §A–§L already say:
   `get`/`put`/`delete` at 128 keys/key-value pairs per call
   (<https://developers.cloudflare.com/durable-objects/api/storage-api/>, fetched
   2026-09-24: "Supports up to 128 keys at a time" / "up to 128 key-value pairs at a
-  time"). Local `workerd` was observed accepting 500+ in one call with no error (the
-  final review's own probe, F1-report.md), so nothing in this codebase's test doubles
+  time"). Local `workerd` was observed accepting 500+ in one call with no error, so
+  nothing in this codebase's test doubles
   enforced it either, until this fix round added the check to both
   (`workers/o11y/src/inbox/storage.ts#memoryStorage()` and
   `pipeline/fixtures/o11y-harness.mjs`). Every multi-key call in `InboxWriter` — dedupe's
@@ -841,7 +843,8 @@ where they add information beyond what §A–§L already say:
 - **§C.3 symbolication.** A Faro exception's stack trace reaches the drain as V8-shaped
   text in the record body — the pre-implementation contract had no field carrying frame
   data for this to resolve at all (T03, a touch to the shared `convert.ts`/`scrub.ts`
-  module outside T03's own file ownership, minimal and justified per COMMON.md).
+  module outside T03's own file ownership — kept minimal and justified by the task
+  board's shared-file rules, since two tasks touching the same module needs sign-off).
 - **§D Worker signals.** `container.boot_ms` (not `session.start`'s own `boot_timeout`
   outcome) is what fires when the Tier-2 boot window is exceeded — the original design
   would have double-counted a session that later times out after already reporting
@@ -864,8 +867,8 @@ where they add information beyond what §A–§L already say:
   behaviour (including the `DEMO_SURFACE` environment re-homing) under `full` scope,
   unreachable under `uncaught` — "the re-homing disappears once the scope flips" is
   literally true only after the flip, not at implementation time.
-- **§B.3 drain, a key with a mixed 400/2xx outcome (fix round, rereview.md row 19, G1,
-  final review second wave).** F2's original fix (two bullets above the pack-alarm ones)
+- **§B.3 drain, a key with a mixed 400/2xx outcome (fix round, final review second
+  wave, "accepted chunks skip §B.3").** F2's original fix (two bullets above the pack-alarm ones)
   correctly kept pushing every chunk of a key even after an earlier one 400'd, but still
   classified the whole key `rejected` if ANY chunk 400'd — including when another chunk
   landed 2xx. A `rejected` key never becomes `provisional`, so those already-accepted
@@ -877,8 +880,8 @@ where they add information beyond what §A–§L already say:
   normal durability path; only a key with ZERO accepted chunks stays `rejected`. The
   permanent chunk loss stays operator-visible via a new `rejectedEvent:` audit log
   (`ledger.ts#recordPartialReject`, contract §8) rather than the key's own ledger state.
-- **§B.3/§F.3 storage housekeeping, remainder (fix round, rereview.md row 13, G1, final
-  review second wave).** Three gaps the B-C1/A-I1 fix round's own prune mechanism left
+- **§B.3/§F.3 storage housekeeping, remainder (fix round, final review second wave,
+  "prune ceiling").** Three gaps the B-C1/A-I1 fix round's own prune mechanism left
   open: (1) its 500-row/tick batch limit falls behind ADR §D's own 10× traffic
   projection at roughly 3× today's traffic — raised to 5,000/tick (still chunked to the
   real 128-key limit per call, see the N2 bullet above), with the exact arithmetic in
@@ -915,14 +918,15 @@ where they add information beyond what §A–§L already say:
   Google for `return_to=https://demos.handsontable.com/grafana/_o11y/callback?n=…`, so the
   callback path is allowed today (see `docs/run-and-deploy.md`'s step 5 for the exact
   command, and its own citation of this — the implementer's separate local round trip
-  against a *stubbed* broker, recorded in `K1-report.md`, proves the Worker's own code,
-  not the real broker's live configuration, and should not be read as a second production
-  probe). **K1 widens DEV-3088's blast radius, it does not just inherit it**: the broker's
+  against a *stubbed* broker (K1's own fix-round notes, "Real local run") proves the
+  Worker's own code, not the real broker's live configuration, and should not be read
+  as a second production probe). **K1 widens DEV-3088's blast radius, it does not just
+  inherit it**: the broker's
   `return_to` allowlist is host-suffix-only, so it also admits anonymous Tier-2 preview
   hosts under `*.demos.handsontable.com`, letting anyone harvest a team member's 1h broker
   token. Before K1, a stolen token could not reach Grafana at all (`ACCESS_AUD` was `""`,
   so Access refused everything); after K1, it can be exchanged for a Grafana session. Fix
-  round (security review finding I3, `.superpowers/sdd/README/final/K1-review.md`)
+  round (K1's own security review, finding I3)
   narrows this: `gates/session.ts#computeSessionTtlSeconds` caps the session at
   `min(now + 12h, brokerTokenExp)` (falling back to 1h when the token carries no readable
   `exp`) instead of a flat 12h, so a stolen token buys close to its own remaining
