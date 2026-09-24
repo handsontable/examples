@@ -158,7 +158,25 @@ class DrainMapCache {
 
 /** Resolves one exception's body text in place; returns the same string
  *  unchanged if there is nothing to resolve (no stack lines, or every frame
- *  is skipped/unresolvable). */
+ *  is skipped/unresolvable).
+ *
+ *  Fix round (finding Z-B-C1): never throws. Two independent guards, both
+ *  load-bearing on their own:
+ *
+ *  1. A frame with `line < 1` (or a non-finite line/col — defensive; the
+ *     regex above only ever captures digits, so this should be unreachable,
+ *     but a *guaranteed* skip is cheap and this function's whole job is to
+ *     never trust the input) is skipped before ever reaching
+ *     `source-map-js`. `originalPositionFor({ line: 0, ... })` throws
+ *     `TypeError: Line must be greater than or equal to 1, got 0` — a
+ *     `lineno: 0` stack frame is valid, storable Faro input (ingest does
+ *     not reject it), so this is reachable from one anonymous
+ *     `POST /telemetry/collect` request, not a contrived shape.
+ *  2. Even so, `originalPositionFor` is wrapped in its own try/catch,
+ *     leaving the frame byte-for-byte unresolved on any other throw the
+ *     library might raise — the same "resolve or leave exactly as
+ *     rendered, never guess, never throw" contract every other skip
+ *     condition in this loop already follows (see the file header). */
 async function resolveBody(body: string, serviceVersion: string, cache: DrainMapCache): Promise<string> {
   const lines = body.split("\n");
   let changed = false;
@@ -168,6 +186,7 @@ async function resolveBody(body: string, serviceVersion: string, cache: DrainMap
     if (raw === undefined) continue;
     const frame = parseLine(raw);
     if (!frame || frame.line === undefined || frame.col === undefined) continue; // not a resolvable stack line
+    if (!Number.isFinite(frame.line) || !Number.isFinite(frame.col) || frame.line < 1) continue; // Z-B-C1: a line-0 (or otherwise invalid) frame is left unresolved, never passed to the map consumer
     if (isBabelChunk(frame.filename)) continue; // criterion 5: left unparsed, deliberately
 
     const mapKey = mapKeyFor(frame.filename, serviceVersion);
@@ -177,7 +196,12 @@ async function resolveBody(body: string, serviceVersion: string, cache: DrainMap
 
     // V8/ErrorEvent columns are 1-based; source-map-js's generated position
     // is 0-based column, 1-based line (the source-map spec's own convention).
-    const original = consumer.originalPositionFor({ line: frame.line, column: Math.max(0, frame.col - 1) });
+    let original: ReturnType<SourceMapConsumer["originalPositionFor"]>;
+    try {
+      original = consumer.originalPositionFor({ line: frame.line, column: Math.max(0, frame.col - 1) });
+    } catch {
+      continue; // Z-B-C1: a library throw on this one frame must not cost the rest of the body
+    }
     if (original.line === null || original.line === undefined || !original.source) continue;
 
     lines[i] = renderLine({
@@ -239,7 +263,20 @@ export async function symbolicateResourceLogs(
         logRecords: await Promise.all(
           scope.logRecords.map(async (log) => {
             if (!log.body?.stringValue) return log;
-            const resolvedBody = await resolveBody(log.body.stringValue, serviceVersion, cache);
+            // Z-B-C1 "guard the record": `resolveBody` above is already
+            // written to never throw, but this is the second, independent
+            // layer the finding asks for — a throw here (from `resolveBody`
+            // itself, or from anything `source-map-js` does that this
+            // module did not anticipate) must leave THIS record's body
+            // exactly as it arrived, never escape and cost every record
+            // after it in the batch (`drain.ts#drainKey` is the third
+            // layer, isolating a whole KEY the same way).
+            let resolvedBody: string;
+            try {
+              resolvedBody = await resolveBody(log.body.stringValue, serviceVersion, cache);
+            } catch {
+              resolvedBody = log.body.stringValue;
+            }
             return resolvedBody === log.body.stringValue ? log : { ...log, body: { stringValue: resolvedBody } };
           }),
         ),

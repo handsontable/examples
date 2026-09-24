@@ -183,8 +183,26 @@ export function sanitizeResourceAttributes(
 export function formatStackFrame(frame: { filename?: string; function?: string; lineno?: number; colno?: number }): string | null {
   if (!frame.filename) return null;
   const fn = frame.function || "<anonymous>";
+  // Fix round (finding Z-B-C1, optional ingest-side half — "the drain
+  // guard is the real fix"): a `lineno < 1` (or non-finite) is not a real
+  // source position — `source-map-js#originalPositionFor` throws on
+  // exactly this shape (`Line must be greater than or equal to 1`), which
+  // is what let one crafted `POST /telemetry/collect` stall the whole
+  // drain queue. `symbolicate.ts#resolveBody` now guards against it
+  // independently (the actual fix — this ingest-side half is cheap
+  // insurance, not a substitute for it: a real browser can still report a
+  // frame this shape for reasons unrelated to any attacker). Dropping only
+  // the position suffix, not the whole frame, keeps the contract shape
+  // unchanged — a frame with no numeric position already renders this way
+  // today (the line above, `typeof … === "number"`), so this frame simply
+  // becomes one more instance of the existing "unresolvable, rendered
+  // as-is" case `symbolicate.ts` already leaves alone.
   const position =
-    typeof frame.lineno === "number" && typeof frame.colno === "number"
+    typeof frame.lineno === "number" &&
+    typeof frame.colno === "number" &&
+    Number.isFinite(frame.lineno) &&
+    Number.isFinite(frame.colno) &&
+    frame.lineno >= 1
       ? `:${frame.lineno}:${frame.colno}`
       : "";
   return `    at ${fn} (${frame.filename}${position})`;
