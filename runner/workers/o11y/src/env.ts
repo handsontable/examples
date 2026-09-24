@@ -96,15 +96,31 @@ export interface InboxWriterApi {
    *  not backlog — only bare `written` counts (ADR §B.3: "`backlog()`
    *  counts only `written` keys"). */
   backlogOldestAgeMs(): Promise<number | null>;
-  /** Count of `key:<k> = rejected:<reason>` entries — ADR §F.3's "a
-   *  `rejected` inbox key" rule reads this, not the raw storage. */
+  /** Count of `key:<k> = rejected:<reason>` entries — informational total,
+   *  used in the alert's own detail text. */
   rejectedKeyCount(): Promise<number>;
+  /** Row 19 (drain partial-400 durability, final review rereview.md): logs
+   *  a rejection EVENT for a key that stays `provisional`/`done:` overall
+   *  (its accepted chunks follow the normal §B.3 durability path) but had
+   *  at least one chunk Loki permanently rejected — see
+   *  `drain.ts#drainKey`'s own doc comment for the reclassification this
+   *  supports, and `ledger.ts#recordPartialReject` for the storage shape. */
+  recordPartialReject(key: string, reason: string): Promise<void>;
+  /** B-C1/A-I1 remainder: count of rejection EVENTS (full `rejectKey` calls
+   *  and `recordPartialReject` calls alike) strictly newer than `sinceMs` —
+   *  ADR §F.3's "a `rejected` inbox key" rule fires on this, not the
+   *  never-pruned `rejectedKeyCount()` total, so it can resolve once
+   *  rejections stop instead of firing forever after the first one. */
+  recentRejectionCount(sinceMs: number): Promise<number>;
 
-  /** `fp:<fingerprint>` entries first seen strictly after `sinceMs` —
+  /** `fp:<fingerprint>` entries first seen strictly after `sinceMs`, read
+   *  via the `fpts:` time-ordered index (bounded — B-C1/A-I1 remainder) —
    *  `demo-runtime` fingerprints are already excluded (they never reach the
    *  registry at all: `feedsNewFingerprintAlert`, contract §7), so every
-   *  name returned here is alert-eligible by construction. */
-  newFingerprintsSince(sinceMs: number): Promise<string[]>;
+   *  name returned here is alert-eligible by construction. `truncated`/
+   *  `lastMs` let the caller (`alerts/rules.ts#newFingerprintRule`) advance
+   *  its own cursor without skipping anything the scan didn't reach. */
+  newFingerprintsSince(sinceMs: number): Promise<{ names: string[]; truncated: boolean; lastMs: number | null }>;
 
   /** `alert:<rule>` (§8): the exact fire-once/resolve-once state the ADR
    *  §F.3 rule evaluator reads and writes every tick. */

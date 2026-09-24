@@ -130,7 +130,17 @@ test("drainKey: a 400 rejects the key with Loki's message, no retry", async () =
 // that would otherwise have pushed cleanly. Two ~700 KB records force
 // `chunkBySize` to split into two separate ~1 MB pushes (the drain's own
 // per-request cap, ADR §B.3).
-test("F2 fix: a 400 on the FIRST chunk of a multi-chunk key does not skip the remaining chunks — they are still pushed", async () => {
+//
+// G1 fix round (rereview.md row 19): F2's version still ended this key
+// `rejected` overall, which never becomes `provisional` — the already-
+// pushed second chunk's durability then never passed the §B.3
+// marker/commit check any wake's clean-stop confirms through (an unclean
+// stop right after this push, before Loki's own flush, could lose it with
+// no automatic replay). Fixed: a key with AT LEAST ONE accepted chunk now
+// stays `provisional` — see `drain.ts#drainKey`'s own doc comment for the
+// full reasoning and `pipeline/o11y-alerts.test.mjs`/box.ts wiring for how
+// the permanent 400 stays operator-visible anyway (`recordPartialReject`).
+test("F2/G1 fix: a 400 on the FIRST chunk of a multi-chunk key does not skip the remaining chunks — they are still pushed, and the key stays provisional (row 19)", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const bigBody = "x".repeat(700_000);
   const records = [record(bigBody + "-first"), record(bigBody + "-second")];
@@ -156,9 +166,35 @@ test("F2 fix: a 400 on the FIRST chunk of a multi-chunk key does not skip the re
 
   assert.equal(pushCount, 2, "both chunks must be attempted — the second must not be skipped because the first 400'd");
   assert.ok(pushedBodies.some((b) => b.includes("-second")), "the second chunk's records must actually reach Loki");
-  assert.equal(outcome.outcome, "rejected", "the key still ends rejected overall (see drain.ts's own doc comment on why)");
+  // Row 19: at least one chunk (the second) landed 2xx, so the key stays
+  // `provisional` — its durability follows the normal §B.3 path instead of
+  // being unrecoverable except by manual reopen. `reason` still carries the
+  // 400 detail so the caller can surface it (`recordPartialReject`).
+  assert.equal(outcome.outcome, "provisional", "at least one accepted chunk must keep the key provisional, not rejected (row 19)");
   assert.equal(outcome.reason, "too_far_behind");
   assert.ok(outcome.bytesPushed > 0, "bytes from the successfully-pushed second chunk must still be counted");
+});
+
+test("row 19: a key where EVERY chunk 400s still ends rejected (nothing accepted to protect)", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000002.ndjson.gz";
+  const bigBody = "x".repeat(700_000);
+  const records = [record(bigBody + "-first"), record(bigBody + "-second")];
+  const bytes = await objectBytes(records);
+  let pushCount = 0;
+  const deps = {
+    fetchObject: async () => bytes,
+    pushToLoki: async () => {
+      pushCount++;
+      return { status: 400, message: "too_far_behind" };
+    },
+    symbolicate: noopSymbolicate,
+  };
+
+  const outcome = await drainKey(key, new Set(), deps);
+
+  assert.equal(pushCount, 2, "both chunks must still be attempted");
+  assert.equal(outcome.outcome, "rejected", "zero accepted chunks means nothing to protect — the key stays rejected");
+  assert.equal(outcome.bytesPushed, 0);
 });
 
 test("F2 fix: a 400 on a LATER chunk still lets an EARLIER chunk's push stand — no retry of the already-successful one", async () => {
@@ -187,7 +223,8 @@ test("F2 fix: a 400 on a LATER chunk still lets an EARLIER chunk's push stand �
 
   assert.equal(firstPushCount, 1, "the already-successful first chunk must be pushed exactly once, never retried");
   assert.equal(secondPushCount, 1, "a 400 is still never retried");
-  assert.equal(outcome.outcome, "rejected");
+  assert.equal(outcome.outcome, "provisional", "the accepted first chunk must keep the key provisional, not rejected (row 19)");
+  assert.equal(outcome.reason, "too_far_behind");
 });
 
 test("drainKey: a 5xx is retried, and succeeds if a later attempt returns 2xx", async () => {

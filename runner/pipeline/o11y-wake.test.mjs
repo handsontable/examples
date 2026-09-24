@@ -37,7 +37,7 @@ function makeStorage() {
 }
 
 function makeInboxWriterStub(overrides = {}) {
-  const calls = { resolveWakes: 0, markKeysProvisional: [], rejectKey: [] };
+  const calls = { resolveWakes: 0, markKeysProvisional: [], rejectKey: [], recordPartialReject: [] };
   return {
     async recordWake() {},
     async resolveWakes() {
@@ -51,6 +51,12 @@ function makeInboxWriterStub(overrides = {}) {
     },
     async rejectKey(key, reason) {
       calls.rejectKey.push({ key, reason });
+    },
+    // Row 19 (drain partial-400 durability): a `provisional` outcome that
+    // still carries a `reason` (drain.ts's partial-400 case) is logged here
+    // — see box.ts#drainStep's own comment and ledger.ts#recordPartialReject.
+    async recordPartialReject(key, reason) {
+      calls.recordPartialReject.push({ key, reason });
     },
     calls,
   };
@@ -236,6 +242,52 @@ test("drainStep rejects a key on a 400 from Loki, with the message, and does not
   assert.equal(inboxWriterStub.calls.rejectKey.length, 1);
   assert.equal(inboxWriterStub.calls.rejectKey[0].key, key);
   assert.match(inboxWriterStub.calls.rejectKey[0].reason, /too_far_behind/);
+});
+
+// Row 19 (drain partial-400 durability, final review rereview.md): a key
+// whose object splits into multiple ~1 MB Loki pushes (ADR §B.3's own
+// per-request cap) can have ONE chunk permanently 400 while another lands
+// 2xx. `drain.ts#drainKey` reclassifies this as `provisional` (its accepted
+// content must still follow the normal §B.3 durability path — an unclean
+// stop before Loki's local flush must still trigger an automatic replay,
+// which only happens for `provisional` keys, never `rejected` ones). This
+// proves the WIRING: `box.ts#drainStep` must route such an outcome through
+// `markKeysProvisional` (not `rejectKey`) while STILL surfacing the
+// permanent loss via `recordPartialReject`, so it stays operator-visible.
+test("drainStep: a key with one accepted chunk and one permanently-400 chunk stays provisional AND logs a partial-reject event (row 19)", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000002.ndjson.gz";
+  const nowNano = String(BigInt(Date.now()) * 1_000_000n);
+  const bigBody = "x".repeat(700_000);
+  const records = [
+    { resource: { attributes: [] }, scopeLogs: [{ logRecords: [{ timeUnixNano: nowNano, body: { stringValue: `${bigBody}-first` } }] }] },
+    { resource: { attributes: [] }, scopeLogs: [{ logRecords: [{ timeUnixNano: nowNano, body: { stringValue: `${bigBody}-second` } }] }] },
+  ];
+  const ndjson = records.map((r) => JSON.stringify(r)).join("\n") + "\n";
+  const stream = new Blob([ndjson]).stream().pipeThrough(new CompressionStream("gzip"));
+  const gz = new Uint8Array(await new Response(stream).arrayBuffer());
+  const r2Objects = new Map([[key, gz]]);
+
+  const { box, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [key] }, r2Objects });
+  await box.wake("backlog");
+  installContainerFetchRouter({
+    otlp: async (req) => {
+      const gzBytes = new Uint8Array(await req.arrayBuffer());
+      const stream = new Blob([gzBytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+      const body = await new Response(stream).text();
+      if (body.includes("-first")) return new Response("too_far_behind", { status: 400 });
+      return new Response(null, { status: 204 });
+    },
+  });
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(inboxWriterStub.calls.rejectKey.length, 0, "a key with an accepted chunk must never be rejectKey'd");
+  assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 1);
+  assert.deepEqual(inboxWriterStub.calls.markKeysProvisional[0].keys, [key]);
+  assert.equal(inboxWriterStub.calls.recordPartialReject.length, 1, "the permanent loss must still be logged");
+  assert.equal(inboxWriterStub.calls.recordPartialReject[0].key, key);
+  assert.match(inboxWriterStub.calls.recordPartialReject[0].reason, /too_far_behind/);
 });
 
 // ---- post-drain stop decision --------------------------------------------
