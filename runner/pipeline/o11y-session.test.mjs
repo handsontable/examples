@@ -500,7 +500,7 @@ test("M3: isValidBrokerUrl accepts https always; accepts http://localhost only w
   assert.equal(isValidBrokerUrl(baseEnv({ LOGIN_BROKER_URL: "http://evil.example" })), false, "a bare http:// non-local host is never allowed");
 });
 
-test("M3: the broker fetch is called with a timeout signal and refuses to follow a redirect", async (t) => {
+test("M3: the broker fetch is called with a timeout signal and redirect: manual (Workers has no redirect: 'error')", async (t) => {
   const env = baseEnv();
   const realFetch = globalThis.fetch;
   let capturedInit;
@@ -511,7 +511,20 @@ test("M3: the broker fetch is called with a timeout signal and refuses to follow
   };
   await resolveBrokerIdentity(env, "a-broker-token");
   assert.ok(capturedInit.signal instanceof AbortSignal, "must pass an AbortSignal");
-  assert.equal(capturedInit.redirect, "error", "must refuse to follow a redirect");
+  // `redirect: "error"` is a browser-fetch-only value — the Workers runtime
+  // throws `TypeError: Invalid redirect value... "error" won't be
+  // implemented` (confirmed live, K1's own local round trip). "manual" is
+  // the Workers-supported equivalent: the caller inspects `res.status`
+  // itself, which the next test proves actually happens.
+  assert.equal(capturedInit.redirect, "manual");
+});
+
+test("M3: a redirecting broker response (3xx) is refused, not followed", async (t) => {
+  const env = baseEnv();
+  const realFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+  globalThis.fetch = async () => new Response(null, { status: 302, headers: { Location: "https://evil.example/harvest" } });
+  assert.equal(await resolveBrokerIdentity(env, "a-broker-token"), null);
 });
 
 test("resolveBrokerIdentity: a @handsontable.com userinfo response resolves", async (t) => {

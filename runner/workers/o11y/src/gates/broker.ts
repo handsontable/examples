@@ -112,18 +112,25 @@ export async function resolveBrokerIdentity(env: Env, token: string): Promise<Br
   try {
     const res = await fetch(`${env.LOGIN_BROKER_URL}/broker/userinfo`, {
       headers: { Authorization: `Bearer ${token}` },
-      // M3: a broker response that tries to redirect is refused outright
-      // (`redirect: "error"` makes `fetch` reject rather than follow it) —
-      // whether the Workers runtime would otherwise forward the
-      // `Authorization` header across a cross-origin redirect was flagged
-      // PLAUSIBLE-but-unverified in the review; refusing every redirect
-      // makes the question moot rather than relying on an unverified
-      // runtime behaviour. `AbortSignal.timeout` bounds a slow broker (a
-      // Render cold start) instead of holding `POST /session` open
-      // indefinitely.
-      redirect: "error",
+      // M3: a broker response that tries to redirect is refused outright.
+      // `redirect: "error"` is what a browser's `fetch` supports for this —
+      // the Workers runtime does NOT implement it at all (confirmed live,
+      // K1's own local round trip: `TypeError: Invalid redirect value, must
+      // be one of "follow" or "manual"` — `"error"` "does not make sense at
+      // the edge", per that exact runtime error message). `redirect:
+      // "manual"` is the Workers-supported equivalent: the fetch returns
+      // the 3xx response ITSELF, unfollowed, instead of throwing — so the
+      // `res.status` check below is what actually refuses it, standing in
+      // for what `redirect: "error"` would have done. Whether the Workers
+      // runtime would otherwise forward the `Authorization` header across a
+      // cross-origin redirect was flagged PLAUSIBLE-but-unverified in the
+      // review; never following one at all makes that question moot either
+      // way. `AbortSignal.timeout` bounds a slow broker (a Render cold
+      // start) instead of holding `POST /session` open indefinitely.
+      redirect: "manual",
       signal: AbortSignal.timeout(BROKER_FETCH_TIMEOUT_MS),
     });
+    if (res.status >= 300 && res.status < 400) return null;
     if (!res.ok) return null;
     const info = (await res.json()) as { email?: unknown };
     if (typeof info.email !== "string" || !info.email.endsWith("@handsontable.com")) return null;
