@@ -250,20 +250,48 @@ function processExampleEvent(
  *   `<context>:<16 hex>` shape is discarded — an attacker cannot inject
  *   arbitrary text into the exact first-seen registry or, from there, an
  *   unescaped Slack line this way.
+ * - `fallbackMessage` (fix round, finding D-I3 remainder, second wave) is
+ *   the LAST resort, used only when NEITHER of the above is present — this
+ *   is exactly the raw `window.onerror`/`unhandledrejection`/render-crash
+ *   path (`ErrorsInstrumentation`, `reportUncaughtError`), since every
+ *   explicit, on-purpose `Telemetry.error()` call already sets
+ *   `payload.fingerprint` (`apps/authoring/src/telemetry/faro.ts`'s
+ *   `buildFacade().error`). It must be the contract-normalised `type: value`
+ *   head ONLY (see `exceptionFingerprintMessage` at the call site below) —
+ *   never `record.body`, which also carries the rendered stack-frame lines
+ *   (`convert.ts#faroBody`'s exception branch). A minified production
+ *   bundle's chunk hash and line:col shift on every deploy even when the
+ *   thrown error is identical, so hashing the stack churned a genuinely
+ *   recurring defect into a fresh `fp:` entry (and Slack "new fingerprint"
+ *   post) on every single release — the D-I3 failure this closes.
  */
 function resolveFingerprint(
   wireFingerprint: string | undefined,
   aeOnlyFingerprint: string | undefined,
   surface: string,
-  bodyText: string,
+  fallbackMessage: string,
 ): string {
   if (wireFingerprint !== undefined && isValidFingerprint(wireFingerprint)) return wireFingerprint;
   if (aeOnlyFingerprint !== undefined && isValidFingerprint(aeOnlyFingerprint)) return aeOnlyFingerprint;
-  return computeFingerprint(surface, bodyText);
+  return computeFingerprint(surface, fallbackMessage);
+}
+
+/** The `type: value` head of a Faro exception payload, with NO stack —
+ *  deliberately mirrors `convert.ts#faroBody`'s own exception-head
+ *  construction (that function is outside this task's file ownership;
+ *  duplicated here rather than touched there — see this module's own doc
+ *  comment style for the same tradeoff elsewhere, e.g.
+ *  `SERVER_SIDE_UNHANDLED_NOISE`'s hand-copy of `eventGate.ts`'s lists).
+ *  `pipeline/telemetry-contract.test.mjs`/`o11y-normalise.test.mjs` pin this
+ *  shape directly, so a future drift between the two shows up as a failing
+ *  test, not a silent mismatch. */
+function exceptionFingerprintMessage(payload: { type?: string; value?: string }): string {
+  const value = payload.value ?? "";
+  return payload.type ? `${payload.type}: ${value}` : value;
 }
 
 function processException(
-  bodyText: string,
+  fallbackMessage: string,
   resourceAttributes: Record<string, string>,
   demoId: string | undefined,
   handled: boolean,
@@ -272,7 +300,7 @@ function processException(
   wireFingerprint: string | undefined,
 ): { points: AePoint[]; fingerprint?: string } {
   const surface = (resourceAttributes[ATTR_HOT_SURFACE] as Surface | undefined) ?? "authoring";
-  const fp = resolveFingerprint(wireFingerprint, aeOnly.fingerprint, surface, bodyText);
+  const fp = resolveFingerprint(wireFingerprint, aeOnly.fingerprint, surface, fallbackMessage);
   const common = { service_name: service.name, service_version: service.version, environment: service.environment };
   const point = handled
     ? toAePoint("error.handled", { count: 1 }, { ...common, surface, route_class: aeOnly.route_class, fingerprint: fp })
@@ -430,7 +458,7 @@ async function processOneItem(
       aePoints = processMeasurement(payload, clientResourceAttributes, demoId, aeOnly, service);
     } else if (type === "exception") {
       const ex = processException(
-        record.body,
+        exceptionFingerprintMessage(scrubbed.payload),
         clientResourceAttributes,
         demoId,
         handled,

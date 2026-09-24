@@ -88,9 +88,44 @@ export function feedsNewFingerprintAlert(surface: Surface): boolean {
  * unescaped Slack alert line — this shape check is the first of two layers,
  * `notify.ts`'s own mrkdwn escaping is the second (defence in depth, since
  * other rules interpolate data into Slack text too).
+ *
+ * Fix round (finding N1, second wave): the FIRST version of this pattern
+ * (and `normalise/otlp.ts`'s own, independent copy, `API_FINGERPRINT_PATTERN`)
+ * both anchored on the FIRST `:` and forbade a second one anywhere in
+ * `context` — but `context` is caller-chosen free text (this file's own doc
+ * comment on `fingerprint()`: "typically `hot.surface` or a metric name"),
+ * and several real call sites already pass a `:`-joined call-site path:
+ * `App.tsx`'s `reportError(error, "docs-example-load:fetch")` and
+ * `"docs-bucket-resolve:bucket"`/`"docs-bucket-resolve:fetch"`,
+ * `workers/api/src/index.ts`'s `reportDiagnostic(..., { context:
+ * "npm-registry:version-exists" })` and `"npm-registry:versions"`. Every one
+ * of those produced a `<context>:<hex>` fingerprint with an embedded `:` in
+ * `context` that BOTH old patterns rejected outright — `resolveFingerprint`
+ * (`normalise/faro.ts`) then silently discarded the wire value and
+ * recomputed a stack-hashed `authoring:<hex>` fallback instead, losing the
+ * call site's own identity and churning on every deploy (the very failure
+ * D-I3 was fixed to close); the API-side four call sites' fingerprints could
+ * never reach C-I2's read half (`apiFingerprintFeed`) at all, regardless of
+ * A-M2. One shared pattern, used here AND by `normalise/otlp.ts`'s
+ * `apiFingerprintFeed` AND by `normalise/faro.ts`'s `resolveFingerprint`
+ * (via this same `isValidFingerprint` export) — never a second, independently
+ * drifting copy: anchor on the LAST `:` followed by exactly 16 lowercase hex
+ * chars, and accept zero or more EARLIER `:`-separated segments in
+ * `context`, each drawn from the same charset a single-segment context
+ * already used (`[a-z0-9._-]`, `.` added for `sandpack.compile_error`-style
+ * dotted metric-name contexts, `metrics.ts`). `context` as a whole (every
+ * segment plus its separating colons) is capped at
+ * {@link MAX_FINGERPRINT_CONTEXT_LENGTH} — generous over every real call
+ * site (the longest today, `docs-bucket-resolve:fetch`, is 22 chars) while
+ * still bounding what an attacker-controlled `hot.fingerprint`/
+ * `payload.fingerprint` string can cost downstream (a Slack line, a `fp:`
+ * registry key).
  */
-const FINGERPRINT_PATTERN = /^[a-z][a-z0-9_-]{0,63}:[0-9a-f]{16}$/;
+const MAX_FINGERPRINT_CONTEXT_LENGTH = 128;
+const FINGERPRINT_PATTERN =
+  /^[a-z][a-z0-9._-]*(?::[a-z0-9._-]+)*:[0-9a-f]{16}$/;
 
 export function isValidFingerprint(value: string): boolean {
+  if (value.length > MAX_FINGERPRINT_CONTEXT_LENGTH + 17) return false; // +1 `:` + 16 hex
   return FINGERPRINT_PATTERN.test(value);
 }

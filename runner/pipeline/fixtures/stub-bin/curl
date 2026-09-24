@@ -14,6 +14,17 @@
 #                                     pre-existing uploader-named <Key>
 #                        malformed -> HTTP 200 but not real S3 XML (a proxy
 #                                     error page)
+#                        code200   -> bare `200` on stdout, nothing else — F2
+#                                     fix (B-I2, second wave): `r2_put_and_verify`
+#                                     (lib.sh) calls curl with
+#                                     `-o /dev/null -w '%{http_code}'` for its
+#                                     PUT and its HEAD confirmation, so its
+#                                     whole stdout IS the status-code text,
+#                                     never S3 list XML — a REAL
+#                                     `run_stop_protocol()` marker write needs
+#                                     this mode for both of those calls, after
+#                                     whatever `empty`/`haskey` listing modes
+#                                     precede them in the same MODES list.
 #   STUB_CURL_COUNTER_FILE  a file this script increments (one line per
 #                      call) so the test can also assert call counts.
 set -u
@@ -48,6 +59,10 @@ case "$mode" in
     ;;
   malformed)
     printf '<html><body>502 Bad Gateway</body></html>'
+    exit 0
+    ;;
+  code200)
+    printf '200'
     exit 0
     ;;
   *)

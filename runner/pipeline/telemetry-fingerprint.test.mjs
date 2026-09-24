@@ -6,7 +6,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fingerprint, stripCodeFrame, feedsNewFingerprintAlert } from "../packages/runtime/dist/telemetry/index.js";
+import {
+  fingerprint,
+  isValidFingerprint,
+  stripCodeFrame,
+  feedsNewFingerprintAlert,
+} from "../packages/runtime/dist/telemetry/index.js";
 
 // Captured verbatim from a real `@babel/standalone` `transform()` throw
 // (`babel.transform("const x = ;", { presets: ["env"] })` and a two-line
@@ -61,4 +66,56 @@ test("feedsNewFingerprintAlert excludes only demo-runtime", () => {
   for (const surface of ["authoring", "share", "embed", "d", "api", "o11y"]) {
     assert.equal(feedsNewFingerprintAlert(surface), true, surface);
   }
+});
+
+// ---- fix round (finding N1, second wave): one shared validator, `:` allowed
+// inside `context` -------------------------------------------------------
+//
+// Two independent, DIFFERENT regexes (this file's own `isValidFingerprint`
+// and `normalise/otlp.ts`'s now-removed `API_FINGERPRINT_PATTERN`) both
+// anchored on the FIRST `:` and rejected a second one anywhere in `context`
+// — every real call site below sends a `:`-joined call-site path and was
+// silently discarded by BOTH old patterns before this fix. Every literal
+// context string here is grepped verbatim from the real call sites, not
+// invented: `apps/authoring/src/App.tsx`'s `reportError(error,
+// "docs-example-load:fetch" | "docs-example-load:path" |
+// "docs-bucket-resolve:bucket" | "docs-bucket-resolve:fetch")`, and
+// `workers/api/src/index.ts`'s `reportDiagnostic(..., { context:
+// "npm-registry:version-exists" | "npm-registry:versions" })`.
+const REAL_MULTI_SEGMENT_CONTEXTS = [
+  "docs-example-load:fetch",
+  "docs-example-load:path",
+  "docs-bucket-resolve:bucket",
+  "docs-bucket-resolve:fetch",
+  "npm-registry:version-exists",
+  "npm-registry:versions",
+];
+
+test("isValidFingerprint accepts every real multi-segment context call site, computed through the real fingerprint() function (never a hand-typed hex string)", () => {
+  for (const ctx of REAL_MULTI_SEGMENT_CONTEXTS) {
+    const fp = fingerprint(ctx, "upstream request failed");
+    assert.ok(isValidFingerprint(fp), `${ctx} -> ${fp} must be valid`);
+    // The context half must survive verbatim — this is what a forgotten
+    // `:`-anchor-on-the-FIRST-colon bug would silently truncate.
+    assert.ok(fp.startsWith(`${ctx}:`), `expected ${fp} to start with "${ctx}:"`);
+  }
+});
+
+test("isValidFingerprint still accepts a single-segment context (the common case, unchanged)", () => {
+  assert.ok(isValidFingerprint(fingerprint("authoring", "boom")));
+  assert.ok(isValidFingerprint(fingerprint("sandpack.compile_error", "boom")), "a dotted metric-name context (metrics.ts)");
+});
+
+test("isValidFingerprint rejects a forged/injection-shaped value", () => {
+  assert.equal(isValidFingerprint("<!channel> N <https://evil.example|open Grafana>"), false);
+  assert.equal(isValidFingerprint("authoring:not-hex-at-all!!"), false);
+  assert.equal(isValidFingerprint("AUTHORING:0123456789abcdef"), false, "uppercase context is not the contract's own charset");
+  assert.equal(isValidFingerprint("authoring:0123456789ABCDEF"), false, "the hex half must be lowercase");
+  assert.equal(isValidFingerprint(":0123456789abcdef"), false, "context must not be empty");
+  assert.equal(isValidFingerprint("authoring:"), false, "hex half must not be empty");
+});
+
+test("isValidFingerprint rejects an over-long value, even one that otherwise matches the shape", () => {
+  const overLong = `${"a".repeat(500)}:0123456789abcdef`;
+  assert.equal(isValidFingerprint(overLong), false);
 });
