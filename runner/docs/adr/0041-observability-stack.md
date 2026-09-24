@@ -10,8 +10,10 @@ profiling access), and exit criterion 13's real-object retention expiry (a 1-day
 lifecycle test is running against real objects; calendar time has not yet passed as of
 T11's own pass — see `docs/run-and-deploy.md`'s Launch plan for how to close both).
 Supersedes ADR-0040 decisions A, B, C.2 and C.3; amends ADR-0022 (o11y spend cap,
-per-script billing rows), ADR-0038 (WAF exception extended to `/telemetry/*`); deviates
-from ADR-0007 for the operator UI; adds routes under ADR-0020. ADR-0042 ships with this
+per-script billing rows), ADR-0038 (WAF exception extended to `/telemetry/*`); adds
+routes under ADR-0020. **No longer deviates from ADR-0007** (K1: `/grafana/*` gates
+through the same Handsontable login broker as every other internal surface, not
+Cloudflare Access — see §H). ADR-0042 ships with this
 ADR, and stays at the same status (Proposed) until this one flips to Accepted.
 ADR-0043 follows after launch (T13, not yet dispatched).
 
@@ -296,7 +298,7 @@ on ephemeral disk, and `retention_delete_delay` outlasts any wake.
 | `v1/logs` | `x-o11y-secret` header set on the export destination, constant-time compare |
 | `deploy` | GitHub OIDC token (issuer, audience, repository, workflow), secret fallback |
 | `hooks/sentry` | `sentry-hook-signature` HMAC |
-| `/grafana/*`, `reopen` | `Cf-Access-Jwt-Assertion` verified against the Access JWKS in the Worker; a client-sent `auth.proxy` header is stripped |
+| `/grafana/*`, `reopen` | the Worker's own HMAC-signed session cookie (`O11Y_SESSION_SECRET`), minted once from a Handsontable login broker token (ADR-0007, K1 — not Cloudflare Access); a client-sent `auth.proxy` header is stripped |
 
 Every drop writes an `o11y.ingest` point with the gate as the reason.
 
@@ -550,9 +552,16 @@ day; an embed above 20 % errors with more than 50 views in 24 h; backlog older t
 
 ### H. Access, jurisdiction, retention
 
-- **Access**: every `@handsontable.com` account, as for `/admin`; Grafana Viewer via
-  `auth.proxy`. This deviates from ADR-0007 for one surface: the broker hands a JWT to a
-  SPA and cannot gate a proxied third-party HTML application.
+- **Login broker (K1), not Cloudflare Access**: every `@handsontable.com` account, as for
+  `/admin` — the same Handsontable login broker (ADR-0007). A callback page under
+  `/grafana/_o11y/` reads the broker's fragment token once and exchanges it for the
+  Worker's own HMAC-signed session cookie (`gates/session.ts`); Grafana Viewer via
+  `auth.proxy`. This **conforms to ADR-0007 rather than deviating from it**. The earlier
+  claim in this section — that the broker "hands a JWT to a SPA and cannot gate a proxied
+  third-party HTML application" — was wrong: hot-mcp's own `create_app` runtime gates a
+  proxied app the identical way, and the production broker was probed live and confirmed
+  to accept this callback host (see §M's K1 delta for the evidence and the one risk this
+  design inherits rather than fixes, DEV-3088).
 - **EU-pinned**: the container (`jurisdiction: "eu"`), both Durable Objects, the inbox,
   Loki and maps buckets.
 - **Deploy order** for the mutual service bindings: the o11y worker first (binding the
@@ -796,6 +805,17 @@ where they add information beyond what §A–§L already say:
   fold — no task minted a real Access application; `docs/run-and-deploy.md`'s Launch plan
   names this as the first pre-condition to confirm before any real deploy (T00-D8, carried
   through every task since).
+- **§H access (K1, supersedes the bullet above).** The `/grafana/*` Access application
+  named above was never created before launch. The controller replaced the gate with the
+  Handsontable login broker (ADR-0007) instead of finishing it — `gates/session.ts`
+  (session cookie, `DEV_ADMIN` bypass), `gates/broker.ts` (the one-time `/broker/userinfo`
+  call), `grafana/login.ts` (login/callback/session/logout). The production broker was
+  probed live and confirmed `302` to Google for
+  `return_to=https://demos.handsontable.com/grafana/_o11y/callback?n=…`, so the callback
+  path is allowed today. The broker-wide risk this design inherits rather than fixes — its
+  `return_to` allowlist is host-suffix-only, so it also admits anonymous Tier-2 preview
+  hosts under `*.demos.handsontable.com` — is filed separately as DEV-3088, not addressed
+  by this change.
 - **§I local development.** `wrangler dev`'s local Container reaches `compose.yml`'s
   standalone `minio`/`clickhouse` services (started without the `box` service) via
   Docker's own `host.docker.internal`, since the two are never on the same Docker network
@@ -810,7 +830,8 @@ where they add information beyond what §A–§L already say:
 - **ADR-0022** gains a subordinate o11y ceiling and per-script billing rows;
   `recordContainerUsage` takes a SKU.
 - **ADR-0038**'s WAF exception grows by one path, `/telemetry/*`.
-- **ADR-0007** is deviated from for Grafana only.
+- **ADR-0007**: no longer deviated from — `/grafana/*` gates through the same
+  Handsontable login broker as every other internal surface (K1, §H).
 - **ADR-0020**: more route patterns on the main hostname, still in deploy commands.
 - **Sentry** keeps uncaught errors (as §E.1 defines them) and spend alerts; handled
   diagnostics move and lose grouping; the per-event `environment` re-homing and the

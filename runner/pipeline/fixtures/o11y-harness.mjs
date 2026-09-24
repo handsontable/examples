@@ -126,8 +126,9 @@ export function makeEnv(InboxWriterClass, overrides = {}) {
 
   const env = {
     O11Y_ENV: "production",
-    ACCESS_TEAM_DOMAIN: "handsontable.cloudflareaccess.com",
-    ACCESS_AUD: "test-aud",
+    // K1: replaces ACCESS_TEAM_DOMAIN/ACCESS_AUD (Cloudflare Access).
+    LOGIN_BROKER_URL: "https://mcp-auth-proxy.example.test",
+    O11Y_SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
     GITHUB_OIDC_REPOSITORY: "handsontable/examples",
     GITHUB_OIDC_WORKFLOW_REF: "handsontable/examples/.github/workflows/master.yml@refs/heads/master",
     O11Y_EXPORT_SECRET: SECRET,

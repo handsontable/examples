@@ -84,13 +84,13 @@ const configNames = configFieldNames(envInterfaceBody);
 test("env.ts's Env interface still has a configuration surface to check", () => {
   // A broken interface-slice or field regex must not silently pass on an
   // empty set — pin a floor well under the current real count (19 at the
-  // time this test was written: O11Y_ENV, ACCESS_TEAM_DOMAIN, ACCESS_AUD,
+  // time this test was written, K1: O11Y_ENV, LOGIN_BROKER_URL,
   // GITHUB_OIDC_REPOSITORY, GITHUB_OIDC_WORKFLOW_REF, SERVICE_VERSION,
   // CLOUDFLARE_ACCOUNT_ID, LOKI_S3_BUCKET, RUNNER_EVENTS_CLICKHOUSE_URL,
   // O11Y_LOCAL_MINIO_PORT, O11Y_LOCAL_CLICKHOUSE_PORT,
   // O11Y_LOCAL_PUBLIC_ORIGIN, O11Y_EXPORT_SECRET, SENTRY_HOOK_SECRET,
   // AE_SQL_TOKEN, LOKI_S3_ACCESS_KEY_ID, LOKI_S3_SECRET_ACCESS_KEY,
-  // SLACK_WEBHOOK_URL, DEV_ADMIN).
+  // SLACK_WEBHOOK_URL, O11Y_SESSION_SECRET, DEV_ADMIN).
   assert.ok(
     configNames.length >= 15,
     `expected at least 15 config fields in Env, found ${configNames.length}: ${configNames.join(", ")}`,

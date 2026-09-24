@@ -34,9 +34,13 @@ in its deploy script (ADR-0020), never in `wrangler.jsonc`:
 | `POST /telemetry/v1/logs` | Cloudflare OTLP log export | `x-o11y-secret` |
 | `POST /telemetry/deploy` | deploy event from CI | GitHub OIDC token, `x-o11y-secret` fallback |
 | `POST /telemetry/hooks/sentry` | Sentry issue-alert webhook | `sentry-hook-signature` HMAC |
-| `/grafana/*` | Grafana UI, waking page | Access JWT verified in the Worker |
-| `POST /grafana/_o11y/reopen` | manual ledger re-open | Access JWT |
-| `GET /grafana/_o11y/admin/<name>` | ADR-0043 read forwarder (after launch) | Access JWT, name allowlist, GET only |
+| `GET /grafana/_o11y/login` | start a broker sign-in | none; mints the `o11y_login` nonce cookie |
+| `GET /grafana/_o11y/callback` | broker return; exchanges the token for a session | none; the `o11y_login` cookie + one live `/broker/userinfo` call |
+| `POST /grafana/_o11y/session` | mint the `o11y_session` cookie | `o11y_login` cookie (nonce bound), same-origin `Origin`, `@handsontable.com` broker identity |
+| `POST /grafana/_o11y/logout` | clear the `o11y_session` cookie | same-origin `Origin` |
+| `/grafana/*` | Grafana UI, waking page | the Worker's own session cookie (`O11Y_SESSION_SECRET`, K1 — not Access) |
+| `POST /grafana/_o11y/reopen` | manual ledger re-open | session cookie, same-origin `Origin` |
+| `GET /grafana/_o11y/admin/<name>` | ADR-0043 read forwarder (after launch) | session cookie, name allowlist, GET only |
 
 There is no trace route: traces are not exported (ADR-0041 §C.4).
 
@@ -61,14 +65,15 @@ Ports inside the Grafana box, reached only through `GrafanaBox.containerFetch`:
 | `RUNNER_EVENTS` | Analytics Engine | dataset `runner_events` |
 | `API` | service binding | `handsontable-demos-api` (o11y usage metering, o11y spend, later `AdminReads`) |
 | `O11Y_ENV` | var | `production` \| `local` |
-| `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | vars | Access application for `/grafana/*` |
+| `LOGIN_BROKER_URL` | var | Handsontable login broker base URL (ADR-0007, K1) — same value as `workers/api/wrangler.jsonc`'s own `LOGIN_BROKER_URL` |
 | `GITHUB_OIDC_REPOSITORY` | var | `handsontable/examples` |
 | `O11Y_EXPORT_SECRET` | secret | `x-o11y-secret` on the export destination and the deploy fallback |
 | `SENTRY_HOOK_SECRET` | secret | Sentry internal-integration client secret |
 | `AE_SQL_TOKEN` | secret | Analytics Engine SQL API (alert cron; passed to the box for Grafana) |
 | `LOKI_S3_ACCESS_KEY_ID`, `LOKI_S3_SECRET_ACCESS_KEY` | secrets | R2 S3 credentials, passed to the box as `envVars` |
 | `SLACK_WEBHOOK_URL` | secret | alert channel; never passed to the box |
-| `DEV_ADMIN` | `.dev.vars` only | fail-closed local bypass of the Access check |
+| `O11Y_SESSION_SECRET` | secret | HMAC key for the Worker's own `o11y_session`/`o11y_login` cookies (K1); rotating it logs every signed-in person out at once |
+| `DEV_ADMIN` | `.dev.vars` only | fail-closed local bypass of the session check |
 
 The box reaches the Loki bucket over S3 at
 `https://<account-id>.eu.r2.cloudflarestorage.com` with `LOKI_S3_*`, scoped to that bucket
@@ -93,7 +98,8 @@ only; it writes Loki data and the clean markers there. Lifecycle rules: `browser
 for a production build; `VITE_SENTRY_SCOPE` = `full` | `uncaught` (§11).
 
 **Headers**: `x-hot-session` (page-load id, browser → API worker), `x-o11y-secret`,
-`sentry-hook-signature`, `Cf-Access-Jwt-Assertion`, `x-o11y-grafana-user` (set by the o11y
+`sentry-hook-signature`, the `o11y_session`/`o11y_login` cookies (K1 — `/grafana/*`'s own
+session, never forwarded to the container), `x-o11y-grafana-user` (set by the o11y
 worker for Grafana `auth.proxy`; stripped from every client request), `X-Scope-OrgID`
 (Loki tenant: `browser` \| `worker`).
 

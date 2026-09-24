@@ -42,6 +42,7 @@ import { readHeartbeatReport } from "./heartbeat.js";
 import { getGrafanaBoxStub } from "./box.js";
 import { handleGrafana } from "./grafana/proxy.js";
 import { handleReopen } from "./grafana/reopen.js";
+import { handleCallback, handleLogin, handleLogout, handleSession } from "./grafana/login.js";
 
 export { GrafanaBox } from "./box.js";
 export { InboxWriter } from "./inbox/writer.js";
@@ -266,6 +267,15 @@ registerRoute("POST", "/telemetry/hooks/sentry", handleSentryHook);
 // route below it; `router.ts`'s own precedence rule (T02-D10: exact beats
 // prefix) means it always wins over this catch-all regardless of
 // registration order.
+// K1: the broker login round trip that replaces Cloudflare Access — exact
+// routes, so `router.ts`'s own precedence rule (exact beats prefix) means
+// they always win over the `/grafana/*` catch-all below regardless of
+// registration order. None of these four ever wakes the box (login.ts's own
+// header).
+registerRoute("GET", "/grafana/_o11y/login", handleLogin);
+registerRoute("GET", "/grafana/_o11y/callback", handleCallback);
+registerRoute("POST", "/grafana/_o11y/session", handleSession);
+registerRoute("POST", "/grafana/_o11y/logout", handleLogout);
 registerRoute("*", "/grafana/*", handleGrafana);
 registerRoute("POST", "/grafana/_o11y/reopen", handleReopen);
 

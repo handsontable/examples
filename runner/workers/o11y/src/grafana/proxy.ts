@@ -1,19 +1,23 @@
-// `/grafana/*` (ADR §B.5/§H, task "Grafana access" scope): verify Access,
-// wake (idempotent), strip client auth headers, set `x-o11y-grafana-user`,
-// proxy to port 3000, renew activity only once the request actually reaches
-// this far — never for a request served the waking page.
+// `/grafana/*` (ADR §B.5/§H, task "Grafana access" scope; gate replaced by
+// controller decision K1 — see gates/session.ts's own header): verify the
+// Worker's own session cookie, wake (idempotent), strip the cookie and any
+// client-supplied auth headers, set `x-o11y-grafana-user`, proxy to port
+// 3000, renew activity only once the request actually reaches this far —
+// never for a request served the waking page.
 
-import { verifyAccess } from "../gates/access.js";
+import { isBrowserNavigation, sanitizeNext, verifySession } from "../gates/session.js";
 import { getGrafanaBoxStub } from "../box.js";
 import { wakingPageResponse } from "./waking-page.js";
 import type { Env } from "../env.js";
 import type { RouteHandler } from "../router.js";
 
-/** Never forwarded to the container — either verified fresh by this Worker
- *  (`Cf-Access-Jwt-Assertion`) or set BY this Worker from the verified
- *  identity (`x-o11y-grafana-user`, `auth.proxy`'s header) — a
- *  client-supplied value of either must never reach Grafana. */
-const STRIPPED_HEADERS = ["cf-access-jwt-assertion", "x-o11y-grafana-user"];
+/** Never forwarded to the container. `cookie` carries our own
+ *  `o11y_session`/`o11y_login` (verified fresh by this Worker, never
+ *  Grafana's business — `auth.proxy` with `enable_login_token=false` keeps
+ *  no session of its own); `x-o11y-grafana-user` is set BY this Worker from
+ *  the verified identity below — a client-supplied value of either must
+ *  never reach Grafana. */
+const STRIPPED_HEADERS = ["cookie", "x-o11y-grafana-user"];
 
 /** F2 fix (final review, B-I3 "an open Grafana tab defeats the 4h cap"): a
  *  dashboard's own auto-refresh `fetch()`/XHR calls (every panel, on the
@@ -44,8 +48,30 @@ function isTopLevelNavigation(req: Request): boolean {
 }
 
 export const handleGrafana: RouteHandler = async (req, env) => {
-  const identity = await verifyAccess(req, env);
-  if (!identity) return new Response("Forbidden", { status: 403 });
+  const identity = await verifySession(req, env);
+  if (!identity) {
+    // K1: an unauthenticated request must NEVER wake the box — this branch
+    // returns before `getGrafanaBoxStub` is even called, below. A top-level
+    // navigation gets a real sign-in redirect; everything else (an XHR, a
+    // fetch, an asset request) gets 401 JSON, which is also what recovers a
+    // session that expired mid-use on one of Grafana's own background
+    // panel-refresh calls (see the session cookie's own doc comment on
+    // expiry) — Grafana's frontend surfaces that as a failed panel rather
+    // than navigating, and the person's next real navigation (reload, or a
+    // link) hits the branch below and gets a clean re-auth redirect instead.
+    if (isBrowserNavigation(req)) {
+      const url = new URL(req.url);
+      const next = sanitizeNext(url.pathname + url.search);
+      return new Response(null, {
+        status: 302,
+        headers: { Location: `/grafana/_o11y/login?next=${encodeURIComponent(next)}` },
+      });
+    }
+    return new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+  }
 
   const box = getGrafanaBoxStub(env);
 

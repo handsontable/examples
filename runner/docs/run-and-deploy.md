@@ -57,7 +57,7 @@ plus wrangler's own local Container orchestration for `GrafanaBox`, against
 the SAME Dockerfile the real deploy uses. It bootstraps
 `workers/o11y/.dev.vars` from `.dev.vars.example` on first run (`O11Y_ENV` set to
 `local`,
-`DEV_ADMIN` for the local Access bypass, and empty placeholders for the six
+`DEV_ADMIN` for the local session bypass, and empty placeholders for the seven
 production secrets — good enough to exercise the gates without hitting
 anything real) and defaults to port `O11Y_DEV_PORT=4200`
 (`O11Y_DEV_INSPECTOR_PORT=4201`) — the authoring app's own dev proxy
@@ -513,22 +513,33 @@ reintroduce a field this parser does not expect.
 > `wrangler secret put` + re-editing the destination's header with the new
 > value) and only then continue.
 
-### 5. Access application for `/grafana/*`
+### 5. `O11Y_SESSION_SECRET` for `/grafana/*`
 
-Zero Trust dashboard → **Access → Applications → Add an application → Self-hosted**.
+**No Cloudflare Access application is needed.** K1 (`.superpowers/sdd/README/final/broker-grafana-feasibility.md`)
+replaced the Access gate with the Handsontable login broker (ADR-0007) — the
+same broker `/admin` and every other internal surface already sign in
+through. A callback page under `/grafana/_o11y/` reads the broker's
+fragment token once, and the o11y worker mints its own signed session
+cookie from it (`workers/o11y/src/gates/session.ts`, `grafana/login.ts`).
+There is nothing to create in the Zero Trust dashboard.
 
-- Application domain: `demos.handsontable.com/grafana`
-- Policy: **Allow**, rule **Emails ending in** `@handsontable.com`
-- Session duration: the team default is fine — the o11y worker verifies the
-  Access JWT itself on every request (`workers/o11y/src/gates/access.ts`); it
-  does not trust the edge unconditionally.
+Set nothing in Cloudflare beyond this one secret:
 
-Copy the **Application Audience (AUD) tag** the dashboard shows after saving,
-and commit it — `ACCESS_AUD` in `workers/o11y/wrangler.jsonc`'s `vars` block is
-currently the placeholder `""` (T00-D8/T03), and the worker fails closed
-(`verifyAccess` rejects every request) while it stays empty. `ACCESS_TEAM_DOMAIN`
-is already the real value (`handsontable.cloudflareaccess.com`) and needs no
-change unless the Zero Trust team domain itself is renamed.
+```bash
+cd workers/o11y
+npx wrangler secret put O11Y_SESSION_SECRET   # generate with `openssl rand -hex 32`, never print it
+```
+
+`LOGIN_BROKER_URL` needs no dashboard step either — it is a public var,
+already the real broker URL in `wrangler.jsonc`'s `vars` block
+(`https://mcp-auth-proxy-j0tb.onrender.com`, the same value
+`workers/api/wrangler.jsonc` uses). The production broker was probed live
+(K1) and confirmed to `302` to Google for `return_to=https://demos.handsontable.com/grafana/_o11y/callback?n=…`,
+so the callback host is allowed today; if that ever stops being true, ask
+the broker's owners (`handsontable/hot-mcp`) to add `demos.handsontable.com`
+to `BROKER_ALLOWED_RETURN_HOSTS`. The broker-wide risk that its `return_to`
+allowlist is host-suffix-only (so it also admits anonymous Tier-2 preview
+hosts) is tracked separately as DEV-3088 and is not specific to this gate.
 
 ### 6. Every o11y worker secret (contract §2)
 
@@ -540,6 +551,7 @@ npx wrangler secret put AE_SQL_TOKEN                 # step below
 npx wrangler secret put LOKI_S3_ACCESS_KEY_ID        # step 3 above
 npx wrangler secret put LOKI_S3_SECRET_ACCESS_KEY    # step 3 above
 npx wrangler secret put SLACK_WEBHOOK_URL            # step 7 below
+npx wrangler secret put O11Y_SESSION_SECRET          # step 5 above
 ```
 
 `AE_SQL_TOKEN` is the Analytics Engine SQL API token — same token shape as the
@@ -644,13 +656,11 @@ what to check right after, and the two decisions ("flip the Sentry scope",
 
 These are carried from the tasks that found them, not newly discovered here:
 
-- **`ACCESS_AUD` is still the committed `""` placeholder** (`workers/o11y/wrangler.jsonc`,
-  T00-D8/T03). Paste the real Access application audience tag in before deploying — see
-  "One-time setup" step 5 above. Until this is real, every `/grafana/*` request fails
-  closed in production (safe, but Grafana is simply unreachable).
-- **`ACCESS_TEAM_DOMAIN`** (`handsontable.cloudflareaccess.com`) is a plausible-convention
-  guess (T00-D8), never independently confirmed against the real Access application.
-  Confirm it matches the domain created in step 5.
+- **`O11Y_SESSION_SECRET` must be set before the first real deploy** (K1, "One-time
+  setup" step 5 above). Until it is, `verifySession`/`verifyLoginCookie` both fail closed
+  (every `/grafana/*` request answers 401/redirects to a login that can never complete) —
+  safe, but Grafana is simply unreachable. There is no Access application to create;
+  Cloudflare Access was removed from this gate entirely (K1).
 - **T09-D5's "no per-panel ClickHouse `database` field" decision has not been checked
   against the real Analytics Engine SQL API** — only local ClickHouse and AE's documented
   SQL surface were checked. If a query returns "unknown table" in production Grafana where
