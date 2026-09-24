@@ -1,0 +1,537 @@
+{
+  "uid": "o11y-logs",
+  "title": "Logs",
+  "tags": [
+    "o11y",
+    "runner"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Runner overview",
+      "type": "link",
+      "url": "/d/o11y-runner-overview/runner-overview"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Observability self",
+      "type": "link",
+      "url": "/d/o11y-observability-self/observability-self"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "type": "query",
+        "label": "Environment",
+        "datasource": {
+          "type": "vertamedia-clickhouse-datasource",
+          "uid": "clickhouse-runner-events"
+        },
+        "query": "SELECT DISTINCT blob3 AS environment FROM runner_events",
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      },
+      {
+        "name": "framework",
+        "type": "query",
+        "label": "Framework",
+        "datasource": {
+          "type": "vertamedia-clickhouse-datasource",
+          "uid": "clickhouse-runner-events"
+        },
+        "query": "SELECT DISTINCT blob6 AS framework FROM runner_events WHERE blob6 != ''",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "ht_major",
+        "type": "custom",
+        "label": "HT major",
+        "query": "15,16,17,18,19,next,none",
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          },
+          {
+            "text": "15",
+            "value": "15"
+          },
+          {
+            "text": "16",
+            "value": "16"
+          },
+          {
+            "text": "17",
+            "value": "17"
+          },
+          {
+            "text": "18",
+            "value": "18"
+          },
+          {
+            "text": "19",
+            "value": "19"
+          },
+          {
+            "text": "next",
+            "value": "next"
+          },
+          {
+            "text": "none",
+            "value": "none"
+          }
+        ],
+        "hide": 0,
+        "includeAll": true,
+        "multi": true
+      },
+      {
+        "name": "tenant",
+        "type": "datasource",
+        "label": "Tenant",
+        "query": "loki",
+        "regex": "",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "current": {
+          "text": "Loki (worker)",
+          "value": "loki-worker"
+        }
+      },
+      {
+        "name": "service_name",
+        "type": "query",
+        "label": "Service",
+        "datasource": {
+          "type": "loki",
+          "uid": "${tenant}"
+        },
+        "query": "label_values(service_name)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "hot_surface",
+        "type": "query",
+        "label": "Surface",
+        "datasource": {
+          "type": "loki",
+          "uid": "${tenant}"
+        },
+        "query": "label_values(hot_surface)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "hot_outcome",
+        "type": "query",
+        "label": "Outcome",
+        "datasource": {
+          "type": "loki",
+          "uid": "${tenant}"
+        },
+        "query": "label_values(hot_outcome)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "type": "textbox",
+        "label": "Search (free text)",
+        "description": "A LogQL line filter (|= \"$search\"). Empty matches every line — an empty substring is contained in every string.",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0
+      },
+      {
+        "name": "correlation",
+        "type": "textbox",
+        "label": "Correlation (cf.ray / session.id / demo id)",
+        "description": "Matched as a LogQL structured-metadata regex filter against cf_ray, session_id and hot_demo_id (never as a stream label — those are unbounded-cardinality values, ADR §B.4). Default \".*\" matches everything, including records with no value for a given field (Loki reads an absent structured-metadata field as \"\", which \".*\" also matches). Paste an exact id to narrow to one request/session/demo.",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "hide": 0
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "name": "Deploys",
+        "datasource": {
+          "type": "loki",
+          "uid": "loki-worker"
+        },
+        "enable": true,
+        "iconColor": "blue",
+        "expr": "{hot_surface=\"o11y\"} |= `\"event\":\"deploy\"`",
+        "titleFormat": "Deploy",
+        "textFormat": "{{__line__}}"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Log volume by service",
+      "description": "count_over_time across every service on the selected tenant, filtered by every dropdown variable, the free-text search and the correlation id.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${tenant}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${tenant}"
+          },
+          "expr": "sum by (service_name) (count_over_time({service_name=~\"${service_name:regex}\", hot_surface=~\"${hot_surface:regex}\", hot_outcome=~\"${hot_outcome:regex}\", hot_framework=~\"${framework:regex}\", deployment_environment_name=\"$environment\"} |= \"$search\" | cf_ray=~\"$correlation\" or session_id=~\"$correlation\" or hot_demo_id=~\"$correlation\" [$__auto]))",
+          "queryType": "range",
+          "legendFormat": "{{service_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 30,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "logs",
+      "title": "API worker errors",
+      "description": "Loki worker tenant, service_name=demos-api, filtered to the API worker's own structured error line (workers/api/src/telemetry/lines.ts#logErrorLine: `console.error(JSON.stringify({\"log.kind\":\"error\",...}))`). Cloudflare's real OTLP export ships that whole console.log call as opaque BODY TEXT (never parsed into attributes, and severityNumber is dropped by this repo's own pipeline before Loki ever sees it — `detected_level` is unusable here), so the line filter below matches the literal body shape instead. Verified against a re-timestamped copy of the real captured console-log-line.json fixture with a log.kind=error body.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-worker"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-worker"
+          },
+          "expr": "{service_name=\"demos-api\"} |= `\"log.kind\":\"error\"`",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 3,
+      "type": "logs",
+      "title": "Authoring errors",
+      "description": "Loki browser tenant, hot_surface=authoring, `hot_kind=\"exception\"` structured-metadata filter (never a label — unbounded per-report cardinality) — Faro exceptions from the authoring app. Verified against a replayed exception fixture.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-browser"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-browser"
+          },
+          "expr": "{hot_surface=\"authoring\"} | hot_kind=\"exception\"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 4,
+      "type": "logs",
+      "title": "Recent embed errors",
+      "description": "Loki browser tenant, hot_surface=embed — same query as the docs-embeds dashboard's own panel.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-browser"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-browser"
+          },
+          "expr": "{hot_surface=\"embed\"}",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 5,
+      "type": "logs",
+      "title": "Recent demo-runtime errors",
+      "description": "Loki browser tenant, hot_surface=demo-runtime — same query as the Tier-1 playground dashboard's own panel.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-browser"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-browser"
+          },
+          "expr": "{hot_surface=\"demo-runtime\"}",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "Sentry issues",
+      "description": "Loki worker tenant, service_name=demos-api / hot_surface=api, the issue-alert webhook's own line shape (normalise/sentry.ts: `sentry <action>: <title> [<id>] release=<release> <link>`). Controller audit finding: emitted but previously unread — verified against a replayed pipeline/fixtures/otlp/sentry-issue.json fixture.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-worker"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-worker"
+          },
+          "expr": "{service_name=\"demos-api\", hot_surface=\"api\"} |= \"sentry \"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Top error fingerprints by count",
+      "description": "error.handled + error.uncaught grouped by fingerprint (blob11), highest count first — an approximation of \"new error fingerprints\": Grafana cannot read the o11y worker's own Durable Object fp: registry (the real first-seen source of truth, ADR §... T04), and Analytics Engine's SQL API only allowlists sum/avg/quantileExactWeighted/toStartOfInterval/toUInt32/now (workers/o11y/src/alerts/ae-query.ts#ALLOWED_AE_FUNCTIONS) — no COUNT(DISTINCT ...)/uniqExact, so a true first-seen-in-range query is not expressible here. Controller audit finding: emitted but previously unread.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT blob11 AS fingerprint, sum(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 IN ('error.handled', 'error.uncaught') AND blob3 = '$environment' GROUP BY fingerprint ORDER BY cnt DESC LIMIT 20",
+          "format": "table",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "type": "logs",
+      "title": "All matching lines",
+      "description": "Every variable on this dashboard applies: tenant, service, surface, outcome, framework, environment, free-text search and the correlation id (cf.ray / session.id / demo id, matched as structured metadata).",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${tenant}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${tenant}"
+          },
+          "expr": "{service_name=~\"${service_name:regex}\", hot_surface=~\"${hot_surface:regex}\", hot_outcome=~\"${hot_outcome:regex}\", hot_framework=~\"${framework:regex}\", deployment_environment_name=\"$environment\"} |= \"$search\" | cf_ray=~\"$correlation\" or session_id=~\"$correlation\" or hot_demo_id=~\"$correlation\"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    }
+  ]
+}

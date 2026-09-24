@@ -341,6 +341,58 @@ test("checkO11yDevVarsStaleness (NB8): warns when a pre-existing .dev.vars decla
   });
 });
 
+test("checkO11yDevVarsStaleness (P1-logs): warns when a pre-existing .dev.vars declares SLACK_WEBHOOK_URL or AE_SQL_TOKEN empty", () => {
+  withTmpDir((dir) => {
+    const devVarsPath = path.join(dir, ".dev.vars");
+
+    // A healthy, freshly-bootstrapped file: no warnings.
+    writeFileSync(
+      devVarsPath,
+      "O11Y_ENV=local\nDEV_ADMIN=dev@handsontable.com\nSLACK_WEBHOOK_URL=http://localhost:4210/slack\nAE_SQL_TOKEN=local-dev-token\n",
+    );
+    assert.deepEqual(checkO11yDevVarsStaleness(devVarsPath), []);
+
+    // The stale-bootstrap shape: an old .dev.vars from before
+    // o11yDevVarsPatch grew these two keys, both declared empty (exactly
+    // what workers/o11y/.dev.vars.example still declares them as before a
+    // fresh bootstrap patches them).
+    writeFileSync(
+      devVarsPath,
+      "O11Y_ENV=local\nDEV_ADMIN=dev@handsontable.com\nSLACK_WEBHOOK_URL=\nAE_SQL_TOKEN=\n",
+    );
+    const warnings = checkO11yDevVarsStaleness(devVarsPath);
+    assert.equal(warnings.length, 2, "both the Slack webhook and the ClickHouse token must each get their own warning");
+    assert.ok(warnings.some((w) => w.includes("SLACK_WEBHOOK_URL")));
+    assert.ok(warnings.some((w) => w.includes("AE_SQL_TOKEN")));
+
+    // Absent entirely must never warn — only DECLARED-but-empty is the
+    // problem (same rule as DEV_ADMIN/O11Y_SESSION_SECRET above).
+    writeFileSync(devVarsPath, "O11Y_ENV=local\nDEV_ADMIN=dev@handsontable.com\n");
+    assert.deepEqual(checkO11yDevVarsStaleness(devVarsPath), []);
+  });
+});
+
+test("o11yDevVarsPatch + bootstrapDevVars (P1-logs): a FRESH bootstrap never leaves SLACK_WEBHOOK_URL or AE_SQL_TOKEN declared empty", () => {
+  withTmpDir((dir) => {
+    const examplePath = path.join(dir, ".dev.vars.example");
+    const devVarsPath = path.join(dir, ".dev.vars");
+    // The real workers/o11y/.dev.vars.example shape for these two keys.
+    writeFileSync(examplePath, "DEV_ADMIN=\nAE_SQL_TOKEN=\nSLACK_WEBHOOK_URL=\nO11Y_SESSION_SECRET=\nO11Y_ENV=local\n");
+
+    const result = bootstrapDevVars({
+      examplePath,
+      devVarsPath,
+      patch: o11yDevVarsPatch({ O11Y_SLACK_CAPTURE_PORT: 4210 }),
+      stripKeys: O11Y_DEVVARS_STRIP_KEYS,
+    });
+    assert.ok(result.patched.includes("AE_SQL_TOKEN"));
+    assert.ok(result.patched.includes("SLACK_WEBHOOK_URL"));
+
+    // The staleness check must find nothing to warn about on this fresh file.
+    assert.deepEqual(checkO11yDevVarsStaleness(devVarsPath), []);
+  });
+});
+
 test("ephemeralSecret: never the same value twice, and never written by bootstrapDevVars", () => {
   assert.notEqual(ephemeralSecret(), ephemeralSecret());
   assert.equal(ephemeralSecret().length, 64); // 32 bytes, hex

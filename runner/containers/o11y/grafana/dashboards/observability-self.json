@@ -14,6 +14,19 @@
     "to": "now"
   },
   "refresh": "1m",
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Logs",
+      "type": "link",
+      "url": "/d/o11y-logs/logs"
+    }
+  ],
   "templating": {
     "list": [
       {

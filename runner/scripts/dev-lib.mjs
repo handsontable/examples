@@ -355,6 +355,23 @@ export function checkDevVarsPortDrift(devVarsPath, key, expectedPort, fs = defau
  * elsewhere) with the local session bypass ALSO off (`DEV_ADMIN` empty).
  * Warns for either case; does not fix the file itself — same "advisory, not
  * fatal" posture as `checkDevVarsPortDrift`.
+ *
+ * P1-logs: the exact same stale-bootstrap shape breaks two more keys, found
+ * while wiring up the Logs dashboard's live verification — an old
+ * `.dev.vars` from before `o11yDevVarsPatch` grew `SLACK_WEBHOOK_URL`/
+ * `AE_SQL_TOKEN` (both still declared empty in
+ * `workers/o11y/.dev.vars.example`, same as `DEV_ADMIN`/`O11Y_SESSION_SECRET`)
+ * has `SLACK_WEBHOOK_URL=` (the local Slack-capture warning webhook,
+ * `o11y-slack-capture.mjs`) and/or `AE_SQL_TOKEN=` (the local ClickHouse
+ * auth token the Logs/Runner-overview/Observability-self dashboards' AE
+ * queries depend on) declared but empty — same silent-string-wins-over-`
+ * --var`-like failure mode, just surfacing as a broken local Slack capture
+ * and a 401/empty ClickHouse panel instead of a 500. On a genuinely FRESH
+ * bootstrap neither key is ever left empty: `o11yDevVarsPatch` (used as
+ * `bootstrapDevVars`'s `patch` argument by both `dev.mjs` and
+ * `o11y-dev.mjs`) already fills both with a real local-dev value the same
+ * pass that fills `DEV_ADMIN` — this function only ever fires for the STALE
+ * case, an existing file this run's bootstrap never touches.
  * @returns {string[]} zero or more warning lines
  */
 export function checkO11yDevVarsStaleness(devVarsPath, fs = defaultFs) {
@@ -372,6 +389,22 @@ export function checkO11yDevVarsStaleness(devVarsPath, fs = defaultFs) {
       `${devVarsPath} declares O11Y_SESSION_SECRET= (empty) — this silently overrides this run's own ephemeral ` +
         `--var (wrangler: .dev.vars always wins), so /grafana/_o11y/login will answer 500. Remove that line from ` +
         `${devVarsPath}, or delete the file and re-run for a fresh bootstrap.`,
+    );
+  }
+  const slackWebhookUrl = readDevVarsLine(devVarsPath, "SLACK_WEBHOOK_URL", fs);
+  if (slackWebhookUrl === "") {
+    warnings.push(
+      `${devVarsPath} declares SLACK_WEBHOOK_URL= (empty) — local Slack alert capture is OFF (an alert fires but ` +
+        `nothing is written for o11y-slack-capture.mjs to read). Edit the file to point it at the local capture ` +
+        `port, or delete it and re-run for a fresh bootstrap.`,
+    );
+  }
+  const aeSqlToken = readDevVarsLine(devVarsPath, "AE_SQL_TOKEN", fs);
+  if (aeSqlToken === "") {
+    warnings.push(
+      `${devVarsPath} declares AE_SQL_TOKEN= (empty) — the local ClickHouse token is OFF, so every Analytics ` +
+        `Engine panel (Runner overview, Observability self, the Logs dashboard) will 401/render empty. Edit the ` +
+        `file to set a token matching compose.yml's local default, or delete it and re-run for a fresh bootstrap.`,
     );
   }
   return warnings;
