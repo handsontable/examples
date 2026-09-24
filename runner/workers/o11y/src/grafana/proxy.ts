@@ -131,7 +131,28 @@ export const handleGrafana: RouteHandler = async (req, env) => {
   // URL string names, so there is no need (and no benefit) to rewrite it to
   // a synthetic origin the way `isReady()`'s own `/ready`/`/grafana/api/health`
   // probes do (those endpoints do not care about `Host` at all).
-  const upstream = new Request(req.url, req);
+  //
+  // Z1: the body is read in full HERE, before the box sees the request, and
+  // forwarded as a buffer rather than piped from `req.body`. When the box
+  // answers without reading a piped body (the live-path/Loki-allowlist
+  // refusals, the not-running 503s), this Worker sends that response while
+  // the runtime is still pumping the incoming body into the DO subrequest.
+  // Every such request then printed `Uncaught TypeError: Can't read from
+  // request stream after response has been sent.` Under `wrangler dev`, a
+  // body of about 20 KB also made the dev proxy fail the request with a 500
+  // ("Network connection lost") instead of passing on the box's 404.
+  // Grafana's own request bodies are small JSON (panel queries, dashboard
+  // saves), and this route is reachable only with a verified session.
+  let body: ArrayBuffer | null = null;
+  if (req.body) {
+    try {
+      body = await req.arrayBuffer();
+    } catch {
+      // The client went away mid-upload: nothing is left to answer.
+      return new Response(null, { status: 400 });
+    }
+  }
+  const upstream = new Request(req.url, { method: req.method, headers: req.headers, body, redirect: req.redirect });
   for (const h of STRIPPED_HEADERS) upstream.headers.delete(h);
   upstream.headers.set("x-o11y-grafana-user", identity.email);
 

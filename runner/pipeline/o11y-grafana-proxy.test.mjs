@@ -267,6 +267,74 @@ test("Z1: a panel-query POST reaches the box through the DO's fetch() with its b
   assert.equal(await upstream.text(), body, "the request body is forwarded verbatim");
 });
 
+// Z1, second half. With the body piped straight from `req.body`, a box
+// that answers WITHOUT reading it (every gate refusal: live path, Loki
+// allowlists, not-running 503) left the runtime still pumping the incoming
+// body after this Worker had sent the response. Live under `wrangler dev`:
+// 30 of 30 refused 20 KB POSTs printed "Uncaught TypeError: Can't read from
+// request stream after response has been sent", and some came back 500
+// instead of 404. With the body buffered first: 0 of 30, all 404.
+test("Z1: the incoming body is read to the end BEFORE the box is called, so a box that answers without reading it leaves nothing pumping", async () => {
+  let sourceDrained = false;
+  const chunks = ['{"streams":[', '{"stream":{"a":"b"},"values":[["1","x"]]}', "]}"];
+  const source = new ReadableStream({
+    pull(controller) {
+      const next = chunks.shift();
+      if (next === undefined) {
+        sourceDrained = true;
+        controller.close();
+      } else controller.enqueue(new TextEncoder().encode(next));
+    },
+  });
+  let drainedWhenBoxCalled = null;
+  const box = makeBoxStub({ ready: true });
+  box.fetch = async (request) => {
+    drainedWhenBoxCalled = sourceDrained;
+    box.calls.fetch.push(request);
+    // Refuse without touching the body, like `GrafanaBox`'s own gates do.
+    return new Response("Not Found", { status: 404 });
+  };
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  const req = new Request("https://demos.handsontable.com/grafana/api/datasources/uid/loki-worker/resources/push", {
+    method: "POST",
+    headers: { "content-type": "application/json", "sec-fetch-dest": "empty" },
+    body: source,
+    duplex: "half",
+  });
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 404, "the box's own refusal is what the client gets");
+  assert.equal(drainedWhenBoxCalled, true, "the client's body must be fully read before the request is handed to the box");
+  assert.equal(
+    await box.calls.fetch[0].text(),
+    '{"streams":[{"stream":{"a":"b"},"values":[["1","x"]]}]}',
+    "the body the box receives is still the complete original",
+  );
+});
+
+test("Z1: a client that drops mid-upload gets a 400 from the Worker, and the box is never called", async () => {
+  const box = makeBoxStub({ ready: true });
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  const source = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"queries":['));
+      controller.error(new Error("client disconnected"));
+    },
+  });
+  const req = new Request("https://demos.handsontable.com/grafana/api/ds/query", {
+    method: "POST",
+    headers: { "content-type": "application/json", "sec-fetch-dest": "empty" },
+    body: source,
+    duplex: "half",
+  });
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 400);
+  assert.equal(box.calls.fetch.length, 0);
+});
+
 test("Z1: a client-supplied cf-container-target-port (the base Container.fetch()'s port selector) is stripped before reaching the box", async () => {
   const box = makeBoxStub({ ready: true });
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
