@@ -324,7 +324,11 @@ dedupe hash is computed over the decoded, scrubbed record before timestamps are 
 | `heartbeat` | `{ lastCron, lastIngest }` |
 
 Limits: records over 256 KB are dropped; requests to Loki carry at most 1 MB
-decompressed.
+decompressed. Fix round (finding Z-A-C1): every free-text string (Faro/OTLP body,
+message, attribute value) is truncated to this same 256 KB before any scrub/redact/
+fingerprint regex runs over it — a ReDoS defense-in-depth independent of each
+pattern also being made linear-time (`SCRUB_TEXT_MAX_CHARS`, `packages/runtime/src/
+telemetry/scrub.ts`).
 
 **Bounded storage (F2 fix, final review, B-C1/A-I1 — the resolve/drain/backlog paths
 must never scan committed history):**

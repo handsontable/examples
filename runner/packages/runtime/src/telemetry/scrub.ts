@@ -23,6 +23,7 @@ import { redactPreviewHosts, type MonitorKind } from "../monitor.js";
 import { stripCodeFrame } from "./fingerprint.js";
 import { browserOf, deviceOf } from "./classify.js";
 import { ALLOWED_ATTRIBUTE_KEYS } from "./attrs.js";
+import { INBOX_RECORD_MAX_BYTES } from "./inbox.js";
 
 // ---- Structural mirrors of the Faro shapes we scrub -----------------------------
 //
@@ -233,9 +234,37 @@ function stripUrlQueriesInText(text: string): string {
   });
 }
 
+/**
+ * ReDoS defense-in-depth (finding Z-A-C1, step 2 "truncate first"): bound a
+ * free-text string to this length BEFORE any scrub/redact regex in this
+ * module (or `../monitor.js`'s `redactPreviewHosts`, or
+ * `workers/o11y/src/normalise/text-scrub.ts`'s own passes) ever sees it —
+ * regardless of whether that particular regex is itself linear-time, so a
+ * pattern this fix round did not identify still has a bounded worst case.
+ *
+ * Set to {@link INBOX_RECORD_MAX_BYTES} (contract §8's own "records over
+ * 256 KB are dropped" limit), not a smaller number: a smaller cap would
+ * change what a legitimately-long (but still under the record limit)
+ * message/body looks like once scrubbed, and — concretely —
+ * `pipeline/o11y-normalise.test.mjs`'s two 300 KB-message oversize tests
+ * rely on the untruncated length surviving scrub far enough that the
+ * record-level size check (which runs AFTER scrubbing) still measures over
+ * the limit. Truncating at exactly that limit keeps both true: no single
+ * field can ever push regex cost past what a 256 KB scan already costs
+ * (trivial once every pattern is linear, see `redactPreviewHosts`'s and
+ * `EMAIL_PATTERN`'s own fix-round comments), and the oversize tests are
+ * unaffected because the JSON structure wrapped around a maxed-out field
+ * always pushes the whole record past the same limit anyway.
+ */
+export const SCRUB_TEXT_MAX_CHARS = INBOX_RECORD_MAX_BYTES;
+
+export function truncateForScrub(value: string): string {
+  return value.length > SCRUB_TEXT_MAX_CHARS ? value.slice(0, SCRUB_TEXT_MAX_CHARS) : value;
+}
+
 function scrubText(value: string | undefined): string | undefined {
   if (value === undefined) return value;
-  return stripUrlQueriesInText(stripCodeFrame(redactPreviewHosts(value)));
+  return stripUrlQueriesInText(stripCodeFrame(redactPreviewHosts(truncateForScrub(value))));
 }
 
 /**
@@ -250,7 +279,7 @@ function scrubText(value: string | undefined): string | undefined {
  * safely run last, after every targeted rule, regardless of order.
  */
 function redactStringsDeep<V>(value: V): V {
-  if (typeof value === "string") return redactPreviewHosts(value) as V;
+  if (typeof value === "string") return redactPreviewHosts(truncateForScrub(value)) as V;
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) value[i] = redactStringsDeep(value[i]);
     return value;
@@ -262,7 +291,7 @@ function redactStringsDeep<V>(value: V): V {
     // (`convert.ts#faroBody`) without ever passing back through a value
     // position this walk would otherwise reach.
     for (const key of Object.keys(obj)) {
-      const redactedKey = redactPreviewHosts(key);
+      const redactedKey = redactPreviewHosts(truncateForScrub(key));
       const redactedValue = redactStringsDeep(obj[key]);
       if (redactedKey !== key) delete obj[key];
       obj[redactedKey] = redactedValue;

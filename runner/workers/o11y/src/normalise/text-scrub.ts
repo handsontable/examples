@@ -13,7 +13,7 @@
 // `body` (and, defensively, on Faro's converted `body` too) after
 // `scrubTelemetry`, never instead of it.
 
-import { stripQueryAndFragment } from "@handsontable/demo-runtime/telemetry";
+import { stripQueryAndFragment, truncateForScrub } from "@handsontable/demo-runtime/telemetry";
 
 // Fix round (finding A-I3): this pass always runs AFTER `scrubTelemetry`
 // (see the file header), which has already replaced a preview host with
@@ -48,7 +48,18 @@ export function stripUrlQueriesInText(text: string): string {
  *  this is this task's own extra pass — a `Mozilla/<ver> (<platform
  *  tokens>)` prefix, the shape every real UA string starts with, is blanked
  *  out; text with no such prefix is untouched. */
-const USER_AGENT_PATTERN = /Mozilla\/[\d.]+\s*\([^)]*\)[^\s,;]*/gi;
+// Fix round (finding Z-A-C1): every quantifier below used to be unbounded
+// (`[\d.]+`, `\s*`, `[^)]*`, `[^\s,;]*`). On an input like `"Mozilla/1 ("`
+// repeated, `[^)]*` greedily ran to the end of the string, the required
+// closing `)` never matched, and the engine backtracked one character at a
+// time before moving to the next `Mozilla/` occurrence — O(n) of work at
+// each of O(n) occurrences, O(n²) total (measured: 40k chars ~1.2s, 80k
+// ~4.8s). No real user-agent string is anywhere near these bounds (a UA's
+// platform-token parenthetical, `[\d.]` version run, and trailing suffix
+// are each well under a few hundred characters), so bounding every
+// quantifier is not a behavior change for any real UA string — it caps the
+// backtrack at a small constant per occurrence, making this O(n) overall.
+const USER_AGENT_PATTERN = /Mozilla\/[\d.]{1,32}\s{0,16}\([^)]{0,512}\)[^\s,;]{0,256}/gi;
 
 export function redactUserAgentInText(text: string): string {
   return text.replace(USER_AGENT_PATTERN, "<ua>");
@@ -61,16 +72,33 @@ export function redactUserAgentInText(text: string): string {
  *  Sentry issue title, `"... user a@b.com Mozilla/5.0 ..."`. No existing
  *  mechanism redacted an email anywhere in this codebase before this fix —
  *  a standard, conservative address shape, blanked the same way a UA is. */
-const EMAIL_PATTERN = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+// Fix round (finding Z-A-C1): `[a-z0-9._%+-]+` and `[a-z0-9.-]+` used to be
+// unbounded. On an input like 80k `a` characters with no `@` at all, the
+// local-part class greedily consumed every start position's entire
+// remainder, the required `@` never matched, and the engine backtracked
+// one character at a time before advancing the start position — O(n) of
+// work at each of O(n) positions, O(n²) total (measured: 10k chars ~72ms,
+// 80k ~4.3s). Bounded per RFC 5321 §4.5.3.1 (local part ≤64 octets, and a
+// domain name ≤253 octets total), which is not a behavior change for any
+// real address — it caps the backtrack at a fixed constant per start
+// position, making this O(n) overall.
+const EMAIL_PATTERN = /[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,253}\.[a-z]{2,63}/gi;
 
 export function redactEmailInText(text: string): string {
   return text.replace(EMAIL_PATTERN, "<email>");
 }
 
 /** The combined extra pass this task runs on every stored record's free
- *  body text, beyond what `scrubTelemetry` alone guarantees. */
+ *  body text, beyond what `scrubTelemetry` alone guarantees.
+ *
+ *  Fix round (finding Z-A-C1, step 2 "truncate first"): `truncateForScrub`
+ *  bounds `text` to `SCRUB_TEXT_MAX_CHARS` (= `INBOX_RECORD_MAX_BYTES`, §8)
+ *  before any of the three scrub passes below ever see it — defense in
+ *  depth alongside making each pattern itself linear, and sized so it never
+ *  changes the outcome of the record-level 256 KB oversize check that runs
+ *  after this (`pipeline/o11y-normalise.test.mjs`'s two oversize tests). */
 export function scrubBodyText(text: string): string {
-  return redactEmailInText(redactUserAgentInText(stripUrlQueriesInText(text)));
+  return redactEmailInText(redactUserAgentInText(stripUrlQueriesInText(truncateForScrub(text))));
 }
 
 /** Fix round (finding A-M3, "also"): `scrubTelemetry`'s OTLP-record branch
@@ -95,7 +123,7 @@ export function scrubAttributeValues(
   if (!attrs) return attrs;
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(attrs)) {
-    out[key] = redactEmailInText(redactUserAgentInText(stripQueryAndFragment(value)));
+    out[key] = redactEmailInText(redactUserAgentInText(stripQueryAndFragment(truncateForScrub(value))));
   }
   return out;
 }
