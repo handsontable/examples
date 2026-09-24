@@ -41,6 +41,9 @@ import {
   redactArgsForLog,
   PORT_DEFAULTS,
 } from "./dev-lib.mjs";
+// dev-prepull task's own additions — a separate import statement so a
+// parallel edit to the block above merges cleanly.
+import { shouldCheckContainerImages, collectTierBaseImages, ensureContainerImagesPresent, formatImagePullFailure } from "./dev-lib.mjs";
 // dev-persist task's own additions — a separate import statement (rather
 // than folded into the block above) so a parallel edit to that block's own
 // import list merges cleanly.
@@ -60,6 +63,7 @@ const COLORS = {
   slack: "\x1b[32m", // green
   build: "\x1b[90m", // grey
   dev: "\x1b[97m", // bright white
+  images: "\x1b[96m", // bright cyan
 };
 const RESET = "\x1b[0m";
 
@@ -120,7 +124,7 @@ function runWranglerCapture(cwd, args) {
 }
 
 async function main() {
-  const { help, tier, replay, resetLocalDb, fresh, errors } = parseArgs(process.argv.slice(2));
+  const { help, tier, replay, resetLocalDb, fresh, skipImageCheck, errors } = parseArgs(process.argv.slice(2));
   if (help) {
     console.log(HELP_TEXT);
     process.exit(0);
@@ -150,6 +154,35 @@ async function main() {
       console.error(`error: ${DOCKER_NOT_RUNNING_MESSAGE}`);
       process.exit(1);
     }
+
+    // Pre-pull gate (dev-prepull task): every container base image this
+    // tier's Dockerfiles declare must be present BEFORE any worker starts.
+    // Without this, `wrangler dev`'s own local container build can fail
+    // silently on a missing base image (e.g. a Docker Hub timeout pulling
+    // `cloudflare/sandbox:0.12.3`) while `wrangler dev` itself keeps
+    // running — the failure only surfaces later, opaquely, at Tier-2
+    // session-start time. Runs before `containersBefore` below (nothing
+    // has been spawned yet at this point), so a pull failure here leaves
+    // nothing running to clean up.
+    if (shouldCheckContainerImages(tier, skipImageCheck)) {
+      const refs = collectTierBaseImages(tier, RUNNER_ROOT);
+      if (refs.length > 0) {
+        log("images", `checking ${refs.length} base image(s) needed for --tier=${tier}`);
+        const dockerExec = (cmd, args) => execFileSync(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+        const result = await ensureContainerImagesPresent({
+          refs,
+          execFileSyncImpl: dockerExec,
+          log: (line) => log("images", line),
+        });
+        if (!result.ok) {
+          console.error(formatImagePullFailure(result));
+          process.exit(1);
+        }
+      }
+    } else if (skipImageCheck) {
+      log("images", "--skip-image-check: skipping the container base-image pre-pull check");
+    }
+
     // Baseline for the leftover-container REPORT on shutdown (this run
     // never stops a container it cannot prove it started — see
     // dev-lib.mjs's module-level doc comment on `possiblyLeftoverContainers`

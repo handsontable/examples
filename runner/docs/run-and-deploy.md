@@ -54,6 +54,23 @@ minio/clickhouse stack this run itself started. It does **not** guarantee no
 orphaned Tier-2 Sandbox containers — see "What Ctrl-C actually cleans up"
 below for why, and for what it prints instead.
 
+**Container base-image pre-pull.** Before starting any worker, `dev:live`/
+`dev:full` read every `FROM` base image the tier's Dockerfiles declare
+(`containers/live/Dockerfile` + `containers/builder/Dockerfile` for the API
+worker, plus `containers/o11y/Dockerfile` for `dev:full`'s o11y worker —
+looked up from each worker's own `wrangler.jsonc` `containers[].image`, not
+hardcoded), runs `docker image inspect` on each, and `docker pull`s (3
+attempts, with backoff) any that's missing, printing `[images]` progress
+lines. This is what `wrangler dev`'s own container build otherwise skips
+silently: without it, a missing base image (e.g. a Docker Hub timeout
+pulling `cloudflare/sandbox:0.12.3`) can leave `wrangler dev` running with a
+broken container build, surfacing only later as an opaque Tier-2
+session-start failure. If a pull still fails after every retry, `dev.mjs`
+prints which image, the Docker error's last line, and the exact
+`docker pull ...` command to retry by hand, then exits before starting any
+worker. Pass `--skip-image-check` to skip this check entirely (e.g. offline,
+with the images already built locally).
+
 Every port is overridable by env var, defaulting to what's below; two
 workers under `wrangler dev` always get their own, distinct `--port` and
 `--inspector-port` so two dev sessions on the same machine never collide on

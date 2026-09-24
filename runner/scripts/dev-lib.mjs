@@ -63,6 +63,14 @@ Options:
                     startup log for the divergence risk if you've also got
                     a dev:full compose stack's volumes still holding data
                     from before).
+  --skip-image-check
+                    (--tier=2 or --tier=full only) skip the pre-flight check
+                    that every container base image (read from each
+                    wrangler.jsonc's own containers[].image Dockerfile,
+                    e.g. cloudflare/sandbox:0.12.3) is present locally,
+                    pulling any that's missing before starting a worker.
+                    Escape hatch for offline use when the images are
+                    already built.
   -h, --help        Print this help and exit 0.
 
 Port overrides (env vars — defaults match the ones documented in
@@ -89,7 +97,7 @@ Other env vars read:
 
 /**
  * @param {string[]} argv (e.g. process.argv.slice(2))
- * @returns {{ help: boolean, tier: "1"|"2"|"full"|null, replay: boolean, errors: string[] }}
+ * @returns {{ help: boolean, tier: "1"|"2"|"full"|null, replay: boolean, resetLocalDb: boolean, fresh: boolean, skipImageCheck: boolean, errors: string[] }}
  */
 export function parseArgs(argv) {
   const errors = [];
@@ -97,6 +105,7 @@ export function parseArgs(argv) {
   let replay = false;
   let resetLocalDb = false;
   let fresh = false;
+  let skipImageCheck = false;
   let help = false;
   for (const arg of argv) {
     if (arg === "-h" || arg === "--help") {
@@ -107,6 +116,8 @@ export function parseArgs(argv) {
       resetLocalDb = true;
     } else if (arg === "--fresh") {
       fresh = true;
+    } else if (arg === "--skip-image-check") {
+      skipImageCheck = true;
     } else if (arg.startsWith("--tier=")) {
       const value = arg.slice("--tier=".length);
       if (value !== "1" && value !== "2" && value !== "full") {
@@ -130,7 +141,10 @@ export function parseArgs(argv) {
   if (fresh && tier !== "full" && tier !== null) {
     errors.push("--fresh is only valid with --tier=full");
   }
-  return { help, tier, replay, resetLocalDb, fresh, errors };
+  if (skipImageCheck && tier !== "2" && tier !== "full" && tier !== null) {
+    errors.push("--skip-image-check is only valid with --tier=2 or --tier=full");
+  }
+  return { help, tier, replay, resetLocalDb, fresh, skipImageCheck, errors };
 }
 
 // ---------------------------------------------------------------------------
@@ -921,6 +935,353 @@ export function reportLeftoverContainers(before, execFileSyncImpl, logImpl) {
  *  so without a handler here `dev.mjs` used to die via the default SIGHUP
  *  action (immediate exit, no cleanup) and leave every child running. */
 export const SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+// ---------------------------------------------------------------------------
+// Container base-image pre-pull (dev-prepull task)
+//
+// Self-contained on purpose (a separate section, its own local helpers, no
+// changes to anything above) so a parallel edit elsewhere in this file
+// merges cleanly. What broke before this existed: `wrangler dev`'s own
+// local container build silently races a missing base image against Docker
+// Hub — if `docker pull` for e.g. `cloudflare/sandbox:0.12.3` times out
+// during the build, wrangler keeps running anyway and a Tier-2 session then
+// fails opaquely at container-start time ("No such image available").
+// This section checks every base image a tier's Dockerfiles need is
+// present BEFORE any worker is spawned, pulling what's missing with a
+// bounded retry, and fails fast with one clear message (not a live-but-
+// broken dev session) if a pull still doesn't land.
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal string-aware JSONC comment stripper (line comments and block
+ * comments, respecting quoted strings/escapes) — same zero-dependency
+ * approach `pipeline/o11y-box-config.test.mjs` already uses for the same
+ * reason: `wrangler.jsonc` is JSONC, not plain JSON, and T00 owns adding
+ * any parsing dependency. Kept as this section's own private copy rather
+ * than a shared export, so this section stays self-contained.
+ */
+function stripJsonCommentsForContainerConfig(text) {
+  let result = "";
+  let inString = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (inLineComment) {
+      if (c === "\n") {
+        inLineComment = false;
+        result += c;
+      }
+      continue;
+    }
+    if (inBlockComment) {
+      if (c === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (inString) {
+      result += c;
+      if (c === "\\") {
+        result += next;
+        i++;
+        continue;
+      }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      result += c;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    result += c;
+  }
+  return result;
+}
+
+/**
+ * Reads a worker's `wrangler.jsonc` `containers[].image` paths — Dockerfile
+ * paths relative to `wranglerJsoncPath`'s own directory (this repo's own
+ * config already names them; this never hardcodes a second copy) —
+ * resolved to absolute paths. Returns `[]` when the config has no
+ * `containers` block.
+ * @param {string} wranglerJsoncPath
+ * @param {typeof defaultFs} [fs]
+ * @returns {string[]}
+ */
+export function readContainerDockerfilePaths(wranglerJsoncPath, fs = defaultFs) {
+  const raw = fs.readFileSync(wranglerJsoncPath, "utf8");
+  const config = JSON.parse(stripJsonCommentsForContainerConfig(raw));
+  const containers = config.containers ?? [];
+  const dir = path.dirname(wranglerJsoncPath);
+  return containers.map((c) => path.resolve(dir, c.image));
+}
+
+/**
+ * Extracts every base image a Dockerfile's `FROM` instructions need pulled
+ * from a registry — i.e. what `docker build` needs present locally before
+ * it can even start. Handles:
+ *  - multi-stage builds: one entry per `FROM`, in order, deduped;
+ *  - stage aliases (`FROM <image> AS <name>`) and a LATER `FROM <name>`
+ *    that references an earlier stage by that alias — excluded, since it
+ *    resolves to a previously built stage, not a registry pull;
+ *  - `ARG`-declared build args used in `FROM $ARG`/`FROM ${ARG}` — resolved
+ *    using the Dockerfile's own default (`ARG NAME=default`, declared
+ *    before the first `FROM`, i.e. a global build arg per Docker's own
+ *    scoping rule) since `docker build` without an explicit `--build-arg`
+ *    uses that default; left unresolved (and so excluded from the "safe to
+ *    pull" set — callers see the literal placeholder, which
+ *    `docker image inspect`/`pull` will just fail on visibly) if the ARG
+ *    has no default;
+ *  - `FROM scratch` — the empty pseudo-image, never pulled, excluded;
+ *  - an optional `--platform=...` flag between `FROM` and the image ref.
+ * @param {string} dockerfileText
+ * @returns {string[]} base image refs, in FROM order, deduped
+ */
+export function parseDockerfileBaseImages(dockerfileText) {
+  const globalArgs = new Map();
+  const stageNames = new Set();
+  const seen = new Set();
+  const images = [];
+  let sawFrom = false;
+  for (const rawLine of dockerfileText.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    let m;
+    if (!sawFrom && (m = /^ARG\s+([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$/.exec(line))) {
+      let value = m[2];
+      if (value !== undefined) {
+        value = value.trim();
+        const q = /^"(.*)"$|^'(.*)'$/.exec(value);
+        if (q) value = q[1] ?? q[2];
+      }
+      globalArgs.set(m[1], value);
+      continue;
+    }
+    if ((m = /^FROM\s+(.+)$/i.exec(line))) {
+      sawFrom = true;
+      const parts = m[1].trim().split(/\s+/);
+      let idx = 0;
+      while (parts[idx]?.startsWith("--")) idx++;
+      let ref = parts[idx];
+      let alias;
+      const asIdx = parts.findIndex((p, i) => i > idx && /^as$/i.test(p));
+      if (asIdx !== -1) alias = parts[asIdx + 1];
+      ref = ref.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (whole, name) => {
+        const resolved = globalArgs.get(name);
+        return globalArgs.has(name) && resolved !== undefined ? resolved : whole;
+      });
+      const referencesEarlierStage = stageNames.has(ref);
+      if (alias) stageNames.add(alias);
+      if (ref.toLowerCase() === "scratch") continue;
+      if (referencesEarlierStage) continue;
+      if (!seen.has(ref)) {
+        seen.add(ref);
+        images.push(ref);
+      }
+    }
+  }
+  return images;
+}
+
+/**
+ * Maps a `dev.mjs` tier to the `wrangler.jsonc`(s) whose `containers[].image`
+ * Dockerfiles that tier's workers actually start. Tier "1" needs none — no
+ * worker with a container starts. Read from this repo's own config
+ * (requirement: derive from `containers[].image`, never hardcode the
+ * Dockerfile paths a second time).
+ * @param {"1"|"2"|"full"} tier
+ * @param {string} runnerRoot
+ * @returns {string[]}
+ */
+export function containerWranglerConfigsForTier(tier, runnerRoot) {
+  if (tier === "1") return [];
+  const apiConfig = path.join(runnerRoot, "workers", "api", "wrangler.jsonc");
+  if (tier === "2") return [apiConfig];
+  if (tier === "full") return [apiConfig, path.join(runnerRoot, "workers", "o11y", "wrangler.jsonc")];
+  throw new Error(`containerWranglerConfigsForTier: unknown tier "${tier}"`);
+}
+
+/**
+ * Every distinct base image ref this tier's Dockerfiles declare, across
+ * every `wrangler.jsonc` `containers[].image` Dockerfile the tier needs —
+ * deduped, first-seen order. Throws a clear error (not a raw `ENOENT`) if a
+ * `containers[].image` path doesn't exist on disk.
+ * @param {"1"|"2"|"full"} tier
+ * @param {string} runnerRoot
+ * @param {typeof defaultFs} [fs]
+ * @returns {string[]}
+ */
+export function collectTierBaseImages(tier, runnerRoot, fs = defaultFs) {
+  const refs = [];
+  const seen = new Set();
+  for (const wranglerJsoncPath of containerWranglerConfigsForTier(tier, runnerRoot)) {
+    for (const dockerfilePath of readContainerDockerfilePaths(wranglerJsoncPath, fs)) {
+      if (!fs.existsSync(dockerfilePath)) {
+        throw new Error(`containers[].image path not found: ${dockerfilePath} (declared in ${wranglerJsoncPath})`);
+      }
+      const text = fs.readFileSync(dockerfilePath, "utf8");
+      for (const ref of parseDockerfileBaseImages(text)) {
+        if (!seen.has(ref)) {
+          seen.add(ref);
+          refs.push(ref);
+        }
+      }
+    }
+  }
+  return refs;
+}
+
+/** True when `--skip-image-check` was not passed and this tier actually
+ *  needs container images checked (tier "1" never does). Factored out as
+ *  its own pure function so the CLI wiring is directly unit-testable
+ *  without spawning `dev.mjs` for every tier/flag combination. */
+export function shouldCheckContainerImages(tier, skipImageCheck) {
+  return (tier === "2" || tier === "full") && !skipImageCheck;
+}
+
+/** True if `docker image inspect <ref>` succeeds — the image already exists
+ *  locally. Read-only, no network; never itself triggers a pull.
+ * @param {string} ref
+ * @param {(cmd: string, args: string[]) => void} execFileSyncImpl throws on
+ *  a non-zero exit (a real `execFileSync` for real use; a stub for tests).
+ */
+export function isImagePresent(ref, execFileSyncImpl) {
+  try {
+    execFileSyncImpl("docker", ["image", "inspect", ref]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Pulls the last non-empty line of a failed `execFileSync`-shaped error's
+ *  OWN error output (ANSI stripped) — stderr first, falling back to stdout
+ *  only when stderr is empty, then to `err.message`. stderr-first matters
+ *  for a real `docker pull`: it writes its per-layer progress ("Pulling
+ *  from ...", "Downloading", ...) to STDOUT and the actual failure (e.g.
+ *  "... DeadlineExceeded") to STDERR — concatenating the two and taking the
+ *  last line (this section's earlier approach) would report a harmless
+ *  progress line instead of the real error whenever stdout had output after
+ *  stderr's own last write. This section's own copy of the same "last
+ *  line" idea `extractSqliteMessage` uses for a migration failure (that one
+ *  is stderr-only, wrangler's own shape), kept private here so this section
+ *  never depends on that one changing shape. */
+function lastErrorLine(err) {
+  const chunk = (v) => (v === undefined || v === null ? "" : v.toString("utf8"));
+  const lastNonEmptyLine = (text) =>
+    text
+      .replace(/\x1b\[[0-9;]*m/g, "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .pop();
+  const stderrLine = lastNonEmptyLine(chunk(err?.stderr));
+  if (stderrLine) return stderrLine;
+  const stdoutLine = lastNonEmptyLine(chunk(err?.stdout));
+  if (stdoutLine) return stdoutLine;
+  return err?.message || String(err);
+}
+
+/**
+ * Pulls `ref` with up to `maxAttempts` tries (default 3) and a short
+ * backoff between attempts, printing one plain progress line per attempt
+ * via `log` (the caller — `dev.mjs` — prefixes it `[images]`, matching this
+ * repo's own per-subsystem log convention). Never throws: returns
+ * `{ ok: true }` on the first successful pull, or
+ * `{ ok: false, lastErrorLine }` (the failing pull's last output line) once
+ * every attempt is exhausted.
+ * @param {object} opts
+ * @param {string} opts.ref
+ * @param {(cmd: string, args: string[]) => void} opts.execFileSyncImpl
+ * @param {number} [opts.maxAttempts]
+ * @param {number} [opts.backoffMs] base backoff; attempt N waits `backoffMs * N`
+ * @param {(line: string) => void} [opts.log]
+ * @param {(ms: number) => Promise<void>} [opts.sleep] injectable so tests
+ *  run instantly instead of waiting out a real backoff
+ * @returns {Promise<{ ok: true } | { ok: false, lastErrorLine: string }>}
+ */
+export async function pullImageWithRetry({
+  ref,
+  execFileSyncImpl,
+  maxAttempts = 3,
+  backoffMs = 500,
+  log = () => {},
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+}) {
+  let lastErr = "";
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    log(`pulling ${ref} (attempt ${attempt}/${maxAttempts})...`);
+    try {
+      execFileSyncImpl("docker", ["pull", ref]);
+      log(`pulled ${ref}`);
+      return { ok: true };
+    } catch (err) {
+      lastErr = lastErrorLine(err);
+      log(`pull failed for ${ref} (attempt ${attempt}/${maxAttempts}): ${lastErr}`);
+      if (attempt < maxAttempts) await sleep(backoffMs * attempt);
+    }
+  }
+  return { ok: false, lastErrorLine: lastErr };
+}
+
+/**
+ * The whole pre-pull gate: for each ref in `refs` (in order), checks
+ * `isImagePresent` and, if missing, pulls it (`pullImageWithRetry`).
+ * Stops at the FIRST ref that cannot be pulled after every retry — no later
+ * ref is even checked — and returns which one failed, so the caller can
+ * print one clear message and exit before starting any worker. Never
+ * throws.
+ * @param {object} opts
+ * @param {string[]} opts.refs
+ * @param {(cmd: string, args: string[]) => void} opts.execFileSyncImpl
+ * @param {(line: string) => void} [opts.log]
+ * @param {number} [opts.maxAttempts]
+ * @param {number} [opts.backoffMs]
+ * @param {(ms: number) => Promise<void>} [opts.sleep]
+ * @returns {Promise<{ ok: true } | { ok: false, ref: string, lastErrorLine: string }>}
+ */
+export async function ensureContainerImagesPresent({ refs, execFileSyncImpl, log = () => {}, maxAttempts = 3, backoffMs = 500, sleep }) {
+  for (const ref of refs) {
+    if (isImagePresent(ref, execFileSyncImpl)) {
+      log(`${ref} already present`);
+      continue;
+    }
+    log(`${ref} missing locally`);
+    const result = await pullImageWithRetry({ ref, execFileSyncImpl, maxAttempts, backoffMs, log, sleep });
+    if (!result.ok) {
+      return { ok: false, ref, lastErrorLine: result.lastErrorLine };
+    }
+  }
+  return { ok: true };
+}
+
+/** The one clean, actionable message `dev.mjs` prints (never a raw
+ *  `execFileSync` stack trace) when {@link ensureContainerImagesPresent}
+ *  stops on a ref it could not pull: which image, the Docker error's last
+ *  line, and the exact `docker pull ...` command to retry by hand — plus
+ *  the `--skip-image-check` escape hatch, for offline use when the images
+ *  are already built. */
+export function formatImagePullFailure({ ref, lastErrorLine: line }) {
+  return (
+    `error: could not pull required container base image ${ref}: ${line}\n` +
+    `  Retry by hand: docker pull ${ref}\n` +
+    `  Or skip this check entirely (e.g. offline, images already built): pass --skip-image-check.`
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Runtime staleness (packages/runtime dist vs src)
