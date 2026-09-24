@@ -89,12 +89,22 @@ wrangler's inspector default (9229):
 | `O11Y_CLICKHOUSE_NATIVE_PORT` | 9009 | compose's ClickHouse native protocol — tier full |
 | `O11Y_SLACK_CAPTURE_PORT` | 4210 | the local Slack capture server — tier full |
 
-Plus `COMPOSE_PROJECT_NAME` (default `o11y-dev`, tier full's `docker compose`
-project) and `WRANGLER_REGISTRY_PATH` (forwarded as-is to every spawned
+Plus `COMPOSE_PROJECT_NAME` (tier full's `docker compose` project; default is
+derived PER WORKTREE — `o11y-dev-<hash of this worktree's absolute path>`,
+via `scripts/dev-lib.mjs`'s `defaultComposeProjectName()` — so two worktrees
+running `pnpm dev:full` never resolve to the same compose project, containers
+or named volumes; set `COMPOSE_PROJECT_NAME` explicitly to still share one
+on purpose) and `WRANGLER_REGISTRY_PATH` (forwarded as-is to every spawned
 `wrangler dev`, for isolating one worktree's service-binding registry from
 another's — several worktrees on this machine routinely run `wrangler dev`
 at once, and without this, one worktree's API/o11y service binding can
 resolve to another worktree's Worker instead of its own).
+
+If you already ran `pnpm dev:full` before this per-worktree default existed,
+your MinIO/ClickHouse named volumes were under the old shared `o11y-dev`
+project; they rename once to this worktree's new derived default on your
+next run (harmless, but `--fresh`/`docker volume ls` will no longer see the
+old ones under the new project name).
 
 **`.dev.vars` bootstrap.** `workers/api/.dev.vars.example` and
 `workers/o11y/.dev.vars.example` are committed, non-secret templates.

@@ -54,6 +54,7 @@ import {
   detectO11yStateDivergence,
   formatO11yDivergenceWarning,
   bringUpO11yCompose,
+  resolveComposeProjectName,
 } from "./dev-lib.mjs";
 
 const COLORS = {
@@ -348,7 +349,10 @@ async function main() {
     for (const warning of checkO11yDevVarsStaleness(devVarsPath)) log("o11y", `warning: ${warning}`);
 
     const composeFile = path.join(RUNNER_ROOT, "containers", "o11y", "compose.yml");
-    const composeProjectName = process.env.COMPOSE_PROJECT_NAME || "o11y-dev";
+    // Z-D-H2 fix: per-worktree default (an explicit COMPOSE_PROJECT_NAME
+    // still wins) — see resolveComposeProjectName's own doc comment in
+    // dev-lib.mjs for why a single fixed default collided across worktrees.
+    const composeProjectName = resolveComposeProjectName(process.env);
     const composeEnv = {
       ...process.env,
       COMPOSE_PROJECT_NAME: composeProjectName,

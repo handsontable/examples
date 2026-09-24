@@ -18,7 +18,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync } from "node:fs";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 
 export const RUNNER_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
@@ -88,7 +88,9 @@ docs/run-and-deploy.md's "Run locally" section):
 
 Other env vars read:
   COMPOSE_PROJECT_NAME   docker compose project name for --tier=full's
-                          minio/clickhouse stack (default "o11y-dev").
+                          minio/clickhouse stack (default derived per
+                          worktree — see defaultComposeProjectName below —
+                          so two worktrees never collide on one project).
   WRANGLER_REGISTRY_PATH forwarded as-is to every spawned wrangler dev (see
                           docs/run-and-deploy.md) — set it to isolate this
                           run's service-binding registry from another
@@ -1458,6 +1460,55 @@ export function planNames(tier, ports) {
 // `resetO11yLocalState` and `detectO11yStateDivergence` below.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Per-worktree compose project name (Z-D-H2 fix): a fixed default
+// `COMPOSE_PROJECT_NAME` ("o11y-dev") meant every worktree's `--tier=full`
+// resolved to the SAME docker compose project — same containers, same named
+// volumes (`<project>_minio-data`/`<project>_clickhouse-data`). A `pnpm
+// dev:full --fresh` (or even a plain Ctrl-C) in one worktree then silently
+// adopted, stopped, or deleted another worktree's stack. `dev.mjs`,
+// `stop-roundtrip.mjs`'s own collision guard, and the docs all derive their
+// default from the ONE helper below, so they can never drift apart again.
+// ---------------------------------------------------------------------------
+
+/**
+ * This worktree's own default `COMPOSE_PROJECT_NAME` for `--tier=full`'s
+ * minio/clickhouse stack — a pure, stable function of `runnerRoot`'s
+ * absolute path (NOT the git remote/branch, so two worktrees checked out
+ * from the same repo still get distinct names; NOT anything randomly
+ * generated, so the SAME worktree gets the SAME name across restarts —
+ * otherwise a plain restart without `--fresh` would look like a divergent
+ * project and orphan the previous run's named volumes).
+ *
+ * `sha256` truncated to 8 hex chars: short enough to stay a comfortable
+ * compose project name, collision-improbable for "however many worktrees
+ * exist on one machine", and — unlike a path-derived slug — never leaks the
+ * worktree's directory name/username into a project name a developer might
+ * paste elsewhere (`docker ps`, a screenshot, a report).
+ *
+ * @param {string} [runnerRoot]
+ * @returns {string}
+ */
+export function defaultComposeProjectName(runnerRoot = RUNNER_ROOT) {
+  const hash = createHash("sha256").update(runnerRoot).digest("hex").slice(0, 8);
+  return `o11y-dev-${hash}`;
+}
+
+/**
+ * Resolves the `COMPOSE_PROJECT_NAME` a `--tier=full` run actually uses: an
+ * explicit env override always wins (unchanged behaviour — a developer who
+ * deliberately shares one project across worktrees, or picks their own name,
+ * is never overridden), and {@link defaultComposeProjectName} is the
+ * fallback instead of the old fixed `"o11y-dev"` literal.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [runnerRoot]
+ * @returns {string}
+ */
+export function resolveComposeProjectName(env = process.env, runnerRoot = RUNNER_ROOT) {
+  return env.COMPOSE_PROJECT_NAME || defaultComposeProjectName(runnerRoot);
+}
+
 /** The exact `docker compose ... down` argv, with `-v` appended only when
  *  `fresh` — factored out so `dev.mjs`'s normal (kept-data) Ctrl-C teardown
  *  and `resetO11yLocalState`'s `--fresh` wipe are provably running the same
@@ -1490,10 +1541,16 @@ export function o11yDevDataModeLine(fresh) {
  * `docker compose` itself (see that file's own doc comment — it starts only
  * the o11y worker, not compose's minio/clickhouse), so its own `--fresh`
  * omits both and this wipes ONLY the o11y worker state. Passing them scopes
- * the `down -v` to exactly `composeEnv.COMPOSE_PROJECT_NAME` — the same
- * project-isolation every other compose call in this module already relies
- * on (compose itself enforces it; this never touches another project's, or
- * another worktree's, volumes) — and never any other compose project.
+ * the `down -v` to exactly `composeEnv.COMPOSE_PROJECT_NAME` — compose
+ * itself enforces that a project's `down -v` only ever touches THAT
+ * project's own containers/volumes, never another project's. That is only
+ * "another worktree's volumes" in practice because `composeEnv` is expected
+ * to carry a project name from {@link resolveComposeProjectName} (a
+ * per-worktree default — see the Z-D-H2 section above): a caller that
+ * passes a SHARED project name across worktrees (an explicit
+ * `COMPOSE_PROJECT_NAME` override, or the old fixed `"o11y-dev"` literal
+ * this module used before the fix) makes this wipe another worktree's data
+ * on purpose, same as it would within a single worktree.
  *
  * `o11yDir` is a worktree-local path (derived from `RUNNER_ROOT`, which is
  * resolved from THIS script's own file location — see the top of this

@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { scrubSecrets } from "../containers/o11y/local/redact.mjs";
+import { defaultComposeProjectName } from "../scripts/dev-lib.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const O11Y_DIR = join(__dirname, "..", "containers", "o11y");
@@ -755,44 +756,49 @@ test("A-I1: scrubSecrets leaves text alone when a secret is empty/undefined (nev
 // resolves to. compose.yml's own header comment documents "o11y-t01" as
 // the T01 developer convention for a manual/persistent run of this exact
 // compose file, and dev.mjs/dev-lib.mjs default the real dev stack to
-// "o11y-dev" — this script's own default must collide with neither, or a
-// developer who happens to run their persistent stack under one of those
-// names loses its data the next time they run this script with no
-// override.
+// `defaultComposeProjectName()` (Z-D-H2 fix: a per-worktree
+// `o11y-dev-<hash>`, no longer the fixed literal "o11y-dev") — this
+// script's own OWN OPERATING default (`REQUESTED_PROJECT`'s fallback,
+// "o11y-stop-roundtrip") must collide with neither, or a developer who
+// happens to run their persistent stack under one of those names loses its
+// data the next time they run this script with no override.
 test("A-M1: stop-roundtrip.mjs's default COMPOSE_PROJECT_NAME never collides with the dev-stack default or the compose.yml-documented manual convention", () => {
   const code = readFileSync(join(O11Y_DIR, "local", "stop-roundtrip.mjs"), "utf8");
-  const devLibCode = readFileSync(join(RUNNER_ROOT, "scripts", "dev.mjs"), "utf8");
 
-  const defaultMatch = code.match(/COMPOSE_PROJECT_NAME\s*\|\|\s*"([^"]+)"/);
-  assert.ok(defaultMatch, "stop-roundtrip.mjs must fall back to a literal default project name");
+  const defaultMatch = code.match(/const REQUESTED_PROJECT = process\.env\.COMPOSE_PROJECT_NAME \|\| "([^"]+)"/);
+  assert.ok(defaultMatch, "stop-roundtrip.mjs must fall back to a literal default project name for its own operating project");
   const defaultProject = defaultMatch[1];
 
   assert.notEqual(defaultProject, "o11y-t01", "must not reuse compose.yml's documented manual/T01 project-name convention");
-
-  const devDefaultMatch = devLibCode.match(/COMPOSE_PROJECT_NAME\s*\|\|\s*"([^"]+)"/);
-  assert.ok(devDefaultMatch, "dev.mjs must have its own literal default project name to compare against");
-  assert.notEqual(defaultProject, devDefaultMatch[1], "must not reuse dev.mjs's own dev-stack default project name");
+  // Compare against the REAL function (not a grepped literal — dev.mjs's own
+  // default is no longer a literal after the Z-D-H2 fix) so this stays a
+  // live check of the actual collision risk, not a stale string match.
+  assert.notEqual(defaultProject, defaultComposeProjectName(), "must not reuse dev.mjs's own (per-worktree) dev-stack default project name");
 });
 
 // A-M1 (fix round 2): a differing DEFAULT alone does not protect a
-// developer who has `COMPOSE_PROJECT_NAME=o11y-dev` exported in their shell
-// (e.g. left over from working on the dev stack directly) — the env var
-// still wins over this script's own default, and `down -v` would still
-// wipe the real dev stack's named volumes. Behavioural CLI test (real
-// `node` spawn, no docker needed — refusal must happen before any docker
-// call): fails without the fix (reverting the refusal block) because the
-// script would instead try to run `docker compose ... down -v`, which
-// either succeeds (data loss) or fails with a docker-shaped error, never
-// this specific refusal message.
+// developer who has `COMPOSE_PROJECT_NAME=<the dev-stack default>` exported
+// in their shell (e.g. left over from working on the dev stack directly) —
+// the env var still wins over this script's own default, and `down -v`
+// would still wipe the real dev stack's named volumes. Behavioural CLI test
+// (real `node` spawn, no docker needed — refusal must happen before any
+// docker call): fails without the fix (reverting the refusal block)
+// because the script would instead try to run `docker compose ... down
+// -v`, which either succeeds (data loss) or fails with a docker-shaped
+// error, never this specific refusal message. Z-D-H2: the dev-stack default
+// is now this worktree's own derived `defaultComposeProjectName()`, not the
+// old fixed "o11y-dev" literal — the env var this test sets must be THAT
+// value for the guard to have anything to refuse.
 test("A-M1: stop-roundtrip.mjs refuses to run when COMPOSE_PROJECT_NAME is explicitly set to dev.mjs's own dev-stack default", () => {
   const script = join(O11Y_DIR, "local", "stop-roundtrip.mjs");
+  const devStackDefault = defaultComposeProjectName();
   const result = spawnSync(process.execPath, [script], {
     encoding: "utf8",
     timeout: 10000,
-    env: { ...process.env, COMPOSE_PROJECT_NAME: "o11y-dev", PATH: "/nonexistent" },
+    env: { ...process.env, COMPOSE_PROJECT_NAME: devStackDefault, PATH: "/nonexistent" },
   });
   assert.notEqual(result.status, 0);
   const output = `${result.stdout}${result.stderr}`;
   assert.match(output, /refusing to run under this project name/i);
-  assert.match(output, /o11y-dev/);
+  assert.ok(output.includes(devStackDefault));
 });
