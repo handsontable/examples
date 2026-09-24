@@ -19,15 +19,18 @@ import {
   HELP_TEXT,
   parseArgs,
   resolvePorts,
+  assertNoPortCollisions,
   bootstrapDevVars,
   o11yDevVarsPatch,
   O11Y_DEVVARS_STRIP_KEYS,
-  checkDevVarsPortDrift,
+  resolveDevVarsPortAdoption,
   checkO11yDevVarsStaleness,
   readDevVarsLine,
   ephemeralSecret,
   migrationRecordPath,
   applyMigrations,
+  formatMigrationError,
+  resetLocalD1,
   DOCKER_NOT_RUNNING_MESSAGE,
   isDockerAvailable,
   isRuntimeDistStale,
@@ -94,8 +97,20 @@ function runWrangler(cwd, args) {
   });
 }
 
+/** Same binary, but stdio is captured (not inherited) and returned as a
+ *  string — used only for the migration schema probe's read-only
+ *  `d1 execute ... --json` queries, whose JSON output on stdout must be
+ *  parsed rather than printed. A real apply (`runWrangler`, above) keeps
+ *  inheriting stdio so its output stays visible live. */
+function runWranglerCapture(cwd, args) {
+  return execFileSync(path.join(cwd, "node_modules", ".bin", "wrangler"), args, {
+    cwd,
+    encoding: "utf8",
+  });
+}
+
 async function main() {
-  const { help, tier, replay, errors } = parseArgs(process.argv.slice(2));
+  const { help, tier, replay, resetLocalDb, errors } = parseArgs(process.argv.slice(2));
   if (help) {
     console.log(HELP_TEXT);
     process.exit(0);
@@ -113,6 +128,10 @@ async function main() {
   } catch (err) {
     console.error(`error: ${err.message}`);
     process.exit(1);
+  }
+
+  if (resetLocalDb) {
+    resetLocalD1(path.join(RUNNER_ROOT, "workers", "api"), undefined, (line) => log("dev", line));
   }
 
   let containersBefore = new Set();
@@ -147,18 +166,59 @@ async function main() {
     const examplePath = path.join(apiDir, ".dev.vars.example");
     const { created } = bootstrapDevVars({ examplePath, devVarsPath });
     if (created) log("api", `created ${path.relative(RUNNER_ROOT, devVarsPath)} from .dev.vars.example`);
-    const drift = checkDevVarsPortDrift(devVarsPath, "PREVIEW_HOST", ports.API_DEV_PORT);
-    if (drift) log("api", `warning: ${drift}`);
+
+    // PREVIEW_HOST port adoption: `.dev.vars` always wins over `--var` for a
+    // key it declares, so when API_DEV_PORT was NOT explicitly set for this
+    // run, a pre-existing `.dev.vars` pinning a different port is the port
+    // that will actually be reached — adopt it (for the worker's own
+    // `--port` and the vite proxy target) instead of starting pointed at a
+    // port `.dev.vars` will silently override anyway. An EXPLICIT
+    // API_DEV_PORT that conflicts still only warns (see
+    // resolveDevVarsPortAdoption's doc comment).
+    const apiPortExplicit = process.env.API_DEV_PORT !== undefined && process.env.API_DEV_PORT !== "";
+    const apiPortAdoption = resolveDevVarsPortAdoption({
+      devVarsPath,
+      key: "PREVIEW_HOST",
+      currentPort: ports.API_DEV_PORT,
+      explicit: apiPortExplicit,
+    });
+    if (apiPortAdoption.message) log("api", `${apiPortAdoption.adopted ? "info" : "warning"}: ${apiPortAdoption.message}`);
+    if (apiPortAdoption.adopted) {
+      ports.API_DEV_PORT = apiPortAdoption.port;
+      try {
+        assertNoPortCollisions(ports);
+      } catch (err) {
+        console.error(`error: ${err.message}`);
+        process.exit(1);
+      }
+    }
 
     const recordPath = migrationRecordPath(apiDir);
-    const { applied } = await applyMigrations({
-      migrationsDir: path.join(apiDir, "migrations"),
-      recordPath,
-      dbName: "handsontable-demos",
-      run: (args) => runWrangler(apiDir, args),
-      log: (line) => log("api", line),
-    });
-    if (applied.length > 0) log("api", `applied ${applied.length} migration(s): ${applied.join(", ")}`);
+    let migrations;
+    try {
+      migrations = await applyMigrations({
+        migrationsDir: path.join(apiDir, "migrations"),
+        recordPath,
+        dbName: "handsontable-demos",
+        run: (args) => runWrangler(apiDir, args),
+        query: (args) => runWranglerCapture(apiDir, args),
+        log: (line) => log("api", line),
+      });
+    } catch (err) {
+      // Clean, single-line failure — never a raw execFileSync stack trace.
+      // Nothing has been spawned yet at this point in main() (this runs
+      // before the long-running processes below, and before docker compose
+      // for --tier=full), so exiting here leaves nothing running to clean up.
+      console.error(formatMigrationError(err));
+      process.exit(1);
+    }
+    if (migrations.applied.length > 0) log("api", `applied ${migrations.applied.length} migration(s): ${migrations.applied.join(", ")}`);
+    if (migrations.adopted.length > 0) {
+      log(
+        "api",
+        `adopted ${migrations.adopted.length} pre-existing migration(s) without running them (local D1 already matched): ${migrations.adopted.join(", ")}`,
+      );
+    }
   }
 
   // ---- workers/o11y + compose setup (full only) ---------------------------
@@ -204,8 +264,28 @@ async function main() {
       console.error(`error: ${devVarsPath} must set O11Y_ENV=local — refusing to start against a non-local config`);
       process.exit(1);
     }
-    const slackDrift = checkDevVarsPortDrift(devVarsPath, "SLACK_WEBHOOK_URL", ports.O11Y_SLACK_CAPTURE_PORT);
-    if (slackDrift) log("o11y", `warning: ${slackDrift}`);
+    // Same PREVIEW_HOST-style port adoption, for the one other port
+    // `.dev.vars` pins here: workers/o11y/.dev.vars's SLACK_WEBHOOK_URL. It's
+    // only ever out of sync on a PRE-EXISTING file (a fresh bootstrap above
+    // already bakes in the current O11Y_SLACK_CAPTURE_PORT), e.g. a
+    // developer changed the port env var after their file was bootstrapped.
+    const slackPortExplicit = process.env.O11Y_SLACK_CAPTURE_PORT !== undefined && process.env.O11Y_SLACK_CAPTURE_PORT !== "";
+    const slackAdoption = resolveDevVarsPortAdoption({
+      devVarsPath,
+      key: "SLACK_WEBHOOK_URL",
+      currentPort: ports.O11Y_SLACK_CAPTURE_PORT,
+      explicit: slackPortExplicit,
+    });
+    if (slackAdoption.message) log("o11y", `${slackAdoption.adopted ? "info" : "warning"}: ${slackAdoption.message}`);
+    if (slackAdoption.adopted) {
+      ports.O11Y_SLACK_CAPTURE_PORT = slackAdoption.port;
+      try {
+        assertNoPortCollisions(ports);
+      } catch (err) {
+        console.error(`error: ${err.message}`);
+        process.exit(1);
+      }
+    }
     // NB8 (re-review 2): only fires for an EXISTING .dev.vars (a fresh one
     // just got DEV_ADMIN patched in and O11Y_SESSION_SECRET stripped, above)
     // — a stale pre-K1 file otherwise fails closed silently.

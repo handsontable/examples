@@ -103,8 +103,14 @@ against wrangler 4.108's `getVarsForDev`) — so for a key `.dev.vars.example`
 already declares, `dev.mjs` bakes the working value into the bootstrapped
 file instead of passing `--var` (which would be silently ignored). If a
 `.dev.vars` value's port (`PREVIEW_HOST`, `SLACK_WEBHOOK_URL`) disagrees with
-what this run actually resolved, `dev.mjs` prints a warning naming the file
-to edit — it does not silently override your file. For a genuinely
+what this run actually resolved, and the corresponding port env var
+(`API_DEV_PORT`, `O11Y_SLACK_CAPTURE_PORT`) was **not** explicitly set for
+this run, `dev.mjs` **adopts** the `.dev.vars` port instead — `.dev.vars`
+was always going to win for that key, so this makes the worker's own
+`--port`, the vite proxy target, and the printed URLs agree with reality
+instead of silently pointing at the wrong port. Only when the port env var
+**was** explicitly set and disagrees does it warn instead, naming the file
+to edit — an explicit choice is never silently overridden. For a genuinely
 per-run secret (`O11Y_SESSION_SECRET`, the Grafana session-cookie signing
 key — see the o11y auth runbook step for the deployed equivalent), the
 bootstrap strips that line from a *freshly created* `.dev.vars` instead, so
@@ -144,6 +150,27 @@ other) and only applies files not yet in that record, so a second run of
 has applied migrations through the framework since before `0003` landed, so
 its bookkeeping is populated and `master.yml`'s `deploy-api` job applies new
 files automatically.)
+
+**Adopting a local D1 with no record.** A local D1 migrated before this
+record existed (or by hand, matching the exact bug this fixed) has none of
+this bookkeeping, so every file looks "pending" — re-running an already
+non-idempotent `ALTER TABLE ... ADD COLUMN` (0003, 0007) would otherwise die
+with a raw `duplicate column name` failure. Before running each pending
+file, `dev.mjs` takes a schema snapshot of the local D1 (table/index names
+from `sqlite_master`, columns from `PRAGMA table_info`) and, if every target
+the file declares (its `CREATE TABLE`/`CREATE INDEX`/`ALTER TABLE ... ADD
+COLUMN` statements) already exists, **adopts** it — records it as applied
+without running it, with a clear log line — instead of re-running it. A file
+whose effect can't be probed generically this way (any other statement
+shape) is never adopted; it always runs, relying on its own idempotency
+(`IF NOT EXISTS`/`IF EXISTS`). Any migration failure — a real SQL error, or a
+probe-query failure — prints ONE clean line (the file, the SQLite message,
+and how to recover: the record path, or `node scripts/dev.mjs --tier=<N>
+--reset-local-db` to wipe local D1 state and the record and start fresh) and
+exits non-zero with nothing left running, never a raw stack trace.
+`--reset-local-db` deletes `workers/api/.wrangler/state/v3/d1` and the
+applied-migrations record; passing the flag is itself the confirmation (no
+interactive prompt), and it prints exactly what it deleted.
 
 **Fixture replay (`dev:full`).** Once the o11y worker reports ready,
 `dev.mjs` prints the replay command
