@@ -2,16 +2,17 @@
 
 **Status:** Proposed — design approved 2026-09-23 (revision 3), implemented (T00–T12,
 T03B), local end-to-end walkthrough and every task's sandbox probe complete (§L
-"Results," T11). 14 of 15 exit criteria pass outright with real evidence; criterion 8
-(Volume) is **Mixed**, not a pass — Analytics Engine points and the raw Workers Logs
-pool both pass at 10× with real margin, but the exported-logs allotment does not (§D
-above has the numbers and the fallback). The design's own §L trigger (criterion 1, 2
-or 7 failing) is not engaged. **Stays Proposed, not Accepted,
-pending exactly two items**: exit criterion 5's CPU/memory measurement inside a real
-Workers isolate (every measurement so far is a Node-process proxy — no task had isolate
-profiling access), and exit criterion 13's real-object retention expiry (a 1-day R2
-lifecycle test is running against real objects; calendar time has not yet passed as of
-T11's own pass — see `docs/run-and-deploy.md`'s Launch plan for how to close both).
+"Results," T11). 12 of 15 exit criteria pass outright with real evidence; criteria 5 and
+13 pass pending the two confirmations named below; criterion 8 (Volume) is **Mixed**, not
+a pass — Analytics Engine points and the raw Workers Logs pool both pass at 10× with real
+margin, but the exported-logs allotment does not (§D above has the numbers and the
+fallback). The design's own §L trigger (criterion 1, 2 or 7 failing) is not engaged.
+**Stays Proposed, not Accepted, pending exactly two items**: exit criterion 5's
+CPU/memory measurement inside a real Workers isolate (every measurement so far is a
+Node-process proxy — no task had isolate profiling access), and exit criterion 13's
+real-object retention expiry (a 1-day R2 lifecycle test is running against real objects;
+calendar time has not yet passed as of T11's own pass — see `docs/run-and-deploy.md`'s
+Launch plan for how to close both).
 Supersedes ADR-0040 decisions A, B, C.2 and C.3; amends ADR-0022 (o11y spend cap,
 per-script billing rows), ADR-0038 (WAF exception extended to `/telemetry/*`); adds
 routes under ADR-0020. **No longer deviates from ADR-0007** (K1: `/grafana/*` gates
