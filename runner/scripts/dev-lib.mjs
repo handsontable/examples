@@ -89,8 +89,9 @@ docs/run-and-deploy.md's "Run locally" section):
 Other env vars read:
   COMPOSE_PROJECT_NAME   docker compose project name for --tier=full's
                           minio/clickhouse stack (default derived per
-                          worktree — see defaultComposeProjectName below —
-                          so two worktrees never collide on one project).
+                          worktree — o11y-dev-<hash of this worktree's
+                          path> — so two worktrees never collide on one
+                          project).
   WRANGLER_REGISTRY_PATH forwarded as-is to every spawned wrangler dev (see
                           docs/run-and-deploy.md) — set it to isolate this
                           run's service-binding registry from another

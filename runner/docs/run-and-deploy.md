@@ -102,9 +102,17 @@ resolve to another worktree's Worker instead of its own).
 
 If you already ran `pnpm dev:full` before this per-worktree default existed,
 your MinIO/ClickHouse named volumes were under the old shared `o11y-dev`
-project; they rename once to this worktree's new derived default on your
-next run (harmless, but `--fresh`/`docker volume ls` will no longer see the
-old ones under the new project name).
+project; docker does not rename them — your next run starts this worktree's
+new derived project on fresh, empty volumes instead, and the old
+`o11y-dev_minio-data`/`o11y-dev_clickhouse-data` are left orphaned. If
+`workers/o11y/.wrangler/state`'s ledger has committed keys from before (the
+usual case), that first run also prints the "committed key(s) ... but this
+project's MinIO volume doesn't exist" divergence warning — `--fresh`'s own
+advice there is the right fix (wipes the o11y worker state so the ledger
+agrees with the new, empty volumes again). To reclaim the old volumes'
+disk space instead of leaving them orphaned, remove them explicitly by the
+old project name: `docker compose -p o11y-dev -f containers/o11y/compose.yml
+down -v`.
 
 **`.dev.vars` bootstrap.** `workers/api/.dev.vars.example` and
 `workers/o11y/.dev.vars.example` are committed, non-secret templates.
