@@ -1,79 +1,133 @@
 #!/usr/bin/env node
-// `pnpm o11y:dev` (ADR-0041 §I): starts the o11y worker under `wrangler dev`
-// (Miniflare's local R2/DO/cron, plus wrangler's own local Container
-// orchestration for `GrafanaBox` — confirmed real and working against this
-// task's own Dockerfile, see the task Outcome for the measured timing and
-// its variability in a sandboxed dev environment) and the fixture replay.
+// `pnpm o11y:dev` (ADR-0041 §I) — the standalone o11y-only entry point,
+// kept separate from `pnpm dev:full` for someone who only wants the o11y
+// worker running (e.g. working a pure o11y bug, without the API worker,
+// Docker compose, or the Slack capture server). Shares its bootstrap and
+// port-resolution logic with `dev.mjs`/`dev-lib.mjs` (this task's dev-stack
+// work) instead of duplicating it.
 //
-// T03-D (see the task Outcome for the full reasoning): this does NOT also
-// start `containers/o11y/compose.yml` — `wrangler dev` manages its OWN
-// container instance via the SAME Dockerfile, and running both would fight
-// over the same image/ports for no benefit. `compose.yml` remains the
-// right tool for a standalone Loki+Grafana+MinIO+ClickHouse stack (T01's
-// own local round-trip script, and this task's own out-of-order-window
-// measurement, both used it directly, bypassing wrangler entirely).
+// This does NOT also start `containers/o11y/compose.yml` — `wrangler dev`
+// manages its OWN container instance via the SAME Dockerfile, and running
+// both would fight over the same image/ports for no benefit. `compose.yml`
+// remains the right tool for a standalone Loki+Grafana+MinIO+ClickHouse
+// stack; use `pnpm dev:full` to get both the o11y worker AND compose's
+// minio/clickhouse wired together correctly (RUNNER_EVENTS_CLICKHOUSE_URL,
+// the local Slack capture server, etc.).
 //
 // Usage: `pnpm o11y:dev` from `runner/`, or `node scripts/o11y-dev.mjs`.
-// Env overrides (COMMON.md's port-block rule): O11Y_DEV_PORT (default
-// 4200, T01's own block — change it if T01's own `wrangler dev` is also
-// running), O11Y_DEV_INSPECTOR_PORT (default 4201).
+// Env overrides: O11Y_DEV_PORT (default 4200), O11Y_DEV_INSPECTOR_PORT
+// (default 4201) — same names/defaults `dev.mjs --tier=full` reads.
 
 import { spawn } from "node:child_process";
-import { existsSync, copyFileSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
+import {
+  RUNNER_ROOT,
+  resolvePorts,
+  bootstrapDevVars,
+  o11yDevVarsPatch,
+  O11Y_DEVVARS_STRIP_KEYS,
+  readDevVarsLine,
+  ephemeralSecret,
+  o11yLocalPublicOrigin,
+  PORT_DEFAULTS,
+} from "./dev-lib.mjs";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const workerDir = path.join(here, "..", "workers", "o11y");
-const devVarsPath = path.join(workerDir, ".dev.vars");
-const devVarsExamplePath = path.join(workerDir, ".dev.vars.example");
+const o11yDir = path.join(RUNNER_ROOT, "workers", "o11y");
 
-if (!existsSync(devVarsPath)) {
-  if (!existsSync(devVarsExamplePath)) {
-    console.error(`[o11y:dev] missing ${devVarsExamplePath} — cannot bootstrap .dev.vars`);
-    process.exit(1);
-  }
-  copyFileSync(devVarsExamplePath, devVarsPath);
+let ports;
+try {
+  ports = resolvePorts("o11y-only", process.env);
+} catch (err) {
+  console.error(`[o11y:dev] ${err.message}`);
+  process.exit(1);
+}
+
+// o11yDevVarsPatch also wants O11Y_SLACK_CAPTURE_PORT, for the
+// SLACK_WEBHOOK_URL default it bakes in on a fresh bootstrap. This
+// standalone command doesn't start that server, so fall back to the
+// documented default rather than requiring an unrelated port override.
+const patchPorts = {
+  ...ports,
+  O11Y_SLACK_CAPTURE_PORT: Number(process.env.O11Y_SLACK_CAPTURE_PORT) || PORT_DEFAULTS.O11Y_SLACK_CAPTURE_PORT,
+};
+
+const devVarsPath = path.join(o11yDir, ".dev.vars");
+const examplePath = path.join(o11yDir, ".dev.vars.example");
+
+let bootstrap;
+try {
+  bootstrap = bootstrapDevVars({
+    examplePath,
+    devVarsPath,
+    patch: o11yDevVarsPatch(patchPorts),
+    stripKeys: O11Y_DEVVARS_STRIP_KEYS,
+  });
+} catch (err) {
+  console.error(`[o11y:dev] ${err.message}`);
+  process.exit(1);
+}
+if (bootstrap.created) {
   console.log(`[o11y:dev] created ${devVarsPath} from .dev.vars.example — edit it if you need real secret values`);
+  if (bootstrap.patched.length) console.log(`[o11y:dev] filled in local-dev defaults for: ${bootstrap.patched.join(", ")}`);
 }
 
 // O11Y_ENV=local and DEV_ADMIN must both be set for the local session bypass
-// (K1: env.ts, gates/session.ts) and the local jurisdiction-skip paths
-// (inbox/accessor.ts, box.ts) to engage. Fail loudly rather than silently
-// running against an unusable config.
-const devVarsText = readFileSync(devVarsPath, "utf8");
-if (!/^O11Y_ENV=local\s*$/m.test(devVarsText)) {
+// (K1: env.ts, gates/session.ts#verifySession — replaces the old Access
+// gate) and the local jurisdiction-skip paths (inbox/accessor.ts, box.ts) to
+// engage. Fail loudly rather than silently running against an unusable
+// config.
+const envLine = readDevVarsLine(devVarsPath, "O11Y_ENV");
+if (envLine !== "local") {
   console.error(`[o11y:dev] ${devVarsPath} must set O11Y_ENV=local — refusing to start against a non-local config`);
   process.exit(1);
 }
 
-const port = process.env.O11Y_DEV_PORT ?? "4200";
-const inspectorPort = process.env.O11Y_DEV_INSPECTOR_PORT ?? "4201";
-
-console.log(`[o11y:dev] starting wrangler dev on port ${port} (inspector ${inspectorPort})`);
+console.log(`[o11y:dev] starting wrangler dev on port ${ports.O11Y_DEV_PORT} (inspector ${ports.O11Y_DEV_INSPECTOR_PORT})`);
 console.log(
-  `[o11y:dev] once ready, replay the fixtures in another shell: node scripts/o11y-replay-fixtures.mjs --base http://localhost:${port}`,
+  `[o11y:dev] once ready, replay the fixtures in another shell: node scripts/o11y-replay-fixtures.mjs --base http://localhost:${ports.O11Y_DEV_PORT}`,
 );
 console.log(
-  "[o11y:dev] T03-D (see the task Outcome): this script starts the box + worker + fixture replay instructions only. A local Slack-webhook capture server (the task's own Scope line: \"box, o11y worker, Slack capture server, fixture replay\") was not built — T04 owns the alert path that would actually post to it, and none of T03's own acceptance criteria exercise it; deferred to whichever task first needs to see a real local alert payload.",
+  "[o11y:dev] a local Slack-webhook capture server is NOT started by this command — use `pnpm dev:full` for that, or point SLACK_WEBHOOK_URL in .dev.vars at your own `node scripts/o11y-slack-capture.mjs --port <port>`.",
 );
 console.log(
-  "[o11y:dev] the box's local container image build + first `wake()` can take anywhere from a few seconds to well over a minute (measured on this task's sandbox probe and in local testing — see the task Outcome). This is a real, environment-dependent Container-platform characteristic, not a hang.",
+  "[o11y:dev] the box's local container image build + first `wake()` can take anywhere from a few seconds to well over a minute. This is a real, environment-dependent Container-platform characteristic, not a hang.",
 );
 console.log(
   '[o11y:dev] to trigger the */10 cron by hand (wrangler no longer wires --test-scheduled/__scheduled locally): curl "http://localhost:' +
-    port +
-    '/cdn-cgi/local/scheduled" (confirmed on wrangler 4.136.3 — the task\'s own local testing found this is what the wrangler dev startup banner itself now recommends).',
+    ports.O11Y_DEV_PORT +
+    '/cdn-cgi/local/scheduled" (wrangler 4.136.3)',
 );
 
+// Spawn `node_modules/.bin/wrangler` directly, not via `npx` — `npx` is a
+// wrapper process, and killing it does not reliably kill the real
+// `wrangler`/`workerd` grandchild it spawns (the exact orphan-container risk
+// this task's research flagged; `detached: true` + signalling the whole
+// process group below is what actually reaches workerd's own children too).
+const sessionSecret = ephemeralSecret();
 const child = spawn(
-  "npx",
-  ["wrangler", "dev", "--port", port, "--inspector-port", inspectorPort],
-  { cwd: workerDir, stdio: "inherit", shell: process.platform === "win32" },
+  path.join("node_modules", ".bin", "wrangler"),
+  [
+    "dev",
+    "--port",
+    String(ports.O11Y_DEV_PORT),
+    "--inspector-port",
+    String(ports.O11Y_DEV_INSPECTOR_PORT),
+    "--var",
+    `O11Y_SESSION_SECRET:${sessionSecret}`,
+    "--var",
+    `O11Y_LOCAL_PUBLIC_ORIGIN:${o11yLocalPublicOrigin(ports)}`,
+  ],
+  { cwd: o11yDir, stdio: "inherit", detached: process.platform !== "win32" },
 );
 
 child.on("exit", (code) => process.exit(code ?? 0));
 
 for (const sig of ["SIGINT", "SIGTERM"]) {
-  process.on(sig, () => child.kill(sig));
+  process.on(sig, () => {
+    try {
+      process.kill(-child.pid, sig);
+    } catch {
+      child.kill(sig);
+    }
+  });
 }

@@ -29,73 +29,180 @@ bundles; the UI lazy-fetches artifacts from the selected version's bucket.
 
 ## Run locally
 
-```bash
-# Tier-1 authoring only (no containers needed):
-pnpm --filter @handsontable/demo-runtime build
-pnpm --filter @handsontable/demo-authoring dev        # http://localhost:5173
+Three commands (`runner/scripts/dev.mjs --tier=1|2|full`, called by
+`runner/package.json`'s `dev`/`dev:live`/`dev:full` scripts — one
+orchestrator, not three separate scripts) cover every level:
 
-# Full stack (Tier-2 containers + sharing): needs Docker.
-cd workers/api && printf 'DEV_AUTH_EMAIL="dev@handsontable.com"\nPREVIEW_HOST="localhost:8787"\n' > .dev.vars
-npx wrangler d1 execute handsontable-demos --local --file=migrations/0001_init.sql -y
-npx wrangler d1 execute handsontable-demos --local --file=migrations/0002_buildkey_nonunique.sql -y
-npx wrangler d1 execute handsontable-demos --local --file=migrations/0003_cost_ledger.sql -y
-npx wrangler d1 execute handsontable-demos --local --file=migrations/0004_settings_and_analytics.sql -y
-npx wrangler d1 execute handsontable-demos --local --file=migrations/0005_profiles.sql -y
-npx wrangler d1 execute handsontable-demos --local --file=migrations/0006_api_tokens.sql -y
-npx wrangler dev --port 8787                          # builds the container images
-# then run the authoring app pointing at it:
-cd ../../apps/authoring
-# VITE_API_BASE points at this dev server, NOT at :8787 — vite.config.ts proxies
-# /api, /d and /embed to the worker, and `?mode=full` needs one origin (AGENTS.md).
-printf 'VITE_DEV_USER=dev@handsontable.com\nVITE_API_BASE=http://localhost:5173\n' > .env.local
-npx vite --port 5173
+```bash
+pnpm dev        # Tier 1: rebuilds @handsontable/demo-runtime if its dist is
+                # stale vs src, then runs the authoring app — http://localhost:5173
+pnpm dev:live   # Tier 1 + Tier 2: + the API worker (wrangler dev, Docker
+                # containers, local D1 migrations) — http://localhost:8787
+pnpm dev:full   # + the o11y worker, docker compose (minio/clickhouse — the
+                # box itself runs through wrangler dev's own container
+                # orchestration, same as `pnpm o11y:dev`), telemetry wiring,
+                # and a local Slack capture server
 ```
 
-**Observability worker, local (contract §10).** `pnpm o11y:dev` (from `runner/`)
-starts the o11y worker under `wrangler dev` — Miniflare's local R2/DO/cron,
-plus wrangler's own local Container orchestration for `GrafanaBox`, against
-the SAME Dockerfile the real deploy uses. It bootstraps
-`workers/o11y/.dev.vars` from `.dev.vars.example` on first run (`O11Y_ENV` set to
-`local`,
-`DEV_ADMIN` for the local session bypass, and empty placeholders for the seven
-production secrets — good enough to exercise the gates without hitting
-anything real) and defaults to port `O11Y_DEV_PORT=4200`
-(`O11Y_DEV_INSPECTOR_PORT=4201`) — the authoring app's own dev proxy
-(`apps/authoring/vite.config.ts`) reads the same `O11Y_DEV_PORT` env var for
-its `/telemetry` target, so the two stay in sync by construction rather than by
-a hardcoded number on each side. `containers/o11y/compose.yml` (MinIO +
-local ClickHouse, for `RUNNER_EVENTS_CLICKHOUSE_URL`'s local stand-in) is a
-**separate**, optional local stack — `wrangler dev` never starts it itself, and
-running both fights over the same image/ports for no benefit; start only the
-backing services with `docker compose -f containers/o11y/compose.yml up minio
-minio-init clickhouse`, published to the host, and `wrangler dev`'s own
-Container reaches them via Docker's `host.docker.internal` (`O11Y_LOCAL_MINIO_PORT`,
-`O11Y_LOCAL_CLICKHOUSE_PORT`, `O11Y_LOCAL_PUBLIC_ORIGIN` in `.dev.vars` if you
-need non-default ports). Replay the OTLP export fixtures once it's up:
-`node scripts/o11y-replay-fixtures.mjs --base http://localhost:4200`.
+`node scripts/dev.mjs --help` prints the full option list. All three need
+Docker running for anything past Tier 1 — `dev:live`/`dev:full` fail fast
+with a clear message (not a hung/opaque container-build error) if
+`docker info` doesn't succeed. Ctrl-C tears everything this command started
+back down — every spawned `wrangler`/`vite`/capture-server process, and (for
+`dev:full`) `docker compose ... down` — with no orphaned containers; see
+"What Ctrl-C actually cleans up" below.
 
-Migrations are listed one file at a time on purpose. Do **not** substitute
-`wrangler d1 migrations apply --local`: local bookkeeping starts empty, so an
-apply re-runs every file, and `0003_cost_ledger.sql` ends in a bare
-`ALTER TABLE demos ADD COLUMN artifacts_purged_at` with no `IF NOT EXISTS` —
-which fails the second time. (Remote is a different story: CI has applied
-migrations through the framework since before `0003` landed, so its bookkeeping
-is populated and `master.yml`'s `deploy-api` job applies new files automatically.)
+Every port is overridable by env var, defaulting to what's below; two
+workers under `wrangler dev` always get their own, distinct `--port` and
+`--inspector-port` so two dev sessions on the same machine never collide on
+wrangler's inspector default (9229):
 
-`.dev.vars` and `.env.local` are gitignored dev-only bypasses — never used in prod.
-`PREVIEW_HOST="localhost:8787"` overrides the `wrangler.jsonc` default
-(`demos.handsontable.com`, a real public wildcard that routes to the *deployed*
-worker) so container preview URLs come out as `*.localhost:8787`, which browsers
-treat as `127.0.0.1` (RFC 6761) and reach your local `wrangler dev`. It must be a
-real host value — wrangler silently ignores empty-string `.dev.vars` overrides.
-Without it, Tier-2/container sessions boot fine but the preview iframe fails with
-`INVALID_TOKEN` — the token is only known to your local session, not to prod.
+| Var | Default | Used by |
+|---|---|---|
+| `AUTHORING_DEV_PORT` | 5173 | the authoring app (`vite`) — every tier |
+| `API_DEV_PORT` | 8787 | the API worker (`wrangler dev`) — tier 2, full |
+| `API_DEV_INSPECTOR_PORT` | 9230 | the API worker's inspector — tier 2, full |
+| `O11Y_DEV_PORT` | 4200 | the o11y worker (`wrangler dev`) — tier full, `o11y:dev` |
+| `O11Y_DEV_INSPECTOR_PORT` | 4201 | the o11y worker's inspector — tier full, `o11y:dev` |
+| `O11Y_MINIO_PORT` | 9000 | compose's MinIO (Loki S3 stand-in) — tier full |
+| `O11Y_MINIO_CONSOLE_PORT` | 9001 | compose's MinIO console — tier full |
+| `O11Y_CLICKHOUSE_PORT` | 8123 | compose's ClickHouse HTTP (Analytics Engine stand-in) — tier full |
+| `O11Y_CLICKHOUSE_NATIVE_PORT` | 9009 | compose's ClickHouse native protocol — tier full |
+| `O11Y_SLACK_CAPTURE_PORT` | 4210 | the local Slack capture server — tier full |
 
-This only works because `wrangler.jsonc` declares **no `routes`**: when routes
-are present, `wrangler dev` simulates the first route's host on every request,
-destroying the preview subdomain before `proxyToSandbox()` can route on it.
-That's why the production routes live in the `deploy` script instead — don't
-move them back into `wrangler.jsonc`.
+Plus `COMPOSE_PROJECT_NAME` (default `o11y-dev`, tier full's `docker compose`
+project) and `WRANGLER_REGISTRY_PATH` (forwarded as-is to every spawned
+`wrangler dev`, for isolating one worktree's service-binding registry from
+another's — see the o11y task board's `COMMON.md` for why that matters when
+several worktrees run `wrangler dev` on the same machine at once).
+
+**`.dev.vars` bootstrap.** `workers/api/.dev.vars.example` and
+`workers/o11y/.dev.vars.example` are committed, non-secret templates.
+`dev.mjs`/`o11y-dev.mjs` copy either one to its gitignored `.dev.vars`
+**only when `.dev.vars` doesn't already exist** — an existing file (your own
+edits, real secret values) is never touched. On a *fresh* o11y bootstrap
+only, a few known-inert local placeholders are filled in with real,
+non-secret working values (matching `containers/o11y/compose.yml`'s own
+documented local defaults): `DEV_ADMIN=dev@handsontable.com` (the local
+Access bypass, contract §10, `workers/o11y/src/gates/access.ts`),
+`AE_SQL_TOKEN=local-dev-token`, `LOKI_S3_ACCESS_KEY_ID`/
+`LOKI_S3_SECRET_ACCESS_KEY=minioadmin` (MinIO's own default root
+credential), and `SLACK_WEBHOOK_URL` pointed at the local capture server
+(`http://localhost:4210/slack` by default). `O11Y_EXPORT_SECRET` and
+`SENTRY_HOOK_SECRET` are deliberately left empty — nothing here ever
+auto-creates a real secret; those two routes (`/telemetry/v1/logs`, the
+Sentry webhook) stay fail-closed until you paste a real value in yourself.
+
+**Why not just `--var`?** Wrangler's `.dev.vars` always wins over a
+same-named `--var`, even when the `.dev.vars` line is empty (confirmed
+against wrangler 4.108's `getVarsForDev`) — so for a key `.dev.vars.example`
+already declares, `dev.mjs` bakes the working value into the bootstrapped
+file instead of passing `--var` (which would be silently ignored). If a
+`.dev.vars` value's port (`PREVIEW_HOST`, `SLACK_WEBHOOK_URL`) disagrees with
+what this run actually resolved, `dev.mjs` prints a warning naming the file
+to edit — it does not silently override your file. For a genuinely
+per-run secret (`O11Y_SESSION_SECRET`, the Grafana session-cookie signing
+key — see the o11y auth runbook step for the deployed equivalent), the
+bootstrap strips that line from a *freshly created* `.dev.vars` instead, so
+the key stays undeclared and `dev.mjs`'s own ephemeral `--var` (a fresh
+random value every run, never written to disk) is the only source.
+
+**o11y worker local-mode config (contract §10).** `dev:full`/`o11y:dev` run
+the o11y worker with `O11Y_ENV` set to `local` (bootstrapped in
+`.dev.vars`), which is what turns on `DEV_ADMIN` (the local session bypass —
+`workers/o11y/src/gates/session.ts#verifySession`) and every
+`O11Y_LOCAL_*`-prefixed override below. `dev.mjs` injects the rest as
+`--var` (never `.dev.vars` — none of these are declared there, so there's no
+precedence conflict to work around): `RUNNER_EVENTS_CLICKHOUSE_URL` (points
+the Analytics Engine stand-in sink at compose's ClickHouse —
+`O11Y_CLICKHOUSE_PORT`), `O11Y_LOCAL_MINIO_PORT`/`O11Y_LOCAL_CLICKHOUSE_PORT`
+(how the box's own container, reached via Docker's `host.docker.internal`,
+finds compose's MinIO/ClickHouse), and `O11Y_LOCAL_PUBLIC_ORIGIN` — the
+origin `gates/session.ts#publicOrigin` builds the broker login's
+`return_to` against and binds every locally-minted session token's `aud`
+claim to; `dev.mjs` always sets it to `http://localhost:<O11Y_DEV_PORT>`
+(Grafana is served from the o11y worker's own origin, not proxied through
+the authoring app), which matters once you override `O11Y_DEV_PORT` away
+from its default — `publicOrigin`'s own built-in fallback assumes the
+default port.
+
+**Migrations.** `dev.mjs` applies every `workers/api/migrations/NNNN_*.sql`
+file (currently `0001` through `0008`) one `wrangler d1 execute --local
+--file=` call at a time — never `wrangler d1 migrations apply --local`,
+because local bookkeeping starts empty and `0003_cost_ledger.sql` ends in a
+bare `ALTER TABLE demos ADD COLUMN artifacts_purged_at` with no
+`IF NOT EXISTS`, which fails the second time an apply re-runs it. Unlike the
+old by-hand recipe, this is now **idempotent**: `dev.mjs` records each
+applied file in `workers/api/.wrangler/state/dev-migrations-applied.json`
+(gitignored, next to the local D1 state itself — wiping one wipes the
+other) and only applies files not yet in that record, so a second run of
+`pnpm dev:live`/`dev:full` applies nothing. (Remote is a different story: CI
+has applied migrations through the framework since before `0003` landed, so
+its bookkeeping is populated and `master.yml`'s `deploy-api` job applies new
+files automatically.)
+
+**Fixture replay (`dev:full`).** Once the o11y worker reports ready,
+`dev.mjs` prints the replay command
+(`node scripts/o11y-replay-fixtures.mjs --base http://localhost:<O11Y_DEV_PORT>`).
+Pass `--replay` to run it automatically instead of just printing it.
+
+**Local Slack alerts.** `dev:full` starts
+`node scripts/o11y-slack-capture.mjs --port <O11Y_SLACK_CAPTURE_PORT>` — a
+tiny local HTTP server (no real Slack workspace involved) that prints and
+keeps the last 50 alert posts (`GET http://localhost:4210/_captured`). The
+o11y worker's local `SLACK_WEBHOOK_URL` points at it (see the bootstrap
+section above), so a fired alert (ADR-0041 §F.3 — trigger the `*/10` cron by
+hand with `curl "http://localhost:<O11Y_DEV_PORT>/cdn-cgi/local/scheduled"`,
+or replay the fixtures, which trips the new-fingerprint rule on first run)
+shows up locally instead of needing a real Slack webhook.
+
+**What Ctrl-C actually cleans up.** Every `wrangler dev`/`vite`/capture-server
+child is spawned in its own process group and signalled as a group on
+Ctrl-C (SIGINT), with an 8s grace period before escalating to SIGKILL, and
+`dev:full` also runs `docker compose ... down` for the minio/clickhouse
+stack it started. This task's own measurement (spawn the API worker under
+`wrangler dev`, start a real Tier-2 session, send SIGINT): the Tier-2
+session's own `Sandbox` container is torn down by wrangler's container
+runtime as part of its own shutdown — but this machine's `docker ps -a`
+already carried dozens of orphaned `workerd-handsontable-demos-api-Sandbox-*`
+containers from *other*, unrelated `wrangler dev` sessions started (and not
+cleanly stopped) over the life of this repo, which is exactly why `dev.mjs`
+never does a blanket `docker rm` by image/name prefix — only the compose
+project it itself started, by `COMPOSE_PROJECT_NAME`.
+
+**Standalone o11y worker.** `pnpm o11y:dev` (unchanged as its own command)
+starts just the o11y worker under `wrangler dev`, sharing the same
+`.dev.vars` bootstrap/port-resolution code as `dev.mjs` — for working a pure
+o11y bug without the API worker, Docker compose, or the Slack capture
+server. It does **not** also start `containers/o11y/compose.yml` —
+`wrangler dev` manages its own container instance via the same Dockerfile,
+and running both would fight over the same image/ports for no benefit.
+
+**Debugging one piece in isolation.** The three commands above cover normal
+development; to run a single worker by hand (e.g. with a debugger attached
+outside the orchestrator), the underlying commands are still just
+`wrangler dev` from that worker's own directory and `vite` from
+`apps/authoring` — `dev.mjs --help` prints every flag and env var this
+script itself understands if you want to replicate its exact invocation.
+
+`.dev.vars` and `.env.local` are gitignored dev-only bypasses — never used in
+prod. `PREVIEW_HOST="localhost:8787"` (the API worker's bootstrapped
+default) overrides the `wrangler.jsonc` default (`demos.handsontable.com`, a
+real public wildcard that routes to the *deployed* worker) so container
+preview URLs come out as `*.localhost:8787`, which browsers treat as
+`127.0.0.1` (RFC 6761) and reach your local `wrangler dev`. It must be a real
+host value — wrangler silently ignores empty-string `.dev.vars` overrides.
+Without it, Tier-2/container sessions boot fine but the preview iframe fails
+with `INVALID_TOKEN` — the token is only known to your local session, not to
+prod. `VITE_DEV_USER`/`VITE_API_BASE` for the authoring app are injected as
+process env by `dev.mjs`, never written to an `.env.local` file — nothing
+committed to disk can leak the dev-login bypass into a later "real" build.
+
+This only works because `wrangler.jsonc` declares **no `routes`**: when
+routes are present, `wrangler dev` simulates the first route's host on every
+request, destroying the preview subdomain before `proxyToSandbox()` can
+route on it. That's why the production routes live in the `deploy` script
+instead — don't move them back into `wrangler.jsonc`.
 
 ## Deploy (main Handsontable account)
 

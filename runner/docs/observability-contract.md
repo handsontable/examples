@@ -387,7 +387,7 @@ Faro items, clamping `ts` to the receive time ± 5 minutes.
 | Loki S3 | Miniflare's local S3 endpoint for R2, or MinIO from `containers/o11y/compose.yml` |
 | Grafana session (K1) | `DEV_ADMIN` in `workers/o11y/.dev.vars`; a real broker login also works locally (`LOGIN_BROKER_URL` defaults to the production broker) |
 | Cloudflare OTLP export | fixtures in `pipeline/fixtures/otlp/` (scrubbed sandbox-probe captures plus hand-built edge cases), replayed by `scripts/o11y-replay-fixtures.mjs` |
-| Slack | a local capture server started by `pnpm o11y:dev` |
+| Slack | `scripts/o11y-slack-capture.mjs`, a local HTTP capture server started by `pnpm dev:full` (NOT by `pnpm o11y:dev`, which doesn't start it — point `SLACK_WEBHOOK_URL` at your own instance if you need one from the standalone o11y-only command); prints and keeps the last 50 posts, `GET /_captured` to inspect |
 
 `deployment.environment.name = local`; the production o11y worker drops `local` data.
 

@@ -58,24 +58,13 @@ build step. Edit shell files and the app picks them up on hot-reload.
 
 ## Run locally
 
-Two processes. **API worker** (Tier-2 live containers need Docker running):
-
-```bash
-cd workers/api
-# .dev.vars (gitignored) holds the local login stand-in — see src/auth.ts.
-npx wrangler dev            # http://localhost:8787
-```
-
-**Authoring app**:
-
-```bash
-cd apps/authoring
-# .env.local (gitignored):  VITE_API_BASE=http://localhost:5173   # this dev server, not :8787
-#                           VITE_DEV_USER=you@handsontable.com   # bypasses broker login locally
-pnpm --filter @handsontable/demo-authoring dev   # http://localhost:5173
-```
-
-Two traps in that setup:
+`pnpm dev` (Tier 1), `pnpm dev:live` (+ the API worker, Docker), `pnpm dev:full`
+(+ o11y, compose, the Slack capture server) — one orchestrator
+(`scripts/dev.mjs --tier=1|2|full`) behind all three; `pnpm o11y:dev` is a
+separate standalone o11y-only command. Full details, every port/env var, and
+the `.dev.vars` bootstrap rules are in `docs/run-and-deploy.md`'s "Run
+locally" section — this is just the two traps worth knowing up front if you
+ever run a piece by hand instead:
 
 - **`?mode=full` needs the SPA and the worker on one origin.** `serveDemoAsset` sends
   `frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` for `/d/:id` and is not wrapped in
@@ -84,8 +73,10 @@ Two traps in that setup:
   which renders as `● error` on a demo that is fine. `vite.config.ts` proxies `/api`, `/d` and
   `/embed` to the worker for exactly this reason — keep `VITE_API_BASE` on the dev server's own
   origin. An **empty** value does not work: `App.tsx` falls back to `:8787` on any falsy value.
+  (`pnpm dev:live`/`dev:full` set this correctly for you, as process env, not a file.)
 - **`VITE_DEV_USER` short-circuits `currentUser()` before the fetch.** Any test of the real broker
-  path has to override it (`VITE_DEV_USER= pnpm dev`) or it silently exercises the bypass instead.
+  path has to override it (`VITE_DEV_USER= pnpm --filter @handsontable/demo-authoring dev`) or it
+  silently exercises the bypass instead.
 
 ## Verify before pushing
 
@@ -167,6 +158,9 @@ grep -rl "localhost:8787\|VITE_DEV_USER\|dev@handsontable.com" apps/authoring/di
 is what catches a leaked `.env.local`; `localhost:8787` catches a missing `.env.production`
 (the `|| "http://localhost:8787"` fallback in `App.tsx` surviving into the bundle). Don't widen
 that term to a bare `localhost:` — catalog README text mentions dev-server ports and it false-fires.
+This grep does not, and does not need to, cover `VITE_TELEMETRY_LOCAL` (a separate local-only
+build-time flag, `.env.example`) — `scripts/check-telemetry-leak.mjs` is the dedicated check for
+that one, run right after the production build in CI.
 
 ## CI/CD
 
