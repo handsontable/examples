@@ -15,7 +15,7 @@ import { register } from "node:module";
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
 const inboxState = await import("../workers/o11y/src/alerts/inbox-state.ts");
-const { memoryStorage } = await import("../workers/o11y/src/inbox/storage.ts");
+const { memoryStorage, putChunked } = await import("../workers/o11y/src/inbox/storage.ts");
 const { evaluateAndNotify, slackPoster, escapeSlackMrkdwn, notifyFingerprintEvent } = await import(
   "../workers/o11y/src/alerts/notify.ts"
 );
@@ -35,7 +35,8 @@ const {
 } = await import("../workers/o11y/src/alerts/rules.ts");
 const { assertAllowedAeQuery, findDisallowedAeFunctions, ALLOWED_AE_FUNCTIONS } =
   await import("../workers/o11y/src/alerts/ae-query.ts");
-const { inboxKeyStorageKey, fingerprintStorageKey, AE_COLUMNS } = await import("@handsontable/demo-runtime/telemetry");
+const { inboxKeyStorageKey, AE_COLUMNS } = await import("@handsontable/demo-runtime/telemetry");
+const { newFingerprintWrites } = await import("../workers/o11y/src/inbox/registry.ts");
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
 const { readHeartbeatReport } = await import("../workers/o11y/src/heartbeat.ts");
 const { canWakeForBacklog, runAlerts } = await import("../workers/o11y/src/alerts/index.ts");
@@ -120,12 +121,51 @@ test("inbox-state: rejectedKeyCount counts only rejected:* states", async () => 
 
 test("inbox-state: newFingerprintsSince returns only names first-seen strictly after the cursor", async () => {
   const storage = memoryStorage();
-  await storage.put({
-    [fingerprintStorageKey("old-fp")]: 1000,
-    [fingerprintStorageKey("new-fp")]: 5000,
-  });
-  assert.deepEqual(await inboxState.newFingerprintsSince(storage, 2000), ["new-fp"]);
-  assert.deepEqual(await inboxState.newFingerprintsSince(storage, 5000), []);
+  // Seeded via the real `newFingerprintWrites` (registry.ts), not a raw
+  // `fp:<fp>` put — the read is now bounded via the `fpts:` time-index
+  // twin that only `newFingerprintWrites` knows how to write (B-C1/A-I1
+  // remainder), so a test that skips it would silently pass against an
+  // index that was never populated.
+  await storage.put(await newFingerprintWrites(storage, ["old-fp"], 1000));
+  await storage.put(await newFingerprintWrites(storage, ["new-fp"], 5000));
+
+  const sinceOld = await inboxState.newFingerprintsSince(storage, 2000);
+  assert.deepEqual(sinceOld.names, ["new-fp"]);
+  assert.equal(sinceOld.truncated, false);
+  assert.equal(sinceOld.lastMs, 5000);
+
+  const sinceNew = await inboxState.newFingerprintsSince(storage, 5000);
+  assert.deepEqual(sinceNew.names, []);
+  assert.equal(sinceNew.lastMs, null);
+});
+
+test("inbox-state: newFingerprintsSince is safe against a fingerprint containing ':'", async () => {
+  const storage = memoryStorage();
+  await storage.put(await newFingerprintWrites(storage, ["docs-example-load:fetch:deadbeefdeadbeef"], 3000));
+  const result = await inboxState.newFingerprintsSince(storage, 2000);
+  assert.deepEqual(result.names, ["docs-example-load:fetch:deadbeefdeadbeef"]);
+});
+
+test("inbox-state: newFingerprintsSince truncates at the scan bound and reports it", async () => {
+  const storage = memoryStorage();
+  // Comfortably over NEW_FINGERPRINT_SCAN_LIMIT (2000) — write in
+  // storage-limit-sized chunks (this is a direct `put`, not through
+  // `putChunked`, to keep the test self-contained and fast; 2100 is small
+  // enough that a manual chunk loop is clearer here than importing the
+  // helper).
+  const total = 2100;
+  for (let i = 0; i < total; i += 100) {
+    const writes = {};
+    for (let j = i; j < i + 100; j++) {
+      const fp = `authoring:${j.toString(16).padStart(16, "0")}`;
+      Object.assign(writes, await newFingerprintWrites(storage, [fp], 1000 + j));
+    }
+    await putChunked(storage, writes); // N2: 200 entries/iteration (fp: + fpts: per name)
+  }
+  const result = await inboxState.newFingerprintsSince(storage, 0);
+  assert.equal(result.truncated, true);
+  assert.equal(result.names.length, 2000);
+  assert.equal(result.lastMs, 1000 + 1999);
 });
 
 test("inbox-state: drainsPaused defaults false, round-trips true", async () => {
@@ -236,11 +276,21 @@ test("backlogAgeRule: fires only past the 2h threshold", async () => {
   assert.equal(over.firing, true);
 });
 
-test("rejectedKeyRule: fires on any rejected key, resolves at zero", async () => {
-  const writerNone = { rejectedKeyCount: async () => 0 };
+test("rejectedKeyRule: fires on a RECENT rejection, resolves once none are recent (B-C1/A-I1 remainder)", async () => {
+  const writerNone = { rejectedKeyCount: async () => 0, recentRejectionCount: async () => 0 };
   assert.equal((await rejectedKeyRule(writerNone)).firing, false);
-  const writerSome = { rejectedKeyCount: async () => 1 };
-  assert.equal((await rejectedKeyRule(writerSome)).firing, true);
+
+  const writerRecent = { rejectedKeyCount: async () => 1, recentRejectionCount: async () => 1 };
+  assert.equal((await rejectedKeyRule(writerRecent)).firing, true);
+
+  // The bug this fixes: `rejected:` key: entries are never pruned, so a
+  // plain "total > 0" firing condition never resolves once ANY key has
+  // ever been rejected. A total that stays > 0 with NO recent events must
+  // resolve.
+  const writerStale = { rejectedKeyCount: async () => 5, recentRejectionCount: async () => 0 };
+  const stale = await rejectedKeyRule(writerStale);
+  assert.equal(stale.firing, false, "an old, unresolved rejection with nothing recent must not keep firing forever");
+  assert.match(stale.detail, /5 rejected key/);
 });
 
 // Fix round (C cross-note): the cursor now lags `nowMs` by a fixed grace
@@ -271,7 +321,9 @@ test("newFingerprintRule: fires when a new fingerprint appears since the cursor,
     },
     async newFingerprintsSince(since) {
       seen.push(since);
-      return Number(since) < fingerprintFirstSeenMs ? ["fp-a"] : [];
+      return Number(since) < fingerprintFirstSeenMs
+        ? { names: ["fp-a"], truncated: false, lastMs: fingerprintFirstSeenMs }
+        : { names: [], truncated: false, lastMs: null };
     },
   };
   const first = await newFingerprintRule(writer, REALISTIC_NOW_MS);
@@ -309,7 +361,9 @@ test("newFingerprintRule: never advances the cursor past nowMs - CURSOR_GRACE_MS
       cursor = v;
     },
     async newFingerprintsSince(since) {
-      return Number(since) < fingerprintFirstSeenMs ? ["fp-late"] : [];
+      return Number(since) < fingerprintFirstSeenMs
+        ? { names: ["fp-late"], truncated: false, lastMs: fingerprintFirstSeenMs }
+        : { names: [], truncated: false, lastMs: null };
     },
   };
   await newFingerprintRule(writer, REALISTIC_NOW_MS); // tick N
@@ -332,7 +386,7 @@ test("newFingerprintRule: caps the Slack detail at 10 names, with an overflow co
       cursor = v;
     },
     async newFingerprintsSince() {
-      return names;
+      return { names, truncated: false, lastMs: null };
     },
   };
   const result = await newFingerprintRule(writer, REALISTIC_NOW_MS);
@@ -340,6 +394,34 @@ test("newFingerprintRule: caps the Slack detail at 10 names, with an overflow co
   for (const name of names.slice(0, 10)) assert.match(result.detail, new RegExp(name));
   assert.ok(!result.detail.includes(names[14]), "the 15th name must not appear verbatim");
   assert.match(result.detail, /\+5 more/);
+});
+
+test("newFingerprintRule: a truncated newFingerprintsSince read never advances the cursor past what it actually read", async () => {
+  // B-C1/A-I1 remainder: `newFingerprintsSince` is now a BOUNDED scan and
+  // can report `truncated: true` with a `lastMs` short of `nowMs`. The
+  // cursor must stop at `lastMs - 1`, not race ahead to `nowMs -
+  // CURSOR_GRACE_MS` — otherwise the unread tail of fingerprints past the
+  // scan bound would be silently skipped forever, exactly the bug this
+  // rule already avoids for the grace-window case.
+  const lastMs = REALISTIC_NOW_MS - 400_000; // well outside the grace window
+  let cursor;
+  const writer = {
+    async getAlertMeta() {
+      return cursor;
+    },
+    async setAlertMeta(_k, v) {
+      cursor = v;
+    },
+    async newFingerprintsSince() {
+      return { names: ["fp-a"], truncated: true, lastMs };
+    },
+  };
+  await newFingerprintRule(writer, REALISTIC_NOW_MS);
+  assert.equal(
+    Number(cursor),
+    lastMs - 1,
+    "a truncated read must cap the cursor at lastMs - 1, never race ahead to nowMs - grace",
+  );
 });
 
 test("notifyFingerprintEvent posts unconditionally and never writes alert:<rule> state (notify-only, not fire/resolve — C cross-note)", async () => {

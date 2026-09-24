@@ -45,6 +45,69 @@ export interface StorageLike {
   setAlarm(scheduledTime: number): Promise<void>;
 }
 
+/** Cloudflare's documented SQLite-backed-DO storage-API limit (final review,
+ *  finding N2): https://developers.cloudflare.com/durable-objects/api/storage-api/
+ *  — "get() ... Supports up to 128 keys at a time.", "put() ... Supports up
+ *  to 128 key-value pairs at a time.", "delete() ... Supports up to 128 keys
+ *  at a time." (fetched 2026-09-24). Local `workerd` was observed accepting
+ *  500+ keys in one call with no error (F1-report.md's probe), so nothing in
+ *  this codebase's OWN test doubles enforced it either — every multi-key
+ *  call below `DO_STORAGE_MAX_KEYS_PER_CALL` in this codebase must chunk
+ *  through {@link getManyChunked}/{@link putChunked}/{@link deleteChunked}
+ *  rather than calling `getMany`/`put`/`delete` directly with an unbounded
+ *  key set; `memoryStorage()` (below) and `pipeline/fixtures/o11y-harness.mjs`'s
+ *  `makeDurableObjectStorage` both throw above this limit so a missed call
+ *  site fails a test instead of silently working locally and throwing only
+ *  in production. */
+export const DO_STORAGE_MAX_KEYS_PER_CALL = 128;
+
+function chunks<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/** `storage.getMany(keys)`, chunked to {@link DO_STORAGE_MAX_KEYS_PER_CALL}
+ *  per call. Safe to call with `storage` being a `transaction()` closure's
+ *  own `txn` — each chunk is just another `get` call against the same
+ *  in-flight transaction. */
+export async function getManyChunked<T = unknown>(storage: StorageLike, keys: readonly string[]): Promise<Map<string, T>> {
+  const out = new Map<string, T>();
+  for (const chunk of chunks(keys, DO_STORAGE_MAX_KEYS_PER_CALL)) {
+    if (chunk.length === 0) continue;
+    const part = await storage.getMany<T>(chunk);
+    for (const [k, v] of part) out.set(k, v);
+  }
+  return out;
+}
+
+/** `storage.put(entries)`, chunked to {@link DO_STORAGE_MAX_KEYS_PER_CALL}
+ *  key-value pairs per call. When `storage` is a `transaction()` closure's
+ *  `txn`, every chunk still commits as one atomic transaction — chunking
+ *  only splits how many pairs go in each underlying `put` CALL, not the
+ *  transaction boundary itself. */
+export async function putChunked<T>(storage: StorageLike, entries: Record<string, T>): Promise<void> {
+  const keys = Object.keys(entries);
+  for (const chunk of chunks(keys, DO_STORAGE_MAX_KEYS_PER_CALL)) {
+    if (chunk.length === 0) continue;
+    const part: Record<string, T> = {};
+    for (const k of chunk) part[k] = entries[k] as T;
+    await storage.put(part);
+  }
+}
+
+/** `storage.delete(keys)`, chunked to {@link DO_STORAGE_MAX_KEYS_PER_CALL}
+ *  keys per call — see {@link putChunked}'s transaction-atomicity note,
+ *  which applies identically here. */
+export async function deleteChunked(storage: StorageLike, keys: readonly string[]): Promise<number> {
+  let deleted = 0;
+  for (const chunk of chunks(keys, DO_STORAGE_MAX_KEYS_PER_CALL)) {
+    if (chunk.length === 0) continue;
+    deleted += await storage.delete(chunk);
+  }
+  return deleted;
+}
+
 /** A `Map`-backed {@link StorageLike} for `node --test`. `transaction()` is a
  *  no-op wrapper (the fake has no concurrent writers to isolate from), so its
  *  only job is giving a caller that always writes inside `transaction()`
@@ -61,14 +124,24 @@ export function memoryStorage(): StorageLike {
       return data.get(key) as T | undefined;
     },
     async getMany<T>(keys: string[]): Promise<Map<string, T>> {
+      if (keys.length > DO_STORAGE_MAX_KEYS_PER_CALL) {
+        throw new Error(`memoryStorage().getMany: ${keys.length} keys exceeds the DO storage limit of ${DO_STORAGE_MAX_KEYS_PER_CALL} — use getManyChunked()`);
+      }
       const out = new Map<string, T>();
       for (const k of keys) if (data.has(k)) out.set(k, data.get(k) as T);
       return out;
     },
     async put(entries) {
+      const keys = Object.keys(entries);
+      if (keys.length > DO_STORAGE_MAX_KEYS_PER_CALL) {
+        throw new Error(`memoryStorage().put: ${keys.length} keys exceeds the DO storage limit of ${DO_STORAGE_MAX_KEYS_PER_CALL} — use putChunked()`);
+      }
       for (const [k, v] of Object.entries(entries)) data.set(k, v);
     },
     async delete(keys) {
+      if (keys.length > DO_STORAGE_MAX_KEYS_PER_CALL) {
+        throw new Error(`memoryStorage().delete: ${keys.length} keys exceeds the DO storage limit of ${DO_STORAGE_MAX_KEYS_PER_CALL} — use deleteChunked()`);
+      }
       let n = 0;
       for (const k of keys) if (data.delete(k)) n++;
       return n;

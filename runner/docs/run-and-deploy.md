@@ -804,6 +804,25 @@ projection) — but against real production data, not the local stack:
    to exceed the breakeven Phase B computed, do not flip the scope until the fallback
    (lowering `head_sampling_rate`, ADR §D's own named escape hatch) has brought it back
    under half.
+4. **The API-side new-fingerprint feed (C-I2) is confirmed live in production, not
+   just correctly gated.** ADR §E.1: the exact new-fingerprint alert (§F.3) is what
+   replaces Sentry's own "new issue" signal for a handled-error class once the scope
+   narrows — if this feed is dark, an API-side handled-error class that goes from zero
+   to happening gets NO signal at all under `uncaught` (Sentry stops seeing it, and
+   nothing tells the operator a new one started). This is **not** itself gated by the
+   `SENTRY_SCOPE` flip — the o11y worker's `*/10` new-fingerprint cron runs
+   unconditionally (ADR §M's C-I2 bullet) — so confirm it separately, before relying on
+   it as the flip's replacement signal: trigger a real, once-off `reportDiagnostic` call
+   in production (the `npm-registry:version-exists`/`npm-registry:versions` probe paths
+   are the ADR's own named example) and confirm its `hot.fingerprint` appears as a new
+   `fp:` entry and a Slack "new fingerprint" post, not silently dropped. This needs BOTH
+   fix-round findings **M2** (real `service.name` normalised to the contract's
+   `demos-api`) and **N1** (the shared fingerprint validator accepts a `:`-joined
+   `context`) — either one reverted or regressed makes this feed a silent no-op again.
+   Also confirm, separately, that no unrelated Tier-2 SSR authored `console.log` is
+   producing spurious `fp:` entries of its own (finding N6, ADR §M — an accepted,
+   bounded residual risk, Slack noise only, not a blocker, but worth a quick look at the
+   Slack channel's actual traffic before trusting this as a clean signal).
 
 **Who flips it**: whoever owns the o11y stack operationally at launch time (the same person
 or team who would triage an `alert-eval-error` or a stale-heartbeat page) — a role, not a

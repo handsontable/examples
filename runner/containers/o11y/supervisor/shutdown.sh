@@ -110,14 +110,23 @@ run_stop_protocol() {
   fi
 
   # --- 1. stop Loki gracefully -------------------------------------------
+  # F2 fix (final review, B-I2, second wave): the uploader-name path is now
+  # overridable via LOKI_UPLOADER_NAME_FILE (default unchanged, the real
+  # container path) — this is what makes `run_stop_protocol` itself directly
+  # testable (`pipeline/o11y-shutdown-snapshot.test.mjs`) without a real
+  # `/loki` filesystem, so a test can drive the REAL function (a real
+  # backgrounded process as LOKI_PID, a real snapshot_ok gate) instead of
+  # re-implementing its control flow inline (the exact gap the rereview
+  # found: "deleting shutdown.sh:168 fails no test").
+  local uploader_name_file="${LOKI_UPLOADER_NAME_FILE:-/loki/tsdb-index/uploader/name}"
   local loki_exit=1
   if [ -n "${LOKI_PID:-}" ] && kill -0 "$LOKI_PID" 2>/dev/null; then
     local uploader_name=""
-    if [ -r /loki/tsdb-index/uploader/name ]; then
-      uploader_name="$(cat /loki/tsdb-index/uploader/name 2>/dev/null || true)"
+    if [ -r "$uploader_name_file" ]; then
+      uploader_name="$(cat "$uploader_name_file" 2>/dev/null || true)"
     fi
     if [ -z "$uploader_name" ] && [ "${STORAGE:-s3}" = "s3" ]; then
-      log "could not read /loki/tsdb-index/uploader/name before stop — index upload cannot be confirmed"
+      log "could not read ${uploader_name_file} before stop — index upload cannot be confirmed"
     fi
 
     # Snapshot BEFORE sending SIGTERM (C1 fix): a periodic ~15-minute

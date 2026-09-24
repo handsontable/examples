@@ -168,3 +168,64 @@ fi
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /MARKER_OK:0/, "a real new upload, cleanly confirmed both sides, must still write the marker");
 });
+
+// ---- B-I2, second wave: drive the REAL run_stop_protocol(), not a copy ----
+//
+// Rereview finding on the two tests above: they re-implement the
+// `snapshot_ok` gate INLINE in the test's own script, rather than calling
+// `run_stop_protocol` itself — "the new unit test copies run_stop_protocol's
+// snapshot_ok gate into its own script instead of calling it, so deleting
+// shutdown.sh:168 fails no test." The two tests below call the real
+// function, driven with: a real backgrounded process as LOKI_PID (traps
+// SIGTERM and exits 0, so `run_stop_protocol`'s own `kill -TERM`/`wait`
+// logic runs for real, not a stub), and `LOKI_UPLOADER_NAME_FILE` pointed at
+// a real temp file (the F2 fix, second wave, that makes this possible at
+// all — the hardcoded `/loki/...` path is not writable outside a real
+// container).
+//
+// `code200` (the new stub-curl mode) is what a real `r2_put_and_verify`
+// PUT+HEAD pair needs — the marker path this revert-evidence pair now
+// actually exercises, which the two tests above never reached at all (they
+// stop at the boolean decision, never call `r2_put_and_verify`).
+
+function withFakeLoki(bodyScript, { modes }) {
+  const script = `
+uploader_file="$(mktemp)"
+printf 'uploaderA' > "$uploader_file"
+export LOKI_UPLOADER_NAME_FILE="$uploader_file"
+export STORAGE=s3
+export WAKE_ID=test-wake-b-i2
+# A fake "loki": traps SIGTERM and exits 0, same as the real Loki 3.3.2
+# graceful-shutdown behaviour this whole mechanism depends on (T01 Outcome).
+bash -c 'trap "exit 0" TERM; while true; do sleep 0.05; done' &
+LOKI_PID=$!
+${bodyScript}
+rm -f "$uploader_file"
+`;
+  return runBash(script, { modes });
+}
+
+test("B-I2, second wave: run_stop_protocol() itself refuses the marker when the PRE-SIGTERM listing fails, even though the after-listing would confirm a real upload", () => {
+  // Only ONE curl call happens: snapshot_index_keys returns on the FIRST
+  // failed day-prefix listing (its own `for day in ...; return 1` — see
+  // lib.sh), so snapshot_ok is decided, and never reached again, before
+  // SIGTERM is even sent. The extra modes after "fail" stand in for what a
+  // REVERTED shutdown.sh:168 (the `&& [ "$snapshot_ok" -eq 1 ]` clause
+  // removed) would consume instead — proving this test actually depends on
+  // that clause, not just on snapshot_index_keys's own behaviour.
+  const res = withFakeLoki('run_stop_protocol; echo "EXIT:$?"; echo "CALLS:$(wc -l < "$STUB_CURL_COUNTER_FILE")"', {
+    modes: "fail,haskey,haskey,code200,code200",
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /EXIT:1$/m, "run_stop_protocol must return non-zero (no marker written)");
+  assert.match(res.stdout, /CALLS:\s*1$/m, "only the one failed BEFORE listing — no after-listing, no PUT, no HEAD");
+});
+
+test("B-I2, second wave (revert check / positive control): run_stop_protocol() writes a real marker when both snapshots succeed and a genuinely new key is confirmed", () => {
+  const res = withFakeLoki('run_stop_protocol; echo "EXIT:$?"; echo "CALLS:$(wc -l < "$STUB_CURL_COUNTER_FILE")"', {
+    modes: "empty,empty,haskey,haskey,code200,code200",
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /EXIT:0$/m, "run_stop_protocol must return 0 — a clean stop, marker written");
+  assert.match(res.stdout, /CALLS:\s*6$/m, "before x2, after x2, PUT, HEAD — the full real marker-write path");
+});

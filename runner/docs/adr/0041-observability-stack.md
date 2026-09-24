@@ -231,7 +231,17 @@ stores and packs. For each accepted request, in this order:
    pending rows than fit in one object is packed across several objects, looping within
    the same alarm invocation up to a per-invocation cap on packed objects and
    rescheduling itself immediately when rows remain, rather than one unbounded
-   in-memory gzip per alarm.
+   in-memory gzip per alarm. **Corrected again (fix round A-I2, G1, final review second
+   wave):** the A-I2 fix above bounded the packed OBJECT's size, but the alarm's own READ
+   of pending rows was still `list({prefix: "row:"})` with no bound — every pending row,
+   across a flood, loaded into memory before any cap applied. `row:<n>` is now
+   zero-padded (12 digits, matching `<seq>`'s own width), so native ascending key order
+   equals arrival order without an in-memory sort, and the alarm pages `row:` in small
+   chunks, accumulated up to one packed object's own byte budget per round, rather than
+   one unbounded `list()`. A row written before this fix, under the old un-padded shape,
+   is migrated in place (rewritten under the padded key, oldest first, a bounded batch at
+   a time) before the alarm packs anything appended after the fix deployed — see contract
+   §8 and `workers/o11y/src/inbox/pack.ts`.
 
 One writer means key order equals arrival order; storage-backed buffering means a
 deploy, eviction or host restart between two alarms loses nothing.
@@ -728,6 +738,36 @@ where they add information beyond what §A–§L already say:
   over budget on its own is still packed alone (row size is already bounded to
   `INBOX_ROW_MAX_BYTES`, ~1 MB, well under the 4 MB object budget) rather than blocking
   progress.
+- **§B storage API, DO 128-key batch limit (confirmed platform fact, fix round N2, G1,
+  final review second wave).** Cloudflare's SQLite-backed Durable Object storage API caps
+  `get`/`put`/`delete` at 128 keys/key-value pairs per call
+  (<https://developers.cloudflare.com/durable-objects/api/storage-api/>, fetched
+  2026-09-24: "Supports up to 128 keys at a time" / "up to 128 key-value pairs at a
+  time"). Local `workerd` was observed accepting 500+ in one call with no error (the
+  final review's own probe, F1-report.md), so nothing in this codebase's test doubles
+  enforced it either, until this fix round added the check to both
+  (`workers/o11y/src/inbox/storage.ts#memoryStorage()` and
+  `pipeline/fixtures/o11y-harness.mjs`). Every multi-key call in `InboxWriter` — dedupe's
+  `checkDuplicates`, the fingerprint registry's writes/prune, `pruneLedger`, wake
+  resolution, `markKeysProvisional`, manual reopen, the pack commit, and `ingest`'s own
+  transaction `put` — now chunks through `storage.ts`'s `getManyChunked`/`putChunked`/
+  `deleteChunked`. `finalizeWakeResolution` and `reopenWindow` also now run their whole
+  put+delete sequence inside one `storage.transaction()` (previously two independent
+  top-level calls) — chunking alone, without that, would let a crash between chunks
+  leave a partial write (an orphaned `provisional:<wakeId>` key whose `wake:<id>` is
+  already gone).
+- **§B.3 drain reads whole objects.** Rereview row 20 (F1/F2/F3 fix round): documented
+  here, since it previously existed only in a fixer's own report, not the ADR. Each
+  drained key's packed object is read into memory whole before its records are pushed
+  to Loki — this is bounded, not unbounded, because the object it reads was itself
+  capped at write time (A-I2's `PACK_OBJECT_MAX_DECOMPRESSED_BYTES`, ~4 MB), plus at
+  most one further oversized single row (`INBOX_ROW_MAX_BYTES`, ~1 MB) packed alone
+  when it alone exceeds the object budget. So one drain-time read is bounded to roughly
+  4–5 MB, never the whole tenant's backlog at once. This bound is a property of the
+  PACK side (`inbox/pack.ts`, owned by a concurrent task in this fix round — see that
+  task's own report for its current shape) and is restated here only as the
+  drain-side consequence rereview row 20 asked to have written down, not as a claim
+  about `drain.ts`'s own internals.
 - **§B.2 ingest, worker tenant.** A Worker's own `console.log(JSON.stringify(...))` line
   (the structured request/error lines §D describes) arrives through Cloudflare's real OTLP
   log export as **opaque body text**, not as OTLP attributes — confirmed with a real
@@ -738,33 +778,62 @@ where they add information beyond what §A–§L already say:
   merge priority** — a body key cannot spoof `service.name`/`deployment.environment.name`/
   any `hot.*` label (T03B, fix-round finding I2, found and fixed within T03B's own pass
   before it shipped).
-- **§B.2 ingest, worker tenant — fingerprint (fix round C-I2, now closed).** The API
-  worker's own handled-error lines (`reportDiagnostic`,
+- **§B.2 ingest, worker tenant — fingerprint (fix round C-I2, live at merge, second
+  wave).** The API worker's own handled-error lines (`reportDiagnostic`,
   `workers/api/src/telemetry/diagnostic.ts`) carry `hot.fingerprint` (contract §3
   AE-only key) in the same structured JSON body the bullet above describes. The read
-  half (`workers/o11y/src/normalise/otlp.ts#toIngestItem`/`apiFingerprintFeed`) now
-  reads `bodyJsonAttrs["hot.fingerprint"]` (the pre-`hoistAttributes` bag
+  half (`workers/o11y/src/normalise/otlp.ts#toIngestItem`/`apiFingerprintFeed`) reads
+  `bodyJsonAttrs["hot.fingerprint"]` (the pre-`hoistAttributes` bag
   `tryParseJsonBodyAttrs` already builds) and feeds it into the `fp:` registry only
   when ALL of: the REAL resource `service.name === "demos-api"` (read from
   `finalResourceAttrs`, the resource attribute after hoisting/defaults — never from
   `bodyJsonAttrs`, the same anti-spoof rule `RESOURCE_ATTR_KEY_SET` already enforces
   for every other resource attribute); the parsed body's `log.kind === "error"`; the
-  value matches `^[a-z0-9-]+:[0-9a-f]{16}$` (contract §7's own `<context>:<16 hex>`
-  shape). The fourth condition — not Tier-2 container stdout — holds by construction,
-  not as a separate check: the B cross-note fix (two bullets below) already makes
-  `tryParseJsonBodyAttrs` refuse to parse ANY body whose own `log.kind` is not one of
-  this worker's trusted shapes, so `bodyJsonAttrs` is already empty for
-  authored/container output before this function runs. Deliberately NOT `hot.surface
-  !== "demo-runtime"` (the browser path's own rule) — a worker-tenant record's
-  `hot.surface` resource attribute defaults to `"none"` when nothing sets it, which
-  would admit any body reaching `/telemetry/v1/logs`, forged or not.
+  value matches contract §7's own shape, via `isValidFingerprint` — ONE shared
+  validator, also used by the browser path's `resolveFingerprint`, never a second,
+  independently drifting copy (fix round finding N1, second wave: the first version of
+  this gate, and `normalise/faro.ts`'s own separate copy, both anchored on the FIRST
+  `:` and rejected the `:`-joined call-site paths `reportDiagnostic`'s own real callers
+  send — `"npm-registry:version-exists"`, `"npm-registry:versions"` — so neither could
+  ever satisfy this condition before N1 landed, gate aside).
 
-  **Known gap, separate from this fix round:** finding M2 (unowned, unfixed) means a
-  real Cloudflare OTLP export's resource `service.name` is `handsontable-demos-api`,
-  not the contract's `demos-api` — so this gate, exactly as specced above, does not
-  fire against real production traffic today. It is unit-tested and behaves correctly
-  once `service.name` is normalised (M2's fix); until then it is a correctly-gated
-  no-op, not a silent bypass.
+  **Two preconditions, both now landed in this fix round, not just one:**
+  1. Finding **M2**: a real Cloudflare OTLP export's resource `service.name` is the
+     deployed script's own name (`handsontable-demos-api`), not the contract's short
+     `demos-api` — `normalise/otlp.ts#remapCloudflareServiceName` strips the shared
+     `handsontable-` script-name prefix whenever what remains is one of the contract's
+     own `SERVICE_NAMES`, applied before `hoistAttributes`, general across every
+     deployable. Confirmed against the captured real-export fixtures
+     (`pipeline/fixtures/otlp/json/console-log-line*.json`,
+     `cloudflare-invocation-log.json`), every one of which carries the raw script name.
+  2. Finding **N1**: the shared validator now accepts a `:`-joined `context`, so
+     `reportDiagnostic`'s own real call sites' fingerprints pass the shape check at
+     all — see above.
+
+  Without BOTH, this gate is a correctly-gated no-op against real production traffic,
+  not a silent bypass; with both, it fires for real. **This makes it LIVE at merge**
+  (the o11y worker's `*/10` new-fingerprint cron runs unconditionally, regardless of
+  `SENTRY_SCOPE`/`VITE_SENTRY_SCOPE` — those only gate whether a moved report ALSO
+  reaches Sentry, §E.3), not gated behind any later `SENTRY_SCOPE` flip —
+  `docs/run-and-deploy.md`'s runbook is updated with this as an explicit precondition
+  check, not just a flip-time one.
+
+  The fourth condition — not Tier-2 container stdout — is attempted by construction,
+  not guaranteed: the B cross-note fix (two bullets below) makes `tryParseJsonBodyAttrs`
+  refuse to parse ANY body whose own `log.kind` isn't one of this worker's trusted
+  shapes, so `bodyJsonAttrs` is empty for a body with no matching sentinel — but the
+  sentinel is body TEXT, not a resource attribute, and (per finding N6, investigated
+  this fix round, not fully resolved — see `normalise/otlp.ts#tryParseJsonBodyAttrs`'s
+  own doc comment for the full investigation) nothing in this pipeline can currently
+  tell a genuine `lines.ts` line apart from a Tier-2 container's own authored stdout
+  that happens to print the same shape, since both would share this Worker's
+  `service.name` once M2 normalises it. Accepted, bounded residual: a forged line can
+  only mint a `fp:` entry and a notify-only, mrkdwn-escaped (A-C2) Slack line, the same
+  noise class N7 already accepts for the browser path — never Sentry, PII or code
+  execution. Deliberately NOT `hot.surface !== "demo-runtime"` (the browser path's own
+  rule) — a worker-tenant record's `hot.surface` resource attribute defaults to
+  `"none"` when nothing sets it, which would admit any body reaching
+  `/telemetry/v1/logs`, forged or not.
 - **§C.1 hops.** Faro's real browser transport posts a `TransportBody`
   (`{meta, exceptions?, logs?, measurements?, events?, traces?}`), not an array of
   self-contained items the way every contract function's own types assume — the ingest
@@ -795,6 +864,35 @@ where they add information beyond what §A–§L already say:
   behaviour (including the `DEMO_SURFACE` environment re-homing) under `full` scope,
   unreachable under `uncaught` — "the re-homing disappears once the scope flips" is
   literally true only after the flip, not at implementation time.
+- **§B.3 drain, a key with a mixed 400/2xx outcome (fix round, rereview.md row 19, G1,
+  final review second wave).** F2's original fix (two bullets above the pack-alarm ones)
+  correctly kept pushing every chunk of a key even after an earlier one 400'd, but still
+  classified the whole key `rejected` if ANY chunk 400'd — including when another chunk
+  landed 2xx. A `rejected` key never becomes `provisional`, so those already-accepted
+  bytes never passed the §B.3 marker/commit check any wake's clean stop confirms
+  durability through: an unclean stop right after the push, before Loki's own local
+  flush, could lose them with no automatic replay (only a manual reopen, which — being
+  a full key replay — would re-derive the identical classification anyway). Corrected: a
+  key with at least one accepted (2xx) chunk now stays `provisional`, following the
+  normal durability path; only a key with ZERO accepted chunks stays `rejected`. The
+  permanent chunk loss stays operator-visible via a new `rejectedEvent:` audit log
+  (`ledger.ts#recordPartialReject`, contract §8) rather than the key's own ledger state.
+- **§B.3/§F.3 storage housekeeping, remainder (fix round, rereview.md row 13, G1, final
+  review second wave).** Three gaps the B-C1/A-I1 fix round's own prune mechanism left
+  open: (1) its 500-row/tick batch limit falls behind ADR §D's own 10× traffic
+  projection at roughly 3× today's traffic — raised to 5,000/tick (still chunked to the
+  real 128-key limit per call, see the N2 bullet above), with the exact arithmetic in
+  `dedupe.ts#HASH_PRUNE_BATCH_LIMIT`'s doc comment; (2) `newFingerprintsSince` listed the
+  entire (alphabetically, not chronologically, ordered) `fp:` prefix every ten-minute
+  alert tick — a new `fpts:<firstSeenMs>:<fingerprint>` time-ordered secondary index
+  (contract §8) makes this a bounded range read instead, with a truncation-safe cursor
+  in `alerts/rules.ts#newFingerprintRule` (never skips an unread fingerprint, at the cost
+  of a bounded duplicate report under sustained flood — the same trade-off already
+  accepted for the cursor's grace window); (3) `rejected-inbox-key` fired on
+  `rejectedKeyCount() > 0` and never resolved (rejected `key:` entries are deliberately
+  never pruned by date alone — see the row-19 bullet's `rejectedEvent:` log and the
+  §B storage API bullet above) — it now fires on a RECENT (last hour) count from that
+  same log instead, resolving once new rejections stop.
 - **§F metering.** ADR-0042's `example.*` events needed the same AE-only attribute-channel
   extension as §B.2 above (`kind`→`hot.metric_kind`, since `hot.kind` is reserved for the
   Faro item kind, `ref`, `area`) before `kind`/`ref`/`area` survived the browser scrub at

@@ -21,6 +21,7 @@ const { processFaroBody, countFaroItems, MAX_FARO_ITEMS_PER_BODY } = await impor
 const { decodeOtlpJson, processOtlpBody } = await import("../workers/o11y/src/normalise/otlp.ts");
 const { decodeOtlpProtobuf } = await import("../workers/o11y/src/normalise/otlp-protobuf.ts");
 const { hashRecord } = await import("../workers/o11y/src/normalise/hash.ts");
+const { fingerprint } = await import("../packages/runtime/dist/telemetry/index.js");
 
 const FIXTURES = fileURLToPath(new URL("./fixtures/", import.meta.url));
 const faroFixture = (name) => JSON.parse(readFileSync(`${FIXTURES}faro/${name}`, "utf8"));
@@ -99,12 +100,43 @@ test("Faro web-vitals: LCP/INP/CLS become points, FCP is not a contract reason",
   assert.deepEqual(reasons, ["web_vital", "web_vital", "web_vital"]);
 });
 
-test("Faro example.open: one Analytics Engine point, no stored record", async () => {
+test("Faro example.open: one Analytics Engine point, no STORED record — but a hash-only ingestItem (A-I4 remainder, closed second wave)", async () => {
   const body = faroFixture("example-open.json");
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
-  assert.equal(item.ingestItem, undefined, "example.* events are never stored (§6)");
+  // A-I4's original fix bypassed dedupe entirely for example.* events (no
+  // `ingestItem` at all) — that let a retried/redelivered batch inflate
+  // ADR-0042's analytics counts on every replay. Fixed: a hash-only
+  // ingestItem (no `record`) still goes through InboxWriter.ingest's own
+  // dedupe transaction, so `index.ts#handleCollect`'s existing
+  // outcome-gated point-write logic covers it — but `record` stays absent,
+  // so `appendRows`/`pack.ts` still never store anything for it (§6
+  // unchanged).
+  assert.ok(item.ingestItem, "an example.* event must still get a hash to dedupe on");
+  assert.equal(item.ingestItem.record, undefined, "but must never carry a record — §6: AE points only, never stored");
+  assert.equal(typeof item.ingestItem.hash, "string");
+  assert.ok(item.ingestItem.hash.length > 0);
   assert.equal(item.aePoints.length, 1);
   assert.equal(item.aePoints[0].indexes[0], "example.open");
+});
+
+test("Faro example.open: a redelivered identical batch hashes identically (dedupe-eligible) — a distinct client timestamp does not", async () => {
+  const body = faroFixture("example-open.json");
+  const receivedAtMs = Date.now();
+  const [first] = await processFaroBody(body, ENV, SERVICE, receivedAtMs);
+  const [second] = await processFaroBody(body, ENV, SERVICE, receivedAtMs + 5000);
+  assert.equal(
+    first.ingestItem.hash,
+    second.ingestItem.hash,
+    "the same example.* event body, redelivered at a different arrival time, must hash identically so InboxWriter.ingest's dedupe actually catches it",
+  );
+
+  // A different CLIENT timestamp (a genuinely distinct click) must NOT
+  // collapse into the same hash (advisor review, this fix round: "hash the
+  // item as sent, including its client timestamp").
+  const distinctBody = faroFixture("example-open.json");
+  for (const e of distinctBody.events ?? []) e.timestamp = new Date(Date.now() + 60_000).toISOString();
+  const [distinct] = await processFaroBody(distinctBody, ENV, SERVICE, receivedAtMs);
+  assert.notEqual(first.ingestItem.hash, distinct.ingestItem.hash, "a genuinely distinct client timestamp must not collapse two real clicks into one hash");
 });
 
 test("Faro log: stored record, no Analytics Engine point", async () => {
@@ -213,6 +245,80 @@ test("Faro exception: an invalid context['hot.fingerprint'] is discarded the sam
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
   assert.ok(item.ingestItem);
   assert.match(item.ingestItem.fingerprint, /^authoring:[0-9a-f]{16}$/);
+});
+
+// ---- fix round (finding D-I3 remainder, second wave): the FALLBACK
+// fingerprint (no wire/AE-only fingerprint present — the raw
+// window.onerror/unhandledrejection/render-crash path) must hash the
+// contract-normalised `type: value` message, never `record.body`'s
+// rendered stack — a minified bundle's chunk hash and line:col shift on
+// every deploy, so hashing the stack churned a genuinely recurring defect
+// into a fresh `fp:` entry on every release. --------------------------------
+
+test("Faro exception (uncaught, no client fingerprint): two different stacks for the SAME type/value fingerprint identically", async () => {
+  // The two stacks differ in exactly the ways a redeploy of the SAME source
+  // actually varies: the minifier's own single-letter identifier assignment
+  // for an unrelated local function shifts ("t" vs "n" — a bundler-wide
+  // renumbering, not a chunk-hash or line:col change), AND one extra
+  // inlined frame appears in one build but not the other. Neither is a URL
+  // or a bare number, so `normalizeMonitorMessage`'s own generic `<url>`/
+  // `<n>` collapsing (packages/runtime/src/monitor.ts) does NOT already
+  // neutralise this difference on its own — this test would pass by
+  // accident (proving nothing) if it varied only the filename/line/col,
+  // since those already collapse to `<url>`/`<n>` before hashing either way.
+  const bodyA = faroFixture("exception-code-frame.json");
+  bodyA.exceptions[0].value = "Cannot read properties of undefined (reading 'x')";
+  bodyA.exceptions[0].stacktrace = {
+    frames: [{ filename: "https://demos.handsontable.com/assets/chunk-aaa111.js", function: "t", lineno: 10, colno: 5 }],
+  };
+  delete bodyA.exceptions[0].fingerprint;
+  delete bodyA.exceptions[0].context["hot.fingerprint"];
+
+  const bodyB = faroFixture("exception-code-frame.json");
+  bodyB.exceptions[0].value = "Cannot read properties of undefined (reading 'x')";
+  bodyB.exceptions[0].stacktrace = {
+    frames: [
+      { filename: "https://demos.handsontable.com/assets/chunk-bbb222.js", function: "n", lineno: 42, colno: 9 },
+      { filename: "https://demos.handsontable.com/assets/chunk-bbb222.js", function: "dispatchHmrUpdate", lineno: 7, colno: 1 },
+    ],
+  };
+  delete bodyB.exceptions[0].fingerprint;
+  delete bodyB.exceptions[0].context["hot.fingerprint"];
+
+  const [itemA] = await processFaroBody(bodyA, ENV, SERVICE, Date.now());
+  const [itemB] = await processFaroBody(bodyB, ENV, SERVICE, Date.now());
+  assert.ok(itemA.ingestItem && itemB.ingestItem);
+  assert.equal(
+    itemA.ingestItem.fingerprint,
+    itemB.ingestItem.fingerprint,
+    "same type:value message, two different stacks — must fingerprint the same after the fix",
+  );
+  // The stored record body must still carry the real stack frames — this
+  // fix changes what is HASHED, never what is STORED (§C.3 symbolication
+  // parses frames back out of the stored body).
+  assert.match(itemA.ingestItem.record.body, /chunk-aaa111\.js/);
+  assert.match(itemB.ingestItem.record.body, /chunk-bbb222\.js/);
+  assert.match(itemB.ingestItem.record.body, /dispatchHmrUpdate/);
+});
+
+test("Faro exception (uncaught, no client fingerprint): a genuinely different message still fingerprints differently, same stack", async () => {
+  const shared = faroFixture("exception-code-frame.json").exceptions[0].stacktrace;
+
+  const bodyA = faroFixture("exception-code-frame.json");
+  bodyA.exceptions[0].value = "Cannot read properties of undefined (reading 'x')";
+  bodyA.exceptions[0].stacktrace = shared;
+  delete bodyA.exceptions[0].fingerprint;
+  delete bodyA.exceptions[0].context["hot.fingerprint"];
+
+  const bodyB = faroFixture("exception-code-frame.json");
+  bodyB.exceptions[0].value = "Maximum call stack size exceeded";
+  bodyB.exceptions[0].stacktrace = shared;
+  delete bodyB.exceptions[0].fingerprint;
+  delete bodyB.exceptions[0].context["hot.fingerprint"];
+
+  const [itemA] = await processFaroBody(bodyA, ENV, SERVICE, Date.now());
+  const [itemB] = await processFaroBody(bodyB, ENV, SERVICE, Date.now());
+  assert.notEqual(itemA.ingestItem.fingerprint, itemB.ingestItem.fingerprint);
 });
 
 // ---- fix round (finding A-M3): the assembled record gets a second scrub pass --
@@ -521,6 +627,36 @@ test("C-I2 condition 3: a hot.fingerprint value outside the contract's <context>
   assert.equal(result.items[0].fingerprint, undefined, "an injection-shaped value must never reach the registry");
 });
 
+// ---- fix round (finding A-M2, second wave): C-I2 against a REAL production
+// export -----------------------------------------------------------------
+//
+// Every C-I2 test above sets `service.name: "demos-api"` directly (see this
+// file's own note above `apiErrorLineOtlpBody`) — that exercises the gate
+// LOGIC but never the actual value a real Cloudflare export sends
+// (`handsontable-demos-api`, confirmed by the captured fixtures this file
+// already uses elsewhere). This test is the one that proves the wiring
+// fires against what production actually sends: the real script name, AND
+// a real multi-segment `reportDiagnostic` context (`npm-registry:*`, the
+// exact call sites N1's own test pins) — so it fails if EITHER A-M2's
+// remap OR N1's validator fix is reverted.
+test("A-M2 + N1 together: a REAL production export (service.name=handsontable-demos-api) with a real reportDiagnostic context feeds the exact first-seen registry", async () => {
+  const fp = fingerprint("npm-registry:version-exists", "upstream npm registry request failed");
+  const result = await processOtlpBody(
+    new TextEncoder().encode(
+      apiErrorLineOtlpBody({
+        serviceName: "handsontable-demos-api",
+        bodyExtra: { "hot.fingerprint": fp, context: "npm-registry:version-exists" },
+      }),
+    ),
+    "application/json",
+    ENV,
+    Date.now(),
+  );
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].fingerprint, fp, "the real script name must be normalised (A-M2) and the multi-segment context accepted (N1)");
+  assert.equal(result.items[0].record.resourceAttributes["service.name"], "demos-api", "the stored record's own label must also be the normalised contract name");
+});
+
 test("C-I2 condition 4: authored/Tier-2-shaped JSON (no trusted log.kind at all) never even surfaces a hot.fingerprint to check — the B cross-note gate already empties bodyJsonAttrs", async () => {
   const body = JSON.stringify({
     resourceLogs: [
@@ -562,6 +698,13 @@ test("fix round I2: a body-JSON key cannot spoof a real resource attribute (serv
   // site gives body-JSON attrs the lowest priority, so even if a future
   // RESOURCE_ATTRS addition were missed by the strip, a real resource/
   // OTLP attribute still could not be overridden by body content.
+  //
+  // Fix round (finding A-M2, second wave): the REAL resource's
+  // `service.name` is now normalised from Cloudflare's real script name
+  // (`handsontable-demos-api`) to the contract's own `demos-api` — see
+  // `remapCloudflareServiceName` — so this test's own "the real value
+  // wins" assertion checks the POST-normalisation value, not the raw
+  // export's, which is what a real Loki label/AE blob1 now stores.
   const result = await processOtlpBody(
     new TextEncoder().encode(otlpJsonFixture("console-log-line-spoof-attempt.json")),
     "application/json",
@@ -571,7 +714,7 @@ test("fix round I2: a body-JSON key cannot spoof a real resource attribute (serv
   assert.equal(result.items.length, 1);
   const record = result.items[0].record;
 
-  assert.equal(record.resourceAttributes["service.name"], "handsontable-demos-api", "the REAL service.name must survive, never the body's spoofed value");
+  assert.equal(record.resourceAttributes["service.name"], "demos-api", "the REAL service.name must survive (normalised, A-M2), never the body's spoofed value");
   assert.equal(record.resourceAttributes["deployment.environment.name"], "production", "the REAL environment must survive, never the body's spoofed value");
   assert.notEqual(record.resourceAttributes["hot.outcome"], "spoof-outcome", "hot.outcome must never be set from body content at all");
   // cf.ray (NOT a RESOURCE_ATTRS key — structured metadata) is legitimate

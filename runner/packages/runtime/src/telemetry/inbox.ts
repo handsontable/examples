@@ -147,8 +147,23 @@ export const SEQ_STORAGE_KEY = "seq";
 export const DRAINS_PAUSED_STORAGE_KEY = "drainsPaused";
 export const HEARTBEAT_STORAGE_KEY = "heartbeat";
 
+/** Digits `pendingRowStorageKey` zero-pads `n` to (F2/G1 fix round, final
+ *  review finding A-I2). The key used to be `row:${n}` un-padded — a plain
+ *  `n.toString()` — which made `row:10` sort BEFORE `row:2` lexicographically
+ *  and forced the pack alarm to load every pending row into memory just to
+ *  sort them back into arrival order. Zero-padding makes native ascending
+ *  key order equal arrival order, so a bounded `list({prefix, limit})` read
+ *  is enough (`workers/o11y/src/inbox/pack.ts#collectRowBatch`). 12 digits
+ *  matches the packed-object `<seq>` width (§8's `inboxKey`) — headroom far
+ *  past any realistic pending-row count for one `InboxWriter`. Rows written
+ *  before this fix deployed, under the un-padded shape, are migrated
+ *  in-place (`pack.ts#migrateLegacyRows`) rather than requiring the pack
+ *  alarm to understand two key shapes forever — see that function's doc
+ *  comment for the compat path and contract §8 for both shapes. */
+export const ROW_SEQ_DIGITS = 12;
+
 export function pendingRowStorageKey(n: number): string {
-  return `row:${n}`;
+  return `row:${n.toString().padStart(ROW_SEQ_DIGITS, "0")}`;
 }
 export function inboxKeyStorageKey(key: string): string {
   return `key:${key}`;
@@ -168,6 +183,23 @@ export function hashStorageKey(sha256Hex: string): string {
 }
 export function fingerprintStorageKey(fp: string): string {
   return `fp:${fp}`;
+}
+/** How many digits {@link fingerprintTimeIndexKey} zero-pads its epoch-ms
+ *  component to — 15 covers every ms timestamp until the year 5138, far
+ *  past any realistic operational lifetime for this key shape. */
+export const FPTS_TIMESTAMP_DIGITS = 15;
+/** `fpts:<firstSeenMs, zero-padded>:<fingerprint>` (F2/G1 fix round, B-C1/
+ *  A-I1 remainder) — a time-ordered secondary index alongside `fp:<fp>`
+ *  (same first-seen value, same write), so `newFingerprintsSince` can do a
+ *  bounded `start`/`end` range read instead of listing the entire (alphabetic,
+ *  not chronological) `fp:` prefix every alert tick. The fingerprint is
+ *  appended as a plain suffix (never parsed out of the padded-ms prefix by
+ *  position alone would be ambiguous if it contained `:` — reading back
+ *  always slices at the fixed padded-ms width, so a `:` inside the
+ *  fingerprint itself is safe). Deleted together with its `fp:<fp>` twin by
+ *  `pruneFingerprintRegistry`. */
+export function fingerprintTimeIndexKey(firstSeenMs: number, fp: string): string {
+  return `fpts:${Math.max(0, Math.trunc(firstSeenMs)).toString().padStart(FPTS_TIMESTAMP_DIGITS, "0")}:${fp}`;
 }
 export function alertStorageKey(rule: string): string {
   return `alert:${rule}`;

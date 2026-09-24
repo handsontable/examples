@@ -9,7 +9,7 @@
 import {
   alertStorageKey,
   DRAINS_PAUSED_STORAGE_KEY,
-  fingerprintStorageKey,
+  fingerprintTimeIndexKey,
   HEARTBEAT_STORAGE_KEY,
   inboxKeyStorageKey,
   parseInboxKey,
@@ -17,19 +17,17 @@ import {
   type Heartbeat,
   type InboxKeyState,
 } from "@handsontable/demo-runtime/telemetry";
+import { fpFromFptsKey, FPTS_PREFIX } from "../inbox/registry.js";
 import type { StorageLike } from "../inbox/storage.js";
 
 const KEY_PREFIX = "key:";
-const FP_PREFIX = "fp:";
 const ALERT_META_PREFIX = "alertMeta:";
 
-// `key:<inbox key>`/`fp:<fingerprint>` prefixes are the storage-key SHAPES
-// the contract module already exports (`inboxKeyStorageKey`/
-// `fingerprintStorageKey`); `.slice()` below strips exactly what those
-// builders prepend, so a future prefix rename only has to change in one
-// place.
+// `key:<inbox key>` prefix is the storage-key SHAPE the contract module
+// already exports (`inboxKeyStorageKey`); `.slice()` below strips exactly
+// what that builder prepends, so a future prefix rename only has to change
+// in one place.
 const KEY_PREFIX_LEN = inboxKeyStorageKey("").length;
-const FP_PREFIX_LEN = fingerprintStorageKey("").length;
 
 export async function readHeartbeat(storage: StorageLike): Promise<Heartbeat> {
   return (await storage.get<Heartbeat>(HEARTBEAT_STORAGE_KEY)) ?? { lastCron: 0, lastIngest: 0 };
@@ -78,14 +76,43 @@ export async function rejectedKeyCount(storage: StorageLike): Promise<number> {
   return count;
 }
 
-/** `fp:<fingerprint>` names first seen strictly after `sinceMs`. */
-export async function newFingerprintsSince(storage: StorageLike, sinceMs: number): Promise<string[]> {
-  const entries = await storage.list<number>({ prefix: FP_PREFIX });
+/** How many `fpts:` rows one `newFingerprintsSince` call may read — bounds
+ *  the cost of the "new fingerprint" alert's own ten-minute cron tick (B-C1/
+ *  A-I1 remainder, rereview.md row 13: "bound `newFingerprintsSince` so it
+ *  doesn't list all of `fp:` every tick"). Generous relative to realistic
+ *  per-tick fingerprint volume — truncation only matters under a sustained
+ *  forged-fingerprint flood (N7), which is already a disclosed, non-blocking
+ *  residual risk (rate-capping Slack posts, not this read). */
+const NEW_FINGERPRINT_SCAN_LIMIT = 2000;
+
+export interface NewFingerprintsResult {
+  names: string[];
+  /** `true` when the scan hit {@link NEW_FINGERPRINT_SCAN_LIMIT} — more
+   *  fingerprints may exist past `lastMs` that this call did not read. */
+  truncated: boolean;
+  /** The last (newest) `firstSeenMs` actually read this call, or `null`
+   *  when nothing was found. The caller (`alerts/rules.ts#newFingerprintRule`)
+   *  must not advance its cursor past this value when `truncated` — see that
+   *  file's own doc comment on why. */
+  lastMs: number | null;
+}
+
+/** `fp:<fingerprint>` names first seen strictly after `sinceMs`, read via
+ *  the `fpts:` time-ordered index (`registry.ts`) — a bounded `start`/`end`
+ *  range scan, never the full (alphabetically, not chronologically, ordered)
+ *  `fp:` prefix. */
+export async function newFingerprintsSince(storage: StorageLike, sinceMs: number): Promise<NewFingerprintsResult> {
+  const start = fingerprintTimeIndexKey(sinceMs + 1, "");
+  const end = `${FPTS_PREFIX}￿`; // exclusive upper bound past every possible fpts: key
+  const page = await storage.list<number>({ start, end, limit: NEW_FINGERPRINT_SCAN_LIMIT });
+
   const names: string[] = [];
-  for (const [storageKey, firstSeenMs] of entries) {
-    if (typeof firstSeenMs === "number" && firstSeenMs > sinceMs) names.push(storageKey.slice(FP_PREFIX_LEN));
+  let lastMs: number | null = null;
+  for (const [storageKey, firstSeenMs] of page) {
+    names.push(fpFromFptsKey(storageKey));
+    if (typeof firstSeenMs === "number") lastMs = firstSeenMs;
   }
-  return names;
+  return { names, truncated: page.size >= NEW_FINGERPRINT_SCAN_LIMIT, lastMs };
 }
 
 export async function readAlertState(storage: StorageLike, rule: string): Promise<AlertState | undefined> {

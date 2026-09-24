@@ -23,12 +23,25 @@ export const ctx = {
  *  nested `txn.get`/`.put`/`.delete`/`.list` calls hit the same backing
  *  `Map` atomically-in-spirit (single-threaded Node, no real concurrency to
  *  guard against). */
+// F2 fix round (final review, N2): the real SQLite-backed DO storage API
+// caps `get`/`put`/`delete` at 128 keys/pairs per call (see
+// `workers/o11y/src/inbox/storage.ts`'s `DO_STORAGE_MAX_KEYS_PER_CALL` doc
+// comment for the exact Cloudflare docs quote and URL) — this fake used to
+// accept any number silently (F1-report.md's own probe: 500+ locally, no
+// error), which is exactly why the previous fix round could not have caught
+// a caller that forgot to chunk. Every multi-key call below now throws past
+// the real limit, the same as `inbox/storage.ts#memoryStorage()`.
+const DO_STORAGE_MAX_KEYS_PER_CALL = 128;
+
 export function makeDurableObjectStorage(seed = new Map()) {
   const data = seed;
   let alarm = null;
   const storage = {
     async get(keyOrKeys) {
       if (Array.isArray(keyOrKeys)) {
+        if (keyOrKeys.length > DO_STORAGE_MAX_KEYS_PER_CALL) {
+          throw new Error(`makeDurableObjectStorage().get: ${keyOrKeys.length} keys exceeds the DO storage limit of ${DO_STORAGE_MAX_KEYS_PER_CALL}`);
+        }
         const out = new Map();
         for (const k of keyOrKeys) if (data.has(k)) out.set(k, data.get(k));
         return out;
@@ -36,9 +49,16 @@ export function makeDurableObjectStorage(seed = new Map()) {
       return data.get(keyOrKeys);
     },
     async put(entries) {
+      const keys = Object.keys(entries);
+      if (keys.length > DO_STORAGE_MAX_KEYS_PER_CALL) {
+        throw new Error(`makeDurableObjectStorage().put: ${keys.length} keys exceeds the DO storage limit of ${DO_STORAGE_MAX_KEYS_PER_CALL}`);
+      }
       for (const [k, v] of Object.entries(entries)) data.set(k, v);
     },
     async delete(keys) {
+      if (keys.length > DO_STORAGE_MAX_KEYS_PER_CALL) {
+        throw new Error(`makeDurableObjectStorage().delete: ${keys.length} keys exceeds the DO storage limit of ${DO_STORAGE_MAX_KEYS_PER_CALL}`);
+      }
       let n = 0;
       for (const k of keys) if (data.delete(k)) n++;
       return n;

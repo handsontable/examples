@@ -19,13 +19,15 @@ import { register } from "node:module";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
-const { memoryStorage } = await import("../workers/o11y/src/inbox/storage.ts");
+const { memoryStorage, putChunked } = await import("../workers/o11y/src/inbox/storage.ts");
 const {
   resolveOverWakes,
   computeBacklog,
   nextWrittenKeys,
   markKeysProvisional,
   rejectKey,
+  recordPartialReject,
+  recentRejectionCount,
   reopenWindow,
   reopenWindowExceedsRetention,
   currentWakeId,
@@ -360,4 +362,172 @@ test("pruneLedger deletes only done: entries older than KEY_RETENTION_MS, per te
   assert.equal(await storage.get(doneKeyStorageKey(staleBrowser)), undefined);
   assert.equal(await storage.get(doneKeyStorageKey(staleWorker)), undefined);
   assert.equal(await storage.get(doneKeyStorageKey(freshBrowser)), 1, "a fresh done: entry must survive");
+});
+
+// ---- N2 (merge blocker): a wake with >128 provisional keys ---------------------
+
+test("N2: a wake with 150 provisional keys (over the real DO storage 128-key limit) resolves correctly, all moved to done:", async () => {
+  const storage = memoryStorage();
+  const wakeId = "big-wake";
+  const keyCount = 150;
+  const keys = Array.from(
+    { length: keyCount },
+    (_, i) => `inbox/worker/2026-01-01/00/${String(i).padStart(12, "0")}.ndjson.gz`,
+  );
+  const writes = { [wakeStorageKey(wakeId)]: { startedAt: 1, reason: "backlog", over: true } };
+  for (const k of keys) writes[inboxKeyStorageKey(k)] = `provisional:${wakeId}`;
+  await putChunked(storage, writes); // N2: 151 keys, over the harness's own 128-key seed limit
+
+  const result = await resolveOverWakes(storage, deps({ running: false, markers: new Set([wakeId]) }));
+
+  assert.equal(result.resolved.length, 1);
+  assert.equal(result.resolved[0].keysAffected, keyCount, "the task's own '>64 provisional keys' scenario must fully finalize, not throw or partially resolve");
+  for (const k of keys) {
+    assert.equal(await storage.get(inboxKeyStorageKey(k)), undefined, `${k} must leave key:`);
+    assert.equal(await storage.get(doneKeyStorageKey(k)), 1, `${k} must appear under done:`);
+  }
+  assert.equal(await storage.get(wakeStorageKey(wakeId)), undefined, "the wake must be fully resolved");
+});
+
+// N2 atomicity trap (advisor review, this fix round): chunking
+// `finalizeWakeResolution`'s delete to the real 128-key limit, WITHOUT also
+// wrapping the whole function in one `storage.transaction()`, would let a
+// crash between chunks orphan whichever provisional keys were in a
+// not-yet-run later chunk — their `wake:<id>` entry could already be gone
+// (an earlier chunk) while they are still `provisional:<wakeId>`, and
+// nothing ever revisits them (`markKeysProvisional` refuses an unknown
+// wake). `wakeStorageKey(wakeId)` is pushed onto `toDelete` LAST — this
+// proves that ordering: a failure on a LATER delete chunk never removes the
+// wake record, so a crash never reaches the "wake is gone but keys are
+// still provisional" state, even though this in-memory fake (unlike the
+// real DO's transaction) does not roll back the earlier, already-applied
+// `put`/`delete` chunks — see this test's own assertions for exactly what
+// is and is not proven here.
+test("N2 atomicity: if a LATER delete chunk throws, wake: (deleted last) survives and the error propagates", async () => {
+  const storage = memoryStorage();
+  const wakeId = "big-wake-2";
+  const keyCount = 150;
+  const keys = Array.from(
+    { length: keyCount },
+    (_, i) => `inbox/worker/2026-01-01/00/${String(i).padStart(12, "0")}.ndjson.gz`,
+  );
+  const writes = { [wakeStorageKey(wakeId)]: { startedAt: 1, reason: "backlog", over: true } };
+  for (const k of keys) writes[inboxKeyStorageKey(k)] = `provisional:${wakeId}`;
+  await putChunked(storage, writes); // N2: 151 keys, over the harness's own 128-key seed limit
+
+  let deleteCalls = 0;
+  const originalDelete = storage.delete.bind(storage);
+  storage.delete = async (chunk) => {
+    deleteCalls++;
+    if (deleteCalls === 2) throw new Error("simulated crash mid-chunk");
+    return originalDelete(chunk);
+  };
+
+  await assert.rejects(() => resolveOverWakes(storage, deps({ running: false, markers: new Set([wakeId]) })));
+
+  assert.ok(deleteCalls >= 2, "sanity: 151 keys (150 + wake:) over the 128-key limit must take more than one delete() call");
+  assert.notEqual(
+    await storage.get(wakeStorageKey(wakeId)),
+    undefined,
+    "wake: must survive a failed LATER delete chunk — it is always the last key in the delete list",
+  );
+});
+
+// N8 (rereview.md §2 Minor, "nearly free" per the advisor review): a stale
+// outer snapshot can undo a concurrent manual reopen.
+test("N8: finalizeWakeResolution re-reads each key's CURRENT state — a concurrent manual reopen (key moved back to written) is not silently overwritten", async () => {
+  const storage = memoryStorage();
+  const wakeId = "w-n8";
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  await storage.put({
+    [wakeStorageKey(wakeId)]: { startedAt: 1, reason: "backlog", over: true },
+    [inboxKeyStorageKey(key)]: "provisional:" + wakeId,
+  });
+
+  // Simulate a manual reopen racing in AFTER resolveOverWakes's own
+  // provisionalKeys snapshot was taken but BEFORE finalizeWakeResolution's
+  // internal re-read — the key is no longer this wake's provisional key.
+  const deps2 = {
+    isBoxRunning: async () => false,
+    markerExists: async () => {
+      await storage.put({ [inboxKeyStorageKey(key)]: "written" }); // the "concurrent reopen"
+      return true; // clean
+    },
+  };
+
+  const result = await resolveOverWakes(storage, deps2);
+
+  assert.equal(result.resolved[0].keysAffected, 0, "the reopened key must not be counted as resolved by this wake");
+  assert.equal(
+    await storage.get(inboxKeyStorageKey(key)),
+    "written",
+    "the concurrent reopen's `written` state must survive — not be overwritten by done: or re-written",
+  );
+});
+
+// ---- rejectedEvent: audit log (row 19 / B-C1/A-I1 remainder) ------------------
+
+test("rejectKey writes both the rejected: key: state AND a rejectedEvent: entry", async () => {
+  const storage = memoryStorage();
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const nowMs = Date.UTC(2026, 5, 1);
+
+  await rejectKey(storage, key, "too_far_behind", nowMs);
+
+  assert.equal(await storage.get(inboxKeyStorageKey(key)), "rejected:too_far_behind");
+  assert.equal(await recentRejectionCount(storage, nowMs - 1), 1, "the event must be visible strictly after (nowMs - 1)");
+  assert.equal(await recentRejectionCount(storage, nowMs), 0, "but not strictly after its own timestamp");
+});
+
+test("recordPartialReject (row 19) logs a rejectedEvent WITHOUT touching key: state — the key stays whatever it already was", async () => {
+  const storage = memoryStorage();
+  const key = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
+  const nowMs = Date.UTC(2026, 5, 1);
+  await storage.put({ [inboxKeyStorageKey(key)]: "provisional:w1" });
+
+  await recordPartialReject(storage, key, "too_far_behind", nowMs);
+
+  assert.equal(
+    await storage.get(inboxKeyStorageKey(key)),
+    "provisional:w1",
+    "a partial reject must never change the key's own ledger state (it stays durable/provisional)",
+  );
+  assert.equal(await recentRejectionCount(storage, nowMs - 1), 1, "the event must still be logged, for the alert");
+});
+
+test("recentRejectionCount: rejected-inbox-key's real fix — an OLD rejection outside the window does not count, even though rejectedKeyCount would still see it forever", async () => {
+  const storage = memoryStorage();
+  const oldMs = Date.UTC(2026, 5, 1);
+  const nowMs = oldMs + 2 * 60 * 60 * 1000; // 2h later
+  await rejectKey(storage, "inbox/worker/2026-01-01/00/000000000000.ndjson.gz", "x", oldMs);
+
+  assert.equal(await recentRejectionCount(storage, nowMs - 60 * 60 * 1000), 0, "a rejection older than the 1h window must not count as recent");
+  assert.equal(await recentRejectionCount(storage, oldMs - 1), 1, "but it is still findable as a raw event, e.g. for audit");
+});
+
+test("pruneLedger also prunes stale rejected: key: entries (filtered by value, not a blind range delete) and rejectedEvent: entries", async () => {
+  const storage = memoryStorage();
+  const now = Date.UTC(2026, 5, 20, 0, 0, 0);
+  const staleDate = new Date(now - KEY_RETENTION_MS - 24 * 60 * 60 * 1000);
+  const freshDate = new Date(now - 60 * 60 * 1000);
+  const staleRejected = inboxKey("worker", staleDate, 0);
+  const staleWritten = inboxKey("worker", staleDate, 1); // same stale date range, NOT rejected — must survive
+  const freshRejected = inboxKey("worker", freshDate, 0);
+
+  await rejectKey(storage, staleRejected, "old", staleDate.getTime());
+  await storage.put({ [inboxKeyStorageKey(staleWritten)]: "written" });
+  await rejectKey(storage, freshRejected, "recent", freshDate.getTime());
+
+  const result = await pruneLedger(storage, now);
+
+  assert.equal(result.rejectedDeleted, 1);
+  assert.equal(await storage.get(inboxKeyStorageKey(staleRejected)), undefined, "the stale REJECTED key must be pruned");
+  assert.equal(
+    await storage.get(inboxKeyStorageKey(staleWritten)),
+    "written",
+    "a stale but NON-rejected key in the same date range must survive — value-filtered, not a blind range delete",
+  );
+  assert.equal(await storage.get(inboxKeyStorageKey(freshRejected)), "rejected:recent", "a fresh rejected key must survive");
+  // The rejectedEvent: audit entries follow the same retention.
+  assert.equal(await recentRejectionCount(storage, staleDate.getTime() - 1), 1, "the fresh event must still be findable");
 });

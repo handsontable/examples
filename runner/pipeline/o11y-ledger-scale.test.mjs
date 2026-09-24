@@ -21,7 +21,7 @@ import { register } from "node:module";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
-const { memoryStorage } = await import("../workers/o11y/src/inbox/storage.ts");
+const { memoryStorage, putChunked } = await import("../workers/o11y/src/inbox/storage.ts");
 const { resolveOverWakes, computeBacklog, nextWrittenKeys, pruneLedger } = await import(
   "../workers/o11y/src/inbox/ledger.ts"
 );
@@ -88,7 +88,11 @@ async function seedScale(storage) {
       writes[inboxKeyStorageKey(key)] = `provisional:${wakeId}`;
     }
   }
-  await storage.put(writes);
+  // F2/G1 fix round (N2): a real SQLite-backed DO storage `put()` caps at
+  // 128 key-value pairs per call — this fixture seeds 10,500+ at once, so
+  // it must chunk like any other production multi-key write (never loosen
+  // `memoryStorage()`'s own enforcement of that limit to make a TEST fit).
+  await putChunked(storage, writes);
 }
 
 test(`scale: resolveOverWakes over ${WAKE_COUNT} wakes × ${KEYS_PER_WAKE} keys (${TOTAL_KEYS} total) reads a number of rows LINEAR in (wakes+keys), never their product`, async () => {
@@ -173,7 +177,7 @@ test("scale: pruneLedger deletes done: history in bounded batches, never in one 
     const key = inboxKey("worker", new Date(Date.UTC(2026, 0, day, hour)), i);
     writes[doneKeyStorageKey(key)] = 1;
   }
-  await storage.put(writes);
+  await putChunked(storage, writes); // N2: chunk the 10k-pair seed write, see seedScale's own note
 
   storage.resetRowReads();
   const nowMs = Date.UTC(2026, 5, 1); // well past every seeded done: entry's retention
