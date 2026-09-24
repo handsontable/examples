@@ -25,15 +25,24 @@ import {
   parseArgs,
   resolvePorts,
   PORT_DEFAULTS,
+  assertNoPortCollisions,
   bootstrapDevVars,
   o11yDevVarsPatch,
   O11Y_DEVVARS_STRIP_KEYS,
   checkDevVarsPortDrift,
+  resolveDevVarsPortAdoption,
   checkO11yDevVarsStaleness,
   readDevVarsLine,
   migrationRecordPath,
   planMigrations,
   applyMigrations,
+  readAppliedMigrations,
+  parseMigrationTargets,
+  isMigrationAlreadyApplied,
+  snapshotLocalSchema,
+  MigrationError,
+  formatMigrationError,
+  resetLocalD1,
   isDockerAvailable,
   DOCKER_NOT_RUNNING_MESSAGE,
   isRuntimeDistStale,
@@ -259,6 +268,56 @@ test("readDevVarsLine / checkDevVarsPortDrift: detects a port mismatch and repor
   });
 });
 
+test("resolveDevVarsPortAdoption: PREVIEW_HOST port is ADOPTED when API_DEV_PORT was not explicitly set (bug 2's fix)", () => {
+  withTmpDir((dir) => {
+    const devVarsPath = path.join(dir, ".dev.vars");
+    // The user's exact real .dev.vars: PREVIEW_HOST pinned to 8799 while
+    // this run's own default/resolved port is 8787.
+    writeFileSync(devVarsPath, 'PREVIEW_HOST="localhost:8799"\n');
+
+    const adoption = resolveDevVarsPortAdoption({ devVarsPath, key: "PREVIEW_HOST", currentPort: 8787, explicit: false });
+    assert.equal(adoption.port, 8799, "the .dev.vars port is adopted, since .dev.vars always wins anyway");
+    assert.equal(adoption.adopted, true);
+    assert.match(adoption.message, /8799/);
+    assert.match(adoption.message, /adopting/);
+  });
+});
+
+test("resolveDevVarsPortAdoption: WARNS instead (does not override) when API_DEV_PORT was explicitly set and conflicts", () => {
+  withTmpDir((dir) => {
+    const devVarsPath = path.join(dir, ".dev.vars");
+    writeFileSync(devVarsPath, 'PREVIEW_HOST="localhost:8799"\n');
+
+    const adoption = resolveDevVarsPortAdoption({ devVarsPath, key: "PREVIEW_HOST", currentPort: 6450, explicit: true });
+    assert.equal(adoption.port, 6450, "an explicit override is never silently discarded");
+    assert.equal(adoption.adopted, false);
+    assert.match(adoption.message, /8799/);
+    assert.match(adoption.message, /6450/);
+  });
+});
+
+test("resolveDevVarsPortAdoption: no message and no change when the port already matches, or the key is undeclared", () => {
+  withTmpDir((dir) => {
+    const devVarsPath = path.join(dir, ".dev.vars");
+    writeFileSync(devVarsPath, 'PREVIEW_HOST="localhost:8787"\n');
+    assert.deepEqual(resolveDevVarsPortAdoption({ devVarsPath, key: "PREVIEW_HOST", currentPort: 8787, explicit: false }), {
+      port: 8787,
+      adopted: false,
+      message: null,
+    });
+    assert.deepEqual(resolveDevVarsPortAdoption({ devVarsPath, key: "SLACK_WEBHOOK_URL", currentPort: 4210, explicit: false }), {
+      port: 4210,
+      adopted: false,
+      message: null,
+    });
+  });
+});
+
+test("assertNoPortCollisions: throws for a duplicate port value, passes for all-distinct ports", () => {
+  assert.doesNotThrow(() => assertNoPortCollisions({ A: 1, B: 2 }));
+  assert.throws(() => assertNoPortCollisions({ A: 1, B: 1 }), /port collision/);
+});
+
 test("checkO11yDevVarsStaleness (NB8): warns when a pre-existing .dev.vars declares DEV_ADMIN or O11Y_SESSION_SECRET empty", () => {
   withTmpDir((dir) => {
     const devVarsPath = path.join(dir, ".dev.vars");
@@ -372,6 +431,275 @@ test("applyMigrations: records each file as it succeeds, so a failure partway th
     const plan = planMigrations({ migrationsDir, recordPath });
     assert.deepEqual(plan.applied, ["0001_init.sql"]);
     assert.deepEqual(plan.pending, ["0002_boom.sql"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// migration schema probe — adopting a pre-existing local D1 with no record
+// (the N1 bug: a hand-migrated local D1, no dev-migrations-applied.json,
+// re-applying from 0001 dies on 0003's non-idempotent `ALTER TABLE ... ADD
+// COLUMN` with a raw `duplicate column name` failure)
+// ---------------------------------------------------------------------------
+
+/** A stub `query` (the injectable `applyMigrations`/`snapshotLocalSchema`
+ *  takes in place of a real `wrangler d1 execute ... --json`) backed by an
+ *  in-memory {tables: Set<string>, indexes: Set<string>, columns: {[table]:
+ *  Set<string>}} — enough to answer both queries `snapshotLocalSchema`
+ *  issues (`sqlite_master`, and `PRAGMA table_info(<table>)`), shaped exactly
+ *  like wrangler's own `--json` output (an array with one `{results}` entry). */
+function stubD1Query(state) {
+  return async (args) => {
+    const command = args[args.indexOf("--command") + 1];
+    if (command.includes("sqlite_master")) {
+      const results = [
+        ...[...state.tables].map((name) => ({ type: "table", name })),
+        ...[...state.indexes].map((name) => ({ type: "index", name })),
+      ];
+      return JSON.stringify([{ results, success: true, meta: { duration: 0 } }]);
+    }
+    const m = /PRAGMA table_info\((\w+)\)/.exec(command);
+    if (m) {
+      const cols = state.columns[m[1]] ?? new Set();
+      return JSON.stringify([{ results: [...cols].map((name) => ({ name })), success: true, meta: { duration: 0 } }]);
+    }
+    throw new Error(`stubD1Query: unrecognized --command: ${command}`);
+  };
+}
+
+test("parseMigrationTargets: CREATE TABLE / CREATE INDEX / ALTER TABLE ADD COLUMN are checkable; any other statement makes the file non-checkable", () => {
+  assert.deepEqual(parseMigrationTargets("CREATE TABLE IF NOT EXISTS demos (id TEXT);\nCREATE INDEX IF NOT EXISTS idx_x ON demos(id);"), {
+    checkable: true,
+    targets: [
+      { type: "table", name: "demos" },
+      { type: "index", name: "idx_x" },
+    ],
+  });
+  assert.deepEqual(parseMigrationTargets("ALTER TABLE demos ADD COLUMN foo TEXT;"), {
+    checkable: true,
+    targets: [{ type: "column", table: "demos", name: "foo" }],
+  });
+  assert.deepEqual(parseMigrationTargets("ALTER TABLE demos ADD foo TEXT;"), {
+    checkable: true,
+    targets: [{ type: "column", table: "demos", name: "foo" }],
+  });
+  // DROP INDEX (0002_buildkey_nonunique.sql's real shape) is not a
+  // recognized "additive, checkable" statement — the whole file must fall
+  // through to "always run it" rather than risk skipping the DROP because
+  // the CREATE INDEX that follows it happens to already exist.
+  assert.deepEqual(parseMigrationTargets("DROP INDEX IF EXISTS idx_x;\nCREATE INDEX IF NOT EXISTS idx_x ON demos(id);"), {
+    checkable: false,
+    targets: [],
+  });
+  // Empty file: never a vacuous "already applied".
+  assert.deepEqual(parseMigrationTargets("-- just a comment\n"), { checkable: false, targets: [] });
+});
+
+test("parseMigrationTargets: pinned against every real workers/api/migrations/*.sql file", () => {
+  const migrationsDir = path.join(RUNNER_ROOT, "workers", "api", "migrations");
+  const files = readFileSync(path.join(migrationsDir, "0001_init.sql"), "utf8"); // sanity: file exists
+  assert.ok(files.length > 0);
+
+  const read = (name) => readFileSync(path.join(migrationsDir, name), "utf8");
+  assert.deepEqual(parseMigrationTargets(read("0001_init.sql")), {
+    checkable: true,
+    targets: [
+      { type: "table", name: "demos" },
+      { type: "index", name: "idx_demos_framework" },
+      { type: "index", name: "idx_demos_created_by" },
+      { type: "index", name: "idx_demos_forked_from" },
+      { type: "index", name: "idx_demos_buildkey" },
+      { type: "table", name: "build_cache" },
+    ],
+  });
+  assert.equal(parseMigrationTargets(read("0002_buildkey_nonunique.sql")).checkable, false, "0002's DROP INDEX must not be treated as checkable");
+  assert.deepEqual(parseMigrationTargets(read("0003_cost_ledger.sql")), {
+    checkable: true,
+    targets: [
+      { type: "table", name: "cost_ledger" },
+      { type: "index", name: "idx_cost_ledger_day" },
+      { type: "table", name: "usage_daily" },
+      { type: "index", name: "idx_usage_daily_day" },
+      { type: "column", table: "demos", name: "artifacts_purged_at" },
+    ],
+  });
+  assert.deepEqual(parseMigrationTargets(read("0007_build_status.sql")), {
+    checkable: true,
+    targets: [
+      { type: "column", table: "demos", name: "build_status" },
+      { type: "column", table: "demos", name: "build_error" },
+    ],
+  });
+  // Every file must at least parse without throwing and either be checkable
+  // with >=1 target, or explicitly non-checkable — never checkable with zero
+  // targets (that would be silently skippable).
+  for (const name of ["0004_settings_and_analytics.sql", "0005_profiles.sql", "0006_api_tokens.sql", "0008_example_daily.sql"]) {
+    const parsed = parseMigrationTargets(read(name));
+    assert.ok(parsed.checkable, `${name} expected checkable`);
+    assert.ok(parsed.targets.length > 0, `${name} expected at least one target`);
+  }
+});
+
+test("isMigrationAlreadyApplied: true only when every target is present; false for an empty/unchecked target list", () => {
+  const snapshot = { tableNames: new Set(["demos"]), indexNames: new Set(["idx_x"]), columns: { demos: new Set(["id", "artifacts_purged_at"]) } };
+  assert.equal(isMigrationAlreadyApplied([{ type: "table", name: "demos" }], snapshot), true);
+  assert.equal(isMigrationAlreadyApplied([{ type: "column", table: "demos", name: "artifacts_purged_at" }], snapshot), true);
+  assert.equal(isMigrationAlreadyApplied([{ type: "column", table: "demos", name: "build_status" }], snapshot), false);
+  assert.equal(isMigrationAlreadyApplied([{ type: "table", name: "demos" }, { type: "table", name: "nope" }], snapshot), false);
+  assert.equal(isMigrationAlreadyApplied([], snapshot), false, "an empty target list must never read as already applied");
+});
+
+test("snapshotLocalSchema: one sqlite_master query plus one PRAGMA per requested table, parsed from wrangler --json shape", async () => {
+  const calls = [];
+  const query = async (args) => {
+    calls.push(args);
+    return stubD1Query({ tables: new Set(["demos"]), indexes: new Set(["idx_x"]), columns: { demos: new Set(["id", "artifacts_purged_at"]) } })(args);
+  };
+  const snapshot = await snapshotLocalSchema({ dbName: "handsontable-demos", tables: ["demos"], query });
+  assert.deepEqual([...snapshot.tableNames], ["demos"]);
+  assert.deepEqual([...snapshot.indexNames], ["idx_x"]);
+  assert.deepEqual([...snapshot.columns.demos].sort(), ["artifacts_purged_at", "id"]);
+  assert.equal(calls.length, 2, "one sqlite_master query + one PRAGMA for the one requested table");
+});
+
+test("applyMigrations: a hand-migrated local D1 with NO record — every pending file whose targets already exist is adopted, not re-applied (the N1 repro)", async () => {
+  await withTmpDir(async (dir) => {
+    const migrationsDir = path.join(dir, "migrations");
+    mkdirSync(migrationsDir);
+    writeFileSync(path.join(migrationsDir, "0001_init.sql"), "CREATE TABLE IF NOT EXISTS demos (id TEXT PRIMARY KEY);\n");
+    writeFileSync(
+      path.join(migrationsDir, "0003_cost_ledger.sql"),
+      "CREATE TABLE IF NOT EXISTS cost_ledger (day TEXT);\nALTER TABLE demos ADD COLUMN artifacts_purged_at TEXT;\n",
+    );
+    writeFileSync(path.join(migrationsDir, "0007_build_status.sql"), "ALTER TABLE demos ADD COLUMN build_status TEXT;\n");
+    const recordPath = migrationRecordPath(dir); // no record file at all — the exact bug precondition
+
+    const state = {
+      tables: new Set(["demos", "cost_ledger"]), // 0001, 0003's table: already there
+      indexes: new Set(),
+      columns: { demos: new Set(["id", "artifacts_purged_at"]) }, // 0003's column exists; 0007's build_status does NOT
+    };
+    const runCalls = [];
+    const run = async (args) => {
+      runCalls.push(args);
+      // Applying 0007 for real adds the column this run's own snapshot didn't have yet.
+      if (args.includes("--file=migrations/0007_build_status.sql")) state.columns.demos.add("build_status");
+    };
+    const query = stubD1Query(state);
+
+    const result = await applyMigrations({ migrationsDir, recordPath, dbName: "handsontable-demos", run, query, log: () => {} });
+
+    assert.deepEqual(result.adopted, ["0001_init.sql", "0003_cost_ledger.sql"], "both fully-pre-existing files are adopted, not re-run");
+    assert.deepEqual(result.applied, ["0007_build_status.sql"], "the file whose column is genuinely missing still runs for real");
+    assert.deepEqual(runCalls, [["d1", "execute", "handsontable-demos", "--local", "--file=migrations/0007_build_status.sql", "-y"]]);
+    assert.deepEqual(readAppliedMigrations(recordPath), ["0001_init.sql", "0003_cost_ledger.sql", "0007_build_status.sql"].sort());
+  });
+});
+
+test("applyMigrations: without `query`, behavior is unchanged — every pending file is always re-run (no probing)", async () => {
+  await withTmpDir(async (dir) => {
+    const migrationsDir = makeMigrationsDir(dir, ["0001_init.sql"]);
+    const recordPath = migrationRecordPath(dir);
+    const calls = [];
+    const run = async (args) => calls.push(args);
+    const result = await applyMigrations({ migrationsDir, recordPath, dbName: "handsontable-demos", run });
+    assert.deepEqual(result.applied, ["0001_init.sql"]);
+    assert.deepEqual(result.adopted, []);
+    assert.equal(calls.length, 1);
+  });
+});
+
+test("applyMigrations: a genuinely failing migration throws a MigrationError with the file and the SQLite message, never swallowed as adopted", async () => {
+  await withTmpDir(async (dir) => {
+    const migrationsDir = makeMigrationsDir(dir, ["0001_init.sql", "0002_boom.sql"]);
+    const recordPath = migrationRecordPath(dir);
+    // Shaped exactly like a real execFileSync failure: wrangler's ANSI-wrapped
+    // "duplicate column name" text on stderr (captured against wrangler 4.108).
+    const stderr = Buffer.from(
+      "\u001b[31m✘ \u001b[41;31m[\u001b[41;97mERROR\u001b[41;31m]\u001b[0m \u001b[1mduplicate column name: artifacts_purged_at: SQLITE_ERROR\u001b[0m\n",
+    );
+    const run = async (args) => {
+      if (args.includes("--file=migrations/0002_boom.sql")) {
+        const err = new Error("Command failed");
+        err.stderr = stderr;
+        err.stdout = Buffer.from("");
+        err.status = 1;
+        throw err;
+      }
+    };
+    await assert.rejects(
+      () => applyMigrations({ migrationsDir, recordPath, dbName: "handsontable-demos", run, log: () => {} }),
+      (err) => {
+        assert.ok(err instanceof MigrationError);
+        assert.equal(err.file, "0002_boom.sql");
+        assert.equal(err.sqliteMessage, "duplicate column name: artifacts_purged_at: SQLITE_ERROR");
+        assert.equal(err.recordPath, recordPath);
+        return true;
+      },
+    );
+    // Not swallowed: 0002 must NOT be recorded as applied/adopted.
+    assert.deepEqual(readAppliedMigrations(recordPath), ["0001_init.sql"]);
+  });
+});
+
+test("applyMigrations: a genuinely DIFFERENT SQL error is reported as itself, not misread as a duplicate-column adoption case", async () => {
+  await withTmpDir(async (dir) => {
+    const migrationsDir = makeMigrationsDir(dir, ["0001_typo.sql"]);
+    const recordPath = migrationRecordPath(dir);
+    const run = async () => {
+      const err = new Error("Command failed");
+      err.stderr = Buffer.from("\u001b[31m✘ \u001b[41;31m[\u001b[41;97mERROR\u001b[41;31m]\u001b[0m \u001b[1mno such table: nope: SQLITE_ERROR\u001b[0m\n");
+      err.stdout = Buffer.from("");
+      throw err;
+    };
+    await assert.rejects(
+      () => applyMigrations({ migrationsDir, recordPath, dbName: "handsontable-demos", run, log: () => {} }),
+      (err) => {
+        assert.equal(err.sqliteMessage, "no such table: nope: SQLITE_ERROR");
+        return true;
+      },
+    );
+  });
+});
+
+test("formatMigrationError: one clean line naming the file, the SQLite message, the record path, and --reset-local-db — never a raw stack trace", () => {
+  const err = new MigrationError({
+    file: "0003_cost_ledger.sql",
+    sqliteMessage: "duplicate column name: artifacts_purged_at: SQLITE_ERROR",
+    recordPath: "/x/workers/api/.wrangler/state/dev-migrations-applied.json",
+    action: "applying",
+  });
+  const formatted = formatMigrationError(err);
+  assert.match(formatted, /^error:/);
+  assert.match(formatted, /0003_cost_ledger\.sql/);
+  assert.match(formatted, /duplicate column name: artifacts_purged_at: SQLITE_ERROR/);
+  assert.match(formatted, /dev-migrations-applied\.json/);
+  assert.match(formatted, /--reset-local-db/);
+  assert.ok(!formatted.includes("\n    at "), "must not include a stack-trace-shaped line");
+});
+
+test("resetLocalD1: deletes local D1 state and the applied-migrations record, and logs what it deleted", () => {
+  withTmpDir((dir) => {
+    const apiDir = path.join(dir, "workers", "api");
+    const stateDir = path.join(apiDir, ".wrangler", "state", "v3", "d1");
+    const recordPath = migrationRecordPath(apiDir);
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, "some.sqlite"), "fake");
+    mkdirSync(path.dirname(recordPath), { recursive: true });
+    writeFileSync(recordPath, "[]\n");
+
+    const lines = [];
+    resetLocalD1(apiDir, undefined, (l) => lines.push(l));
+
+    assert.equal(existsSync(stateDir), false);
+    assert.equal(existsSync(recordPath), false);
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /--reset-local-db/);
+    assert.match(lines[0], /deleted/);
+
+    // Second call, nothing left: says so, doesn't throw.
+    const lines2 = [];
+    resetLocalD1(apiDir, undefined, (l) => lines2.push(l));
+    assert.match(lines2[0], /nothing to delete/);
   });
 });
 

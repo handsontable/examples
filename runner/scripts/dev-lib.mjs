@@ -16,7 +16,7 @@
 //   O11Y_MINIO_CONSOLE_PORT, O11Y_CLICKHOUSE_PORT, O11Y_CLICKHOUSE_NATIVE_PORT,
 //   O11Y_SLACK_CAPTURE_PORT, COMPOSE_PROJECT_NAME, WRANGLER_REGISTRY_PATH
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -39,10 +39,15 @@ Tiers:
                server.
 
 Options:
-  --replay     (--tier=full only) run the OTLP/Faro fixture replay once,
-               after the o11y worker reports ready. Without this flag,
-               dev.mjs just prints the replay command.
-  -h, --help   Print this help and exit 0.
+  --replay          (--tier=full only) run the OTLP/Faro fixture replay once,
+                    after the o11y worker reports ready. Without this flag,
+                    dev.mjs just prints the replay command.
+  --reset-local-db  (--tier=2 or --tier=full only) delete workers/api's local
+                    D1 state (workers/api/.wrangler/state/v3/d1) and the
+                    applied-migrations record before starting, then run every
+                    migration fresh. Passing this flag IS the confirmation —
+                    it prints what it deleted and does not prompt.
+  -h, --help        Print this help and exit 0.
 
 Port overrides (env vars — defaults match the ones documented in
 docs/run-and-deploy.md's "Run locally" section):
@@ -74,12 +79,15 @@ export function parseArgs(argv) {
   const errors = [];
   let tier = null;
   let replay = false;
+  let resetLocalDb = false;
   let help = false;
   for (const arg of argv) {
     if (arg === "-h" || arg === "--help") {
       help = true;
     } else if (arg === "--replay") {
       replay = true;
+    } else if (arg === "--reset-local-db") {
+      resetLocalDb = true;
     } else if (arg.startsWith("--tier=")) {
       const value = arg.slice("--tier=".length);
       if (value !== "1" && value !== "2" && value !== "full") {
@@ -97,7 +105,10 @@ export function parseArgs(argv) {
   if (replay && tier !== "full" && tier !== null) {
     errors.push("--replay is only valid with --tier=full");
   }
-  return { help, tier, replay, errors };
+  if (resetLocalDb && tier !== "2" && tier !== "full" && tier !== null) {
+    errors.push("--reset-local-db is only valid with --tier=2 or --tier=full");
+  }
+  return { help, tier, replay, resetLocalDb, errors };
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +168,17 @@ export function resolvePorts(tier, env = process.env) {
     }
     resolved[key] = value;
   }
+  assertNoPortCollisions(resolved);
+  return resolved;
+}
+
+/** Throws if any two of `resolved`'s own port values collide. Exported so a
+ *  caller that MUTATES an already-resolved ports object after the fact (e.g.
+ *  `dev.mjs` adopting a `.dev.vars`-pinned port — see
+ *  `resolveDevVarsPortAdoption`) can re-run the same check `resolvePorts`
+ *  itself runs, rather than silently allowing the adopted port to collide
+ *  with another already-resolved one. */
+export function assertNoPortCollisions(resolved) {
   const byPort = new Map();
   for (const [key, value] of Object.entries(resolved)) {
     if (byPort.has(value)) {
@@ -164,14 +186,13 @@ export function resolvePorts(tier, env = process.env) {
     }
     byPort.set(value, key);
   }
-  return resolved;
 }
 
 // ---------------------------------------------------------------------------
 // .dev.vars bootstrap
 // ---------------------------------------------------------------------------
 
-const defaultFs = { existsSync, readFileSync, writeFileSync, mkdirSync };
+const defaultFs = { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync };
 
 /**
  * Copies `examplePath` to `devVarsPath` ONLY when `devVarsPath` does not
@@ -260,26 +281,65 @@ export function o11yDevVarsPatch(ports) {
 export const O11Y_DEVVARS_STRIP_KEYS = ["O11Y_SESSION_SECRET"];
 
 /**
+ * Resolves a `.dev.vars` key that pins a `host:port` value (`PREVIEW_HOST`,
+ * `SLACK_WEBHOOK_URL`) against the port this run otherwise resolved.
+ * Wrangler's `.dev.vars` always wins over `--var` for a key it declares (see
+ * this file's module doc comment), so when the declared port disagrees with
+ * this run's resolved port, the `.dev.vars` value is the one that will
+ * actually be reached regardless of what this script decided — a bare
+ * warning that leaves the script pointed at the WRONG port (e.g. the vite
+ * proxy's `API_DEV_PORT`) is what produced the original port-drift bug.
+ *
+ * `explicit` says whether the developer explicitly overrode this port's env
+ * var for THIS run (e.g. `API_DEV_PORT` set in the environment):
+ *  - `explicit: false` (the common case — no override) ADOPTS the
+ *    `.dev.vars`-declared port: `.dev.vars` was already going to win, so
+ *    matching it is what makes every OTHER piece this script controls (the
+ *    worker's own `--port`, the vite proxy target, the printed URLs) agree
+ *    with reality instead of silently disagreeing with it.
+ *  - `explicit: true` WARNS instead and leaves `currentPort` alone — an
+ *    explicit override is the developer's deliberate choice; silently
+ *    discarding it in favor of the file would be the surprising direction.
+ *
+ * @returns {{ port: number, adopted: boolean, message: string|null }}
+ */
+export function resolveDevVarsPortAdoption({ devVarsPath, key, currentPort, explicit, fs = defaultFs }) {
+  const value = readDevVarsLine(devVarsPath, key, fs);
+  if (value === undefined) return { port: currentPort, adopted: false, message: null };
+  const m = /:(\d+)(?:\/|$)/.exec(value);
+  if (!m) return { port: currentPort, adopted: false, message: null };
+  const declaredPort = Number(m[1]);
+  if (declaredPort === currentPort) return { port: currentPort, adopted: false, message: null };
+  if (explicit) {
+    return {
+      port: currentPort,
+      adopted: false,
+      message:
+        `${devVarsPath} declares ${key}=${value} (port ${declaredPort}), but this run resolved port ` +
+        `${currentPort} — .dev.vars always wins over this script's own port choice for a key it declares. ` +
+        `Edit ${devVarsPath} by hand, or delete it and re-run to get a fresh bootstrap at the new port.`,
+    };
+  }
+  return {
+    port: declaredPort,
+    adopted: true,
+    message:
+      `${devVarsPath} declares ${key}=${value} (port ${declaredPort}) — adopting it for this run since no ` +
+      `explicit port override was set; .dev.vars always wins over this script's own port choice for a key it declares.`,
+  };
+}
+
+/**
  * Warns (does not throw — this is advisory, not fatal) when a `.dev.vars`
  * value baked in at bootstrap time (a `localhost:<port>`-shaped default)
- * disagrees with the port this run actually resolved — the situation where
- * a developer set a port-override env var AFTER their `.dev.vars` was
- * already bootstrapped with the old default, and `.dev.vars` silently wins
- * over any `--var` this run would otherwise pass for the same key.
+ * disagrees with the port this run actually resolved AND that port was
+ * explicitly requested (`resolveDevVarsPortAdoption`'s `explicit: true`
+ * branch) — the situation where a developer set a port-override env var
+ * AFTER their `.dev.vars` was already bootstrapped with the old default.
  * @returns {string|null} a warning line, or null if there's no drift to report
  */
 export function checkDevVarsPortDrift(devVarsPath, key, expectedPort, fs = defaultFs) {
-  const value = readDevVarsLine(devVarsPath, key, fs);
-  if (value === undefined) return null;
-  const m = /:(\d+)(?:\/|$)/.exec(value);
-  if (!m) return null;
-  const declaredPort = Number(m[1]);
-  if (declaredPort === expectedPort) return null;
-  return (
-    `${devVarsPath} declares ${key}=${value} (port ${declaredPort}), but this run resolved port ` +
-    `${expectedPort} — .dev.vars always wins over this script's own port choice for a key it declares. ` +
-    `Edit ${devVarsPath} by hand, or delete it and re-run to get a fresh bootstrap at the new port.`
-  );
+  return resolveDevVarsPortAdoption({ devVarsPath, key, currentPort: expectedPort, explicit: true, fs }).message;
 }
 
 /**
@@ -408,7 +468,177 @@ function writeAppliedMigrations(recordPath, files, fs) {
   fs.writeFileSync(recordPath, JSON.stringify([...files].sort(), null, 2) + "\n");
 }
 
+function recordMigrationApplied(recordPath, file, fs) {
+  const already = readAppliedMigrations(recordPath, fs);
+  writeAppliedMigrations(recordPath, [...already, file], fs);
+}
+
 const defaultFsWithReaddir = { ...defaultFs, readdirSync, statSync };
+
+// ---------------------------------------------------------------------------
+// Migration schema probe — adopts a local D1 that was migrated before this
+// script's applied-migrations record existed (or by hand, matching the exact
+// bug this fixes: a developer's pre-existing local D1 re-applied from 0001,
+// where 0003_cost_ledger.sql's bare `ALTER TABLE demos ADD COLUMN
+// artifacts_purged_at` — no `IF NOT EXISTS`, SQLite has no such clause for a
+// column — died with `duplicate column name`).
+// ---------------------------------------------------------------------------
+
+/** Strips `--` line comments, then splits on `;` into individual statements.
+ *  Good enough for this repo's own migrations (never a `;` inside a string
+ *  literal or a trigger body) — not a general SQL parser. */
+function splitStatements(sql) {
+  return sql
+    .replace(/--[^\n]*/g, "")
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Extracts a migration file's "checkable, additive" targets: `CREATE TABLE`,
+ * `CREATE [UNIQUE] INDEX`, and `ALTER TABLE ... ADD [COLUMN] ...` — the
+ * shapes whose effect can be checked generically against a schema snapshot
+ * (`snapshotLocalSchema`/`isMigrationAlreadyApplied` below).
+ *
+ * Deliberately conservative: an empty file, or a file containing ANY other
+ * statement shape (e.g. `DROP INDEX`, a bare `UPDATE`/`INSERT`, a table
+ * `RENAME`), is marked `checkable: false` — this migrations dir has exactly
+ * one such file, 0002_buildkey_nonunique.sql, whose `DROP INDEX
+ * idx_demos_buildkey` exists precisely to fix a design error (a UNIQUE index
+ * that should not have been unique); a name-only probe would see the OLD
+ * unique index and wrongly report the file's target as "already exists",
+ * skipping the very fix it exists to apply. 0002 is fully idempotent on its
+ * own (`IF EXISTS`/`IF NOT EXISTS` throughout), so simply running it again is
+ * correct and safe — `checkable: false` just means "don't try to skip it".
+ *
+ * @returns {{ checkable: boolean, targets: Array<
+ *   {type:'table', name:string} | {type:'index', name:string} |
+ *   {type:'column', table:string, name:string}
+ * > }}
+ */
+export function parseMigrationTargets(sql) {
+  const statements = splitStatements(sql);
+  if (statements.length === 0) return { checkable: false, targets: [] };
+  const targets = [];
+  for (const stmt of statements) {
+    let m;
+    if ((m = /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`[]?(\w+)["`\]]?/i.exec(stmt))) {
+      targets.push({ type: "table", name: m[1] });
+      continue;
+    }
+    if ((m = /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["`[]?(\w+)["`\]]?/i.exec(stmt))) {
+      targets.push({ type: "index", name: m[1] });
+      continue;
+    }
+    if ((m = /^ALTER\s+TABLE\s+["`[]?(\w+)["`\]]?\s+ADD\s+(?:COLUMN\s+)?["`[]?(\w+)["`\]]?/i.exec(stmt))) {
+      targets.push({ type: "column", table: m[1], name: m[2] });
+      continue;
+    }
+    // Any other statement shape — this file's effect can't be probed
+    // generically, so it's never a candidate for "adopt without running".
+    return { checkable: false, targets: [] };
+  }
+  return { checkable: true, targets };
+}
+
+async function queryD1Json(query, args) {
+  const raw = await query(args);
+  const parsed = JSON.parse(raw);
+  return parsed[0]?.results ?? [];
+}
+
+/**
+ * One schema snapshot of the local D1: every table/index name in
+ * `sqlite_master`, plus the column list (`PRAGMA table_info`) for each table
+ * in `tables` — one `wrangler d1 execute --json` round trip per query, not
+ * per target (a `wrangler` spawn costs real wall-clock seconds, and a
+ * migrations dir touches only a handful of distinct tables via `ALTER TABLE`
+ * — `demos` is the only one today).
+ * @param {(args: string[]) => Promise<string>|string} query injectable —
+ *   real callers run `wrangler d1 execute <db> --local --json --command=...`
+ *   and return raw stdout; tests stub it.
+ */
+export async function snapshotLocalSchema({ dbName, tables, query }) {
+  const objects = await queryD1Json(query, [
+    "d1",
+    "execute",
+    dbName,
+    "--local",
+    "--json",
+    "--command",
+    "SELECT type, name FROM sqlite_master WHERE type IN ('table','index')",
+  ]);
+  const tableNames = new Set(objects.filter((r) => r.type === "table").map((r) => r.name));
+  const indexNames = new Set(objects.filter((r) => r.type === "index").map((r) => r.name));
+  const columns = {};
+  for (const table of tables) {
+    if (!tableNames.has(table)) {
+      columns[table] = new Set();
+      continue;
+    }
+    const rows = await queryD1Json(query, ["d1", "execute", dbName, "--local", "--json", "--command", `PRAGMA table_info(${table})`]);
+    columns[table] = new Set(rows.map((r) => r.name));
+  }
+  return { tableNames, indexNames, columns };
+}
+
+/** True when EVERY target a migration file declares (per `parseMigrationTargets`)
+ *  already exists in `snapshot` — the condition for adopting the file as
+ *  already-applied instead of running it. A file with zero targets (e.g.
+ *  `checkable: false`, or a genuinely empty file) is never adopted — that
+ *  would be vacuously "true" for a file whose effect was never checked. */
+export function isMigrationAlreadyApplied(targets, snapshot) {
+  if (targets.length === 0) return false;
+  return targets.every((t) => {
+    if (t.type === "table") return snapshot.tableNames.has(t.name);
+    if (t.type === "index") return snapshot.indexNames.has(t.name);
+    if (t.type === "column") return snapshot.columns[t.table]?.has(t.name) ?? false;
+    return false;
+  });
+}
+
+/** Typed error `applyMigrations` throws on any failure (a real `d1 execute`
+ *  failure, or a schema-probe query failure) — carries what `dev.mjs` needs
+ *  to print ONE clean line instead of letting a raw `execFileSync` stack
+ *  trace reach the top-level `main().catch`. `file` is `null` for a
+ *  probe-query failure (not tied to one specific migration file). */
+export class MigrationError extends Error {
+  constructor({ file, sqliteMessage, recordPath, action }) {
+    const where = file ? `migration ${file}` : "the local D1 schema probe";
+    super(`${action} ${where} failed: ${sqliteMessage}`);
+    this.name = "MigrationError";
+    this.file = file;
+    this.sqliteMessage = sqliteMessage;
+    this.recordPath = recordPath;
+  }
+}
+
+/** Pulls the actual SQLite error text out of a failed `wrangler` invocation
+ *  (an `execFileSync`-shaped error, with `.stderr`/`.stdout` Buffers or
+ *  strings) — wrangler prints `✘ [ERROR] <message>` to stderr wrapped in ANSI
+ *  color codes (confirmed against wrangler 4.108's own output for a real
+ *  `duplicate column name` failure). Falls back to the last non-empty line
+ *  of whatever output is available, then to the raw error's own `.message`,
+ *  so this never throws trying to format another error. */
+function extractSqliteMessage(err) {
+  const chunk = (v) => (v === undefined || v === null ? "" : v.toString("utf8"));
+  const raw = chunk(err.stderr) + chunk(err.stdout);
+  const clean = raw.replace(/\x1b\[[0-9;]*m/g, "");
+  const m = /✘\s*\[ERROR\]\s*(.+)/.exec(clean);
+  if (m) return m[1].trim();
+  const lastLine = clean
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .pop();
+  return lastLine || err.message || String(err);
+}
+
+function toMigrationError({ file, recordPath, cause, action }) {
+  if (cause instanceof MigrationError) return cause;
+  return new MigrationError({ file, sqliteMessage: extractSqliteMessage(cause), recordPath, action });
+}
 
 /** Every `NNNN_*.sql` file on disk, sorted, split into already-applied
  *  (per the record) and pending. Pure — takes no action. */
@@ -431,31 +661,120 @@ export function planMigrations({ migrationsDir, recordPath, fs = defaultFsWithRe
  * batch at the end, so a failure partway through never re-applies a file
  * that already landed.
  *
+ * Before running any file, if `query` is given, takes a schema snapshot of
+ * the local D1 (`snapshotLocalSchema`) and adopts (records as applied,
+ * without running) any pending file whose targets ALL already exist there
+ * (`isMigrationAlreadyApplied`) — this is what safely absorbs a local D1
+ * that was migrated (by hand, or by `dev.mjs` itself before this task) with
+ * no applied-migrations record: re-running a file that already landed used
+ * to fail on its first non-idempotent statement (0003/0007's bare
+ * `ALTER TABLE ... ADD COLUMN`) with a raw `duplicate column name` error.
+ * Re-snapshots after every file that actually runs, so a later file's probe
+ * sees that file's own effect. `query` is optional — omitting it (as every
+ * existing caller/test here does) skips probing entirely and always runs
+ * every pending file, unchanged from this function's original behavior.
+ *
+ * Any failure — a real `d1 execute` failure, or (when `query` is given) a
+ * probe-query failure — throws a {@link MigrationError} naming the file (or
+ * `null` for a probe failure), the SQLite message, and `recordPath`, instead
+ * of letting a raw `execFileSync` error (a stack trace) escape. Genuinely
+ * different errors are never swallowed as "already applied" — only a file
+ * whose targets the probe actually found already present is skipped;
+ * anything else still runs and can still fail loudly.
+ *
  * @param {object} opts
  * @param {string} opts.migrationsDir
  * @param {string} opts.recordPath
  * @param {string} opts.dbName
- * @param {string} opts.cwd
  * @param {(args: string[]) => Promise<void>|void} opts.run injectable —
- *   real callers pass a `node_modules/.bin/wrangler d1 execute ...` runner;
- *   tests pass a stub that just records calls.
+ *   real callers pass a `node_modules/.bin/wrangler d1 execute ...` runner
+ *   (stdio inherited, for live output); tests pass a stub that just records
+ *   calls (or throws an `execFileSync`-shaped error to simulate a failure).
+ * @param {(args: string[]) => Promise<string>|string} [opts.query] injectable
+ *   — real callers run `wrangler d1 execute ... --json` and return raw
+ *   stdout; omit to skip the schema probe entirely.
  * @param {(line: string) => void} [opts.log]
+ * @returns {Promise<{ applied: string[], adopted: string[] }>} `applied` is
+ *   every file this run actually ran; `adopted` is every file this run
+ *   recorded as applied WITHOUT running it (the probe's skip list).
  */
-export async function applyMigrations({ migrationsDir, recordPath, dbName, run, fs = defaultFsWithReaddir, log = () => {} }) {
+export async function applyMigrations({ migrationsDir, recordPath, dbName, run, query, fs = defaultFsWithReaddir, log = () => {} }) {
   const { pending } = planMigrations({ migrationsDir, recordPath, fs });
   if (pending.length === 0) {
     log("migrations: nothing to apply (all recorded as already applied)");
-    return { applied: [] };
+    return { applied: [], adopted: [] };
   }
+
+  const parsed = pending.map((file) => {
+    const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
+    return { file, ...parseMigrationTargets(sql) };
+  });
+  const alterTables = [...new Set(parsed.flatMap((p) => p.targets.filter((t) => t.type === "column").map((t) => t.table)))];
+
+  async function takeSnapshot() {
+    try {
+      return await snapshotLocalSchema({ dbName, tables: alterTables, query });
+    } catch (cause) {
+      throw toMigrationError({ file: null, recordPath, cause, action: "probing" });
+    }
+  }
+
+  let snapshot = query ? await takeSnapshot() : null;
   const appliedThisRun = [];
-  for (const file of pending) {
+  const adoptedThisRun = [];
+  for (const { file, checkable, targets } of parsed) {
+    if (snapshot && checkable && isMigrationAlreadyApplied(targets, snapshot)) {
+      log(`migration ${file}: every target already exists in the local D1 — adopting it as already applied (not running it)`);
+      adoptedThisRun.push(file);
+      recordMigrationApplied(recordPath, file, fs);
+      continue;
+    }
     log(`applying migration ${file}`);
-    await run(["d1", "execute", dbName, "--local", `--file=migrations/${file}`, "-y"]);
+    try {
+      await run(["d1", "execute", dbName, "--local", `--file=migrations/${file}`, "-y"]);
+    } catch (cause) {
+      throw toMigrationError({ file, recordPath, cause, action: "applying" });
+    }
     appliedThisRun.push(file);
-    const already = readAppliedMigrations(recordPath, fs);
-    writeAppliedMigrations(recordPath, [...already, file], fs);
+    recordMigrationApplied(recordPath, file, fs);
+    if (query && alterTables.length > 0) snapshot = await takeSnapshot();
   }
-  return { applied: appliedThisRun };
+  return { applied: appliedThisRun, adopted: adoptedThisRun };
+}
+
+/** Formats a caught {@link MigrationError} (or any other error) as ONE clean
+ *  line for `dev.mjs`'s own top-level catch — never a raw stack trace — plus
+ *  a recovery line naming the applied-migrations record and, if the caller
+ *  passed `mentionReset`, the `--reset-local-db` flag. */
+export function formatMigrationError(err, { mentionReset = true } = {}) {
+  if (err instanceof MigrationError) {
+    const resetHint = mentionReset ? ", or wipe local D1 state and start over with `--reset-local-db`" : "";
+    return (
+      `error: ${err.message}\n` +
+      `  Recovery: inspect/edit the applied-migrations record at ${err.recordPath}${resetHint}.`
+    );
+  }
+  return `error: migrations failed: ${err.message ?? err}`;
+}
+
+/** Deletes workers/api's local D1 state (`.wrangler/state/v3/d1`) and the
+ *  applied-migrations record (`migrationRecordPath`) — the two `dev-lib.mjs`
+ *  otherwise keeps in lockstep (see `migrationRecordPath`'s own doc comment).
+ *  Passing `--reset-local-db` on the CLI IS the confirmation (no interactive
+ *  prompt from a script that's meant to run unattended); this function just
+ *  logs exactly what it found and deleted, so the action is never silent. */
+export function resetLocalD1(apiDir, fs = defaultFs, log = () => {}) {
+  const stateDir = path.join(apiDir, ".wrangler", "state", "v3", "d1");
+  const recordPath = migrationRecordPath(apiDir);
+  const hadState = fs.existsSync(stateDir);
+  const hadRecord = fs.existsSync(recordPath);
+  if (hadState) fs.rmSync(stateDir, { recursive: true, force: true });
+  if (hadRecord) fs.rmSync(recordPath, { force: true });
+  if (hadState || hadRecord) {
+    log(`--reset-local-db: deleted ${hadState ? stateDir : ""}${hadState && hadRecord ? " and " : ""}${hadRecord ? recordPath : ""}`);
+  } else {
+    log("--reset-local-db: no local D1 state or applied-migrations record found — nothing to delete");
+  }
 }
 
 // ---------------------------------------------------------------------------

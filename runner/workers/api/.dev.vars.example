@@ -5,10 +5,13 @@
 #
 # Both values below are non-secret dev-only bypasses (auth.ts, index.ts) and
 # already match this script's own documented default ports (API_DEV_PORT
-# 8787). If you override API_DEV_PORT, edit PREVIEW_HOST here to match —
-# wrangler's `.dev.vars` always wins over this script's own `--var`, so a
-# mismatched port here is NOT silently corrected for you (dev.mjs prints a
-# warning when it notices the drift).
+# 8787). If you edit PREVIEW_HOST here to a different port WITHOUT also
+# setting the API_DEV_PORT env var, dev.mjs ADOPTS this file's port for the
+# run (prints an info line) instead of starting pointed at the wrong one —
+# wrangler's `.dev.vars` always wins over this script's own `--var`, so this
+# file's value was always going to be the one actually reached. Only an
+# EXPLICIT API_DEV_PORT env var that disagrees with this file gets a warning
+# instead (your explicit choice is never silently overridden).
 
 # Local login bypass — an internal @handsontable.com address, checked in
 # auth.ts AFTER the persistent-API-token check. See AGENTS.md.
