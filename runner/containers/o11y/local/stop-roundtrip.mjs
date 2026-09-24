@@ -188,6 +188,16 @@ function boxContainerId() {
   return res.stdout.trim();
 }
 
+/** The supervisor's own stdout log lines for a container (B-I2, second
+ *  wave) — used to confirm which branch of `run_stop_protocol` actually
+ *  refused the marker (a listing failure vs. an upload failure vs. neither
+ *  applying), rather than inferring it only from "no marker" (which both
+ *  branches, and several others, all produce identically). */
+function boxLogs(containerId) {
+  const res = sh("docker", ["logs", containerId], { allowFail: true });
+  return `${res.stdout}\n${res.stderr}`;
+}
+
 // --- main -------------------------------------------------------------------
 
 async function main() {
@@ -453,6 +463,79 @@ async function main() {
     !markerExists(wakeIdC1),
     `state/wakes/${wakeIdC1}/clean, box exit=${exitCodeC1}`,
   );
+  // B-I2 (second wave): confirm WHICH branch refused the marker — a blocked
+  // PUT ("no index object bearing uploader name … is new since before
+  // SIGTERM"), not a coincidentally-also-failing listing. "No marker" alone
+  // is consistent with several different refusal branches; the log line
+  // pins down the one this scenario is actually supposed to exercise.
+  const logsC1 = boxLogs(containerIdC1);
+  record(
+    "C1: the log confirms the PUT-blocked branch specifically refused it (not a listing failure)",
+    /is new since before SIGTERM/.test(logsC1),
+    logsC1.includes("is new since before SIGTERM") ? "found" : "not found in supervisor log",
+  );
+
+  // ---- D1 negative control (B-I2, second wave): a failed pre-SIGTERM
+  // LISTING (not a blocked PUT) also writes no marker -------------------
+  //
+  // C1 above proves the PUT-blocked path. This proves the OTHER path the
+  // rereview asked for: `r2_list_prefix`'s own listing call itself fails
+  // (ListBucket denied), which must make `snapshot_ok=0` and refuse the
+  // marker BEFORE any upload confirmation is even attempted — the exact
+  // shape `pipeline/o11y-shutdown-snapshot.test.mjs`'s "B-I2, second wave"
+  // tests prove at the shell-function level with a stubbed curl; this is
+  // the same shape against a REAL MinIO ListBucket denial and a real Loki.
+  console.log("\n== D1 negative control (B-I2): a failed pre-SIGTERM listing writes no marker ==");
+  const LIST_DENY_USER = `list-deny-${RUN_ID}`;
+  const LIST_DENY_PASSWORD = `list-deny-pw-${RUN_ID}`;
+  const LIST_DENY_POLICY = `deny-list-${RUN_ID}`;
+  // ListBucket is evaluated against the BUCKET's own ARN, never `/*` (which
+  // only ever matches object-level actions) — get this wrong and the deny
+  // silently does nothing, and the "negative control" would pass for
+  // having tested nothing.
+  setupRestrictedMinioUser(LIST_DENY_USER, LIST_DENY_PASSWORD, LIST_DENY_POLICY, {
+    Effect: "Deny",
+    Action: ["s3:ListBucket"],
+    Resource: ["arn:aws:s3:::loki"],
+  });
+
+  const wakeIdD1 = `roundtrip-d1-${RUN_ID}`;
+  sh("docker", [
+    "compose", "-p", PROJECT, "-f", "compose.yml",
+    "up", "-d", "--no-deps", "--force-recreate", "box",
+  ], {
+    env: {
+      O11Y_WAKE_ID: wakeIdD1,
+      O11Y_LOKI_S3_ACCESS_KEY_ID: LIST_DENY_USER,
+      O11Y_LOKI_S3_SECRET_ACCESS_KEY: LIST_DENY_PASSWORD,
+    },
+  });
+  const readyMsD1 = await waitReadyForBox();
+  // Ready under a ListBucket-denied credential proves Loki's own boot path
+  // does not itself need ListBucket — so a later "no marker" is
+  // attributable to the shutdown-time listing this test targets, not to a
+  // boot-time side effect of the same denied permission.
+  record("D1: box (ListBucket-denied credential) became ready — boot itself does not need ListBucket", readyMsD1 >= 0, `${readyMsD1}ms`);
+
+  const containerIdD1 = boxContainerId();
+  const pushStatusD1 = await pushLines("browser", [`roundtrip-d1-line-${RUN_ID}`], { "hot.demo_id": "r-roundtrip" });
+  record("D1: push accepted under the ListBucket-denied credential — ingest itself does not need ListBucket either", pushStatusD1 === 204, `HTTP ${pushStatusD1}`);
+  await sleep(300);
+
+  sh("docker", ["kill", "-s", "TERM", containerIdD1]);
+  sh("docker", ["wait", containerIdD1]);
+  const exitCodeD1 = sh("docker", ["inspect", containerIdD1, "--format", "{{.State.ExitCode}}"]).stdout.trim();
+  record(
+    "D1: no marker written when the pre-SIGTERM index LISTING is blocked",
+    !markerExists(wakeIdD1),
+    `state/wakes/${wakeIdD1}/clean, box exit=${exitCodeD1}`,
+  );
+  const logsD1 = boxLogs(containerIdD1);
+  record(
+    "D1: the log confirms the LISTING-failure branch specifically refused it (shutdown.sh's own snapshot_ok gate)",
+    /pre-SIGTERM index listing failed/.test(logsD1),
+    logsD1.includes("pre-SIGTERM index listing failed") ? "found" : "not found in supervisor log",
+  );
 
   // Revert evidence lives in the T01 report (fix round 1): the same
   // seed-then-SIGTERM sequence run against the pre-fix "does one exist"
@@ -479,12 +562,22 @@ async function main() {
   }
 }
 
-function setupRestrictedMinioUser(user, password, policyName) {
+// `denyStatement` (B-I2's D1 negative control, second wave, added alongside
+// C1's original PutObject-deny): a single extra `Deny` statement layered
+// on top of the same base `Allow s3:* on the whole bucket` every restricted
+// user starts from. Defaults to C1's own PutObject-on-`index/*` deny so
+// existing callers are unaffected.
+function setupRestrictedMinioUser(
+  user,
+  password,
+  policyName,
+  denyStatement = { Effect: "Deny", Action: ["s3:PutObject"], Resource: ["arn:aws:s3:::loki/index/*"] },
+) {
   const policy = JSON.stringify({
     Version: "2012-10-17",
     Statement: [
       { Effect: "Allow", Action: ["s3:*"], Resource: ["arn:aws:s3:::loki", "arn:aws:s3:::loki/*"] },
-      { Effect: "Deny", Action: ["s3:PutObject"], Resource: ["arn:aws:s3:::loki/index/*"] },
+      denyStatement,
     ],
   });
   const script = [
