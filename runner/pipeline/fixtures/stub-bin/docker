@@ -1,0 +1,16 @@
+#!/bin/bash
+# A minimal `docker` stand-in for pipeline/dev-script.test.mjs's
+# Docker-missing CLI test. Only understands `docker info` (what
+# dev-lib.mjs#isDockerAvailable actually shells out to) — anything else
+# exits 1 unconditionally, since no test here should ever get that far.
+set -u
+if [ "${1:-}" = "info" ]; then
+  if [ "${STUB_DOCKER_MODE:-ok}" = "fail" ]; then
+    echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2
+    exit 1
+  fi
+  echo "stub docker info: ok"
+  exit 0
+fi
+echo "stub docker: unsupported subcommand $*" >&2
+exit 1

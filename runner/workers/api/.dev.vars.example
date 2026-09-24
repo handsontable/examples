@@ -1,0 +1,22 @@
+# Copy to .dev.vars (gitignored) for `wrangler dev`. Never commit real values.
+# `runner/scripts/dev.mjs` (pnpm dev:live / dev:full) bootstraps this
+# automatically on first run, the same way workers/o11y/.dev.vars.example is
+# bootstrapped — see docs/run-and-deploy.md's "Run locally" section.
+#
+# Both values below are non-secret dev-only bypasses (auth.ts, index.ts) and
+# already match this script's own documented default ports (API_DEV_PORT
+# 8787). If you override API_DEV_PORT, edit PREVIEW_HOST here to match —
+# wrangler's `.dev.vars` always wins over this script's own `--var`, so a
+# mismatched port here is NOT silently corrected for you (dev.mjs prints a
+# warning when it notices the drift).
+
+# Local login bypass — an internal @handsontable.com address, checked in
+# auth.ts AFTER the persistent-API-token check. See AGENTS.md.
+DEV_AUTH_EMAIL="dev@handsontable.com"
+
+# Overrides wrangler.jsonc's real default (demos.handsontable.com) so Tier-2
+# container preview URLs come out as *.localhost:8787 — browsers treat that
+# as 127.0.0.1 (RFC 6761) and reach your local `wrangler dev`. Must stay a
+# non-production host: it also selects the local (vs. production) telemetry
+# sink (telemetry/resource.ts).
+PREVIEW_HOST="localhost:8787"
