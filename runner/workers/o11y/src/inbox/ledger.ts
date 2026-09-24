@@ -60,6 +60,23 @@ const WAKE_PREFIX = "wake:";
 const KEY_PREFIX = "key:";
 const DONE_PREFIX = "done:";
 const PROVISIONAL_PREFIX = "provisional:";
+// Fix round (finding B-M5): the box's `o11y.drain` point never emitted the
+// contract's `reason: "reopen"` value (`docs/observability-contract.md`'s
+// `o11y.drain` row / `METRICS["o11y.drain"].values.reason`, which already
+// lists it) — `nextWrittenKeys` deliberately does not distinguish a
+// reopened key from an ordinary one (see its own doc comment: sort order
+// alone gives reopened keys drain PRIORITY, which is all the ledger itself
+// needs). Reporting *that a drain replayed reopened keys* needs a real
+// signal, so `reopenWindow` now also drops a one-shot marker per key it
+// moves to `written` — consumed (read AND deleted) by `takeReopenedFlag`,
+// called once per drain batch (`box.ts#drainStepBody`). A marker is
+// deliberately transient: it exists only to answer "was any key in the
+// batch just drained a reopen" once, not to track reopen provenance
+// forever.
+const REOPEN_MARK_PREFIX = "reopenmark:";
+function reopenMarkStorageKey(inboxKey: string): string {
+  return `${REOPEN_MARK_PREFIX}${inboxKey}`;
+}
 
 /** Contract §8: inbox objects live 7 days (R2 lifecycle). A `done:<key>`
  *  entry (a committed key, kept only so a manual reopen can find it) is
@@ -542,6 +559,13 @@ export async function reopenWindow(
   }
 
   const reopened = Object.keys(writes).length;
+  // Fix round (finding B-M5): one transient `reopenmark:` per key this call
+  // moves to `written`, in the SAME transaction as the `written` write
+  // itself — see this file's `REOPEN_MARK_PREFIX` doc comment.
+  const marks: Record<string, 1> = {};
+  for (const storageKey of Object.keys(writes)) {
+    marks[reopenMarkStorageKey(inboxKeyOf(storageKey))] = 1;
+  }
   // N2: both a large reopen window and the real DO 128-key limit mean this
   // must chunk; wrapped in one transaction (rather than two independent
   // top-level calls) so a crash mid-chunk never leaves a `done:` entry
@@ -549,10 +573,32 @@ export async function reopenWindow(
   // written (or the reverse) — the same atomicity-trap fix as
   // `finalizeWakeResolution`, above.
   await storage.transaction(async (txn) => {
-    if (reopened > 0) await putChunked(txn, writes);
+    if (reopened > 0) {
+      await putChunked(txn, writes);
+      await putChunked(txn, marks);
+    }
     if (toDelete.length > 0) await deleteChunked(txn, toDelete);
   });
   return { reopened };
+}
+
+/**
+ * Consumes the reopen markers `reopenWindow` left for any of `inboxKeys`
+ * (fix round B-M5) — reads which of them are marked reopened, deletes those
+ * markers (one-shot: a marker is only meant to be observed once, by the
+ * drain batch that actually replays the key), and reports whether ANY were
+ * found. Called once per drain batch (`box.ts#drainStepBody`) so its
+ * `o11y.drain` point can emit `reason: "reopen"` instead of the wake's own
+ * `backlog`/`visit` reason when the batch it just pushed replayed reopened
+ * keys.
+ */
+export async function takeReopenedFlag(storage: StorageLike, inboxKeys: readonly string[]): Promise<boolean> {
+  if (inboxKeys.length === 0) return false;
+  const markKeys = inboxKeys.map(reopenMarkStorageKey);
+  const found = await getManyChunked(storage, markKeys);
+  if (found.size === 0) return false;
+  await deleteChunked(storage, [...found.keys()]);
+  return true;
 }
 
 /** The current not-over wake's id, or `null` (fully stopped). Used by the

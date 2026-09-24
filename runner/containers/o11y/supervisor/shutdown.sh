@@ -36,11 +36,13 @@
 # index objects across a 90-day retention window (§H) — once it holds over
 # 1000, an unpaginated listing of the bare index/ prefix silently stops
 # seeing the newest (highest-sorting) keys, and every future stop would read
-# as unclean. Scoping the listing to today's (and, for a wake that straddles
-# UTC midnight, yesterday's) single-day table prefix keeps each listing
-# small for the life of the bucket, and searching for this instance's own
-# uploader name distinguishes "we uploaded something" from "some other wake,
-# maybe running concurrently, uploaded something."
+# as unclean. Scoping the listing to one single-day table prefix per day —
+# today's, plus every earlier day a backlogged/reopened record accepted this
+# wake could still land under (fix round B-M8: `INDEX_DAY_SPAN_DAYS`, bounded
+# by Loki's own `reject_old_samples_max_age: 7d`), not just yesterday's —
+# keeps each listing small for the life of the bucket, and searching for
+# this instance's own uploader name distinguishes "we uploaded something"
+# from "some other wake, maybe running concurrently, uploaded something."
 #
 # T01 fix round 1, C1: an uploader-name match alone is not enough. The
 # shipper also uploads on a periodic ~15-minute schedule while Loki runs, so
@@ -63,6 +65,20 @@
 
 STOP_GRACE_SECONDS="${O11Y_STOP_GRACE_SECONDS:-30}"
 
+# Fix round (finding B-M8): the snapshot used to cover only `day_now` and
+# `day_now - 1` — enough for records timestamped "now," but Loki's own
+# `reject_old_samples_max_age: 7d` (loki-config.yaml) means a wake that
+# pushes backlogged/reopened records (ADR-0041's reopen mechanism resends
+# older, previously-dropped data) can legitimately write a NEW TSDB index
+# table under a day prefix up to 7 days in the past — a day this check never
+# looked at, so that upload was never verified before the clean-shutdown
+# marker was written. `INDEX_DAY_SPAN_DAYS` is the upper bound on how old an
+# accepted record's own timestamp can be relative to "now," so it is also
+# the upper bound on how far back a NEW index day-prefix can appear this
+# wake; overridable so a test can exercise the full loop without a 7-day
+# fixture.
+INDEX_DAY_SPAN_DAYS="${O11Y_INDEX_DAY_SPAN_DAYS:-7}"
+
 # F2 fix (final review, B-I2): the snapshot-diff decision, extracted into its
 # own testable functions (previously inlined in `run_stop_protocol`, which
 # needs a real `LOKI_PID`/`GRAFANA_PID` to exercise at all). See
@@ -70,15 +86,18 @@ STOP_GRACE_SECONDS="${O11Y_STOP_GRACE_SECONDS:-30}"
 # proof (stubbed `curl`) that a failed listing is now refused rather than
 # silently read as empty.
 
-# snapshot_index_keys <day_now> <day_prev>  — every uploader-named key under
-# both day prefixes, one per line. Prints nothing and returns 1 if EITHER
-# day's listing could not be confirmed (r2_list_prefix itself fails closed —
-# see lib.sh) — the caller MUST treat that as "cannot confirm," never as
-# "confirmed empty."
+# snapshot_index_keys <day_now>  — every uploader-named key under EVERY day
+# prefix the wake's pushed records could span (`day_now` down through
+# `day_now - INDEX_DAY_SPAN_DAYS`, inclusive — fix round B-M8, was just
+# `day_now`/`day_now - 1`), one per line. Prints nothing and returns 1 if ANY
+# one day's listing could not be confirmed (r2_list_prefix itself fails
+# closed — see lib.sh) — the caller MUST treat that as "cannot confirm,"
+# never as "confirmed empty."
 snapshot_index_keys() {
-  local day_now="$1" day_prev="$2"
-  local keys="" day listing
-  for day in "$day_now" "$day_prev"; do
+  local day_now="$1"
+  local keys="" offset day listing
+  for offset in $(seq 0 "$INDEX_DAY_SPAN_DAYS"); do
+    day=$((day_now - offset))
     if ! listing="$(r2_list_prefix "index/index/${day}/")"; then
       return 1
     fi
@@ -137,11 +156,10 @@ run_stop_protocol() {
     # snapshot can actually be trusted — a FAILED listing (network blip,
     # timeout, 5xx) is no longer silently read as an empty one (see
     # `r2_list_prefix`'s own doc comment in lib.sh).
-    local day_now day_prev before_keys="" snapshot_ok=0
+    local day_now before_keys="" snapshot_ok=0
     if [ "${STORAGE:-s3}" = "s3" ] && [ -n "$uploader_name" ]; then
       day_now=$(( $(date -u +%s) / 86400 ))
-      day_prev=$((day_now - 1))
-      if before_keys="$(snapshot_index_keys "$day_now" "$day_prev")"; then
+      if before_keys="$(snapshot_index_keys "$day_now")"; then
         snapshot_ok=1
       else
         log "pre-SIGTERM index listing failed — cannot confirm a new upload this wake; will refuse the marker"
@@ -176,12 +194,12 @@ run_stop_protocol() {
     # this whole block fixes).
     if [ "$loki_exit" -eq 0 ] && [ -n "${WAKE_ID:-}" ] && [ "${STORAGE:-s3}" = "s3" ] && [ -n "$uploader_name" ] && [ "$snapshot_ok" -eq 1 ]; then
       local after_keys
-      if after_keys="$(snapshot_index_keys "$day_now" "$day_prev")"; then
+      if after_keys="$(snapshot_index_keys "$day_now")"; then
         if confirm_new_upload "$uploader_name" "$before_keys" "$after_keys"; then
           log "new index upload confirmed (not present before SIGTERM)"
           marker_ok=0
         else
-          log "no index object bearing uploader name '${uploader_name}' is new since before SIGTERM under index/index/{${day_now},${day_prev}}/ — not writing a marker (plan B territory, see ADR-0041 exit criterion 1)"
+          log "no index object bearing uploader name '${uploader_name}' is new since before SIGTERM under index/index/{$((day_now - INDEX_DAY_SPAN_DAYS))..${day_now}}/ — not writing a marker (plan B territory, see ADR-0041 exit criterion 1)"
           marker_ok=1
         fi
       else

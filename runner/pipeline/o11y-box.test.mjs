@@ -134,37 +134,53 @@ test("wake(): idempotent while already running/healthy — no second recordWake,
   assert.equal(inboxWriterCalls.length, 1, "recordWake is called exactly once");
 });
 
-test("wake(): refuses while the container is \"stopping\" — never mints a second wakeId over a draining one (C1)", async () => {
+// Fix round (finding B-M1): this test used to assert `wake()` REJECTS while
+// a dedicated `state.status === "stopping"` branch in `box.ts` was hit — a
+// status the real `@cloudflare/containers` library's `stop()` never actually
+// sets (it only signals SIGTERM; `getState()` keeps reporting
+// "running"/"healthy" until the process actually exits). That branch was
+// deleted as dead code. What actually still guards against a second wakeId
+// during the real SIGTERM-pending window is the ALREADY-EXISTING
+// "running"/"healthy" branch returning the persisted wake record — this test
+// now proves THAT: `wake()` called right after `stop()` (still
+// "running"/"healthy" here, exactly like the real library mid-shutdown)
+// returns the SAME first wake record, with no second `recordWake` and no
+// second `start()`. Deliberately uses the STUB'S OWN DEFAULT `stop()` hook
+// (only wrapped for a call count, never replaced) rather than a per-test
+// override, so this test is sensitive to both halves of the fix together:
+// fails if `box.ts`'s dead branch is restored AND the stub is reverted to
+// fabricate `"stopping"` (the exact combination the finding describes) —
+// `wake()` then throws instead of returning the first record.
+test("wake(): idempotent while a stop() SIGTERM is in flight — never mints a second wakeId over a draining one (C1)", async () => {
   const { box, inboxWriterCalls } = makeBox();
   let startCalls = 0;
+  let stopCalls = 0;
   hooks.start = async (self) => {
     startCalls++;
     self._state = { status: "running", lastChange: Date.now() };
+  };
+  const defaultStop = hooks.stop;
+  hooks.stop = async (...args) => {
+    stopCalls++;
+    return defaultStop(...args);
   };
 
   const first = await box.wake("visit");
   assert.equal(inboxWriterCalls.length, 1);
 
-  // The stub's own default `stop` hook (cloudflare-containers-stub.mjs)
-  // already models the platform's "stopping" state — this is exactly the
-  // window a second wake() call can observe while the real
-  // @cloudflare/containers stop() is still in flight (SIGTERM sent, the
-  // container not yet actually exited).
   await box.stop();
-  assert.equal((await box.getState()).status, "stopping");
+  assert.equal(stopCalls, 1);
 
-  await assert.rejects(() => box.wake("backlog"), /stopping/);
+  const second = await box.wake("backlog");
 
   // The bug this guards: falling through to #doWake here would mint a
   // SECOND wakeId and call recordWake again, marking the FIRST (still
   // draining) wake `over: true` in InboxWriter's ledger before its own
   // marker exists — while start()'s own fast path may not even restart a
-  // mid-shutdown process or deliver the new WAKE_ID to it. So: still only
-  // the one recordWake call from the original wake, still only the one
-  // start() call, and the persisted wake record must still be the FIRST
-  // wake's, not a second one.
-  assert.equal(inboxWriterCalls.length, 1, "no second recordWake while stopping");
-  assert.equal(startCalls, 1, "no second start() while stopping");
+  // mid-shutdown process or deliver the new WAKE_ID to it.
+  assert.equal(second.wakeId, first.wakeId, "the draining wake's own record is returned, not a new one");
+  assert.equal(inboxWriterCalls.length, 1, "no second recordWake while the SIGTERM is still in flight");
+  assert.equal(startCalls, 1, "no second start() while the SIGTERM is still in flight");
   const stillTracked = await box.ctx.storage.get("wake");
   assert.equal(stillTracked.wakeId, first.wakeId, "the persisted wake record is still the draining wake's, not a new one");
 });

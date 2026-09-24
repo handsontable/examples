@@ -35,10 +35,24 @@ export function isDeployPayload(v: unknown): v is DeployPayload {
   return typeof d["service"] === "string" && typeof d["sha"] === "string" && typeof d["cf_version_id"] === "string";
 }
 
-/** No explicit event time in the payload (§C.2 names only `service`, `sha`,
- *  `cf_version_id`) — `rawEventTime` is always `""`, so the record's own
- *  timestamp is `receivedAtMs`, and a redelivery of the identical deploy
- *  event (the same CI step retried) still hashes identically. */
+// Fix round (finding A-M7): the payload itself carries no event time (§C.2
+// names only `service`, `sha`, `cf_version_id`), and there is no per-delivery
+// header either — this is a plain authenticated POST from a CI step, not a
+// webhook system with its own delivery id. `rawEventTime` used to be a fixed
+// `""`, so two genuinely different deploys that happen to redeploy the exact
+// same `{service, sha, cf_version_id}` (e.g. a no-op redeploy, or a rollback
+// back to a previous version) inside the same 24h dedupe window
+// (`DEDUPE_WINDOW_MS`) hashed identically and the second one silently
+// vanished. Bucketing the worker's own receive time to the minute gives each
+// such event a distinct `rawEventTime` while still collapsing a genuine
+// network-level retry of the same POST, which lands well inside the same
+// one-minute bucket.
+const RAW_EVENT_TIME_BUCKET_MS = 60_000;
+
+function bucketedReceivedAt(receivedAtMs: number): string {
+  return String(Math.floor(receivedAtMs / RAW_EVENT_TIME_BUCKET_MS));
+}
+
 export async function processDeployPayload(
   payload: DeployPayload,
   env: Env,
@@ -69,7 +83,7 @@ export async function processDeployPayload(
     body: record.body,
     resourceAttributes: record.resourceAttributes,
     attributes: {},
-    rawEventTime: "",
+    rawEventTime: bucketedReceivedAt(receivedAtMs),
   });
   return { hash, record };
 }

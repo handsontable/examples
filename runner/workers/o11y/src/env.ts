@@ -175,9 +175,18 @@ export interface InboxWriterApi {
   backlog(): Promise<{ oldestWrittenAgeMs: number; totalBytes: number; writtenCount: number; drainsPaused: boolean }>;
 
   /** Up to `limit` `written` keys, in key order (re-opened keys sort first —
-   *  see `ledger.ts#nextWrittenKeys`'s doc comment for why no separate
-   *  "re-opened" flag is needed). The drain's own batch source. */
+   *  see `ledger.ts#nextWrittenKeys`'s doc comment for why DRAIN ORDERING
+   *  needs no separate "re-opened" flag). The drain's own batch source. */
   nextWrittenKeys(limit: number): Promise<string[]>;
+
+  /** Fix round (finding B-M5): consumes (reads AND clears) the one-shot
+   *  reopen markers `reopenWindow` left for any of `inboxKeys` — the signal
+   *  `nextWrittenKeys` above deliberately does not carry, since ordering
+   *  alone is enough for drain PRIORITY. `box.ts#drainStepBody` calls this
+   *  once per batch so its `o11y.drain` point can emit `reason: "reopen"`
+   *  when the batch it just pushed replayed reopened keys. See
+   *  `ledger.ts#takeReopenedFlag`. */
+  takeReopenedFlag(inboxKeys: string[]): Promise<boolean>;
 
   /** A key becomes `provisional(wakeId)` only after every one of its
    *  requests to Loki returned `2xx` (ADR §B.3). */
