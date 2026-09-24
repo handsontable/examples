@@ -67,3 +67,47 @@ test("master.yml: deploy-api's if condition refuses to run after deploy-o11y was
     "the existing failure guard must still be present alongside the cancellation guard",
   );
 });
+
+// Minor triage item 3 (C-M3): each deploy step's `Current Version ID:` grep
+// runs under `set -o pipefail`. If wrangler's own output wording ever
+// changes, the grep finds nothing, exits 1, and (with no `|| true`) that
+// failure propagates through the pipe and the `$(...)` assignment, failing
+// the step — and the JOB — even though the deploy already shipped, skipping
+// the deploy-event report and the smoke test that follow. Reverting any one
+// `|| true` makes its assertion below fail.
+test("master.yml: every 'Current Version ID:' grep is guarded with || true", () => {
+  const lines = [...source.matchAll(/^.*version_id=\$\(grep -oE 'Current Version ID:.*$/gm)].map((m) => m[0]);
+  assert.ok(lines.length >= 3, "expected at least 3 deploy steps (authoring, api, o11y) to extract a version id");
+  for (const line of lines) {
+    assert.match(
+      line.trimEnd(),
+      /\)\s*\|\|\s*true$/,
+      `version_id assignment must end in '|| true': ${line}`,
+    );
+  }
+});
+
+// Minor triage item 4 (C-M5): the API-worker path gate used to match ALL of
+// `containers/`, so a Grafana-box image edit under `containers/o11y/` also
+// redeployed the API worker and rebuilt/pushed the unrelated Tier-2 image.
+// Narrowed to `containers/(live|builder)/`; `deploy-o11y` must still gate on
+// `containers/o11y/` specifically (unchanged, checked here too so a future
+// edit can't narrow that line by accident while fixing this one).
+test("master.yml: the API path gate is narrowed to containers/(live|builder)/, and the o11y gate still covers containers/o11y/", () => {
+  const changesJobStart = source.indexOf("\n  changes:");
+  const changesJobEnd = source.indexOf("\n  build:", changesJobStart);
+  const changesJob = source.slice(changesJobStart, changesJobEnd);
+
+  const apiLine = changesJob.split("\n").find((l) => l.includes("&& api=true"));
+  assert.ok(apiLine, "the api=true gate line must exist");
+  assert.match(apiLine, /containers\/\(live\|builder\)\//, "api gate must be narrowed to containers/(live|builder)/");
+  assert.doesNotMatch(
+    apiLine,
+    /containers\/\|/,
+    "api gate must not still match the whole containers/ tree unnarrowed",
+  );
+
+  const o11yLine = changesJob.split("\n").find((l) => l.includes("&& o11y=true"));
+  assert.ok(o11yLine, "the o11y=true gate line must exist");
+  assert.match(o11yLine, /containers\/o11y\//, "o11y gate must still cover containers/o11y/");
+});

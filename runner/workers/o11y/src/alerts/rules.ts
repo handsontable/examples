@@ -162,16 +162,67 @@ export async function atCapacityRule(env: Env, queryFn: AeQueryFn = runAeQuery):
 
 // ---- api.request 5xx rate: above 1% over 15 min ---------------------------
 
+/**
+ * Minor triage item 6 (C-M9): the API's own DELIBERATE 503 degradations
+ * must not, by themselves, trip this general worker-health rule — each
+ * already has its own dedicated alert (`at-capacity-rate`,
+ * `litellm-error-rate`) or is a known, accepted refusal shape, not a fault.
+ * `api.request`'s own AE point (contract §5) carries only `route_class` +
+ * a coarse `outcome` status bucket ("2xx"/"3xx"/"4xx"/"5xx") — no finer
+ * code — so two different techniques are used, one per how precisely a
+ * degradation's volume can be isolated:
+ *
+ * - `at_capacity`/`container_starting` (POST /api/session,
+ *   `session-lifecycle.ts#AT_CAPACITY_CODE`/`CONTAINER_STARTING_CODE`) and
+ *   the `chat_unavailable` refusal on `/api/chat`/`/api/theme`
+ *   (`ChatUnavailableError`) each have an EXACT 1:1 count elsewhere in the
+ *   contract — `session.start`'s `at_capacity`/`container_starting`
+ *   outcomes and `chat.answer`/`theme.ai`'s `error` outcome are emitted
+ *   exactly once per matching `api.request` 503, right before the response
+ *   is built (`index.ts` ~1111, ~1139, ~2075, ~2145). Those exact counts
+ *   are subtracted from BOTH the numerator and the denominator, so a
+ *   capacity surge or a LiteLLM outage large enough to dwarf real traffic
+ *   cannot, by itself, fire this rule — while every OTHER 5xx on
+ *   "api/session"/"api/chat"/"api/theme" (a genuine 500) still counts.
+ * - The "still building" placeholder `share.ts` serves on `/d/:id` and
+ *   `/embed/:id` while a snapshot build is in flight has NO matching exact
+ *   count anywhere (`serve.d`/`serve.embed`'s own outcome set is
+ *   "2xx"/"304"/"4xx"/"5xx" — the same coarse bucket, not a distinguishing
+ *   reason). Those two route classes are excluded WHOLESALE instead —
+ *   the only option available without a new contract column (out of this
+ *   task's file ownership; see the task report for that residual gap: a
+ *   real "build failed" 500 on `/d/:id`/`/embed/:id` — DEMOS-31-shaped,
+ *   `mcp-async-build.test.mjs`'s own "failed" row — is ALSO excluded by
+ *   this, not just the deliberate "still building" 503).
+ */
+const FIVE_XX_STILL_BUILDING_ROUTE_CLASSES = ["d/:id", "embed/:id"];
+
 export async function fiveXxRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const windowMs = 15 * 60 * 1000;
-  const counts = await countByOutcome(env, "api.request", windowMs, "", queryFn);
+  const routeClassCol = col("route_class");
+  const excludedRoutes = FIVE_XX_STILL_BUILDING_ROUTE_CLASSES.map((rc) => `'${rc}'`).join(", ");
+  const [counts, sessionOutcomes, chatOutcomes, themeOutcomes] = await Promise.all([
+    countByOutcome(env, "api.request", windowMs, `AND ${routeClassCol} NOT IN (${excludedRoutes})`, queryFn),
+    countByOutcome(env, "session.start", windowMs, "", queryFn),
+    countByOutcome(env, "chat.answer", windowMs, "", queryFn),
+    countByOutcome(env, "theme.ai", windowMs, "", queryFn),
+  ]);
   const total = [...counts.values()].reduce((a, b) => a + b, 0);
   const fiveXx = counts.get("5xx") ?? 0;
-  const pct = ratio(fiveXx, total) * 100;
+  const deliberate =
+    (sessionOutcomes.get("at_capacity") ?? 0) +
+    (sessionOutcomes.get("container_starting") ?? 0) +
+    (chatOutcomes.get("error") ?? 0) +
+    (themeOutcomes.get("error") ?? 0);
+  const adjustedFiveXx = Math.max(0, fiveXx - deliberate);
+  const adjustedTotal = Math.max(0, total - deliberate);
+  const pct = ratio(adjustedFiveXx, adjustedTotal) * 100;
   return {
     rule: "api-5xx-rate",
-    firing: total > 0 && pct > 1,
-    detail: `${pct.toFixed(2)}% 5xx over the last 15 min (${fiveXx}/${total}, threshold 1%)`,
+    firing: adjustedTotal > 0 && pct > 1,
+    detail:
+      `${pct.toFixed(2)}% 5xx over the last 15 min (${adjustedFiveXx}/${adjustedTotal}, threshold 1%, ` +
+      `excludes at-capacity/container-starting/chat-theme-gateway refusals and the still-building routes)`,
   };
 }
 

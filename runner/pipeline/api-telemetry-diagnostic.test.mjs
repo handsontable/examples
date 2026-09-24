@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // T05 fix round (controller review): `reportDiagnostic`'s `sentryScopeIsFull`
 // gate (`workers/api/src/telemetry/diagnostic.ts`) had no direct test — only
@@ -30,16 +31,27 @@ const workersApiDir = join(import.meta.dirname, "..", "workers/api");
 const telemetrySrc = join(workersApiDir, "src/telemetry");
 const envSrc = join(workersApiDir, "src/env.ts");
 const dir = mkdtempSync(join(workersApiDir, ".hot-diagnostic-"));
-// diagnostic.ts's own chain: diagnostic.ts -> lines.ts, points.ts, scope.ts
-// -> resource.ts. `env.ts` is imported everywhere as `import type` only
-// (erased by strip-types, never resolved), but is copied too so a stray
-// value use would fail loudly instead of silently resolving to nothing.
-for (const file of ["diagnostic.ts", "lines.ts", "points.ts", "scope.ts", "resource.ts"]) {
-  writeFileSync(join(dir, file), readFileSync(join(telemetrySrc, file), "utf8").replaceAll('.js"', '.ts"'));
+// Minor triage item 8 (C-M15): the copy-and-import below used to run as a
+// plain top-level sequence with `rmSync` last — a failing import (a typo in
+// one of the copied files, a resolution error) skipped the cleanup and left
+// the scratch directory behind for `git add -A` to pick up, since it was
+// never gitignored either (see `.gitignore`'s own `workers/api/.hot-*`
+// entry, added alongside this fix). `try/finally` guarantees the directory
+// is always removed, whether the import below succeeds or throws.
+let reportDiagnostic;
+try {
+  // diagnostic.ts's own chain: diagnostic.ts -> lines.ts, points.ts, scope.ts
+  // -> resource.ts. `env.ts` is imported everywhere as `import type` only
+  // (erased by strip-types, never resolved), but is copied too so a stray
+  // value use would fail loudly instead of silently resolving to nothing.
+  for (const file of ["diagnostic.ts", "lines.ts", "points.ts", "scope.ts", "resource.ts"]) {
+    writeFileSync(join(dir, file), readFileSync(join(telemetrySrc, file), "utf8").replaceAll('.js"', '.ts"'));
+  }
+  writeFileSync(join(dir, "env.ts"), readFileSync(envSrc, "utf8"));
+  ({ reportDiagnostic } = await import(join(dir, "diagnostic.ts")));
+} finally {
+  rmSync(dir, { recursive: true, force: true });
 }
-writeFileSync(join(dir, "env.ts"), readFileSync(envSrc, "utf8"));
-const { reportDiagnostic } = await import(join(dir, "diagnostic.ts"));
-rmSync(dir, { recursive: true, force: true });
 
 // `getSink`/`emitPoint` inside `reportDiagnostic` would otherwise reach for
 // the local ClickHouse sink (a real `fetch` to localhost:8123) — production
@@ -154,4 +166,25 @@ test("the chat-gateway and theme-gateway reportDiagnostic calls set a status-gro
     /sentryFingerprint:\s*\["litellm-gateway",\s*String\(err\.status\)\]/,
     "theme-gateway must fingerprint by gateway + status too",
   );
+});
+
+// Minor triage item 8 (C-M15): the scratch-directory copy+import above used
+// to be a plain top-level sequence ending in a bare `rmSync` — a failing
+// import left `workers/api/.hot-diagnostic-*` behind, ungitignored, for
+// `git add -A` to pick up. Structural (the fix IS the shape of this file's
+// own top-level code, not something a runtime assertion can observe after
+// the fact — the directory from a real run is already gone by the time any
+// test() body runs, success or failure). Reverting the try/finally back to
+// a bare sequence, or dropping `.gitignore`'s `workers/api/.hot-*` line,
+// makes the matching assertion below fail.
+test("scratch-dir cleanup is wrapped in try/finally, and workers/api/.hot-* is gitignored", () => {
+  const selfSource = readFileSync(fileURLToPath(import.meta.url), "utf8");
+  assert.match(
+    selfSource,
+    /try\s*\{[\s\S]*await import\(join\(dir, "diagnostic\.ts"\)\)[\s\S]*\}\s*finally\s*\{\s*rmSync\(dir,/,
+    "the copy+import block must be wrapped in try/finally, with rmSync(dir, ...) in the finally",
+  );
+
+  const gitignore = readFileSync(join(import.meta.dirname, "..", ".gitignore"), "utf8");
+  assert.match(gitignore, /^workers\/api\/\.hot-\*$/m, "runner/.gitignore must ignore workers/api/.hot-* scratch dirs");
 });

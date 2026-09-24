@@ -285,7 +285,17 @@ test("the alarm turns a deterministic failure into a failed row instead of a ret
   });
 
   const job = new BuildJobBase(state, env);
-  await job.alarm(); // must not throw — a throw would spend platform retries re-running the build
+  // Minor triage item 7 (C-M14): `markSnapshotFailed`'s structured error
+  // line must key the demo id `hot.demo_id` (the contract's own name,
+  // `telemetry/lines.ts#logRequestLine`'s shape), not the stale `demo_id`.
+  const originalConsoleError = console.error;
+  const errorLines = [];
+  console.error = (line) => errorLines.push(line);
+  try {
+    await job.alarm(); // must not throw — a throw would spend platform retries re-running the build
+  } finally {
+    console.error = originalConsoleError;
+  }
 
   const failed = writes.find((w) => /SET build_status='failed'/.test(w.sql));
   assert.ok(failed, "the failure is recorded on the row");
@@ -293,6 +303,11 @@ test("the alarm turns a deterministic failure into a failed row instead of a ret
   assert.equal(failed.binds.at(-1), "d1");
   assert.equal(state.map.size, 0, "the job is cleared");
   assert.equal(state.alarms.length, 0, "no retry is scheduled");
+
+  const alarmLine = errorLines.map((l) => JSON.parse(l)).find((l) => l.context === "snapshot-job:alarm");
+  assert.ok(alarmLine, "the alarm's structured error line was logged");
+  assert.equal(alarmLine["hot.demo_id"], "d1", "the demo id must be keyed hot.demo_id, the contract's own name");
+  assert.equal(alarmLine.demo_id, undefined, "the stale un-prefixed demo_id key must not be present");
 });
 
 test("the alarm waits out an at-capacity pool a bounded number of times", async () => {

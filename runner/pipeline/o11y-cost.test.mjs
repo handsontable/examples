@@ -63,6 +63,35 @@ test("computeO11ySpend: sums only o11y_container/o11y_workers, never the app's o
   assert.equal(spend.capUsd, 15, "default O11Y_BUDGET_USD is $15");
 });
 
+// Minor triage item 9 (C-findings.md T04: "no rollover test for alert
+// state ... month rollover of the cap is a plain month-prefix LIKE"). This
+// pins the ledger half of that claim directly: a heavy prior-month spend
+// must NOT leak into the current month's month-prefix LIKE read — the exact
+// mechanism that makes the o11y-spend-cap alert self-resolve once the
+// calendar rolls over, even with no code path that explicitly "resets"
+// anything (there is none — the LIKE filter itself is the reset). The
+// alert-state half of the same rollover (o11yCapRule firing on last month's
+// high spend, then correctly resolving once this month's read comes back
+// near zero) is pinned in `pipeline/o11y-alerts.test.mjs`'s own
+// month-rollover test, through the SAME `computeO11ySpend`-shaped values.
+// Reverting `computeO11ySpend`'s `day LIKE ?1` filter (e.g. back to an
+// unbounded `SELECT ... FROM cost_ledger WHERE sku IN (...)`) makes the
+// assertion below fail: spend would come back $500 instead of $0.
+test("computeO11ySpend: a previous month's spend does not carry over after the calendar rolls into a new month", async () => {
+  const now = new Date();
+  const lastMonthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15));
+  const lastMonthPrefix = lastMonthDate.toISOString().slice(0, 7);
+  const thisMonthPrefix = now.toISOString().slice(0, 7);
+  assert.notEqual(lastMonthPrefix, thisMonthPrefix, "test precondition: the two prefixes must actually differ");
+
+  const { env } = makeEnv([
+    // A huge prior-month spend, well over any real cap — must not count.
+    { day: `${lastMonthPrefix}-15`, sku: "o11y_container", source: "estimate", units: 100_000, usd: 500 },
+  ]);
+  const spend = await computeO11ySpend(env);
+  assert.equal(spend.spendUsd, 0, "the previous month's spend must not carry into this month's read");
+});
+
 test("computeO11ySpend: a 'billing' row outranks an 'estimate' row for the same (day, sku)", async () => {
   const month = new Date().toISOString().slice(0, 7);
   const { env } = makeEnv([

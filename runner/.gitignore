@@ -28,3 +28,12 @@ apps/authoring/dist-*/
 
 # generated starter-matrix run reports — paste into the ticket/PR instead
 docs/reports/
+
+# Minor triage item 8 (C-M15): node:test scratch dirs copied out of
+# workers/api/src (so a bare @sentry/cloudflare / @handsontable/demo-runtime
+# specifier still resolves through workers/api/node_modules — see
+# pipeline/api-telemetry-diagnostic.test.mjs and
+# pipeline/api-telemetry-cron-step.test.mjs's own header comments). Removed
+# by the test itself on the success path; this covers the failure path too
+# (a failing import used to leave the directory behind for `git add -A`).
+workers/api/.hot-*
