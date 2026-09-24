@@ -542,6 +542,16 @@ test("parseMigrationTargets: pinned against every real workers/api/migrations/*.
       { type: "column", table: "demos", name: "build_error" },
     ],
   });
+  // 0009_example_daily_downloaded.sql (R1-followups): the second real
+  // ALTER TABLE ... ADD COLUMN file in this migrations dir (after 0003/0007,
+  // both against `demos`) — pinned explicitly, not just swept into the
+  // "checkable with >=1 target" loop below, because it is the one that
+  // exercises a table OTHER than `demos` going through the same adoption
+  // path (see the `applyMigrations` adoption test further down).
+  assert.deepEqual(parseMigrationTargets(read("0009_example_daily_downloaded.sql")), {
+    checkable: true,
+    targets: [{ type: "column", table: "example_daily", name: "downloaded" }],
+  });
   // Every file must at least parse without throwing and either be checkable
   // with >=1 target, or explicitly non-checkable — never checkable with zero
   // targets (that would be silently skippable).
@@ -605,6 +615,51 @@ test("applyMigrations: a hand-migrated local D1 with NO record — every pending
     assert.deepEqual(result.applied, ["0007_build_status.sql"], "the file whose column is genuinely missing still runs for real");
     assert.deepEqual(runCalls, [["d1", "execute", "handsontable-demos", "--local", "--file=migrations/0007_build_status.sql", "-y"]]);
     assert.deepEqual(readAppliedMigrations(recordPath), ["0001_init.sql", "0003_cost_ledger.sql", "0007_build_status.sql"].sort());
+  });
+});
+
+// R1-followups: the same N1 adoption path, exercised against the real
+// 0008/0009_example_daily_downloaded.sql pair — a table (`example_daily`)
+// that is NOT `demos`, proving `applyMigrations`' `alterTables` derivation
+// (COMMON.md's "verify with a test only" instruction for dev-lib.mjs's
+// ADD COLUMN handling) is not hardcoded to the one table every earlier
+// migration in this dir happens to alter.
+test("applyMigrations: a local D1 that already has example_daily.downloaded (dev stack migrated by hand) adopts 0009 instead of re-running it", async () => {
+  await withTmpDir(async (dir) => {
+    const migrationsDir = path.join(dir, "migrations");
+    mkdirSync(migrationsDir);
+    const realMigrationsDir = path.join(RUNNER_ROOT, "workers", "api", "migrations");
+    writeFileSync(
+      path.join(migrationsDir, "0008_example_daily.sql"),
+      readFileSync(path.join(realMigrationsDir, "0008_example_daily.sql"), "utf8"),
+    );
+    writeFileSync(
+      path.join(migrationsDir, "0009_example_daily_downloaded.sql"),
+      readFileSync(path.join(realMigrationsDir, "0009_example_daily_downloaded.sql"), "utf8"),
+    );
+    // 0008 was recorded as applied by an earlier run; 0009 is pending, and a
+    // developer's local D1 already carries the `downloaded` column (e.g.
+    // adopted by hand, or applied once before the applied-migrations record
+    // existed — the same N1 class of drift the adjacent `demos` test above
+    // covers).
+    mkdirSync(path.dirname(migrationRecordPath(dir)), { recursive: true });
+    writeFileSync(migrationRecordPath(dir), JSON.stringify(["0008_example_daily.sql"]));
+
+    const state = {
+      tables: new Set(["example_daily"]),
+      indexes: new Set(["idx_example_daily_day"]),
+      columns: { example_daily: new Set(["day", "kind", "ref", "area", "framework", "ht_major", "opens", "engaged", "forked", "saved", "shared", "downloaded"]) },
+    };
+    const runCalls = [];
+    const run = async (args) => runCalls.push(args);
+    const query = stubD1Query(state);
+
+    const result = await applyMigrations({ migrationsDir, recordPath: migrationRecordPath(dir), dbName: "handsontable-demos", run, query, log: () => {} });
+
+    assert.deepEqual(result.adopted, ["0009_example_daily_downloaded.sql"], "the column already exists — 0009 must be adopted, not re-run");
+    assert.deepEqual(result.applied, [], "never a real d1 execute for a file whose only target is already present");
+    assert.deepEqual(runCalls, [], "no wrangler d1 execute call at all — this is what avoids the 'duplicate column name' failure");
+    assert.deepEqual(readAppliedMigrations(migrationRecordPath(dir)), ["0008_example_daily.sql", "0009_example_daily_downloaded.sql"].sort());
   });
 });
 

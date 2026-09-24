@@ -109,6 +109,8 @@ covers the dependency:
 | `E2E_API_TOKEN` | An authed write round-trip against the deployed API (`share-create-live.spec.ts`, `session-abandoned-create.spec.ts`) | `e2e-live.yml` | A persistent API token minted on `/api-tokens` (ADR-0037). It does not expire, so a token that stops validating **fails** the run — it means revoked or broken. Absent, the step is skipped. |
 | `E2E_AI=1` | A live LLM answer (`ai-live.spec.ts`, lands with [#187](https://github.com/handsontable/examples/pull/187)) | `e2e-live.yml` weekly canary | Real budget, shared 8/min-per-IP rate bucket — a 429 skips rather than fails. |
 | `E2E_STARTER_MATRIX=1` | Every starter × major through a live container session | `e2e-starter-matrix.yml` (manual + monthly) | Serialized against the global container cap; never fold matrix cases into the PR suite. |
+| `E2E_TELEMETRY=1` | A `VITE_TELEMETRY_LOCAL=1` build (contract §10) | `page.route`-mocked specs (`telemetry-faro.spec.ts`, `example-analytics.spec.ts`) run in `ci.yml`'s `e2e-telemetry` job, every PR. Combined with `E2E_LIVE=1`, `telemetry-metrics.spec.ts` needs a real local API worker + Docker instead, and runs in `e2e-o11y-local.yml` (manual + nightly + o11y-path PRs) | Same gate, two very different cost profiles — mocked network vs. a real `wrangler dev` — hence two different workflow homes. |
+| `E2E_O11Y_LOCAL=1` | The whole local o11y stack: Docker compose (ClickHouse/MinIO), a real o11y `wrangler dev`, a real API `wrangler dev`, applied D1 migrations | `e2e-o11y-local.yml` (manual + nightly + o11y-path PRs) | `o11y-local.spec.ts` proves telemetry reaches the real ingest pipeline end to end, never mocked — the standing check that T02–T08's wiring still holds. |
 
 Two rules that keep gates honest:
 

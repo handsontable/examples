@@ -344,8 +344,10 @@ export async function gcRevokedArtifacts(env: Env): Promise<void> {
 //
 // A nightly step in this same cron recomputes the PREVIOUS full UTC day from
 // Analytics Engine into D1 `example_daily` (migration
-// `workers/api/migrations/0008_example_daily.sql`). Three pieces, split so
-// each is independently testable:
+// `workers/api/migrations/0008_example_daily.sql`, plus
+// `0009_example_daily_downloaded.sql` — the `downloaded` column ADR-0042 §2
+// always named but 0008 shipped without, per its own flagged gap). Three
+// pieces, split so each is independently testable:
 //
 //   `queryExampleEventTotals` — the AE/ClickHouse read. Production reads
 //   Cloudflare's Analytics Engine SQL API (`CF_ACCOUNT_ID` + `AE_SQL_TOKEN`,
@@ -368,7 +370,14 @@ export async function gcRevokedArtifacts(env: Env): Promise<void> {
 //   lingering when that group has zero events on a re-run (ADR-0042 §5:
 //   "re-running it for a day replaces that day's rows").
 
-const EXAMPLE_METRICS = ["example.open", "example.engaged", "example.forked", "example.saved", "example.shared"] as const;
+const EXAMPLE_METRICS = [
+  "example.open",
+  "example.engaged",
+  "example.forked",
+  "example.saved",
+  "example.shared",
+  "example.downloaded",
+] as const;
 type ExampleMetric = (typeof EXAMPLE_METRICS)[number];
 
 /** One (metric, taxonomy) group's total count, as the AE/ClickHouse query
@@ -397,9 +406,10 @@ export interface ExampleDailyRow {
   forked: number;
   saved: number;
   shared: number;
+  downloaded: number;
 }
 
-type ExampleDailyCounterColumn = "opens" | "engaged" | "forked" | "saved" | "shared";
+type ExampleDailyCounterColumn = "opens" | "engaged" | "forked" | "saved" | "shared" | "downloaded";
 
 const EXAMPLE_DAILY_COLUMN: Readonly<Record<ExampleMetric, ExampleDailyCounterColumn>> = {
   "example.open": "opens",
@@ -407,6 +417,7 @@ const EXAMPLE_DAILY_COLUMN: Readonly<Record<ExampleMetric, ExampleDailyCounterCo
   "example.forked": "forked",
   "example.saved": "saved",
   "example.shared": "shared",
+  "example.downloaded": "downloaded",
 };
 
 /** Pure: groups `rows` (one per metric per taxonomy tuple, as the AE query
@@ -434,6 +445,7 @@ export function pivotExampleDaily(day: string, rows: readonly ExampleEventRow[])
         forked: 0,
         saved: 0,
         shared: 0,
+        downloaded: 0,
       };
       byKey.set(key, entry);
     }
@@ -540,9 +552,22 @@ export async function writeExampleDaily(env: Env, day: string, rows: readonly Ex
     ...rows.map((r) =>
       env.DB.prepare(
         `INSERT OR REPLACE INTO example_daily
-           (day, kind, ref, area, framework, ht_major, opens, engaged, forked, saved, shared)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
-      ).bind(r.day, r.kind, r.ref, r.area, r.framework, r.ht_major, r.opens, r.engaged, r.forked, r.saved, r.shared),
+           (day, kind, ref, area, framework, ht_major, opens, engaged, forked, saved, shared, downloaded)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
+      ).bind(
+        r.day,
+        r.kind,
+        r.ref,
+        r.area,
+        r.framework,
+        r.ht_major,
+        r.opens,
+        r.engaged,
+        r.forked,
+        r.saved,
+        r.shared,
+        r.downloaded,
+      ),
     ),
   ];
   await env.DB.batch(statements);

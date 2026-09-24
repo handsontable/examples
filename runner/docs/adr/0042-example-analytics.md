@@ -73,14 +73,17 @@ Constraint: anonymous by construction. Counts only, no user id, no per-request r
    `hot.metric_kind`, not `hot.kind`, which is reserved for the Faro item's own kind.
 5. **Permanent record**: a nightly step in the reconcile cron recomputes **the previous
    full UTC day** from Analytics Engine into D1 `example_daily(day, kind, ref, area,
-   framework, ht_major, opens, engaged, forked, saved, shared)` with primary key `(day,
-   kind, ref, framework, ht_major)` (`area` is a function of `ref`), written with `INSERT OR REPLACE`. Re-running it for a day
-   replaces that day's rows; events arriving after the day closed are not counted. Counts
-   use `SUM(_sample_interval * count)`. **As implemented (T12-D3), `example_daily` has no
-   `downloaded` column** — this decision's own five-counter list above (`opens, engaged,
-   forked, saved, shared`) is what shipped, literally; `example.downloaded` still exists
-   as an Analytics Engine point, just not rolled into D1. Revisit under ADR-0043 if a
-   long-range downloads view turns out to matter.
+   framework, ht_major, opens, engaged, forked, saved, shared, downloaded)` with primary
+   key `(day, kind, ref, framework, ht_major)` (`area` is a function of `ref`), written
+   with `INSERT OR REPLACE`. Re-running it for a day replaces that day's rows; events
+   arriving after the day closed are not counted. Counts use
+   `SUM(_sample_interval * count)`. **Follow-up (R1-followups):** `example_daily` shipped
+   (T12-D3) without a `downloaded` column — this decision's own six-metric list above
+   included `example.downloaded`, but the table and rollup only ever carried the other
+   five. Migration `0009_example_daily_downloaded.sql` (additive `ALTER TABLE ... ADD
+   COLUMN downloaded INTEGER NOT NULL DEFAULT 0`) and the matching `reconcile.ts` rollup
+   change close that gap; existing rows backfill to `downloaded = 0` (their true count for
+   already-rolled days is unrecoverable from D1 alone, and 0 never overcounts).
 6. **Dashboard** "Examples & features" reads Analytics Engine, so it covers the last three
    months without D1: top guides by opens and engaged opens, area breakdown, framework
    split per guide, starter ranking, `ht_major` distribution, the funnel open → engaged →

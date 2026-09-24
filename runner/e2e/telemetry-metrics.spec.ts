@@ -24,10 +24,21 @@ import { previewReady, expectGridRendered, trackSessions, activeEditor } from ".
 //
 // This spec manages its own preview server (like telemetry-faro.spec.ts), never
 // the shared playwright.config.ts webServer (:4173, no VITE_TELEMETRY_LOCAL).
+//
+// CI home: `.github/workflows/e2e-o11y-local.yml` (R1-followups) — on
+// workflow_dispatch, nightly, and PRs touching the o11y ingest path. Not
+// ci.yml's `e2e-telemetry` job: that job's two specs are self-contained
+// (page.route mocks, no real API worker), this one needs Docker + a real
+// `wrangler dev`, which the shared Playwright container image can't provide.
 
-const AUTHORING_PORT = 4800;
-const API_PORT = 4810;
-const API_INSPECTOR_PORT = 4811;
+// Env-overridable (COMMON.md's per-worktree port block rule) — a local
+// reproduction of the CI job running alongside other o11y worktrees on the
+// same machine sets these to its own block instead of colliding on T07's
+// original 4800-4899. Defaults unchanged: e2e-o11y-local.yml and every
+// existing doc/comment naming ":4810" etc. still work unmodified.
+const AUTHORING_PORT = Number(process.env.E2E_TELEMETRY_METRICS_AUTHORING_PORT ?? 4800);
+const API_PORT = Number(process.env.E2E_TELEMETRY_METRICS_API_PORT ?? 4810);
+const API_INSPECTOR_PORT = Number(process.env.E2E_TELEMETRY_METRICS_API_INSPECTOR_PORT ?? 4811);
 const BASE_URL = `http://localhost:${AUTHORING_PORT}`;
 const API_BASE_URL = `http://localhost:${API_PORT}`;
 const AUTHORING_DIR = fileURLToPath(new URL("../apps/authoring", import.meta.url));

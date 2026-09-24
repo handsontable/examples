@@ -50,16 +50,21 @@ import { previewReady, expectGridRendered } from "./helpers.js";
 //   cd workers/api && npx wrangler d1 migrations apply handsontable-demos --local
 //   E2E_O11Y_LOCAL=1 pnpm e2e e2e/o11y-local.spec.ts
 //
-// Not wired into CI (docs/TESTING.md's "every gate needs a workflow home"
-// rule, exception recorded in docs/run-and-deploy.md's "Tests (CI)"
-// section): the prerequisite stack is Docker + two `wrangler dev`
-// processes + D1 migrations, the same class of gap T10 already left
-// `telemetry-metrics.spec.ts` with. Run it locally before every o11y
+// CI home: `.github/workflows/e2e-o11y-local.yml` (R1-followups) — on
+// workflow_dispatch, nightly, and PRs touching the o11y ingest path, never
+// the per-PR `ci.yml` gate (docs/TESTING.md's "every gate needs a workflow
+// home" rule, docs/run-and-deploy.md's "Tests (CI)" section): the
+// prerequisite stack is Docker + two `wrangler dev` processes + D1
+// migrations, the same class of gap T10 already left
+// `telemetry-metrics.spec.ts` with. Also run it locally before every o11y
 // change that touches the ingest path, and before a launch.
 
-const AUTHORING_PORT = 5290;
-const API_PORT = 5280;
-const API_INSPECTOR_PORT = 5281;
+// Env-overridable (COMMON.md's per-worktree port block rule), same reasoning
+// telemetry-metrics.spec.ts gives — O11Y_PORT/CLICKHOUSE_PORT below already
+// were. Defaults unchanged.
+const AUTHORING_PORT = Number(process.env.E2E_O11Y_LOCAL_AUTHORING_PORT ?? 5290);
+const API_PORT = Number(process.env.E2E_O11Y_LOCAL_API_PORT ?? 5280);
+const API_INSPECTOR_PORT = Number(process.env.E2E_O11Y_LOCAL_API_INSPECTOR_PORT ?? 5281);
 const O11Y_PORT = Number(process.env.O11Y_DEV_PORT ?? 5220);
 const CLICKHOUSE_PORT = Number(process.env.O11Y_LOCAL_CLICKHOUSE_PORT ?? 5212);
 const BASE_URL = `http://localhost:${AUTHORING_PORT}`;
