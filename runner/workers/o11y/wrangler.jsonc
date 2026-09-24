@@ -42,10 +42,13 @@
   // Public, non-secret config (contract §2).
   "vars": {
     "O11Y_ENV": "production",
-    // Placeholders (T00-D8, see the task Outcome): the real Access application
-    // does not exist yet — T03 creates it and fills in both values.
-    "ACCESS_TEAM_DOMAIN": "handsontable.cloudflareaccess.com",
-    "ACCESS_AUD": "",
+    // K1 (replaces the ACCESS_TEAM_DOMAIN/ACCESS_AUD placeholders — no
+    // Access application was ever created, T00-D8/T03): the Handsontable
+    // login broker's base URL (ADR-0007), same value as
+    // workers/api/wrangler.jsonc's own LOGIN_BROKER_URL var. Public, not a
+    // secret — every consumer of this broker (the API worker, the authoring
+    // app) already commits it the same way.
+    "LOGIN_BROKER_URL": "https://mcp-auth-proxy-j0tb.onrender.com",
     "GITHUB_OIDC_REPOSITORY": "handsontable/examples",
     // T02-D16 (fix round, see the task Outcome): the expected `workflow_ref`
     // OIDC claim for the deploy job — T10 must keep this in sync with the

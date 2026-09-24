@@ -8,9 +8,10 @@
 // InboxWriter, readiness, the container-facing half of the stop protocol,
 // onStop bookkeeping, and the /api/live/* defense-in-depth the controller
 // ruled required — see the T01-D1 note in containers/o11y/grafana/grafana.ini).
-// It does NOT decide *when* to wake (a Grafana visit through Access vs. the
-// backlog cron) or proxy Grafana's own routes — those are T03's "wake and
-// Grafana access" task, explicitly out of scope here.
+// It does NOT decide *when* to wake (a Grafana visit through the login
+// broker session, K1 — not Cloudflare Access — vs. the backlog cron) or
+// proxy Grafana's own routes — those are T03's "wake and Grafana access"
+// task, explicitly out of scope here.
 
 import { Container } from "@cloudflare/containers";
 import { o11ySelfIdentity } from "./normalise/respond.js";
@@ -324,8 +325,8 @@ export class GrafanaBox extends Container<Env> {
 
   /** ADR §A: "The Worker renews the activity timer only on HTTP requests to
    *  `/grafana/*`." Called by the `/grafana/*` proxy (`grafana/proxy.ts`)
-   *  after a request passes Access — never by the drain's own Loki pushes.
-   *  Also renews the base class's own idle clock (harmless — see
+   *  after a request passes the session check (K1) — never by the drain's
+   *  own Loki pushes. Also renews the base class's own idle clock (harmless — see
    *  {@link LAST_GRAFANA_STORAGE_KEY}'s doc comment). */
   async noteVisitorActivity(): Promise<void> {
     await this.ctx.storage.put(LAST_GRAFANA_STORAGE_KEY, Date.now());

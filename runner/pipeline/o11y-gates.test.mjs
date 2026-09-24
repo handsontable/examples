@@ -27,14 +27,18 @@ const { checkSentryHmac } = await import("../workers/o11y/src/gates/sentry.ts");
 const { checkDeployGate, O11Y_GITHUB_OIDC_AUDIENCE, _resetGithubJwksCacheForTests } = await import(
   "../workers/o11y/src/gates/oidc.ts"
 );
-const { verifyAccess } = await import("../workers/o11y/src/gates/access.ts");
 const { hmacSha256Hex } = await import("../workers/o11y/src/gates/util.ts");
+
+// K1: the `/grafana/*` session gate (`gates/session.ts`, replacing
+// `gates/access.ts`'s Cloudflare Access JWT verification) has its own file,
+// `o11y-session.test.mjs` — its cookie mechanics (HMAC signing, nonce
+// binding, the broker call) are a different shape of test than the
+// stateless per-request gates this file covers.
 
 function baseEnv(overrides = {}) {
   return {
     O11Y_ENV: "production",
-    ACCESS_TEAM_DOMAIN: "handsontable.cloudflareaccess.com",
-    ACCESS_AUD: "test-aud",
+    LOGIN_BROKER_URL: "https://mcp-auth-proxy.example.test",
     GITHUB_OIDC_REPOSITORY: "handsontable/examples",
     GITHUB_OIDC_WORKFLOW_REF: "handsontable/examples/.github/workflows/master.yml@refs/heads/master",
     O11Y_EXPORT_SECRET: "top-secret",
@@ -269,51 +273,4 @@ test("deploy gate: no bearer token falls through to the secret fallback", async 
     baseEnv(),
   );
   assert.equal(withoutSecret.ok, false);
-});
-
-// ---- access.ts: Cf-Access-Jwt-Assertion + DEV_ADMIN -----------------------------
-
-test("verifyAccess: DEV_ADMIN bypasses only when O11Y_ENV is local, never in production", async () => {
-  const req = new Request("https://demos.handsontable.com/grafana/");
-  const local = await verifyAccess(req, baseEnv({ O11Y_ENV: "local", DEV_ADMIN: "dev@handsontable.com" }));
-  assert.deepEqual(local, { email: "dev@handsontable.com" });
-
-  const prod = await verifyAccess(req, baseEnv({ O11Y_ENV: "production", DEV_ADMIN: "dev@handsontable.com" }));
-  assert.equal(prod, null, "DEV_ADMIN must never bypass Access in production");
-});
-
-test("verifyAccess: an empty ACCESS_AUD refuses rather than accepting any issuer-matching token", async () => {
-  const req = new Request("https://demos.handsontable.com/grafana/", {
-    headers: { "Cf-Access-Jwt-Assertion": "irrelevant.token.value" },
-  });
-  const result = await verifyAccess(req, baseEnv({ ACCESS_AUD: "" }));
-  assert.equal(result, null);
-});
-
-test("verifyAccess: a valid Access JWT returns the email claim", async (t) => {
-  const { privateKey, publicKey } = await generateKeyPair("RS256");
-  const jwk = await exportJWK(publicKey);
-  jwk.kid = "access-key";
-  jwk.alg = "RS256";
-  const env = baseEnv({ ACCESS_TEAM_DOMAIN: "handsontable.cloudflareaccess.com", ACCESS_AUD: "aud-123" });
-  const token = await new SignJWT({ email: "artur.medrygal@handsontable.com" })
-    .setProtectedHeader({ alg: "RS256", kid: "access-key" })
-    .setIssuer(`https://${env.ACCESS_TEAM_DOMAIN}`)
-    .setAudience(env.ACCESS_AUD)
-    .setIssuedAt()
-    .setExpirationTime("5m")
-    .sign(privateKey);
-
-  const realFetch = globalThis.fetch;
-  t.after(() => {
-    globalThis.fetch = realFetch;
-  });
-  globalThis.fetch = async () =>
-    new Response(JSON.stringify({ keys: [jwk] }), { headers: { "content-type": "application/json" } });
-
-  const req = new Request("https://demos.handsontable.com/grafana/", {
-    headers: { "Cf-Access-Jwt-Assertion": token },
-  });
-  const result = await verifyAccess(req, env);
-  assert.deepEqual(result, { email: "artur.medrygal@handsontable.com" });
 });

@@ -3,6 +3,12 @@
 // stubs (no real Container/DO needed: these handlers only call methods on
 // the stub returned by `getGrafanaBoxStub`/`inboxWriter`).
 //
+// K1: the gate itself is `gates/session.ts` (replacing Cloudflare Access) —
+// its own cookie/nonce/broker mechanics are covered in
+// `o11y-session.test.mjs`; this file covers what the PROXY route does with
+// the gate's verdict (redirect vs. 401, never touching the box when
+// unauthenticated, header stripping, wake gating).
+//
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
@@ -14,6 +20,7 @@ register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 const { handleGrafana } = await import("../workers/o11y/src/grafana/proxy.ts");
 const { handleReopen } = await import("../workers/o11y/src/grafana/reopen.ts");
 const { wakingPageHtml } = await import("../workers/o11y/src/grafana/waking-page.ts");
+const { signSessionCookie, SESSION_COOKIE } = await import("../workers/o11y/src/gates/session.ts");
 
 function makeBoxStub(overrides = {}) {
   const calls = { wake: [], noteVisitorActivity: 0, containerFetch: [] };
@@ -63,8 +70,8 @@ function makeEnv({ devAdmin, o11yEnv = "local", boxStub, inboxWriterStub } = {})
     env: {
       O11Y_ENV: o11yEnv,
       DEV_ADMIN: devAdmin,
-      ACCESS_TEAM_DOMAIN: "handsontable.cloudflareaccess.com",
-      ACCESS_AUD: "test-aud",
+      LOGIN_BROKER_URL: "https://mcp-auth-proxy.example.test",
+      O11Y_SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
       GRAFANA_BOX: makeGrafanaBoxNamespace(box),
       INBOX_WRITER: makeInboxWriterNamespace(
         inboxWriterStub ?? { async reopenWindow() { return { reopened: 0 }; } },
@@ -74,13 +81,62 @@ function makeEnv({ devAdmin, o11yEnv = "local", boxStub, inboxWriterStub } = {})
   };
 }
 
+/** A real, validly signed `__Host-o11y_session` cookie header — the
+ *  non-DEV_ADMIN path through `verifySession`, exercised by the tests below
+ *  that need to prove the gate itself (not just the local bypass) drives
+ *  the route. */
+async function sessionCookieHeader(env, email = "artur.medrygal@handsontable.com") {
+  const token = await signSessionCookie(env, email, 3600);
+  return `${SESSION_COOKIE}=${token}`;
+}
+
 // ---- /grafana/* -----------------------------------------------------------
 
-test("/grafana/* without a JWT (and no local bypass) answers 403", async () => {
-  const { env } = makeEnv({ o11yEnv: "production" });
+test("/grafana/* unauthenticated, no navigation signal (and no local bypass): 401, box never touched", async () => {
+  const box = makeBoxStub();
+  const { env } = makeEnv({ o11yEnv: "production", boxStub: box });
   const req = new Request("https://demos.handsontable.com/grafana/d/abc");
   const res = await handleGrafana(req, env, {});
-  assert.equal(res.status, 403);
+  assert.equal(res.status, 401);
+  assert.deepEqual(box.calls.wake, [], "an unauthenticated request must never wake the box");
+  assert.equal(box.calls.containerFetch.length, 0);
+});
+
+test("/grafana/* unauthenticated top-level navigation (Sec-Fetch-Mode: navigate): 302 to login, box never touched", async () => {
+  const box = makeBoxStub();
+  const { env } = makeEnv({ o11yEnv: "production", boxStub: box });
+  const req = new Request("https://demos.handsontable.com/grafana/d/abc?tab=1", {
+    headers: { "sec-fetch-mode": "navigate" },
+  });
+  const res = await handleGrafana(req, env, {});
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get("Location"), "/grafana/_o11y/login?next=%2Fgrafana%2Fd%2Fabc%3Ftab%3D1");
+  assert.deepEqual(box.calls.wake, [], "a redirect to login must never wake the box");
+  assert.equal(box.calls.containerFetch.length, 0);
+});
+
+test("/grafana/* unauthenticated XHR/fetch (Sec-Fetch-Mode: cors): 401 JSON, box never touched — this is also what recovers a session that expired mid-use", async () => {
+  const box = makeBoxStub();
+  const { env } = makeEnv({ o11yEnv: "production", boxStub: box });
+  const req = new Request("https://demos.handsontable.com/grafana/api/ds/query", {
+    method: "POST",
+    headers: { "sec-fetch-mode": "cors", accept: "application/json" },
+  });
+  const res = await handleGrafana(req, env, {});
+  assert.equal(res.status, 401);
+  assert.equal(res.headers.get("content-type"), "application/json");
+  assert.deepEqual(box.calls.wake, []);
+  assert.equal(box.calls.containerFetch.length, 0);
+});
+
+test("/grafana/* with a real (non-DEV_ADMIN) session cookie authenticates and reaches Grafana", async () => {
+  const box = makeBoxStub({ ready: true });
+  const { env } = makeEnv({ o11yEnv: "production", boxStub: box });
+  const cookie = await sessionCookieHeader(env);
+  const req = new Request("https://demos.handsontable.com/grafana/d/abc", { headers: { cookie } });
+  const res = await handleGrafana(req, env, {});
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "grafana-body");
 });
 
 test("/grafana/* with the local DEV_ADMIN bypass shows the waking page while not ready, then Grafana once ready", async () => {
@@ -119,6 +175,42 @@ test("/grafana/* strips a client-supplied x-o11y-grafana-user and sets it from t
 
   const upstream = box.calls.containerFetch[0];
   assert.equal(upstream.headers.get("x-o11y-grafana-user"), "dev@handsontable.com");
+});
+
+test("/grafana/* strips the session cookie from the request forwarded to Grafana", async () => {
+  const box = makeBoxStub({ ready: true });
+  const { env } = makeEnv({ o11yEnv: "production", boxStub: box });
+  const cookie = await sessionCookieHeader(env);
+  const req = new Request("https://demos.handsontable.com/grafana/d/abc", { headers: { cookie } });
+
+  await handleGrafana(req, env, {});
+
+  const upstream = box.calls.containerFetch[0];
+  assert.equal(upstream.headers.get("cookie"), null, "o11y_session must never reach the container Grafana runs in");
+});
+
+test("I2 (live, through the proxy route): a tossed/junk duplicate cookie ahead of the real one does not lock the visitor out", async () => {
+  const box = makeBoxStub({ ready: true });
+  const { env } = makeEnv({ o11yEnv: "production", boxStub: box });
+  const token = (await sessionCookieHeader(env)).split("=").slice(1).join("=");
+  const req = new Request("https://demos.handsontable.com/grafana/d/abc", {
+    headers: { cookie: `${SESSION_COOKIE}=junk-from-a-tossed-cookie; ${SESSION_COOKIE}=${token}` },
+  });
+  const res = await handleGrafana(req, env, {});
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "grafana-body");
+});
+
+test("M7: an unauthenticated HEAD or OPTIONS request never touches the box either", async () => {
+  for (const method of ["HEAD", "OPTIONS"]) {
+    const box = makeBoxStub();
+    const { env } = makeEnv({ o11yEnv: "production", boxStub: box });
+    const req = new Request("https://demos.handsontable.com/grafana/d/abc", { method });
+    const res = await handleGrafana(req, env, {});
+    assert.equal(res.status, 401, `expected 401 for ${method}`);
+    assert.deepEqual(box.calls.wake, [], `${method} must never wake the box`);
+    assert.equal(box.calls.containerFetch.length, 0);
+  }
 });
 
 test("/grafana/* preserves the original Host and path (never rewrites to a synthetic origin)", async () => {
@@ -200,14 +292,26 @@ test("B-I3: a background request while the box IS already awake still renews act
 
 // ---- POST /grafana/_o11y/reopen --------------------------------------------
 
-const JSON_HEADERS = { "content-type": "application/json" };
+const JSON_HEADERS = { "content-type": "application/json", Origin: "https://demos.handsontable.com" };
 
-test("POST /grafana/_o11y/reopen requires Access too", async () => {
+test("POST /grafana/_o11y/reopen requires a session too", async () => {
   const { env } = makeEnv({ o11yEnv: "production" });
   const req = new Request("https://demos.handsontable.com/grafana/_o11y/reopen", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({ fromMs: 0, toMs: 1 }),
+  });
+  const res = await handleReopen(req, env, {});
+  assert.equal(res.status, 403);
+});
+
+test("POST /grafana/_o11y/reopen: a same-SITE but cross-ORIGIN caller (another *.handsontable.com host) is refused", async () => {
+  const inboxWriterStub = { async reopenWindow() { return { reopened: 0 }; } };
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", inboxWriterStub });
+  const req = new Request("https://demos.handsontable.com/grafana/_o11y/reopen", {
+    method: "POST",
+    headers: { "content-type": "application/json", Origin: "https://preview-host.demos.handsontable.com" },
+    body: JSON.stringify({ fromMs: 0, toMs: 1000 }),
   });
   const res = await handleReopen(req, env, {});
   assert.equal(res.status, 403);
@@ -260,7 +364,7 @@ test("B-M9: a non-application/json content-type is refused with 415, never reach
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", inboxWriterStub });
   const req = new Request("https://demos.handsontable.com/grafana/_o11y/reopen", {
     method: "POST",
-    headers: { "content-type": "text/plain" },
+    headers: { "content-type": "text/plain", Origin: "https://demos.handsontable.com" },
     body: JSON.stringify({ fromMs: 0, toMs: 1000 }),
   });
 
@@ -275,7 +379,7 @@ test("B-M9: application/json with parameters (charset) is still accepted", async
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", inboxWriterStub });
   const req = new Request("https://demos.handsontable.com/grafana/_o11y/reopen", {
     method: "POST",
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: { "content-type": "application/json; charset=utf-8", Origin: "https://demos.handsontable.com" },
     body: JSON.stringify({ fromMs: 0, toMs: 1000 }),
   });
 
