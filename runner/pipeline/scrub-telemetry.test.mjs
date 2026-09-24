@@ -138,6 +138,24 @@ test("strips a real Babel code frame from an exception's value", () => {
   assert.equal(scrubbed.payload.value, "unknown: Unexpected token (1:10)");
 });
 
+// ---- strip a query string embedded in message-bearing text (D-M7 fix round) ----
+
+test("strips a query string off a URL embedded in a log item's message text, keeping the surrounding text", () => {
+  const item = faroLog({
+    payload: { message: "fetch failed for https://example.com/api/versions?token=SECRET after 3 retries" },
+  });
+  const scrubbed = scrubTelemetry(item);
+  assert.equal(scrubbed.payload.message, "fetch failed for https://example.com/api/versions after 3 retries");
+});
+
+test("strips a query string off an embedded preview-host URL in a message, after the host itself is redacted", () => {
+  const item = faroLog({
+    payload: { message: `stale preview at https://${PREVIEW_HOST}/src/main.js?t=12345` },
+  });
+  const scrubbed = scrubTelemetry(item);
+  assert.equal(scrubbed.payload.message, "stale preview at https://<preview>/src/main.js");
+});
+
 // ---- allowlist attributes/context (drops forbidden attrs, §3) ------------------
 
 test("drops forbidden Faro context attributes (url.full, geo), keeps allowlisted hot.* ones", () => {

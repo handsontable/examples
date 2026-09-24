@@ -45,7 +45,10 @@ Constraint: anonymous by construction. Counts only, no user id, no per-request r
    example-resolve path in `App.tsx`, sent through the ADR-0041 facade and turned into an
    Analytics Engine point at ingest. It is **never written to the inbox or Loki**, so it
    carries no page-load id anywhere it is stored. Attributes: `kind` (`docs`, `starter`,
-   `saved`, `import`, `payload`), `ref` (the guide path or the starter id), `area` (the
+   `saved`, `import`, `payload`), `ref` (defined per `kind`, `exampleAnalytics.ts#exampleTaxonomy`:
+   the docs guide path for `docs`; the starter's `config/frameworks.json` key for `starter`;
+   the saved demo's id for `saved`; the import provider for `import`; the payload source for
+   `payload`), `area` (the
    loaded entry's first breadcrumb element; it is not derivable from `ref`), `framework`
    (for docs examples this already distinguishes JavaScript from TypeScript), `ht_major`,
    `bucket`, and

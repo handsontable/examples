@@ -65,9 +65,11 @@ Ports inside the Grafana box, reached only through `GrafanaBox.containerFetch`:
 | `O11Y_MAPS` | R2 | bucket `handsontable-demos-o11y-maps` (EU) |
 | `RUNNER_EVENTS` | Analytics Engine | dataset `runner_events` |
 | `API` | service binding | `handsontable-demos-api` (o11y usage metering, o11y spend, later `AdminReads`) |
+| `RATE_LIMITER` | Rate Limiting binding | gates `POST /telemetry/collect` and `POST /telemetry/lite` (ADR §B.5) |
 | `O11Y_ENV` | var | `production` \| `local` |
 | `LOGIN_BROKER_URL` | var | Handsontable login broker base URL (ADR-0007, K1) — same value as `workers/api/wrangler.jsonc`'s own `LOGIN_BROKER_URL` |
 | `GITHUB_OIDC_REPOSITORY` | var | `handsontable/examples` |
+| `GITHUB_OIDC_WORKFLOW_REF` | var | `<owner>/<repo>/<workflow file path>@<ref>`, exact match — the deploy webhook's OIDC `workflow_ref` claim (ADR §B.5's "issuer, audience, repository, **workflow**") |
 | `O11Y_EXPORT_SECRET` | secret | `x-o11y-secret` on the export destination and the deploy fallback |
 | `SENTRY_HOOK_SECRET` | secret | Sentry internal-integration client secret |
 | `AE_SQL_TOKEN` | secret | Analytics Engine SQL API (alert cron; passed to the box for Grafana) |
@@ -129,12 +131,23 @@ Structured metadata only — never a Loki label, never an Analytics Engine index
 kind: `exception`, `log`, `event`, `measurement`).
 
 Diagnostic tags — flat, non-dotted, never a Loki label, never an Analytics Engine
-index, and not hoisted to structured metadata either (§6): `handled`, `context`,
+index, but hoisted to structured metadata alongside the dotted keys above (§6,
+`convert.ts#hoistAttributes`'s `STRUCTURED_KEY_SET`): `handled`, `context`,
 `sentry_event_id`, `versions_fetch_attempts`, `versions_fetch_outcome`,
 `versions_fetch_elapsed_bucket`, `versions_fetch_online`, `api_base_origin`,
 `net_effective_type`. Each is a boolean flag, an enum-like/bucketed value, an
 opaque platform id, or the reporting call site's own name — never user or
 request content.
+
+AE-only transport keys — never a Loki label, never structured metadata, never
+hoisted by `hoistAttributes` at all: `hot.bucket`, `hot.reason`, `hot.fingerprint`,
+`hot.metric_kind`, `hot.ref`, `hot.area`. Survive the same browser/ingest attribute
+allowlist as every key above (so the browser can transmit them at all), but exist
+only to carry an Analytics Engine column (§4/§5) through a Faro item's raw
+`context`/`attributes`, read directly from the wire body by
+`normalise/browser-attrs.ts#readAeOnlyAttrs` before `hoistAttributes` ever runs —
+for a metric such as `example.open` that is never written to the inbox or Loki at
+all (§6, ADR-0042).
 
 **Never sent to the o11y stack**: the user pseudonym, an email, an IP, a user-agent
 string, a query string or fragment, authored code (including Babel code frames), chat
@@ -377,7 +390,11 @@ must never scan committed history):**
 
 ## 9. Lite beacon payload
 
-`POST /telemetry/lite`, `navigator.sendBeacon`, `application/json`, **≤ 2 KB**:
+`POST /telemetry/lite`, a JSON body, **≤ 2 KB**, sent with `navigator.sendBeacon(url, json)` —
+a plain string, not a `Blob`, so the browser sends its own default
+`Content-Type: text/plain;charset=UTF-8`, never `application/json` (D-M6 fix round; the
+route itself does not check or require a content type either way, so this is a fact about
+what ships on the wire, not a gate). The body itself is still JSON:
 
 ```json
 {"v":1,"t":"err","s":"embed","demo":"r-react-18-0-0","ht":"18","fw":"react","n":"TypeError","m":"<normalized, ≤500 chars>","st":"<stack, ≤2000 chars>","val":null,"dev":"desktop","ts":1695463200000}

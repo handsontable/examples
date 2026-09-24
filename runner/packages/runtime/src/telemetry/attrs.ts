@@ -103,13 +103,15 @@ export type StructuredMetadataKey = (typeof STRUCTURED_METADATA_KEYS)[number];
 
 /**
  * §3 "Diagnostic tags" — flat, non-dotted metadata on a handled-error or
- * diagnostic-event report only (§6). Distinct from `STRUCTURED_METADATA_KEYS`:
- * these are not hoisted to a Loki resource attribute or a structured-metadata
- * field by `convert.ts#hoistAttributes` (that function only recognises
- * `RESOURCE_ATTR_KEYS` and `STRUCTURED_KEY_SET`) — this allowlist only
- * decides whether the browser-side (and re-run, server-side) scrub keeps them
- * at all; what ingest does with a kept-but-not-hoisted attribute is the
- * ingest route's own decision.
+ * diagnostic-event report only (§6). Distinct from `STRUCTURED_METADATA_KEYS`
+ * as its own named category, but not a separate transport rule any more:
+ * `convert.ts#hoistAttributes`'s `STRUCTURED_KEY_SET` is
+ * `[...STRUCTURED_METADATA_KEYS, ...DIAGNOSTIC_TAG_KEYS]` (T02-D merge fix),
+ * so these keys ARE hoisted into structured metadata, the same bucket the
+ * dotted keys above land in — never a Loki resource attribute or label
+ * either way. D-M5 fix round: this comment used to say the opposite
+ * ("not hoisted"), which the contract doc repeated; both were stale against
+ * `convert.ts`'s own `STRUCTURED_KEY_SET` and are now corrected together.
  *
  * Each entry is a boolean flag, an opaque platform id, an enum-like/bucketed
  * value, or a reporting call site's own name — never user or request content

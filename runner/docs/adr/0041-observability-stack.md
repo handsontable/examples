@@ -2,8 +2,11 @@
 
 **Status:** Proposed — design approved 2026-09-23 (revision 3), implemented (T00–T12,
 T03B), local end-to-end walkthrough and every task's sandbox probe complete (§L
-"Results," T11). 13 of 15 exit criteria pass with real evidence; the design's own §L
-trigger (criterion 1, 2 or 7 failing) is not engaged. **Stays Proposed, not Accepted,
+"Results," T11). 14 of 15 exit criteria pass outright with real evidence; criterion 8
+(Volume) is **Mixed**, not a pass — Analytics Engine points and the raw Workers Logs
+pool both pass at 10× with real margin, but the exported-logs allotment does not (§D
+above has the numbers and the fallback). The design's own §L trigger (criterion 1, 2
+or 7 failing) is not engaged. **Stays Proposed, not Accepted,
 pending exactly two items**: exit criterion 5's CPU/memory measurement inside a real
 Workers isolate (every measurement so far is a Node-process proxy — no task had isolate
 profiling access), and exit criterion 13's real-object retention expiry (a 1-day R2
@@ -618,8 +621,13 @@ transitions and marker handling; a label test asserting the Loki series for each
 carry exactly the contract labels (exit criterion 15); scrubber tests per rule on real inputs (a Babel code
 frame, a preview-host URL, a user-agent string); a config test pinning the Loki keys of
 §B.4 and the `observability` block of §D; symbolication against a real `vite build`;
-beacon injection and an `acorn` ES5 parse; one `E2E_LIVE` spec from `/telemetry` to a
-queryable Loki line.
+beacon injection and an `acorn` ES5 parse; `e2e/o11y-local.spec.ts` (T11), which drives a
+real browser against the real o11y worker and asserts the resulting points land in the
+local Analytics Engine stand-in (ClickHouse rows) — not a Loki query. Loki queryability
+itself is proven separately: `containers/o11y/local/stop-roundtrip.mjs`'s own
+`query_range` calls against a real local Loki (the clean-stop/reopen roundtrip, criteria
+1–2), and the local end-to-end walkthrough's live Grafana Logs-panel checks
+(`docs/run-and-deploy.md`'s local-dev section).
 
 ### L. Delivery and exit criteria
 
