@@ -31,6 +31,8 @@ import {
   isDockerAvailable,
   isRuntimeDistStale,
   buildPlan,
+  listRunningContainers,
+  newLeftoverContainers,
   PORT_DEFAULTS,
 } from "./dev-lib.mjs";
 
@@ -110,11 +112,16 @@ async function main() {
     process.exit(1);
   }
 
+  let containersBefore = new Set();
   if (tier === "2" || tier === "full") {
     if (!isDockerAvailable((cmd, args) => execFileSync(cmd, args, { stdio: "ignore" }))) {
       console.error(`error: ${DOCKER_NOT_RUNNING_MESSAGE}`);
       process.exit(1);
     }
+    // Baseline for the leftover-container sweep on shutdown — see
+    // dev-lib.mjs#newLeftoverContainers's doc comment for what this can and
+    // can't distinguish.
+    containersBefore = new Set(listRunningContainers((cmd, args) => execFileSync(cmd, args)).map((c) => c.id));
   }
 
   // ---- runtime build (blocking, all tiers) --------------------------------
@@ -153,6 +160,26 @@ async function main() {
   // ---- workers/o11y + compose setup (full only) ---------------------------
   const o11yDir = path.join(RUNNER_ROOT, "workers", "o11y");
   const teardownSteps = [];
+  if (tier === "2" || tier === "full") {
+    // Measured for this task (see the report): Ctrl-C does not make
+    // wrangler's own Tier-2 Sandbox-container orchestration tear itself
+    // down synchronously — a session's containers can still be `Up` several
+    // seconds after this wrapper has already exited. Sweep only what
+    // dev-lib.mjs#newLeftoverContainers can safely attribute to this run;
+    // see its doc comment for the known false-positive risk this accepts
+    // rather than a blanket sweep by image/name prefix.
+    teardownSteps.push(() => {
+      const after = listRunningContainers((cmd, args) => execFileSync(cmd, args));
+      const leftovers = newLeftoverContainers(containersBefore, after);
+      if (leftovers.length === 0) return;
+      log("dev", `stopping ${leftovers.length} leftover container(s) this run started: ${leftovers.map((c) => c.name).join(", ")}`);
+      try {
+        execFileSync("docker", ["stop", ...leftovers.map((c) => c.id)], { stdio: "ignore" });
+      } catch (err) {
+        log("dev", `container cleanup failed: ${err.message}`);
+      }
+    });
+  }
   if (tier === "full") {
     const devVarsPath = path.join(o11yDir, ".dev.vars");
     const examplePath = path.join(o11yDir, ".dev.vars.example");
@@ -214,7 +241,7 @@ async function main() {
 
   function killAll(signal) {
     for (const child of children) {
-      if (child.killed) continue;
+      if (child.exited) continue;
       try {
         // `detached: true` (below) put each child in its own process
         // group — signal the whole group so wrangler's own child
@@ -234,10 +261,17 @@ async function main() {
     log("dev", `${signal} received — shutting down`);
     killAll("SIGINT");
     const deadline = Date.now() + 8000;
-    while (children.some((c) => !c.killed) && Date.now() < deadline) {
+    // NOTE: `child.killed` (ChildProcess's own flag) only reflects whether
+    // `.kill()` was CALLED, not whether the process actually exited — and
+    // we signal the process GROUP via the top-level `process.kill(-pid,
+    // ...)` above, which never touches that flag at all. Track real exits
+    // ourselves (`child.exited`, set from the `exit` listener below)
+    // instead, so this loop returns as soon as everything is actually
+    // gone rather than always waiting out the full grace period.
+    while (children.some((c) => !c.exited) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 200));
     }
-    if (children.some((c) => !c.killed)) {
+    if (children.some((c) => !c.exited)) {
       log("dev", "escalating to SIGKILL for any process still up after 8s");
       killAll("SIGKILL");
     }
@@ -269,7 +303,9 @@ async function main() {
     });
     pipeLines(child.stdout, proc.name);
     pipeLines(child.stderr, proc.name);
+    child.exited = false;
     child.on("exit", (code, signal) => {
+      child.exited = true;
       if (!shuttingDown) {
         log(proc.name, `exited unexpectedly (code=${code} signal=${signal}) — tearing everything else down`);
         shutdown("SIGTERM");

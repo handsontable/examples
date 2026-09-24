@@ -39,6 +39,8 @@ import {
   buildPlan,
   planNames,
   ephemeralSecret,
+  newLeftoverContainers,
+  o11yLocalPublicOrigin,
 } from "../scripts/dev-lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -482,6 +484,62 @@ test("buildPlan: never spawns wrangler via npx (spawns node_modules/.bin/wrangle
     assert.notEqual(proc.bin, "npx");
     assert.doesNotMatch(proc.bin, /^npx\b/);
   }
+});
+
+// ---------------------------------------------------------------------------
+// container cleanup (measured live for this task — see the report: Ctrl-C
+// does not make wrangler's own Sandbox-container orchestration tear itself
+// down synchronously, and this machine's `docker ps -a` already carried
+// dozens of orphaned containers from OTHER, unrelated `wrangler dev`
+// sessions — proof a blanket sweep by image/name would be unsafe)
+// ---------------------------------------------------------------------------
+
+test("newLeftoverContainers: only a container absent from `before` AND matching this run's own worker names counts", () => {
+  const before = new Set(["existing-1"]);
+  const after = [
+    { id: "existing-1", name: "workerd-handsontable-demos-api-Sandbox-xyz-proxy" }, // pre-existing — not ours to touch
+    { id: "new-1", name: "workerd-handsontable-demos-api-Sandbox-abc-proxy" }, // new + matches — ours
+    { id: "new-2", name: "workerd-handsontable-demos-o11y-GrafanaBox-def-proxy" }, // new + matches — ours
+    { id: "new-3", name: "some-unrelated-container" }, // new but does not match — never touched
+  ];
+  const leftovers = newLeftoverContainers(before, after);
+  assert.deepEqual(
+    leftovers.map((c) => c.id).sort(),
+    ["new-1", "new-2"],
+  );
+});
+
+test("newLeftoverContainers: empty when nothing new appeared", () => {
+  const before = new Set(["a", "b"]);
+  const after = [
+    { id: "a", name: "workerd-handsontable-demos-api-Sandbox-1-proxy" },
+    { id: "b", name: "workerd-handsontable-demos-api-Sandbox-2-proxy" },
+  ];
+  assert.deepEqual(newLeftoverContainers(before, after), []);
+});
+
+test("newLeftoverContainers: never touches an unrelated container even if it's new (backend-postgres, mongodb, another worktree's own service)", () => {
+  const before = new Set();
+  const after = [
+    { id: "x", name: "backend-postgres-1" },
+    { id: "y", name: "myhandsontable-mongodb" },
+  ];
+  assert.deepEqual(newLeftoverContainers(before, after), []);
+});
+
+// ---------------------------------------------------------------------------
+// o11yLocalPublicOrigin
+// ---------------------------------------------------------------------------
+
+test("o11yLocalPublicOrigin: tracks O11Y_DEV_PORT, not AUTHORING_DEV_PORT — Grafana is served from the o11y worker's own origin", () => {
+  assert.equal(o11yLocalPublicOrigin({ O11Y_DEV_PORT: 4200, AUTHORING_DEV_PORT: 5173 }), "http://localhost:4200");
+  assert.equal(o11yLocalPublicOrigin({ O11Y_DEV_PORT: 6223, AUTHORING_DEV_PORT: 6220 }), "http://localhost:6223");
+});
+
+test("buildPlan: tier=full's o11y spawn injects O11Y_LOCAL_PUBLIC_ORIGIN matching the resolved O11Y_DEV_PORT", () => {
+  const ports = resolvePorts("full", { O11Y_DEV_PORT: "6223" });
+  const o11y = buildPlan("full", ports).find((p) => p.name === "o11y");
+  assert.ok(o11y.args.includes("O11Y_LOCAL_PUBLIC_ORIGIN:http://localhost:6223"));
 });
 
 // ---------------------------------------------------------------------------

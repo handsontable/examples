@@ -419,6 +419,46 @@ export function isDockerAvailable(execFileSyncImpl) {
   }
 }
 
+/**
+ * Measured empirically for this task (see the report): Ctrl-C on `dev.mjs`
+ * does NOT make wrangler's own Sandbox-container orchestration tear itself
+ * down synchronously — a Tier-2 session's `workerd-handsontable-demos-api-
+ * Sandbox-*`(-proxy) containers were both still `Up` several seconds after
+ * the wrapper process itself had already exited. This machine also already
+ * carried dozens of `Exited` containers from OTHER, unrelated `wrangler dev`
+ * sessions (other worktrees/tasks) — proof that a blanket sweep by image or
+ * name prefix would be unsafe (COMMON.md: several worktrees run `wrangler
+ * dev` on this same machine at once). So cleanup is scoped to the narrowest
+ * safe signal available: a container that did not exist when THIS run
+ * started, does now, and matches this run's own worker name pattern. A
+ * concurrent, unrelated `wrangler dev` creating a new same-named container
+ * in the exact same few-second window would still be a false positive —
+ * accepted as a known, reported limitation (see the report), not solved
+ * here, since anything more precise would need something wrangler's own
+ * Sandbox SDK does not expose (a per-session/per-worktree container label).
+ */
+export function listRunningContainers(execFileSyncImpl) {
+  const out = execFileSyncImpl("docker", ["ps", "--format", "{{.ID}}\t{{.Names}}"]).toString();
+  return out
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [id, ...rest] = line.split("\t");
+      return { id, name: rest.join("\t") };
+    });
+}
+
+const LEFTOVER_CONTAINER_NAME_RE = /handsontable-demos-(api|o11y)/;
+
+/** `before`: a Set of container ids running when this run started (from
+ *  `listRunningContainers` at that point, ids only). `after`:
+ *  `listRunningContainers()`'s result now. Returns only the ones that are
+ *  both new since `before` AND look like this run's own worker containers. */
+export function newLeftoverContainers(before, after) {
+  return after.filter((c) => !before.has(c.id) && LEFTOVER_CONTAINER_NAME_RE.test(c.name));
+}
+
 // ---------------------------------------------------------------------------
 // Runtime staleness (packages/runtime dist vs src)
 // ---------------------------------------------------------------------------
