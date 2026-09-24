@@ -67,6 +67,8 @@ import {
   findComposeVolume,
   detectO11yStateDivergence,
   formatO11yDivergenceWarning,
+  defaultComposeProjectName,
+  resolveComposeProjectName,
 } from "../scripts/dev-lib.mjs";
 // dev-prepull task's own additions — a separate import statement so a
 // parallel edit to the blocks above merges cleanly.
@@ -1583,6 +1585,140 @@ test("resetO11yLocalState: logs 'nothing to delete' when there is no o11y worker
 // `path.join(o11yDir, ".wrangler", "state")` to `o11yDir` itself (or to
 // `dir`) makes "workers/api's own state untouched" fail, since `otherDir`
 // sits next to `o11yDir` under the same tmp root.
+
+// ---------------------------------------------------------------------------
+// Z-D-H2: per-worktree default COMPOSE_PROJECT_NAME (dev.mjs's own default
+// used to be the fixed literal "o11y-dev" — every worktree's `--tier=full`
+// resolved to the SAME compose project, so one worktree's `--fresh` (or even
+// a plain Ctrl-C) could wipe/stop another worktree's stack). See
+// `defaultComposeProjectName`'s own doc comment in dev-lib.mjs.
+// ---------------------------------------------------------------------------
+
+test("defaultComposeProjectName: two different worktree roots give two different names", () => {
+  const a = defaultComposeProjectName("/Users/dev/Code/examples/runner");
+  const b = defaultComposeProjectName("/Users/dev/Code/examples-wt/Q1-persist/runner");
+  assert.notEqual(a, b, "two distinct worktrees must never resolve to the same compose project");
+  assert.match(a, /^o11y-dev-[0-9a-f]+$/, "must still look like a compose project name (lowercase, hyphen, hex)");
+  assert.match(b, /^o11y-dev-[0-9a-f]+$/);
+});
+
+test("defaultComposeProjectName: the same root gives the same (stable) name every time", () => {
+  const root = "/Users/dev/Code/examples-wt/Y1-final/runner";
+  assert.equal(defaultComposeProjectName(root), defaultComposeProjectName(root), "must be stable across calls/restarts, not randomly generated");
+});
+
+// Revert evidence: reverting `defaultComposeProjectName` to the old fixed
+// `"o11y-dev"` literal (ignoring `runnerRoot` entirely) makes the first test
+// above fail (`a === b`, since both worktree paths would produce the exact
+// same literal) — the second test would still incidentally pass (a constant
+// is trivially "stable"), which is exactly why the first test is the one
+// that catches a worktree-collision regression.
+
+test("resolveComposeProjectName: an explicit COMPOSE_PROJECT_NAME env override always wins over the derived default", () => {
+  assert.equal(
+    resolveComposeProjectName({ COMPOSE_PROJECT_NAME: "my-shared-project" }, "/Users/dev/Code/examples/runner"),
+    "my-shared-project",
+  );
+});
+
+test("resolveComposeProjectName: falls back to defaultComposeProjectName(runnerRoot) when unset", () => {
+  const root = "/Users/dev/Code/examples/runner";
+  assert.equal(resolveComposeProjectName({}, root), defaultComposeProjectName(root));
+  // An empty string is "unset" too (matches every other env-override check in
+  // this module, e.g. resolvePorts' own `raw !== undefined && raw !== ""`).
+  assert.equal(resolveComposeProjectName({ COMPOSE_PROJECT_NAME: "" }, root), defaultComposeProjectName(root));
+});
+
+// Revert evidence: reverting `resolveComposeProjectName` to always return
+// `defaultComposeProjectName(runnerRoot)` (dropping the `env.COMPOSE_PROJECT_NAME
+// ||` short-circuit) makes the override test above fail (`"my-shared-project"`
+// vs a derived `o11y-dev-<hash>`).
+
+test("dev.mjs's own --tier=full compose section resolves COMPOSE_PROJECT_NAME via resolveComposeProjectName, not a hardcoded literal (drift guard)", () => {
+  const devSrc = readFileSync(path.join(RUNNER_ROOT, "scripts", "dev.mjs"), "utf8");
+  assert.match(
+    devSrc,
+    /const composeProjectName = resolveComposeProjectName\(process\.env\)/,
+    "dev.mjs must derive composeProjectName through the shared helper (Z-D-H2) so --fresh's own down -v (which reads composeEnv.COMPOSE_PROJECT_NAME straight from this variable) targets THIS worktree's derived project, not a value shared across worktrees",
+  );
+  assert.doesNotMatch(
+    devSrc,
+    /process\.env\.COMPOSE_PROJECT_NAME \|\| "o11y-dev"/,
+    "must not reintroduce the old fixed-literal fallback that collided across worktrees",
+  );
+});
+
+// Revert evidence: reverting dev.mjs's own `composeProjectName` line back to
+// `process.env.COMPOSE_PROJECT_NAME || "o11y-dev"` makes both assertions
+// above fail (the first regex no longer matches; the second one now does).
+
+// Behavioural companion to the source-grep drift guard above: reproduces
+// dev.mjs's own `--tier=full --fresh` wiring end to end (resolve the
+// project name the same way dev.mjs does -> build composeEnv from it ->
+// call resetO11yLocalState with it) and asserts the ACTUAL docker call
+// `resetO11yLocalState` makes carries THIS worktree's derived project name,
+// not a value shared across worktrees. Fails the same way the grep test
+// does if `resolveComposeProjectName`'s fallback is ever removed, but also
+// catches a caller-side mistake (e.g. building `composeEnv` from a
+// different/stale variable) that a pure source-text match cannot see.
+test("--tier=full's own wiring: --fresh's docker compose down -v carries THIS worktree's derived COMPOSE_PROJECT_NAME (behavioural)", () => {
+  withTmpDir((dir) => {
+    const o11yDir = path.join(dir, "workers", "o11y");
+    const root = path.join(dir, "some-worktree", "runner");
+    // No override — exactly dev.mjs's own `resolveComposeProjectName(process.env)`
+    // call when COMPOSE_PROJECT_NAME is unset.
+    const composeProjectName = resolveComposeProjectName({}, root);
+    const composeFile = path.join(dir, "compose.yml");
+    const composeEnv = { COMPOSE_PROJECT_NAME: composeProjectName };
+    const calls = [];
+    const execFileSyncImpl = (cmd, args, opts) => calls.push({ cmd, args, opts });
+
+    resetO11yLocalState({ o11yDir, composeFile, composeEnv, execFileSyncImpl });
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].args, composeDownArgs(composeFile, { fresh: true }), "must be the real --fresh down -v shape");
+    assert.equal(
+      calls[0].opts.env.COMPOSE_PROJECT_NAME,
+      defaultComposeProjectName(root),
+      "the docker call actually made must carry this worktree's derived name, not a shared/stale one",
+    );
+  });
+});
+
+test("stop-roundtrip.mjs's own dev-stack collision guard imports its default from defaultComposeProjectName, not a second hardcoded literal (drift guard)", () => {
+  const src = readFileSync(path.join(RUNNER_ROOT, "containers", "o11y", "local", "stop-roundtrip.mjs"), "utf8");
+  assert.match(
+    src,
+    /import\s*\{\s*defaultComposeProjectName\s*\}\s*from\s*"\.\.\/\.\.\/\.\.\/scripts\/dev-lib\.mjs"/,
+    "stop-roundtrip.mjs must import the ONE shared helper rather than keeping its own copy of the dev-stack default literal, so the two can never drift apart again",
+  );
+  assert.match(src, /const DEV_STACK_DEFAULT_PROJECT = defaultComposeProjectName\(\)/);
+});
+
+// Revert evidence: reverting stop-roundtrip.mjs's `DEV_STACK_DEFAULT_PROJECT`
+// back to the literal `"o11y-dev"` makes this test's second assertion fail,
+// and re-introduces the exact drift risk this item exists to close (a
+// worktree-derived dev.mjs default this script's guard would then silently
+// never match, so a `stop-roundtrip.mjs` run under this worktree's real
+// dev-stack project name would no longer be refused).
+
+test("o11y-dev.mjs never runs docker compose itself, so it has no COMPOSE_PROJECT_NAME/compose-project default to derive (documents why H2 does not touch it)", () => {
+  const src = readFileSync(path.join(RUNNER_ROOT, "scripts", "o11y-dev.mjs"), "utf8");
+  // The file's own comments explain (in prose) that it does NOT shell out to
+  // `docker compose` — only the actual invocation shape (`["compose", ...]`,
+  // as `dev.mjs`'s real `up`/`down` calls use) would mean it started doing so.
+  assert.doesNotMatch(src, /\[\s*"compose"/, "o11y-dev.mjs must keep not shelling out to docker compose at all");
+  assert.doesNotMatch(src, /COMPOSE_PROJECT_NAME/);
+});
+
+test("run-and-deploy.md documents the per-worktree derivation and what happens to an existing single-worktree user's old volumes (they are NOT renamed — orphaned, not migrated)", () => {
+  const doc = readFileSync(path.join(RUNNER_ROOT, "docs", "run-and-deploy.md"), "utf8");
+  assert.match(doc, /derived PER WORKTREE/i);
+  assert.match(doc, /defaultComposeProjectName/);
+  assert.match(doc, /does not rename them/i, "must correctly say docker does NOT rename the old volumes (they are orphaned; the new project starts empty)");
+  assert.match(doc, /orphaned/i);
+  assert.match(doc, /divergence warning/i, "must call out that the existing-ledger case prints detectO11yStateDivergence's warning on the first run under the new project");
+});
 
 test("o11yLedgerCommittedKeyCount: counts only 'done:' keys in the InboxWriter DO's real SQLite storage, across multiple .sqlite files", async () => {
   await withTmpDir(async (dir) => {

@@ -10,8 +10,9 @@
 // behind) and confirm every line is still queryable. Then the negative
 // control: SIGKILL a second wake and confirm NO marker is written.
 //
-// Zero npm dependencies (T00 owns adding any); shells out to `docker
-// compose` and `curl --aws-sigv4` (same technique as
+// Zero npm dependencies (T00 owns adding any) — the `dev-lib.mjs` import
+// below is this repo's own script, not an npm package; shells out to
+// `docker compose` and `curl --aws-sigv4` (same technique as
 // containers/o11y/supervisor/lib.sh) for the S3-signed marker check, and
 // uses Node's built-in fetch for everything else.
 //
@@ -25,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { scrubSecrets } from "./redact.mjs";
+import { defaultComposeProjectName } from "../../../scripts/dev-lib.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const O11Y_DIR = join(__dirname, "..");
@@ -36,25 +38,28 @@ const O11Y_DIR = join(__dirname, "..");
 // developer's persistent manual/dev stack — so running this script with no
 // override could silently wipe that stack's data. The default here must
 // never collide with a persistent stack's own default or documented
-// convention: `dev.mjs`/`dev-lib.mjs` default to "o11y-dev", and
+// convention: `dev.mjs`/`dev-lib.mjs` default to
+// `defaultComposeProjectName()` (Z-D-H2 fix: a per-worktree
+// `o11y-dev-<hash>`, imported from dev-lib.mjs here rather than a second
+// copy of that literal so the two can never drift apart again), and
 // compose.yml's header comment's example uses "o11y-t01" — this script gets
 // a name distinct from both.
 //
 // A distinct DEFAULT alone is not enough, though: if a developer has
-// `COMPOSE_PROJECT_NAME=o11y-dev` exported in their shell (e.g. left over
-// from working on the dev stack directly) when they run this script, the
-// env var wins over the default the same way it always does, and the `down
-// -v` below would still wipe the real dev stack. "Never reuse the dev
-// stack's [project name]" therefore has to be a hard refusal, not just a
-// differing default.
-const DEV_STACK_DEFAULT_PROJECT = "o11y-dev";
+// `COMPOSE_PROJECT_NAME=<this worktree's dev-stack default>` exported in
+// their shell (e.g. left over from working on the dev stack directly) when
+// they run this script, the env var wins over the default the same way it
+// always does, and the `down -v` below would still wipe the real dev stack.
+// "Never reuse the dev stack's [project name]" therefore has to be a hard
+// refusal, not just a differing default.
+const DEV_STACK_DEFAULT_PROJECT = defaultComposeProjectName();
 const REQUESTED_PROJECT = process.env.COMPOSE_PROJECT_NAME || "o11y-stop-roundtrip";
 if (REQUESTED_PROJECT === DEV_STACK_DEFAULT_PROJECT) {
   console.error(
     `error: COMPOSE_PROJECT_NAME="${DEV_STACK_DEFAULT_PROJECT}" is dev.mjs's own persistent dev-stack project name ` +
-      `(scripts/dev-lib.mjs's default) — this script's own \`down -v\` would wipe its named volumes ` +
-      `(minio-data/clickhouse-data). Refusing to run under this project name; set COMPOSE_PROJECT_NAME to ` +
-      `something else (or unset it to use this script's own "o11y-stop-roundtrip" default).`,
+      `for this worktree (scripts/dev-lib.mjs's defaultComposeProjectName()) — this script's own \`down -v\` would ` +
+      `wipe its named volumes (minio-data/clickhouse-data). Refusing to run under this project name; set ` +
+      `COMPOSE_PROJECT_NAME to something else (or unset it to use this script's own "o11y-stop-roundtrip" default).`,
   );
   process.exit(1);
 }
