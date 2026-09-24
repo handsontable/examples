@@ -119,7 +119,7 @@ test("inbox-state: rejectedKeyCount counts only rejected:* states", async () => 
   assert.equal(await inboxState.rejectedKeyCount(storage), 2);
 });
 
-test("inbox-state: newFingerprintsSince returns only names first-seen strictly after the cursor", async () => {
+test("inbox-state: newFingerprintsAfterKey (no cursor yet) returns only entries first-seen strictly after fallbackSinceMs", async () => {
   const storage = memoryStorage();
   // Seeded via the real `newFingerprintWrites` (registry.ts), not a raw
   // `fp:<fp>` put — the read is now bounded via the `fpts:` time-index
@@ -129,24 +129,26 @@ test("inbox-state: newFingerprintsSince returns only names first-seen strictly a
   await storage.put(await newFingerprintWrites(storage, ["old-fp"], 1000));
   await storage.put(await newFingerprintWrites(storage, ["new-fp"], 5000));
 
-  const sinceOld = await inboxState.newFingerprintsSince(storage, 2000);
-  assert.deepEqual(sinceOld.names, ["new-fp"]);
+  const sinceOld = await inboxState.newFingerprintsAfterKey(storage, null, 2000);
+  assert.deepEqual(sinceOld.entries.map((e) => e.name), ["new-fp"]);
   assert.equal(sinceOld.truncated, false);
-  assert.equal(sinceOld.lastMs, 5000);
+  assert.equal(sinceOld.entries[0].firstSeenMs, 5000);
 
-  const sinceNew = await inboxState.newFingerprintsSince(storage, 5000);
-  assert.deepEqual(sinceNew.names, []);
-  assert.equal(sinceNew.lastMs, null);
+  const sinceNew = await inboxState.newFingerprintsAfterKey(storage, null, 5000);
+  assert.deepEqual(sinceNew.entries, []);
 });
 
-test("inbox-state: newFingerprintsSince is safe against a fingerprint containing ':'", async () => {
+test("inbox-state: newFingerprintsAfterKey is safe against a fingerprint containing ':'", async () => {
   const storage = memoryStorage();
   await storage.put(await newFingerprintWrites(storage, ["docs-example-load:fetch:deadbeefdeadbeef"], 3000));
-  const result = await inboxState.newFingerprintsSince(storage, 2000);
-  assert.deepEqual(result.names, ["docs-example-load:fetch:deadbeefdeadbeef"]);
+  const result = await inboxState.newFingerprintsAfterKey(storage, null, 2000);
+  assert.deepEqual(
+    result.entries.map((e) => e.name),
+    ["docs-example-load:fetch:deadbeefdeadbeef"],
+  );
 });
 
-test("inbox-state: newFingerprintsSince truncates at the scan bound and reports it", async () => {
+test("inbox-state: newFingerprintsAfterKey truncates at the scan bound and reports it", async () => {
   const storage = memoryStorage();
   // Comfortably over NEW_FINGERPRINT_SCAN_LIMIT (2000) — write in
   // storage-limit-sized chunks (this is a direct `put`, not through
@@ -162,10 +164,46 @@ test("inbox-state: newFingerprintsSince truncates at the scan bound and reports 
     }
     await putChunked(storage, writes); // N2: 200 entries/iteration (fp: + fpts: per name)
   }
-  const result = await inboxState.newFingerprintsSince(storage, 0);
+  const result = await inboxState.newFingerprintsAfterKey(storage, null, 0);
   assert.equal(result.truncated, true);
-  assert.equal(result.names.length, 2000);
-  assert.equal(result.lastMs, 1000 + 1999);
+  assert.equal(result.entries.length, 2000);
+  assert.equal(result.entries.at(-1).firstSeenMs, 1000 + 1999);
+});
+
+test("inbox-state: newFingerprintsAfterKey (NB1 probe, keyset resume) advances past 2,100 entries sharing ONE first-seen ms, across two calls chained by key", async () => {
+  // Re-review 2, NB1's exact reproduction shape: every entry shares one ms,
+  // and there are more of them than NEW_FINGERPRINT_SCAN_LIMIT (2000). The
+  // old ms-only cursor ("lastMs - 1") could never move past this ms at all.
+  // A LATER, real fingerprint at a later ms must still be reachable.
+  const storage = memoryStorage();
+  const floodMs = 1_000_000;
+  const total = 2100;
+  for (let i = 0; i < total; i += 100) {
+    const writes = {};
+    for (let j = i; j < i + 100; j++) {
+      const fp = `flood-fp-${j.toString().padStart(5, "0")}`;
+      Object.assign(writes, await newFingerprintWrites(storage, [fp], floodMs));
+    }
+    await putChunked(storage, writes);
+  }
+  await storage.put(await newFingerprintWrites(storage, ["real-later-fingerprint"], floodMs + 1000));
+
+  const first = await inboxState.newFingerprintsAfterKey(storage, null, floodMs - 1);
+  assert.equal(first.truncated, true);
+  assert.equal(first.entries.length, 2000);
+  const firstNames = first.entries.map((e) => e.name);
+  assert.equal(firstNames[0], "flood-fp-00000");
+
+  const lastKeyOfFirst = first.entries.at(-1).key;
+  const second = await inboxState.newFingerprintsAfterKey(storage, lastKeyOfFirst, floodMs - 1);
+  assert.equal(second.truncated, false, "the remaining 101 entries fit comfortably under the scan limit");
+  const secondNames = second.entries.map((e) => e.name);
+  // The KEY point of NB1: the second read's first name must differ from
+  // the first read's first name — with the old ms cursor this test would
+  // fail here, re-reading the exact same page forever.
+  assert.notEqual(secondNames[0], firstNames[0]);
+  assert.equal(secondNames[0], "flood-fp-02000");
+  assert.ok(secondNames.includes("real-later-fingerprint"), "a later, real fingerprint past the flood must be reachable, not stalled forever");
 });
 
 test("inbox-state: drainsPaused defaults false, round-trips true", async () => {
@@ -304,7 +342,7 @@ test("rejectedKeyRule: fires on a RECENT rejection, resolves once none are recen
 const REALISTIC_NOW_MS = 1_700_000_000_000;
 const CURSOR_GRACE_MS = 2 * 60 * 1000;
 
-test("newFingerprintRule: fires when a new fingerprint appears since the cursor, advances the cursor by nowMs minus the grace period (not to nowMs itself)", async () => {
+test("newFingerprintRule: fires when a new fingerprint appears since the cursor, and advances the KEYSET cursor to the entry's own key (not into the grace window)", async () => {
   let cursor;
   const seen = [];
   // Comfortably OUTSIDE the grace window (500s before nowMs, grace is
@@ -312,6 +350,7 @@ test("newFingerprintRule: fires when a new fingerprint appears since the cursor,
   // then, so it does not reappear (unlike the dedicated grace-window test
   // below, which deliberately places a fingerprint INSIDE the window).
   const fingerprintFirstSeenMs = REALISTIC_NOW_MS - 500_000;
+  const entry = { key: "fpts:000000001699999500000:fp-a", name: "fp-a", firstSeenMs: fingerprintFirstSeenMs };
   const writer = {
     async getAlertMeta() {
       return cursor;
@@ -319,40 +358,35 @@ test("newFingerprintRule: fires when a new fingerprint appears since the cursor,
     async setAlertMeta(_k, v) {
       cursor = v;
     },
-    async newFingerprintsSince(since) {
-      seen.push(since);
-      return Number(since) < fingerprintFirstSeenMs
-        ? { names: ["fp-a"], truncated: false, lastMs: fingerprintFirstSeenMs }
-        : { names: [], truncated: false, lastMs: null };
+    async newFingerprintsAfterKey(afterKey) {
+      seen.push(afterKey);
+      return afterKey === null ? { entries: [entry], truncated: false } : { entries: [], truncated: false };
     },
   };
   const first = await newFingerprintRule(writer, REALISTIC_NOW_MS);
   assert.equal(first.firing, true);
   assert.match(first.detail, /fp-a/);
-  // Without the grace-period fix this reverts to asserting `cursor ===
-  // String(REALISTIC_NOW_MS)` — the exact assertion the previous (buggy)
-  // version of this test made.
-  assert.equal(
-    cursor,
-    String(REALISTIC_NOW_MS - CURSOR_GRACE_MS),
-    "cursor advances to nowMs minus the grace period, not to nowMs itself",
-  );
+  // Re-review 2, NB1 fix: the persisted cursor is now the exact KEY of the
+  // entry read (a keyset cursor), never a millisecond derived from
+  // `nowMs`/grace — that ms-based scheme is exactly what let a shared
+  // millisecond stall forever (see the dedicated NB1 probe test below).
+  assert.equal(cursor, entry.key, "cursor advances to the exact key of the entry actually read");
 
   // A full ten-minute cron interval later — comfortably past the grace
-  // period — the same underlying data source reports nothing new.
+  // period — the same underlying data source reports nothing new past
+  // that cursor.
   const second = await newFingerprintRule(writer, REALISTIC_NOW_MS + 10 * 60 * 1000);
   assert.equal(second.firing, false);
 });
 
-test("newFingerprintRule: never advances the cursor past nowMs - CURSOR_GRACE_MS, so a fingerprint stamped inside the grace window is not permanently missed on the next tick", async () => {
+test("newFingerprintRule: never advances the cursor past an entry inside the grace window, so a fingerprint stamped inside CURSOR_GRACE_MS is not permanently missed on the next tick", async () => {
   // Simulates the exact race the finding describes: a fingerprint with
   // firstSeen inside the last CURSOR_GRACE_MS of tick N is still visible
   // (not silently dropped) on tick N+1's query, because the cursor tick N
-  // wrote never advanced past it. Without the fix (cursor = nowMs), this
-  // fingerprint's firstSeen would already be <= the advanced cursor and
-  // `newFingerprintsSince` would never be asked about it again.
+  // wrote never advanced past it.
   let cursor;
-  const fingerprintFirstSeenMs = REALISTIC_NOW_MS - 30_000; // 30s before tick N's nowMs
+  const fingerprintFirstSeenMs = REALISTIC_NOW_MS - 30_000; // 30s before tick N's nowMs, inside the 120s grace window
+  const entry = { key: "fpts:000000001699999970000:fp-late", name: "fp-late", firstSeenMs: fingerprintFirstSeenMs };
   const writer = {
     async getAlertMeta() {
       return cursor;
@@ -360,23 +394,23 @@ test("newFingerprintRule: never advances the cursor past nowMs - CURSOR_GRACE_MS
     async setAlertMeta(_k, v) {
       cursor = v;
     },
-    async newFingerprintsSince(since) {
-      return Number(since) < fingerprintFirstSeenMs
-        ? { names: ["fp-late"], truncated: false, lastMs: fingerprintFirstSeenMs }
-        : { names: [], truncated: false, lastMs: null };
+    async newFingerprintsAfterKey(afterKey) {
+      return afterKey === null ? { entries: [entry], truncated: false } : { entries: [], truncated: false };
     },
   };
   await newFingerprintRule(writer, REALISTIC_NOW_MS); // tick N
-  assert.ok(
-    Number(cursor) < fingerprintFirstSeenMs,
-    "tick N's cursor must stay below the fingerprint's firstSeen, not jump past it",
-  );
+  assert.equal(cursor, undefined, "an entry inside the grace window must not advance the cursor at all");
   const nextTick = await newFingerprintRule(writer, REALISTIC_NOW_MS + 10 * 60 * 1000); // tick N+1
   assert.equal(nextTick.firing, true, "the fingerprint must still be visible on the very next tick");
 });
 
 test("newFingerprintRule: caps the Slack detail at 10 names, with an overflow count", async () => {
   const names = Array.from({ length: 15 }, (_, i) => `authoring:${i.toString(16).padStart(16, "0")}`);
+  const entries = names.map((name, i) => ({
+    key: `fpts:${String(1_699_999_500_000 + i).padStart(15, "0")}:${name}`,
+    name,
+    firstSeenMs: REALISTIC_NOW_MS - 500_000,
+  }));
   let cursor;
   const writer = {
     async getAlertMeta() {
@@ -385,8 +419,8 @@ test("newFingerprintRule: caps the Slack detail at 10 names, with an overflow co
     async setAlertMeta(_k, v) {
       cursor = v;
     },
-    async newFingerprintsSince() {
-      return { names, truncated: false, lastMs: null };
+    async newFingerprintsAfterKey() {
+      return { entries, truncated: false };
     },
   };
   const result = await newFingerprintRule(writer, REALISTIC_NOW_MS);
@@ -396,14 +430,17 @@ test("newFingerprintRule: caps the Slack detail at 10 names, with an overflow co
   assert.match(result.detail, /\+5 more/);
 });
 
-test("newFingerprintRule: a truncated newFingerprintsSince read never advances the cursor past what it actually read", async () => {
-  // B-C1/A-I1 remainder: `newFingerprintsSince` is now a BOUNDED scan and
-  // can report `truncated: true` with a `lastMs` short of `nowMs`. The
-  // cursor must stop at `lastMs - 1`, not race ahead to `nowMs -
-  // CURSOR_GRACE_MS` — otherwise the unread tail of fingerprints past the
-  // scan bound would be silently skipped forever, exactly the bug this
-  // rule already avoids for the grace-window case.
+test("newFingerprintRule: a truncated newFingerprintsAfterKey read advances the cursor only to the last KEY it actually read, never past it", async () => {
+  // B-C1/A-I1 remainder, kept true under the keyset cursor: a BOUNDED scan
+  // can report `truncated: true` with entries short of `nowMs`. The cursor
+  // must stop at the last entry's own key — structurally guaranteed now,
+  // since the cursor is always literally the key of an entry this call
+  // read, never an inferred value past it.
   const lastMs = REALISTIC_NOW_MS - 400_000; // well outside the grace window
+  const entries = [
+    { key: "fpts:000000001699999600000:fp-a", name: "fp-a", firstSeenMs: lastMs - 1000 },
+    { key: "fpts:000000001699999600000:fp-b", name: "fp-b", firstSeenMs: lastMs },
+  ];
   let cursor;
   const writer = {
     async getAlertMeta() {
@@ -412,34 +449,142 @@ test("newFingerprintRule: a truncated newFingerprintsSince read never advances t
     async setAlertMeta(_k, v) {
       cursor = v;
     },
-    async newFingerprintsSince() {
-      return { names: ["fp-a"], truncated: true, lastMs };
+    async newFingerprintsAfterKey() {
+      return { entries, truncated: true };
     },
   };
   await newFingerprintRule(writer, REALISTIC_NOW_MS);
-  assert.equal(
-    Number(cursor),
-    lastMs - 1,
-    "a truncated read must cap the cursor at lastMs - 1, never race ahead to nowMs - grace",
-  );
+  assert.equal(cursor, entries.at(-1).key, "the cursor must stop exactly at the last entry this call actually read");
 });
+
+test("newFingerprintRule (real InboxWriter + registry, NB1 probe): the keyset cursor progresses across ticks even when 2,100 fingerprints share ONE first-seen ms, and never stalls", async () => {
+  // The reviewer's exact reproduction (rereview2.md NB1): "I used
+  // memoryStorage with the real newFingerprintWrites, newFingerprintsSince
+  // and newFingerprintRule, seeded 2,100 fingerprints that share one
+  // first-seen ms, and ran 4 ticks. The cursor stayed at ms-1 on every
+  // tick, and the first name read never changed." This drives the REAL
+  // InboxWriter DO (not a stub), through the real `writer.ingest` path, so
+  // it also exercises the real `newFingerprintsAfterKey` RPC wiring.
+  const { env } = makeEnv(InboxWriter);
+  const writer = env.INBOX_WRITER.jurisdiction("eu").get();
+
+  const floodMs = REALISTIC_NOW_MS - 500_000; // outside the grace window throughout
+  const total = 2100;
+  const floodItems = Array.from({ length: total }, (_, i) => ({
+    hash: `flood-hash-${i}`,
+    fingerprint: `flood-fp-${i.toString().padStart(5, "0")}`,
+  }));
+  await writer.ingest("worker", floodMs, floodItems);
+  // A later, real fingerprint — the exact thing NB1 says "is never read
+  // again" under the old ms-only cursor.
+  await writer.ingest("worker", floodMs + 1000, [{ hash: "real-hash", fingerprint: "real-later-fingerprint" }]);
+
+  const tick1 = await newFingerprintRule(writer, REALISTIC_NOW_MS);
+  const tick2 = await newFingerprintRule(writer, REALISTIC_NOW_MS + 10 * 60 * 1000);
+  await newFingerprintRule(writer, REALISTIC_NOW_MS + 20 * 60 * 1000);
+  const tick4 = await newFingerprintRule(writer, REALISTIC_NOW_MS + 30 * 60 * 1000);
+
+  assert.equal(tick1.firing, true);
+  const firstNameTick1 = tick1.detail.match(/new fingerprint\(s\): ([^,]+)/)?.[1];
+  const firstNameTick2 = tick2.detail.match(/new fingerprint\(s\): ([^,]+)/)?.[1];
+  assert.equal(firstNameTick1, "flood-fp-00000");
+  // The KEY assertion: with the old ms cursor, tick 2 re-reads the exact
+  // same page (`lastMs - 1` re-equals the stored cursor forever) and this
+  // would be equal, not different — this is the assertion NB1's own probe
+  // says fails against the un-fixed code ("the first name read never
+  // changed").
+  assert.notEqual(firstNameTick2, firstNameTick1, "tick 2 must read a different page than tick 1 — the cursor must have advanced");
+
+  // No permanent stall: by the 4th tick every flood fingerprint AND the
+  // later real one must have been consumed, so the feed goes quiet.
+  assert.equal(tick4.firing, false, "the cursor must fully catch up within a few ticks, including the later real fingerprint — not stall forever");
+});
+
+function fakeInboxWriterMeta() {
+  const meta = new Map();
+  return {
+    async getAlertMeta(key) {
+      return meta.get(key);
+    },
+    async setAlertMeta(key, value) {
+      meta.set(key, value);
+    },
+  };
+}
 
 test("notifyFingerprintEvent posts unconditionally and never writes alert:<rule> state (notify-only, not fire/resolve — C cross-note)", async () => {
   const posted = [];
   const postSlack = async (text) => posted.push(text);
   const aeSink = { writeDataPoint() {} };
   const commonAttrs = { service_name: "demos-o11y", service_version: "abc", environment: "production" };
+  const inboxWriter = fakeInboxWriterMeta();
 
-  await notifyFingerprintEvent(postSlack, aeSink, commonAttrs, "new-fingerprint", "new fingerprint(s): fp-a");
-  await notifyFingerprintEvent(postSlack, aeSink, commonAttrs, "new-fingerprint", "new fingerprint(s): fp-b");
+  await notifyFingerprintEvent(inboxWriter, postSlack, aeSink, commonAttrs, "new-fingerprint", "new fingerprint(s): fp-a", REALISTIC_NOW_MS);
+  await notifyFingerprintEvent(inboxWriter, postSlack, aeSink, commonAttrs, "new-fingerprint", "new fingerprint(s): fp-b", REALISTIC_NOW_MS);
 
   // The bug this fixes: routing this rule through `evaluateAndNotify` meant
   // a SECOND batch of new fingerprints while still "firing" produced no
   // Slack line at all (fire-once masking). Notify-only posts every time
-  // there is something to report.
+  // there is something to report (up to the N7 rate cap — see the
+  // dedicated test below for that boundary).
   assert.equal(posted.length, 2, "every call with something to report must post, not just the first");
   assert.match(posted[0], /fp-a/);
   assert.match(posted[1], /fp-b/);
+});
+
+test("notifyFingerprintEvent (N7 rate cap): posts normally up to the per-window cap, then exactly ONE summary line with a count, then resumes normally in the next window", async () => {
+  // Re-review 2, N7: nothing capped how many times this notify-only path
+  // could post — a flood of forged-but-shape-valid fingerprints (the same
+  // attacker model as row 13/NB1) could post a Slack line every cron tick
+  // forever, spamming the channel and/or training operators to ignore the
+  // feed, masking a genuine new fingerprint arriving in the same flood.
+  const posted = [];
+  const postSlack = async (text) => posted.push(text);
+  const aeSink = { writeDataPoint() {} };
+  const commonAttrs = { service_name: "demos-o11y", service_version: "abc", environment: "production" };
+  const inboxWriter = fakeInboxWriterMeta();
+
+  const CAP = 20; // notify.ts#MAX_FINGERPRINT_POSTS_PER_WINDOW
+  const OVERFLOW_TICKS = 5;
+
+  for (let i = 0; i < CAP; i++) {
+    await notifyFingerprintEvent(inboxWriter, postSlack, aeSink, commonAttrs, "new-fingerprint", `new fingerprint(s): fp-${i}`, REALISTIC_NOW_MS);
+  }
+  assert.equal(posted.length, CAP, "every tick up to the cap posts its own detail line");
+
+  for (let i = 0; i < OVERFLOW_TICKS; i++) {
+    await notifyFingerprintEvent(
+      inboxWriter,
+      postSlack,
+      aeSink,
+      commonAttrs,
+      "new-fingerprint",
+      `new fingerprint(s): overflow-${i}`,
+      REALISTIC_NOW_MS + i * 60_000,
+    );
+  }
+  // Exactly ONE additional post for all 5 overflow ticks combined — never
+  // dropped silently (a summary line, not nothing) and never one line per
+  // overflow tick (that would just be the flood again, wearing a
+  // different label).
+  assert.equal(posted.length, CAP + 1, "the whole overflow burst must add exactly one summary post, not zero and not one-per-tick");
+  const summary = posted.at(-1);
+  assert.doesNotMatch(summary, /overflow-/, "the summary must not carry a raw suppressed detail line");
+  assert.match(summary, /\b1\b/, "the summary's count reflects the FIRST overflow tick (when it was sent), not a running total");
+
+  // The next window (an hour later — notify.ts#FINGERPRINT_POST_WINDOW_MS)
+  // posts normally again.
+  await notifyFingerprintEvent(
+    inboxWriter,
+    postSlack,
+    aeSink,
+    commonAttrs,
+    "new-fingerprint",
+    "new fingerprint(s): fp-next-window",
+    REALISTIC_NOW_MS + 61 * 60_000,
+  );
+  assert.equal(posted.length, CAP + 2);
+  assert.match(posted.at(-1), /fp-next-window/);
 });
 
 test("escapeSlackMrkdwn escapes &, < and > in Slack's own order (fix round A-C2)", () => {

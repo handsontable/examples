@@ -135,7 +135,7 @@ export async function runAlerts(env: Env, _ctx?: ExecutionContext): Promise<RunA
     const result = await newFingerprintRule(writer, nowMs);
     results.push(result);
     if (result.firing) {
-      await notifyFingerprintEvent(postSlack, sink, attrs, result.rule, result.detail);
+      await notifyFingerprintEvent(writer, postSlack, sink, attrs, result.rule, result.detail, nowMs);
     }
   } catch (err) {
     errors["new-fingerprint"] = err instanceof Error ? err.message : String(err);

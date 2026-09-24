@@ -123,14 +123,20 @@ export interface InboxWriterApi {
    *  rejections stop instead of firing forever after the first one. */
   recentRejectionCount(sinceMs: number): Promise<number>;
 
-  /** `fp:<fingerprint>` entries first seen strictly after `sinceMs`, read
-   *  via the `fpts:` time-ordered index (bounded — B-C1/A-I1 remainder) —
-   *  `demo-runtime` fingerprints are already excluded (they never reach the
-   *  registry at all: `feedsNewFingerprintAlert`, contract §7), so every
-   *  name returned here is alert-eligible by construction. `truncated`/
-   *  `lastMs` let the caller (`alerts/rules.ts#newFingerprintRule`) advance
-   *  its own cursor without skipping anything the scan didn't reach. */
-  newFingerprintsSince(sinceMs: number): Promise<{ names: string[]; truncated: boolean; lastMs: number | null }>;
+  /** `fp:<fingerprint>` entries read via the `fpts:` time-ordered index
+   *  (bounded — B-C1/A-I1 remainder), strictly after `afterKey` — a KEYSET
+   *  cursor (re-review 2, NB1 fix: a millisecond-only cursor stalls forever
+   *  once one ms holds `NEW_FINGERPRINT_SCAN_LIMIT`-or-more entries).
+   *  `afterKey === null` means "no cursor yet"; the scan then starts just
+   *  after `fallbackSinceMs`. `demo-runtime` fingerprints are already
+   *  excluded (they never reach the registry at all: `feedsNewFingerprintAlert`,
+   *  contract §7), so every entry returned here is alert-eligible by
+   *  construction. `truncated` lets the caller (`alerts/rules.ts#newFingerprintRule`)
+   *  know more may exist past the last entry read. */
+  newFingerprintsAfterKey(
+    afterKey: string | null,
+    fallbackSinceMs: number,
+  ): Promise<{ entries: { key: string; name: string; firstSeenMs: number }[]; truncated: boolean }>;
 
   /** `alert:<rule>` (§8): the exact fire-once/resolve-once state the ADR
    *  §F.3 rule evaluator reads and writes every tick. */

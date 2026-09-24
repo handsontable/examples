@@ -109,16 +109,74 @@ export async function evaluateAndNotify(
  * the same `o11y.alert` `outcome: "fired"` point every other rule does, so
  * the existing dashboard panel still has something to show; never writes
  * `"resolved"` — there is no matching transition for an event stream.
+ *
+ * Re-review 2, N7: notify-only means nothing here caps how OFTEN this
+ * posts — `rules.ts#newFingerprintRule`'s own cursor only bounds how much
+ * one call can report, not how many ticks in a row can each fire a Slack
+ * line. A flood of forged-but-shape-valid fingerprints (the same attacker
+ * model row 13/NB1 disclose) can therefore post every ten minutes forever,
+ * which either spams the channel or trains operators to ignore it — either
+ * way it can mask a real new fingerprint arriving in the same flood. This
+ * function now rate-caps ITS OWN posts, independent of the cursor: at most
+ * {@link MAX_FINGERPRINT_POSTS_PER_WINDOW} individual detail lines per
+ * {@link FINGERPRINT_POST_WINDOW_MS}, tracked in `InboxWriter` alertMeta
+ * (never module state — this runs in a stateless Worker). Once the cap is
+ * hit, further calls in the same window post NOTHING individually; instead
+ * exactly ONE summary line is posted the first time the cap is exceeded,
+ * carrying a count, so the operator sees "something is being rate-limited"
+ * rather than total silence. The read this feeds off (`newFingerprintRule`)
+ * is never gated by this cap — only the Slack post is — so the cursor
+ * keeps advancing and NB1's fix still holds under a flood.
  */
+const FINGERPRINT_POST_WINDOW_MS = 60 * 60 * 1000;
+const MAX_FINGERPRINT_POSTS_PER_WINDOW = 20;
+const FINGERPRINT_POST_WINDOW_META_KEY = "newFingerprintPostWindow";
+
+interface FingerprintPostWindowState {
+  windowStart: number;
+  /** Individual detail lines posted so far this window. */
+  posted: number;
+  /** Firing calls suppressed (not individually posted) so far this window. */
+  suppressed: number;
+  /** Whether the one summary line for this window has already gone out. */
+  summarized: boolean;
+}
+
+function freshFingerprintPostWindow(nowMs: number): FingerprintPostWindowState {
+  return { windowStart: nowMs, posted: 0, suppressed: 0, summarized: false };
+}
+
 export async function notifyFingerprintEvent(
+  inboxWriter: InboxWriterApi,
   postSlack: PostSlack,
   aeSink: AeSink,
   commonAttrs: CommonResourceAttrs,
   rule: string,
   detail: string,
+  nowMs = Date.now(),
 ): Promise<void> {
-  await postSlack(`:rotating_light: [o11y] *${escapeSlackMrkdwn(rule)}* — ${escapeSlackMrkdwn(detail)}`);
-  writeAlertPoint(aeSink, commonAttrs, rule, "fired");
+  const raw = await inboxWriter.getAlertMeta(FINGERPRINT_POST_WINDOW_META_KEY);
+  let state: FingerprintPostWindowState = raw ? (JSON.parse(raw) as FingerprintPostWindowState) : freshFingerprintPostWindow(nowMs);
+  if (nowMs - state.windowStart >= FINGERPRINT_POST_WINDOW_MS) state = freshFingerprintPostWindow(nowMs);
+
+  if (state.posted < MAX_FINGERPRINT_POSTS_PER_WINDOW) {
+    state.posted += 1;
+    await inboxWriter.setAlertMeta(FINGERPRINT_POST_WINDOW_META_KEY, JSON.stringify(state));
+    await postSlack(`:rotating_light: [o11y] *${escapeSlackMrkdwn(rule)}* — ${escapeSlackMrkdwn(detail)}`);
+    writeAlertPoint(aeSink, commonAttrs, rule, "fired");
+    return;
+  }
+
+  state.suppressed += 1;
+  const postSummaryNow = !state.summarized;
+  if (postSummaryNow) state.summarized = true;
+  await inboxWriter.setAlertMeta(FINGERPRINT_POST_WINDOW_META_KEY, JSON.stringify(state));
+  if (postSummaryNow) {
+    await postSlack(
+      `:rotating_light: [o11y] *${escapeSlackMrkdwn(rule)}* — rate-capped after ${MAX_FINGERPRINT_POSTS_PER_WINDOW} posts this window; ${state.suppressed} further new-fingerprint report(s) suppressed (not dropped — see the cursor), no more individual lines until the window rolls over`,
+    );
+    writeAlertPoint(aeSink, commonAttrs, rule, "fired");
+  }
 }
 
 function writeAlertPoint(
