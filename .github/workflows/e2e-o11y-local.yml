@@ -256,20 +256,41 @@ jobs:
       # is that "first". Backgrounded + polled here rather than left to the
       # spec, because the spec's own error message assumes a human did this
       # step by hand.
+      #
+      # `--enable-containers=false` (hidden flag, `wrangler dev --help` does
+      # not list it — confirmed present in this pinned wrangler 4.136.3's
+      # CLI parser): without it, `wrangler dev` runs an "⎔ Preparing
+      # container image(s)…" step first to build the GrafanaBox image (Loki
+      # 3.3.2 + Grafana 11.4.0 base pulls, plugins) before it ever opens
+      # :5220, which alone can outlast this poll's 120s budget on a cold
+      # runner. e2e/o11y-local.spec.ts never touches Grafana or Loki — it
+      # asserts against local ClickHouse rows — so nothing here needs the
+      # box, and building it would only cost minutes for no coverage. The
+      # box is otherwise only woken by the (unfired-in-dev) backlog cron and
+      # the `/grafana/*` visit route, neither of which this spec exercises,
+      # so `/telemetry/*` ingest still works unaffected.
       - name: Start the o11y worker (wrangler dev)
         working-directory: runner/workers/o11y
         run: |
-          pnpm exec wrangler dev --port 5220 --inspector-port 5221 \
+          pnpm exec wrangler dev --port 5220 --inspector-port 5221 --enable-containers=false \
             > "${RUNNER_TEMP}/o11y-dev.log" 2>&1 &
           echo $! > "${RUNNER_TEMP}/o11y-dev.pid"
+          # No `-f`: this worker registers no route at "/", so a healthy
+          # worker answers with a plain 404 — matching `scripts/dev.mjs`'s
+          # own `waitForServer`, which polls with a bare `fetch()` and
+          # treats any response (2xx or not) as "up". `-f` would turn that
+          # 404 into a curl failure and the loop would never succeed, no
+          # matter how fast the worker started. `--max-time 5` caps each
+          # attempt so a hung/misbundled `wrangler dev` still fails within
+          # the 60x2s budget instead of stalling on a single slow request.
           for _ in $(seq 1 60); do
-            if curl -sf "http://localhost:5220" >/dev/null; then
+            if curl -s --max-time 5 -o /dev/null "http://localhost:5220"; then
               echo "o11y worker is up"; exit 0
             fi
             sleep 2
           done
           echo "::error::o11y worker never answered on :5220"
-          cat "${RUNNER_TEMP}/o11y-dev.log"
+          tail -n 100 "${RUNNER_TEMP}/o11y-dev.log"
           exit 1
 
       # Same E2E_BASE_URL trick as the telemetry-metrics job — see that job's
