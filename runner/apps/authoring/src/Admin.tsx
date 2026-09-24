@@ -64,8 +64,10 @@ export interface BudgetSettings {
   enforce: boolean;
   alertsUsd: number[];
   /** ADR-0041 §G: the o11y stack's own monthly ceiling (default $15),
-   *  separate from `limitUsd` — see settings.ts's own doc comment. */
-  o11yBudgetUsd: number;
+   *  separate from `limitUsd` — see settings.ts's own doc comment. Optional:
+   *  an API response from before ADR-0041 §G shipped won't carry it, and the
+   *  panel must render that older payload rather than crash on it. */
+  o11yBudgetUsd?: number;
   source?: "defaults" | "override";
   updatedAt?: string | null;
   updatedBy?: string | null;
@@ -96,8 +98,11 @@ interface UsageReport {
     reconciled: boolean;
     enforced: boolean;
   };
-  /** ADR-0041 §G: "`/admin` shows app, observability and total." */
-  o11y: {
+  /** ADR-0041 §G: "`/admin` shows app, observability and total." Optional:
+   *  an API worker deployed before this landed won't send it (rolling
+   *  deploys mean an older Worker can serve a newer authoring bundle), so
+   *  the panel renders without this line rather than crashing on it. */
+  o11y?: {
     spendUsd: number;
     capUsd: number;
     appSpendUsd: number;
@@ -380,7 +385,7 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
 function BudgetCard({ report }: { report: UsageReport }) {
   const { budget, settings, o11y } = report;
   const tier = TIERS[budget.tier] ?? { label: budget.tier, color: theme.color.text };
-  const o11yOverCap = o11y.spendUsd >= o11y.capUsd;
+  const o11yOverCap = o11y ? o11y.spendUsd >= o11y.capUsd : false;
   const pct = Math.max(0, Math.min(1, budget.pct));
   const limit = settings.limitUsd || 1;
   const marks: [string, number][] = [
@@ -423,21 +428,25 @@ function BudgetCard({ report }: { report: UsageReport }) {
             + "once these figures track the Cloudflare Billable Usage dashboard."}
       </p>
 
-      {/* ADR-0041 §G: app, observability and total. */}
-      <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 8, fontSize: 13 }}>
-        <span>App: <strong>{usd(o11y.appSpendUsd)}</strong></span>
-        <span>
-          Observability: <strong style={{ color: o11yOverCap ? theme.color.danger : undefined }}>
-            {usd(o11y.spendUsd)}
-          </strong> of {usd(o11y.capUsd)} cap
-          {o11yOverCap && (
-            <span style={{ ...pill, background: theme.color.danger, marginLeft: 6 }}>
-              backlog drains paused
-            </span>
-          )}
-        </span>
-        <span>Total: <strong>{usd(o11y.totalSpendUsd)}</strong></span>
-      </div>
+      {/* ADR-0041 §G: app, observability and total. Absent entirely against
+          an older API response that predates this line (see the `o11y?`
+          doc comment on UsageReport) — nothing to show, so nothing renders. */}
+      {o11y && (
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 8, fontSize: 13 }}>
+          <span>App: <strong>{usd(o11y.appSpendUsd)}</strong></span>
+          <span>
+            Observability: <strong style={{ color: o11yOverCap ? theme.color.danger : undefined }}>
+              {usd(o11y.spendUsd)}
+            </strong> of {usd(o11y.capUsd)} cap
+            {o11yOverCap && (
+              <span style={{ ...pill, background: theme.color.danger, marginLeft: 6 }}>
+                backlog drains paused
+              </span>
+            )}
+          </span>
+          <span>Total: <strong>{usd(o11y.totalSpendUsd)}</strong></span>
+        </div>
+      )}
     </section>
   );
 }
