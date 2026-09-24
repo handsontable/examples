@@ -17,6 +17,16 @@ register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 const { GrafanaBox } = await import("../workers/o11y/src/box.ts");
 const { handleGrafana } = await import("../workers/o11y/src/grafana/proxy.ts");
 const { wakingPageHtml } = await import("../workers/o11y/src/grafana/waking-page.ts");
+const { AE_COLUMNS } = await import("@handsontable/demo-runtime/telemetry");
+
+/** Reads a metric's `outcome` blob out of a fake AE point the way the real
+ *  slot (`AE_COLUMNS.outcome`, e.g. `"blob8"`) addresses it — never a
+ *  hardcoded array index, so a future contract slot renumbering cannot
+ *  silently desync this test from what `toAePoint` actually wrote. */
+function outcomeOf(point) {
+  const slot = /^blob(\d+)$/.exec(AE_COLUMNS.outcome);
+  return point.blobs[Number(slot[1]) - 1];
+}
 
 // ---- fakes ------------------------------------------------------------
 
@@ -267,7 +277,7 @@ test("drainStep: a key with one accepted chunk and one permanently-400 chunk sta
   const gz = new Uint8Array(await new Response(stream).arrayBuffer());
   const r2Objects = new Map([[key, gz]]);
 
-  const { box, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [key] }, r2Objects });
+  const { box, inboxWriterStub, ae } = makeBox({ inboxWriter: { writtenKeys: [key] }, r2Objects });
   await box.wake("backlog");
   installContainerFetchRouter({
     otlp: async (req) => {
@@ -288,6 +298,14 @@ test("drainStep: a key with one accepted chunk and one permanently-400 chunk sta
   assert.equal(inboxWriterStub.calls.recordPartialReject.length, 1, "the permanent loss must still be logged");
   assert.equal(inboxWriterStub.calls.recordPartialReject[0].key, key);
   assert.match(inboxWriterStub.calls.recordPartialReject[0].reason, /too_far_behind/);
+
+  // NB4 (re-review 2): `rejectedKeys` alone missed this case entirely
+  // (the key stays `provisional`, never `rejected`), so the drain point
+  // used to report `outcome: "ok"` even though a chunk was permanently
+  // lost. Must be `partial`, the same outcome a fully-rejected key gets.
+  const drainPoint = ae.points.find((p) => p.indexes?.[0] === "o11y.drain");
+  assert.ok(drainPoint, "an o11y.drain point must be written");
+  assert.equal(outcomeOf(drainPoint), "partial", "a partial-400 key must not report outcome: ok");
 });
 
 // ---- post-drain stop decision --------------------------------------------

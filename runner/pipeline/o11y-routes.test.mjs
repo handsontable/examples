@@ -18,6 +18,15 @@ const { default: worker } = await import("../workers/o11y/src/index.ts");
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
 const { makeEnv, ctx } = await import("./fixtures/o11y-harness.mjs");
 const { hmacSha256Hex } = await import("../workers/o11y/src/gates/util.ts");
+const { AE_COLUMNS } = await import("@handsontable/demo-runtime/telemetry");
+
+/** Reads a numeric metric field (`count`, etc.) out of a fake AE point via
+ *  the real contract slot (`AE_COLUMNS.count`, e.g. `"double1"`) — never a
+ *  hardcoded array index. */
+function metricValue(point, name) {
+  const m = /^double(\d+)$/.exec(AE_COLUMNS[name]);
+  return point.doubles[Number(m[1]) - 1];
+}
 
 const FIXTURES = fileURLToPath(new URL("./fixtures/", import.meta.url));
 const faroFixture = (name) => readFileSync(`${FIXTURES}faro/${name}`, "utf8");
@@ -217,6 +226,99 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
   // §6 must still hold: an example.* event is never stored, redelivered or not.
   const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
   assert.equal(rowKeys.length, 0, "an example.* event must never produce a row: entry");
+});
+
+// NB3 (re-review 2): an `example.*` event now carries a hash-only
+// `ingestItem` (A-I4 remainder, above) purely so InboxWriter's dedupe
+// transaction covers it too — but `index.ts#handleCollect` used to count
+// EVERY accepted hash, including one with no `record`, toward the route's
+// own `o11y.ingest accepted` self-metric. That metric exists to track
+// stored-record ingest volume; an AE-only `example.*` event never produces
+// a `row:` and must not inflate it.
+test("POST /telemetry/collect: an example.* event does not inflate the o11y.ingest 'accepted' self-metric count (NB3)", async () => {
+  const { env, ae } = freshEnv();
+  const exampleBody = withFreshTimestamp(faroFixture("example-open.json"));
+  const logBody = withFreshTimestamp(faroFixture("log.json"));
+  // One batch, one stored log record and one AE-only example.* event —
+  // both genuinely new, both "accepted" by InboxWriter's dedupe.
+  const body = { meta: exampleBody.meta, events: exampleBody.events, logs: logBody.logs };
+
+  const res = await worker.fetch(
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    env,
+    ctx,
+  );
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300);
+
+  const ingestAccepted = ae.points.find((p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("collect") && p.blobs?.includes("accepted"));
+  assert.ok(ingestAccepted, "an o11y.ingest accepted point must be written for the collect route");
+  assert.equal(
+    metricValue(ingestAccepted, "count"),
+    1,
+    "only the stored log record counts toward this route's accepted self-metric, not the AE-only example.* event too",
+  );
+});
+
+// N3 (re-review 2): `handleCollect` answered 2xx even when `InboxWriter.ingest`
+// threw and nothing was committed — a batch that gets dropped on the floor
+// must not tell the client it succeeded (ADR §B.2: 2xx only after commit),
+// and Faro's own client only retries a non-2xx, so a 2xx here also means
+// the batch is gone for good, not just mis-reported.
+test("POST /telemetry/collect: answers 5xx (not 2xx) when InboxWriter.ingest throws, and commits nothing (N3)", async () => {
+  const { env, doStorage, inboxWriterInstance, ae } = freshEnv();
+  const originalIngest = inboxWriterInstance.ingest.bind(inboxWriterInstance);
+  inboxWriterInstance.ingest = async () => {
+    throw new Error("simulated InboxWriter.ingest failure (N3 test)");
+  };
+  try {
+    const body = withFreshTimestamp(faroFixture("log.json"));
+    const res = await worker.fetch(
+      new Request("https://demos.handsontable.com/telemetry/collect", {
+        method: "POST",
+        headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      env,
+      ctx,
+    );
+    await ctx.drain();
+    assert.ok(res.status >= 500, `expected a 5xx so the client retries, got ${res.status}`);
+
+    const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
+    assert.equal(rowKeys.length, 0, "nothing was committed — there must be no row: entry");
+
+    const acceptedPoints = ae.points.filter((p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("accepted"));
+    assert.equal(acceptedPoints.length, 0, "an uncommitted batch must never report an accepted o11y.ingest point");
+  } finally {
+    inboxWriterInstance.ingest = originalIngest;
+  }
+});
+
+test("POST /telemetry/collect: a batch that legitimately commits nothing (every record already a duplicate) still answers 2xx (contrast with N3)", async () => {
+  const { env } = freshEnv();
+  const body = withFreshTimestamp(faroFixture("log.json"));
+  const req = () =>
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const first = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(first.status >= 200 && first.status < 300);
+
+  // Redelivered: InboxWriter does NOT throw, it correctly dedupes — this
+  // is an idempotent replay, not a failure, and must stay 2xx even though
+  // it commits nothing new.
+  const second = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(second.status >= 200 && second.status < 300, "an all-duplicate batch is a successful no-op, not a failure");
 });
 
 test("POST /telemetry/v1/logs: the x-o11y-secret gate — wrong secret is 401, correct secret is 2xx", async () => {

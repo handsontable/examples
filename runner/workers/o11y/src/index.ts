@@ -124,10 +124,17 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
     for (const p of processed) {
       if (p.invalid) recordInvalidItem(env, ctx, p.invalid);
       if (p.oversize) recordOversizeDrop(env, ctx, "Faro record exceeds 256 KB");
-      // Fix round (finding A-I4): only an item with no stored record (an
-      // `example.*` event) writes its point unconditionally — anything with
-      // an `ingestItem` is gated below on the actual dedupe outcome, so a
-      // retried/redelivered batch cannot double-count a browser metric.
+      // Fix round (finding A-I4; NB3 correction, re-review 2): an item with
+      // no `ingestItem` AT ALL never reached even hash-only ingest (it was
+      // already fully handled above — invalid, oversize, or the "log"/non-
+      // "example." case that stores a record with no AE point) — those, and
+      // only those, write their points unconditionally. An `example.*`
+      // event is NOT one of these any more (A-I4 remainder, closed second
+      // wave): it carries a hash-only `ingestItem` (no `record`) purely so
+      // it goes through InboxWriter's dedupe transaction like everything
+      // else, and its points are gated below on the actual dedupe outcome,
+      // the same as a stored record's — a retried/redelivered batch cannot
+      // double-count either kind.
       if (!p.ingestItem) {
         for (const point of p.aePoints) writePoint(env, ctx, point);
       }
@@ -136,7 +143,19 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
     if (ingestItems.length > 0) {
       const result = await inboxWriter(env).ingest("browser", receivedAtMs, ingestItems);
       const outcomeByHash = new Map(result.results.map((r) => [r.hash, r.outcome]));
-      for (const r of result.results) r.outcome === "duplicate" ? duplicate++ : accepted++;
+      // NB3 (re-review 2): only count hashes that carry a STORED `record`
+      // toward this route's own `o11y.ingest accepted`/`duplicate`
+      // self-metric. An `example.*` event's hash-only `ingestItem` (no
+      // `record`, above) is real for InboxWriter's dedupe bookkeeping and
+      // ADR-0042's counts, but it never produces a `row:` — counting it
+      // here too would skew the ingest-volume panels upward by however
+      // much `example.*` traffic this batch carried, panels that exist to
+      // track stored-record volume.
+      const recordHashes = new Set(processed.filter((p) => p.ingestItem?.record !== undefined).map((p) => p.ingestItem!.hash));
+      for (const r of result.results) {
+        if (!recordHashes.has(r.hash)) continue;
+        r.outcome === "duplicate" ? duplicate++ : accepted++;
+      }
       for (const p of processed) {
         if (!p.ingestItem) continue;
         if (outcomeByHash.get(p.ingestItem.hash) === "accepted") {
@@ -153,7 +172,21 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
     // degrades to one accounted drop, never an unhandled exception.
     console.warn("[o11y] handleCollect failed:", err instanceof Error ? err.message : String(err));
     recordInvalidItem(env, ctx, "handleCollect: unhandled batch failure");
-    return respondIngested(env, ctx, "collect", { accepted, duplicate }, bytes.byteLength);
+    // N3 (re-review 2): reaching this catch means nothing in this batch
+    // reached `InboxWriter.ingest` successfully — `accepted`/`duplicate`
+    // are still their zero initial values, since both are only incremented
+    // after `ingest()` resolves (above). Answering 2xx here would claim a
+    // commit that never happened (ADR §B.2: "2xx only after commit"), and
+    // — because Faro clients only retry on a non-2xx — would also silently
+    // and permanently drop this batch instead of it being retried. This is
+    // distinct from a batch that legitimately commits nothing because every
+    // item was already a duplicate: that path never throws, so it still
+    // reaches the ordinary `respondIngested` 204 below, unchanged — an
+    // idempotent replay must stay 2xx.
+    return new Response(JSON.stringify({ error: "unhandled_batch_failure" }), {
+      status: 500,
+      headers: { "content-type": "application/json" },
+    });
   }
 
   return respondIngested(env, ctx, "collect", { accepted, duplicate }, bytes.byteLength);
