@@ -73,7 +73,8 @@ resource inventory.
 | Rate limiting | namespace `1001` | `RATE_LIMITER` | self-chosen scoping id, provisioned automatically on deploy — no dashboard step |
 
 The API worker gains one addition of its own: an `O11Y` service binding to
-`handsontable-demos-o11y` (the watchdog heartbeat call) and a shared
+`handsontable-demos-o11y`, entrypoint `O11yHeartbeat` (the watchdog heartbeat
+RPC call, not an HTTP route — see A-C1 in the fix history) and a shared
 `RUNNER_EVENTS` Analytics Engine binding to the same `runner_events` dataset.
 
 The Grafana box (`containers/o11y/`) is a single container application — Loki

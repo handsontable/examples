@@ -796,6 +796,28 @@ test("A-M7: a redelivered deploy event within the same minute still hashes ident
   assert.equal(first.hash, second.hash, "a retry inside the same minute bucket must still dedupe");
 });
 
+// B-I1: an empty cf_version_id (master.yml's `version_id=$(grep ...) || true`
+// can produce one on a wrangler wording change) must never be rejected by
+// this ingest path — the deploy already shipped — but must be visibly
+// marked, both for a Workers-Logs/Loki search and for a queryable Grafana
+// attribute. Fails without the fix: reverting the `versionIdMissing` branch
+// in processDeployPayload makes `attributes` come back `{}` regardless of
+// cf_version_id.
+test("B-I1: an empty cf_version_id is accepted (never dropped) and marked in the body for a Loki/Grafana query", async () => {
+  const payload = { service: "demos-authoring", sha: "abc123", cf_version_id: "" };
+  const item = await processDeployPayload(payload, ENV, 0);
+  const body = JSON.parse(item.record.body);
+  assert.equal(body.cf_version_id, "", "the empty value is still recorded verbatim in the body, not silently dropped");
+  assert.equal(body.cf_version_id_missing, true, "must mark the record so it is findable without grepping for an empty string");
+});
+
+test("B-I1: a normal, non-empty cf_version_id is NOT marked", async () => {
+  const payload = { service: "demos-authoring", sha: "abc123", cf_version_id: "01998a3e-1234-abcd" };
+  const item = await processDeployPayload(payload, ENV, 0);
+  const body = JSON.parse(item.record.body);
+  assert.equal(body.cf_version_id_missing, undefined);
+});
+
 test("A-M7: a Sentry issue regressing twice in one day (identical action/title/release) hashes differently per Sentry-Hook-Timestamp", async () => {
   const payload = {
     action: "regression",

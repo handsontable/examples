@@ -111,3 +111,34 @@ test("master.yml: the API path gate is narrowed to containers/(live|builder)/, a
   assert.ok(o11yLine, "the o11y=true gate line must exist");
   assert.match(o11yLine, /containers\/o11y\//, "o11y gate must still cover containers/o11y/");
 });
+
+// B-I1: the `|| true` on each `version_id=$(grep ...)` (minor triage item 3
+// above) deliberately lets a wrangler wording change through as an empty
+// version_id rather than failing the job after the deploy already shipped
+// — but nothing downstream checked whether it actually came out non-empty
+// before the deploy-event step shipped a `cf_version_id: ""` row with no
+// signal pointing at the root cause. Every `version_id=$(...)` assignment
+// must be immediately followed by a check that warns when it's empty.
+// Reverting any one of the three `[ -n "$version_id" ] || echo
+// "::warning::..."` lines makes this fail (fewer matches than
+// version_id assignments).
+test("master.yml: every version_id assignment is followed by an ::warning:: for an empty parse (B-I1)", () => {
+  const assignments = [...source.matchAll(/^.*version_id=\$\(grep -oE 'Current Version ID:.*$/gm)];
+  assert.ok(assignments.length >= 3, "expected at least 3 deploy steps to extract a version id");
+
+  const warnings = [...source.matchAll(/\[ -n "\$version_id" \] \|\| echo "::warning::[^"]*empty cf_version_id[^"]*"/g)];
+  assert.equal(
+    warnings.length,
+    assignments.length,
+    "every version_id assignment must be paired with its own empty-value ::warning::",
+  );
+
+  for (const assignment of assignments) {
+    const afterAssignment = source.slice(assignment.index, assignment.index + 800);
+    assert.match(
+      afterAssignment,
+      /\[ -n "\$version_id" \] \|\| echo "::warning::/,
+      `no empty-value ::warning:: found shortly after: ${assignment[0].trim()}`,
+    );
+  }
+});

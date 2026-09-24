@@ -497,6 +497,28 @@ test("stop-roundtrip.mjs, dev.mjs and the e2e-o11y-local workflow never use quay
   }
 });
 
+// B-I3: `e2e/telemetry-metrics.spec.ts` boots a real local API worker
+// (workers/api) and asserts directly against it; both e2e-o11y-local.yml
+// specs also exercise the shared @handsontable/demo-runtime telemetry code
+// under packages/** (workers/api/src/analytics.ts and monitor-inject.ts
+// import from it) — the same reasoning master.yml's own o11y deploy-gate
+// comment gives for gating on the whole packages/ directory. Without these
+// two subtrees in the pull_request path filter, a regression there is only
+// caught by the nightly run or a manual dispatch, not by the PR that
+// introduces it. Fails without the fix: reverting either added line makes
+// the matching assertion below fail.
+test("e2e-o11y-local.yml: the PR path filter also covers workers/api/** and packages/** (B-I3)", () => {
+  const workflowPath = join(RUNNER_ROOT, "..", ".github", "workflows", "e2e-o11y-local.yml");
+  const code = readFileSync(workflowPath, "utf8");
+  const pathsStart = code.indexOf("pull_request:");
+  assert.ok(pathsStart > -1, "the pull_request trigger must exist");
+  const pathsEnd = code.indexOf("\npermissions:", pathsStart);
+  const pathsBlock = code.slice(pathsStart, pathsEnd > -1 ? pathsEnd : undefined);
+
+  assert.match(pathsBlock, /^\s*- 'runner\/workers\/api\/\*\*'\s*$/m, "must gate on runner/workers/api/**");
+  assert.match(pathsBlock, /^\s*- 'runner\/packages\/\*\*'\s*$/m, "must gate on runner/packages/**");
+});
+
 // --- Dockerfile: pins that the right config files are actually loaded ------
 
 test("Dockerfile: loads the same config files this test pins (source-grep pin)", () => {
@@ -660,4 +682,55 @@ test("logo markup: the waking page's LOGO_SVG and containers/o11y/waking/logo.sv
 
   assert.ok(servedPaths.length > 0, "must find at least one <path d=...> in waking-page.ts's LOGO_SVG");
   assert.deepEqual(servedPaths, assetPaths, "the served LOGO_SVG and the documentation asset copy must carry identical path data, in the same order");
+});
+
+// A-I1: on a failed docker-exec, `sh()` used to print the full command
+// line unredacted, including the plain-text root MINIO_PASSWORD and the
+// restricted test user's generated password — both land in stdout/CI logs.
+// Structural check (matches this file's own "read source, assert on
+// shape" house style): `compose()` must be able to forward `allowFail`
+// through to `sh()` (a trailing options object), and the one call site
+// that execs `mc admin ...` with credentials embedded in the script must
+// use it, so a transient failure there degrades to a silent skip (the
+// pre-T1 behaviour) instead of a credential-bearing console.error.
+test("A-I1: stop-roundtrip.mjs's compose() can forward allowFail/redact options, and setupRestrictedMinioUser's mc-admin exec uses allowFail", () => {
+  const code = readFileSync(join(O11Y_DIR, "local", "stop-roundtrip.mjs"), "utf8");
+
+  assert.match(
+    code,
+    /function compose\(\.\.\.args\)\s*\{[\s\S]{0,400}?opts\s*=\s*args\.pop\(\)/,
+    "compose(...) must pop a trailing options object and forward it to sh(), so a caller can pass { allowFail } through",
+  );
+
+  const setupFnMatch = code.match(/function setupRestrictedMinioUser\([\s\S]*?\n\}/);
+  assert.ok(setupFnMatch, "setupRestrictedMinioUser must exist");
+  assert.match(
+    setupFnMatch[0],
+    /compose\(\s*"exec",\s*"-T",\s*"minio",\s*"\/bin\/sh",\s*"-c",\s*script,\s*\{\s*allowFail:\s*true/,
+    "the mc-admin exec (embeds MINIO_PASSWORD and the restricted user's password in plain text) must pass { allowFail: true, ... } " +
+      "— without it, any transient docker-exec failure prints the full credential-bearing command line",
+  );
+});
+
+// A-M1: `main()`'s up-front `down -v` wipes whatever project the script
+// resolves to. compose.yml's own header comment documents "o11y-t01" as
+// the T01 developer convention for a manual/persistent run of this exact
+// compose file, and dev.mjs/dev-lib.mjs default the real dev stack to
+// "o11y-dev" — this script's own default must collide with neither, or a
+// developer who happens to run their persistent stack under one of those
+// names loses its data the next time they run this script with no
+// override.
+test("A-M1: stop-roundtrip.mjs's default COMPOSE_PROJECT_NAME never collides with the dev-stack default or the compose.yml-documented manual convention", () => {
+  const code = readFileSync(join(O11Y_DIR, "local", "stop-roundtrip.mjs"), "utf8");
+  const devLibCode = readFileSync(join(RUNNER_ROOT, "scripts", "dev.mjs"), "utf8");
+
+  const defaultMatch = code.match(/COMPOSE_PROJECT_NAME\s*\|\|\s*"([^"]+)"/);
+  assert.ok(defaultMatch, "stop-roundtrip.mjs must fall back to a literal default project name");
+  const defaultProject = defaultMatch[1];
+
+  assert.notEqual(defaultProject, "o11y-t01", "must not reuse compose.yml's documented manual/T01 project-name convention");
+
+  const devDefaultMatch = devLibCode.match(/COMPOSE_PROJECT_NAME\s*\|\|\s*"([^"]+)"/);
+  assert.ok(devDefaultMatch, "dev.mjs must have its own literal default project name to compare against");
+  assert.notEqual(defaultProject, devDefaultMatch[1], "must not reuse dev.mjs's own dev-stack default project name");
 });

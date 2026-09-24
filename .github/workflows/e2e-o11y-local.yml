@@ -46,6 +46,18 @@ on:
       - 'runner/workers/o11y/**'
       - 'runner/containers/o11y/**'
       - 'runner/apps/authoring/src/telemetry/**'
+      # B-I3: e2e/telemetry-metrics.spec.ts boots a real local API worker
+      # (runner/workers/api) and asserts against it directly; both specs
+      # also exercise the shared @handsontable/demo-runtime telemetry code
+      # (runner/packages/**) that workers/api/src/analytics.ts and
+      # monitor-inject.ts import from — the same reasoning master.yml's own
+      # o11y deploy-gate comment gives for gating on the whole packages/
+      # directory (e.g. scrub.ts imports redactPreviewHosts from
+      # monitor.ts, outside that subpath). Without these, a regression in
+      # either subtree is only caught by the nightly run or a manual
+      # workflow_dispatch, not by the PR that introduces it.
+      - 'runner/workers/api/**'
+      - 'runner/packages/**'
       - 'runner/e2e/telemetry-metrics.spec.ts'
       - 'runner/e2e/o11y-local.spec.ts'
       - '.github/workflows/e2e-o11y-local.yml'

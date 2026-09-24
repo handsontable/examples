@@ -28,7 +28,17 @@ import { randomUUID } from "node:crypto";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const O11Y_DIR = join(__dirname, "..");
 
-const PROJECT = process.env.COMPOSE_PROJECT_NAME || "o11y-t01";
+// A-M1: this script's own up-front `down -v` (below) wipes whatever project
+// name it resolves to, INCLUDING the named volumes dev-persist relies on
+// (minio-data/clickhouse-data). The default used to be "o11y-t01" — the
+// same name compose.yml's own header comment recommends for a T01
+// developer's persistent manual/dev stack — so running this script with no
+// override could silently wipe that stack's data. The default here must
+// never collide with a persistent stack's own default or documented
+// convention: `dev.mjs`/`dev-lib.mjs` default to "o11y-dev", and
+// compose.yml's header comment's example uses "o11y-t01" — this script gets
+// a name distinct from both.
+const PROJECT = process.env.COMPOSE_PROJECT_NAME || "o11y-stop-roundtrip";
 const GRAFANA_PORT = process.env.O11Y_GRAFANA_PORT || "4200";
 const LOKI_PORT = process.env.O11Y_LOKI_PORT || "4201";
 const MINIO_PORT = process.env.O11Y_MINIO_PORT || "4202";
@@ -62,8 +72,21 @@ const BASE_ENV = {
   O11Y_MINIO_ROOT_PASSWORD: MINIO_PASSWORD,
 };
 
+// A-I1: MINIO_USER/MINIO_PASSWORD (root creds) are always scrubbed from a
+// failure log, regardless of caller — `opts.redact` lets a specific call
+// site (e.g. `setupRestrictedMinioUser`) add its own per-run secrets (a
+// restricted user's generated password) to the same scrub pass, since `sh`
+// has no way to know about those on its own.
+function scrubSecrets(text, secrets) {
+  let out = text;
+  for (const secret of secrets) {
+    if (secret) out = out.split(secret).join("<redacted>");
+  }
+  return out;
+}
+
 function sh(cmd, args, opts = {}) {
-  const { env: extraEnv, ...restOpts } = opts;
+  const { env: extraEnv, redact: redactValues = [], ...restOpts } = opts;
   const res = spawnSync(cmd, args, {
     cwd: O11Y_DIR,
     encoding: "utf8",
@@ -71,13 +94,27 @@ function sh(cmd, args, opts = {}) {
     ...restOpts,
   });
   if (res.status !== 0 && !opts.allowFail) {
-    console.error(`command failed: ${cmd} ${args.join(" ")}\n${res.stdout}\n${res.stderr}`);
+    const secrets = [MINIO_PASSWORD, ...redactValues];
+    const scrub = (text) => scrubSecrets(text ?? "", secrets);
+    console.error(`command failed: ${scrub(`${cmd} ${args.join(" ")}`)}\n${scrub(res.stdout)}\n${scrub(res.stderr)}`);
   }
   return res;
 }
 
+// A-I1 / regression from removing `allowFail`: `compose(...)` used to take
+// only positional docker-compose args, with no way for a caller to pass
+// `{ allowFail: true }` (or `redact`) through to `sh()` — the pre-T1 code
+// called `sh(...)` directly with `{ allowFail: true }` for exactly this
+// exec-into-minio path. A trailing plain-object argument is now treated as
+// options for `sh()` and popped off before building the compose args, so
+// every existing call site (which only ever passes strings) is unaffected.
 function compose(...args) {
-  return sh("docker", ["compose", "-p", PROJECT, "-f", "compose.yml", ...args]);
+  let opts = {};
+  const last = args[args.length - 1];
+  if (last !== null && typeof last === "object" && !Array.isArray(last)) {
+    opts = args.pop();
+  }
+  return sh("docker", ["compose", "-p", PROJECT, "-f", "compose.yml", ...args], opts);
 }
 
 // --- S3-signed helpers against the MinIO bucket, mirroring lib.sh ---------
@@ -624,7 +661,15 @@ function setupRestrictedMinioUser(
     `mc admin user add c1 ${user} "${password}"`,
     `mc admin policy attach c1 ${policyName} --user ${user}`,
   ].join(" && ");
-  const res = compose("exec", "-T", "minio", "/bin/sh", "-c", script);
+  // A-I1: `allowFail: true` restores the pre-T1 behaviour (this call used to
+  // go through `sh(..., { allowFail: true })` directly) — a transient
+  // failure here (stale RUN_ID collision, docker exec hiccup, MinIO not yet
+  // warmed) must not print the full `mc admin ...` command line, which
+  // embeds both the root MINIO_PASSWORD and this restricted user's
+  // `password` in plain text. `redact: [password]` also scrubs the
+  // restricted-user secret specifically, in case a future caller ever
+  // flips `allowFail` back on for this same script.
+  const res = compose("exec", "-T", "minio", "/bin/sh", "-c", script, { allowFail: true, redact: [password] });
   record(label, res.status === 0, res.stdout.trim().split("\n").pop());
 }
 

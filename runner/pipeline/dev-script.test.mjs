@@ -858,6 +858,85 @@ test("DOCKER_NOT_RUNNING_MESSAGE: names the fix (start Docker), not just the sym
   assert.match(DOCKER_NOT_RUNNING_MESSAGE, /Start Docker/);
 });
 
+// B-I2: `--wait` (T1) makes `docker compose ... up -d --wait minio
+// clickhouse` block-and-FAIL on a real condition (a named service's
+// healthcheck never goes green) — before this fix, that throw happened
+// BEFORE this call's own teardown step was ever pushed onto
+// `teardownSteps`, and propagated straight past the try/catch around the
+// readiness wait further down to `main().catch`, which only logs and
+// `process.exit(1)`s — no cleanup, no `docker compose down`, orphaning
+// whichever of minio/clickhouse DID start under `up -d`. Fails without the
+// fix: reverting the try/catch this test drives (scripts/dev.mjs, the
+// `execFileSync("docker", ["compose", ..., "up", ...])` call around line
+// 383) makes the "stub docker compose down" line never appear in the
+// output at all — the run dies with only the raw `up` failure and no
+// teardown attempt.
+test("CLI: `dev.mjs --tier=full` tears down minio + clickhouse (docker compose down, no -v) when `docker compose up --wait` fails", () => {
+  const stubBinDir = path.join(HERE, "fixtures", "stub-bin");
+  const devScript = path.join(RUNNER_ROOT, "scripts", "dev.mjs");
+  const result = spawnSync(process.execPath, [devScript, "--tier=full", "--skip-image-check"], {
+    cwd: RUNNER_ROOT,
+    encoding: "utf8",
+    timeout: 60000,
+    env: {
+      ...process.env,
+      PATH: `${stubBinDir}:${process.env.PATH}`,
+      STUB_DOCKER_MODE: "ok",
+      STUB_DOCKER_PS_ENABLED: "1",
+      STUB_DOCKER_COMPOSE_UP_MODE: "fail",
+    },
+  });
+  const output = `${result.stdout}${result.stderr}`;
+  assert.notEqual(result.status, 0, `expected a non-zero exit; output:\n${output}`);
+  assert.match(output, /container minio did not become healthy/, "the real compose-up failure must surface");
+  assert.match(
+    output,
+    /stub docker compose down: ok \(no -v, data kept\)/,
+    "a docker compose down (no -v, data kept) must run on this startup failure — it did not, before B-I2's fix",
+  );
+  assert.doesNotMatch(output, /-v, data WIPED/, "must never pass -v here — only --fresh's own explicit wipe does that");
+});
+
+// B-9: `--reset-local-db` used to run BEFORE the Docker-availability check,
+// so `dev.mjs --tier=2 --reset-local-db` with Docker not running deleted
+// workers/api's local D1 state and then immediately exited on the
+// Docker-not-running error — a surprising side effect for a run that
+// otherwise did nothing. `resetLocalD1`'s call site in dev.mjs (unlike its
+// unit-tested form above) is hardcoded to the real `workers/api` dir, so
+// this test seeds and inspects that REAL (gitignored, disposable)
+// `.wrangler/state/v3/d1` directory directly rather than a temp one. Fails
+// without the fix: reverting the ordering in scripts/dev.mjs's `main()`
+// (moving the Docker check below the `if (resetLocalDb)` block again)
+// makes the marker file disappear even though `docker info` fails.
+test("CLI: `dev.mjs --tier=2 --reset-local-db` does NOT wipe local D1 state when Docker is not running (Docker check runs first)", () => {
+  const stubBinDir = path.join(HERE, "fixtures", "stub-bin");
+  const devScript = path.join(RUNNER_ROOT, "scripts", "dev.mjs");
+  const apiDir = path.join(RUNNER_ROOT, "workers", "api");
+  const d1StateDir = path.join(apiDir, ".wrangler", "state", "v3", "d1");
+  const markerPath = path.join(d1StateDir, "b9-test-marker.txt");
+  mkdirSync(d1StateDir, { recursive: true });
+  writeFileSync(markerPath, "b9 marker\n");
+  try {
+    const result = spawnSync(process.execPath, [devScript, "--tier=2", "--reset-local-db"], {
+      cwd: RUNNER_ROOT,
+      encoding: "utf8",
+      timeout: 10000,
+      env: {
+        ...process.env,
+        PATH: `${stubBinDir}:${process.env.PATH}`,
+        STUB_DOCKER_MODE: "fail",
+      },
+    });
+    const output = `${result.stdout}${result.stderr}`;
+    assert.notEqual(result.status, 0);
+    assert.match(output, /Start Docker/, "must fail on the Docker check");
+    assert.doesNotMatch(output, /reset-local-db: deleted/, "must never actually run the reset once Docker is confirmed unavailable");
+    assert.equal(existsSync(markerPath), true, "local D1 state must survive a run that fails the Docker check");
+  } finally {
+    rmSync(d1StateDir, { recursive: true, force: true });
+  }
+});
+
 test("CLI: `dev.mjs --tier=2` fails fast with the Docker message when `docker info` fails, before spawning anything else", () => {
   const stubBinDir = path.join(HERE, "fixtures", "stub-bin");
   const devScript = path.join(RUNNER_ROOT, "scripts", "dev.mjs");

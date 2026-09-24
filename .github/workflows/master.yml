@@ -298,6 +298,13 @@ jobs:
           # would fail the whole job AFTER the deploy already shipped,
           # skipping the deploy-event report and the smoke test below it.
           version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-authoring.log | awk '{print $NF}') || true
+          # B-I1: the `|| true` above trades "job goes red" for "job stays
+          # green" on a wrangler wording change — this warning is what makes
+          # that trade safe: an empty version_id would otherwise ship a
+          # deploy-event row with cf_version_id:"" (silently corrupting the
+          # ADR §C.2 deploy-correlation record) with nothing pointing at the
+          # actual root cause (the version-id parse, not the deploy itself).
+          [ -n "$version_id" ] || echo "::warning::could not parse Current Version ID from wrangler deploy output (handsontable-demos-authoring) — the deploy-event report below will ship with an empty cf_version_id"
           echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
 
       - name: Report the deploy to the o11y worker (T10, ADR §C.2)
@@ -430,6 +437,8 @@ jobs:
           # Minor triage item 3 (C-M3): see the matching comment in
           # deploy-authoring — same reasoning, same fix.
           version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-api.log | awk '{print $NF}') || true
+          # B-I1: see the matching comment in deploy-authoring — same reasoning, same fix.
+          [ -n "$version_id" ] || echo "::warning::could not parse Current Version ID from wrangler deploy output (handsontable-demos-api) — the deploy-event report below will ship with an empty cf_version_id"
           echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
 
       - name: Report the deploy to the o11y worker (T10, ADR §C.2)
@@ -516,6 +525,8 @@ jobs:
           # Minor triage item 3 (C-M3): see the matching comment in
           # deploy-authoring — same reasoning, same fix.
           version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-o11y.log | awk '{print $NF}') || true
+          # B-I1: see the matching comment in deploy-authoring — same reasoning, same fix.
+          [ -n "$version_id" ] || echo "::warning::could not parse Current Version ID from wrangler deploy output (handsontable-demos-o11y) — the deploy-event report below will ship with an empty cf_version_id"
           echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
 
       - name: Report the deploy to the o11y worker (T10, ADR §C.2)

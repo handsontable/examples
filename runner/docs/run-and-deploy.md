@@ -862,14 +862,15 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://demos.handsontable.com/
 ### First deploy, in order
 
 The o11y worker's `services` binding (`API`, entrypoint `O11yUsage`) and the
-API worker's `O11Y` binding are **mutual** — each names the other's Worker.
-Deploy the o11y worker **first**: its own binding resolves lazily (a Workers
-service binding is not validated against the target actually existing at
-*deploy* time), but `O11yUsage.recordAwakeSeconds`/`o11ySpend` calls from
-`GrafanaBox` will fail until the API worker is deployed too, and the API
-worker's own `env.O11Y` calls (the watchdog heartbeat) fail the same way in
-the other direction until the o11y worker exists. Deploying o11y first means
-there is only ever one direction of "the other side isn't up yet" instead of
+API worker's `O11Y` binding (entrypoint `O11yHeartbeat`) are **mutual** —
+each names the other's Worker's named RPC entrypoint. Deploy the o11y worker
+**first**: its own binding resolves lazily (a Workers service binding is not
+validated against the target actually existing at *deploy* time), but
+`O11yUsage.recordAwakeSeconds`/`o11ySpend` calls from `GrafanaBox` will fail
+until the API worker is deployed too, and the API worker's own
+`env.O11Y.heartbeat()` RPC calls (the watchdog heartbeat) fail the same way
+in the other direction until the o11y worker exists. Deploying o11y first
+means there is only ever one direction of "the other side isn't up yet" instead of
 two. `master.yml` encodes this ordering automatically — `deploy-api` needs
 `deploy-o11y` and proceeds once it is `success` or was skipped (unrelated
 push) — so from the first merge onward this is handled without a manual step.

@@ -30,7 +30,16 @@ function jobBody(name) {
 const e2eTelemetry = jobBody("e2e-telemetry");
 
 test("ci.yml: e2e-telemetry runs actionlint", () => {
-  assert.match(e2eTelemetry, /actionlint/i, "the job must run actionlint somewhere in its steps");
+  // B-4: matching bare /actionlint/i passes even if the real step is
+  // deleted, because the step's own preceding comment ("actionlint here
+  // too, so a workflow-YAML mistake...") also contains the word
+  // "actionlint" — this only pins the STEP itself (its `uses:` line),
+  // which a comment can never satisfy.
+  assert.match(
+    e2eTelemetry,
+    /uses:\s*reviewdog\/action-actionlint@v1/,
+    "the job must run the reviewdog/action-actionlint step, not just mention it in a comment",
+  );
 });
 
 test("ci.yml: e2e-telemetry builds a production-mode bundle and runs both leak checks against it, before building the flag bundle", () => {

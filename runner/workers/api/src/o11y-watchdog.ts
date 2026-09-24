@@ -26,16 +26,29 @@ export interface HeartbeatReport {
   backlogOldestAgeMs: number | null;
 }
 
-/** Structural shape of `workers/o11y/src/heartbeat.ts`'s `O11yHeartbeat`
- *  `WorkerEntrypoint`, duplicated here rather than imported (T04-D, see the
- *  task Outcome): the two Workers are separate `tsconfig.json` projects
- *  (each `"include": ["src"]`), so a type-only import across the worker
- *  boundary is unnecessary; `env.O11Y` stays typed `Fetcher` (T00's own
- *  declaration, unchanged) and this interface is only ever used for a local
- *  structural cast, the same pattern `chat.ts`'s `ChatUnavailableError`
- *  duplication documents for the sibling-import constraint (T05-D2). */
-interface O11yHeartbeatFetcher {
-  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+/** Structural mirror of `O11yHeartbeat`'s RPC surface
+ *  (`workers/o11y/src/heartbeat.ts`), duplicated here rather than imported
+ *  (T04-D, see the task Outcome; same reasoning `workers/o11y/src/cost.ts`'s
+ *  own `O11yUsageRpc` doc comment gives on the o11y side): the two Workers
+ *  are separate `tsconfig.json` projects (each `"include": ["src"]`), so a
+ *  type-only import across the worker boundary is unnecessary. `env.O11Y`
+ *  stays typed `Fetcher` (T00's own declaration, unchanged) —
+ *  `workers/api/wrangler.jsonc` now binds it to the named `O11yHeartbeat`
+ *  entrypoint (see that file's comment), so the RPC method below is real at
+ *  runtime even though the ambient type does not know it. Fixed round
+ *  A-C1: this used to call `.fetch("/_internal/heartbeat")` on the binding,
+ *  which only ever worked while the o11y worker's default export answered
+ *  that path over HTTP. It no longer does (RPC-only, W1) — without an
+ *  `entrypoint` on the binding, `.fetch()` here resolved to the o11y
+ *  worker's *default* export, which now 404s that route, permanently
+ *  latching the watchdog stale. Calling the named RPC method directly is
+ *  both the fix and the reason the binding now needs `entrypoint` set. */
+interface O11yHeartbeatRpc {
+  heartbeat(): Promise<HeartbeatReport>;
+}
+
+function o11yHeartbeatRpc(env: Env): O11yHeartbeatRpc | undefined {
+  return env.O11Y as unknown as O11yHeartbeatRpc | undefined;
 }
 
 export type CaptureMessageFn = (message: string, opts: { level: "warning" | "error" }) => void;
@@ -58,20 +71,19 @@ async function writeWatchdogState(env: Env, state: WatchdogState): Promise<void>
   });
 }
 
-/** Fetches `GET /_internal/heartbeat` over the `O11Y` service binding — not
- *  a path any `--routes` flag on either Worker's deploy script names (the
- *  o11y worker's own routes are `demos.handsontable.com/telemetry/*` and
- *  `/grafana/*` only), so it is unreachable except through this binding.
- *  Any failure (network, non-2xx, malformed JSON) is treated the same as a
- *  stale heartbeat — an unreachable o11y worker is exactly the condition
- *  this watchdog exists to catch. */
+/** Calls `heartbeat()` over the `O11Y` service binding's named
+ *  `O11yHeartbeat` RPC entrypoint — never `.fetch()`: the o11y worker's
+ *  default export has no HTTP route for this report any more (RPC-only,
+ *  W1/A-C1), so a `.fetch()` call here would silently and permanently
+ *  regress to always-unreachable. Any failure (missing binding, RPC
+ *  rejection, malformed body) is treated the same as a stale heartbeat —
+ *  an unreachable o11y worker is exactly the condition this watchdog
+ *  exists to catch. */
 async function fetchHeartbeat(env: Env): Promise<HeartbeatReport | null> {
-  const o11y = env.O11Y as O11yHeartbeatFetcher | undefined;
+  const o11y = o11yHeartbeatRpc(env);
   if (!o11y) return null;
   try {
-    const res = await o11y.fetch("https://o11y-internal.invalid/_internal/heartbeat");
-    if (!res.ok) return null;
-    const body = (await res.json()) as Partial<HeartbeatReport>;
+    const body = await o11y.heartbeat();
     if (typeof body.lastCron !== "number" || typeof body.lastIngest !== "number") return null;
     return {
       lastCron: body.lastCron,
