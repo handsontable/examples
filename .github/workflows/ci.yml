@@ -221,8 +221,12 @@ jobs:
   # example-analytics.spec.ts: 5301), `page.route` interception of
   # `/telemetry/collect`, no o11y worker or API worker — so they fit the
   # deterministic PR suite unlike e2e/telemetry-metrics.spec.ts (E2E_LIVE +
-  # a local API worker + a live Tier-2 container — see docs/run-and-deploy.md's
-  # "Tests (CI)" section for why that one stays with T11 instead).
+  # a local API worker + a live Tier-2 container). That spec, plus
+  # e2e/o11y-local.spec.ts (E2E_O11Y_LOCAL, needs Docker + two `wrangler dev`
+  # processes + a compose stack on top), have their own workflow instead —
+  # `.github/workflows/e2e-o11y-local.yml` — kept off the per-PR gate and run
+  # on workflow_dispatch, nightly, and PRs that touch the ingest path. See
+  # docs/run-and-deploy.md's "Tests (CI)" section.
   e2e-telemetry:
     needs: build
     runs-on: ubuntu-latest

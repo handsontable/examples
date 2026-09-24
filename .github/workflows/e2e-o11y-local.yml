@@ -1,0 +1,301 @@
+name: E2E — o11y local integration
+
+# CI home for the two gated specs docs/TESTING.md's "every gate must have a
+# workflow home" rule left unhomed (R1-followups task 2):
+#
+#   e2e/telemetry-metrics.spec.ts  (E2E_LIVE=1 + E2E_TELEMETRY=1) — a real
+#     local API worker (`wrangler dev`, Docker for the Tier-2 Sandbox
+#     container image) serving a VITE_TELEMETRY_LOCAL=1 build.
+#   e2e/o11y-local.spec.ts         (E2E_O11Y_LOCAL=1) — the same, PLUS a real
+#     o11y worker (`wrangler dev`) and local ClickHouse/MinIO (Docker
+#     compose), proving telemetry actually reaches the real ingest pipeline
+#     and lands in Analytics Engine's local stand-in — not `page.route`
+#     mocks, which is what ci.yml's `e2e-telemetry` job already covers for
+#     telemetry-faro.spec.ts/example-analytics.spec.ts.
+#
+# Both specs document (in their own file header) the exact local setup this
+# workflow automates; see there for the "why" of each step.
+#
+# NOT the shared `mcr.microsoft.com/playwright` container image ci.yml and
+# e2e-live.yml use: both specs spawn `wrangler dev` (which shells out to
+# Docker to build/run the Tier-2 container image) and, for o11y-local, a
+# `docker compose` stack. Docker-in-Docker from inside that container image
+# has no docker CLI and can't reach a sibling container's `localhost` port —
+# this runs directly on the `ubuntu-latest` host, which ships Docker running
+# (confirmed already relied on by master.yml's `deploy-api` job, which builds
+# the same Tier-2 image via `wrangler deploy` on this exact runner image) and
+# installs the Playwright browser itself instead.
+#
+# Kept OFF the per-PR merge gate for the common case (Docker + two `wrangler
+# dev` boots + a compose stack costs several minutes no ordinary PR should
+# pay), while still catching a regression before it ships: workflow_dispatch,
+# a nightly run, and PRs that touch the ingest path these specs exist to
+# prove (docs/run-and-deploy.md's "Tests (CI)" section, docs/TESTING.md's env
+# gate taxonomy).
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Nightly, clear of the other three nightly/weekly windows this repo
+    # already runs (01:00 starter matrix, 03:00 e2e-live prod canary, Monday
+    # 05:00 examples-build) so none of them ever contend for the same
+    # ubuntu-latest runner pool or Docker daemon.
+    - cron: '30 2 * * *'
+  pull_request:
+    paths:
+      - 'runner/workers/o11y/**'
+      - 'runner/containers/o11y/**'
+      - 'runner/apps/authoring/src/telemetry/**'
+      - 'runner/e2e/telemetry-metrics.spec.ts'
+      - 'runner/e2e/o11y-local.spec.ts'
+      - '.github/workflows/e2e-o11y-local.yml'
+
+permissions:
+  contents: read
+
+# Safe to cancel, unlike e2e-live.yml/e2e-starter-matrix.yml: both jobs here
+# only ever touch throwaway state inside THIS runner's own ephemeral VM (its
+# own Docker daemon, its own `wrangler dev` processes) — nothing prod-shaped
+# to strand.
+concurrency:
+  group: e2e-o11y-local-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---- e2e/telemetry-metrics.spec.ts (T07 phase 2) --------------------------
+  telemetry-metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      # Job-scoped, never the machine-global default registry path — the same
+      # isolation rule COMMON.md gives every o11y task's own worktree, applied
+      # here so a stray leftover `wrangler dev` from a previous job on a
+      # self-hosted-style shared runner could never cross-wire service
+      # bindings with this run. `$RUNNER_TEMP` is wiped with the VM. Written
+      # to `$GITHUB_ENV` (not a job-level `env:`, which cannot see the
+      # `runner` context) so every later step, including the ones Playwright
+      # itself spawns `wrangler dev` from, inherits it.
+      - name: Isolate this job's wrangler dev registry
+        run: echo "WRANGLER_REGISTRY_PATH=${RUNNER_TEMP}/wrangler-registry" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install the Playwright browser (no pre-built image on this runner)
+        run: pnpm exec playwright install --with-deps chromium
+
+      - run: pnpm build
+
+      # `apps/authoring/.env.local` must never be copied in (AGENTS.md — its
+      # VITE_DEV_USER poisons auth tests); this spec needs none of that, only
+      # workers/api/.dev.vars, generated fresh from the committed example
+      # exactly the way a developer's first `pnpm dev:live` bootstraps it
+      # (`scripts/dev-lib.mjs#bootstrapDevVars`), with PREVIEW_HOST patched to
+      # this spec's own API port (the file header's documented setup).
+      - name: Bootstrap workers/api/.dev.vars
+        run: |
+          cp workers/api/.dev.vars.example workers/api/.dev.vars
+          sed -i 's#^PREVIEW_HOST=.*#PREVIEW_HOST="localhost:4810"#' workers/api/.dev.vars
+          cat workers/api/.dev.vars
+
+      # E2E_BASE_URL is set to a value this spec never reads (it hard-codes
+      # its own BASE_URL/API_BASE_URL and overrides Playwright's baseURL via
+      # `test.use()`) purely to make playwright.config.ts's shared `webServer`
+      # resolve to `undefined` — otherwise it would try to `vite preview` the
+      # default `dist/` this job never builds (the spec builds its own
+      # `dist-telemetry-metrics` instead), and fail before a single test runs.
+      #
+      # `--reporter=list,json` + `PLAYWRIGHT_JSON_OUTPUT_NAME`: the guard step
+      # right after this one reads `stats.expected`/`stats.skipped` from the
+      # json file — this is what catches a mistyped gate turning the whole
+      # step into a silent, all-skipped, exit-0 "pass" (docs/TESTING.md's
+      # "every gate must have a workflow home" only means something if this
+      # workflow provably runs the gated tests, not just exits clean).
+      - name: E2E — telemetry-metrics (E2E_LIVE + E2E_TELEMETRY)
+        env:
+          E2E_LIVE: '1'
+          E2E_TELEMETRY: '1'
+          E2E_BASE_URL: 'http://127.0.0.1:1'
+          PLAYWRIGHT_JSON_OUTPUT_NAME: telemetry-metrics-report.json
+        run: pnpm e2e e2e/telemetry-metrics.spec.ts --reporter=list,json
+
+      - name: Guard — the gate actually ran tests, none silently skipped
+        run: node scripts/ci/assert-e2e-ran.mjs telemetry-metrics-report.json
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-telemetry-metrics
+          path: |
+            runner/playwright-report/
+            runner/test-results/
+            runner/telemetry-metrics-report.json
+          retention-days: 7
+          if-no-files-found: warn
+
+  # ---- e2e/o11y-local.spec.ts (T11) ------------------------------------------
+  o11y-local:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: runner
+    env:
+      COMPOSE_PROJECT_NAME: o11y-ci
+      # The exact port block e2e/o11y-local.spec.ts's own file header
+      # documents (its defaults for O11Y_DEV_PORT/O11Y_LOCAL_CLICKHOUSE_PORT
+      # already match these) — kept identical rather than reassigned, since a
+      # single-job ubuntu-latest runner has nothing else to collide with.
+      O11Y_MINIO_PORT: '5210'
+      O11Y_MINIO_CONSOLE_PORT: '5211'
+      O11Y_CLICKHOUSE_PORT: '5212'
+      O11Y_CLICKHOUSE_NATIVE_PORT: '5213'
+      AE_SQL_TOKEN: local-dev-token
+    steps:
+      - uses: actions/checkout@v4
+
+      # See the telemetry-metrics job's identical step for why this is
+      # written to $GITHUB_ENV instead of a job-level `env:` entry.
+      - name: Isolate this job's wrangler dev registry
+        run: echo "WRANGLER_REGISTRY_PATH=${RUNNER_TEMP}/wrangler-registry" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install the Playwright browser (no pre-built image on this runner)
+        run: pnpm exec playwright install --with-deps chromium
+
+      - run: pnpm build
+
+      - name: Start local ClickHouse + MinIO (Analytics Engine stand-in)
+        run: docker compose -f containers/o11y/compose.yml up -d minio-init clickhouse
+
+      - name: Wait for local ClickHouse
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -sf "http://localhost:${O11Y_CLICKHOUSE_PORT}/ping" >/dev/null; then
+              echo "ClickHouse is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::ClickHouse never answered on :${O11Y_CLICKHOUSE_PORT}"
+          docker compose -f containers/o11y/compose.yml logs clickhouse
+          exit 1
+
+      # Same non-secret local-only bypass values the file header names —
+      # DEV_ADMIN can be any non-empty string (workers/o11y/src/gates/session.ts
+      # honours it only when O11Y_ENV=local, contract §2, K1); the two secret
+      # fields the export/Sentry-hook routes check are exercised with fixed
+      # CI-only values, never real ones.
+      - name: Bootstrap workers/o11y/.dev.vars
+        run: |
+          cp workers/o11y/.dev.vars.example workers/o11y/.dev.vars
+          sed -i \
+            -e 's#^DEV_ADMIN=.*#DEV_ADMIN=ci-e2e@handsontable.com#' \
+            -e 's#^O11Y_EXPORT_SECRET=.*#O11Y_EXPORT_SECRET=ci-e2e-export-secret#' \
+            -e 's#^SENTRY_HOOK_SECRET=.*#SENTRY_HOOK_SECRET=ci-e2e-sentry-hook-secret#' \
+            -e "s#^AE_SQL_TOKEN=.*#AE_SQL_TOKEN=${AE_SQL_TOKEN}#" \
+            -e 's#^O11Y_ENV=.*#O11Y_ENV=local#' \
+            workers/o11y/.dev.vars
+          {
+            echo "O11Y_LOCAL_MINIO_PORT=${O11Y_MINIO_PORT}"
+            echo "O11Y_LOCAL_CLICKHOUSE_PORT=${O11Y_CLICKHOUSE_PORT}"
+            echo "RUNNER_EVENTS_CLICKHOUSE_URL=http://localhost:${O11Y_CLICKHOUSE_PORT}"
+          } >> workers/o11y/.dev.vars
+
+      # PREVIEW_HOST must be a non-production host (the file header) or the
+      # API worker starts reporting to the real Sentry project — matched to
+      # this spec's own API_PORT (5280) the same way telemetry-metrics.spec.ts's
+      # job matches its API port above.
+      - name: Bootstrap workers/api/.dev.vars
+        run: |
+          cp workers/api/.dev.vars.example workers/api/.dev.vars
+          sed -i 's#^PREVIEW_HOST=.*#PREVIEW_HOST="localhost:5280"#' workers/api/.dev.vars
+          {
+            echo "RUNNER_EVENTS_CLICKHOUSE_URL=http://localhost:${O11Y_CLICKHOUSE_PORT}"
+            echo "AE_SQL_TOKEN=${AE_SQL_TOKEN}"
+          } >> workers/api/.dev.vars
+
+      - name: Apply local D1 migrations (workers/api)
+        working-directory: runner/workers/api
+        run: pnpm exec wrangler d1 migrations apply handsontable-demos --local
+
+      # o11y-local.spec.ts starts its OWN api worker + authoring preview
+      # internally, but expects the o11y worker already answering (its
+      # `beforeAll` throws a clear "start it first" error otherwise) — this
+      # is that "first". Backgrounded + polled here rather than left to the
+      # spec, because the spec's own error message assumes a human did this
+      # step by hand.
+      - name: Start the o11y worker (wrangler dev)
+        working-directory: runner/workers/o11y
+        run: |
+          pnpm exec wrangler dev --port 5220 --inspector-port 5221 \
+            > "${RUNNER_TEMP}/o11y-dev.log" 2>&1 &
+          echo $! > "${RUNNER_TEMP}/o11y-dev.pid"
+          for _ in $(seq 1 60); do
+            if curl -sf "http://localhost:5220" >/dev/null; then
+              echo "o11y worker is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::o11y worker never answered on :5220"
+          cat "${RUNNER_TEMP}/o11y-dev.log"
+          exit 1
+
+      # Same E2E_BASE_URL trick as the telemetry-metrics job — see that job's
+      # comment for why.
+      - name: E2E — o11y-local (E2E_O11Y_LOCAL)
+        env:
+          E2E_O11Y_LOCAL: '1'
+          E2E_BASE_URL: 'http://127.0.0.1:1'
+          PLAYWRIGHT_JSON_OUTPUT_NAME: o11y-local-report.json
+        run: pnpm e2e e2e/o11y-local.spec.ts --reporter=list,json
+
+      - name: Guard — the gate actually ran tests, none silently skipped
+        run: node scripts/ci/assert-e2e-ran.mjs o11y-local-report.json
+
+      - name: Stop the o11y worker
+        if: always()
+        run: |
+          pid="$(cat "${RUNNER_TEMP}/o11y-dev.pid" 2>/dev/null || true)"
+          [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+
+      - name: Tear down ClickHouse + MinIO
+        if: always()
+        run: docker compose -f containers/o11y/compose.yml down -v
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-o11y-local
+          path: |
+            runner/playwright-report/
+            runner/test-results/
+            runner/o11y-local-report.json
+          retention-days: 7
+          if-no-files-found: warn

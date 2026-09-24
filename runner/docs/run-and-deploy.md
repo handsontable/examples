@@ -395,19 +395,27 @@ the "See in documentation" link.
   `E2E_TELEMETRY=1 pnpm e2e e2e/telemetry-faro.spec.ts e2e/example-analytics.spec.ts`
   — both specs are self-contained (their own preview server, `page.route`
   interception of `/telemetry/collect`, no o11y worker or API worker needed),
-  so they fit the deterministic PR suite. **Not wired in here, decided by T11:**
-  `e2e/telemetry-metrics.spec.ts` and `e2e/o11y-local.spec.ts`
-  (`E2E_LIVE=1`/`E2E_O11Y_LOCAL=1`) both need infrastructure a per-PR runner
-  should not own — a real local API worker with a live Tier-2 container for the
-  first, that plus a real o11y worker, local ClickHouse/MinIO (Docker) and
-  applied D1 migrations for the second. This is `docs/TESTING.md`'s own named
-  exception to "every gate needs a workflow home" (a spec whose prerequisite
-  stack costs more than a PR job should), not a silent gap: run both locally,
-  by hand, before any change that touches the ingest path (`workers/o11y/src/
-  normalise/**`, `apps/authoring/src/telemetry/**`, `packages/runtime/src/
-  telemetry/**`) and before every launch — `e2e/o11y-local.spec.ts`'s own file
-  header has the exact setup commands. A future task may still give these a
-  scheduled (not per-PR) CI home; that decision is left open, not taken here.
+  so they fit the deterministic PR suite.
+- **`e2e-o11y-local.yml`** (R1-followups): `e2e/telemetry-metrics.spec.ts`
+  (`E2E_LIVE=1` + `E2E_TELEMETRY=1`) and `e2e/o11y-local.spec.ts`
+  (`E2E_O11Y_LOCAL=1`) both need infrastructure the per-PR `ci.yml` suite
+  should not own on every PR — a real local API worker with a live Tier-2
+  container (Docker) for the first, that plus a real o11y worker, local
+  ClickHouse/MinIO (Docker compose) and applied D1 migrations for the second.
+  Rather than leaving them unhomed (`docs/TESTING.md`'s "every gate needs a
+  workflow home" rule), they get their own workflow, run directly on
+  `ubuntu-latest` (not the shared Playwright container image — Docker-in-Docker
+  can't reach a sibling container's `localhost`, and `wrangler dev` needs a
+  real Docker daemon to build the Tier-2 container image, which the bare
+  runner already ships, same as `master.yml`'s `deploy-api` job relies on):
+  `workflow_dispatch`, nightly (02:30 UTC), and on any PR touching
+  `workers/o11y/**`, `containers/o11y/**`, `apps/authoring/src/telemetry/**`,
+  or either spec file. Each job's own guard step (`scripts/ci/
+  assert-e2e-ran.mjs`) fails if the gate ran zero tests or skipped any — a
+  mistyped env var must not read as a green, empty run. Run both specs
+  locally, by hand, before any change that touches the ingest path and before
+  every launch too — `e2e/o11y-local.spec.ts`'s own file header has the exact
+  setup commands.
 
 ### Authoring app (frontend)
 

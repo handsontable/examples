@@ -1,0 +1,17 @@
+-- ADR-0042 (example analytics), follow-up to 0008_example_daily.sql.
+--
+-- ADR-0042 §2 names six `example.*` metrics (open, engaged, forked, saved,
+-- shared, downloaded); 0008's `example_daily` table only ever stored five
+-- counters — `example.downloaded` existed as an Analytics Engine point but
+-- was never rolled into D1 (0008's own header comment, and ADR-0042 §5,
+-- flagged this explicitly as a known gap). This migration closes it.
+--
+-- Additive and safe on production data: a bare `ADD COLUMN ... DEFAULT 0`
+-- backfills every existing row with `downloaded = 0` (correct — those rows
+-- were computed before this column existed, so their true downloaded count
+-- for that day is unknown, and 0 is the least misleading value: it never
+-- overcounts, and a nightly re-roll from Analytics Engine's own retention
+-- window will fill in real numbers for any day still inside it). 0008 itself
+-- is left untouched, as ever — a migration already shipped is never edited,
+-- only superseded by a new one.
+ALTER TABLE example_daily ADD COLUMN downloaded INTEGER NOT NULL DEFAULT 0;
