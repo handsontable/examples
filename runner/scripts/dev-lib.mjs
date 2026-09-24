@@ -296,6 +296,21 @@ export function readDevVarsLine(devVarsPath, key, fs = defaultFs) {
   return m[1].trim().replace(/^"(.*)"$/, "$1");
 }
 
+/**
+ * The origin `gates/session.ts#publicOrigin`/`grafana/login.ts` build the
+ * broker `return_to` against, and the `aud` every locally-minted session
+ * token is bound to (K1: `O11Y_ENV === "local"` only — see that file's own
+ * doc comment). Grafana is served from the o11y worker's OWN origin
+ * (`/grafana/*`, not proxied through the authoring app), so this must track
+ * `O11Y_DEV_PORT`, not `AUTHORING_DEV_PORT` — on a non-default o11y port,
+ * `publicOrigin`'s own fallback (`http://localhost:4200`) would otherwise
+ * be silently wrong and every locally-minted token would fail its own
+ * `aud` check.
+ */
+export function o11yLocalPublicOrigin(ports) {
+  return `http://localhost:${ports.O11Y_DEV_PORT}`;
+}
+
 /** Ephemeral, never-persisted hex secret for O11Y_SESSION_SECRET (or any
  *  other run-scoped local secret) — a fresh value every process start,
  *  injected only via `--var`/env, never written to a file. */
@@ -511,6 +526,8 @@ export function buildPlan(tier, ports, opts = {}) {
         `O11Y_LOCAL_CLICKHOUSE_PORT:${ports.O11Y_CLICKHOUSE_PORT}`,
         "--var",
         `RUNNER_EVENTS_CLICKHOUSE_URL:http://localhost:${ports.O11Y_CLICKHOUSE_PORT}`,
+        "--var",
+        `O11Y_LOCAL_PUBLIC_ORIGIN:${o11yLocalPublicOrigin(ports)}`,
       ],
       cwd: "workers/o11y",
       env: {},

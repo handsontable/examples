@@ -207,8 +207,13 @@ export interface Env {
   API: Fetcher;
 
   O11Y_ENV: "production" | "local";
-  ACCESS_TEAM_DOMAIN: string;
-  ACCESS_AUD: string;
+  /** K1 (replaces `ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`, ADR-0041 §B.5/§H):
+   *  the Handsontable login broker's base URL (ADR-0007) — same value as
+   *  `workers/api/wrangler.jsonc`'s own `LOGIN_BROKER_URL` var. Read only by
+   *  `gates/broker.ts#resolveBrokerIdentity` and `grafana/login.ts`'s own
+   *  `/login` redirect; never by `gates/session.ts`, which verifies only the
+   *  Worker's own signed cookie and never calls out to the broker itself. */
+  LOGIN_BROKER_URL: string;
   GITHUB_OIDC_REPOSITORY: string;
   /** T02-D16 addition (fix round, see the task Outcome): ADR §B.5's `deploy`
    *  row names "issuer, audience, repository, **workflow**" — the workflow
@@ -276,10 +281,20 @@ export interface Env {
   LOKI_S3_ACCESS_KEY_ID?: string;
   LOKI_S3_SECRET_ACCESS_KEY?: string;
   SLACK_WEBHOOK_URL?: string;
+  /** K1 (replaces `ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`): the HMAC key for the
+   *  Worker's own `o11y_session`/`o11y_login` cookies
+   *  (`gates/session.ts`). Optional for the same reason every other secret
+   *  here is: a gate that reads it must fail closed when it is absent
+   *  (`verifySession`/`verifyLoginCookie` both return `null`), never assume
+   *  presence. Rotating it logs every signed-in person out at once — the
+   *  emergency revoke `O11Y_SESSION_SECRET` has instead of per-session
+   *  revocation. */
+  O11Y_SESSION_SECRET?: string;
 
-  /** `.dev.vars` only — fail-closed local bypass of the Access check
-   *  (`verifyAccess`, T02, `workers/o11y/src/gates/access.ts`). Optional is
-   *  load-bearing: absent in production, so the bypass fails closed there. */
+  /** `.dev.vars` only — fail-closed local bypass of the session check
+   *  (`verifySession`, `workers/o11y/src/gates/session.ts`, K1; formerly the
+   *  Access check). Optional is load-bearing: absent in production, so the
+   *  bypass fails closed there. */
   DEV_ADMIN?: string;
 
   /** ADR §B.5: the Workers rate-limiting binding gating `collect`/`lite`. T00

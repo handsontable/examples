@@ -28,6 +28,7 @@ import {
   O11Y_DEVVARS_STRIP_KEYS,
   readDevVarsLine,
   ephemeralSecret,
+  o11yLocalPublicOrigin,
   PORT_DEFAULTS,
 } from "./dev-lib.mjs";
 
@@ -70,10 +71,11 @@ if (bootstrap.created) {
   if (bootstrap.patched.length) console.log(`[o11y:dev] filled in local-dev defaults for: ${bootstrap.patched.join(", ")}`);
 }
 
-// O11Y_ENV=local must be set for the Access bypass and the local
-// jurisdiction-skip paths (env.ts, gates/access.ts, inbox/accessor.ts,
-// box.ts) to engage. Fail loudly rather than silently running against an
-// unusable config.
+// O11Y_ENV=local and DEV_ADMIN must both be set for the local session bypass
+// (K1: env.ts, gates/session.ts#verifySession — replaces the old Access
+// gate) and the local jurisdiction-skip paths (inbox/accessor.ts, box.ts) to
+// engage. Fail loudly rather than silently running against an unusable
+// config.
 const envLine = readDevVarsLine(devVarsPath, "O11Y_ENV");
 if (envLine !== "local") {
   console.error(`[o11y:dev] ${devVarsPath} must set O11Y_ENV=local — refusing to start against a non-local config`);
@@ -112,6 +114,8 @@ const child = spawn(
     String(ports.O11Y_DEV_INSPECTOR_PORT),
     "--var",
     `O11Y_SESSION_SECRET:${sessionSecret}`,
+    "--var",
+    `O11Y_LOCAL_PUBLIC_ORIGIN:${o11yLocalPublicOrigin(ports)}`,
   ],
   { cwd: o11yDir, stdio: "inherit", detached: process.platform !== "win32" },
 );

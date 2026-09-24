@@ -107,6 +107,25 @@ bootstrap strips that line from a *freshly created* `.dev.vars` instead, so
 the key stays undeclared and `dev.mjs`'s own ephemeral `--var` (a fresh
 random value every run, never written to disk) is the only source.
 
+**o11y worker local-mode config (contract §10).** `dev:full`/`o11y:dev` run
+the o11y worker with `O11Y_ENV` set to `local` (bootstrapped in
+`.dev.vars`), which is what turns on `DEV_ADMIN` (the local session bypass —
+`workers/o11y/src/gates/session.ts#verifySession`) and every
+`O11Y_LOCAL_*`-prefixed override below. `dev.mjs` injects the rest as
+`--var` (never `.dev.vars` — none of these are declared there, so there's no
+precedence conflict to work around): `RUNNER_EVENTS_CLICKHOUSE_URL` (points
+the Analytics Engine stand-in sink at compose's ClickHouse —
+`O11Y_CLICKHOUSE_PORT`), `O11Y_LOCAL_MINIO_PORT`/`O11Y_LOCAL_CLICKHOUSE_PORT`
+(how the box's own container, reached via Docker's `host.docker.internal`,
+finds compose's MinIO/ClickHouse), and `O11Y_LOCAL_PUBLIC_ORIGIN` — the
+origin `gates/session.ts#publicOrigin` builds the broker login's
+`return_to` against and binds every locally-minted session token's `aud`
+claim to; `dev.mjs` always sets it to `http://localhost:<O11Y_DEV_PORT>`
+(Grafana is served from the o11y worker's own origin, not proxied through
+the authoring app), which matters once you override `O11Y_DEV_PORT` away
+from its default — `publicOrigin`'s own built-in fallback assumes the
+default port.
+
 **Migrations.** `dev.mjs` applies every `workers/api/migrations/NNNN_*.sql`
 file (currently `0001` through `0008`) one `wrangler d1 execute --local
 --file=` call at a time — never `wrangler d1 migrations apply --local`,
@@ -601,22 +620,47 @@ reintroduce a field this parser does not expect.
 > `wrangler secret put` + re-editing the destination's header with the new
 > value) and only then continue.
 
-### 5. Access application for `/grafana/*`
+### 5. `O11Y_SESSION_SECRET` for `/grafana/*`
 
-Zero Trust dashboard → **Access → Applications → Add an application → Self-hosted**.
+**No Cloudflare Access application is needed.** K1 (`.superpowers/sdd/README/final/broker-grafana-feasibility.md`)
+replaced the Access gate with the Handsontable login broker (ADR-0007) — the
+same broker `/admin` and every other internal surface already sign in
+through. A callback page under `/grafana/_o11y/` reads the broker's
+fragment token once, and the o11y worker mints its own signed session
+cookie from it (`workers/o11y/src/gates/session.ts`, `grafana/login.ts`).
+There is nothing to create in the Zero Trust dashboard.
 
-- Application domain: `demos.handsontable.com/grafana`
-- Policy: **Allow**, rule **Emails ending in** `@handsontable.com`
-- Session duration: the team default is fine — the o11y worker verifies the
-  Access JWT itself on every request (`workers/o11y/src/gates/access.ts`); it
-  does not trust the edge unconditionally.
+Set nothing in Cloudflare beyond this one secret:
 
-Copy the **Application Audience (AUD) tag** the dashboard shows after saving,
-and commit it — `ACCESS_AUD` in `workers/o11y/wrangler.jsonc`'s `vars` block is
-currently the placeholder `""` (T00-D8/T03), and the worker fails closed
-(`verifyAccess` rejects every request) while it stays empty. `ACCESS_TEAM_DOMAIN`
-is already the real value (`handsontable.cloudflareaccess.com`) and needs no
-change unless the Zero Trust team domain itself is renamed.
+```bash
+cd workers/o11y
+npx wrangler secret put O11Y_SESSION_SECRET   # generate with `openssl rand -hex 32`, never print it
+```
+
+`LOGIN_BROKER_URL` needs no dashboard step either — it is a public var,
+already the real broker URL in `wrangler.jsonc`'s `vars` block
+(`https://mcp-auth-proxy-j0tb.onrender.com`, the same value
+`workers/api/wrangler.jsonc` uses). Before K1 landed, the task's dispatcher ran the real
+production probe by hand —
+`curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' 'https://mcp-auth-proxy-j0tb.onrender.com/broker/login?return_to=https%3A%2F%2Fdemos.handsontable.com%2Fgrafana%2F_o11y%2Fcallback%3Fn%3Dx'`
+— and confirmed a `302` to Google (2026-09-24), so the callback host is allowed today;
+the K1 implementer separately re-verified the same round trip end-to-end against a
+*stubbed* local broker only (`.superpowers/sdd/README/final/K1-report.md`'s "Real local
+run" section), which proves the Worker's own code, not the real broker's live
+configuration. If the production behaviour ever changes, re-run the curl command above
+before assuming it still holds, and ask the broker's owners (`handsontable/hot-mcp`) to
+add `demos.handsontable.com` back to `BROKER_ALLOWED_RETURN_HOSTS` if it does not.
+
+**The broker-wide risk this gate inherits, not fixes (DEV-3088).** The broker's
+`return_to` allowlist is host-suffix-only, so it also admits anonymous Tier-2 preview
+hosts (`*.demos.handsontable.com`) — anyone can harvest another team member's 1h broker
+token by sending them a crafted login link. Before K1, a stolen token could not reach
+Grafana at all (`ACCESS_AUD` was `""`, so Access refused everything). **K1 widens
+DEV-3088's blast radius**: a stolen token can now be exchanged for a Grafana session.
+Fix round (security review finding I3) narrows that widening — the session is capped at
+`min(now + 12h, brokerTokenExp)` instead of a flat 12h, so the exposure a stolen token
+buys is close to the token's own 1h lifetime, not 11 hours longer — but does not close
+it: DEV-3088 itself remains open and is tracked separately, not by this gate.
 
 ### 6. Every o11y worker secret (contract §2)
 
@@ -628,6 +672,7 @@ npx wrangler secret put AE_SQL_TOKEN                 # step below
 npx wrangler secret put LOKI_S3_ACCESS_KEY_ID        # step 3 above
 npx wrangler secret put LOKI_S3_SECRET_ACCESS_KEY    # step 3 above
 npx wrangler secret put SLACK_WEBHOOK_URL            # step 7 below
+npx wrangler secret put O11Y_SESSION_SECRET          # step 5 above
 ```
 
 `AE_SQL_TOKEN` is the Analytics Engine SQL API token — same token shape as the
@@ -732,13 +777,22 @@ what to check right after, and the two decisions ("flip the Sentry scope",
 
 These are carried from the tasks that found them, not newly discovered here:
 
-- **`ACCESS_AUD` is still the committed `""` placeholder** (`workers/o11y/wrangler.jsonc`,
-  T00-D8/T03). Paste the real Access application audience tag in before deploying — see
-  "One-time setup" step 5 above. Until this is real, every `/grafana/*` request fails
-  closed in production (safe, but Grafana is simply unreachable).
-- **`ACCESS_TEAM_DOMAIN`** (`handsontable.cloudflareaccess.com`) is a plausible-convention
-  guess (T00-D8), never independently confirmed against the real Access application.
-  Confirm it matches the domain created in step 5.
+- **`O11Y_SESSION_SECRET` must be set (at least 32 bytes, `openssl rand -hex 32`) before
+  the first real deploy** (K1, "One-time setup" step 5 above). Until it is,
+  `verifySession`/`verifyLoginCookie` both fail closed on every `/grafana/*` request
+  (a navigation redirects to `/grafana/_o11y/login`, everything else gets 401) — but that
+  login page itself answers a plain `500` rather than completing (`grafana/login.ts`'s own
+  pre-flight check), so Grafana is simply unreachable, not silently degraded. There is no
+  Access application to create; Cloudflare Access was removed from this gate entirely
+  (K1).
+- **The Grafana session is capped at the broker token's own lifetime, not a flat 12h**
+  (K1 fix round, security review finding I3): before this fix, a stolen 1h broker token
+  (DEV-3088, the broker-wide `return_to` suffix-allowlist risk) could have been turned
+  into an unrevocable 12h Grafana session — 11 extra hours of exposure per stolen token,
+  on top of DEV-3088's existing blast radius. `gates/session.ts#computeSessionTtlSeconds`
+  now caps every session at `min(now + 12h, brokerTokenExp)`, falling back to 1h when the
+  token carries no readable `exp` — this narrows, but does not eliminate, what K1 adds to
+  DEV-3088's blast radius, which is still open and tracked separately.
 - **T09-D5's "no per-panel ClickHouse `database` field" decision has not been checked
   against the real Analytics Engine SQL API** — only local ClickHouse and AE's documented
   SQL surface were checked. If a query returns "unknown table" in production Grafana where
