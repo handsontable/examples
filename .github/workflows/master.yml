@@ -59,7 +59,7 @@ jobs:
       api: ${{ steps.detect.outputs.api }}
       o11y: ${{ steps.detect.outputs.o11y }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Full history: the diff below spans the whole push range, and a
           # multi-commit push (rebase-and-merge, a direct push of several
@@ -123,13 +123,13 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -140,7 +140,7 @@ jobs:
       - run: pnpm build
 
       - name: Upload the runtime build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: runtime-dist
           path: runner/packages/runtime/dist/
@@ -253,7 +253,7 @@ jobs:
 
       - name: Upload the authoring build
         if: needs.changes.outputs.authoring == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: authoring-dist
           path: runner/apps/authoring/dist/
@@ -274,10 +274,10 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download the authoring build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: authoring-dist
           path: runner/apps/authoring/dist/
@@ -391,13 +391,13 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -409,7 +409,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Download the runtime build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: runtime-dist
           path: runner/packages/runtime/dist/
@@ -487,13 +487,13 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -505,7 +505,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Download the runtime build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: runtime-dist
           path: runner/packages/runtime/dist/

@@ -43,13 +43,13 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # The gate diffs the PR range against its base — it needs history,
           # not just the merge commit.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -62,13 +62,13 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -86,15 +86,15 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Read the pnpm version from runner/package.json's packageManager field
       # (avoids a conflict with the repo-root package.json).
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -110,7 +110,7 @@ jobs:
         run: pnpm typecheck
 
       - name: Upload the runtime build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: runtime-dist
           path: runner/packages/runtime/dist/
@@ -124,13 +124,13 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -139,7 +139,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Download the runtime build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: runtime-dist
           path: runner/packages/runtime/dist/
@@ -155,7 +155,7 @@ jobs:
         run: node scripts/check-compiler-chunk.mjs
 
       - name: Upload the authoring build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: authoring-dist
           path: runner/apps/authoring/dist/
@@ -176,13 +176,13 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -191,7 +191,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Download the authoring build (the e2e target)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: authoring-dist
           path: runner/apps/authoring/dist/
@@ -201,7 +201,7 @@ jobs:
 
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report
           # playwright-report/ holds the html report, test-results/ the traces.
@@ -236,7 +236,7 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Minor triage item 5 (C-M7/D-M8): the leak checks used to run ONLY
       # post-merge, in master.yml, after the production authoring bundle had
@@ -250,11 +250,11 @@ jobs:
         with:
           fail_level: error
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -263,7 +263,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Download the runtime build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: runtime-dist
           path: runner/packages/runtime/dist/
@@ -318,7 +318,7 @@ jobs:
 
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report-telemetry
           path: |

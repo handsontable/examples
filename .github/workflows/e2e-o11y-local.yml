@@ -82,7 +82,7 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Job-scoped, never the machine-global default registry path — the same
       # isolation rule COMMON.md gives every o11y task's own worktree, applied
@@ -95,11 +95,11 @@ jobs:
       - name: Isolate this job's wrangler dev registry
         run: echo "WRANGLER_REGISTRY_PATH=${RUNNER_TEMP}/wrangler-registry" >> "$GITHUB_ENV"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -150,7 +150,7 @@ jobs:
 
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report-telemetry-metrics
           path: |
@@ -179,18 +179,18 @@ jobs:
       O11Y_CLICKHOUSE_NATIVE_PORT: '5213'
       AE_SQL_TOKEN: local-dev-token
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # See the telemetry-metrics job's identical step for why this is
       # written to $GITHUB_ENV instead of a job-level `env:` entry.
       - name: Isolate this job's wrangler dev registry
         run: echo "WRANGLER_REGISTRY_PATH=${RUNNER_TEMP}/wrangler-registry" >> "$GITHUB_ENV"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -329,7 +329,7 @@ jobs:
 
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report-o11y-local
           path: |
