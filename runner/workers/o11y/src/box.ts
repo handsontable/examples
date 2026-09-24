@@ -574,6 +574,33 @@ export class GrafanaBox extends Container<Env> {
     return super.containerFetch(requestOrUrl, portOrInit, portParam);
   }
 
+  /**
+   * Z1: the ONLY entry point the `/grafana/*` proxy route
+   * (`grafana/proxy.ts`) uses, called as `stub.fetch(request)`. It used to
+   * call the `containerFetch` RPC method on the stub instead. Every
+   * body-bearing request sent that way (each panel's `POST /api/ds/query`,
+   * each datasource `resources/*` POST) printed
+   * `Uncaught Error: ReadableStream received over RPC disconnected
+   * prematurely.` inside this DO, one error per POST. It happened on
+   * completed requests too, not only on client aborts, and even when the
+   * body was buffered to an ArrayBuffer first: JS RPC serialises any
+   * `Request` body as an RPC stream. GETs (no body) never printed it. A DO's
+   * `fetch()` handler is carried as a plain HTTP request, not JS RPC, so
+   * it has no such stream. Measured live in `wrangler dev`: 33 errors for 33
+   * POSTs from one dashboard switch before, 0 after.
+   *
+   * Every gate stays where it was: this delegates to the
+   * `containerFetch` override above (the live-path and Loki datasource
+   * allowlists, the not-running 503s), so nothing reaches the container
+   * without passing them. It is pinned to Grafana's port 3000: the base
+   * class's own `fetch()` honours a `cf-container-target-port` request
+   * header, and `/grafana/*` forwards client headers, so inheriting that
+   * would let a browser pick Loki's port 3100 (its push/delete/admin API).
+   */
+  override async fetch(request: Request): Promise<Response> {
+    return this.containerFetch(request, 3000);
+  }
+
   override async onStart(): Promise<void> {
     // T03-D (see the task Outcome): `onStart` fires as soon as the
     // container process is issued (the base `start()` — the path `wake()`

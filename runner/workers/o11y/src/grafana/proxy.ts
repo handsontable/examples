@@ -16,8 +16,12 @@ import type { RouteHandler } from "../router.js";
  *  Grafana's business — `auth.proxy` with `enable_login_token=false` keeps
  *  no session of its own); `x-o11y-grafana-user` is set BY this Worker from
  *  the verified identity below — a client-supplied value of either must
- *  never reach Grafana. */
-const STRIPPED_HEADERS = ["cookie", "x-o11y-grafana-user"];
+ *  never reach Grafana. `cf-container-target-port` is the base
+ *  `Container.fetch()`'s port selector: `GrafanaBox.fetch` ignores it and
+ *  always targets port 3000, and stripping it here too means a client can
+ *  never aim a proxied request at Loki's 3100 even if that override
+ *  regresses. */
+const STRIPPED_HEADERS = ["cookie", "x-o11y-grafana-user", "cf-container-target-port"];
 
 /** F2 fix (final review, B-I3 "an open Grafana tab defeats the 4h cap"): a
  *  dashboard's own auto-refresh `fetch()`/XHR calls (every panel, on the
@@ -131,5 +135,12 @@ export const handleGrafana: RouteHandler = async (req, env) => {
   for (const h of STRIPPED_HEADERS) upstream.headers.delete(h);
   upstream.headers.set("x-o11y-grafana-user", identity.email);
 
-  return box.containerFetch(upstream, 3000);
+  // Z1: the DO's `fetch()` handler, never the `containerFetch` RPC method.
+  // A `Request` passed to an RPC method has its body sent as an RPC stream,
+  // and every POST proxied that way (each panel query) printed
+  // `ReadableStream received over RPC disconnected prematurely` in the box
+  // DO. See `GrafanaBox.fetch`'s doc comment (box.ts), which also keeps
+  // every gate (live-path block, Loki allowlists, not-running 503s) and
+  // pins the port to Grafana's 3000.
+  return box.fetch(upstream);
 };
