@@ -61,7 +61,7 @@ export const handleGrafana: RouteHandler = async (req, env) => {
     // link) hits the branch below and gets a clean re-auth redirect instead.
     if (isBrowserNavigation(req)) {
       const url = new URL(req.url);
-      const next = sanitizeNext(url.pathname + url.search);
+      const next = sanitizeNext(url.pathname + url.search, env);
       return new Response(null, {
         status: 302,
         headers: { Location: `/grafana/_o11y/login?next=${encodeURIComponent(next)}` },

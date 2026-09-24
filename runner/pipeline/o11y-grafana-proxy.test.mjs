@@ -20,7 +20,7 @@ register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 const { handleGrafana } = await import("../workers/o11y/src/grafana/proxy.ts");
 const { handleReopen } = await import("../workers/o11y/src/grafana/reopen.ts");
 const { wakingPageHtml } = await import("../workers/o11y/src/grafana/waking-page.ts");
-const { signSessionCookie } = await import("../workers/o11y/src/gates/session.ts");
+const { signSessionCookie, SESSION_COOKIE } = await import("../workers/o11y/src/gates/session.ts");
 
 function makeBoxStub(overrides = {}) {
   const calls = { wake: [], noteVisitorActivity: 0, containerFetch: [] };
@@ -81,12 +81,13 @@ function makeEnv({ devAdmin, o11yEnv = "local", boxStub, inboxWriterStub } = {})
   };
 }
 
-/** A real, validly signed `o11y_session` cookie header — the non-DEV_ADMIN
- *  path through `verifySession`, exercised by the tests below that need to
- *  prove the gate itself (not just the local bypass) drives the route. */
+/** A real, validly signed `__Host-o11y_session` cookie header — the
+ *  non-DEV_ADMIN path through `verifySession`, exercised by the tests below
+ *  that need to prove the gate itself (not just the local bypass) drives
+ *  the route. */
 async function sessionCookieHeader(env, email = "artur.medrygal@handsontable.com") {
-  const token = await signSessionCookie(env, email);
-  return `o11y_session=${token}`;
+  const token = await signSessionCookie(env, email, 3600);
+  return `${SESSION_COOKIE}=${token}`;
 }
 
 // ---- /grafana/* -----------------------------------------------------------
@@ -186,6 +187,30 @@ test("/grafana/* strips the session cookie from the request forwarded to Grafana
 
   const upstream = box.calls.containerFetch[0];
   assert.equal(upstream.headers.get("cookie"), null, "o11y_session must never reach the container Grafana runs in");
+});
+
+test("I2 (live, through the proxy route): a tossed/junk duplicate cookie ahead of the real one does not lock the visitor out", async () => {
+  const box = makeBoxStub({ ready: true });
+  const { env } = makeEnv({ o11yEnv: "production", boxStub: box });
+  const token = (await sessionCookieHeader(env)).split("=").slice(1).join("=");
+  const req = new Request("https://demos.handsontable.com/grafana/d/abc", {
+    headers: { cookie: `${SESSION_COOKIE}=junk-from-a-tossed-cookie; ${SESSION_COOKIE}=${token}` },
+  });
+  const res = await handleGrafana(req, env, {});
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "grafana-body");
+});
+
+test("M7: an unauthenticated HEAD or OPTIONS request never touches the box either", async () => {
+  for (const method of ["HEAD", "OPTIONS"]) {
+    const box = makeBoxStub();
+    const { env } = makeEnv({ o11yEnv: "production", boxStub: box });
+    const req = new Request("https://demos.handsontable.com/grafana/d/abc", { method });
+    const res = await handleGrafana(req, env, {});
+    assert.equal(res.status, 401, `expected 401 for ${method}`);
+    assert.deepEqual(box.calls.wake, [], `${method} must never wake the box`);
+    assert.equal(box.calls.containerFetch.length, 0);
+  }
 });
 
 test("/grafana/* preserves the original Host and path (never rewrites to a synthetic origin)", async () => {

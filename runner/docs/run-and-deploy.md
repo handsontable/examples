@@ -533,13 +533,27 @@ npx wrangler secret put O11Y_SESSION_SECRET   # generate with `openssl rand -hex
 `LOGIN_BROKER_URL` needs no dashboard step either — it is a public var,
 already the real broker URL in `wrangler.jsonc`'s `vars` block
 (`https://mcp-auth-proxy-j0tb.onrender.com`, the same value
-`workers/api/wrangler.jsonc` uses). The production broker was probed live
-(K1) and confirmed to `302` to Google for `return_to=https://demos.handsontable.com/grafana/_o11y/callback?n=…`,
-so the callback host is allowed today; if that ever stops being true, ask
-the broker's owners (`handsontable/hot-mcp`) to add `demos.handsontable.com`
-to `BROKER_ALLOWED_RETURN_HOSTS`. The broker-wide risk that its `return_to`
-allowlist is host-suffix-only (so it also admits anonymous Tier-2 preview
-hosts) is tracked separately as DEV-3088 and is not specific to this gate.
+`workers/api/wrangler.jsonc` uses). Before K1 landed, the task's dispatcher ran the real
+production probe by hand —
+`curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' 'https://mcp-auth-proxy-j0tb.onrender.com/broker/login?return_to=https%3A%2F%2Fdemos.handsontable.com%2Fgrafana%2F_o11y%2Fcallback%3Fn%3Dx'`
+— and confirmed a `302` to Google (2026-09-24), so the callback host is allowed today;
+the K1 implementer separately re-verified the same round trip end-to-end against a
+*stubbed* local broker only (`.superpowers/sdd/README/final/K1-report.md`'s "Real local
+run" section), which proves the Worker's own code, not the real broker's live
+configuration. If the production behaviour ever changes, re-run the curl command above
+before assuming it still holds, and ask the broker's owners (`handsontable/hot-mcp`) to
+add `demos.handsontable.com` back to `BROKER_ALLOWED_RETURN_HOSTS` if it does not.
+
+**The broker-wide risk this gate inherits, not fixes (DEV-3088).** The broker's
+`return_to` allowlist is host-suffix-only, so it also admits anonymous Tier-2 preview
+hosts (`*.demos.handsontable.com`) — anyone can harvest another team member's 1h broker
+token by sending them a crafted login link. Before K1, a stolen token could not reach
+Grafana at all (`ACCESS_AUD` was `""`, so Access refused everything). **K1 widens
+DEV-3088's blast radius**: a stolen token can now be exchanged for a Grafana session.
+Fix round (security review finding I3) narrows that widening — the session is capped at
+`min(now + 12h, brokerTokenExp)` instead of a flat 12h, so the exposure a stolen token
+buys is close to the token's own 1h lifetime, not 11 hours longer — but does not close
+it: DEV-3088 itself remains open and is tracked separately, not by this gate.
 
 ### 6. Every o11y worker secret (contract §2)
 
@@ -656,11 +670,22 @@ what to check right after, and the two decisions ("flip the Sentry scope",
 
 These are carried from the tasks that found them, not newly discovered here:
 
-- **`O11Y_SESSION_SECRET` must be set before the first real deploy** (K1, "One-time
-  setup" step 5 above). Until it is, `verifySession`/`verifyLoginCookie` both fail closed
-  (every `/grafana/*` request answers 401/redirects to a login that can never complete) —
-  safe, but Grafana is simply unreachable. There is no Access application to create;
-  Cloudflare Access was removed from this gate entirely (K1).
+- **`O11Y_SESSION_SECRET` must be set (at least 32 bytes, `openssl rand -hex 32`) before
+  the first real deploy** (K1, "One-time setup" step 5 above). Until it is,
+  `verifySession`/`verifyLoginCookie` both fail closed on every `/grafana/*` request
+  (a navigation redirects to `/grafana/_o11y/login`, everything else gets 401) — but that
+  login page itself answers a plain `500` rather than completing (`grafana/login.ts`'s own
+  pre-flight check), so Grafana is simply unreachable, not silently degraded. There is no
+  Access application to create; Cloudflare Access was removed from this gate entirely
+  (K1).
+- **The Grafana session is capped at the broker token's own lifetime, not a flat 12h**
+  (K1 fix round, security review finding I3): before this fix, a stolen 1h broker token
+  (DEV-3088, the broker-wide `return_to` suffix-allowlist risk) could have been turned
+  into an unrevocable 12h Grafana session — 11 extra hours of exposure per stolen token,
+  on top of DEV-3088's existing blast radius. `gates/session.ts#computeSessionTtlSeconds`
+  now caps every session at `min(now + 12h, brokerTokenExp)`, falling back to 1h when the
+  token carries no readable `exp` — this narrows, but does not eliminate, what K1 adds to
+  DEV-3088's blast radius, which is still open and tracked separately.
 - **T09-D5's "no per-panel ClickHouse `database` field" decision has not been checked
   against the real Analytics Engine SQL API** — only local ClickHouse and AE's documented
   SQL surface were checked. If a query returns "unknown table" in production Grafana where

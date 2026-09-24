@@ -103,7 +103,7 @@ test("Grafana visit wake: unaffected by drainsPaused (still wakes the box)", asy
   const { env } = makeEnv(InboxWriter);
   const grafanaBox = makeGrafanaBoxRecorder();
   env.GRAFANA_BOX = grafanaBox.namespace;
-  env.DEV_ADMIN = "dev@handsontable.com"; // local Access bypass (O11Y_ENV is "production" in this harness by default)
+  env.DEV_ADMIN = "dev@handsontable.com"; // local session bypass, K1 (O11Y_ENV is "production" in this harness by default)
   env.O11Y_ENV = "local";
 
   const writer = env.INBOX_WRITER.jurisdiction("eu").get();

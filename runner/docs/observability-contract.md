@@ -35,9 +35,10 @@ in its deploy script (ADR-0020), never in `wrangler.jsonc`:
 | `POST /telemetry/deploy` | deploy event from CI | GitHub OIDC token, `x-o11y-secret` fallback |
 | `POST /telemetry/hooks/sentry` | Sentry issue-alert webhook | `sentry-hook-signature` HMAC |
 | `GET /grafana/_o11y/login` | start a broker sign-in | none; mints the `o11y_login` nonce cookie |
-| `GET /grafana/_o11y/callback` | broker return; exchanges the token for a session | none; the `o11y_login` cookie + one live `/broker/userinfo` call |
+| `GET /grafana/_o11y/callback` | broker return; static page, no server-side check of its own | none (fix round M6: the `o11y_login` cookie + the live `/broker/userinfo` call happen on the `session` row below, not here — this route only serves a hash-pinned static page) |
 | `POST /grafana/_o11y/session` | mint the `o11y_session` cookie | `o11y_login` cookie (nonce bound), same-origin `Origin`, `@handsontable.com` broker identity |
-| `POST /grafana/_o11y/logout` | clear the `o11y_session` cookie | same-origin `Origin` |
+| `GET /grafana/_o11y/logout` | a same-origin sign-out page (fix round M5) | none; the page itself fires the `POST` below |
+| `POST /grafana/_o11y/logout` | clear both cookies | same-origin `Origin` |
 | `/grafana/*` | Grafana UI, waking page | the Worker's own session cookie (`O11Y_SESSION_SECRET`, K1 — not Access) |
 | `POST /grafana/_o11y/reopen` | manual ledger re-open | session cookie, same-origin `Origin` |
 | `GET /grafana/_o11y/admin/<name>` | ADR-0043 read forwarder (after launch) | session cookie, name allowlist, GET only |
@@ -335,7 +336,7 @@ Faro items, clamping `ts` to the receive time ± 5 minutes.
 |---|---|
 | `RUNNER_EVENTS` | ClickHouse at `http://localhost:8123`, table `runner_events` with the §4 columns plus `timestamp` and `_sample_interval` (always 1), DDL in `containers/o11y/local/clickhouse-init.sql` |
 | Loki S3 | Miniflare's local S3 endpoint for R2, or MinIO from `containers/o11y/compose.yml` |
-| Access | `DEV_ADMIN` in `workers/o11y/.dev.vars` |
+| Grafana session (K1) | `DEV_ADMIN` in `workers/o11y/.dev.vars`; a real broker login also works locally (`LOGIN_BROKER_URL` defaults to the production broker) |
 | Cloudflare OTLP export | fixtures in `pipeline/fixtures/otlp/` (scrubbed sandbox-probe captures plus hand-built edge cases), replayed by `scripts/o11y-replay-fixtures.mjs` |
 | Slack | a local capture server started by `pnpm o11y:dev` |
 

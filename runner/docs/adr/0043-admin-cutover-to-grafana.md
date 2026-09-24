@@ -27,7 +27,8 @@ the same handler as public `/api` traffic, so "internal" cannot be a header.
    `costLedger`). It is reachable only through a service binding with
    `entrypoint: "AdminReads"` from the o11y worker, never from the public fetch handler.
 2. **A read-only forwarder.** The o11y worker serves `GET /grafana/_o11y/admin/<name>`
-   behind the same Access check as Grafana, maps `<name>` onto exactly those methods and
+   behind the same session check as Grafana (K1: the Handsontable login broker, ADR-0007
+   — not Cloudflare Access), maps `<name>` onto exactly those methods and
    answers 404 to any other name and 405 to any other method. The Infinity datasource's
    allowed-hosts list holds only this forwarder. No admin token exists in Grafana.
 3. **Panels**: Cost (moved here from ADR-0041: spend from `cost_ledger`, app /
@@ -42,8 +43,8 @@ the same handler as public `/api` traffic, so "internal" cannot be a header.
    D1 rows, so the risk is the panel's query and transform, not the data. A test renders
    both from one D1 fixture and asserts equal totals per panel (counts to the unit, USD to
    the cent); one production spot check then compares the two for the same day. When
-   both pass, `/admin` redirects to Grafana through Access and the read half of
-   `Admin.tsx` is deleted.
+   both pass, `/admin` redirects to Grafana through the login broker (K1) and the read
+   half of `Admin.tsx` is deleted.
 
 ## Consequences
 

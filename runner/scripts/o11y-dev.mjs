@@ -37,9 +37,9 @@ if (!existsSync(devVarsPath)) {
   console.log(`[o11y:dev] created ${devVarsPath} from .dev.vars.example — edit it if you need real secret values`);
 }
 
-// O11Y_ENV=local and DEV_ADMIN must both be set for the Access bypass and
-// the local jurisdiction-skip paths (env.ts, gates/access.ts,
-// inbox/accessor.ts, box.ts) to engage. Fail loudly rather than silently
+// O11Y_ENV=local and DEV_ADMIN must both be set for the local session bypass
+// (K1: env.ts, gates/session.ts) and the local jurisdiction-skip paths
+// (inbox/accessor.ts, box.ts) to engage. Fail loudly rather than silently
 // running against an unusable config.
 const devVarsText = readFileSync(devVarsPath, "utf8");
 if (!/^O11Y_ENV=local\s*$/m.test(devVarsText)) {
