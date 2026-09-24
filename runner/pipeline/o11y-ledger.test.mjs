@@ -31,6 +31,7 @@ const {
   recentRejectionCount,
   reopenWindow,
   reopenWindowExceedsRetention,
+  takeReopenedFlag,
   currentWakeId,
   pruneLedger,
   KEY_RETENTION_MS,
@@ -390,6 +391,50 @@ test("reopenWindow never touches a key provisional to the CURRENT active wake", 
 test("B-M9: reopenWindowExceedsRetention refuses a window wider than the 7-day retention", () => {
   assert.equal(reopenWindowExceedsRetention(0, KEY_RETENTION_MS), false);
   assert.equal(reopenWindowExceedsRetention(0, KEY_RETENTION_MS + 1), true);
+});
+
+// ---- takeReopenedFlag (fix round B-M5) -----------------------------------
+//
+// `box.ts`'s `o11y.drain` point never emitted the contract's `reason:
+// "reopen"` value. `reopenWindow` now drops a one-shot marker per key it
+// moves to `written`; `takeReopenedFlag` is what a drain batch consumes to
+// find out whether it just replayed any of them. Fails without the fix (a
+// `reopenWindow` that no longer writes the markers, or a `takeReopenedFlag`
+// that always returns `false`): the second assertion below goes from `true`
+// to `false`.
+
+test("takeReopenedFlag: true for a batch containing a key reopenWindow just re-opened, and consumes the marker (one-shot)", async () => {
+  const storage = memoryStorage();
+  const key = inboxKey("worker", new Date(Date.UTC(2026, 0, 1, 10)), 0);
+  await storage.put({ [inboxKeyStorageKey(key)]: "rejected:too_far_behind" });
+
+  const reopenResult = await reopenWindow(storage, Date.UTC(2026, 0, 1, 9, 30), Date.UTC(2026, 0, 1, 10, 30), null);
+  assert.equal(reopenResult.reopened, 1);
+
+  const first = await takeReopenedFlag(storage, [key]);
+  assert.equal(first, true, "a batch containing the just-reopened key must report true");
+
+  const second = await takeReopenedFlag(storage, [key]);
+  assert.equal(second, false, "the marker is one-shot — a later batch touching the same key again must not re-report it");
+});
+
+test("takeReopenedFlag: false for an ordinary key that was never reopened", async () => {
+  const storage = memoryStorage();
+  const key = inboxKey("worker", new Date(Date.UTC(2026, 0, 1, 10)), 0);
+  await storage.put({ [inboxKeyStorageKey(key)]: "written" });
+
+  assert.equal(await takeReopenedFlag(storage, [key]), false);
+});
+
+test("takeReopenedFlag: true if ANY key in a mixed batch was reopened, false for an empty batch", async () => {
+  const storage = memoryStorage();
+  const reopenedKey = inboxKey("worker", new Date(Date.UTC(2026, 0, 1, 10)), 0);
+  const ordinaryKey = inboxKey("worker", new Date(Date.UTC(2026, 0, 1, 11)), 0);
+  await storage.put({ [inboxKeyStorageKey(reopenedKey)]: "rejected:too_far_behind" });
+  await reopenWindow(storage, Date.UTC(2026, 0, 1, 9, 30), Date.UTC(2026, 0, 1, 10, 30), null);
+
+  assert.equal(await takeReopenedFlag(storage, [ordinaryKey, reopenedKey]), true);
+  assert.equal(await takeReopenedFlag(storage, []), false);
 });
 
 // ---- currentWakeId ------------------------------------------------------

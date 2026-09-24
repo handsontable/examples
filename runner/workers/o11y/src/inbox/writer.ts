@@ -48,6 +48,7 @@ import {
   reopenWindow as ledgerReopenWindow,
   reopenWindowExceedsRetention,
   resolveOverWakes,
+  takeReopenedFlag as ledgerTakeReopenedFlag,
   type InboxObjectInfo,
 } from "./ledger.js";
 import { appendRows, collectRowBatch, commitPackedObject, migrateLegacyRows, packTenant, ROW_SEQ_STORAGE_KEY } from "./pack.js";
@@ -254,6 +255,14 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
 
   async nextWrittenKeys(limit: number): Promise<string[]> {
     return ledgerNextWrittenKeys(adaptStorage(this.ctx.storage), limit);
+  }
+
+  // Fix round (finding B-M5): lets `box.ts#drainStepBody` know whether the
+  // batch it just pushed replayed any reopened keys, so its `o11y.drain`
+  // point can emit `reason: "reopen"` — see `ledger.ts#takeReopenedFlag`'s
+  // own doc comment.
+  async takeReopenedFlag(inboxKeys: string[]): Promise<boolean> {
+    return ledgerTakeReopenedFlag(adaptStorage(this.ctx.storage), inboxKeys);
   }
 
   async markKeysProvisional(wakeId: string, keys: string[]): Promise<void> {

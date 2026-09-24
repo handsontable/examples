@@ -297,6 +297,19 @@ export class GrafanaBox extends Container<Env> {
   async #wakeInner(reason: WakeReason): Promise<WakeRecord> {
     const state = await this.getState();
     if (state.status === "running" || state.status === "healthy") {
+      // Fix round (C1): this is also the branch that protects a still-
+      // draining container from a second wake — `stop()` (SIGTERM) does NOT
+      // change `getState()`'s status in the real `@cloudflare/containers`
+      // library (`Container.prototype.stop` only signals the process and
+      // awaits `syncPendingStoppedEvents`; it never calls
+      // `setStatusAndupdate`), so `getState()` still reports
+      // `"running"`/`"healthy"` for the whole window between calling
+      // `stop()` and the process actually exiting. Falling through to
+      // `#doWake` here would mint a second wakeId and call `recordWake`,
+      // marking the still-draining wake `over: true` in InboxWriter's ledger
+      // before its own marker exists — returning the EXISTING record
+      // instead (below) is what actually prevents that, not a dedicated
+      // `"stopping"` check.
       const existing = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
       if (existing) return existing;
       // Running with no persisted record is an inconsistent state this
@@ -306,19 +319,18 @@ export class GrafanaBox extends Container<Env> {
         `GrafanaBox.wake: container state is "${state.status}" but no wake record is stored`,
       );
     }
-    if (state.status === "stopping") {
-      // Fix round (C1): falling through to #doWake here mints a wakeId and
-      // calls recordWake — marking the still-draining wake `over: true` in
-      // InboxWriter's ledger before its own marker exists — while
-      // @cloudflare/containers' own start() fast path may not actually
-      // restart a process that is mid-shutdown, or deliver the new
-      // WAKE_ID to it. The eventual onStop for the OLD process then tags
-      // its report with the NEW wakeId, since onStop reads whatever is
-      // currently in WAKE_STORAGE_KEY. Refuse instead: the caller (T03's
-      // waking page) already polls/refreshes, so a rejected wake here is
-      // retried by the next request rather than corrupting the ledger.
-      throw new Error("GrafanaBox.wake: container is stopping — retry shortly");
-    }
+    // Fix round (finding B-M1): a dedicated `state.status === "stopping"`
+    // branch used to live here, refusing `wake()` while "stopping". The
+    // real `@cloudflare/containers` library never actually reports that
+    // status from `getState()` (its `ContainerState.setStopping()` method
+    // exists but has no caller anywhere in the package — `stop()` above
+    // confirms why: it never calls it), so the branch was dead code in
+    // production; its own test only passed because the test stub's default
+    // `stop()` hook invented the "stopping" state by hand
+    // (`cloudflare-containers-stub.mjs`, now fixed to match the real
+    // library and leave status untouched). Deleted rather than kept as
+    // dead code — the "running"/"healthy" branch above already gives the
+    // same protection for the real SIGTERM-pending window.
     return this.#doWake(reason);
   }
 
@@ -617,6 +629,14 @@ export class GrafanaBox extends Container<Env> {
       return;
     }
 
+    // Fix round (finding B-M5): does this batch replay any reopened keys?
+    // One-shot (the call also clears the markers) — see
+    // `ledger.ts#takeReopenedFlag`'s own doc comment. Read BEFORE
+    // `drainBatch` so the check reflects exactly the keys this batch is
+    // about to push, not whatever the ledger looks like by the time the
+    // point below is written.
+    const replayedReopenedKeys = await writer.takeReopenedFlag(keys);
+
     const deps: DrainDeps = {
       fetchObject: async (key) => {
         const obj = await this.env.O11Y_INBOX.get(key);
@@ -673,7 +693,13 @@ export class GrafanaBox extends Container<Env> {
       "o11y.drain",
       { count: result.outcomes.length, duration_ms: Date.now() - startedAt, bytes: bytesPushed, value: droppedOld },
       {
-        reason: current.reason,
+        // Fix round (finding B-M5): `"reopen"` (already a contract-allowed
+        // `reason` value — `METRICS["o11y.drain"].values.reason`) instead of
+        // the wake's own `backlog`/`visit` reason when this batch replayed
+        // reopened keys — a wake can be TRIGGERED by a backlog/visit while
+        // still draining backlogged manual-reopen data, and that is the
+        // more informative fact about THIS batch.
+        reason: replayedReopenedKeys ? "reopen" : current.reason,
         // NB4 (re-review 2): a mixed-outcome key (at least one chunk 2xx,
         // at least one permanently 400'd) stays `provisional` since row 19
         // — correct for durability — but that also meant it fell out of

@@ -26,6 +26,19 @@ export async function processSentryPayload(
   payload: unknown,
   env: Env,
   receivedAtMs: number,
+  // Fix round (finding A-M7): `rawEventTime` used to be a fixed `""`, so an
+  // issue that flips regression -> resolved -> regression inside one 24h
+  // dedupe window (`DEDUPE_WINDOW_MS`) produced two records with an
+  // IDENTICAL derived body (same `action`, same `title`/`issueId`/`release`)
+  // — the second, genuinely new regression silently deduped away. Sentry
+  // sends a real per-delivery `Sentry-Hook-Timestamp` header
+  // (https://docs.sentry.io/product/integrations/integration-platform/webhooks/#headers)
+  // — the caller (`index.ts`) passes it through here; falls back to the
+  // worker's own bucketed receive time (same scheme as `deploy.ts`) when the
+  // header is absent, so a hand-built payload or a future header change
+  // still gets SOME per-event distinction instead of silently reverting to
+  // the old collapsing-empty-string behaviour.
+  rawEventTime: string | null,
 ): Promise<IngestItem> {
   const p = (typeof payload === "object" && payload !== null ? payload : {}) as Record<string, unknown>;
   const data = (typeof p["data"] === "object" && p["data"] !== null ? p["data"] : {}) as Record<string, unknown>;
@@ -62,7 +75,7 @@ export async function processSentryPayload(
     body: record.body,
     resourceAttributes: record.resourceAttributes,
     attributes: {},
-    rawEventTime: "",
+    rawEventTime: rawEventTime && rawEventTime.length > 0 ? rawEventTime : String(Math.floor(receivedAtMs / 60_000)),
   });
   return { hash, record };
 }

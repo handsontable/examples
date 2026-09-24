@@ -236,7 +236,7 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `payload.boot` | API worker | framework, outcome | count | `ok`, `error` |
 | `reconcile.run` | API worker cron | outcome | count, duration_ms, usd (billing total WRITTEN this run — not a delta against the estimate; D-M15 fix round) | `ok`, `skipped`, `error` |
 | `o11y.ingest` | o11y worker | reason, outcome | count, bytes | `accepted`, `dropped`, `duplicate`; reason = gate |
-| `o11y.drain` | o11y worker | reason, outcome | count (objects), duration_ms, bytes, value (re-opened keys) | `ok`, `partial`, `error`; reason `backlog`, `visit`, `reopen` |
+| `o11y.drain` | o11y worker | reason, outcome | count (objects), duration_ms, bytes, value (records dropped for being too old — `reject_old_samples_max_age`) | `ok`, `partial`, `error`; reason `backlog`, `visit`, `reopen` (this batch replayed reopened keys) |
 | `o11y.wake` | o11y worker | reason, outcome | count, duration_ms (to ready) | reason `backlog`, `visit`; outcome `clean`, `unclean` |
 | `o11y.backlog` | o11y worker cron | — | value (oldest age s), bytes | — |
 | `o11y.alert` | o11y worker cron | reason (rule id), outcome | count | `fired`, `resolved` |

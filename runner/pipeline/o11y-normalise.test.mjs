@@ -21,6 +21,8 @@ const { processFaroBody, countFaroItems, MAX_FARO_ITEMS_PER_BODY } = await impor
 const { decodeOtlpJson, processOtlpBody } = await import("../workers/o11y/src/normalise/otlp.ts");
 const { decodeOtlpProtobuf } = await import("../workers/o11y/src/normalise/otlp-protobuf.ts");
 const { hashRecord } = await import("../workers/o11y/src/normalise/hash.ts");
+const { processDeployPayload } = await import("../workers/o11y/src/normalise/deploy.ts");
+const { processSentryPayload } = await import("../workers/o11y/src/normalise/sentry.ts");
 const { fingerprint } = await import("../packages/runtime/dist/telemetry/index.js");
 
 const FIXTURES = fileURLToPath(new URL("./fixtures/", import.meta.url));
@@ -767,4 +769,53 @@ test("Faro: a record over 256 KB is dropped, not stored (I2 — the Faro path la
   assert.equal(item.ingestItem, undefined, "an oversize Faro record must not be stored");
   assert.equal(item.oversize, true);
   assert.equal(item.invalid, undefined, "oversize is distinct from invalid (I3: different o11y.ingest reason)");
+});
+
+// ---- A-M7: deploy/Sentry hashes must not collapse genuinely different events ------
+//
+// Both processors used to hash with a fixed `rawEventTime: ""`. Two
+// genuinely different events whose derived body text happens to be
+// byte-identical (a redeploy of the exact same `{service,sha,cf_version_id}`;
+// a Sentry issue going regression -> resolved -> regression in one day, so
+// the second "regression" body matches the first) then hashed identically
+// and deduped inside the 24h dedupe window even though they are real,
+// distinct events. Fails without the fix: reverting `rawEventTime` to `""`
+// in either processor makes the two hashes below equal.
+
+test("A-M7: two deploy events with identical service/sha/cf_version_id at receive times in different minute buckets hash differently", async () => {
+  const payload = { service: "demos-authoring", sha: "abc123", cf_version_id: "v1" };
+  const first = await processDeployPayload(payload, ENV, 0);
+  const second = await processDeployPayload(payload, ENV, 5 * 60_000);
+  assert.notEqual(first.hash, second.hash, "two distinct-minute deploys of the same payload must not dedupe");
+});
+
+test("A-M7: a redelivered deploy event within the same minute still hashes identically (idempotent retry)", async () => {
+  const payload = { service: "demos-authoring", sha: "abc123", cf_version_id: "v1" };
+  const first = await processDeployPayload(payload, ENV, 1_000);
+  const second = await processDeployPayload(payload, ENV, 1_500);
+  assert.equal(first.hash, second.hash, "a retry inside the same minute bucket must still dedupe");
+});
+
+test("A-M7: a Sentry issue regressing twice in one day (identical action/title/release) hashes differently per Sentry-Hook-Timestamp", async () => {
+  const payload = {
+    action: "regression",
+    data: { issue: { id: "1", title: "TypeError: boom", lastRelease: { version: "rel-1" } } },
+  };
+  const morning = await processSentryPayload(payload, ENV, Date.now(), "1700000000");
+  const afternoon = await processSentryPayload(payload, ENV, Date.now(), "1700020000");
+  assert.notEqual(
+    morning.hash,
+    afternoon.hash,
+    "two regressions of the same issue on the same day must not dedupe away the second one",
+  );
+});
+
+test("A-M7: a redelivered Sentry hook with the same Sentry-Hook-Timestamp still hashes identically", async () => {
+  const payload = {
+    action: "regression",
+    data: { issue: { id: "1", title: "TypeError: boom", lastRelease: { version: "rel-1" } } },
+  };
+  const first = await processSentryPayload(payload, ENV, Date.now(), "1700000000");
+  const second = await processSentryPayload(payload, ENV, Date.now() + 500, "1700000000");
+  assert.equal(first.hash, second.hash, "a retry with the same delivery timestamp must still dedupe");
 });

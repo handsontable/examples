@@ -450,6 +450,67 @@ test("POST /telemetry/lite: an accepted error beacon answers 2xx and lands in th
   assert.equal(stored.length, 1);
 });
 
+// Fix round (item 8, ingest test gaps): `checkBrowserGates` (`gates/browser.ts`)
+// is the ONE gate function both `/telemetry/collect` (`index.ts#handleCollect`)
+// and `/telemetry/lite` (`lite.ts`, this file's own header: "Reuses T02's
+// ingest machinery end-to-end... the browser gate (checkBrowserGates)") call,
+// keyed only by `cf-connecting-ip` — never by route. No route-level test
+// proved that: a route-scoped rate limiter (e.g. one budget per path) would
+// have satisfied every EXISTING per-route test unchanged. Driven through the
+// real router on both routes, with a fake `RATE_LIMITER` that enforces one
+// shared budget across whatever `key` it is called with — fails if either
+// route starts keying its rate limit separately (each route would then get
+// its own untouched budget and never see the other's exhaustion).
+test("POST /telemetry/collect and POST /telemetry/lite share the same rate limiter (same key, one shared budget)", async () => {
+  const BUDGET = 2;
+  const calls = [];
+  // Fix round (advisor finding on this test): budgeted PER KEY (a `Map`),
+  // not with one process-wide counter — a global counter would still hit
+  // 429 on the BUDGET+1'th call even if `/telemetry/collect` and
+  // `/telemetry/lite` used two DIFFERENT (route-prefixed) keys, since it
+  // never actually checks which key is being spent. Per-key budgeting
+  // means the `liteRes` 429 assertion below can only pass if the two
+  // routes' calls landed on the SAME key's counter — the real behaviour
+  // this test exists to prove.
+  const usedByKey = new Map();
+  const rateLimiter = {
+    async limit({ key }) {
+      calls.push(key);
+      const used = (usedByKey.get(key) ?? 0) + 1;
+      usedByKey.set(key, used);
+      return { success: used <= BUDGET };
+    },
+  };
+  const { env } = makeEnv(InboxWriter, { env: { RATE_LIMITER: rateLimiter } });
+  const ip = "203.0.113.7";
+
+  // Spend the whole shared budget on /telemetry/collect alone — a minimal,
+  // even structurally-invalid body is fine: the rate limit gate runs BEFORE
+  // any body is read (`gates/browser.ts#checkBrowserGates`, called first in
+  // both `handleCollect` and `lite.ts`).
+  const collectRequest = () =>
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json", "cf-connecting-ip": ip },
+      body: "{}",
+    });
+  for (let i = 0; i < BUDGET; i++) {
+    const res = await worker.fetch(collectRequest(), env, ctx);
+    await ctx.drain();
+    assert.notEqual(res.status, 429, `/telemetry/collect call ${i + 1} of ${BUDGET} must still be within budget`);
+  }
+
+  // The budget is now spent — a /telemetry/lite request from the SAME ip
+  // must be refused too, proving the two routes share the same counter, not
+  // two independent ones.
+  const liteRes = await worker.fetch(liteRequest(litePayload(), { "cf-connecting-ip": ip }), env, ctx);
+  await ctx.drain();
+  assert.equal(liteRes.status, 429, "/telemetry/lite must be rate-limited once /telemetry/collect has spent the shared budget for this ip");
+
+  assert.equal(calls.length, BUDGET + 1);
+  assert.ok(calls.every((k) => k === ip), "both routes must call the rate limiter with the identical key");
+});
+
 test("POST /telemetry/lite: the stored record's resourceLogs land under the browser tenant scope", async () => {
   const { env, r2 } = freshEnv();
   await worker.fetch(liteRequest(litePayload()), env, ctx);

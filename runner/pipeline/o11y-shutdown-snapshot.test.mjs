@@ -34,8 +34,15 @@ const STUB_BIN_DIR = path.join(HERE, "fixtures", "stub-bin");
 
 /** Sources lib.sh + shutdown.sh into a fresh bash process (stubbed `curl`
  *  first on PATH) and runs `script` (bash source) in that same context.
- *  `script` should end by printing whatever the test wants to assert on. */
-function runBash(script, { modes = "empty" } = {}) {
+ *  `script` should end by printing whatever the test wants to assert on.
+ *  `daySpan` sets `O11Y_INDEX_DAY_SPAN_DAYS` BEFORE `shutdown.sh` is
+ *  sourced (`INDEX_DAY_SPAN_DAYS` is only read at source time, not inside a
+ *  function) — defaults to `1` (today + yesterday, i.e. two day-prefixes
+ *  per snapshot) so every EXISTING test's call-count expectations, written
+ *  before fix round B-M8 widened the real default to 7, keep meaning
+ *  exactly what they said without editing each one; tests that care about
+ *  the wider span pass `daySpan` explicitly. */
+function runBash(script, { modes = "empty", daySpan = 1 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "o11y-shutdown-test-"));
   const counterFile = path.join(dir, "curl-calls");
   writeFileSync(counterFile, "");
@@ -51,6 +58,7 @@ export LOKI_S3_ACCESS_KEY_ID="test"
 export LOKI_S3_SECRET_ACCESS_KEY="test"
 export LOKI_S3_INSECURE="true"
 export STORAGE="s3"
+export O11Y_INDEX_DAY_SPAN_DAYS=${JSON.stringify(String(daySpan))}
 source ${JSON.stringify(path.join(SUPERVISOR_DIR, "lib.sh"))}
 source ${JSON.stringify(path.join(SUPERVISOR_DIR, "shutdown.sh"))}
 ${script}
@@ -103,13 +111,13 @@ test("r2_list_prefix: a 200 that is not real S3 XML (a proxy error page) is refu
 // ---- snapshot_index_keys: propagates a failed listing as a failure --------
 
 test("snapshot_index_keys: fails (prints nothing usable) when either day's listing fails", () => {
-  const res = runBash('snapshot_index_keys 19999 19998 > /dev/null; echo "EXIT:$?"', { modes: "fail" });
+  const res = runBash('snapshot_index_keys 19999 > /dev/null; echo "EXIT:$?"', { modes: "fail" });
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /EXIT:1$/m);
 });
 
 test("snapshot_index_keys: succeeds (possibly empty) when both listings succeed", () => {
-  const res = runBash('snapshot_index_keys 19999 19998 > /dev/null; echo "EXIT:$?"', { modes: "empty" });
+  const res = runBash('snapshot_index_keys 19999 > /dev/null; echo "EXIT:$?"', { modes: "empty" });
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /EXIT:0$/m);
 });
@@ -126,15 +134,14 @@ test("B-I2: the marker decision refuses when the PRE-SIGTERM snapshot failed, ev
   // refuse — `snapshot_ok=0` — regardless of what the after-listing shows.
   const script = `
 day_now=19999
-day_prev=19998
 snapshot_ok=0
-if before_keys="$(snapshot_index_keys "$day_now" "$day_prev")"; then
+if before_keys="$(snapshot_index_keys "$day_now")"; then
   snapshot_ok=1
 fi
 echo "SNAPSHOT_OK:$snapshot_ok"
 marker_ok=1
 if [ "$snapshot_ok" -eq 1 ]; then
-  if after_keys="$(snapshot_index_keys "$day_now" "$day_prev")"; then
+  if after_keys="$(snapshot_index_keys "$day_now")"; then
     if confirm_new_upload "uploaderA" "$before_keys" "$after_keys"; then
       marker_ok=0
     fi
@@ -153,9 +160,8 @@ echo "MARKER_OK:$marker_ok"
 test("B-I2 (revert check / positive control): with BOTH snapshots succeeding, a genuinely new key IS confirmed and the marker is written", () => {
   const script = `
 day_now=19999
-day_prev=19998
-before_keys="$(snapshot_index_keys "$day_now" "$day_prev")"
-after_keys="$(snapshot_index_keys "$day_now" "$day_prev")"
+before_keys="$(snapshot_index_keys "$day_now")"
+after_keys="$(snapshot_index_keys "$day_now")"
 if confirm_new_upload "uploaderA" "$before_keys" "$after_keys"; then
   echo "MARKER_OK:0"
 else
@@ -227,4 +233,49 @@ test("B-I2, second wave (revert check / positive control): run_stop_protocol() w
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /EXIT:0$/m, "run_stop_protocol must return 0 — a clean stop, marker written");
   assert.match(res.stdout, /CALLS:\s*6$/m, "before x2, after x2, PUT, HEAD — the full real marker-write path");
+});
+
+// ---- B-M8: the snapshot must span every day a backlogged upload could land,
+// not just today and yesterday ----------------------------------------------
+
+test("snapshot_index_keys: queries one prefix per day from day_now down through day_now - INDEX_DAY_SPAN_DAYS", () => {
+  // daySpan=3 -> 4 day-prefixes (offsets 0..3) -> 4 curl calls for one snapshot.
+  const res = runBash('snapshot_index_keys 19999 > /dev/null; echo "CALLS:$(wc -l < "$STUB_CURL_COUNTER_FILE")"', {
+    modes: "empty",
+    daySpan: 3,
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /CALLS:\s*4$/m, "one call per day from day_now through day_now - 3, inclusive");
+});
+
+// Fails without the fix: reverting `shutdown.sh`'s `snapshot_index_keys` to
+// its old two-argument, today/yesterday-only form makes this MARKER_OK:1 —
+// the day-3 upload is never even listed, so `confirm_new_upload` never sees
+// it. `day_now`'s offset-3 day prefix (three days back) stands in for a
+// backlogged/reopened record's index table, which can legitimately land
+// under any day up to `INDEX_DAY_SPAN_DAYS` (7 in production, bounded by
+// Loki's own `reject_old_samples_max_age: 7d`) in the past — a day the old
+// today/yesterday-only check never looked at.
+test("B-M8: a backlogged upload landing under a day older than yesterday is confirmed as new, not silently missed", () => {
+  const script = `
+day_now=19999
+before_keys="$(snapshot_index_keys "$day_now")"
+after_keys="$(snapshot_index_keys "$day_now")"
+if confirm_new_upload "uploaderA" "$before_keys" "$after_keys"; then
+  echo "MARKER_OK:0"
+else
+  echo "MARKER_OK:1"
+fi
+`;
+  // BEFORE (offsets 0..3, today..day_now-3): all empty. AFTER: today,
+  // day_now-1, day_now-2 still empty; day_now-3 (the oldest day this span
+  // covers) now has the uploader's key — a backlogged upload three days
+  // back, never touched by the pre-fix today/yesterday-only check.
+  const res = runBash(script, { modes: "empty,empty,empty,empty,empty,empty,empty,haskey", daySpan: 3 });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(
+    res.stdout,
+    /MARKER_OK:0/,
+    "a genuinely new upload under a day older than yesterday must still confirm the marker",
+  );
 });

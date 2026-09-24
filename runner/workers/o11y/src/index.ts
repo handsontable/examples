@@ -38,7 +38,6 @@ import { recordInvalidItem, recordOversizeDrop, respondDrop, respondIngested, o1
 import { writePoint } from "./normalise/points.js";
 import { findRoute, registerRoute } from "./router.js";
 import { runAlerts } from "./alerts/index.js";
-import { readHeartbeatReport } from "./heartbeat.js";
 import { getGrafanaBoxStub } from "./box.js";
 import { handleGrafana } from "./grafana/proxy.js";
 import { handleReopen } from "./grafana/reopen.js";
@@ -281,7 +280,7 @@ async function handleSentryHook(req: Request, env: Env, ctx: ExecutionContext): 
   }
 
   const receivedAtMs = Date.now();
-  const item = await processSentryPayload(body, env, receivedAtMs);
+  const item = await processSentryPayload(body, env, receivedAtMs, req.headers.get("sentry-hook-timestamp"));
   const result = await inboxWriter(env).ingest("worker", receivedAtMs, [item]);
   const accepted = result.results.filter((r) => r.outcome === "accepted").length;
   const duplicate = result.results.filter((r) => r.outcome === "duplicate").length;
@@ -356,31 +355,28 @@ async function handleScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
   try {
     await getGrafanaBoxStub(env).wake("backlog");
   } catch (err) {
-    // A wake failure (e.g. the box is mid-`stopping`) is retried by the
-    // very next tick — nothing here needs to escalate.
+    // A wake failure (e.g. `recordWake` throwing) is retried by the very
+    // next tick — nothing here needs to escalate.
     console.warn("[o11y] cron wake failed:", err instanceof Error ? err.message : String(err));
   }
 }
 
-// T04: the API worker's watchdog reaches this path over the `O11Y` service
-// binding (`o11y-watchdog.ts`). Deliberately never passed to
-// `registerRoute` — this Worker's own `--routes` flags (package.json's
-// `deploy` script) are `demos.handsontable.com/telemetry/*` and
-// `/grafana/*` only, so `/_internal/heartbeat` is unreachable from outside
-// this binding by construction, unlike the API worker's wildcard
-// `*.demos.handsontable.com/*` (see `heartbeat.ts`'s own header for why
-// that distinction matters and why the API-side entrypoint is a real named
-// `WorkerEntrypoint` instead of the same trick).
-const HEARTBEAT_INTERNAL_PATH = "/_internal/heartbeat";
-
+// Fix round (finding A-M5): `/_internal/heartbeat` used to be answered
+// directly inside this `fetch()` handler, before route matching — reachable
+// by ANY request that reaches this Worker's default export, relying only on
+// the zone's "Normalize incoming URLs" setting (and this Worker's `--routes`
+// scoping to `/telemetry/*`/`/grafana/*`) to keep it private from the public
+// internet. A crafted path that survives edge normalisation differently than
+// assumed could still reach this exact pathname. The heartbeat report is now
+// served ONLY through `O11yHeartbeat` (`heartbeat.ts`), a real
+// `WorkerEntrypoint` a caller must bind to by name (`entrypoint:
+// "O11yHeartbeat"` in the caller's `wrangler.jsonc`, the same pattern this
+// Worker's own `API`/`O11yUsage` binding already uses) — never reachable
+// through this default `fetch()`. This path now always 404s here, same as
+// any other unregistered route.
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-
-    if (request.method === "GET" && url.pathname === HEARTBEAT_INTERNAL_PATH) {
-      const report = await readHeartbeatReport(env);
-      return new Response(JSON.stringify(report), { headers: { "content-type": "application/json" } });
-    }
 
     const handler = findRoute(request.method, url.pathname);
     if (handler) return handler(request, env, ctx);

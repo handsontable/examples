@@ -28,6 +28,12 @@ function outcomeOf(point) {
   return point.blobs[Number(slot[1]) - 1];
 }
 
+// Fix round (finding B-M5): same pattern as outcomeOf, for the `reason` blob.
+function reasonOf(point) {
+  const slot = /^blob(\d+)$/.exec(AE_COLUMNS.reason);
+  return point.blobs[Number(slot[1]) - 1];
+}
+
 // ---- fakes ------------------------------------------------------------
 
 function makeStorage() {
@@ -47,7 +53,14 @@ function makeStorage() {
 }
 
 function makeInboxWriterStub(overrides = {}) {
-  const calls = { resolveWakes: 0, markKeysProvisional: [], commitKeys: [], rejectKey: [], recordPartialReject: [] };
+  const calls = {
+    resolveWakes: 0,
+    markKeysProvisional: [],
+    commitKeys: [],
+    rejectKey: [],
+    recordPartialReject: [],
+    takeReopenedFlag: [],
+  };
   return {
     async recordWake() {},
     async resolveWakes() {
@@ -55,6 +68,14 @@ function makeInboxWriterStub(overrides = {}) {
     },
     async nextWrittenKeys() {
       return overrides.writtenKeys ?? [];
+    },
+    // Fix round (finding B-M5): defaults to "no reopened keys in this
+    // batch" — a test proving the `reason: "reopen"` emission overrides
+    // this via `overrides.reopenedFlag` (or its own `inboxWriterStub`
+    // override, the same pattern `nextWrittenKeys` above uses).
+    async takeReopenedFlag(inboxKeys) {
+      calls.takeReopenedFlag.push(inboxKeys);
+      return overrides.reopenedFlag ?? false;
     },
     async markKeysProvisional(wakeId, keys) {
       calls.markKeysProvisional.push({ wakeId, keys });
@@ -189,9 +210,10 @@ test("drainStep is a no-op once a newer wake has superseded the payload's wakeId
   await box.wake("backlog");
   const staleWakeId = (await box.ctx.storage.get("wake")).wakeId;
   // Simulate the OLD wake having fully stopped by now (not merely
-  // "stopping" — wake() deliberately refuses while stopping, C1) so the
-  // next wake() call actually mints a fresh id, the real shape a superseded
-  // step sees in production.
+  // "running"/"healthy" mid-SIGTERM — wake() is idempotent during THAT
+  // window, C1, fix round B-M5: see box.ts's own comment on the deleted
+  // "stopping" branch) so the next wake() call actually mints a fresh id,
+  // the real shape a superseded step sees in production.
   box._state = { status: "stopped", lastChange: Date.now() };
   await box.wake("backlog"); // a fresh wakeId now in storage
   scheduled.length = 0;
@@ -313,6 +335,62 @@ test("drainStep: a key with one accepted chunk and one permanently-400 chunk sta
   assert.equal(outcomeOf(drainPoint), "partial", "a partial-400 key must not report outcome: ok");
 });
 
+/** One real, in-window (F1's age filter) gzipped-ndjson inbox object — the
+ *  same fixture shape `drainStep pushes drained records...` above builds
+ *  inline, factored out so the two B-M5 tests below don't repeat it. */
+async function makeInboxObjectGz() {
+  const record = {
+    resource: { attributes: [] },
+    scopeLogs: [{ logRecords: [{ timeUnixNano: String(BigInt(Date.now()) * 1_000_000n), body: { stringValue: "hello" } }] }],
+  };
+  const ndjson = JSON.stringify(record) + "\n";
+  const stream = new Blob([ndjson]).stream().pipeThrough(new CompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+// Fix round (finding B-M5): `o11y.drain` must emit `reason: "reopen"`
+// (already a contract-allowed value) when the batch it just pushed replayed
+// reopened keys — instead of silently reporting the wake's own
+// `backlog`/`visit` reason, which loses the fact entirely. Fails without
+// the fix: reverting box.ts's `replayedReopenedKeys` read (or its use in
+// the point below) leaves `reasonOf(drainPoint)` as `"backlog"`.
+test("B-M5: o11y.drain reports reason: \"reopen\" when the batch replays a reopened key, even on a backlog wake", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
+  const r2Objects = new Map([[key, await makeInboxObjectGz()]]);
+  const { box, inboxWriterStub, ae } = makeBox({
+    inboxWriter: { writtenKeys: [key], reopenedFlag: true },
+    r2Objects,
+  });
+  await box.wake("backlog");
+  installContainerFetchRouter({ otlp: async () => new Response(null, { status: 204 }) });
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.deepEqual(
+    inboxWriterStub.calls.takeReopenedFlag,
+    [[key]],
+    "takeReopenedFlag must be called once per batch, with exactly the keys the batch is about to push",
+  );
+  const drainPoint = ae.points.find((p) => p.indexes?.[0] === "o11y.drain");
+  assert.ok(drainPoint, "an o11y.drain point must be written");
+  assert.equal(reasonOf(drainPoint), "reopen", "a batch replaying reopened keys must report reason: reopen, not the wake's own backlog/visit reason");
+});
+
+test("B-M5 (revert check / positive control): o11y.drain still reports the wake's own reason when nothing was reopened", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
+  const r2Objects = new Map([[key, await makeInboxObjectGz()]]);
+  const { box, ae } = makeBox({ inboxWriter: { writtenKeys: [key], reopenedFlag: false }, r2Objects });
+  await box.wake("backlog");
+  installContainerFetchRouter({ otlp: async () => new Response(null, { status: 204 }) });
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  const drainPoint = ae.points.find((p) => p.indexes?.[0] === "o11y.drain");
+  assert.equal(reasonOf(drainPoint), "backlog");
+});
+
 // B-M4 fix (minor triage item 3): a key whose only record is too old
 // (dropped by F1's `dropOldRecords` before any push is even attempted) ends
 // `provisional` with `bytesPushed: 0` — `drainKey`'s own zero-chunk case.
@@ -378,7 +456,7 @@ test("drainStep records an o11y.drain error point and still runs the post-drain 
   let stopped = false;
   hooks.stop = async (self) => {
     stopped = true;
-    self._state = { status: "stopping", lastChange: Date.now() };
+    self._state = { status: "stopped", lastChange: Date.now() }; // B-M5: real stop() does not set "stopping" (see box.ts)
   };
 
   const wake = await box.ctx.storage.get("wake");
@@ -432,7 +510,7 @@ test("an idle drain (no recent /grafana/* activity) stops right after finishing"
   let stopped = false;
   hooks.stop = async (self) => {
     stopped = true;
-    self._state = { status: "stopping", lastChange: Date.now() };
+    self._state = { status: "stopped", lastChange: Date.now() }; // B-M5: real stop() does not set "stopping" (see box.ts)
   };
 
   const wake = await box.ctx.storage.get("wake");
@@ -462,7 +540,8 @@ test("fix round I1: a fresh backlog wake with no visitors self-stops, even right
   assert.equal((await box.getState()).status, "healthy", "wake 1 must still be running (active visitor)");
 
   // Wake 1 fully stops (simulating its own eventual idle/hard-cap stop) —
-  // not merely "stopping", so wake() mints a genuinely new id next.
+  // not merely "running"/"healthy" mid-SIGTERM (which stays idempotent, C1),
+  // so wake() mints a genuinely new id next.
   box._state = { status: "stopped", lastChange: Date.now() };
 
   // Wake 2: backlog-triggered, no visitor of its own.
@@ -473,7 +552,7 @@ test("fix round I1: a fresh backlog wake with no visitors self-stops, even right
   let stopped = false;
   hooks.stop = async (self) => {
     stopped = true;
-    self._state = { status: "stopping", lastChange: Date.now() };
+    self._state = { status: "stopped", lastChange: Date.now() }; // B-M5: real stop() does not set "stopping" (see box.ts)
   };
 
   await box.drainStep({ wakeId: wake2.wakeId });
@@ -544,7 +623,7 @@ test("hardCapStop stops a still-running wake matching its own wakeId", async () 
   let stopped = false;
   hooks.stop = async (self) => {
     stopped = true;
-    self._state = { status: "stopping", lastChange: Date.now() };
+    self._state = { status: "stopped", lastChange: Date.now() }; // B-M5: real stop() does not set "stopping" (see box.ts)
   };
 
   const wake = await box.ctx.storage.get("wake");

@@ -24,9 +24,20 @@ export function defaultHooks() {
       return new Response("stub: containerFetch not configured for this call", { status: 500 });
     },
     // (self, signal) -> void
-    async stop(self, _signal) {
-      self._state = { status: "stopping", lastChange: Date.now() };
-    },
+    //
+    // Fix round (finding B-M1): the real `Container.prototype.stop` only
+    // signals the process (SIGTERM) and awaits `syncPendingStoppedEvents` —
+    // it never sets `status: "stopping"` (that status exists in the
+    // library's types and its `ContainerState.setStopping()` method exists,
+    // but nothing in the package ever calls it). `getState()` keeps
+    // reporting whatever it reported before `stop()` was called
+    // (`"running"`/`"healthy"`) until the container process actually exits
+    // and the real `onStop` path (or, here, a test explicitly setting
+    // `self._state = { status: "stopped", ... }`) reflects that. This used
+    // to fabricate `"stopping"`, which is exactly why `box.ts`'s own
+    // (now-deleted) `state.status === "stopping"` branch had a test that
+    // passed against a state the real library never produces.
+    async stop(_self, _signal) {},
   };
 }
 

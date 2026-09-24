@@ -51,7 +51,7 @@ function freshEnv() {
 }
 
 test("POST /telemetry/collect: an accepted Faro batch answers 2xx after the storage commit", async () => {
-  const { env } = freshEnv();
+  const { env, doStorage } = freshEnv();
   const body = withFreshTimestamp(faroFixture("log.json"));
   const req = new Request("https://demos.handsontable.com/telemetry/collect", {
     method: "POST",
@@ -61,6 +61,21 @@ test("POST /telemetry/collect: an accepted Faro batch answers 2xx after the stor
   const res = await worker.fetch(req, env, ctx);
   await ctx.drain();
   assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
+  // Fix round (item 8, ingest test gaps): the status code alone proves
+  // nothing about "after the storage commit" the test's own name claims —
+  // a 2xx would still show up here even if `InboxWriter.ingest`'s actual DO
+  // write were deleted entirely. Assert the real write landed: a `row:`
+  // entry (`inbox.ts#pendingRowStorageKey`) is what `InboxWriter.ingest`
+  // durably persists BEFORE this route ever answers (ADR §B.2 "2xx only
+  // after commit") — the same DO-storage-key check the bot-user-agent test
+  // just below already uses to prove the NEGATIVE case (no row: written).
+  // Fails without the fix: deleting the `appendRows`/`putChunked` write
+  // inside `InboxWriter.ingest` still leaves this test green under the old
+  // status-code-only assertion, but not under this one.
+  assert.ok(
+    [...doStorage._data.keys()].some((k) => k.startsWith("row:")),
+    "an accepted batch must leave a real row: entry in DO storage, not just a 2xx response",
+  );
 });
 
 test("POST /telemetry/collect: a bot user-agent is refused, never reaches the inbox", async () => {
@@ -542,6 +557,64 @@ test("POST /telemetry/hooks/sentry: a correct HMAC signature passes, a wrong one
   assert.equal(bad.status, 401);
 });
 
+// Fix round (finding A-M7): a route-level proof that `index.ts#handleSentryHook`
+// actually THREADS the `sentry-hook-timestamp` header through to
+// `processSentryPayload`'s `rawEventTime` — the direct-call tests in
+// `o11y-normalise.test.mjs` only prove `processSentryPayload` itself hashes
+// differently given different `rawEventTime` values; they pass unchanged
+// even if the call site silently drops the 4th argument. Two identically
+// signed, byte-identical bodies (same action/title/issueId — the exact
+// "issue regresses twice in a day" collision shape) with different
+// `sentry-hook-timestamp` header values must both land as distinct stored
+// records, not dedupe into one.
+test("POST /telemetry/hooks/sentry: two identical-body hooks with different Sentry-Hook-Timestamp headers both land as distinct stored records (A-M7, route-level)", async () => {
+  const { env, r2 } = freshEnv();
+  const payload = {
+    action: "regression",
+    data: { issue: { id: "987654321", title: "TypeError: boom", lastRelease: { version: "rel-1" } } },
+  };
+  const body = JSON.stringify(payload);
+  const sig = await hmacSha256Hex(env.SENTRY_HOOK_SECRET, body);
+
+  const send = (timestamp) =>
+    worker.fetch(
+      new Request("https://demos.handsontable.com/telemetry/hooks/sentry", {
+        method: "POST",
+        headers: {
+          "sentry-hook-signature": sig,
+          "sentry-hook-timestamp": timestamp,
+          "content-type": "application/json",
+        },
+        body,
+      }),
+      env,
+      ctx,
+    );
+
+  const first = await send("1700000000");
+  await ctx.drain();
+  const second = await send("1700020000");
+  await ctx.drain();
+
+  assert.ok(first.status >= 200 && first.status < 300);
+  assert.ok(second.status >= 200 && second.status < 300);
+
+  const inboxWriter = env.INBOX_WRITER.get();
+  await inboxWriter.alarm();
+  // Both accepted rows pack into ONE R2 object per tenant per alarm tick
+  // (`pack.ts#packTenant`, NDJSON — one line per stored record), not one
+  // object per record; count the lines, not `r2.objects.size`.
+  assert.equal(r2.objects.size, 1, "one packed object for this alarm tick");
+  const [, bytes] = [...r2.objects.entries()][0];
+  const text = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+  const lines = text.trim().split("\n").filter(Boolean);
+  assert.equal(
+    lines.length,
+    2,
+    "two same-body hooks with different Sentry-Hook-Timestamp values must both be stored as distinct records, not deduped into one",
+  );
+});
+
 test("POST /telemetry/hooks/sentry: fix round A-I3 — a title embedding a preview host, a query string, an email and a user-agent is scrubbed before storage, not stored verbatim", async () => {
   const { env, r2 } = freshEnv();
   // The exact probe from the finding: a correctly-signed hook whose title
@@ -598,6 +671,21 @@ test("POST /telemetry/hooks/sentry: fix round A-I3 — a title embedding a previ
 test("an unknown path answers 404", async () => {
   const { env } = freshEnv();
   const res = await worker.fetch(new Request("https://demos.handsontable.com/nope"), env, ctx);
+  assert.equal(res.status, 404);
+});
+
+// Fix round (finding A-M5): `/_internal/heartbeat` must never be answered by
+// this Worker's default `fetch()` — it is served only through the
+// `O11yHeartbeat` RPC entrypoint (`heartbeat.ts`). Fails without the fix:
+// before the fix, this path was handled unconditionally in `fetch()` before
+// route matching and answered 200 with the heartbeat JSON.
+test("GET /_internal/heartbeat 404s through the public fetch handler", async () => {
+  const { env } = freshEnv();
+  const res = await worker.fetch(
+    new Request("https://demos.handsontable.com/_internal/heartbeat"),
+    env,
+    ctx,
+  );
   assert.equal(res.status, 404);
 });
 

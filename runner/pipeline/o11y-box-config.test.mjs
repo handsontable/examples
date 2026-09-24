@@ -512,11 +512,40 @@ test("Dockerfile: loads the same config files this test pins (source-grep pin)",
   // `ENV KEY value` form (no `=` at all) — check both shapes for ENV and
   // ARG. A bare `ARG LOKI_S3_SECRET_ACCESS_KEY` with no value is not
   // matched (that only declares the name, it does not bake a value).
-  assert.doesNotMatch(
-    dockerfile,
-    /^\s*(ENV|ARG)\s+LOKI_S3_SECRET_ACCESS_KEY(\s*=\s*\S+|\s+\S+)/m,
-    "no baked secret default (ENV/ARG, = or space form)",
-  );
+  // T01 M8 fix round (minor triage item 6): the regex only ever covered
+  // `LOKI_S3_SECRET_ACCESS_KEY` — `LOKI_S3_ACCESS_KEY_ID` (still a real,
+  // bucket-scoped credential half, not a public id) and `AE_SQL_TOKEN`
+  // (the ClickHouse/AE datasource bearer token, `compose.yml`'s
+  // `O11Y_CLICKHOUSE_HEADER2_VALUE`) went unscanned entirely — a baked
+  // default for either would leak just as badly. One regex per secret name,
+  // same ENV/ARG-both-forms shape.
+  for (const secretName of ["LOKI_S3_SECRET_ACCESS_KEY", "LOKI_S3_ACCESS_KEY_ID", "AE_SQL_TOKEN"]) {
+    assert.doesNotMatch(
+      dockerfile,
+      new RegExp(String.raw`^\s*(ENV|ARG)\s+${secretName}(\s*=\s*\S+|\s+\S+)`, "m"),
+      `no baked secret default for ${secretName} (ENV/ARG, = or space form)`,
+    );
+  }
+});
+
+// --- grafana.ini: anonymous auth must stay disabled (T01 M3 pin) ----------
+
+test("grafana.ini: [auth.anonymous] enabled = false (T01 M3 — no pinning test previously existed for this value)", () => {
+  // Fix round (minor triage item 6): the VALUE was already correct — this
+  // test only closes the gap that nothing pinned it, so a future edit that
+  // flips it (or drops the stanza) fails a test instead of silently
+  // shipping an anonymous-viewer-reachable Grafana. `[section]`-scoped: a
+  // bare `enabled = false` search elsewhere in the file (there are several
+  // `[...]\nenabled = ...` stanzas — see `[auth.disable_login_form]`) would
+  // false-pass against the WRONG section, so this greps only within
+  // `[auth.anonymous]`'s own block, up to the next `[section]` header.
+  const ini = readText(join("grafana", "grafana.ini"));
+  // `(?![\s\S])` (not `\z`, which is not a JS regex anchor — it would match
+  // a literal "z") is "true end of string," so the block also ends cleanly
+  // if `[auth.anonymous]` is ever the LAST stanza in the file.
+  const section = /^\[auth\.anonymous\]\n([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(ini);
+  assert.ok(section, "[auth.anonymous] section must exist");
+  assert.match(section[1], /^\s*enabled\s*=\s*false\s*$/m, "[auth.anonymous] must stay enabled = false");
 });
 
 // --- r2-lifecycle-rules.json: shape T10 applies via wrangler ---------------
@@ -601,4 +630,34 @@ test("wrangler.jsonc: CLOUDFLARE_ACCOUNT_ID is present and matches the top-level
     config.account_id,
     "the runtime-visible copy must never drift from the deploy-time account_id",
   );
+});
+
+// --- Logo markup drift guard (T03 minor: two hand-kept copies) -----------
+//
+// `workers/o11y/src/grafana/waking-page.ts`'s `LOGO_SVG` constant (what the
+// waking page actually serves — a Worker has no filesystem at request time)
+// and `containers/o11y/waking/logo.svg` (a documentation/asset copy next to
+// the box's other static config, per its own README) carry the same path
+// data by hand, kept in sync only by a code-comment reminder. A true single
+// source (the Worker importing the .svg file as raw text at build time) was
+// the first choice, but this repo's wrangler/esbuild bundling has no
+// established "import a static asset as raw text into a Worker" loader
+// convention, and the two files live in different directory trees
+// (`workers/o11y/` vs `containers/o11y/`) — wiring that up is a bundler
+// change, not a cheap one, so it is skipped here (see this task's report).
+// This test is the cheap alternative: it cannot merge the two files, but it
+// guarantees they cannot silently drift — an edit to one without the other
+// fails this test instead of shipping a stale logo in one of the two
+// places. Fails without either file's `d="..."` path data matching: edit
+// one copy's markup (or delete this test) to see it fail.
+test("logo markup: the waking page's LOGO_SVG and containers/o11y/waking/logo.svg carry identical path data (drift guard, T03 minor)", () => {
+  const wakingPageSource = readFileSync(join(WORKER_DIR, "src", "grafana", "waking-page.ts"), "utf8");
+  const assetSvg = readFileSync(join(O11Y_DIR, "waking", "logo.svg"), "utf8");
+
+  const pathData = (text) => [...text.matchAll(/d="([^"]+)"/g)].map((m) => m[1]);
+  const servedPaths = pathData(wakingPageSource);
+  const assetPaths = pathData(assetSvg);
+
+  assert.ok(servedPaths.length > 0, "must find at least one <path d=...> in waking-page.ts's LOGO_SVG");
+  assert.deepEqual(servedPaths, assetPaths, "the served LOGO_SVG and the documentation asset copy must carry identical path data, in the same order");
 });
