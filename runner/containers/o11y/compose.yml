@@ -118,46 +118,64 @@ services:
           cpus: "0.5"
           memory: 4g
     depends_on:
-      minio-init:
-        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
       clickhouse:
         condition: service_started
 
+  # T1 (2026-09): upstream MinIO stopped distributing public community
+  # images — a FRESH pull of quay.io/minio/minio and docker.io/minio/minio
+  # (no cached layers) now returns 401 Unauthorized / "repository does not
+  # exist" respectively. Confirmed from a machine with no cache; a machine
+  # that pulled earlier still has working local images, which is why this
+  # broke silently and only bit fresh machines/CI runners first. Replaced
+  # with Bitnami's frozen "legacy" mirror of the SAME release line (its
+  # `minio --version` reports `DEVELOPMENT.2024-11-07T00-52-20Z`, matching
+  # upstream's RELEASE tag of the same date — verified by `docker run`
+  # before switching), pinned by DIGEST (not a mutable tag) so this can
+  # never silently drift again. Alternatives the controller offered
+  # (chrislusf/seaweedfs, dxflrs/garage, zenko/cloudserver) all pull, but
+  # none was verified against the C1 negative control below (a
+  # deny-`s3:PutObject` policy applied through MinIO's own admin API) —
+  # Bitnami ships the real MinIO `mc` binary with full `mc admin` support
+  # INSIDE this same container (`docker compose exec minio mc admin ...`),
+  # verified end to end (policy create/user add/policy attach, then a real
+  # denied PUT), which made it the smallest-diff, most-compatible choice.
   minio:
-    image: quay.io/minio/minio:RELEASE.2024-11-07T00-52-20Z
-    command: ["server", "/data", "--console-address", ":9001"]
+    image: bitnamilegacy/minio@sha256:81cd091fb9f14b2e9e9bfa6dbc2bf2d46fdd5eafa6c5e7c9213baf4256ff13d6 # 2024.11.7, verified linux/amd64+arm64 (`docker buildx imagetools inspect`)
     environment:
       MINIO_ROOT_USER: ${O11Y_MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${O11Y_MINIO_ROOT_PASSWORD:-minioadmin}
+      # Replaces the old `minio-init` one-shot `mc mb` container below
+      # (quay.io/minio/mc is gone too — same outage) — Bitnami's own
+      # entrypoint creates every bucket named here itself, BEFORE the real,
+      # long-running MinIO server starts listening (verified via `docker
+      # logs`: "Creating default buckets... Bucket created successfully
+      # `local/loki`" completes before "** Starting MinIO **"). The
+      # healthcheck below additionally checks the bucket directory on disk,
+      # so `service_healthy` already guarantees the bucket exists by the
+      # time `box` starts — no separate init container needed.
+      MINIO_DEFAULT_BUCKETS: loki
     volumes:
-      - minio-data:/data
+      # Bitnami's image data dir differs from upstream minio/minio's `/data`
+      # (`docker inspect` on the image: `Volumes: {"/bitnami/minio/data"}`).
+      - minio-data:/bitnami/minio/data
     ports:
       - "127.0.0.1:${O11Y_MINIO_PORT:-9000}:9000"
       - "127.0.0.1:${O11Y_MINIO_CONSOLE_PORT:-9001}:9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      # Checks the bucket directory AND the live endpoint, not just the
+      # endpoint alone: Bitnami's entrypoint briefly runs a first, throwaway
+      # MinIO instance to create the default buckets, then stops and
+      # restarts it for real (see the MINIO_DEFAULT_BUCKETS comment above) —
+      # a bare `/minio/health/live` check could in principle latch
+      # "healthy" against that throwaway instance. Measured empirically
+      # (T1 report): with both conditions the check only ever goes healthy
+      # once, after the bucket dir exists and the final server answers.
+      test: ["CMD-SHELL", "test -d /bitnami/minio/data/loki && curl -f http://localhost:9000/minio/health/live"]
       interval: 2s
       timeout: 2s
       retries: 30
-
-  # One-shot: creates the Loki bucket, then exits. `box` waits on this
-  # completing successfully so Loki never races an empty alias/missing
-  # bucket on a cold `up`. Waits for minio's own healthcheck (not just
-  # "container started") so a fresh `up` never races the server socket.
-  minio-init:
-    image: quay.io/minio/mc:RELEASE.2024-11-05T11-29-45Z
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        set -e
-        mc alias set local http://minio:9000 "$${O11Y_MINIO_ROOT_USER:-minioadmin}" "$${O11Y_MINIO_ROOT_PASSWORD:-minioadmin}"
-        mc mb -p local/loki || true
-    environment:
-      O11Y_MINIO_ROOT_USER: ${O11Y_MINIO_ROOT_USER:-minioadmin}
-      O11Y_MINIO_ROOT_PASSWORD: ${O11Y_MINIO_ROOT_PASSWORD:-minioadmin}
-    depends_on:
-      minio:
-        condition: service_healthy
 
   # Analytics Engine stand-in (docs/observability-contract.md §10): a
   # `runner_events` table shaped exactly like the real AE SQL API response

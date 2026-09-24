@@ -374,7 +374,13 @@ async function main() {
     log("dev", o11yDevDataModeLine(fresh));
 
     log("compose", `starting minio + clickhouse (project ${composeProjectName})`);
-    execFileSync("docker", ["compose", "-f", composeFile, "up", "-d", "minio", "minio-init", "clickhouse"], {
+    // T1: `minio-init` (a one-shot `mc mb` container) is gone — its image
+    // (quay.io/minio/mc) stopped being pullable along with quay.io/minio/minio
+    // itself. compose.yml's `minio` service now creates its own bucket via
+    // MINIO_DEFAULT_BUCKETS before its healthcheck goes green, so `--wait`
+    // (block until every named service is healthy/running) replaces waiting
+    // on the old init container's exit code.
+    execFileSync("docker", ["compose", "-f", composeFile, "up", "-d", "--wait", "minio", "clickhouse"], {
       cwd: RUNNER_ROOT,
       env: composeEnv,
       stdio: "inherit",

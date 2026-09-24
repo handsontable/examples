@@ -191,8 +191,14 @@ jobs:
 
       - run: pnpm build
 
+      # T1: no more separate `minio-init` one-shot container (its image,
+      # quay.io/minio/mc, stopped being pullable along with quay.io/minio/minio
+      # itself) — `minio` now creates its own `loki` bucket via
+      # MINIO_DEFAULT_BUCKETS before its healthcheck goes green, so `--wait`
+      # (block until every named service is healthy/running) replaces
+      # waiting on the old init container's exit code.
       - name: Start local ClickHouse + MinIO (Analytics Engine stand-in)
-        run: docker compose -f containers/o11y/compose.yml up -d minio-init clickhouse
+        run: docker compose -f containers/o11y/compose.yml up -d --wait minio clickhouse
 
       - name: Wait for local ClickHouse
         run: |

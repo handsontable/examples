@@ -397,6 +397,78 @@ test("compose.yml: every box/minio/clickhouse host port is env-overridable (COMM
   assert.equal(byVar.get("O11Y_CLICKHOUSE_PORT"), "8123", "ClickHouse host port defaults to the contract's 8123");
 });
 
+// --- T1: MinIO image pin (2026-09 outage) -----------------------------------
+//
+// MinIO stopped distributing public community images: a FRESH pull (no
+// cached layers) of quay.io/minio/minio now returns 401 Unauthorized, and
+// quay.io/minio/mc (used by the old `minio-init` container and by
+// stop-roundtrip.mjs's restricted-user setup) returns the same. Verified by
+// the controller from a fresh machine, and again for this task via
+// `docker pull` (T1 report). Replaced with `bitnamilegacy/minio`, pinned by
+// DIGEST — never a mutable tag, and never the gone quay.io images again.
+// These tests fail on either regression: an unpinned/wrong-digest minio
+// image, or any LIVE (non-comment) `quay.io/minio` or `minio-init`
+// reference in the files that used to name them.
+
+const EXPECTED_MINIO_IMAGE =
+  "bitnamilegacy/minio@sha256:81cd091fb9f14b2e9e9bfa6dbc2bf2d46fdd5eafa6c5e7c9213baf4256ff13d6";
+
+function extractComposeServiceBlock(compose, serviceName) {
+  // Same lookahead shape as the "box" block extraction above (M7's fix:
+  // `$(?![\s\S])` is the correct "true end of string" in a JS RegExp).
+  const match = compose.match(
+    new RegExp(`^\\s{2}${serviceName}:[\\s\\S]*?(?=^\\s{2}\\S|$(?![\\s\\S]))`, "m"),
+  );
+  return match ? match[0] : null;
+}
+
+// Comments are stripped before every "no live reference" assertion below so
+// this test's OWN explanatory comments (which must say "quay.io/minio" and
+// "minio-init" to document why they're gone) can never trip it — see the
+// revert evidence in the T1 report for confirmation this distinction is
+// real (restoring a live reference fails; restoring a comment does not).
+function stripYamlComments(text) {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/(^|\s)#.*$/, ""))
+    .join("\n");
+}
+
+function stripJsLineComments(text) {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/(^|\s)\/\/.*$/, ""))
+    .join("\n");
+}
+
+test("compose.yml: minio image is pinned by digest, and no minio-init/quay.io/minio remains live", () => {
+  const raw = readText("compose.yml");
+  const code = stripYamlComments(raw);
+
+  const minioBlock = extractComposeServiceBlock(code, "minio");
+  assert.ok(minioBlock, "compose.yml has a `minio` service block");
+  const imageMatch = minioBlock.match(/^\s*image:\s*(\S+)/m);
+  assert.ok(imageMatch, "minio service declares an image:");
+  assert.equal(imageMatch[1], EXPECTED_MINIO_IMAGE, "minio image is pinned to the exact expected digest");
+  assert.match(imageMatch[1], /^[^@]+@sha256:[0-9a-f]{64}$/, "minio image is pinned by digest, not a mutable tag");
+
+  assert.doesNotMatch(code, /quay\.io\/minio/, "no live quay.io/minio reference anywhere in compose.yml");
+  assert.doesNotMatch(code, /^\s*minio-init:/m, "no minio-init service block (T1: replaced by MINIO_DEFAULT_BUCKETS)");
+});
+
+test("stop-roundtrip.mjs, dev.mjs and the e2e-o11y-local workflow never use quay.io/minio or minio-init as a live value", () => {
+  const files = [
+    ["stop-roundtrip.mjs", join(O11Y_DIR, "local", "stop-roundtrip.mjs"), stripJsLineComments],
+    ["dev.mjs", join(RUNNER_ROOT, "scripts", "dev.mjs"), stripJsLineComments],
+    ["e2e-o11y-local.yml", join(RUNNER_ROOT, "..", ".github", "workflows", "e2e-o11y-local.yml"), stripYamlComments],
+  ];
+  for (const [name, path, stripComments] of files) {
+    const code = stripComments(readFileSync(path, "utf8"));
+    assert.doesNotMatch(code, /quay\.io\/minio/, `${name}: no live quay.io/minio reference`);
+    assert.doesNotMatch(code, /\bminio-init\b/, `${name}: no live minio-init reference`);
+  }
+});
+
 // --- Dockerfile: pins that the right config files are actually loaded ------
 
 test("Dockerfile: loads the same config files this test pins (source-grep pin)", () => {
