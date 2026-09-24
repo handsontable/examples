@@ -365,6 +365,138 @@ test("containerFetch(): a requestOrUrl argument that cannot even be constructed 
   assert.equal(containerFetchCalls, 0, "an uninspectable request must never reach the container");
 });
 
+// --- containerFetch(): the Loki datasource-proxy block (minor triage item 2) ---
+//
+// `/api/datasources/proxy/...` forwards its trailing subpath verbatim to
+// whichever datasource the uid/numeric-id selector names — for BOTH Loki
+// datasources (loki-browser, loki-worker), that datasource's own `url` is
+// Loki's bare root, so the subpath IS Loki's real HTTP path, including its
+// ingest and admin endpoints. Reverting `box.ts`'s `isBlockedLokiProxyPath`
+// (dropping the `isBlockedLokiProxyPath(normalized)` disjunct from
+// `isBlockedContainerRequest`, back to only `LIVE_PATH_RE.test(normalized)`)
+// makes every "refused" assertion below fail: each would come back 200
+// instead of 404.
+
+test("containerFetch(): Loki push/flush/shutdown/delete/config/otlp-ingest are refused through the uid-form datasource proxy", async () => {
+  const { box } = makeBox();
+  hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
+
+  for (const path of [
+    "/grafana/api/datasources/proxy/uid/loki-worker/loki/api/v1/push",
+    "/grafana/api/datasources/proxy/uid/loki-browser/flush",
+    "/grafana/api/datasources/proxy/uid/loki-worker/ingester/shutdown",
+    "/grafana/api/datasources/proxy/uid/loki-worker/loki/api/v1/delete",
+    "/grafana/api/datasources/proxy/uid/loki-worker/config",
+    // The drain's own ingest path (box.ts's `pushToLoki`, port 3100) is
+    // served at Loki's bare root too, NOT under `/loki/...` — this is
+    // exactly why identification is by the uid/id selector, never by
+    // guessing every dangerous `<rest>` shape (a `<rest>`-keyed denylist
+    // would miss this one entirely).
+    "/grafana/api/datasources/proxy/uid/loki-worker/otlp/v1/logs",
+  ]) {
+    const res = await box.containerFetch(new Request(`https://box.example${path}`));
+    assert.ok(res.status === 403 || res.status === 404, `expected 403/404 for ${path}, got ${res.status}`);
+  }
+});
+
+test("containerFetch(): the same paths are refused through the NUMERIC-id form too (default-deny — nothing provisioned uses it)", async () => {
+  const { box } = makeBox();
+  hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
+
+  for (const path of [
+    "/api/datasources/proxy/1/loki/api/v1/push",
+    "/api/datasources/proxy/2/flush",
+    "/api/datasources/proxy/1/ingester/shutdown",
+    "/api/datasources/proxy/2/loki/api/v1/delete",
+    "/api/datasources/proxy/1/config",
+    "/api/datasources/proxy/2/otlp/v1/logs",
+  ]) {
+    const res = await box.containerFetch(new Request(`https://box.example${path}`));
+    assert.ok(res.status === 403 || res.status === 404, `expected 403/404 for ${path}, got ${res.status}`);
+  }
+});
+
+test("containerFetch(): Loki's own read/query API still reaches the container through the datasource proxy (dashboards/legacy panels)", async () => {
+  const { box } = makeBox();
+  hooks.start = async (self) => {
+    self._state = { status: "running", lastChange: Date.now() };
+  };
+  hooks.containerFetch = async () => new Response("ok", { status: 200 });
+  await box.wake("visit");
+
+  for (const path of [
+    "/grafana/api/datasources/proxy/uid/loki-worker/loki/api/v1/query_range",
+    "/grafana/api/datasources/proxy/uid/loki-browser/loki/api/v1/labels",
+    "/grafana/api/datasources/proxy/uid/loki-worker/loki/api/v1/label/env/values",
+    "/grafana/api/datasources/proxy/uid/loki-worker/loki/api/v1/series",
+    "/grafana/api/datasources/proxy/uid/loki-worker/loki/api/v1/index/stats",
+    "/grafana/api/datasources/proxy/uid/loki-worker/loki/api/v1/index/volume_range",
+    "/grafana/api/datasources/proxy/uid/loki-worker/loki/api/v1/patterns",
+    "/grafana/api/datasources/proxy/uid/loki-worker/loki/api/v1/detected_labels",
+    "/grafana/api/datasources/proxy/uid/loki-worker/loki/api/v1/format_query",
+    "/api/datasources/proxy/1/loki/api/v1/query",
+  ]) {
+    const res = await box.containerFetch(new Request(`https://box.example${path}`));
+    assert.equal(res.status, 200, `expected the query path to reach the container: ${path}`);
+  }
+});
+
+test("containerFetch(): the ClickHouse datasource proxy (its own uid) is completely untouched by the Loki gate", async () => {
+  const { box } = makeBox();
+  hooks.start = async (self) => {
+    self._state = { status: "running", lastChange: Date.now() };
+  };
+  hooks.containerFetch = async () => new Response("ok", { status: 200 });
+  await box.wake("visit");
+
+  for (const path of [
+    "/grafana/api/datasources/proxy/uid/clickhouse-runner-events/",
+    "/grafana/api/datasources/proxy/uid/clickhouse-runner-events?query=SELECT+1",
+  ]) {
+    const res = await box.containerFetch(new Request(`https://box.example${path}`));
+    assert.equal(res.status, 200, `ClickHouse's own uid must never be blocked: ${path}`);
+  }
+});
+
+test("containerFetch(): a ClickHouse query issued through the numeric-id form is ALSO refused — nothing provisioned relies on that form for anything", async () => {
+  const { box } = makeBox();
+  hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
+
+  // ClickHouse happens to be provisioned 3rd (datasources.yaml), so a real
+  // numeric id COULD front it — but every dashboard here references it by
+  // uid only (`o11y-box-config.test.mjs` pins that), so refusing the
+  // numeric-id form entirely, for every datasource, is the safe default
+  // (this file's own doc comment on `isBlockedLokiProxyPath`).
+  const res = await box.containerFetch(new Request("https://box.example/api/datasources/proxy/3/"));
+  assert.ok(res.status === 403 || res.status === 404, `expected the numeric-id form to be refused, got ${res.status}`);
+});
+
+test("containerFetch(): percent-encoding and case variants are blocked the same way the live-path check already handles them", async () => {
+  const { box } = makeBox();
+  hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
+
+  for (const path of [
+    "/GRAFANA/API/DATASOURCES/PROXY/UID/loki-worker/LOKI/API/V1/PUSH",
+    "/grafana/api/datasources/proxy/uid/loki-worker/%6Coki/api/v1/push",
+    "//grafana//api//datasources//proxy//uid//loki-worker//flush",
+  ]) {
+    const res = await box.containerFetch(new Request(`https://box.example${path}`));
+    assert.ok(res.status === 403 || res.status === 404, `expected 403/404 for ${path}, got ${res.status}`);
+  }
+});
+
+test("containerFetch(): /api/ds/query (the real backend query path Explore/dashboards use) is never touched by this gate", async () => {
+  const { box } = makeBox();
+  hooks.start = async (self) => {
+    self._state = { status: "running", lastChange: Date.now() };
+  };
+  hooks.containerFetch = async () => new Response("ok", { status: 200 });
+  await box.wake("visit");
+
+  const res = await box.containerFetch(new Request("https://box.example/grafana/api/ds/query", { method: "POST" }));
+  assert.equal(res.status, 200, "the backend query API is a different path entirely and must not be gated");
+});
+
 test("containerFetch(): a non-live path still reaches the container once it is running", async () => {
   const { box } = makeBox();
   hooks.start = async (self) => {

@@ -14,7 +14,19 @@ seedAnonymousContext();
 // (`resolveReporting` + the local flag/host check, contract §10), so ordering
 // relative to Sentry's init does not matter for correctness, only convention.
 import { initTelemetry, reportUncaughtError } from "./telemetry/index.js";
-initTelemetry();
+import { safeInit } from "./bootGuard.js";
+// Minor triage item 5: `initTelemetry()` used to run unguarded here — a
+// synchronous throw inside it (Faro's own client construction, a gate check,
+// anything) would propagate straight out of this module's top-level
+// evaluation and blank the whole app before `createRoot` ever runs, even
+// though Sentry (imported above) is already initialised and would have
+// reported it just fine on its own. Telemetry is a best-effort side channel
+// (`telemetry/index.js`'s own `noopTelemetry` already models "not
+// initialised" as a valid, harmless state), so a construction failure must
+// degrade to that state, not take the app down with it. `safeInit` (its own
+// doc comment) is where the guarding logic actually lives and is tested —
+// this call site is a thin, non-branching wrapper around it.
+safeInit(initTelemetry, (err) => Sentry.captureException(err, { tags: { surface: "telemetry-init" } }));
 // DEMOS-1D (DEV-2859): attach the bounded editor trail to every event this
 // client sends, plus the tags derived from its most recent entry. Registered
 // unconditionally — `Sentry.addEventProcessor` is a no-op when reporting is

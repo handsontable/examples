@@ -36,6 +36,7 @@ import { writePointFromDo } from "../normalise/points.js";
 // to this module's top-level import), but aliasing removes any doubt for a
 // reader, rather than relying on that scoping rule holding.
 import {
+  commitKeys as ledgerCommitKeys,
   computeBacklog as ledgerComputeBacklog,
   currentWakeId as ledgerCurrentWakeId,
   markKeysProvisional as ledgerMarkKeysProvisional,
@@ -257,6 +258,13 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
 
   async markKeysProvisional(wakeId: string, keys: string[]): Promise<void> {
     await ledgerMarkKeysProvisional(adaptStorage(this.ctx.storage), wakeId, keys);
+  }
+
+  /** B-M4 fix (minor triage item 3): see `ledger.ts#commitKeys`'s own doc
+   *  comment — a zero-bytes-pushed key commits directly, no wake/marker
+   *  involved. */
+  async commitKeys(keys: string[]): Promise<void> {
+    await ledgerCommitKeys(adaptStorage(this.ctx.storage), keys);
   }
 
   async rejectKey(key: string, reason: string): Promise<void> {

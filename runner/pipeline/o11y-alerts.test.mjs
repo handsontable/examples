@@ -749,6 +749,45 @@ test("previewReadyRateRule: tier 1 below 97% fires, tier 2 within threshold does
   assert.equal(healthyResult.firing, false);
 });
 
+// Minor triage item 10: `abandoned` (the user simply navigated away before
+// the preview finished) must be excluded from both the numerator (already
+// true by construction — it is never `ready`) and the DENOMINATOR. Counting
+// it in the denominator only ever drags the computed ready% DOWN (it can
+// never inflate it), so the bug direction is always a FALSE fire, never a
+// masked real one. Reverting the `abandoned` filter in
+// `previewReadyRateRule` (back to `[...counts.values()]` unfiltered) makes
+// the "must not false-fire" assertion below fail.
+test("previewReadyRateRule: a large abandoned burst must not drag a healthy tier below threshold (false-fire guard)", async () => {
+  // Tier 1: 97 ready / 3 error = exactly 97% of REAL outcomes — right at the
+  // threshold, so it must NOT fire. 1000 abandoned navigations alongside
+  // that, if counted in the denominator, would compute ~8.8% and false-fire.
+  const withAbandoned = makeFakeAeQuery([
+    { metric: "preview.ready_ms", tier: "1", outcome: "ready", count: 97 },
+    { metric: "preview.ready_ms", tier: "1", outcome: "error", count: 3 },
+    { metric: "preview.ready_ms", tier: "1", outcome: "abandoned", count: 1000 },
+    { metric: "preview.ready_ms", tier: "2", outcome: "ready", count: 96 },
+    { metric: "preview.ready_ms", tier: "2", outcome: "error", count: 4 },
+  ]);
+  const result = await previewReadyRateRule({}, withAbandoned.queryFn);
+  assert.equal(result.firing, false, `a navigation-away burst must not fire the alert: ${result.detail}`);
+});
+
+test("previewReadyRateRule: a real below-threshold tier still fires correctly alongside an abandoned burst", async () => {
+  // Tier 1: 80 ready / 20 error = 80% of real outcomes — a genuine problem,
+  // below the 97% threshold, and must still fire even with abandoned noise
+  // mixed in (the exclusion must not accidentally suppress a real firing).
+  const fake = makeFakeAeQuery([
+    { metric: "preview.ready_ms", tier: "1", outcome: "ready", count: 80 },
+    { metric: "preview.ready_ms", tier: "1", outcome: "error", count: 20 },
+    { metric: "preview.ready_ms", tier: "1", outcome: "abandoned", count: 300 },
+    { metric: "preview.ready_ms", tier: "2", outcome: "ready", count: 96 },
+    { metric: "preview.ready_ms", tier: "2", outcome: "error", count: 4 },
+  ]);
+  const result = await previewReadyRateRule({}, fake.queryFn);
+  assert.equal(result.firing, true, result.detail);
+  assert.match(result.detail, /tier 1: 80\.0% ready \(80\/100,/, "abandoned must not appear in the reported denominator");
+});
+
 test("sessionStartP95Rule: over 20s fires, under does not; outcome='ready' filter is real, not decorative", async () => {
   const over = makeFakeAeQuery([
     ...Array.from({ length: 10 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 5000 })),
@@ -847,6 +886,37 @@ test("litellmErrorRateRule: chat.answer + theme.ai combined over 5% fires; under
   assert.equal(underResult.firing, false, underResult.detail); // 2/200 = 1%
 });
 
+// Minor triage item 10: `denied` (a rate-limit/budget refusal at `index.ts`'s
+// own gate — never reaches the LiteLLM gateway) must be excluded from the
+// denominator. Including it only ever drags the computed error% DOWN, which
+// can MASK a real gateway outage behind a burst of unrelated denials.
+// Reverting the `denied` filter in `litellmErrorRateRule` (back to
+// `[...chat.values(), ...theme.values()]` unfiltered) makes the "masked"
+// assertion below fail: `firing` would come back `false` instead of `true`.
+test("litellmErrorRateRule: a burst of denied requests must not mask a real gateway error rate (minor triage item 10)", async () => {
+  // Real gateway traffic: 94 answered + 6 error = 6% error rate — over the
+  // 5% threshold. 900 denied requests alongside it, if counted in the
+  // denominator, would compute 6/1000 = 0.6% and hide the outage entirely.
+  const masked = makeFakeAeQuery([
+    { metric: "chat.answer", outcome: "answered", count: 94 },
+    { metric: "chat.answer", outcome: "error", count: 6 },
+    { metric: "chat.answer", outcome: "denied", count: 900 },
+  ]);
+  const result = await litellmErrorRateRule({}, masked.queryFn);
+  assert.equal(result.firing, true, `a denied burst must not mask a real gateway outage: ${result.detail}`);
+  assert.match(result.detail, /6\.00% gateway errors .*\(6\/100,/, "denied must not appear in the reported denominator");
+});
+
+test("litellmErrorRateRule: a healthy gateway alongside a denied burst still does not fire", async () => {
+  const fake = makeFakeAeQuery([
+    { metric: "chat.answer", outcome: "answered", count: 199 },
+    { metric: "chat.answer", outcome: "error", count: 1 },
+    { metric: "chat.answer", outcome: "denied", count: 500 },
+  ]);
+  const result = await litellmErrorRateRule({}, fake.queryFn);
+  assert.equal(result.firing, false, result.detail);
+});
+
 // ---- Fix round (I2): alert-eval-error, surfaced from inside runAlerts ----
 
 test("alertEvalErrorRule: fires with every failing rule id named, resolves on a clean errors map", () => {
@@ -915,4 +985,46 @@ test("runAlerts: a real query failure (unreachable local ClickHouse) is surfaced
   const second = await runAlerts(env);
   assert.ok(Object.keys(second.errors).length > 0);
   assert.equal(second.transitions["alert-eval-error"], undefined, "must stay silent while still failing");
+});
+
+// Minor triage item 7: `drainsPaused` used to be set only on a `fired`/
+// `resolved` TRANSITION (`if (transition === "fired") ...`), not on every
+// tick from the rule's own current `firing` value — edge-triggered instead
+// of level-triggered. If the ONE `setDrainsPaused` RPC on the transition
+// tick failed, the alert's own `alert:<rule>` state had already recorded
+// "firing" (that write happens inside `evaluateAndNotify`, before
+// `setDrainsPaused` is even called), so no later tick ever sees a fresh
+// transition while the cap stays breached — `drainsPaused` got stuck at its
+// stale value (false) forever, even though the cap alert itself correctly
+// stayed "firing" and kept notifying. Reverting the `alerts/index.ts` fix
+// (back to `if (transition === "fired") ...` / `if (transition ===
+// "resolved") ...`) makes this test fail at the "SECOND tick" assertion:
+// `drainsPaused()` would still read `false` after tick 2 succeeds, because
+// tick 2 sees no transition (still firing) and never retries the RPC.
+test("runAlerts: a failed setDrainsPaused RPC on the firing tick recovers on the very next tick (level-triggered, not edge-triggered)", async () => {
+  const overCap = { spendUsd: 100, capUsd: 10 };
+  const { env, inboxWriterInstance } = makeEnv(InboxWriter, {
+    env: {
+      API: { fetch: async () => new Response(null, { status: 204 }), o11ySpend: async () => overCap },
+    },
+  });
+
+  // Tick 1: the cap rule fires, but the DO's own setDrainsPaused RPC fails
+  // (simulating a transient DO/RPC error) — the SAME failure mode a real
+  // dropped connection or DO eviction would produce.
+  const realSetDrainsPaused = inboxWriterInstance.setDrainsPaused.bind(inboxWriterInstance);
+  inboxWriterInstance.setDrainsPaused = async () => {
+    throw new Error("simulated DO RPC failure");
+  };
+  const first = await runAlerts(env);
+  assert.equal(first.transitions["o11y-spend-cap"], "fired", "the alert itself must still fire");
+  assert.ok("o11y-spend-cap" in first.errors, "the failed RPC must surface as an error, not be swallowed silently");
+  assert.equal(await inboxWriterInstance.drainsPaused(), false, "drainsPaused must still read false — the RPC never landed");
+
+  // Tick 2: the RPC works again, the cap is STILL breached (no new
+  // transition — the alert state already recorded "firing" on tick 1).
+  inboxWriterInstance.setDrainsPaused = realSetDrainsPaused;
+  const second = await runAlerts(env);
+  assert.equal(second.transitions["o11y-spend-cap"], undefined, "fire-once: no new transition on tick 2, still firing");
+  assert.equal(await inboxWriterInstance.drainsPaused(), true, "level-triggered: tick 2 must re-derive and re-apply paused=true from firing, with no transition needed");
 });

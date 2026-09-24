@@ -344,6 +344,34 @@ test("datasources.yaml: fixed uids and tenant headers are pinned (T09 depends on
   assert.match(workerBlock, /httpHeaderValue1:\s*worker\b/, "loki-worker datasource sends X-Scope-OrgID: worker");
 });
 
+// Minor triage item 2: `box.ts#isBlockedLokiProxyPath` identifies a Loki
+// datasource-proxy request by its `uid` starting with `loki-` (never by
+// guessing the forwarded `<rest>` path's shape — see that function's own
+// doc comment). This test pins the assumption that decision rests on: every
+// datasource of `type: loki` here has a `loki-`-prefixed uid, and no OTHER
+// datasource does (a future non-Loki datasource accidentally named
+// `loki-something` would silently gain the strict Loki allowlist instead
+// of its own type's normal, unrestricted proxy access).
+test("datasources.yaml: every type: loki datasource has a loki-* uid, and no other datasource does (box.ts's proxy-gate assumption)", () => {
+  const raw = readText("grafana/provisioning/datasources/datasources.yaml");
+  const blocks = raw.split(/\n(?=\s*- name:)/);
+  let lokiCount = 0;
+  for (const block of blocks) {
+    const uidMatch = /uid:\s*(\S+)/.exec(block);
+    const typeMatch = /type:\s*(\S+)/.exec(block);
+    if (!uidMatch || !typeMatch) continue;
+    const uid = uidMatch[1];
+    const type = typeMatch[1];
+    if (type === "loki") {
+      lokiCount++;
+      assert.match(uid, /^loki-/, `a type: loki datasource's uid must start with "loki-", got "${uid}"`);
+    } else {
+      assert.doesNotMatch(uid, /^loki-/i, `a non-Loki datasource (type: ${type}) must not use a loki-* uid, got "${uid}"`);
+    }
+  }
+  assert.equal(lokiCount, 2, "expected exactly the two provisioned Loki datasources (browser, worker)");
+});
+
 // --- compose.yml: no GF_* env var may silently override a pinned key -------
 
 test("compose.yml: no GF_* override for the pinned grafana.ini keys", () => {

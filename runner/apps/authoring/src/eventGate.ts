@@ -184,3 +184,43 @@ export function isEdgelessForeignSessionStart(event: TaggedEvent): boolean {
     !hasRay
   );
 }
+
+// ── ADR §E.2 tee (minor triage item 5) ───────────────────────────────────────────
+//
+// Split out of `sentry.ts#sharedSentryOptions`'s `beforeSend`, same import-free
+// reason as this file's own header: the concrete `telemetry` facade needs no
+// `./telemetry/index.js` import here — its `pageLoadId`/`event` methods are
+// accepted structurally, so a plain object stub exercises this in
+// `pipeline/sentry-gating.test.mjs` with no Faro/`@sentry/react` import required.
+
+/** The `telemetry` facade shape this tee needs — structurally typed against
+ *  `Telemetry` (contract §6), not imported, for the reason above. */
+interface TelemetryTeeTarget {
+  pageLoadId(): string;
+  event(name: string, attributes: Record<string, string>): void;
+}
+
+/**
+ * ADR §E.2: the Faro page-load id becomes a Sentry tag, and the Sentry event
+ * id is pushed as a Faro event — both directions of the cross-reference, on
+ * every event that actually ships. No-ops safely when telemetry never
+ * initialised (`noopTelemetry.pageLoadId()` still mints and returns a real,
+ * stable id; `.event()` is a no-op).
+ *
+ * Wrapped in try/catch (the actual fix): a throw from EITHER call — Faro's
+ * own client, once constructed, is outside this file's control — used to
+ * propagate straight out of `beforeSend` itself, and the SDK treats a
+ * throwing `beforeSend` as "drop this event." The tee is a best-effort
+ * enrichment; its own failure must never cost the underlying error report it
+ * was only ever supposed to enrich. Always returns the (possibly
+ * tag-mutated) event, never throws.
+ */
+export function applyFaroTee<E extends TaggedEvent & { event_id?: string }>(event: E, telemetry: TelemetryTeeTarget): E {
+  try {
+    event.tags = { ...event.tags, page_load_id: telemetry.pageLoadId() };
+    telemetry.event("sentry.event", { sentry_event_id: event.event_id ?? "" });
+  } catch {
+    // best-effort tee only — the caller still ships `event` regardless.
+  }
+  return event;
+}

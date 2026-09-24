@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { demoIdFromPath, routeClassOf } from "../workers/api/src/telemetry/route-class.ts";
+import { demoIdFromPath, routeClassOf, validSessionId } from "../workers/api/src/telemetry/route-class.ts";
 import { serviceEnvironment, serviceVersion } from "../workers/api/src/telemetry/resource.ts";
 import { sentryScopeIsFull } from "../workers/api/src/telemetry/scope.ts";
 
@@ -56,6 +56,50 @@ test("demoIdFromPath: extracted for the routes that name one, empty otherwise", 
   assert.equal(demoIdFromPath("/embed/abc123"), "abc123");
   assert.equal(demoIdFromPath("/api/versions"), "");
   assert.equal(demoIdFromPath("/api/session/sess-1/status"), "");
+});
+
+// Minor triage item 8 (C-M11's request-line sub-item): a raw, unresolved path
+// segment must never reach `hot.demo_id` on the per-request log line — a
+// crawler probing `/d/<garbage>` used to stuff arbitrary strings straight
+// into Loki structured metadata. Reverting the `DEMO_ID_SHAPE_RE` check in
+// `route-class.ts#demoIdFromPath` (back to returning the raw segment
+// unconditionally) makes every assertion below of a garbage id fail — it
+// would come back non-empty instead of `""`.
+test("demoIdFromPath: rejects a path segment that isn't shaped like a real demo id", () => {
+  assert.equal(demoIdFromPath("/d/';DROP TABLE demos;--"), "");
+  assert.equal(demoIdFromPath("/d/<script>alert(1)</script>"), "");
+  assert.equal(demoIdFromPath("/d/has spaces"), "");
+  assert.equal(demoIdFromPath(`/d/${"a".repeat(200)}`), "", "implausibly long guesses are rejected");
+  assert.equal(demoIdFromPath("/embed/../../etc/passwd"), "", "a literal '..' segment (path-traversal-shaped) is rejected");
+});
+
+test("demoIdFromPath: still accepts every real id shape (shortId's own alphabet, and a hyphenated legacy fixed id)", () => {
+  assert.equal(demoIdFromPath("/d/abc123defg"), "abc123defg", "share.ts#shortId()'s own lowercase-base36 alphabet");
+  assert.equal(demoIdFromPath("/d/react-18-legacy-id"), "react-18-legacy-id", "a hyphenated legacy fixed id");
+  assert.equal(demoIdFromPath("/api/demos/abc123"), "abc123");
+  assert.equal(demoIdFromPath("/api/mcp/demos/abc123"), "abc123");
+});
+
+// Minor triage item 8 (`x-hot-session` half). `validSessionId` is what
+// `index.ts`'s per-request log line now calls instead of trusting the raw
+// `x-hot-session` header. Reverting the `SESSION_ID_RE` check in
+// `telemetry/lines.ts#validSessionId` (back to `raw ?? ""`) makes the
+// "rejects" assertions below fail — an arbitrary header value would come
+// back unchanged instead of `""`.
+test("validSessionId: accepts a real crypto.randomUUID() page-load id", () => {
+  assert.equal(validSessionId("3fa85f64-5717-4562-b3fc-2c963f66afa6"), "3fa85f64-5717-4562-b3fc-2c963f66afa6");
+});
+
+test("validSessionId: accepts the defensive plid-<base36>-<base36> fallback shape", () => {
+  assert.equal(validSessionId("plid-l3x9k2-9f2h1q"), "plid-l3x9k2-9f2h1q");
+});
+
+test("validSessionId: rejects null, empty, and arbitrary client-controlled values", () => {
+  assert.equal(validSessionId(null), "");
+  assert.equal(validSessionId(""), "");
+  assert.equal(validSessionId("not-a-real-session-id"), "");
+  assert.equal(validSessionId("'; DROP TABLE sessions;--"), "");
+  assert.equal(validSessionId("a".repeat(500)), "", "an implausibly long header value is rejected");
 });
 
 test("serviceEnvironment: production only under the real host", () => {

@@ -18,6 +18,7 @@ import { fingerprint as contractFingerprint } from "@handsontable/demo-runtime/t
 import { ApiError } from "./apiError.js";
 import { resolveReporting } from "./reportingGate.js";
 import {
+  applyFaroTee,
   isEdgelessForeignSessionStart,
   isForeignUnhandled,
   isOfficeScannerRejection,
@@ -187,14 +188,10 @@ function sharedSentryOptions(environment: string): Sentry.BrowserOptions {
         return event;
       }
       if (isForeignUnhandled(event, window.location.origin)) return null;
-      // ADR §E.2 tee: the Faro page-load id becomes a Sentry tag, and the
-      // Sentry event id is pushed as a Faro event — both directions of the
-      // cross-reference, on every event that actually ships. No-ops safely
-      // when telemetry never initialised (`noopTelemetry.pageLoadId()` still
-      // mints and returns a real, stable id; `.event()` is a no-op).
-      event.tags = { ...event.tags, page_load_id: telemetry.pageLoadId() };
-      telemetry.event("sentry.event", { sentry_event_id: event.event_id ?? "" });
-      return event;
+      // ADR §E.2 tee — see `eventGate.ts#applyFaroTee`'s own doc comment
+      // (minor triage item 5: guarded against a throw from either call, so
+      // the tee's own failure can never cost the underlying event).
+      return applyFaroTee(event, telemetry);
     },
   };
 }

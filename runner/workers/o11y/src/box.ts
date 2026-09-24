@@ -137,7 +137,67 @@ function normalizedPathname(url: URL): string | null {
   return decoded.replace(/\/{2,}/g, "/");
 }
 
-function isBlockedLiveRequest(request: Request): boolean {
+/** Minor triage item 2: Grafana's LEGACY, frontend-driven datasource proxy
+ *  route — `/api/datasources/proxy/uid/<uid>/<rest>` or the numeric-id form
+ *  `/api/datasources/proxy/<id>/<rest>` — forwards `<rest>` VERBATIM to that
+ *  datasource's configured `url`
+ *  (`containers/o11y/grafana/provisioning/datasources/datasources.yaml`),
+ *  with Grafana adding the datasource's own auth header. Every provisioned
+ *  dashboard here (`containers/o11y/grafana/dashboards/*.json`) references
+ *  its datasource by `uid` only (`o11y-box-config.test.mjs` pins this — see
+ *  its new test below); nothing provisioned uses the numeric-id form, so a
+ *  legitimate use of it is not something this box's own UI relies on.
+ *  Capture groups: 1 = the `uid/<uid>` value if that form was used, 2 = the
+ *  numeric id if that form was used, 3 = `<rest>`. */
+const DATASOURCE_PROXY_RE = /^\/(?:grafana\/)?api\/datasources\/proxy\/(?:uid\/([^/]+)|(\d+))\/(.*)$/i;
+
+/** Loki's own read/query HTTP API (`/loki/api/v1/*`) — everything a
+ *  dashboard panel or Explore can legitimately need through the legacy
+ *  proxy path (this box's own live check, `dev:full` against a real Grafana
+ *  11, is the source for this set — see the task Outcome). `tail` streams
+ *  over a websocket upgrade — already refused unconditionally above
+ *  regardless of path — kept in this allowlist only so a non-upgrade
+ *  request to the same path isn't blocked here for a second, more
+ *  confusing reason. */
+const LOKI_ALLOWED_QUERY_RE =
+  /^loki\/api\/v1\/(?:query|query_range|labels|label\/[^/]+\/values|series|index\/stats|index\/volume(?:_range)?|patterns|detected_labels|detected_fields|tail|format_query)\/?$/i;
+
+/** `true` for a datasource-proxy request that is not on the Loki read/query
+ *  allowlist above (minor triage item 2). Identification is by the
+ *  SELECTOR, not by `<rest>` — the opposite of an allowlist keyed on the
+ *  forwarded path would risk missing an unenumerated Loki endpoint (e.g.
+ *  the drain's own ingest path, `/otlp/v1/logs`, is also served at Loki's
+ *  bare root and is NOT under `/loki/...` — a `<rest>`-shape denylist would
+ *  never catch it):
+ *  - `uid/<uid>` where `<uid>` (decoded, case-folded) starts with `loki-` —
+ *    both provisioned Loki datasources match, and so would any future one
+ *    that keeps this naming convention — gets the strict allowlist.
+ *  - any OTHER uid (ClickHouse's `clickhouse-runner-events`, or anything
+ *    else) is never touched by this gate at all.
+ *  - the numeric-id form cannot be resolved back to a datasource identity
+ *    here, so it gets the SAME strict allowlist unconditionally — nothing
+ *    provisioned needs it (see this file's own doc comment above), so
+ *    default-deny is the safe choice for it, including for what would
+ *    otherwise be a legitimate ClickHouse query issued through a numeric id
+ *    instead of its uid. */
+function isBlockedLokiProxyPath(normalized: string): boolean {
+  // `normalized` is already fully percent-decoded and slash-collapsed by
+  // this function's one caller (`isBlockedContainerRequest`, via
+  // `normalizedPathname`) — `uid`/`rest` below need no further decoding.
+  const match = DATASOURCE_PROXY_RE.exec(normalized);
+  if (!match) return false;
+  const [, uid, numericId, rest] = match;
+  if (uid !== undefined) {
+    if (!/^loki-/i.test(uid)) return false; // a non-Loki uid (e.g. ClickHouse) — untouched
+  } else if (numericId === undefined) {
+    return false; // unreachable given the regex, but keeps this exhaustive
+  }
+  // Either a `loki-*` uid, or the numeric-id form (default-deny) — both
+  // held to the same strict read/query allowlist.
+  return !LOKI_ALLOWED_QUERY_RE.test(rest ?? "");
+}
+
+function isBlockedContainerRequest(request: Request): boolean {
   if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
     // Defense in depth beyond the path check: nothing this box legitimately
     // serves needs a websocket upgrade at all.
@@ -147,7 +207,7 @@ function isBlockedLiveRequest(request: Request): boolean {
   const normalized = normalizedPathname(url);
   // Fail closed: an unparseable path is refused, not let through.
   if (normalized === null) return true;
-  return LIVE_PATH_RE.test(normalized);
+  return LIVE_PATH_RE.test(normalized) || isBlockedLokiProxyPath(normalized);
 }
 
 // T03-D (see the task Outcome): both stubs below used to call
@@ -396,7 +456,7 @@ export class GrafanaBox extends Container<Env> {
     // this code couldn't even construct into a `Request` to inspect skip
     // the block entirely — silence read as "not live" instead of "unknown,
     // so refuse". If it cannot be inspected, it cannot be proven safe.
-    if (!request || isBlockedLiveRequest(request)) {
+    if (!request || isBlockedContainerRequest(request)) {
       // Refused before touching container state or renewing the activity
       // timer — an idle tab hammering this path must not count as activity
       // even though Live cannot be disabled at the Grafana-config layer.
@@ -500,6 +560,51 @@ export class GrafanaBox extends Container<Env> {
       return;
     }
 
+    const startedAt = Date.now();
+    try {
+      await this.#drainStepBody(payload, current, startedAt);
+    } catch (err) {
+      // B-M2 fix (minor triage item 4): any throw in `#drainStepBody` (an R2
+      // `get`, an `InboxWriter` RPC, or a symbolication failure that isn't a
+      // Loki-HTTP error) used to propagate straight out of `drainStep` and
+      // silently end the drain for the rest of this wake — nothing
+      // rescheduled it, nothing recorded the failure, and the box just sat
+      // there (idle-timer-bound) having quietly given up mid-drain. Record
+      // it exactly like a Loki outage already is (`outcome: "error"`, same
+      // `o11y.drain` point shape `stoppedEarly` writes) and run the SAME
+      // post-drain stop decision a Loki outage runs, so a later wake (the
+      // cron backlog wake, or a fresh visit) retries these still-`written`
+      // keys instead of losing the wake silently.
+      try {
+        writeBoxPoint(
+          this.env,
+          this.ctx,
+          "o11y.drain",
+          { count: 0, duration_ms: Date.now() - startedAt, bytes: 0, value: 0 },
+          { reason: current.reason, outcome: "error" },
+        );
+        console.error(JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, message: String(err) }));
+        await this.#finishDrain(payload.wakeId);
+      } catch (finishErr) {
+        // `#finishDrain` (or the point write above it) throwing too — most
+        // plausibly the SAME failure that took down `#drainStepBody` in the
+        // first place (a DO storage/RPC outage affects every call in this
+        // isolate, not just one). "always reschedule or finish" must hold
+        // even here: fall back to a plain reschedule, the same one the
+        // readiness gate above already uses, so this wake still gets
+        // another chance rather than silently stalling forever.
+        console.error(
+          JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, message: String(finishErr), stage: "finish" }),
+        );
+        await this.schedule(new Date(Date.now() + DRAIN_STEP_GAP_MS), DRAIN_STEP_SCHEDULE, payload);
+      }
+    }
+  }
+
+  /** The actual drain-batch work `drainStep` runs inside a try/finally-style
+   *  guard (above) — split out so every throw inside it, from ANY step, is
+   *  caught by the SAME handler (B-M2 fix, minor triage item 4). */
+  async #drainStepBody(payload: { wakeId: string }, current: WakeRecord, startedAt: number): Promise<void> {
     const writer = inboxWriterStub(this.env);
     // ADR §B.3: "at each cron tick and at the start of each wake" — this is
     // the wake-start call (idempotent to run again on every step: cheap,
@@ -512,7 +617,6 @@ export class GrafanaBox extends Container<Env> {
       return;
     }
 
-    const startedAt = Date.now();
     const deps: DrainDeps = {
       fetchObject: async (key) => {
         const obj = await this.env.O11Y_INBOX.get(key);
@@ -535,7 +639,15 @@ export class GrafanaBox extends Container<Env> {
 
     const result = await drainBatch(keys, new Set(), deps);
 
-    const provisionalKeys = result.outcomes.filter((o) => o.outcome === "provisional").map((o) => o.key);
+    // B-M4 fix (minor triage item 3): a `provisional` key that pushed ZERO
+    // bytes (every record was already deduped/too-old — `drain.ts#drainKey`'s
+    // zero-chunk case) commits straight to `done:` instead of entering
+    // `provisional:<wakeId>` — see `ledger.ts#commitKeys`'s own doc comment
+    // for the endless-re-wake loop this avoids.
+    const zeroByteKeys = result.outcomes.filter((o) => o.outcome === "provisional" && o.bytesPushed === 0).map((o) => o.key);
+    const provisionalKeys = result.outcomes
+      .filter((o) => o.outcome === "provisional" && o.bytesPushed > 0)
+      .map((o) => o.key);
     const rejectedKeys = result.outcomes.filter((o) => o.outcome === "rejected");
     // G1 fix (row 19): a `provisional` outcome with a `reason` set is
     // `drain.ts#drainKey`'s partial-400 case — at least one chunk landed
@@ -551,6 +663,7 @@ export class GrafanaBox extends Container<Env> {
     const droppedOld = result.outcomes.reduce((sum, o) => sum + o.droppedOld, 0);
 
     if (provisionalKeys.length > 0) await writer.markKeysProvisional(payload.wakeId, provisionalKeys);
+    if (zeroByteKeys.length > 0) await writer.commitKeys(zeroByteKeys);
     for (const r of rejectedKeys) await writer.rejectKey(r.key, r.reason ?? "unknown");
     for (const r of partiallyRejected) await writer.recordPartialReject(r.key, r.reason ?? "unknown");
 

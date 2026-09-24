@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PRODUCTION_HOST, resolveReporting } from "../apps/authoring/src/reportingGate.ts";
 import {
   apiSentryDsn,
@@ -7,12 +9,14 @@ import {
   rehomeBudgetAlert,
 } from "../workers/api/src/sentry-gate.ts";
 import {
+  applyFaroTee,
   isEdgelessForeignSessionStart,
   isForeignUnhandled,
   isOfficeScannerRejection,
   isUnhandledNoise,
 } from "../apps/authoring/src/eventGate.ts";
 import { resolveSentryScope, reportsDiagnosticToSentry } from "../apps/authoring/src/sentryScope.ts";
+import { safeInit } from "../apps/authoring/src/bootGuard.ts";
 
 // DEV-2540. Three classes of traffic reached the production Sentry project that had
 // no business being there — local dev sessions, a Playwright run pointed at
@@ -467,4 +471,132 @@ test("reportsDiagnosticToSentry: never widens a closed reportingEnabled gate", (
   // already closed — full scope on a closed gate still reports nothing.
   assert.equal(reportsDiagnosticToSentry(false, "full"), false);
   assert.equal(reportsDiagnosticToSentry(false, "uncaught"), false);
+});
+
+// ── Minor triage item 5: unguarded browser telemetry ─────────────────────────────
+//
+// `main.tsx`'s `initTelemetry()` call and `sentry.ts`'s ADR §E.2 tee were both
+// unguarded — a synchronous throw in either used to propagate out (blanking the
+// app before `createRoot`, or making the SDK drop the whole Sentry event). Both
+// fixes are thin call sites around the two guarded functions below; these tests
+// exercise the actual guarding logic. Reverting either `try`/`catch` in
+// `bootGuard.ts#safeInit` / `eventGate.ts#applyFaroTee` back to an unguarded call
+// makes the matching "still renders" / "still returns the event" test below throw
+// instead of passing.
+
+test("safeInit: a throwing init is swallowed and reported, never propagates (main.tsx still renders)", () => {
+  let reported;
+  assert.doesNotThrow(() => {
+    safeInit(
+      () => {
+        throw new Error("Faro client construction failed");
+      },
+      (err) => {
+        reported = err;
+      },
+    );
+  });
+  assert.ok(reported instanceof Error);
+  assert.equal(reported.message, "Faro client construction failed");
+});
+
+test("safeInit: a non-throwing init runs normally and onError is never called", () => {
+  let ran = false;
+  let reported;
+  safeInit(
+    () => {
+      ran = true;
+    },
+    (err) => {
+      reported = err;
+    },
+  );
+  assert.equal(ran, true);
+  assert.equal(reported, undefined);
+});
+
+test("applyFaroTee: sets the page_load_id tag and pushes a sentry.event, returns the event", () => {
+  const event = { event_id: "abc123", tags: { existing: "x" } };
+  const telemetry = {
+    pageLoadId: () => "plid-1",
+    event(name, attrs) {
+      this.calls = this.calls ?? [];
+      this.calls.push({ name, attrs });
+    },
+  };
+  const out = applyFaroTee(event, telemetry);
+  assert.equal(out, event, "must return the same event, never null/undefined");
+  assert.equal(out.tags.page_load_id, "plid-1");
+  assert.equal(out.tags.existing, "x", "existing tags must be preserved");
+  assert.deepEqual(telemetry.calls, [{ name: "sentry.event", attrs: { sentry_event_id: "abc123" } }]);
+});
+
+test("applyFaroTee: a throwing telemetry.pageLoadId() is swallowed — the event still ships", () => {
+  const event = { event_id: "abc123", tags: {} };
+  const telemetry = {
+    pageLoadId: () => {
+      throw new Error("Faro client not ready");
+    },
+    event: () => {
+      throw new Error("must not be reached");
+    },
+  };
+  let out;
+  assert.doesNotThrow(() => {
+    out = applyFaroTee(event, telemetry);
+  });
+  assert.equal(out, event, "the event must still be returned, not dropped");
+});
+
+test("applyFaroTee: a throwing telemetry.event() is swallowed — the event still ships with its tag set", () => {
+  const event = { event_id: "abc123", tags: {} };
+  const telemetry = {
+    pageLoadId: () => "plid-2",
+    event: () => {
+      throw new Error("Faro push failed");
+    },
+  };
+  let out;
+  assert.doesNotThrow(() => {
+    out = applyFaroTee(event, telemetry);
+  });
+  assert.equal(out, event);
+  assert.equal(out.tags.page_load_id, "plid-2", "the tag set before the throw is kept, not rolled back");
+});
+
+// Advisor follow-up on minor triage item 5: the tests above prove
+// `safeInit`/`applyFaroTee` THEMSELVES never throw — they do NOT prove the
+// real call sites still call them. `main.tsx`/`sentry.ts` cannot be
+// imported here (they pull in React/`@sentry/react`/`import.meta.env`, the
+// same constraint this file's own header note gives for `sentry.ts` and
+// `index.ts`), so the wiring is pinned structurally instead, the same
+// pattern `pipeline/mcp-create.test.mjs`'s "the update route calls
+// isMcpCreated()" test uses. Reverting either call site (back to a bare
+// `initTelemetry();`, or the inline try/catch instead of
+// `applyFaroTee(event, telemetry)`) makes the matching assertion fail even
+// though every test above it stays green.
+test("main.tsx calls initTelemetry() through safeInit(), not bare", () => {
+  const root = join(import.meta.dirname, "..");
+  const source = readFileSync(join(root, "apps/authoring/src/main.tsx"), "utf8");
+  assert.match(source, /safeInit\(\s*initTelemetry\s*,/, "main.tsx must call initTelemetry() through safeInit()");
+  assert.doesNotMatch(
+    source,
+    /^\s*initTelemetry\(\);\s*$/m,
+    "a bare, unguarded initTelemetry(); call on its own line would defeat the guard entirely",
+  );
+});
+
+test("sentry.ts's beforeSend returns applyFaroTee(event, telemetry), not an inline tee", () => {
+  const root = join(import.meta.dirname, "..");
+  const source = readFileSync(join(root, "apps/authoring/src/sentry.ts"), "utf8");
+  assert.match(
+    source,
+    /return applyFaroTee\(event, telemetry\);/,
+    "beforeSend must return applyFaroTee(event, telemetry), the guarded tee",
+  );
+  assert.doesNotMatch(
+    source,
+    /telemetry\.pageLoadId\(\)/,
+    "sentry.ts itself must not call telemetry.pageLoadId() directly — that belongs entirely to eventGate.ts#applyFaroTee now",
+  );
 });
