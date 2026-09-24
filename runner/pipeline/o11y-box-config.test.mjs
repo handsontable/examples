@@ -540,7 +540,10 @@ test("grafana.ini: [auth.anonymous] enabled = false (T01 M3 — no pinning test 
   // false-pass against the WRONG section, so this greps only within
   // `[auth.anonymous]`'s own block, up to the next `[section]` header.
   const ini = readText(join("grafana", "grafana.ini"));
-  const section = /^\[auth\.anonymous\]\n([\s\S]*?)(?=^\[|\z)/m.exec(ini);
+  // `(?![\s\S])` (not `\z`, which is not a JS regex anchor — it would match
+  // a literal "z") is "true end of string," so the block also ends cleanly
+  // if `[auth.anonymous]` is ever the LAST stanza in the file.
+  const section = /^\[auth\.anonymous\]\n([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(ini);
   assert.ok(section, "[auth.anonymous] section must exist");
   assert.match(section[1], /^\s*enabled\s*=\s*false\s*$/m, "[auth.anonymous] must stay enabled = false");
 });

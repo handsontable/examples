@@ -464,11 +464,20 @@ test("POST /telemetry/lite: an accepted error beacon answers 2xx and lands in th
 test("POST /telemetry/collect and POST /telemetry/lite share the same rate limiter (same key, one shared budget)", async () => {
   const BUDGET = 2;
   const calls = [];
-  let used = 0;
+  // Fix round (advisor finding on this test): budgeted PER KEY (a `Map`),
+  // not with one process-wide counter — a global counter would still hit
+  // 429 on the BUDGET+1'th call even if `/telemetry/collect` and
+  // `/telemetry/lite` used two DIFFERENT (route-prefixed) keys, since it
+  // never actually checks which key is being spent. Per-key budgeting
+  // means the `liteRes` 429 assertion below can only pass if the two
+  // routes' calls landed on the SAME key's counter — the real behaviour
+  // this test exists to prove.
+  const usedByKey = new Map();
   const rateLimiter = {
     async limit({ key }) {
       calls.push(key);
-      used++;
+      const used = (usedByKey.get(key) ?? 0) + 1;
+      usedByKey.set(key, used);
       return { success: used <= BUDGET };
     },
   };

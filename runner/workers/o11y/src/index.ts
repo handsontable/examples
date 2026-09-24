@@ -355,8 +355,8 @@ async function handleScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
   try {
     await getGrafanaBoxStub(env).wake("backlog");
   } catch (err) {
-    // A wake failure (e.g. the box is mid-`stopping`) is retried by the
-    // very next tick — nothing here needs to escalate.
+    // A wake failure (e.g. `recordWake` throwing) is retried by the very
+    // next tick — nothing here needs to escalate.
     console.warn("[o11y] cron wake failed:", err instanceof Error ? err.message : String(err));
   }
 }

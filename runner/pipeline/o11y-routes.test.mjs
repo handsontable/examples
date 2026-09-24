@@ -557,6 +557,64 @@ test("POST /telemetry/hooks/sentry: a correct HMAC signature passes, a wrong one
   assert.equal(bad.status, 401);
 });
 
+// Fix round (finding A-M7): a route-level proof that `index.ts#handleSentryHook`
+// actually THREADS the `sentry-hook-timestamp` header through to
+// `processSentryPayload`'s `rawEventTime` — the direct-call tests in
+// `o11y-normalise.test.mjs` only prove `processSentryPayload` itself hashes
+// differently given different `rawEventTime` values; they pass unchanged
+// even if the call site silently drops the 4th argument. Two identically
+// signed, byte-identical bodies (same action/title/issueId — the exact
+// "issue regresses twice in a day" collision shape) with different
+// `sentry-hook-timestamp` header values must both land as distinct stored
+// records, not dedupe into one.
+test("POST /telemetry/hooks/sentry: two identical-body hooks with different Sentry-Hook-Timestamp headers both land as distinct stored records (A-M7, route-level)", async () => {
+  const { env, r2 } = freshEnv();
+  const payload = {
+    action: "regression",
+    data: { issue: { id: "987654321", title: "TypeError: boom", lastRelease: { version: "rel-1" } } },
+  };
+  const body = JSON.stringify(payload);
+  const sig = await hmacSha256Hex(env.SENTRY_HOOK_SECRET, body);
+
+  const send = (timestamp) =>
+    worker.fetch(
+      new Request("https://demos.handsontable.com/telemetry/hooks/sentry", {
+        method: "POST",
+        headers: {
+          "sentry-hook-signature": sig,
+          "sentry-hook-timestamp": timestamp,
+          "content-type": "application/json",
+        },
+        body,
+      }),
+      env,
+      ctx,
+    );
+
+  const first = await send("1700000000");
+  await ctx.drain();
+  const second = await send("1700020000");
+  await ctx.drain();
+
+  assert.ok(first.status >= 200 && first.status < 300);
+  assert.ok(second.status >= 200 && second.status < 300);
+
+  const inboxWriter = env.INBOX_WRITER.get();
+  await inboxWriter.alarm();
+  // Both accepted rows pack into ONE R2 object per tenant per alarm tick
+  // (`pack.ts#packTenant`, NDJSON — one line per stored record), not one
+  // object per record; count the lines, not `r2.objects.size`.
+  assert.equal(r2.objects.size, 1, "one packed object for this alarm tick");
+  const [, bytes] = [...r2.objects.entries()][0];
+  const text = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+  const lines = text.trim().split("\n").filter(Boolean);
+  assert.equal(
+    lines.length,
+    2,
+    "two same-body hooks with different Sentry-Hook-Timestamp values must both be stored as distinct records, not deduped into one",
+  );
+});
+
 test("POST /telemetry/hooks/sentry: fix round A-I3 — a title embedding a preview host, a query string, an email and a user-agent is scrubbed before storage, not stored verbatim", async () => {
   const { env, r2 } = freshEnv();
   // The exact probe from the finding: a correctly-signed hook whose title

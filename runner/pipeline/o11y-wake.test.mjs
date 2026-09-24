@@ -210,9 +210,10 @@ test("drainStep is a no-op once a newer wake has superseded the payload's wakeId
   await box.wake("backlog");
   const staleWakeId = (await box.ctx.storage.get("wake")).wakeId;
   // Simulate the OLD wake having fully stopped by now (not merely
-  // "stopping" — wake() deliberately refuses while stopping, C1) so the
-  // next wake() call actually mints a fresh id, the real shape a superseded
-  // step sees in production.
+  // "running"/"healthy" mid-SIGTERM — wake() is idempotent during THAT
+  // window, C1, fix round B-M5: see box.ts's own comment on the deleted
+  // "stopping" branch) so the next wake() call actually mints a fresh id,
+  // the real shape a superseded step sees in production.
   box._state = { status: "stopped", lastChange: Date.now() };
   await box.wake("backlog"); // a fresh wakeId now in storage
   scheduled.length = 0;
@@ -455,7 +456,7 @@ test("drainStep records an o11y.drain error point and still runs the post-drain 
   let stopped = false;
   hooks.stop = async (self) => {
     stopped = true;
-    self._state = { status: "stopping", lastChange: Date.now() };
+    self._state = { status: "stopped", lastChange: Date.now() }; // B-M5: real stop() does not set "stopping" (see box.ts)
   };
 
   const wake = await box.ctx.storage.get("wake");
@@ -509,7 +510,7 @@ test("an idle drain (no recent /grafana/* activity) stops right after finishing"
   let stopped = false;
   hooks.stop = async (self) => {
     stopped = true;
-    self._state = { status: "stopping", lastChange: Date.now() };
+    self._state = { status: "stopped", lastChange: Date.now() }; // B-M5: real stop() does not set "stopping" (see box.ts)
   };
 
   const wake = await box.ctx.storage.get("wake");
@@ -539,7 +540,8 @@ test("fix round I1: a fresh backlog wake with no visitors self-stops, even right
   assert.equal((await box.getState()).status, "healthy", "wake 1 must still be running (active visitor)");
 
   // Wake 1 fully stops (simulating its own eventual idle/hard-cap stop) —
-  // not merely "stopping", so wake() mints a genuinely new id next.
+  // not merely "running"/"healthy" mid-SIGTERM (which stays idempotent, C1),
+  // so wake() mints a genuinely new id next.
   box._state = { status: "stopped", lastChange: Date.now() };
 
   // Wake 2: backlog-triggered, no visitor of its own.
@@ -550,7 +552,7 @@ test("fix round I1: a fresh backlog wake with no visitors self-stops, even right
   let stopped = false;
   hooks.stop = async (self) => {
     stopped = true;
-    self._state = { status: "stopping", lastChange: Date.now() };
+    self._state = { status: "stopped", lastChange: Date.now() }; // B-M5: real stop() does not set "stopping" (see box.ts)
   };
 
   await box.drainStep({ wakeId: wake2.wakeId });
@@ -621,7 +623,7 @@ test("hardCapStop stops a still-running wake matching its own wakeId", async () 
   let stopped = false;
   hooks.stop = async (self) => {
     stopped = true;
-    self._state = { status: "stopping", lastChange: Date.now() };
+    self._state = { status: "stopped", lastChange: Date.now() }; // B-M5: real stop() does not set "stopping" (see box.ts)
   };
 
   const wake = await box.ctx.storage.get("wake");
