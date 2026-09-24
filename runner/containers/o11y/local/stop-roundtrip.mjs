@@ -4,10 +4,11 @@
 // Proves ADR-0041 exit criterion 1 and 2 against a REAL docker compose
 // stack, not a mock: push OTLP lines to both Loki tenants, SIGTERM the box,
 // confirm the clean-shutdown marker, force-recreate the box container (a
-// genuinely fresh container — no volume on Loki's data dir, so nothing
-// survives but what MinIO holds) and confirm every line is still
-// queryable. Then the negative control: SIGKILL a second wake and confirm
-// NO marker is written.
+// genuinely fresh container — MinIO/ClickHouse now use named volumes
+// (dev-persist task), so `main()` runs its own `down -v` up front to
+// guarantee a genuinely empty start regardless of what a prior run left
+// behind) and confirm every line is still queryable. Then the negative
+// control: SIGKILL a second wake and confirm NO marker is written.
 //
 // Zero npm dependencies (T00 owns adding any); shells out to `docker
 // compose` and `curl --aws-sigv4` (same technique as
@@ -203,6 +204,17 @@ function boxLogs(containerId) {
 async function main() {
   console.log(`o11y box stop-roundtrip — project=${PROJECT} run=${RUN_ID}`);
   console.log(`ports: grafana=${GRAFANA_PORT} loki=${LOKI_PORT} minio=${MINIO_PORT}`);
+
+  // dev-persist task: compose.yml's minio/clickhouse now use named volumes
+  // (so a plain `dev.mjs`/`pnpm dev:full` restart keeps its logs/metrics),
+  // which means a PRIOR run of this script that crashed before reaching its
+  // own `down -v` at the bottom (O11Y_ROUNDTRIP_KEEP unset) would otherwise
+  // leave this fixed `PROJECT` name's volumes around for THIS run's `up` to
+  // silently reuse — this script's own header comment ("no volume on Loki's
+  // data dir, so nothing survives") used to be true by construction; this
+  // `down -v` up front is what keeps it true now that the volumes persist
+  // by default. Harmless (a no-op) when nothing is left over.
+  compose("down", "-v");
 
   console.log("\n== bring up minio + clickhouse ==");
   compose("up", "-d", "minio", "minio-init", "clickhouse");

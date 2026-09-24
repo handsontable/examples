@@ -30,9 +30,30 @@ import {
   ephemeralSecret,
   o11yLocalPublicOrigin,
   PORT_DEFAULTS,
+  resetO11yLocalState,
+  o11yDevDataModeLine,
 } from "./dev-lib.mjs";
 
 const o11yDir = path.join(RUNNER_ROOT, "workers", "o11y");
+
+// dev-persist task: shares dev-lib.mjs's `resetO11yLocalState` with
+// `dev.mjs --tier=full --fresh` (see this file's own module doc comment on
+// why the two commands share bootstrap/port logic rather than duplicating
+// it), but this standalone command never runs `docker compose` itself — so
+// its own `--fresh` wipes ONLY workers/o11y/.wrangler/state, never any
+// compose volume. If you've ALSO been running `pnpm dev:full`'s compose
+// stack (minio/clickhouse, now persisted by default — see
+// containers/o11y/compose.yml), wiping just the worker state here can
+// create the exact divergence `dev.mjs`'s own `--fresh` exists to prevent
+// (the ledger says a key was drained; the data it points at is still
+// sitting in that other stack's MinIO volume, or vice versa). Run
+// `docker compose -f containers/o11y/compose.yml down -v` yourself first if
+// you want both wiped together.
+const fresh = process.argv.slice(2).includes("--fresh");
+if (fresh) {
+  resetO11yLocalState({ o11yDir, log: (line) => console.log(`[o11y:dev] ${line}`) });
+}
+console.log(`[o11y:dev] ${o11yDevDataModeLine(fresh)}`);
 
 let ports;
 try {
