@@ -47,10 +47,12 @@ pnpm dev:full   # + the o11y worker, docker compose (minio/clickhouse — the
 `node scripts/dev.mjs --help` prints the full option list. All three need
 Docker running for anything past Tier 1 — `dev:live`/`dev:full` fail fast
 with a clear message (not a hung/opaque container-build error) if
-`docker info` doesn't succeed. Ctrl-C tears everything this command started
-back down — every spawned `wrangler`/`vite`/capture-server process, and (for
-`dev:full`) `docker compose ... down` — with no orphaned containers; see
-"What Ctrl-C actually cleans up" below.
+`docker info` doesn't succeed. Ctrl-C (also SIGTERM, or SIGHUP from closing
+the terminal) tears down every spawned `wrangler`/`vite`/capture-server
+process and (for `dev:full`) runs `docker compose ... down` for the
+minio/clickhouse stack this run itself started. It does **not** guarantee no
+orphaned Tier-2 Sandbox containers — see "What Ctrl-C actually cleans up"
+below for why, and for what it prints instead.
 
 Every port is overridable by env var, defaulting to what's below; two
 workers under `wrangler dev` always get their own, distinct `--port` and
@@ -73,8 +75,9 @@ wrangler's inspector default (9229):
 Plus `COMPOSE_PROJECT_NAME` (default `o11y-dev`, tier full's `docker compose`
 project) and `WRANGLER_REGISTRY_PATH` (forwarded as-is to every spawned
 `wrangler dev`, for isolating one worktree's service-binding registry from
-another's — see the o11y task board's `COMMON.md` for why that matters when
-several worktrees run `wrangler dev` on the same machine at once).
+another's — several worktrees on this machine routinely run `wrangler dev`
+at once, and without this, one worktree's API/o11y service binding can
+resolve to another worktree's Worker instead of its own).
 
 **`.dev.vars` bootstrap.** `workers/api/.dev.vars.example` and
 `workers/o11y/.dev.vars.example` are committed, non-secret templates.
@@ -84,7 +87,8 @@ edits, real secret values) is never touched. On a *fresh* o11y bootstrap
 only, a few known-inert local placeholders are filled in with real,
 non-secret working values (matching `containers/o11y/compose.yml`'s own
 documented local defaults): `DEV_ADMIN=dev@handsontable.com` (the local
-Access bypass, contract §10, `workers/o11y/src/gates/access.ts`),
+session bypass, contract §10, `workers/o11y/src/gates/session.ts#verifySession`
+— honoured only when `O11Y_ENV === "local"`, fail-closed everywhere else),
 `AE_SQL_TOKEN=local-dev-token`, `LOKI_S3_ACCESS_KEY_ID`/
 `LOKI_S3_SECRET_ACCESS_KEY=minioadmin` (MinIO's own default root
 credential), and `SLACK_WEBHOOK_URL` pointed at the local capture server
@@ -158,17 +162,29 @@ shows up locally instead of needing a real Slack webhook.
 
 **What Ctrl-C actually cleans up.** Every `wrangler dev`/`vite`/capture-server
 child is spawned in its own process group and signalled as a group on
-Ctrl-C (SIGINT), with an 8s grace period before escalating to SIGKILL, and
-`dev:full` also runs `docker compose ... down` for the minio/clickhouse
-stack it started. This task's own measurement (spawn the API worker under
-`wrangler dev`, start a real Tier-2 session, send SIGINT): the Tier-2
-session's own `Sandbox` container is torn down by wrangler's container
-runtime as part of its own shutdown — but this machine's `docker ps -a`
-already carried dozens of orphaned `workerd-handsontable-demos-api-Sandbox-*`
-containers from *other*, unrelated `wrangler dev` sessions started (and not
-cleanly stopped) over the life of this repo, which is exactly why `dev.mjs`
-never does a blanket `docker rm` by image/name prefix — only the compose
-project it itself started, by `COMPOSE_PROJECT_NAME`.
+Ctrl-C (SIGINT — also SIGTERM and SIGHUP), with an 8s grace period before
+escalating to SIGKILL, and `dev:full` also runs `docker compose ... down`
+for the minio/clickhouse stack it started.
+
+What it does **not** do: stop a Tier-2 Sandbox/GrafanaBox container on your
+behalf. Measured for this task: Ctrl-C does not make wrangler's own
+Sandbox-container orchestration tear itself down synchronously — a
+session's `workerd-handsontable-demos-api-Sandbox-*`(-proxy) container can
+still be `Up` several seconds after `dev.mjs` has already exited. An
+earlier version of this script tried to sweep those up itself (stop any
+container that was "new since this run started" and name-matched
+`handsontable-demos-(api|o11y)`), but that signal cannot tell this run's own
+container apart from one a DIFFERENT worktree's concurrent `wrangler dev`
+session started — several worktrees running `wrangler dev` on this same
+machine at once is the normal case here (see `WRANGLER_REGISTRY_PATH`
+above), not a rare race, and the sweep's window was this run's entire
+session, not a narrow few seconds. Stopping the wrong worktree's container
+silently kills its session. So `dev.mjs` now only **reports** containers
+that look like they might be leftovers — it prints their names, a
+`docker ps` filter, and the exact manual `docker stop` command — and never
+runs `docker stop`/`docker rm` on anything itself. If you see that report,
+confirm what a container actually is (e.g. `docker inspect` its ports)
+before stopping it by hand.
 
 **Standalone o11y worker.** `pnpm o11y:dev` (unchanged as its own command)
 starts just the o11y worker under `wrangler dev`, sharing the same
@@ -622,7 +638,8 @@ reintroduce a field this parser does not expect.
 
 ### 5. `O11Y_SESSION_SECRET` for `/grafana/*`
 
-**No Cloudflare Access application is needed.** K1 (`.superpowers/sdd/README/final/broker-grafana-feasibility.md`)
+**No Cloudflare Access application is needed.** K1 (the controller decision
+from the broker/Grafana feasibility investigation)
 replaced the Access gate with the Handsontable login broker (ADR-0007) — the
 same broker `/admin` and every other internal surface already sign in
 through. A callback page under `/grafana/_o11y/` reads the broker's
@@ -645,8 +662,8 @@ production probe by hand —
 `curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' 'https://mcp-auth-proxy-j0tb.onrender.com/broker/login?return_to=https%3A%2F%2Fdemos.handsontable.com%2Fgrafana%2F_o11y%2Fcallback%3Fn%3Dx'`
 — and confirmed a `302` to Google (2026-09-24), so the callback host is allowed today;
 the K1 implementer separately re-verified the same round trip end-to-end against a
-*stubbed* local broker only (`.superpowers/sdd/README/final/K1-report.md`'s "Real local
-run" section), which proves the Worker's own code, not the real broker's live
+*stubbed* local broker only ("Real local run", K1's own fix-round notes), which
+proves the Worker's own code, not the real broker's live
 configuration. If the production behaviour ever changes, re-run the curl command above
 before assuming it still holds, and ask the broker's owners (`handsontable/hot-mcp`) to
 add `demos.handsontable.com` back to `BROKER_ALLOWED_RETURN_HOSTS` if it does not.
@@ -762,9 +779,9 @@ there is only ever one direction of "the other side isn't up yet" instead of
 two. `master.yml` encodes this ordering automatically — `deploy-api` needs
 `deploy-o11y` and proceeds once it is `success` or was skipped (unrelated
 push) — so from the first merge onward this is handled without a manual step.
-The same order applies to a throwaway sandbox probe of either worker
-(COMMON.md's probe rules): stand up the probe o11y worker (or a stub) before
-the probe API worker if the probe exercises the mutual binding at all.
+The same order applies to a throwaway sandbox probe of either worker: stand
+up the probe o11y worker (or a stub) before the probe API worker if the
+probe exercises the mutual binding at all.
 
 ## Launch plan (ADR-0041 §L, T11)
 
