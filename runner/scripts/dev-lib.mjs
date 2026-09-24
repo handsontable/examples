@@ -1647,9 +1647,10 @@ export function findComposeVolume({ composeProjectName, volumeKey, execFileSyncI
  * points at ClickHouse. MinIO is what the ledger's `done:` keys are actually
  * about: they mark an R2 inbox object as already drained into Loki, whose
  * chunks/index live in MinIO (`containers/o11y/compose.yml`'s own header
- * comment). Existence, not "is it empty", is the check: `minio-init`
- * creates the bucket as part of every successful `up`, so a volume that
- * exists has necessarily been used — the divergent case this warns about is
+ * comment). Existence, not "is it empty", is the check: MinIO's own
+ * entrypoint (MINIO_DEFAULT_BUCKETS, T1 — replaced the old `minio-init`
+ * one-shot container) creates the bucket as part of every successful `up`,
+ * so a volume that exists has necessarily been used — the divergent case this warns about is
  * specifically the volume being GONE while the ledger thinks otherwise, not
  * a volume that merely has less in it than the ledger expects.
  *

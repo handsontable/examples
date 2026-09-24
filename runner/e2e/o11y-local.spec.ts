@@ -21,7 +21,10 @@ import { previewReady, expectGridRendered } from "./helpers.js";
 //        O11Y_MINIO_PORT=5210 O11Y_MINIO_CONSOLE_PORT=5211 \
 //        O11Y_CLICKHOUSE_PORT=5212 O11Y_CLICKHOUSE_NATIVE_PORT=5213 \
 //        AE_SQL_TOKEN=local-dev-token \
-//        docker compose -f containers/o11y/compose.yml up -d minio-init clickhouse
+//        docker compose -f containers/o11y/compose.yml up -d --wait minio clickhouse
+//      (T1: no more separate `minio-init` container — `minio` creates its
+//      own `loki` bucket via MINIO_DEFAULT_BUCKETS before its healthcheck
+//      goes green; `--wait` blocks on that.)
 //   2. `workers/o11y/.dev.vars` (copy from `.dev.vars.example`, fill in
 //      O11Y_ENV=local, DEV_ADMIN, O11Y_EXPORT_SECRET, SENTRY_HOOK_SECRET,
 //      AE_SQL_TOKEN=local-dev-token, O11Y_LOCAL_MINIO_PORT=5210,

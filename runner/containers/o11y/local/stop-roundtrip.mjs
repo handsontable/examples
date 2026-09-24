@@ -217,21 +217,17 @@ async function main() {
   compose("down", "-v");
 
   console.log("\n== bring up minio + clickhouse ==");
-  compose("up", "-d", "minio", "minio-init", "clickhouse");
-  // Wait for minio-init to finish (bucket created) before touching the box.
-  let minioInitDone = false;
-  for (let i = 0; i < 30; i++) {
-    const id = compose("ps", "-a", "-q", "minio-init").stdout.trim();
-    if (id) {
-      const code = sh("docker", ["inspect", id, "--format", "{{.State.ExitCode}}"], { allowFail: true }).stdout.trim();
-      if (code === "0") {
-        minioInitDone = true;
-        break;
-      }
-    }
-    await sleep(1000);
-  }
-  record("minio-init completed (bucket created)", minioInitDone);
+  // T1: `minio-init` (a one-shot `mc mb` container) is gone along with
+  // quay.io/minio/mc — Bitnami's `minio` image creates the `loki` bucket
+  // itself via MINIO_DEFAULT_BUCKETS (compose.yml) before its healthcheck
+  // goes green, so `--wait` (blocks until every started service is
+  // healthy/running) replaces the old poll-for-minio-init-exit-code loop.
+  const bringUpRes = compose("up", "-d", "--wait", "minio", "clickhouse");
+  record(
+    "minio became healthy (bucket created — compose.yml's MINIO_DEFAULT_BUCKETS)",
+    bringUpRes.status === 0,
+    `exit=${bringUpRes.status}`,
+  );
 
   // ---- run 1: clean stop -----------------------------------------------
   const wakeIdClean = `roundtrip-clean-${RUN_ID}`;
@@ -612,19 +608,23 @@ function setupRestrictedMinioUser(
       denyStatement,
     ],
   });
+  // T1: quay.io/minio/mc is gone (same outage as its sibling quay.io/minio/minio
+  // image, both replaced in compose.yml) — the Bitnami `minio` image ships the real `mc`
+  // binary INSIDE the container itself (PATH includes
+  // /opt/bitnami/minio-client/bin, confirmed via `docker inspect`), so this
+  // execs into the already-running `minio` service instead of `docker run`-
+  // ing a second, separate mc image against the compose network. `-T`:
+  // spawnSync has no TTY, so `exec` must not try to allocate one (`docker
+  // exec` defaults to `-t` off, but `compose exec` defaults it ON and fails
+  // without `-T` in a non-interactive shell — verified below).
   const script = [
-    `mc alias set c1 http://minio:9000 "${MINIO_USER}" "${MINIO_PASSWORD}" >/dev/null`,
+    `mc alias set c1 http://localhost:9000 "${MINIO_USER}" "${MINIO_PASSWORD}" >/dev/null`,
     `cat > /tmp/policy.json <<'EOF'\n${policy}\nEOF`,
     `mc admin policy create c1 ${policyName} /tmp/policy.json`,
     `mc admin user add c1 ${user} "${password}"`,
     `mc admin policy attach c1 ${policyName} --user ${user}`,
   ].join(" && ");
-  const res = sh("docker", [
-    "run", "--rm", "--network", `${PROJECT}_default`,
-    "--entrypoint", "/bin/sh",
-    "quay.io/minio/mc:RELEASE.2024-11-05T11-29-45Z",
-    "-c", script,
-  ], { allowFail: true });
+  const res = compose("exec", "-T", "minio", "/bin/sh", "-c", script);
   record(label, res.status === 0, res.stdout.trim().split("\n").pop());
 }
 

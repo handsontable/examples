@@ -746,8 +746,9 @@ function buildEnvVars(env: Env, wakeId: string): Record<string, string> {
  *  `compose.yml` network — it reaches host-published services via Docker's
  *  own `host.docker.internal` DNS name, which `scripts/o11y-dev.mjs`'s own
  *  README section documents starting local MinIO/ClickHouse for
- *  (`docker compose -f containers/o11y/compose.yml up minio minio-init
- *  clickhouse`, ports published to the host — the `box` service itself is
+ *  (`docker compose -f containers/o11y/compose.yml up --wait minio
+ *  clickhouse` — T1: no more separate `minio-init`, `minio` creates its own
+ *  bucket — ports published to the host — the `box` service itself is
  *  never started locally that way; `wrangler dev` IS the box). */
 function buildLocalEnvVars(env: Env, wakeId: string): Record<string, string> {
   const minioPort = env.O11Y_LOCAL_MINIO_PORT || "4402";
