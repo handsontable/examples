@@ -41,6 +41,19 @@ import {
   redactArgsForLog,
   PORT_DEFAULTS,
 } from "./dev-lib.mjs";
+// dev-prepull task's own additions — a separate import statement so a
+// parallel edit to the block above merges cleanly.
+import { shouldCheckContainerImages, collectTierBaseImages, ensureContainerImagesPresent, formatImagePullFailure } from "./dev-lib.mjs";
+// dev-persist task's own additions — a separate import statement (rather
+// than folded into the block above) so a parallel edit to that block's own
+// import list merges cleanly.
+import {
+  composeDownArgs,
+  o11yDevDataModeLine,
+  resetO11yLocalState,
+  detectO11yStateDivergence,
+  formatO11yDivergenceWarning,
+} from "./dev-lib.mjs";
 
 const COLORS = {
   app: "\x1b[36m", // cyan
@@ -50,6 +63,7 @@ const COLORS = {
   slack: "\x1b[32m", // green
   build: "\x1b[90m", // grey
   dev: "\x1b[97m", // bright white
+  images: "\x1b[96m", // bright cyan
 };
 const RESET = "\x1b[0m";
 
@@ -110,7 +124,7 @@ function runWranglerCapture(cwd, args) {
 }
 
 async function main() {
-  const { help, tier, replay, resetLocalDb, errors } = parseArgs(process.argv.slice(2));
+  const { help, tier, replay, resetLocalDb, fresh, skipImageCheck, errors } = parseArgs(process.argv.slice(2));
   if (help) {
     console.log(HELP_TEXT);
     process.exit(0);
@@ -140,6 +154,35 @@ async function main() {
       console.error(`error: ${DOCKER_NOT_RUNNING_MESSAGE}`);
       process.exit(1);
     }
+
+    // Pre-pull gate (dev-prepull task): every container base image this
+    // tier's Dockerfiles declare must be present BEFORE any worker starts.
+    // Without this, `wrangler dev`'s own local container build can fail
+    // silently on a missing base image (e.g. a Docker Hub timeout pulling
+    // `cloudflare/sandbox:0.12.3`) while `wrangler dev` itself keeps
+    // running — the failure only surfaces later, opaquely, at Tier-2
+    // session-start time. Runs before `containersBefore` below (nothing
+    // has been spawned yet at this point), so a pull failure here leaves
+    // nothing running to clean up.
+    if (shouldCheckContainerImages(tier, skipImageCheck)) {
+      const refs = collectTierBaseImages(tier, RUNNER_ROOT);
+      if (refs.length > 0) {
+        log("images", `checking ${refs.length} base image(s) needed for --tier=${tier}`);
+        const dockerExec = (cmd, args) => execFileSync(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+        const result = await ensureContainerImagesPresent({
+          refs,
+          execFileSyncImpl: dockerExec,
+          log: (line) => log("images", line),
+        });
+        if (!result.ok) {
+          console.error(formatImagePullFailure(result));
+          process.exit(1);
+        }
+      }
+    } else if (skipImageCheck) {
+      log("images", "--skip-image-check: skipping the container base-image pre-pull check");
+    }
+
     // Baseline for the leftover-container REPORT on shutdown (this run
     // never stops a container it cannot prove it started — see
     // dev-lib.mjs's module-level doc comment on `possiblyLeftoverContainers`
@@ -302,6 +345,34 @@ async function main() {
       O11Y_CLICKHOUSE_NATIVE_PORT: String(ports.O11Y_CLICKHOUSE_NATIVE_PORT),
       AE_SQL_TOKEN: "local-dev-token",
     };
+
+    // execFileSync wrapper for `resetO11yLocalState`'s injectable — always
+    // runs from RUNNER_ROOT with the compose stack's own env, stdio
+    // inherited (live `docker compose down -v` output), and lets a caller's
+    // own `{ env }` win for the compose call specifically.
+    const runDocker = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: RUNNER_ROOT, stdio: "inherit", ...opts });
+
+    if (fresh) {
+      resetO11yLocalState({
+        o11yDir,
+        composeFile,
+        composeEnv,
+        execFileSyncImpl: runDocker,
+        log: (line) => log("dev", line),
+      });
+    } else {
+      // Cheap (local file read) unless there's actually something to warn
+      // about — see detectO11yStateDivergence's own doc comment for why
+      // MinIO (not ClickHouse) is the volume this checks.
+      const divergence = await detectO11yStateDivergence({
+        composeProjectName,
+        o11yDir,
+        execFileSyncImpl: (cmd, args) => execFileSync(cmd, args),
+      });
+      if (divergence.divergent) log("dev", formatO11yDivergenceWarning(divergence.committedCount));
+    }
+    log("dev", o11yDevDataModeLine(fresh));
+
     log("compose", `starting minio + clickhouse (project ${composeProjectName})`);
     execFileSync("docker", ["compose", "-f", composeFile, "up", "-d", "minio", "minio-init", "clickhouse"], {
       cwd: RUNNER_ROOT,
@@ -309,9 +380,13 @@ async function main() {
       stdio: "inherit",
     });
     teardownSteps.push(() => {
-      log("compose", "tearing down minio + clickhouse");
+      log("compose", "tearing down minio + clickhouse (data kept — named volumes; use --fresh next run to wipe)");
       try {
-        execFileSync("docker", ["compose", "-f", composeFile, "down"], {
+        // Never `-v` here: Ctrl-C is the KEEP path — see composeDownArgs's
+        // own doc comment and o11yDevDataModeLine above. --fresh's own wipe
+        // (resetO11yLocalState) already ran, if at all, before this run's
+        // compose stack was even started.
+        execFileSync("docker", composeDownArgs(composeFile), {
           cwd: RUNNER_ROOT,
           env: composeEnv,
           stdio: "inherit",

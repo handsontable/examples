@@ -47,6 +47,30 @@ Options:
                     applied-migrations record before starting, then run every
                     migration fresh. Passing this flag IS the confirmation —
                     it prints what it deleted and does not prompt.
+  --fresh           (--tier=full only) wipe ALL local o11y state together
+                    before starting: docker compose ... down -v for this
+                    project's minio/clickhouse (named volumes — logs and
+                    runner_events) AND workers/o11y/.wrangler/state (the
+                    InboxWriter ledger, dedupe hashes, local R2 inbox
+                    objects). Without --fresh, both are KEPT across a
+                    restart on purpose — see docs/run-and-deploy.md's "Run
+                    locally" section for why they must be wiped together,
+                    never separately (the API worker's D1 is untouched
+                    either way; that's --reset-local-db). Prints exactly
+                    what it removed. pnpm o11y:dev also accepts --fresh,
+                    for just the workers/o11y/.wrangler/state half (it never
+                    runs docker compose itself — see that command's own
+                    startup log for the divergence risk if you've also got
+                    a dev:full compose stack's volumes still holding data
+                    from before).
+  --skip-image-check
+                    (--tier=2 or --tier=full only) skip the pre-flight check
+                    that every container base image (read from each
+                    wrangler.jsonc's own containers[].image Dockerfile,
+                    e.g. cloudflare/sandbox:0.12.3) is present locally,
+                    pulling any that's missing before starting a worker.
+                    Escape hatch for offline use when the images are
+                    already built.
   -h, --help        Print this help and exit 0.
 
 Port overrides (env vars — defaults match the ones documented in
@@ -73,13 +97,15 @@ Other env vars read:
 
 /**
  * @param {string[]} argv (e.g. process.argv.slice(2))
- * @returns {{ help: boolean, tier: "1"|"2"|"full"|null, replay: boolean, errors: string[] }}
+ * @returns {{ help: boolean, tier: "1"|"2"|"full"|null, replay: boolean, resetLocalDb: boolean, fresh: boolean, skipImageCheck: boolean, errors: string[] }}
  */
 export function parseArgs(argv) {
   const errors = [];
   let tier = null;
   let replay = false;
   let resetLocalDb = false;
+  let fresh = false;
+  let skipImageCheck = false;
   let help = false;
   for (const arg of argv) {
     if (arg === "-h" || arg === "--help") {
@@ -88,6 +114,10 @@ export function parseArgs(argv) {
       replay = true;
     } else if (arg === "--reset-local-db") {
       resetLocalDb = true;
+    } else if (arg === "--fresh") {
+      fresh = true;
+    } else if (arg === "--skip-image-check") {
+      skipImageCheck = true;
     } else if (arg.startsWith("--tier=")) {
       const value = arg.slice("--tier=".length);
       if (value !== "1" && value !== "2" && value !== "full") {
@@ -108,7 +138,13 @@ export function parseArgs(argv) {
   if (resetLocalDb && tier !== "2" && tier !== "full" && tier !== null) {
     errors.push("--reset-local-db is only valid with --tier=2 or --tier=full");
   }
-  return { help, tier, replay, resetLocalDb, errors };
+  if (fresh && tier !== "full" && tier !== null) {
+    errors.push("--fresh is only valid with --tier=full");
+  }
+  if (skipImageCheck && tier !== "2" && tier !== "full" && tier !== null) {
+    errors.push("--skip-image-check is only valid with --tier=2 or --tier=full");
+  }
+  return { help, tier, replay, resetLocalDb, fresh, skipImageCheck, errors };
 }
 
 // ---------------------------------------------------------------------------
@@ -934,6 +970,353 @@ export function reportLeftoverContainers(before, execFileSyncImpl, logImpl) {
 export const SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 // ---------------------------------------------------------------------------
+// Container base-image pre-pull (dev-prepull task)
+//
+// Self-contained on purpose (a separate section, its own local helpers, no
+// changes to anything above) so a parallel edit elsewhere in this file
+// merges cleanly. What broke before this existed: `wrangler dev`'s own
+// local container build silently races a missing base image against Docker
+// Hub — if `docker pull` for e.g. `cloudflare/sandbox:0.12.3` times out
+// during the build, wrangler keeps running anyway and a Tier-2 session then
+// fails opaquely at container-start time ("No such image available").
+// This section checks every base image a tier's Dockerfiles need is
+// present BEFORE any worker is spawned, pulling what's missing with a
+// bounded retry, and fails fast with one clear message (not a live-but-
+// broken dev session) if a pull still doesn't land.
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal string-aware JSONC comment stripper (line comments and block
+ * comments, respecting quoted strings/escapes) — same zero-dependency
+ * approach `pipeline/o11y-box-config.test.mjs` already uses for the same
+ * reason: `wrangler.jsonc` is JSONC, not plain JSON, and T00 owns adding
+ * any parsing dependency. Kept as this section's own private copy rather
+ * than a shared export, so this section stays self-contained.
+ */
+function stripJsonCommentsForContainerConfig(text) {
+  let result = "";
+  let inString = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (inLineComment) {
+      if (c === "\n") {
+        inLineComment = false;
+        result += c;
+      }
+      continue;
+    }
+    if (inBlockComment) {
+      if (c === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (inString) {
+      result += c;
+      if (c === "\\") {
+        result += next;
+        i++;
+        continue;
+      }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      result += c;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    result += c;
+  }
+  return result;
+}
+
+/**
+ * Reads a worker's `wrangler.jsonc` `containers[].image` paths — Dockerfile
+ * paths relative to `wranglerJsoncPath`'s own directory (this repo's own
+ * config already names them; this never hardcodes a second copy) —
+ * resolved to absolute paths. Returns `[]` when the config has no
+ * `containers` block.
+ * @param {string} wranglerJsoncPath
+ * @param {typeof defaultFs} [fs]
+ * @returns {string[]}
+ */
+export function readContainerDockerfilePaths(wranglerJsoncPath, fs = defaultFs) {
+  const raw = fs.readFileSync(wranglerJsoncPath, "utf8");
+  const config = JSON.parse(stripJsonCommentsForContainerConfig(raw));
+  const containers = config.containers ?? [];
+  const dir = path.dirname(wranglerJsoncPath);
+  return containers.map((c) => path.resolve(dir, c.image));
+}
+
+/**
+ * Extracts every base image a Dockerfile's `FROM` instructions need pulled
+ * from a registry — i.e. what `docker build` needs present locally before
+ * it can even start. Handles:
+ *  - multi-stage builds: one entry per `FROM`, in order, deduped;
+ *  - stage aliases (`FROM <image> AS <name>`) and a LATER `FROM <name>`
+ *    that references an earlier stage by that alias — excluded, since it
+ *    resolves to a previously built stage, not a registry pull;
+ *  - `ARG`-declared build args used in `FROM $ARG`/`FROM ${ARG}` — resolved
+ *    using the Dockerfile's own default (`ARG NAME=default`, declared
+ *    before the first `FROM`, i.e. a global build arg per Docker's own
+ *    scoping rule) since `docker build` without an explicit `--build-arg`
+ *    uses that default; left unresolved (and so excluded from the "safe to
+ *    pull" set — callers see the literal placeholder, which
+ *    `docker image inspect`/`pull` will just fail on visibly) if the ARG
+ *    has no default;
+ *  - `FROM scratch` — the empty pseudo-image, never pulled, excluded;
+ *  - an optional `--platform=...` flag between `FROM` and the image ref.
+ * @param {string} dockerfileText
+ * @returns {string[]} base image refs, in FROM order, deduped
+ */
+export function parseDockerfileBaseImages(dockerfileText) {
+  const globalArgs = new Map();
+  const stageNames = new Set();
+  const seen = new Set();
+  const images = [];
+  let sawFrom = false;
+  for (const rawLine of dockerfileText.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    let m;
+    if (!sawFrom && (m = /^ARG\s+([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$/.exec(line))) {
+      let value = m[2];
+      if (value !== undefined) {
+        value = value.trim();
+        const q = /^"(.*)"$|^'(.*)'$/.exec(value);
+        if (q) value = q[1] ?? q[2];
+      }
+      globalArgs.set(m[1], value);
+      continue;
+    }
+    if ((m = /^FROM\s+(.+)$/i.exec(line))) {
+      sawFrom = true;
+      const parts = m[1].trim().split(/\s+/);
+      let idx = 0;
+      while (parts[idx]?.startsWith("--")) idx++;
+      let ref = parts[idx];
+      let alias;
+      const asIdx = parts.findIndex((p, i) => i > idx && /^as$/i.test(p));
+      if (asIdx !== -1) alias = parts[asIdx + 1];
+      ref = ref.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (whole, name) => {
+        const resolved = globalArgs.get(name);
+        return globalArgs.has(name) && resolved !== undefined ? resolved : whole;
+      });
+      const referencesEarlierStage = stageNames.has(ref);
+      if (alias) stageNames.add(alias);
+      if (ref.toLowerCase() === "scratch") continue;
+      if (referencesEarlierStage) continue;
+      if (!seen.has(ref)) {
+        seen.add(ref);
+        images.push(ref);
+      }
+    }
+  }
+  return images;
+}
+
+/**
+ * Maps a `dev.mjs` tier to the `wrangler.jsonc`(s) whose `containers[].image`
+ * Dockerfiles that tier's workers actually start. Tier "1" needs none — no
+ * worker with a container starts. Read from this repo's own config
+ * (requirement: derive from `containers[].image`, never hardcode the
+ * Dockerfile paths a second time).
+ * @param {"1"|"2"|"full"} tier
+ * @param {string} runnerRoot
+ * @returns {string[]}
+ */
+export function containerWranglerConfigsForTier(tier, runnerRoot) {
+  if (tier === "1") return [];
+  const apiConfig = path.join(runnerRoot, "workers", "api", "wrangler.jsonc");
+  if (tier === "2") return [apiConfig];
+  if (tier === "full") return [apiConfig, path.join(runnerRoot, "workers", "o11y", "wrangler.jsonc")];
+  throw new Error(`containerWranglerConfigsForTier: unknown tier "${tier}"`);
+}
+
+/**
+ * Every distinct base image ref this tier's Dockerfiles declare, across
+ * every `wrangler.jsonc` `containers[].image` Dockerfile the tier needs —
+ * deduped, first-seen order. Throws a clear error (not a raw `ENOENT`) if a
+ * `containers[].image` path doesn't exist on disk.
+ * @param {"1"|"2"|"full"} tier
+ * @param {string} runnerRoot
+ * @param {typeof defaultFs} [fs]
+ * @returns {string[]}
+ */
+export function collectTierBaseImages(tier, runnerRoot, fs = defaultFs) {
+  const refs = [];
+  const seen = new Set();
+  for (const wranglerJsoncPath of containerWranglerConfigsForTier(tier, runnerRoot)) {
+    for (const dockerfilePath of readContainerDockerfilePaths(wranglerJsoncPath, fs)) {
+      if (!fs.existsSync(dockerfilePath)) {
+        throw new Error(`containers[].image path not found: ${dockerfilePath} (declared in ${wranglerJsoncPath})`);
+      }
+      const text = fs.readFileSync(dockerfilePath, "utf8");
+      for (const ref of parseDockerfileBaseImages(text)) {
+        if (!seen.has(ref)) {
+          seen.add(ref);
+          refs.push(ref);
+        }
+      }
+    }
+  }
+  return refs;
+}
+
+/** True when `--skip-image-check` was not passed and this tier actually
+ *  needs container images checked (tier "1" never does). Factored out as
+ *  its own pure function so the CLI wiring is directly unit-testable
+ *  without spawning `dev.mjs` for every tier/flag combination. */
+export function shouldCheckContainerImages(tier, skipImageCheck) {
+  return (tier === "2" || tier === "full") && !skipImageCheck;
+}
+
+/** True if `docker image inspect <ref>` succeeds — the image already exists
+ *  locally. Read-only, no network; never itself triggers a pull.
+ * @param {string} ref
+ * @param {(cmd: string, args: string[]) => void} execFileSyncImpl throws on
+ *  a non-zero exit (a real `execFileSync` for real use; a stub for tests).
+ */
+export function isImagePresent(ref, execFileSyncImpl) {
+  try {
+    execFileSyncImpl("docker", ["image", "inspect", ref]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Pulls the last non-empty line of a failed `execFileSync`-shaped error's
+ *  OWN error output (ANSI stripped) — stderr first, falling back to stdout
+ *  only when stderr is empty, then to `err.message`. stderr-first matters
+ *  for a real `docker pull`: it writes its per-layer progress ("Pulling
+ *  from ...", "Downloading", ...) to STDOUT and the actual failure (e.g.
+ *  "... DeadlineExceeded") to STDERR — concatenating the two and taking the
+ *  last line (this section's earlier approach) would report a harmless
+ *  progress line instead of the real error whenever stdout had output after
+ *  stderr's own last write. This section's own copy of the same "last
+ *  line" idea `extractSqliteMessage` uses for a migration failure (that one
+ *  is stderr-only, wrangler's own shape), kept private here so this section
+ *  never depends on that one changing shape. */
+function lastErrorLine(err) {
+  const chunk = (v) => (v === undefined || v === null ? "" : v.toString("utf8"));
+  const lastNonEmptyLine = (text) =>
+    text
+      .replace(/\x1b\[[0-9;]*m/g, "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .pop();
+  const stderrLine = lastNonEmptyLine(chunk(err?.stderr));
+  if (stderrLine) return stderrLine;
+  const stdoutLine = lastNonEmptyLine(chunk(err?.stdout));
+  if (stdoutLine) return stdoutLine;
+  return err?.message || String(err);
+}
+
+/**
+ * Pulls `ref` with up to `maxAttempts` tries (default 3) and a short
+ * backoff between attempts, printing one plain progress line per attempt
+ * via `log` (the caller — `dev.mjs` — prefixes it `[images]`, matching this
+ * repo's own per-subsystem log convention). Never throws: returns
+ * `{ ok: true }` on the first successful pull, or
+ * `{ ok: false, lastErrorLine }` (the failing pull's last output line) once
+ * every attempt is exhausted.
+ * @param {object} opts
+ * @param {string} opts.ref
+ * @param {(cmd: string, args: string[]) => void} opts.execFileSyncImpl
+ * @param {number} [opts.maxAttempts]
+ * @param {number} [opts.backoffMs] base backoff; attempt N waits `backoffMs * N`
+ * @param {(line: string) => void} [opts.log]
+ * @param {(ms: number) => Promise<void>} [opts.sleep] injectable so tests
+ *  run instantly instead of waiting out a real backoff
+ * @returns {Promise<{ ok: true } | { ok: false, lastErrorLine: string }>}
+ */
+export async function pullImageWithRetry({
+  ref,
+  execFileSyncImpl,
+  maxAttempts = 3,
+  backoffMs = 500,
+  log = () => {},
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+}) {
+  let lastErr = "";
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    log(`pulling ${ref} (attempt ${attempt}/${maxAttempts})...`);
+    try {
+      execFileSyncImpl("docker", ["pull", ref]);
+      log(`pulled ${ref}`);
+      return { ok: true };
+    } catch (err) {
+      lastErr = lastErrorLine(err);
+      log(`pull failed for ${ref} (attempt ${attempt}/${maxAttempts}): ${lastErr}`);
+      if (attempt < maxAttempts) await sleep(backoffMs * attempt);
+    }
+  }
+  return { ok: false, lastErrorLine: lastErr };
+}
+
+/**
+ * The whole pre-pull gate: for each ref in `refs` (in order), checks
+ * `isImagePresent` and, if missing, pulls it (`pullImageWithRetry`).
+ * Stops at the FIRST ref that cannot be pulled after every retry — no later
+ * ref is even checked — and returns which one failed, so the caller can
+ * print one clear message and exit before starting any worker. Never
+ * throws.
+ * @param {object} opts
+ * @param {string[]} opts.refs
+ * @param {(cmd: string, args: string[]) => void} opts.execFileSyncImpl
+ * @param {(line: string) => void} [opts.log]
+ * @param {number} [opts.maxAttempts]
+ * @param {number} [opts.backoffMs]
+ * @param {(ms: number) => Promise<void>} [opts.sleep]
+ * @returns {Promise<{ ok: true } | { ok: false, ref: string, lastErrorLine: string }>}
+ */
+export async function ensureContainerImagesPresent({ refs, execFileSyncImpl, log = () => {}, maxAttempts = 3, backoffMs = 500, sleep }) {
+  for (const ref of refs) {
+    if (isImagePresent(ref, execFileSyncImpl)) {
+      log(`${ref} already present`);
+      continue;
+    }
+    log(`${ref} missing locally`);
+    const result = await pullImageWithRetry({ ref, execFileSyncImpl, maxAttempts, backoffMs, log, sleep });
+    if (!result.ok) {
+      return { ok: false, ref, lastErrorLine: result.lastErrorLine };
+    }
+  }
+  return { ok: true };
+}
+
+/** The one clean, actionable message `dev.mjs` prints (never a raw
+ *  `execFileSync` stack trace) when {@link ensureContainerImagesPresent}
+ *  stops on a ref it could not pull: which image, the Docker error's last
+ *  line, and the exact `docker pull ...` command to retry by hand — plus
+ *  the `--skip-image-check` escape hatch, for offline use when the images
+ *  are already built. */
+export function formatImagePullFailure({ ref, lastErrorLine: line }) {
+  return (
+    `error: could not pull required container base image ${ref}: ${line}\n` +
+    `  Retry by hand: docker pull ${ref}\n` +
+    `  Or skip this check entirely (e.g. offline, images already built): pass --skip-image-check.`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Runtime staleness (packages/runtime dist vs src)
 // ---------------------------------------------------------------------------
 
@@ -1061,4 +1444,256 @@ export function buildPlan(tier, ports, opts = {}) {
  *  the plan for each tier is built from. */
 export function planNames(tier, ports) {
   return buildPlan(tier, ports).map((p) => p.name);
+}
+
+// ---------------------------------------------------------------------------
+// --fresh (dev-persist task): compose.yml's minio/clickhouse now use named
+// volumes (see that file's own header comment) so a plain restart KEEPS
+// logs/metrics — but `workers/o11y/.wrangler/state` (the InboxWriter
+// ledger/dedupe hashes/local R2 inbox) was ALREADY persisted across a
+// restart before this task. `--fresh` is what wipes both together, so they
+// can never diverge into "ledger says committed, but the data it points at
+// is gone" (a committed key is never re-drained; a dedupe hash blocks a
+// fixture replay from ever refilling the now-empty stores). See
+// `resetO11yLocalState` and `detectO11yStateDivergence` below.
+// ---------------------------------------------------------------------------
+
+/** The exact `docker compose ... down` argv, with `-v` appended only when
+ *  `fresh` — factored out so `dev.mjs`'s normal (kept-data) Ctrl-C teardown
+ *  and `resetO11yLocalState`'s `--fresh` wipe are provably running the same
+ *  command shape with only the one intentional difference, instead of two
+ *  independently-typed argv literals that could silently drift apart. */
+export function composeDownArgs(composeFile, { fresh = false } = {}) {
+  const args = ["compose", "-f", composeFile, "down"];
+  if (fresh) args.push("-v");
+  return args;
+}
+
+/** One line, printed once at startup for `--tier=full` (`dev.mjs`) — the
+ *  point-3 "startup mode line" the task/report needs to be able to point at
+ *  verbatim. */
+export function o11yDevDataModeLine(fresh) {
+  return fresh ? "o11y local data: fresh" : "o11y local data: kept (MinIO/ClickHouse volumes + o11y worker state)";
+}
+
+/**
+ * `--fresh`'s whole job: wipe compose's named volumes (minio/clickhouse —
+ * only when `composeFile`/`composeEnv` are given) AND
+ * `workers/o11y/.wrangler/state` (the InboxWriter ledger, dedupe hashes,
+ * local R2 inbox objects) TOGETHER, so the two local stores this repo now
+ * persists across a restart never diverge (see this section's header
+ * comment). Leaves the API worker's local D1 (`workers/api/.wrangler/state`)
+ * completely alone — that is `--reset-local-db`'s job, a different flag for
+ * a different store.
+ *
+ * `composeFile`/`composeEnv` are optional: `scripts/o11y-dev.mjs` never runs
+ * `docker compose` itself (see that file's own doc comment — it starts only
+ * the o11y worker, not compose's minio/clickhouse), so its own `--fresh`
+ * omits both and this wipes ONLY the o11y worker state. Passing them scopes
+ * the `down -v` to exactly `composeEnv.COMPOSE_PROJECT_NAME` — the same
+ * project-isolation every other compose call in this module already relies
+ * on (compose itself enforces it; this never touches another project's, or
+ * another worktree's, volumes) — and never any other compose project.
+ *
+ * `o11yDir` is a worktree-local path (derived from `RUNNER_ROOT`, which is
+ * resolved from THIS script's own file location — see the top of this
+ * module), so the state-dir removal can never reach another worktree's
+ * `workers/o11y/.wrangler/state` either.
+ *
+ * @param {object} opts
+ * @param {string} opts.o11yDir
+ * @param {string} [opts.composeFile]
+ * @param {NodeJS.ProcessEnv} [opts.composeEnv]
+ * @param {(cmd: string, args: string[], opts?: object) => void} opts.execFileSyncImpl
+ *   real callers pass `(cmd, args, o) => execFileSync(cmd, args, { cwd: RUNNER_ROOT, env: composeEnv, stdio: "inherit", ...o })`
+ * @param {typeof defaultFs} [opts.fs]
+ * @param {(line: string) => void} [opts.log]
+ * @returns {{ composeDownRan: boolean, stateDirRemoved: boolean, stateDir: string }}
+ */
+export function resetO11yLocalState({ o11yDir, composeFile, composeEnv, execFileSyncImpl, fs = defaultFs, log = () => {} }) {
+  let composeDownRan = false;
+  if (composeFile) {
+    log(`--fresh: docker compose down -v (project ${composeEnv?.COMPOSE_PROJECT_NAME ?? "?"})`);
+    execFileSyncImpl("docker", composeDownArgs(composeFile, { fresh: true }), { env: composeEnv });
+    composeDownRan = true;
+  }
+  const stateDir = path.join(o11yDir, ".wrangler", "state");
+  const stateDirRemoved = fs.existsSync(stateDir);
+  if (stateDirRemoved) {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    log(`--fresh: deleted ${stateDir} (InboxWriter ledger, dedupe hashes, local R2 inbox objects)`);
+  } else {
+    log(`--fresh: no ${stateDir} found — nothing to delete there`);
+  }
+  return { composeDownRan, stateDirRemoved, stateDir };
+}
+
+/**
+ * Reads the committed-key count straight out of the InboxWriter DO's local
+ * SQLite storage (wrangler's local dev backing store — confirmed against a
+ * real dev session: `workers/o11y/.wrangler/state/v3/do/<name-containing-InboxWriter>/<id>.sqlite`,
+ * table `_cf_KV(key, value)`, one row per DO storage key). A `done:<key>`
+ * entry (`ledger.ts`'s `DONE_PREFIX`) is a key already resolved as
+ * COMMITTED — the ledger considers it drained and will never look at it
+ * again on its own (only a manual `POST /grafana/_o11y/reopen` moves it back
+ * — see `ledger.ts`'s "Manual reopen" section). If the data those keys point
+ * at (Loki chunks in MinIO) is gone, this count is exactly what makes that
+ * silent — nothing else ever re-checks a `done:` key.
+ *
+ * Best-effort by design: this is a startup convenience check, not a
+ * correctness gate. Returns 0 (never throws) if `node:sqlite` isn't
+ * available, the state dir doesn't exist, or a `.sqlite` file can't be
+ * opened (e.g. locked by a `wrangler dev` still shutting down) — a false
+ * "0" just means the divergence warning below doesn't fire, which is the
+ * safe direction to fail in for a warning-only check.
+ *
+ * @param {string} o11yDir
+ * @param {typeof defaultFsWithReaddir} [fs]
+ * @returns {Promise<number>}
+ */
+export async function o11yLedgerCommittedKeyCount(o11yDir, fs = defaultFsWithReaddir) {
+  const doDir = path.join(o11yDir, ".wrangler", "state", "v3", "do");
+  if (!fs.existsSync(doDir)) return 0;
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = await import("node:sqlite"));
+  } catch {
+    return 0;
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(doDir);
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries.filter((name) => name.includes("InboxWriter"))) {
+    const dir = path.join(doDir, entry);
+    let files;
+    try {
+      files = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!file.endsWith(".sqlite") || file === "metadata.sqlite") continue;
+      let db;
+      try {
+        db = new DatabaseSync(path.join(dir, file), { readOnly: true });
+        const row = db.prepare(`SELECT count(*) as c FROM _cf_KV WHERE key LIKE '${DONE_PREFIX_SQL_LIKE}'`).get();
+        total += Number(row?.c ?? 0);
+      } catch {
+        // Not this DO's storage shape, or the file is locked/corrupt —
+        // best-effort, skip it.
+      } finally {
+        try {
+          db?.close();
+        } catch {
+          // already closed/never opened
+        }
+      }
+    }
+  }
+  return total;
+}
+
+/** `ledger.ts`'s `DONE_PREFIX` ("done:"), as a SQL `LIKE` pattern — kept as
+ *  its own named constant (rather than string-building `"done:" + "%"`
+ *  inline) so it reads as the same contract value that file documents, not
+ *  an ad hoc string. */
+const DONE_PREFIX_SQL_LIKE = "done:%";
+
+/** Finds the real docker volume name compose created for `volumeKey` (a
+ *  short key in compose.yml's top-level `volumes:` block, e.g.
+ *  `"minio-data"`) under project `composeProjectName` — via compose's own
+ *  `com.docker.compose.project`/`com.docker.compose.volume` labels, never by
+ *  guessing compose's own project-name sanitization/prefixing rule (which
+ *  compose.yml deliberately does NOT pin down with an explicit `name:` — see
+ *  that file's header comment). Returns `null` if no such volume exists
+ *  (never created yet, or removed by `docker compose down -v` / a manual
+ *  `docker volume rm`) — every caller here treats that the same as "no
+ *  data", not as an error.
+ * @param {(cmd: string, args: string[]) => Buffer|string} execFileSyncImpl
+ */
+export function findComposeVolume({ composeProjectName, volumeKey, execFileSyncImpl }) {
+  const out = execFileSyncImpl("docker", [
+    "volume",
+    "ls",
+    "-q",
+    "--filter",
+    `label=com.docker.compose.project=${composeProjectName}`,
+    "--filter",
+    `label=com.docker.compose.volume=${volumeKey}`,
+  ])
+    .toString()
+    .trim();
+  if (!out) return null;
+  return out.split("\n")[0].trim();
+}
+
+/**
+ * The divergent case the task calls out: named volumes empty (or gone —
+ * `docker volume rm`, a manual `docker compose down -v` outside `--fresh`,
+ * a volume that was simply never created yet) while the o11y worker's own
+ * ledger still has `done:` (committed) keys pointing at data that isn't
+ * there anymore. Checked in this order (cheapest first): the ledger read is
+ * a local file read, so a worktree with no o11y worker state yet (the
+ * common case — nothing to warn about) never touches `docker` at all.
+ *
+ * Deliberately checks MinIO only, not ClickHouse: `runner_events` (the
+ * Analytics Engine stand-in) is written directly by the worker via
+ * `RUNNER_EVENTS_CLICKHOUSE_URL` — outside the inbox ledger entirely (see
+ * `normalise/points.ts#aeSink`) — so nothing about a `done:` ledger key ever
+ * points at ClickHouse. MinIO is what the ledger's `done:` keys are actually
+ * about: they mark an R2 inbox object as already drained into Loki, whose
+ * chunks/index live in MinIO (`containers/o11y/compose.yml`'s own header
+ * comment). Existence, not "is it empty", is the check: `minio-init`
+ * creates the bucket as part of every successful `up`, so a volume that
+ * exists has necessarily been used — the divergent case this warns about is
+ * specifically the volume being GONE while the ledger thinks otherwise, not
+ * a volume that merely has less in it than the ledger expects.
+ *
+ * Chose "warn and point at --fresh" over an automatic ledger reopen
+ * (`POST /grafana/_o11y/reopen`, `ledger.ts`'s own escape hatch) here on
+ * purpose: this check runs from `dev.mjs`'s `main()` BEFORE the o11y worker
+ * is even started (it decides whether to start compose first), so an
+ * automatic reopen would need its own separate post-startup step, an HTTP
+ * round trip, and a guessed reopen window — real complexity for a dev
+ * convenience script. `--fresh` is a one-flag fix that's already needed for
+ * the "someone ran `docker volume rm` by hand" case this same check exists
+ * to catch; the warning below also names the manual `/grafana/_o11y/reopen`
+ * route as a lighter-weight alternative once the worker is up, for anyone
+ * who'd rather keep what's still in R2 (7-day retention) than start over.
+ *
+ * @param {object} opts
+ * @param {string} opts.composeProjectName
+ * @param {string} opts.o11yDir
+ * @param {(cmd: string, args: string[]) => Buffer|string} opts.execFileSyncImpl
+ * @param {typeof defaultFsWithReaddir} [opts.fs]
+ * @param {(o11yDir: string, fs: typeof defaultFsWithReaddir) => Promise<number>} [opts.countCommittedLedgerKeys]
+ * @returns {Promise<{ divergent: boolean, committedCount: number }>}
+ */
+export async function detectO11yStateDivergence({
+  composeProjectName,
+  o11yDir,
+  execFileSyncImpl,
+  fs = defaultFsWithReaddir,
+  countCommittedLedgerKeys = o11yLedgerCommittedKeyCount,
+}) {
+  const committedCount = await countCommittedLedgerKeys(o11yDir, fs);
+  if (committedCount === 0) return { divergent: false, committedCount: 0 };
+  const minioVolume = findComposeVolume({ composeProjectName, volumeKey: "minio-data", execFileSyncImpl });
+  return { divergent: minioVolume === null, committedCount };
+}
+
+/** The warning line `dev.mjs` prints when {@link detectO11yStateDivergence}
+ *  finds the divergent case. */
+export function formatO11yDivergenceWarning(committedCount) {
+  return (
+    `warning: workers/o11y's local ledger has ${committedCount} committed key(s) marking data as already drained, ` +
+    `but this project's MinIO volume doesn't exist (removed by hand, e.g. \`docker volume rm\`?) — that data is gone ` +
+    `and these keys will NEVER be re-drained on their own. Run \`node scripts/dev.mjs --tier=full --fresh\` to wipe ` +
+    `the o11y worker state too so both stores agree again, or — to keep what R2 still has (7-day retention) instead ` +
+    `of starting over — once the worker is up: POST /grafana/_o11y/reopen for the affected time window.`
+  );
 }

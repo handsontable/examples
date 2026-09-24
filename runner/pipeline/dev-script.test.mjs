@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import {
+  HELP_TEXT,
   parseArgs,
   resolvePorts,
   PORT_DEFAULTS,
@@ -55,6 +56,31 @@ import {
   SHUTDOWN_SIGNALS,
   o11yLocalPublicOrigin,
 } from "../scripts/dev-lib.mjs";
+// dev-persist task's own additions — a separate import statement so a
+// parallel edit to the block above merges cleanly.
+import {
+  composeDownArgs,
+  o11yDevDataModeLine,
+  resetO11yLocalState,
+  o11yLedgerCommittedKeyCount,
+  findComposeVolume,
+  detectO11yStateDivergence,
+  formatO11yDivergenceWarning,
+} from "../scripts/dev-lib.mjs";
+// dev-prepull task's own additions — a separate import statement so a
+// parallel edit to the blocks above merges cleanly.
+import {
+  readContainerDockerfilePaths,
+  parseDockerfileBaseImages,
+  containerWranglerConfigsForTier,
+  collectTierBaseImages,
+  shouldCheckContainerImages,
+  isImagePresent,
+  pullImageWithRetry,
+  ensureContainerImagesPresent,
+  formatImagePullFailure,
+} from "../scripts/dev-lib.mjs";
+import { DatabaseSync } from "node:sqlite";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER_ROOT = path.join(HERE, "..");
@@ -581,6 +607,16 @@ test("parseMigrationTargets: pinned against every real workers/api/migrations/*.
       { type: "column", table: "demos", name: "build_error" },
     ],
   });
+  // 0009_example_daily_downloaded.sql (R1-followups): the second real
+  // ALTER TABLE ... ADD COLUMN file in this migrations dir (after 0003/0007,
+  // both against `demos`) — pinned explicitly, not just swept into the
+  // "checkable with >=1 target" loop below, because it is the one that
+  // exercises a table OTHER than `demos` going through the same adoption
+  // path (see the `applyMigrations` adoption test further down).
+  assert.deepEqual(parseMigrationTargets(read("0009_example_daily_downloaded.sql")), {
+    checkable: true,
+    targets: [{ type: "column", table: "example_daily", name: "downloaded" }],
+  });
   // Every file must at least parse without throwing and either be checkable
   // with >=1 target, or explicitly non-checkable — never checkable with zero
   // targets (that would be silently skippable).
@@ -644,6 +680,51 @@ test("applyMigrations: a hand-migrated local D1 with NO record — every pending
     assert.deepEqual(result.applied, ["0007_build_status.sql"], "the file whose column is genuinely missing still runs for real");
     assert.deepEqual(runCalls, [["d1", "execute", "handsontable-demos", "--local", "--file=migrations/0007_build_status.sql", "-y"]]);
     assert.deepEqual(readAppliedMigrations(recordPath), ["0001_init.sql", "0003_cost_ledger.sql", "0007_build_status.sql"].sort());
+  });
+});
+
+// R1-followups: the same N1 adoption path, exercised against the real
+// 0008/0009_example_daily_downloaded.sql pair — a table (`example_daily`)
+// that is NOT `demos`, proving `applyMigrations`' `alterTables` derivation
+// (COMMON.md's "verify with a test only" instruction for dev-lib.mjs's
+// ADD COLUMN handling) is not hardcoded to the one table every earlier
+// migration in this dir happens to alter.
+test("applyMigrations: a local D1 that already has example_daily.downloaded (dev stack migrated by hand) adopts 0009 instead of re-running it", async () => {
+  await withTmpDir(async (dir) => {
+    const migrationsDir = path.join(dir, "migrations");
+    mkdirSync(migrationsDir);
+    const realMigrationsDir = path.join(RUNNER_ROOT, "workers", "api", "migrations");
+    writeFileSync(
+      path.join(migrationsDir, "0008_example_daily.sql"),
+      readFileSync(path.join(realMigrationsDir, "0008_example_daily.sql"), "utf8"),
+    );
+    writeFileSync(
+      path.join(migrationsDir, "0009_example_daily_downloaded.sql"),
+      readFileSync(path.join(realMigrationsDir, "0009_example_daily_downloaded.sql"), "utf8"),
+    );
+    // 0008 was recorded as applied by an earlier run; 0009 is pending, and a
+    // developer's local D1 already carries the `downloaded` column (e.g.
+    // adopted by hand, or applied once before the applied-migrations record
+    // existed — the same N1 class of drift the adjacent `demos` test above
+    // covers).
+    mkdirSync(path.dirname(migrationRecordPath(dir)), { recursive: true });
+    writeFileSync(migrationRecordPath(dir), JSON.stringify(["0008_example_daily.sql"]));
+
+    const state = {
+      tables: new Set(["example_daily"]),
+      indexes: new Set(["idx_example_daily_day"]),
+      columns: { example_daily: new Set(["day", "kind", "ref", "area", "framework", "ht_major", "opens", "engaged", "forked", "saved", "shared", "downloaded"]) },
+    };
+    const runCalls = [];
+    const run = async (args) => runCalls.push(args);
+    const query = stubD1Query(state);
+
+    const result = await applyMigrations({ migrationsDir, recordPath: migrationRecordPath(dir), dbName: "handsontable-demos", run, query, log: () => {} });
+
+    assert.deepEqual(result.adopted, ["0009_example_daily_downloaded.sql"], "the column already exists — 0009 must be adopted, not re-run");
+    assert.deepEqual(result.applied, [], "never a real d1 execute for a file whose only target is already present");
+    assert.deepEqual(runCalls, [], "no wrangler d1 execute call at all — this is what avoids the 'duplicate column name' failure");
+    assert.deepEqual(readAppliedMigrations(migrationRecordPath(dir)), ["0008_example_daily.sql", "0009_example_daily_downloaded.sql"].sort());
   });
 });
 
@@ -793,6 +874,293 @@ test("CLI: `dev.mjs --tier=2` fails fast with the Docker message when `docker in
   const output = `${result.stdout}${result.stderr}`;
   assert.match(output, /docker info/);
   assert.match(output, /Start Docker/);
+});
+
+// ---------------------------------------------------------------------------
+// Container base-image pre-pull (dev-prepull task)
+// ---------------------------------------------------------------------------
+
+test("parseDockerfileBaseImages: single-stage FROM", () => {
+  const dockerfile = `FROM docker.io/cloudflare/sandbox:0.12.3\nWORKDIR /app\n`;
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["docker.io/cloudflare/sandbox:0.12.3"]);
+});
+
+test("parseDockerfileBaseImages: multi-stage build — a later FROM referencing an earlier stage's alias is excluded", () => {
+  const dockerfile = [
+    "FROM golang:1.20 AS build",
+    "RUN go build ./...",
+    "FROM build AS test",
+    "RUN go test ./...",
+    "FROM alpine:3.19",
+    "COPY --from=test /bin/app /app",
+  ].join("\n");
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["golang:1.20", "alpine:3.19"]);
+});
+
+test("parseDockerfileBaseImages: matches containers/o11y/Dockerfile's real shape — two real images, no stage-name leakage", () => {
+  const dockerfile = ["FROM grafana/loki:3.3.2 AS loki", "FROM grafana/grafana:11.4.0", "COPY --from=loki /usr/bin/loki /usr/bin/loki"].join("\n");
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["grafana/loki:3.3.2", "grafana/grafana:11.4.0"]);
+});
+
+test("parseDockerfileBaseImages: FROM scratch is excluded (never pulled)", () => {
+  const dockerfile = ["FROM golang:1.20 AS build", "RUN go build -o /app", "FROM scratch", "COPY --from=build /app /app"].join("\n");
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["golang:1.20"]);
+});
+
+test("parseDockerfileBaseImages: ARG-based FROM resolves against the ARG's own default", () => {
+  const dockerfile = ["ARG BASE_IMAGE=alpine:3.19", "FROM ${BASE_IMAGE}", "RUN echo hi"].join("\n");
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["alpine:3.19"]);
+});
+
+test("parseDockerfileBaseImages: dedupes an image reused across stages", () => {
+  const dockerfile = ["FROM node:20 AS a", "FROM node:20 AS b", "FROM node:20"].join("\n");
+  assert.deepEqual(parseDockerfileBaseImages(dockerfile), ["node:20"]);
+});
+
+test("containerWranglerConfigsForTier: tier=1 needs none, tier=2 needs only the API worker, tier=full needs API + o11y", () => {
+  const root = "/runner";
+  assert.deepEqual(containerWranglerConfigsForTier("1", root), []);
+  assert.deepEqual(containerWranglerConfigsForTier("2", root), [path.join(root, "workers", "api", "wrangler.jsonc")]);
+  assert.deepEqual(containerWranglerConfigsForTier("full", root), [
+    path.join(root, "workers", "api", "wrangler.jsonc"),
+    path.join(root, "workers", "o11y", "wrangler.jsonc"),
+  ]);
+});
+
+test("readContainerDockerfilePaths: reads containers[].image from the real workers/api/wrangler.jsonc", () => {
+  const paths = readContainerDockerfilePaths(path.join(RUNNER_ROOT, "workers", "api", "wrangler.jsonc"));
+  assert.equal(paths.length, 2);
+  assert.ok(paths.some((p) => p.endsWith(path.join("containers", "live", "Dockerfile"))));
+  assert.ok(paths.some((p) => p.endsWith(path.join("containers", "builder", "Dockerfile"))));
+  for (const p of paths) assert.equal(existsSync(p), true);
+});
+
+test("collectTierBaseImages: tier=2 against the real repo resolves the shared sandbox base image once", () => {
+  const refs = collectTierBaseImages("2", RUNNER_ROOT);
+  assert.deepEqual(refs, ["docker.io/cloudflare/sandbox:0.12.3"]);
+});
+
+test("collectTierBaseImages: tier=full also pulls in the o11y worker's two real base images", () => {
+  const refs = collectTierBaseImages("full", RUNNER_ROOT);
+  assert.deepEqual(refs, ["docker.io/cloudflare/sandbox:0.12.3", "grafana/loki:3.3.2", "grafana/grafana:11.4.0"]);
+});
+
+test("shouldCheckContainerImages: true for tier 2/full unless --skip-image-check; always false for tier 1", () => {
+  assert.equal(shouldCheckContainerImages("2", false), true);
+  assert.equal(shouldCheckContainerImages("full", false), true);
+  assert.equal(shouldCheckContainerImages("2", true), false);
+  assert.equal(shouldCheckContainerImages("full", true), false);
+  assert.equal(shouldCheckContainerImages("1", false), false);
+  assert.equal(shouldCheckContainerImages("1", true), false);
+});
+
+test("parseArgs: --skip-image-check is only valid with --tier=2 or --tier=full", () => {
+  assert.equal(parseArgs(["--tier=2", "--skip-image-check"]).errors.length, 0);
+  assert.equal(parseArgs(["--tier=2", "--skip-image-check"]).skipImageCheck, true);
+  assert.equal(parseArgs(["--tier=full", "--skip-image-check"]).errors.length, 0);
+  assert.equal(parseArgs(["--tier=1", "--skip-image-check"]).errors.length, 1);
+  assert.equal(parseArgs(["--help", "--skip-image-check"]).errors.length, 0);
+});
+
+test("parseArgs: --skip-image-check defaults to false", () => {
+  assert.equal(parseArgs(["--tier=2"]).skipImageCheck, false);
+});
+
+test("isImagePresent: true when `docker image inspect` succeeds", () => {
+  assert.equal(
+    isImagePresent("alpine:3.19", () => {}),
+    true,
+  );
+});
+
+test("isImagePresent: false when `docker image inspect` throws (image missing locally)", () => {
+  assert.equal(
+    isImagePresent("alpine:3.19", () => {
+      throw new Error("No such image");
+    }),
+    false,
+  );
+});
+
+test("ensureContainerImagesPresent: a PRESENT image is never pulled", async () => {
+  const calls = [];
+  const result = await ensureContainerImagesPresent({
+    refs: ["alpine:3.19"],
+    execFileSyncImpl: (cmd, args) => {
+      calls.push(args);
+      if (args[0] === "image" && args[1] === "inspect") return "ok";
+      throw new Error(`unexpected call: docker ${args.join(" ")}`);
+    },
+    sleep: () => Promise.resolve(),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(
+    calls.some((a) => a[0] === "pull"),
+    false,
+    "a present image must never trigger docker pull",
+  );
+});
+
+test("ensureContainerImagesPresent: a MISSING image is pulled exactly once (succeeds first try)", async () => {
+  const calls = [];
+  const result = await ensureContainerImagesPresent({
+    refs: ["alpine:3.19"],
+    execFileSyncImpl: (cmd, args) => {
+      calls.push(args);
+      if (args[0] === "image" && args[1] === "inspect") throw new Error("No such image");
+      if (args[0] === "pull") return "ok";
+      throw new Error(`unexpected call: docker ${args.join(" ")}`);
+    },
+    sleep: () => Promise.resolve(),
+  });
+  assert.equal(result.ok, true);
+  const pullCalls = calls.filter((a) => a[0] === "pull");
+  assert.equal(pullCalls.length, 1);
+  assert.deepEqual(pullCalls[0], ["pull", "alpine:3.19"]);
+});
+
+test("pullImageWithRetry: retries up to maxAttempts with backoff, then reports the last error line", async () => {
+  let attempts = 0;
+  const sleeps = [];
+  const result = await pullImageWithRetry({
+    ref: "alpine:3.19",
+    execFileSyncImpl: () => {
+      attempts += 1;
+      const err = new Error("pull failed");
+      err.stderr = Buffer.from(`Error response from daemon: Get "https://registry-1.docker.io/v2/": net/http: TLS handshake timeout\n`);
+      throw err;
+    },
+    maxAttempts: 3,
+    backoffMs: 10,
+    sleep: (ms) => {
+      sleeps.push(ms);
+      return Promise.resolve();
+    },
+  });
+  assert.equal(attempts, 3);
+  assert.equal(sleeps.length, 2); // no sleep after the last attempt
+  assert.equal(result.ok, false);
+  assert.match(result.lastErrorLine, /TLS handshake timeout/);
+});
+
+test("pullImageWithRetry: a real `docker pull` writes progress to stdout and the actual failure to stderr — the stderr line must win, not stdout's later one", async () => {
+  const result = await pullImageWithRetry({
+    ref: "docker.io/cloudflare/sandbox:0.12.3",
+    execFileSyncImpl: () => {
+      const err = new Error("pull failed");
+      // Matches real `docker pull` output shape: per-layer progress on
+      // stdout keeps writing lines AFTER stderr's own last write (the
+      // process failing mid-pull, not at the very start) — a naive
+      // "concat stdout after stderr, take the last line" extraction would
+      // report the harmless stdout progress line instead of this error.
+      err.stdout = Buffer.from("0.12.3: Pulling from cloudflare/sandbox\nabc123: Downloading  [==>  ]  12MB/48MB\n");
+      err.stderr = Buffer.from("error pulling image configuration: download failed after attempts=6: context deadline exceeded\n");
+      throw err;
+    },
+    maxAttempts: 1,
+    sleep: () => Promise.resolve(),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.lastErrorLine, /context deadline exceeded/);
+  assert.doesNotMatch(result.lastErrorLine, /Downloading/);
+});
+
+test("ensureContainerImagesPresent: a pull that fails every attempt stops before checking any later ref", async () => {
+  const calls = [];
+  const result = await ensureContainerImagesPresent({
+    refs: ["alpine:3.19", "busybox:1.36"],
+    execFileSyncImpl: (cmd, args) => {
+      calls.push(args);
+      if (args[0] === "image" && args[1] === "inspect") throw new Error("No such image");
+      if (args[0] === "pull") {
+        const err = new Error("pull failed");
+        err.stderr = Buffer.from("Error response from daemon: some network error\n");
+        throw err;
+      }
+      throw new Error(`unexpected call: docker ${args.join(" ")}`);
+    },
+    maxAttempts: 3,
+    backoffMs: 5,
+    sleep: () => Promise.resolve(),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.ref, "alpine:3.19");
+  assert.match(result.lastErrorLine, /some network error/);
+  assert.ok(
+    calls.every((a) => a[a.length - 1] !== "busybox:1.36"),
+    "the second ref must never be checked once the first one exhausts its retries",
+  );
+});
+
+test("formatImagePullFailure: names the image, the last error line, the retry command, and the escape hatch", () => {
+  const message = formatImagePullFailure({ ref: "docker.io/cloudflare/sandbox:0.12.3", lastErrorLine: "TLS handshake timeout" });
+  assert.match(message, /docker\.io\/cloudflare\/sandbox:0\.12\.3/);
+  assert.match(message, /TLS handshake timeout/);
+  assert.match(message, /docker pull docker\.io\/cloudflare\/sandbox:0\.12\.3/);
+  assert.match(message, /--skip-image-check/);
+});
+
+test("CLI: `dev.mjs --tier=2` stops before spawning any worker when a required base image fails to pull after every retry", () => {
+  const stubBinDir = path.join(HERE, "fixtures", "stub-bin");
+  const devScript = path.join(RUNNER_ROOT, "scripts", "dev.mjs");
+  const result = spawnSync(process.execPath, [devScript, "--tier=2"], {
+    cwd: RUNNER_ROOT,
+    encoding: "utf8",
+    timeout: 30000,
+    env: {
+      ...process.env,
+      PATH: `${stubBinDir}:${process.env.PATH}`,
+      STUB_DOCKER_MODE: "ok",
+      STUB_DOCKER_IMAGE_PRESENT: "0",
+      STUB_DOCKER_PULL_MODE: "fail",
+    },
+  });
+  assert.notEqual(result.status, 0);
+  const output = `${result.stdout}${result.stderr}`;
+  assert.match(output, /could not pull required container base image/);
+  assert.match(output, /docker pull docker\.io\/cloudflare\/sandbox:0\.12\.3/);
+  assert.match(output, /attempt 3\/3/, "the bounded retry must actually run through the real CLI, not just report ok:false");
+  assert.doesNotMatch(output, /spawning:/, "no worker should ever be spawned once the image pull gate fails");
+  // The stub docker has no "ps" handler (the very next docker call after
+  // the image gate, listing containers) — its catch-all reply is "stub
+  // docker: unsupported subcommand ps". Its ABSENCE here is what actually
+  // proves this run stopped at the image gate and never reached that next
+  // step, not merely that it exited non-zero for some other reason.
+  assert.doesNotMatch(output, /unsupported subcommand/, "the run must stop at the image gate, never reaching the next docker call (docker ps)");
+});
+
+test("CLI: `dev.mjs --tier=2 --skip-image-check` never calls `docker image inspect`/`pull` even when they'd fail", () => {
+  const stubBinDir = path.join(HERE, "fixtures", "stub-bin");
+  const devScript = path.join(RUNNER_ROOT, "scripts", "dev.mjs");
+  // `docker info` (the tier's own Docker-availability check, ahead of the
+  // image gate this test targets) succeeds via STUB_DOCKER_MODE=ok. The
+  // stub doesn't implement `docker ps` (the leftover-container baseline
+  // that runs right after the image gate), so this run dies there — fine,
+  // and fast: everything this test needs to observe (the skip line, and
+  // the absence of any image inspect/pull attempt) has already happened by
+  // then, and it proves nothing past the gate got anywhere near a real
+  // `wrangler`/pnpm build.
+  const result = spawnSync(process.execPath, [devScript, "--tier=2", "--skip-image-check"], {
+    cwd: RUNNER_ROOT,
+    encoding: "utf8",
+    timeout: 10000,
+    env: {
+      ...process.env,
+      PATH: `${stubBinDir}:${process.env.PATH}`,
+      STUB_DOCKER_MODE: "ok",
+      STUB_DOCKER_IMAGE_PRESENT: "0",
+      STUB_DOCKER_PULL_MODE: "fail",
+    },
+  });
+  const output = `${result.stdout}${result.stderr}`;
+  assert.doesNotMatch(output, /could not pull required container base image/);
+  assert.match(output, /--skip-image-check: skipping/);
+  // Proves this run DID proceed past the (skipped) gate, all the way to
+  // the next docker call the stub doesn't implement (`docker ps`) — the
+  // control for the test above: same env (a pull would fail if attempted),
+  // but with --skip-image-check the run gets past the gate instead of
+  // stopping at it.
+  assert.match(output, /unsupported subcommand/, "the run must proceed past the (skipped) gate to the next docker call");
 });
 
 // ---------------------------------------------------------------------------
@@ -1011,6 +1379,189 @@ test("buildPlan: tier=full's o11y spawn injects O11Y_LOCAL_PUBLIC_ORIGIN matchin
 });
 
 // ---------------------------------------------------------------------------
+// --fresh (dev-persist task): compose.yml's minio/clickhouse now use named
+// volumes; --fresh wipes them + workers/o11y/.wrangler/state together.
+// ---------------------------------------------------------------------------
+
+test("parseArgs: --fresh is only valid with --tier=full", () => {
+  assert.equal(parseArgs(["--tier=full", "--fresh"]).errors.length, 0);
+  assert.equal(parseArgs(["--tier=full", "--fresh"]).fresh, true);
+  assert.equal(parseArgs(["--tier=1", "--fresh"]).errors.length, 1);
+  assert.equal(parseArgs(["--tier=2", "--fresh"]).errors.length, 1);
+  // Allowed with --help and no --tier (mirrors --replay/--reset-local-db).
+  assert.equal(parseArgs(["--help", "--fresh"]).errors.length, 0);
+});
+
+test("parseArgs: --fresh defaults to false", () => {
+  assert.equal(parseArgs(["--tier=full"]).fresh, false);
+});
+
+test("composeDownArgs: no -v by default (the Ctrl-C/kept-data path); -v only when fresh", () => {
+  const plain = composeDownArgs("/x/compose.yml");
+  assert.deepEqual(plain, ["compose", "-f", "/x/compose.yml", "down"]);
+  assert.ok(!plain.includes("-v"));
+
+  const fresh = composeDownArgs("/x/compose.yml", { fresh: true });
+  assert.deepEqual(fresh, ["compose", "-f", "/x/compose.yml", "down", "-v"]);
+});
+
+test("o11yDevDataModeLine: exact startup mode line for both cases", () => {
+  assert.equal(o11yDevDataModeLine(false), "o11y local data: kept (MinIO/ClickHouse volumes + o11y worker state)");
+  assert.equal(o11yDevDataModeLine(true), "o11y local data: fresh");
+});
+
+test("resetO11yLocalState: runs `docker compose down -v` scoped to the given project, and removes only <o11yDir>/.wrangler/state", () => {
+  withTmpDir((dir) => {
+    const o11yDir = path.join(dir, "workers", "o11y");
+    const otherDir = path.join(dir, "workers", "api"); // must never be touched
+    mkdirSync(path.join(o11yDir, ".wrangler", "state", "v3", "do"), { recursive: true });
+    writeFileSync(path.join(o11yDir, ".wrangler", "state", "v3", "do", "marker.txt"), "x");
+    // A file directly under o11yDir (a sibling of .wrangler/, not under it)
+    // — this is what actually catches a rm-path widened to o11yDir itself
+    // (or to `dir`): the `.wrangler/state` assertion below stays trivially
+    // true either way (a deleted parent takes every child path down with
+    // it), this one does not.
+    writeFileSync(path.join(o11yDir, ".dev.vars"), "O11Y_ENV=local\n");
+    mkdirSync(path.join(otherDir, ".wrangler", "state"), { recursive: true });
+    writeFileSync(path.join(otherDir, ".wrangler", "state", "keep-me.txt"), "x");
+
+    const calls = [];
+    const execFileSyncImpl = (cmd, args, opts) => calls.push({ cmd, args, opts });
+    const composeFile = "/x/compose.yml";
+    const composeEnv = { COMPOSE_PROJECT_NAME: "o11y-q1-test" };
+
+    const result = resetO11yLocalState({ o11yDir, composeFile, composeEnv, execFileSyncImpl });
+
+    assert.equal(calls.length, 1, "exactly one docker invocation");
+    assert.equal(calls[0].cmd, "docker");
+    assert.ok(calls[0].args.includes("-v"), "down -v (the whole point of --fresh)");
+    assert.deepEqual(calls[0].args, ["compose", "-f", composeFile, "down", "-v"]);
+    assert.equal(calls[0].opts.env.COMPOSE_PROJECT_NAME, "o11y-q1-test", "scoped to the right project only");
+
+    assert.equal(result.composeDownRan, true);
+    assert.equal(result.stateDirRemoved, true);
+    assert.equal(existsSync(path.join(o11yDir, ".wrangler", "state")), false, "o11y worker state dir removed");
+    assert.equal(existsSync(path.join(o11yDir, ".dev.vars")), true, "rm scoped to .wrangler/state, not all of o11yDir");
+    assert.equal(existsSync(path.join(otherDir, ".wrangler", "state", "keep-me.txt")), true, "workers/api's own state untouched");
+  });
+});
+
+test("resetO11yLocalState: without composeFile/composeEnv (o11y:dev's own --fresh), no docker call is made at all", () => {
+  withTmpDir((dir) => {
+    const o11yDir = path.join(dir, "workers", "o11y");
+    mkdirSync(path.join(o11yDir, ".wrangler", "state"), { recursive: true });
+    const execFileSyncImpl = () => {
+      throw new Error("must not be called — o11y:dev never runs docker compose");
+    };
+    const result = resetO11yLocalState({ o11yDir, execFileSyncImpl });
+    assert.equal(result.composeDownRan, false);
+    assert.equal(result.stateDirRemoved, true);
+    assert.equal(existsSync(path.join(o11yDir, ".wrangler", "state")), false);
+  });
+});
+
+test("resetO11yLocalState: logs 'nothing to delete' when there is no o11y worker state at all (never throws)", () => {
+  withTmpDir((dir) => {
+    const o11yDir = path.join(dir, "workers", "o11y");
+    const lines = [];
+    const result = resetO11yLocalState({ o11yDir, log: (l) => lines.push(l) });
+    assert.equal(result.stateDirRemoved, false);
+    assert.ok(lines.some((l) => l.includes("nothing to delete")));
+  });
+});
+
+// Revert evidence for the two tests above: dropping the `-v` push in
+// `composeDownArgs({ fresh: true })`'s branch makes the first assertion in
+// "runs `docker compose down -v` scoped..." fail (`args.includes("-v")` is
+// false); widening `resetO11yLocalState`'s rm target from
+// `path.join(o11yDir, ".wrangler", "state")` to `o11yDir` itself (or to
+// `dir`) makes "workers/api's own state untouched" fail, since `otherDir`
+// sits next to `o11yDir` under the same tmp root.
+
+test("o11yLedgerCommittedKeyCount: counts only 'done:' keys in the InboxWriter DO's real SQLite storage, across multiple .sqlite files", async () => {
+  await withTmpDir(async (dir) => {
+    const o11yDir = path.join(dir, "workers", "o11y");
+    const inboxDir = path.join(o11yDir, ".wrangler", "state", "v3", "do", "handsontable-demos-o11y-InboxWriter");
+    mkdirSync(inboxDir, { recursive: true });
+
+    function makeKvSqlite(fileName, rows) {
+      const db = new DatabaseSync(path.join(inboxDir, fileName));
+      db.exec("CREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB) WITHOUT ROWID");
+      for (const key of rows) db.prepare("INSERT INTO _cf_KV (key, value) VALUES (?, ?)").run(key, Buffer.from("1"));
+      db.close();
+    }
+    makeKvSqlite("aaa.sqlite", ["done:inbox/tenant/2026-09-24/one", "done:inbox/tenant/2026-09-24/two", "hash:20260924:abc", "wake:xyz"]);
+    makeKvSqlite("bbb.sqlite", ["done:inbox/tenant/2026-09-24/three"]);
+    // metadata.sqlite (real wrangler layout) never has a _cf_KV table — must
+    // be skipped, not counted as an error.
+    const metaDb = new DatabaseSync(path.join(inboxDir, "metadata.sqlite"));
+    metaDb.exec("CREATE TABLE something_else (id INTEGER)");
+    metaDb.close();
+
+    const count = await o11yLedgerCommittedKeyCount(o11yDir);
+    assert.equal(count, 3);
+  });
+});
+
+test("o11yLedgerCommittedKeyCount: 0 (never throws) when there's no o11y worker state yet", async () => {
+  await withTmpDir(async (dir) => {
+    const count = await o11yLedgerCommittedKeyCount(path.join(dir, "workers", "o11y"));
+    assert.equal(count, 0);
+  });
+});
+
+test("findComposeVolume: null when docker finds nothing for that project+key; the resolved name otherwise", () => {
+  const found = findComposeVolume({
+    composeProjectName: "o11y-q1",
+    volumeKey: "minio-data",
+    execFileSyncImpl: () => "o11y-q1_minio-data\n",
+  });
+  assert.equal(found, "o11y-q1_minio-data");
+
+  const missing = findComposeVolume({
+    composeProjectName: "o11y-q1",
+    volumeKey: "minio-data",
+    execFileSyncImpl: () => "",
+  });
+  assert.equal(missing, null);
+});
+
+test("detectO11yStateDivergence: never touches docker when the ledger has zero committed keys (cheap path first)", async () => {
+  const result = await detectO11yStateDivergence({
+    composeProjectName: "o11y-q1",
+    o11yDir: "/does/not/matter",
+    execFileSyncImpl: () => {
+      throw new Error("must not be called — nothing to warn about");
+    },
+    countCommittedLedgerKeys: async () => 0,
+  });
+  assert.deepEqual(result, { divergent: false, committedCount: 0 });
+});
+
+test("detectO11yStateDivergence: divergent when the ledger has committed keys but the MinIO volume is gone (the warning fires)", async () => {
+  const result = await detectO11yStateDivergence({
+    composeProjectName: "o11y-q1",
+    o11yDir: "/does/not/matter",
+    execFileSyncImpl: () => "", // docker volume ls -q finds nothing
+    countCommittedLedgerKeys: async () => 7,
+  });
+  assert.equal(result.divergent, true);
+  assert.equal(result.committedCount, 7);
+  assert.match(formatO11yDivergenceWarning(result.committedCount), /--fresh/);
+  assert.match(formatO11yDivergenceWarning(result.committedCount), /7/);
+});
+
+test("detectO11yStateDivergence: NOT divergent when committed keys exist but the MinIO volume also exists (normal case, not just fewer bytes)", async () => {
+  const result = await detectO11yStateDivergence({
+    composeProjectName: "o11y-q1",
+    o11yDir: "/does/not/matter",
+    execFileSyncImpl: () => "o11y-q1_minio-data\n",
+    countCommittedLedgerKeys: async () => 7,
+  });
+  assert.equal(result.divergent, false);
+});
+
+// ---------------------------------------------------------------------------
 // drift: every env var / flag the script reads is documented
 // ---------------------------------------------------------------------------
 
@@ -1049,12 +1600,16 @@ test("drift: every env var read by dev.mjs/dev-lib.mjs/o11y-dev.mjs is documente
   assert.deepEqual(missing, [], `env var(s) not documented (as a backtick-wrapped name) in run-and-deploy.md's Run locally section: ${missing.join(", ")}`);
 });
 
-test("drift: --tier, --replay, and --help are documented in run-and-deploy.md's Run locally section", () => {
+test("drift: --tier, --replay, --fresh, and --help are documented in run-and-deploy.md's Run locally section", () => {
   const doc = readFileSync(path.join(RUNNER_ROOT, "docs", "run-and-deploy.md"), "utf8");
   const section = extractSection(doc, "## Run locally");
-  for (const flag of ["--tier", "--replay", "--help"]) {
+  for (const flag of ["--tier", "--replay", "--fresh", "--help"]) {
     assert.match(section, new RegExp(flag.replace("-", "\\-")), `${flag} not documented in the Run locally section`);
   }
+});
+
+test("drift: --fresh is documented in dev.mjs --help (HELP_TEXT)", () => {
+  assert.match(HELP_TEXT, /--fresh/);
 });
 
 test("drift: pnpm dev / dev:live / dev:full / o11y:dev are all documented in run-and-deploy.md's Run locally section", () => {

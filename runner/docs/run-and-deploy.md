@@ -54,6 +54,23 @@ minio/clickhouse stack this run itself started. It does **not** guarantee no
 orphaned Tier-2 Sandbox containers — see "What Ctrl-C actually cleans up"
 below for why, and for what it prints instead.
 
+**Container base-image pre-pull.** Before starting any worker, `dev:live`/
+`dev:full` read every `FROM` base image the tier's Dockerfiles declare
+(`containers/live/Dockerfile` + `containers/builder/Dockerfile` for the API
+worker, plus `containers/o11y/Dockerfile` for `dev:full`'s o11y worker —
+looked up from each worker's own `wrangler.jsonc` `containers[].image`, not
+hardcoded), runs `docker image inspect` on each, and `docker pull`s (3
+attempts, with backoff) any that's missing, printing `[images]` progress
+lines. This is what `wrangler dev`'s own container build otherwise skips
+silently: without it, a missing base image (e.g. a Docker Hub timeout
+pulling `cloudflare/sandbox:0.12.3`) can leave `wrangler dev` running with a
+broken container build, surfacing only later as an opaque Tier-2
+session-start failure. If a pull still fails after every retry, `dev.mjs`
+prints which image, the Docker error's last line, and the exact
+`docker pull ...` command to retry by hand, then exits before starting any
+worker. Pass `--skip-image-check` to skip this check entirely (e.g. offline,
+with the images already built locally).
+
 Every port is overridable by env var, defaulting to what's below; two
 workers under `wrangler dev` always get their own, distinct `--port` and
 `--inspector-port` so two dev sessions on the same machine never collide on
@@ -200,11 +217,40 @@ Viewer save a change back to a provisioned dashboard or datasource — those
 stay read-only, and Grafana's state is disposable anyway (a fresh DB on
 every wake).
 
+**Local o11y data persists across a restart.** `containers/o11y/compose.yml`
+gives MinIO and ClickHouse named volumes (Grafana itself stays ephemeral by
+design), and `workers/o11y/.wrangler/state` (the InboxWriter ledger, dedupe
+hashes, local R2 inbox objects) was already kept across a restart before
+this. So a plain Ctrl-C + `pnpm dev:full` again keeps your local
+logs/metrics AND the ledger that tracks them, together — `dev.mjs` prints
+one line at startup either way: `o11y local data: kept (MinIO/ClickHouse
+volumes + o11y worker state)`, or `o11y local data: fresh` when you passed
+`--fresh`.
+
+**`--fresh`** wipes all of that local o11y state together in one shot:
+`docker compose ... down -v` for this project's minio/clickhouse volumes,
+AND `workers/o11y/.wrangler/state`. It prints exactly what it removed.
+Wiping only one half (e.g. `docker volume rm` by hand) is what causes the
+stack to look "broken" after a restart: a `done:` (committed) ledger key
+whose MinIO data is gone is never re-drained on its own, and a fixture
+replay's dedupe hashes can then block the same data from ever refilling the
+now-empty store. If `dev.mjs` finds exactly that mismatch (the MinIO volume
+is gone but the ledger still has committed keys) it prints a warning
+recommending `--fresh` — or, if you'd rather keep what R2 still has (7-day
+retention), `POST /grafana/_o11y/reopen` once the worker is up. `--fresh`
+never touches `workers/api`'s local D1 — that's `--reset-local-db`, a
+different flag for a different store. `pnpm o11y:dev` also accepts
+`--fresh`, for just its own half (workers/o11y's worker state) — it never
+runs `docker compose` itself, so it can't wipe the compose volumes; see that
+command's own startup log for the divergence risk if you're also running
+`dev:full`'s compose stack.
+
 **What Ctrl-C actually cleans up.** Every `wrangler dev`/`vite`/capture-server
 child is spawned in its own process group and signalled as a group on
 Ctrl-C (SIGINT — also SIGTERM and SIGHUP), with an 8s grace period before
 escalating to SIGKILL, and `dev:full` also runs `docker compose ... down`
-for the minio/clickhouse stack it started.
+(never `-v` — see above) for the minio/clickhouse stack it started, keeping
+its named volumes for next time.
 
 What it does **not** do: stop a Tier-2 Sandbox/GrafanaBox container on your
 behalf. Measured for this task: Ctrl-C does not make wrangler's own
@@ -408,19 +454,27 @@ the "See in documentation" link.
   `E2E_TELEMETRY=1 pnpm e2e e2e/telemetry-faro.spec.ts e2e/example-analytics.spec.ts`
   — both specs are self-contained (their own preview server, `page.route`
   interception of `/telemetry/collect`, no o11y worker or API worker needed),
-  so they fit the deterministic PR suite. **Not wired in here, decided by T11:**
-  `e2e/telemetry-metrics.spec.ts` and `e2e/o11y-local.spec.ts`
-  (`E2E_LIVE=1`/`E2E_O11Y_LOCAL=1`) both need infrastructure a per-PR runner
-  should not own — a real local API worker with a live Tier-2 container for the
-  first, that plus a real o11y worker, local ClickHouse/MinIO (Docker) and
-  applied D1 migrations for the second. This is `docs/TESTING.md`'s own named
-  exception to "every gate needs a workflow home" (a spec whose prerequisite
-  stack costs more than a PR job should), not a silent gap: run both locally,
-  by hand, before any change that touches the ingest path (`workers/o11y/src/
-  normalise/**`, `apps/authoring/src/telemetry/**`, `packages/runtime/src/
-  telemetry/**`) and before every launch — `e2e/o11y-local.spec.ts`'s own file
-  header has the exact setup commands. A future task may still give these a
-  scheduled (not per-PR) CI home; that decision is left open, not taken here.
+  so they fit the deterministic PR suite.
+- **`e2e-o11y-local.yml`** (R1-followups): `e2e/telemetry-metrics.spec.ts`
+  (`E2E_LIVE=1` + `E2E_TELEMETRY=1`) and `e2e/o11y-local.spec.ts`
+  (`E2E_O11Y_LOCAL=1`) both need infrastructure the per-PR `ci.yml` suite
+  should not own on every PR — a real local API worker with a live Tier-2
+  container (Docker) for the first, that plus a real o11y worker, local
+  ClickHouse/MinIO (Docker compose) and applied D1 migrations for the second.
+  Rather than leaving them unhomed (`docs/TESTING.md`'s "every gate needs a
+  workflow home" rule), they get their own workflow, run directly on
+  `ubuntu-latest` (not the shared Playwright container image — Docker-in-Docker
+  can't reach a sibling container's `localhost`, and `wrangler dev` needs a
+  real Docker daemon to build the Tier-2 container image, which the bare
+  runner already ships, same as `master.yml`'s `deploy-api` job relies on):
+  `workflow_dispatch`, nightly (02:30 UTC), and on any PR touching
+  `workers/o11y/**`, `containers/o11y/**`, `apps/authoring/src/telemetry/**`,
+  or either spec file. Each job's own guard step (`scripts/ci/
+  assert-e2e-ran.mjs`) fails if the gate ran zero tests or skipped any — a
+  mistyped env var must not read as a green, empty run. Run both specs
+  locally, by hand, before any change that touches the ingest path and before
+  every launch too — `e2e/o11y-local.spec.ts`'s own file header has the exact
+  setup commands.
 
 ### Authoring app (frontend)
 
