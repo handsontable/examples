@@ -52,6 +52,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          # setup-node v5 auto-enables pnpm caching from the root package.json
+          # `packageManager` field; this job never installs pnpm.
+          package-manager-cache: false
 
       - name: Test-presence gate (source change ⇒ test change)
         run: node runner/scripts/check-test-presence.mjs "${{ github.base_ref }}"
