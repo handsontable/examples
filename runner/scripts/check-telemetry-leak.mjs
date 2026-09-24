@@ -30,6 +30,11 @@
 //    `reportDemoEvent` test bypass). Gated by the same `localTestSentryEnabled()`
 //    (`VITE_TELEMETRY_LOCAL === "1"` + localhost/127.0.0.1) as the CrashProbe
 //    seam, same dead-code-elimination guarantee.
+//  - `__t06Telemetry` — `faro.ts`'s Z-D-H1 e2e-only hook (the facade's
+//    `event`/`metric`, exposed so `e2e/telemetry-faro.spec.ts` can prove
+//    repeat pushes are not deduped). Gated on the same build-time+host pair
+//    inline in `faro.ts` (it does not import `sentry.ts`, to avoid a cycle),
+//    same dead-code-elimination guarantee.
 //
 // Exit 0 and prints "ok" when none of the sentinels are found; exit 1 and
 // lists every match otherwise.
@@ -57,6 +62,7 @@ const SENTINELS = [
   "VITE_TELEMETRY_LOCAL",
   "__t06SentryCapture",
   "__t06ReportDemoEvent",
+  "__t06Telemetry",
 ];
 
 const jsFiles = readdirSync(assetsDir).filter((f) => f.endsWith(".js"));

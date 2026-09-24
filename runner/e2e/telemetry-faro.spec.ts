@@ -257,6 +257,64 @@ test.describe("Faro in the authoring app (T06)", () => {
     assert(!scannerHit, "the Office scanner's injected rejection must never reach Faro/telemetry/collect");
   });
 
+  // Z-D-H1: faro-core's default `dedupe: true` keeps ONE `lastPayload` per
+  // API (events/measurements) and silently skips a push that deep-equals
+  // the previous one, with no time window — a real second `example.saved`
+  // (repeat Save, Download, Share) or a second `example.open` on a guide's
+  // second example (identical `ref`-keyed attrs) never left the browser
+  // before the fix. `faro.ts`'s `event()`/`metric()` now pass
+  // `skipDedupe: true`; `window.__t06Telemetry` (a build+host-gated e2e-only
+  // hook, same guarantee as `__t06ReportDemoEvent` — see faro.ts's own doc
+  // comment) calls the real facade methods directly so this proves the
+  // facade's own behaviour without driving the real save/download UI.
+  // Fails without the fix: reverting either `skipDedupe: true` makes the
+  // second identical push vanish and this poll times out at 1, not 2.
+  test("Z-D-H1: two identical example.saved events both reach Faro (facade skipDedupe)", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+
+    const ref = "t06-h1-event-probe-" + Date.now();
+    await page.evaluate((probeRef) => {
+      const hook = (
+        window as unknown as {
+          __t06Telemetry?: { event: (name: string, attrs: Record<string, string>) => void };
+        }
+      ).__t06Telemetry;
+      hook?.event("example.saved", { surface: "authoring", kind: "docs", ref: probeRef });
+      hook?.event("example.saved", { surface: "authoring", kind: "docs", ref: probeRef });
+    }, ref);
+
+    const matching = () =>
+      captured
+        .flatMap((b) => b.events ?? [])
+        .filter((e) => e.name === "example.saved" && (e.attributes as Record<string, unknown> | undefined)?.["hot.ref"] === ref);
+    await expect.poll(matching).toHaveLength(2);
+  });
+
+  test("Z-D-H1: two identical bucket.resolve_ms measurements both reach Faro (facade skipDedupe)", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+
+    const bucket = "t06-h1-metric-probe-" + Date.now();
+    await page.evaluate((probeBucket) => {
+      const hook = (
+        window as unknown as {
+          __t06Telemetry?: { metric: (name: string, values: Record<string, number>, attrs: Record<string, string>) => void };
+        }
+      ).__t06Telemetry;
+      hook?.metric("bucket.resolve_ms", { duration_ms: 0 }, { bucket: probeBucket, outcome: "ok" });
+      hook?.metric("bucket.resolve_ms", { duration_ms: 0 }, { bucket: probeBucket, outcome: "ok" });
+    }, bucket);
+
+    const matching = () =>
+      captured
+        .flatMap((b) => b.measurements ?? [])
+        .filter((m) => m.type === "bucket.resolve_ms" && (m.context as Record<string, unknown> | undefined)?.["hot.bucket"] === bucket);
+    await expect.poll(matching).toHaveLength(2);
+  });
+
   test("an uncaught error reaches Faro (window.onerror, via ErrorsInstrumentation)", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);

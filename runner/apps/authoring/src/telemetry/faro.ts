@@ -173,14 +173,29 @@ function attrsToContext(attrs?: object): Record<string, string> | undefined {
 
 function buildFacade(faro: Faro, pageLoadId: string): Telemetry {
   return {
+    // Z-D-H1 fix: `skipDedupe: true` on both calls below. `initializeFaro`
+    // (below) passes no `dedupe` override, so faro-core's `makeCoreConfig`
+    // default `dedupe = true` still applies GLOBALLY — this is what still
+    // collapses a `window.onerror`/`unhandledrejection` storm for
+    // `pushError` (unaffected by this fix; `error()` below is untouched).
+    // But faro-core's event/measurement dedupe keeps exactly ONE
+    // `lastPayload` per API and skips a push whenever it deep-equals the
+    // PREVIOUS push, with no time window — so two `example.saved` (or
+    // `example.open` on a guide's second example — see H1's `ref`-only
+    // taxonomy) calls with an identical attribute bag back-to-back silently
+    // drop the second one before it ever leaves the browser. Server-side
+    // redelivery hashing (`normalise/faro.ts`) already includes the client
+    // `timestamp`, and AE-only `example.*` points are never hashed at all,
+    // so this client-side collapse buys no real dedupe value for these two
+    // calls — only silent data loss on every legitimate repeat action.
     metric(name: MetricName, values: MetricValues, attrs: HotAttrs) {
       faro.api.pushMeasurement(
         { type: name, values: { ...values } as unknown as Record<string, number> },
-        { context: attrsToContext(attrs) },
+        { context: attrsToContext(attrs), skipDedupe: true },
       );
     },
     event(name: EventName, attrs: HotAttrs & Record<string, string>) {
-      faro.api.pushEvent(name, attrsToContext(attrs));
+      faro.api.pushEvent(name, attrsToContext(attrs), undefined, { skipDedupe: true });
     },
     // A HANDLED error only (contract §6 doc on `Telemetry.error`) — always
     // tagged `context.handled = "true"` so the o11y worker's ingest-time split
@@ -253,7 +268,28 @@ export function initFaroTelemetry(options: InitFaroOptions): Telemetry | null {
   faro.metas.add(() => ({ session: { id: options.pageLoadId } }));
 
   faroInstance = faro;
-  return buildFacade(faro, options.pageLoadId);
+  const impl = buildFacade(faro, options.pageLoadId);
+
+  // Z-D-H1 e2e-only hook — same dead-code-elimination guarantee as
+  // `sentry.ts`'s `localTestSentryEnabled()` hooks (`__t06SentryCapture`/
+  // `__t06ReportDemoEvent`) and `main.tsx`'s CrashProbe: gated on the exact
+  // same build-time+host pair (`VITE_TELEMETRY_LOCAL === "1"`, a literal
+  // Vite replaces at build time, so a plain production build folds this
+  // whole branch — including the string literal below — to dead code;
+  // `scripts/check-telemetry-leak.mjs`'s SENTINELS list covers
+  // `__t06Telemetry` too, the durable proof it never survives a build
+  // without the flag). `e2e/telemetry-faro.spec.ts` calls `event`/`metric`
+  // directly through it to prove the H1 fix (two identical repeat pushes
+  // are NOT collapsed by the facade) without having to drive the real
+  // save/download UI just to fire two identical `example.saved` events.
+  if (localFlag === "1" && typeof window !== "undefined" && (hostname === "localhost" || hostname === "127.0.0.1")) {
+    (window as unknown as { __t06Telemetry?: Pick<Telemetry, "event" | "metric"> }).__t06Telemetry = {
+      event: impl.event,
+      metric: impl.metric,
+    };
+  }
+
+  return impl;
 }
 
 /**
