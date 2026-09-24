@@ -559,7 +559,17 @@ export class GrafanaBox extends Container<Env> {
       this.ctx,
       "o11y.drain",
       { count: result.outcomes.length, duration_ms: Date.now() - startedAt, bytes: bytesPushed, value: droppedOld },
-      { reason: current.reason, outcome: result.stoppedEarly ? "error" : rejectedKeys.length > 0 ? "partial" : "ok" },
+      {
+        reason: current.reason,
+        // NB4 (re-review 2): a mixed-outcome key (at least one chunk 2xx,
+        // at least one permanently 400'd) stays `provisional` since row 19
+        // — correct for durability — but that also meant it fell out of
+        // `rejectedKeys` entirely, so this point reported `ok` for a drain
+        // that permanently lost real data. `recordPartialReject` (above)
+        // already logs the loss as its own event; this outcome must not
+        // hide it too.
+        outcome: result.stoppedEarly ? "error" : rejectedKeys.length > 0 || partiallyRejected.length > 0 ? "partial" : "ok",
+      },
     );
 
     if (result.stoppedEarly) {

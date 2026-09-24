@@ -56,7 +56,7 @@ import { pruneFingerprintRegistry } from "./registry.js";
 import type { StorageLike } from "./storage.js";
 import {
   backlogOldestAgeMs,
-  newFingerprintsSince,
+  newFingerprintsAfterKey,
   readAlertMeta,
   readAlertState,
   readDrainsPaused,
@@ -413,8 +413,11 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     return rejectedKeyCount(adaptStorage(this.ctx.storage));
   }
 
-  async newFingerprintsSince(sinceMs: number): Promise<{ names: string[]; truncated: boolean; lastMs: number | null }> {
-    return newFingerprintsSince(adaptStorage(this.ctx.storage), sinceMs);
+  async newFingerprintsAfterKey(
+    afterKey: string | null,
+    fallbackSinceMs: number,
+  ): Promise<{ entries: { key: string; name: string; firstSeenMs: number }[]; truncated: boolean }> {
+    return newFingerprintsAfterKey(adaptStorage(this.ctx.storage), afterKey, fallbackSinceMs);
   }
 
   async alertState(rule: string): Promise<AlertState | undefined> {

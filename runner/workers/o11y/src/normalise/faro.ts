@@ -83,7 +83,7 @@ const LITE_VITAL_KEYS: Readonly<Record<string, string>> = {
 
 /**
  * Controller handoff (defence in depth for finding D-I2's server-side half,
- * F3-report.md "Not fixed / handed off"): F3 applied the shared noise gates
+ * "not fixed / handed off" by the final review): F3 applied the shared noise gates
  * to Faro's browser-side `beforeSend`
  * (`apps/authoring/src/eventGate.ts#isUnhandledNoise`/`isOfficeScannerRejection`),
  * which already closes the failure scenario the finding names for a normal

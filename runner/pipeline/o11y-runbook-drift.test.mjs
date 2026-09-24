@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // T10 — the runbook drift gate (task acceptance criterion: "every secret and
@@ -122,6 +124,37 @@ const CI_ONLY_SECRET_NAMES = ["R2_MAPS_ACCESS_KEY_ID", "R2_MAPS_SECRET_ACCESS_KE
 test("the CI-only R2 maps-upload secrets are documented in run-and-deploy.md", () => {
   const missing = CI_ONLY_SECRET_NAMES.filter((name) => !runbook.includes(`\`${name}\``));
   assert.deepEqual(missing, [], `not documented as a backtick-wrapped name in docs/run-and-deploy.md: ${missing.join(", ")}`);
+});
+
+// Re-review 2, NB9 (merge blocker): repo docs/code must never point a
+// reader at the gitignored planning/report directory this feature's fix
+// rounds were tracked in (its own nested .gitignore is `*`, so any such
+// reference is a dead link for anyone else who clones this repo). `git
+// ls-files` scopes this to TRACKED files only — a gitignored scratch file
+// legitimately mentioning it is not this test's concern. The banned
+// substring is assembled at runtime, and deliberately never spelled out
+// contiguously anywhere in THIS file either (comments included), so this
+// test cannot trip over its own source describing what it checks for.
+const BANNED_DIR_NAME = ["s", "uperpower", "s"].join("");
+const BANNED_SUBSTRING = "." + BANNED_DIR_NAME;
+
+test(`no tracked file under runner/ mentions the gitignored ${BANNED_DIR_NAME} directory`, () => {
+  const runnerRoot = fileURLToPath(new URL("..", import.meta.url));
+  const tracked = execFileSync("git", ["ls-files"], { cwd: runnerRoot, encoding: "utf8" })
+    .split("\n")
+    .filter(Boolean);
+  const offenders = [];
+  for (const relPath of tracked) {
+    const fullPath = path.join(runnerRoot, relPath);
+    let contents;
+    try {
+      contents = fs.readFileSync(fullPath, "utf8");
+    } catch {
+      continue; // a submodule entry, a symlink to nowhere, etc. — not a text file to grep
+    }
+    if (contents.includes(BANNED_SUBSTRING)) offenders.push(relPath);
+  }
+  assert.deepEqual(offenders, [], `these tracked files reference the banned directory: ${offenders.join(", ")}`);
 });
 
 test("configFieldNames ignores resource-binding types and comment-only mentions", () => {

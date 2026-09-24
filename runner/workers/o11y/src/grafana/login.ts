@@ -2,8 +2,8 @@
 // `POST /grafana/_o11y/session`, `GET /grafana/_o11y/logout` (a same-origin
 // sign-out page), `POST /grafana/_o11y/logout` (the actual state-clearing
 // action) — the broker login round trip that replaces Cloudflare Access for
-// `/grafana/*` (controller decision K1; see
-// `.superpowers/sdd/README/final/broker-grafana-feasibility.md` and
+// `/grafana/*` (controller decision K1 — the feasibility probe that
+// concluded no Cloudflare Access application is needed here; see
 // ADR-0041 §B.5/§H).
 //
 // None of these routes ever calls `getGrafanaBoxStub` — an unauthenticated
@@ -11,7 +11,7 @@
 // (session) must never wake the box, the same "gate first, box second"
 // ordering `grafana/proxy.ts` already enforces for the proxy route itself.
 //
-// K1 fix round (security review `.superpowers/sdd/README/final/K1-review.md`):
+// K1 fix round (security review of the broker login round trip):
 // - I3: the session TTL is capped at the broker token's own `exp`
 //   (`gates/session.ts#computeSessionTtlSeconds`), not a flat 12h.
 // - M3: `/login` refuses a missing/invalid secret or broker URL with a clear

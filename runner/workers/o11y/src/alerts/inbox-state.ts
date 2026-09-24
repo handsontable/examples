@@ -76,7 +76,7 @@ export async function rejectedKeyCount(storage: StorageLike): Promise<number> {
   return count;
 }
 
-/** How many `fpts:` rows one `newFingerprintsSince` call may read — bounds
+/** How many `fpts:` rows one `newFingerprintsAfterKey` call may read — bounds
  *  the cost of the "new fingerprint" alert's own ten-minute cron tick (B-C1/
  *  A-I1 remainder, rereview.md row 13: "bound `newFingerprintsSince` so it
  *  doesn't list all of `fp:` every tick"). Generous relative to realistic
@@ -85,34 +85,56 @@ export async function rejectedKeyCount(storage: StorageLike): Promise<number> {
  *  residual risk (rate-capping Slack posts, not this read). */
 const NEW_FINGERPRINT_SCAN_LIMIT = 2000;
 
-export interface NewFingerprintsResult {
-  names: string[];
-  /** `true` when the scan hit {@link NEW_FINGERPRINT_SCAN_LIMIT} — more
-   *  fingerprints may exist past `lastMs` that this call did not read. */
-  truncated: boolean;
-  /** The last (newest) `firstSeenMs` actually read this call, or `null`
-   *  when nothing was found. The caller (`alerts/rules.ts#newFingerprintRule`)
-   *  must not advance its cursor past this value when `truncated` — see that
-   *  file's own doc comment on why. */
-  lastMs: number | null;
+export interface NewFingerprintEntry {
+  /** The exact `fpts:` storage key this entry was read from. The caller
+   *  (`alerts/rules.ts#newFingerprintRule`) persists this verbatim as its
+   *  keyset cursor so the next call resumes exactly after it — never by
+   *  millisecond (re-review 2, NB1: a millisecond shared by
+   *  {@link NEW_FINGERPRINT_SCAN_LIMIT} or more entries stalled the old
+   *  ms-based cursor forever, because `lastMs - 1` always re-equalled the
+   *  stored cursor on the next tick, so the same truncated page was read
+   *  again every time). */
+  key: string;
+  name: string;
+  firstSeenMs: number;
 }
 
-/** `fp:<fingerprint>` names first seen strictly after `sinceMs`, read via
- *  the `fpts:` time-ordered index (`registry.ts`) — a bounded `start`/`end`
- *  range scan, never the full (alphabetically, not chronologically, ordered)
- *  `fp:` prefix. */
-export async function newFingerprintsSince(storage: StorageLike, sinceMs: number): Promise<NewFingerprintsResult> {
-  const start = fingerprintTimeIndexKey(sinceMs + 1, "");
-  const end = `${FPTS_PREFIX}￿`; // exclusive upper bound past every possible fpts: key
-  const page = await storage.list<number>({ start, end, limit: NEW_FINGERPRINT_SCAN_LIMIT });
+export interface NewFingerprintsPage {
+  entries: NewFingerprintEntry[];
+  /** `true` when the scan hit {@link NEW_FINGERPRINT_SCAN_LIMIT} — more
+   *  fingerprints may exist past the last entry returned. */
+  truncated: boolean;
+}
 
-  const names: string[] = [];
-  let lastMs: number | null = null;
+/** `fp:<fingerprint>` entries read via the `fpts:` time-ordered index
+ *  (`registry.ts`), strictly after `afterKey` — a bounded `start`/`end`
+ *  range scan, never the full (alphabetically, not chronologically,
+ *  ordered) `fp:` prefix. `afterKey === null` means "no cursor yet" (first
+ *  ever call): the scan instead starts just after `fallbackSinceMs`.
+ *
+ *  `start` is documented as INCLUSIVE (`storage.ts#ListOptions`), so an
+ *  `afterKey` is re-fetched and dropped rather than appending a separator
+ *  byte to make the read exclusive — a real DO `list()`'s handling of a
+ *  literal NUL byte inside `start` was never probed, so this file does not
+ *  depend on it (re-review 2, NB1 fix). */
+export async function newFingerprintsAfterKey(
+  storage: StorageLike,
+  afterKey: string | null,
+  fallbackSinceMs: number,
+): Promise<NewFingerprintsPage> {
+  const start = afterKey ?? fingerprintTimeIndexKey(fallbackSinceMs + 1, "");
+  const end = `${FPTS_PREFIX}￿`; // exclusive upper bound past every possible fpts: key
+  // Ask for one extra row when resuming from a real cursor, so dropping the
+  // re-fetched `afterKey` row itself still leaves a full page.
+  const limit = NEW_FINGERPRINT_SCAN_LIMIT + (afterKey !== null ? 1 : 0);
+  const page = await storage.list<number>({ start, end, limit });
+
+  const entries: NewFingerprintEntry[] = [];
   for (const [storageKey, firstSeenMs] of page) {
-    names.push(fpFromFptsKey(storageKey));
-    if (typeof firstSeenMs === "number") lastMs = firstSeenMs;
+    if (afterKey !== null && storageKey === afterKey) continue;
+    entries.push({ key: storageKey, name: fpFromFptsKey(storageKey), firstSeenMs: Number(firstSeenMs) });
   }
-  return { names, truncated: page.size >= NEW_FINGERPRINT_SCAN_LIMIT, lastMs };
+  return { entries: entries.slice(0, NEW_FINGERPRINT_SCAN_LIMIT), truncated: page.size >= limit };
 }
 
 export async function readAlertState(storage: StorageLike, rule: string): Promise<AlertState | undefined> {

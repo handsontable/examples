@@ -329,7 +329,7 @@ export async function rejectedKeyRule(inboxWriter: InboxWriterApi, nowMs = Date.
 
 // ---- new handled-error fingerprint ------------------------------------------
 
-const NEW_FINGERPRINT_CURSOR_META_KEY = "newFingerprintCursorMs";
+const NEW_FINGERPRINT_CURSOR_META_KEY = "newFingerprintCursorKey";
 
 /** Fix round (C cross-note, PLAUSIBLE double/missed report): the cursor used
  *  to advance to `nowMs` — this rule's OWN wall-clock time at the start of
@@ -368,31 +368,49 @@ const CURSOR_GRACE_MS = 2 * 60 * 1000;
  *  large legitimate batch, must not grow one Slack message without bound). */
 const MAX_FINGERPRINTS_LISTED = 10;
 
+// Re-review 2, NB1 (G1 regression): a millisecond that holds
+// `NEW_FINGERPRINT_SCAN_LIMIT` (2,000) or more fingerprints stalled the old
+// ms-only cursor FOREVER — `lastMs - 1` always re-equals the stored cursor,
+// so the next tick re-reads the exact same truncated page and every later,
+// real fingerprint is never seen again. The cursor is now a KEYSET cursor:
+// it persists the exact `fpts:` storage key of the last entry it advanced
+// past (`inbox-state.ts#NewFingerprintEntry.key`), and the next tick resumes
+// strictly after that key (`newFingerprintsAfterKey`), never by millisecond
+// alone. Because a keyset position is a specific row, not a timestamp
+// bucket, 2,000+ entries sharing one ms no longer collapse to one
+// unadvanceable point — each tick still advances by up to
+// `NEW_FINGERPRINT_SCAN_LIMIT` rows even inside that single ms.
 export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Date.now()): Promise<RuleResult> {
-  const cursorRaw = await inboxWriter.getAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY);
-  const cursor = cursorRaw ? Number(cursorRaw) : nowMs - HOUR_MS; // first run: look back one hour
-  const { names: fresh, truncated, lastMs } = await inboxWriter.newFingerprintsSince(cursor);
-  // B-C1/A-I1 remainder (rereview.md row 13): `newFingerprintsSince` is now
-  // a BOUNDED read (`NEW_FINGERPRINT_SCAN_LIMIT`, inbox-state.ts) — if it
-  // truncated, entries past `lastMs` were never read this tick, so the
-  // cursor must not advance past them either, or they would be silently
-  // skipped forever (the exact bug this bound would otherwise reintroduce).
-  // `lastMs - 1` (not `lastMs`) re-includes `lastMs` itself next tick: two
-  // or more fingerprints can share the exact same first-seen ms (one
-  // ingest transaction stamps every fingerprint in the batch with the same
-  // `arrivalMs`), and truncation can cut a page mid-timestamp, so cutting
-  // at `lastMs` risks skipping a same-millisecond sibling that sorted just
-  // past the truncation point. Re-showing an already-reported name once
-  // more is a bounded, harmless duplicate (the same trade-off this rule
-  // already accepts for `CURSOR_GRACE_MS`, below); silently dropping one is
-  // not.
-  const truncatedCap = truncated && lastMs !== null ? lastMs - 1 : null;
-  // Never advance past `nowMs - CURSOR_GRACE_MS` (see that constant's doc
-  // comment); `Math.max` guards the first-run case, where the initial
-  // cursor (`nowMs - HOUR_MS`) already sits well below the lagged value.
-  const graceCap = nowMs - CURSOR_GRACE_MS;
-  const nextCursor = Math.max(cursor, truncatedCap !== null ? Math.min(graceCap, truncatedCap) : graceCap);
-  await inboxWriter.setAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY, String(nextCursor));
+  const cursorKeyRaw = await inboxWriter.getAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY);
+  // A stored value from before this fix (a bare ms number, no `fpts:`
+  // prefix) is not a valid keyset position — treat it the same as "no
+  // cursor yet" rather than passing a bogus `start` to `list()`.
+  const cursorKey = cursorKeyRaw && cursorKeyRaw.startsWith("fpts:") ? cursorKeyRaw : null;
+  const fallbackSinceMs = nowMs - HOUR_MS; // first run: look back one hour
+  const { entries, truncated } = await inboxWriter.newFingerprintsAfterKey(cursorKey, fallbackSinceMs);
+
+  // Grace-lag semantics, unchanged from the ms-cursor design (see the
+  // module-level `CURSOR_GRACE_MS` doc comment): every entry actually read
+  // is reported this tick (`fresh`, below) regardless of how recent it is,
+  // but the cursor only advances up to the last entry whose `firstSeenMs`
+  // is at/under `nowMs - CURSOR_GRACE_MS`. Entries are read in ascending
+  // key order (ms, then fingerprint — `fingerprintTimeIndexKey`'s shape),
+  // so the last entry meeting that bound is exactly the right resume point.
+  // A fingerprint inside the grace window is reported now and, at most,
+  // once more next tick (bounded, self-correcting double report) — never
+  // silently skipped, and — unlike the old ms cursor — this bound can never
+  // make the cursor get stuck: it always advances to a REAL row it read,
+  // never to a synthetic "ms - 1" value that could re-equal itself forever.
+  const graceCutoffMs = nowMs - CURSOR_GRACE_MS;
+  let advanceToKey: string | null = null;
+  for (const entry of entries) {
+    if (entry.firstSeenMs <= graceCutoffMs) advanceToKey = entry.key;
+  }
+  const nextCursorKey = advanceToKey ?? cursorKey;
+  if (nextCursorKey !== null) {
+    await inboxWriter.setAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY, nextCursorKey);
+  }
+  const fresh = entries.map((entry) => entry.name);
   const shown = fresh.slice(0, MAX_FINGERPRINTS_LISTED);
   const overflow = fresh.length - shown.length;
   // `truncated` means real, unread fingerprints may exist beyond what this

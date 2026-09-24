@@ -3,8 +3,8 @@
 // Pins the ADR-0041 §B.4 Loki keys and the Grafana sub-path/Live/auth.proxy
 // settings (ADR-0041 §A) that containers/o11y/** ships. Each assertion below
 // was verified by hand to fail when its key is removed from the source file
-// (T01 Outcome / T01-report.md records the exact removal -> failing
-// assertion -> revert loop, per docs/TESTING.md "no hollow assertions").
+// (each key's removal -> failing assertion -> revert loop, per
+// docs/TESTING.md "no hollow assertions").
 //
 // Zero-dependency parsing on purpose (T00 owns adding any new dependency,
 // runner/pnpm-lock.yaml has no yaml package): the Loki config files are

@@ -16,7 +16,7 @@
 //
 // Usage: node containers/o11y/local/stop-roundtrip.mjs
 // Exit code 0 = every check passed. Non-zero = at least one failed; see the
-// FAIL lines. Run through `rtk proxy` per .superpowers/sdd/README/COMMON.md.
+// FAIL lines. Run through `rtk proxy` — judge by exit code, not rtk's summary.
 
 import { spawnSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";

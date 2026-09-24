@@ -6,9 +6,7 @@
 // injectable parameters, so `pipeline/dev-script.test.mjs` can exercise the
 // real logic with stub binaries instead of spawning `wrangler`/`docker`/`vite`
 // for real. See `runner/docs/run-and-deploy.md`'s "Run locally" section for
-// the user-facing walkthrough this module implements, and
-// `.superpowers/sdd/README/final/dev-stack-research.md` for the design this
-// was built from.
+// the user-facing walkthrough this module implements.
 //
 // Env vars this module reads (kept in sync with docs/run-and-deploy.md by
 // `pipeline/dev-script.test.mjs`'s drift test — grep this file for `env.` if
@@ -284,6 +282,41 @@ export function checkDevVarsPortDrift(devVarsPath, key, expectedPort, fs = defau
   );
 }
 
+/**
+ * Re-review 2, NB8: an `workers/o11y/.dev.vars` bootstrapped BEFORE this
+ * task's `DEV_ADMIN`/`O11Y_SESSION_SECRET` handling existed (e.g. by the old
+ * standalone `o11y-dev.mjs`, which copied `.dev.vars.example` verbatim) has
+ * both declared EMPTY: `DEV_ADMIN=` and `O11Y_SESSION_SECRET=`. Neither
+ * `bootstrapDevVars` (only acts on a FRESH file) nor the `O11Y_ENV=local`
+ * check above catches this — the run starts, looks normal, and then
+ * `/grafana/_o11y/login` answers 500 (the declared-but-empty
+ * `O11Y_SESSION_SECRET` line silently wins over this run's own `--var`, the
+ * same `.dev.vars`-always-wins quirk `checkDevVarsPortDrift` guards
+ * elsewhere) with the local session bypass ALSO off (`DEV_ADMIN` empty).
+ * Warns for either case; does not fix the file itself — same "advisory, not
+ * fatal" posture as `checkDevVarsPortDrift`.
+ * @returns {string[]} zero or more warning lines
+ */
+export function checkO11yDevVarsStaleness(devVarsPath, fs = defaultFs) {
+  const warnings = [];
+  const devAdmin = readDevVarsLine(devVarsPath, "DEV_ADMIN", fs);
+  if (devAdmin === "") {
+    warnings.push(
+      `${devVarsPath} declares DEV_ADMIN= (empty) — the local session bypass is OFF. ` +
+        `Edit the file to set DEV_ADMIN=dev@handsontable.com, or delete it and re-run for a fresh bootstrap.`,
+    );
+  }
+  const sessionSecret = readDevVarsLine(devVarsPath, "O11Y_SESSION_SECRET", fs);
+  if (sessionSecret === "") {
+    warnings.push(
+      `${devVarsPath} declares O11Y_SESSION_SECRET= (empty) — this silently overrides this run's own ephemeral ` +
+        `--var (wrangler: .dev.vars always wins), so /grafana/_o11y/login will answer 500. Remove that line from ` +
+        `${devVarsPath}, or delete the file and re-run for a fresh bootstrap.`,
+    );
+  }
+  return warnings;
+}
+
 /** Reads one `KEY=value` line out of a `.dev.vars`-shaped file (quotes
  *  stripped), or `undefined` if absent/the file doesn't exist. Used for the
  *  O11Y_ENV=local sanity check (o11y) and the PREVIEW_HOST port-drift
@@ -316,6 +349,35 @@ export function o11yLocalPublicOrigin(ports) {
  *  injected only via `--var`/env, never written to a file. */
 export function ephemeralSecret(bytes = 32) {
   return randomBytes(bytes).toString("hex");
+}
+
+/** `--var NAME:value` argument names whose value must never be echoed back
+ *  to the log line `dev.mjs` prints for each spawned child (re-review 2,
+ *  NB6) — this run's own ephemeral `O11Y_SESSION_SECRET` is the only one
+ *  today, but a future ephemeral local secret should be added here rather
+ *  than growing a second ad hoc check. Does not (and cannot, from here)
+ *  keep the value out of `ps` output — an argv is visible to any local
+ *  process by nature — only out of dev.mjs's own terminal/log line. */
+const REDACT_VAR_NAMES = ["O11Y_SESSION_SECRET"];
+
+/** Returns `args` with the value half of every `--var NAME:value` pair
+ *  named in {@link REDACT_VAR_NAMES} replaced by `<redacted>`, for
+ *  `dev.mjs`'s own "spawning: ..." log line only — the real `args` array
+ *  passed to `spawn()` is never touched, only a copy built for display. */
+export function redactArgsForLog(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (args[i - 1] === "--var" && typeof arg === "string") {
+      const [name] = arg.split(":", 1);
+      if (REDACT_VAR_NAMES.includes(name)) {
+        out.push(`${name}:<redacted>`);
+        continue;
+      }
+    }
+    out.push(arg);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -420,22 +482,35 @@ export function isDockerAvailable(execFileSyncImpl) {
 }
 
 /**
- * Measured empirically for this task (see the report): Ctrl-C on `dev.mjs`
- * does NOT make wrangler's own Sandbox-container orchestration tear itself
- * down synchronously — a Tier-2 session's `workerd-handsontable-demos-api-
+ * Measured empirically for this task: Ctrl-C on `dev.mjs` does NOT make
+ * wrangler's own Sandbox-container orchestration tear itself down
+ * synchronously — a Tier-2 session's `workerd-handsontable-demos-api-
  * Sandbox-*`(-proxy) containers were both still `Up` several seconds after
- * the wrapper process itself had already exited. This machine also already
- * carried dozens of `Exited` containers from OTHER, unrelated `wrangler dev`
- * sessions (other worktrees/tasks) — proof that a blanket sweep by image or
- * name prefix would be unsafe (COMMON.md: several worktrees run `wrangler
- * dev` on this same machine at once). So cleanup is scoped to the narrowest
- * safe signal available: a container that did not exist when THIS run
- * started, does now, and matches this run's own worker name pattern. A
- * concurrent, unrelated `wrangler dev` creating a new same-named container
- * in the exact same few-second window would still be a false positive —
- * accepted as a known, reported limitation (see the report), not solved
- * here, since anything more precise would need something wrangler's own
- * Sandbox SDK does not expose (a per-session/per-worktree container label).
+ * the wrapper process itself had already exited.
+ *
+ * Re-review 2, NB2: this used to also `docker stop` every container that
+ * was new since this run started AND matched a name pattern
+ * (`/handsontable-demos-(api|o11y)/`). That is NOT a safe ownership proof —
+ * several worktrees on this machine routinely run `wrangler dev` at once
+ * (the whole reason `WRANGLER_REGISTRY_PATH`/port-block conventions exist),
+ * and "new since my snapshot" is a race over this run's ENTIRE session
+ * (potentially hours for `dev:live`/`dev:full`), not a narrow few-second
+ * window: worktree B starting its own Tier-2 session or `wrangler dev` at
+ * any point while worktree A is still up produces a same-named container
+ * that is "new" relative to A's snapshot too. Stopping it silently kills
+ * B's session. Neither `wrangler dev`'s local container runtime nor the
+ * Sandbox SDK stamps a per-run/per-worktree Docker label this codebase
+ * could use to tell "mine" from "someone else's" apart (checked wrangler's
+ * own bundled JS for a `--label`/`Labels` it sets when building or running
+ * a local dev container: none found — the actual `docker run` for a woken
+ * Sandbox happens inside workerd's own native container runtime, which is
+ * opaque to a static check like this one).
+ *
+ * So this module NEVER runs `docker stop` on a container it cannot prove it
+ * started. `listRunningContainers`/`possiblyLeftoverContainers` below are
+ * used only to PRINT a report and a manual cleanup command — see
+ * `dev.mjs`'s teardown step, which decides whether to act (never) and what
+ * to print.
  */
 export function listRunningContainers(execFileSyncImpl) {
   const out = execFileSyncImpl("docker", ["ps", "--format", "{{.ID}}\t{{.Names}}"]).toString();
@@ -449,15 +524,62 @@ export function listRunningContainers(execFileSyncImpl) {
     });
 }
 
-const LEFTOVER_CONTAINER_NAME_RE = /handsontable-demos-(api|o11y)/;
+export const LEFTOVER_CONTAINER_NAME_RE = /handsontable-demos-(api|o11y)/;
 
 /** `before`: a Set of container ids running when this run started (from
  *  `listRunningContainers` at that point, ids only). `after`:
- *  `listRunningContainers()`'s result now. Returns only the ones that are
- *  both new since `before` AND look like this run's own worker containers. */
-export function newLeftoverContainers(before, after) {
+ *  `listRunningContainers()`'s result now. Returns the ones that are both
+ *  new since `before` AND look like a `handsontable-demos-*` worker
+ *  container — a REPORTING signal only (see this file's module-level doc
+ *  comment above): `dev.mjs` prints these, it never stops them, because
+ *  "new since my own snapshot" cannot distinguish this run's own container
+ *  from one a concurrent, unrelated `wrangler dev` session (another
+ *  worktree) started in the same window. */
+export function possiblyLeftoverContainers(before, after) {
   return after.filter((c) => !before.has(c.id) && LEFTOVER_CONTAINER_NAME_RE.test(c.name));
 }
+
+/** The exact `docker ps` filter and manual `docker stop` command to print
+ *  for the containers `possiblyLeftoverContainers` found — so a developer
+ *  who recognizes them as genuinely this run's own can clean them up by
+ *  hand, after confirming (e.g. `docker inspect` the ports/mounts) that
+ *  they are not another worktree's session. */
+export function describeLeftoverContainersForOperator(candidates) {
+  const ids = candidates.map((c) => c.id).join(" ");
+  const names = candidates.map((c) => c.name).join(", ");
+  return (
+    `${candidates.length} container(s) look like this run's own worker containers ` +
+    `(new since startup, name matches ${LEFTOVER_CONTAINER_NAME_RE}) but this cannot be proven — ` +
+    `another worktree's concurrent \`wrangler dev\` session can produce the exact same signal. ` +
+    `NOT stopping them automatically. Names: ${names}. ` +
+    `Inspect first (e.g. \`docker inspect ${candidates[0]?.id ?? "<id>"}\` for its ports/mounts), ` +
+    `list candidates with \`docker ps --filter "name=handsontable-demos-"\`, ` +
+    `and if you're sure they're yours: \`docker stop ${ids}\`.`
+  );
+}
+
+/** The whole leftover-container REPORT step `dev.mjs`'s teardown runs —
+ *  factored out here (rather than left inline in `dev.mjs`) so it is
+ *  directly unit-testable with a stubbed `execFileSyncImpl`, the same way
+ *  every other side-effecting piece of this module is. Re-review 2, NB2:
+ *  this function calls `docker` only to LIST containers (`docker ps`, via
+ *  `listRunningContainers`) — it never calls `docker stop`, no matter what
+ *  it finds. Returns the candidates found (possibly empty) so a caller can
+ *  assert on them without re-parsing the log line. */
+export function reportLeftoverContainers(before, execFileSyncImpl, logImpl) {
+  const after = listRunningContainers(execFileSyncImpl);
+  const candidates = possiblyLeftoverContainers(before, after);
+  if (candidates.length > 0) logImpl(describeLeftoverContainersForOperator(candidates));
+  return candidates;
+}
+
+/** Signals `dev.mjs` treats as "shut everything down cleanly". Re-review 2,
+ *  NB5: SIGHUP is included because every child is spawned `detached: true`
+ *  (its own process group/session) — closing the terminal `dev.mjs` runs
+ *  in sends SIGHUP to `dev.mjs` itself but not to those detached children,
+ *  so without a handler here `dev.mjs` used to die via the default SIGHUP
+ *  action (immediate exit, no cleanup) and leave every child running. */
+export const SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 // ---------------------------------------------------------------------------
 // Runtime staleness (packages/runtime dist vs src)

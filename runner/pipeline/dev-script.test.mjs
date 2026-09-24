@@ -29,6 +29,7 @@ import {
   o11yDevVarsPatch,
   O11Y_DEVVARS_STRIP_KEYS,
   checkDevVarsPortDrift,
+  checkO11yDevVarsStaleness,
   readDevVarsLine,
   migrationRecordPath,
   planMigrations,
@@ -39,7 +40,10 @@ import {
   buildPlan,
   planNames,
   ephemeralSecret,
-  newLeftoverContainers,
+  redactArgsForLog,
+  possiblyLeftoverContainers,
+  reportLeftoverContainers,
+  SHUTDOWN_SIGNALS,
   o11yLocalPublicOrigin,
 } from "../scripts/dev-lib.mjs";
 
@@ -255,9 +259,50 @@ test("readDevVarsLine / checkDevVarsPortDrift: detects a port mismatch and repor
   });
 });
 
+test("checkO11yDevVarsStaleness (NB8): warns when a pre-existing .dev.vars declares DEV_ADMIN or O11Y_SESSION_SECRET empty", () => {
+  withTmpDir((dir) => {
+    const devVarsPath = path.join(dir, ".dev.vars");
+
+    // A healthy, freshly-bootstrapped file: no warnings.
+    writeFileSync(devVarsPath, "O11Y_ENV=local\nDEV_ADMIN=dev@handsontable.com\n");
+    assert.deepEqual(checkO11yDevVarsStaleness(devVarsPath), []);
+
+    // The exact NB8 shape: an old .dev.vars from before this task's
+    // DEV_ADMIN/O11Y_SESSION_SECRET handling existed, both declared empty.
+    writeFileSync(devVarsPath, "O11Y_ENV=local\nDEV_ADMIN=\nO11Y_SESSION_SECRET=\n");
+    const warnings = checkO11yDevVarsStaleness(devVarsPath);
+    assert.equal(warnings.length, 2, "both the bypass and the secret must each get their own warning");
+    assert.ok(warnings.some((w) => w.includes("DEV_ADMIN")));
+    assert.ok(warnings.some((w) => w.includes("O11Y_SESSION_SECRET")));
+
+    // O11Y_SESSION_SECRET simply ABSENT (the normal, freshly-stripped case)
+    // must never warn — only DECLARED-but-empty is the problem.
+    writeFileSync(devVarsPath, "O11Y_ENV=local\nDEV_ADMIN=dev@handsontable.com\n");
+    assert.deepEqual(checkO11yDevVarsStaleness(devVarsPath), []);
+  });
+});
+
 test("ephemeralSecret: never the same value twice, and never written by bootstrapDevVars", () => {
   assert.notEqual(ephemeralSecret(), ephemeralSecret());
   assert.equal(ephemeralSecret().length, 64); // 32 bytes, hex
+});
+
+test("redactArgsForLog (NB6): O11Y_SESSION_SECRET's --var value is redacted for dev.mjs's own log line", () => {
+  const secret = ephemeralSecret();
+  const args = [
+    "dev",
+    "--port",
+    "4200",
+    "--var",
+    `O11Y_SESSION_SECRET:${secret}`,
+    "--var",
+    "O11Y_LOCAL_MINIO_PORT:9000",
+  ];
+  const redacted = redactArgsForLog(args);
+  assert.ok(!redacted.join(" ").includes(secret), "the secret value must never appear in the redacted args");
+  assert.deepEqual(redacted, ["dev", "--port", "4200", "--var", "O11Y_SESSION_SECRET:<redacted>", "--var", "O11Y_LOCAL_MINIO_PORT:9000"]);
+  // The real spawn() args are untouched — only a copy for display is redacted.
+  assert.ok(args.join(" ").includes(secret), "the original args array passed to spawn() must be unaffected");
 });
 
 // ---------------------------------------------------------------------------
@@ -487,44 +532,87 @@ test("buildPlan: never spawns wrangler via npx (spawns node_modules/.bin/wrangle
 });
 
 // ---------------------------------------------------------------------------
-// container cleanup (measured live for this task — see the report: Ctrl-C
-// does not make wrangler's own Sandbox-container orchestration tear itself
-// down synchronously, and this machine's `docker ps -a` already carried
-// dozens of orphaned containers from OTHER, unrelated `wrangler dev`
-// sessions — proof a blanket sweep by image/name would be unsafe)
+// container REPORTING, never stopping (re-review 2, NB2: Ctrl-C does not
+// make wrangler's own Sandbox-container orchestration tear itself down
+// synchronously, and several worktrees running `wrangler dev` on this same
+// machine at once is the NORMAL case — a "new since my own snapshot" +
+// name-match container can just as easily be ANOTHER worktree's session as
+// this run's own, so this module must never `docker stop` one on a guess.)
 // ---------------------------------------------------------------------------
 
-test("newLeftoverContainers: only a container absent from `before` AND matching this run's own worker names counts", () => {
+test("possiblyLeftoverContainers: only a container absent from `before` AND matching this run's own worker names counts", () => {
   const before = new Set(["existing-1"]);
   const after = [
-    { id: "existing-1", name: "workerd-handsontable-demos-api-Sandbox-xyz-proxy" }, // pre-existing — not ours to touch
-    { id: "new-1", name: "workerd-handsontable-demos-api-Sandbox-abc-proxy" }, // new + matches — ours
-    { id: "new-2", name: "workerd-handsontable-demos-o11y-GrafanaBox-def-proxy" }, // new + matches — ours
-    { id: "new-3", name: "some-unrelated-container" }, // new but does not match — never touched
+    { id: "existing-1", name: "workerd-handsontable-demos-api-Sandbox-xyz-proxy" }, // pre-existing — not a candidate
+    { id: "new-1", name: "workerd-handsontable-demos-api-Sandbox-abc-proxy" }, // new + matches — a candidate
+    { id: "new-2", name: "workerd-handsontable-demos-o11y-GrafanaBox-def-proxy" }, // new + matches — a candidate
+    { id: "new-3", name: "some-unrelated-container" }, // new but does not match — never a candidate
   ];
-  const leftovers = newLeftoverContainers(before, after);
+  const candidates = possiblyLeftoverContainers(before, after);
   assert.deepEqual(
-    leftovers.map((c) => c.id).sort(),
+    candidates.map((c) => c.id).sort(),
     ["new-1", "new-2"],
   );
 });
 
-test("newLeftoverContainers: empty when nothing new appeared", () => {
+test("possiblyLeftoverContainers: empty when nothing new appeared", () => {
   const before = new Set(["a", "b"]);
   const after = [
     { id: "a", name: "workerd-handsontable-demos-api-Sandbox-1-proxy" },
     { id: "b", name: "workerd-handsontable-demos-api-Sandbox-2-proxy" },
   ];
-  assert.deepEqual(newLeftoverContainers(before, after), []);
+  assert.deepEqual(possiblyLeftoverContainers(before, after), []);
 });
 
-test("newLeftoverContainers: never touches an unrelated container even if it's new (backend-postgres, mongodb, another worktree's own service)", () => {
+test("possiblyLeftoverContainers: never flags an unrelated container even if it's new (backend-postgres, mongodb, another worktree's own service)", () => {
   const before = new Set();
   const after = [
     { id: "x", name: "backend-postgres-1" },
     { id: "y", name: "myhandsontable-mongodb" },
   ];
-  assert.deepEqual(newLeftoverContainers(before, after), []);
+  assert.deepEqual(possiblyLeftoverContainers(before, after), []);
+});
+
+test("reportLeftoverContainers (NB2, the required stubbed-docker test): a foreign container that appears new during the session, matching this run's own worker-name pattern, is REPORTED but never stopped", () => {
+  // Simulates the exact false-positive re-review 2 describes: worktree B
+  // starts its own `wrangler dev`/Tier-2 session partway through worktree
+  // A's (this run's) session. B's `workerd-handsontable-demos-api-Sandbox-*`
+  // container is "new since A's snapshot" and matches the name pattern —
+  // indistinguishable, by this signal alone, from a container A actually
+  // started itself.
+  const before = new Set(["existing-1"]);
+  const dockerCalls = [];
+  const execFileSyncImpl = (cmd, args) => {
+    dockerCalls.push([cmd, ...args]);
+    if (cmd !== "docker") throw new Error(`unexpected command: ${cmd}`);
+    if (args[0] === "stop") {
+      // The exact regression this test guards against: NB2's old code
+      // ran `docker stop` on a container it could not prove was its own.
+      throw new Error("docker stop must NEVER be called by reportLeftoverContainers — NB2 regression");
+    }
+    if (args[0] === "ps") {
+      return [
+        "existing-1\tworkerd-handsontable-demos-api-Sandbox-preexisting-proxy",
+        "foreign-1\tworkerd-handsontable-demos-api-Sandbox-foreign-worktree-proxy",
+      ].join("\n");
+    }
+    throw new Error(`unexpected docker subcommand: ${args.join(" ")}`);
+  };
+  const logLines = [];
+  const candidates = reportLeftoverContainers(before, execFileSyncImpl, (msg) => logLines.push(msg));
+
+  assert.deepEqual(candidates.map((c) => c.id), ["foreign-1"], "the foreign container is still correctly IDENTIFIED as a candidate");
+  assert.ok(
+    !dockerCalls.some(([, sub]) => sub === "stop"),
+    "docker stop must never be invoked, even for a container that looks exactly like this run's own",
+  );
+  assert.equal(logLines.length, 1, "exactly one informational log line, no automatic action");
+  assert.match(logLines[0], /NOT stopping/);
+  assert.match(logLines[0], /docker stop foreign-1/, "the manual cleanup command is printed for a human to run");
+});
+
+test("SHUTDOWN_SIGNALS (NB5): includes SIGHUP alongside SIGINT/SIGTERM, so closing the terminal a detached session was started from still triggers cleanup", () => {
+  assert.deepEqual([...SHUTDOWN_SIGNALS].sort(), ["SIGHUP", "SIGINT", "SIGTERM"]);
 });
 
 // ---------------------------------------------------------------------------

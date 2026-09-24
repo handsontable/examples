@@ -542,7 +542,7 @@ test("B cross-note fix: authored console output that happens to be JSON (e.g. Ti
 
 // ---- controller handoff (finding C-I2, read half): the API-side fingerprint feed --
 //
-// Spec (ADR §M, F3-report.md "Not fixed / handed off"): read
+// Spec (ADR §M, "controller handoff / not fixed by the final review"): read
 // bodyJsonAttrs["hot.fingerprint"] and feed it into the fp: registry ONLY
 // when the real resource service.name === "demos-api", log.kind === "error",
 // the value matches ^[a-z0-9-]+:[0-9a-f]{16}$, and the record is not Tier-2

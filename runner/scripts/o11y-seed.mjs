@@ -41,7 +41,8 @@
 // Exit code 0 = every write batch succeeded (checked by status, not just "fetch
 // didn't throw" — sink.ts's own documented trap). Non-zero = at least one
 // batch failed; the failing response body is printed. Run through `rtk proxy`
-// per .superpowers/sdd/README/COMMON.md.
+// — its summaries have printed green over real failures in this repo, so
+// judge this script by its exit code, not rtk's own summary.
 
 import {
   METRIC_NAMES,
