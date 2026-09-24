@@ -198,9 +198,44 @@ function allowlistAttributes(attrs: Record<string, string> | undefined): Record<
   return out;
 }
 
+/**
+ * D-M7 fix round: the same query-stripping rule
+ * `workers/o11y/src/normalise/text-scrub.ts#stripUrlQueriesInText` applies
+ * server-side (a "T02-D" extra pass run on every stored record's free body
+ * text, beyond what this module alone guarantees) — `stripQueryAndFragment`
+ * above only strips a field that IS a URL end to end (`meta.page.url`, a
+ * stack frame's `filename`); it never touches a URL merely *embedded* inside
+ * a message/value string, which the server-side pass covers separately.
+ * Applied here too, browser-side, as the matching defense-in-depth pass — no
+ * known call site produces this today, same caveat the server module's own
+ * doc comment gives, but a message/value string reaching here should not
+ * carry a query string (a token, a cache-busting param) any more than a
+ * discrete URL field would.
+ *
+ * Cannot import the server's own `stripUrlQueriesInText`: it lives in
+ * `workers/o11y/src/normalise/`, a Cloudflare-Worker-only module that itself
+ * imports FROM this package (`@handsontable/demo-runtime/telemetry`), never
+ * the other way — this is the same regex rule, kept in sync by hand.
+ *
+ * Matches after `redactPreviewHosts` has already replaced a preview host
+ * with the literal `<preview>` placeholder (`scrubText` below runs this
+ * last), so the pattern optionally consumes that placeholder before
+ * continuing into the (ordinary, `<`/`>`-free) path and query — the same fix
+ * the server module's own header comment documents for the identical
+ * ordering problem (A-I3).
+ */
+const EMBEDDED_URL_PATTERN = /\bhttps?:\/\/(?:<preview>)?[^\s"'<>)]*/gi;
+
+function stripUrlQueriesInText(text: string): string {
+  return text.replace(EMBEDDED_URL_PATTERN, (url) => {
+    const cut = url.search(/[?#]/);
+    return cut === -1 ? url : url.slice(0, cut);
+  });
+}
+
 function scrubText(value: string | undefined): string | undefined {
   if (value === undefined) return value;
-  return stripCodeFrame(redactPreviewHosts(value));
+  return stripUrlQueriesInText(stripCodeFrame(redactPreviewHosts(value)));
 }
 
 /**

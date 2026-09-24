@@ -343,6 +343,17 @@ const FAILED_POLLS_MAX = 12;
 // `Telemetry`, through `runtime.onX?.(cb)` — no cast to the concrete class
 // needed at the call site.
 
+/** D-M2 fix round: real in-place HMR (Vite) never triggers the
+ *  consume-on-ready `onFrameLoad` path at all — only a dev server that does a
+ *  full page reload on an edit does — so `lastEditFlushDispatchedAt` could
+ *  otherwise sit set for many minutes (an edit made, then no further edits,
+ *  then an unrelated reload much later) and get reported as the HMR
+ *  round-trip duration for a load that has nothing to do with it. A real
+ *  round trip completes in at most a few seconds; 30s is generous headroom
+ *  above that, chosen to bound the staleness window without being tight
+ *  enough to false-negative a slow-but-real reload. */
+const HMR_ROUNDTRIP_STALE_MS = 30_000;
+
 /**
  * Classify a failed `POST /api/session` the same way `sessionStartMessage` already
  * tiers it for the user-facing message, but onto `session.start`'s outcome set
@@ -540,7 +551,13 @@ export class ContainerRuntime implements DemoRuntime {
     if (wasReadyBeforeThisLoad && !this.reloadInFlight && this.lastEditFlushDispatchedAt !== null) {
       const durationMs = Math.round(performance.now() - this.lastEditFlushDispatchedAt);
       this.lastEditFlushDispatchedAt = null;
-      for (const cb of this.hmrCbs) cb({ durationMs });
+      // D-M2 fix round: a load arriving long after the flush is not this
+      // flush's round trip — real in-place HMR never reaches this handler at
+      // all, so a stale timestamp here means an unrelated later reload, not
+      // a slow-but-real one. Drop it rather than report a bogus duration.
+      if (durationMs <= HMR_ROUNDTRIP_STALE_MS) {
+        for (const cb of this.hmrCbs) cb({ durationMs });
+      }
     }
     this.graceTimer = setTimeout(() => {
       this.graceTimer = null;

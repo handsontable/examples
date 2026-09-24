@@ -747,6 +747,25 @@ test("onHmr: a post-ready load with no preceding edit flush does not report (not
     runtime.dispose();
   }));
 
+// D-M2 fix round: real in-place HMR never reaches `onFrameLoad` at all, so
+// `lastEditFlushDispatchedAt` could otherwise sit set for minutes until an
+// unrelated later reload reported that stale gap as the round-trip duration.
+test("onHmr: a load arriving long after the flush (stale dispatch clock) does not report", () =>
+  withFakeWindow(() => {
+    const runtime = new ContainerRuntime(ENTRY, { iframe: {} });
+    const events = [];
+    runtime.onHmr((e) => events.push(e));
+    runtime.didReady = true;
+    // Well past the bounded window (30s) — an unrelated reload long after the
+    // edit was flushed, not that edit's own round trip.
+    runtime.lastEditFlushDispatchedAt = performance.now() - 45_000;
+
+    runtime.onFrameLoad();
+
+    assert.equal(events.length, 0, "guard: a stale dispatch timestamp must not be reported as this load's duration");
+    runtime.dispose();
+  }));
+
 test("flush() only starts the HMR dispatch clock once the preview is already ready", () =>
   withFakeWindow(() => {
     const runtime = new ContainerRuntime(ENTRY, { iframe: {} });

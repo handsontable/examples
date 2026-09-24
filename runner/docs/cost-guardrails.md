@@ -81,13 +81,15 @@ exactly the number of visitors who can hold a live preview at once.
 
 ### Measuring pool pressure — [ADR-0040](adr/0040-hourly-buckets-and-pool-pressure.md), delivered by [ADR-0041](adr/0041-observability-stack.md)
 
-> **Not implemented yet.** Nothing below exists in code as of 2026-09-23: there is
-> no `hour` dimension, no `usage_hourly`, no `at_capacity` counter and no peak
-> sampler. ADR-0041 (proposed) delivers them as follows: the `at_capacity` refusal
-> counter lands in `usage_daily` exactly as ADR-0040 C.1 says (and as a
-> `session.start` outcome point); awake-seconds per hour and peak concurrency become
-> Workers Analytics Engine points from a `*/5` API-worker cron, read by Grafana. Only
-> the `hour` dimension and the `usage_hourly` table described here are superseded.
+> **Implemented, on the ADR-0041 observability branch.** As of this branch, both gaps
+> below are closed: the `at_capacity` refusal counter lands in `usage_daily`
+> (`recordUsageEvent(env, "at_capacity", …)` beside the 503, `workers/api/src/index.ts`)
+> exactly as ADR-0040 C.1 says, and as a `session.start` outcome=`at_capacity` point;
+> peak concurrency is a `pool.gauge` Analytics Engine point (`reason: "live"`,
+> `telemetry/cron.ts#emitPoolGauge`) sampled every 5 minutes by the API worker's `*/5`
+> cron and read by Grafana — not the `usage_hourly` D1 table or the `hour` dimension
+> this section originally proposed; ADR-0041 superseded both of those in favor of
+> Analytics Engine points, which is what actually shipped.
 
 The 5 → 10 decision above was made without the number that should have decided
 it. Daily totals cannot yield peak concurrency (13,237 sessions over 30 days

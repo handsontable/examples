@@ -18,6 +18,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   AE_COLUMNS,
+  AE_ONLY_ATTRIBUTE_KEYS,
+  ALLOWED_ATTRIBUTE_KEYS,
   DIAGNOSTIC_TAG_KEYS,
   ENVIRONMENTS,
   HOT_KINDS,
@@ -130,17 +132,43 @@ test("§3 resource attributes match attrs.ts, key for key, slot for slot, label 
   }
 });
 
-test("§3 structured-metadata-only keys match STRUCTURED_METADATA_KEYS", () => {
-  const marker = "Structured metadata only";
+/** A marker paragraph's text (up to the next blank line), for the §3
+ *  categories below that are prose, not a table. Called inside each test
+ *  (never at module load) so a missing/renamed marker fails just that one
+ *  test, rather than throwing during collection and skipping every test
+ *  after it in the file. */
+function markerParagraph(marker) {
   const start = doc.indexOf(marker);
-  assert.notEqual(start, -1, "structured-metadata paragraph not found");
-  const paragraphEnd = doc.indexOf("\n\n", start);
-  const paragraph = doc.slice(start, paragraphEnd === -1 ? undefined : paragraphEnd);
-  const keys = backtickTokens(paragraph).filter((t) => /^[a-z]+\.[a-z_]+$/.test(t));
-  assert.deepEqual(new Set(keys), new Set(STRUCTURED_METADATA_KEYS));
+  assert.notEqual(start, -1, `${marker} paragraph not found`);
+  const end = doc.indexOf("\n\n", start);
+  return doc.slice(start, end === -1 ? undefined : end);
+}
+
+function structuredMetadataDocKeys() {
+  return backtickTokens(markerParagraph("Structured metadata only")).filter((t) => /^[a-z]+\.[a-z_]+$/.test(t));
+}
+
+// Flat, non-dotted keys only (excludes the structured-metadata paragraph's
+// dotted `hot.*`/`session.id`/`cf.ray` keys by construction — they never
+// match this shape).
+function diagnosticTagsDocKeys() {
+  return backtickTokens(markerParagraph("Diagnostic tags")).filter((t) => /^[a-z][a-z_]*$/.test(t));
+}
+
+function aeOnlyDocKeys() {
+  return backtickTokens(markerParagraph("AE-only transport keys")).filter((t) => /^hot\.[a-z_]+$/.test(t));
+}
+
+function resourceAttrDocKeys() {
+  return tableRows(section("## 3. Attributes", "## 4.")).map(([keyCell]) => keyCell.replace(/`/g, ""));
+}
+
+test("§3 structured-metadata-only keys match STRUCTURED_METADATA_KEYS", () => {
+  assert.deepEqual(new Set(structuredMetadataDocKeys()), new Set(STRUCTURED_METADATA_KEYS));
 
   // "`hot.kind` (the Faro item kind: `exception`, `log`, `event`, `measurement`)"
   // — HOT_KINDS is attrs.ts's closed set for this key; pin it to the doc too.
+  const paragraph = markerParagraph("Structured metadata only");
   const hotKindIdx = paragraph.indexOf("`hot.kind`");
   assert.notEqual(hotKindIdx, -1, "hot.kind not found in the structured-metadata paragraph");
   const hotKindValues = backtickTokens(paragraph.slice(hotKindIdx + "`hot.kind`".length));
@@ -149,19 +177,37 @@ test("§3 structured-metadata-only keys match STRUCTURED_METADATA_KEYS", () => {
 
 // T06 fix round D1 (controller ruling): a third §3 category, flat/non-dotted,
 // distinct from STRUCTURED_METADATA_KEYS — see attrs.ts's own doc comment on
-// DIAGNOSTIC_TAG_KEYS for why these are not hoisted the way structured
-// metadata is.
+// DIAGNOSTIC_TAG_KEYS for how these are hoisted alongside structured metadata.
 test("§3 diagnostic tag keys match DIAGNOSTIC_TAG_KEYS", () => {
-  const marker = "Diagnostic tags";
-  const start = doc.indexOf(marker);
-  assert.notEqual(start, -1, "diagnostic-tags paragraph not found");
-  const paragraphEnd = doc.indexOf("\n\n", start);
-  const paragraph = doc.slice(start, paragraphEnd === -1 ? undefined : paragraphEnd);
-  // Flat, non-dotted keys only (excludes the structured-metadata paragraph's
-  // dotted `hot.*`/`session.id`/`cf.ray` keys by construction — they never
-  // match this shape).
-  const keys = backtickTokens(paragraph).filter((t) => /^[a-z][a-z_]*$/.test(t));
-  assert.deepEqual(new Set(keys), new Set(DIAGNOSTIC_TAG_KEYS));
+  assert.deepEqual(new Set(diagnosticTagsDocKeys()), new Set(DIAGNOSTIC_TAG_KEYS));
+});
+
+// D-M5 fix round: a fourth §3 category — keys that survive the browser/ingest
+// attribute allowlist (`ALLOWED_ATTRIBUTE_KEYS`) but are never hoisted to a
+// resource attribute or structured metadata at all (`attrs.ts`'s own doc
+// comment on `AE_ONLY_ATTRIBUTE_KEYS`). Pinned separately from the two tests
+// above so the doc's "AE-only transport keys" paragraph cannot drift from
+// `AE_ONLY_ATTRIBUTE_KEYS` unnoticed.
+test("§3 AE-only transport keys match AE_ONLY_ATTRIBUTE_KEYS", () => {
+  assert.deepEqual(new Set(aeOnlyDocKeys()), new Set(AE_ONLY_ATTRIBUTE_KEYS));
+});
+
+// The allowlist `scrub.ts#allowlistAttributes` actually enforces is exactly
+// the union of every §3 category documented above (resource attrs table +
+// the three prose paragraphs) — proving each category against the doc
+// separately (the tests above) does not by itself prove the code's allowlist
+// has no fifth, undocumented member, or that a category was accidentally
+// left out of `ALLOWED_ATTRIBUTE_KEYS`. Built from the DOC-PARSED key lists
+// above, not from the module's own constants, so this only passes when the
+// code's `ALLOWED_ATTRIBUTE_KEYS` matches what the doc actually says.
+test("ALLOWED_ATTRIBUTE_KEYS equals the union of every documented §3 category", () => {
+  const documentedUnion = new Set([
+    ...resourceAttrDocKeys(),
+    ...structuredMetadataDocKeys(),
+    ...diagnosticTagsDocKeys(),
+    ...aeOnlyDocKeys(),
+  ]);
+  assert.deepEqual(new Set(ALLOWED_ATTRIBUTE_KEYS), documentedUnion);
 });
 
 // ---- §4: Analytics Engine layout ----------------------------------------------

@@ -1014,14 +1014,16 @@ projection) — but against real production data, not the local stack:
    task's local capture server.
 3. **Volume sits inside the projection** — the Observability-self dashboard's real numbers,
    after at least a few days of production traffic, are under half of every allotment (§D)
-   the dashboard covers, matching or beating Phase B's projected figures. **Fix round
-   D-I6:** the exported-logs allotment specifically is NOT on that dashboard (see the
-   post-deploy smoke's item 6 above for why) — read it from Cloudflare's own Workers →
-   Observability → Usage view instead, same place, same number, this time "at least a
-   few days" rather than "one day." If real Tier-2 stdout volume turns out
-   to exceed the breakeven Phase B computed, do not flip the scope until the fallback
-   (lowering `head_sampling_rate`, ADR §D's own named escape hatch) has brought it back
-   under half.
+   the dashboard covers, matching or beating the sandbox-measured figures (ADR-0041 §L,
+   criteria 7–8: $0.21/month at 1× traffic, $0.33/month at 10×, both far under the $10
+   ceiling). **Fix round D-I6:** the exported-logs allotment specifically is NOT on that
+   dashboard (see the post-deploy smoke's item 6 above for why) — read it from
+   Cloudflare's own Workers → Observability → Usage view instead, same place, same
+   number, this time "at least a few days" rather than "one day." If real Tier-2 stdout
+   volume turns out to exceed the measured exported-logs allotment (ADR-0041 §L
+   criterion 8, the one criterion that stayed Mixed rather than passing), do not flip
+   the scope until the fallback (lowering `head_sampling_rate`, ADR §D's own named
+   escape hatch) has brought it back under half.
 4. **The API-side new-fingerprint feed (C-I2) is confirmed live in production, not
    just correctly gated.** ADR §E.1: the exact new-fingerprint alert (§F.3) is what
    replaces Sentry's own "new issue" signal for a handled-error class once the scope
@@ -1044,9 +1046,13 @@ projection) — but against real production data, not the local stack:
 
 **Who flips it**: whoever owns the o11y stack operationally at launch time (the same person
 or team who would triage an `alert-eval-error` or a stale-heartbeat page) — a role, not a
-name fixed here; confirm with the user before the first flip. The mechanism is two `--var`
-flags (`SENTRY_SCOPE` on the API worker's deploy, `VITE_SENTRY_SCOPE` on the authoring
-build), both currently defaulting to `full` in every committed config.
+name fixed here; confirm with the user before the first flip. D-M12 fix round: the
+mechanism is not a `--var` flag pair — both names are already committed config, edited in
+place and redeployed/rebuilt: `SENTRY_SCOPE` is the `"full"` var in
+`workers/api/wrangler.jsonc`, flipped to `"uncaught"` and deployed with the API worker;
+`VITE_SENTRY_SCOPE` is the `full` build-env value in `.github/workflows/master.yml`'s
+authoring build step, flipped to `uncaught` and shipped on the next authoring deploy. Both
+currently read `full`/`"full"` in those two committed files.
 
 ### Rollback
 
@@ -1058,7 +1064,8 @@ build), both currently defaulting to `full` in every committed config.
 - **The `SENTRY_SCOPE`/`VITE_SENTRY_SCOPE` flip needs no revert plan of its own** (ADR
   Consequences, and the "Error monitoring" section below repeats this) — it only ever
   narrows what reaches Sentry, never widens it past what the production gates already allow,
-  so reverting it just means flipping the same two `--var` flags back to `full`.
+  so reverting it just means editing the same two committed values (`workers/api/wrangler.jsonc`'s
+  `SENTRY_SCOPE`, `master.yml`'s `VITE_SENTRY_SCOPE` build env) back to `full` and redeploying.
 - The o11y worker and the Grafana box can be torn down entirely (delete the Worker, the
   Container application, the three R2 buckets) without touching the API worker or authoring
   app at all — they have no hard dependency in that direction (the API worker's own
@@ -1086,9 +1093,11 @@ keeps working.
 **`SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` — full vs. uncaught (contract §11, ADR
 §E.3).** Sentry now sits beside the o11y stack described in "Observability"
 above, not in front of it, and this switch controls how much overlap the two
-keep. `full` (the default — both vars are absent from every committed config
-today, and `resolveSentryScope`/the API worker's own fallback both treat
-absent-or-anything-but-`"uncaught"` as `full`) sends every explicit diagnostic
+keep. `full` (the default — both vars are set to `full` in every committed config
+today: `SENTRY_SCOPE` in `workers/api/wrangler.jsonc`, `VITE_SENTRY_SCOPE` in
+`.github/workflows/master.yml`'s authoring build env; `resolveSentryScope`/the API
+worker's own fallback also treat an absent var as `full`, for a build/deploy that
+predates either being set) sends every explicit diagnostic
 report — `reportError`, the Tier-1/Tier-2 branches of `reportRuntimeError`, the
 Worker's own handled-error lines — to **both** Sentry and the o11y facade, so
 today's dashboards, saved searches and on-call habits keep working unchanged.
