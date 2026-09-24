@@ -4,13 +4,12 @@
 // `o11y-worker-hooks.mjs`, the same harness `o11y-gates.test.mjs` and
 // `o11y-grafana-proxy.test.mjs` already use.
 //
-// Fix round (security review `.superpowers/sdd/README/final/K1-review.md`):
-// this file was rewritten to cover I1 (secret strength + HKDF key
-// separation), I2 (`__Host-` cookies + duplicate-cookie recovery), I3
-// (session TTL capped at the broker token's own `exp`), and the M1-M7
-// regressions the review's "by inspection" section named — each guard below
-// was spot-checked failing with its code reverted; see the Fix round
-// section of `.superpowers/sdd/README/final/K1-report.md` for the sample.
+// Fix round (K1, a security review of the broker login round trip): this
+// file was rewritten to cover I1 (secret strength + HKDF key separation),
+// I2 (`__Host-` cookies + duplicate-cookie recovery), I3 (session TTL
+// capped at the broker token's own `exp`), and the M1-M7 regressions the
+// review's "by inspection" section named — each guard below was
+// spot-checked failing with its code reverted (revert -> run -> restore).
 //
 // Run: node --experimental-strip-types --test pipeline/o11y-session.test.mjs
 

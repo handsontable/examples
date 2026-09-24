@@ -27,8 +27,8 @@ export const ctx = {
 // caps `get`/`put`/`delete` at 128 keys/pairs per call (see
 // `workers/o11y/src/inbox/storage.ts`'s `DO_STORAGE_MAX_KEYS_PER_CALL` doc
 // comment for the exact Cloudflare docs quote and URL) — this fake used to
-// accept any number silently (F1-report.md's own probe: 500+ locally, no
-// error), which is exactly why the previous fix round could not have caught
+// accept any number silently (local `workerd` was observed accepting 500+
+// keys in one call with no error), which is exactly why the previous fix round could not have caught
 // a caller that forgot to chunk. Every multi-key call below now throws past
 // the real limit, the same as `inbox/storage.ts#memoryStorage()`.
 const DO_STORAGE_MAX_KEYS_PER_CALL = 128;

@@ -1,12 +1,11 @@
 # containers/o11y/compose.yml — local stand-in for the Grafana box (ADR-0041
 # §I, docs/observability-contract.md §10). No `container_name`, no named
 # volumes, no fixed network name: other tasks (T03, T11) run this same file
-# under their own `COMPOSE_PROJECT_NAME` and port block (see
-# .superpowers/sdd/README/COMMON.md rule 5), and compose already namespaces
-# everything by project.
+# under their own `COMPOSE_PROJECT_NAME` and port block, and compose already
+# namespaces everything by project.
 #
 # Run it with (T01's own port block is 4200-4299; every other task uses its
-# own block from COMMON.md):
+# own dedicated block):
 #   COMPOSE_PROJECT_NAME=o11y-t01 \
 #   O11Y_GRAFANA_PORT=4200 O11Y_LOKI_PORT=4201 O11Y_MINIO_PORT=4202 \
 #   O11Y_MINIO_CONSOLE_PORT=4203 O11Y_CLICKHOUSE_PORT=4204 O11Y_CLICKHOUSE_NATIVE_PORT=4205 \

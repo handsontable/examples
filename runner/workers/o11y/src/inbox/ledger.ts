@@ -8,8 +8,8 @@
 // COMMON.md interface 1's explicit "further methods are added by ... T03
 // (ledger/backlog)") wires these against the real storage/R2/GrafanaBox stub.
 //
-// F2 fix round (final review, B-C1/A-I1/B "reopen-window unbounded", must-fix
-// — see .superpowers/sdd/README/final/{A,B}-findings.md): the previous
+// F2 fix round (final review, B-C1/A-I1/B "reopen-window unbounded", must-fix):
+// the previous
 // version scanned the ENTIRE `key:` prefix once per wake inside a loop over
 // every `wake:` entry ever recorded (O(wakes × keys), and both factors grew
 // forever — nothing ever deleted a `key:`/`wake:` entry). At 30 days of

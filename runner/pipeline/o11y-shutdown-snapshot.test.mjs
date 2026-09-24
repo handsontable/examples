@@ -11,8 +11,7 @@
 // policy-toggle timed against the exact moment `shutdown.sh`'s trap runs
 // inside the container. That is not reproducible deterministically over
 // docker; this test controls the exact sequence of curl responses instead,
-// which is what actually exercises the fixed control flow (see
-// `F2-report.md` for the fuller reasoning). `stop-roundtrip.mjs`'s own C1
+// which is what actually exercises the fixed control flow. `stop-roundtrip.mjs`'s own C1
 // case still proves the real end-to-end index-upload/marker path against a
 // real Loki + MinIO; this test proves the specific listing-failure branch
 // that path cannot reach on demand.

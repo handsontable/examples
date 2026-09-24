@@ -66,8 +66,8 @@ export interface DedupeResult {
  *  occurrence as non-duplicate) against storage's 24 h dedupe window. Since
  *  the 24h window can only ever straddle AT MOST two calendar-day buckets
  *  (today's, which is by construction < 24h old, and yesterday's, which
- *  covers the remainder — see the proof in this file's git history /
- *  F2-report.md), checking exactly those two buckets per unique hash is
+ *  covers the remainder — see the proof in this file's git history),
+ *  checking exactly those two buckets per unique hash is
  *  correct and bounded (a fixed ×2 factor on `getMany`'s key list, never a
  *  `list()` over accumulated history). Read-only: does **not** write
  *  anything itself, so a caller that decides not to commit (an error later

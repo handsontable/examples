@@ -50,7 +50,7 @@ export interface StorageLike {
  *  — "get() ... Supports up to 128 keys at a time.", "put() ... Supports up
  *  to 128 key-value pairs at a time.", "delete() ... Supports up to 128 keys
  *  at a time." (fetched 2026-09-24). Local `workerd` was observed accepting
- *  500+ keys in one call with no error (F1-report.md's probe), so nothing in
+ *  500+ keys in one call with no error, so nothing in
  *  this codebase's OWN test doubles enforced it either — every multi-key
  *  call below `DO_STORAGE_MAX_KEYS_PER_CALL` in this codebase must chunk
  *  through {@link getManyChunked}/{@link putChunked}/{@link deleteChunked}

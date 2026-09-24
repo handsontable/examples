@@ -242,7 +242,7 @@ const RESOURCE_ATTR_KEY_SET = new Set<string>(RESOURCE_ATTRS.map((a) => a.key));
  *    record sharing this Worker's `service.name`/OTLP shape (as opposed to
  *    a separately-tagged container-log stream this module never sees) is a
  *    real-Cloudflare-account question outside a sandbox probe (reserved for
- *    T01–T03 tasks, `.superpowers/sdd/README/COMMON.md`) and this fix
+ *    the T01-T03 tasks' own account-scoped probes) and this fix
  *    round's evidence. T11's own real local measurement (`docker logs
  *    <sandbox container>`, `docs/run-and-deploy.md` post-deploy smoke item
  *    6) saw zero new lines from an HMR-triggering file edit — no SSR/dev-
@@ -299,8 +299,8 @@ function tryParseJsonBodyAttrs(body: string): Record<string, string> {
 }
 
 /**
- * Controller handoff (finding C-I2, read half — F3-report.md "Not fixed /
- * handed off", same spec restated in ADR §M): F3 wired the API worker's own
+ * Controller handoff (finding C-I2, read half — "not fixed / handed off" by
+ * the final review, same spec restated in ADR §M): F3 wired the API worker's own
  * `error.handled`/diagnostic reports to carry `hot.fingerprint` on their
  * structured line (`workers/api/src/telemetry/diagnostic.ts`,
  * `lines.ts#logErrorLine`'s `"log.kind": "error"` shape). Nothing on the

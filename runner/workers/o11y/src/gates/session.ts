@@ -1,6 +1,6 @@
-// Replaces `gates/access.ts` (Cloudflare Access). Controller decision K1
-// (`.superpowers/sdd/README/final/broker-grafana-feasibility.md`): `/grafana/*`
-// and `POST /grafana/_o11y/reopen` gate on the Worker's own HMAC-signed
+// Replaces the deleted Cloudflare Access gate. Controller decision K1 (the
+// feasibility probe concluded no Cloudflare Access application is needed):
+// `/grafana/*` and `POST /grafana/_o11y/reopen` gate on the Worker's own HMAC-signed
 // session cookie, minted once a Handsontable login broker token (ADR-0007)
 // has been verified through `gates/broker.ts`. `grafana/login.ts` owns the
 // login/callback/session/logout routes that mint and clear the two cookies
@@ -11,7 +11,7 @@
 // Promise<{ email } | null>`, honouring `DEV_ADMIN` only when
 // `O11Y_ENV === "local"` (fail-closed, unchanged from the Access gate).
 //
-// K1 fix round (security review `.superpowers/sdd/README/final/K1-review.md`,
+// K1 fix round (security review of the broker login round trip,
 // findings I1/I2/M2): the review's live probe found a 1-byte secret signed
 // and verified, a session token with no `exp` or `v:99` verified, and a
 // tossed `Domain=` cookie could lock a victim out with no way for login or
