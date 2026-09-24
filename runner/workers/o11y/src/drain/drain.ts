@@ -111,6 +111,11 @@ export interface KeyOutcome {
   key: string;
   tenant: Tenant;
   outcome: "provisional" | "rejected" | "error";
+  /** Set on `rejected` (why), and — row 19 fix — also on `provisional` when
+   *  at least one chunk 2xx'd but another permanently 400'd: the caller
+   *  (`box.ts#drainStep`) should still surface this via
+   *  `InboxWriterApi#recordPartialReject` even though the key itself is
+   *  durable. `undefined` on a fully clean `provisional`. */
   reason?: string;
   bytesPushed: number;
   /** F1: records dropped by {@link dropOldRecords} before this key's push —
@@ -256,22 +261,40 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
   // the rest of the WHOLE BATCH `written` for a later wake, which is the
   // correct behaviour for a transient failure (a 400 is not transient).
   //
-  // Chosen semantics for the "some chunks 2xx, one chunk 400" case (see
-  // F2-report.md for the fuller reasoning the advisor review settled on):
-  // the key still ends `rejected` overall — the ledger has no per-chunk
-  // state, only per-key, so a key that had ANY genuine (not just
-  // too-old-and-filtered) rejection cannot be marked `provisional`/
-  // `committed` without a marker check that has nothing to distinguish
-  // "half this key's data is in Loki" from "committed." The already-pushed
-  // chunks' records ARE durably in Loki by this point regardless (this
-  // function does not undo a successful push) — `rejected` only means THIS
-  // key is never automatically retried; `POST /grafana/_o11y/reopen` is the
-  // existing manual escape hatch once whatever caused the 400 is fixed, and
-  // a re-push of the already-successful chunks is a harmless duplicate
-  // (query-time dedup, ADR §B.3's own "what an unclean stop costs"
-  // paragraph already relies on exactly this property). This is a
-  // deliberately conservative choice: it does not invent a new ledger
-  // state, and it never re-attempts a chunk Loki has already 400'd once.
+  // Chosen semantics for the "some chunks 2xx, one chunk 400" case — G1 fix
+  // round, rereview.md row 19, replacing F2's original choice (a key with
+  // any 400 ended `rejected` outright): F2's comment here claimed the
+  // already-pushed chunks "ARE durably in Loki … regardless," but `rejected`
+  // NEVER becomes `provisional`, so those chunks never pass the §B.3
+  // marker/commit check any wake's clean-stop confirms durability through —
+  // an unclean stop right after this push, before Loki's own local WAL/TSDB
+  // flush, could lose them with no automatic replay (a `rejected` key is
+  // never retried by a later wake, only by a manual reopen). That was the
+  // actual gap: not the claim itself, but that NOTHING was verifying it.
+  //
+  // Fixed by tracking whether ANY chunk landed 2xx (`acceptedAnyChunk`,
+  // via `bytesPushed`): if so, the key still ends `provisional` — its
+  // accepted content follows the exact same §B.3 durability path as a
+  // fully-clean key (an unclean stop reverts it to `written` for automatic
+  // replay; a clean stop's marker confirms it and moves it to `done:`).
+  // Only a key with ZERO accepted chunks (every chunk 400'd) still ends
+  // `rejected` — there is nothing to protect, so the existing "never
+  // auto-retried, `POST /grafana/_o11y/reopen` is the manual escape hatch"
+  // behaviour is unchanged for that case.
+  //
+  // This does NOT invent per-chunk ledger state (`key:` stays one state per
+  // key, as F2's original comment already argued) and does NOT change what
+  // gets pushed: a replay (automatic, after an unclean stop, OR a manual
+  // reopen of an already-`done:` key) re-attempts every chunk of this key
+  // again, deterministically re-deriving the SAME classification — the
+  // permanently-bad chunk 400s again (harmless: `pushChunkWithRetry` never
+  // retries a 400, so this costs one request, not a loop) while the good
+  // chunk(s) are safely, redundantly re-confirmed (Loki's own partial-
+  // accept behaviour plus query-time dedup already make a duplicate push
+  // harmless, per ADR §B.3's "what an unclean stop costs"). `reason` still
+  // carries the 400 detail on the `provisional` outcome so the caller
+  // (`box.ts#drainStep`) can log/alert on the permanent loss even though
+  // the key itself is not `rejected` — see `InboxWriterApi#recordPartialReject`.
   let bytesPushed = 0;
   let rejectedReason: string | undefined;
   for (const chunk of chunkBySize(fresh)) {
@@ -288,7 +311,15 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
   }
 
   if (rejectedReason !== undefined) {
-    return { key, tenant, outcome: "rejected", reason: rejectedReason, bytesPushed, droppedOld };
+    const acceptedAnyChunk = bytesPushed > 0;
+    return {
+      key,
+      tenant,
+      outcome: acceptedAnyChunk ? "provisional" : "rejected",
+      reason: rejectedReason,
+      bytesPushed,
+      droppedOld,
+    };
   }
   return { key, tenant, outcome: "provisional", bytesPushed, droppedOld };
 }

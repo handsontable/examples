@@ -228,7 +228,17 @@ stores and packs. For each accepted request, in this order:
    pending rows than fit in one object is packed across several objects, looping within
    the same alarm invocation up to a per-invocation cap on packed objects and
    rescheduling itself immediately when rows remain, rather than one unbounded
-   in-memory gzip per alarm.
+   in-memory gzip per alarm. **Corrected again (fix round A-I2, G1, final review second
+   wave):** the A-I2 fix above bounded the packed OBJECT's size, but the alarm's own READ
+   of pending rows was still `list({prefix: "row:"})` with no bound — every pending row,
+   across a flood, loaded into memory before any cap applied. `row:<n>` is now
+   zero-padded (12 digits, matching `<seq>`'s own width), so native ascending key order
+   equals arrival order without an in-memory sort, and the alarm pages `row:` in small
+   chunks, accumulated up to one packed object's own byte budget per round, rather than
+   one unbounded `list()`. A row written before this fix, under the old un-padded shape,
+   is migrated in place (rewritten under the padded key, oldest first, a bounded batch at
+   a time) before the alarm packs anything appended after the fix deployed — see contract
+   §8 and `workers/o11y/src/inbox/pack.ts`.
 
 One writer means key order equals arrival order; storage-backed buffering means a
 deploy, eviction or host restart between two alarms loses nothing.
@@ -717,6 +727,24 @@ where they add information beyond what §A–§L already say:
   over budget on its own is still packed alone (row size is already bounded to
   `INBOX_ROW_MAX_BYTES`, ~1 MB, well under the 4 MB object budget) rather than blocking
   progress.
+- **§B storage API, DO 128-key batch limit (confirmed platform fact, fix round N2, G1,
+  final review second wave).** Cloudflare's SQLite-backed Durable Object storage API caps
+  `get`/`put`/`delete` at 128 keys/key-value pairs per call
+  (<https://developers.cloudflare.com/durable-objects/api/storage-api/>, fetched
+  2026-09-24: "Supports up to 128 keys at a time" / "up to 128 key-value pairs at a
+  time"). Local `workerd` was observed accepting 500+ in one call with no error (the
+  final review's own probe, F1-report.md), so nothing in this codebase's test doubles
+  enforced it either, until this fix round added the check to both
+  (`workers/o11y/src/inbox/storage.ts#memoryStorage()` and
+  `pipeline/fixtures/o11y-harness.mjs`). Every multi-key call in `InboxWriter` — dedupe's
+  `checkDuplicates`, the fingerprint registry's writes/prune, `pruneLedger`, wake
+  resolution, `markKeysProvisional`, manual reopen, the pack commit, and `ingest`'s own
+  transaction `put` — now chunks through `storage.ts`'s `getManyChunked`/`putChunked`/
+  `deleteChunked`. `finalizeWakeResolution` and `reopenWindow` also now run their whole
+  put+delete sequence inside one `storage.transaction()` (previously two independent
+  top-level calls) — chunking alone, without that, would let a crash between chunks
+  leave a partial write (an orphaned `provisional:<wakeId>` key whose `wake:<id>` is
+  already gone).
 - **§B.3 drain reads whole objects.** Rereview row 20 (F1/F2/F3 fix round): documented
   here, since it previously existed only in a fixer's own report, not the ADR. Each
   drained key's packed object is read into memory whole before its records are pushed
@@ -825,6 +853,35 @@ where they add information beyond what §A–§L already say:
   behaviour (including the `DEMO_SURFACE` environment re-homing) under `full` scope,
   unreachable under `uncaught` — "the re-homing disappears once the scope flips" is
   literally true only after the flip, not at implementation time.
+- **§B.3 drain, a key with a mixed 400/2xx outcome (fix round, rereview.md row 19, G1,
+  final review second wave).** F2's original fix (two bullets above the pack-alarm ones)
+  correctly kept pushing every chunk of a key even after an earlier one 400'd, but still
+  classified the whole key `rejected` if ANY chunk 400'd — including when another chunk
+  landed 2xx. A `rejected` key never becomes `provisional`, so those already-accepted
+  bytes never passed the §B.3 marker/commit check any wake's clean stop confirms
+  durability through: an unclean stop right after the push, before Loki's own local
+  flush, could lose them with no automatic replay (only a manual reopen, which — being
+  a full key replay — would re-derive the identical classification anyway). Corrected: a
+  key with at least one accepted (2xx) chunk now stays `provisional`, following the
+  normal durability path; only a key with ZERO accepted chunks stays `rejected`. The
+  permanent chunk loss stays operator-visible via a new `rejectedEvent:` audit log
+  (`ledger.ts#recordPartialReject`, contract §8) rather than the key's own ledger state.
+- **§B.3/§F.3 storage housekeeping, remainder (fix round, rereview.md row 13, G1, final
+  review second wave).** Three gaps the B-C1/A-I1 fix round's own prune mechanism left
+  open: (1) its 500-row/tick batch limit falls behind ADR §D's own 10× traffic
+  projection at roughly 3× today's traffic — raised to 5,000/tick (still chunked to the
+  real 128-key limit per call, see the N2 bullet above), with the exact arithmetic in
+  `dedupe.ts#HASH_PRUNE_BATCH_LIMIT`'s doc comment; (2) `newFingerprintsSince` listed the
+  entire (alphabetically, not chronologically, ordered) `fp:` prefix every ten-minute
+  alert tick — a new `fpts:<firstSeenMs>:<fingerprint>` time-ordered secondary index
+  (contract §8) makes this a bounded range read instead, with a truncation-safe cursor
+  in `alerts/rules.ts#newFingerprintRule` (never skips an unread fingerprint, at the cost
+  of a bounded duplicate report under sustained flood — the same trade-off already
+  accepted for the cursor's grace window); (3) `rejected-inbox-key` fired on
+  `rejectedKeyCount() > 0` and never resolved (rejected `key:` entries are deliberately
+  never pruned by date alone — see the row-19 bullet's `rejectedEvent:` log and the
+  §B storage API bullet above) — it now fires on a RECENT (last hour) count from that
+  same log instead, resolving once new rejections stop.
 - **§F metering.** ADR-0042's `example.*` events needed the same AE-only attribute-channel
   extension as §B.2 above (`kind`→`hot.metric_kind`, since `hot.kind` is reserved for the
   Faro item kind, `ref`, `area`) before `kind`/`ref`/`area` survived the browser scrub at

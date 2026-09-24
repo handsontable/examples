@@ -10,12 +10,13 @@ import {
   inboxKeyStorageKey,
   INBOX_ROW_MAX_BYTES,
   pendingRowStorageKey,
+  ROW_SEQ_DIGITS,
   SEQ_STORAGE_KEY,
   type NormalisedRecord,
   type OtlpResourceLogs,
   type Tenant,
 } from "@handsontable/demo-runtime/telemetry";
-import type { StorageLike } from "./storage.js";
+import { deleteChunked, putChunked, type StorageLike } from "./storage.js";
 
 export interface PendingRow {
   tenant: Tenant;
@@ -83,9 +84,14 @@ export async function appendRows(
 
 export { ROW_SEQ_STORAGE_KEY };
 
-/** All pending rows, grouped by tenant, in row-insertion order (numeric, not
- *  lexicographic — `row:10` must sort after `row:2`, which `storage.list()`'s
- *  string ordering gets wrong). */
+/** All pending rows, grouped by tenant, in row-insertion order (numeric sort
+ *  in memory, so this is correct regardless of whether any un-migrated
+ *  legacy (un-padded) `row:<n>` keys remain — see `migrateLegacyRows`).
+ *
+ *  UNBOUNDED — loads every pending row into memory, exactly the shape A-I2
+ *  fixed the pack alarm away from. Kept only for tests/diagnostics that
+ *  work over a small, known row count; production code (`writer.ts#alarm()`)
+ *  must use {@link collectRowBatch} instead, never this. */
 export async function pendingRowsByTenant(storage: StorageLike): Promise<Map<Tenant, [string, PendingRow][]>> {
   const rows = await storage.list<PendingRow>({ prefix: ROW_PREFIX });
   const sorted = [...rows.entries()].sort(([a], [b]) => rowNumber(a) - rowNumber(b));
@@ -196,6 +202,138 @@ export async function commitPackedObject(storage: StorageLike, packed: PackedObj
       [SEQ_STORAGE_KEY]: seq + 1,
       [inboxKeyStorageKey(packed.key)]: "written",
     });
-    await txn.delete(packed.consumedRowKeys);
+    // N2: many small rows can pack more than 128 into one object.
+    await deleteChunked(txn, packed.consumedRowKeys);
   });
+}
+
+// ---- A-I2: bounded reads for the pack alarm --------------------------------------
+//
+// `row:<n>` is zero-padded as of this fix (`pendingRowStorageKey`, the
+// shared package) — native ascending `storage.list()` order then equals
+// arrival order, so a small, bounded page is enough to read rows in the
+// right order without sorting anything in memory. Two helpers:
+//   - `migrateLegacyRows`: a bounded, self-terminating sweep that rewrites
+//     any un-padded `row:<n>` key (written before this fix deployed) into
+//     the new padded shape, oldest first.
+//   - `collectRowBatch`: bounded pages, accumulated up to one packed
+//     object's own byte budget, for the alarm's normal packing loop.
+// `writer.ts#alarm()` always finishes migrating (a call that migrates zero
+// rows) before ever calling `collectRowBatch` — a newer (larger, padded)
+// row must never be packed ahead of an older (un-migrated, legacy) one.
+
+/** A legacy (pre-fix) row key: `row:` followed by a bare decimal with no
+ *  leading zero (`n.toString()`, the old `pendingRowStorageKey`). Excludes
+ *  every possible NEW padded key by construction: a padded key is always
+ *  exactly {@link ROW_SEQ_DIGITS} digits wide and, for any `n` that could
+ *  realistically occur (far below `10 ** (ROW_SEQ_DIGITS - 1)`), starts
+ *  with `0` — which `n.toString()` never produces except for the bare
+ *  string `"0"` itself (handled separately, see `migrateLegacyRows`). */
+const LEGACY_ROW_RE = /^row:[1-9]\d*$/;
+/** How many legacy rows one `migrateLegacyRows` call may rewrite — well
+ *  under the real DO storage 128-key limit (`storage.ts`), since the call
+ *  does one `put` and one `delete`, each sized to this many keys. */
+export const LEGACY_MIGRATE_BATCH_LIMIT = 64;
+
+/** Bounded, oldest-first page of un-migrated legacy row keys. `start`/`end`
+ *  (never combined with `prefix` — `storage.ts`'s own caveat) restrict the
+ *  scan to the lexicographic band `row:1` .. `row:~` (`~` sorts after every
+ *  digit), which holds every legacy key with `n >= 1` and NO padded key
+ *  (padded keys start with `0` for any realistic `n` — see `LEGACY_ROW_RE`).
+ *  `row:0` (legacy `n === 0`) sorts BEFORE that whole band, so it needs its
+ *  own one-key check. */
+async function legacyRowPage(storage: StorageLike, limit: number): Promise<[string, PendingRow][]> {
+  const zeroKey = `${ROW_PREFIX}0`;
+  const zero = await storage.get<PendingRow>(zeroKey);
+  const rest = await storage.list<PendingRow>({
+    start: `${ROW_PREFIX}1`,
+    end: `${ROW_PREFIX}~`,
+    limit: zero !== undefined ? limit - 1 : limit,
+  });
+  const entries: [string, PendingRow][] = [];
+  if (zero !== undefined) entries.push([zeroKey, zero]);
+  for (const entry of rest) if (LEGACY_ROW_RE.test(entry[0])) entries.push(entry);
+  return entries;
+}
+
+/** Rewrites up to {@link LEGACY_MIGRATE_BATCH_LIMIT} legacy (un-padded)
+ *  `row:<n>` rows into the new padded shape, in one transaction (same
+ *  value, only the key changes — never touches `rowSeq`/`seq`, which are
+ *  unaffected by the key's own text width). Returns how many were migrated;
+ *  the caller (`writer.ts#alarm()`) keeps calling this — never packing in
+ *  between — until it returns 0, guaranteeing every legacy row is packed
+ *  strictly before any row appended after this fix deployed. Self-limiting:
+ *  legacy rows only ever shrink (nothing writes new ones — `appendRows`
+ *  always uses the current, padded `pendingRowStorageKey`), so this
+ *  eventually always reaches 0 and never runs again after that. */
+export async function migrateLegacyRows(storage: StorageLike, limit: number = LEGACY_MIGRATE_BATCH_LIMIT): Promise<number> {
+  const legacy = await legacyRowPage(storage, limit);
+  if (legacy.length === 0) return 0;
+  await storage.transaction(async (txn) => {
+    const writes: Record<string, PendingRow> = {};
+    const toDelete: string[] = [];
+    for (const [key, row] of legacy) {
+      writes[pendingRowStorageKey(rowNumber(key))] = row;
+      toDelete.push(key);
+    }
+    await putChunked(txn, writes);
+    await deleteChunked(txn, toDelete);
+  });
+  return legacy.length;
+}
+
+/** How many rows one `list()` page fetches while accumulating a batch — a
+ *  small constant (not {@link PACK_OBJECT_MAX_DECOMPRESSED_BYTES}-sized)
+ *  so a single call's OWN memory footprint stays small even before the
+ *  accumulated-bytes check below can stop it (rows are ≤ `INBOX_ROW_MAX_BYTES`
+ *  each, so one page is ≤ ~8 MB). */
+export const ROW_LIST_PAGE_LIMIT = 8;
+/** Target bytes to accumulate per `collectRowBatch` call — matches
+ *  {@link PACK_OBJECT_MAX_DECOMPRESSED_BYTES} so one batch is normally
+ *  enough to fill one packed object per tenant present in it, without the
+ *  page-boundary fragmentation a much-smaller per-page limit would cause
+ *  (advisor review, this fix round: a naive re-list-from-the-front-after-
+ *  every-object loop re-reads rows it isn't about to use, amplifying DO row
+ *  reads well past what packing this many bytes actually needs). */
+const ROW_BATCH_TARGET_BYTES = PACK_OBJECT_MAX_DECOMPRESSED_BYTES;
+
+function rowByteSize(row: PendingRow): number {
+  return new TextEncoder().encode(encodeNdjson(row.resourceLogs)).length;
+}
+
+/** Bounded, arrival-ordered batch of pending rows (ANY tenant mixed in —
+ *  the caller groups by tenant): pages through `row:` in small chunks
+ *  ({@link ROW_LIST_PAGE_LIMIT} at a time — bounds ONE `list()` call's
+ *  memory) via an exclusive `start` cursor, accumulating until
+ *  {@link ROW_BATCH_TARGET_BYTES} is reached or no more rows exist. Always
+ *  takes at least one row (a single oversized row must still make
+ *  progress, matching `packTenant`'s own rule). Requires every `row:` key
+ *  in storage to already be in the padded shape — the caller
+ *  (`writer.ts#alarm()`) only calls this after `migrateLegacyRows` reports
+ *  0 remaining, so native ascending `list()` order is arrival order (see
+ *  this section's header). */
+export async function collectRowBatch(storage: StorageLike): Promise<[string, PendingRow][]> {
+  const rows: [string, PendingRow][] = [];
+  let bytes = 0;
+  let start: string | undefined;
+  for (;;) {
+    const page = await storage.list<PendingRow>({ prefix: ROW_PREFIX, start, limit: ROW_LIST_PAGE_LIMIT });
+    if (page.size === 0) break;
+    let lastKey: string | undefined;
+    let hitBudget = false;
+    for (const [key, row] of page) {
+      lastKey = key;
+      const size = rowByteSize(row);
+      if (rows.length > 0 && bytes + size > ROW_BATCH_TARGET_BYTES) {
+        hitBudget = true;
+        break;
+      }
+      rows.push([key, row]);
+      bytes += size;
+    }
+    if (hitBudget) break;
+    if (page.size < ROW_LIST_PAGE_LIMIT) break; // nothing pending beyond this page
+    start = `${lastKey}\0`; // exclusive: the next page starts strictly after lastKey
+  }
+  return rows;
 }

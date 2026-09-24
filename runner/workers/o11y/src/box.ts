@@ -536,6 +536,13 @@ export class GrafanaBox extends Container<Env> {
 
     const provisionalKeys = result.outcomes.filter((o) => o.outcome === "provisional").map((o) => o.key);
     const rejectedKeys = result.outcomes.filter((o) => o.outcome === "rejected");
+    // G1 fix (row 19): a `provisional` outcome with a `reason` set is
+    // `drain.ts#drainKey`'s partial-400 case — at least one chunk landed
+    // 2xx (so it stays `provisional`, following the normal durability
+    // path) but another permanently 400'd. That loss is real and must stay
+    // operator-visible even though the key itself is not `rejected` — see
+    // `InboxWriterApi#recordPartialReject`'s own doc comment.
+    const partiallyRejected = result.outcomes.filter((o) => o.outcome === "provisional" && o.reason !== undefined);
     const bytesPushed = result.outcomes.reduce((sum, o) => sum + o.bytesPushed, 0);
     // F1: records dropped for being older than Loki's `reject_old_samples_max_age`
     // (ADR §G accepts this loss, but it must be counted, never silent) —
@@ -544,6 +551,7 @@ export class GrafanaBox extends Container<Env> {
 
     if (provisionalKeys.length > 0) await writer.markKeysProvisional(payload.wakeId, provisionalKeys);
     for (const r of rejectedKeys) await writer.rejectKey(r.key, r.reason ?? "unknown");
+    for (const r of partiallyRejected) await writer.recordPartialReject(r.key, r.reason ?? "unknown");
 
     writeBoxPoint(
       this.env,

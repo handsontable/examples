@@ -108,6 +108,61 @@ test("POST /telemetry/collect: a batch over MAX_FARO_ITEMS_PER_BODY is refused o
   );
 });
 
+// N2 (merge blocker, final review): the real SQLite-backed DO storage API
+// caps get/put/delete at 128 keys/pairs per call. 65 UNIQUE log messages
+// (still under the 200-item A-I4 cap) already need 130 lookup keys in
+// `dedupe.ts#checkDuplicates`'s single `getMany` (2 day-buckets per unique
+// hash) — well over 128. Before this fix round chunked every such call,
+// this would either throw inside `InboxWriter.ingest`'s transaction (and
+// the route's own catch would then answer a MISLEADING 204 with nothing
+// stored — finding N3) or, if `memoryStorage`/the harness didn't enforce
+// the real limit, silently pass locally while throwing in production.
+// Per the advisor review this fix round recorded: assert the records
+// actually LANDED in storage, not just the response status code.
+test("POST /telemetry/collect: a batch of 65 unique log records (over the DO storage 128-key limit once bucketed) is fully accepted and stored (finding N2)", async () => {
+  const { env, doStorage } = freshEnv();
+  const body = withFreshTimestamp(faroFixture("log.json"));
+  const template = body.logs[0];
+  const UNIQUE_COUNT = 65;
+  body.logs = Array.from({ length: UNIQUE_COUNT }, (_, i) => ({ ...template, message: `${template.message} #${i}` }));
+
+  const req = new Request("https://demos.handsontable.com/telemetry/collect", {
+    method: "POST",
+    headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const res = await worker.fetch(req, env, ctx);
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
+
+  // Assert the records actually reached storage — not just a 2xx, which
+  // `handleCollect`'s own catch (N3) can answer even when `ingest` threw
+  // and stored nothing.
+  const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
+  assert.ok(rowKeys.length > 0, "at least one row: entry must exist after a 65-unique-item batch");
+  let totalRecords = 0;
+  for (const k of rowKeys) totalRecords += doStorage._data.get(k).resourceLogs.length;
+  assert.equal(totalRecords, UNIQUE_COUNT, "every one of the 65 unique records must be stored, none dropped");
+
+  // A redelivery of the SAME batch must dedupe every one of the 65 hashes
+  // in one call too (the other half of checkDuplicates's chunked getMany).
+  const replay = await worker.fetch(
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    env,
+    ctx,
+  );
+  await ctx.drain();
+  assert.ok(replay.status >= 200 && replay.status < 300);
+  const rowKeysAfterReplay = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
+  let totalAfterReplay = 0;
+  for (const k of rowKeysAfterReplay) totalAfterReplay += doStorage._data.get(k).resourceLogs.length;
+  assert.equal(totalAfterReplay, UNIQUE_COUNT, "a redelivery of all 65 must be fully deduped, not stored a second time");
+});
+
 test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count the browser metric point — only the dedupe-accepted copy writes error.uncaught (finding A-I4)", async () => {
   const { env, ae } = freshEnv();
   const body = withFreshTimestamp(faroFixture("exception-code-frame.json"));
@@ -128,6 +183,40 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
 
   const errorPoints = ae.points.filter((p) => p.indexes[0] === "error.uncaught");
   assert.equal(errorPoints.length, 1, "a redelivered batch must write exactly one error.uncaught point, not two");
+});
+
+// A-I4 remainder (closed, second wave): `example.*` events used to bypass
+// InboxWriter.ingest's dedupe transaction entirely (no ingestItem at all),
+// so a retried/redelivered batch inflated ADR-0042's analytics counts on
+// every replay — unlike every other item type, which A-I4's original fix
+// already protected. `normalise/faro.ts` now gives an example.* event a
+// hash-only ingestItem (no `record`, so it is still never stored, §6)
+// purely so it flows through the SAME dedupe-gated point-write logic
+// `index.ts#handleCollect` already has for everything else.
+test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count an example.* analytics point (A-I4 remainder)", async () => {
+  const { env, ae, doStorage } = freshEnv();
+  const body = withFreshTimestamp(faroFixture("example-open.json"));
+  const req = () =>
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const first = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(first.status >= 200 && first.status < 300);
+
+  const second = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(second.status >= 200 && second.status < 300, "a duplicate delivery must still answer 2xx");
+
+  const examplePoints = ae.points.filter((p) => p.indexes[0] === "example.open");
+  assert.equal(examplePoints.length, 1, "a redelivered example.* batch must write exactly one point, not two");
+
+  // §6 must still hold: an example.* event is never stored, redelivered or not.
+  const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
+  assert.equal(rowKeys.length, 0, "an example.* event must never produce a row: entry");
 });
 
 test("POST /telemetry/v1/logs: the x-o11y-secret gate — wrong secret is 401, correct secret is 2xx", async () => {

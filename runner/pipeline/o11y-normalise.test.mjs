@@ -100,12 +100,43 @@ test("Faro web-vitals: LCP/INP/CLS become points, FCP is not a contract reason",
   assert.deepEqual(reasons, ["web_vital", "web_vital", "web_vital"]);
 });
 
-test("Faro example.open: one Analytics Engine point, no stored record", async () => {
+test("Faro example.open: one Analytics Engine point, no STORED record — but a hash-only ingestItem (A-I4 remainder, closed second wave)", async () => {
   const body = faroFixture("example-open.json");
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
-  assert.equal(item.ingestItem, undefined, "example.* events are never stored (§6)");
+  // A-I4's original fix bypassed dedupe entirely for example.* events (no
+  // `ingestItem` at all) — that let a retried/redelivered batch inflate
+  // ADR-0042's analytics counts on every replay. Fixed: a hash-only
+  // ingestItem (no `record`) still goes through InboxWriter.ingest's own
+  // dedupe transaction, so `index.ts#handleCollect`'s existing
+  // outcome-gated point-write logic covers it — but `record` stays absent,
+  // so `appendRows`/`pack.ts` still never store anything for it (§6
+  // unchanged).
+  assert.ok(item.ingestItem, "an example.* event must still get a hash to dedupe on");
+  assert.equal(item.ingestItem.record, undefined, "but must never carry a record — §6: AE points only, never stored");
+  assert.equal(typeof item.ingestItem.hash, "string");
+  assert.ok(item.ingestItem.hash.length > 0);
   assert.equal(item.aePoints.length, 1);
   assert.equal(item.aePoints[0].indexes[0], "example.open");
+});
+
+test("Faro example.open: a redelivered identical batch hashes identically (dedupe-eligible) — a distinct client timestamp does not", async () => {
+  const body = faroFixture("example-open.json");
+  const receivedAtMs = Date.now();
+  const [first] = await processFaroBody(body, ENV, SERVICE, receivedAtMs);
+  const [second] = await processFaroBody(body, ENV, SERVICE, receivedAtMs + 5000);
+  assert.equal(
+    first.ingestItem.hash,
+    second.ingestItem.hash,
+    "the same example.* event body, redelivered at a different arrival time, must hash identically so InboxWriter.ingest's dedupe actually catches it",
+  );
+
+  // A different CLIENT timestamp (a genuinely distinct click) must NOT
+  // collapse into the same hash (advisor review, this fix round: "hash the
+  // item as sent, including its client timestamp").
+  const distinctBody = faroFixture("example-open.json");
+  for (const e of distinctBody.events ?? []) e.timestamp = new Date(Date.now() + 60_000).toISOString();
+  const [distinct] = await processFaroBody(distinctBody, ENV, SERVICE, receivedAtMs);
+  assert.notEqual(first.ingestItem.hash, distinct.ingestItem.hash, "a genuinely distinct client timestamp must not collapse two real clicks into one hash");
 });
 
 test("Faro log: stored record, no Analytics Engine point", async () => {

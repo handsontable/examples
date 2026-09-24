@@ -24,10 +24,17 @@ import type { InboxWriter } from "./inbox/writer.js";
  * time. `fingerprint` is set only for exception/error records whose surface
  * feeds the new-fingerprint alert (`feedsNewFingerprintAlert`, §7) — absent
  * otherwise, so `InboxWriter` never has to re-derive that decision.
+ *
+ * `record` is optional (fix round, A-I4 remainder, closed second wave):
+ * absent for an `example.*` Faro event, which still needs `ingest`'s own
+ * hash/dedupe transaction (a redelivered batch must not double-count its AE
+ * point) but must never be stored (§6, unchanged) — `ingest`/`appendRows`
+ * skip a `record`-less item's row entirely, so `hash`/`fingerprint`
+ * dedupe/registry bookkeeping still runs for it, nothing else does.
  */
 export interface IngestItem {
   hash: string;
-  record: NormalisedRecord;
+  record?: NormalisedRecord;
   fingerprint?: string;
 }
 
@@ -55,14 +62,17 @@ export interface InboxWriterApi {
 
   /**
    * ADR §B.2 steps 4–5, T02: dedupe each item's `hash` against the 24 h window
-   * (`hash:<sha256>`), append every non-duplicate record to storage rows ≤ 1 MB
-   * (arrival time on the row, never in the record), update the exact
-   * fingerprint first-seen registry (`fp:<fingerprint>`) and the
-   * `heartbeat.lastIngest` marker, and answer only after the transaction
-   * commits. Returns the per-item outcome so the route handler can write
-   * aggregated `o11y.ingest` `accepted`/`duplicate` points (one point per
-   * request, per T02-D — see the task Outcome for why per-record points would
-   * violate exit criterion 4's "one duplicate point").
+   * (`hash:<sha256>`), append every non-duplicate ITEM WITH A `record` to
+   * storage rows ≤ 1 MB (arrival time on the row, never in the record) —
+   * a `record`-less item (A-I4 remainder, §6's `example.*` events) still
+   * runs through the same dedupe/fingerprint bookkeeping but produces no
+   * row — update the exact fingerprint first-seen registry
+   * (`fp:<fingerprint>`) and the `heartbeat.lastIngest` marker, and answer
+   * only after the transaction commits. Returns the per-item outcome so the
+   * route handler can write aggregated `o11y.ingest` `accepted`/`duplicate`
+   * points (one point per request, per T02-D — see the task Outcome for why
+   * per-record points would violate exit criterion 4's "one duplicate
+   * point").
    */
   ingest(tenant: Tenant, arrivalMs: number, items: IngestItem[]): Promise<IngestResult>;
 
@@ -96,15 +106,31 @@ export interface InboxWriterApi {
    *  not backlog — only bare `written` counts (ADR §B.3: "`backlog()`
    *  counts only `written` keys"). */
   backlogOldestAgeMs(): Promise<number | null>;
-  /** Count of `key:<k> = rejected:<reason>` entries — ADR §F.3's "a
-   *  `rejected` inbox key" rule reads this, not the raw storage. */
+  /** Count of `key:<k> = rejected:<reason>` entries — informational total,
+   *  used in the alert's own detail text. */
   rejectedKeyCount(): Promise<number>;
+  /** Row 19 (drain partial-400 durability, final review rereview.md): logs
+   *  a rejection EVENT for a key that stays `provisional`/`done:` overall
+   *  (its accepted chunks follow the normal §B.3 durability path) but had
+   *  at least one chunk Loki permanently rejected — see
+   *  `drain.ts#drainKey`'s own doc comment for the reclassification this
+   *  supports, and `ledger.ts#recordPartialReject` for the storage shape. */
+  recordPartialReject(key: string, reason: string): Promise<void>;
+  /** B-C1/A-I1 remainder: count of rejection EVENTS (full `rejectKey` calls
+   *  and `recordPartialReject` calls alike) strictly newer than `sinceMs` —
+   *  ADR §F.3's "a `rejected` inbox key" rule fires on this, not the
+   *  never-pruned `rejectedKeyCount()` total, so it can resolve once
+   *  rejections stop instead of firing forever after the first one. */
+  recentRejectionCount(sinceMs: number): Promise<number>;
 
-  /** `fp:<fingerprint>` entries first seen strictly after `sinceMs` —
+  /** `fp:<fingerprint>` entries first seen strictly after `sinceMs`, read
+   *  via the `fpts:` time-ordered index (bounded — B-C1/A-I1 remainder) —
    *  `demo-runtime` fingerprints are already excluded (they never reach the
    *  registry at all: `feedsNewFingerprintAlert`, contract §7), so every
-   *  name returned here is alert-eligible by construction. */
-  newFingerprintsSince(sinceMs: number): Promise<string[]>;
+   *  name returned here is alert-eligible by construction. `truncated`/
+   *  `lastMs` let the caller (`alerts/rules.ts#newFingerprintRule`) advance
+   *  its own cursor without skipping anything the scan didn't reach. */
+  newFingerprintsSince(sinceMs: number): Promise<{ names: string[]; truncated: boolean; lastMs: number | null }>;
 
   /** `alert:<rule>` (§8): the exact fire-once/resolve-once state the ADR
    *  §F.3 rule evaluator reads and writes every tick. */

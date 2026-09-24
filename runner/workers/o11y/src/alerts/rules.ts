@@ -303,12 +303,27 @@ export async function backlogAgeRule(inboxWriter: InboxWriterApi): Promise<RuleR
 
 // ---- a rejected inbox key ---------------------------------------------------
 
-export async function rejectedKeyRule(inboxWriter: InboxWriterApi): Promise<RuleResult> {
-  const count = await inboxWriter.rejectedKeyCount();
+/** B-C1/A-I1 remainder (rereview.md row 13): rejected `key:` entries are
+ *  never pruned (`ledger.ts#rejectKey`'s own doc comment — an operator
+ *  needs to still find one), so a plain "count > 0" firing condition, once
+ *  true, stays true forever after the very first rejection ever seen. Fire
+ *  on RECENT rejection events instead (`rejectedEvent:`, `ledger.ts`) —
+ *  standard fire-once/resolve-once semantics (`evaluateAndNotify`) then
+ *  resolve naturally once no new rejection lands within this window. */
+const REJECTED_RECENT_WINDOW_MS = HOUR_MS;
+
+export async function rejectedKeyRule(inboxWriter: InboxWriterApi, nowMs = Date.now()): Promise<RuleResult> {
+  const recent = await inboxWriter.recentRejectionCount(nowMs - REJECTED_RECENT_WINDOW_MS);
+  const total = await inboxWriter.rejectedKeyCount();
   return {
     rule: "rejected-inbox-key",
-    firing: count > 0,
-    detail: `${count} rejected inbox key(s)`,
+    firing: recent > 0,
+    detail:
+      recent > 0
+        ? `${recent} rejection(s) in the last hour (${total} rejected key(s) overall)`
+        : total > 0
+          ? `no rejections in the last hour (${total} rejected key(s) overall, unresolved)`
+          : "no rejected inbox keys",
   };
 }
 
@@ -356,21 +371,38 @@ const MAX_FINGERPRINTS_LISTED = 10;
 export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Date.now()): Promise<RuleResult> {
   const cursorRaw = await inboxWriter.getAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY);
   const cursor = cursorRaw ? Number(cursorRaw) : nowMs - HOUR_MS; // first run: look back one hour
-  const fresh = await inboxWriter.newFingerprintsSince(cursor);
+  const { names: fresh, truncated, lastMs } = await inboxWriter.newFingerprintsSince(cursor);
+  // B-C1/A-I1 remainder (rereview.md row 13): `newFingerprintsSince` is now
+  // a BOUNDED read (`NEW_FINGERPRINT_SCAN_LIMIT`, inbox-state.ts) — if it
+  // truncated, entries past `lastMs` were never read this tick, so the
+  // cursor must not advance past them either, or they would be silently
+  // skipped forever (the exact bug this bound would otherwise reintroduce).
+  // `lastMs - 1` (not `lastMs`) re-includes `lastMs` itself next tick: two
+  // or more fingerprints can share the exact same first-seen ms (one
+  // ingest transaction stamps every fingerprint in the batch with the same
+  // `arrivalMs`), and truncation can cut a page mid-timestamp, so cutting
+  // at `lastMs` risks skipping a same-millisecond sibling that sorted just
+  // past the truncation point. Re-showing an already-reported name once
+  // more is a bounded, harmless duplicate (the same trade-off this rule
+  // already accepts for `CURSOR_GRACE_MS`, below); silently dropping one is
+  // not.
+  const truncatedCap = truncated && lastMs !== null ? lastMs - 1 : null;
   // Never advance past `nowMs - CURSOR_GRACE_MS` (see that constant's doc
   // comment); `Math.max` guards the first-run case, where the initial
   // cursor (`nowMs - HOUR_MS`) already sits well below the lagged value.
-  const nextCursor = Math.max(cursor, nowMs - CURSOR_GRACE_MS);
+  const graceCap = nowMs - CURSOR_GRACE_MS;
+  const nextCursor = Math.max(cursor, truncatedCap !== null ? Math.min(graceCap, truncatedCap) : graceCap);
   await inboxWriter.setAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY, String(nextCursor));
   const shown = fresh.slice(0, MAX_FINGERPRINTS_LISTED);
   const overflow = fresh.length - shown.length;
+  // `truncated` means real, unread fingerprints may exist beyond what this
+  // tick even counted — "+N more" (computed only from what WAS read) would
+  // understate them, so say "or more" instead of a precise count.
+  const overflowSuffix = truncated ? " (+ more, still catching up)" : overflow > 0 ? ` (+${overflow} more)` : "";
   return {
     rule: "new-fingerprint",
     firing: fresh.length > 0,
-    detail:
-      fresh.length > 0
-        ? `new fingerprint(s): ${shown.join(", ")}${overflow > 0 ? ` (+${overflow} more)` : ""}`
-        : "no new fingerprints",
+    detail: fresh.length > 0 ? `new fingerprint(s): ${shown.join(", ")}${overflowSuffix}` : "no new fingerprints",
   };
 }
 

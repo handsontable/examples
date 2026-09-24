@@ -98,7 +98,12 @@ test("example.open: end to end from a scrubbed browser payload to one AE point, 
 
   const [item] = await processFaroBody(wireBody, ENV, SERVICE, Date.now());
 
-  assert.equal(item.ingestItem, undefined, "example.* is never stored (§6) — never reaches the inbox, so never Loki");
+  // A-I4 remainder (rereview.md, closed second wave): an example.* event
+  // now gets a hash-only ingestItem (no `record`) so a redelivered batch
+  // can't double-count this AE point — but it must still never reach the
+  // inbox/Loki (§6 unchanged): `record` stays absent.
+  assert.ok(item.ingestItem, "example.* still needs a hash to dedupe on (A-I4 remainder)");
+  assert.equal(item.ingestItem.record, undefined, "example.* is never stored (§6) — never reaches the inbox, so never Loki");
   assert.equal(item.invalid, undefined);
   assert.equal(item.aePoints.length, 1);
   const point = item.aePoints[0];
@@ -136,7 +141,10 @@ test("example.engaged: same taxonomy channel, no reason blob", async () => {
   const scrubbed = scrubTelemetry(item);
   const wireBody = { meta: scrubbed.meta, events: [{ name: scrubbed.payload.name, attributes: scrubbed.payload.attributes }] };
   const [result] = await processFaroBody(wireBody, ENV, SERVICE, Date.now());
-  assert.equal(result.ingestItem, undefined);
+  // A-I4 remainder: hash-only ingestItem, still never stored — see the
+  // "example.open" test above for the full reasoning.
+  assert.ok(result.ingestItem);
+  assert.equal(result.ingestItem.record, undefined);
   assert.equal(result.aePoints.length, 1);
   assert.equal(result.aePoints[0].indexes[0], "example.engaged");
 });

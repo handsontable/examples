@@ -281,13 +281,15 @@ dedupe hash is computed over the decoded, scrubbed record before timestamps are 
 | Key | Value |
 |---|---|
 | `seq` | last issued sequence |
-| `row:<n>` | pending records with their arrival time, ≤ 1 MB per row |
+| `row:<n:012d>` | pending records with their arrival time, ≤ 1 MB per row. `<n>` is zero-padded to 12 digits (G1 fix round, A-I2) so native ascending key order equals arrival order; a row written before this fix, under the un-padded `row:<n>` shape, is migrated in place (rewritten under the padded key, oldest first) before the pack alarm packs anything appended after the fix — see `pack.ts#migrateLegacyRows` |
 | `key:<inbox key>` | `written` \| `provisional:<wakeId>` \| `rejected:<reason>` — **never `committed`** (see `done:`, below) |
 | `done:<inbox key>` | `1` — a **committed** key, moved OUT of `key:` on commit (same write that deletes `key:<inbox key>`) |
 | `hash:<yyyymmdd>:<sha256>` | first-seen epoch ms; 24 h window, checked across the current and previous UTC-day bucket |
 | `fp:<fingerprint>` | first-seen epoch ms (exact registry for the new-fingerprint alert) |
+| `fpts:<firstSeenMs:015d>:<fingerprint>` | same first-seen epoch ms as its `fp:` twin — a time-ordered secondary index (G1 fix round, B-C1/A-I1 remainder) so the new-fingerprint alert can do a bounded `start`/`end` range read instead of listing the whole (alphabetically, not chronologically, ordered) `fp:` prefix every tick. Written/deleted together with its `fp:` twin, always |
 | `alert:<rule>` | `{ state: firing \| resolved, since, lastNotified }` |
 | `wake:<wakeId>` | `{ startedAt, reason, over: boolean }` — over when a newer wake started or the container is not running; **deleted once fully resolved** (see below) |
+| `rejectedEvent:<ms:015d>:<inbox key>` | rejection reason (string) — a chronological audit/alert log (G1 fix round, row 19 / B-C1/A-I1 remainder), written by both a full rejection (`ledger.ts#rejectKey`) and a **partial** one (`ledger.ts#recordPartialReject`, see below). The `rejected-inbox-key` alert fires on a RECENT (last hour) count here, not on `rejectedKeyCount()`'s never-pruned total, so it resolves once rejections stop instead of firing forever after the first one ever seen |
 | `drainsPaused` | boolean (o11y spend cap) |
 | `heartbeat` | `{ lastCron, lastIngest }` |
 
@@ -321,6 +323,40 @@ must never scan committed history):**
   application/json` (CSRF hardening: forces a CORS preflight for any cross-origin caller).
 - A manual reopen of a **committed** key reads `done:`, moves it back to `key:<inbox
   key> = written`, and deletes the `done:` entry.
+
+**G1 fix round (final review, second wave) additions:**
+- **Pack alarm, bounded (A-I2 remainder).** The alarm no longer loads every pending
+  `row:` into memory before packing (F1's fix only bounded the packed OBJECT's size, not
+  this read). It first migrates any legacy (un-padded) `row:<n>` rows to completion, then
+  pages `row:` in small chunks, accumulating up to one packed object's own ~4 MB budget
+  per round, looping until the backlog is drained or `MAX_OBJECTS_PER_ALARM` (25) objects
+  have been packed this invocation. See `pack.ts#collectRowBatch`/`migrateLegacyRows`.
+- **DO storage 128-key batch limit (N2).** Cloudflare's SQLite-backed Durable Object
+  storage API caps `get`/`put`/`delete` at 128 keys/pairs per call
+  (<https://developers.cloudflare.com/durable-objects/api/storage-api/>, fetched
+  2026-09-24: "Supports up to 128 keys at a time" / "up to 128 key-value pairs at a
+  time"). Every multi-key call in `InboxWriter` chunks through `storage.ts`'s
+  `getManyChunked`/`putChunked`/`deleteChunked` — `checkDuplicates`, `newFingerprintWrites`,
+  `pruneLedger`/`pruneHashBuckets`/`pruneFingerprintRegistry`, `finalizeWakeResolution`,
+  `markKeysProvisional`, `reopenWindow`, `commitPackedObject`, and `ingest`'s own
+  transaction `put`. `finalizeWakeResolution`/`reopenWindow` also now run their whole
+  put+delete sequence inside one `storage.transaction()` (previously two independent
+  top-level calls) — chunking alone, without that, would let a crash between chunks
+  leave a partial write.
+- **Prune throughput (B-C1/A-I1 remainder).** `hash:`/`done:` prune batch sizes raised
+  from 500 to 5,000 rows/tick (still chunked to 128 per actual `delete()` call) — ADR
+  §D's own 10× headroom projects ~220,000 worker records/day, which the old 500/tick ×
+  144 ten-minute ticks/day (72,000/day) falls behind at roughly 3× today's traffic.
+  `rejected:` `key:` entries are now pruned too, past the same 7-day retention (filtered
+  by value, since `key:` mixes live and rejected states chronologically — see
+  `ledger.ts#pruneLedger`).
+- **Drain partial-400 durability (rereview.md row 19).** A key with at least one chunk
+  accepted (2xx) and at least one chunk permanently rejected (400) now stays
+  `provisional` (not `rejected`) — its accepted content follows the normal
+  written→provisional→committed path, so an unclean stop before Loki's local flush
+  still triggers an automatic replay instead of being silently unrecoverable except by
+  manual reopen. Only a key with ZERO accepted chunks stays `rejected`. See
+  `drain.ts#drainKey`'s own doc comment.
 
 ## 9. Lite beacon payload
 

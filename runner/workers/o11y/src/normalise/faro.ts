@@ -128,18 +128,23 @@ function isServerSideNoiseException(value: string | undefined, type: string | un
 
 export interface ProcessedFaroItem {
   /** Absent for a console-dropped item, an unrecoverable item (a bad
-   *  `item.type`/`toAePoint` input, T00-D10), an oversize record, or an
-   *  `example.*` event (AE points only, never stored, §6). */
+   *  `item.type`/`toAePoint` input, T00-D10), or an oversize record.
+   *  Fix round (A-I4 remainder, closed second wave): an `example.*` event
+   *  now ALSO carries an `ingestItem` — a hash-only one, `record` absent —
+   *  purely so `InboxWriter.ingest`'s own dedupe transaction covers it too;
+   *  §6's "AE points only, never stored" is unchanged, since
+   *  `InboxWriter.ingest`/`appendRows` skip a `record`-less item entirely. */
   ingestItem?: IngestItem;
   /** Fix round (finding A-I4): when {@link ingestItem} is set, the caller
    *  (`index.ts#handleCollect`) must write these points only for a hash
    *  `InboxWriter.ingest` reports as `"accepted"`, never `"duplicate"` — a
    *  retried/redelivered batch must not double-count `error.uncaught`,
-   *  `error.handled`, or any browser metric point the way the underlying
-   *  log record already avoids double-storage. When {@link ingestItem} is
-   *  absent (an `example.*` event, or an item that never reached storage at
-   *  all), these points have no hash to gate on and are written
-   *  unconditionally, same as before. */
+   *  `error.handled`, any browser metric point, or (A-I4 remainder) an
+   *  `example.*` analytics counter, the way a stored log record already
+   *  avoids double-storage. When {@link ingestItem} is absent (an item that
+   *  never reached even hash-only ingest, e.g. an oversize/unrecoverable
+   *  one), these points have no hash to gate on and are written
+   *  unconditionally. */
   aePoints: AePoint[];
   /** Set when this item could not be converted/validated at all — the caller
    *  writes one `invalid_item` `o11y.ingest` point and moves on (never a
@@ -480,7 +485,27 @@ async function processOneItem(
     aePoints = [];
   }
 
-  if (!storeRecord) return { aePoints };
+  if (!storeRecord) {
+    // A-I4 remainder (rereview.md, closed second wave): an `example.*`
+    // event skipped row storage (§6: AE points only, correct — unchanged
+    // below) but was ALSO skipping `InboxWriter.ingest`'s own hash/dedupe
+    // transaction entirely, so a retried/redelivered batch double-counted
+    // its AE point the same way A-I4's original fix already closed for
+    // every other item type. Reuses the exact hash shape `hashRecord`
+    // computes for a stored record below (same fields, including the raw
+    // client `timestamp` — not the clamped one — so two genuine clicks a
+    // browser reports with distinct timestamps never collapse into one)
+    // purely for dedupe: no `record` is attached, so
+    // `InboxWriter.ingest`/`appendRows` (`inbox/writer.ts`, `inbox/pack.ts`)
+    // skip a `record`-less item entirely — nothing is ever stored for it.
+    const hash = await hashRecord({
+      body: record.body,
+      resourceAttributes: record.resourceAttributes,
+      attributes: record.attributes ?? {},
+      rawEventTime: scrubbed.payload.timestamp ?? "",
+    });
+    return { aePoints, ingestItem: { hash } };
+  }
 
   // I2 (fix round, see the task Outcome): the OTLP path already dropped
   // records over `INBOX_RECORD_MAX_BYTES` before this fix; the Faro path

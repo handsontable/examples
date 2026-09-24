@@ -18,6 +18,7 @@ import {
   wakeStorageKey,
   type AlertState,
   type Heartbeat,
+  type NormalisedRecord,
   type Tenant,
   type WakeState,
 } from "@handsontable/demo-runtime/telemetry";
@@ -40,13 +41,16 @@ import {
   markKeysProvisional as ledgerMarkKeysProvisional,
   nextWrittenKeys as ledgerNextWrittenKeys,
   pruneLedger,
+  recentRejectionCount as ledgerRecentRejectionCount,
+  recordPartialReject as ledgerRecordPartialReject,
   rejectKey as ledgerRejectKey,
   reopenWindow as ledgerReopenWindow,
   reopenWindowExceedsRetention,
   resolveOverWakes,
   type InboxObjectInfo,
 } from "./ledger.js";
-import { appendRows, commitPackedObject, packTenant, pendingRowsByTenant, ROW_SEQ_STORAGE_KEY } from "./pack.js";
+import { appendRows, collectRowBatch, commitPackedObject, migrateLegacyRows, packTenant, ROW_SEQ_STORAGE_KEY } from "./pack.js";
+import { putChunked } from "./storage.js";
 import { pruneHashBuckets } from "./dedupe.js";
 import { pruneFingerprintRegistry } from "./registry.js";
 import type { StorageLike } from "./storage.js";
@@ -135,11 +139,16 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
       const dedupe = await checkDuplicates(txn, hashes, arrivalMs);
       const accepted = items.filter((i) => !dedupe.duplicates.has(i.hash));
 
+      // A-I4 remainder (closed, second wave): a `record`-less item (an
+      // `example.*` Faro event, `normalise/faro.ts`) still goes through the
+      // dedupe/fingerprint bookkeeping above — the whole point is giving it
+      // the same hash/dedupe transaction every other item gets — but must
+      // never produce a `row:` entry (§6: AE points only, never stored).
       const append = await appendRows(
         txn,
         tenant,
         arrivalMs,
-        accepted.map((i) => i.record),
+        accepted.map((i) => i.record).filter((r): r is NormalisedRecord => r !== undefined),
       );
 
       const fingerprints = accepted.map((i) => i.fingerprint).filter((fp): fp is string => Boolean(fp));
@@ -147,7 +156,10 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
 
       const heartbeat = (await txn.get<Heartbeat>(HEARTBEAT_STORAGE_KEY)) ?? { lastCron: 0, lastIngest: 0 };
 
-      await txn.put<unknown>({
+      // N2: a 200-item Faro batch (A-I4's own per-request cap) can produce
+      // up to 200 dedupe.writes + 200*2 fpWrites (fp:/fpts: pairs) entries
+      // in one call — well over the real DO storage 128-key put() limit.
+      await putChunked<unknown>(txn, {
         ...dedupe.writes,
         ...append.writes,
         [ROW_SEQ_STORAGE_KEY]: append.nextRowSeq,
@@ -251,6 +263,22 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     await ledgerRejectKey(adaptStorage(this.ctx.storage), key, reason);
   }
 
+  /** Row 19 (drain partial-400 durability): logs a rejection EVENT for a
+   *  key whose ledger state stays `provisional`/`done:` (its accepted
+   *  chunks are durable, per §B.3) — see `ledger.ts#recordPartialReject`'s
+   *  own doc comment. */
+  async recordPartialReject(key: string, reason: string): Promise<void> {
+    await ledgerRecordPartialReject(adaptStorage(this.ctx.storage), key, reason);
+  }
+
+  /** B-C1/A-I1 remainder: count of `rejectedEvent:` entries newer than
+   *  `sinceMs` — `alerts/rules.ts#rejectedKeyRule` reads this instead of
+   *  the never-pruned `rejectedKeyCount()` total, so the alert can resolve
+   *  once rejections stop, not fire forever after the first one. */
+  async recentRejectionCount(sinceMs: number): Promise<number> {
+    return ledgerRecentRejectionCount(adaptStorage(this.ctx.storage), sinceMs);
+  }
+
   /** B-M9: a window wider than {@link KEY_RETENTION_MS} is refused outright
    *  (defense in depth alongside `grafana/reopen.ts`'s own check — see that
    *  file's doc comment): nothing that old can exist any more (`done:`
@@ -292,36 +320,74 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
   /** ADR §B.2 step 6: gzipped NDJSON objects per tenant, `seq`/`key:<key>`/
    *  row-deletion committed atomically per object (`pack.ts#commitPackedObject`).
    *
-   *  Fix round (finding A-I2, minimal touch — `pack.ts` is this fix's real
-   *  home, see that file's own doc comment): `packTenant` now bounds one
-   *  object to `PACK_OBJECT_MAX_DECOMPRESSED_BYTES` and may leave rows
-   *  behind, so this loop keeps calling it per tenant until nothing pending
-   *  remains — otherwise the object-size cap alone would still leave an
-   *  unbounded NUMBER of un-packed rows sitting in storage after one alarm.
-   *  Bounded to `MAX_OBJECTS_PER_ALARM` packed objects per invocation (a
-   *  large backlog is packed over several alarm invocations, not one
-   *  unbounded loop competing with the Worker's own CPU limit) and
-   *  reschedules immediately (`setAlarm(Date.now())`) when objects remain. */
+   *  Fix round (finding R-A-I2, rereview.md "the pack alarm lists EVERY
+   *  pending row, with full content, into memory before the cap" — the F1
+   *  fix round only bounded the OBJECT's size, not this read): the old
+   *  `pendingRowsByTenant(storage)` call above loaded every pending row
+   *  across BOTH tenants into memory in one `list()`, unbounded by design —
+   *  a sustained ingest flood fills the pending set faster than 60 s alarms
+   *  can drain it, and this read grows right along with it, eventually
+   *  exceeding the DO's 128 MB memory and retrying forever against an
+   *  ever-larger set (pipeline's own flood test proves the old function's
+   *  read size instead).
+   *
+   *  Two bounded steps, in order:
+   *  1. `migrateLegacyRows` — rewrites any un-padded `row:<n>` key (written
+   *     before this fix deployed) into the new zero-padded shape, a small
+   *     batch at a time. Runs to COMPLETION (this alarm invocation reschedules
+   *     and returns without packing anything while any remain) before any
+   *     packing — a row written before the fix must never be packed AFTER
+   *     one written after it, which native key order alone cannot guarantee
+   *     while both shapes coexist (see `pack.ts`'s "bounded reads" header).
+   *  2. `collectRowBatch` — pages `row:` in small chunks, accumulated up to
+   *     one packed object's own byte budget, then packed/committed per
+   *     tenant present in that bounded batch. Looped until nothing remains
+   *     or `MAX_OBJECTS_PER_ALARM` objects have been packed this invocation
+   *     (a large backlog is packed over several alarm invocations, not one
+   *     unbounded loop competing with the Worker's own CPU limit),
+   *     rescheduling immediately (`setAlarm(Date.now())`) when objects
+   *     remain. */
   async alarm(): Promise<void> {
     const MAX_OBJECTS_PER_ALARM = 25;
     const storage = adaptStorage(this.ctx.storage);
+
+    const migrated = await migrateLegacyRows(storage);
+    if (migrated > 0) {
+      await storage.setAlarm(Date.now());
+      return;
+    }
+
     let packedCount = 0;
     let more = false;
-    const byTenant = await pendingRowsByTenant(storage);
-    for (const [tenant, rows] of byTenant) {
-      let remaining = rows;
-      while (remaining.length > 0) {
+    for (;;) {
+      if (packedCount >= MAX_OBJECTS_PER_ALARM) {
+        more = true;
+        break;
+      }
+      const batch = await collectRowBatch(storage); // bounded — see this method's own doc comment
+      if (batch.length === 0) break;
+
+      const byTenant = new Map<Tenant, [string, (typeof batch)[number][1]][]>();
+      for (const entry of batch) {
+        const list = byTenant.get(entry[1].tenant) ?? [];
+        list.push(entry);
+        byTenant.set(entry[1].tenant, list);
+      }
+
+      let packedAny = false;
+      for (const [tenant, rows] of byTenant) {
         if (packedCount >= MAX_OBJECTS_PER_ALARM) {
           more = true;
           break;
         }
-        const packed = await packTenant(storage, this.env.O11Y_INBOX, tenant, remaining);
-        if (!packed) break;
+        const packed = await packTenant(storage, this.env.O11Y_INBOX, tenant, rows);
+        if (!packed) continue;
         await commitPackedObject(storage, packed);
         packedCount++;
-        remaining = remaining.slice(packed.consumedRowKeys.length);
+        packedAny = true;
       }
       if (more) break;
+      if (!packedAny) break; // safety valve: nothing consumable in this batch
     }
     if (more) await storage.setAlarm(Date.now());
   }
@@ -347,7 +413,7 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     return rejectedKeyCount(adaptStorage(this.ctx.storage));
   }
 
-  async newFingerprintsSince(sinceMs: number): Promise<string[]> {
+  async newFingerprintsSince(sinceMs: number): Promise<{ names: string[]; truncated: boolean; lastMs: number | null }> {
     return newFingerprintsSince(adaptStorage(this.ctx.storage), sinceMs);
   }
 
