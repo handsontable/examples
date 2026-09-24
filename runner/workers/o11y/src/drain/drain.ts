@@ -263,13 +263,17 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
   // ascending order) and threw again, forever. A non-transient failure
   // here (a decode/parse throw, not a Loki/R2 outage — those never throw;
   // they return a `LokiPushResult`/`null` the rest of this function already
-  // handles) means this ONE key's symbolication is unrecoverable, so it is
-  // classified exactly like `undecodable_object` above: `rejected`, with
-  // the same `InboxWriterApi#rejectKey` metric/alert path
+  // handles) means this ONE key's symbolication is unrecoverable, so it
+  // gets the same `outcome: "rejected"` SHAPE as `undecodable_object`
+  // above and the same `InboxWriterApi#rejectKey` metric/alert path
   // (`box.ts#drainStep`) — never retried automatically, but no longer able
   // to block every key after it. `drainBatch`'s loop only stops on an
   // `"error"` outcome, so the next key in this batch (and every later one)
-  // still drains in the same call.
+  // still drains in the same call. The `reason` carries the underlying
+  // error's own message rather than a fixed token, same as the existing
+  // 400-rejection path a few lines below (`rejectedReason ??=
+  // result.message ?? "loki_400"`) — dynamic reason text already reaches
+  // `rejectedEvent:`/Slack alerts today, and `notify.ts` is what escapes it.
   try {
     records = await deps.symbolicate(records);
   } catch (err) {

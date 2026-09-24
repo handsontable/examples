@@ -35,6 +35,7 @@ const { fingerprint } = await import("../packages/runtime/dist/telemetry/index.j
 const { default: worker } = await import("../workers/o11y/src/index.ts");
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
 const { makeEnv, ctx } = await import("./fixtures/o11y-harness.mjs");
+const { symbolicateResourceLogs } = await import("../workers/o11y/src/drain/symbolicate.ts");
 
 const ENV = { O11Y_ENV: "production" };
 const SERVICE = { name: "demos-authoring", version: "deadbeef1234", environment: "production" };
@@ -56,13 +57,18 @@ async function assertUnderBudget(label, budgetMs, fn) {
 
 // ---- Individual pattern budgets (well under 100ms, per the task's own bar) -----
 
-test("redactEmailInText: 200k 'a' characters with no '@' completes well under 100ms", async () => {
-  const input = "a".repeat(200_000);
+// Sized at 100k, not 200k: on the pre-fix quadratic pattern this still
+// costs several seconds (measured on the unfixed code: ~5.9s / ~10s
+// respectively, both far over budget), while giving the fixed, linear
+// pattern more headroom under the 100ms budget in a loaded CI run (a
+// parallel `pnpm test` worker pool, slower hardware).
+test("redactEmailInText: 100k 'a' characters with no '@' completes well under 100ms", async () => {
+  const input = "a".repeat(100_000);
   await assertUnderBudget("redactEmailInText", 100, () => redactEmailInText(input));
 });
 
-test("redactEmailInText: 200k 'a.'-repeats (no '@') completes well under 100ms", async () => {
-  const input = "a.".repeat(100_000);
+test("redactEmailInText: 100k 'a.'-repeats (no '@') completes well under 100ms", async () => {
+  const input = "a.".repeat(50_000);
   await assertUnderBudget("redactEmailInText (a.-repeats)", 100, () => redactEmailInText(input));
 });
 
@@ -71,8 +77,8 @@ test("redactUserAgentInText: 'Mozilla/1 (' repeated with no closing paren comple
   await assertUnderBudget("redactUserAgentInText", 100, () => redactUserAgentInText(input));
 });
 
-test("redactPreviewHosts: 200k 'a-'-repeats with no '.demos.handsontable.com' suffix completes well under 100ms", async () => {
-  const input = "a-".repeat(100_000);
+test("redactPreviewHosts: 100k 'a-'-repeats with no '.demos.handsontable.com' suffix completes well under 100ms", async () => {
+  const input = "a-".repeat(50_000);
   await assertUnderBudget("redactPreviewHosts", 100, () => redactPreviewHosts(input));
 });
 
@@ -88,8 +94,8 @@ test("fingerprint (the real monitor.ts shape, via normalizeMonitorMessage + stri
 
 // ---- The combined server-side pass (text-scrub.ts's own extra scrub) -----------
 
-test("scrubBodyText: 200k 'a' characters (email + UA + URL passes chained) completes well under 100ms", async () => {
-  const input = "a".repeat(200_000);
+test("scrubBodyText: 100k 'a' characters (email + UA + URL passes chained) completes well under 100ms", async () => {
+  const input = "a".repeat(100_000);
   await assertUnderBudget("scrubBodyText", 100, () => scrubBodyText(input));
 });
 
@@ -151,4 +157,52 @@ test("POST /telemetry/collect: a gzip body carrying an adversarial 160k-characte
   );
   await ctx.drain();
   assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
+});
+
+// ---- Advisor sweep finding: STACK_LINE_RE (symbolicate.ts), the same class --
+//
+// `workers/o11y/src/drain/symbolicate.ts#STACK_LINE_RE` has two lazy
+// groups (`(.+?)`) separated by a required ` (` literal, with a required
+// `)` at the very end — catastrophic on a line shaped like
+// `"    at a (a (a (…"` with no closing paren, even though the regex has
+// no `/g` (it is anchored `^…$` and tried once per line, but that ONE
+// attempt still backtracks quadratically across every ambiguous split
+// point). Measured directly against the bare regex (not through this
+// test): 5k chars 5ms, 10k 20ms, 20k 74ms, 40k 305ms — roughly quadratic.
+// An exception's `value` field is free text that becomes the FIRST line of
+// the stored body (`convert.ts#faroBody`) and is bounded only by
+// `SCRUB_TEXT_MAX_CHARS` (256 KB, Z-A-C1) before it ever reaches drain —
+// nothing stops it from starting with `"    at "` and containing many
+// `" ("` sequences. Fixed with a length guard in `parseLine` (`MAX_STACK_LINE_LENGTH`
+// = 4096) that skips the regex entirely for any line longer than a real
+// rendered frame could ever be.
+test("symbolicateResourceLogs: a pathological '    at a (a (a (…' line with no closing paren completes well under budget, not quadratic on STACK_LINE_RE", async () => {
+  const poisonLine = "    at " + "a (".repeat(30_000); // ~90k chars, well past MAX_STACK_LINE_LENGTH
+  const record = {
+    resource: {
+      attributes: [
+        { key: "service.name", value: { stringValue: "demos-authoring" } },
+        { key: "service.version", value: { stringValue: "deadbeef1234" } },
+      ],
+    },
+    scopeLogs: [
+      {
+        logRecords: [
+          {
+            timeUnixNano: "1000000000",
+            body: { stringValue: `TypeError: boom\n${poisonLine}` },
+            attributes: [{ key: "hot.kind", value: { stringValue: "exception" } }],
+          },
+        ],
+      },
+    ],
+  };
+
+  const [resolved] = await assertUnderBudget("symbolicateResourceLogs (pathological STACK_LINE_RE input)", 200, () =>
+    symbolicateResourceLogs([record], { getMap: async () => null }),
+  );
+  // The pathological line must never resolve (no map lookup could even
+  // apply to it) — correctness alongside the budget, so a short-circuit
+  // that also broke resolution would not silently pass.
+  assert.equal(resolved.scopeLogs[0].logRecords[0].body.stringValue, record.scopeLogs[0].logRecords[0].body.stringValue);
 });

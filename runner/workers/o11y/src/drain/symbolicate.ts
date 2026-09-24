@@ -29,6 +29,30 @@ import { SourceMapConsumer, type RawSourceMap } from "source-map-js";
  *  narrow character class for the filename. */
 const STACK_LINE_RE = /^( {4}at )(.+?) \((.+?)(?::(\d+):(\d+))?\)$/;
 
+/**
+ * Advisor sweep finding (post-report, same Z-B-C1 file): `STACK_LINE_RE`'s
+ * two lazy groups (`(.+?)`, `(.+?)`) separated by a required ` (` literal
+ * are quadratic on a line shaped like `"    at a (a (a (…"` — no `/g`, so
+ * it is only tried once per line (anchored `^…$`), but that ONE attempt
+ * still backtracks catastrophically across every ambiguous split point.
+ * Measured directly (`node -e`, the two-group regex alone): 5k chars 5ms,
+ * 10k 20ms, 20k 74ms, 40k 305ms — roughly ×4 per ×2, i.e. quadratic.
+ * Projected to `SCRUB_TEXT_MAX_CHARS` (256 KB, the cap Z-A-C1 truncates
+ * every free-text string to, including an exception `value` that becomes
+ * this body's first line): tens of seconds. A CPU-limit kill from this is
+ * not a JS throw, so none of this module's three throw-shaped guards
+ * (the `line < 1` check, the `originalPositionFor` try/catch,
+ * `symbolicateResourceLogs`'s per-record try/catch) would catch it — the
+ * regex call itself never returns. A real frame line
+ * (`convert.ts#formatStackFrame`'s own output: a `"    at "` prefix, a
+ * function name, and a scrubbed URL with its query already stripped) is
+ * nowhere near this length; skipping anything longer costs no real frame
+ * resolution and removes the attack surface at its cheapest point — before
+ * the regex ever runs, matching this whole fix round's "truncate first"
+ * approach (Z-A-C1).
+ */
+const MAX_STACK_LINE_LENGTH = 4096;
+
 interface ParsedFrame {
   prefix: string;
   fn: string;
@@ -38,6 +62,7 @@ interface ParsedFrame {
 }
 
 function parseLine(line: string): ParsedFrame | null {
+  if (line.length > MAX_STACK_LINE_LENGTH) return null; // guard STACK_LINE_RE against catastrophic backtracking before it ever runs
   const m = STACK_LINE_RE.exec(line);
   if (!m) return null;
   const [, prefix, fn, filename, lineStr, colStr] = m;
