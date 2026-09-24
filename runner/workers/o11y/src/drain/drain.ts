@@ -250,7 +250,42 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
   const { kept, droppedOld } = dropOldRecords(records, (deps.now ?? Date.now)());
   records = kept;
 
-  records = await deps.symbolicate(records);
+  // Z-B-C1 defense in depth: `symbolicate.ts#symbolicateResourceLogs` is
+  // now written to never throw (it isolates a per-frame and a per-record
+  // failure internally), but this is the THIRD, independent layer — a
+  // throw here must isolate only THIS key, not the whole batch. Before
+  // this fix, an uncaught throw here escaped `drainKey`, then `drainBatch`
+  // (whose loop only guards against an `"error"` *outcome*, never an
+  // exception), then `box.ts#drainStep`'s own catch, which recorded the
+  // whole wake as `outcome: "error"` and left every key in this batch
+  // `written` — including the one that poisoned it, so the NEXT wake
+  // fetched the identical batch (`nextWrittenKeys`'s deterministic
+  // ascending order) and threw again, forever. A non-transient failure
+  // here (a decode/parse throw, not a Loki/R2 outage — those never throw;
+  // they return a `LokiPushResult`/`null` the rest of this function already
+  // handles) means this ONE key's symbolication is unrecoverable, so it
+  // gets the same `outcome: "rejected"` SHAPE as `undecodable_object`
+  // above and the same `InboxWriterApi#rejectKey` metric/alert path
+  // (`box.ts#drainStep`) — never retried automatically, but no longer able
+  // to block every key after it. `drainBatch`'s loop only stops on an
+  // `"error"` outcome, so the next key in this batch (and every later one)
+  // still drains in the same call. The `reason` carries the underlying
+  // error's own message rather than a fixed token, same as the existing
+  // 400-rejection path a few lines below (`rejectedReason ??=
+  // result.message ?? "loki_400"`) — dynamic reason text already reaches
+  // `rejectedEvent:`/Slack alerts today, and `notify.ts` is what escapes it.
+  try {
+    records = await deps.symbolicate(records);
+  } catch (err) {
+    return {
+      key,
+      tenant,
+      outcome: "rejected",
+      reason: `symbolicate_exception: ${err instanceof Error ? err.message : String(err)}`,
+      bytesPushed: 0,
+      droppedOld,
+    };
+  }
 
   const fresh: OtlpResourceLogs[] = [];
   for (const record of records) {

@@ -10,6 +10,7 @@ import {
   beaconToRecord,
   clampTimestampMs,
   faroItemToRecord,
+  formatStackFrame,
   hoistAttributes,
   isValidOpenAttrValue,
   msToUnixNano,
@@ -229,6 +230,43 @@ test("faroItemToRecord body: exception carries its type, log carries its message
 
   const logRecord = faroItemToRecord(faroLogItem(), { service: SERVICE, receivedAtMs: RECEIVED_AT_MS });
   assert.equal(logRecord.body, "session started");
+});
+
+// ---- Z-B-C1 (optional ingest-side half): a lineno < 1 is not a real position ---
+//
+// `source-map-js#originalPositionFor` throws on `line: 0` at drain time
+// (`workers/o11y/src/drain/symbolicate.ts`'s own Z-B-C1 fix is the real
+// guard against that). This is the cheap, optional ingest-side half the
+// task's own Outcome calls for: drop only the invalid position, so the
+// drain-time regex (`symbolicate.ts#STACK_LINE_RE`) never even captures a
+// `line: 0` for a record normalised after this fix — without changing the
+// contract shape (a frame with no numeric position already renders exactly
+// this way, see the "no real position" case just below).
+test("formatStackFrame: a lineno of 0 is dropped (no position rendered), not passed through as an invalid source position", () => {
+  const line = formatStackFrame({
+    filename: "https://demos.handsontable.com/assets/index-abc123.js",
+    function: "f",
+    lineno: 0,
+    colno: 5,
+  });
+  assert.equal(line, "    at f (https://demos.handsontable.com/assets/index-abc123.js)");
+});
+
+test("formatStackFrame: a negative or non-finite lineno is also dropped", () => {
+  const negative = formatStackFrame({ filename: "https://demos.handsontable.com/x.js", function: "f", lineno: -5, colno: 1 });
+  const nonFinite = formatStackFrame({ filename: "https://demos.handsontable.com/x.js", function: "f", lineno: Infinity, colno: 1 });
+  assert.equal(negative, "    at f (https://demos.handsontable.com/x.js)");
+  assert.equal(nonFinite, "    at f (https://demos.handsontable.com/x.js)");
+});
+
+test("formatStackFrame: a normal, valid lineno/colno still renders its position exactly as before", () => {
+  const line = formatStackFrame({
+    filename: "https://demos.handsontable.com/assets/index-abc123.js",
+    function: "f",
+    lineno: 12,
+    colno: 34,
+  });
+  assert.equal(line, "    at f (https://demos.handsontable.com/assets/index-abc123.js:12:34)");
 });
 
 test("faroItemToRecord is byte-identical converting the same item twice", () => {

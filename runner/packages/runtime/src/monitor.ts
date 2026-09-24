@@ -133,9 +133,20 @@ export const PREVIEW_HOST_PLACEHOLDER = "<preview>";
  * This is the parent's backstop. The reporter redacts its own `location.host` before
  * sending, which is the precise version; this catches whatever crossed the boundary
  * anyway, including a payload from a demo that never ran the reporter.
+ *
+ * Fix round (finding Z-A-C1): the label quantifier used to be unbounded
+ * (`[a-z0-9-]+`). On a string with no `.demos.handsontable.com` suffix at
+ * all (e.g. `"a-"` repeated), every `\b` position started a greedy run to
+ * the end of the string, failed the required literal, and backtracked one
+ * character at a time — O(n) of work at each of O(n) start positions,
+ * O(n²) total (measured: 40k chars ~1.2s, 80k ~4.8s). A DNS label is at
+ * most 63 octets by spec (RFC 1035 §2.3.4), so bounding the quantifier to
+ * `{1,63}` is not a behavior change for any real hostname — it caps the
+ * backtrack at 63 steps per start position, making this O(n) overall. Same
+ * fix class as `text-scrub.ts`'s `EMAIL_PATTERN`/`USER_AGENT_PATTERN`.
  */
 export function redactPreviewHosts(value: string): string {
-  return value.replace(/\b[a-z0-9-]+\.demos\.handsontable\.com\b/gi, PREVIEW_HOST_PLACEHOLDER);
+  return value.replace(/\b[a-z0-9-]{1,63}\.demos\.handsontable\.com\b/gi, PREVIEW_HOST_PLACEHOLDER);
 }
 
 /**
@@ -351,9 +362,21 @@ export function createMonitorBudget(ceiling: number = MONITOR_EVENT_CEILING): {
  * which still needs to parse in Safari <16.4.
  *
  * Used for the Sentry fingerprint, not for the message the issue displays.
+ *
+ * Fix round (finding Z-A-C1): the input is bounded to
+ * {@link NORMALIZE_MESSAGE_INPUT_MAX} chars BEFORE any of the passes below
+ * run — the final result is sliced to 200 chars anyway (last line), so
+ * nothing past a few thousand input characters can ever survive into the
+ * output; truncating first bounds the cost of every pass on a
+ * caller-controlled message, independent of whether that pass is itself
+ * linear. See rule 1's own comment for the other half of this fix (the
+ * identifier-rule regex itself used to be quadratic).
  */
+const NORMALIZE_MESSAGE_INPUT_MAX = 4096;
+
 export function normalizeMonitorMessage(message: string): string {
-  return message
+  const bounded = message.length > NORMALIZE_MESSAGE_INPUT_MAX ? message.slice(0, NORMALIZE_MESSAGE_INPUT_MAX) : message;
+  return bounded
     .replace(/https?:\/\/\S+/g, "<url>")
     .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, "<ts>")
     .replace(/["'`][^"'`]*["'`]/g, "<str>")
@@ -361,7 +384,19 @@ export function normalizeMonitorMessage(message: string): string {
     // (`l`, `li`, `lic`, … `licenseKey` `is not defined`). Must precede the
     // number rule below (see the doc comment) and follow the quoted-string
     // rule above.
-    .replace(/[A-Za-z_$][\w$]*(?:\.[\w$]+)*(?= is not defined\b)/g, "<ident>")
+    //
+    // Fix round (finding Z-A-C1): both quantifiers used to be unbounded
+    // (`[\w$]*` and `(?:\.[\w$]+)*`). On a long identifier-shaped run with
+    // no trailing " is not defined" (e.g. `"a"` repeated), the lookahead
+    // failed at the end of every greedy match and backtracked one
+    // character at a time before the engine moved on to the next start
+    // position — O(n) of work at each of O(n) positions, O(n²) total
+    // (measured via the real `fingerprint()`: 40k chars ~1.9s, 80k ~7.7s).
+    // No real identifier or dotted path is anywhere near 256 characters
+    // per segment or 32 segments deep, so bounding both quantifiers is not
+    // a behavior change for any real message — it caps the backtrack at a
+    // small constant per start position, making this O(n) overall.
+    .replace(/[A-Za-z_$][\w$]{0,256}(?:\.[\w$]{1,256}){0,32}(?= is not defined\b)/g, "<ident>")
     // DEV-2853 rule 2 — the partial locale in a RangeError from Intl, e.g.
     // `Invalid language tag: zh-c` ladders alongside `zh-`, `z`, and the
     // empty tail `Invalid language tag: `. `[ \t]*`, not `\s*`: `\s` matches

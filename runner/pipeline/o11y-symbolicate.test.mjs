@@ -165,6 +165,53 @@ test("symbolicateResourceLogs is deterministic: two independent calls over the s
   assert.deepEqual(first, second);
 });
 
+// ---- Z-B-C1: a line-0 stack frame must not throw out of symbolication -----
+//
+// `source-map-js#originalPositionFor({ line: 0, ... })` throws
+// `TypeError: Line must be greater than or equal to 1, got 0` — reachable
+// from one anonymous `POST /telemetry/collect` request with a crafted
+// `lineno: 0` exception frame (ingest does not reject it). Before this fix,
+// that throw escaped `resolveBody`, then `symbolicateResourceLogs`, then
+// `drain.ts#drainKey`, then `drainBatch` — poisoning the whole drain queue
+// (see `pipeline/o11y-drain.test.mjs`'s own Z-B-C1 tests for the
+// batch/key-isolation half of this fix).
+//
+// The raw stack line is built by hand here, not through `formatStackFrame`
+// — `convert.ts#formatStackFrame` now has its own optional ingest-side
+// guard (Z-B-C1) that omits the position for a `lineno < 1`, which would
+// hide the very shape this test needs to construct. A record ingested
+// before that guard existed (or any other path that reaches `resolveBody`
+// with this exact text) must still be handled safely — that is what this
+// module's own guard is for, independent of the ingest-side fix.
+test("Z-B-C1: symbolicateResourceLogs leaves a lineno: 0 frame's body byte-for-byte unchanged, and does not throw, even when a valid map exists", async () => {
+  const poisonedLine = "    at f (https://demos.handsontable.com/assets/index-abc123.js:0:5)";
+  const record = exceptionRecord(["TypeError: boom", poisonedLine]);
+  const maps = new Map([["sourcemaps/deadbeef1234/assets/index-abc123.js.map", buildTestMap()]]);
+
+  const [resolved] = await symbolicateResourceLogs([record], { getMap: async (key) => maps.get(key) ?? null });
+
+  const body = resolved.scopeLogs[0].logRecords[0].body.stringValue;
+  assert.equal(body, record.scopeLogs[0].logRecords[0].body.stringValue, "a lineno: 0 frame must be left byte-for-byte unresolved, never throw");
+});
+
+test("Z-B-C1: a lineno: 0 frame is left alone even alongside a genuinely resolvable frame in the same body", async () => {
+  const poisonedLine = "    at f (https://demos.handsontable.com/assets/index-abc123.js:0:5)";
+  const resolvableLine = formatStackFrame({
+    filename: "https://demos.handsontable.com/assets/index-abc123.js",
+    function: "minifiedFn",
+    lineno: 1,
+    colno: 1,
+  });
+  const record = exceptionRecord(["TypeError: boom", poisonedLine, resolvableLine]);
+  const maps = new Map([["sourcemaps/deadbeef1234/assets/index-abc123.js.map", buildTestMap()]]);
+
+  const [resolved] = await symbolicateResourceLogs([record], { getMap: async (key) => maps.get(key) ?? null });
+
+  const body = resolved.scopeLogs[0].logRecords[0].body.stringValue;
+  assert.match(body, /:0:5\)/, "the poisoned frame's raw text must survive unresolved");
+  assert.match(body, /src\/app\.ts:5:3/, "a sibling resolvable frame in the SAME body must still resolve");
+});
+
 // ---- F4 / Exit criterion 5: a real `vite build` of a self-built fixture --
 //
 // This used to read whatever `apps/authoring/dist` happened to exist on

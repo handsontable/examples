@@ -394,6 +394,99 @@ test("drainKey: symbolicate() is applied to the records before they are pushed",
   assert.doesNotMatch(pushedText, /"original"/);
 });
 
+// ---- Z-B-C1: a throw inside symbolicate() must isolate only ITS key -----------
+//
+// Before this fix, a throw from `deps.symbolicate` (e.g. the real
+// `symbolicateResourceLogs` hitting a line-0 frame before ITS OWN Z-B-C1 fix)
+// escaped `drainKey` entirely — uncaught, not returned as an outcome — which
+// then escaped `drainBatch`'s for-loop (its early-stop check only looks at
+// the `outcome` field of a NORMALLY-RETURNED result; an exception skips that
+// check completely) and propagated to the caller. `box.ts#drainStep`'s own
+// catch recorded the whole wake as `outcome: "error"` and left EVERY key in
+// the batch `written`, including the poisoned one — so the identical batch
+// replayed on the next wake and threw again, forever (`nextWrittenKeys`'s
+// deterministic ascending order always re-fetches the same poisoned key
+// first). This isolation makes a symbolication throw behave like any other
+// permanent per-key failure (`undecodable_object`, `object_missing`):
+// `rejected`, and the batch moves on.
+
+test("Z-B-C1: drainKey isolates a throw from symbolicate() as a rejected outcome, never lets it escape", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const bytes = await objectBytes([record("poison")]);
+  const deps = {
+    fetchObject: async () => bytes,
+    pushToLoki: async () => {
+      throw new Error("pushToLoki must never be reached — symbolicate() threw before any push");
+    },
+    symbolicate: async () => {
+      throw new TypeError("Line must be greater than or equal to 1, got 0");
+    },
+  };
+
+  const outcome = await drainKey(key, new Set(), deps);
+
+  assert.equal(outcome.outcome, "rejected", "a symbolication throw must isolate to this key, not escape as an exception");
+  assert.match(outcome.reason ?? "", /symbolicate_exception/);
+  assert.match(outcome.reason ?? "", /Line must be greater/);
+});
+
+test("Z-B-C1: drainBatch with one poison key (symbolicate throws) followed by a good key pushes the good key and rejects only the poison one", async () => {
+  const poisonKey = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const goodKey = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
+  const objects = {
+    [poisonKey]: await objectBytes([record("poison")]),
+    [goodKey]: await objectBytes([record("fine")]),
+  };
+  const pushedBodies = [];
+  const deps = {
+    fetchObject: async (k) => objects[k] ?? null,
+    pushToLoki: async (_tenant, gz) => {
+      const stream = new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"));
+      pushedBodies.push(await new Response(stream).text());
+      return { status: 204 };
+    },
+    // Only the poison key's OWN records throw — a real symbolicator would
+    // throw on the poisoned RECORD regardless of which key it came from, so
+    // this fake keys off the record content, exactly the same shape
+    // `symbolicateResourceLogs` itself would present.
+    symbolicate: async (records) => {
+      if (records.some((r) => JSON.stringify(r).includes("poison"))) {
+        throw new TypeError("Line must be greater than or equal to 1, got 0");
+      }
+      return records;
+    },
+  };
+
+  const result = await drainBatch([poisonKey, goodKey], new Set(), deps);
+
+  assert.equal(result.stoppedEarly, false, "a rejected key must not stop the batch — only an 'error' outcome does");
+  assert.equal(result.outcomes.length, 2, "both keys must be processed");
+  assert.equal(result.outcomes[0].outcome, "rejected");
+  assert.equal(result.outcomes[1].outcome, "provisional");
+  assert.ok(pushedBodies.some((b) => b.includes("fine")), "the good key's record must actually reach Loki");
+  assert.ok(!pushedBodies.some((b) => b.includes("poison")), "the poisoned key's record must never be pushed");
+});
+
+test("Z-B-C1: a transient Loki failure (not a symbolication throw) still does NOT reject — it keeps today's error/retry behaviour", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const bytes = await objectBytes([record("transient")]);
+  let attempts = 0;
+  const deps = {
+    fetchObject: async () => bytes,
+    pushToLoki: async () => {
+      attempts++;
+      return { status: 503 }; // a real outage — never a throw, never "rejected"
+    },
+    symbolicate: noopSymbolicate,
+  };
+
+  const outcome = await drainKey(key, new Set(), deps);
+
+  assert.equal(outcome.outcome, "error", "a transient push failure must stay 'error' (retried by a later wake), never 'rejected'");
+  assert.notEqual(outcome.outcome, "rejected");
+  assert.ok(attempts >= 3, "must still have retried, exactly like before this fix");
+});
+
 test("drainBatch stops immediately on the first `error` outcome, leaving later keys untouched", async () => {
   const okKey = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const failKey = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
