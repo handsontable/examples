@@ -23,7 +23,7 @@ const { wakingPageHtml } = await import("../workers/o11y/src/grafana/waking-page
 const { signSessionCookie, SESSION_COOKIE } = await import("../workers/o11y/src/gates/session.ts");
 
 function makeBoxStub(overrides = {}) {
-  const calls = { wake: [], noteVisitorActivity: 0, containerFetch: [] };
+  const calls = { wake: [], noteVisitorActivity: 0, fetch: [], containerFetchRpc: 0 };
   return {
     calls,
     async wake(reason) {
@@ -43,9 +43,21 @@ function makeBoxStub(overrides = {}) {
     async noteVisitorActivity() {
       calls.noteVisitorActivity++;
     },
-    async containerFetch(request) {
-      calls.containerFetch.push(request);
-      return overrides.containerFetchResponse ?? new Response("grafana-body", { status: 200 });
+    // Z1: the DO's `fetch()` handler — the only way `/grafana/*` may reach
+    // the box (see `GrafanaBox.fetch`'s doc comment in box.ts).
+    async fetch(request) {
+      calls.fetch.push(request);
+      return overrides.fetchResponse ?? new Response("grafana-body", { status: 200 });
+    },
+    // Z1: the RPC method the proxy used to call. A `Request` handed to an
+    // RPC method has its body sent as an RPC stream, and in workerd every
+    // proxied POST printed "ReadableStream received over RPC disconnected
+    // prematurely". The real DO still has this method (the drain and
+    // `isReady()` call it locally, inside the DO), so this fake keeps it
+    // but makes the route's use of it loud.
+    async containerFetch() {
+      calls.containerFetchRpc++;
+      throw new Error("the /grafana/* proxy must not call the containerFetch RPC method on the box stub");
     },
   };
 }
@@ -99,7 +111,7 @@ test("/grafana/* unauthenticated, no navigation signal (and no local bypass): 40
   const res = await handleGrafana(req, env, {});
   assert.equal(res.status, 401);
   assert.deepEqual(box.calls.wake, [], "an unauthenticated request must never wake the box");
-  assert.equal(box.calls.containerFetch.length, 0);
+  assert.equal(box.calls.fetch.length, 0);
 });
 
 test("/grafana/* unauthenticated top-level navigation (Sec-Fetch-Mode: navigate): 302 to login, box never touched", async () => {
@@ -112,7 +124,7 @@ test("/grafana/* unauthenticated top-level navigation (Sec-Fetch-Mode: navigate)
   assert.equal(res.status, 302);
   assert.equal(res.headers.get("Location"), "/grafana/_o11y/login?next=%2Fgrafana%2Fd%2Fabc%3Ftab%3D1");
   assert.deepEqual(box.calls.wake, [], "a redirect to login must never wake the box");
-  assert.equal(box.calls.containerFetch.length, 0);
+  assert.equal(box.calls.fetch.length, 0);
 });
 
 test("/grafana/* unauthenticated XHR/fetch (Sec-Fetch-Mode: cors): 401 JSON, box never touched — this is also what recovers a session that expired mid-use", async () => {
@@ -126,7 +138,7 @@ test("/grafana/* unauthenticated XHR/fetch (Sec-Fetch-Mode: cors): 401 JSON, box
   assert.equal(res.status, 401);
   assert.equal(res.headers.get("content-type"), "application/json");
   assert.deepEqual(box.calls.wake, []);
-  assert.equal(box.calls.containerFetch.length, 0);
+  assert.equal(box.calls.fetch.length, 0);
 });
 
 test("/grafana/* with a real (non-DEV_ADMIN) session cookie authenticates and reaches Grafana", async () => {
@@ -173,7 +185,7 @@ test("/grafana/* strips a client-supplied x-o11y-grafana-user and sets it from t
 
   await handleGrafana(req, env, {});
 
-  const upstream = box.calls.containerFetch[0];
+  const upstream = box.calls.fetch[0];
   assert.equal(upstream.headers.get("x-o11y-grafana-user"), "dev@handsontable.com");
 });
 
@@ -185,7 +197,7 @@ test("/grafana/* strips the session cookie from the request forwarded to Grafana
 
   await handleGrafana(req, env, {});
 
-  const upstream = box.calls.containerFetch[0];
+  const upstream = box.calls.fetch[0];
   assert.equal(upstream.headers.get("cookie"), null, "o11y_session must never reach the container Grafana runs in");
 });
 
@@ -209,7 +221,7 @@ test("M7: an unauthenticated HEAD or OPTIONS request never touches the box eithe
     const res = await handleGrafana(req, env, {});
     assert.equal(res.status, 401, `expected 401 for ${method}`);
     assert.deepEqual(box.calls.wake, [], `${method} must never wake the box`);
-    assert.equal(box.calls.containerFetch.length, 0);
+    assert.equal(box.calls.fetch.length, 0);
   }
 });
 
@@ -220,9 +232,145 @@ test("/grafana/* preserves the original Host and path (never rewrites to a synth
 
   await handleGrafana(req, env, {});
 
-  const upstream = box.calls.containerFetch[0];
+  const upstream = box.calls.fetch[0];
   assert.equal(new URL(upstream.url).host, "demos.handsontable.com");
   assert.equal(new URL(upstream.url).pathname, "/grafana/api/ds/query");
+});
+
+// --- Z1: never proxy through a JS RPC method ------------------------------
+//
+// Before Z1 the route called `box.containerFetch(upstream, 3000)`, an RPC
+// method on the GrafanaBox stub. In `wrangler dev` every body-bearing
+// request sent that way (33 of 33 POSTs from one dashboard switch; GETs:
+// 0 of 77) printed "Uncaught Error: ReadableStream received over RPC
+// disconnected prematurely." inside the DO. The DO's `fetch()` handler has
+// no such stream (0 errors after the fix). workerd's RPC transport cannot
+// run under `node --test`, so these pin the call shape that avoids it.
+
+test("Z1: a panel-query POST reaches the box through the DO's fetch() with its body intact, never the containerFetch RPC method", async () => {
+  const box = makeBoxStub({ ready: true });
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  const body = JSON.stringify({ queries: [{ refId: "A", expr: '{service_name="api"}' }] });
+  const req = new Request("https://demos.handsontable.com/grafana/api/ds/query", {
+    method: "POST",
+    headers: { "content-type": "application/json", "sec-fetch-dest": "empty" },
+    body,
+  });
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 200);
+  assert.equal(box.calls.containerFetchRpc, 0, "the containerFetch RPC method must never carry a proxied request");
+  assert.equal(box.calls.fetch.length, 1);
+  const upstream = box.calls.fetch[0];
+  assert.equal(upstream.method, "POST");
+  assert.equal(await upstream.text(), body, "the request body is forwarded verbatim");
+});
+
+// Z1, second half. With the body piped straight from `req.body`, a box
+// that answers WITHOUT reading it (every gate refusal: live path, Loki
+// allowlists, not-running 503) left the runtime still pumping the incoming
+// body after this Worker had sent the response. Live under `wrangler dev`:
+// 30 of 30 refused 20 KB POSTs printed "Uncaught TypeError: Can't read from
+// request stream after response has been sent", and some came back 500
+// instead of 404. With the body buffered first: 0 of 30, all 404.
+test("Z1: the incoming body is read to the end BEFORE the box is called, so a box that answers without reading it leaves nothing pumping", async () => {
+  let sourceDrained = false;
+  const chunks = ['{"streams":[', '{"stream":{"a":"b"},"values":[["1","x"]]}', "]}"];
+  const source = new ReadableStream({
+    pull(controller) {
+      const next = chunks.shift();
+      if (next === undefined) {
+        sourceDrained = true;
+        controller.close();
+      } else controller.enqueue(new TextEncoder().encode(next));
+    },
+  });
+  let drainedWhenBoxCalled = null;
+  const box = makeBoxStub({ ready: true });
+  box.fetch = async (request) => {
+    drainedWhenBoxCalled = sourceDrained;
+    box.calls.fetch.push(request);
+    // Refuse without touching the body, like `GrafanaBox`'s own gates do.
+    return new Response("Not Found", { status: 404 });
+  };
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  const req = new Request("https://demos.handsontable.com/grafana/api/datasources/uid/loki-worker/resources/push", {
+    method: "POST",
+    headers: { "content-type": "application/json", "sec-fetch-dest": "empty" },
+    body: source,
+    duplex: "half",
+  });
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 404, "the box's own refusal is what the client gets");
+  assert.equal(drainedWhenBoxCalled, true, "the client's body must be fully read before the request is handed to the box");
+  assert.equal(
+    await box.calls.fetch[0].text(),
+    '{"streams":[{"stream":{"a":"b"},"values":[["1","x"]]}]}',
+    "the body the box receives is still the complete original",
+  );
+});
+
+test("Z1: a client that drops mid-upload gets a 400 from the Worker, and the box is never called", async () => {
+  const box = makeBoxStub({ ready: true });
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  const source = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"queries":['));
+      controller.error(new Error("client disconnected"));
+    },
+  });
+  const req = new Request("https://demos.handsontable.com/grafana/api/ds/query", {
+    method: "POST",
+    headers: { "content-type": "application/json", "sec-fetch-dest": "empty" },
+    body: source,
+    duplex: "half",
+  });
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 400);
+  assert.equal(box.calls.fetch.length, 0);
+});
+
+test("Z1: a client-supplied cf-container-target-port (the base Container.fetch()'s port selector) is stripped before reaching the box", async () => {
+  const box = makeBoxStub({ ready: true });
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  const req = new Request("https://demos.handsontable.com/grafana/api/health", {
+    headers: { "cf-container-target-port": "3100" },
+  });
+
+  await handleGrafana(req, env, {});
+
+  assert.equal(box.calls.fetch.length, 1);
+  assert.equal(box.calls.fetch[0].headers.get("cf-container-target-port"), null);
+});
+
+test("Z1 (structural): nothing in workers/o11y/src outside box.ts calls containerFetch — only the DO may, on itself", async () => {
+  const { readdirSync, readFileSync } = await import("node:fs");
+  const { join, relative } = await import("node:path");
+  const root = new URL("../workers/o11y/src/", import.meta.url).pathname;
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".ts") && relative(root, full) !== "box.ts") {
+        const code = readFileSync(full, "utf8")
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .replace(/\/\/.*$/gm, "");
+        if (/\bcontainerFetch\s*\(/.test(code)) offenders.push(relative(root, full));
+      }
+    }
+  };
+  walk(root);
+  assert.deepEqual(
+    offenders,
+    [],
+    "a containerFetch call from a Worker route is an RPC call: any Request body it passes crosses as an RPC stream (Z1). Use the stub's fetch() instead.",
+  );
 });
 
 test("/grafana/* serves the waking page instead of erroring when wake() refuses (e.g. mid-stop)", async () => {

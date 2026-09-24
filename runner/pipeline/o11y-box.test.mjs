@@ -686,6 +686,89 @@ test("F2 fix (B-I4): a STALE persisted status (healthy) with the REAL container 
   );
 });
 
+// --- fetch(): the /grafana/* proxy's entry point (Z1) ----------------------
+//
+// `grafana/proxy.ts` now calls `stub.fetch(request)` instead of the
+// `containerFetch` RPC method (JS RPC sent each POST body as an RPC stream,
+// and every proxied POST printed "ReadableStream received over RPC
+// disconnected prematurely"). These prove the new entry point keeps every
+// gate the RPC path had, and cannot be steered to Loki's port.
+
+test("Z1 fetch(): proxies to Grafana's port 3000 through the gated override once running, body intact", async () => {
+  const { box } = makeBox();
+  hooks.start = async (self) => {
+    self._state = { status: "running", lastChange: Date.now() };
+  };
+  const seen = [];
+  hooks.containerFetch = async (_self, requestOrUrl, port) => {
+    seen.push({ port, body: await requestOrUrl.text() });
+    return new Response("ok", { status: 200 });
+  };
+  await box.wake("visit");
+
+  const res = await box.fetch(
+    new Request("https://box.example/grafana/api/ds/query", { method: "POST", body: '{"queries":[]}' }),
+  );
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(seen, [{ port: 3000, body: '{"queries":[]}' }]);
+});
+
+test("Z1 fetch(): a cf-container-target-port header cannot steer it to Loki's 3100", async () => {
+  const { box } = makeBox();
+  hooks.start = async (self) => {
+    self._state = { status: "running", lastChange: Date.now() };
+  };
+  const ports = [];
+  hooks.containerFetch = async (_self, _requestOrUrl, port) => {
+    ports.push(port);
+    return new Response("ok", { status: 200 });
+  };
+  await box.wake("visit");
+
+  await box.fetch(
+    new Request("https://box.example/loki/api/v1/push", {
+      method: "POST",
+      headers: { "cf-container-target-port": "3100" },
+      body: "{}",
+    }),
+  );
+
+  assert.deepEqual(ports, [3000], "the port is pinned to Grafana, never taken from the request");
+});
+
+test("Z1 fetch(): the live-path block, the Loki datasource allowlists and the not-running 503 all still apply", async () => {
+  const { box } = makeBox();
+  let reached = 0;
+  hooks.containerFetch = async () => {
+    reached++;
+    return new Response("should not be reached", { status: 200 });
+  };
+
+  // Stopped box: 503, never auto-started.
+  const stopped = await box.fetch(new Request("https://box.example/grafana/"));
+  assert.equal(stopped.status, 503);
+  assert.equal((await box.getState()).status, "stopped");
+
+  hooks.start = async (self) => {
+    self._state = { status: "running", lastChange: Date.now() };
+  };
+  await box.wake("visit");
+
+  for (const path of [
+    "/grafana/api/live/ws",
+    "/grafana/api/datasources/proxy/uid/loki-worker/loki/api/v1/push",
+    "/grafana/api/datasources/uid/loki-worker/resources/push",
+    "/grafana/api/datasources/proxy/3/",
+  ]) {
+    const res = await box.fetch(new Request(`https://box.example${path}`, { method: "POST", body: "{}" }));
+    assert.ok(res.status === 403 || res.status === 404, `expected 403/404 for ${path}, got ${res.status}`);
+  }
+  const ws = await box.fetch(new Request("https://box.example/grafana/", { headers: { upgrade: "websocket" } }));
+  assert.equal(ws.status, 404);
+  assert.equal(reached, 0, "no gated request may reach the container");
+});
+
 // --- onStop(): records what it was told, nothing more ---------------------
 
 test("onStop(): records exactly what it received, tagged with the wake it was tracking", async () => {

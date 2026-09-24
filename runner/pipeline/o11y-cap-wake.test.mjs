@@ -45,7 +45,9 @@ function makeGrafanaBoxRecorder(overrides = {}) {
       return overrides.ready ?? true;
     },
     async noteVisitorActivity() {},
-    async containerFetch() {
+    // Z1: `/grafana/*` proxies through the DO's `fetch()` handler (never
+    // the `containerFetch` RPC method — see grafana/proxy.ts).
+    async fetch() {
       return new Response("grafana-body", { status: 200 });
     },
   };
