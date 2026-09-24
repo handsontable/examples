@@ -2,10 +2,7 @@
 # A minimal `docker` stand-in for pipeline/dev-script.test.mjs's CLI-level
 # tests. Understands `docker info` (dev-lib.mjs#isDockerAvailable),
 # `docker image inspect <ref>` and `docker pull <ref>` (dev-lib.mjs's
-# container base-image pre-pull gate — isImagePresent/pullImageWithRetry),
-# `docker ps --format ...` (dev-lib.mjs#listRunningContainers, the
-# leftover-container baseline) and `docker compose -f <file> up|down ...`
-# (B-I2: dev.mjs's --tier=full minio/clickhouse bring-up/teardown) —
+# container base-image pre-pull gate — isImagePresent/pullImageWithRetry) —
 # anything else exits 1 unconditionally, since no test here should ever get
 # that far (each CLI test is designed to have observed everything it needs
 # before reaching an unstubbed subcommand).
@@ -33,41 +30,6 @@ if [ "${1:-}" = "pull" ]; then
   fi
   echo "stub docker pull: ok for ${2:-}"
   exit 0
-fi
-if [ "${1:-}" = "ps" ]; then
-  # Opt-in only (STUB_DOCKER_PS_ENABLED=1): two existing tests deliberately
-  # rely on `docker ps` being UNSUPPORTED (the default) to prove a run
-  # stopped at, or proceeded past, the image-pull gate — see their own doc
-  # comments. B-I2's compose test enables this explicitly to get further,
-  # to the compose section.
-  if [ "${STUB_DOCKER_PS_ENABLED:-0}" = "1" ]; then
-    # No output = no running containers (listRunningContainers's baseline).
-    echo "stub docker ps: ok (no containers)" >&2
-    exit 0
-  fi
-fi
-if [ "${1:-}" = "compose" ]; then
-  # dev.mjs's own two shapes: ["compose", "-f", <file>, "up", "-d", "--wait", "minio", "clickhouse"]
-  # and composeDownArgs's ["compose", "-f", <file>, "down"] (+ "-v" when --fresh).
-  subcmd="${4:-}"
-  if [ "$subcmd" = "up" ]; then
-    if [ "${STUB_DOCKER_COMPOSE_UP_MODE:-ok}" = "fail" ]; then
-      echo "Error response from daemon: container minio did not become healthy" >&2
-      exit 1
-    fi
-    echo "stub docker compose up: ok"
-    exit 0
-  fi
-  if [ "$subcmd" = "down" ]; then
-    if [ "${5:-}" = "-v" ]; then
-      echo "stub docker compose down: ok (-v, data WIPED)"
-    else
-      echo "stub docker compose down: ok (no -v, data kept)"
-    fi
-    exit 0
-  fi
-  echo "stub docker compose: unsupported subcommand $*" >&2
-  exit 1
 fi
 echo "stub docker: unsupported subcommand $*" >&2
 exit 1

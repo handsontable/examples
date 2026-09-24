@@ -153,21 +153,38 @@ const DATASOURCE_PROXY_RE = /^\/(?:grafana\/)?api\/datasources\/proxy\/(?:uid\/(
 
 /** A-I2: Grafana's MODERN resource-proxy route —
  *  `/api/datasources/uid/<uid>/resources/<rest>` or the numeric-id form
- *  `/api/datasources/<id>/resources/<rest>` — reaches the datasource
- *  PLUGIN's own registered `CallResource` handler for `<rest>` (Go backend
- *  code that decides what, if anything, to call upstream), never a
- *  verbatim forward the way the legacy proxy route above is. Verified live
- *  against this box's own real Grafana 11.4 + Loki plugin (COMMON.md's
- *  port-block rule, o11y-x1 project, see the task report): `resources/flush`,
- *  `resources/shutdown`, and `resources/loki/api/v1/push` (a path-traversal
- *  attempt at the legacy shape) all 404 *inside Grafana itself* — "404 page
- *  not found", the same body an unregistered Go route returns — while
- *  `resources/labels`, `resources/series`, `resources/query`, etc. (the
- *  plugin's real handlers) respond normally. So this route cannot reach
- *  Loki's push/flush/shutdown endpoints today. Gated anyway, with the same
- *  allowlist shape as the legacy route: this Worker's gate is meant to be
- *  the actual security boundary, not a bet that a future Grafana/plugin
- *  version keeps registering the same small handler set. */
+ *  `/api/datasources/<id>/resources/<rest>` — reaches the Loki datasource
+ *  plugin's Go `CallResource` handler, which (confirmed live against this
+ *  box's own real Grafana 11.4 + Loki plugin, COMMON.md port-block rule,
+ *  project o11y-x1, see the task report) does NOT limit itself to a small
+ *  registered set of names the way the earlier version of this comment
+ *  claimed: reading the box's own container logs (`docker compose logs
+ *  box`, `logger=tsdb.loki endpoint=callResource ... resourcePath=...`)
+ *  shows the plugin builds the REAL outbound Loki request as literally
+ *  `/loki/api/v1/<rest>` for whatever `<rest>` the client sent — e.g.
+ *  `resources/config` really does reach Loki at `/loki/api/v1/config`
+ *  (Loki's own 404, not Grafana's) — and forwards the response back
+ *  verbatim. So this route is not "unregistered names can't reach Loki at
+ *  all"; it is "everything is forwarded under the fixed `/loki/api/v1/`
+ *  prefix". `resources/flush`/`resources/shutdown`/`resources/config` fail
+ *  ONLY because Loki's real admin/config endpoints live OUTSIDE that
+ *  prefix (Loki's bare root, e.g. `/flush`), a coincidence of Loki's own
+ *  URL layout, not something Grafana enforces; `resources/push` reaches
+ *  Loki's real `/loki/api/v1/push` and gets a genuine `405` from Loki
+ *  itself (regardless of the client's own GET/POST — the plugin's
+ *  outbound call does not appear to forward the client's HTTP method for
+ *  this resource). A `--path-as-is` `../` traversal attempt at
+ *  `resources/../otlp/v1/logs` (targeting the drain's own OTLP ingest
+ *  path, which — unlike flush/shutdown — genuinely IS under Loki's root,
+ *  not `/loki/api/v1/`) reached Loki as the literal, uncleaned string
+ *  `/loki/api/v1/../otlp/v1/logs` and 404'd there too — Loki's own router
+ *  does not resolve `..` segments either, so this specific escape did not
+ *  work, but nothing about the mechanism *rules it out* for a future Loki
+ *  version. Given all of this, the allowlist below is not defense in
+ *  depth against something already structurally impossible — it is the
+ *  actual boundary: this route is a real, live, working forward into
+ *  Loki's `/loki/api/v1/*` namespace, gated here the same way the legacy
+ *  proxy route is. */
 const DATASOURCE_RESOURCE_RE = /^\/(?:grafana\/)?api\/datasources\/(?:uid\/([^/]+)\/resources|(\d+)\/resources)\/(.*)$/i;
 
 /** Loki's own read/query HTTP API (`/loki/api/v1/*`) — everything a

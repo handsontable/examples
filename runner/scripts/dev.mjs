@@ -53,6 +53,7 @@ import {
   resetO11yLocalState,
   detectO11yStateDivergence,
   formatO11yDivergenceWarning,
+  bringUpO11yCompose,
 } from "./dev-lib.mjs";
 
 const COLORS = {
@@ -392,35 +393,23 @@ async function main() {
     // MINIO_DEFAULT_BUCKETS before its healthcheck goes green, so `--wait`
     // (block until every named service is healthy/running) replaces waiting
     // on the old init container's exit code.
-    try {
-      execFileSync("docker", ["compose", "-f", composeFile, "up", "-d", "--wait", "minio", "clickhouse"], {
-        cwd: RUNNER_ROOT,
-        env: composeEnv,
-        stdio: "inherit",
-      });
-    } catch (err) {
-      // B-I2: `--wait` (T1, added above) makes this call block-and-FAIL on
-      // a real condition (a named service's healthcheck never goes green)
-      // — the OLD `up -d minio minio-init clickhouse` (no `--wait`)
-      // essentially never threw here. A throw here happens BEFORE this
-      // call's own teardown step (below) is ever pushed onto
-      // teardownSteps, and it propagates straight past the try/catch that
-      // wraps the readiness wait further down, all the way to
-      // `main().catch` at the bottom of this file — which only logs and
-      // `process.exit(1)`s, with no cleanup call at all. Without this
-      // catch, whichever of minio/clickhouse DID start under `up -d` is
-      // left running with no teardown ever invoked, contradicting this
-      // command's own "no orphaned containers" guarantee (NB5's doc
-      // comment above). `down` (never `-v`) mirrors the same "keep data"
-      // contract every other teardown path in this file uses.
-      log("compose", `startup failed (${err.message}) — tearing down minio + clickhouse (data kept)`);
-      try {
-        execFileSync("docker", composeDownArgs(composeFile), { cwd: RUNNER_ROOT, env: composeEnv, stdio: "inherit" });
-      } catch (downErr) {
-        log("compose", `teardown after startup failure also failed: ${downErr.message}`);
-      }
-      throw err;
-    }
+    //
+    // B-I2: brings the stack up and, if `up` itself throws (`--wait` above
+    // makes that a real possibility — a healthcheck that never goes green —
+    // where the old `up -d` essentially never threw here), tears the SAME
+    // project back down (no `-v`, data kept) before rethrowing — see
+    // `bringUpO11yCompose`'s own doc comment in dev-lib.mjs for why this
+    // needed to be pulled out of `main()` (a throw here happens BEFORE this
+    // stack's own teardown step, further down, is ever pushed onto
+    // `teardownSteps`, and propagates straight past the readiness-wait
+    // try/catch to `main().catch`, which only logs and `process.exit(1)`s —
+    // no cleanup at all).
+    bringUpO11yCompose({
+      composeFile,
+      composeEnv,
+      execFileSyncImpl: (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: RUNNER_ROOT, stdio: "inherit", ...opts }),
+      log: (line) => log("compose", line),
+    });
     teardownSteps.push(() => {
       log("compose", "tearing down minio + clickhouse (data kept — named volumes; use --fresh next run to wipe)");
       try {

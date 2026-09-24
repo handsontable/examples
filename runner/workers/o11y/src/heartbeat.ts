@@ -15,11 +15,20 @@
 // caller bound to it BY NAME (`entrypoint: "O11yHeartbeat"` in the caller's
 // `wrangler.jsonc`, the same pattern this Worker's own `API`/`O11yUsage`
 // binding already uses). `fetch()` below still exists and still answers the
-// report unconditionally (ignoring the request/path entirely) so a
-// `Fetcher`-typed binding pointed at this named entrypoint keeps working
-// with NO CODE CHANGE on the caller's side — only its `wrangler.jsonc`
-// binding needs the `entrypoint` field added. `o11y-watchdog.ts` itself
-// (workers/api/src/) is unowned by this task and was not changed.
+// report unconditionally (ignoring the request/path entirely) — a
+// `Fetcher`-typed binding pointed at this named entrypoint would keep
+// working even with no caller-side code change, only the `wrangler.jsonc`
+// `entrypoint` field. A-C1 (focused review fix round): the missing
+// `entrypoint` field on the caller's binding was never added when this
+// class was introduced — `env.O11Y` in `workers/api/src/o11y-watchdog.ts`
+// resolved to this Worker's DEFAULT export the whole time, whose `fetch()`
+// 404s `/_internal/heartbeat`, permanently latching the watchdog stale.
+// Fixed in both files: `workers/api/wrangler.jsonc`'s `O11Y` binding now
+// declares `entrypoint: "O11yHeartbeat"`, and `o11y-watchdog.ts` was
+// changed (a necessary edit to a file this task does not own, per that
+// finding's own Outcome) to call the named RPC `heartbeat()` method
+// directly rather than `fetch()`, so a future regression back to `.fetch()`
+// fails loudly instead of silently regressing to the broken shape again.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "./env.js";

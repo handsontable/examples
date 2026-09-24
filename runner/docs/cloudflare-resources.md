@@ -74,8 +74,8 @@ resource inventory.
 
 The API worker gains one addition of its own: an `O11Y` service binding to
 `handsontable-demos-o11y`, entrypoint `O11yHeartbeat` (the watchdog heartbeat
-RPC call, not an HTTP route — see A-C1 in the fix history) and a shared
-`RUNNER_EVENTS` Analytics Engine binding to the same `runner_events` dataset.
+RPC call, not an HTTP route) and a shared `RUNNER_EVENTS` Analytics Engine
+binding to the same `runner_events` dataset.
 
 The Grafana box (`containers/o11y/`) is a single container application — Loki
 + Grafana only, no Tier-2 Sandbox SDK involved — woken by a request to
