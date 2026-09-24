@@ -54,7 +54,7 @@ import {
   type Tenant,
   type WakeState,
 } from "@handsontable/demo-runtime/telemetry";
-import type { StorageLike } from "./storage.js";
+import { deleteChunked, getManyChunked, putChunked, type StorageLike } from "./storage.js";
 
 const WAKE_PREFIX = "wake:";
 const KEY_PREFIX = "key:";
@@ -69,11 +69,18 @@ const PROVISIONAL_PREFIX = "provisional:";
  *  up front by `reopenWindow`/`grafana/reopen.ts`. */
 export const KEY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** How many `done:`/`hash:` rows one `pruneLedger`/dedupe-prune call may
- *  delete — bounds the cost of a call that runs after a quiet period has let
- *  a backlog of stale rows build up (T03-D2's own "bounded number of objects
- *  per invocation" principle, applied to storage housekeeping too). */
-const PRUNE_BATCH_LIMIT = 500;
+/** How many `done:` rows one `pruneLedger` call may delete — bounds the cost
+ *  of a call that runs after a quiet period has let a backlog of stale rows
+ *  build up (T03-D2's own "bounded number of objects per invocation"
+ *  principle, applied to storage housekeeping too).
+ *
+ *  B-C1/A-I1 remainder (final review, rereview.md row 13): raised from 500
+ *  — see `dedupe.ts#HASH_PRUNE_BATCH_LIMIT`'s doc comment for the same
+ *  throughput arithmetic (500/tick tops out at 72,000/day against a 10-min
+ *  cron; ADR §D's own 10× headroom projects ~220,000 worker records/day).
+ *  Each `delete()` call is still chunked to the real 128-key DO limit
+ *  (`deleteChunked`), independently of this list-side batch size. */
+const PRUNE_BATCH_LIMIT = 5000;
 
 function wakeIdOf(storageKey: string): string {
   return storageKey.slice(WAKE_PREFIX.length);
@@ -125,12 +132,30 @@ export interface ResolveResult {
 /** Resolves a single wake's provisional keys (already known, from a fresh or
  *  shared read — see call sites) against the marker, moving each to
  *  `done:`/`written` as appropriate and deleting the `wake:<id>` entry.
- *  Re-checks the wake entry still exists immediately before writing (point
- *  4/COMMON's "drainStep every second + cron can call resolveWakes at the
- *  same time" — see this file's header): a concurrent call may already have
- *  resolved (and deleted) this same wake while `markerExists` above was in
- *  flight, and applying this write on top of that would double-count the
- *  `o11y.wake` point `writer.ts` emits per `resolved` entry. */
+ *
+ *  N2/N8 fix (final review, rereview.md "atomicity trap" + row-count minor
+ *  N8): the previous version did a `get` (existence re-check), a `put` and
+ *  a `delete` as three SEPARATE, non-transactional `storage` calls — a
+ *  crash between them could already leave `wake:<id>` deleted with some of
+ *  its provisional keys never resolved (orphaned in `provisional:<wakeId>`
+ *  forever: `markKeysProvisional` refuses an unknown wake, so nothing ever
+ *  revisits them). Chunking the put/delete to the real DO 128-key limit
+ *  (N2) would make this markedly WORSE — a crash between chunk 1 and chunk
+ *  2 orphans exactly the keys in the chunks that never ran. The whole
+ *  function now runs inside one `storage.transaction()`: every chunked
+ *  put/delete inside it commits or rolls back together, so a crash mid-way
+ *  leaves the PRE-transaction state, not a partial one. `wake:<id>` is
+ *  still deleted last (defense in depth, cheap, no reason not to) even
+ *  though the transaction's own atomicity no longer depends on the order.
+ *
+ *  N8 (rereview.md §2 Minor): re-reads each key's CURRENT state inside this
+ *  same transaction, rather than trusting the caller's (possibly stale,
+ *  snapshot-at-some-earlier-point) `provisionalStorageKeys` list blindly —
+ *  a concurrent manual reopen (`reopenWindow`, below) can move a key OUT of
+ *  `provisional:<wakeId>` (back to `written`) between that snapshot and
+ *  this point; applying the snapshot's decision on top of that would
+ *  silently undo the reopen. A key whose current state no longer matches
+ *  `provisional:<wakeId>` is skipped, not resolved. */
 async function finalizeWakeResolution(
   storage: StorageLike,
   wake: WakeState,
@@ -138,26 +163,37 @@ async function finalizeWakeResolution(
   provisionalStorageKeys: readonly string[],
   clean: boolean,
 ): Promise<WakeResolution | null> {
-  const stillThere = await storage.get<WakeState>(wakeStorageKey(wakeId));
-  if (!stillThere) return null; // a concurrent call already resolved this wake
+  return storage.transaction(async (txn) => {
+    const stillThere = await txn.get<WakeState>(wakeStorageKey(wakeId));
+    if (!stillThere) return null; // a concurrent call already resolved this wake
 
-  const writes: Record<string, InboxKeyState> = {};
-  const doneWrites: Record<string, 1> = {};
-  const toDelete: string[] = [wakeStorageKey(wakeId)];
-  for (const storageKey of provisionalStorageKeys) {
-    if (clean) {
-      // F2 fix: move OUT of `key:` into `done:` on commit, so `key:` never
-      // accumulates committed history (see this file's header, point 1).
-      toDelete.push(storageKey);
-      doneWrites[doneKeyStorageKey(inboxKeyOf(storageKey))] = 1;
-    } else {
-      writes[storageKey] = "written";
+    const marker = `${PROVISIONAL_PREFIX}${wakeId}`;
+    const currentStates =
+      provisionalStorageKeys.length > 0 ? await getManyChunked<InboxKeyState>(txn, provisionalStorageKeys) : new Map();
+
+    const writes: Record<string, InboxKeyState> = {};
+    const doneWrites: Record<string, 1> = {};
+    const toDelete: string[] = [];
+    let keysAffected = 0;
+    for (const storageKey of provisionalStorageKeys) {
+      if (currentStates.get(storageKey) !== marker) continue; // N8: no longer this wake's — a concurrent reopen won
+      keysAffected++;
+      if (clean) {
+        // F2 fix: move OUT of `key:` into `done:` on commit, so `key:` never
+        // accumulates committed history (see this file's header, point 1).
+        toDelete.push(storageKey);
+        doneWrites[doneKeyStorageKey(inboxKeyOf(storageKey))] = 1;
+      } else {
+        writes[storageKey] = "written";
+      }
     }
-  }
-  await storage.put<unknown>({ ...writes, ...doneWrites });
-  if (toDelete.length > 0) await storage.delete(toDelete);
+    toDelete.push(wakeStorageKey(wakeId)); // deleted last — see this function's own doc comment
 
-  return { wakeId, reason: wake.reason, clean, keysAffected: provisionalStorageKeys.length };
+    await putChunked<unknown>(txn, { ...writes, ...doneWrites });
+    await deleteChunked(txn, toDelete);
+
+    return { wakeId, reason: wake.reason, clean, keysAffected };
+  });
 }
 
 /**
@@ -254,7 +290,8 @@ export async function markKeysProvisional(storage: StorageLike, wakeId: string, 
     if (!wake || wake.over) return; // refuse: unknown or already-over wake
     const writes: Record<string, InboxKeyState> = {};
     for (const key of keys) writes[inboxKeyStorageKey(key)] = `provisional:${wakeId}`;
-    await txn.put(writes);
+    // N2: a drain batch can carry more than 128 keys (DRAIN_BATCH_SIZE, box.ts).
+    await putChunked(txn, writes);
   });
 }
 
@@ -340,15 +377,71 @@ export async function nextWrittenKeys(storage: StorageLike, limit: number): Prom
   return written.slice(0, limit);
 }
 
+// ---- rejectedEvent: audit log (row 19 / B-C1/A-I1 remainder) ------------------
+//
+// `rejectedKeyRule` used to fire on `rejectedKeyCount() > 0` and never
+// resolve — `rejected:<reason>` `key:` entries are never pruned (rare,
+// operator-diagnosable, by design — see `rejectKey`'s own doc comment), so
+// once ANY key was ever rejected, the alert fired forever (rereview.md's
+// "resolve the rejected-inbox-key rule: fire once per new rejection,
+// resolve when none are recent"). Fixing this needs a REJECTION TIME, which
+// `rejected:<reason>` never carried — this chronological, independently
+// prunable event log provides it without changing `key:`'s own value shape
+// at all (no compat/migration burden on the ledger's live state). Also used
+// by `recordPartialReject` (drain partial-400 durability fix, row 19,
+// below): a key that stays `provisional`/resolves to `done:` (its accepted
+// chunks ARE durable) can still log a rejection event for a permanently
+// dropped chunk, without the ledger conflating "durable" and "rejected."
+const REJECTED_EVENT_PREFIX = "rejectedEvent:";
+const REJECTED_EVENT_TIMESTAMP_DIGITS = 15;
+/** Same window contract §8 already uses for `done:`/`hash:`/reopen (the
+ *  underlying inbox object's own 7-day retention) — past this, nothing
+ *  about the rejection is diagnosable any more anyway. */
+const REJECTED_EVENT_RETENTION_MS = KEY_RETENTION_MS;
+
+function rejectedEventStorageKey(ms: number, inboxKeyStr: string): string {
+  return `${REJECTED_EVENT_PREFIX}${Math.max(0, Math.trunc(ms)).toString().padStart(REJECTED_EVENT_TIMESTAMP_DIGITS, "0")}:${inboxKeyStr}`;
+}
+
 /** A `400` (e.g. `too_far_behind`) marks the key `rejected`, logged with
  *  Loki's message (ADR §B.3) — never retried by a later wake. Rejected keys
  *  are rare (a genuine, not-just-stale, Loki-side rejection) and stay under
- *  `key:` indefinitely rather than being moved to `done:`/pruned — unlike
- *  `committed`, this is not the dominant growth path B-C1 measured, and a
- *  rejected key is exactly what an operator diagnosing the
- *  `rejected-inbox-key` alert (ADR §F.3) needs to still be able to find. */
-export async function rejectKey(storage: StorageLike, key: string, reason: string): Promise<void> {
-  await storage.put({ [inboxKeyStorageKey(key)]: `rejected:${reason}` satisfies InboxKeyState });
+ *  `key:` past retention only via `pruneLedger`'s value-filtered sweep
+ *  (B-C1/A-I1 remainder — see that function) rather than `done:`'s blind
+ *  range delete: unlike `committed`, this is not the dominant growth path
+ *  B-C1 measured, and a rejected key is exactly what an operator diagnosing
+ *  the `rejected-inbox-key` alert (ADR §F.3) needs to still be able to
+ *  find, for as long as its underlying object could still exist. Also logs
+ *  a `rejectedEvent:` entry — see this section's header — so the alert can
+ *  tell "rejected, ever" from "rejected, recently." */
+export async function rejectKey(storage: StorageLike, key: string, reason: string, nowMs = Date.now()): Promise<void> {
+  await storage.put({
+    [inboxKeyStorageKey(key)]: `rejected:${reason}` satisfies InboxKeyState,
+    [rejectedEventStorageKey(nowMs, key)]: reason,
+  });
+}
+
+/** Row 19 (drain partial-400 durability): a key with at least one 2xx chunk
+ *  AND at least one permanently-400'd chunk stays `provisional` (its
+ *  accepted content follows the normal §B.3 marker/commit path — see
+ *  `drain.ts#drainKey`'s own doc comment for why), so it never becomes
+ *  `key:<key> = rejected:<reason>` and `rejectedKeyCount`/`pruneLedger`'s
+ *  value-filtered sweep never sees it. This still logs the SAME
+ *  `rejectedEvent:` entry `rejectKey` would, so the alert stays accurate —
+ *  a permanently-dropped chunk is real operator-visible information even
+ *  though the key itself durably resolves. */
+export async function recordPartialReject(storage: StorageLike, key: string, reason: string, nowMs = Date.now()): Promise<void> {
+  await storage.put({ [rejectedEventStorageKey(nowMs, key)]: reason });
+}
+
+/** Count of `rejectedEvent:` entries strictly newer than `sinceMs` — bounded
+ *  `start`/`end` range read (chronologically keyed by construction, same
+ *  pattern as `fpts:`), never a full-prefix scan. */
+export async function recentRejectionCount(storage: StorageLike, sinceMs: number): Promise<number> {
+  const start = rejectedEventStorageKey(sinceMs + 1, "");
+  const end = `${REJECTED_EVENT_PREFIX}￿`;
+  const page = await storage.list<unknown>({ start, end, limit: PRUNE_BATCH_LIMIT });
+  return page.size;
 }
 
 // ---- Manual reopen (POST /grafana/_o11y/reopen) -------------------------------
@@ -419,8 +512,16 @@ export async function reopenWindow(
   }
 
   const reopened = Object.keys(writes).length;
-  if (reopened > 0) await storage.put(writes);
-  if (toDelete.length > 0) await storage.delete(toDelete);
+  // N2: both a large reopen window and the real DO 128-key limit mean this
+  // must chunk; wrapped in one transaction (rather than two independent
+  // top-level calls) so a crash mid-chunk never leaves a `done:` entry
+  // deleted without its `key:<key> = written` twin ever having been
+  // written (or the reverse) — the same atomicity-trap fix as
+  // `finalizeWakeResolution`, above.
+  await storage.transaction(async (txn) => {
+    if (reopened > 0) await putChunked(txn, writes);
+    if (toDelete.length > 0) await deleteChunked(txn, toDelete);
+  });
   return { reopened };
 }
 
@@ -439,6 +540,9 @@ export async function currentWakeId(storage: StorageLike): Promise<string | null
 
 export interface PruneResult {
   doneDeleted: number;
+  /** Stale `key:<k> = rejected:<reason>` entries deleted this call
+   *  (B-C1/A-I1 remainder — see `pruneLedger`'s own doc comment). */
+  rejectedDeleted: number;
 }
 
 /** Deletes `done:<key>` entries whose embedded inbox-key date is older than
@@ -469,12 +573,55 @@ export async function pruneLedger(storage: StorageLike, nowMs: number): Promise<
     });
     const toDelete = [...stale.keys()];
     if (toDelete.length > 0) {
-      await storage.delete(toDelete);
+      await deleteChunked(storage, toDelete); // N2
       doneDeleted += toDelete.length;
     }
   }
 
-  return { doneDeleted };
+  // B-C1/A-I1 remainder (rereview.md G1 section: "prune rejected: key
+  // entries after their inbox object's retention"): `rejected:<reason>`
+  // entries were never pruned at all (`rejectKey`'s own doc comment
+  // originally argued this — an operator diagnosing the alert needs to
+  // still find them — but nothing past the object's own 7-day retention is
+  // still diagnosable: the R2 object is already gone). `key:inbox/<tenant>/`
+  // mixes live `written`/`provisional:*` entries in with `rejected:*` ones
+  // chronologically, so — unlike `done:`, which is exclusively committed
+  // history — this range read must filter by VALUE, not just blind-delete
+  // the range. Accepted, documented trade-off: a batch whose oldest rows
+  // are all non-rejected makes no delete progress this tick (the read is
+  // still bounded; it just doesn't always convert to a deletion), and
+  // converges over later ticks once older rejected rows are reached.
+  let rejectedDeleted = 0;
+  for (const tenant of ["browser", "worker"] satisfies Tenant[]) {
+    const stale = await storage.list<InboxKeyState>({
+      start: `${KEY_PREFIX}inbox/${tenant}/`,
+      end: `${KEY_PREFIX}inbox/${tenant}/${cutoffDate}/`,
+      limit: PRUNE_BATCH_LIMIT,
+    });
+    const toDelete: string[] = [];
+    for (const [key, state] of stale) {
+      if (typeof state === "string" && state.startsWith("rejected:")) toDelete.push(key);
+    }
+    if (toDelete.length > 0) {
+      await deleteChunked(storage, toDelete);
+      rejectedDeleted += toDelete.length;
+    }
+  }
+
+  // C-I1/rereview row 13 (fire-once/resolve-when-none-recent): the
+  // `rejectedEvent:` audit log (`rejectKey`/`recordPartialReject`, see
+  // those functions' doc comments) is itself chronologically keyed, so a
+  // plain bounded range delete (no value filtering needed) prunes it past
+  // the same retention.
+  const rejectedEventStale = await storage.list<unknown>({
+    start: REJECTED_EVENT_PREFIX,
+    end: rejectedEventStorageKey(nowMs - REJECTED_EVENT_RETENTION_MS, ""),
+    limit: PRUNE_BATCH_LIMIT,
+  });
+  const rejectedEventToDelete = [...rejectedEventStale.keys()];
+  if (rejectedEventToDelete.length > 0) await deleteChunked(storage, rejectedEventToDelete);
+
+  return { doneDeleted, rejectedDeleted };
 }
 
 export { wakeStorageKey };

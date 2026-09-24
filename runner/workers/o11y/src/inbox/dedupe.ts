@@ -17,14 +17,26 @@
 // UNCHANGED — this is purely a storage-layout fix.
 
 import { DEDUPE_WINDOW_MS } from "@handsontable/demo-runtime/telemetry";
-import type { StorageLike } from "./storage.js";
+import { deleteChunked, getManyChunked, type StorageLike } from "./storage.js";
 
 const HASH_PREFIX = "hash:";
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** How many stale `hash:` rows one `pruneHashBuckets` call may delete —
  *  bounds the cost of a call after a quiet period let a backlog of stale
- *  buckets build up (same principle as `ledger.ts`'s `PRUNE_BATCH_LIMIT`). */
-const HASH_PRUNE_BATCH_LIMIT = 500;
+ *  buckets build up (same principle as `ledger.ts`'s `PRUNE_BATCH_LIMIT`).
+ *
+ *  B-C1/A-I1 remainder (final review, rereview.md row 13): the previous
+ *  500/tick, against a 10-minute cron (144 ticks/day), tops out at
+ *  500 * 144 = 72,000 hash: deletes/day. ADR §D's own 10× headroom
+ *  projection is ~6.6M worker records/month ≈ 220,000/day (before browser
+ *  traffic) — a sustained ~3× multiplier on TODAY's traffic already outruns
+ *  72k/day, and the sweep falls permanently behind (rereview.md's own
+ *  framing: "falls behind at about 3× traffic"). 5,000/tick gives
+ *  5,000 * 144 = 720,000/day — over 3× the 10× projection's own headroom,
+ *  with margin left for browser-side hash: entries too. Each `delete()`
+ *  call is still chunked to the real 128-key DO limit (`deleteChunked`),
+ *  independently of this list-side batch size. */
+const HASH_PRUNE_BATCH_LIMIT = 5000;
 
 /** `yyyymmdd`, UTC — chosen so the bucket sorts lexicographically in
  *  chronological order (a plain string comparison on this component alone
@@ -78,7 +90,10 @@ export async function checkDuplicates(
     lookupKeys.push(bucketedHashKey(today, hash));
     lookupKeys.push(bucketedHashKey(yesterday, hash));
   }
-  const existing = await storage.getMany<number>(lookupKeys);
+  // N2 fix: a batch of 65+ unique records (still under the 200-item A-I4
+  // cap) already needs 130+ lookup keys here (2 buckets each) — over the
+  // real DO storage limit (`storage.ts#DO_STORAGE_MAX_KEYS_PER_CALL`).
+  const existing = await getManyChunked<number>(storage, lookupKeys);
 
   const duplicates = new Set<string>();
   const writes: Record<string, number> = {};
@@ -124,6 +139,6 @@ export async function pruneHashBuckets(storage: StorageLike, nowMs: number, keep
     limit: HASH_PRUNE_BATCH_LIMIT,
   });
   const toDelete = [...stale.keys()];
-  if (toDelete.length > 0) await storage.delete(toDelete);
+  if (toDelete.length > 0) await deleteChunked(storage, toDelete);
   return { hashDeleted: toDelete.length };
 }
