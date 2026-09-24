@@ -46,9 +46,33 @@ test.skip(
 // 4712 (other specs' shared/own preview ports) and never another fixer's
 // concurrent worktree block.
 const PORT = 5701;
-const BASE_URL = `http://localhost:${PORT}`;
+// 127.0.0.1, not "localhost": see telemetry-faro.spec.ts's BASE_URL comment —
+// in CI's Playwright container, this spec's own `fetch("http://localhost:…")`
+// readiness poll failed with "TypeError: fetch failed" while `vite preview`
+// itself bound the default host with no startup error logged. Not
+// reproduced locally; pinning bind and poll to the same literal address
+// removes a whole axis of ambiguity regardless of the exact mechanism.
+const BASE_URL = `http://127.0.0.1:${PORT}`;
 const AUTHORING_DIR = fileURLToPath(new URL("../apps/authoring", import.meta.url));
 const OUT_DIR = "dist-example-analytics";
+
+/** Node's `fetch` (undici) reports a connection failure as a bare
+ *  `TypeError: fetch failed` — the useful part (ECONNREFUSED vs ENETUNREACH,
+ *  which address/port it actually tried) is one level down in `.cause`,
+ *  which a plain `String(err)` drops. Mirrors telemetry-faro.spec.ts's
+ *  helper — this is exactly the CI failure that motivated it: the logged
+ *  line said nothing more than "fetch failed". */
+function formatFetchFailure(err: unknown): string {
+  if (err instanceof Error) {
+    const cause = (err as { cause?: unknown }).cause;
+    if (cause && typeof cause === "object") {
+      const c = cause as { code?: string; address?: string; port?: number; message?: string };
+      return `${err.message} (cause: ${c.code ?? "?"} ${c.address ?? ""}${c.port ? `:${c.port}` : ""} ${c.message ?? ""})`.trim();
+    }
+    return err.message;
+  }
+  return String(err);
+}
 
 function waitForServer(url: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -63,6 +87,24 @@ function waitForServer(url: string, timeoutMs: number): Promise<void> {
     };
     attempt();
   });
+}
+
+/** Wires a spawned preview server's stdout+stderr (and a hard spawn failure,
+ *  which fires on `"error"` rather than either stream) into one string, so a
+ *  `waitForServer` timeout's thrown error explains what happened instead of
+ *  just restating the timeout. Stdout matters as much as stderr: vite's own
+ *  `➜ Local: http://…` bind line goes to stdout. Mirrors
+ *  telemetry-faro.spec.ts's helper. */
+function captureServerDiagnostics(child: ChildProcess): { get(): string } {
+  let text = "";
+  child.stdout?.on("data", (chunk) => { text += String(chunk); });
+  child.stderr?.on("data", (chunk) => { text += String(chunk); });
+  child.on("error", (err) => { text += `\n[spawn error] ${String(err)}`; });
+  child.on("exit", (code, signal) => {
+    if (code !== 0 && code !== null) text += `\n[exited early with code ${code}]`;
+    else if (signal) text += `\n[killed by signal ${signal}]`;
+  });
+  return { get: () => text.trim() };
 }
 
 interface FaroEvent {
@@ -211,15 +253,14 @@ test.beforeAll(async () => {
   });
   server = spawn(
     "node_modules/.bin/vite",
-    ["preview", "--outDir", OUT_DIR, "--port", String(PORT), "--strictPort"],
+    ["preview", "--outDir", OUT_DIR, "--host", "127.0.0.1", "--port", String(PORT), "--strictPort"],
     { cwd: AUTHORING_DIR, stdio: "pipe" },
   );
-  let stderr = "";
-  server.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+  const diagnostics = captureServerDiagnostics(server);
   try {
     await waitForServer(BASE_URL, 30_000);
   } catch (err) {
-    throw new Error(`preview server on :${PORT} never came up: ${stderr || String(err)}`);
+    throw new Error(`preview server on :${PORT} never came up: fetch: ${formatFetchFailure(err)} | server output: ${diagnostics.get() || "(none)"}`);
   }
 });
 
