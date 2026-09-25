@@ -277,6 +277,15 @@ export interface SessionMeter {
   startedAt: number;
   meteredThrough: number;
   instanceType: InstanceType;
+  /**
+   * The session's framework (`session.end`, contract §5). Optional because a
+   * meter written before this field existed round-trips with it absent — same
+   * defaulting shape as `instanceType` above. Carried here, rather than
+   * re-derived at teardown, because teardown call sites (`teardownLiveSession`,
+   * `sessionSubrouteGuard`) only ever have a `sessionId`, and this meter is the
+   * one piece of state that already lives from create to teardown under that key.
+   */
+  framework?: string;
 }
 
 const meterKey = (sessionId: string) => `${KV_METER_PREFIX}${sessionId}`;
@@ -325,9 +334,10 @@ export async function startSessionMeter(
   env: Env,
   sessionId: string,
   instanceType: InstanceType = SESSION_INSTANCE_TYPE,
+  framework?: string,
 ): Promise<void> {
   const now = Date.now();
-  const meter: SessionMeter = { startedAt: now, meteredThrough: now, instanceType };
+  const meter: SessionMeter = { startedAt: now, meteredThrough: now, instanceType, ...(framework ? { framework } : {}) };
   await env.CACHE.put(meterKey(sessionId), JSON.stringify(meter), {
     expirationTtl: KV_METER_TTL_SECONDS,
     metadata: meterMetadata(meter),
@@ -337,20 +347,26 @@ export async function startSessionMeter(
 /**
  * Book the slice of awake time since the last flush.
  * `final` (teardown) always books and then drops the meter.
+ *
+ * Returns the meter's `framework` (contract §5's `session.end` blob) when one
+ * is on record — `undefined` on a KV miss/hiccup or a pre-F14 meter that
+ * never had one. `void`-safe: every existing caller already ignores the
+ * return value.
  */
 export async function meterSession(
   env: Env,
   sessionId: string,
   opts: { final?: boolean } = {},
-): Promise<void> {
+): Promise<string | undefined> {
   // Metering is telemetry, and telemetry must never be the reason a request
   // fails. The teardown path in particular: a throw here would skip the
   // `sandbox.destroy()` that follows it and leave a container billing until
   // its idle window lapses — the exact cost this file exists to prevent.
   try {
-    await meterSessionUnsafe(env, sessionId, opts);
+    return await meterSessionUnsafe(env, sessionId, opts);
   } catch (err) {
     console.warn("[budget] session metering failed:", err instanceof Error ? err.message : String(err));
+    return undefined;
   }
 }
 
@@ -358,14 +374,14 @@ async function meterSessionUnsafe(
   env: Env,
   sessionId: string,
   opts: { final?: boolean },
-): Promise<void> {
+): Promise<string | undefined> {
   const key = meterKey(sessionId);
   const meter = (await env.CACHE.get(key, "json").catch(() => null)) as SessionMeter | null;
-  if (!meter) return;
+  if (!meter) return undefined;
 
   const now = Date.now();
   const elapsedSeconds = Math.max(0, (now - meter.meteredThrough) / 1000);
-  if (!opts.final && elapsedSeconds < METER_FLUSH_SECONDS) return;
+  if (!opts.final && elapsedSeconds < METER_FLUSH_SECONDS) return meter.framework;
 
   const awakeSeconds = Math.min(elapsedSeconds, MAX_UNSEEN_AWAKE_SECONDS);
   if (opts.final) {
@@ -380,6 +396,7 @@ async function meterSessionUnsafe(
     }).catch(() => { /* next ping re-books the same slice; capped above */ });
   }
   await recordContainerUsage(env, { instanceType: meter.instanceType, awakeSeconds });
+  return meter.framework;
 }
 
 // ---- Traffic accumulator -----------------------------------------------------

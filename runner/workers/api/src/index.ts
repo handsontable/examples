@@ -182,6 +182,21 @@ class SandboxBaseWithSleep extends SandboxBase {
   private bootFailureReported = false;
 
   /**
+   * F14 (W-triage): the framework `POST /api/session` created this session
+   * with, so a LATER, unrelated request against this same DO —
+   * `previewBootFailureResponse`, reachable minutes or restarts after create
+   * — can still label its `container.boot_ms window_exceeded` point
+   * (contract §5's `framework` blob). Set once, best-effort, by
+   * `setFramework` right after create; also persisted to durable storage
+   * (unlike `bootStartedAt` above) because "since this container started" is
+   * meaningless to recompute after an isolate eviction, but the framework a
+   * session was created with does not change — reading it back in `onStart`
+   * costs one storage read per container start and never biases the metric.
+   */
+  private framework: string | null = null;
+  private static readonly FRAMEWORK_STORAGE_KEY = "o11y:boot-framework";
+
+  /**
    * Fires on every container start, which is exactly the clock DEV-2537 needs:
    * a refusal is only ever reachable inside the generation that exposed the port
    * (see `preview-boot.ts` — a restart makes every preview URL a 410 instead),
@@ -192,7 +207,27 @@ class SandboxBaseWithSleep extends SandboxBase {
   override async onStart(): Promise<void> {
     this.bootStartedAt = Date.now();
     this.bootFailureReported = false;
+    if (this.framework === null) {
+      try {
+        this.framework = (await this.ctx.storage.get<string>(SandboxBaseWithSleep.FRAMEWORK_STORAGE_KEY)) ?? null;
+      } catch { /* best effort — see the field doc */ }
+    }
     await super.onStart();
+  }
+
+  /**
+   * Called once by the Worker right after create (`POST /api/session`), with
+   * the framework already validated against `FRAMEWORK_DEV`/`BUILD_CONFIG`.
+   * Best-effort in both directions: the Worker `.catch()`s this RPC, and this
+   * method never throws, because losing the framework only means
+   * `window_exceeded` falls back to today's framework-less point — it must
+   * never fail the create.
+   */
+  async setFramework(framework: string): Promise<void> {
+    this.framework = framework;
+    try {
+      await this.ctx.storage.put(SandboxBaseWithSleep.FRAMEWORK_STORAGE_KEY, framework);
+    } catch { /* best effort — see the field doc */ }
   }
 
   /**
@@ -271,11 +306,21 @@ class SandboxBaseWithSleep extends SandboxBase {
       // `session.start` — one `ready` point from the create, then a second,
       // unrelated `boot_timeout` point from a later mid-session crash, for the
       // SAME session — would corrupt `SUM(double1)` reads and any ratio T04's
-      // alerts build on `session.start`'s own outcome mix. `framework`/`reason`
-      // are not available at this call site (the DO only carries a session id,
-      // not the framework it was created with) and are left unset — optional
-      // per the metric's own blob list, not a validation error.
-      void emitPoint(env, "container.boot_ms", { duration_ms: elapsedMs }, { outcome: "window_exceeded" });
+      // alerts build on `session.start`'s own outcome mix. `reason` is not
+      // available at this call site and is left unset — optional per the
+      // metric's own blob list, not a validation error. `framework` (F14,
+      // W-triage) IS available, best-effort, via `this.framework` — set by
+      // `setFramework` right after create and rehydrated in `onStart` — so
+      // the `tier2-sessions` panel's `blob6 IN (${framework})` filter has
+      // something to match; a session created before this fix, or one whose
+      // `setFramework` RPC never landed, still gets a framework-less point,
+      // same as today.
+      void emitPoint(
+        env,
+        "container.boot_ms",
+        { duration_ms: elapsedMs },
+        { framework: this.framework ?? undefined, outcome: "window_exceeded" },
+      );
     }
 
     const response =
@@ -397,6 +442,11 @@ type SandboxLike = {
   startProcess(cmd: string, opts?: { cwd?: string; env?: Record<string, string> }): Promise<unknown>;
   exposePort(port: number, opts?: { hostname?: string }): Promise<{ url?: string; exposedAt?: string }>;
   destroy(): Promise<unknown>;
+  // F14: best-effort framework hand-off so a later, unrelated request against
+  // this same DO (`previewBootFailureResponse`, on a preview request that can
+  // arrive long after create) can label its `container.boot_ms
+  // window_exceeded` point — see `SandboxBaseWithSleep#setFramework`.
+  setFramework(framework: string): Promise<void>;
 };
 // Cast the function itself so TS never instantiates its deep generic return.
 const getSandboxShallow = getSandbox as unknown as (ns: unknown, id: string) => SandboxLike;
@@ -486,7 +536,14 @@ async function teardownLiveSession(
   // Close the awake window before the container goes away: this is the one
   // teardown path that knows the session is over for good. It also drops the
   // meter key, which is what takes the row off the admin panel.
-  await meterSession(env, sessionId, { final: true });
+  //
+  // `session.end` framework (W-triage, adjacent to F14): this handler only
+  // ever has a `sessionId`, never the framework the session was created
+  // with — the meter is the one piece of state that already lives from
+  // create to teardown under that key, so its (now-final) read is also
+  // where `session.end`'s `framework` blob comes from. `undefined` (a
+  // pre-fix meter, or a KV miss) degrades to today's framework-less point.
+  const framework = await meterSession(env, sessionId, { final: true });
   const sandbox = liveSbx(env, sessionId);
   // Releasing a container must not need one (DEV-2556, Sentry DEMOS-1).
   // When the pool is full the platform refuses `destroy()` itself, and this
@@ -500,12 +557,14 @@ async function teardownLiveSession(
   try {
     await sandbox.destroy();
     await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
-    if (endReason !== "admin") void emitPoint(env, "session.end", { count: 1 }, { framework: "", reason: endReason });
+    if (endReason !== "admin") {
+      void emitPoint(env, "session.end", { count: 1 }, { framework: framework ?? "", reason: endReason });
+    }
   } catch (err) {
     if (!isExpectedTeardownFailure(err)) throw err;
     // The destroy itself was refused — regardless of why teardown was asked
     // for, the session ends here as `teardown_failed`, not as `endReason`.
-    void emitPoint(env, "session.end", { count: 1 }, { framework: "", reason: "teardown_failed" });
+    void emitPoint(env, "session.end", { count: 1 }, { framework: framework ?? "", reason: "teardown_failed" });
     console.warn(
       `[session] teardown for ${sessionId} declined by the platform:`,
       err instanceof Error ? err.message : String(err),
@@ -709,7 +768,10 @@ async function sessionSubrouteGuard(env: Env, sessionId: string): Promise<Respon
 
   if (state.tier !== "closed") return null;
 
-  await meterSession(env, sessionId, { final: true });
+  // See `teardownLiveSession`'s matching comment: the meter is the only
+  // place this handler — which also only ever has a `sessionId` — can read
+  // the session's framework back from, for `session.end`'s `framework` blob.
+  const framework = await meterSession(env, sessionId, { final: true });
   await putTombstone(env, sessionId, TOMBSTONE_ATTEMPTED);
   try {
     await liveSbx(env, sessionId).destroy();
@@ -719,7 +781,7 @@ async function sessionSubrouteGuard(env: Env, sessionId: string): Promise<Respon
     await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
   } catch { /* best effort */ }
   console.log(`[budget] closed live session ${sessionId}: over the monthly ceiling`);
-  void emitPoint(env, "session.end", { count: 1 }, { framework: "", reason: "budget_closed" });
+  void emitPoint(env, "session.end", { count: 1 }, { framework: framework ?? "", reason: "budget_closed" });
   return json({ error: "budget_exhausted", message: budgetPausedMessage, tier: "closed" }, 410);
 }
 
@@ -967,11 +1029,33 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         // `return`/`throw` inside stays exactly as it was — `withSpan` only
         // wraps, it does not change control flow, see `spans.ts`).
         return await withSpan("session.start", async () => {
+        // F14 (W-triage): `container.boot_ms` timing, set only once the
+        // `container.boot` span below actually starts — a throw earlier in
+        // this try (metering, `writeFiles`) never booted a container, so it
+        // must not count as a `container.boot_ms` outcome. `null` also
+        // distinguishes "never reached the span" from "started at 0".
+        let bootStartedAt: number | null = null;
         try {
           // Billing starts at the first sandbox RPC, so the awake-window meter
           // starts here rather than after a successful boot — a create that
-          // throws half-way still ran a container.
-          await startSessionMeter(env, sessionId);
+          // throws half-way still ran a container. `session.end`'s
+          // `framework` blob (W-triage, adjacent to F14) rides along on the
+          // same meter: it is the only state that already lives from create
+          // to teardown under this session id.
+          await startSessionMeter(env, sessionId, undefined, body.framework);
+          // Best-effort: lets a later, unrelated request (the DO's own
+          // `previewBootFailureResponse`, hours or restarts away) attach this
+          // session's framework to its own `container.boot_ms window_exceeded`
+          // point (contract §5 / W-triage F14 adjacent note). A KV hiccup here
+          // must not fail the create — the window_exceeded point already
+          // degrades to framework-less if this never lands. Wrapped in a real
+          // try/catch, not just `.catch()`: an RPC method the SDK's stub
+          // failed to forward would throw SYNCHRONOUSLY before `.catch()`
+          // ever attaches, and this call must never be the reason a create
+          // fails.
+          try {
+            await sandbox.setFramework(body.framework);
+          } catch { /* best effort */ }
           await recordUsageEvent(env, "session_started", body.framework);
           await writeFiles(sandbox, files);
           // Boot asynchronously (returns immediately; UI polls /status for live
@@ -1038,6 +1122,13 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // dev server and open its port — the SDK calls this fix is scoped to
           // (DEV-2541/DEV-2537 above), not the file writes or budget checks
           // around it.
+          //
+          // F14: the SAME two RPCs also give `container.boot_ms` (contract §5)
+          // its clock — container start to port exposed, NOT dev-server ready
+          // (that is the browser's own `session.start_ms`, through to
+          // `data-preview-status="ready"`). Stamped immediately before the
+          // span so a throw inside it is still timed.
+          bootStartedAt = Date.now();
           const previewUrl = await withSpan("container.boot", async () => {
             await sandbox.startProcess(
               `sh -lc ${shq(`( ${script} ) > ${BOOT_LOG} 2>&1; echo "__RUNNER_EXIT__:$?" >> ${BOOT_LOG}`)}`,
@@ -1051,6 +1142,10 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             return (exposed as { url?: string; exposedAt?: string }).url
               ?? (exposed as { exposedAt?: string }).exposedAt;
           });
+          // Measured HERE, right as the span resolves — not after the
+          // `closedRace` check below, which is its own KV read and must not
+          // inflate the boot clock.
+          const bootMs = Date.now() - (bootStartedAt as number);
 
           // Create/delete race check: if the client's DELETE landed while this
           // create was still running — or arrived before it even started — its
@@ -1067,9 +1162,22 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // A race with a client DELETE that arrived mid-create is not scored
           // either way: the visitor is already gone, so neither outcome is
           // meaningful (T05-D).
-          if (!closedRace) void emitSessionStart("ready");
+          if (!closedRace) {
+            void emitSessionStart("ready");
+            // F14: `bootStartedAt` is always set here — it is stamped right
+            // before the span this branch's success depends on.
+            void emitPoint(
+              env,
+              "container.boot_ms",
+              { duration_ms: bootMs },
+              { framework: body.framework, outcome: "ready" },
+            );
+          }
           return closedRace ?? json({ sessionId, previewUrl, port: dev.port });
         } catch (err) {
+          // F14: measured at catch ENTRY, before `closedWhileCreating()`'s own
+          // KV read (and everything else this branch does) can inflate it.
+          const errorAt = Date.now();
           // A create step that throws may still have left a booted container
           // behind (every sandbox RPC auto-boots one), and if the client's
           // DELETE already landed there is no client left to clean it up —
@@ -1140,6 +1248,21 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             return json({ error: CONTAINER_STARTING_CODE, message: containerStartingMessage }, 503);
           }
           void emitSessionStart("error");
+          // F14: only the genuinely unrecognised failures reach here —
+          // `isAtCapacityFailure`/`isContainerStartingFailure` both returned
+          // above with their own `session.start` outcome, which already
+          // covers those refusals; double-counting them as `container.boot_ms
+          // error` too would corrupt the panel's error rate. `bootStartedAt`
+          // is null when the throw happened before the span even started
+          // (metering, `writeFiles`), which is not a boot failure either.
+          if (bootStartedAt !== null) {
+            void emitPoint(
+              env,
+              "container.boot_ms",
+              { duration_ms: errorAt - bootStartedAt },
+              { framework: body.framework, outcome: "error" },
+            );
+          }
           throw err;
         }
         });
