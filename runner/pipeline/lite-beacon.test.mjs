@@ -595,6 +595,74 @@ test("POST /telemetry/lite: an accepted web_vital beacon writes a web_vital AE p
   assert.equal(point.doubles[2], 2500); // value, double3
 });
 
+// ---- QA follow-up ("lite-beacon vitals") -----------------------------------
+//
+// F18 (normalise/faro.ts) made a Faro measurement AE-only (`storeRecord =
+// false`) — this route still stored a Loki record for every lite web-vital
+// beacon from `/d`/`/embed`. Same pattern here: AE only, dedupe and
+// accounting kept. An error beacon (`t: "err"`) is unaffected — it must
+// still be stored.
+
+function liteVitalPayload(overrides = {}) {
+  return {
+    v: 1,
+    t: "vital",
+    s: "d",
+    demo: "abc12345",
+    ht: "18",
+    fw: "react",
+    n: "LCP",
+    val: 2500,
+    dev: "desktop",
+    ts: Date.now(),
+    ...overrides,
+  };
+}
+
+test("POST /telemetry/lite: an accepted web_vital beacon never reaches storage (F18-style AE-only) — zero pending rows, zero R2 objects", async () => {
+  const { env, doStorage, r2 } = freshEnv();
+  const res = await worker.fetch(liteRequest(liteVitalPayload()), env, ctx);
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
+
+  const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
+  assert.equal(rowKeys.length, 0, "a web-vital beacon must never leave a pending row in storage");
+
+  const inboxWriter = env.INBOX_WRITER.get();
+  await inboxWriter.alarm();
+  assert.equal(r2.objects.size, 0, "a web-vital beacon must never produce a stored R2 object");
+});
+
+test("POST /telemetry/lite: an error beacon is unaffected — it still lands in the browser tenant", async () => {
+  const { env, r2 } = freshEnv();
+  await worker.fetch(liteRequest(litePayload()), env, ctx); // t: "err" (litePayload's default)
+  await ctx.drain();
+  const inboxWriter = env.INBOX_WRITER.get();
+  await inboxWriter.alarm();
+  assert.equal(r2.objects.size, 1, "an error beacon must still be stored");
+});
+
+test("POST /telemetry/lite: a duplicated web_vital beacon (identical payload, redelivered) does not double-count its web_vital point", async () => {
+  const { env, ae } = freshEnv();
+  const vital = liteVitalPayload();
+  const first = await worker.fetch(liteRequest(vital), env, ctx);
+  await ctx.drain();
+  assert.ok(first.status >= 200 && first.status < 300);
+
+  const second = await worker.fetch(liteRequest(vital), env, ctx);
+  await ctx.drain();
+  assert.ok(second.status >= 200 && second.status < 300, "a duplicate vital beacon must still answer 2xx");
+
+  const vitalPoints = ae.points.filter((p) => p.indexes[0] === "web_vital");
+  assert.equal(vitalPoints.length, 1, "a redelivered vital beacon must write exactly one web_vital point, not two — dedupe must still work with no stored record");
+
+  const ingestPoints = ae.points.filter((p) => p.indexes[0] === "o11y.ingest");
+  assert.ok(
+    ingestPoints.some((p) => p.blobs[7] === "duplicate"),
+    "the second delivery's o11y.ingest point must say duplicate",
+  );
+});
+
 test("POST /telemetry/lite: a duplicated beacon (identical payload, redelivered) does not double-count its error.uncaught point (finding A-I4)", async () => {
   const { env, ae } = freshEnv();
   const payload = litePayload();
