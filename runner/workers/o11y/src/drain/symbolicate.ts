@@ -6,8 +6,22 @@
 //       at fn (https://demos.handsontable.com/assets/index-abc123.js:12:34)
 //
 // This module parses that text back into frames, resolves app-chunk frames
-// with `source-map-js` against `sourcemaps/<service.version>/<original
-// asset path>.map` (the maps bucket), and rewrites resolved lines in place.
+// with `@jridgewell/trace-mapping` against `sourcemaps/<service.version>/
+// <original asset path>.map` (the maps bucket), and rewrites resolved lines
+// in place.
+//
+// F30 (why not `source-map-js`, which this module used until then): its
+// `lib/quick-sort.js` builds the comparator-specialised sort it runs on the
+// first `originalPositionFor` with `new Function(...)`. workerd forbids
+// code generation from strings, so inside the real Worker EVERY lookup
+// threw `EvalError: Code generation from strings disallowed for this
+// context`, the per-frame catch below swallowed it, and no frame was ever
+// resolved in production or under `wrangler dev`, while every Node unit
+// test (Node allows `new Function`) stayed green.
+// `pipeline/o11y-symbolicate-drain.test.mjs` runs the drain under
+// `node --disallow-code-generation-from-strings` so that class of
+// dependency cannot come back unnoticed. `trace-mapping` does no code
+// generation.
 // Frames it cannot or must not resolve (Babel-chunk, third-party, a missing
 // or unparseable map) are left byte-for-byte as rendered — never a
 // placeholder, never a partial guess — so drain-time symbolication produces
@@ -17,7 +31,7 @@
 // unclean stop would make the replay's line diverge from a clean run's).
 
 import { ATTR_HOT_KIND, type OtlpResourceLogs } from "@handsontable/demo-runtime/telemetry";
-import { SourceMapConsumer, type RawSourceMap } from "source-map-js";
+import { TraceMap, originalPositionFor } from "@jridgewell/trace-mapping";
 
 /** Exactly `convert.ts#formatStackFrame`'s output shape, parsed back out.
  *  `(?:` filename `(?::` line `:` col `)?)` — the position suffix is
@@ -108,10 +122,75 @@ function isBabelChunk(filename: string): boolean {
 function mapKeyFor(filename: string, serviceVersion: string): string | null {
   try {
     const url = new URL(filename);
+    // F30: a frame in the page itself (an inline `<script>`, e.g.
+    // `at eval (http://host/:303:30)`) has no file to map. Without this the
+    // symbolicator fetched `sourcemaps/<sha>/.map` for every such frame and
+    // reported it as a missing map.
+    if (url.pathname.endsWith("/")) return null;
     return `sourcemaps/${serviceVersion}${url.pathname}.map`;
   } catch {
     return null;
   }
+}
+
+/** Workspace directories directly under the `runner/` checkout root. */
+const WORKSPACE_ROOTS: ReadonlySet<string> = new Set(["apps", "packages", "workers", "node_modules"]);
+
+/**
+ * F30 (render-time source-path normalisation): turns a map `sources` entry
+ * into a repo-relative path for the rendered frame. Rollup writes each
+ * source relative to the map file, so a CI build (`apps/authoring/dist`)
+ * emits `../../src/sentry.ts` or `../../../../packages/runtime/dist/monitor.js`,
+ * and a build into any other outDir climbs out of the checkout entirely
+ * (`../../../../../../../../Users/<user>/Code/examples/runner/...`), which
+ * leaks a home directory into Loki.
+ *
+ * Rule: drop leading `./`, `../` and `/`; then, if a `runner/<workspace
+ * root>` pair remains, cut everything before the workspace root. The LAST
+ * such pair wins, so a GitHub Actions checkout
+ * (`/home/runner/work/examples/examples/runner/apps/...`) is cut at the
+ * repo's own `runner/`, not the CI user's home. The CI build therefore
+ * renders `src/sentry.ts` / `packages/runtime/dist/monitor.js`, which is
+ * what ADR-0041 exit criterion 5 names. A URL source (`https://...`) is left
+ * as it is.
+ *
+ * Done at render time, not with Vite's `sourcemapPathTransform` at build
+ * time, because the same maps are uploaded to Sentry: changing `sources`
+ * there changes Sentry's frame filenames and so its issue grouping and any
+ * code mappings. Render time also fixes maps already in the bucket.
+ */
+export function normaliseSourcePath(source: string): string {
+  if (/^[a-z][\w+.-]*:\/\//i.test(source) && !source.startsWith("file://")) return source;
+  const segments = source.replace(/^file:\/\//, "").replace(/\\/g, "/").split("/");
+  let start = 0;
+  while (start < segments.length - 1 && (segments[start] === "" || segments[start] === "." || segments[start] === "..")) start++;
+  const rest = segments.slice(start);
+  for (let i = rest.length - 2; i >= 0; i--) {
+    if (rest[i] === "runner" && WORKSPACE_ROOTS.has(rest[i + 1] ?? "")) return rest.slice(i + 1).join("/");
+  }
+  return rest.join("/");
+}
+
+/** F30: why a map key's frames were left unresolved. `fetch_error` (the
+ *  read threw) is kept apart from `no_map` (the object is absent) so a
+ *  transient R2 failure is not read as a missing upload (B-M6). */
+export type SymbolicateSkipReason =
+  | "no_map"
+  | "fetch_error"
+  | "parse_error"
+  | "over_budget"
+  | "lookup_error"
+  | "no_frames_matched";
+
+export interface SymbolicateSkip {
+  /** The maps-bucket key, e.g. `sourcemaps/<sha>/assets/index-abc.js.map`. */
+  key: string;
+  reason: SymbolicateSkipReason;
+  /** Frames that pointed at this key and stayed unresolved. */
+  frames: number;
+  /** The first underlying error message, truncated; absent for `no_map`,
+   *  `over_budget` and `no_frames_matched`. */
+  detail?: string;
 }
 
 export interface SymbolicateDeps {
@@ -120,6 +199,38 @@ export interface SymbolicateDeps {
    *  is exactly why this must be the maps bucket, never a `fetch()` to
    *  `demos.handsontable.com`). */
   getMap(key: string): Promise<string | null>;
+  /** F30: called at most once per {@link symbolicateResourceLogs} call when
+   *  any key had frames that were attempted and left unresolved, with at
+   *  most {@link MAX_SKIP_REPORTS} entries (one per key) and the number of
+   *  further keys left out. Defaults to {@link logSymbolicateSkips}. Never
+   *  affects the rendered output. */
+  onSkip?(skips: SymbolicateSkip[], suppressed: number): void;
+}
+
+/** Bounds the skip signal: a batch carrying many distinct, map-less chunk
+ *  URLs (third-party scripts, a forged payload) costs one line per key up
+ *  to this many, then one count. */
+export const MAX_SKIP_REPORTS = 20;
+const MAX_SKIP_DETAIL_CHARS = 200;
+
+/** The default {@link SymbolicateDeps.onSkip}: one structured
+ *  `o11y.symbolicate.skip` line per key, the same JSON-line shape as the
+ *  worker's other `o11y.*` events, plus one line for the suppressed count. */
+export function logSymbolicateSkips(skips: SymbolicateSkip[], suppressed: number): void {
+  for (const skip of skips) console.warn(JSON.stringify({ event: "o11y.symbolicate.skip", ...skip }));
+  if (suppressed > 0) console.warn(JSON.stringify({ event: "o11y.symbolicate.skip", reason: "suppressed", keys: suppressed }));
+}
+
+function errorDetail(err: unknown): string {
+  const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  return text.slice(0, MAX_SKIP_DETAIL_CHARS);
+}
+
+interface KeyStats {
+  attempted: number;
+  resolved: number;
+  lookupErrors: number;
+  lookupDetail?: string;
 }
 
 /**
@@ -131,7 +242,9 @@ export interface SymbolicateDeps {
  * parse within this one call (ADR §C.3), discarded when it returns.
  */
 class DrainMapCache {
-  #parsed = new Map<string, SourceMapConsumer | null>();
+  #parsed = new Map<string, TraceMap | null>();
+  /** F30: why a key resolved to `null`, for the skip signal. */
+  #failures = new Map<string, { reason: SymbolicateSkipReason; detail?: string }>();
   #parsedBytes = 0;
   /** A generous per-invocation ceiling on total parsed map JSON, well under
    *  the 64 MB isolate-memory budget criterion 5 sets for ONE exception's
@@ -153,31 +266,35 @@ class DrainMapCache {
     this.#deps = deps;
   }
 
-  async get(key: string): Promise<SourceMapConsumer | null> {
+  failureOf(key: string): { reason: SymbolicateSkipReason; detail?: string } | undefined {
+    return this.#failures.get(key);
+  }
+
+  #fail(key: string, reason: SymbolicateSkipReason, detail?: string): null {
+    this.#parsed.set(key, null);
+    this.#failures.set(key, detail === undefined ? { reason } : { reason, detail });
+    return null;
+  }
+
+  async get(key: string): Promise<TraceMap | null> {
     if (this.#parsed.has(key)) return this.#parsed.get(key) ?? null;
-    if (this.#parsedBytes >= DrainMapCache.MAX_PARSED_BYTES) {
-      this.#parsed.set(key, null);
-      return null;
-    }
+    if (this.#parsedBytes >= DrainMapCache.MAX_PARSED_BYTES) return this.#fail(key, "over_budget");
     let text: string | null;
     try {
       text = await this.#deps.getMap(key);
-    } catch {
-      text = null;
+    } catch (err) {
+      return this.#fail(key, "fetch_error", errorDetail(err));
     }
-    if (text === null) {
-      this.#parsed.set(key, null);
-      return null;
-    }
+    if (text === null) return this.#fail(key, "no_map");
     this.#parsedBytes += text.length;
-    let consumer: SourceMapConsumer | null;
+    let map: TraceMap;
     try {
-      consumer = new SourceMapConsumer(JSON.parse(text) as RawSourceMap);
-    } catch {
-      consumer = null;
+      map = new TraceMap(text);
+    } catch (err) {
+      return this.#fail(key, "parse_error", errorDetail(err));
     }
-    this.#parsed.set(key, consumer);
-    return consumer;
+    this.#parsed.set(key, map);
+    return map;
   }
 }
 
@@ -192,8 +309,10 @@ class DrainMapCache {
  *     regex above only ever captures digits, so this should be unreachable,
  *     but a *guaranteed* skip is cheap and this function's whole job is to
  *     never trust the input) is skipped before ever reaching
- *     `source-map-js`. `originalPositionFor({ line: 0, ... })` throws
- *     `TypeError: Line must be greater than or equal to 1, got 0` — a
+ *     the map library. `originalPositionFor({ line: 0, ... })` throws (in
+ *     `source-map-js`, used until F30: `TypeError: Line must be greater
+ *     than or equal to 1, got 0`; in `trace-mapping`: "`line` must be
+ *     greater than 0") — a
  *     `lineno: 0` stack frame is valid, storable Faro input (ingest does
  *     not reject it), so this is reachable from one anonymous
  *     `POST /telemetry/collect` request, not a contrived shape.
@@ -202,7 +321,12 @@ class DrainMapCache {
  *     library might raise — the same "resolve or leave exactly as
  *     rendered, never guess, never throw" contract every other skip
  *     condition in this loop already follows (see the file header). */
-async function resolveBody(body: string, serviceVersion: string, cache: DrainMapCache): Promise<string> {
+async function resolveBody(
+  body: string,
+  serviceVersion: string,
+  cache: DrainMapCache,
+  stats: Map<string, KeyStats>,
+): Promise<string> {
   const lines = body.split("\n");
   let changed = false;
 
@@ -216,26 +340,36 @@ async function resolveBody(body: string, serviceVersion: string, cache: DrainMap
 
     const mapKey = mapKeyFor(frame.filename, serviceVersion);
     if (!mapKey) continue;
-    const consumer = await cache.get(mapKey);
-    if (!consumer) continue; // no map, or it failed to parse — leave the frame exactly as it was
+    let keyStats = stats.get(mapKey);
+    if (!keyStats) {
+      keyStats = { attempted: 0, resolved: 0, lookupErrors: 0 };
+      stats.set(mapKey, keyStats);
+    }
+    keyStats.attempted++;
+    const map = await cache.get(mapKey);
+    if (!map) continue; // no map, or it failed to parse — leave the frame exactly as it was (reported via the skip signal)
 
-    // V8/ErrorEvent columns are 1-based; source-map-js's generated position
+    // V8/ErrorEvent columns are 1-based; trace-mapping's generated position
     // is 0-based column, 1-based line (the source-map spec's own convention).
-    let original: ReturnType<SourceMapConsumer["originalPositionFor"]>;
+    let original: ReturnType<typeof originalPositionFor>;
     try {
-      original = consumer.originalPositionFor({ line: frame.line, column: Math.max(0, frame.col - 1) });
-    } catch {
-      continue; // Z-B-C1: a library throw on this one frame must not cost the rest of the body
+      original = originalPositionFor(map, { line: frame.line, column: Math.max(0, frame.col - 1) });
+    } catch (err) {
+      // Z-B-C1: a library throw on this one frame must not cost the rest of the body.
+      keyStats.lookupErrors++;
+      keyStats.lookupDetail ??= errorDetail(err);
+      continue;
     }
     if (original.line === null || original.line === undefined || !original.source) continue;
 
     lines[i] = renderLine({
       prefix: frame.prefix,
       fn: original.name ?? frame.fn,
-      filename: original.source,
+      filename: normaliseSourcePath(original.source),
       line: original.line,
       col: (original.column ?? 0) + 1,
     });
+    keyStats.resolved++;
     changed = true;
   }
 
@@ -270,6 +404,7 @@ export async function symbolicateResourceLogs(
   deps: SymbolicateDeps,
 ): Promise<OtlpResourceLogs[]> {
   const cache = new DrainMapCache(deps);
+  const stats = new Map<string, KeyStats>();
   const out: OtlpResourceLogs[] = [];
 
   for (const record of records) {
@@ -291,14 +426,14 @@ export async function symbolicateResourceLogs(
             // Z-B-C1 "guard the record": `resolveBody` above is already
             // written to never throw, but this is the second, independent
             // layer the finding asks for — a throw here (from `resolveBody`
-            // itself, or from anything `source-map-js` does that this
+            // itself, or from anything the map library does that this
             // module did not anticipate) must leave THIS record's body
             // exactly as it arrived, never escape and cost every record
             // after it in the batch (`drain.ts#drainKey` is the third
             // layer, isolating a whole KEY the same way).
             let resolvedBody: string;
             try {
-              resolvedBody = await resolveBody(log.body.stringValue, serviceVersion, cache);
+              resolvedBody = await resolveBody(log.body.stringValue, serviceVersion, cache, stats);
             } catch {
               resolvedBody = log.body.stringValue;
             }
@@ -311,5 +446,39 @@ export async function symbolicateResourceLogs(
     out.push({ ...record, scopeLogs: resolvedScopeLogs });
   }
 
+  reportSkips(stats, cache, deps.onSkip ?? logSymbolicateSkips);
   return out;
+}
+
+/** F30: one entry per map key whose frames were attempted and not all
+ *  resolved for a reason worth an operator's attention, in first-seen key
+ *  order. A key with at least one resolved frame is only reported for a
+ *  `lookup_error`: a frame the map has no mapping for is normal, a library
+ *  throw is not. A reporter that throws is ignored, so the signal can never
+ *  cost the drain. */
+function reportSkips(
+  stats: Map<string, KeyStats>,
+  cache: DrainMapCache,
+  onSkip: NonNullable<SymbolicateDeps["onSkip"]>,
+): void {
+  const skips: SymbolicateSkip[] = [];
+  let suppressed = 0;
+  for (const [key, s] of stats) {
+    const unresolved = s.attempted - s.resolved;
+    if (unresolved === 0) continue;
+    const failure = cache.failureOf(key);
+    let skip: SymbolicateSkip | null = null;
+    if (failure) skip = { key, reason: failure.reason, frames: unresolved, ...(failure.detail !== undefined ? { detail: failure.detail } : {}) };
+    else if (s.lookupErrors > 0) skip = { key, reason: "lookup_error", frames: unresolved, ...(s.lookupDetail !== undefined ? { detail: s.lookupDetail } : {}) };
+    else if (s.resolved === 0) skip = { key, reason: "no_frames_matched", frames: unresolved };
+    if (!skip) continue;
+    if (skips.length < MAX_SKIP_REPORTS) skips.push(skip);
+    else suppressed++;
+  }
+  if (skips.length === 0) return;
+  try {
+    onSkip(skips, suppressed);
+  } catch {
+    // the signal is best-effort; the resolved records are already built
+  }
 }
