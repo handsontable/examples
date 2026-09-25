@@ -369,7 +369,7 @@
       "id": 6,
       "type": "logs",
       "title": "Recent demo-runtime errors",
-      "description": "Loki browser tenant, hot_surface=demo-runtime — the free text AE only carries a fingerprint for.",
+      "description": "Loki browser tenant, hot_surface=demo-runtime exceptions: one line per collapsed preview error (F26/F10: one per fingerprint per edit burst, text = the §7 fingerprint shape, never the raw message) plus the Tier-1 compile branch's constant-titled report. The text behind the fingerprint AE carries.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -387,7 +387,7 @@
             "type": "loki",
             "uid": "loki-browser"
           },
-          "expr": "{hot_surface=\"demo-runtime\"}",
+          "expr": "{hot_surface=\"demo-runtime\"} | hot_kind=\"exception\"",
           "queryType": "range"
         }
       ],

@@ -1,7 +1,7 @@
 import { test, expect, type Route, type Page } from "@playwright/test";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { stubShell } from "./helpers.js";
+import { activeEditor, stubShell } from "./helpers.js";
 
 // T06 — Faro in the authoring app.
 //
@@ -18,7 +18,10 @@ import { stubShell } from "./helpers.js";
 // webServer, which serves :4173 without the flag) so it never depends on, or
 // interferes with, whatever `dist` another spec run left behind.
 
-const PORT = 4711;
+// `E2E_TELEMETRY_PORT` / `E2E_TELEMETRY_UNCAUGHT_PORT`: a worktree running
+// in a different port block (COMMON.md) overrides both; the defaults are
+// T06's own block, unchanged.
+const PORT = Number(process.env.E2E_TELEMETRY_PORT ?? 4711);
 // 127.0.0.1, not "localhost": in CI (the Playwright container job) this
 // spec's own `fetch("http://localhost:…")` readiness poll failed outright
 // ("TypeError: fetch failed", cause unlogged — see `formatFetchFailure`
@@ -613,6 +616,121 @@ test.describe("Faro in the authoring app (T06)", () => {
     const guardedHit = events.find((e) => JSON.stringify(e).includes(guardedMarker));
     assert(!guardedHit, "reportDemoEvent must never reach Sentry through the R3 F10 local leg");
   });
+  // ---- F26: the edit-burst collapse in front of the facade ------------------
+  //
+  // Typing one throwing line relayed one `preview.runtime_error` per
+  // half-typed prefix. Drives the same two entry points `App.tsx` uses — the
+  // guarded `reportDemoEvent` and the edit signal `noteDemoEdit` — through
+  // their local-only hooks, so no real (E2E_LIVE-gated) preview is needed.
+  test("F26: a keystroke ladder emits one preview.runtime_error + one Faro record; a first-load error counts at once; Sentry is not collapsed", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+
+    const relay = (message: string, sentry = false) =>
+      page.evaluate(
+        ([msg, viaSentry]) => {
+          const w = window as unknown as Record<string, (p: unknown, c: unknown) => void>;
+          const hook = viaSentry ? w.__t06ReportDemoEvent : w.__t06ReportDemoEventGuarded;
+          hook({ type: "hot-runner-monitor", kind: "error", message: msg }, { tier: 1, framework: "react", htMajor: "18" });
+        },
+        [message, sentry] as const,
+      );
+    const noteEdit = () =>
+      page.evaluate(() => (window as unknown as { __t06ReportDemoEventNoteEdit: () => void }).__t06ReportDemoEventNoteEdit());
+    // Letters only in the markers: digits would be normalised to `<n>` in the shape.
+    const run = "F" + Math.random().toString(36).replace(/[^a-z]/g, "").slice(0, 8);
+    // Scoped to this test's own relays: the real (bundler-less) preview on this
+    // page relays events of its own — a Handsontable "Theme … is already
+    // registered" console warning, observed — which are real reports, just not
+    // the ones this test drives. Every relay below is `kind: "error"`
+    // (reason `uncaught`), and every record it produces carries `run`.
+    const runtimePoints = () =>
+      captured
+        .flatMap((b) => b.measurements ?? [])
+        .filter((m) => m.type === "preview.runtime_error")
+        .filter((m) => (m.context as Record<string, string> | undefined)?.["hot.reason"] === "uncaught");
+    const demoRecords = () =>
+      captured
+        .flatMap((b) => b.exceptions ?? [])
+        .filter((e) => (e.context as Record<string, string> | undefined)?.["hot.surface"] === "demo-runtime")
+        .filter((e) => String(e.value ?? "").includes(run) || String(e.value ?? "").includes("is not defined"));
+    const ladder = ["s", "se", "set", "setT", "setTi", "setTim", "setTime", "setTimeo"].map((p) => `${p} is not defined`);
+    ladder.push(`Unexpected token ${run}`, `Unterminated string constant ${run}`);
+    for (const rung of ladder) {
+      await noteEdit();
+      await relay(rung);
+    }
+    await noteEdit(); // the last keystroke
+    await relay(`ladder final ${run} 'secretLiteral'`);
+
+    // Held back while the burst is open (the settle window is 2 s).
+    await page.waitForTimeout(700);
+    expect(runtimePoints()).toHaveLength(0);
+
+    await expect.poll(() => runtimePoints().length, { timeout: 10_000 }).toBe(1);
+    await expect.poll(() => demoRecords().length).toBe(1);
+    // Nothing else trickles in after the burst closed.
+    await page.waitForTimeout(1500);
+    expect(runtimePoints()).toHaveLength(1);
+    expect(demoRecords()).toHaveLength(1);
+
+    // The one record is the final run's, as the §7 shape: handled, no stack,
+    // quoted text (authored content, contract §3) replaced.
+    const record = demoRecords()[0]!;
+    expect(record.type).toBe("DemoError");
+    expect(String(record.value)).toBe(`ladder final ${run} <str>`);
+    expect(record.stacktrace).toBeUndefined();
+    expect((record.context as Record<string, string>).handled).toBe("true");
+    expect(JSON.stringify(captured)).not.toContain("secretLiteral");
+    expect(runtimePoints()[0]!.context).toMatchObject({ "hot.surface": "demo-runtime", "hot.reason": "uncaught" });
+
+    // A first-load / interaction error (no edit open): counted without the settle wait.
+    await relay(`first load ${run}`);
+    await expect.poll(() => runtimePoints().length, { timeout: 1_500 }).toBe(2);
+    expect(demoRecords().map((r) => r.value)).toContain(`first load ${run}`);
+
+    // Sentry is NOT behind the collapse: under an open burst, every rung still
+    // reaches it at once (the unguarded hook is the `opts.sentry` path).
+    await noteEdit();
+    for (const rung of ["a is not defined", "ab is not defined", "abc is not defined"]) {
+      await relay(`${rung} ${run}`, true);
+    }
+    await expect
+      .poll(() => readSentryEvents(page).then((events) => events.filter((e) => JSON.stringify(e).includes(run)).length))
+      .toBe(3);
+  });
+
+  // The test above drives the edit signal through its hook; this one proves
+  // `App.tsx` actually sends it: a real keystroke in the code editor must open
+  // a burst, so an error relayed right after it is held back until the editor
+  // goes quiet, instead of counting at once like a first-load error.
+  test("F26: a code-editor keystroke opens the edit burst (App.tsx wiring)", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+    await expect(activeEditor(page)).toBeVisible();
+
+    const run = "F" + Math.random().toString(36).replace(/[^a-z]/g, "").slice(0, 8);
+    const points = () =>
+      captured
+        .flatMap((b) => b.measurements ?? [])
+        .filter((m) => m.type === "preview.runtime_error")
+        .filter((m) => (m.context as Record<string, string> | undefined)?.["hot.reason"] === "uncaught");
+
+    await activeEditor(page).click();
+    await page.keyboard.type("x");
+    await page.evaluate((msg) => {
+      (window as unknown as Record<string, (p: unknown, c: unknown) => void>).__t06ReportDemoEventGuarded(
+        { type: "hot-runner-monitor", kind: "error", message: msg },
+        { tier: 1, framework: "react", htMajor: "18" },
+      );
+    }, `after keystroke ${run}`);
+
+    await page.waitForTimeout(700);
+    expect(points(), "an error right after a keystroke waits for the burst to settle").toHaveLength(0);
+    await expect.poll(() => points().length, { timeout: 10_000 }).toBe(1);
+  });
 });
 
 // ---- Sentry scope switch = uncaught (fix round I1/I3) -----------------------
@@ -630,7 +748,7 @@ test.describe("Sentry scope switch = uncaught (fix round I1/I3)", () => {
   );
   test.describe.configure({ mode: "serial" });
 
-  const UNCAUGHT_PORT = 4712;
+  const UNCAUGHT_PORT = Number(process.env.E2E_TELEMETRY_UNCAUGHT_PORT ?? 4712);
   const UNCAUGHT_BASE_URL = `http://127.0.0.1:${UNCAUGHT_PORT}`;
   const OUT_DIR = "dist-uncaught-scope";
   test.use({ baseURL: UNCAUGHT_BASE_URL });

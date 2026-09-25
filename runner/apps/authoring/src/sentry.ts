@@ -14,7 +14,12 @@ import {
   sanitizeMonitorPayload,
   type MonitorPayload,
 } from "@handsontable/demo-runtime/monitor";
-import { fingerprint as contractFingerprint, type HtMajor } from "@handsontable/demo-runtime/telemetry";
+import {
+  fingerprint as contractFingerprint,
+  fingerprintShape,
+  type HotAttrs,
+  type HtMajor,
+} from "@handsontable/demo-runtime/telemetry";
 import { ApiError } from "./apiError.js";
 import { resolveReporting } from "./reportingGate.js";
 import {
@@ -26,6 +31,7 @@ import {
 } from "./eventGate.js";
 import { resolveSentryScope, reportsDiagnosticToSentry } from "./sentryScope.js";
 import { demoEventReport, type DemoMonitorKind } from "./demoEventReport.js";
+import { createDemoEventCollapse } from "./demoEventCollapse.js";
 import { tier2StderrReport } from "./tier2Report.js";
 import { telemetry } from "./telemetry/index.js";
 
@@ -288,6 +294,70 @@ const demoRelayBudget = createMonitorBudget(MONITOR_EVENT_CEILING);
  */
 const demoBreadcrumbBudget = createMonitorBudget(MONITOR_BREADCRUMB_CEILING);
 
+/** One collapsed demo-runtime report, ready for the facade. */
+interface CollapsedDemoEvent {
+  attrs: HotAttrs;
+  reason: string;
+  fingerprint: string;
+  recordName: string | null;
+  shape: string;
+}
+
+/**
+ * F26 + F10 Loki: what survives the edit-burst collapse becomes exactly two
+ * facade calls — the `preview.runtime_error` count (§5) and one handled Faro
+ * exception (ADR §E.1: "Faro reports … with an `error.handled` point"), whose
+ * Loki line is what the "Recent demo-runtime errors" panels read. The
+ * record's message is the §7 fingerprint shape, never the relayed text
+ * (contract §3); its stack is emptied so Faro does not attach the authoring
+ * app's own frames (the relay site) to a demo's fault. A console warning gets
+ * the count only (`demoEventReport.ts#RECORD_NAME_BY_KIND`).
+ */
+function emitCollapsedDemoEvent(event: CollapsedDemoEvent): void {
+  telemetry.metric(
+    "preview.runtime_error",
+    { count: 1 },
+    { ...event.attrs, reason: event.reason, fingerprint: event.fingerprint },
+  );
+  if (event.recordName === null) return; // a console warning: counted, not a Loki error line
+  const record = new Error(event.shape);
+  record.name = event.recordName;
+  record.stack = "";
+  telemetry.error(record, DEMO_SURFACE, event.attrs);
+}
+
+/**
+ * F26: the facade's demo-runtime reports go through the edit-burst collapse
+ * (`demoEventCollapse.ts`) — one report per fingerprint per edit burst, from
+ * the last run before the editor went quiet. Page-load scoped like the two
+ * budgets above. Sentry is not behind it: the relay budgets and captures
+ * below are unchanged.
+ */
+const demoEventCollapse = createDemoEventCollapse<CollapsedDemoEvent>({
+  emit: emitCollapsedDemoEvent,
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+});
+
+/** F26: an edit that re-runs the preview — see `DemoEventCollapse.noteEdit`.
+ *  Called by `App.tsx` on every non-quiet workspace write. */
+export function noteDemoEdit(): void {
+  if (!previewMonitoring) return;
+  demoEventCollapse.noteEdit();
+}
+
+/** F26: a preview is being torn down (example/version switch, remount) —
+ *  count its last run, then let the next preview's first load count afresh. */
+export function resetDemoEventCollapse(): void {
+  if (!previewMonitoring) return;
+  demoEventCollapse.reset();
+}
+
+if (previewMonitoring && typeof window !== "undefined") {
+  // A burst still open when the tab goes away: its last run is real.
+  window.addEventListener("pagehide", () => demoEventCollapse.flush());
+}
+
 /** Where a relayed event came from. `tier` distinguishes the two engines; `demoId`
  *  is present only for a saved demo. */
 export interface DemoEventContext {
@@ -308,10 +378,10 @@ export interface DemoEventContext {
  * Fix round I1 (controller ruling: ADR §E.3's scope switch is binding over the task
  * file's "leave Sentry" line for this function specifically):
  *
- * - **Always**, when the shared budget admits: one `preview.runtime_error` count
- *   through the facade (§5), fingerprinted with the contract's `fingerprint()` — a
- *   keystroke-ladder shape collapses to one fingerprint per shape (§7), which is
- *   what makes this "one deduplicated count" rather than one relay per keystroke.
+ * - **Always**: into the F26 edit-burst collapse (`demoEventCollapse.ts`), which
+ *   emits one `preview.runtime_error` count plus one handled Faro exception (the
+ *   Loki line) per fingerprint per edit burst, from the last run before the editor
+ *   went quiet — not one per keystroke. Not behind the Sentry budgets below.
  * - **`full` scope (default)**: ALSO today's pre-T06 Sentry behaviour, byte-for-byte
  *   — `captureException`/`captureMessage`/`addBreadcrumb`, the `tier2Report.ts`
  *   TS-diagnostic/build-envelope classification, the `DEMO_SURFACE` tags that the
@@ -320,8 +390,8 @@ export interface DemoEventContext {
  *   above is simply never reached for these events (ADR Consequences: "the re-homing
  *   disappears once the scope flips").
  *
- * The kind→budget split (`demoEventReport.ts`) governs both destinations from one
- * admission check: `console-warn` still spends the looser `MONITOR_BREADCRUMB_CEILING`
+ * The kind→budget split (`demoEventReport.ts`) governs the Sentry side's admission
+ * check: `console-warn` still spends the looser `MONITOR_BREADCRUMB_CEILING`
  * (and, under `full`, becomes a breadcrumb rather than an issue — DEV-2539), everything
  * else the tighter `MONITOR_EVENT_CEILING`.
  */
@@ -370,17 +440,20 @@ function reportDemoEventUnguarded(
     demoId: context.demoId,
   });
 
-  function toFacade(): void {
-    telemetry.metric(
-      "preview.runtime_error",
-      { count: 1 },
-      {
-        ...report.attrs,
-        reason: report.reason,
-        fingerprint: contractFingerprint(report.fingerprintContext, report.fingerprintMessage),
-      },
-    );
-  }
+  // F26: into the edit-burst collapse, not straight to the facade, and
+  // BEFORE either Sentry budget below: those budgets are Sentry's brake and
+  // stay exactly as they were, but a keystroke ladder spends the relay one in
+  // a single typed line, and gating the collapsed count on it would drop
+  // every later real error of the page load from the metric. The collapse
+  // has its own ceiling for a demo that floods with crafted payloads.
+  const fp = contractFingerprint(report.fingerprintContext, report.fingerprintMessage);
+  demoEventCollapse.report(fp, {
+    attrs: report.attrs,
+    reason: report.reason,
+    fingerprint: fp,
+    recordName: report.recordName,
+    shape: fingerprintShape(report.fingerprintMessage),
+  });
 
   // A warning is context, not a fault (DEV-2539). Handsontable's own "Theme is already
   // registered" notice is emitted by normal re-renders, and every warning used to open
@@ -393,7 +466,6 @@ function reportDemoEventUnguarded(
   // everything else that crossed the origin boundary.
   if (clean.kind === "console-warn") {
     if (!demoBreadcrumbBudget.admit(clean.kind, message)) return;
-    toFacade();
     if (opts.sentry && diagnosticsGoToSentry) {
       // Breadcrumbs live on the Sentry scope, which outlives a preview: one recorded
       // while example A was mounted can still be attached to an error from example B.
@@ -412,7 +484,6 @@ function reportDemoEventUnguarded(
     return;
   }
   if (!demoRelayBudget.admit(clean.kind, message, clean.stack)) return;
-  toFacade();
   if (!(opts.sentry && diagnosticsGoToSentry)) return;
 
   // DEV-2854 / DEV-2876: a recognised Tier-2 compiler diagnostic, or a recognised Tier-2
@@ -499,6 +570,14 @@ if (localTestSentryEnabled()) {
       __t06ReportDemoEventGuarded?: (payload: MonitorPayload, context: DemoEventContext) => void;
     }
   ).__t06ReportDemoEventGuarded = reportDemoEvent;
+  // F26: the edit signal `App.tsx` sends on every non-quiet write, so a spec
+  // can drive a keystroke ladder through `__t06ReportDemoEventGuarded` without
+  // a real (E2E_LIVE-gated) preview. Named under the `__t06ReportDemoEvent`
+  // prefix on purpose: `check:telemetry-leak`'s existing sentinel for that
+  // prefix already proves it never survives a build without the local flag.
+  (
+    window as unknown as { __t06ReportDemoEventNoteEdit?: () => void }
+  ).__t06ReportDemoEventNoteEdit = noteDemoEdit;
 }
 
 export { Sentry };

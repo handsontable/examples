@@ -72,6 +72,8 @@ import {
   monitorDemos,
   previewMonitoring,
   reportDemoEvent,
+  noteDemoEdit,
+  resetDemoEventCollapse,
   reportError,
   Sentry,
 } from "./sentry.js";
@@ -2760,6 +2762,9 @@ function Authoring({
       // `preview.ready_ms` outcome `abandoned`).
       previewTracker.abandon();
       window.removeEventListener("message", onPreviewMessage);
+      // F26: count this preview's last run now, and let the next preview's first
+      // load count afresh (see `DemoEventCollapse.reset`).
+      resetDemoEventCollapse();
       runtime.dispose();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
@@ -2828,6 +2833,9 @@ function Authoring({
       // A quiet write reaches no dev server yet, so there is nothing to wait for. The
       // rebuild it is eventually flushed by reports its own progress (`flushQuietEdits`).
       if (opts?.quiet) return;
+      // F26: the preview re-runs on this write — open/extend the edit burst, so the
+      // keystroke-prefix ladder it relays collapses to the last run's errors.
+      noteDemoEdit();
       showSyncing();
     },
     [markDirty, showSyncing],
@@ -2959,6 +2967,7 @@ function Authoring({
     // no generic "flush" source in the trail's vocabulary because nothing
     // else calls this yet.
     recordEditorEvent({ kind: "flush-quiet", source: "style", path: "", quiet: false, size: 0 });
+    noteDemoEdit(); // F26: the flush re-runs the preview, same as an edit
     try {
       runtimeRef.current?.flushQuiet?.();
       showSyncing();
@@ -2976,6 +2985,7 @@ function Authoring({
       filesRef.current = next;
       setFiles(next);
       markDirty(path);
+      noteDemoEdit(); // F26
       try { runtimeRef.current?.writeFile(path, ""); } catch { /* not mounted */ }
     },
     [markDirty],
@@ -2999,6 +3009,7 @@ function Authoring({
       setFiles(next);
       // Variadic on purpose (see its definition): one call dots every dropped tab.
       markDirty(...dropped.map((file) => file.path));
+      noteDemoEdit(); // F26
       for (const { path, contents } of dropped) {
         try { runtimeRef.current?.writeFile(path, contents); } catch { /* not mounted */ }
       }
@@ -3028,6 +3039,7 @@ function Authoring({
         rest.delete(path);
         return rest;
       });
+      noteDemoEdit(); // F26
       try { runtimeRef.current?.deleteFile?.(path); } catch { /* not mounted */ }
     },
     [markDirty],
@@ -3052,6 +3064,7 @@ function Authoring({
         rest.delete(oldPath);
         return rest;
       });
+      noteDemoEdit(); // F26
       try {
         runtimeRef.current?.writeFile(newPath, content);
         runtimeRef.current?.deleteFile?.(oldPath);
