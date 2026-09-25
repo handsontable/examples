@@ -275,6 +275,7 @@ jobs:
           # date" and left 18.0.0 installed. A canary that rebuilds the pinned
           # version is worse than no canary. `update --latest` moves the lock
           # (18.0.0 -> 18.1.0 in the same copy) and leaves the spec alone.
+          # shellcheck disable=SC2086 # $pkgs is a space-separated list; it must split.
           pnpm update $pkgs --latest
 
       - name: Verify the install actually moved to the released version

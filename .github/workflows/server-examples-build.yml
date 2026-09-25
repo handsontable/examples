@@ -141,6 +141,7 @@ jobs:
             process.stdout.write(w ? w + '@latest' : '');
           ")
           echo "Installing handsontable@latest $wrapper"
+          # shellcheck disable=SC2086 # $wrapper may be empty; quoting it would pass "".
           npm install handsontable@latest $wrapper
 
       - name: Report resolved Handsontable version
