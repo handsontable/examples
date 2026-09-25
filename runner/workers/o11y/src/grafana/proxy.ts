@@ -6,6 +6,8 @@
 // never for a request served the waking page.
 
 import { isBrowserNavigation, sanitizeNext, verifySession } from "../gates/session.js";
+import { GRAFANA_PROXY_MAX_BYTES, contentLengthExceeds } from "../gates/limits.js";
+import { BodyTooLargeError } from "../normalise/read-body.js";
 import { getGrafanaBoxStub } from "../box.js";
 import { wakingPageResponse } from "./waking-page.js";
 import type { Env } from "../env.js";
@@ -51,6 +53,50 @@ function isTopLevelNavigation(req: Request): boolean {
   return dest === "document";
 }
 
+function payloadTooLargeResponse(): Response {
+  return new Response(JSON.stringify({ error: "payload too large" }), {
+    status: 413,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** QA follow-up ("/grafana/* body cap"): reads `req`'s body verbatim (this route forwards it
+ *  exactly as received — see the Z1 note below on why it is buffered rather
+ *  than piped — so this never decompresses, unlike `normalise/read-body.ts`'s
+ *  `readCappedBytes`), refusing once the byte count crosses `maxBytes`.
+ *  Reads only as much of the stream as it takes to detect the overflow, and
+ *  CANCELS the reader (not merely releasing its lock) the moment it does, so
+ *  nothing keeps pumping past the cap — the same `Content-Length` is only a
+ *  hint" reasoning `read-body.ts` documents applies here too: an absent or
+ *  wrong `Content-Length` must not bypass this. */
+async function readCappedArrayBuffer(req: Request, maxBytes: number): Promise<ArrayBuffer> {
+  if (!req.body) return new ArrayBuffer(0);
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new BodyTooLargeError(maxBytes);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out.buffer;
+}
+
 export const handleGrafana: RouteHandler = async (req, env) => {
   const identity = await verifySession(req, env);
   if (!identity) {
@@ -76,6 +122,12 @@ export const handleGrafana: RouteHandler = async (req, env) => {
       headers: { "content-type": "application/json" },
     });
   }
+
+  // QA follow-up ("/grafana/* body cap"): checked before the box is ever touched — an
+  // oversized request must not wake a stopped box or renew its activity
+  // timer. `Content-Length` is only a pre-check (a client can omit it or
+  // lie); `readCappedArrayBuffer` below is the real enforcement.
+  if (contentLengthExceeds(req, GRAFANA_PROXY_MAX_BYTES)) return payloadTooLargeResponse();
 
   const box = getGrafanaBoxStub(env);
 
@@ -146,8 +198,12 @@ export const handleGrafana: RouteHandler = async (req, env) => {
   let body: ArrayBuffer | null = null;
   if (req.body) {
     try {
-      body = await req.arrayBuffer();
-    } catch {
+      // QA follow-up ("/grafana/* body cap"): enforced again here, not just against the
+      // `Content-Length` hint above — an absent or wrong header must not
+      // let an oversized body reach the buffer at all.
+      body = await readCappedArrayBuffer(req, GRAFANA_PROXY_MAX_BYTES);
+    } catch (err) {
+      if (err instanceof BodyTooLargeError) return payloadTooLargeResponse();
       // The client went away mid-upload: nothing is left to answer.
       return new Response(null, { status: 400 });
     }

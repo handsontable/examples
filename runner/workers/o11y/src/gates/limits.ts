@@ -15,6 +15,13 @@
 export const COLLECT_MAX_BYTES = 1_000_000;
 export const OTLP_MAX_BYTES = 4_000_000;
 export const SMALL_JSON_MAX_BYTES = 64_000;
+// - `GRAFANA_PROXY_MAX_BYTES`: `/grafana/*` (`grafana/proxy.ts`) request
+//   bodies — panel queries and dashboard saves. The dashboards themselves are
+//   provisioned read-only (git-managed JSON, never edited through the UI), so
+//   no legitimate request through this proxy is anywhere near this size;
+//   generous rather than tightly fit to any real payload, the same spirit
+//   `OTLP_MAX_BYTES` uses for its own batch.
+export const GRAFANA_PROXY_MAX_BYTES = 10_000_000;
 
 /** Cheap pre-check against the `Content-Length` header, when the client sent
  *  one — not the enforcement itself (a chunked/absent `Content-Length` must
