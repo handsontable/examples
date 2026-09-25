@@ -933,12 +933,20 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
     try {
       // POST /api/session  { framework, files, sessionId? } -> { sessionId, previewUrl }
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "session" && parts.length === 2) {
-        const body = await request.json() as {
+        // Unparseable JSON (this route is public — anonymous, and reachable
+        // by anything that sends garbage) used to fall through to the fetch
+        // catch-all's generic 500, polluting the `api.request` 5xx rate and
+        // the `api-5xx-rate` alert with what is really a 400-shaped client
+        // mistake. `.catch(() => null)` here, same as every other public
+        // POST route's `request.json()` call in this file, so a parse
+        // failure reaches the existing `isPlainRecord` check (`null` fails
+        // it) instead of throwing past this handler.
+        const body = await request.json().catch(() => null) as {
           framework: string;
           files: unknown;
           sessionId?: string;
           htVersion?: string;
-        };
+        } | null;
         if (!isPlainRecord(body)) return json({ error: "request body must be a plain record" }, 400);
         const dev = FRAMEWORK_DEV[body.framework];
         const cfg = BUILD_CONFIG[body.framework];
@@ -1294,7 +1302,11 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       // POST /api/session/:id/file  { path, contents } -> 204   (streams an edit; HMR picks it up)
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "session" && parts[3] === "file") {
         const sessionId = parts[2]!;
-        const body = validateFileWrite(await request.json());
+        // Same trivial fix as POST /api/session above: unparseable JSON must
+        // not throw past this handler. `validateFileWrite(null)` already
+        // throws `InvalidFilePathError`, which the fetch catch-all already
+        // answers with 400 — so this needs no new branch, just the `.catch`.
+        const body = validateFileWrite(await request.json().catch(() => null));
         const sandbox = liveSbx(env, sessionId);
         const full = body.path;
         const dir = full.slice(0, full.lastIndexOf("/"));
