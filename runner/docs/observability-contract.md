@@ -241,6 +241,24 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `o11y.backlog` | o11y worker cron | — | value (oldest age s), bytes | — |
 | `o11y.alert` | o11y worker cron | reason (rule id), outcome | count | `fired`, `resolved` |
 
+`o11y.wake`'s `duration_ms` (F8) is wake-to-ready time — from the wake starting to the
+box's first successful `isReady()`, sourced from `wake:<wakeId>.readyMs` (§8) — on both
+the `clean` and `unclean` outcome. `duration_ms = 0` means the box never became ready
+during that wake, not a genuinely instant boot.
+
+`sandpack.compile_error` (F10b, W-triage) counts bundler-reported compile diagnostics
+only. On a parcel Tier-1 example (every starter except `vue-cli`), a syntax error typed
+on the edit path is caught client-side by the pre-transpile step and dropped **by
+design** — it never reaches the bundler, so it is intentionally not counted. One gap
+stays open: a demo that fails to parse at *mount* (a saved/shared/`?payload=` demo, not
+a live edit) is never counted as `sandpack.compile_error` either — only
+`preview.ready_ms outcome=error` records it.
+
+`payload.boot` (F15, W-triage) is emitted only at `POST /api/payload`, the Theme
+Builder hand-off — never at the actual playground boot, `GET /api/payload/:id`. A
+`?payload=<bad-id>` failure on that boot is recorded as `error.handled
+context=payload-boot`, not as a `payload.boot` point.
+
 ## 6. Browser facade and Faro
 
 The app never calls Faro directly; it calls one facade, implemented with Faro:
@@ -258,6 +276,12 @@ Faro configuration: session tracking disabled; only the errors and web-vitals
 instrumentations; no `user` meta; the facade sets `session.id` = page-load id on every
 item; transport to same-origin `/telemetry/collect`; `beforeSend` = `scrubTelemetry` then
 the shared noise gates.
+
+Faro's global `dedupe` stays on for `pushError` (F12, W-triage): consecutive identical
+exceptions (same type, message, stack, context) collapse to one item, with no time
+window. So `error.uncaught`/`error.handled` counts — including the dashboard panels
+built on them — are **reports**, not occurrences: a burst of identical errors counts as
+one. Sentry, not this pipeline, is the occurrence counter (ADR §F.3).
 
 What the o11y worker does with each Faro item at ingest:
 
@@ -318,7 +342,7 @@ dedupe hash is computed over the decoded, scrubbed record before timestamps are 
 | `fp:<fingerprint>` | first-seen epoch ms (exact registry for the new-fingerprint alert) |
 | `fpts:<firstSeenMs:015d>:<fingerprint>` | same first-seen epoch ms as its `fp:` twin — a time-ordered secondary index (G1 fix round, B-C1/A-I1 remainder) so the new-fingerprint alert can do a bounded `start`/`end` range read instead of listing the whole (alphabetically, not chronologically, ordered) `fp:` prefix every tick. Written/deleted together with its `fp:` twin, always |
 | `alert:<rule>` | `{ state: firing \| resolved, since, lastNotified }` |
-| `wake:<wakeId>` | `{ startedAt, reason, over: boolean }` — over when a newer wake started or the container is not running; **deleted once fully resolved** (see below) |
+| `wake:<wakeId>` | `{ startedAt, reason, over: boolean, readyMs? }` — over when a newer wake started or the container is not running; **deleted once fully resolved** (see below). `readyMs` (F8) is wake-to-ready time in ms, written once by `InboxWriterApi.recordWakeReady(wakeId, readyMs)` — called by `GrafanaBox` on the wake's first successful `isReady()`, first call wins, a no-op for an already-resolved (deleted) wake — and copied onto the resolved `o11y.wake` point as `duration_ms` (§5); absent while the box has not yet become ready |
 | `rejectedEvent:<ms:015d>:<inbox key>` | rejection reason (string) — a chronological audit/alert log (G1 fix round, row 19 / B-C1/A-I1 remainder), written by both a full rejection (`ledger.ts#rejectKey`) and a **partial** one (`ledger.ts#recordPartialReject`, see below). The `rejected-inbox-key` alert fires on a RECENT (last hour) count here, not on `rejectedKeyCount()`'s never-pruned total, so it resolves once rejections stop instead of firing forever after the first one ever seen |
 | `drainsPaused` | boolean (o11y spend cap) |
 | `heartbeat` | `{ lastCron, lastIngest }` |
@@ -330,6 +354,13 @@ regex runs over it (`SCRUB_TEXT_MAX_CHARS`, `packages/runtime/src/telemetry/scru
 — a ReDoS defense-in-depth independent of each pattern also being made linear-time.
 The fingerprint normaliser (`normalizeMonitorMessage`, §7) is bounded separately, to a
 much smaller 4096 chars, since its own output is always sliced to 200 chars regardless.
+
+(F11, W-triage) The pre-scrub truncation above shares the same 256 KB limit as the
+record-size drop, so a field that actually gets truncated still leaves the record over
+the drop cap — an oversize record is genuinely **dropped**, never truncated down to fit.
+Only the inbox/Loki record and its first-seen `fp:` entry are lost this way; the item's
+Analytics Engine point (e.g. `error.uncaught`/`error.handled`) is still written — dropping
+is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
 
 **Bounded storage (F2 fix, final review, B-C1/A-I1 — the resolve/drain/backlog paths
 must never scan committed history):**

@@ -162,9 +162,17 @@ test.describe("o11y local end-to-end (T11)", () => {
       throw new Error(`something is already answering on :${API_PORT} — kill it first (lsof -ti :${API_PORT} | xargs kill)`);
     }
 
+    // F1 (V-triage): this spec only ever checks ClickHouse rows for
+    // Tier-1 (Sandpack) traffic — it never opens a Tier-2 (Sandbox
+    // container) session, unlike telemetry-metrics.spec.ts. Without
+    // `--enable-containers=false`, `wrangler dev` still runs its
+    // "⎔ Preparing container image(s)…" step on every cold run, which alone
+    // can blow this hook's 180s budget and was the CI beforeAll-timeout
+    // flake's other half (the o11y-local job's own worker already passes
+    // this flag — see e2e-o11y-local.yml).
     apiServer = spawn(
       "node_modules/.bin/wrangler",
-      ["dev", "--port", String(API_PORT), "--inspector-port", String(API_INSPECTOR_PORT)],
+      ["dev", "--port", String(API_PORT), "--inspector-port", String(API_INSPECTOR_PORT), "--enable-containers=false"],
       { cwd: API_DIR, stdio: "pipe" },
     );
     let apiStderr = "";
