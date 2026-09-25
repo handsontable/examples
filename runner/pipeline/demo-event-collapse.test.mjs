@@ -173,6 +173,15 @@ test("reset counts the outgoing preview's last run and re-arms first-load counti
   assert.equal(emitted.length, 3);
 });
 
+test("reset alone (no edit in between) re-arms first-load counting for the next preview", () => {
+  const { emitted, collapse, relay } = harness();
+  relay("theme not found"); // example A's first load
+  relay("theme not found"); // A re-renders: same burst window, not counted again
+  collapse.reset(); // switch to example B
+  relay("theme not found"); // B's first load hits the same fault
+  assert.deepEqual(emitted, ["theme not found", "theme not found"]);
+});
+
 test("the ceiling bounds a demo posting ever-different payloads with no edit", () => {
   const { emitted, relay } = harness();
   for (let i = 0; i < DEMO_COLLAPSE_CEILING + 30; i++) relay(`crafted ${"x".repeat(i)}`);

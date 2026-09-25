@@ -94,8 +94,11 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
   let timer: unknown = null;
   let used = 0;
 
+  // No `counted` check here: `report` does it for the direct path, and a held
+  // key cannot already be counted — `counted` is cleared when the burst opens
+  // and nothing is emitted until it closes.
   function emit(key: string, item: T): void {
-    if (used >= ceiling || counted.has(key)) return;
+    if (used >= ceiling) return;
     counted.add(key);
     used += 1;
     opts.emit(item);
