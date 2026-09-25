@@ -24,6 +24,21 @@ export interface PreHashRecord {
    *  clamp/fallback) — `""` when the source carried none at all, which is
    *  itself a stable, redelivery-identical value. */
   rawEventTime: string;
+  /** QA follow-up ("Faro dedupe hash inputs"): additional content that
+   *  distinguishes two otherwise-identical records but is not itself part of
+   *  `body`/`attributes` — e.g. `normalise/faro.ts` uses this for the raw
+   *  Faro `payload.type` (a measurement's own metric name, which
+   *  `faroBody()`'s measurement case never puts in `body`, only `values`),
+   *  the AE-only `hot.*` attributes (`browser-attrs.ts#readAeOnlyAttrs` —
+   *  never part of a stored record's `attributes`, since they are not on
+   *  `attrs.ts#ALLOWED_ATTRIBUTE_KEYS`), and the Faro session id
+   *  (`meta.session.id`, a batch-level field `faroItemToRecord` never reads
+   *  at all). Left `undefined` (not merely an empty object — see
+   *  {@link hashRecord}'s own doc comment) by every OTHER caller of
+   *  `hashRecord`, so their hash output is unchanged — W1's timestamp work
+   *  and F5's in-batch dedupe both depend on hashing staying stable for an
+   *  identical redelivery. */
+  extra?: Record<string, string>;
 }
 
 /** Deterministic JSON: object keys sorted recursively, so two structurally

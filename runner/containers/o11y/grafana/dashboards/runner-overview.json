@@ -297,7 +297,7 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Error rate (uncaught + handled)",
+      "title": "Error report rate (uncaught + handled)",
       "description": "error.uncaught and error.handled counts.",
       "gridPos": {
         "h": 8,

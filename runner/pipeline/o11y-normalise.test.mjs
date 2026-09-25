@@ -209,6 +209,71 @@ test("Faro measurement: a redelivered identical batch hashes identically (dedupe
   );
 });
 
+// ---- QA follow-up ("Faro dedupe hash inputs") ------------------------------
+//
+// The dedupe hash left out the metric/measurement name, the AE-only
+// attributes and the Faro session id, so two genuinely different records
+// arriving in the same millisecond could hash identically and lose one to
+// dedupe. F18 made measurements AE-only (above), but they are still hashed
+// for dedupe — this is exactly the shape that used to collide.
+
+test('QA follow-up (Faro dedupe hash inputs): two DIFFERENT measurement types with identical values hash differently (faroBody()\'s measurement case stringifies only `values`, never `type`)', async () => {
+  const bodyA = faroFixture("measurement.json");
+  const bodyB = faroFixture("measurement.json");
+  bodyB.measurements[0].type = "compiler.build_ms"; // same values/context/timestamp as bodyA, a different metric name
+  const receivedAtMs = Date.now();
+  const [a] = await processFaroBody(bodyA, ENV, SERVICE, receivedAtMs);
+  const [b] = await processFaroBody(bodyB, ENV, SERVICE, receivedAtMs);
+  assert.notEqual(
+    a.ingestItem.hash,
+    b.ingestItem.hash,
+    "two different measurement types must not collapse into one dedupe hash just because the stored body never carries `type`",
+  );
+});
+
+test("QA follow-up (Faro dedupe hash inputs): two measurements differing only in an AE-only attribute (hot.bucket) hash differently", async () => {
+  const bodyA = faroFixture("measurement.json");
+  const bodyB = faroFixture("measurement.json");
+  assert.equal(bodyB.measurements[0].context["hot.bucket"], "18.1", "fixture sanity: hot.bucket is set");
+  bodyB.measurements[0].context["hot.bucket"] = "17.2";
+  const receivedAtMs = Date.now();
+  const [a] = await processFaroBody(bodyA, ENV, SERVICE, receivedAtMs);
+  const [b] = await processFaroBody(bodyB, ENV, SERVICE, receivedAtMs);
+  assert.notEqual(
+    a.ingestItem.hash,
+    b.ingestItem.hash,
+    "an AE-only hot.* attribute (never hoisted into a stored record's attributes, browser-attrs.ts) must still distinguish two records for dedupe",
+  );
+});
+
+test("QA follow-up (Faro dedupe hash inputs): two logs differing only in Faro's own session id (meta.session.id) hash differently", async () => {
+  const bodyA = faroFixture("log.json");
+  const bodyB = faroFixture("log.json");
+  bodyA.meta.session = { id: "session-aaaa" };
+  bodyB.meta.session = { id: "session-bbbb" };
+  const receivedAtMs = Date.now();
+  const [a] = await processFaroBody(bodyA, ENV, SERVICE, receivedAtMs);
+  const [b] = await processFaroBody(bodyB, ENV, SERVICE, receivedAtMs);
+  assert.notEqual(
+    a.ingestItem.hash,
+    b.ingestItem.hash,
+    "Faro's own meta.session.id (a batch-level field faroItemToRecord never reads) must still distinguish two records for dedupe",
+  );
+});
+
+test("QA follow-up (Faro dedupe hash inputs): a redelivery with the session id set still hashes identically at a different arrival time (dedupe stays intact)", async () => {
+  const body = faroFixture("measurement.json");
+  body.meta.session = { id: "session-stable" };
+  const receivedAtMs = Date.now();
+  const [first] = await processFaroBody(body, ENV, SERVICE, receivedAtMs);
+  const [second] = await processFaroBody(body, ENV, SERVICE, receivedAtMs + 5000);
+  assert.equal(
+    first.ingestItem.hash,
+    second.ingestItem.hash,
+    "adding the session id to the hash must not break dedupe for an identical redelivery",
+  );
+});
+
 // R3 F18 (advisor review, this fix round): a crafted `hot.outcome`/`reason`
 // that makes `toAePoint` throw inside `processMeasurement` (T00-D10's own
 // isolated try/catch) must surface as `invalid`, never fall through and

@@ -295,6 +295,44 @@ function exceptionFingerprintMessage(payload: { type?: string; value?: string })
   return payload.type ? `${payload.type}: ${value}` : value;
 }
 
+/** QA follow-up ("Faro dedupe hash inputs"): inputs that can change what
+ *  this item produces (an AE point, an alert) but never make it into
+ *  `hashRecord`'s ordinary `body`/`attributes` fields — see
+ *  `hash.ts#PreHashRecord.extra`'s own doc comment for why each one is
+ *  missing there.
+ *
+ *  - `type`: the raw Faro payload `type` (e.g. a measurement's own metric
+ *    name, `"web-vitals"` vs. a browser `MetricName` — `faroBody()`'s
+ *    measurement case stringifies only `values`, never `type`, so two
+ *    DIFFERENT measurements with the same `values` in the same millisecond
+ *    hashed identically before this).
+ *  - `aeOnly`: the `hot.*` AE-only attributes (`hot.reason`, `hot.bucket`,
+ *    …) — read from the item's raw context but never hoisted into a stored
+ *    record's `attributes` (`browser-attrs.ts`'s own doc comment), so two
+ *    items differing only in one of these collapsed to the same hash.
+ *  - `sessionId`: Faro's `meta.session.id` (§6/§3: "the facade sets
+ *    `session.id` = the page-load id on every item") — set as a Faro META
+ *    field (`faro.metas.add`), never copied into an item's own
+ *    `context`/`attributes`, so `faroItemToRecord` never sees it and it
+ *    never reached the hash at all. Read from the RAW `meta` parameter
+ *    (before `ScrubbableFaroItem`'s narrower, untyped-for-`session` shape),
+ *    since that is the one place this value actually exists on the wire. */
+function hashExtra(
+  payload: Record<string, unknown>,
+  aeOnly: ReturnType<typeof readAeOnlyAttrs>,
+  meta: unknown,
+): Record<string, string> {
+  const extra: Record<string, string> = {};
+  const type = payload["type"];
+  if (typeof type === "string" && type.length > 0) extra["type"] = type;
+  for (const [key, value] of Object.entries(aeOnly)) {
+    if (typeof value === "string" && value.length > 0) extra[`ae.${key}`] = value;
+  }
+  const sessionId = (meta as { session?: { id?: unknown } } | null | undefined)?.session?.id;
+  if (typeof sessionId === "string" && sessionId.length > 0) extra["session.id"] = sessionId;
+  return extra;
+}
+
 function processException(
   fallbackMessage: string,
   resourceAttributes: Record<string, string>,
@@ -535,6 +573,7 @@ async function processOneItem(
       resourceAttributes: record.resourceAttributes,
       attributes: record.attributes ?? {},
       rawEventTime: scrubbed.payload.timestamp ?? "",
+      extra: hashExtra(payload, aeOnly, meta),
     });
     return { aePoints, ingestItem: { hash } };
   }
@@ -553,6 +592,7 @@ async function processOneItem(
     resourceAttributes: record.resourceAttributes,
     attributes: record.attributes ?? {},
     rawEventTime: scrubbed.payload.timestamp ?? "",
+    extra: hashExtra(payload, aeOnly, meta),
   });
   return { aePoints, ingestItem: { hash, record, fingerprint: itemFingerprint } };
 }

@@ -25,6 +25,12 @@ import {
   type RuleResult,
 } from "./rules.js";
 
+/** QA follow-up ("alert-eval-error names the failing rule"): `InboxWriter.alertMeta` key for the LAST failing
+ *  detail `alertEvalErrorRule` saw while firing — see the write site's own
+ *  doc comment below for why this exists on top of the Slack "firing" line,
+ *  which already names the failing rule id(s) in `result.detail`. */
+export const ALERT_EVAL_ERROR_DETAIL_KEY = "alertEvalErrorDetail";
+
 function commonAttrs(env: Env): CommonResourceAttrs {
   return {
     service_name: "demos-o11y",
@@ -176,6 +182,30 @@ export async function runAlerts(env: Env, _ctx?: ExecutionContext): Promise<RunA
   // cron log line should surface loudly, not swallow a second time.
   const evalErrorResult = alertEvalErrorRule(errors);
   results.push(evalErrorResult);
+  // QA follow-up ("alert-eval-error names the failing rule"): persisted independent of Slack, whose poster is a
+  // silent no-op with no `SLACK_WEBHOOK_URL` (exactly the local-dev shape
+  // that made a real "alert-eval-error firing" tick during the F13 recovery
+  // untraceable — fire-once means the Slack line is the ONLY place
+  // `result.detail`'s failing rule id(s) ever go, and a post nobody
+  // received left nothing else naming them). Written on every tick this
+  // rule is FIRING, not only a transition tick, so it keeps reflecting the
+  // most recent failing set if which rule fails changes mid-incident, and
+  // it is never cleared on resolve — a later read still shows what was last
+  // wrong, the same way `getAlertMeta`/`setAlertMeta` already persist the
+  // new-fingerprint rate-cap window (`notify.ts#notifyFingerprintEvent`)
+  // across ticks.
+  if (evalErrorResult.firing) {
+    try {
+      await writer.setAlertMeta(
+        ALERT_EVAL_ERROR_DETAIL_KEY,
+        JSON.stringify({ detail: evalErrorResult.detail, failingRules: Object.keys(errors), updatedAtMs: nowMs }),
+      );
+    } catch (err) {
+      // Best-effort, like every other alertMeta write in this module — must
+      // never block the fire-once notification below.
+      console.error(JSON.stringify({ event: "o11y.alert.eval_error_detail_persist_failed", message: String(err) }));
+    }
+  }
   const evalErrorTransition = await evaluateAndNotify(evalErrorResult, {
     inboxWriter: writer,
     postSlack,

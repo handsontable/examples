@@ -107,11 +107,23 @@ async function handleLite(req: Request, env: Env, ctx: ExecutionContext): Promis
   scrubbed.body = scrubBodyText(scrubbed.body);
   withResourceAttrDefaults(scrubbed.resourceAttributes, env);
 
-  if (new TextEncoder().encode(JSON.stringify(scrubbed)).length > INBOX_RECORD_MAX_BYTES) {
+  // QA follow-up ("lite-beacon vitals"): the same `storeRecord = false`
+  // pattern F18 applied to a Faro measurement (`normalise/faro.ts`) — a lite
+  // web-vital beacon (`t !== "err"`) is AE-only, contract §6/§9's own ruling
+  // (measurements never need a stored Loki record; only an error report
+  // does). Errors are unaffected: `body.t === "err"` still stores its
+  // record, symbolication and all.
+  const storeRecord = body.t === "err";
+
+  if (
+    storeRecord &&
+    new TextEncoder().encode(JSON.stringify(scrubbed)).length > INBOX_RECORD_MAX_BYTES
+  ) {
     // Unreachable in practice — the whole request body is already capped at
     // `LITE_PAYLOAD_MAX_BYTES` (2 KB), far under `INBOX_RECORD_MAX_BYTES`
     // (256 KB) — kept for the same defence-in-depth reason the Faro and OTLP
-    // paths both carry this check (I2, T02's task Outcome).
+    // paths both carry this check (I2, T02's task Outcome). Skipped entirely
+    // for a vital: there is nothing to store for it regardless of size.
     recordOversizeDrop(env, ctx, "lite beacon record exceeds 256 KB");
     return respondIngested(env, ctx, "lite", { accepted: 0, duplicate: 0 }, bytes.byteLength);
   }
@@ -154,7 +166,14 @@ async function handleLite(req: Request, env: Env, ctx: ExecutionContext): Promis
     rawEventTime: String(body.ts),
   });
 
-  const item: IngestItem = { hash, record: scrubbed, fingerprint: itemFingerprint };
+  // A-I4 remainder's own pattern (`normalise/faro.ts`): a hash-only item with
+  // no `record` still gets a real dedupe transaction
+  // (`InboxWriter.ingest`/`appendRows` skip a `record`-less item entirely —
+  // nothing is ever stored for it), so a retried/redelivered vital beacon
+  // still cannot double-count its `web_vital` point.
+  const item: IngestItem = storeRecord
+    ? { hash, record: scrubbed, fingerprint: itemFingerprint }
+    : { hash, fingerprint: itemFingerprint };
   const result = await inboxWriter(env).ingest("browser", receivedAtMs, [item]);
   let accepted = 0;
   let duplicate = 0;

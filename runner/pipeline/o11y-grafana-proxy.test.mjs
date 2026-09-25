@@ -21,6 +21,7 @@ const { handleGrafana } = await import("../workers/o11y/src/grafana/proxy.ts");
 const { handleReopen } = await import("../workers/o11y/src/grafana/reopen.ts");
 const { wakingPageHtml } = await import("../workers/o11y/src/grafana/waking-page.ts");
 const { signSessionCookie, SESSION_COOKIE } = await import("../workers/o11y/src/gates/session.ts");
+const { GRAFANA_PROXY_MAX_BYTES } = await import("../workers/o11y/src/gates/limits.ts");
 
 function makeBoxStub(overrides = {}) {
   const calls = { wake: [], noteVisitorActivity: 0, fetch: [], containerFetchRpc: 0 };
@@ -333,6 +334,127 @@ test("Z1: a client that drops mid-upload gets a 400 from the Worker, and the box
 
   assert.equal(res.status, 400);
   assert.equal(box.calls.fetch.length, 0);
+});
+
+// ---- QA follow-up: a 10 MB cap on /grafana/* request bodies --------
+//
+// Grafana's dashboards are provisioned read-only, so no legitimate request
+// through this proxy is anywhere near this size (a panel query or a
+// dashboard save is small JSON). Two enforcement points, mirroring
+// `gates/limits.ts#contentLengthExceeds` + `normalise/read-body.ts`'s own
+// "Content-Length is only a hint" pattern: a cheap pre-check against the
+// header (this section's first test), and the real enforcement while
+// reading (the next two), which must catch it even when the header is
+// absent or lies small.
+
+test("item 1: a Content-Length above the cap is refused with 413 before the body is ever read", async () => {
+  const box = makeBoxStub({ ready: true });
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  // `ReadableStream.locked` is the precise signal here (rather than counting
+  // `pull()` calls): the Streams spec has an underlying source's `pull()`
+  // fire once on its own shortly after construction to pre-fill the default
+  // high-water mark, entirely independent of application code (confirmed
+  // directly against this Node version — a bare `new Request(..., {body})`
+  // with nobody ever calling `getReader()` still ticks `pull()` once on its
+  // own). `.locked` only flips to `true` once something actually calls
+  // `getReader()` on the stream, which is exactly what this route's own
+  // `readCappedArrayBuffer` does — so it is what actually distinguishes "the
+  // route read this" from "the runtime pre-filled its queue unprompted".
+  // Bounded (not infinite): a reverted route would fully drain this via
+  // `req.arrayBuffer()` before ever answering, and an infinite producer would
+  // hang that revert-check run forever instead of failing it promptly.
+  let served = 0;
+  const source = new ReadableStream({
+    pull(controller) {
+      if (served >= 15) {
+        controller.close();
+        return;
+      }
+      served++;
+      controller.enqueue(new Uint8Array(1_000_000));
+    },
+  });
+  const req = new Request("https://demos.handsontable.com/grafana/api/ds/query", {
+    method: "POST",
+    headers: {
+      "content-length": String(GRAFANA_PROXY_MAX_BYTES + 1),
+      "content-type": "application/json",
+      "sec-fetch-dest": "empty",
+    },
+    body: source,
+    duplex: "half",
+  });
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 413);
+  assert.equal(source.locked, false, "the body must never be read (no reader ever attached) once the Content-Length hint alone already exceeds the cap");
+  assert.deepEqual(box.calls.wake, [], "an oversized request must never wake the box");
+  assert.equal(box.calls.fetch.length, 0, "an oversized request must never reach the box");
+});
+
+test("item 1: a body that exceeds the cap with NO Content-Length is still refused with 413, without draining the whole stream", async () => {
+  const box = makeBoxStub({ ready: true });
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  // 20 x 1 MB (20 MB total) crosses the 10 MB cap after the 11th chunk. The
+  // stream's own automatic pre-fill/read-ahead (see the previous test's
+  // comment) can race a chunk or two beyond exactly 11, but nowhere near all
+  // 20 — proving the reader stops early without pinning an exact count that
+  // would make this test flaky against that read-ahead.
+  const TOTAL_CHUNKS = 20;
+  let pulls = 0;
+  let served = 0;
+  const source = new ReadableStream({
+    pull(controller) {
+      pulls++;
+      if (served >= TOTAL_CHUNKS) {
+        controller.close();
+        return;
+      }
+      served++;
+      controller.enqueue(new Uint8Array(1_000_000));
+    },
+  });
+  const req = new Request("https://demos.handsontable.com/grafana/api/ds/query", {
+    method: "POST",
+    headers: { "content-type": "application/json", "sec-fetch-dest": "empty" }, // no content-length at all
+    body: source,
+    duplex: "half",
+  });
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 413);
+  assert.ok(pulls < TOTAL_CHUNKS, `must stop well before draining all ${TOTAL_CHUNKS} chunks, got ${pulls} pulls`);
+  assert.equal(box.calls.fetch.length, 0, "an oversized body must never reach the box");
+});
+
+test("item 1: a small, LYING Content-Length does not let an oversize streamed body bypass the cap", async () => {
+  const box = makeBoxStub({ ready: true });
+  const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
+  const bigChunk = new Uint8Array(6_000_000);
+  const chunks = [bigChunk, bigChunk];
+  const source = new ReadableStream({
+    pull(controller) {
+      const next = chunks.shift();
+      if (next === undefined) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(next);
+    },
+  });
+  const req = new Request("https://demos.handsontable.com/grafana/api/ds/query", {
+    method: "POST",
+    headers: { "content-length": "10", "content-type": "application/json", "sec-fetch-dest": "empty" },
+    body: source,
+    duplex: "half",
+  });
+
+  const res = await handleGrafana(req, env, {});
+
+  assert.equal(res.status, 413);
+  assert.equal(box.calls.fetch.length, 0, "an oversized body must never reach the box, even behind a lying small Content-Length");
 });
 
 test("Z1: a client-supplied cf-container-target-port (the base Container.fetch()'s port selector) is stripped before reaching the box", async () => {
