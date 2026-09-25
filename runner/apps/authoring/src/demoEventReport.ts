@@ -1,9 +1,10 @@
 // What a relayed demo-runtime event becomes now that it leaves Sentry entirely
 // (ADR §E.1, "Moves to the new stack only": "...and demo-runtime preview
-// events"): a `preview.runtime_error` count through the facade, budgeted by
-// the SAME two `monitor.ts` caps the pre-T06 Sentry version used (DEV-2539) —
-// a loud kind still spends the tight relay budget, `console-warn` still spends
-// the looser one, so a demo re-rendering every keystroke cannot flood either.
+// events"): a `preview.runtime_error` count through the facade. The Sentry
+// side is budgeted by the SAME two `monitor.ts` caps the pre-T06 Sentry
+// version used (DEV-2539) — a loud kind still spends the tight relay budget,
+// `console-warn` still spends the looser one. The facade side is bounded by
+// the F26 edit-burst collapse instead (`demoEventCollapse.ts`).
 //
 // Split out of `sentry.ts` for the same reason as `tier1Report.ts` /
 // `tier2Report.ts` (see their headers): that module imports `@sentry/react`,
@@ -33,6 +34,25 @@ export type DemoMonitorKind = "error" | "rejection" | "console-error" | "console
 
 /** `preview.runtime_error`'s `reason` values (contract §5). */
 export type PreviewRuntimeErrorReason = "uncaught" | "console" | "network" | "stderr";
+
+/** F10 Loki: the `name` of the Faro exception record a collapsed report
+ *  becomes (its Loki line is `<name>: <shape>`). The first two match the
+ *  names `sentry.ts` gives the Sentry capture of the same kinds, so the two
+ *  sides read alike.
+ *
+ *  `console-warn` gets none: a warning is context, not a fault (DEV-2539 —
+ *  Sentry files it as a breadcrumb, never an issue), so it keeps its
+ *  `preview.runtime_error reason=console` count but opens no Loki "error"
+ *  line and no `error.handled` point. Handsontable's own "Theme … is already
+ *  registered" notice, emitted by normal re-renders, is the everyday case. */
+const RECORD_NAME_BY_KIND: Record<DemoMonitorKind, string | null> = {
+  error: "DemoError",
+  rejection: "DemoUnhandledRejection",
+  "console-error": "DemoConsoleError",
+  "console-warn": null,
+  network: "DemoNetworkError",
+  stderr: "DemoStderr",
+};
 
 const REASON_BY_KIND: Record<DemoMonitorKind, PreviewRuntimeErrorReason> = {
   error: "uncaught",
@@ -73,6 +93,12 @@ export interface DemoEventReport {
    *  function (T00 owns that normalisation, not this decision). */
   fingerprintMessage: string;
   reason: PreviewRuntimeErrorReason;
+  /** F10 Loki: the Faro exception record's `name` (see `RECORD_NAME_BY_KIND`),
+   *  or `null` for no record at all (`console-warn`). Its message is the §7
+   *  fingerprint shape of the relayed message, never the raw message —
+   *  computed by the caller (`fingerprintShape`), for the import-free reason
+   *  in this file's header. */
+  recordName: string | null;
   attrs: {
     surface: "demo-runtime";
     tier: "1" | "2";
@@ -95,6 +121,7 @@ export function demoEventReport(facts: DemoEventFacts): DemoEventReport {
     fingerprintContext: "demo-runtime",
     fingerprintMessage: facts.message,
     reason: REASON_BY_KIND[facts.kind],
+    recordName: RECORD_NAME_BY_KIND[facts.kind],
     attrs: {
       surface: "demo-runtime",
       tier: facts.tier === 2 ? "2" : "1",

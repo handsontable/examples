@@ -406,7 +406,7 @@
       "id": 5,
       "type": "logs",
       "title": "Recent demo-runtime errors",
-      "description": "Loki browser tenant, hot_surface=demo-runtime — same query as the Tier-1 playground dashboard's own panel.",
+      "description": "Loki browser tenant, hot_surface=demo-runtime exceptions: one line per collapsed preview error (F26/F10: one per fingerprint per edit burst, text = the §7 fingerprint shape, never the raw message) plus the Tier-1 compile branch's constant-titled report. Same query as the Tier-1 playground dashboard's own panel.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -424,7 +424,7 @@
             "type": "loki",
             "uid": "loki-browser"
           },
-          "expr": "{hot_surface=\"demo-runtime\"}",
+          "expr": "{hot_surface=\"demo-runtime\"} | hot_kind=\"exception\"",
           "queryType": "range"
         }
       ],

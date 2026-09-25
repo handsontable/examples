@@ -64,8 +64,22 @@ export function stripCodeFrame(message: string): string {
  * or a metric name, kept short and already a controlled value, unlike `message`.
  */
 export function fingerprint(context: string, message: string): string {
-  const normalised = normalizeMonitorMessage(stripCodeFrame(message));
-  return `${context}:${fnv1a64Hex(normalised)}`;
+  return `${context}:${fnv1a64Hex(fingerprintShape(message))}`;
+}
+
+/**
+ * The normalised text `fingerprint()` hashes: code frame stripped, then
+ * `normalizeMonitorMessage` (quoted strings, numbers, URLs, timestamps and
+ * keystroke-ladder identifiers replaced; whitespace collapsed; ≤200 chars).
+ *
+ * F10 Loki: also the only message text a demo-runtime Faro record carries
+ * (contract §3, §6) — the shape of the fault, not the relayed message itself.
+ * Idempotent in practice (`fingerprint(c, fingerprintShape(m)) ===
+ * fingerprint(c, m)`, pinned by `pipeline/demo-event-collapse.test.mjs`), so
+ * the record's own fingerprint agrees with the metric point's.
+ */
+export function fingerprintShape(message: string): string {
+  return normalizeMonitorMessage(stripCodeFrame(message));
 }
 
 /**
