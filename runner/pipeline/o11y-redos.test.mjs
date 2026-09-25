@@ -55,48 +55,83 @@ async function assertUnderBudget(label, budgetMs, fn) {
   return result;
 }
 
-// ---- Individual pattern budgets (well under 100ms, per the task's own bar) -----
+// ---- Individual pattern budgets (a shared budget, comfortably under both bars) -
 
-// Sized at 100k, not 200k: on the pre-fix quadratic pattern this still
-// costs several seconds (measured on the unfixed code: ~5.9s / ~10s
-// respectively, both far over budget), while giving the fixed, linear
-// pattern more headroom under the 100ms budget in a loaded CI run (a
-// parallel `pnpm test` worker pool, slower hardware).
-test("redactEmailInText: 100k 'a' characters with no '@' completes well under 100ms", async () => {
-  const input = "a".repeat(100_000);
-  await assertUnderBudget("redactEmailInText", 100, () => redactEmailInText(input));
+// `INDIVIDUAL_PATTERN_BUDGET_MS` replaces a hard-coded 100ms that was too
+// tight for `pnpm test`'s full worker pool on a loaded machine: on a real
+// run at load average 50, four of these tests missed their 100ms budget on
+// the FIXED (linear) code alone — redactEmailInText 297ms/268ms,
+// redactUserAgentInText 502ms, redactPreviewHosts 148ms — with no code
+// regression; the same file run alone passed 10/10. 3000ms was chosen to
+// sit far above both:
+//  - at least 5x the worst fixed-code time observed under that load
+//    (~500ms), so ordinary scheduler contention can't trip it; and
+//  - at least 3x (in practice ~4-5x, measured below) under every pre-fix
+//    (quadratic) pattern's time on its own adversarial input, so a
+//    reintroduced unbounded quantifier still fails loudly.
+// Each test's own comment gives the pre-fix timing this was checked
+// against (measured directly against the pre-fix regex from before commit
+// 1e376b4c7, not through this test file — see the task report for the
+// revert-evidence runs of this file itself).
+const INDIVIDUAL_PATTERN_BUDGET_MS = 3000;
+
+// Sized at 150k, not 100k: at 100k the pre-fix EMAIL_PATTERN only cost
+// ~6-10s on this machine — too close to 3x the shared budget once other
+// `pnpm test` workers are also loading the CPU. At 150k it measured a
+// steady ~14.2-14.9s pre-fix (still <30ms fixed), comfortably ~5x the
+// budget.
+test(`redactEmailInText: 150k 'a' characters with no '@' completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+  const input = "a".repeat(150_000);
+  await assertUnderBudget("redactEmailInText", INDIVIDUAL_PATTERN_BUDGET_MS, () => redactEmailInText(input));
 });
 
-test("redactEmailInText: 100k 'a.'-repeats (no '@') completes well under 100ms", async () => {
-  const input = "a.".repeat(50_000);
-  await assertUnderBudget("redactEmailInText (a.-repeats)", 100, () => redactEmailInText(input));
+// 65k reps (130k chars): pre-fix measured ~13.9-14.5s, fixed <30ms.
+test(`redactEmailInText: 65k 'a.'-repeats (no '@') completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+  const input = "a.".repeat(65_000);
+  await assertUnderBudget("redactEmailInText (a.-repeats)", INDIVIDUAL_PATTERN_BUDGET_MS, () => redactEmailInText(input));
 });
 
-test("redactUserAgentInText: 'Mozilla/1 (' repeated with no closing paren completes well under 100ms", async () => {
-  const input = "Mozilla/1 (".repeat(20_000);
-  await assertUnderBudget("redactUserAgentInText", 100, () => redactUserAgentInText(input));
+// 50k reps: pre-fix measured a steady ~12.5-12.6s (20k reps, the previous
+// size, only cost ~1.9-4.8s pre-fix — too close to, and on one trial under,
+// 3x the shared budget); fixed code measured <60ms.
+test(`redactUserAgentInText: 'Mozilla/1 (' repeated with no closing paren completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+  const input = "Mozilla/1 (".repeat(50_000);
+  await assertUnderBudget("redactUserAgentInText", INDIVIDUAL_PATTERN_BUDGET_MS, () => redactUserAgentInText(input));
 });
 
-test("redactPreviewHosts: 100k 'a-'-repeats with no '.demos.handsontable.com' suffix completes well under 100ms", async () => {
-  const input = "a-".repeat(50_000);
-  await assertUnderBudget("redactPreviewHosts", 100, () => redactPreviewHosts(input));
+// 65k reps (130k chars): pre-fix measured ~13.7-14.0s, fixed <30ms.
+test(`redactPreviewHosts: 65k 'a-'-repeats with no '.demos.handsontable.com' suffix completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+  const input = "a-".repeat(65_000);
+  await assertUnderBudget("redactPreviewHosts", INDIVIDUAL_PATTERN_BUDGET_MS, () => redactPreviewHosts(input));
 });
 
-test("normalizeMonitorMessage: 200k identifier-shaped characters with no ' is not defined' suffix completes well under 100ms", async () => {
+// Unchanged at 200k: `normalizeMonitorMessage` bounds its own input to 4096
+// chars before any regex pass runs (NORMALIZE_MESSAGE_INPUT_MAX), so the
+// fixed code's cost here is a few ms regardless of the shared budget. The
+// pre-fix function (no such bound) measured ~52s on this exact 200k input —
+// nowhere near 3x the budget being a concern.
+test(`normalizeMonitorMessage: 200k identifier-shaped characters with no ' is not defined' suffix completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
   const input = "a".repeat(200_000);
-  await assertUnderBudget("normalizeMonitorMessage", 100, () => normalizeMonitorMessage(input));
+  await assertUnderBudget("normalizeMonitorMessage", INDIVIDUAL_PATTERN_BUDGET_MS, () => normalizeMonitorMessage(input));
 });
 
-test("fingerprint (the real monitor.ts shape, via normalizeMonitorMessage + stripCodeFrame): 200k chars completes well under 100ms", async () => {
+// Unchanged at 200k, same reasoning as above (fingerprint calls
+// normalizeMonitorMessage): pre-fix measured ~50.5s on this input.
+test(`fingerprint (the real monitor.ts shape, via normalizeMonitorMessage + stripCodeFrame): 200k chars completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
   const input = "a".repeat(200_000);
-  await assertUnderBudget("fingerprint", 100, () => fingerprint("demo-runtime", input));
+  await assertUnderBudget("fingerprint", INDIVIDUAL_PATTERN_BUDGET_MS, () => fingerprint("demo-runtime", input));
 });
 
 // ---- The combined server-side pass (text-scrub.ts's own extra scrub) -----------
 
-test("scrubBodyText: 100k 'a' characters (email + UA + URL passes chained) completes well under 100ms", async () => {
-  const input = "a".repeat(100_000);
-  await assertUnderBudget("scrubBodyText", 100, () => scrubBodyText(input));
+// Sized at 150k to match redactEmailInText's own bump above: scrubBodyText's
+// dominant cost on this all-'a' input is its chained (pre-fix) email pass,
+// which measured ~12.8s at 150k, well over 3x the shared budget; the fixed
+// chain (truncate + URL-strip + UA + email passes) measured comfortably
+// under budget.
+test(`scrubBodyText: 150k 'a' characters (email + UA + URL passes chained) completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+  const input = "a".repeat(150_000);
+  await assertUnderBudget("scrubBodyText", INDIVIDUAL_PATTERN_BUDGET_MS, () => scrubBodyText(input));
 });
 
 // ---- The full normalise pipeline, the shape Z-A-C1 actually measured -----------
