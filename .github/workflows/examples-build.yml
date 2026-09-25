@@ -125,10 +125,12 @@ jobs:
       # checkout, so an install under RUNNER_TEMP can miss it with no error and no
       # signal. 16 cold installs is the cheaper trade. If this is ever added as an
       # optimization, prove the hit by comparing two consecutive runs — a silent
-      # miss reads exactly like a hit.
+      # miss reads exactly like a hit. setup-node v5 would otherwise turn that
+      # cache on by itself from the root package.json `packageManager` field.
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          package-manager-cache: false
 
       - name: Extract the starter outside the repo tree
         run: |
@@ -229,6 +231,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          # Same RUNNER_TEMP extraction as the `build` lane — no cache.
+          package-manager-cache: false
 
       - name: Extract the starter outside the repo tree
         run: |

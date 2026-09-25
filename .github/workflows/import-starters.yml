@@ -110,6 +110,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          # setup-node v5 auto-enables pnpm caching from the root package.json
+          # `packageManager` field; pnpm only exists after `corepack enable` below.
+          package-manager-cache: false
 
       - name: Enable corepack (pnpm lockfile resolution)
         run: corepack enable
@@ -200,6 +203,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          # setup-node v5 auto-enables pnpm caching from the root package.json
+          # `packageManager` field; pnpm only exists after `corepack enable` below.
+          package-manager-cache: false
 
       - name: Enable corepack (container context locks)
         run: corepack enable
