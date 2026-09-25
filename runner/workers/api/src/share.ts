@@ -229,6 +229,13 @@ function base64ToBytes(b64: string): Uint8Array {
 /** Artifact contents: text for source/markup, raw bytes for binary assets. */
 export type ArtifactContents = string | Uint8Array;
 
+/** Byte length of one artifact's contents — `TextEncoder`, the same primitive this
+ *  file already uses for a byte count elsewhere (the lite-beacon egress record,
+ *  below), rather than `Buffer`, which is not a global in a real Workers isolate. */
+function contentsByteLength(contents: ArtifactContents): number {
+  return typeof contents === "string" ? new TextEncoder().encode(contents).length : contents.byteLength;
+}
+
 /**
  * Turbopack's browser runtime registers each chunk by stripping a compiled
  * "/_next/" prefix from the script's `src` attribute; unmatched srcs keep the
@@ -458,16 +465,23 @@ export async function createPendingDemo(env: Env, args: CreateArgs): Promise<{ i
  * something to hide (and this matches the shape `snapshot-jobs.ts` already used
  * before this point moved here, which counted the DO's cache-hit finalizes the same
  * way).
+ *
+ * `fn` is handed an `addBytes` accumulator so both callers (a fresh build's own
+ * outputs, or a `build_cache` hit's copied R2 objects) can report the built
+ * artifact's total size into the point's `bytes` field (§5) as they write each
+ * object — the only place either caller has that number in hand. Omitted (stays 0)
+ * on a `failed` outcome: a build that never finished writing has no total to report.
  */
 async function withSnapshotBuildPoint<T>(
   env: Env,
   framework: string,
   reason: "inline" | "detached",
-  fn: () => Promise<T>,
+  fn: (addBytes: (n: number) => void) => Promise<T>,
 ): Promise<T> {
   const startedAt = Date.now();
+  let bytes = 0;
   try {
-    const result = await fn();
+    const result = await fn((n) => { bytes += n; });
     // `await`, not `ctx.waitUntil`/`void`: neither `createDemo`/`updateDemo` nor
     // their callers thread an `ExecutionContext` down to here, and `emitPoint`'s
     // own doc says a local ClickHouse-shim write only survives past the response
@@ -477,7 +491,7 @@ async function withSnapshotBuildPoint<T>(
     await emitPoint(
       env,
       "snapshot.build",
-      { count: 1, duration_ms: Date.now() - startedAt },
+      { count: 1, duration_ms: Date.now() - startedAt, bytes },
       { framework, outcome: "ok", reason },
     );
     return result;
@@ -501,7 +515,7 @@ export async function createDemo(
   args: CreateArgs,
   buildReason: "inline" | "detached" = "inline",
 ): Promise<{ id: string }> {
-  return withSnapshotBuildPoint(env, args.entry.framework, buildReason, async () => {
+  return withSnapshotBuildPoint(env, args.entry.framework, buildReason, async (addBytes) => {
     const hash = await filesHash(args.files);
     const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
 
@@ -518,7 +532,13 @@ export async function createDemo(
       const listed = await env.ARTIFACTS.list({ prefix: src });
       for (const obj of listed.objects) {
         const body = await env.ARTIFACTS.get(obj.key);
-        if (body) await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
+        if (body) {
+          await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
+          // `body.size` is the copied object's real byte length (an R2Object's own
+          // field), not the source string/stream's — the cheapest correct number
+          // for a copy, and the only one either branch here has in hand.
+          addBytes(body.size);
+        }
       }
     } else {
       const built = await runBuild(env, args.entry, args.files);
@@ -526,6 +546,7 @@ export async function createDemo(
         await env.ARTIFACTS.put(r2Prefix + rel, contents, {
           httpMetadata: { contentType: contentTypeFor(rel) },
         });
+        addBytes(contentsByteLength(contents));
       }
       await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
         .bind(buildKey, r2Prefix, args.now).run();
@@ -581,7 +602,7 @@ export async function updateDemo(
   args: UpdateArgs,
   buildReason: "inline" | "detached" = "inline",
 ): Promise<void> {
-  return withSnapshotBuildPoint(env, args.entry.framework, buildReason, async () => {
+  return withSnapshotBuildPoint(env, args.entry.framework, buildReason, async (addBytes) => {
     const hash = await filesHash(args.files);
     const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
     const r2Prefix = `demos/${args.id}/`;
@@ -594,7 +615,10 @@ export async function updateDemo(
       const listed = await env.ARTIFACTS.list({ prefix: src });
       for (const obj of listed.objects) {
         const body = await env.ARTIFACTS.get(obj.key);
-        if (body) await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
+        if (body) {
+          await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
+          addBytes(body.size);
+        }
       }
     } else if (!cached) {
       const built = await runBuild(env, args.entry, args.files);
@@ -602,11 +626,13 @@ export async function updateDemo(
         await env.ARTIFACTS.put(r2Prefix + rel, contents, {
           httpMetadata: { contentType: contentTypeFor(rel) },
         });
+        addBytes(contentsByteLength(contents));
       }
       await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
         .bind(buildKey, r2Prefix, args.now).run();
     }
-    // (cached && cached.r2_prefix === r2Prefix): identical code already built here.
+    // (cached && cached.r2_prefix === r2Prefix): identical code already built here —
+    // nothing is written, so nothing to add; `bytes` reports 0 for this outcome.
 
     await env.ARTIFACTS.put(
       `${r2Prefix}__source.json`,
