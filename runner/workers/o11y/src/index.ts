@@ -149,18 +149,29 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
       // identical items in one batch the later copy's "duplicate"
       // overwrote the first copy's "accepted", so the stored copy's AE
       // points were dropped too.
-      // NB3 (re-review 2): only count hashes that carry a STORED `record`
-      // toward this route's own `o11y.ingest accepted`/`duplicate`
-      // self-metric. An `example.*` event's hash-only `ingestItem` (no
-      // `record`, above) is real for InboxWriter's dedupe bookkeeping and
-      // ADR-0042's counts, but it never produces a `row:` — counting it
-      // here too would skew the ingest-volume panels upward by however
-      // much `example.*` traffic this batch carried, panels that exist to
-      // track stored-record volume.
+      // F28 fix (Round 6, supersedes the old NB3 gate this comment used to
+      // describe): every hash `InboxWriter.ingest` reports as
+      // "accepted"/"duplicate" counts toward this route's own
+      // `o11y.ingest` self-metric, whether or not it carries a stored
+      // `record`. `respond.ts#respondIngested`'s own contract is "a batch
+      // with N accepted … records writes one `accepted` point (count=N)" —
+      // an AE-only item (an `example.*` event, A-I4 remainder; a Faro
+      // measurement, R3 F18) is still a record the pipeline accepted, and
+      // contract §5's `o11y.ingest` row names no narrower definition. The
+      // old gate here (`if (p.ingestItem!.record !== undefined) …`) instead
+      // treated this self-metric as "stored-record volume": harmless while
+      // only `example.*` events were AE-only, but once F18 made
+      // measurements the same shape — ~99% of this route's real traffic
+      // (R3-triage F18) — it starved the Observability-self "o11y.ingest
+      // rate by outcome" panel almost entirely: a real run showed 1,946
+      // `collect` 204s and 4,031 AE points written, but only 6 `accepted`
+      // self-metric points (F28). AE points themselves were never affected
+      // by that gate — they are written for every "accepted" outcome
+      // regardless of `record`, unchanged below.
       withItem.forEach((p, idx) => {
         const outcome = result.results[idx]?.outcome;
         if (outcome === undefined) return;
-        if (p.ingestItem!.record !== undefined) outcome === "duplicate" ? duplicate++ : accepted++;
+        outcome === "duplicate" ? duplicate++ : accepted++;
         if (outcome === "accepted") {
           for (const point of p.aePoints) writePoint(env, ctx, point);
         }

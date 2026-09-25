@@ -224,6 +224,15 @@ interactive prompt), and it prints exactly what it deleted.
 (`node scripts/o11y-replay-fixtures.mjs --base http://localhost:<O11Y_DEV_PORT>`).
 Pass `--replay` to run it automatically instead of just printing it.
 
+**Local rate limit is shared across browsers.** `checkRateLimit`'s key is
+`cf-connecting-ip ?? "unknown"` (`gates/browser.ts`) — every local browser
+resolves the same fallback, so `/telemetry/collect`/`/telemetry/lite` share
+one 100-per-60s bucket across the whole machine. Several parallel test
+browsers (or tabs) can burst past it and get `429`s, and a beacon dropped at
+the gate never reaches Loki — expect gaps, not a bug, when running
+multi-browser local traffic. Production has a real per-visitor
+`cf-connecting-ip`, so this is local-only (F29).
+
 **Local Slack alerts.** `dev:full` starts
 `node scripts/o11y-slack-capture.mjs --port <O11Y_SLACK_CAPTURE_PORT>` — a
 tiny local HTTP server (no real Slack workspace involved) that prints and

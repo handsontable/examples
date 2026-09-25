@@ -31,6 +31,21 @@ register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 const { default: worker } = await import("../workers/o11y/src/index.ts");
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
 const { makeEnv, ctx } = await import("./fixtures/o11y-harness.mjs");
+// Dynamic, not a static top-level import: `@handsontable/demo-runtime` only
+// resolves through `o11y-worker-hooks.mjs`'s own `resolve()` hook (registered
+// above via `register()`), and static imports are hoisted ahead of that
+// call — the same reason every other borrowed-specifier import in this repo's
+// `pipeline/*.test.mjs` files is `await import(...)` placed after `register()`,
+// never a plain `import … from`.
+const { AE_COLUMNS } = await import("@handsontable/demo-runtime/telemetry");
+
+/** Reads a numeric metric field (`count`, etc.) out of a fake AE point via
+ *  the real contract slot (`AE_COLUMNS.count`, e.g. `"double1"`) — the same
+ *  helper `o11y-routes.test.mjs` uses, never a hardcoded array index. */
+function metricValue(point, name) {
+  const m = /^double(\d+)$/.exec(AE_COLUMNS[name]);
+  return point.doubles[Number(m[1]) - 1];
+}
 
 // ---- the reporter, built for a representative config --------------------------
 
@@ -593,6 +608,26 @@ test("POST /telemetry/lite: an accepted web_vital beacon writes a web_vital AE p
   assert.equal(point.blobs[8], "LCP"); // reason, blob9
   assert.equal(point.blobs[11], "abc12345"); // demo_id, blob12
   assert.equal(point.doubles[2], 2500); // value, double3
+});
+
+// F28 (`/telemetry/collect`'s own fix, Round 6): the equivalent accounting
+// gap never actually existed on this route — `handleLite`'s accepted/
+// duplicate counters (below) were always unconditional, with no gate on
+// whether the item carried a stored `record`, unlike `handleCollect`'s old
+// NB3 gate. This pins that explicitly now that it matters for the
+// Observability-self dashboard: a first-time, AE-only web-vital beacon
+// (F18) must still count as "accepted", not just its own web_vital point.
+test("POST /telemetry/lite: a first-time web_vital beacon (AE-only, F18) still writes an o11y.ingest accepted point (F28)", async () => {
+  const { env, ae } = freshEnv();
+  const res = await worker.fetch(liteRequest(liteVitalPayload()), env, ctx);
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300);
+
+  const ingestAccepted = ae.points.find(
+    (p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("lite") && p.blobs?.includes("accepted"),
+  );
+  assert.ok(ingestAccepted, "an o11y.ingest accepted point must be written for a first-time AE-only vital beacon");
+  assert.equal(metricValue(ingestAccepted, "count"), 1);
 });
 
 // ---- QA follow-up ("lite-beacon vitals") -----------------------------------
