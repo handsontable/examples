@@ -12,25 +12,40 @@
 // Sentry fixtures get their own gates. `--base` defaults to
 // `http://localhost:4300` (this task's port block, COMMON.md).
 //
+// F21 (fix round R4): `O11Y_EXPORT_SECRET`/`SENTRY_HOOK_SECRET` are read from
+// the environment FIRST (covers `dev.mjs --replay`, which runs this as a
+// child process and so inherits its own env), falling back to
+// `workers/o11y/.dev.vars` (covers this file's own documented standalone
+// invocation above, run from a separate shell with no `dev.mjs` process to
+// inherit from) — `dev.mjs`/`fillEmptyDevVarsSecrets` now keep both keys
+// filled with a local-only ephemeral value in that file, so this fallback
+// reads the exact value the running `wrangler dev` worker itself loaded.
+//
 // Exits non-zero if any fixture does not answer 2xx.
 
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
+import { resolveReplaySecret } from "./dev-lib.mjs";
 
 const args = process.argv.slice(2);
 const baseIndex = args.indexOf("--base");
 const base = baseIndex !== -1 ? args[baseIndex + 1] : "http://localhost:4300";
 
 const ROOT = fileURLToPath(new URL("../pipeline/fixtures/", import.meta.url));
-const EXPORT_SECRET = process.env.O11Y_EXPORT_SECRET ?? "";
-const SENTRY_SECRET = process.env.SENTRY_HOOK_SECRET ?? "";
+const O11Y_DEV_VARS_PATH = fileURLToPath(new URL("../workers/o11y/.dev.vars", import.meta.url));
+const EXPORT_SECRET = resolveReplaySecret(process.env.O11Y_EXPORT_SECRET, O11Y_DEV_VARS_PATH, "O11Y_EXPORT_SECRET");
+const SENTRY_SECRET = resolveReplaySecret(process.env.SENTRY_HOOK_SECRET, O11Y_DEV_VARS_PATH, "SENTRY_HOOK_SECRET");
 
 if (!EXPORT_SECRET) {
-  console.warn("O11Y_EXPORT_SECRET not set — v1/logs and deploy fixtures will 401. Export it from .dev.vars first.");
+  console.warn(
+    "O11Y_EXPORT_SECRET not set (checked env and workers/o11y/.dev.vars) — v1/logs and deploy fixtures will 401.",
+  );
 }
 if (!SENTRY_SECRET) {
-  console.warn("SENTRY_HOOK_SECRET not set — the Sentry hook fixture will 401. Export it from .dev.vars first.");
+  console.warn(
+    "SENTRY_HOOK_SECRET not set (checked env and workers/o11y/.dev.vars) — the Sentry hook fixture will 401.",
+  );
 }
 
 let failures = 0;

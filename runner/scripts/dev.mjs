@@ -23,6 +23,8 @@ import {
   bootstrapDevVars,
   o11yDevVarsPatch,
   O11Y_DEVVARS_STRIP_KEYS,
+  fillEmptyDevVarsSecrets,
+  O11Y_DEVVARS_AUTOFILL_SECRET_KEYS,
   resolveDevVarsPortAdoption,
   checkO11yDevVarsStaleness,
   readDevVarsLine,
@@ -315,6 +317,18 @@ async function main() {
       log("o11y", `created ${path.relative(RUNNER_ROOT, devVarsPath)} from .dev.vars.example`);
       if (patched.length) log("o11y", `filled in local-dev defaults for: ${patched.join(", ")}`);
       if (stripped.length) log("o11y", `left ${stripped.join(", ")} undeclared so this run's own ephemeral --var takes effect`);
+    }
+    // F21 (fix round R4): runs on EVERY invocation, not only a fresh
+    // bootstrap (`created`) — a `.dev.vars` bootstrapped before this fix
+    // shipped still declares these two empty forever otherwise, which is
+    // exactly the finding (worker-tenant/Sentry panels can't fill locally
+    // because both fixture-replay gates 401). Only the key NAME is logged,
+    // never the generated value — the same rule `O11Y_SESSION_SECRET`'s own
+    // `--var` gets from `redactArgsForLog`, here trivially satisfied because
+    // the value is never in `dev.mjs`'s own argv/log line at all.
+    const { filled } = fillEmptyDevVarsSecrets({ devVarsPath, keys: O11Y_DEVVARS_AUTOFILL_SECRET_KEYS });
+    if (filled.length) {
+      log("o11y", `filled in ephemeral local-dev values for: ${filled.join(", ")} (values never logged)`);
     }
     const envLine = readDevVarsLine(devVarsPath, "O11Y_ENV");
     if (envLine !== "local") {
