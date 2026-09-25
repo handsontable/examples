@@ -249,20 +249,35 @@ function stripUrlQueriesInText(text: string): string {
  *
  * IPv4: four dotted octets 0–255, boundary-guarded on both ends so a
  * version string never matches (`18.1.1` has too few dotted numbers to
- * reach the pattern; `1.2.3.4-beta` is rejected by the trailing boundary —
- * a `-` right after the fourth octet reads as "still the same token").
+ * reach the pattern; `1.2.3.4-beta`/`1.2.3.4.5` are rejected by the
+ * trailing lookahead), while a trailing `.` with nothing/a non-digit after
+ * it — an IP that simply ends a sentence — still redacts.
+ *
+ * The START boundary is a CAPTURING alternation (`^` or one non-`[\w.-]`
+ * character), never a lookbehind: `new RegExp` with a lookbehind
+ * (`(?<!...)`, ES2018) throws on Safari before 16.4 (March 2023), and this
+ * module is imported EAGERLY at browser boot (`apps/authoring/src/main.tsx`
+ * → `telemetry/index.js` → this package) — a throw here at module
+ * evaluation time would fail the whole telemetry module's import on any
+ * older Safari, exactly the class of eager-import regression
+ * `pipeline/telemetry-facade-boot-safety.test.mjs` exists to catch. The
+ * trailing boundary stays a plain negative LOOKAHEAD (`(?!...)`), which has
+ * always been supported — only lookBEHIND is the compatibility risk. The
+ * replacer functions below re-attach the captured prefix character.
  */
 const IPV4_OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d{2}|[1-9]?\\d)";
-const IPV4_PATTERN = new RegExp(`(?<![\\w.-])(?:${IPV4_OCTET}\\.){3}${IPV4_OCTET}(?![\\w.-])`, "g");
+const IPV4_PATTERN = new RegExp(`(^|[^\\w.-])(?:${IPV4_OCTET}\\.){3}${IPV4_OCTET}(?![\\w-]|\\.\\d)`, "g");
 
 /** IPv6, the standard bounded form (7 alternatives covering the
  *  uncompressed 8-group shape and every valid position of one `::`
  *  compression) — same shape as the IPv4 pattern above: a small fixed
  *  alternation built only from `{1,4}`/`{1,7}`-capped quantifiers, so a
- *  single match attempt costs a small constant regardless of input length. */
+ *  single match attempt costs a small constant regardless of input length.
+ *  Same capturing-prefix boundary as IPv4 above, for the same lookbehind
+ *  compatibility reason. */
 const IPV6_GROUP = "[0-9A-Fa-f]{1,4}";
 const IPV6_PATTERN = new RegExp(
-  "(?<![\\w:])(?:" +
+  "(^|[^\\w:])(?:" +
     `(?:${IPV6_GROUP}:){7}${IPV6_GROUP}` +
     `|(?:${IPV6_GROUP}:){1,7}:` +
     `|(?:${IPV6_GROUP}:){1,6}:${IPV6_GROUP}` +
@@ -276,8 +291,14 @@ const IPV6_PATTERN = new RegExp(
   "g",
 );
 
+// IPv4 first, then IPv6 — same reordering, and the same reason, as the
+// server-side `redactIpInText` (an IPv4-mapped IPv6 address's octets are
+// hex-digit-shaped, so IPv6 alone can eat a leading fragment and leave a
+// real piece of the address behind).
 function redactIpInText(text: string): string {
-  return text.replace(IPV6_PATTERN, "<ip>").replace(IPV4_PATTERN, "<ip>");
+  return text
+    .replace(IPV4_PATTERN, (_match, prefix: string) => `${prefix}<ip>`)
+    .replace(IPV6_PATTERN, (_match, prefix: string) => `${prefix}<ip>`);
 }
 
 /**

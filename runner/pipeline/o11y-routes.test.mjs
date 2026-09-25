@@ -313,6 +313,92 @@ test("POST /telemetry/collect: an example.* event does not inflate the o11y.inge
   );
 });
 
+// R3 F18: the same double-counting protection A-I4's remainder gave
+// example.* events (above) must also hold for a Faro measurement now that
+// it carries the identical hash-only ingestItem shape (`storeRecord =
+// false`, faro.ts).
+test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count a measurement's analytics point (F18)", async () => {
+  const { env, ae, doStorage } = freshEnv();
+  const body = withFreshTimestamp(faroFixture("measurement.json"));
+  const req = () =>
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const first = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(first.status >= 200 && first.status < 300);
+
+  const second = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(second.status >= 200 && second.status < 300, "a duplicate delivery must still answer 2xx");
+
+  const measurementPoints = ae.points.filter((p) => p.indexes[0] === "preview.ready_ms");
+  assert.equal(measurementPoints.length, 1, "a redelivered measurement batch must write exactly one point, not two");
+
+  // §6 must still hold: a measurement is never stored, redelivered or not.
+  const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
+  assert.equal(rowKeys.length, 0, "a measurement must never produce a row: entry");
+});
+
+// R3 F18 acceptance criterion, at the ROUTE level — the o11y-normalise.test.mjs
+// version of this scenario only calls `processFaroBody`, one layer below
+// `InboxWriter`/`writePoint`/the route's own accounting; this is the layer
+// the acceptance criterion ("only the log and exception records reach the
+// inbox, and all AE points are written") and the `o11y.ingest` self-metric
+// actually live at.
+test("POST /telemetry/collect: a mixed batch (measurement + log + exception) stores exactly 2 records, writes all AE points, and does not inflate o11y.ingest accepted (F18)", async () => {
+  const { env, ae, doStorage } = freshEnv();
+  const measurementBody = withFreshTimestamp(faroFixture("measurement.json"));
+  const logBody = withFreshTimestamp(faroFixture("log.json"));
+  const exceptionBody = withFreshTimestamp(faroFixture("exception-code-frame.json"));
+  const body = {
+    meta: measurementBody.meta,
+    measurements: measurementBody.measurements,
+    logs: logBody.logs,
+    exceptions: exceptionBody.exceptions,
+  };
+
+  const res = await worker.fetch(
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    env,
+    ctx,
+  );
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300);
+
+  // Only the log and the exception ever reach the inbox (F18) — the
+  // measurement's hash-only ingestItem never produces a stored record.
+  // `appendRows` (pack.ts) batches every accepted record from one `ingest()`
+  // call into as few `row:<n>` entries as fit under `INBOX_ROW_MAX_BYTES`
+  // (one row here, not one row per record), so the real assertion is over
+  // the total `resourceLogs` entries across every row, not the row COUNT.
+  const rows = [...doStorage._data.entries()].filter(([k]) => k.startsWith("row:")).map(([, v]) => v);
+  const storedRecordCount = rows.reduce((n, row) => n + row.resourceLogs.length, 0);
+  assert.equal(storedRecordCount, 2, "only the log and exception must be stored, not the measurement");
+
+  // All AE points are still written, including the measurement's own.
+  assert.equal(ae.points.filter((p) => p.indexes[0] === "preview.ready_ms").length, 1);
+  assert.equal(ae.points.filter((p) => p.indexes[0] === "error.uncaught").length, 1);
+
+  // The o11y.ingest self-metric tracks stored-record volume: 2, not 3.
+  const ingestAccepted = ae.points.find(
+    (p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("collect") && p.blobs?.includes("accepted"),
+  );
+  assert.ok(ingestAccepted, "an o11y.ingest accepted point must be written for the collect route");
+  assert.equal(
+    metricValue(ingestAccepted, "count"),
+    2,
+    "only the log and exception count toward this route's accepted self-metric, not the AE-only measurement too",
+  );
+});
+
 // N3 (re-review 2): `handleCollect` answered 2xx even when `InboxWriter.ingest`
 // threw and nothing was committed — a batch that gets dropped on the floor
 // must not tell the client it succeeded (ADR §B.2: 2xx only after commit),

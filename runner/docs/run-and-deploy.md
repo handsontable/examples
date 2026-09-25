@@ -247,10 +247,15 @@ dashboard for API-worker lines, authoring/embed browser errors, and a
 free-text/`cf.ray`/`session.id`/demo-id search across every service in one
 place — it's linked from the Runner overview and Observability self
 dashboards too. (R3 F10: the same dashboard's `hot_surface="demo-runtime"`
-panel carries no message text — `reportDemoEvent` sends the preview relay
-to Sentry only, and files a Faro line that is a count metric with no
-message, `{"count":1}`; the in-preview diagnostic detail lives in Sentry
-when `MONITOR_DEMOS`/`VITE_MONITOR_DEMOS` is on, never in Loki.) `/admin`'s
+panel carries no message text. `reportDemoEvent` files the preview relay as
+a `preview.runtime_error` count metric (a Faro measurement, `toFacade` →
+`telemetry.metric` → `pushMeasurement`) — as of the F18 ruling above (§6),
+every measurement is Analytics-Engine-only, so this produces no Loki line
+at all any more, not even a count-only one. The one demo-runtime Loki line
+that still exists is the Tier-1 compile-failure branch, whose message is
+always the constant `"Tier-1 compile failed"` — the real diagnostic detail
+goes to `extra` there, and for everything else lives in Sentry, when
+`MONITOR_DEMOS`/`VITE_MONITOR_DEMOS` is on.) `/admin`'s
 header also has an **Open Grafana** link
 (otherwise nothing in the app points at it): `href={GRAFANA_URL}` in
 `Admin.tsx`, which reads `import.meta.env.VITE_GRAFANA_URL` and falls back to

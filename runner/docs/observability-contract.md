@@ -301,16 +301,22 @@ What the o11y worker does with each Faro item at ingest:
 | event named `example.*` | one point | **none** |
 | other event, log | — | one log record |
 
-**R3 F18 ruling**: measurements and web vitals are AE-only; Loki holds logs, events and
-exceptions. This was a contract/ADR mismatch, not an implementation bug — ADR §F.1
-("Counts and latencies go to Analytics Engine; Loki holds the text") already said this;
-this table previously required a stored record for every measurement too, which made
-measurements ~99% of the browser Loki tenant's lines and drained bytes (R3-triage F18)
-for no reader: no dashboard panel parses a measurement's `{"duration_ms":N}`-shaped body,
-so the AE point was always the only consumer. A measurement/web-vitals item still gets a
+**R3 F18 ruling**: a Faro measurement or web-vitals item (this table's scope — the item
+kinds `normalise/faro.ts` handles) is AE-only; Loki holds logs, events and exceptions.
+This was a contract/ADR mismatch, not an implementation bug — ADR §F.1 ("Counts and
+latencies go to Analytics Engine; Loki holds the text") already said this; this table
+previously required a stored record for every measurement too, which made measurements
+~99% of the browser Loki tenant's lines and drained bytes (R3-triage F18) for no reader:
+no dashboard panel parses a measurement's `{"duration_ms":N}`-shaped body, so the AE
+point was always the only consumer. A measurement/web-vitals item still gets a
 hash-only `ingestItem` (no `record`) so a retried/redelivered batch cannot double-write
 its Analytics Engine point — the same dedupe-only shape an `example.*` event already
 used above.
+
+**Scope note, not yet fixed**: §9's lite-beacon path (`workers/o11y/src/lite.ts`,
+`POST /telemetry/lite`) is a separate converter and still stores a vital beacon's record
+today (the triage's own `LCP=172` inbox-record example) — this ruling was not extended
+there. A future consistency pass may want to.
 
 ## 7. Fingerprint
 

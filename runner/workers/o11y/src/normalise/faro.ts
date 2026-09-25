@@ -456,13 +456,21 @@ async function processOneItem(
     if (type === "event") {
       const name = typeof scrubbed.payload.name === "string" ? scrubbed.payload.name : "";
       if (name.startsWith("example.")) {
-        aePoints = processExampleEvent(name, clientResourceAttributes, aeOnly, service);
+        // Set BEFORE calling the extractor (advisor review, this fix round):
+        // the catch block below reads `storeRecord` to decide whether a
+        // throwing extractor should surface as `invalid` (nothing to
+        // salvage) or fall through to still storing the record. Setting the
+        // flag AFTER a call that can itself throw left it at its default
+        // `true` on that path — a crafted `example.*` attribute that made
+        // `processExampleEvent`/`toAePoint` throw would have stored a
+        // record anyway, contradicting §6 ("AE points only, never stored")
+        // and this function's own catch-block comment.
         storeRecord = false; // §6: example.* events are AE points only, never stored
+        aePoints = processExampleEvent(name, clientResourceAttributes, aeOnly, service);
       }
     } else if (type === "measurement") {
-      aePoints = processMeasurement(payload, clientResourceAttributes, demoId, aeOnly, service);
       // R3 F18: a Faro measurement (including a `web-vitals` measurement,
-      // `processMeasurement`'s other branch above — both arrive as Faro item
+      // `processMeasurement`'s other branch below — both arrive as Faro item
       // `type === "measurement"`, never a distinct wire type of their own)
       // is ~99% of the browser Loki tenant's lines and drained bytes
       // (R3-triage F18), pollutes the "Recent … errors" panels (no panel
@@ -474,9 +482,17 @@ async function processOneItem(
       // text") already said this; contract §6 is the ruling this fixes.
       // AE points and the dedupe hashing are unchanged — this only flips
       // `storeRecord`, reusing the exact hash-only `ingestItem` path
-      // `example.*` events already take below (A-I4 remainder), so a
+      // `example.*` events already take above (A-I4 remainder), so a
       // retried/redelivered batch still cannot double-count the AE point.
+      //
+      // Set BEFORE calling `processMeasurement` (advisor review, this fix
+      // round — same reasoning as the `example.*` branch above): a crafted
+      // `hot.outcome`/`hot.reason` that makes `toAePoint` throw inside
+      // `processMeasurement` (T00-D10) must surface as `invalid`, not fall
+      // through and store a measurement record — that would leave a stored
+      // record with zero AE points, contradicting the §6 "none" ruling.
       storeRecord = false;
+      aePoints = processMeasurement(payload, clientResourceAttributes, demoId, aeOnly, service);
     } else if (type === "exception") {
       const ex = processException(
         exceptionFingerprintMessage(scrubbed.payload),
