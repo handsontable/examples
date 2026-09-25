@@ -819,3 +819,222 @@ test("noteVisitorActivity persists a timestamp lastGrafanaActivityMs reads back"
   const after = await box.lastGrafanaActivityMs();
   assert.ok(after >= before);
 });
+
+// ---- F13: no await on the container is unbounded ---------------------------
+//
+// F13 (local verification): after the box container was SIGKILLed while a
+// dashboard was open, the library's `start()` for the next wake never
+// settled (the new container itself booted fine). `wake()` shares one
+// in-flight promise between callers, so every later `/grafana/*` request and
+// the cron's backlog wake waited on it forever. VA measured the second half
+// in workerd: a container port that accepts and never answers held every
+// `isReady()` caller forever. Each test below would hang on the old code, so
+// each one races its subject against `within()`, which fails the test
+// instead of letting it hang.
+
+/** Rejects if `promise` has not settled within `ms`: a hang fails the test. */
+function within(promise, ms, what) {
+  let timer;
+  const guard = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms} ms (hung)`)), ms);
+  });
+  return Promise.race([promise, guard]).finally(() => clearTimeout(timer));
+}
+
+/** `hooks.start` for the observed wedge: the container is issued (state
+ *  "running", as the library's `setRunning()` leaves it), then `start()`
+ *  never returns, so `onStart()` never runs. */
+function installWedgedStart() {
+  let calls = 0;
+  hooks.start = async (self) => {
+    calls++;
+    self._state = { status: "running", lastChange: Date.now() };
+    await new Promise(() => {});
+  };
+  return () => calls;
+}
+
+test("F13: a start() that never settles no longer pins every later wake() caller", async () => {
+  const startCalls = installWedgedStart();
+  const { box, inboxWriterStub } = makeBox();
+  let recordWakeCalls = 0;
+  inboxWriterStub.recordWake = async () => {
+    recordWakeCalls++;
+  };
+  box.wakeWaitMs = 50;
+  // Short, so the wedged start's own deadline does not keep the test
+  // process alive for the production 180 s.
+  box.startDeadlineMs = 300;
+  box.ctx.abort = () => {};
+
+  const first = box.wake("visit");
+  const second = box.wake("visit");
+  await assert.rejects(within(first, 2000, "first wake()"), /still in flight/);
+  await assert.rejects(within(second, 2000, "second wake()"), /still in flight/);
+  // A caller that timed out is not a new wake: the start stays single.
+  await assert.rejects(within(box.wake("backlog"), 2000, "third wake()"), /still in flight/);
+  assert.equal(startCalls(), 1, "one start() for the in-flight wake, however many callers gave up on it");
+  assert.equal(recordWakeCalls, 1, "no second wakeId minted while the first start is still in flight");
+});
+
+test("F13: a wedged start() resets the DO instance (ctx.abort) and still leaves the wake its 4-hour cap", async () => {
+  installWedgedStart();
+  const { box, scheduled } = makeBox();
+  box.startDeadlineMs = 50;
+  const aborts = [];
+  box.ctx.abort = (reason) => aborts.push(reason);
+
+  await assert.rejects(within(box.wake("visit"), 2000, "wake()"), /GrafanaBox\.start\(\): no answer within 50 ms/);
+
+  assert.equal(aborts.length, 1, "the wedged instance must be reset so a fresh one can recover");
+  const wake = await box.ctx.storage.get("wake");
+  const hardCap = scheduled.find((s) => s.callback === "hardCapStop");
+  assert.ok(hardCap, "the container may be running under this wakeId, so the cap must exist even though start() never returned");
+  assert.equal(hardCap.payload.wakeId, wake.wakeId);
+});
+
+test("F13 (positive control): a start() that settles normally never resets the instance", async () => {
+  const { box } = makeBox();
+  box.startDeadlineMs = 50;
+  const aborts = [];
+  box.ctx.abort = (reason) => aborts.push(reason);
+  await box.wake("visit");
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(aborts.length, 0);
+});
+
+test("F13: /grafana/* serves the waking page instead of hanging while the box's start is wedged", async () => {
+  installWedgedStart();
+  const { box, env, inboxWriterStub } = makeBox({ env: { O11Y_ENV: "local", DEV_ADMIN: "dev@handsontable.com" } });
+  env.GRAFANA_BOX = { getByName: () => box };
+  env.INBOX_WRITER = { getByName: () => inboxWriterStub };
+  box.wakeWaitMs = 50;
+  // Short, so the wedged start's own deadline does not keep the test
+  // process alive for the production 180 s.
+  box.startDeadlineMs = 300;
+  box.ctx.abort = () => {};
+
+  // The waking page's own meta-refresh (a document navigation) mints the wake.
+  const nav = await within(handleGrafana(new Request("https://o11y.example/grafana/"), env, {}), 2000, "navigation");
+  assert.equal(await nav.text(), wakingPageHtml());
+  // An open dashboard's background request, the box now reading "running".
+  const xhr = new Request("https://o11y.example/grafana/api/health", { headers: { "sec-fetch-dest": "empty" } });
+  const bg = await within(handleGrafana(xhr, env, {}), 2000, "background request");
+  assert.equal(await bg.text(), wakingPageHtml());
+});
+
+test("F13: isReady() answers false within its deadline when a probe never answers, and releases a late answer", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  box.readyProbeTimeoutMs = 50;
+  let lateCancelled = false;
+  const signals = [];
+  hooks.containerFetch = async (_self, request) => {
+    signals.push(request.signal);
+    if (request.url.endsWith("/ready")) return new Response("ready\n", { status: 200 });
+    // Grafana's port accepts and does not answer until well after the
+    // deadline, ignoring the signal (the library's own pre-fetch start
+    // machinery does not always honour it).
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const body = new ReadableStream({
+      cancel() {
+        lateCancelled = true;
+      },
+    });
+    return new Response(body, { status: 200 });
+  };
+
+  const started = Date.now();
+  assert.equal(await within(box.isReady(), 2000, "isReady()"), false);
+  assert.ok(Date.now() - started < 1000, `isReady took ${Date.now() - started} ms`);
+  assert.ok(
+    signals.every((s) => s instanceof AbortSignal),
+    "each probe must carry a signal that cancels the container request itself",
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  await settle();
+  assert.equal(lateCancelled, true, "a probe answering after its deadline must still have its body released (F6)");
+  assert.equal(box.inflightRequests, 0);
+});
+
+test("F13: drainStep finishes when Loki's push port never answers, instead of freezing the alarm loop", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000013.ndjson.gz";
+  const record = {
+    resource: { attributes: [] },
+    scopeLogs: [{ logRecords: [{ timeUnixNano: String(BigInt(Date.now()) * 1_000_000n), body: { stringValue: "hello" } }] }],
+  };
+  const stream = new Blob([JSON.stringify(record) + "\n"]).stream().pipeThrough(new CompressionStream("gzip"));
+  const gz = new Uint8Array(await new Response(stream).arrayBuffer());
+
+  const { box, inboxWriterStub, ae } = makeBox({ inboxWriter: { writtenKeys: [key] }, r2Objects: new Map([[key, gz]]) });
+  await box.wake("backlog");
+  box.lokiPushTimeoutMs = 30;
+  installRealisticProbeBodies({
+    // The library answers an aborted container request with a 500; without
+    // a signal the request would never settle at all.
+    otlp: (request) =>
+      new Promise((resolve) => {
+        request.signal?.addEventListener("abort", () => resolve(new Response("aborted", { status: 500 })));
+      }),
+  });
+
+  const wake = await box.ctx.storage.get("wake");
+  await within(box.drainStep({ wakeId: wake.wakeId }), 10_000, "drainStep");
+
+  assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 0, "nothing reached Loki, so nothing may be provisional");
+  const drainPoints = ae.points.filter((p) => p.indexes?.[0] === "o11y.drain");
+  assert.equal(drainPoints.length, 1);
+  assert.equal(outcomeOf(drainPoints[0]), "error", "the stalled push must be reported, and the key left for the next wake");
+});
+
+// F13, the reload path: a fresh instance (hot reload, deploy or eviction
+// while the container kept running) never calls start() itself, so only the
+// probes can notice a wedged library start. Both probes here never settle.
+function installSilentProbes() {
+  hooks.containerFetch = () => new Promise(() => {});
+}
+
+test("F13: probes that time out for startDeadlineMs reset the instance once (the reload path)", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  box.readyProbeTimeoutMs = 10;
+  box.startDeadlineMs = 60;
+  const aborts = [];
+  box.ctx.abort = (reason) => aborts.push(reason);
+  installSilentProbes();
+
+  assert.equal(await within(box.isReady(), 2000, "isReady()"), false);
+  await settle();
+  assert.equal(aborts.length, 0, "one timed-out probe round is not yet a wedge");
+
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(await within(box.isReady(), 2000, "isReady()"), false);
+  await settle();
+  assert.equal(aborts.length, 1, "probes stuck for longer than startDeadlineMs must reset the instance");
+
+  assert.equal(await within(box.isReady(), 2000, "isReady()"), false);
+  await settle();
+  assert.equal(aborts.length, 1, "the clock restarts after a reset instead of aborting on every probe");
+});
+
+test("F13 (positive control): a probe that answers in between restarts the stuck clock", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  box.readyProbeTimeoutMs = 10;
+  box.startDeadlineMs = 60;
+  const aborts = [];
+  box.ctx.abort = (reason) => aborts.push(reason);
+
+  installSilentProbes();
+  await box.isReady();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  // Loki still booting: a real answer, just not a ready one.
+  installRealisticProbeBodies({ lokiStatus: 503, lokiBody: "not ready\n" });
+  assert.equal(await box.isReady(), false);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  installSilentProbes();
+  await box.isReady();
+  await settle();
+  assert.equal(aborts.length, 0, "80 ms of timeouts, split by a settled probe, is never a 60 ms stuck window");
+});

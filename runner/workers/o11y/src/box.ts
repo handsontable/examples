@@ -92,6 +92,34 @@ const DRAIN_BATCH_SIZE = 10;
  *  the `now` captured at the START of the invocation that inserted it. */
 const DRAIN_STEP_GAP_MS = 1000;
 
+// F13: every await on the container, or on `@cloudflare/containers`' own
+// start machinery, is bounded. Measured in `wrangler dev` (see the F13
+// report): after the box container was SIGKILLed under dashboard traffic,
+// the library's `start()` for the next wake never settled, although the new
+// container itself booted fine. `wake()` shares one in-flight promise
+// between callers, so every later `/grafana/*` request and the cron's
+// backlog wake awaited that promise forever. A container port that accepts
+// a connection and never answers also held `isReady()` forever: its probes
+// carried no signal, and the library's healthy-state `containerFetch` goes
+// straight to `tcpPort.fetch`.
+/** One `isReady()` probe (Loki `/ready`, Grafana `/api/health`). Both
+ *  answer in milliseconds on a live box. */
+const READY_PROBE_TIMEOUT_MS = 5_000;
+/** How long a `wake()` CALLER waits for a start already in flight before it
+ *  gets a rejection instead: `/grafana/*` then serves the waking page, whose
+ *  own 3 s refresh asks again. The start itself keeps running. */
+const WAKE_WAIT_MS = 15_000;
+/** How long `start()` may take before this instance is treated as wedged.
+ *  The library's own retry budget in `start()` is 27 attempts of up to
+ *  5 s each plus 300 ms apart, about 143 s. */
+const START_DEADLINE_MS = 180_000;
+/** One drain push to Loki's OTLP endpoint. `drainStep` runs inside the
+ *  base class's `alarm()`, and alarms are serialised, so a push that never
+ *  answered used to freeze every later schedule too: the next drain step,
+ *  `hardCapStop`, and the idle-stop check. A timed-out push comes back as
+ *  the library's 500, which `drain.ts` retries and then stops early on. */
+const LOKI_PUSH_TIMEOUT_MS = 60_000;
+
 type WakeReason = "backlog" | "visit";
 
 interface WakeRecord {
@@ -325,6 +353,17 @@ export class GrafanaBox extends Container<Env> {
 
   #startingPromise: Promise<WakeRecord> | null = null;
 
+  // F13 bounds (see the constants' doc comments). Instance fields only so
+  // `pipeline/o11y-wake.test.mjs` (F13 tests) can shrink them; production
+  // never assigns them.
+  readyProbeTimeoutMs = READY_PROBE_TIMEOUT_MS;
+  wakeWaitMs = WAKE_WAIT_MS;
+  startDeadlineMs = START_DEADLINE_MS;
+  lokiPushTimeoutMs = LOKI_PUSH_TIMEOUT_MS;
+  /** F13: when an `isReady()` probe first ran out of time with no probe
+   *  settling since. In memory only: a fresh instance starts clean. */
+  #probesStuckSince: number | null = null;
+
   /**
    * The only way to start this container. Mints a fresh wakeId, persists it
    * (durably — this DO can be evicted between `wake()` and `onStop()`, so
@@ -352,7 +391,9 @@ export class GrafanaBox extends Container<Env> {
         this.#startingPromise = null;
       });
     }
-    return this.#startingPromise;
+    // F13: a caller waits at most `wakeWaitMs` for the shared promise.
+    // Unbounded, one start that never settled pinned every later caller.
+    return withDeadline(this.#startingPromise, this.wakeWaitMs, "GrafanaBox.wake: container start still in flight");
   }
 
   async #wakeInner(reason: WakeReason): Promise<WakeRecord> {
@@ -420,7 +461,19 @@ export class GrafanaBox extends Container<Env> {
     // if it cannot record this wake, the container must not start with a
     // wakeId nothing else knows about.
     await inboxWriterStub(this.env).recordWake(record.wakeId, reason);
-    await this.start({ envVars });
+    // ADR §A: "after 4 hours awake regardless." `hardCapStop` re-checks the
+    // wakeId when it fires — a wake that already stopped on its own (idle
+    // timeout, or the post-drain quiet stop) leaves nothing for this to do.
+    // F13: scheduled BEFORE `start()`, not after it. When `start()` hangs
+    // or throws after the container was already issued, that container
+    // still runs under this wakeId, and it still needs its cap.
+    await this.schedule(new Date(Date.now() + WAKE_HARD_CAP_MS), HARD_CAP_SCHEDULE, { wakeId: record.wakeId });
+    try {
+      await withDeadline(this.start({ envVars }), this.startDeadlineMs, "GrafanaBox.start()");
+    } catch (err) {
+      if (err instanceof DeadlineExceeded) this.#resetWedgedInstance(record.wakeId, err);
+      throw err;
+    }
     // T03-D (see the task Outcome — found running a real `wrangler dev`
     // locally, not guessed): `start()` never calls `state.setHealthy()`
     // (only `startAndWaitForPorts()` does), so `state.status` stays
@@ -439,11 +492,62 @@ export class GrafanaBox extends Container<Env> {
     // before ports ever come up) — nothing awaits it, and it targets THIS
     // wake's own container instance state, never a later wake's.
     void this.startAndWaitForPorts({ ports: this.requiredPorts }).catch(() => {});
-    // ADR §A: "after 4 hours awake regardless." `hardCapStop` re-checks the
-    // wakeId when it fires — a wake that already stopped on its own (idle
-    // timeout, or the post-drain quiet stop) leaves nothing for this to do.
-    await this.schedule(new Date(Date.now() + WAKE_HARD_CAP_MS), HARD_CAP_SCHEDULE, { wakeId: record.wakeId });
     return record;
+  }
+
+  /**
+   * F13: `start()` did not settle within `startDeadlineMs`. The library
+   * keeps its own in-flight start promise (`startInFlight`) and every later
+   * start path joins it, so this instance cannot recover on its own. Only
+   * the in-memory object is reset (`ctx.abort()`, the same recovery the
+   * library uses itself for a lost container connection). Storage and the
+   * container survive. The next request builds a fresh instance: `wake()`
+   * returns this wake's stored record while the container runs, and the
+   * first `containerFetch` there runs `startAndWaitForPorts`, whose
+   * `onStart` schedules this wake's drain. When the container is not
+   * running, the base `alarm()` loop records the stop (`onStop`) and the
+   * next wake mints a fresh wakeId, so the unclean-stop replay proceeds as
+   * usual.
+   */
+  #resetWedgedInstance(wakeId: string, err: Error): void {
+    console.error(JSON.stringify({ event: "o11y.box.start_wedged", wakeId, message: err.message }));
+    try {
+      this.ctx.abort?.(err.message);
+    } catch {
+      // `abort()` throws into the calling context by design, and the caller
+      // rethrows the deadline error right after this anyway.
+    }
+  }
+
+  /**
+   * F13, the reload path: an instance that did not start the container
+   * itself (a hot reload, deploy or eviction while the box kept running)
+   * never goes through `#doWake`'s start deadline. It reaches the library's
+   * start machinery only through `containerFetch` → `startAndWaitForPorts`,
+   * where a wedged `startInFlight` would make every probe time out forever.
+   * The probe deadline keeps each request answering (waking page), and this
+   * escalation makes the instance recover as well: probes that have timed
+   * out without a single one settling for `startDeadlineMs` reset it once,
+   * like a wedged `start()` does. Any settled probe, ready or not, clears
+   * the clock, so a slow but live boot never trips it.
+   */
+  #escalateStuckProbes(probes: PromiseSettledResult<Response>[]): void {
+    const timedOut = probes.find(
+      (p): p is PromiseRejectedResult => p.status === "rejected" && p.reason instanceof DeadlineExceeded,
+    );
+    const settledOnItsOwn = probes.some((p) => p.status === "fulfilled" || !(p.reason instanceof DeadlineExceeded));
+    if (!timedOut || settledOnItsOwn) {
+      this.#probesStuckSince = null;
+      return;
+    }
+    const now = Date.now();
+    this.#probesStuckSince ??= now;
+    if (now - this.#probesStuckSince < this.startDeadlineMs) return;
+    this.#probesStuckSince = null;
+    void this.ctx.storage
+      .get<WakeRecord>(WAKE_STORAGE_KEY)
+      .then((wake) => this.#resetWedgedInstance(wake?.wakeId ?? "unknown", timedOut.reason as Error))
+      .catch(() => {});
   }
 
   /** {@link HARD_CAP_SCHEDULE}'s callback. A no-op if a newer wake has
@@ -509,12 +613,22 @@ export class GrafanaBox extends Container<Env> {
     // and every `drainStep` — so a visit wake never idled out and ran to
     // the 4-hour cap. `Promise.all` would also drop the other probe's
     // response unreleased when one of them throws.
-    const probes = await Promise.allSettled([
-      this.containerFetch(new Request("http://box/ready"), 3100),
-      this.containerFetch(new Request("http://box/grafana/api/health"), 3000),
-    ]);
+    //
+    // F13: each probe is bounded twice. The signal cancels the container
+    // request itself, and the deadline covers the library's own start
+    // machinery before that request is even sent (a `containerFetch` on a
+    // not-yet-healthy box runs `startAndWaitForPorts` first). A probe
+    // answering after its deadline gets its body released anyway.
+    const probe = (url: string, port: number) =>
+      boundedProbe(
+        this.containerFetch(new Request(url, { signal: AbortSignal.timeout(this.readyProbeTimeoutMs) }), port),
+        this.readyProbeTimeoutMs,
+        `isReady probe ${url}`,
+      );
+    const probes = await Promise.allSettled([probe("http://box/ready", 3100), probe("http://box/grafana/api/health", 3000)]);
     const responses = probes.flatMap((p) => (p.status === "fulfilled" ? [p.value] : []));
     await Promise.all(responses.map(releaseBody));
+    this.#escalateStuckProbes(probes);
     const ready = responses.length === probes.length && responses.every((r) => r.status === 200);
     if (ready) await this.#recordReadyOnce();
     return ready;
@@ -768,6 +882,8 @@ export class GrafanaBox extends Container<Env> {
         const res = await this.containerFetch(
           new Request("http://box/otlp/v1/logs", {
             method: "POST",
+            // F13: see LOKI_PUSH_TIMEOUT_MS.
+            signal: AbortSignal.timeout(this.lokiPushTimeoutMs),
             headers: { "content-type": "application/json", "content-encoding": "gzip", "X-Scope-OrgID": tenant },
             body: gzippedBody,
           }),
@@ -923,6 +1039,34 @@ export class GrafanaBox extends Container<Env> {
   async lastStop(): Promise<StopRecord | undefined> {
     return this.ctx.storage.get<StopRecord>(LAST_STOP_STORAGE_KEY);
   }
+}
+
+/** F13: a bounded wait failed. Its own class so `#doWake` can tell a
+ *  wedged `start()` apart from a start that failed on its own. */
+class DeadlineExceeded extends Error {}
+
+/** F13: `promise`, or a {@link DeadlineExceeded} rejection after `ms`,
+ *  whichever comes first. The timer is cleared as soon as either settles,
+ *  and `promise` keeps its handler, so a late rejection is never an
+ *  unhandled one. */
+function withDeadline<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new DeadlineExceeded(`${what}: no answer within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
+/** F13: {@link withDeadline} for a container probe whose body must still be
+ *  released when it answers after the deadline (F6: an unreleased body
+ *  counts as in flight and blocks the idle stop). */
+function boundedProbe(response: Promise<Response>, ms: number, what: string): Promise<Response> {
+  return withDeadline(response, ms, what).catch((err: unknown) => {
+    if (err instanceof DeadlineExceeded) void response.then(releaseBody, () => {});
+    throw err;
+  });
 }
 
 /**
