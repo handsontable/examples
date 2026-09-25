@@ -595,6 +595,25 @@ test("POST /telemetry/lite: an accepted web_vital beacon writes a web_vital AE p
   assert.equal(point.doubles[2], 2500); // value, double3
 });
 
+// F28 (`/telemetry/collect`'s own fix, Round 6): the equivalent accounting
+// gap never actually existed on this route — `handleLite`'s accepted/
+// duplicate counters (below) were always unconditional, with no gate on
+// whether the item carried a stored `record`, unlike `handleCollect`'s old
+// NB3 gate. This pins that explicitly now that it matters for the
+// Observability-self dashboard: a first-time, AE-only web-vital beacon
+// (F18) must still count as "accepted", not just its own web_vital point.
+test("POST /telemetry/lite: a first-time web_vital beacon (AE-only, F18) still writes an o11y.ingest accepted point (F28)", async () => {
+  const { env, ae } = freshEnv();
+  const res = await worker.fetch(liteRequest(liteVitalPayload()), env, ctx);
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300);
+
+  const ingestAccepted = ae.points.find(
+    (p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("lite") && p.blobs?.includes("accepted"),
+  );
+  assert.ok(ingestAccepted, "an o11y.ingest accepted point must be written for a first-time AE-only vital beacon");
+});
+
 // ---- QA follow-up ("lite-beacon vitals") -----------------------------------
 //
 // F18 (normalise/faro.ts) made a Faro measurement AE-only (`storeRecord =

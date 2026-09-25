@@ -277,14 +277,15 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
   assert.equal(rowKeys.length, 0, "an example.* event must never produce a row: entry");
 });
 
-// NB3 (re-review 2): an `example.*` event now carries a hash-only
-// `ingestItem` (A-I4 remainder, above) purely so InboxWriter's dedupe
-// transaction covers it too — but `index.ts#handleCollect` used to count
-// EVERY accepted hash, including one with no `record`, toward the route's
-// own `o11y.ingest accepted` self-metric. That metric exists to track
-// stored-record ingest volume; an AE-only `example.*` event never produces
-// a `row:` and must not inflate it.
-test("POST /telemetry/collect: an example.* event does not inflate the o11y.ingest 'accepted' self-metric count (NB3)", async () => {
+// F28 fix (Round 6): an `example.*` event carries a hash-only `ingestItem`
+// (A-I4 remainder, above) purely so InboxWriter's dedupe transaction covers
+// it too — and it IS a record the pipeline accepted, so it now counts
+// toward the route's own `o11y.ingest accepted` self-metric the same as a
+// stored record (see the F28 comment at the call site, index.ts). This test
+// used to assert the opposite (the old "NB3" gate excluded an AE-only item
+// from this count) — flipped as part of the F28 fix, not a new behaviour
+// this test merely documents.
+test("POST /telemetry/collect: an example.* event counts toward the o11y.ingest 'accepted' self-metric, same as a stored record (F28)", async () => {
   const { env, ae } = freshEnv();
   const exampleBody = withFreshTimestamp(faroFixture("example-open.json"));
   const logBody = withFreshTimestamp(faroFixture("log.json"));
@@ -308,8 +309,8 @@ test("POST /telemetry/collect: an example.* event does not inflate the o11y.inge
   assert.ok(ingestAccepted, "an o11y.ingest accepted point must be written for the collect route");
   assert.equal(
     metricValue(ingestAccepted, "count"),
-    1,
-    "only the stored log record counts toward this route's accepted self-metric, not the AE-only example.* event too",
+    2,
+    "both the stored log record and the AE-only example.* event must count toward this route's accepted self-metric (F28)",
   );
 });
 
@@ -348,8 +349,11 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
 // `InboxWriter`/`writePoint`/the route's own accounting; this is the layer
 // the acceptance criterion ("only the log and exception records reach the
 // inbox, and all AE points are written") and the `o11y.ingest` self-metric
-// actually live at.
-test("POST /telemetry/collect: a mixed batch (measurement + log + exception) stores exactly 2 records, writes all AE points, and does not inflate o11y.ingest accepted (F18)", async () => {
+// actually live at. F28 fix (Round 6): the self-metric now counts the
+// AE-only measurement too, alongside the two stored records — updated from
+// this test's earlier expectation of 2 (see the F28 comment at the call
+// site, index.ts).
+test("POST /telemetry/collect: a mixed batch (measurement + log + exception) stores exactly 2 records, writes all AE points, and counts all 3 toward o11y.ingest accepted (F18, F28)", async () => {
   const { env, ae, doStorage } = freshEnv();
   const measurementBody = withFreshTimestamp(faroFixture("measurement.json"));
   const logBody = withFreshTimestamp(faroFixture("log.json"));
@@ -387,16 +391,132 @@ test("POST /telemetry/collect: a mixed batch (measurement + log + exception) sto
   assert.equal(ae.points.filter((p) => p.indexes[0] === "preview.ready_ms").length, 1);
   assert.equal(ae.points.filter((p) => p.indexes[0] === "error.uncaught").length, 1);
 
-  // The o11y.ingest self-metric tracks stored-record volume: 2, not 3.
+  // The o11y.ingest self-metric now counts every accepted record, stored or
+  // AE-only (F28): the log, the exception, and the measurement — 3, not 2.
   const ingestAccepted = ae.points.find(
     (p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("collect") && p.blobs?.includes("accepted"),
   );
   assert.ok(ingestAccepted, "an o11y.ingest accepted point must be written for the collect route");
   assert.equal(
     metricValue(ingestAccepted, "count"),
-    2,
-    "only the log and exception count toward this route's accepted self-metric, not the AE-only measurement too",
+    3,
+    "the log, exception, and AE-only measurement must all count toward this route's accepted self-metric (F28)",
   );
+});
+
+// F28: a batch that is ENTIRELY measurements (no stored record at all) must
+// still produce an `o11y.ingest accepted` point — the bug this fix closes
+// was exactly this shape (a collect request "carrying only measurements"),
+// and it is the shape Round 6's real traffic run hit almost every time
+// (1,946 collect 204s, only 6 accepted points).
+test("POST /telemetry/collect: a measurement-only Faro batch produces the correct o11y.ingest accepted count (F28)", async () => {
+  const { env, ae, doStorage } = freshEnv();
+  const body = withFreshTimestamp(faroFixture("measurement.json"));
+
+  const res = await worker.fetch(
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    env,
+    ctx,
+  );
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300);
+
+  const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
+  assert.equal(rowKeys.length, 0, "a measurement-only batch must never produce a stored row (§6)");
+
+  assert.equal(ae.points.filter((p) => p.indexes[0] === "preview.ready_ms").length, 1, "the measurement's own AE point is still written");
+
+  const ingestAccepted = ae.points.find(
+    (p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("collect") && p.blobs?.includes("accepted"),
+  );
+  assert.ok(ingestAccepted, "an o11y.ingest accepted point must be written even though nothing was stored (F28)");
+  assert.equal(metricValue(ingestAccepted, "count"), 1);
+});
+
+// F28: duplicates and oversize records must still be counted exactly as
+// before this fix — only the "accepted" gate on `record !== undefined` was
+// removed; oversize handling (`recordOversizeDrop`) and dedupe outcomes
+// (`InboxWriter.ingest`'s own per-hash result) are untouched code paths. One
+// batch: a brand-new AE-only measurement (accepted), a brand-new stored log
+// (accepted), a redelivered exception (duplicate — accepted on a prior
+// request), and an oversize log (dropped, reason=size, never reaches
+// `withItem`/the accepted-duplicate counters at all).
+test("POST /telemetry/collect: a batch mixing an AE-only accept, a stored accept, a duplicate, and an oversize record counts each outcome correctly (F28)", async () => {
+  const { env, ae, doStorage } = freshEnv();
+
+  // Seed the exception as already-accepted so this batch's copy is a
+  // duplicate.
+  const exceptionBody = withFreshTimestamp(faroFixture("exception-code-frame.json"));
+  const seed = await worker.fetch(
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(exceptionBody),
+    }),
+    env,
+    ctx,
+  );
+  await ctx.drain();
+  assert.ok(seed.status >= 200 && seed.status < 300);
+
+  // Snapshot state right after the seed request — the seed itself writes its
+  // own `row:`/`accepted` point, which must not be mistaken for this test's
+  // own batch below.
+  const storedBeforeMain = [...doStorage._data.keys()]
+    .filter((k) => k.startsWith("row:"))
+    .reduce((n, k) => n + doStorage._data.get(k).resourceLogs.length, 0);
+  const pointsBeforeMain = ae.points.length;
+
+  const measurementBody = withFreshTimestamp(faroFixture("measurement.json"));
+  const logBody = withFreshTimestamp(faroFixture("log.json"));
+  logBody.logs[0].message = `${logBody.logs[0].message} — unique for this test`;
+  const oversizeLog = { ...logBody.logs[0], message: "x".repeat(300_000) };
+  const body = {
+    meta: measurementBody.meta,
+    measurements: measurementBody.measurements,
+    exceptions: exceptionBody.exceptions,
+    logs: [...logBody.logs, oversizeLog],
+  };
+
+  const res = await worker.fetch(
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    env,
+    ctx,
+  );
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300);
+
+  const storedAfterMain = [...doStorage._data.keys()]
+    .filter((k) => k.startsWith("row:"))
+    .reduce((n, k) => n + doStorage._data.get(k).resourceLogs.length, 0);
+  assert.equal(
+    storedAfterMain - storedBeforeMain,
+    1,
+    "only the new, non-oversize log is stored by this request (the measurement is AE-only, the exception is a duplicate, the huge log is dropped)",
+  );
+
+  const newPoints = ae.points.slice(pointsBeforeMain);
+  const ingestPoints = (blob) =>
+    newPoints.filter((p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("collect") && p.blobs?.includes(blob));
+
+  const accepted = ingestPoints("accepted");
+  assert.equal(accepted.length, 1, "one accepted point for this request");
+  assert.equal(metricValue(accepted[0], "count"), 2, "the AE-only measurement and the new stored log both count as accepted");
+
+  const duplicate = ingestPoints("duplicate");
+  assert.equal(duplicate.length, 1, "one duplicate point for this request");
+  assert.equal(metricValue(duplicate[0], "count"), 1, "the redelivered exception counts as duplicate, unaffected by the F28 fix");
+
+  const sizeDrops = newPoints.filter((p) => p.indexes[0] === "o11y.ingest" && p.blobs?.[8] === "size");
+  assert.equal(sizeDrops.length, 1, "the oversize log is still recorded with reason=size, never folded into accepted/duplicate");
 });
 
 // N3 (re-review 2): `handleCollect` answered 2xx even when `InboxWriter.ingest`
