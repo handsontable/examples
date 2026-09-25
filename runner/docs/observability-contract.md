@@ -159,6 +159,12 @@ all (§6, ADR-0042).
 string, a query string or fragment, authored code (including Babel code frames), chat
 text, console output, `url.full`, geo or ASN attributes.
 
+One bounded exception, demo-runtime records (§6): a relayed preview message is sent
+only as its §7 fingerprint shape (`fingerprintShape`: code frame stripped; quoted
+strings, numbers, URLs, timestamps and keystroke-ladder identifiers replaced; ≤200
+chars), never raw, never with its stack or URL. Unquoted prose a demo itself passes to
+`new Error(…)` or `console.error(…)` survives that normalisation.
+
 ## 4. Analytics Engine layout (`runner_events`)
 
 `index1` = metric name (the sampling key); queries filter on `index1` directly.
@@ -261,6 +267,26 @@ stays open: a demo that fails to parse at *mount* (a saved/shared/`?payload=` de
 a live edit) is never counted as `sandpack.compile_error` either — only
 `preview.ready_ms outcome=error` records it.
 
+`preview.runtime_error` (F26) counts broken preview states, not relays. The preview
+re-runs on every keystroke, so one typed line relays a whole keystroke-prefix ladder
+(`s is not defined`, `se is not defined`, …, then the line's real error). The browser
+collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
+- an edit that re-runs the preview (a non-quiet workspace write, a file add, delete or
+  rename) opens or extends a burst, and discards what the previous run reported;
+- 2 s (`DEMO_EDIT_SETTLE_MS`) after the last edit the burst closes, and the last run's
+  reports are emitted, one per §7 fingerprint;
+- outside a burst (first load, a user interaction, a Tier-2 rebuild that reports after
+  the burst closed) a report is emitted at once;
+- a fingerprint counts once until the next edit or preview mount, and at most 50
+  (`DEMO_COLLAPSE_CEILING`) points per page load.
+A report from a superseded run still in flight at the last keystroke can add one point
+to that burst. The Sentry side is not behind this collapse; its relay budgets are
+unchanged.
+
+`serve.share` locally (F27): under `vite dev` (what `pnpm dev:full` serves), React
+StrictMode runs the share page's load effect twice, so one `/share/<id>` view gives 2
+points. A production build gives 1 (measured on `vite preview`).
+
 `payload.boot` (F15, W-triage) is emitted only at `POST /api/payload`, the Theme
 Builder hand-off — never at the actual playground boot, `GET /api/payload/:id`. A
 `?payload=<bad-id>` failure on that boot is recorded as `error.handled
@@ -300,6 +326,18 @@ What the o11y worker does with each Faro item at ingest:
 | other exception | `error.uncaught` | one log record, symbolicated at drain |
 | event named `example.*` | one point | **none** |
 | other event, log | — | one log record |
+
+**Demo-runtime records (F10 Loki).** Each report that survives the F26 collapse (§5)
+is also one handled Faro exception, through `Telemetry.error` with context
+`demo-runtime`. Its `type` is `DemoError`, `DemoUnhandledRejection`, `DemoConsoleError`,
+`DemoNetworkError` or `DemoStderr`. Its value is the §7 fingerprint shape (§3). It has
+no stack, and the §3 labels include `hot.surface = demo-runtime`. At ingest it becomes
+an `error.handled` point (surface `demo-runtime`, never feeding the new-fingerprint
+alert) and one Loki line, which the "Recent demo-runtime errors" panels read with
+`{hot_surface="demo-runtime"} | hot_kind="exception"`. A `console-warn` report is
+counted but gets no record: a warning is context, not a fault (DEV-2539). Faro's
+`pushError` dedupe applies, so an identical record in two consecutive bursts is sent
+once. The `preview.runtime_error` metric, not the line count, is the counter.
 
 **R3 F18 ruling**: a Faro measurement or web-vitals item (this table's scope — the item
 kinds `normalise/faro.ts` handles) is AE-only; Loki holds logs, events and exceptions.
