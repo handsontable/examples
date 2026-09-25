@@ -1381,6 +1381,13 @@ export function buildPlan(tier, ports, opts = {}) {
   if (tier === "full") {
     appEnv.VITE_TELEMETRY_LOCAL = "1";
     appEnv.O11Y_DEV_PORT = String(ports.O11Y_DEV_PORT);
+    // Admin.tsx's "Open Grafana" link: same origin as the login redirect
+    // (`o11yLocalPublicOrigin`/O11Y_LOCAL_PUBLIC_ORIGIN below) so the
+    // DEV_ADMIN bypass's session cookie lands on the host the browser is
+    // actually asked to open — NOT O11Y_GRAFANA_PORT (compose.yml's
+    // container-internal port), which the o11y worker proxies to, not the
+    // browser reaches directly.
+    appEnv.VITE_GRAFANA_URL = `${o11yLocalPublicOrigin(ports)}/grafana/`;
   }
   plan.push({
     name: "app",

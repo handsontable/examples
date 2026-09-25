@@ -85,11 +85,17 @@ function liveSessionsSection(page: Page) {
 test("signed in, the header links to Grafana through the o11y worker's own broker login", async ({ page }) => {
   // Nothing else in the app links to Grafana (ADR-0043's dashboards are
   // otherwise unreachable except by typing the URL), so this pins the one
-  // discoverable entry point: a plain same-origin anchor to `/grafana/`,
-  // opened in a new tab — `target="_blank"` so a signed-out visit there
-  // doesn't lose the operator's place in `/admin`, and the o11y worker's own
-  // session check (not this app) decides whether they land in Grafana or its
-  // broker login.
+  // discoverable entry point: a same-origin anchor to `/grafana/`, opened in
+  // a new tab — `target="_blank"` so a signed-out visit there doesn't lose
+  // the operator's place in `/admin`, and the o11y worker's own session
+  // check (not this app) decides whether they land in Grafana or its broker
+  // login. The href comes from `Admin.tsx`'s `import.meta.env.VITE_GRAFANA_URL
+  // || "/grafana/"` — this suite runs against a `pnpm build` with no such env
+  // set (playwright.config.ts's webServer), so `/grafana/` here is that
+  // fallback, the same one a production build produces. The
+  // `pnpm dev:full`-only override to the o11y worker's local origin is
+  // covered by `pipeline/dev-script.test.mjs`'s buildPlan/VITE_GRAFANA_URL
+  // tests instead, since it needs no browser.
   await stubShell(page);
   await signIn(page);
 
