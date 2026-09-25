@@ -1062,10 +1062,16 @@ this task could not test at all (calendar time, real Cloudflare Analytics Engine
 credentials). None of it blocks the deploy — it confirms the deploy did what the local
 walkthrough already showed.
 
-1. **A malformed `POST /api/session`** against the real API worker — expect the fetch
-   catch-all's structured error line + a real Sentry event (exit criterion 11's Worker leg,
-   local-only until now; also a safe way to forced-fire the catch-all in production without
-   touching anything real).
+1. **A malformed `PATCH /api/demos/:id` for a demo you own**, with your own login's bearer
+   token and a body that isn't valid JSON — expect the fetch catch-all's structured error
+   line + a real Sentry event (exit criterion 11's Worker leg, local-only until now).
+   Not `POST /api/session` any more: that route is public and unauthenticated, so a
+   malformed body there used to reach this same catch-all as an uncaught 500 on ordinary
+   client garbage — polluting the `api.request` 5xx rate and the `api-5xx-rate` alert. It
+   is now a 400 by design (fix round: malformed-JSON handling on the session routes).
+   `PATCH /api/demos/:id` is the replacement probe: authentication and the ownership check
+   both run before the body is ever parsed, so a malformed body throws past them with
+   nothing written — touching nothing real, same as the old probe's intent.
 2. **Exit criterion 15, worker tenant, against a real Cloudflare export** — T02's own probe
    already did this once (sandbox account); repeat once against the production o11y worker's
    real Workers Logs export destination and confirm the same 7 labels + `cloudflare.ray_id`
@@ -1111,7 +1117,7 @@ walkthrough already showed.
    resolves to `src/…` file and line using at most 500 ms CPU and 64 MB of isolate
    memory; Babel-chunk frames are skipped, not parsed." This is a **Faro/browser**
    exception specifically (§C.3: "a Faro exception's stack trace reaches the drain as
-   V8-shaped text") — item 1's malformed `POST /api/session` probe is a worker-tenant
+   V8-shaped text") — item 1's malformed `PATCH /api/demos/:id` probe is a worker-tenant
    line and never goes through symbolication, so it does not exercise this criterion.
    A Playwright `page.evaluate` against the production host does not either:
    `reportingEnabled`/Faro's own `productionReportingEnabled` both gate on
@@ -1131,8 +1137,35 @@ walkthrough already showed.
    number exists. Flip exit-criterion-5's row from "not yet measured in a real
    isolate" to a dated pass/fail on that basis (13 flips separately, from its own
    calendar-time check in item 4 above) — this is what unblocks Proposed → Accepted.
+8. **Exit criterion 13 (retention) in production, and the AE SQL rollup, both against real
+   data** — item 4 above only re-checks the sandbox probe's own 1-day retention-clock test;
+   this is the equivalent check on the real Loki bucket and the real Grafana AE datasource.
 
-### Flipping `SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` to `uncaught`
+   ```bash
+   # No objects in the production Loki bucket older than their prefix's own rule
+   # (containers/o11y/r2-lifecycle-rules.json: browser/ 30d, worker/ 90d, index/ 90d,
+   # state/ 30d) — confirm the rules are actually applied to the bucket first,
+   npx wrangler r2 bucket lifecycle list handsontable-demos-o11y-loki -J eu
+   # then, in the R2 dashboard's object browser (wrangler has no object-listing
+   # command), sort each prefix by "Uploaded" ascending and confirm the oldest
+   # object is younger than that prefix's day count.
+   ```
+
+   Open any Analytics-Engine-datasource panel in the **production** Grafana (`/grafana/`,
+   not the local stack) and confirm it returns real rows rather than an "unknown table" SQL
+   error — T09-D5's "no per-panel ClickHouse `database` field" decision was checked against
+   local ClickHouse and AE's documented SQL surface only, never a live query (see the "Known
+   gaps" note above). Separately, confirm the nightly `example_daily` rollup (ADR-0042,
+   `cron:nightly:rollup`) is actually landing rows in D1:
+
+   ```bash
+   cd workers/api
+   npx wrangler d1 execute handsontable-demos --remote \
+     --command "SELECT day, framework, count(*) FROM example_daily GROUP BY day, framework ORDER BY day DESC LIMIT 20"
+   ```
+
+   Expect one `day` value per completed UTC day since deploy, never zero rows once at least
+   one nightly cron (04:17 UTC) has run.
 
 All three conditions below must hold, evidenced the same way this task's own local
 walkthrough evidenced them (Grafana dashboards, a fired-and-resolved alert, the volume
@@ -1190,6 +1223,12 @@ currently read `full`/`"full"` in those two committed files.
 
 - **Drop the export destinations** (Workers Logs → o11y ingest) if the o11y stack itself is
   the problem — this stops new data from reaching Loki/the inbox without touching the app.
+  **Caveat, unverified:** `workers/api/wrangler.jsonc`'s `observability.logs.destinations`
+  still names `o11y-logs` after this step, and whether `wrangler deploy` rejects a
+  `destinations` entry that names a Logpush destination which no longer exists has not been
+  checked against a real deploy. Remove `observability.logs.destinations` from
+  `wrangler.jsonc` (or comment it out) before, or together with, deleting the destination,
+  rather than finding out which way a live deploy behaves.
 - **Revert the `observability` block** (`workers/api/wrangler.jsonc`'s
   `observability.logs`/`.traces`) to pre-o11y values if the volume itself is the problem —
   this is a config-only revert, no code change.
