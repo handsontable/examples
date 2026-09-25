@@ -526,6 +526,54 @@ test.describe("Faro in the authoring app (T06)", () => {
       `demo-runtime event must be re-homed to environment "demo-runtime", got ${JSON.stringify((hit as { environment?: string }).environment)}`,
     );
   });
+
+  // ---- R3 F10: reportDemoEvent's own gate (previewMonitoring), not the ----
+  // ---- __t06ReportDemoEvent bypass above -----------------------------------
+  //
+  // Every test above drives `reportDemoEventUnguarded` directly (the
+  // `__t06ReportDemoEvent` hook), which never exercised `reportDemoEvent`'s
+  // own `monitorDemos` gate at all. Before this fix round, THIS build (no
+  // `VITE_MONITOR_DEMOS`, so `monitorDemos` is false, same as every real
+  // `dev:full` run) made `reportDemoEvent` itself a no-op — F10's exact
+  // finding. `__t06ReportDemoEventGuarded` calls `reportDemoEvent` (the real,
+  // guarded entry point `App.tsx`'s `onPreviewMessage` uses) so this proves
+  // the fix without a real (E2E_LIVE-gated) preview mount.
+  test("R3 F10: reportDemoEvent (guarded) reaches Faro under the local leg, and never Sentry", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+
+    const marker = "T06 e2e R3 F10 guarded probe " + Date.now();
+    await page.evaluate((msg) => {
+      (
+        window as unknown as {
+          __t06ReportDemoEventGuarded?: (
+            payload: { type: string; kind: string; message: string },
+            context: { tier: number; framework: string; htMajor: string },
+          ) => void;
+        }
+      ).__t06ReportDemoEventGuarded?.(
+        { type: "hot-runner-monitor", kind: "error", message: msg },
+        { tier: 1, framework: "react", htMajor: "18" },
+      );
+    }, marker);
+
+    // The AE metric (contract §5) — F10's "local-only" finding for the metric
+    // side: `previewMonitoring` (`monitorDemos || localTestSentryEnabled()`)
+    // is what let this call through `reportDemoEvent`'s gate at all.
+    await expect
+      .poll(() => captured.flatMap((b) => b.measurements ?? []).some((m) => m.type === "preview.runtime_error"))
+      .toBe(true);
+
+    // Never Sentry: `opts.sentry` is `monitorDemos` (false in this build,
+    // same as every real local run) — independent of `previewMonitoring` and
+    // of `diagnosticsGoToSentry`, which IS true in this build (proved by the
+    // sibling "reaches Sentry" tests above using the same dist). The brief's
+    // "never Sentry locally" guarantee is this assertion.
+    const events = await readSentryEvents(page);
+    const sentryHit = events.find((e) => (e as { tags?: { surface?: string } }).tags?.surface === "demo-runtime");
+    assert(!sentryHit, "reportDemoEvent must never reach Sentry through the R3 F10 local leg");
+  });
 });
 
 // ---- Sentry scope switch = uncaught (fix round I1/I3) -----------------------
