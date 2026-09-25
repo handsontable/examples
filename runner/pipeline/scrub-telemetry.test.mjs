@@ -156,6 +156,26 @@ test("strips a query string off an embedded preview-host URL in a message, after
   assert.equal(scrubbed.payload.message, "stale preview at https://<preview>/src/main.js");
 });
 
+// ---- R3 F17c: redact an IP embedded in message text, browser-side defense-in-depth
+
+test("redacts an IPv4 address embedded in a log item's message text", () => {
+  const item = faroLog({ payload: { message: "connection from 192.0.2.55 refused" } });
+  const scrubbed = scrubTelemetry(item);
+  assert.equal(scrubbed.payload.message, "connection from <ip> refused");
+});
+
+test("redacts an IPv6 address embedded in an exception's value", () => {
+  const item = { type: "exception", payload: { value: "failed for 2001:db8::8a2e:370:7334" }, meta: {} };
+  const scrubbed = scrubTelemetry(item);
+  assert.equal(scrubbed.payload.value, "failed for <ip>");
+});
+
+test("does not redact a version string that merely looks IP-shaped", () => {
+  const item = faroLog({ payload: { message: "Handsontable 18.1.1, build 1.2.3.4-beta" } });
+  const scrubbed = scrubTelemetry(item);
+  assert.equal(scrubbed.payload.message, "Handsontable 18.1.1, build 1.2.3.4-beta");
+});
+
 // ---- allowlist attributes/context (drops forbidden attrs, §3) ------------------
 
 test("drops forbidden Faro context attributes (url.full, geo), keeps allowlisted hot.* ones", () => {

@@ -88,6 +88,55 @@ export function redactEmailInText(text: string): string {
   return text.replace(EMAIL_PATTERN, "<email>");
 }
 
+/** R3 F17c: contract §3's "never sent" list includes "an IP" — nothing
+ *  redacted one anywhere before this fix. The privacy canary `192.0.2.55`
+ *  only "passed" verification because F17a lost its whole record to a
+ *  different bug (a Faro gecko-regex fallback that turned the message line
+ *  into a fake stack frame, which the noise gate then dropped) — once that
+ *  is fixed separately, the IP would have reached here unredacted.
+ *
+ *  Bounded from the start, unlike `EMAIL_PATTERN`/`USER_AGENT_PATTERN`
+ *  above (both needed their own ReDoS fix round, Z-A-C1/Y2): every
+ *  quantifier here is a small fixed alternation or a `{1,4}` cap, so there
+ *  is no unbounded run to backtrack over regardless of input shape — see
+ *  `pipeline/o11y-redos.test.mjs` for the adversarial-input timing proof
+ *  all the same, the same budget every other pattern in this file is held
+ *  to.
+ *
+ *  IPv4: four dotted octets 0–255, boundary-guarded on both ends so a
+ *  version string never matches — `18.1.1` has too few dotted numbers to
+ *  reach the pattern at all, and `1.2.3.4-beta` is rejected by the trailing
+ *  boundary (a `-` right after the fourth octet reads as "still the same
+ *  token", the same way a semver pre-release/build suffix would). */
+const IPV4_OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d{2}|[1-9]?\\d)";
+const IPV4_PATTERN = new RegExp(`(?<![\\w.-])(?:${IPV4_OCTET}\\.){3}${IPV4_OCTET}(?![\\w.-])`, "g");
+
+/** IPv6: the standard bounded form (7 alternatives covering the
+ *  uncompressed 8-group shape and every valid position of one `::`
+ *  compression), each alternative built only from a `{1,4}` hex-digit group
+ *  and a `{1,7}`-capped group count — the same "small fixed alternation,
+ *  bounded quantifiers only" shape as the IPv4 pattern above, so a single
+ *  match attempt costs a small constant regardless of input length. */
+const IPV6_GROUP = "[0-9A-Fa-f]{1,4}";
+const IPV6_PATTERN = new RegExp(
+  "(?<![\\w:])(?:" +
+    `(?:${IPV6_GROUP}:){7}${IPV6_GROUP}` + // 1:2:3:4:5:6:7:8 (no compression)
+    `|(?:${IPV6_GROUP}:){1,7}:` + // 1::  ...  1:2:3:4:5:6:7::
+    `|(?:${IPV6_GROUP}:){1,6}:${IPV6_GROUP}` + // 1::8  ...  1:2:3:4:5:6::8
+    `|(?:${IPV6_GROUP}:){1,5}(?::${IPV6_GROUP}){1,2}` + // 1::7:8 ...
+    `|(?:${IPV6_GROUP}:){1,4}(?::${IPV6_GROUP}){1,3}` +
+    `|(?:${IPV6_GROUP}:){1,3}(?::${IPV6_GROUP}){1,4}` +
+    `|(?:${IPV6_GROUP}:){1,2}(?::${IPV6_GROUP}){1,5}` +
+    `|${IPV6_GROUP}:(?::${IPV6_GROUP}){1,6}` + // 1::3:4:5:6:7:8
+    `|:(?:(?::${IPV6_GROUP}){1,7}|:)` + // ::2:3:4:5:6:7:8  ::
+    ")(?![\\w:])",
+  "g",
+);
+
+export function redactIpInText(text: string): string {
+  return text.replace(IPV6_PATTERN, "<ip>").replace(IPV4_PATTERN, "<ip>");
+}
+
 /** The combined extra pass this task runs on every stored record's free
  *  body text, beyond what `scrubTelemetry` alone guarantees.
  *
@@ -96,9 +145,11 @@ export function redactEmailInText(text: string): string {
  *  before any of the three scrub passes below ever see it — defense in
  *  depth alongside making each pattern itself linear, and sized so it never
  *  changes the outcome of the record-level 256 KB oversize check that runs
- *  after this (`pipeline/o11y-normalise.test.mjs`'s two oversize tests). */
+ *  after this (`pipeline/o11y-normalise.test.mjs`'s two oversize tests).
+ *
+ *  R3 F17c: `redactIpInText` added as a fourth chained pass. */
 export function scrubBodyText(text: string): string {
-  return redactEmailInText(redactUserAgentInText(stripUrlQueriesInText(truncateForScrub(text))));
+  return redactIpInText(redactEmailInText(redactUserAgentInText(stripUrlQueriesInText(truncateForScrub(text)))));
 }
 
 /** Fix round (finding A-M3, "also"): `scrubTelemetry`'s OTLP-record branch
@@ -123,7 +174,7 @@ export function scrubAttributeValues(
   if (!attrs) return attrs;
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(attrs)) {
-    out[key] = redactEmailInText(redactUserAgentInText(stripQueryAndFragment(truncateForScrub(value))));
+    out[key] = redactIpInText(redactEmailInText(redactUserAgentInText(stripQueryAndFragment(truncateForScrub(value)))));
   }
   return out;
 }

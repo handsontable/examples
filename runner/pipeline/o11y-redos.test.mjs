@@ -26,7 +26,7 @@ import { register } from "node:module";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
-const { redactEmailInText, redactUserAgentInText, scrubBodyText } = await import(
+const { redactEmailInText, redactUserAgentInText, redactIpInText, scrubBodyText } = await import(
   "../workers/o11y/src/normalise/text-scrub.ts"
 );
 const { processFaroBody } = await import("../workers/o11y/src/normalise/faro.ts");
@@ -105,6 +105,32 @@ test(`redactPreviewHosts: 65k 'a-'-repeats with no '.demos.handsontable.com' suf
   await assertUnderBudget("redactPreviewHosts", INDIVIDUAL_PATTERN_BUDGET_MS, () => redactPreviewHosts(input));
 });
 
+// R3 F17c: `redactIpInText` (IPv4 + IPv6) is bounded from the start — every
+// quantifier is a small fixed alternation or a `{1,4}`/`{1,7}` cap, so
+// there is no unbounded run to backtrack over. These adversarial inputs are
+// shaped to stress an IP-pattern implementation that DID have an unbounded
+// quantifier (a run of digits/dots, or hex/colons, with no valid IP ever
+// completing) — measured directly against the fixed code at 150k/260k
+// chars: 1-3ms, nowhere near this budget. There is no "pre-fix" timing to
+// cite (this pattern never shipped an unbounded version), so this is a
+// regression guard, not a revert-evidence timing the way the others above
+// are — reverting `IPV4_PATTERN`/`IPV6_PATTERN` to an unbounded shape (e.g.
+// `[\d.]+` for the octet run) is what this test would catch.
+test(`redactIpInText: 150k '1' characters (no valid IPv4/IPv6 ever completes) completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+  const input = "1".repeat(150_000);
+  await assertUnderBudget("redactIpInText (digits)", INDIVIDUAL_PATTERN_BUDGET_MS, () => redactIpInText(input));
+});
+
+test(`redactIpInText: 65k '1.'-repeats (no valid IPv4 ever completes) completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+  const input = "1.".repeat(65_000);
+  await assertUnderBudget("redactIpInText (IPv4-shaped)", INDIVIDUAL_PATTERN_BUDGET_MS, () => redactIpInText(input));
+});
+
+test(`redactIpInText: 65k 'a:'-repeats (no valid IPv6 ever completes) completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+  const input = "a:".repeat(65_000);
+  await assertUnderBudget("redactIpInText (IPv6-shaped)", INDIVIDUAL_PATTERN_BUDGET_MS, () => redactIpInText(input));
+});
+
 // Unchanged at 200k: `normalizeMonitorMessage` bounds its own input to 4096
 // chars before any regex pass runs (NORMALIZE_MESSAGE_INPUT_MAX), so the
 // fixed code's cost here is a few ms regardless of the shared budget. The
@@ -127,9 +153,9 @@ test(`fingerprint (the real monitor.ts shape, via normalizeMonitorMessage + stri
 // Sized at 150k to match redactEmailInText's own bump above: scrubBodyText's
 // dominant cost on this all-'a' input is its chained (pre-fix) email pass,
 // which measured ~12.8s at 150k, well over 3x the shared budget; the fixed
-// chain (truncate + URL-strip + UA + email passes) measured comfortably
-// under budget.
-test(`scrubBodyText: 150k 'a' characters (email + UA + URL passes chained) completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+// chain (truncate + URL-strip + UA + email + IP passes, R3 F17c added the
+// last one) measured comfortably under budget.
+test(`scrubBodyText: 150k 'a' characters (email + UA + URL + IP passes chained) completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
   const input = "a".repeat(150_000);
   await assertUnderBudget("scrubBodyText", INDIVIDUAL_PATTERN_BUDGET_MS, () => scrubBodyText(input));
 });

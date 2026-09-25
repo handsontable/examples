@@ -461,6 +461,22 @@ async function processOneItem(
       }
     } else if (type === "measurement") {
       aePoints = processMeasurement(payload, clientResourceAttributes, demoId, aeOnly, service);
+      // R3 F18: a Faro measurement (including a `web-vitals` measurement,
+      // `processMeasurement`'s other branch above — both arrive as Faro item
+      // `type === "measurement"`, never a distinct wire type of their own)
+      // is ~99% of the browser Loki tenant's lines and drained bytes
+      // (R3-triage F18), pollutes the "Recent … errors" panels (no panel
+      // ever parses a measurement's body — no `unwrap`/`json` over
+      // `{"duration_ms":N}` — so it only ever showed as an unlabeled,
+      // message-less line), and no dashboard reads a stored measurement
+      // record at all: the AE point above is the only consumer. ADR §F.1
+      // ("Counts and latencies go to Analytics Engine; Loki holds the
+      // text") already said this; contract §6 is the ruling this fixes.
+      // AE points and the dedupe hashing are unchanged — this only flips
+      // `storeRecord`, reusing the exact hash-only `ingestItem` path
+      // `example.*` events already take below (A-I4 remainder), so a
+      // retried/redelivered batch still cannot double-count the AE point.
+      storeRecord = false;
     } else if (type === "exception") {
       const ex = processException(
         exceptionFingerprintMessage(scrubbed.payload),
