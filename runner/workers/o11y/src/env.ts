@@ -46,6 +46,10 @@ export interface IngestItemResult {
 }
 
 export interface IngestResult {
+  /** Index-aligned with the `items` passed to `ingest`: `results[i]` is the
+   *  outcome of `items[i]`. Callers must match by index, never by `hash` —
+   *  two items in one batch can share a hash and get different outcomes
+   *  (the first `accepted`, later copies `duplicate`; F5-batch fix). */
   results: IngestItemResult[];
 }
 
@@ -59,6 +63,12 @@ export interface InboxWriterApi {
    *  marks every earlier wake `over: true`. Called by `GrafanaBox` (T01) at
    *  container start. */
   recordWake(wakeId: string, reason: "backlog" | "visit"): Promise<void>;
+
+  /** F8: stores `readyMs` (wake-to-ready, ms) on `wake:<wakeId>` — first
+   *  call wins, and a wake already resolved (entry deleted) is a no-op.
+   *  Called by `GrafanaBox` on its first successful `isReady()` per wake;
+   *  `resolveWakes` carries it into the `o11y.wake` point's `duration_ms`. */
+  recordWakeReady(wakeId: string, readyMs: number): Promise<void>;
 
   /**
    * ADR §B.2 steps 4–5, T02: dedupe each item's `hash` against the 24 h window

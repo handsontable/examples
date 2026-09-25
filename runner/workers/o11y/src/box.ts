@@ -57,6 +57,9 @@ const LAST_GRAFANA_STORAGE_KEY = "lastGrafanaAt";
 /** Guards `onStart`'s double-invocation (see its own doc comment) from
  *  scheduling `drainStep` twice for the same wake. */
 const DRAIN_SCHEDULED_FOR_STORAGE_KEY = "drainScheduledFor";
+/** F8: the wakeId whose wake-to-ready time was already reported to
+ *  InboxWriter, so only a wake's FIRST successful `isReady()` reports it. */
+const READY_RECORDED_FOR_STORAGE_KEY = "readyRecordedFor";
 const HARD_CAP_SCHEDULE = "hardCapStop";
 const DRAIN_STEP_SCHEDULE = "drainStep";
 /** ADR §A: "after 4 hours awake regardless." */
@@ -497,14 +500,48 @@ export class GrafanaBox extends Container<Env> {
   async isReady(): Promise<boolean> {
     const state = await this.getState();
     if (state.status !== "running" && state.status !== "healthy") return false;
+    // F6 (V-triage): `allSettled`, and every body released on every path.
+    // `@cloudflare/containers` counts a `containerFetch` as in flight until
+    // its response body is consumed or cancelled (see
+    // {@link releaseBody}), and never runs the `sleepAfter` idle stop while
+    // that count is above zero. Reading only `.status` here left two
+    // requests in flight per call — this runs on every `/grafana/*` request
+    // and every `drainStep` — so a visit wake never idled out and ran to
+    // the 4-hour cap. `Promise.all` would also drop the other probe's
+    // response unreleased when one of them throws.
+    const probes = await Promise.allSettled([
+      this.containerFetch(new Request("http://box/ready"), 3100),
+      this.containerFetch(new Request("http://box/grafana/api/health"), 3000),
+    ]);
+    const responses = probes.flatMap((p) => (p.status === "fulfilled" ? [p.value] : []));
+    await Promise.all(responses.map(releaseBody));
+    const ready = responses.length === probes.length && responses.every((r) => r.status === 200);
+    if (ready) await this.#recordReadyOnce();
+    return ready;
+  }
+
+  /**
+   * F8: contract §5's `o11y.wake` `duration_ms` is wake-to-ready (exit
+   * criterion 6): from `wake()` minting the wake (`WakeRecord.startedAt`,
+   * set in `#doWake` before `recordWake`/`start()`) to the first successful
+   * `isReady()` — whichever caller gets there first, `drainStep`'s poll or
+   * a `/grafana/*` request. Resolution is that poll's cadence: `drainStep`
+   * re-checks about once a second (`DRAIN_STEP_GAP_MS`, whole-second
+   * schedule times), so expect up to ~2 s of slack against criterion 6's
+   * 90 s budget. Reported once per wake (`READY_RECORDED_FOR_STORAGE_KEY`);
+   * `InboxWriter.resolveWakes` writes it on the `o11y.wake` point when the
+   * wake resolves, clean or unclean. Never fails `isReady()`: if the RPC
+   * throws, the guard is not set and the next successful probe retries.
+   */
+  async #recordReadyOnce(): Promise<void> {
+    const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    if (!wake) return;
+    if ((await this.ctx.storage.get<string>(READY_RECORDED_FOR_STORAGE_KEY)) === wake.wakeId) return;
     try {
-      const [loki, grafana] = await Promise.all([
-        this.containerFetch(new Request("http://box/ready"), 3100),
-        this.containerFetch(new Request("http://box/grafana/api/health"), 3000),
-      ]);
-      return loki.status === 200 && grafana.status === 200;
-    } catch {
-      return false;
+      await inboxWriterStub(this.env).recordWakeReady(wake.wakeId, Math.max(0, Date.now() - wake.startedAt));
+      await this.ctx.storage.put(READY_RECORDED_FOR_STORAGE_KEY, wake.wakeId);
+    } catch (err) {
+      console.error(JSON.stringify({ event: "o11y.wake.ready_record_failed", wakeId: wake.wakeId, message: String(err) }));
     }
   }
 
@@ -736,7 +773,16 @@ export class GrafanaBox extends Container<Env> {
           }),
           3100,
         );
-        const message = res.status >= 400 ? await res.text().catch(() => undefined) : undefined;
+        // F6: a 2xx body is released too, not only read on >=400 — an
+        // unread body keeps this push "in flight" for the idle stop (see
+        // `releaseBody`). Loki's OTLP push usually answers 204 (no body),
+        // but nothing guarantees it.
+        if (res.status < 400) {
+          await releaseBody(res);
+          return { status: res.status, message: undefined };
+        }
+        const message = await res.text().catch(() => undefined);
+        await releaseBody(res); // no-op once `text()` consumed it; releases it if `text()` threw early
         return { status: res.status, message };
       },
       symbolicate: (records) => symbolicateResourceLogs(records, { getMap: (key) => this.#getMap(key) }),
@@ -876,6 +922,30 @@ export class GrafanaBox extends Container<Env> {
    *  the stop protocol's own trust chain (see `onStop`'s own doc comment). */
   async lastStop(): Promise<StopRecord | undefined> {
     return this.ctx.storage.get<StopRecord>(LAST_STOP_STORAGE_KEY);
+  }
+}
+
+/**
+ * F6 (V-triage): releases a container response whose body the caller does
+ * not need. `@cloudflare/containers@0.3.7` (`dist/lib/container.js`)
+ * increments `inflightRequests` in `containerFetch` (:887) and, for a
+ * response with a body, returns `new Response(readable, res)` after
+ * `res.body.pipeTo(writable).finally(() => this.decrementInflight())`
+ * through an `IdentityTransformStream` (:955-960). The pipe, and so the
+ * decrement, only finishes once the reader consumes or cancels `readable`.
+ * `isActivityExpired()` (:1687-1692) returns false while the count is above
+ * zero, so the base `alarm()` loop never reaches `onActivityExpired()` →
+ * `stop()` (:1566). Cancelling ends the pipe at once (the transform's
+ * writable side errors, `pipeTo` rejects, `finally` runs). Never throws:
+ * a body that is already consumed, locked or errored has nothing left to
+ * release.
+ */
+async function releaseBody(res: Response): Promise<void> {
+  if (!res.body || res.bodyUsed) return;
+  try {
+    await res.body.cancel();
+  } catch {
+    // already locked or errored — nothing left to release
   }
 }
 

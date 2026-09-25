@@ -31,7 +31,7 @@ const {
   PACK_OBJECT_MAX_DECOMPRESSED_BYTES,
 } = await import("../workers/o11y/src/inbox/pack.ts");
 const { memoryStorage, putChunked } = await import("../workers/o11y/src/inbox/storage.ts");
-const { decodeNdjson, buildResourceLogs } = await import("@handsontable/demo-runtime/telemetry");
+const { decodeNdjson, buildResourceLogs, AE_COLUMNS } = await import("@handsontable/demo-runtime/telemetry");
 
 function record(body, i = 0) {
   return {
@@ -58,18 +58,20 @@ function todayBucket(ms = Date.now()) {
 test("dedupe: a hash seen within the 24h window is a duplicate; an unseen one is not", async () => {
   const storage = memoryStorage();
   const first = await checkDuplicates(storage, ["h1", "h2"], Date.now());
-  assert.deepEqual([...first.duplicates], []);
+  assert.deepEqual(first.isDuplicate, [false, false]);
   await storage.put(first.writes);
 
   const second = await checkDuplicates(storage, ["h1", "h3"], Date.now() + 5000);
-  assert.deepEqual([...second.duplicates], ["h1"]);
+  assert.deepEqual(second.isDuplicate, [true, false]);
   assert.ok(`hash:${todayBucket()}:h3` in second.writes, "the unseen hash must get a write entry, bucketed by today's UTC date");
 });
 
-test("dedupe: a hash repeated within one batch is a duplicate on its second occurrence", async () => {
+test("dedupe: a hash repeated within one batch is a duplicate on its second occurrence only", async () => {
   const storage = memoryStorage();
-  const result = await checkDuplicates(storage, ["h1", "h1", "h2"], Date.now());
-  assert.deepEqual([...result.duplicates], ["h1"]);
+  const result = await checkDuplicates(storage, ["h1", "h1", "h2", "h1"], Date.now());
+  // Per occurrence (F5-batch): the first h1 is the copy that gets stored.
+  assert.deepEqual(result.isDuplicate, [false, true, false, true]);
+  assert.ok(`hash:${todayBucket()}:h1` in result.writes, "the first occurrence marks the hash seen");
 });
 
 test("dedupe: a hash outside the 24h window is treated as new again", async () => {
@@ -77,7 +79,7 @@ test("dedupe: a hash outside the 24h window is treated as new again", async () =
   const dayAgo = Date.now() - 25 * 60 * 60 * 1000;
   await storage.put({ [`hash:${todayBucket(dayAgo)}:h1`]: dayAgo });
   const result = await checkDuplicates(storage, ["h1"], Date.now());
-  assert.deepEqual([...result.duplicates], [], "an expired hash must not be treated as a duplicate");
+  assert.deepEqual(result.isDuplicate, [false], "an expired hash must not be treated as a duplicate");
 });
 
 test("dedupe: a hash from a DIFFERENT UTC-day bucket, still within 24h, is found via the two-bucket check", async () => {
@@ -92,7 +94,7 @@ test("dedupe: a hash from a DIFFERENT UTC-day bucket, still within 24h, is found
 
   const result = await checkDuplicates(storage, ["hY"], nowMs);
 
-  assert.deepEqual([...result.duplicates], ["hY"], "a hash from yesterday's UTC bucket, still within 24h, must be found");
+  assert.deepEqual(result.isDuplicate, [true], "a hash from yesterday's UTC bucket, still within 24h, must be found");
 });
 
 // B-C1/A-I1 remainder (final review, rereview.md row 13): "the prune ceiling
@@ -262,6 +264,35 @@ test("InboxWriter.ingest: a duplicate delivery, seconds apart, produces one stor
   assert.equal(totalRecords, 1, "exactly one copy must be pending, never two");
 });
 
+// F5-batch (V-triage): two identical records in ONE ingest batch used to be
+// both dropped while the hash was still marked seen — the record was stored
+// zero times, and every later redelivery was refused as a duplicate, so it
+// was lost for good.
+test("InboxWriter.ingest: an in-batch repeat stores its first copy once, marks only later copies duplicate", async () => {
+  const doStorage = makeDurableObjectStorage();
+  const { env } = makeEnv(InboxWriter, { doStorage });
+  const writer = new InboxWriter({ storage: doStorage }, env);
+
+  const same = { hash: "same-hash", record: record("same") };
+  const other = { hash: "other-hash", record: record("other", 1) };
+  const batch = await writer.ingest("worker", Date.now(), [same, { ...same }, other]);
+  assert.deepEqual(
+    batch.results.map((r) => `${r.hash}=${r.outcome}`),
+    ["same-hash=accepted", "same-hash=duplicate", "other-hash=accepted"],
+  );
+
+  const byTenant = await pendingRowsByTenant(doStorage);
+  const bodies = [...(byTenant.get("worker") ?? [])].flatMap(([, row]) =>
+    row.resourceLogs.flatMap((rl) => rl.scopeLogs.flatMap((sl) => sl.logRecords.map((lr) => lr.body.stringValue))),
+  );
+  assert.deepEqual(bodies.sort(), ["other", "same"], "the repeated record is stored exactly once, not zero times");
+
+  // A later redelivery is a real duplicate of a STORED record now, not the
+  // silent drop of a record that was never stored.
+  const later = await writer.ingest("worker", Date.now() + 3000, [same]);
+  assert.equal(later.results[0].outcome, "duplicate");
+});
+
 test("InboxWriter: a simulated restart between an append and the alarm loses nothing", async () => {
   const doStorage = makeDurableObjectStorage();
   const { env } = makeEnv(InboxWriter, { doStorage });
@@ -293,6 +324,39 @@ test("InboxWriter.recordWake: marks every earlier wake over, starts the new one 
   assert.equal(wake1.over, true, "the earlier wake must be marked over");
   assert.equal(wake2.over, false, "the new wake starts open");
   assert.equal(wake2.reason, "visit");
+});
+
+// F8 (V-triage): `o11y.wake` `duration_ms` was always 0 — nothing wrote it.
+test("InboxWriter: recordWakeReady's time is the o11y.wake duration_ms on clean and unclean resolution; a never-ready wake writes 0", async () => {
+  const doStorage = makeDurableObjectStorage();
+  const { env, ae } = makeEnv(InboxWriter, { doStorage });
+  const markers = new Set(["state/wakes/w-clean/clean"]);
+  env.O11Y_LOKI_STATE = { head: async (key) => (markers.has(key) ? {} : null) };
+  env.GRAFANA_BOX = { jurisdiction() { return this; }, getByName: () => ({ isAwake: async () => false }) };
+  const pending = [];
+  const writer = new InboxWriter({ storage: doStorage, waitUntil: (p) => pending.push(p) }, env);
+
+  // Three wakes, each superseded by the next; each owns one provisional key.
+  for (const [i, wakeId] of ["w-clean", "w-unclean", "w-never-ready"].entries()) {
+    await writer.recordWake(wakeId, "visit");
+    await doStorage.put({ [`key:inbox/worker/2026-01-01/00/00000000000${i}.ndjson.gz`]: `provisional:${wakeId}` });
+  }
+  await writer.recordWakeReady("w-clean", 31_000);
+  await writer.recordWakeReady("w-unclean", 47_000);
+
+  await writer.resolveWakes();
+  await Promise.all(pending);
+
+  const slot = (column) => Number(/(\d+)$/.exec(AE_COLUMNS[column])[1]) - 1;
+  const wakes = ae.points
+    .filter((p) => p.indexes[0] === "o11y.wake")
+    .map((p) => ({ outcome: p.blobs[slot("outcome")], count: p.doubles[slot("count")], duration: p.doubles[slot("duration_ms")] }))
+    .sort((a, b) => a.duration - b.duration);
+  assert.deepEqual(wakes, [
+    { outcome: "unclean", count: 1, duration: 0 }, // w-never-ready: deliberately 0
+    { outcome: "clean", count: 1, duration: 31_000 },
+    { outcome: "unclean", count: 1, duration: 47_000 },
+  ]);
 });
 
 // ---- A-I2 (rereview.md, merge blocker): the pack alarm's bounded reads ----------

@@ -34,6 +34,7 @@ const {
   takeReopenedFlag,
   currentWakeId,
   pruneLedger,
+  recordWakeReady,
   KEY_RETENTION_MS,
 } = await import("../workers/o11y/src/inbox/ledger.ts");
 const { wakeStorageKey, inboxKeyStorageKey, doneKeyStorageKey, inboxKey } = await import(
@@ -46,6 +47,63 @@ function deps({ running = false, markers = new Set() } = {}) {
     markerExists: async (wakeId) => markers.has(wakeId),
   };
 }
+
+// ---- F8: wake-to-ready time on the wake entry ------------------------------
+
+test("F8: recordWakeReady stores readyMs once (first call wins) and leaves the rest of the entry alone", async () => {
+  const storage = memoryStorage();
+  await storage.put({ [wakeStorageKey("w1")]: { startedAt: 1, reason: "visit", over: false } });
+
+  await recordWakeReady(storage, "w1", 41_500);
+  await recordWakeReady(storage, "w1", 99_999); // a later, slower probe
+
+  assert.deepEqual(await storage.get(wakeStorageKey("w1")), { startedAt: 1, reason: "visit", over: false, readyMs: 41_500 });
+});
+
+test("F8: recordWakeReady for an already-resolved (deleted) wake does not recreate it", async () => {
+  const storage = memoryStorage();
+  await recordWakeReady(storage, "gone", 1234);
+  assert.equal(await storage.get(wakeStorageKey("gone")), undefined);
+});
+
+test("F8: a resolved wake carries its readyMs on the clean path AND the unclean path", async () => {
+  const k0 = inboxKeyStorageKey("inbox/worker/2026-01-01/00/000000000000.ndjson.gz");
+  const k1 = inboxKeyStorageKey("inbox/worker/2026-01-01/00/000000000001.ndjson.gz");
+  const storage = memoryStorage();
+  await storage.put({
+    [wakeStorageKey("clean-w")]: { startedAt: 1, reason: "backlog", over: true, readyMs: 30_000 },
+    [wakeStorageKey("unclean-w")]: { startedAt: 2, reason: "visit", over: true, readyMs: 45_000 },
+    [wakeStorageKey("never-ready")]: { startedAt: 3, reason: "visit", over: false },
+    [k0]: "provisional:clean-w",
+    [k1]: "provisional:unclean-w",
+  });
+
+  const { resolved } = await resolveOverWakes(storage, deps({ running: false, markers: new Set(["clean-w"]) }));
+  const byId = Object.fromEntries(resolved.map((w) => [w.wakeId, w]));
+
+  assert.equal(byId["clean-w"].clean, true);
+  assert.equal(byId["clean-w"].readyMs, 30_000);
+  assert.equal(byId["unclean-w"].clean, false);
+  assert.equal(byId["unclean-w"].readyMs, 45_000);
+  assert.equal(byId["never-ready"].readyMs, undefined, "a wake that never became ready has no time to report");
+});
+
+test("F8: marking the active wake over does not overwrite a readyMs recorded while isBoxRunning() was pending", async () => {
+  const storage = memoryStorage();
+  await storage.put({ [wakeStorageKey("w1")]: { startedAt: 1, reason: "visit", over: false } });
+
+  const { resolved } = await resolveOverWakes(storage, {
+    // The outbound RPC opens the input gate; the box's recordWakeReady lands meanwhile.
+    isBoxRunning: async () => {
+      await recordWakeReady(storage, "w1", 12_000);
+      return false;
+    },
+    markerExists: async () => false,
+  });
+
+  assert.equal(resolved.length, 1);
+  assert.equal(resolved[0].readyMs, 12_000);
+});
 
 // ---- resolveOverWakes -----------------------------------------------------
 

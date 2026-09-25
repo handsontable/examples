@@ -44,6 +44,7 @@ import {
   pruneLedger,
   recentRejectionCount as ledgerRecentRejectionCount,
   recordPartialReject as ledgerRecordPartialReject,
+  recordWakeReady as ledgerRecordWakeReady,
   rejectKey as ledgerRejectKey,
   reopenWindow as ledgerReopenWindow,
   reopenWindowExceedsRetention,
@@ -133,13 +134,20 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     });
   }
 
+  async recordWakeReady(wakeId: string, readyMs: number): Promise<void> {
+    await ledgerRecordWakeReady(adaptStorage(this.ctx.storage), wakeId, readyMs);
+  }
+
   async ingest(tenant: Tenant, arrivalMs: number, items: IngestItem[]): Promise<IngestResult> {
     const storage = adaptStorage(this.ctx.storage);
 
     const result = await storage.transaction(async (txn) => {
       const hashes = items.map((i) => i.hash);
       const dedupe = await checkDuplicates(txn, hashes, arrivalMs);
-      const accepted = items.filter((i) => !dedupe.duplicates.has(i.hash));
+      // F5-batch fix: filter by OCCURRENCE (index), never by hash — the
+      // first copy of an in-batch repeat is the one stored, later copies
+      // are duplicates. See `DedupeResult.isDuplicate`.
+      const accepted = items.filter((_, idx) => !dedupe.isDuplicate[idx]);
 
       // A-I4 remainder (closed, second wave): a `record`-less item (an
       // `example.*` Faro event, `normalise/faro.ts`) still goes through the
@@ -170,9 +178,9 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
       });
 
       return {
-        results: items.map((i) => ({
+        results: items.map((i, idx) => ({
           hash: i.hash,
-          outcome: (dedupe.duplicates.has(i.hash) ? "duplicate" : "accepted") as "duplicate" | "accepted",
+          outcome: (dedupe.isDuplicate[idx] ? "duplicate" : "accepted") as "duplicate" | "accepted",
         })),
         bytesAdded: append.bytesAdded,
       };
@@ -196,17 +204,23 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
         return head !== null;
       },
     });
-    // ADR §5's `o11y.wake` "outcome: clean, unclean" — written here, at
-    // resolution time, because only the ledger (not `box.ts`, which writes
-    // its own `o11y.wake` at wake-start with `duration_ms` instead) ever
-    // learns whether a wake's stop was clean.
+    // Contract §5's `o11y.wake` (outcome `clean`/`unclean`, `duration_ms`
+    // "to ready") — one point per wake, written here at resolution time,
+    // because only the ledger ever learns whether a wake's stop was clean.
+    // F8: `box.ts` never wrote an `o11y.wake` point of its own (a comment
+    // here used to claim it did, so `duration_ms` was always 0). The box
+    // now reports its wake-to-ready time through `recordWakeReady`, stored
+    // on `wake:<id>`, and it is carried here on BOTH the clean and the
+    // unclean path. A wake whose box never became ready (it died or was
+    // stopped while still booting) has no such time and writes 0
+    // deliberately — read `duration_ms` only together with a non-zero value.
     for (const w of resolved) {
       writePointFromDo(
         this.env,
         this.ctx,
         toAePoint(
           "o11y.wake",
-          { count: 1 },
+          { count: 1, duration_ms: w.readyMs ?? 0 },
           { ...o11ySelfIdentity(this.env), reason: w.reason, outcome: w.clean ? "clean" : "unclean" },
         ),
       );

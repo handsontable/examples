@@ -209,6 +209,40 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
   assert.equal(errorPoints.length, 1, "a redelivered batch must write exactly one error.uncaught point, not two");
 });
 
+// F5-batch (V-triage): two identical exceptions in ONE Faro batch. Before the
+// fix, InboxWriter dropped both copies (filtering by hash) and index.ts's
+// `outcomeByHash` Map let the later "duplicate" overwrite the first copy's
+// "accepted" — no record, no error.uncaught point, and the hash marked seen.
+test("POST /telemetry/collect: an in-batch repeat stores one copy and writes its points once (F5-batch)", async () => {
+  const { env, ae, doStorage } = freshEnv();
+  const body = withFreshTimestamp(faroFixture("exception-code-frame.json"));
+  body.exceptions = [body.exceptions[0], structuredClone(body.exceptions[0])];
+  const req = () =>
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const res = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(res.status >= 200 && res.status < 300);
+
+  const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
+  const stored = rowKeys.reduce((n, k) => n + doStorage._data.get(k).resourceLogs.length, 0);
+  assert.equal(stored, 1, "the repeated exception is stored exactly once");
+  assert.equal(ae.points.filter((p) => p.indexes[0] === "error.uncaught").length, 1, "the stored copy's point is written once");
+  const ingestPoint = (outcome) =>
+    ae.points.find((p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("collect") && p.blobs?.includes(outcome));
+  assert.equal(metricValue(ingestPoint("accepted"), "count"), 1);
+  assert.equal(metricValue(ingestPoint("duplicate"), "count"), 1);
+
+  // A later redelivery of the same batch adds nothing.
+  await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.equal(ae.points.filter((p) => p.indexes[0] === "error.uncaught").length, 1);
+});
+
 // A-I4 remainder (closed, second wave): `example.*` events used to bypass
 // InboxWriter.ingest's dedupe transaction entirely (no ingestItem at all),
 // so a retried/redelivered batch inflated ADR-0042's analytics counts on
