@@ -85,17 +85,21 @@ function liveSessionsSection(page: Page) {
 test("signed in, the header links to Grafana through the o11y worker's own broker login", async ({ page }) => {
   // Nothing else in the app links to Grafana (ADR-0043's dashboards are
   // otherwise unreachable except by typing the URL), so this pins the one
-  // discoverable entry point: a same-origin anchor to `/grafana/`, opened in
-  // a new tab — `target="_blank"` so a signed-out visit there doesn't lose
-  // the operator's place in `/admin`, and the o11y worker's own session
-  // check (not this app) decides whether they land in Grafana or its broker
-  // login. The href comes from `Admin.tsx`'s `import.meta.env.VITE_GRAFANA_URL
-  // || "/grafana/"` — this suite runs against a `pnpm build` with no such env
-  // set (playwright.config.ts's webServer), so `/grafana/` here is that
-  // fallback, the same one a production build produces. The
-  // `pnpm dev:full`-only override to the o11y worker's local origin is
-  // covered by `pipeline/dev-script.test.mjs`'s buildPlan/VITE_GRAFANA_URL
-  // tests instead, since it needs no browser.
+  // discoverable entry point: a same-origin anchor, opened in a new tab —
+  // `target="_blank"` so a signed-out visit there doesn't lose the
+  // operator's place in `/admin`, and the o11y worker's own session check
+  // (not this app) decides whether they land in Grafana or its broker login.
+  //
+  // The href comes from `Admin.tsx`'s `import.meta.env.VITE_GRAFANA_URL ||
+  // "/grafana/"`, baked in at BUILD time (this suite runs `vite build` once,
+  // in playwright.config.ts's webServer, then serves the static `dist/`).
+  // `E2E_EXPECT_GRAFANA_URL` lets a caller that rebuilt with `VITE_GRAFANA_URL`
+  // set (see pipeline/dev-script.test.mjs's revert-check, which rebuilds and
+  // reruns this exact test against a fake local value) assert against that
+  // value instead of the default; CI never sets it, so CI is checking the
+  // production fallback, the same value a real production build produces.
+  const expectedHref = process.env.E2E_EXPECT_GRAFANA_URL ?? "/grafana/";
+
   await stubShell(page);
   await signIn(page);
 
@@ -108,7 +112,7 @@ test("signed in, the header links to Grafana through the o11y worker's own broke
 
   const grafanaLink = page.getByRole("link", { name: /Open Grafana/ });
   await expect(grafanaLink).toBeVisible();
-  await expect(grafanaLink).toHaveAttribute("href", "/grafana/");
+  await expect(grafanaLink).toHaveAttribute("href", expectedHref);
   await expect(grafanaLink).toHaveAttribute("target", "_blank");
 });
 
