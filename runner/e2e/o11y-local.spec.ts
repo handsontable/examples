@@ -141,7 +141,7 @@ test.describe("o11y local end-to-end (T11)", () => {
   let apiServer: ChildProcess;
 
   test.beforeAll(async () => {
-    test.setTimeout(180_000);
+    test.setTimeout(360_000);
 
     const o11yUp = await fetch(O11Y_BASE_URL).then(() => true).catch(() => false);
     if (!o11yUp) {
@@ -162,17 +162,14 @@ test.describe("o11y local end-to-end (T11)", () => {
       throw new Error(`something is already answering on :${API_PORT} — kill it first (lsof -ti :${API_PORT} | xargs kill)`);
     }
 
-    // F1 (V-triage): this spec only ever checks ClickHouse rows for
-    // Tier-1 (Sandpack) traffic — it never opens a Tier-2 (Sandbox
-    // container) session, unlike telemetry-metrics.spec.ts. Without
-    // `--enable-containers=false`, `wrangler dev` still runs its
-    // "⎔ Preparing container image(s)…" step on every cold run, which alone
-    // can blow this hook's 180s budget and was the CI beforeAll-timeout
-    // flake's other half (the o11y-local job's own worker already passes
-    // this flag — see e2e-o11y-local.yml).
+    // The API worker keeps containers enabled: the /d test's Fork is
+    // "fork -> build -> R2", and the build runs in a container. Starting it
+    // with `--enable-containers=false` (an earlier F1 flake fix) made Fork
+    // fail with no redirect to /edit/. The cold-runner image step is covered
+    // by the longer hook timeout above instead.
     apiServer = spawn(
       "node_modules/.bin/wrangler",
-      ["dev", "--port", String(API_PORT), "--inspector-port", String(API_INSPECTOR_PORT), "--enable-containers=false"],
+      ["dev", "--port", String(API_PORT), "--inspector-port", String(API_INSPECTOR_PORT)],
       { cwd: API_DIR, stdio: "pipe" },
     );
     let apiStderr = "";
