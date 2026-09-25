@@ -497,15 +497,22 @@ export class GrafanaBox extends Container<Env> {
   async isReady(): Promise<boolean> {
     const state = await this.getState();
     if (state.status !== "running" && state.status !== "healthy") return false;
-    try {
-      const [loki, grafana] = await Promise.all([
-        this.containerFetch(new Request("http://box/ready"), 3100),
-        this.containerFetch(new Request("http://box/grafana/api/health"), 3000),
-      ]);
-      return loki.status === 200 && grafana.status === 200;
-    } catch {
-      return false;
-    }
+    // F6 (V-triage): `allSettled`, and every body released on every path.
+    // `@cloudflare/containers` counts a `containerFetch` as in flight until
+    // its response body is consumed or cancelled (see
+    // {@link releaseBody}), and never runs the `sleepAfter` idle stop while
+    // that count is above zero. Reading only `.status` here left two
+    // requests in flight per call — this runs on every `/grafana/*` request
+    // and every `drainStep` — so a visit wake never idled out and ran to
+    // the 4-hour cap. `Promise.all` would also drop the other probe's
+    // response unreleased when one of them throws.
+    const probes = await Promise.allSettled([
+      this.containerFetch(new Request("http://box/ready"), 3100),
+      this.containerFetch(new Request("http://box/grafana/api/health"), 3000),
+    ]);
+    const responses = probes.flatMap((p) => (p.status === "fulfilled" ? [p.value] : []));
+    await Promise.all(responses.map(releaseBody));
+    return responses.length === probes.length && responses.every((r) => r.status === 200);
   }
 
   /**
@@ -736,7 +743,16 @@ export class GrafanaBox extends Container<Env> {
           }),
           3100,
         );
-        const message = res.status >= 400 ? await res.text().catch(() => undefined) : undefined;
+        // F6: a 2xx body is released too, not only read on >=400 — an
+        // unread body keeps this push "in flight" for the idle stop (see
+        // `releaseBody`). Loki's OTLP push usually answers 204 (no body),
+        // but nothing guarantees it.
+        if (res.status < 400) {
+          await releaseBody(res);
+          return { status: res.status, message: undefined };
+        }
+        const message = await res.text().catch(() => undefined);
+        await releaseBody(res); // no-op once `text()` consumed it; releases it if `text()` threw early
         return { status: res.status, message };
       },
       symbolicate: (records) => symbolicateResourceLogs(records, { getMap: (key) => this.#getMap(key) }),
@@ -876,6 +892,30 @@ export class GrafanaBox extends Container<Env> {
    *  the stop protocol's own trust chain (see `onStop`'s own doc comment). */
   async lastStop(): Promise<StopRecord | undefined> {
     return this.ctx.storage.get<StopRecord>(LAST_STOP_STORAGE_KEY);
+  }
+}
+
+/**
+ * F6 (V-triage): releases a container response whose body the caller does
+ * not need. `@cloudflare/containers@0.3.7` (`dist/lib/container.js`)
+ * increments `inflightRequests` in `containerFetch` (:887) and, for a
+ * response with a body, returns `new Response(readable, res)` after
+ * `res.body.pipeTo(writable).finally(() => this.decrementInflight())`
+ * through an `IdentityTransformStream` (:955-960). The pipe, and so the
+ * decrement, only finishes once the reader consumes or cancels `readable`.
+ * `isActivityExpired()` (:1687-1692) returns false while the count is above
+ * zero, so the base `alarm()` loop never reaches `onActivityExpired()` →
+ * `stop()` (:1566). Cancelling ends the pipe at once (the transform's
+ * writable side errors, `pipeTo` rejects, `finally` runs). Never throws:
+ * a body that is already consumed, locked or errored has nothing left to
+ * release.
+ */
+async function releaseBody(res: Response): Promise<void> {
+  if (!res.body || res.bodyUsed) return;
+  try {
+    await res.body.cancel();
+  } catch {
+    // already locked or errored — nothing left to release
   }
 }
 

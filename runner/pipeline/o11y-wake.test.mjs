@@ -615,6 +615,98 @@ test("F2: a waking-page request (box not yet ready) still counts as visitor acti
   assert.equal(stopped, false, "a visit wake whose only activity was a waking-page poll must not self-stop on the first drain-finish");
 });
 
+// ---- F6: every container response body is released ------------------------
+//
+// V-triage F6: `@cloudflare/containers` counts a `containerFetch` as in
+// flight until its response body is consumed or cancelled, and never runs
+// the `sleepAfter` idle stop while that count is above zero. `isReady()`
+// read only `.status`, so each probe pinned the count up by two and a visit
+// wake ran to the 4-hour cap. The stub now models that accounting
+// (`cloudflare-containers-stub.mjs`, "in-flight accounting"); these tests
+// answer with REAL bodies, as Loki (`ready\n`) and Grafana (JSON) do —
+// `installContainerFetchRouter`'s `null` bodies could never leak.
+
+/** Lets the stub's `pipeTo(...).finally(decrementInflight)` chains run. */
+async function settle() {
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+}
+
+function installRealisticProbeBodies({ lokiStatus = 200, lokiBody = "ready\n", grafana = "ok", otlp } = {}) {
+  hooks.containerFetch = async (_self, requestOrUrl, portOrInit) => {
+    const url = requestOrUrl instanceof Request ? requestOrUrl.url : String(requestOrUrl);
+    const port = typeof portOrInit === "number" ? portOrInit : undefined;
+    if (url.endsWith("/ready")) return new Response(lokiBody, { status: lokiStatus });
+    if (url.endsWith("/grafana/api/health")) {
+      if (grafana === "throw") throw new Error("probe failed");
+      return Response.json({ database: "ok", version: "11.4.0" }, { status: 200 });
+    }
+    if (url.includes("/otlp/v1/logs")) return otlp ? otlp(requestOrUrl, port) : new Response(null, { status: 204 });
+    return new Response("unrouted", { status: 500 });
+  };
+}
+
+test("F6: isReady() releases both probe bodies, so the in-flight count returns to 0 and the idle stop can fire", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  installRealisticProbeBodies();
+
+  for (let i = 0; i < 3; i++) assert.equal(await box.isReady(), true);
+  await settle();
+
+  assert.equal(box.inflightRequests, 0, "every probe response must be consumed or cancelled");
+  // 15 idle minutes later (the library's alarm loop asks exactly this).
+  box.sleepAfterMs = Date.now() - 1;
+  assert.equal(box.isActivityExpired(), true, "with nothing in flight the sleepAfter idle stop must be due");
+});
+
+test("F6: a not-ready probe's body is released too (Loki answers 503 with a body while it boots)", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  installRealisticProbeBodies({ lokiStatus: 503, lokiBody: "Ingester not ready: waiting for 15s after being ready\n" });
+
+  assert.equal(await box.isReady(), false);
+  await settle();
+  assert.equal(box.inflightRequests, 0);
+});
+
+test("F6: when one probe throws, the other probe's body is still released", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  installRealisticProbeBodies({ grafana: "throw" });
+
+  assert.equal(await box.isReady(), false);
+  await settle();
+  assert.equal(box.inflightRequests, 0, "the Loki probe's body must not leak because the Grafana probe threw");
+});
+
+test("F6: drainStep's Loki push releases a 2xx response body (not only a >=400 one)", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000009.ndjson.gz";
+  const record = {
+    resource: { attributes: [] },
+    scopeLogs: [{ logRecords: [{ timeUnixNano: String(BigInt(Date.now()) * 1_000_000n), body: { stringValue: "hello" } }] }],
+  };
+  const stream = new Blob([JSON.stringify(record) + "\n"]).stream().pipeThrough(new CompressionStream("gzip"));
+  const gz = new Uint8Array(await new Response(stream).arrayBuffer());
+
+  const { box, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [key] }, r2Objects: new Map([[key, gz]]) });
+  await box.wake("backlog");
+  let pushes = 0;
+  installRealisticProbeBodies({
+    otlp: () => {
+      pushes++;
+      return Response.json({ partialSuccess: {} }, { status: 200 });
+    },
+  });
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+  await settle();
+
+  assert.ok(pushes > 0, "the drain must actually have pushed");
+  assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 1);
+  assert.equal(box.inflightRequests, 0, "a 2xx push body must be released too");
+});
+
 // ---- hardCapStop ------------------------------------------------------
 
 test("hardCapStop stops a still-running wake matching its own wakeId", async () => {

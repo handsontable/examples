@@ -43,6 +43,16 @@ export function defaultHooks() {
 
 export const hooks = defaultHooks();
 
+/** `@cloudflare/containers` `dist/lib/helpers.js#parseTimeExpression`:
+ *  seconds, from a number or an `"<n>s|m|h"` string. */
+function parseTimeExpression(expr) {
+  if (typeof expr === "number") return expr;
+  const match = /^(\d+)([smh])$/.exec(expr);
+  if (!match) throw new Error(`invalid time expression ${expr}`);
+  const value = parseInt(match[1], 10);
+  return match[2] === "s" ? value : match[2] === "m" ? value * 60 : value * 3600;
+}
+
 export class Container {
   constructor(ctx, env, options) {
     this.ctx = ctx;
@@ -88,8 +98,68 @@ export class Container {
     return hooks.startAndWaitForPorts(this, portsOrArgs, cancellationOptions, startOptions);
   }
 
+  // ---- in-flight accounting and the idle clock (F6, V-triage) -------------
+  //
+  // Mirrors `@cloudflare/containers@0.3.7` `dist/lib/container.js`, because
+  // this is what decides whether the `sleepAfter` idle stop can ever fire:
+  // - `containerFetch` does `inflightRequests++` (:887) before proxying;
+  // - a response WITH a body is returned as `new Response(readable, res)`
+  //   after `res.body.pipeTo(writable).finally(() => decrementInflight())`
+  //   through an `IdentityTransformStream` (:955-960), so the count drops
+  //   only once the CALLER consumes or cancels that body;
+  // - a body-less response, or a throw, decrements at once (:962, :966);
+  // - `isActivityExpired()` (:1687-1692) returns false and renews the clock
+  //   while `inflightRequests > 0`; the base `alarm()` loop calls it and
+  //   `onActivityExpired()` → `stop()` only when it returns true (:1566).
+  // Before this, `renewActivityTimeout()` was a no-op and nothing counted,
+  // so a caller that never released a response body (box.ts `isReady()`
+  // did exactly that on every probe) looked idle here and pinned the real
+  // container awake until the 4-hour cap. Deviations: a hook that THROWS
+  // still throws (the real library turns it into a 500 response), so
+  // existing tests that inject a throw keep their meaning; WebSocket
+  // responses are not modelled (nothing here proxies one).
+  inflightRequests = 0;
+  sleepAfterMs = 0;
+
   async containerFetch(requestOrUrl, portOrInit, portParam) {
-    return hooks.containerFetch(this, requestOrUrl, portOrInit, portParam);
+    this.inflightRequests++;
+    let res;
+    try {
+      this.renewActivityTimeout();
+      res = await hooks.containerFetch(this, requestOrUrl, portOrInit, portParam);
+    } catch (e) {
+      this.decrementInflight();
+      throw e;
+    }
+    if (res.body !== null) {
+      const { readable, writable } = new TransformStream();
+      res.body
+        .pipeTo(writable)
+        .finally(() => this.decrementInflight())
+        // The library leaves this rejection (a cancelled body) unhandled;
+        // under node it would crash the test process instead.
+        .catch(() => {});
+      return new Response(readable, res);
+    }
+    this.decrementInflight();
+    return res;
+  }
+
+  decrementInflight() {
+    this.inflightRequests = Math.max(0, this.inflightRequests - 1);
+    if (this.inflightRequests === 0) this.renewActivityTimeout();
+  }
+
+  renewActivityTimeout() {
+    this.sleepAfterMs = Date.now() + parseTimeExpression(this.sleepAfter ?? "10m") * 1000;
+  }
+
+  isActivityExpired() {
+    if (this.inflightRequests > 0) {
+      this.renewActivityTimeout();
+      return false;
+    }
+    return this.sleepAfterMs <= Date.now();
   }
 
   async stop(signal) {
@@ -108,7 +178,6 @@ export class Container {
   onError(error) {
     throw error;
   }
-  renewActivityTimeout() {}
 
   /** T03 addition: the real `Container.schedule()` persists to SQLite and
    *  is later invoked by the base class's own `alarm()` loop — machinery
