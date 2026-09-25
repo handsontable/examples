@@ -19,6 +19,13 @@
 // contract module for the facade itself) turns the returned
 // `{ fingerprintContext, fingerprintMessage }` into a real fingerprint with
 // `fingerprint(context, message)`.
+//
+// The one exception is `HtMajor`, below: a `type`-only import, which
+// `node --experimental-strip-types` (this file's `pipeline/` test runner)
+// erases as syntax before any module resolution runs, so it hits neither of
+// the two problems above — no `@sentry/react` transitively, no
+// `runner/node_modules` bare-specifier resolution at all.
+import type { HtMajor } from "@handsontable/demo-runtime/telemetry";
 
 /** Mirrors `MonitorKind` (`packages/runtime/src/monitor.ts`) structurally,
  *  same arrangement as `eventGate.ts`'s local `ExceptionShape`. */
@@ -44,6 +51,7 @@ export interface DemoEventFacts {
   message: string;
   tier: 1 | 2;
   framework: string;
+  htMajor: HtMajor;
   demoId?: string | null;
 }
 
@@ -69,6 +77,7 @@ export interface DemoEventReport {
     surface: "demo-runtime";
     tier: "1" | "2";
     framework: string;
+    ht_major: HtMajor;
     demo_id?: string;
   };
 }
@@ -90,6 +99,7 @@ export function demoEventReport(facts: DemoEventFacts): DemoEventReport {
       surface: "demo-runtime",
       tier: facts.tier === 2 ? "2" : "1",
       framework: facts.framework,
+      ht_major: facts.htMajor,
       ...(facts.demoId ? { demo_id: facts.demoId } : {}),
     },
   };

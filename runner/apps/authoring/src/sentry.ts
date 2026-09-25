@@ -14,7 +14,7 @@ import {
   sanitizeMonitorPayload,
   type MonitorPayload,
 } from "@handsontable/demo-runtime/monitor";
-import { fingerprint as contractFingerprint } from "@handsontable/demo-runtime/telemetry";
+import { fingerprint as contractFingerprint, type HtMajor } from "@handsontable/demo-runtime/telemetry";
 import { ApiError } from "./apiError.js";
 import { resolveReporting } from "./reportingGate.js";
 import {
@@ -276,6 +276,7 @@ const demoBreadcrumbBudget = createMonitorBudget(MONITOR_BREADCRUMB_CEILING);
 export interface DemoEventContext {
   tier: 1 | 2;
   framework: string;
+  htMajor: HtMajor;
   demoId?: string | null;
 }
 
@@ -334,6 +335,7 @@ function reportDemoEventUnguarded(payload: MonitorPayload, context: DemoEventCon
     message,
     tier: context.tier,
     framework: context.framework,
+    htMajor: context.htMajor,
     demoId: context.demoId,
   });
 

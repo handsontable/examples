@@ -130,12 +130,12 @@ function callReportDemoEvent(page: Page, message: string): Promise<void> {
       window as unknown as {
         __t06ReportDemoEvent?: (
           payload: { type: string; kind: string; message: string },
-          context: { tier: number; framework: string },
+          context: { tier: number; framework: string; htMajor: string },
         ) => void;
       }
     ).__t06ReportDemoEvent?.(
       { type: "hot-runner-monitor", kind: "error", message: msg },
-      { tier: 1, framework: "react" },
+      { tier: 1, framework: "react", htMajor: "18" },
     );
   }, message);
 }
