@@ -235,6 +235,73 @@ function stripUrlQueriesInText(text: string): string {
 }
 
 /**
+ * R3 F17c: contract §3's "never sent" list includes "an IP" — the matching
+ * defense-in-depth duplicate of
+ * `workers/o11y/src/normalise/text-scrub.ts#redactIpInText`, kept in sync by
+ * hand for the same reason `stripUrlQueriesInText` above is: that module is
+ * Cloudflare-Worker-only and itself imports FROM this package, never the
+ * other way. Applied browser-side too so a stripped IP never leaves the
+ * client at all, not only at ingest.
+ *
+ * Bounded from the start, the same as every other pattern in this module —
+ * no unbounded quantifier, so no separate ReDoS fix round was needed; see
+ * `pipeline/o11y-redos.test.mjs` for the adversarial-input timing proof.
+ *
+ * IPv4: four dotted octets 0–255, boundary-guarded on both ends so a
+ * version string never matches (`18.1.1` has too few dotted numbers to
+ * reach the pattern; `1.2.3.4-beta`/`1.2.3.4.5` are rejected by the
+ * trailing lookahead), while a trailing `.` with nothing/a non-digit after
+ * it — an IP that simply ends a sentence — still redacts.
+ *
+ * The START boundary is a CAPTURING alternation (`^` or one non-`[\w.-]`
+ * character), never a lookbehind: `new RegExp` with a lookbehind
+ * (`(?<!...)`, ES2018) throws on Safari before 16.4 (March 2023), and this
+ * module is imported EAGERLY at browser boot (`apps/authoring/src/main.tsx`
+ * → `telemetry/index.js` → this package) — a throw here at module
+ * evaluation time would fail the whole telemetry module's import on any
+ * older Safari, exactly the class of eager-import regression
+ * `pipeline/telemetry-facade-boot-safety.test.mjs` exists to catch. The
+ * trailing boundary stays a plain negative LOOKAHEAD (`(?!...)`), which has
+ * always been supported — only lookBEHIND is the compatibility risk. The
+ * replacer functions below re-attach the captured prefix character.
+ */
+const IPV4_OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d{2}|[1-9]?\\d)";
+const IPV4_PATTERN = new RegExp(`(^|[^\\w.-])(?:${IPV4_OCTET}\\.){3}${IPV4_OCTET}(?![\\w-]|\\.\\d)`, "g");
+
+/** IPv6, the standard bounded form (7 alternatives covering the
+ *  uncompressed 8-group shape and every valid position of one `::`
+ *  compression) — same shape as the IPv4 pattern above: a small fixed
+ *  alternation built only from `{1,4}`/`{1,7}`-capped quantifiers, so a
+ *  single match attempt costs a small constant regardless of input length.
+ *  Same capturing-prefix boundary as IPv4 above, for the same lookbehind
+ *  compatibility reason. */
+const IPV6_GROUP = "[0-9A-Fa-f]{1,4}";
+const IPV6_PATTERN = new RegExp(
+  "(^|[^\\w:])(?:" +
+    `(?:${IPV6_GROUP}:){7}${IPV6_GROUP}` +
+    `|(?:${IPV6_GROUP}:){1,7}:` +
+    `|(?:${IPV6_GROUP}:){1,6}:${IPV6_GROUP}` +
+    `|(?:${IPV6_GROUP}:){1,5}(?::${IPV6_GROUP}){1,2}` +
+    `|(?:${IPV6_GROUP}:){1,4}(?::${IPV6_GROUP}){1,3}` +
+    `|(?:${IPV6_GROUP}:){1,3}(?::${IPV6_GROUP}){1,4}` +
+    `|(?:${IPV6_GROUP}:){1,2}(?::${IPV6_GROUP}){1,5}` +
+    `|${IPV6_GROUP}:(?::${IPV6_GROUP}){1,6}` +
+    `|:(?:(?::${IPV6_GROUP}){1,7}|:)` +
+    ")(?![\\w:])",
+  "g",
+);
+
+// IPv4 first, then IPv6 — same reordering, and the same reason, as the
+// server-side `redactIpInText` (an IPv4-mapped IPv6 address's octets are
+// hex-digit-shaped, so IPv6 alone can eat a leading fragment and leave a
+// real piece of the address behind).
+function redactIpInText(text: string): string {
+  return text
+    .replace(IPV4_PATTERN, (_match, prefix: string) => `${prefix}<ip>`)
+    .replace(IPV6_PATTERN, (_match, prefix: string) => `${prefix}<ip>`);
+}
+
+/**
  * ReDoS defense-in-depth (finding Z-A-C1, step 2 "truncate first"): bound a
  * free-text string to this length BEFORE any scrub/redact regex in this
  * module (or `../monitor.js`'s `redactPreviewHosts`, or
@@ -264,7 +331,7 @@ export function truncateForScrub(value: string): string {
 
 function scrubText(value: string | undefined): string | undefined {
   if (value === undefined) return value;
-  return stripUrlQueriesInText(stripCodeFrame(redactPreviewHosts(truncateForScrub(value))));
+  return redactIpInText(stripUrlQueriesInText(stripCodeFrame(redactPreviewHosts(truncateForScrub(value)))));
 }
 
 /**

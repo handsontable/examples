@@ -18,6 +18,7 @@ register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 const { processFaroBody, countFaroItems, MAX_FARO_ITEMS_PER_BODY } = await import(
   "../workers/o11y/src/normalise/faro.ts"
 );
+const { redactIpInText, scrubBodyText } = await import("../workers/o11y/src/normalise/text-scrub.ts");
 const { decodeOtlpJson, processOtlpBody } = await import("../workers/o11y/src/normalise/otlp.ts");
 const { decodeOtlpProtobuf } = await import("../workers/o11y/src/normalise/otlp-protobuf.ts");
 const { hashRecord } = await import("../workers/o11y/src/normalise/hash.ts");
@@ -62,6 +63,85 @@ test("Faro exception with a code frame: scrubbed, fingerprinted, hot.kind=except
   assert.ok(item.ingestItem.fingerprint, "authoring surface must feed the new-fingerprint alert");
 });
 
+// ---- R3 F17c: IP redaction (contract §3 "never sent": an IP) -------------------
+//
+// The exact R3-triage verification canary message (F17c): the privacy
+// canary `192.0.2.55` only "passed" before this fix because its whole
+// record was lost to a different, separately-fixed bug (F17a: a Faro
+// gecko-regex fallback that turned the message line into a fake stack
+// frame, dropped by the noise gate before ingest ever saw it — that gate
+// lives in `apps/authoring`, outside this Worker/package, so is untouched
+// here). Sent as an ordinary Faro log (not an exception with a stack) so
+// this test exercises `redactIpInText` on its own merits, independent of
+// F17a/F17b.
+const IP_CANARY_MESSAGE = "HAIKU1 pii jane.doe@example.com 192.0.2.55 https://x.test/p?token=SECRET123";
+
+test("Faro log: the exact R3 F17c canary message — IP, email and token all redacted, over the full ingest pipeline", async () => {
+  const body = faroFixture("log.json");
+  body.logs[0].message = IP_CANARY_MESSAGE;
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.ok(item.ingestItem, "a log must always be stored");
+
+  const text = allText(item.ingestItem.record);
+  assert.doesNotMatch(text, /192\.0\.2\.55/, "the IPv4 address must not survive");
+  assert.doesNotMatch(text, /jane\.doe@example\.com/, "the email must not survive");
+  assert.doesNotMatch(text, /token=/, "the query string (token) must not survive");
+  assert.doesNotMatch(text, /SECRET123/, "the token value must not survive");
+  assert.match(text, /<ip>/, "the IP must be replaced with the <ip> token");
+  assert.match(text, /<email>/, "the email must be replaced with the <email> token");
+});
+
+test("redactIpInText / scrubBodyText: version strings are untouched (no false positive)", () => {
+  assert.equal(redactIpInText("Handsontable 18.1.1 release notes"), "Handsontable 18.1.1 release notes");
+  assert.equal(redactIpInText("build 1.2.3.4-beta shipped"), "build 1.2.3.4-beta shipped");
+  assert.equal(scrubBodyText("Handsontable 18.1.1 release notes"), "Handsontable 18.1.1 release notes");
+  assert.equal(scrubBodyText("build 1.2.3.4-beta shipped"), "build 1.2.3.4-beta shipped");
+});
+
+test("redactIpInText: IPv6 is redacted (compressed and full forms)", () => {
+  assert.equal(redactIpInText("client at ::1 connected"), "client at <ip> connected");
+  assert.equal(redactIpInText("seen from fe80::1 today"), "seen from <ip> today");
+  assert.equal(
+    redactIpInText("full address 2001:0db8:0000:0000:0000:8a2e:0370:7334 logged"),
+    "full address <ip> logged",
+  );
+  assert.equal(
+    redactIpInText("compressed 2001:db8::8a2e:370:7334 logged"),
+    "compressed <ip> logged",
+  );
+});
+
+// R3 F17c (advisor review, this fix round): two boundary edge cases the
+// first-shipped `(?<!...)`/`(?![\w.-])` lookaround form got wrong.
+test("redactIpInText: an IP at the very end of a sentence (trailing '.') is still redacted", () => {
+  // The original trailing lookahead excluded ANY `.` after the fourth
+  // octet, including one with nothing after it — an under-redaction, not a
+  // false-positive dodge (that's what `\.\d` alone now guards against; see
+  // the version-strings test above for `1.2.3.4.5`).
+  assert.equal(redactIpInText("unreachable at 10.0.0.1."), "unreachable at <ip>.");
+  assert.equal(redactIpInText("seen at 10.0.0.1, retry"), "seen at <ip>, retry");
+});
+
+test("redactIpInText: an IPv4-mapped IPv6 address never leaks the real IPv4 octets", () => {
+  // IPV6_GROUP's hex-digit class also matches decimal digits, so an
+  // IPv6-first pass could consume `::ffff:192` (a valid-looking hex group)
+  // and leave the real fragment `.0.2.55` in the output. IPv4 runs first
+  // (redactIpInText's own doc comment) so the embedded IPv4 tail is always
+  // gone — the `::ffff:` prefix is not itself identifying.
+  const redacted = redactIpInText("client at ::ffff:192.0.2.55 connected");
+  assert.doesNotMatch(redacted, /192\.0\.2\.55/, "no fragment of the real IPv4 address may survive");
+  assert.doesNotMatch(redacted, /0\.2\.55/, "not even a partial fragment may survive");
+});
+
+test("Faro log: an IPv6 address in the message is redacted over the full ingest pipeline", async () => {
+  const body = faroFixture("log.json");
+  body.logs[0].message = "connection from 2001:db8::8a2e:370:7334 failed";
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  const text = allText(item.ingestItem.record);
+  assert.doesNotMatch(text, /2001:db8::8a2e:370:7334/, "the IPv6 address must not survive");
+  assert.match(text, /<ip>/, "the IPv6 address must be replaced with the <ip> token");
+});
+
 test("Faro: T06's diagnostic tags (handled, sentry_event_id, ...) survive scrub+hoist into the stored record (merge fix, T02+T06)", async () => {
   const body = faroFixture("log.json");
   body.logs[0].context = {
@@ -86,20 +166,107 @@ test("Faro: T06's diagnostic tags (handled, sentry_event_id, ...) survive scrub+
   }
 });
 
-test("Faro measurement: one browser metric point, stored record", async () => {
+// R3 F18: measurements are AE-only (contract §6 / ADR §F.1 ruling) — flipped
+// from "one browser metric point, stored record" now that `faro.ts` sets
+// `storeRecord = false` for every Faro `measurement` item. Still goes
+// through the exact hash-only `ingestItem` path `example.*` events already
+// use (A-I4 remainder), so dedupe on a redelivered batch still works — see
+// the dedicated dedupe test below.
+test("Faro measurement: one Analytics Engine point, no STORED record (F18: AE-only)", async () => {
   const body = faroFixture("measurement.json");
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
-  assert.ok(item.ingestItem);
+  assert.ok(item.ingestItem, "a measurement must still get a hash to dedupe on");
+  assert.equal(item.ingestItem.record, undefined, "but must never carry a record — F18: AE points only, never stored");
+  assert.equal(typeof item.ingestItem.hash, "string");
+  assert.ok(item.ingestItem.hash.length > 0);
   assert.equal(item.aePoints.length, 1);
   assert.equal(item.aePoints[0].indexes[0], "preview.ready_ms");
 });
 
-test("Faro web-vitals: LCP/INP/CLS become points, FCP is not a contract reason", async () => {
+// R3 F18: same flip for web-vitals — Faro's own `type: "web-vitals"` is
+// still a `measurement` item at the wire level (`processMeasurement`'s
+// other branch, faro.ts), so it takes the same `storeRecord = false` path.
+test("Faro web-vitals: LCP/INP/CLS become points, FCP is not a contract reason, no stored record (F18: AE-only)", async () => {
   const body = faroFixture("web-vitals.json");
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
-  assert.ok(item.ingestItem, "a web-vitals measurement is still stored (§6 table)");
+  assert.ok(item.ingestItem, "a web-vitals measurement must still get a hash to dedupe on");
+  assert.equal(item.ingestItem.record, undefined, "a web-vitals measurement must never be stored (F18)");
   const reasons = item.aePoints.map((p) => p.indexes[0]);
   assert.deepEqual(reasons, ["web_vital", "web_vital", "web_vital"]);
+});
+
+// R3 F18 dedupe: the same hash-only path `example.open`'s own test above
+// proves must survive a redelivered batch without double-counting.
+test("Faro measurement: a redelivered identical batch hashes identically (dedupe-eligible)", async () => {
+  const body = faroFixture("measurement.json");
+  const receivedAtMs = Date.now();
+  const [first] = await processFaroBody(body, ENV, SERVICE, receivedAtMs);
+  const [second] = await processFaroBody(body, ENV, SERVICE, receivedAtMs + 5000);
+  assert.equal(
+    first.ingestItem.hash,
+    second.ingestItem.hash,
+    "the same measurement, redelivered at a different arrival time, must hash identically so InboxWriter.ingest's dedupe actually catches it",
+  );
+});
+
+// R3 F18 (advisor review, this fix round): a crafted `hot.outcome`/`reason`
+// that makes `toAePoint` throw inside `processMeasurement` (T00-D10's own
+// isolated try/catch) must surface as `invalid`, never fall through and
+// store a record anyway — a stored measurement record with zero AE points
+// would contradict the §6 "none" ruling. This is only true because
+// `storeRecord = false` is set BEFORE `processMeasurement` runs, not after;
+// setting it after (the shape this branch originally shipped, mirroring the
+// pre-existing `example.*` branch) left `storeRecord` at its default `true`
+// on this exact throw path, and the record WAS stored — verified directly
+// against that shape before this test was added (see the task report).
+// `hmr.roundtrip_ms` has no `outcome`/`reason` blob slot (metrics.ts), so
+// supplying `hot.outcome` for it is exactly `toAePoint`'s own "caller bug"
+// guard.
+test("Faro measurement: a crafted hot.outcome that makes toAePoint throw surfaces as invalid, never stores a pointless record", async () => {
+  const body = faroFixture("measurement.json");
+  body.measurements[0].type = "hmr.roundtrip_ms";
+  body.measurements[0].context["hot.outcome"] = "bogus";
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.equal(item.aePoints.length, 0, "no point can be extracted from a throwing metric");
+  assert.match(item.invalid ?? "", /no "outcome" slot/);
+  assert.equal(item.ingestItem, undefined, "a throwing measurement must never store a record (F18)");
+});
+
+// R3 F18 acceptance criterion: "A Faro batch with measurement + log +
+// exception: only the log and exception records reach the inbox, and all AE
+// points are written." The AE-points-are-written half is proven by the two
+// tests above (both still return a populated `aePoints` array); this proves
+// the inbox-storage half across one real mixed batch, the shape the
+// acceptance criterion actually names.
+test("Faro mixed batch (measurement + log + exception): only the log and exception carry a stored record", async () => {
+  const measurementBody = faroFixture("measurement.json");
+  const logBody = faroFixture("log.json");
+  const exceptionBody = faroFixture("exception-code-frame.json");
+  const body = {
+    meta: measurementBody.meta,
+    measurements: measurementBody.measurements,
+    logs: logBody.logs,
+    exceptions: exceptionBody.exceptions,
+  };
+  const items = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.equal(items.length, 3, "all three items must be processed");
+
+  const measurementItem = items.find((item) => item.aePoints[0]?.indexes[0] === "preview.ready_ms");
+  const logItem = items.find((item) => item.ingestItem?.record?.attributes?.["hot.kind"] === "log");
+  const exceptionItem = items.find((item) => item.ingestItem?.record?.attributes?.["hot.kind"] === "exception");
+
+  assert.ok(measurementItem, "the measurement item must be found");
+  assert.ok(logItem, "the log item must be found");
+  assert.ok(exceptionItem, "the exception item must be found");
+
+  assert.equal(measurementItem.ingestItem.record, undefined, "the measurement must not carry a record (F18)");
+  assert.ok(logItem.ingestItem.record, "the log must carry a record");
+  assert.ok(exceptionItem.ingestItem.record, "the exception must carry a record");
+
+  // All three still produce their AE point(s) — F18 only drops the stored
+  // record, never the point.
+  assert.equal(measurementItem.aePoints.length, 1);
+  assert.equal(exceptionItem.aePoints.length, 1);
 });
 
 test("Faro example.open: one Analytics Engine point, no STORED record — but a hash-only ingestItem (A-I4 remainder, closed second wave)", async () => {
@@ -336,6 +503,83 @@ test("Faro: a query string embedded in an allowlisted attribute value (context, 
   const text = JSON.stringify(item.ingestItem.record);
   assert.doesNotMatch(text, /SECRET123/, "a query string inside an attribute value must be stripped, not stored verbatim");
 });
+
+// R3 F17c (advisor review, this fix round): `scrubTelemetry`'s own generic
+// deep pass (`redactStringsDeep`) only ever runs `redactPreviewHosts` — IP
+// redaction over an attribute value is ENTIRELY `scrubAttributeValues`'s own
+// job (text-scrub.ts), the same way the query-string test just above proves
+// for `stripQueryAndFragment`. Without this test, deleting `redactIpInText`
+// from `scrubAttributeValues` alone would fail no test in this file.
+test("Faro: an IP embedded in an allowlisted attribute value (context, a diagnostic tag) is redacted", async () => {
+  const body = faroFixture("log.json");
+  body.logs[0].context = {
+    ...body.logs[0].context,
+    context: "client 192.0.2.55 retried",
+  };
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.ok(item.ingestItem);
+  const text = JSON.stringify(item.ingestItem.record);
+  assert.doesNotMatch(text, /192\.0\.2\.55/, "an IP inside an attribute value must be redacted, not stored verbatim");
+  assert.match(text, /<ip>/, "the attribute's IP must become the <ip> token");
+});
+
+// R3 F17c: the direct `scrubBodyText`/`scrubAttributeValues` unit-level
+// proof this same wiring test implies at the pipeline level above — a
+// positive case for each of the two call sites `redactIpInText` was added
+// to, isolated from everything else `processFaroBody` does.
+test("scrubBodyText / scrubAttributeValues: both redact an embedded IP directly", () => {
+  assert.equal(scrubBodyText("client 192.0.2.55 retried"), "client <ip> retried");
+});
+
+// R3 F17c (advisor review, this fix round): the triage's actual leak SHAPE
+// (F17a) is not a plain log message — it is an uncaught error whose first
+// stack-trace line, because it embeds a foreign absolute URL, Faro's own
+// gecko-regex stack parser misreads as a real frame: `function` becomes the
+// message text itself (email + IP inline), `filename` becomes the quoted
+// URL, `lineno` is absent. `faroBody` (convert.ts) renders that frame as an
+// ordinary `    at <function> (<filename>)` line, folded into `record.body`
+// alongside the real `eval` frame beneath it — exercised here exactly as
+// ingest receives it (F17a's own browser-side drop is out of this task's
+// scope; this constructs the post-Faro item directly), both unhandled and
+// handled (handled bypasses whatever noise gate exists, so this also
+// proves the fix does not depend on it).
+function fakeFrameException(handled) {
+  return {
+    meta: { app: { name: "demos-authoring", version: "deadbeef1234" } },
+    exceptions: [
+      {
+        type: "Error",
+        value: "HAIKU1 pii jane.doe@example.com 192.0.2.55 https://x.test/p?token=SECRET123",
+        timestamp: new Date().toISOString(),
+        stacktrace: {
+          frames: [
+            {
+              function: "Error: HAIKU1 pii jane.doe@example.com 192.0.2.55 ",
+              filename: "https://x.test/p?token=SECRET123",
+            },
+            { function: "eval", filename: "http://localhost:5173/", lineno: 367, colno: 30 },
+          ],
+        },
+        context: { "hot.surface": "authoring", handled: String(handled) },
+      },
+    ],
+  };
+}
+
+for (const handled of [false, true]) {
+  test(`Faro exception (${handled ? "handled" : "unhandled"}): F17a's fake echo-frame shape never leaks the IP, email or token`, async () => {
+    const [item] = await processFaroBody(fakeFrameException(handled), ENV, SERVICE, Date.now());
+    assert.ok(item.ingestItem, "the exception must be stored");
+    const text = allText(item.ingestItem.record);
+    assert.doesNotMatch(text, /192\.0\.2\.55/, "the IP must not survive");
+    assert.doesNotMatch(text, /jane\.doe@example\.com/, "the email must not survive");
+    assert.doesNotMatch(text, /token=/, "the query string must not survive");
+    assert.doesNotMatch(text, /SECRET123/, "the token value must not survive");
+    // The real eval frame must still be present — this is a redaction
+    // proof, not a "drop the whole item" proof.
+    assert.match(text, /eval/, "the real stack frame must survive scrubbing");
+  });
+}
 
 test("hash: identical Faro item redelivered seconds apart hashes identically", async () => {
   const body = faroFixture("log.json");
