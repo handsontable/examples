@@ -111,7 +111,12 @@ test.describe("Browser metrics catalogue, live (T07)", () => {
     // The default hook timeout (60s) is not enough for wrangler dev's own
     // startup (the Sandbox container image check/build) plus the authoring
     // build plus the preview server — all sequential, all inside one hook.
-    test.setTimeout(180_000);
+    // F1 (V-triage): on a cold CI runner (no cached image layers) the
+    // container check/build step alone can approach the old 180s budget,
+    // so the whole hook intermittently tripped the timeout on attempt 1 and
+    // only passed on Playwright's retry (masking the failure as green CI).
+    // 360s gives the cold-build path real headroom without masking a hang.
+    test.setTimeout(360_000);
     const authoringAlready = await fetch(BASE_URL).then(() => true).catch(() => false);
     if (authoringAlready) {
       throw new Error(
