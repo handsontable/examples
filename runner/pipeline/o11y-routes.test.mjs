@@ -344,6 +344,41 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
   assert.equal(rowKeys.length, 0, "a measurement must never produce a row: entry");
 });
 
+// F28 (advisor follow-up): the old NB3 gate excluded an AE-only item from
+// BOTH counters, not just `accepted` — a redelivered measurement-only batch
+// used to write no `o11y.ingest` point at all on its second delivery, the
+// same blind spot as the first-delivery `accepted` case above, just for
+// `duplicate`. The task's "duplicates … still counted as before" line only
+// holds for a STORED duplicate (the exception in the mixed-outcome test
+// below); an AE-only duplicate is a genuinely new, intended behaviour
+// change from this fix, not something that was already correct.
+test("POST /telemetry/collect: a redelivered measurement-only batch writes an o11y.ingest duplicate point (F28)", async () => {
+  const { env, ae } = freshEnv();
+  const body = withFreshTimestamp(faroFixture("measurement.json"));
+  const req = () =>
+    new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const first = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(first.status >= 200 && first.status < 300);
+  const pointsBeforeSecond = ae.points.length;
+
+  const second = await worker.fetch(req(), env, ctx);
+  await ctx.drain();
+  assert.ok(second.status >= 200 && second.status < 300, "a duplicate delivery must still answer 2xx");
+
+  const newPoints = ae.points.slice(pointsBeforeSecond);
+  const duplicatePoint = newPoints.find(
+    (p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("collect") && p.blobs?.includes("duplicate"),
+  );
+  assert.ok(duplicatePoint, "the redelivered AE-only measurement must write an o11y.ingest duplicate point (F28)");
+  assert.equal(metricValue(duplicatePoint, "count"), 1);
+});
+
 // R3 F18 acceptance criterion, at the ROUTE level — the o11y-normalise.test.mjs
 // version of this scenario only calls `processFaroBody`, one layer below
 // `InboxWriter`/`writePoint`/the route's own accounting; this is the layer

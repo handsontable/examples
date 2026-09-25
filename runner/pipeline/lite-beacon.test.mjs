@@ -31,6 +31,21 @@ register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 const { default: worker } = await import("../workers/o11y/src/index.ts");
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
 const { makeEnv, ctx } = await import("./fixtures/o11y-harness.mjs");
+// Dynamic, not a static top-level import: `@handsontable/demo-runtime` only
+// resolves through `o11y-worker-hooks.mjs`'s own `resolve()` hook (registered
+// above via `register()`), and static imports are hoisted ahead of that
+// call — the same reason every other borrowed-specifier import in this repo's
+// `pipeline/*.test.mjs` files is `await import(...)` placed after `register()`,
+// never a plain `import … from`.
+const { AE_COLUMNS } = await import("@handsontable/demo-runtime/telemetry");
+
+/** Reads a numeric metric field (`count`, etc.) out of a fake AE point via
+ *  the real contract slot (`AE_COLUMNS.count`, e.g. `"double1"`) — the same
+ *  helper `o11y-routes.test.mjs` uses, never a hardcoded array index. */
+function metricValue(point, name) {
+  const m = /^double(\d+)$/.exec(AE_COLUMNS[name]);
+  return point.doubles[Number(m[1]) - 1];
+}
 
 // ---- the reporter, built for a representative config --------------------------
 
@@ -612,6 +627,7 @@ test("POST /telemetry/lite: a first-time web_vital beacon (AE-only, F18) still w
     (p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("lite") && p.blobs?.includes("accepted"),
   );
   assert.ok(ingestAccepted, "an o11y.ingest accepted point must be written for a first-time AE-only vital beacon");
+  assert.equal(metricValue(ingestAccepted, "count"), 1);
 });
 
 // ---- QA follow-up ("lite-beacon vitals") -----------------------------------
