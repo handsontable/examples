@@ -99,6 +99,32 @@ export function isForeignUnhandled(event: ExceptionShape, originOrigin: string):
   );
 }
 
+// ── R3 F17a: strip Faro's message-echo pseudo-frames before Gate 0b runs ────────
+//
+// Faro 2.12.1's `getStackFramesFromError` runs every line of `error.stack` through
+// a webkit regex, then a gecko-regex fallback. When the FIRST line of the stack
+// (the `Error: <message>` line, not a real `at …` frame) fails the webkit regex but
+// matches the gecko one, it becomes a fake frame: `{filename: <a URL quoted in the
+// message>, function: "Error: <message text>"}`, with NO `lineno`. If the message
+// happens to quote a foreign absolute URL — `Failed to load https://cdn…`, or an
+// error someone threw with a URL in its text — `isForeignUnhandled` above then
+// reads that fake frame's filename as "this error's stack lives outside our
+// origin" and drops the whole event. The message text was never a stack frame.
+//
+// A real frame always carries a `lineno` (even a minified/anonymous one); only
+// this message-echo artifact does not. So: drop a frame with no `lineno` whose
+// `filename` is a substring of the error's own message — that is the artifact,
+// not evidence of foreignness. Keep everything else, including a genuinely
+// foreign real frame (extension, third-party script), which still has a
+// `lineno` and is untouched.
+export function withoutMessageEchoFrames<F extends { filename?: string; lineno?: number }>(
+  value: string | undefined,
+  frames: F[] | undefined,
+): F[] | undefined {
+  if (!frames || !value) return frames;
+  return frames.filter((f) => typeof f.lineno === "number" || !f.filename || !value.includes(f.filename));
+}
+
 // ── Gate 1: DEMOS-5F — Microsoft Outlook/Office safelink scanner ────────────────
 //
 // The scanner injects script into the page that then throws its own unhandled

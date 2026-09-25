@@ -40,7 +40,12 @@ import {
   type Telemetry,
 } from "@handsontable/demo-runtime/telemetry";
 import { resolveTelemetryEnabled, telemetryEnvironment } from "./gate.js";
-import { isForeignUnhandled, isOfficeScannerRejection, isUnhandledNoise } from "../eventGate.js";
+import {
+  isForeignUnhandled,
+  isOfficeScannerRejection,
+  isUnhandledNoise,
+  withoutMessageEchoFrames,
+} from "../eventGate.js";
 
 /**
  * Fix round D-I2: contract §6 requires `beforeSend` = `scrubTelemetry` THEN
@@ -90,9 +95,34 @@ function faroExceptionToExceptionShape(payload: ScrubbableFaroItem["payload"]) {
  *  never exported here) and this module's narrower `ScrubbableFaroItem`.
  *  D-I2: an `exception` item is then run through the shared noise gates,
  *  same as Sentry's own `beforeSend` — AFTER scrubbing, so a gate never
- *  reads pre-scrub content. */
+ *  reads pre-scrub content.
+ *
+ *  R3 F17a: BEFORE scrubbing, an `exception` item's stack frames are run
+ *  through `withoutMessageEchoFrames` on the RAW (unstripped) message —
+ *  `scrubTelemetry` already strips the query/fragment off a frame's
+ *  `filename`, which would break the substring match this needs against the
+ *  message text quoting that same URL in full. This drops Faro's fake
+ *  message-echo frame (see `eventGate.ts`) before Gate 0b
+ *  (`isForeignUnhandled`) ever sees it, and also removes the duplicated
+ *  message text from the stored body — a real frame (e.g.
+ *  `at native (<anonymous>)`) always has a `filename` that is not a
+ *  substring of the message, so it survives untouched. */
 const beforeSend: BeforeSendHook = (item) => {
-  const scrubbed = scrubTelemetry(item as unknown as ScrubbableFaroItem) as ScrubbableFaroItem | null;
+  const raw = item as unknown as ScrubbableFaroItem;
+  const candidate: ScrubbableFaroItem =
+    raw.type === "exception" && raw.payload.stacktrace
+      ? {
+          ...raw,
+          payload: {
+            ...raw.payload,
+            stacktrace: {
+              ...raw.payload.stacktrace,
+              frames: withoutMessageEchoFrames(raw.payload.value, raw.payload.stacktrace.frames),
+            },
+          },
+        }
+      : raw;
+  const scrubbed = scrubTelemetry(candidate) as ScrubbableFaroItem | null;
   if (!scrubbed) return null;
   if (scrubbed.type === "exception") {
     const shape = faroExceptionToExceptionShape(scrubbed.payload);
