@@ -246,14 +246,20 @@ several triggers fires, so the `curl` forms above are simpler.)
 dashboard for API-worker lines, authoring/embed/demo-runtime browser errors,
 and a free-text/`cf.ray`/`session.id`/demo-id search across every service in
 one place — it's linked from the Runner overview and Observability self
-dashboards too. On the deployed zone, `/admin`'s header also has an **Open
-Grafana** link (otherwise nothing in the app points at it) — it works there
-because the authoring app and the o11y worker share one origin. Locally they
-don't: `apps/authoring/vite.config.ts`'s dev proxy has no `/grafana` entry
-(only `/api`, `/d`, `/embed`, `/telemetry`), so that same link on
-`:<AUTHORING_PORT>/admin` falls through to the SPA instead of reaching
-Grafana — open `http://localhost:<O11Y_DEV_PORT>/grafana/` directly there
-instead. Every signed-in user is a Grafana Viewer, but Viewers now also get
+dashboards too. `/admin`'s header also has an **Open Grafana** link
+(otherwise nothing in the app points at it): `href={GRAFANA_URL}` in
+`Admin.tsx`, which reads `import.meta.env.VITE_GRAFANA_URL` and falls back to
+`/grafana/`. On the deployed zone that fallback is what actually runs (no env
+override needed) because the authoring app and the o11y worker share one
+origin. Locally they don't — `apps/authoring/vite.config.ts`'s dev proxy has
+no `/grafana` entry (only `/api`, `/d`, `/embed`, `/telemetry`), and a proxy
+wouldn't be the right fix anyway: Grafana's own `GF_SERVER_ROOT_URL` is the
+o11y worker's origin, so its login redirect would bounce off a proxied
+origin. `pnpm dev:full` (`scripts/dev-lib.mjs`'s `--tier=full` plan) instead
+sets `VITE_GRAFANA_URL=http://localhost:<O11Y_DEV_PORT>/grafana/` as process
+env for the app's dev server, so the same link on `:<AUTHORING_PORT>/admin`
+opens Grafana directly there too, with the `DEV_ADMIN` local login bypass
+landing correctly. Every signed-in user is a Grafana Viewer, but Viewers now also get
 **Explore** (`/grafana/explore`): pick the `Loki (browser)` or
 `Loki (worker)` datasource and run a LogQL query directly against either
 tenant, without needing a dashboard panel for it. Neither capability lets a
@@ -833,10 +839,11 @@ fragment token once, and the o11y worker mints its own signed session
 cookie from it (`workers/o11y/src/gates/session.ts`, `grafana/login.ts`).
 There is nothing to create in the Zero Trust dashboard.
 
-On the deployed zone, `/admin`'s header has an **Open Grafana** link
-straight to `/grafana/` — it goes through this same broker login, opened in
-a new tab (see "Browsing logs" above for why the equivalent local link
-doesn't work the same way).
+`/admin`'s header has an **Open Grafana** link, opened in a new tab, that
+goes through this same broker login — straight to `/grafana/` on the
+deployed zone, and to the o11y worker's own local origin under `pnpm
+dev:full` (see "Browsing logs" above for the `VITE_GRAFANA_URL` wiring that
+makes the local case work too).
 
 Set nothing in Cloudflare beyond this one secret:
 

@@ -1379,6 +1379,20 @@ test("buildPlan: tier=full additionally injects VITE_TELEMETRY_LOCAL=1 for the a
   assert.equal(tier2App.env.VITE_TELEMETRY_LOCAL, undefined);
 });
 
+test("buildPlan: tier=full injects VITE_GRAFANA_URL for the app process, at the o11y worker's own origin (not AUTHORING/O11Y_GRAFANA_PORT)", () => {
+  const ports = resolvePorts("full", { O11Y_DEV_PORT: "6223", AUTHORING_DEV_PORT: "6220" });
+  const app = buildPlan("full", ports).find((p) => p.name === "app");
+  assert.equal(app.env.VITE_GRAFANA_URL, "http://localhost:6223/grafana/");
+});
+
+test("buildPlan: only tier=full injects VITE_GRAFANA_URL — tier=1 and tier=2 leave it unset so a build without dev.mjs falls back to the app's own default", () => {
+  for (const tier of ["1", "2"]) {
+    const ports = resolvePorts(tier, {});
+    const app = buildPlan(tier, ports).find((p) => p.name === "app");
+    assert.equal(app.env.VITE_GRAFANA_URL, undefined, `tier=${tier} must not set VITE_GRAFANA_URL`);
+  }
+});
+
 test("buildPlan: never spawns wrangler via npx (spawns node_modules/.bin/wrangler directly)", () => {
   const ports = resolvePorts("full", {});
   for (const proc of buildPlan("full", ports)) {

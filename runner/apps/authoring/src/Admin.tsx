@@ -127,6 +127,24 @@ interface UsageReport {
 
 const WINDOWS = [7, 30, 90];
 
+/** `import.meta.env.VITE_GRAFANA_URL` — on the deployed zone the authoring
+ *  app and the o11y worker share one origin, so a plain `/grafana/` reaches
+ *  it (the fallback, and what a production build with no env produces).
+ *  Locally the authoring app runs on Vite and the o11y worker on its own
+ *  port, with no dev-server proxy for `/grafana` (Grafana's own
+ *  `GF_SERVER_ROOT_URL` is the o11y worker's origin, so proxying would just
+ *  bounce its redirects) — `scripts/dev-lib.mjs`'s `--tier=full` plan sets
+ *  this env var to that worker's `http://localhost:<O11Y_DEV_PORT>/grafana/`
+ *  so the link (and the DEV_ADMIN login bypass it relies on) works there too,
+ *  injected as process env for the dev server only (never written to a
+ *  file), the same way that plan injects `VITE_API_BASE`/`VITE_DEV_USER`.
+ *  Unlike `VITE_TELEMETRY_LOCAL`, `pnpm check:telemetry-leak` does NOT check
+ *  for this one — nothing here needs dead-code elimination to be safe, so a
+ *  stray `VITE_GRAFANA_URL` in a hand-edited `.env.local` would bake its
+ *  value into a "production" build undetected. Don't set it outside
+ *  `dev-lib.mjs`. See docs/run-and-deploy.md's "Browsing logs" section. */
+const GRAFANA_URL = import.meta.env.VITE_GRAFANA_URL || "/grafana/";
+
 const usd = (n: number): string => (n >= 100 ? `$${n.toFixed(0)}` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`);
 const int = (n: number): string => n.toLocaleString("en-US");
 const duration = (seconds: number): string => {
@@ -232,7 +250,7 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
          *  same-tab-avoiding anchor is enough, no client-side auth needed. */}
         <a
           style={{ ...chip, textDecoration: "none" }}
-          href="/grafana/"
+          href={GRAFANA_URL}
           target="_blank"
           rel="noopener noreferrer"
         >
