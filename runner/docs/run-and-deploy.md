@@ -218,42 +218,71 @@ tiny local HTTP server (no real Slack workspace involved) that prints and
 keeps the last 50 alert posts (`GET http://localhost:4210/_captured`). The
 o11y worker's local `SLACK_WEBHOOK_URL` points at it (see the bootstrap
 section above), so a fired alert (ADR-0041 §F.3 — trigger the `*/10` cron by
-hand with `curl "http://localhost:<O11Y_DEV_PORT>/cdn-cgi/local/scheduled"`,
+hand with `curl "http://localhost:<O11Y_DEV_PORT>/cdn-cgi/local/scheduled?cron=*/10+*+*+*+*"`,
 or replay the fixtures, which trips the new-fingerprint rule on first run)
 shows up locally instead of needing a real Slack webhook.
+
+**Crons never fire on their own under `wrangler dev`** — neither worker's,
+and this is by design, not a bug (both print "Scheduled Workers are not
+automatically triggered during local development" on startup when they have
+any). Trigger a specific one by hand with the pattern above for the o11y
+worker (its `*/10 * * * *` backlog/alert tick), or, for the API worker's two
+triggers (`workers/api/wrangler.jsonc`'s `triggers.crons`):
+`curl "http://localhost:<API_DEV_PORT>/cdn-cgi/handler/scheduled?cron=17+4+*+*+*"`
+for the nightly job (reconciliation, spend alerts, GC, analytics prune), and
+`curl "http://localhost:<API_DEV_PORT>/cdn-cgi/handler/scheduled?cron=*/5+*+*+*+*"`
+for the `*/5` pool/budget-gauge tick. The two workers' local trigger paths
+differ (`/cdn-cgi/local/scheduled` vs `/cdn-cgi/handler/scheduled`) because
+they pin different wrangler versions (o11y 4.136.3, API 4.108.0) whose
+Miniflare internals name this differently; wrangler itself prints the
+correct path and port for whichever worker you're running, so treat that
+printed line as the source of truth if it ever disagrees with this doc.
+(`wrangler dev --test-scheduled` + `/__scheduled` still exists as an older,
+separate opt-in path, but needs the flag and does not let you pick which of
+several triggers fires, so the `curl` forms above are simpler.)
 
 **Browsing logs.** Sign into Grafana (`http://localhost:<O11Y_DEV_PORT>/grafana/` —
 `DEV_ADMIN` logs you in automatically in local mode) and open the **Logs**
 dashboard for API-worker lines, authoring/embed/demo-runtime browser errors,
 and a free-text/`cf.ray`/`session.id`/demo-id search across every service in
 one place — it's linked from the Runner overview and Observability self
-dashboards too, and from an **Open Grafana** link in `/admin`'s own header
-(otherwise nothing in the app points at it). Every signed-in user is a
-Grafana Viewer, but Viewers now also get **Explore** (`/grafana/explore`):
-pick the `Loki (browser)` or `Loki (worker)` datasource and run a LogQL
-query directly against either tenant, without needing a dashboard panel for
-it. Neither capability lets a Viewer save a change back to a provisioned
-dashboard or datasource — those stay read-only, and Grafana's state is
-disposable anyway (a fresh DB on every wake).
+dashboards too. On the deployed zone, `/admin`'s header also has an **Open
+Grafana** link (otherwise nothing in the app points at it) — it works there
+because the authoring app and the o11y worker share one origin. Locally they
+don't: `apps/authoring/vite.config.ts`'s dev proxy has no `/grafana` entry
+(only `/api`, `/d`, `/embed`, `/telemetry`), so that same link on
+`:<AUTHORING_PORT>/admin` falls through to the SPA instead of reaching
+Grafana — open `http://localhost:<O11Y_DEV_PORT>/grafana/` directly there
+instead. Every signed-in user is a Grafana Viewer, but Viewers now also get
+**Explore** (`/grafana/explore`): pick the `Loki (browser)` or
+`Loki (worker)` datasource and run a LogQL query directly against either
+tenant, without needing a dashboard panel for it. Neither capability lets a
+Viewer save a change back to a provisioned dashboard or datasource — those
+stay read-only, and Grafana's state is disposable anyway (a fresh DB on
+every wake).
 
 **Logs are only as fresh as the last wake.** The box drains its packed
 objects into Loki once, right after it wakes, and nothing re-arms that
 drain while it stays awake (ADR-0041 §B.3's out-of-order window assumes the
 drain replays into an empty ingester, which only holds true at wake start).
-So anything packed *while* the box is already up — a visit that keeps it
-alive, a mid-wake backlog cron tick — sits undrained and invisible in
-Grafana/Explore until the *next* wake, which today can be as late as the 4h
-hard cap. There is no staleness indicator on the dashboards for this; treat
-Logs/Explore as "as of the last wake started", not live, until a periodic
-in-wake drain ships.
+So any ingest that arrives *while* the box is already up sits undrained and
+invisible in Grafana/Explore until the *next* wake. There is no staleness
+indicator on the dashboards for this; treat Logs/Explore as "as of the last
+wake started", not live — a design change may follow.
 
 **Bot traffic is filtered locally too.** The o11y worker's bot gate drops
 any request whose user agent matches `HeadlessChrome` — including local
-requests, by design. Scripted local traffic (a bare `chromium.launch()`,
-most CI-style Playwright runs) is silently dropped before it reaches
-Analytics Engine/Loki, with no client-side signal that it happened; use a
-real Chrome UA or Playwright's `channel: "chrome"` if you need scripted
-traffic to actually show up in local dashboards.
+requests, by design. This repo's own Playwright config already avoids it
+(`playwright.config.ts` uses `devices["Desktop Chrome"]`, which does not
+send a `HeadlessChrome` UA even when headless — confirmed live), so it's
+only a risk for a bare `chromium.launch()` with no device preset. That kind
+of scripted local traffic is silently dropped before it reaches Analytics
+Engine/Loki, with no client-side signal that it happened; use a
+`devices[...]` preset (confirmed live: `devices["Desktop Chrome"]` does not
+send `HeadlessChrome` even headless) or an explicit non-`HeadlessChrome` UA
+override if you need it to actually show up in local dashboards —
+`channel: "chrome"` alone does **not** fix it: confirmed live, a headless
+`chromium.launch({ channel: "chrome" })` still sends `HeadlessChrome/...`.
 
 **Local o11y data persists across a restart.** `containers/o11y/compose.yml`
 gives MinIO and ClickHouse named volumes (Grafana itself stays ephemeral by
@@ -272,13 +301,14 @@ Wiping only one half (e.g. `docker volume rm` by hand) is what causes the
 stack to look "broken" after a restart: a `done:` (committed) ledger key
 whose MinIO data is gone is never re-drained on its own, and a fixture
 replay's dedupe hashes can then block the same data from ever refilling the
-now-empty store. (In practice a *pushed* key almost never reaches `done:`
-locally in the first place — see "Local clean markers never commit" below —
-so this mismatch mainly bites a wake that drained nothing, or state carried
-over from before that gap existed; the dedupe-hash half of the warning
-still applies regardless.) If `dev.mjs` finds exactly that mismatch (the
-MinIO volume is gone but the ledger still has committed keys) it prints a
-warning recommending `--fresh` — or, if you'd rather keep what R2 still has
+now-empty store. In practice, only that second half — the dedupe-hash
+hazard — applies to a wake that pushed data: see "Local clean markers never
+commit" below for why a pushed key can't reach `done:` locally at all, so
+neither the "committed key whose MinIO data is gone" case nor `dev.mjs`'s
+own divergence warning (below) ever fires for one. If `dev.mjs` finds that
+mismatch (the MinIO volume is gone but the ledger still has committed keys —
+in practice, only a wake that drained nothing) it prints a warning
+recommending `--fresh` — or, if you'd rather keep what R2 still has
 (7-day retention), `POST /grafana/_o11y/reopen` once the worker is up.
 `--fresh` never touches `workers/api`'s local D1 — that's `--reset-local-db`, a
 different flag for a different store. `pnpm o11y:dev` also accepts
@@ -287,16 +317,19 @@ runs `docker compose` itself, so it can't wipe the compose volumes; see that
 command's own startup log for the divergence risk if you're also running
 `dev:full`'s compose stack.
 
-**Local clean markers never commit.** In production, the box writes each
+**Local clean markers never commit.** A wake resolves clean or unclean, and
+it's the keys it **drained** (packing is `InboxWriter`'s job, not the
+wake's) that become `done:` on a clean resolution — or get reopened and
+replayed on the next wake otherwise. In production, the box writes each
 wake's `state/wakes/<wakeId>/clean` marker and the worker checks for it
 through the same R2 bucket (`handsontable-demos-o11y-loki`), so a clean stop
-resolves the wake `done:` and its keys are never replayed again. Locally
-those are two *different* stores: the container writes the marker straight
-to MinIO over S3, but the o11y worker checks for it through its
+resolves those drained keys `done:` and they are never replayed again.
+Locally those are two *different* stores: the container writes the marker
+straight to MinIO over S3, but the o11y worker checks for it through its
 `O11Y_LOKI_STATE` R2 binding, which under `wrangler dev` is Miniflare's own
 separate local R2 — not MinIO. The worker never finds the marker, so a local
-wake that pushed any data always resolves `unclean` and reopens every key it
-packed, which then replays again on the next wake, indefinitely (within
+wake that drained any data always resolves `unclean` and reopens every key
+it drained, which then replays again on the next wake, indefinitely (within
 Loki's 7-day retention) — not only after a crash. This is a local-dev-only
 gap with no bridge today; treat `o11y.wake outcome=unclean` as expected
 locally rather than a sign something broke, and don't rely on local
@@ -458,15 +491,10 @@ ceiling. They are informational; the enforced ceiling is the Worker's own, shipp
 observe-only and switched on from **/admin → Guardrail settings**. Full detail
 in [cost-guardrails.md](cost-guardrails.md).
 
-Crons never fire on their own under `wrangler dev` — trigger the API
-worker's two triggers by hand instead (`--test-scheduled`/`/__scheduled`
-are gone as of wrangler 4.108, this repo's pinned API-worker version; it
-serves `/cdn-cgi/handler/scheduled?cron=<urlencoded pattern>` instead):
-`curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=17+4+*+*+*"` runs
-the nightly job (reconciliation, spend alerts, GC, analytics prune), and
-`curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=*/5+*+*+*+*"`
-runs the `*/5` pool/budget-gauge tick — both patterns straight from
-`workers/api/wrangler.jsonc`'s `triggers.crons`.
+Crons never fire on their own under `wrangler dev` — see "Crons never fire
+on their own under `wrangler dev`" in the local-dev section above for the
+exact `curl` commands, including the one that runs this nightly job
+on demand.
 
 ## Continuous deployment
 
@@ -804,6 +832,11 @@ through. A callback page under `/grafana/_o11y/` reads the broker's
 fragment token once, and the o11y worker mints its own signed session
 cookie from it (`workers/o11y/src/gates/session.ts`, `grafana/login.ts`).
 There is nothing to create in the Zero Trust dashboard.
+
+On the deployed zone, `/admin`'s header has an **Open Grafana** link
+straight to `/grafana/` — it goes through this same broker login, opened in
+a new tab (see "Browsing logs" above for why the equivalent local link
+doesn't work the same way).
 
 Set nothing in Cloudflare beyond this one secret:
 
