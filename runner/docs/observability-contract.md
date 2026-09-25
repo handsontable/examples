@@ -241,6 +241,11 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `o11y.backlog` | o11y worker cron | — | value (oldest age s), bytes | — |
 | `o11y.alert` | o11y worker cron | reason (rule id), outcome | count | `fired`, `resolved` |
 
+`o11y.wake`'s `duration_ms` (F8) is wake-to-ready time — from the wake starting to the
+box's first successful `isReady()`, sourced from `wake:<wakeId>.readyMs` (§8) — on both
+the `clean` and `unclean` outcome. `duration_ms = 0` means the box never became ready
+during that wake, not a genuinely instant boot.
+
 ## 6. Browser facade and Faro
 
 The app never calls Faro directly; it calls one facade, implemented with Faro:
@@ -318,7 +323,7 @@ dedupe hash is computed over the decoded, scrubbed record before timestamps are 
 | `fp:<fingerprint>` | first-seen epoch ms (exact registry for the new-fingerprint alert) |
 | `fpts:<firstSeenMs:015d>:<fingerprint>` | same first-seen epoch ms as its `fp:` twin — a time-ordered secondary index (G1 fix round, B-C1/A-I1 remainder) so the new-fingerprint alert can do a bounded `start`/`end` range read instead of listing the whole (alphabetically, not chronologically, ordered) `fp:` prefix every tick. Written/deleted together with its `fp:` twin, always |
 | `alert:<rule>` | `{ state: firing \| resolved, since, lastNotified }` |
-| `wake:<wakeId>` | `{ startedAt, reason, over: boolean }` — over when a newer wake started or the container is not running; **deleted once fully resolved** (see below) |
+| `wake:<wakeId>` | `{ startedAt, reason, over: boolean, readyMs? }` — over when a newer wake started or the container is not running; **deleted once fully resolved** (see below). `readyMs` (F8) is wake-to-ready time in ms, written once by `InboxWriterApi.recordWakeReady(wakeId, readyMs)` — called by `GrafanaBox` on the wake's first successful `isReady()`, first call wins, a no-op for an already-resolved (deleted) wake — and copied onto the resolved `o11y.wake` point as `duration_ms` (§5); absent while the box has not yet become ready |
 | `rejectedEvent:<ms:015d>:<inbox key>` | rejection reason (string) — a chronological audit/alert log (G1 fix round, row 19 / B-C1/A-I1 remainder), written by both a full rejection (`ledger.ts#rejectKey`) and a **partial** one (`ledger.ts#recordPartialReject`, see below). The `rejected-inbox-key` alert fires on a RECENT (last hour) count here, not on `rejectedKeyCount()`'s never-pruned total, so it resolves once rejections stop instead of firing forever after the first one ever seen |
 | `drainsPaused` | boolean (o11y spend cap) |
 | `heartbeat` | `{ lastCron, lastIngest }` |
