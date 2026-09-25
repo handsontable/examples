@@ -41,8 +41,21 @@ function malformedJsonRequest(method, path) {
   });
 }
 
+/** `api.request` (recordRequestSignal) writes an AE point for every request; with
+ *  the bare `makeEnv()` env this falls through to the local-ClickHouse-HTTP sink
+ *  (`serviceEnvironment`'s non-production branch) and makes a real network call to
+ *  whatever is on :8123 on this machine — same fix as `snapshot-build-point.test.mjs`'s
+ *  own `envWithPointCapture` helper: an in-memory sink routes the write away from
+ *  the network entirely. */
+function envWithPointCapture() {
+  const { env, ...rest } = makeEnv();
+  env.RUNNER_EVENTS = { writeDataPoint() {} };
+  env.PREVIEW_HOST = "demos.handsontable.com";
+  return { env, ...rest };
+}
+
 test("a malformed POST /api/session body is a 400, not the fetch catch-all's 500", async () => {
-  const { env } = makeEnv();
+  const { env } = envWithPointCapture();
   const res = await worker.fetch(malformedJsonRequest("POST", "/api/session"), env, ctx);
   assert.equal(res.status, 400, "must not reach the generic 500 catch-all");
   const body = await res.json();
@@ -53,7 +66,7 @@ test("a malformed POST /api/session body is a 400, not the fetch catch-all's 500
 });
 
 test("a malformed POST /api/session/:id/file body is a 400, not a 500", async () => {
-  const { env } = makeEnv();
+  const { env } = envWithPointCapture();
   const res = await worker.fetch(malformedJsonRequest("POST", "/api/session/sess-1/file"), env, ctx);
   assert.equal(res.status, 400, "must not reach the generic 500 catch-all");
   const body = await res.json();

@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { stubShell } from "./helpers";
 
 // `/share/<bad>` used to show "entry file /index.html not found in example
 // files" for a demo id that doesn't resolve — confusing, and not even about
@@ -16,16 +17,15 @@ import { test, expect, type Page } from "@playwright/test";
 // already uses for the docs-example loader) before EditorShell — and hence its
 // mount effect — is ever reached.
 //
-// Deterministic: both `/api/demos/:id/source` and `/api/demos/:id` are
-// stubbed, so this needs no real API worker — same approach as
-// saved-demo-version.spec.ts, runs against the local `vite preview`.
+// Deterministic: `stubShell` (e2e/helpers.ts) covers /api/versions, the two
+// Sandpack hosts and the login redirect; `/api/demos/:id/source` and
+// `/api/demos/:id` are stubbed here on top, so this needs no real API worker,
+// running against the local `vite preview`.
 
 const DEMO_ID = "e2ezzznope1";
 
 async function stubMissingDemo(page: Page, { metaStatus }: { metaStatus: 404 | 410 }) {
-  await page.route("**/api/versions", (route) =>
-    route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0", "17.1.0"] } }),
-  );
+  await stubShell(page);
   await page.route("**/api/demos/**", (route) => {
     const isSource = new URL(route.request().url()).pathname.endsWith("/source");
     if (isSource) {
@@ -39,9 +39,6 @@ async function stubMissingDemo(page: Page, { metaStatus }: { metaStatus: 404 | 4
       json: metaStatus === 410 ? { error: "revoked" } : { error: "not found" },
     });
   });
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
-  await page.route("**/broker/login**", (route) => route.abort());
 }
 
 test("a share link to a demo id that never existed says so, not 'entry file not found'", async ({ page }) => {

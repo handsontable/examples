@@ -1146,9 +1146,9 @@ walkthrough already showed.
    # (containers/o11y/r2-lifecycle-rules.json: browser/ 30d, worker/ 90d, index/ 90d,
    # state/ 30d) — confirm the rules are actually applied to the bucket first,
    npx wrangler r2 bucket lifecycle list handsontable-demos-o11y-loki -J eu
-   # then, in the R2 dashboard's object browser (wrangler has no object-listing
-   # command), sort each prefix by "Uploaded" ascending and confirm the oldest
-   # object is younger than that prefix's day count.
+   # then check the oldest object per prefix in the R2 dashboard's object browser
+   # (wrangler has no object-listing command) and confirm it is younger than
+   # that prefix's day count.
    ```
 
    Open any Analytics-Engine-datasource panel in the **production** Grafana (`/grafana/`,
@@ -1164,8 +1164,11 @@ walkthrough already showed.
      --command "SELECT day, framework, count(*) FROM example_daily GROUP BY day, framework ORDER BY day DESC LIMIT 20"
    ```
 
-   Expect one `day` value per completed UTC day since deploy, never zero rows once at least
-   one nightly cron (04:17 UTC) has run.
+   `rollupExampleDaily` only writes rows for groups with at least one event, so a quiet day can
+   legitimately add none — expect rows, not necessarily one per calendar day, once at least one
+   nightly cron (04:17 UTC) has run since deploy.
+
+### Flipping `SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` to `uncaught`
 
 All three conditions below must hold, evidenced the same way this task's own local
 walkthrough evidenced them (Grafana dashboards, a fired-and-resolved alert, the volume
@@ -1223,12 +1226,10 @@ currently read `full`/`"full"` in those two committed files.
 
 - **Drop the export destinations** (Workers Logs → o11y ingest) if the o11y stack itself is
   the problem — this stops new data from reaching Loki/the inbox without touching the app.
-  **Caveat, unverified:** `workers/api/wrangler.jsonc`'s `observability.logs.destinations`
-  still names `o11y-logs` after this step, and whether `wrangler deploy` rejects a
-  `destinations` entry that names a Logpush destination which no longer exists has not been
-  checked against a real deploy. Remove `observability.logs.destinations` from
-  `wrangler.jsonc` (or comment it out) before, or together with, deleting the destination,
-  rather than finding out which way a live deploy behaves.
+  **Caveat, unverified:** whether `wrangler deploy` rejects `workers/api/wrangler.jsonc`'s
+  `observability.logs.destinations` once it still names `o11y-logs` but that destination is
+  gone has not been checked — remove that entry from `wrangler.jsonc` before, or together
+  with, deleting the destination.
 - **Revert the `observability` block** (`workers/api/wrangler.jsonc`'s
   `observability.logs`/`.traces`) to pre-o11y values if the volume itself is the problem —
   this is a config-only revert, no code change.
