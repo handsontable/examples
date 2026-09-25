@@ -82,6 +82,30 @@ function liveSessionsSection(page: Page) {
   });
 }
 
+test("signed in, the header links to Grafana through the o11y worker's own broker login", async ({ page }) => {
+  // Nothing else in the app links to Grafana (ADR-0043's dashboards are
+  // otherwise unreachable except by typing the URL), so this pins the one
+  // discoverable entry point: a plain same-origin anchor to `/grafana/`,
+  // opened in a new tab — `target="_blank"` so a signed-out visit there
+  // doesn't lose the operator's place in `/admin`, and the o11y worker's own
+  // session check (not this app) decides whether they land in Grafana or its
+  // broker login.
+  await stubShell(page);
+  await signIn(page);
+
+  await page.route("**/api/admin/usage**", (route) =>
+    route.fulfill({ json: usageReport(sessionsPage([], { offset: 0, limit: 25, total: 0, awakeCount: 0, meterCount: 0 })) }),
+  );
+
+  await page.goto("/admin");
+  await expect(page.getByRole("heading", { name: /usage & cost/ })).toBeVisible();
+
+  const grafanaLink = page.getByRole("link", { name: /Open Grafana/ });
+  await expect(grafanaLink).toBeVisible();
+  await expect(grafanaLink).toHaveAttribute("href", "/grafana/");
+  await expect(grafanaLink).toHaveAttribute("target", "_blank");
+});
+
 test("signed out, /admin is a login wall — the panel never renders and no admin data is fetched", async ({ page }) => {
   // The contrast case. AdminGate answers a null user by calling `login()`
   // (App.tsx), a top-level `location.href` to the broker. stubShell's abort of
