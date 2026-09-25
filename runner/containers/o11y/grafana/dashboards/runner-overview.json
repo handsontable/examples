@@ -298,7 +298,7 @@
       "id": 4,
       "type": "timeseries",
       "title": "Error report rate (uncaught + handled)",
-      "description": "error.uncaught and error.handled counts.",
+      "description": "error.uncaught and error.handled counts. Excludes demo-runtime errors (errors inside a user's preview), which the Tier-1 dashboard shows.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -316,7 +316,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, index1 AS metric, sum(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 IN ('error.uncaught','error.handled') AND blob3 = '$environment' GROUP BY t, metric ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, index1 AS metric, sum(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 IN ('error.uncaught','error.handled') AND blob3 = '$environment' AND blob4 != 'demo-runtime' GROUP BY t, metric ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
