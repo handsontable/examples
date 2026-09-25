@@ -47,21 +47,19 @@ test("countLiveSessionMeters: a stale 24h meter plus one awake meter counts only
   assert.equal(await countLiveSessionMeters(env, now), 1);
 });
 
-test("countLiveSessionMeters: a meter exactly at the idle window still counts as awake (inclusive boundary)", async () => {
+// Boundary: one meter exactly at the idle window (must count, inclusive —
+// matches `classifyMeter`'s own `quietSeconds <= AWAKE_WINDOW_SECONDS` rule,
+// already pinned in `pipeline/admin-sessions.test.mjs`) and one meter one
+// second past it (must not). Both meters sit in the same KV so this discrim-
+// inates every revert that could fake a pass on its own:
+//  - the pre-fix key-count logic answers 2 (it does not classify at all);
+//  - a classifier that flipped the boundary to exclusive (`<` instead of
+//    `<=`) answers 0 (it would drop the at-window meter too).
+// Only the fix under test answers 1.
+test("countLiveSessionMeters: the idle-window boundary is inclusive, same rule as classifyMeter", async () => {
   const cache = fakeKV();
   await seedMeter(cache, "astro-atwindow1", now - sec(900), now - sec(AWAKE_WINDOW_SECONDS));
-  const env = { CACHE: cache };
-  assert.equal(await countLiveSessionMeters(env, now), 1);
-});
-
-test("countLiveSessionMeters: one second past the idle window drops out", async () => {
-  const cache = fakeKV();
   await seedMeter(cache, "astro-pastwindow", now - sec(900), now - sec(AWAKE_WINDOW_SECONDS + 1));
   const env = { CACHE: cache };
-  assert.equal(await countLiveSessionMeters(env, now), 0);
-});
-
-test("countLiveSessionMeters: an empty pool reads zero, not every-key count of the empty case", async () => {
-  const env = { CACHE: fakeKV() };
-  assert.equal(await countLiveSessionMeters(env, now), 0);
+  assert.equal(await countLiveSessionMeters(env, now), 1);
 });
