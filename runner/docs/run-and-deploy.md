@@ -243,10 +243,15 @@ several triggers fires, so the `curl` forms above are simpler.)
 
 **Browsing logs.** Sign into Grafana (`http://localhost:<O11Y_DEV_PORT>/grafana/` —
 `DEV_ADMIN` logs you in automatically in local mode) and open the **Logs**
-dashboard for API-worker lines, authoring/embed/demo-runtime browser errors,
-and a free-text/`cf.ray`/`session.id`/demo-id search across every service in
-one place — it's linked from the Runner overview and Observability self
-dashboards too. `/admin`'s header also has an **Open Grafana** link
+dashboard for API-worker lines, authoring/embed browser errors, and a
+free-text/`cf.ray`/`session.id`/demo-id search across every service in one
+place — it's linked from the Runner overview and Observability self
+dashboards too. (R3 F10: the same dashboard's `hot_surface="demo-runtime"`
+panel carries no message text — `reportDemoEvent` sends the preview relay
+to Sentry only, and files a Faro line that is a count metric with no
+message, `{"count":1}`; the in-preview diagnostic detail lives in Sentry
+when `MONITOR_DEMOS`/`VITE_MONITOR_DEMOS` is on, never in Loki.) `/admin`'s
+header also has an **Open Grafana** link
 (otherwise nothing in the app points at it): `href={GRAFANA_URL}` in
 `Admin.tsx`, which reads `import.meta.env.VITE_GRAFANA_URL` and falls back to
 `/grafana/`. On the deployed zone that fallback is what actually runs (no env

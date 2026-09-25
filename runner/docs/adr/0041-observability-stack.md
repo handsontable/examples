@@ -493,7 +493,9 @@ the budget. Until then nothing that reaches Sentry today stops reaching it.
 
 ### F. What is metered
 
-**F.1 Store.** Counts and latencies go to Analytics Engine; Loki holds the text. The
+**F.1 Store.** Counts and latencies go to Analytics Engine; Loki holds the text. (R3
+F18: contract §6's own table now matches this ruling — a Faro measurement or web-vitals
+item is AE-only, never a stored Loki record.) The
 positional slot layout and the full metric registry, with allowed outcomes, are in
 [`docs/observability-contract.md`](../observability-contract.md) §4–§5; this section
 names the signals, the contract fixes their shape. Every

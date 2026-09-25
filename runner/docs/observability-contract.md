@@ -246,6 +246,13 @@ box's first successful `isReady()`, sourced from `wake:<wakeId>.readyMs` (§8) �
 the `clean` and `unclean` outcome. `duration_ms = 0` means the box never became ready
 during that wake, not a genuinely instant boot.
 
+The point's own **timestamp** (R3 F8) is a different moment: it is written at
+**resolution** — the next `backlog()` call that runs `resolveWakes()` (§8) and finds this
+wake `over`, not when the wake itself started. Locally, with no cron firing, that can lag
+the actual wake by an hour or more; in production it lags by at most one `*/10` cron
+period. Two wakes resolved in the same `resolveWakes()` call get timestamps identical to
+the millisecond even though their wakes started at different times — expected, not a bug.
+
 `sandpack.compile_error` (F10b, W-triage) counts bundler-reported compile diagnostics
 only. On a parcel Tier-1 example (every starter except `vue-cli`), a syntax error typed
 on the edit path is caught client-side by the pre-transpile step and dropped **by
@@ -287,12 +294,23 @@ What the o11y worker does with each Faro item at ingest:
 
 | Faro item | Analytics Engine | Inbox (Loki `browser` tenant) |
 |---|---|---|
-| measurement whose `type` is a browser metric in §5 | one point | one log record |
-| `web-vitals` measurement | one `web_vital` point per vital | one log record |
+| measurement whose `type` is a browser metric in §5 | one point | **none** |
+| `web-vitals` measurement | one `web_vital` point per vital | **none** |
 | exception with `context.handled = "true"` | `error.handled` | one log record, symbolicated at drain |
 | other exception | `error.uncaught` | one log record, symbolicated at drain |
 | event named `example.*` | one point | **none** |
 | other event, log | — | one log record |
+
+**R3 F18 ruling**: measurements and web vitals are AE-only; Loki holds logs, events and
+exceptions. This was a contract/ADR mismatch, not an implementation bug — ADR §F.1
+("Counts and latencies go to Analytics Engine; Loki holds the text") already said this;
+this table previously required a stored record for every measurement too, which made
+measurements ~99% of the browser Loki tenant's lines and drained bytes (R3-triage F18)
+for no reader: no dashboard panel parses a measurement's `{"duration_ms":N}`-shaped body,
+so the AE point was always the only consumer. A measurement/web-vitals item still gets a
+hash-only `ingestItem` (no `record`) so a retried/redelivered batch cannot double-write
+its Analytics Engine point — the same dedupe-only shape an `example.*` event already
+used above.
 
 ## 7. Fingerprint
 
