@@ -39,7 +39,7 @@ const { inboxKeyStorageKey, AE_COLUMNS } = await import("@handsontable/demo-runt
 const { newFingerprintWrites } = await import("../workers/o11y/src/inbox/registry.ts");
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
 const { readHeartbeatReport } = await import("../workers/o11y/src/heartbeat.ts");
-const { canWakeForBacklog, runAlerts } = await import("../workers/o11y/src/alerts/index.ts");
+const { canWakeForBacklog, runAlerts, ALERT_EVAL_ERROR_DETAIL_KEY } = await import("../workers/o11y/src/alerts/index.ts");
 const { makeEnv } = await import("./fixtures/o11y-harness.mjs");
 const { makeFakeAeQuery } = await import("./fixtures/fake-ae-query.mjs");
 
@@ -1097,6 +1097,58 @@ test("runAlerts: a real query failure (unreachable local ClickHouse) is surfaced
   const second = await runAlerts(env);
   assert.ok(Object.keys(second.errors).length > 0);
   assert.equal(second.transitions["alert-eval-error"], undefined, "must stay silent while still failing");
+});
+
+// QA follow-up ("alert-eval-error names the failing rule"): the fire-once Slack line already names the failing
+// rule id(s) (`alertEvalErrorRule`'s own `detail`), but that line is the
+// ONLY place that ever went — exactly the shape that made a real
+// "alert-eval-error firing" tick during the F13 recovery untraceable: no
+// `SLACK_WEBHOOK_URL` locally means `slackPoster` is a silent no-op
+// (`notify.ts`), so nothing anywhere recorded which rule failed once that
+// one post went nowhere. `runAlerts` must now persist the failing rule
+// id(s) to `InboxWriter.alertMeta` independent of Slack, and must NOT erase
+// that record on resolve — reverting the `writer.setAlertMeta` call in
+// `alerts/index.ts` makes this fail: `getAlertMeta` reads back `undefined`.
+test("runAlerts: the failing rule id(s) survive in InboxWriter.alertMeta even with no Slack webhook, and are not erased on resolve", async () => {
+  const { env, inboxWriterInstance } = makeEnv(InboxWriter, {
+    env: {
+      O11Y_ENV: "local", // no SLACK_WEBHOOK_URL at all — the Slack poster is a silent no-op
+      API: { fetch: async () => new Response(null, { status: 204 }), o11ySpend: async () => ({ spendUsd: 0, capUsd: 100 }) },
+    },
+  });
+  assert.equal(env.SLACK_WEBHOOK_URL, undefined, "this test only proves something with the Slack poster silenced");
+
+  // Deterministic AE-query outage/recovery, the same `globalThis.fetch`-stub
+  // pattern the new-fingerprint test above uses — no real ClickHouse needed.
+  const realFetch = globalThis.fetch;
+  let healthy = false;
+  globalThis.fetch = async () => {
+    if (!healthy) throw new Error("simulated Analytics Engine SQL API outage");
+    return new Response(JSON.stringify({ data: [] }), { status: 200 });
+  };
+
+  try {
+    const firing = await runAlerts(env);
+    assert.equal(firing.transitions["alert-eval-error"], "fired");
+    const failingIds = Object.keys(firing.errors);
+    assert.ok(failingIds.length > 0, "expected at least one AE-query rule to fail against the simulated outage");
+
+    const persistedRaw = await inboxWriterInstance.getAlertMeta(ALERT_EVAL_ERROR_DETAIL_KEY);
+    assert.ok(persistedRaw, "the failing rule id(s) must be persisted even though Slack never received anything");
+    const persisted = JSON.parse(persistedRaw);
+    assert.deepEqual(persisted.failingRules.sort(), failingIds.sort());
+    for (const id of failingIds) assert.match(persisted.detail, new RegExp(id));
+
+    // Recover — the persisted detail must survive (a "what was it last
+    // time" trail), not be wiped just because the alert cleared.
+    healthy = true;
+    const resolved = await runAlerts(env);
+    assert.equal(resolved.transitions["alert-eval-error"], "resolved");
+    const stillPersistedRaw = await inboxWriterInstance.getAlertMeta(ALERT_EVAL_ERROR_DETAIL_KEY);
+    assert.equal(stillPersistedRaw, persistedRaw, "resolving must not erase the last-known failing detail");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 // Minor triage item 7: `drainsPaused` used to be set only on a `fired`/
