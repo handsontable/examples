@@ -57,6 +57,9 @@ const LAST_GRAFANA_STORAGE_KEY = "lastGrafanaAt";
 /** Guards `onStart`'s double-invocation (see its own doc comment) from
  *  scheduling `drainStep` twice for the same wake. */
 const DRAIN_SCHEDULED_FOR_STORAGE_KEY = "drainScheduledFor";
+/** F8: the wakeId whose wake-to-ready time was already reported to
+ *  InboxWriter, so only a wake's FIRST successful `isReady()` reports it. */
+const READY_RECORDED_FOR_STORAGE_KEY = "readyRecordedFor";
 const HARD_CAP_SCHEDULE = "hardCapStop";
 const DRAIN_STEP_SCHEDULE = "drainStep";
 /** ADR §A: "after 4 hours awake regardless." */
@@ -512,7 +515,34 @@ export class GrafanaBox extends Container<Env> {
     ]);
     const responses = probes.flatMap((p) => (p.status === "fulfilled" ? [p.value] : []));
     await Promise.all(responses.map(releaseBody));
-    return responses.length === probes.length && responses.every((r) => r.status === 200);
+    const ready = responses.length === probes.length && responses.every((r) => r.status === 200);
+    if (ready) await this.#recordReadyOnce();
+    return ready;
+  }
+
+  /**
+   * F8: contract §5's `o11y.wake` `duration_ms` is wake-to-ready (exit
+   * criterion 6): from `wake()` minting the wake (`WakeRecord.startedAt`,
+   * set in `#doWake` before `recordWake`/`start()`) to the first successful
+   * `isReady()` — whichever caller gets there first, `drainStep`'s poll or
+   * a `/grafana/*` request. Resolution is that poll's cadence: `drainStep`
+   * re-checks about once a second (`DRAIN_STEP_GAP_MS`, whole-second
+   * schedule times), so expect up to ~2 s of slack against criterion 6's
+   * 90 s budget. Reported once per wake (`READY_RECORDED_FOR_STORAGE_KEY`);
+   * `InboxWriter.resolveWakes` writes it on the `o11y.wake` point when the
+   * wake resolves, clean or unclean. Never fails `isReady()`: if the RPC
+   * throws, the guard is not set and the next successful probe retries.
+   */
+  async #recordReadyOnce(): Promise<void> {
+    const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    if (!wake) return;
+    if ((await this.ctx.storage.get<string>(READY_RECORDED_FOR_STORAGE_KEY)) === wake.wakeId) return;
+    try {
+      await inboxWriterStub(this.env).recordWakeReady(wake.wakeId, Math.max(0, Date.now() - wake.startedAt));
+      await this.ctx.storage.put(READY_RECORDED_FOR_STORAGE_KEY, wake.wakeId);
+    } catch (err) {
+      console.error(JSON.stringify({ event: "o11y.wake.ready_record_failed", wakeId: wake.wakeId, message: String(err) }));
+    }
   }
 
   /**

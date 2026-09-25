@@ -60,9 +60,15 @@ function makeInboxWriterStub(overrides = {}) {
     rejectKey: [],
     recordPartialReject: [],
     takeReopenedFlag: [],
+    recordWakeReady: [],
   };
   return {
     async recordWake() {},
+    // F8: the box reports its wake-to-ready time on the first successful isReady().
+    async recordWakeReady(wakeId, readyMs) {
+      if (overrides.recordWakeReady) return overrides.recordWakeReady(wakeId, readyMs);
+      calls.recordWakeReady.push({ wakeId, readyMs });
+    },
     async resolveWakes() {
       calls.resolveWakes++;
     },
@@ -705,6 +711,63 @@ test("F6: drainStep's Loki push releases a 2xx response body (not only a >=400 o
   assert.ok(pushes > 0, "the drain must actually have pushed");
   assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 1);
   assert.equal(box.inflightRequests, 0, "a 2xx push body must be released too");
+});
+
+// ---- F8: wake-to-ready time ------------------------------------------------
+
+test("F8: the first successful isReady() of a wake reports wake-to-ready, once", async () => {
+  const { box, inboxWriterStub } = makeBox();
+  await box.wake("visit");
+  const wake = await box.ctx.storage.get("wake");
+  // Pretend wake() minted this wake 42 s ago.
+  await box.ctx.storage.put("wake", { ...wake, startedAt: Date.now() - 42_000 });
+
+  installRealisticProbeBodies({ lokiStatus: 503, lokiBody: "not ready\n" });
+  assert.equal(await box.isReady(), false);
+  assert.equal(inboxWriterStub.calls.recordWakeReady.length, 0, "a not-ready probe reports nothing");
+
+  installRealisticProbeBodies();
+  assert.equal(await box.isReady(), true);
+  assert.equal(await box.isReady(), true);
+
+  assert.equal(inboxWriterStub.calls.recordWakeReady.length, 1, "only the FIRST successful probe reports");
+  const [{ wakeId, readyMs }] = inboxWriterStub.calls.recordWakeReady;
+  assert.equal(wakeId, wake.wakeId);
+  assert.ok(readyMs >= 42_000 && readyMs < 43_000, `expected ~42000 ms, got ${readyMs}`);
+});
+
+test("F8: a new wake reports its own wake-to-ready again", async () => {
+  const { box, inboxWriterStub } = makeBox();
+  installRealisticProbeBodies();
+  await box.wake("visit");
+  await box.isReady();
+  box._state = { status: "stopped", lastChange: Date.now() };
+  await box.wake("backlog");
+  await box.isReady();
+
+  const ids = inboxWriterStub.calls.recordWakeReady.map((c) => c.wakeId);
+  assert.equal(ids.length, 2);
+  assert.notEqual(ids[0], ids[1]);
+  assert.equal(ids[1], (await box.ctx.storage.get("wake")).wakeId);
+});
+
+test("F8: a failing recordWakeReady never fails isReady(), and the next successful probe retries it", async () => {
+  let attempts = 0;
+  const { box } = makeBox({
+    inboxWriter: {
+      recordWakeReady: async () => {
+        attempts++;
+        if (attempts === 1) throw new Error("InboxWriter unavailable");
+      },
+    },
+  });
+  await box.wake("visit");
+  installRealisticProbeBodies();
+
+  assert.equal(await box.isReady(), true, "readiness must not depend on the bookkeeping RPC");
+  assert.equal(await box.isReady(), true);
+  assert.equal(await box.isReady(), true);
+  assert.equal(attempts, 2, "retried once after the failure, then recorded for good");
 });
 
 // ---- hardCapStop ------------------------------------------------------

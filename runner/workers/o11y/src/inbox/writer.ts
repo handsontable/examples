@@ -44,6 +44,7 @@ import {
   pruneLedger,
   recentRejectionCount as ledgerRecentRejectionCount,
   recordPartialReject as ledgerRecordPartialReject,
+  recordWakeReady as ledgerRecordWakeReady,
   rejectKey as ledgerRejectKey,
   reopenWindow as ledgerReopenWindow,
   reopenWindowExceedsRetention,
@@ -133,6 +134,10 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     });
   }
 
+  async recordWakeReady(wakeId: string, readyMs: number): Promise<void> {
+    await ledgerRecordWakeReady(adaptStorage(this.ctx.storage), wakeId, readyMs);
+  }
+
   async ingest(tenant: Tenant, arrivalMs: number, items: IngestItem[]): Promise<IngestResult> {
     const storage = adaptStorage(this.ctx.storage);
 
@@ -199,17 +204,23 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
         return head !== null;
       },
     });
-    // ADR §5's `o11y.wake` "outcome: clean, unclean" — written here, at
-    // resolution time, because only the ledger (not `box.ts`, which writes
-    // its own `o11y.wake` at wake-start with `duration_ms` instead) ever
-    // learns whether a wake's stop was clean.
+    // Contract §5's `o11y.wake` (outcome `clean`/`unclean`, `duration_ms`
+    // "to ready") — one point per wake, written here at resolution time,
+    // because only the ledger ever learns whether a wake's stop was clean.
+    // F8: `box.ts` never wrote an `o11y.wake` point of its own (a comment
+    // here used to claim it did, so `duration_ms` was always 0). The box
+    // now reports its wake-to-ready time through `recordWakeReady`, stored
+    // on `wake:<id>`, and it is carried here on BOTH the clean and the
+    // unclean path. A wake whose box never became ready (it died or was
+    // stopped while still booting) has no such time and writes 0
+    // deliberately — read `duration_ms` only together with a non-zero value.
     for (const w of resolved) {
       writePointFromDo(
         this.env,
         this.ctx,
         toAePoint(
           "o11y.wake",
-          { count: 1 },
+          { count: 1, duration_ms: w.readyMs ?? 0 },
           { ...o11ySelfIdentity(this.env), reason: w.reason, outcome: w.clean ? "clean" : "unclean" },
         ),
       );

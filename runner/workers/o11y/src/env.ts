@@ -64,6 +64,12 @@ export interface InboxWriterApi {
    *  container start. */
   recordWake(wakeId: string, reason: "backlog" | "visit"): Promise<void>;
 
+  /** F8: stores `readyMs` (wake-to-ready, ms) on `wake:<wakeId>` — first
+   *  call wins, and a wake already resolved (entry deleted) is a no-op.
+   *  Called by `GrafanaBox` on its first successful `isReady()` per wake;
+   *  `resolveWakes` carries it into the `o11y.wake` point's `duration_ms`. */
+  recordWakeReady(wakeId: string, readyMs: number): Promise<void>;
+
   /**
    * ADR §B.2 steps 4–5, T02: dedupe each item's `hash` against the 24 h window
    * (`hash:<sha256>`), append every non-duplicate ITEM WITH A `record` to

@@ -218,6 +218,12 @@ export interface WakeState {
   startedAt: number;
   reason: "backlog" | "visit";
   over: boolean;
+  /** F8: wake-to-ready time in ms (contract §5 `o11y.wake` `duration_ms`,
+   *  "to ready"; exit criterion 6): from `GrafanaBox.wake()` minting this
+   *  wake to its first successful `isReady()`. Written once by
+   *  `InboxWriter.recordWakeReady`; absent while the box has not yet become
+   *  ready, and forever for a wake that never did. */
+  readyMs?: number;
 }
 
 /** `alert:<rule>` value (ADR §F.3 — notify once on fire, once on resolve). */

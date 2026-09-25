@@ -132,6 +132,10 @@ export interface WakeResolution {
   reason: WakeState["reason"];
   clean: boolean;
   keysAffected: number;
+  /** F8: the wake's `readyMs` as stored at resolution time (read inside the
+   *  resolving transaction, so the freshest value) — `undefined` when the
+   *  box never became ready during this wake. */
+  readyMs?: number;
 }
 
 export interface ResolveResult {
@@ -209,7 +213,7 @@ async function finalizeWakeResolution(
     await putChunked<unknown>(txn, { ...writes, ...doneWrites });
     await deleteChunked(txn, toDelete);
 
-    return { wakeId, reason: wake.reason, clean, keysAffected };
+    return { wakeId, reason: wake.reason, clean, keysAffected, readyMs: stillThere.readyMs };
   });
 }
 
@@ -271,7 +275,12 @@ export async function resolveOverWakes(storage: StorageLike, deps: LedgerDeps): 
       // read just below (correctly captured) or is refused outright
       // (`markKeysProvisional` checks `over` itself). This ordering is the
       // B-I1 fix (see this file's header, point 3).
-      await storage.put({ [storageKey]: { ...wake, over: true } satisfies WakeState });
+      // F8: re-read before writing — `wake` is the pre-`isBoxRunning()`
+      // snapshot, and a `recordWakeReady` delivered while that RPC was
+      // pending would otherwise be overwritten by `...wake`. (No await
+      // between this get and the put, so nothing can interleave there.)
+      const fresh = (await storage.get<WakeState>(storageKey)) ?? wake;
+      await storage.put({ [storageKey]: { ...fresh, over: true } satisfies WakeState });
       newlyOver.push(wakeId);
 
       const freshKeys = await storage.list<InboxKeyState>({ prefix: KEY_PREFIX });
@@ -280,7 +289,7 @@ export async function resolveOverWakes(storage: StorageLike, deps: LedgerDeps): 
       for (const [sk, state] of freshKeys) if (state === marker) provisionalKeys.push(sk);
 
       const clean = provisionalKeys.length > 0 ? await deps.markerExists(wakeId) : true;
-      const outcome = await finalizeWakeResolution(storage, { ...wake, over: true }, wakeId, provisionalKeys, clean);
+      const outcome = await finalizeWakeResolution(storage, { ...fresh, over: true }, wakeId, provisionalKeys, clean);
       if (outcome) resolved.push(outcome);
     }
   }
@@ -604,6 +613,20 @@ export async function takeReopenedFlag(storage: StorageLike, inboxKeys: readonly
 /** The current not-over wake's id, or `null` (fully stopped). Used by the
  *  reopen route to protect an in-flight drain (see {@link reopenWindow}) and
  *  by drain/wake orchestration to know "which wakeId am I." */
+/** F8: records a wake's wake-to-ready time on `wake:<wakeId>`, once. First
+ *  call wins (a later, slower probe must not overwrite the real first-ready
+ *  time), and a wake whose entry is already gone (fully resolved) is left
+ *  alone rather than recreated. Does not touch `over` or anything else in
+ *  the entry. */
+export async function recordWakeReady(storage: StorageLike, wakeId: string, readyMs: number): Promise<void> {
+  await storage.transaction(async (txn) => {
+    const key = wakeStorageKey(wakeId);
+    const wake = await txn.get<WakeState>(key);
+    if (!wake || wake.readyMs !== undefined) return;
+    await txn.put({ [key]: { ...wake, readyMs } satisfies WakeState });
+  });
+}
+
 export async function currentWakeId(storage: StorageLike): Promise<string | null> {
   const wakes = await storage.list<WakeState>({ prefix: WAKE_PREFIX });
   for (const [storageKey, wake] of wakes) {

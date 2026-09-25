@@ -31,7 +31,7 @@ const {
   PACK_OBJECT_MAX_DECOMPRESSED_BYTES,
 } = await import("../workers/o11y/src/inbox/pack.ts");
 const { memoryStorage, putChunked } = await import("../workers/o11y/src/inbox/storage.ts");
-const { decodeNdjson, buildResourceLogs } = await import("@handsontable/demo-runtime/telemetry");
+const { decodeNdjson, buildResourceLogs, AE_COLUMNS } = await import("@handsontable/demo-runtime/telemetry");
 
 function record(body, i = 0) {
   return {
@@ -324,6 +324,39 @@ test("InboxWriter.recordWake: marks every earlier wake over, starts the new one 
   assert.equal(wake1.over, true, "the earlier wake must be marked over");
   assert.equal(wake2.over, false, "the new wake starts open");
   assert.equal(wake2.reason, "visit");
+});
+
+// F8 (V-triage): `o11y.wake` `duration_ms` was always 0 — nothing wrote it.
+test("InboxWriter: recordWakeReady's time is the o11y.wake duration_ms on clean and unclean resolution; a never-ready wake writes 0", async () => {
+  const doStorage = makeDurableObjectStorage();
+  const { env, ae } = makeEnv(InboxWriter, { doStorage });
+  const markers = new Set(["state/wakes/w-clean/clean"]);
+  env.O11Y_LOKI_STATE = { head: async (key) => (markers.has(key) ? {} : null) };
+  env.GRAFANA_BOX = { jurisdiction() { return this; }, getByName: () => ({ isAwake: async () => false }) };
+  const pending = [];
+  const writer = new InboxWriter({ storage: doStorage, waitUntil: (p) => pending.push(p) }, env);
+
+  // Three wakes, each superseded by the next; each owns one provisional key.
+  for (const [i, wakeId] of ["w-clean", "w-unclean", "w-never-ready"].entries()) {
+    await writer.recordWake(wakeId, "visit");
+    await doStorage.put({ [`key:inbox/worker/2026-01-01/00/00000000000${i}.ndjson.gz`]: `provisional:${wakeId}` });
+  }
+  await writer.recordWakeReady("w-clean", 31_000);
+  await writer.recordWakeReady("w-unclean", 47_000);
+
+  await writer.resolveWakes();
+  await Promise.all(pending);
+
+  const slot = (column) => Number(/(\d+)$/.exec(AE_COLUMNS[column])[1]) - 1;
+  const wakes = ae.points
+    .filter((p) => p.indexes[0] === "o11y.wake")
+    .map((p) => ({ outcome: p.blobs[slot("outcome")], count: p.doubles[slot("count")], duration: p.doubles[slot("duration_ms")] }))
+    .sort((a, b) => a.duration - b.duration);
+  assert.deepEqual(wakes, [
+    { outcome: "unclean", count: 1, duration: 0 }, // w-never-ready: deliberately 0
+    { outcome: "clean", count: 1, duration: 31_000 },
+    { outcome: "unclean", count: 1, duration: 47_000 },
+  ]);
 });
 
 // ---- A-I2 (rereview.md, merge blocker): the pack alarm's bounded reads ----------
