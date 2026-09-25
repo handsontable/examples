@@ -933,12 +933,20 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
     try {
       // POST /api/session  { framework, files, sessionId? } -> { sessionId, previewUrl }
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "session" && parts.length === 2) {
-        const body = await request.json() as {
+        // Unparseable JSON (this route is public — anonymous, and reachable
+        // by anything that sends garbage) used to fall through to the fetch
+        // catch-all's generic 500, polluting the `api.request` 5xx rate and
+        // the `api-5xx-rate` alert with what is really a 400-shaped client
+        // mistake. `.catch(() => null)` here, same as every other public
+        // POST route's `request.json()` call in this file, so a parse
+        // failure reaches the existing `isPlainRecord` check (`null` fails
+        // it) instead of throwing past this handler.
+        const body = await request.json().catch(() => null) as {
           framework: string;
           files: unknown;
           sessionId?: string;
           htVersion?: string;
-        };
+        } | null;
         if (!isPlainRecord(body)) return json({ error: "request body must be a plain record" }, 400);
         const dev = FRAMEWORK_DEV[body.framework];
         const cfg = BUILD_CONFIG[body.framework];
@@ -1294,7 +1302,11 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       // POST /api/session/:id/file  { path, contents } -> 204   (streams an edit; HMR picks it up)
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "session" && parts[3] === "file") {
         const sessionId = parts[2]!;
-        const body = validateFileWrite(await request.json());
+        // Same trivial fix as POST /api/session above: unparseable JSON must
+        // not throw past this handler. `validateFileWrite(null)` already
+        // throws `InvalidFilePathError`, which the fetch catch-all already
+        // answers with 400 — so this needs no new branch, just the `.catch`.
+        const body = validateFileWrite(await request.json().catch(() => null));
         const sandbox = liveSbx(env, sessionId);
         const full = body.path;
         const dir = full.slice(0, full.lastIndexOf("/"));
@@ -2280,14 +2292,24 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           );
           return json(suggestion);
         } catch (err) {
+          // §5's `theme.ai` row promises a point on every outcome, `error`
+          // included — this used to only fire for a `ChatUnavailableError`
+          // (a gateway 4xx/5xx or a malformed reply), so a network-level
+          // throw from the `fetch` in `requestTheme` (LiteLLM host
+          // unreachable, DNS failure, connection reset) fell straight to
+          // `throw err` below with no point at all. Emitted for every
+          // non-ok outcome now, before the instanceof branch decides the
+          // response/diagnostic — mirroring the shape of the `chat.answer`
+          // catch above (which still has this same gap for its own raw
+          // `fetch`; out of scope here).
+          void emitPoint(
+            env,
+            "theme.ai",
+            { count: 1, duration_ms: Date.now() - themeStartedAt },
+            { model: env.LITELLM_MODEL ?? "unknown", outcome: "error" },
+          );
           if (err instanceof ChatUnavailableError) {
             ctx.waitUntil(recordUsageEvent(env, "chat_error", "theme"));
-            void emitPoint(
-              env,
-              "theme.ai",
-              { count: 1, duration_ms: Date.now() - themeStartedAt },
-              { model: env.LITELLM_MODEL ?? "unknown", outcome: "error" },
-            );
             if (err.status !== undefined) {
               reportDiagnostic(env, err, {
                 context: "theme-gateway",

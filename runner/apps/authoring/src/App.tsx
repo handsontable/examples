@@ -1027,6 +1027,33 @@ function NotFound({
   );
 }
 
+/**
+ * `/share/:id` or `/edit/:id` for an id that no longer resolves — same visual
+ * pattern as `NotFound` above (its own component, not a shared prop, so a
+ * change to the docs-example copy can't drift this one's wording by accident).
+ * `kind === "removed"` only when the metadata route (`GET /api/demos/:id`,
+ * `?view=share`) answered 410 — a demo that was revoked, as opposed to one
+ * whose id never existed at all.
+ */
+function DemoNotFound({ kind }: { kind: "missing" | "removed" }) {
+  return (
+    <div style={centered}>
+      <Logo size={40} />
+      <p style={{ color: theme.color.text, fontFamily: theme.font.ui, fontWeight: 600, margin: 0 }}>
+        {kind === "removed" ? "This demo was removed" : "Demo not found"}
+      </p>
+      <p style={{ color: theme.color.textMuted, fontFamily: theme.font.ui, margin: 0 }}>
+        {kind === "removed"
+          ? "The person who shared it took it down."
+          : "This link doesn't point to a demo that exists."}
+      </p>
+      <a href="/" style={{ color: theme.color.accentText, fontFamily: theme.font.ui }}>
+        Back to the playground
+      </a>
+    </div>
+  );
+}
+
 /** Does this lineage name a workspace that came from outside the catalog?
  *
  *  `import:<provider>` (DEV-2504) and `payload:<source>` (DEV-2517) both arrive
@@ -1238,6 +1265,15 @@ function Authoring({
   // a bucket absence with no suggestion available isn't mistaken for the
   // "path" kind's unrelated wording.
   const [docsNotFoundSuggestion, setDocsNotFoundSuggestion] = useState<string | null | undefined>(undefined);
+  // Saved-demo analogue of docsNotFound: set when a `/share/:id` or `/edit/:id`
+  // load's `GET /api/demos/:id[/source]` answers 404/410, so this short-circuits
+  // rendering the same way `docsNotFound` does — before EditorShell, and before
+  // the preview-mount effect ever runs against the still-empty placeholder
+  // `files`/`entry` state (which used to throw its OWN "entry file … not found"
+  // error and overwrite whatever message this set, since nothing gated the
+  // mount effect on this failure — only on `sourceLoaded`, which this also
+  // flips true).
+  const [demoNotFound, setDemoNotFound] = useState<"missing" | "removed" | null>(null);
   const [docsRuntimeBlocked, setDocsRuntimeBlocked] = useState(!!initialDocs);
   // Starter analogue of docsRuntimeBlocked: set by the unified starter refusal
   // (below-floor major, version with no bucket, artifact fetch failure) so the
@@ -1829,6 +1865,12 @@ function Authoring({
       history.replaceState(null, "", location.pathname + strippedSearch + location.hash);
     }
     let cancelled = false;
+    // Cleared on every run, not just set on failure: `savedId` can change
+    // while this stays mounted (a fork lands on a fresh id via the same
+    // history.replaceState path above), and a stale `demoNotFound` from a
+    // previous id must not keep short-circuiting the render for a new one
+    // that resolves fine.
+    setDemoNotFound(null);
     (async () => {
       const token = getToken();
       const headers = apiHeaders(!isShare && token ? { Authorization: `Bearer ${token}` } : undefined);
@@ -1856,9 +1898,20 @@ function Authoring({
         ]);
         if (cancelled) return;
         if (!srcRes.ok) {
-          setErrorMessage(
-            !isShare && srcRes.status === 401 ? "Please sign in to edit this demo." : "This demo is unavailable.",
-          );
+          // `/source` collapses "never existed" and "revoked" to the same 404
+          // (getDemoSource returns null for both — index.ts's own comment: "a
+          // demo link is unlisted-but-public … revoked demos return 404"), so
+          // the 404/410 distinction has to come from the metadata fetch
+          // instead, which answers 410 specifically for a revoked row. Both
+          // requests were issued together above, so `metaRes` has already
+          // resolved by the time this runs.
+          if (!isShare && srcRes.status === 401) {
+            setErrorMessage("Please sign in to edit this demo.");
+          } else if (srcRes.status === 404 || srcRes.status === 410) {
+            setDemoNotFound(metaRes.status === 410 ? "removed" : "missing");
+          } else {
+            setErrorMessage("This demo is unavailable.");
+          }
           setSourceLoaded(true);
           return;
         }
@@ -3311,6 +3364,14 @@ function Authoring({
       suggestion={docsNotFoundSuggestion ?? null}
     />
   );
+  // Before the splash-loading check: `demoNotFound` is only ever set together
+  // with `sourceLoaded=true`, but ordering it first is what actually matters —
+  // without this short-circuit, falling through to EditorShell below runs the
+  // preview-mount effect against the still-empty placeholder `files`/`entry`
+  // state (nothing ever called `loadWorkspace` on this failure path), which
+  // throws its own "entry file … not found in example files" and overwrites
+  // this message. Same idiom as `docsNotFound` immediately above.
+  if (savedId && demoNotFound) return <DemoNotFound kind={demoNotFound} />;
   if (savedId && !sourceLoaded) return <Splash text="Loading data …" />;
 
   return (
