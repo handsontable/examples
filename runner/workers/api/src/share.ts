@@ -448,56 +448,109 @@ export async function createPendingDemo(env: Env, args: CreateArgs): Promise<{ i
   return { id };
 }
 
-/** Build (or reuse cached build), store to R2, insert into D1, return the demo id. */
-export async function createDemo(env: Env, args: CreateArgs): Promise<{ id: string }> {
-  const hash = await filesHash(args.files);
-  const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
-
-  // Reuse a prior identical build if present.
-  const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
-    .bind(buildKey).first<{ r2_prefix: string }>();
-
-  const id = args.id ?? shortId();
-  const r2Prefix = `demos/${id}/`;
-
-  if (cached) {
-    // Copy the cached artifact under the new id's prefix (cheap; keeps ids independent).
-    const src = cached.r2_prefix;
-    const listed = await env.ARTIFACTS.list({ prefix: src });
-    for (const obj of listed.objects) {
-      const body = await env.ARTIFACTS.get(obj.key);
-      if (body) await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
-    }
-  } else {
-    const built = await runBuild(env, args.entry, args.files);
-    for (const [rel, contents] of Object.entries(built)) {
-      await env.ARTIFACTS.put(r2Prefix + rel, contents, {
-        httpMetadata: { contentType: contentTypeFor(rel) },
-      });
-    }
-    await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
-      .bind(buildKey, r2Prefix, args.now).run();
+/**
+ * Wrap a `createDemo`/`updateDemo` finalize for the §5 `snapshot.build` point: every
+ * synchronous ("inline", the direct `/api/demos`/`/api/mcp/demos` and edit-page Save
+ * routes in index.ts) or detached-DO ("detached", `snapshot-jobs.ts`'s alarm) call
+ * gets exactly one `ok`/`failed` point, timed end to end. A `build_cache` hit that
+ * only copies R2 objects still emits `ok` — the panel reads "how snapshot builds are
+ * going", and a cache copy answering it near-instantly is a real outcome, not
+ * something to hide (and this matches the shape `snapshot-jobs.ts` already used
+ * before this point moved here, which counted the DO's cache-hit finalizes the same
+ * way).
+ */
+async function withSnapshotBuildPoint<T>(
+  env: Env,
+  framework: string,
+  reason: "inline" | "detached",
+  fn: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    const result = await fn();
+    // `await`, not `ctx.waitUntil`/`void`: neither `createDemo`/`updateDemo` nor
+    // their callers thread an `ExecutionContext` down to here, and `emitPoint`'s
+    // own doc says a local ClickHouse-shim write only survives past the response
+    // under `waitUntil` — an unawaited write here would race the handler's
+    // return and could be cancelled before the local sink's HTTP POST lands
+    // (never throws either way, so this cannot turn a build failure silent).
+    await emitPoint(
+      env,
+      "snapshot.build",
+      { count: 1, duration_ms: Date.now() - startedAt },
+      { framework, outcome: "ok", reason },
+    );
+    return result;
+  } catch (err) {
+    await emitPoint(
+      env,
+      "snapshot.build",
+      { count: 1, duration_ms: Date.now() - startedAt },
+      { framework, outcome: "failed", reason },
+    );
+    throw err;
   }
+}
 
-  // Store the source snapshot (for forking a saved demo). Served only via the
-  // authenticated /api/demos/:id/source route, never as a public /d asset.
-  await env.ARTIFACTS.put(
-    `${r2Prefix}__source.json`,
-    JSON.stringify({ framework: args.entry.framework, files: args.files }),
-    { httpMetadata: { contentType: "application/json" } },
-  );
+/** Build (or reuse cached build), store to R2, insert into D1, return the demo id.
+ *  `buildReason` picks the §5 `snapshot.build` reason this finalize reports under —
+ *  callers on the synchronous request path leave it at its default `"inline"`;
+ *  `snapshot-jobs.ts`'s DO alarm passes `"detached"`. */
+export async function createDemo(
+  env: Env,
+  args: CreateArgs,
+  buildReason: "inline" | "detached" = "inline",
+): Promise<{ id: string }> {
+  return withSnapshotBuildPoint(env, args.entry.framework, buildReason, async () => {
+    const hash = await filesHash(args.files);
+    const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
 
-  await env.DB.prepare(
-    `INSERT OR REPLACE INTO demos (id,title,description,framework,tier,ht_version,files_hash,r2_prefix,forked_from,visibility,revoked,created_by,created_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?, ?, 0, ?,?,?)`,
-  ).bind(
-    id, args.title, args.description ?? null, args.entry.framework, args.entry.tier,
-    args.htVersion, hash, r2Prefix, args.forkedFrom ?? null, args.visibility ?? "unlisted",
-    args.createdBy, args.now, args.now,
-  ).run();
-  await invalidateDemo(env, id);
+    // Reuse a prior identical build if present.
+    const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
+      .bind(buildKey).first<{ r2_prefix: string }>();
 
-  return { id };
+    const id = args.id ?? shortId();
+    const r2Prefix = `demos/${id}/`;
+
+    if (cached) {
+      // Copy the cached artifact under the new id's prefix (cheap; keeps ids independent).
+      const src = cached.r2_prefix;
+      const listed = await env.ARTIFACTS.list({ prefix: src });
+      for (const obj of listed.objects) {
+        const body = await env.ARTIFACTS.get(obj.key);
+        if (body) await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
+      }
+    } else {
+      const built = await runBuild(env, args.entry, args.files);
+      for (const [rel, contents] of Object.entries(built)) {
+        await env.ARTIFACTS.put(r2Prefix + rel, contents, {
+          httpMetadata: { contentType: contentTypeFor(rel) },
+        });
+      }
+      await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
+        .bind(buildKey, r2Prefix, args.now).run();
+    }
+
+    // Store the source snapshot (for forking a saved demo). Served only via the
+    // authenticated /api/demos/:id/source route, never as a public /d asset.
+    await env.ARTIFACTS.put(
+      `${r2Prefix}__source.json`,
+      JSON.stringify({ framework: args.entry.framework, files: args.files }),
+      { httpMetadata: { contentType: "application/json" } },
+    );
+
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO demos (id,title,description,framework,tier,ht_version,files_hash,r2_prefix,forked_from,visibility,revoked,created_by,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?, ?, 0, ?,?,?)`,
+    ).bind(
+      id, args.title, args.description ?? null, args.entry.framework, args.entry.tier,
+      args.htVersion, hash, r2Prefix, args.forkedFrom ?? null, args.visibility ?? "unlisted",
+      args.createdBy, args.now, args.now,
+    ).run();
+    await invalidateDemo(env, id);
+
+    return { id };
+  });
 }
 
 export interface UpdateArgs {
@@ -518,51 +571,61 @@ export interface UpdateArgs {
 
 /** Rebuild a saved demo in place (edit-page Save): re-run the build for the new
  *  code, overwrite the demo's R2 artifacts + source snapshot, and update its row.
- *  The demo id, prefix, owner, and lineage are preserved. */
-export async function updateDemo(env: Env, args: UpdateArgs): Promise<void> {
-  const hash = await filesHash(args.files);
-  const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
-  const r2Prefix = `demos/${args.id}/`;
+ *  The demo id, prefix, owner, and lineage are preserved. `buildReason` picks the
+ *  §5 `snapshot.build` reason this finalize reports under — synchronous callers
+ *  (the edit-page Save and MCP-fix routes in index.ts) leave it at its default
+ *  `"inline"`; `snapshot-jobs.ts`'s DO alarm, finalizing both a create and a
+ *  rebuild, passes `"detached"`. */
+export async function updateDemo(
+  env: Env,
+  args: UpdateArgs,
+  buildReason: "inline" | "detached" = "inline",
+): Promise<void> {
+  return withSnapshotBuildPoint(env, args.entry.framework, buildReason, async () => {
+    const hash = await filesHash(args.files);
+    const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
+    const r2Prefix = `demos/${args.id}/`;
 
-  const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
-    .bind(buildKey).first<{ r2_prefix: string }>();
+    const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
+      .bind(buildKey).first<{ r2_prefix: string }>();
 
-  if (cached && cached.r2_prefix !== r2Prefix) {
-    const src = cached.r2_prefix;
-    const listed = await env.ARTIFACTS.list({ prefix: src });
-    for (const obj of listed.objects) {
-      const body = await env.ARTIFACTS.get(obj.key);
-      if (body) await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
+    if (cached && cached.r2_prefix !== r2Prefix) {
+      const src = cached.r2_prefix;
+      const listed = await env.ARTIFACTS.list({ prefix: src });
+      for (const obj of listed.objects) {
+        const body = await env.ARTIFACTS.get(obj.key);
+        if (body) await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
+      }
+    } else if (!cached) {
+      const built = await runBuild(env, args.entry, args.files);
+      for (const [rel, contents] of Object.entries(built)) {
+        await env.ARTIFACTS.put(r2Prefix + rel, contents, {
+          httpMetadata: { contentType: contentTypeFor(rel) },
+        });
+      }
+      await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
+        .bind(buildKey, r2Prefix, args.now).run();
     }
-  } else if (!cached) {
-    const built = await runBuild(env, args.entry, args.files);
-    for (const [rel, contents] of Object.entries(built)) {
-      await env.ARTIFACTS.put(r2Prefix + rel, contents, {
-        httpMetadata: { contentType: contentTypeFor(rel) },
-      });
-    }
-    await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
-      .bind(buildKey, r2Prefix, args.now).run();
-  }
-  // (cached && cached.r2_prefix === r2Prefix): identical code already built here.
+    // (cached && cached.r2_prefix === r2Prefix): identical code already built here.
 
-  await env.ARTIFACTS.put(
-    `${r2Prefix}__source.json`,
-    JSON.stringify({ framework: args.entry.framework, files: args.files }),
-    { httpMetadata: { contentType: "application/json" } },
-  );
+    await env.ARTIFACTS.put(
+      `${r2Prefix}__source.json`,
+      JSON.stringify({ framework: args.entry.framework, files: args.files }),
+      { httpMetadata: { contentType: "application/json" } },
+    );
 
-  // Built column by column so an absent title or description is *not written*,
-  // rather than written back as whatever the row held when the rebuild started.
-  // A completed rebuild is a ready demo whatever state preceded it, so the build
-  // columns reset unconditionally — this is also how the async path (BuildJob's
-  // alarm calls this function) flips 'building' to 'ready'.
-  const sets = ["ht_version=?", "files_hash=?", "updated_at=?", "build_status='ready'", "build_error=NULL"];
-  const binds: unknown[] = [args.htVersion, hash, args.now];
-  if (args.title !== undefined) { sets.push("title=?"); binds.push(args.title); }
-  if (args.description !== undefined) { sets.push("description=?"); binds.push(args.description ?? null); }
-  await env.DB.prepare(`UPDATE demos SET ${sets.join(", ")} WHERE id=?`).bind(...binds, args.id).run();
-  await invalidateDemo(env, args.id);
+    // Built column by column so an absent title or description is *not written*,
+    // rather than written back as whatever the row held when the rebuild started.
+    // A completed rebuild is a ready demo whatever state preceded it, so the build
+    // columns reset unconditionally — this is also how the async path (BuildJob's
+    // alarm calls this function) flips 'building' to 'ready'.
+    const sets = ["ht_version=?", "files_hash=?", "updated_at=?", "build_status='ready'", "build_error=NULL"];
+    const binds: unknown[] = [args.htVersion, hash, args.now];
+    if (args.title !== undefined) { sets.push("title=?"); binds.push(args.title); }
+    if (args.description !== undefined) { sets.push("description=?"); binds.push(args.description ?? null); }
+    await env.DB.prepare(`UPDATE demos SET ${sets.join(", ")} WHERE id=?`).bind(...binds, args.id).run();
+    await invalidateDemo(env, args.id);
+  });
 }
 
 export async function getDemo(env: Env, id: string): Promise<DemoRow | null> {
