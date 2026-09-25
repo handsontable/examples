@@ -69,9 +69,9 @@ function buildEmitting(built) {
   });
 }
 
-function envWithPointCapture(opts) {
+function envWithPointCapture(opts, seedArtifacts = {}) {
   const points = [];
-  const { env, ...rest } = makeEnv([], [], {}, opts);
+  const { env, ...rest } = makeEnv([], [], seedArtifacts, opts);
   env.RUNNER_EVENTS = { writeDataPoint: (p) => points.push(p) };
   env.PREVIEW_HOST = "demos.handsontable.com";
   return { env, points, ...rest };
@@ -140,6 +140,58 @@ test("updateDemo (fresh build, no cache) reports the real total bytes written to
   }
 });
 
+test("createDemo (build_cache hit) counts the copied artifact's bytes but not __source.json's", async () => {
+  // `fixtures/worker-harness.mjs`'s `fakeD1`, on a cache hit, always answers
+  // `{ r2_prefix: "demos/_prior-identical-build/" }` — see its own comment.
+  const CACHED_PREFIX = "demos/_prior-identical-build/";
+  const seedArtifacts = {
+    [`${CACHED_PREFIX}index.html`]: "<!doctype html><html><body>the real artifact</body></html>",
+    // A prior demo's private source snapshot, sitting in the same cached
+    // directory (share.ts writes one next to every build). Deliberately
+    // larger than the artifact above, so a regression that counts it would
+    // move `bytes` by more than a rounding error — not just barely wrong.
+    [`${CACHED_PREFIX}__source.json`]: JSON.stringify({
+      framework: "javascript",
+      files: { "/src/app.js": "x".repeat(1000) },
+    }),
+  };
+  const { env, points } = envWithPointCapture({ buildCacheHit: true }, seedArtifacts);
+  // `fakeR2.list()` always answers `{ objects: [] }` (a harness limitation
+  // unrelated to this fix — see snapshot-build-point.test.mjs's own cache-hit
+  // tests, which never reach the copy loop for the same reason). Overridden
+  // here, for this test only, so the copy loop this fix touches actually runs.
+  env.ARTIFACTS.list = async ({ prefix }) => ({
+    objects: Object.keys(seedArtifacts)
+      .filter((key) => key.startsWith(prefix))
+      .map((key) => ({ key })),
+  });
+
+  await createDemo(env, {
+    entry: ENTRY,
+    files: FILES,
+    htVersion: "18.1.0",
+    title: "A demo",
+    createdBy: "dev@handsontable.com",
+    now: new Date().toISOString(),
+  });
+
+  const sb = snapshotBuildPoints(points);
+  assert.equal(sb.length, 1);
+  assert.equal(sb[0].blobs[7], "ok");
+  const artifactBytes = new TextEncoder().encode(seedArtifacts[`${CACHED_PREFIX}index.html`]).length;
+  assert.ok(artifactBytes > 0, "sanity: the fixture artifact is non-empty");
+  assert.equal(
+    sb[0].doubles[BYTES_SLOT],
+    artifactBytes,
+    "must equal the copied artifact's own bytes, excluding the copied __source.json",
+  );
+});
+
+// A guard test, not revert-check evidence for the fix itself (the three tests
+// above already carry that: bytes was always 0/absent before the fix, so this
+// assertion holds either way). Kept anyway — it pins the "never positive on
+// failure" direction against a future change to the failure path specifically,
+// which the other tests don't exercise.
 test("a failed build reports bytes as 0 (or absent), never a partial/wrong total", async () => {
   setSandboxFactory(() => ({
     mkdir: async () => {},

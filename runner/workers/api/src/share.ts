@@ -533,11 +533,18 @@ export async function createDemo(
       for (const obj of listed.objects) {
         const body = await env.ARTIFACTS.get(obj.key);
         if (body) {
-          await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
+          const rel = obj.key.slice(src.length);
+          await env.ARTIFACTS.put(r2Prefix + rel, body.body);
           // `body.size` is the copied object's real byte length (an R2Object's own
           // field), not the source string/stream's — the cheapest correct number
-          // for a copy, and the only one either branch here has in hand.
-          addBytes(body.size);
+          // for a copy, and the only one either branch here has in hand. Excludes
+          // a `__`-prefixed rel (`__source.json`, and a detached create's own
+          // `__job.json`): `cached.r2_prefix` is a full copy of *some* earlier
+          // build's directory, private files included, and this write is
+          // immediately superseded by the explicit `__source.json` put a few
+          // lines down — counting it would make "the built artifact's total
+          // size" include another demo's private source, not the artifact.
+          if (!rel.split("/").some((seg) => seg.startsWith("__"))) addBytes(body.size);
         }
       }
     } else {
@@ -616,8 +623,10 @@ export async function updateDemo(
       for (const obj of listed.objects) {
         const body = await env.ARTIFACTS.get(obj.key);
         if (body) {
-          await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
-          addBytes(body.size);
+          const rel = obj.key.slice(src.length);
+          await env.ARTIFACTS.put(r2Prefix + rel, body.body);
+          // Same `__`-prefix exclusion as createDemo's own copy loop above.
+          if (!rel.split("/").some((seg) => seg.startsWith("__"))) addBytes(body.size);
         }
       }
     } else if (!cached) {
