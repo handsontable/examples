@@ -280,7 +280,8 @@ collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
 - a fingerprint counts once until the next edit or preview mount, and at most 50
   (`DEMO_COLLAPSE_CEILING`) points per page load.
 A report from a superseded run still in flight at the last keystroke can add one point
-to that burst. The Sentry side is not behind this collapse; its relay budgets are
+to that burst. On Tier 2, where a rebuild outlasts the 2 s window, a superseded
+rebuild's report can land after the burst closed and count on its own. The Sentry side is not behind this collapse; its relay budgets are
 unchanged.
 
 `serve.share` locally (F27): under `vite dev` (what `pnpm dev:full` serves), React

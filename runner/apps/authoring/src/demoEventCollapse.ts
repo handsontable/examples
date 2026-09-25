@@ -13,8 +13,12 @@
 //   reported since the previous edit belongs to a run the user has already
 //   typed past, so it is discarded — that is what removes the ladder.
 // - While a burst is open, reports are held back, one per key (the caller
-//   passes the §7 fingerprint, so a fault seen through two channels — an
-//   uncaught throw and React's console echo of it — is still one).
+//   passes the §7 fingerprint of the relayed message). A `console.error`
+//   carrying an Error is already relayed by the in-preview reporter on the
+//   error channel with the Error's own message (DEV-2552), so it shares the
+//   throw's key and counts once. A console line with different text — React
+//   18's "The above error occurred in …" boundary log, or prose passed to
+//   `console.error` — is a different key and counts separately.
 // - `settleMs` after the LAST edit the burst closes and whatever the final run
 //   reported is emitted, once per key.
 // - Outside a burst (a preview's first load, a click that throws, a Tier-2
@@ -38,6 +42,12 @@
 // held with the final run's reports, since nothing on the relay says which
 // run a report came from. That costs at most the one or two runs in flight at
 // the last keystroke — a small constant per burst, not one point per rung.
+//
+// Tier 2 is covered less tightly. A container rebuild takes seconds (longer
+// than `DEMO_EDIT_SETTLE_MS`), so a superseded rebuild's report can land
+// after the burst has closed and is then emitted at once, one per distinct
+// fingerprint. Rule 1 of `normalizeMonitorMessage` folds most `is not
+// defined` rungs into one fingerprint, which keeps this small.
 //
 // Import-free, and every clock/timer injected, for the same reason as
 // `demoEventReport.ts`: `sentry.ts` imports `@sentry/react`, so `node --test`
