@@ -139,7 +139,10 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     const result = await storage.transaction(async (txn) => {
       const hashes = items.map((i) => i.hash);
       const dedupe = await checkDuplicates(txn, hashes, arrivalMs);
-      const accepted = items.filter((i) => !dedupe.duplicates.has(i.hash));
+      // F5-batch fix: filter by OCCURRENCE (index), never by hash — the
+      // first copy of an in-batch repeat is the one stored, later copies
+      // are duplicates. See `DedupeResult.isDuplicate`.
+      const accepted = items.filter((_, idx) => !dedupe.isDuplicate[idx]);
 
       // A-I4 remainder (closed, second wave): a `record`-less item (an
       // `example.*` Faro event, `normalise/faro.ts`) still goes through the
@@ -170,9 +173,9 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
       });
 
       return {
-        results: items.map((i) => ({
+        results: items.map((i, idx) => ({
           hash: i.hash,
-          outcome: (dedupe.duplicates.has(i.hash) ? "duplicate" : "accepted") as "duplicate" | "accepted",
+          outcome: (dedupe.isDuplicate[idx] ? "duplicate" : "accepted") as "duplicate" | "accepted",
         })),
         bytesAdded: append.bytesAdded,
       };

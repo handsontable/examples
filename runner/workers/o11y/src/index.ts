@@ -118,7 +118,10 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
   try {
     const processed = await processFaroBody(body, env, service, receivedAtMs);
 
-    const ingestItems = processed.filter((p) => p.ingestItem).map((p) => p.ingestItem!);
+    // `withItem[i].ingestItem` is `ingestItems[i]`, and `IngestResult.results`
+    // is index-aligned with `ingestItems` (F5-batch fix, below).
+    const withItem = processed.filter((p) => p.ingestItem);
+    const ingestItems = withItem.map((p) => p.ingestItem!);
 
     for (const p of processed) {
       if (p.invalid) recordInvalidItem(env, ctx, p.invalid);
@@ -141,7 +144,11 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
 
     if (ingestItems.length > 0) {
       const result = await inboxWriter(env).ingest("browser", receivedAtMs, ingestItems);
-      const outcomeByHash = new Map(result.results.map((r) => [r.hash, r.outcome]));
+      // F5-batch fix: outcomes are matched to items BY INDEX. This used to
+      // be `new Map(results.map((r) => [r.hash, r.outcome]))`: with two
+      // identical items in one batch the later copy's "duplicate"
+      // overwrote the first copy's "accepted", so the stored copy's AE
+      // points were dropped too.
       // NB3 (re-review 2): only count hashes that carry a STORED `record`
       // toward this route's own `o11y.ingest accepted`/`duplicate`
       // self-metric. An `example.*` event's hash-only `ingestItem` (no
@@ -150,17 +157,14 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
       // here too would skew the ingest-volume panels upward by however
       // much `example.*` traffic this batch carried, panels that exist to
       // track stored-record volume.
-      const recordHashes = new Set(processed.filter((p) => p.ingestItem?.record !== undefined).map((p) => p.ingestItem!.hash));
-      for (const r of result.results) {
-        if (!recordHashes.has(r.hash)) continue;
-        r.outcome === "duplicate" ? duplicate++ : accepted++;
-      }
-      for (const p of processed) {
-        if (!p.ingestItem) continue;
-        if (outcomeByHash.get(p.ingestItem.hash) === "accepted") {
+      withItem.forEach((p, idx) => {
+        const outcome = result.results[idx]?.outcome;
+        if (outcome === undefined) return;
+        if (p.ingestItem!.record !== undefined) outcome === "duplicate" ? duplicate++ : accepted++;
+        if (outcome === "accepted") {
           for (const point of p.aePoints) writePoint(env, ctx, point);
         }
-      }
+      });
     }
   } catch (err) {
     // Fix round (finding A-M1): `handleCollect` had no boundary of its own

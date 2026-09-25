@@ -46,6 +46,10 @@ export interface IngestItemResult {
 }
 
 export interface IngestResult {
+  /** Index-aligned with the `items` passed to `ingest`: `results[i]` is the
+   *  outcome of `items[i]`. Callers must match by index, never by `hash` —
+   *  two items in one batch can share a hash and get different outcomes
+   *  (the first `accepted`, later copies `duplicate`; F5-batch fix). */
   results: IngestItemResult[];
 }
 

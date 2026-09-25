@@ -12,9 +12,10 @@
 // `pruneHashBuckets` deletes stale buckets with a bounded `start`/`end`
 // range read (never a full-prefix scan — see `storage.ts`'s `ListOptions`
 // doc comment), called from `writer.ts#backlog()` alongside
-// `ledger.ts#pruneLedger`. `checkDuplicates`'s signature and behaviour
-// (24h window, same-batch repeats collapse to their first occurrence) are
-// UNCHANGED — this is purely a storage-layout fix.
+// `ledger.ts#pruneLedger`. `checkDuplicates`'s behaviour (24h window,
+// same-batch repeats collapse to their first occurrence) was unchanged by
+// that storage-layout fix; its result shape changed later (F5-batch, see
+// `DedupeResult.isDuplicate`).
 
 import { DEDUPE_WINDOW_MS } from "@handsontable/demo-runtime/telemetry";
 import { deleteChunked, getManyChunked, type StorageLike } from "./storage.js";
@@ -51,10 +52,21 @@ function bucketedHashKey(bucket: string, sha256Hex: string): string {
 }
 
 export interface DedupeResult {
-  /** Hashes that are duplicates — already seen within the 24 h window, or
-   *  repeated within this same batch (a request that includes the same
-   *  record twice, e.g. a client-side retry folded into one POST). */
-  duplicates: ReadonlySet<string>;
+  /** One entry per input hash, index-aligned with `hashes`: `true` when
+   *  THAT occurrence is a duplicate — already seen within the 24 h window,
+   *  or a later copy of a hash that occurs earlier in this same batch (a
+   *  request that includes the same record twice, e.g. a client-side retry
+   *  folded into one POST). The first in-batch occurrence of an unseen hash
+   *  is `false`: it is the copy that gets stored.
+   *
+   *  F5-batch fix: this used to be a `Set` of duplicate HASHES. A caller can
+   *  only filter a set by hash, not by occurrence, so `InboxWriter.ingest`
+   *  dropped the first copy of an in-batch repeat along with the later
+   *  ones, while `writes` below still marked the hash seen. The record was
+   *  stored zero times and every later redelivery was refused as a
+   *  duplicate, so it was lost for good. Per occurrence is the only shape
+   *  that cannot be read that way. */
+  isDuplicate: readonly boolean[];
   /** `hash:<yyyymmdd>:<sha256>` entries to write for every non-duplicate
    *  hash — the caller commits these in the same transaction as the
    *  rows/fingerprints (ADR §B.2: "the same transaction as
@@ -95,26 +107,27 @@ export async function checkDuplicates(
   // real DO storage limit (`storage.ts#DO_STORAGE_MAX_KEYS_PER_CALL`).
   const existing = await getManyChunked<number>(storage, lookupKeys);
 
-  const duplicates = new Set<string>();
+  const isDuplicate: boolean[] = [];
   const writes: Record<string, number> = {};
   const acceptedThisBatch = new Set<string>();
 
   for (const hash of hashes) {
     if (acceptedThisBatch.has(hash)) {
-      duplicates.add(hash);
+      isDuplicate.push(true);
       continue;
     }
     const firstSeen = existing.get(bucketedHashKey(today, hash)) ?? existing.get(bucketedHashKey(yesterday, hash));
     const withinWindow = firstSeen !== undefined && nowMs - firstSeen < DEDUPE_WINDOW_MS;
     if (withinWindow) {
-      duplicates.add(hash);
+      isDuplicate.push(true);
     } else {
       writes[bucketedHashKey(today, hash)] = nowMs;
       acceptedThisBatch.add(hash);
+      isDuplicate.push(false);
     }
   }
 
-  return { duplicates, writes };
+  return { isDuplicate, writes };
 }
 
 export interface HashPruneResult {
