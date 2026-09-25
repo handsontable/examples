@@ -2591,6 +2591,7 @@ function Authoring({
     const demoContext = () => ({
       tier: (entry.engine === "container" ? 2 : 1) as 1 | 2,
       framework: entry.framework,
+      htMajor: htMajorOf(v.value.ref),
       demoId: savedIdRef.current,
     });
     // T07: §5 browser metric catalogue. `wireRuntimeMetrics` reads
