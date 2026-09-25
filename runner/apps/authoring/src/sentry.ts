@@ -116,6 +116,23 @@ export const diagnosticsGoToSentry = reportsDiagnosticToSentry(sentryActive, SEN
 export const monitorDemos =
   reportingEnabled && (import.meta.env.VITE_MONITOR_DEMOS as string | undefined) === "1";
 
+/**
+ * R3 F10: preview-error monitoring under `dev:full`, Faro only, never Sentry.
+ * `monitorDemos` stays production-only (see its own doc comment); this widens
+ * the same "is the preview reporter injected at all" gate with the fix-round-I3
+ * local leg (`localTestSentryEnabled` — build-time `VITE_TELEMETRY_LOCAL` flag
+ * AND a localhost/127.0.0.1 host, same two-gate shape as Faro's own local path),
+ * so the AE metric and Faro report reach the local stack even though
+ * `monitorDemos` is false there. `reportDemoEvent`/`reportDemoEventUnguarded`
+ * below use `opts.sentry` (always `monitorDemos`, never this local leg) to keep
+ * every Sentry call exactly as gated as it is today — `previewMonitoring` only
+ * ever ADDS the Faro/facade path, never a Sentry one. In production
+ * `previewMonitoring === monitorDemos` (`localTestSentryEnabled()` is
+ * constant-false there — see `check:telemetry-leak`), so this is a no-op on the
+ * host that matters.
+ */
+export const previewMonitoring = monitorDemos || localTestSentryEnabled();
+
 /** The `environment` (and tag) demo-side events are filed under, so a flood of them
  *  can be rate-limited or muted in the Sentry UI without touching the app — the only
  *  brake that works without a build. Fix round I1 (controller ruling, ADR §E.3 is
@@ -309,21 +326,35 @@ export interface DemoEventContext {
  * else the tighter `MONITOR_EVENT_CEILING`.
  */
 export function reportDemoEvent(payload: MonitorPayload, context: DemoEventContext): void {
-  if (!monitorDemos) return;
-  reportDemoEventUnguarded(payload, context);
+  if (!previewMonitoring) return;
+  reportDemoEventUnguarded(payload, context, { sentry: monitorDemos });
 }
 
 /**
- * The body of `reportDemoEvent`, without the `monitorDemos` gate — split out
- * so fix round I3's e2e-only test hook (below) can drive it directly. A real
- * preview mount (the only way `reportDemoEvent` is called for real) needs
- * `E2E_LIVE` and an external bundler, out of reach for this deterministic
- * spec; this hook exercises the exact same reporting logic (budget, facade,
- * Sentry gate — everything past this point) without needing one, and does NOT
- * touch `monitorDemos` itself, so `App.tsx`'s real preview instrumentation
- * gate is completely unaffected.
+ * The body of `reportDemoEvent`, without the `previewMonitoring` gate — split
+ * out so fix round I3's e2e-only test hook (below) can drive it directly. A
+ * real preview mount (the only way `reportDemoEvent` is called for real)
+ * needs `E2E_LIVE` and an external bundler, out of reach for this
+ * deterministic spec; this hook exercises the exact same reporting logic
+ * (budget, facade, Sentry gate — everything past this point) without needing
+ * one, and does NOT touch `previewMonitoring`/`monitorDemos` themselves, so
+ * `App.tsx`'s real preview instrumentation gate is completely unaffected.
+ *
+ * R3 F10: `opts.sentry` (default `true`, matching every pre-existing caller —
+ * the `__t06ReportDemoEvent` hook included) decides whether this relay's
+ * Sentry calls (breadcrumb / `captureException` / `captureMessage`) run at
+ * all, independently of `diagnosticsGoToSentry`. `reportDemoEvent` passes
+ * `monitorDemos` explicitly, so the R3 F10 local leg (`previewMonitoring`
+ * true, `monitorDemos` false) reaches the facade/Faro below but never Sentry
+ * — "never Sentry locally" stays true even though `diagnosticsGoToSentry` is
+ * independently true locally (`sentryActive` includes the local test-capture
+ * leg).
  */
-function reportDemoEventUnguarded(payload: MonitorPayload, context: DemoEventContext): void {
+function reportDemoEventUnguarded(
+  payload: MonitorPayload,
+  context: DemoEventContext,
+  opts: { sentry: boolean } = { sentry: true },
+): void {
   // Bound and redacted before anything else touches it — including the dedupe key
   // below, which hashes the stack. An unbounded `stack` from a crafted postMessage is
   // free client-side resource pressure, and a Tier-2 preview host inside it is a live
@@ -363,7 +394,7 @@ function reportDemoEventUnguarded(payload: MonitorPayload, context: DemoEventCon
   if (clean.kind === "console-warn") {
     if (!demoBreadcrumbBudget.admit(clean.kind, message)) return;
     toFacade();
-    if (diagnosticsGoToSentry) {
+    if (opts.sentry && diagnosticsGoToSentry) {
       // Breadcrumbs live on the Sentry scope, which outlives a preview: one recorded
       // while example A was mounted can still be attached to an error from example B.
       // `data` carries the tier, framework and demo id so a stale one is identifiable.
@@ -382,7 +413,7 @@ function reportDemoEventUnguarded(payload: MonitorPayload, context: DemoEventCon
   }
   if (!demoRelayBudget.admit(clean.kind, message, clean.stack)) return;
   toFacade();
-  if (!diagnosticsGoToSentry) return;
+  if (!(opts.sentry && diagnosticsGoToSentry)) return;
 
   // DEV-2854 / DEV-2876: a recognised Tier-2 compiler diagnostic, or a recognised Tier-2
   // build-failure envelope, collapses into its own flat, constant-titled bucket instead of
@@ -455,6 +486,19 @@ if (localTestSentryEnabled()) {
       __t06ReportDemoEvent?: (payload: MonitorPayload, context: DemoEventContext) => void;
     }
   ).__t06ReportDemoEvent = reportDemoEventUnguarded;
+  // R3 F10: a second hook exposing the GUARDED entry point (`reportDemoEvent`
+  // itself, not the Unguarded bypass above) — the only way an e2e spec can
+  // prove the two-gate behaviour without a real (E2E_LIVE-gated) preview
+  // mount posting a `message` `onPreviewMessage` would accept. Before this
+  // fix round, `reportDemoEvent` was a no-op in every build this repo's e2e
+  // specs run (`monitorDemos` is always false off the production host) — this
+  // hook is what lets a spec built with `VITE_TELEMETRY_LOCAL=1` show it is
+  // no longer one, and that it still never reaches Sentry.
+  (
+    window as unknown as {
+      __t06ReportDemoEventGuarded?: (payload: MonitorPayload, context: DemoEventContext) => void;
+    }
+  ).__t06ReportDemoEventGuarded = reportDemoEvent;
 }
 
 export { Sentry };

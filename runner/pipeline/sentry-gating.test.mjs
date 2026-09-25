@@ -14,6 +14,7 @@ import {
   isForeignUnhandled,
   isOfficeScannerRejection,
   isUnhandledNoise,
+  withoutMessageEchoFrames,
 } from "../apps/authoring/src/eventGate.ts";
 import { resolveSentryScope, reportsDiagnosticToSentry } from "../apps/authoring/src/sentryScope.ts";
 import { safeInit } from "../apps/authoring/src/bootGuard.ts";
@@ -241,6 +242,94 @@ test("isForeignUnhandled: a HANDLED report through a foreign frame is NOT droppe
 test("isUnhandledNoise / isForeignUnhandled: no exception values -> false, not thrown on", () => {
   assert.equal(isUnhandledNoise({}), false);
   assert.equal(isForeignUnhandled({ exception: { values: [] } }, "https://x"), false);
+});
+
+// ── R3 F17a: withoutMessageEchoFrames — Faro's gecko-regex message-echo frame ───
+//
+// Faro's stack parser can turn the `Error: <message>` line itself into a fake
+// frame (no `lineno`, `filename` = a URL quoted in the message). Un-gated, that
+// fake frame reaches `isForeignUnhandled` and drops the whole event — the exact
+// finding input from R3 F17a.
+
+test("withoutMessageEchoFrames: drops the exact fake frame Faro produced for the pii finding", () => {
+  const message =
+    "HAIKU1 pii jane.doe@example.com 192.0.2.55 https://x.test/p?token=SECRET123";
+  const frames = [
+    {
+      filename: "https://x.test/p?token=SECRET123",
+      function: "Error: HAIKU1 pii jane.doe@example.com 192.0.2.55 ",
+    },
+  ];
+  assert.deepEqual(withoutMessageEchoFrames(message, frames), []);
+});
+
+test("withoutMessageEchoFrames: keeps a real frame (has a lineno) even if its filename appears in the message", () => {
+  const message = "boom at https://app.test/main.js";
+  const frames = [
+    { filename: "https://app.test/main.js", function: "doThing", lineno: 12, colno: 3 },
+  ];
+  assert.deepEqual(withoutMessageEchoFrames(message, frames), frames);
+});
+
+test("withoutMessageEchoFrames: keeps a real, genuinely foreign frame not quoted in the message", () => {
+  // The full pipeline case for R3 F17a's second requirement: a real extension/
+  // third-party frame must still be droppable by isForeignUnhandled downstream —
+  // this helper must not touch it.
+  const message = "boom";
+  const frames = [
+    { filename: "https://sandpack-bundler.codesandbox.io/bundle.js", function: "run", lineno: 4 },
+  ];
+  assert.deepEqual(withoutMessageEchoFrames(message, frames), frames);
+});
+
+test("withoutMessageEchoFrames: no message or no frames -> frames returned unchanged", () => {
+  const frames = [{ filename: "https://x.test/p", function: "f" }];
+  assert.equal(withoutMessageEchoFrames(undefined, frames), frames);
+  assert.equal(withoutMessageEchoFrames("boom", undefined), undefined);
+});
+
+test("R3 F17a end to end: the pii finding's message no longer makes isForeignUnhandled drop the event", () => {
+  const message =
+    "HAIKU1 pii jane.doe@example.com 192.0.2.55 https://x.test/p?token=SECRET123";
+  const rawFrames = [
+    {
+      filename: "https://x.test/p?token=SECRET123",
+      function: "Error: HAIKU1 pii jane.doe@example.com 192.0.2.55 ",
+    },
+  ];
+  const event = {
+    exception: {
+      values: [
+        {
+          type: "Error",
+          value: message,
+          mechanism: { handled: false },
+          stacktrace: { frames: withoutMessageEchoFrames(message, rawFrames) },
+        },
+      ],
+    },
+  };
+  assert.equal(isForeignUnhandled(event, "http://localhost:5173"), false);
+});
+
+test("R3 F17a: a genuinely foreign third-party script error is still dropped", () => {
+  const event = {
+    exception: {
+      values: [
+        {
+          type: "TypeError",
+          value: "boom",
+          mechanism: { handled: false },
+          stacktrace: {
+            frames: withoutMessageEchoFrames("boom", [
+              { filename: "https://sandpack-bundler.codesandbox.io/bundle.js", function: "inject", lineno: 7 },
+            ]),
+          },
+        },
+      ],
+    },
+  };
+  assert.equal(isForeignUnhandled(event, "http://localhost:5173"), true);
 });
 
 // ── DEV-2858. beforeSend suppression gates for two NOT-OURS populations ─────────

@@ -67,7 +67,14 @@ import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
 import { ApiTokensPage } from "./ApiTokens.js";
 import { useProfile } from "./useProfile.js";
-import { diagnosticsGoToSentry, monitorDemos, reportDemoEvent, reportError, Sentry } from "./sentry.js";
+import {
+  diagnosticsGoToSentry,
+  monitorDemos,
+  previewMonitoring,
+  reportDemoEvent,
+  reportError,
+  Sentry,
+} from "./sentry.js";
 import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
 import { tier1Report } from "./tier1Report.js";
 import { telemetry, apiHeaders } from "./telemetry/index.js";
@@ -305,7 +312,11 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
       causeMessage: e instanceof Error && e.cause instanceof Error ? e.cause.message : null,
       replay: e instanceof Error && (e as { replay?: boolean }).replay === true,
       online: navigator.onLine,
-      monitorDemos,
+      // R3 F10: widened to the local leg so the compile-diagnostic branch's facade/Faro
+      // report reaches the local stack under `dev:full`. The Sentry gate just below stays
+      // keyed on the real `monitorDemos` for this same branch, so nothing here changes what
+      // reaches Sentry.
+      monitorDemos: previewMonitoring,
     });
     if (!report) return;
     // Captured as a fresh error rather than `e`, and this is the whole of DEMOS-15's second
@@ -326,7 +337,12 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
       tier: (report.tags.tier as Tier | undefined) ?? "1",
       framework,
     });
-    if (diagnosticsGoToSentry) {
+    // R3 F10: the compiler-asset branch (`report.tags.surface !== "demo-runtime"`) is
+    // unaffected — gated on `diagnosticsGoToSentry` alone, exactly as before. The
+    // compile-diagnostic branch (`surface: "demo-runtime"`) is now reachable locally via
+    // `previewMonitoring` above, so its own Sentry call needs the real `monitorDemos` back
+    // as a second conjunct — "never Sentry locally" for demo-runtime events.
+    if (diagnosticsGoToSentry && (report.tags.surface !== "demo-runtime" || monitorDemos)) {
       Sentry.captureException(titled, {
         tags: report.tags,
         fingerprint: report.fingerprint,
@@ -2578,13 +2594,17 @@ function Authoring({
             // Identifies the caller to the cost guardrail: at >=80% of the
             // monthly budget live sessions are signed-in-only (DEV-2030).
             authToken: getToken(),
-            monitor: monitorDemos,
+            // R3 F10: widened from `monitorDemos` to `previewMonitoring` so the in-preview
+            // reporter is injected under the local leg too (Faro only — see `sentry.ts`).
+            // Tier-2's own preview-host injection (`workers/api/src/monitor-inject.ts`) is a
+            // separate, production-only gate this does not change.
+            monitor: previewMonitoring,
           })
         : new SandpackRuntime(entry, {
             iframe: iframeEl,
             bundlerURL: SANDPACK_BUNDLER_URL,
             version: v.value,
-            monitor: monitorDemos,
+            monitor: previewMonitoring,
           });
     // Resolved per event: the demo id can be minted (first save) while this very
     // preview is running, and the ref is how that reaches an already-wired relay.
@@ -2633,7 +2653,7 @@ function Authoring({
       if (!isMonitorPayload(event.data)) return;
       reportDemoEvent(event.data, demoContext());
     };
-    if (monitorDemos) window.addEventListener("message", onPreviewMessage);
+    if (previewMonitoring) window.addEventListener("message", onPreviewMessage);
     runtime.onReady(() => !cancelled && setStatus("ready"));
     runtime.onError((e) => {
       if (cancelled) return;

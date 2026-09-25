@@ -340,6 +340,31 @@ test.describe("Faro in the authoring app (T06)", () => {
     );
   });
 
+  // R3 F17a: the exact R3-triage finding input. Faro's gecko-regex stack fallback used
+  // to turn this message's own trailing URL into a fake, lineno-less frame, which
+  // `isForeignUnhandled` then read as "foreign" and dropped the whole event — the error
+  // never reached Faro/Loki at all. This only proves the event is KEPT; it deliberately
+  // does not assert anything about the IP/email text surviving or being redacted — that
+  // redaction is F17c, out of this worktree's scope (landed separately, R3B).
+  test("R3 F17a: an uncaught error whose message quotes a foreign URL is kept, not dropped as foreign", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+
+    const marker = Date.now();
+    await page.evaluate((m) => {
+      setTimeout(() => {
+        throw new Error(
+          `HAIKU1 pii jane.doe@example.com 192.0.2.55 https://x.test/p?token=SECRET123 (${m})`,
+        );
+      });
+    }, marker);
+
+    await expect
+      .poll(() => captured.flatMap((b) => b.exceptions ?? []).some((e) => String(e.value ?? "").includes(`HAIKU1 pii`) && String(e.value ?? "").includes(String(marker))))
+      .toBe(true);
+  });
+
   test("a render crash inside the error boundary reaches Faro too, still not handled", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
@@ -525,6 +550,68 @@ test.describe("Faro in the authoring app (T06)", () => {
       (hit as { environment?: string }).environment === "demo-runtime",
       `demo-runtime event must be re-homed to environment "demo-runtime", got ${JSON.stringify((hit as { environment?: string }).environment)}`,
     );
+  });
+
+  // ---- R3 F10: reportDemoEvent's own gate (previewMonitoring), not the ----
+  // ---- __t06ReportDemoEvent bypass above -----------------------------------
+  //
+  // Every test above drives `reportDemoEventUnguarded` directly (the
+  // `__t06ReportDemoEvent` hook), which never exercised `reportDemoEvent`'s
+  // own `monitorDemos` gate at all. Before this fix round, THIS build (no
+  // `VITE_MONITOR_DEMOS`, so `monitorDemos` is false, same as every real
+  // `dev:full` run) made `reportDemoEvent` itself a no-op — F10's exact
+  // finding. `__t06ReportDemoEventGuarded` calls `reportDemoEvent` (the real,
+  // guarded entry point `App.tsx`'s `onPreviewMessage` uses) so this proves
+  // the fix without a real (E2E_LIVE-gated) preview mount.
+  test("R3 F10: reportDemoEvent (guarded) reaches Faro under the local leg, and never Sentry", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+
+    const guardedMarker = "T06 e2e R3 F10 guarded probe " + Date.now();
+    await page.evaluate((msg) => {
+      (
+        window as unknown as {
+          __t06ReportDemoEventGuarded?: (
+            payload: { type: string; kind: string; message: string },
+            context: { tier: number; framework: string; htMajor: string },
+          ) => void;
+        }
+      ).__t06ReportDemoEventGuarded?.(
+        { type: "hot-runner-monitor", kind: "error", message: msg },
+        { tier: 1, framework: "react", htMajor: "18" },
+      );
+    }, guardedMarker);
+
+    // The AE metric (contract §5) — F10's "local-only" finding for the metric
+    // side: `previewMonitoring` (`monitorDemos || localTestSentryEnabled()`)
+    // is what let this call through `reportDemoEvent`'s gate at all.
+    await expect
+      .poll(() => captured.flatMap((b) => b.measurements ?? []).some((m) => m.type === "preview.runtime_error"))
+      .toBe(true);
+
+    // Control, same D-I2 pattern as the noise-gate tests above: a SECOND
+    // demo-runtime event, fired through the UNGUARDED hook (opts.sentry=true
+    // default), which DOES reach Sentry on this exact dist (proved by the
+    // sibling "I3: a demo-runtime event reaches Sentry under full scope" test
+    // above). Waiting for this first rules out "no Sentry event yet because
+    // nothing has flushed" as the reason the guarded marker is absent below —
+    // Sentry capture/transport is provably alive on this page.
+    const controlMarker = "T06 e2e R3 F10 control probe " + Date.now();
+    await callReportDemoEvent(page, controlMarker);
+    await expect
+      .poll(() => readSentryEvents(page).then((events) => events.some((e) => JSON.stringify(e).includes(controlMarker))))
+      .toBe(true);
+
+    // Never Sentry: `opts.sentry` is `monitorDemos` (false in this build, same
+    // as every real local run) — independent of `previewMonitoring` and of
+    // `diagnosticsGoToSentry`, which IS true in this build (the control above
+    // just proved it). Matched on the message text, not `tags.surface`: the
+    // control event ALSO carries `surface: "demo-runtime"`, so a surface-only
+    // match would pass even if the guarded call had leaked through too.
+    const events = await readSentryEvents(page);
+    const guardedHit = events.find((e) => JSON.stringify(e).includes(guardedMarker));
+    assert(!guardedHit, "reportDemoEvent must never reach Sentry through the R3 F10 local leg");
   });
 });
 
