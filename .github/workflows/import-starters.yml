@@ -39,7 +39,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: matrix
         name: Build bucket matrix
@@ -94,12 +94,12 @@ jobs:
     steps:
       # Pipeline code always comes from master; matrix.ref only selects the
       # examples/ source tree for the bucket.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: master
 
       - name: Check out starter sources at ${{ matrix.ref }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ matrix.ref }}
           path: starter-src
@@ -107,7 +107,7 @@ jobs:
             /examples/**
           sparse-checkout-cone-mode: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -172,7 +172,7 @@ jobs:
           cp -R "apps/authoring/public/starter-examples/${{ matrix.bucket }}" "$RUNNER_TEMP/starter-examples/${{ matrix.bucket }}"
 
       - name: Upload bucket ${{ matrix.bucket }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: starter-examples-${{ matrix.bucket }}
           path: ${{ runner.temp }}/starter-examples
@@ -186,18 +186,18 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: master
 
       - name: Download generated buckets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: starter-examples-*
           merge-multiple: true
           path: runner/apps/authoring/public/starter-examples
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 

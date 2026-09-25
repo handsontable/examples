@@ -76,7 +76,7 @@ jobs:
     outputs:
       starters: ${{ steps.find.outputs.starters }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: find
         run: |
@@ -114,9 +114,9 @@ jobs:
       matrix:
         starter: ${{ fromJSON(needs.discover.outputs.starters) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: ${{ matrix.starter }}/package.json
 
@@ -126,7 +126,7 @@ jobs:
       # signal. 16 cold installs is the cheaper trade. If this is ever added as an
       # optimization, prove the hit by comparing two consecutive runs — a silent
       # miss reads exactly like a hit.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -220,13 +220,13 @@ jobs:
       matrix:
         starter: ${{ fromJSON(needs.discover.outputs.starters) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: ${{ matrix.starter }}/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 

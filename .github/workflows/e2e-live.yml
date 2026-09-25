@@ -87,13 +87,13 @@ jobs:
       # weekly canary fires (schedule events carry no inputs).
       BASE_URL: ${{ inputs.base_url || (github.event_name == 'schedule' && 'https://demos.handsontable.com' || '') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -222,7 +222,7 @@ jobs:
 
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report-live
           # playwright-report/ holds the html report, test-results/ the traces.

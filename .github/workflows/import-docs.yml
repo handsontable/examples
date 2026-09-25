@@ -64,10 +64,10 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check out Handsontable docs source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: handsontable/handsontable
           ref: ${{ matrix.docs_branch }}
@@ -139,7 +139,7 @@ jobs:
           cp -R "apps/authoring/public/docs-examples/${{ matrix.bucket }}" "$RUNNER_TEMP/docs-examples/${{ matrix.bucket }}"
 
       - name: Upload ${{ matrix.bucket }} bucket
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: docs-examples-${{ matrix.bucket }}
           path: ${{ runner.temp }}/docs-examples
@@ -153,10 +153,10 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download generated buckets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: docs-examples-*
           merge-multiple: true
