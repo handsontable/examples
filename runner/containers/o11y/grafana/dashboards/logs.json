@@ -469,7 +469,7 @@
     {
       "id": 8,
       "type": "table",
-      "title": "Top error fingerprints by count",
+      "title": "Top error fingerprints by report count",
       "description": "error.handled + error.uncaught grouped by fingerprint (blob11), highest count first — an approximation of \"new error fingerprints\": Grafana cannot read the o11y worker's own Durable Object fp: registry (the real first-seen source of truth, ADR §... T04), and Analytics Engine's SQL API only allowlists sum/avg/quantileExactWeighted/toStartOfInterval/toUInt32/now (workers/o11y/src/alerts/ae-query.ts#ALLOWED_AE_FUNCTIONS) — no COUNT(DISTINCT ...)/uniqExact, so a true first-seen-in-range query is not expressible here. Controller audit finding: emitted but previously unread.",
       "gridPos": {
         "h": 8,
