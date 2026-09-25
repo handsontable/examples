@@ -3,8 +3,10 @@
 // alongside these from `index.ts#scheduled` — see the marked call point
 // there; this module does not implement it.
 
-import { getBudgetState, KV_METER_PREFIX } from "../budget.js";
+import { readMeters } from "../admin.js";
+import { getBudgetState } from "../budget.js";
 import type { Env } from "../env.js";
+import { classifyMeter } from "../session-listing.js";
 import { emitPoint } from "./points.js";
 
 /** Mirrors `wrangler.jsonc`'s `containers[].max_instances` for the live-preview
@@ -15,10 +17,20 @@ import { emitPoint } from "./points.js";
 const LIVE_POOL_MAX_INSTANCES = 10;
 
 /**
- * `pool.gauge` (reason `live`): how many Tier-2 sessions currently hold an
- * awake-window meter, against the pool's `max_instances` ceiling — the same
- * KV prefix the admin panel already scans (`admin.ts#readMeters`), reused
- * read-only rather than duplicated.
+ * `pool.gauge` (reason `live`): how many Tier-2 sessions are actually AWAKE
+ * right now, against the pool's `max_instances` ceiling — the same KV scan
+ * the admin panel already runs (`admin.ts#readMeters`), reused read-only
+ * rather than duplicated, classified with the one definition of "awake" this
+ * codebase has (`session-listing.ts#classifyMeter`, `AWAKE_WINDOW_SECONDS`).
+ *
+ * F19b: the first cut of this function counted every `session-meter:` key in
+ * KV, full stop. A meter key outlives the container it fronts by
+ * `KV_METER_TTL_SECONDS` (24h, `budget.ts`) — the exact gap DEV-2567 already
+ * fixed for the admin panel's own count (`admin.ts#liveSessions`'s
+ * `awakeCount`, unchanged since master) by filtering on `classifyMeter(...)
+ * .state === "awake"` instead of key existence. A stale 24h tail with one
+ * genuinely awake session used to read as `value: N` for every stale key
+ * still inside its TTL; it now reads 1.
  *
  * T05-D: reason `builder` (the `BuilderSandbox` share-build pool) is not
  * emitted — nothing in this worker meters builder-container concurrency today
@@ -26,18 +38,9 @@ const LIVE_POOL_MAX_INSTANCES = 10;
  * would only ever read zero. Left for whichever task adds that meter, rather
  * than shipping a point that always misreports.
  */
-async function countLiveSessionMeters(env: Env): Promise<number> {
-  let cursor: string | undefined;
-  let count = 0;
-  // The pool can never exceed max_instances, so a handful of pages is already
-  // generous headroom against meter/container drift.
-  for (let page = 0; page < 10; page += 1) {
-    const listed = await env.CACHE.list({ prefix: KV_METER_PREFIX, limit: 1000, cursor });
-    count += listed.keys.length;
-    if (listed.list_complete) break;
-    cursor = listed.cursor;
-  }
-  return count;
+export async function countLiveSessionMeters(env: Env, now: number = Date.now()): Promise<number> {
+  const { meters } = await readMeters(env);
+  return meters.filter((meter) => classifyMeter(meter, now).state === "awake").length;
 }
 
 export async function emitPoolGauge(env: Env): Promise<void> {
