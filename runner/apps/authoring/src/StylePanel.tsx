@@ -23,6 +23,7 @@ import {
   theme as ui,
 } from "@handsontable/demo-editor-shell";
 import { reportError } from "./sentry.js";
+import { apiHeaders } from "./telemetry/index.js";
 import { useAutoGrow } from "./useAutoGrow.js";
 import type { FilesMap, WriteFileOptions } from "@handsontable/demo-runtime";
 import {
@@ -431,10 +432,10 @@ export function StylePanel({
     try {
       const res = await fetch(`${apiBase}/api/theme`, {
         method: "POST",
-        headers: {
+        headers: apiHeaders({
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        }),
         body: JSON.stringify({ prompt: request, current: state }),
       });
       const body = (await res.json().catch(() => ({}))) as ThemeAnswer & { error?: string };

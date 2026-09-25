@@ -8,6 +8,7 @@
 
 import { assertApiOk, readApiJson } from "./api.js";
 import { getToken } from "./auth.js";
+import { apiHeaders } from "./telemetry/index.js";
 
 /** A token as the listing shows it. No digest, no plaintext — the server never
  *  selects the former and only ever answers the latter once, on mint. */
@@ -26,9 +27,11 @@ export interface MintedToken extends ApiToken {
   token: string;
 }
 
+/** Every one of this file's `fetch` calls is an API call, so this is also
+ *  where `x-hot-session` (T06, `apiHeaders`) rides along. */
 function authHeaders(): Record<string, string> {
   const token = getToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return Object.fromEntries(apiHeaders(token ? { Authorization: `Bearer ${token}` } : undefined).entries());
 }
 
 const FALLBACK = (status: number) => `Request failed (${status}).`;

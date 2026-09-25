@@ -1,0 +1,151 @@
+{
+  // The observability Worker (ADR-0041 rev. 3) — o11y worker + InboxWriter DO +
+  // GrafanaBox DO/Container. Deployed to the main Handsontable Cloudflare
+  // account (NOT the sandbox), same account as workers/api.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "handsontable-demos-o11y",
+  "account_id": "15111272c53ed0aaf84a908f0c9c7f8b",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+
+  // No workers.dev URL, no preview URLs (contract §1) — every request reaches
+  // this Worker through the `--routes` flags in the `deploy` script
+  // (package.json), never a Cloudflare-issued subdomain.
+  "workers_dev": false,
+  "preview_urls": false,
+
+  // ADR §B.6, restated from the task file's "§B.4" (a typo for §B.6, per the
+  // controller): the observer does not observe itself — no exported Workers
+  // Logs, no traces, invocation logs off. Its own `o11y.*` self-metrics go to
+  // Analytics Engine like every other metric, never through its own ingest
+  // routes.
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": false, "persist": true, "destinations": [] },
+    "traces": { "enabled": false }
+  },
+
+  // ADR §B.3: the drain's alarm loop budget, at most 300000 per ADR. T03-D
+  // (see the task Outcome): raised from T02's 30000 placeholder — a single
+  // `drainStep` invocation pushes up to `DRAIN_BATCH_SIZE` (10) objects,
+  // each up to 1 MB decompressed, through gzip/hash/symbolication; 30 s was
+  // measured too tight against a real multi-object batch on the sandbox
+  // probe (see the Outcome for the exact number), 120000 leaves headroom
+  // under the 300000 ceiling without approaching it blindly.
+  "limits": { "cpu_ms": 120000 },
+
+  // T03: the backlog cron (ADR §A: "a `*/10` cron in the o11y worker asks
+  // `InboxWriter.backlog()`"). T04 extends the same `scheduled()` handler
+  // for its own alert evaluation rather than adding a second trigger.
+  "triggers": { "crons": ["*/10 * * * *"] },
+
+  // Public, non-secret config (contract §2).
+  "vars": {
+    "O11Y_ENV": "production",
+    // K1 (replaces the ACCESS_TEAM_DOMAIN/ACCESS_AUD placeholders — no
+    // Access application was ever created, T00-D8/T03): the Handsontable
+    // login broker's base URL (ADR-0007), same value as
+    // workers/api/wrangler.jsonc's own LOGIN_BROKER_URL var. Public, not a
+    // secret — every consumer of this broker (the API worker, the authoring
+    // app) already commits it the same way.
+    "LOGIN_BROKER_URL": "https://mcp-auth-proxy-j0tb.onrender.com",
+    "GITHUB_OIDC_REPOSITORY": "handsontable/examples",
+    // T02-D16 (fix round, see the task Outcome): the expected `workflow_ref`
+    // OIDC claim for the deploy job — T10 must keep this in sync with the
+    // real deploy workflow's file path and the ref it runs from.
+    "GITHUB_OIDC_WORKFLOW_REF": "handsontable/examples/.github/workflows/master.yml@refs/heads/master",
+    // T01 phase-2 addition (env.ts has the full reasoning): duplicates the
+    // `account_id` above because a Worker has no runtime way to read its own
+    // account id, and GrafanaBox needs it to build the Loki bucket's R2 S3
+    // endpoint and the Analytics Engine SQL API URL.
+    "CLOUDFLARE_ACCOUNT_ID": "15111272c53ed0aaf84a908f0c9c7f8b"
+    // SERVICE_VERSION (T02 addition, see the task Outcome) is intentionally
+    // absent here: the real deploy script sets it via `--var
+    // SERVICE_VERSION:$GITHUB_SHA` (the same pattern `docs/observability-contract.md`
+    // §2 documents for the API worker's own `SERVICE_VERSION`), not a
+    // committed `vars` value — every reader falls back to `"dev"` when unset.
+  },
+
+  // R2 — EU jurisdiction on every bucket (contract §2). Bucket names must exist
+  // once R2 is enabled for this account (`wrangler r2 bucket create --jurisdiction eu <name>`),
+  // the same one-time step `AGENTS.md` notes for the API worker's bucket.
+  "r2_buckets": [
+    { "binding": "O11Y_INBOX", "bucket_name": "handsontable-demos-o11y-inbox", "jurisdiction": "eu" },
+    { "binding": "O11Y_LOKI_STATE", "bucket_name": "handsontable-demos-o11y-loki", "jurisdiction": "eu" },
+    { "binding": "O11Y_MAPS", "bucket_name": "handsontable-demos-o11y-maps", "jurisdiction": "eu" }
+  ],
+
+  // Analytics Engine — `runner_events` (contract §4), shared with the API
+  // worker's own `RUNNER_EVENTS` binding.
+  "analytics_engine_datasets": [{ "binding": "RUNNER_EVENTS", "dataset": "runner_events" }],
+
+  // `handsontable-demos-api` — o11y usage metering, o11y spend, later
+  // `AdminReads` (ADR-0043). T04: bound to the named `O11yUsage`
+  // `WorkerEntrypoint` (`workers/api/src/o11y-usage.ts`), not the default
+  // export — a named RPC entrypoint has no HTTP route on any host, which is
+  // what keeps `recordAwakeSeconds`/`o11ySpend` unreachable from outside
+  // this binding even though the API worker's own deploy routes are the
+  // wildcard `*.demos.handsontable.com/*` (see that file's header). This is
+  // a small, necessary edit to a file this task does not otherwise own —
+  // T04's Outcome documents it (not in this task's "Owns" row).
+  "services": [{ "binding": "API", "service": "handsontable-demos-api", "entrypoint": "O11yUsage" }],
+
+  // `INBOX_WRITER` (T02, real behaviour: dedupe, fingerprint registry,
+  // row-chunked pack/commit, `recordWake`) and `GRAFANA_BOX` (T01, real
+  // behaviour + the `containers` block below, phase 2).
+  //
+  // EU jurisdiction for both is a *runtime* call
+  // (`env.INBOX_WRITER.jurisdiction("eu")`), not a wrangler.jsonc field — there
+  // is no such key on a `durable_objects` binding.
+  "durable_objects": {
+    "bindings": [
+      { "class_name": "InboxWriter", "name": "INBOX_WRITER" },
+      { "class_name": "GrafanaBox", "name": "GRAFANA_BOX" }
+    ]
+  },
+  "migrations": [{ "new_sqlite_classes": ["InboxWriter", "GrafanaBox"], "tag": "v1" }],
+
+  // T00-D7's missing half, added by T01 phase 2 alongside `box.ts`'s real
+  // behaviour. `image` is a path to the Dockerfile (not its directory) —
+  // verified against wrangler 4.136.3's own config schema
+  // (`definitions.ContainerApp.properties.image`). `constraints.jurisdiction`
+  // (not a top-level `jurisdiction` key — also read from the schema, the
+  // task file only said "look up the current wrangler key") is the EU
+  // compliance boundary (ADR-0041 §A/§H); `standard-1` = 1/2 vCPU, 4 GiB
+  // memory, 8 GB disk, matching `containers/o11y/compose.yml`'s local
+  // `deploy.resources` limits so local and real measurements mean the same
+  // thing. `max_instances: 1`: exactly one box exists at a time (ADR §A
+  // "one sleeping box"). `scheduling_policy` deliberately left unset —
+  // Cloudflare's own Containers "Get started" example for a
+  // Durable-Object-managed container (`class_name` + `image` +
+  // `max_instances`, no `scheduling_policy`) omits it too; recorded in the
+  // T01 Outcome which way `wrangler deploy --dry-run` and the sandbox probe
+  // resolved it.
+  "containers": [
+    {
+      "class_name": "GrafanaBox",
+      "image": "../../containers/o11y/Dockerfile",
+      "instance_type": "standard-1",
+      "max_instances": 1,
+      "constraints": { "jurisdiction": "eu" }
+    }
+  ],
+
+  // ADR §B.5's Workers rate-limiting binding, gating `collect`/`lite`. T02-D
+  // (see the task Outcome): T00 left this out believing it "needs a real
+  // namespace id from the dashboard" — measured false against `wrangler`'s
+  // own config schema (`ratelimits[].namespace_id` is a free-form string the
+  // deploy author picks to scope the limiter, not a dashboard-provisioned
+  // resource id) and a real `wrangler deploy --dry-run`. `1001` is this
+  // task's own choice, scoped to this Worker only — nothing else in this
+  // account uses rate-limit namespace ids, so any small integer is fine.
+  // `100` requests per `60` s per key (`cf-connecting-ip`) is a starting
+  // value, generous for a legitimate browser (Faro batches, not
+  // per-event) and tight enough to blunt an abusive client; unmeasured
+  // against real traffic (the sandbox probe's synthetic load does not
+  // represent production volume) — tune after launch like every other
+  // ADR §F.3 threshold.
+  "ratelimits": [
+    { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 100, "period": 60 } }
+  ]
+}

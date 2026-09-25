@@ -5,8 +5,9 @@
 // the gate directly — it decides whether every anonymous visitor's preview reports,
 // which is the highest-volume decision in the feature.
 
-import { injectReporterIntoHtml } from "@handsontable/demo-runtime/monitor";
+import { injectLiteReporterIntoHtml, injectReporterIntoHtml, type LiteReporterConfig } from "@handsontable/demo-runtime/monitor";
 import { injectSchemeIntoHtml } from "@handsontable/demo-runtime/scheme";
+import { HT_MAJORS, type HtMajor } from "@handsontable/demo-runtime/telemetry";
 
 /** Just the vars this module reads, so a test needs no full `Env`. */
 export interface MonitorEnv {
@@ -105,4 +106,67 @@ export async function injectScheme(response: Response): Promise<Response> {
   } catch {
     return response;
   }
+}
+
+// ---- T08: lite beacon injection, `/d` and `/embed` (ADR §C.5, contract §9) ----
+//
+// A wholly different seam from `injectMonitor`/`injectScheme` above: those guard
+// a *proxied* Tier-2 response (arbitrary upstream bytes, unknown encoding, must
+// clone before reading). `share.ts#serveDemoAsset` already reads its own R2
+// object once, already knows it is `text/html` (`hitPath.endsWith(".html")`),
+// and never gzip-encodes what it stores — so there is nothing to clone and no
+// encoding to sniff there. `injectLiteHtml` below is the guard this seam
+// actually needs (HTML-only, content-type checked) on a plain string, not a
+// `Response` — a `Response`-wrapping guard here would cost a second full read
+// of the body on `/d`/`/embed`'s own hottest path only to recover a size this
+// task also has to compute. `injectLiteReporterIntoHtml`'s own idempotency
+// marker still makes a second pass a no-op, matching `injectMonitor`/
+// `injectScheme`'s "same marker, either seam" guarantee.
+
+/** A next-channel ref, either shape `version.ts#isNextPrereleaseVersion`/
+ *  `ANY_NEXT_VERSION_RE` recognise: the nightly `0.0.0-next-<hash>-<date>` or a
+ *  dotted prerelease like `19.0.0-next.1`. Not imported from `version.ts`
+ *  (`ANY_NEXT_VERSION_RE` is not exported) — restated here rather than widen
+ *  that module's surface for one more caller. */
+const NEXT_VERSION_RE = /^\d+\.\d+\.\d+-next[.-]/i;
+const NIGHTLY_NEXT_RE = /^0\.0\.0-next-/i;
+
+/**
+ * `DemoRow.ht_version` (a validated ref: an exact release, or a next-channel
+ * prerelease — never the pre-DEV-2565 `"latest"` sentinel today, but this
+ * still degrades to `"none"` rather than throwing if one ever reaches here) →
+ * contract §3's `hot.ht_major`. A next-channel build maps to `"next"`, never
+ * `"none"`: the nightly's own major is always `0` under plain semver parsing,
+ * which is exactly the case `version.ts`'s own `NEXT_PRERELEASE_RE` exists to
+ * special-case, and a dotted `19.0.0-next.1` prerelease is not a released `19`
+ * either.
+ */
+export function htMajorFromVersion(htVersion: string | null | undefined): HtMajor {
+  const v = (htVersion ?? "").trim();
+  if (!v) return "none";
+  if (NEXT_VERSION_RE.test(v) || NIGHTLY_NEXT_RE.test(v)) return "next";
+  const major = /^(\d+)\./.exec(v)?.[1];
+  return major && (HT_MAJORS as readonly string[]).includes(major) ? (major as HtMajor) : "none";
+}
+
+/**
+ * Inject the standalone lite reporter into an already-in-hand HTML string —
+ * `text/html` only (checked against `contentType`, the same guard family as
+ * `injectMonitor`/`injectScheme`) and identity-encoded only (checked against
+ * `contentEncoding`, when the caller has one to offer — `serveDemoAsset`'s own
+ * R2 puts never set one, so its call site passes `null`, but the guard exists
+ * regardless: decoding to inject would risk corrupting the served document,
+ * `injectMonitor`'s own reasoning, restated for a plain string rather than a
+ * `Response`). Idempotent (delegates to `injectLiteReporterIntoHtml`'s own
+ * marker check): a second pass over an already-injected document is a no-op.
+ */
+export function injectLiteHtml(
+  html: string,
+  contentType: string,
+  contentEncoding: string | null | undefined,
+  config: LiteReporterConfig,
+): string {
+  if (!contentType.toLowerCase().includes("text/html")) return html;
+  if (contentEncoding && contentEncoding.toLowerCase() !== "identity") return html;
+  return injectLiteReporterIntoHtml(html, config);
 }

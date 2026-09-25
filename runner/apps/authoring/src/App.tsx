@@ -67,9 +67,39 @@ import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
 import { ApiTokensPage } from "./ApiTokens.js";
 import { useProfile } from "./useProfile.js";
-import { monitorDemos, reportDemoEvent, reportError, reportingEnabled, Sentry } from "./sentry.js";
+import {
+  diagnosticsGoToSentry,
+  monitorDemos,
+  previewMonitoring,
+  reportDemoEvent,
+  noteDemoEdit,
+  resetDemoEventCollapse,
+  reportError,
+  Sentry,
+} from "./sentry.js";
 import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
 import { tier1Report } from "./tier1Report.js";
+import { telemetry, apiHeaders } from "./telemetry/index.js";
+import type { HotAttrs, Surface, Tier } from "@handsontable/demo-runtime/telemetry";
+import {
+  emitBucketResolve,
+  emitVersionSwitch,
+  htMajorOf,
+  startClock,
+  trackPreviewReady,
+  wireRuntimeMetrics,
+} from "./telemetry/metrics.js";
+import {
+  consumeForkMarker,
+  exampleActionAttrs,
+  exampleOpenAttrs,
+  exampleOpenKey,
+  exampleTaxonomy,
+  FORK_LANDING_PARAM,
+  type DocsExampleMeta,
+  type ExampleOpenReason,
+  type ExampleTaxonomy,
+} from "./exampleAnalytics.js";
 import { isOpaqueNetworkFailure } from "./fetchFailure.js";
 import { describeDependencyFailure } from "./dependencyFailure.js";
 import {
@@ -258,7 +288,11 @@ function describeRuntimeError(
  * or stack parsing, which is exactly what putting it in the message got wrong.
  */
 function reportRuntimeError(e: unknown, engine: string, framework: string): void {
-  if (!reportingEnabled) return;
+  // No blanket gate here (T06): each branch below reports through the facade
+  // unconditionally (it no-ops when telemetry is off) and reaches Sentry only
+  // when `diagnosticsGoToSentry` — `reportingEnabled && SENTRY_SCOPE === "full"`
+  // (contract §11 / ADR §E.3) — so a local run with `VITE_TELEMETRY_LOCAL=1`
+  // still exercises the facade even though Sentry itself stays silent off-host.
   // Tier-1 compile and runtime errors are the "product output" case above — dropped
   // by default, reported while demo monitoring is on (DEV-2527). They arrive as
   // ordinary app-surface events rather than through `reportDemoEvent`, because this
@@ -280,7 +314,11 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
       causeMessage: e instanceof Error && e.cause instanceof Error ? e.cause.message : null,
       replay: e instanceof Error && (e as { replay?: boolean }).replay === true,
       online: navigator.onLine,
-      monitorDemos,
+      // R3 F10: widened to the local leg so the compile-diagnostic branch's facade/Faro
+      // report reaches the local stack under `dev:full`. The Sentry gate just below stays
+      // keyed on the real `monitorDemos` for this same branch, so nothing here changes what
+      // reaches Sentry.
+      monitorDemos: previewMonitoring,
     });
     if (!report) return;
     // Captured as a fresh error rather than `e`, and this is the whole of DEMOS-15's second
@@ -292,12 +330,28 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
     // rather than at the failure.
     const titled = new Error(report.synthesizeAs.message, { cause: e });
     titled.name = report.synthesizeAs.name;
-    Sentry.captureException(titled, {
-      tags: report.tags,
-      fingerprint: report.fingerprint,
-      level: report.level,
-      extra: report.extra,
+    // Facade first, unconditional — contract fingerprint computed from
+    // `report.tags.context` + the synthesized title, matching what Sentry's
+    // own `report.fingerprint` groups on (both ultimately key off the same
+    // constant title/context pair per branch).
+    telemetry.error(titled, report.tags.context ?? "tier1-runtime", {
+      surface: (report.tags.surface as Surface | undefined) ?? "authoring",
+      tier: (report.tags.tier as Tier | undefined) ?? "1",
+      framework,
     });
+    // R3 F10: the compiler-asset branch (`report.tags.surface !== "demo-runtime"`) is
+    // unaffected — gated on `diagnosticsGoToSentry` alone, exactly as before. The
+    // compile-diagnostic branch (`surface: "demo-runtime"`) is now reachable locally via
+    // `previewMonitoring` above, so its own Sentry call needs the real `monitorDemos` back
+    // as a second conjunct — "never Sentry locally" for demo-runtime events.
+    if (diagnosticsGoToSentry && (report.tags.surface !== "demo-runtime" || monitorDemos)) {
+      Sentry.captureException(titled, {
+        tags: report.tags,
+        fingerprint: report.fingerprint,
+        level: report.level,
+        extra: report.extra,
+      });
+    }
     return;
   }
   // The budget guardrail refusing a session is the guardrail working. It would
@@ -349,48 +403,62 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
     // are unbounded and extra-only for the same reason `sessionElapsedMs` is: Sentry tag
     // values are meant to be faceted, not read as free text.
     const diagnostics = e.diagnostics;
-    Sentry.captureException(e, {
-      tags: {
-        context: "tier2-session-start",
-        session_status: String(e.status),
-        framework,
-        ...(code ? { session_refusal: code } : {}),
+    telemetry.error(e, "tier2-session-start", {
+      surface: "authoring",
+      tier: "2",
+      framework,
+      reason: code ?? String(e.status),
+    });
+    if (diagnosticsGoToSentry) {
+      Sentry.captureException(e, {
+        tags: {
+          context: "tier2-session-start",
+          session_status: String(e.status),
+          framework,
+          ...(code ? { session_refusal: code } : {}),
+          ...(diagnostics
+            ? {
+                session_elapsed_bucket: elapsedBucket(diagnostics.elapsedMs),
+                ...(diagnostics.ray ? { cf_ray: diagnostics.ray } : {}),
+                session_response_origin: responseOrigin(diagnostics),
+                session_response_type: diagnostics.responseType,
+              }
+            : {}),
+        },
+        fingerprint: ["tier2-session-start", String(e.status), ...(code ? [code] : [])],
         ...(diagnostics
           ? {
-              session_elapsed_bucket: elapsedBucket(diagnostics.elapsedMs),
-              ...(diagnostics.ray ? { cf_ray: diagnostics.ray } : {}),
-              session_response_origin: responseOrigin(diagnostics),
-              session_response_type: diagnostics.responseType,
+              extra: {
+                sessionElapsedMs: diagnostics.elapsedMs,
+                sessionResponseHeaders: diagnostics.headerNames.join(", "),
+                sessionResponseHeaderCount: diagnostics.headerCount,
+                ...(diagnostics.server ? { sessionResponseServer: diagnostics.server } : {}),
+              },
             }
           : {}),
-      },
-      fingerprint: ["tier2-session-start", String(e.status), ...(code ? [code] : [])],
-      ...(diagnostics
-        ? {
-            extra: {
-              sessionElapsedMs: diagnostics.elapsedMs,
-              sessionResponseHeaders: diagnostics.headerNames.join(", "),
-              sessionResponseHeaderCount: diagnostics.headerCount,
-              ...(diagnostics.server ? { sessionResponseServer: diagnostics.server } : {}),
-            },
-          }
-        : {}),
-    });
+      });
+    }
     return;
   }
   if (e instanceof ContainerBootFailure) {
-    Sentry.captureException(e, {
-      tags: { context: "tier2-container-boot" },
-      fingerprint: ["tier2-container-boot"],
-      // Bounded upstream (the status route tails 2500 bytes, `bootFailureDetail`
-      // keeps 40 lines) and already redacted of preview hosts, so no extra cap here.
-      ...(e.log ? { extra: { bootLog: e.log } } : {}),
-    });
+    telemetry.error(e, "tier2-container-boot", { surface: "authoring", tier: "2", framework });
+    if (diagnosticsGoToSentry) {
+      Sentry.captureException(e, {
+        tags: { context: "tier2-container-boot" },
+        fingerprint: ["tier2-container-boot"],
+        // Bounded upstream (the status route tails 2500 bytes, `bootFailureDetail`
+        // keeps 40 lines) and already redacted of preview hosts, so no extra cap here.
+        ...(e.log ? { extra: { bootLog: e.log } } : {}),
+      });
+    }
     return;
   }
   // Normal teardown: dispose() races a pending message, or the tab is closing.
   if (e instanceof Error && e.message === "The session was closed.") return;
-  Sentry.captureException(e, { tags: { context: "tier2-runtime" } });
+  telemetry.error(e, "tier2-runtime", { surface: "authoring", tier: "2", framework });
+  if (diagnosticsGoToSentry) {
+    Sentry.captureException(e, { tags: { context: "tier2-runtime" } });
+  }
 }
 
 /** Pin the workspace to the version state's ref. Thin wrapper over the shared
@@ -486,7 +554,7 @@ function parseRoute(): AppRoute {
 function beacon(path: string): void {
   void fetch(`${API_BASE}/api/beacon`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ path }),
     keepalive: true,
   }).catch(() => { /* analytics must never surface to a user */ });
@@ -693,7 +761,7 @@ function FullMode({ id }: { id: string }) {
     // `invalidateDemo` clears only the worker's KV copy — nothing reaches the
     // browser cache. Without this, opening full mode right after an Edit info save
     // shows the *old* title for up to a minute, which reads as the save not landing.
-    fetch(`${API_BASE}/api/demos/${id}`, { cache: "no-store" })
+    fetch(`${API_BASE}/api/demos/${id}`, { cache: "no-store", headers: apiHeaders() })
       .then((res) => (res.ok ? res.json() : null))
       .then((meta: { title?: string; description?: string | null; ht_version?: string } | null) => {
         if (cancelled || !meta) return;
@@ -718,7 +786,7 @@ function FullMode({ id }: { id: string }) {
   // `Download` zips; without them the button hides rather than handing over an empty zip.
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE}/api/demos/${id}/source`)
+    fetch(`${API_BASE}/api/demos/${id}/source`, { headers: apiHeaders() })
       .then((res) => (res.ok ? res.json() : null))
       .then((src: { framework: string; files: FilesMap; htVersion?: string | null } | null) => {
         if (cancelled || !src) return;
@@ -865,7 +933,7 @@ function Gate({ route }: { route: { mode: "play" } | { mode: "edit"; id: string 
     let live = true;
     const token = getToken();
     fetch(`${API_BASE}/api/demos/${route.id}/access`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: apiHeaders(token ? { Authorization: `Bearer ${token}` } : undefined),
     })
       .then((res) => (res.ok ? (res.json() as Promise<{ owned?: boolean }>) : null))
       .then((body) => {
@@ -961,6 +1029,33 @@ function NotFound({
   );
 }
 
+/**
+ * `/share/:id` or `/edit/:id` for an id that no longer resolves — same visual
+ * pattern as `NotFound` above (its own component, not a shared prop, so a
+ * change to the docs-example copy can't drift this one's wording by accident).
+ * `kind === "removed"` only when the metadata route (`GET /api/demos/:id`,
+ * `?view=share`) answered 410 — a demo that was revoked, as opposed to one
+ * whose id never existed at all.
+ */
+function DemoNotFound({ kind }: { kind: "missing" | "removed" }) {
+  return (
+    <div style={centered}>
+      <Logo size={40} />
+      <p style={{ color: theme.color.text, fontFamily: theme.font.ui, fontWeight: 600, margin: 0 }}>
+        {kind === "removed" ? "This demo was removed" : "Demo not found"}
+      </p>
+      <p style={{ color: theme.color.textMuted, fontFamily: theme.font.ui, margin: 0 }}>
+        {kind === "removed"
+          ? "The person who shared it took it down."
+          : "This link doesn't point to a demo that exists."}
+      </p>
+      <a href="/" style={{ color: theme.color.accentText, fontFamily: theme.font.ui }}>
+        Back to the playground
+      </a>
+    </div>
+  );
+}
+
 /** Does this lineage name a workspace that came from outside the catalog?
  *
  *  `import:<provider>` (DEV-2504) and `payload:<source>` (DEV-2517) both arrive
@@ -1023,6 +1118,12 @@ function Authoring({
     return catalog.examples.some((e) => e.framework === p) ? (p as string) : "react";
   });
   const hadUrlVersion = useRef<boolean>(new URLSearchParams(location.search).has("v"));
+  // ADR-0042: a bare `/` visit defaults `framework` to `"react"` with no
+  // `?example=` in the URL at all — that default landing is not the visitor
+  // reaching for the react starter, and counting it would swamp every real
+  // starter pick in the ranking. `example.open` fires on the starter's first
+  // real deep link (`?example=` present) but not on this silent default.
+  const hadUrlExample = useRef<boolean>(new URLSearchParams(location.search).has("example"));
   // The active example entry — a starter template or a docs example, both
   // lazy-loaded per version bucket. Starts as a files-less placeholder built
   // from the catalog index; the runtime-mount effect stays gated until a real
@@ -1166,6 +1267,15 @@ function Authoring({
   // a bucket absence with no suggestion available isn't mistaken for the
   // "path" kind's unrelated wording.
   const [docsNotFoundSuggestion, setDocsNotFoundSuggestion] = useState<string | null | undefined>(undefined);
+  // Saved-demo analogue of docsNotFound: set when a `/share/:id` or `/edit/:id`
+  // load's `GET /api/demos/:id[/source]` answers 404/410, so this short-circuits
+  // rendering the same way `docsNotFound` does — before EditorShell, and before
+  // the preview-mount effect ever runs against the still-empty placeholder
+  // `files`/`entry` state (which used to throw its OWN "entry file … not found"
+  // error and overwrite whatever message this set, since nothing gated the
+  // mount effect on this failure — only on `sourceLoaded`, which this also
+  // flips true).
+  const [demoNotFound, setDemoNotFound] = useState<"missing" | "removed" | null>(null);
   const [docsRuntimeBlocked, setDocsRuntimeBlocked] = useState(!!initialDocs);
   // Starter analogue of docsRuntimeBlocked: set by the unified starter refusal
   // (below-floor major, version with no bucket, artifact fetch failure) so the
@@ -1322,6 +1432,35 @@ function Authoring({
     }
   }, []);
   const docsPathRef = useRef<string | null>(docsPath);
+  // ADR-0042: dedup key for the last `example.open` fired (`lineage` + pinned
+  // version, `exampleAnalytics.ts#exampleOpenKey`) — an effect that re-runs
+  // for an unrelated reason (a late `nextVersion` resolve, a `versionsResolved`
+  // flip) must not re-fire the same open. `currentExampleTaxonomyRef` is that
+  // open's own taxonomy, reused by the later `example.engaged`/`.forked`/
+  // `.saved`/`.shared`/`.downloaded` events for the same workspace.
+  const lastExampleOpenKeyRef = useRef<string | null>(null);
+  const currentExampleTaxonomyRef = useRef<ExampleTaxonomy | null>(null);
+  const exampleEngagedRef = useRef(false);
+
+  /** ADR-0042 §2 — `example.<action>` for the CURRENTLY open example, a
+   *  no-op before any `example.open` has fired for this workspace (an ad-hoc
+   *  bare-`/` default, or a page that has not resolved yet). */
+  const noteExampleAction = useCallback((metric: string) => {
+    const taxonomy = currentExampleTaxonomyRef.current;
+    if (!taxonomy) return;
+    telemetry.event(metric, exampleActionAttrs(taxonomy) as HotAttrs & Record<string, string>);
+  }, []);
+
+  /** `example.engaged` — "first code edit, or preview ready plus 30s"
+   *  (ADR-0042 §2), whichever comes first; fires once per workspace
+   *  (`exampleEngagedRef`, reset on every `loadWorkspace`). Called from
+   *  `markDirty` (first edit) and from the preview-ready timer below. */
+  const noteExampleEngaged = useCallback(() => {
+    if (exampleEngagedRef.current) return;
+    exampleEngagedRef.current = true;
+    noteExampleAction("example.engaged");
+  }, [noteExampleAction]);
+
   const dirtyRef = useRef(dirty);
   const sourceLoadedRef = useRef(sourceLoaded);
   const activeDocsBucketRef = useRef<string | null>(activeDocsBucket);
@@ -1352,6 +1491,10 @@ function Authoring({
    *  but nothing uses it since DEV-2495: the Edit info dialog, its only caller, now
    *  writes its own PATCH instead of staging an edit for the workspace save. */
   const markDirty = useCallback((...touched: string[]) => {
+    // ADR-0042 §2 `example.engaged`'s "first code edit" half — BEFORE
+    // `dirtyRef.current` flips, so this only ever fires on the transition
+    // from clean to dirty, not on every subsequent keystroke.
+    if (!dirtyRef.current) noteExampleEngaged();
     setDirty(true);
     dirtyRef.current = true;
     if (!touched.length) return;
@@ -1360,7 +1503,7 @@ function Authoring({
       for (const p of touched) next.add(p);
       return next;
     });
-  }, []);
+  }, [noteExampleEngaged]);
 
   /** Saved or replaced — nothing is outstanding. */
   const clearDirty = useCallback(() => {
@@ -1368,6 +1511,19 @@ function Authoring({
     dirtyRef.current = false;
     setDirtyPaths((prev) => (prev.size ? new Set() : prev));
   }, []);
+
+  // ADR-0042 §2 `example.engaged`'s "preview ready plus 30s" half. Restarts
+  // whenever `status` becomes `"ready"` again (every workspace switch passes
+  // back through `"booting"` first, so this alone is the right dependency —
+  // no separate mount-generation counter needed); `noteExampleEngaged`
+  // itself is the guard against a second workspace's timer re-firing for the
+  // first (its own `exampleEngagedRef` is reset per `loadWorkspace`, not per
+  // timer).
+  useEffect(() => {
+    if (status !== "ready") return;
+    const timer = setTimeout(() => noteExampleEngaged(), 30_000);
+    return () => clearTimeout(timer);
+  }, [status, noteExampleEngaged]);
 
   /** The single `Notice` slot in the preview bar (DEV-2173 owns its placement).
    *  Two facts can be true at once after a downgrade — the theme was removed,
@@ -1390,7 +1546,23 @@ function Authoring({
 
   /** Replace the whole workspace (entry + files + lineage) and remount. */
   const loadWorkspace = useCallback(
-    (nextEntry: CatalogEntry, nextFiles: FilesMap, lineage: string) => {
+    (
+      nextEntry: CatalogEntry,
+      nextFiles: FilesMap,
+      lineage: string,
+      // ADR-0042 `example.open` — optional because a few internal callers of
+      // `loadWorkspace` (the version-repin path, etc.) reuse it for something
+      // that is not a fresh example resolve. Every real resolve call site
+      // below passes this. `version`/`bucket`/`docs` come from the CALLER,
+      // never read off component state inside this callback: `loadWorkspace`
+      // is a stable `useCallback` (deps: `[clearDirty]`), so `version` here
+      // would otherwise be whatever it was on the render that created the
+      // closure, not the version this particular resolve is actually for —
+      // the saved-demo path in particular calls `setVersion(pinnedVersion)`
+      // immediately before `loadWorkspace`, so reading component state here
+      // would race that update.
+      exampleOpen?: { reason: ExampleOpenReason; version: string; bucket?: string; docs?: DocsExampleMeta },
+    ) => {
       // DEV-2859: the lineage *prefix only* — the segment before the first
       // `:` — never the full string. `import:<url>` and `docs:<bucket>:<path>`
       // both carry visitor- or docs-authored data after that first colon; a
@@ -1433,6 +1605,44 @@ function Authoring({
       // down as `workspaceKey`, and it is the only truthful "this is a different
       // workspace now" signal the app has.
       setMountGen((g) => g + 1);
+
+      // ADR-0042 §2: every real `loadWorkspace` call is a genuine remount
+      // (`setMountGen` above already fired), so the previous workspace's
+      // engagement state is stale regardless of whether `example.open`
+      // itself gets deduped below.
+      exampleEngagedRef.current = false;
+      if (!exampleOpen) {
+        // The one caller that reaches here with no taxonomy at all: the
+        // starter effect's silent bare-`/` default (T12-D, see its call
+        // site) — no `example.open`, and nothing to attribute a later edit
+        // to either.
+        currentExampleTaxonomyRef.current = null;
+      } else {
+        const taxonomy = exampleTaxonomy({
+          lineage,
+          framework: nextEntry.framework,
+          htMajor: htMajorOf(exampleOpen.version),
+          bucket: exampleOpen.bucket,
+          docs: exampleOpen.docs,
+        });
+        currentExampleTaxonomyRef.current = taxonomy;
+
+        // `example.open` — fired once per resolved example, never on a
+        // re-render (`loadWorkspace` only runs from an explicit navigation
+        // call, and this key additionally guards an effect that re-fires
+        // this same call for an unrelated reason, e.g. a late `nextVersion`
+        // resolve). Deliberately AFTER every state setter above: an event
+        // this function throws building must never skip installing the new
+        // workspace.
+        const key = exampleOpenKey(lineage, exampleOpen.version);
+        if (lastExampleOpenKeyRef.current !== key) {
+          lastExampleOpenKeyRef.current = key;
+          telemetry.event(
+            "example.open",
+            exampleOpenAttrs(taxonomy, exampleOpen.reason) as HotAttrs & Record<string, string>,
+          );
+        }
+      }
     },
     [clearDirty],
   );
@@ -1448,10 +1658,10 @@ function Authoring({
       try {
         const res = await fetch(`${API_BASE}/api/import`, {
           method: "POST",
-          headers: {
+          headers: apiHeaders({
             "Content-Type": "application/json",
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
+          }),
           body: JSON.stringify({ url: initialImport }),
         });
         const body = (await res.json().catch(() => ({}))) as {
@@ -1501,7 +1711,12 @@ function Authoring({
         // response a no-op, so it cannot land on top of the import.
         starterRequestSeqRef.current += 1;
         importStarterGenRef.current = starterGenRef.current;
-        loadWorkspace(toPlaceholderEntry(indexEntry), { ...body.files }, `import:${body.provider ?? "url"}`);
+        loadWorkspace(
+          toPlaceholderEntry(indexEntry),
+          { ...body.files },
+          `import:${body.provider ?? "url"}`,
+          { reason: "deep-link", version },
+        );
         if (body.title) {
           setTitle(body.title);
           setImportedTitle(body.title);
@@ -1555,7 +1770,9 @@ function Authoring({
     };
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/payload/${encodeURIComponent(initialPayload)}`);
+        const res = await fetch(`${API_BASE}/api/payload/${encodeURIComponent(initialPayload)}`, {
+          headers: apiHeaders(),
+        });
         const body = (await res.json().catch(() => ({}))) as {
           framework?: string;
           files?: FilesMap;
@@ -1602,7 +1819,12 @@ function Authoring({
         // the user picks a starter themselves.
         starterRequestSeqRef.current += 1;
         importStarterGenRef.current = starterGenRef.current;
-        loadWorkspace(toPlaceholderEntry(indexEntry), { ...body.files }, "payload:theme-builder");
+        loadWorkspace(
+          toPlaceholderEntry(indexEntry),
+          { ...body.files },
+          "payload:theme-builder",
+          { reason: "deep-link", version },
+        );
         if (body.title) {
           setTitle(body.title);
           setImportedTitle(body.title);
@@ -1634,23 +1856,64 @@ function Authoring({
   // Edit/share mode: load the saved demo's source + metadata into the workspace.
   useEffect(() => {
     if (!savedId) return;
+    // ADR-0042 T12-D2 fix: read + strip the one-shot fork marker BEFORE
+    // anything async runs, so a second render of this same effect (or a
+    // manual reload of the now-stripped URL) never re-reads it —
+    // `consumeForkMarker`'s own doc comment has the full reasoning for why
+    // this has to be a URL param rather than an in-memory flag or browser
+    // storage.
+    const { isFork: isForkLanding, search: strippedSearch } = consumeForkMarker(location.search);
+    if (isForkLanding) {
+      history.replaceState(null, "", location.pathname + strippedSearch + location.hash);
+    }
     let cancelled = false;
+    // Cleared on every run, not just set on failure: `savedId` can change
+    // while this stays mounted (a fork lands on a fresh id via the same
+    // history.replaceState path above), and a stale `demoNotFound` from a
+    // previous id must not keep short-circuiting the render for a new one
+    // that resolves fine.
+    setDemoNotFound(null);
     (async () => {
       const token = getToken();
-      const headers: Record<string, string> = !isShare && token ? { Authorization: `Bearer ${token}` } : {};
+      const headers = apiHeaders(!isShare && token ? { Authorization: `Bearer ${token}` } : undefined);
       try {
         const [srcRes, metaRes] = await Promise.all([
           fetch(`${API_BASE}/api/demos/${savedId}/source`, { headers }),
           // `no-store` for the same reason `FullMode` uses it (DEV-2495): the
           // metadata endpoint is cached for a minute in the browser, and this is
           // the page you land on straight after renaming the demo.
-          fetch(`${API_BASE}/api/demos/${savedId}`, { cache: "no-store" }),
+          //
+          // `?view=share` (contract §5 `serve.share`, only on this fetch, only
+          // when `isShare`): this same metadata endpoint also answers the edit
+          // page's load (this same effect, `!isShare`) and `FullMode`'s own
+          // fetch — neither is a share-page view, and `/share/:id` itself is a
+          // static SPA route the API worker never sees a request for (it is
+          // served by the authoring app's assets-only Worker, no server code in
+          // the loop). This marker is the one signal the worker can use to tell
+          // "someone is viewing `/share/:id`" apart from those other two
+          // callers of the same route, so `index.ts`'s handler only counts a
+          // `serve.share` point when it is present.
+          fetch(`${API_BASE}/api/demos/${savedId}${isShare ? "?view=share" : ""}`, {
+            cache: "no-store",
+            headers: apiHeaders(),
+          }),
         ]);
         if (cancelled) return;
         if (!srcRes.ok) {
-          setErrorMessage(
-            !isShare && srcRes.status === 401 ? "Please sign in to edit this demo." : "This demo is unavailable.",
-          );
+          // `/source` collapses "never existed" and "revoked" to the same 404
+          // (getDemoSource returns null for both — index.ts's own comment: "a
+          // demo link is unlisted-but-public … revoked demos return 404"), so
+          // the 404/410 distinction has to come from the metadata fetch
+          // instead, which answers 410 specifically for a revoked row. Both
+          // requests were issued together above, so `metaRes` has already
+          // resolved by the time this runs.
+          if (!isShare && srcRes.status === 401) {
+            setErrorMessage("Please sign in to edit this demo.");
+          } else if (srcRes.status === 404 || srcRes.status === 410) {
+            setDemoNotFound(metaRes.status === 410 ? "removed" : "missing");
+          } else {
+            setErrorMessage("This demo is unavailable.");
+          }
           setSourceLoaded(true);
           return;
         }
@@ -1692,7 +1955,19 @@ function Authoring({
           hadUrlVersion.current = true; // keep the demo's pinned version, don't override with latest
           setVersion(pinnedVersion);
         }
-        loadWorkspace(toPlaceholderEntry(getEntry(src.framework)), src.files, savedId);
+        loadWorkspace(
+          toPlaceholderEntry(getEntry(src.framework)),
+          src.files,
+          savedId,
+          // ADR-0042 kind "saved". `entry` is `fork` when `isForkLanding`
+          // (the one-shot URL marker `onFork` left behind, read and
+          // stripped above) — `deep-link` otherwise: every other saved-demo
+          // landing is a direct navigation to `/edit/:id`/`/share/:id`, or a
+          // browser reload of one. `pinnedVersion ?? version`, not the
+          // (stale) `version` closure variable: `setVersion(pinnedVersion)`
+          // two lines above has not committed yet.
+          { reason: isForkLanding ? "fork" : "deep-link", version: pinnedVersion ?? version },
+        );
         setSourceLoaded(true);
       } catch (error) {
         // A share/edit link that no longer resolves: missing D1 row, unreadable R2
@@ -1713,7 +1988,7 @@ function Authoring({
   // unreachable budget endpoint must never put a warning in front of a user.
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE}/api/budget`)
+    fetch(`${API_BASE}/api/budget`, { headers: apiHeaders() })
       .then((r) => (r.ok ? r.json() : null))
       .then((state: { notice?: string | null } | null) => {
         if (!cancelled && state?.notice) setBudgetNotice(state.notice);
@@ -1772,14 +2047,22 @@ function Authoring({
               apiBaseOrigin: apiBaseOrigin(API_BASE, location.origin),
               netEffectiveType: netEffectiveType(),
             };
-            Sentry.withScope((scope) => {
-              scope.setLevel("warning");
-              scope.setTags(diagnosticTags(full));
-              scope.setExtras(diagnosticExtras(full));
-              Sentry.captureMessage("versions fetch unreachable", {
-                fingerprint: ["versions-fetch-unreachable"],
+            // Facade first, unconditional (T06): an upstream-failure-with-tags
+            // report, ADR §E.1's own named example. Sentry keeps it only under
+            // `full` scope — this call was unconditional before T06 and would
+            // otherwise still reach Sentry under `uncaught`, in violation of
+            // contract §11.
+            telemetry.event("versions_fetch_unreachable", diagnosticTags(full));
+            if (diagnosticsGoToSentry) {
+              Sentry.withScope((scope) => {
+                scope.setLevel("warning");
+                scope.setTags(diagnosticTags(full));
+                scope.setExtras(diagnosticExtras(full));
+                Sentry.captureMessage("versions fetch unreachable", {
+                  fingerprint: ["versions-fetch-unreachable"],
+                });
               });
-            });
+            }
           }
         } else if (isOpaqueNetworkFailure(error)) {
           Sentry.addBreadcrumb({
@@ -1891,7 +2174,18 @@ function Authoring({
     const candidate = plan.bucket;
 
     let cancelled = false;
-    void fetchDocsManifest(candidate)
+    const manifestPromise = fetchDocsManifest(candidate);
+    // §5 `bucket.resolve_ms` (T07) — same reasoning as the starter-bucket site:
+    // a separate `.then(ok, err)` on the raw promise, kept apart from the
+    // app-logic chain below so a downstream throw cannot double-report this
+    // resolve. `fetchDocsManifest` caches per bucket (`docs-catalog.ts`), so a
+    // re-visit of an already-resolved bucket reports a near-zero duration.
+    const stopBucketClock = startClock();
+    manifestPromise.then(
+      () => emitBucketResolve(telemetry, { bucket: candidate, outcome: "ok", durationMs: stopBucketClock() }),
+      () => emitBucketResolve(telemetry, { bucket: candidate, outcome: "error", durationMs: stopBucketClock() }),
+    );
+    void manifestPromise
       .then(async (manifest) => {
         if (cancelled || docsRequestSeqRef.current !== requestSeq) return;
         setDocsItems(manifest.examples);
@@ -1923,7 +2217,17 @@ function Authoring({
           const nextFiles = manifest.hotVersion === version
             ? { ...docsEntry.files }
             : pinHandsontableFiles({ ...docsEntry.files }, version);
-          loadWorkspace(docsEntry, nextFiles, `docs:${candidate}:${openPath}`);
+          loadWorkspace(docsEntry, nextFiles, `docs:${candidate}:${openPath}`, {
+            // The very first successful load this page-load ever makes is a
+            // deep link (`?docs=`); every later run of this same effect is
+            // this docs path being re-resolved against a version/bucket
+            // change (`version-switch`) — a picker or framework-switch click
+            // goes through `selectDocs` instead, not through this effect.
+            reason: initialLoad ? "deep-link" : "version-switch",
+            version,
+            bucket: candidate,
+            docs: { guide: docsEntry.guide, area: docsEntry.breadcrumb[0] ?? "", framework: docsEntry.framework },
+          });
           setDocsPath(openPath);
           docsPathRef.current = openPath;
           setVersionWarning(null);
@@ -2083,8 +2387,35 @@ function Authoring({
       }
     }
 
+    // ADR-0042 `entry`: the first successful load this page-load ever makes
+    // is a deep link only when `?example=` was actually in the URL — the
+    // bare-`/` default (no `example.open` at all, see `hadUrlExample`) is
+    // not a visitor reaching for anything. Once something is loaded, this
+    // same effect only runs again for either a picker pick (`selectExample`
+    // changed `framework`) or a bucket-crossing version change for the SAME
+    // framework (`version-switch`).
+    const starterIsInitialLoad = !sourceLoadedRef.current;
+    const starterOpenReason: ExampleOpenReason = starterIsInitialLoad
+      ? "deep-link"
+      : entry.framework === framework
+        ? "version-switch"
+        : "picker";
+
     let cancelled = false;
-    void loadStarterExample(bucket, framework)
+    const starterPromise = loadStarterExample(bucket, framework);
+    // §5 `bucket.resolve_ms` (T07). A SEPARATE `.then(ok, err)` on the raw
+    // promise, not chained onto the app-logic pipeline below: that pipeline's
+    // own `.catch` also catches whatever throws inside its `.then` (e.g.
+    // `loadWorkspace`), which would double-report one resolve as `ok` and then
+    // `error`. Note for the Outcome: `loadStarterExample` caches by bucket +
+    // framework, so a re-pick of an already-fetched bucket reports a near-zero
+    // duration — a real cache hit, not a measurement bug.
+    const stopBucketClock = startClock();
+    starterPromise.then(
+      () => emitBucketResolve(telemetry, { bucket, outcome: "ok", durationMs: stopBucketClock() }),
+      () => emitBucketResolve(telemetry, { bucket, outcome: "error", durationMs: stopBucketClock() }),
+    );
+    void starterPromise
       .then((starter) => {
         if (cancelled || starterRequestSeqRef.current !== requestSeq) return;
         const nextFiles = starter.htCoreRange === v.value.ref
@@ -2092,7 +2423,14 @@ function Authoring({
           : pinHandsontableFiles({ ...starter.files }, version);
         activeStarterBucketRef.current = bucket;
         setStarterRuntimeBlocked(false);
-        loadWorkspace(starter, nextFiles, `catalog:${framework}`);
+        loadWorkspace(
+          starter,
+          nextFiles,
+          `catalog:${framework}`,
+          starterIsInitialLoad && !hadUrlExample.current
+            ? undefined // the silent bare-`/` default — no example.open
+            : { reason: starterOpenReason, version, bucket },
+        );
         setVersionWarning(null);
         setSourceLoaded(true);
         sourceLoadedRef.current = true;
@@ -2184,7 +2522,7 @@ function Authoring({
 
   /** Open a documentation-guide example (lazy-loaded by its docs content path). */
   const selectDocs = useCallback(
-    async (dp: string) => {
+    async (dp: string, reason: Extract<ExampleOpenReason, "picker" | "switch"> = "picker") => {
       const bucket = activeDocsBucketRef.current;
       const manifest = activeDocsManifestRef.current;
       if (!bucket || !manifest || !manifest.examples.some((item) => item.docsPath === dp)) {
@@ -2203,7 +2541,12 @@ function Authoring({
           : pinHandsontableFiles({ ...e.files }, version);
         setDocsPath(dp);
         docsPathRef.current = dp;
-        loadWorkspace(e, nextFiles, `docs:${bucket}:${dp}`);
+        loadWorkspace(e, nextFiles, `docs:${bucket}:${dp}`, {
+          reason,
+          version,
+          bucket,
+          docs: { guide: e.guide, area: e.breadcrumb[0] ?? "", framework: e.framework },
+        });
         setVersionWarning(null);
         setDocsRuntimeBlocked(false);
       } catch (error) {
@@ -2226,6 +2569,16 @@ function Authoring({
     // editing it — so it needs its own trail entry, tagged by the requested
     // version rather than a file path.
     recordEditorEvent({ kind: "version", source: "repin", path: next, quiet: false, size: 0 });
+    // §5 `version.switch` (T07). Before `setVersion`, so `version` here is still
+    // the FROM ref; `bucket` is whichever kind of workspace is open right now
+    // (docs or starter), read off the same refs the bucket-resolve effects keep
+    // current.
+    emitVersionSwitch(telemetry, {
+      framework,
+      toRef: next,
+      fromRef: version,
+      bucket: (docsPathRef.current ? activeDocsBucketRef.current : activeStarterBucketRef.current) ?? undefined,
+    });
     docsRequestSeqRef.current += 1;
     setVersionWarning(null);
     setThemeRemoved(false);
@@ -2240,7 +2593,7 @@ function Authoring({
       setErrorMessage(null);
     }
     setVersion(next);
-  }, []);
+  }, [framework, version]);
 
   // Dispose and visibly clear a preview while its target bucket/artifact is
   // unresolved or unavailable — docs or starter alike. The version picker and
@@ -2310,21 +2663,46 @@ function Authoring({
             // Identifies the caller to the cost guardrail: at >=80% of the
             // monthly budget live sessions are signed-in-only (DEV-2030).
             authToken: getToken(),
-            monitor: monitorDemos,
+            // R3 F10: widened from `monitorDemos` to `previewMonitoring` so the in-preview
+            // reporter is injected under the local leg too (Faro only — see `sentry.ts`).
+            // Tier-2's own preview-host injection (`workers/api/src/monitor-inject.ts`) is a
+            // separate, production-only gate this does not change.
+            monitor: previewMonitoring,
           })
         : new SandpackRuntime(entry, {
             iframe: iframeEl,
             bundlerURL: SANDPACK_BUNDLER_URL,
             version: v.value,
-            monitor: monitorDemos,
+            monitor: previewMonitoring,
           });
     // Resolved per event: the demo id can be minted (first save) while this very
     // preview is running, and the ref is how that reaches an already-wired relay.
     const demoContext = () => ({
       tier: (entry.engine === "container" ? 2 : 1) as 1 | 2,
       framework: entry.framework,
+      htMajor: htMajorOf(v.value.ref),
       demoId: savedIdRef.current,
     });
+    // T07: §5 browser metric catalogue. `wireRuntimeMetrics` reads
+    // `runtime.onCompileTiming?`/`onSessionStart?`/etc through optional chains — it
+    // is the same call for either engine, no `entry.engine` branch needed here.
+    // `trackPreviewReady`'s `tier` reuses `demoContext()`'s own engine-derived value
+    // (never `entry.tier`, the catalog tier — the two disagree for the five
+    // UI-library starters, `react-js` and siblings: catalog tier 1, `engine:
+    // "container"`). `telemetry` is read here, live, not captured earlier — T06's
+    // `initTelemetry()` reassigns the binding after init.
+    wireRuntimeMetrics(runtime, { framework: entry.framework, versionRef: v.value.ref }, telemetry);
+    const previewTracker = trackPreviewReady(
+      runtime,
+      {
+        surface: isShare ? "share" : "authoring",
+        tier: demoContext().tier,
+        framework: entry.framework,
+        versionRef: v.value.ref,
+        bucket: (docsPath ? activeDocsBucketRef.current : activeStarterBucketRef.current) ?? undefined,
+      },
+      telemetry,
+    );
     if (entry.engine === "container") {
       (runtime as ContainerRuntime).onProgress((log) => !cancelled && setBootLog(log));
       // Post-boot dev-server faults (DEV-2527). Not gated on `cancelled`: a dev
@@ -2344,7 +2722,7 @@ function Authoring({
       if (!isMonitorPayload(event.data)) return;
       reportDemoEvent(event.data, demoContext());
     };
-    if (monitorDemos) window.addEventListener("message", onPreviewMessage);
+    if (previewMonitoring) window.addEventListener("message", onPreviewMessage);
     runtime.onReady(() => !cancelled && setStatus("ready"));
     runtime.onError((e) => {
       if (cancelled) return;
@@ -2354,8 +2732,12 @@ function Authoring({
     });
     runtimeRef.current = runtime;
     setPreviewUrl("");
-    runtime
-      .mount(filesRef.current)
+    // Captured once, in a variable: `previewTracker.observe` and the `.then`/
+    // `.catch` chain below both read this SAME promise. `mount()` itself is
+    // called exactly once, same as before this task — `observe` only listens.
+    const mountPromise = runtime.mount(filesRef.current);
+    previewTracker.observe(mountPromise);
+    mountPromise
       .then(({ previewUrl: url }) => {
         // Container only. Tier 1 hands back whatever `iframe.src` happens to be
         // at mount time, which is Sandpack's *bundler* origin — not an address
@@ -2375,7 +2757,14 @@ function Authoring({
       });
     return () => {
       cancelled = true;
+      // A switch away (version, example) or an unmount before this preview
+      // settled — a no-op once ready/error/timeout already reported (§5
+      // `preview.ready_ms` outcome `abandoned`).
+      previewTracker.abandon();
       window.removeEventListener("message", onPreviewMessage);
+      // F26: count this preview's last run now, and let the next preview's first
+      // load count afresh (see `DemoEventCollapse.reset`).
+      resetDemoEventCollapse();
       runtime.dispose();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
@@ -2444,6 +2833,9 @@ function Authoring({
       // A quiet write reaches no dev server yet, so there is nothing to wait for. The
       // rebuild it is eventually flushed by reports its own progress (`flushQuietEdits`).
       if (opts?.quiet) return;
+      // F26: the preview re-runs on this write — open/extend the edit burst, so the
+      // keystroke-prefix ladder it relays collapses to the last run's errors.
+      noteDemoEdit();
       showSyncing();
     },
     [markDirty, showSyncing],
@@ -2575,6 +2967,7 @@ function Authoring({
     // no generic "flush" source in the trail's vocabulary because nothing
     // else calls this yet.
     recordEditorEvent({ kind: "flush-quiet", source: "style", path: "", quiet: false, size: 0 });
+    noteDemoEdit(); // F26: the flush re-runs the preview, same as an edit
     try {
       runtimeRef.current?.flushQuiet?.();
       showSyncing();
@@ -2592,6 +2985,7 @@ function Authoring({
       filesRef.current = next;
       setFiles(next);
       markDirty(path);
+      noteDemoEdit(); // F26
       try { runtimeRef.current?.writeFile(path, ""); } catch { /* not mounted */ }
     },
     [markDirty],
@@ -2615,6 +3009,7 @@ function Authoring({
       setFiles(next);
       // Variadic on purpose (see its definition): one call dots every dropped tab.
       markDirty(...dropped.map((file) => file.path));
+      noteDemoEdit(); // F26
       for (const { path, contents } of dropped) {
         try { runtimeRef.current?.writeFile(path, contents); } catch { /* not mounted */ }
       }
@@ -2644,6 +3039,7 @@ function Authoring({
         rest.delete(path);
         return rest;
       });
+      noteDemoEdit(); // F26
       try { runtimeRef.current?.deleteFile?.(path); } catch { /* not mounted */ }
     },
     [markDirty],
@@ -2668,6 +3064,7 @@ function Authoring({
         rest.delete(oldPath);
         return rest;
       });
+      noteDemoEdit(); // F26
       try {
         runtimeRef.current?.writeFile(newPath, content);
         runtimeRef.current?.deleteFile?.(oldPath);
@@ -2679,7 +3076,8 @@ function Authoring({
   /** Download the current (possibly-edited) workspace as a .zip. */
   const downloadZip = useCallback(() => {
     downloadWorkspaceZip(filesRef.current, title || entry.displayName);
-  }, [title, entry.displayName]);
+    noteExampleAction("example.downloaded"); // ADR-0042 §2
+  }, [title, entry.displayName, noteExampleAction]);
 
   /** Create an embeddable (docs-only) version from the current playground code
    *  and show its embed URL — the logged-in path to embed a public example. */
@@ -2691,7 +3089,10 @@ function Authoring({
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/demos`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: apiHeaders({
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        }),
         body: JSON.stringify({
           framework: entry.framework,
           files: filesRef.current,
@@ -2703,6 +3104,7 @@ function Authoring({
       const { id } = await readApiJson<{ id: string }>(res, `embed failed (${res.status})`);
       setLinksId(id);
       setShareLinksOpen(true);
+      noteExampleAction("example.shared"); // ADR-0042 §2 — the mint-a-link half of "shared"
     } catch (e) {
       // The dialog answers this one; a `<pre>` full of prose with no button
       // would not (DEV-2534). `finally` still clears the in-flight state.
@@ -2712,7 +3114,7 @@ function Authoring({
     } finally {
       setEmbedding(false);
     }
-  }, [user, entry, version, forkedFrom, importedTitle]);
+  }, [user, entry, version, forkedFrom, importedTitle, noteExampleAction]);
 
   /** Fork the current playground code into a new saved demo, then open its edit page. */
   const onFork = useCallback(async () => {
@@ -2723,7 +3125,10 @@ function Authoring({
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/demos`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: apiHeaders({
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        }),
         body: JSON.stringify({
           framework: entry.framework,
           files: filesRef.current,
@@ -2735,7 +3140,13 @@ function Authoring({
         }),
       });
       const { id } = await readApiJson<{ id: string }>(res, `fork failed (${res.status})`);
-      location.href = `/edit/${id}`; // boot into the edit page for the new demo
+      noteExampleAction("example.forked"); // ADR-0042 §2, before navigating away
+      // ADR-0042 T12-D2 fix: a one-shot URL marker for the new demo's own
+      // `example.open`, since this is a full reload — no in-memory flag
+      // survives it (`exampleAnalytics.ts#consumeForkMarker`'s own doc
+      // comment has the full reasoning). The saved-demo load effect reads
+      // and strips it.
+      location.href = `/edit/${id}?${FORK_LANDING_PARAM}=1`; // boot into the edit page for the new demo
     } catch (e) {
       // First statement, before any branch. There is no `finally` here on
       // purpose — the success path navigates away and clearing `forking` first
@@ -2748,7 +3159,7 @@ function Authoring({
       reportError(e, "demo-fork");
       setErrorMessage(e instanceof Error ? e.message : String(e));
     }
-  }, [user, entry, version, forkedFrom, importedTitle]);
+  }, [user, entry, version, forkedFrom, importedTitle, noteExampleAction]);
 
   /** Save the saved-demo edits: the code, which rebuilds the snapshot.
    *
@@ -2769,7 +3180,10 @@ function Authoring({
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/demos/${savedId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: apiHeaders({
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        }),
         body: JSON.stringify({
           files: filesRef.current,
           htVersion: version,
@@ -2777,6 +3191,7 @@ function Authoring({
       });
       await assertApiOk(res, `save failed (${res.status})`);
       clearDirty();
+      noteExampleAction("example.saved"); // ADR-0042 §2
     } catch (e) {
       // Losing a save is the worst outcome in the app — the user's edits are only
       // in this tab's memory until the PATCH lands. Which is exactly why an
@@ -2790,7 +3205,7 @@ function Authoring({
     } finally {
       setSaving(false);
     }
-  }, [savedId, isShare, version, clearDirty]);
+  }, [savedId, isShare, version, clearDirty, noteExampleAction]);
 
   /**
    * The preview bar's share icon, mode-aware (ADR-0025). `edit` has a saved demo
@@ -2962,6 +3377,14 @@ function Authoring({
       suggestion={docsNotFoundSuggestion ?? null}
     />
   );
+  // Before the splash-loading check: `demoNotFound` is only ever set together
+  // with `sourceLoaded=true`, but ordering it first is what actually matters —
+  // without this short-circuit, falling through to EditorShell below runs the
+  // preview-mount effect against the still-empty placeholder `files`/`entry`
+  // state (nothing ever called `loadWorkspace` on this failure path), which
+  // throws its own "entry file … not found in example files" and overwrites
+  // this message. Same idiom as `docsNotFound` immediately above.
+  if (savedId && demoNotFound) return <DemoNotFound kind={demoNotFound} />;
   if (savedId && !sourceLoaded) return <Splash text="Loading data …" />;
 
   return (
@@ -3164,7 +3587,7 @@ function Authoring({
         // is briefly one control short.
         onSignIn={accountPending ? undefined : login}
         frameworks={frameworks}
-        onFrameworkChange={(docsPathKey) => void selectDocs(docsPathKey)}
+        onFrameworkChange={(docsPathKey) => void selectDocs(docsPathKey, "switch")}
         docsUrl={currentDocsMeta ? docsPageUrl(framework, currentDocsMeta.docPermalink) : undefined}
         // Play only, as before. A saved demo's source is the demo itself, not
         // the starter it was forked from, so pointing at the starter repo there

@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PRODUCTION_HOST, resolveReporting } from "../apps/authoring/src/reportingGate.ts";
 import {
   apiSentryDsn,
@@ -7,9 +9,15 @@ import {
   rehomeBudgetAlert,
 } from "../workers/api/src/sentry-gate.ts";
 import {
+  applyFaroTee,
   isEdgelessForeignSessionStart,
+  isForeignUnhandled,
   isOfficeScannerRejection,
+  isUnhandledNoise,
+  withoutMessageEchoFrames,
 } from "../apps/authoring/src/eventGate.ts";
+import { resolveSentryScope, reportsDiagnosticToSentry } from "../apps/authoring/src/sentryScope.ts";
+import { safeInit } from "../apps/authoring/src/bootGuard.ts";
 
 // DEV-2540. Three classes of traffic reached the production Sentry project that had
 // no business being there — local dev sessions, a Playwright run pointed at
@@ -146,6 +154,182 @@ test("ordinary events pass through untouched", () => {
     assert.equal(out, event);
     assert.equal(out.environment, undefined);
   }
+});
+
+// ── Fix round D-I2: isUnhandledNoise / isForeignUnhandled, moved from sentry.ts ──
+//
+// Moved into `eventGate.ts` (previously private to `sentry.ts`, untestable) so
+// `telemetry/faro.ts`'s `beforeSend` can apply the SAME predicates Sentry's own
+// `beforeSend` does — contract §6's "shared noise gates" requirement. Before this
+// fix, only Sentry ever ran them.
+
+test("isUnhandledNoise: a ResizeObserver loop warning, unhandled, is noise", () => {
+  const event = {
+    exception: { values: [{ type: "Error", value: "ResizeObserver loop completed with undelivered notifications.", mechanism: { handled: false } }] },
+  };
+  assert.equal(isUnhandledNoise(event), true);
+});
+
+test("isUnhandledNoise: a navigation-abort Failed to fetch, unhandled, is noise", () => {
+  const event = {
+    exception: { values: [{ type: "TypeError", value: "Failed to fetch", mechanism: { handled: false } }] },
+  };
+  assert.equal(isUnhandledNoise(event), true);
+});
+
+test("isUnhandledNoise: the SAME message, but handled (an explicit report), is NOT noise", () => {
+  const event = {
+    exception: { values: [{ type: "TypeError", value: "Failed to fetch", mechanism: { handled: true } }] },
+  };
+  assert.equal(isUnhandledNoise(event), false, "an explicit reportError('Failed to fetch') must still be reported");
+});
+
+test("isUnhandledNoise: an unrelated unhandled error is NOT noise", () => {
+  const event = {
+    exception: { values: [{ type: "TypeError", value: "x is not a function", mechanism: { handled: false } }] },
+  };
+  assert.equal(isUnhandledNoise(event), false);
+});
+
+test("isForeignUnhandled: an unhandled error whose stack is entirely outside this origin is dropped", () => {
+  const event = {
+    exception: {
+      values: [
+        {
+          type: "TypeError",
+          value: "boom",
+          mechanism: { handled: false },
+          stacktrace: { frames: [{ filename: "https://sandpack-bundler.codesandbox.io/bundle.js" }] },
+        },
+      ],
+    },
+  };
+  assert.equal(isForeignUnhandled(event, "https://demos.handsontable.com"), true);
+});
+
+test("isForeignUnhandled: an unhandled error with an own-origin frame is NOT dropped", () => {
+  const event = {
+    exception: {
+      values: [
+        {
+          type: "TypeError",
+          value: "boom",
+          mechanism: { handled: false },
+          stacktrace: { frames: [{ filename: "https://demos.handsontable.com/assets/index.js" }] },
+        },
+      ],
+    },
+  };
+  assert.equal(isForeignUnhandled(event, "https://demos.handsontable.com"), false);
+});
+
+test("isForeignUnhandled: a HANDLED report through a foreign frame is NOT dropped", () => {
+  const event = {
+    exception: {
+      values: [
+        {
+          type: "TypeError",
+          value: "boom",
+          mechanism: { handled: true },
+          stacktrace: { frames: [{ filename: "https://sandpack-bundler.codesandbox.io/bundle.js" }] },
+        },
+      ],
+    },
+  };
+  assert.equal(isForeignUnhandled(event, "https://demos.handsontable.com"), false);
+});
+
+test("isUnhandledNoise / isForeignUnhandled: no exception values -> false, not thrown on", () => {
+  assert.equal(isUnhandledNoise({}), false);
+  assert.equal(isForeignUnhandled({ exception: { values: [] } }, "https://x"), false);
+});
+
+// ── R3 F17a: withoutMessageEchoFrames — Faro's gecko-regex message-echo frame ───
+//
+// Faro's stack parser can turn the `Error: <message>` line itself into a fake
+// frame (no `lineno`, `filename` = a URL quoted in the message). Un-gated, that
+// fake frame reaches `isForeignUnhandled` and drops the whole event — the exact
+// finding input from R3 F17a.
+
+test("withoutMessageEchoFrames: drops the exact fake frame Faro produced for the pii finding", () => {
+  const message =
+    "HAIKU1 pii jane.doe@example.com 192.0.2.55 https://x.test/p?token=SECRET123";
+  const frames = [
+    {
+      filename: "https://x.test/p?token=SECRET123",
+      function: "Error: HAIKU1 pii jane.doe@example.com 192.0.2.55 ",
+    },
+  ];
+  assert.deepEqual(withoutMessageEchoFrames(message, frames), []);
+});
+
+test("withoutMessageEchoFrames: keeps a real frame (has a lineno) even if its filename appears in the message", () => {
+  const message = "boom at https://app.test/main.js";
+  const frames = [
+    { filename: "https://app.test/main.js", function: "doThing", lineno: 12, colno: 3 },
+  ];
+  assert.deepEqual(withoutMessageEchoFrames(message, frames), frames);
+});
+
+test("withoutMessageEchoFrames: keeps a real, genuinely foreign frame not quoted in the message", () => {
+  // The full pipeline case for R3 F17a's second requirement: a real extension/
+  // third-party frame must still be droppable by isForeignUnhandled downstream —
+  // this helper must not touch it.
+  const message = "boom";
+  const frames = [
+    { filename: "https://sandpack-bundler.codesandbox.io/bundle.js", function: "run", lineno: 4 },
+  ];
+  assert.deepEqual(withoutMessageEchoFrames(message, frames), frames);
+});
+
+test("withoutMessageEchoFrames: no message or no frames -> frames returned unchanged", () => {
+  const frames = [{ filename: "https://x.test/p", function: "f" }];
+  assert.equal(withoutMessageEchoFrames(undefined, frames), frames);
+  assert.equal(withoutMessageEchoFrames("boom", undefined), undefined);
+});
+
+test("R3 F17a end to end: the pii finding's message no longer makes isForeignUnhandled drop the event", () => {
+  const message =
+    "HAIKU1 pii jane.doe@example.com 192.0.2.55 https://x.test/p?token=SECRET123";
+  const rawFrames = [
+    {
+      filename: "https://x.test/p?token=SECRET123",
+      function: "Error: HAIKU1 pii jane.doe@example.com 192.0.2.55 ",
+    },
+  ];
+  const event = {
+    exception: {
+      values: [
+        {
+          type: "Error",
+          value: message,
+          mechanism: { handled: false },
+          stacktrace: { frames: withoutMessageEchoFrames(message, rawFrames) },
+        },
+      ],
+    },
+  };
+  assert.equal(isForeignUnhandled(event, "http://localhost:5173"), false);
+});
+
+test("R3 F17a: a genuinely foreign third-party script error is still dropped", () => {
+  const event = {
+    exception: {
+      values: [
+        {
+          type: "TypeError",
+          value: "boom",
+          mechanism: { handled: false },
+          stacktrace: {
+            frames: withoutMessageEchoFrames("boom", [
+              { filename: "https://sandpack-bundler.codesandbox.io/bundle.js", function: "inject", lineno: 7 },
+            ]),
+          },
+        },
+      ],
+    },
+  };
+  assert.equal(isForeignUnhandled(event, "http://localhost:5173"), true);
 });
 
 // ── DEV-2858. beforeSend suppression gates for two NOT-OURS populations ─────────
@@ -341,4 +525,167 @@ test("N6: a foreign-shaped event under a different context is reported", () => {
 test("N7: an event with no tags at all does not throw and is not dropped", () => {
   assert.equal(isEdgelessForeignSessionStart({}), false);
   assert.equal(isEdgelessForeignSessionStart({ tags: {} }), false);
+});
+
+// ── T06, contract §11 / ADR §E.3: VITE_SENTRY_SCOPE ──────────────────────────────
+//
+// `sentryScope.ts` is import-free for the same reason as `reportingGate.ts` — see
+// its own header. The truth table: `"full"` is the default for every input other
+// than the exact string `"uncaught"`, and `reportsDiagnosticToSentry` only ever
+// narrows `reportingEnabled`, never widens it.
+
+test("resolveSentryScope: only the literal 'uncaught' opens the narrow scope", () => {
+  assert.equal(resolveSentryScope("uncaught"), "uncaught");
+});
+
+test("resolveSentryScope: absent, empty, or any other string stays 'full'", () => {
+  for (const raw of [undefined, "", "Uncaught", "UNCAUGHT", "full", "off", "uncaught "]) {
+    assert.equal(resolveSentryScope(raw), "full", `raw=${JSON.stringify(raw)}`);
+  }
+});
+
+test("reportsDiagnosticToSentry: full scope + reporting enabled -> true", () => {
+  assert.equal(reportsDiagnosticToSentry(true, "full"), true);
+});
+
+test("reportsDiagnosticToSentry: uncaught scope closes it even though reporting is enabled", () => {
+  // The launch-plan flip (ADR §E.3): once this ships, a handled diagnostic no
+  // longer reaches Sentry at all, on the production host, with reporting on.
+  assert.equal(reportsDiagnosticToSentry(true, "uncaught"), false);
+});
+
+test("reportsDiagnosticToSentry: never widens a closed reportingEnabled gate", () => {
+  // The regression this guards: a scope switch must not become a second way to
+  // turn Sentry on when the production/automation gate (reportingGate.ts) is
+  // already closed — full scope on a closed gate still reports nothing.
+  assert.equal(reportsDiagnosticToSentry(false, "full"), false);
+  assert.equal(reportsDiagnosticToSentry(false, "uncaught"), false);
+});
+
+// ── Minor triage item 5: unguarded browser telemetry ─────────────────────────────
+//
+// `main.tsx`'s `initTelemetry()` call and `sentry.ts`'s ADR §E.2 tee were both
+// unguarded — a synchronous throw in either used to propagate out (blanking the
+// app before `createRoot`, or making the SDK drop the whole Sentry event). Both
+// fixes are thin call sites around the two guarded functions below; these tests
+// exercise the actual guarding logic. Reverting either `try`/`catch` in
+// `bootGuard.ts#safeInit` / `eventGate.ts#applyFaroTee` back to an unguarded call
+// makes the matching "still renders" / "still returns the event" test below throw
+// instead of passing.
+
+test("safeInit: a throwing init is swallowed and reported, never propagates (main.tsx still renders)", () => {
+  let reported;
+  assert.doesNotThrow(() => {
+    safeInit(
+      () => {
+        throw new Error("Faro client construction failed");
+      },
+      (err) => {
+        reported = err;
+      },
+    );
+  });
+  assert.ok(reported instanceof Error);
+  assert.equal(reported.message, "Faro client construction failed");
+});
+
+test("safeInit: a non-throwing init runs normally and onError is never called", () => {
+  let ran = false;
+  let reported;
+  safeInit(
+    () => {
+      ran = true;
+    },
+    (err) => {
+      reported = err;
+    },
+  );
+  assert.equal(ran, true);
+  assert.equal(reported, undefined);
+});
+
+test("applyFaroTee: sets the page_load_id tag and pushes a sentry.event, returns the event", () => {
+  const event = { event_id: "abc123", tags: { existing: "x" } };
+  const telemetry = {
+    pageLoadId: () => "plid-1",
+    event(name, attrs) {
+      this.calls = this.calls ?? [];
+      this.calls.push({ name, attrs });
+    },
+  };
+  const out = applyFaroTee(event, telemetry);
+  assert.equal(out, event, "must return the same event, never null/undefined");
+  assert.equal(out.tags.page_load_id, "plid-1");
+  assert.equal(out.tags.existing, "x", "existing tags must be preserved");
+  assert.deepEqual(telemetry.calls, [{ name: "sentry.event", attrs: { sentry_event_id: "abc123" } }]);
+});
+
+test("applyFaroTee: a throwing telemetry.pageLoadId() is swallowed — the event still ships", () => {
+  const event = { event_id: "abc123", tags: {} };
+  const telemetry = {
+    pageLoadId: () => {
+      throw new Error("Faro client not ready");
+    },
+    event: () => {
+      throw new Error("must not be reached");
+    },
+  };
+  let out;
+  assert.doesNotThrow(() => {
+    out = applyFaroTee(event, telemetry);
+  });
+  assert.equal(out, event, "the event must still be returned, not dropped");
+});
+
+test("applyFaroTee: a throwing telemetry.event() is swallowed — the event still ships with its tag set", () => {
+  const event = { event_id: "abc123", tags: {} };
+  const telemetry = {
+    pageLoadId: () => "plid-2",
+    event: () => {
+      throw new Error("Faro push failed");
+    },
+  };
+  let out;
+  assert.doesNotThrow(() => {
+    out = applyFaroTee(event, telemetry);
+  });
+  assert.equal(out, event);
+  assert.equal(out.tags.page_load_id, "plid-2", "the tag set before the throw is kept, not rolled back");
+});
+
+// Advisor follow-up on minor triage item 5: the tests above prove
+// `safeInit`/`applyFaroTee` THEMSELVES never throw — they do NOT prove the
+// real call sites still call them. `main.tsx`/`sentry.ts` cannot be
+// imported here (they pull in React/`@sentry/react`/`import.meta.env`, the
+// same constraint this file's own header note gives for `sentry.ts` and
+// `index.ts`), so the wiring is pinned structurally instead, the same
+// pattern `pipeline/mcp-create.test.mjs`'s "the update route calls
+// isMcpCreated()" test uses. Reverting either call site (back to a bare
+// `initTelemetry();`, or the inline try/catch instead of
+// `applyFaroTee(event, telemetry)`) makes the matching assertion fail even
+// though every test above it stays green.
+test("main.tsx calls initTelemetry() through safeInit(), not bare", () => {
+  const root = join(import.meta.dirname, "..");
+  const source = readFileSync(join(root, "apps/authoring/src/main.tsx"), "utf8");
+  assert.match(source, /safeInit\(\s*initTelemetry\s*,/, "main.tsx must call initTelemetry() through safeInit()");
+  assert.doesNotMatch(
+    source,
+    /^\s*initTelemetry\(\);\s*$/m,
+    "a bare, unguarded initTelemetry(); call on its own line would defeat the guard entirely",
+  );
+});
+
+test("sentry.ts's beforeSend returns applyFaroTee(event, telemetry), not an inline tee", () => {
+  const root = join(import.meta.dirname, "..");
+  const source = readFileSync(join(root, "apps/authoring/src/sentry.ts"), "utf8");
+  assert.match(
+    source,
+    /return applyFaroTee\(event, telemetry\);/,
+    "beforeSend must return applyFaroTee(event, telemetry), the guarded tee",
+  );
+  assert.doesNotMatch(
+    source,
+    /telemetry\.pageLoadId\(\)/,
+    "sentry.ts itself must not call telemetry.pageLoadId() directly — that belongs entirely to eventGate.ts#applyFaroTee now",
+  );
 });

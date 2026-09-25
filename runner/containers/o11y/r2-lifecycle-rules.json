@@ -1,0 +1,36 @@
+{
+  "rules": [
+    {
+      "id": "o11y-loki-browser-chunks-30d",
+      "enabled": true,
+      "conditions": { "prefix": "browser/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 2592000 }
+      }
+    },
+    {
+      "id": "o11y-loki-worker-chunks-90d",
+      "enabled": true,
+      "conditions": { "prefix": "worker/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 7776000 }
+      }
+    },
+    {
+      "id": "o11y-loki-index-90d",
+      "enabled": true,
+      "conditions": { "prefix": "index/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 7776000 }
+      }
+    },
+    {
+      "id": "o11y-loki-state-30d",
+      "enabled": true,
+      "conditions": { "prefix": "state/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 2592000 }
+      }
+    }
+  ]
+}

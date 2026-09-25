@@ -3,6 +3,7 @@ import type { Catalog, CatalogIndexEntry } from "@handsontable/demo-runtime";
 import catalogJson from "../../../catalog.json";
 import docsBucketsJson from "../../../docs-buckets.json";
 import { fetchWithDiagnostics, type FetchDiagnostics } from "./fetchDiagnostics.js";
+import { apiHeaders } from "./telemetry/index.js";
 
 // The index only (~15 KB): framework rows without files. Full starter
 // artifacts are lazy-fetched per version bucket — see starter-catalog.ts.
@@ -55,7 +56,9 @@ export const DEFAULT_VERSION = VERSION_OPTIONS[0];
 export async function fetchVersions(
   apiBase: string,
 ): Promise<{ latest: string | null; next: string | null; versions: string[]; diagnostics: FetchDiagnostics }> {
-  const { res, diagnostics } = await fetchWithDiagnostics(`${apiBase}/api/versions`);
+  const { res, diagnostics } = await fetchWithDiagnostics(`${apiBase}/api/versions`, {
+    headers: apiHeaders(),
+  });
   if (!res.ok) throw new Error(`versions ${res.status}`);
   const body = (await res.json()) as { latest: string | null; next: string | null; versions: string[] };
   return { ...body, diagnostics };
@@ -73,7 +76,7 @@ export async function checkVersionExists(apiBase: string, version: string): Prom
   try {
     const res = await fetch(
       `${apiBase}/api/versions/exists?v=${encodeURIComponent(version)}`,
-      { signal: controller.signal },
+      { signal: controller.signal, headers: apiHeaders() },
     );
     if (!res.ok) return true;
     const body = (await res.json()) as { exists: boolean };

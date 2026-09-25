@@ -58,24 +58,13 @@ build step. Edit shell files and the app picks them up on hot-reload.
 
 ## Run locally
 
-Two processes. **API worker** (Tier-2 live containers need Docker running):
-
-```bash
-cd workers/api
-# .dev.vars (gitignored) holds the local login stand-in — see src/auth.ts.
-npx wrangler dev            # http://localhost:8787
-```
-
-**Authoring app**:
-
-```bash
-cd apps/authoring
-# .env.local (gitignored):  VITE_API_BASE=http://localhost:5173   # this dev server, not :8787
-#                           VITE_DEV_USER=you@handsontable.com   # bypasses broker login locally
-pnpm --filter @handsontable/demo-authoring dev   # http://localhost:5173
-```
-
-Two traps in that setup:
+`pnpm dev` (Tier 1), `pnpm dev:live` (+ the API worker, Docker), `pnpm dev:full`
+(+ o11y, compose, the Slack capture server) — one orchestrator
+(`scripts/dev.mjs --tier=1|2|full`) behind all three; `pnpm o11y:dev` is a
+separate standalone o11y-only command. Full details, every port/env var, and
+the `.dev.vars` bootstrap rules are in `docs/run-and-deploy.md`'s "Run
+locally" section — this is just the two traps worth knowing up front if you
+ever run a piece by hand instead:
 
 - **`?mode=full` needs the SPA and the worker on one origin.** `serveDemoAsset` sends
   `frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` for `/d/:id` and is not wrapped in
@@ -84,8 +73,10 @@ Two traps in that setup:
   which renders as `● error` on a demo that is fine. `vite.config.ts` proxies `/api`, `/d` and
   `/embed` to the worker for exactly this reason — keep `VITE_API_BASE` on the dev server's own
   origin. An **empty** value does not work: `App.tsx` falls back to `:8787` on any falsy value.
+  (`pnpm dev:live`/`dev:full` set this correctly for you, as process env, not a file.)
 - **`VITE_DEV_USER` short-circuits `currentUser()` before the fetch.** Any test of the real broker
-  path has to override it (`VITE_DEV_USER= pnpm dev`) or it silently exercises the bypass instead.
+  path has to override it (`VITE_DEV_USER= pnpm --filter @handsontable/demo-authoring dev`) or it
+  silently exercises the bypass instead.
 
 ## Verify before pushing
 
@@ -167,6 +158,9 @@ grep -rl "localhost:8787\|VITE_DEV_USER\|dev@handsontable.com" apps/authoring/di
 is what catches a leaked `.env.local`; `localhost:8787` catches a missing `.env.production`
 (the `|| "http://localhost:8787"` fallback in `App.tsx` surviving into the bundle). Don't widen
 that term to a bare `localhost:` — catalog README text mentions dev-server ports and it false-fires.
+This grep does not, and does not need to, cover `VITE_TELEMETRY_LOCAL` (a separate local-only
+build-time flag, `.env.example`) — `scripts/check-telemetry-leak.mjs` is the dedicated check for
+that one, run right after the production build in CI.
 
 ## CI/CD
 
@@ -214,7 +208,8 @@ does not pick up the repo-root manifest.
   imported under the global's own identifier, and Handsontable's CDN CSS becomes an npm import so
   the demo follows the version picker. Copying verbatim produced demos that could not run.
 - Tier-2 containers stay warm while a tab is open (client keepalive + `sleepAfter=5m`); disk is ephemeral, so a slept container cold-boots on return.
-- **Cost guardrails** (DEV-2030, ADR-0022): `max_instances` 10/5 is the container cap **and** the live-preview concurrency limit (no queue sits in front of the pool; the overflow caller gets the `at_capacity` 503) — raised from 5/3 in DEV-2909, and not to be changed again without redoing the arithmetic in `docs/cost-guardrails.md` in the same commit. Spend degrades live sessions in stages while static shares keep serving. The dollar thresholds and the enforcement switch are **editable at runtime in `/admin`** (stored in `runner_settings`); the `BUDGET_*` vars are only defaults. Pool pressure — `at_capacity` refusals, hourly awake-seconds and sampled peak concurrency — is instrumented per **ADR-0040**, because daily totals cannot yield peak concurrency and that is what sizing the pool actually depends on.
+- **Cost guardrails** (DEV-2030, ADR-0022): `max_instances` 10/5 is the container cap **and** the live-preview concurrency limit (no queue sits in front of the pool; the overflow caller gets the `at_capacity` 503) — raised from 5/3 in DEV-2909, and not to be changed again without redoing the arithmetic in `docs/cost-guardrails.md` in the same commit. Spend degrades live sessions in stages while static shares keep serving. The dollar thresholds and the enforcement switch are **editable at runtime in `/admin`** (stored in `runner_settings`); the `BUDGET_*` vars are only defaults. Pool pressure — `at_capacity` refusals, awake-seconds and sampled peak concurrency — was specified by **ADR-0040** and is delivered under **ADR-0041** (built, on this branch), as Analytics Engine points rather than the hourly-bucketed D1 rows ADR-0040 originally proposed (`docs/cost-guardrails.md`): the `at_capacity` counter in `usage_daily` as ADR-0040 C.1 says (`recordUsageEvent`, `workers/api/src/index.ts`); awake-seconds as `session.end`'s `value` (contract §5, per session, bucketable into an hourly view by the Grafana query rather than a dedicated hourly metric); and peak concurrency as the `pool.gauge` Analytics Engine point sampled every 5 minutes (`telemetry/cron.ts#emitPoolGauge`) — because daily totals cannot yield peak concurrency and that is what sizing the pool actually depends on.
+- **Observability** (ADR-0041, **built, verified locally and on the sandbox platform, not yet deployed**): a self-hosted, sleeping Loki + Grafana box (`workers/o11y/`, `containers/o11y/`) fed over OTLP, with metrics in Workers Analytics Engine, plus Sentry for uncaught errors (errors escaping a handler, ADR-0041 §E.1) and spend alerts. `SENTRY_SCOPE`/`VITE_SENTRY_SCOPE` still default to `full` in every committed config, so Sentry keeps receiving everything it does today until the launch plan (`docs/run-and-deploy.md`) flips the switch — nothing about today's Sentry behaviour changes until then. New telemetry follows the ADR's `hot.*` attribute set and its "never a label" rule for demo id, session id, cf-ray and the user pseudonym, checked by `pipeline/telemetry-contract.test.mjs`. ADR-0042 (example analytics) ships with it. ADR-0043 (`/admin` cutover) follows after launch, once ADR-0041 itself is Accepted (see its own status line — two items are pending: a real-Workers-isolate symbolication measurement, and an R2 retention-lifecycle clock still running). Shared names, Analytics Engine slots and payload shapes are frozen in [`docs/observability-contract.md`](docs/observability-contract.md); the deploy runbook, one-time setup and post-deploy checklist are in [`docs/run-and-deploy.md`](docs/run-and-deploy.md)'s Observability and Launch plan sections.
 - **Ask AI** (DEV-2047, `docs/example-chat.md`): chat panel scoped to the open example; docs chunks are retrieved **in the browser** (Cloudflare blocks Worker→workers.dev, error 1042), the Worker adds Algolia page links and calls LiteLLM. Model edits are proposed, never auto-applied, and every answer is metered into the cost ledger.
 - **Style panel** (DEV-2047, `docs/style-panel.md`): Theme Builder's controls applied to the open example via Handsontable's **JS theme API** (`registerTheme`/`params`), written into the demo as a real module and wired into the grid; `POST /api/theme` does natural-language styling. Controls show the demo's own Handsontable version's preset defaults — fetched at runtime, override state stays empty until you edit — and the panel is gated off below core 17, which has no theme API (DEV-2560).
 - **Analytics are anonymous by construction** — no cookies, no IPs, no user agents, no query strings, no per-request rows; unique visitors use a daily-rotating salted hash. Keep it that way when touching `workers/api/src/analytics.ts`.

@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "app": { "name": "demos-authoring", "version": "deadbeef1234" },
+    "browser": { "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" }
+  },
+  "exceptions": [
+    {
+      "type": "ReferenceError",
+      "value": "x is not defined\n\n  1 | function f() {\n> 2 |   return x + 1;\n    |          ^\n  3 | }",
+      "timestamp": "2026-01-01T00:00:00.000Z",
+      "stacktrace": {
+        "frames": [
+          { "filename": "https://8787-abc123-tok3n.demos.handsontable.com/assets/index-abc123.js?t=1700000000" },
+          { "filename": "https://demos.handsontable.com/assets/main-def456.js" }
+        ]
+      },
+      "context": {
+        "hot.surface": "authoring",
+        "hot.tier": "1",
+        "hot.framework": "react",
+        "hot.ht_major": "18",
+        "handled": "false"
+      }
+    }
+  ]
+}

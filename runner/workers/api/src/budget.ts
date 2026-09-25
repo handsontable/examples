@@ -192,15 +192,48 @@ function upsertEstimate(env: Env, day: string, sku: string, units: number, usd: 
 /**
  * Meter a closed container awake window. Additive per (day, sku) so concurrent
  * writers never clobber each other.
+ *
+ * `sku` (T04, ADR-0041 §G: "`recordContainerUsage` takes the SKU as a
+ * parameter") defaults to `"container"` — every existing call site (the
+ * app's own session meter, below) is unaffected. `workers/api/src/o11y-usage.ts`
+ * calls this with `sku: "o11y_container"` for `GrafanaBox`'s awake seconds,
+ * reported over the `API` service binding — a distinct SKU so its upsert
+ * never overwrites the app's `container` rows (same (day, sku) primary key,
+ * different sku).
  */
 export async function recordContainerUsage(
   env: Env,
-  opts: { instanceType: InstanceType; awakeSeconds: number },
+  opts: { instanceType: InstanceType; awakeSeconds: number; sku?: string },
 ): Promise<void> {
   if (!(opts.awakeSeconds > 0)) return;
   const usd = opts.awakeSeconds * containerUsdPerSecond(opts.instanceType);
-  await upsertEstimate(env, utcDay(), "container", opts.awakeSeconds, usd).run();
+  await upsertEstimate(env, utcDay(), opts.sku ?? "container", opts.awakeSeconds, usd).run();
   await invalidateBudgetState(env);
+}
+
+/**
+ * Month-to-date observability spend (`o11y_container` + `o11y_workers`
+ * SKUs only), plus the ADR-0041 §G cap it is checked against. Read by
+ * `O11yUsage#o11ySpend` (the o11y worker's spend-cap alert rule) and by
+ * `adminUsage` (the `/admin` app/observability/total split).
+ *
+ * Deliberately separate from {@link computeBudgetState}: the app's own
+ * `limitUsd`/tier machinery keeps summing *every* sku in `cost_ledger`
+ * unchanged (ADR §G: "Product tiers keep acting on the total") — this is an
+ * additional, narrower read over the same table, not a replacement.
+ */
+export async function computeO11ySpend(env: Env): Promise<{ spendUsd: number; capUsd: number }> {
+  const settings = await loadSettings(env);
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  const { results } = await env.DB.prepare(
+    `SELECT COALESCE(MAX(CASE WHEN source = 'billing'  THEN usd END),
+                     MAX(CASE WHEN source = 'estimate' THEN usd END), 0) AS usd
+       FROM cost_ledger
+      WHERE day LIKE ?1 AND sku IN ('o11y_container', 'o11y_workers')
+      GROUP BY day, sku`,
+  ).bind(`${monthPrefix}%`).all<{ usd: number }>();
+  const spendUsd = (results ?? []).reduce((sum, r) => sum + (r.usd ?? 0), 0);
+  return { spendUsd, capUsd: settings.o11yBudgetUsd };
 }
 
 /**
@@ -244,6 +277,15 @@ export interface SessionMeter {
   startedAt: number;
   meteredThrough: number;
   instanceType: InstanceType;
+  /**
+   * The session's framework (`session.end`, contract §5). Optional because a
+   * meter written before this field existed round-trips with it absent — same
+   * defaulting shape as `instanceType` above. Carried here, rather than
+   * re-derived at teardown, because teardown call sites (`teardownLiveSession`,
+   * `sessionSubrouteGuard`) only ever have a `sessionId`, and this meter is the
+   * one piece of state that already lives from create to teardown under that key.
+   */
+  framework?: string;
 }
 
 const meterKey = (sessionId: string) => `${KV_METER_PREFIX}${sessionId}`;
@@ -292,9 +334,10 @@ export async function startSessionMeter(
   env: Env,
   sessionId: string,
   instanceType: InstanceType = SESSION_INSTANCE_TYPE,
+  framework?: string,
 ): Promise<void> {
   const now = Date.now();
-  const meter: SessionMeter = { startedAt: now, meteredThrough: now, instanceType };
+  const meter: SessionMeter = { startedAt: now, meteredThrough: now, instanceType, ...(framework ? { framework } : {}) };
   await env.CACHE.put(meterKey(sessionId), JSON.stringify(meter), {
     expirationTtl: KV_METER_TTL_SECONDS,
     metadata: meterMetadata(meter),
@@ -304,20 +347,26 @@ export async function startSessionMeter(
 /**
  * Book the slice of awake time since the last flush.
  * `final` (teardown) always books and then drops the meter.
+ *
+ * Returns the meter's `framework` (contract §5's `session.end` blob) when one
+ * is on record — `undefined` on a KV miss/hiccup or a pre-F14 meter that
+ * never had one. `void`-safe: every existing caller already ignores the
+ * return value.
  */
 export async function meterSession(
   env: Env,
   sessionId: string,
   opts: { final?: boolean } = {},
-): Promise<void> {
+): Promise<string | undefined> {
   // Metering is telemetry, and telemetry must never be the reason a request
   // fails. The teardown path in particular: a throw here would skip the
   // `sandbox.destroy()` that follows it and leave a container billing until
   // its idle window lapses — the exact cost this file exists to prevent.
   try {
-    await meterSessionUnsafe(env, sessionId, opts);
+    return await meterSessionUnsafe(env, sessionId, opts);
   } catch (err) {
     console.warn("[budget] session metering failed:", err instanceof Error ? err.message : String(err));
+    return undefined;
   }
 }
 
@@ -325,14 +374,14 @@ async function meterSessionUnsafe(
   env: Env,
   sessionId: string,
   opts: { final?: boolean },
-): Promise<void> {
+): Promise<string | undefined> {
   const key = meterKey(sessionId);
   const meter = (await env.CACHE.get(key, "json").catch(() => null)) as SessionMeter | null;
-  if (!meter) return;
+  if (!meter) return undefined;
 
   const now = Date.now();
   const elapsedSeconds = Math.max(0, (now - meter.meteredThrough) / 1000);
-  if (!opts.final && elapsedSeconds < METER_FLUSH_SECONDS) return;
+  if (!opts.final && elapsedSeconds < METER_FLUSH_SECONDS) return meter.framework;
 
   const awakeSeconds = Math.min(elapsedSeconds, MAX_UNSEEN_AWAKE_SECONDS);
   if (opts.final) {
@@ -347,6 +396,7 @@ async function meterSessionUnsafe(
     }).catch(() => { /* next ping re-books the same slice; capped above */ });
   }
   await recordContainerUsage(env, { instanceType: meter.instanceType, awakeSeconds });
+  return meter.framework;
 }
 
 // ---- Traffic accumulator -----------------------------------------------------

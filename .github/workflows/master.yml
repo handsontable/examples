@@ -37,6 +37,10 @@ on:
         description: 'Deploy the API worker + Tier-2 container image'
         type: boolean
         default: false
+      deploy_o11y:
+        description: 'Deploy the observability worker + Grafana box image (T10)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,8 +57,9 @@ jobs:
     outputs:
       authoring: ${{ steps.detect.outputs.authoring }}
       api: ${{ steps.detect.outputs.api }}
+      o11y: ${{ steps.detect.outputs.o11y }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Full history: the diff below spans the whole push range, and a
           # multi-commit push (rebase-and-merge, a direct push of several
@@ -65,8 +70,11 @@ jobs:
         name: Detect what this push touches
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "authoring=${{ inputs.deploy_authoring }}" >> "$GITHUB_OUTPUT"
-            echo "api=${{ inputs.deploy_api }}" >> "$GITHUB_OUTPUT"
+            {
+              echo "authoring=${{ inputs.deploy_authoring }}"
+              echo "api=${{ inputs.deploy_api }}"
+              echo "o11y=${{ inputs.deploy_o11y }}"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # The push event's `before` bounds the range: HEAD^ only covers the
@@ -84,28 +92,44 @@ jobs:
           # The same path sets the two deploy workflows used to declare under
           # `on.push.paths` (catalog.json is authoring-only: the app bundles it
           # at build time; scripts/ and containers/ are api-only).
-          authoring=false; api=false
+          authoring=false; api=false; o11y=false
           grep -qE '^runner/(apps/authoring/|packages/|config/|catalog\.json$|pnpm-lock\.yaml$)|^\.github/workflows/(master|ci)\.yml$' /tmp/changed.txt && authoring=true
-          grep -qE '^runner/(workers/api/|containers/|scripts/|config/|packages/|pnpm-lock\.yaml$)|^\.github/workflows/(master|ci)\.yml$' /tmp/changed.txt && api=true
-          echo "authoring=$authoring" >> "$GITHUB_OUTPUT"
-          echo "api=$api" >> "$GITHUB_OUTPUT"
+          # Minor triage item 4 (C-M5): `containers/` used to match ALL of
+          # it, including a Grafana-box image edit under containers/o11y/ —
+          # any such edit also redeployed the API worker and rebuilt/pushed
+          # the unrelated Tier-2 image. Narrowed to the two containers/
+          # subtrees the API worker's own deploy actually builds/pushes
+          # (containers/live/, containers/builder/); containers/o11y/ stays
+          # gated on the o11y line below only.
+          grep -qE '^runner/(workers/api/|containers/(live|builder)/|scripts/|config/|packages/|pnpm-lock\.yaml$)|^\.github/workflows/(master|ci)\.yml$' /tmp/changed.txt && api=true
+          # T10: workers/o11y (the worker itself), containers/o11y (the Grafana
+          # box image) and packages/ (the shared telemetry module — gated on the
+          # whole directory, not just packages/runtime/src/telemetry/, since
+          # e.g. scrub.ts imports redactPreviewHosts from monitor.ts, outside
+          # that subpath) all redeploy the o11y worker.
+          grep -qE '^runner/(workers/o11y/|containers/o11y/|packages/|pnpm-lock\.yaml$)|^\.github/workflows/(master|ci)\.yml$' /tmp/changed.txt && o11y=true
+          {
+            echo "authoring=$authoring"
+            echo "api=$api"
+            echo "o11y=$o11y"
+          } >> "$GITHUB_OUTPUT"
 
-  # One install, one workspace build — shared by both deploys via artifacts.
+  # One install, one workspace build — shared by all three deploys via artifacts.
   build:
     needs: [changes]
-    if: needs.changes.outputs.authoring == 'true' || needs.changes.outputs.api == 'true'
+    if: needs.changes.outputs.authoring == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.o11y == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -116,7 +140,7 @@ jobs:
       - run: pnpm build
 
       - name: Upload the runtime build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: runtime-dist
           path: runner/packages/runtime/dist/
@@ -127,8 +151,11 @@ jobs:
       # VITE_API_BASE comes from apps/authoring/.env.production (committed) so
       # it targets prod. SENTRY_* are only set on this deploying build; PR CI
       # (ci.yml) gets no token, so PR builds neither emit source maps nor
-      # upload a release — see apps/authoring/vite.config.ts.
-      - name: Build authoring (skipped when only the api deploys)
+      # upload a release — see apps/authoring/vite.config.ts. VITE_SENTRY_SCOPE
+      # (T10, contract §11) is pinned to "full" explicitly here, rather than
+      # relying on the code's own absent-means-full default, so this is the one
+      # place T11's launch-plan flip to "uncaught" needs to touch.
+      - name: Build authoring (skipped when only the api/o11y deploys)
         if: needs.changes.outputs.authoring == 'true'
         run: pnpm --filter @handsontable/demo-authoring build
         env:
@@ -136,6 +163,85 @@ jobs:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
           GITHUB_SHA: ${{ github.sha }}
+          VITE_SENTRY_SCOPE: full
+
+      # T10 / ADR §C.3: the Sentry plugin above uploads the SAME maps to
+      # Sentry (for stack-trace symbolication there) but no longer deletes
+      # them — they're only removed from dist/ here, after also landing in R2
+      # for the o11y worker's own symbolicator
+      # (workers/o11y/src/drain/symbolicate.ts#mapKeyFor:
+      # `sourcemaps/<service.version>/<original asset path>.map`, matched key
+      # for key). No maps means SENTRY_* wasn't configured (a PR build, or a
+      # push where only api/o11y changed) — the loop is then a no-op.
+      #
+      # Fix round (review finding I1): this step used to authenticate with
+      # the account-wide CLOUDFLARE_API_TOKEN, which the runbook then had to
+      # widen with a blanket R2: Edit grant — a token that can write to any
+      # bucket in the account, sitting in the one job that never otherwise
+      # needs Cloudflare API access at all. Uses a dedicated R2 S3 credential
+      # instead (Object Read & Write, scoped to `handsontable-demos-o11y-maps`
+      # only — one-time setup step 2 in docs/run-and-deploy.md, the same
+      # mechanism as the Loki-only token in step 3), through the S3 API via
+      # `aws s3 cp` — the AWS CLI ships preinstalled on GitHub-hosted Ubuntu
+      # runners (actions/runner-images), so this adds no new dependency.
+      # `CLOUDFLARE_API_TOKEN` is no longer read anywhere in this job.
+      - name: Upload source maps to R2, then remove them from dist
+        if: needs.changes.outputs.authoring == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_MAPS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_MAPS_SECRET_ACCESS_KEY }}
+          # Required by the SDK/CLI's request signing; R2 does not use it
+          # (contract: the region for an R2 bucket's S3 API is always "auto").
+          AWS_DEFAULT_REGION: auto
+          # EU jurisdiction (contract §2 — same value workers/o11y/wrangler.jsonc's
+          # own account_id + box.ts's Loki-bucket endpoint use), not a secret.
+          R2_MAPS_ENDPOINT: https://15111272c53ed0aaf84a908f0c9c7f8b.eu.r2.cloudflarestorage.com
+          # A modern AWS CLI defaults to a CRC32 trailing checksum on every
+          # request and validates one on every response; R2's S3 API doesn't
+          # implement that trailer, so the upload can be rejected outright
+          # (minor triage C-M6). Both must be "when_required" (only send/
+          # validate when the operation explicitly requires it) so `aws s3 cp`
+          # against R2 works with whatever CLI version the runner image ships.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        run: |
+          set -o pipefail
+          mapfile -t maps < <(find apps/authoring/dist -name '*.map')
+          if [ ${#maps[@]} -eq 0 ]; then
+            echo "no source maps in this build — nothing to upload to R2 (expected unless SENTRY_* secrets are set)"
+          else
+            for f in "${maps[@]}"; do
+              rel="${f#apps/authoring/dist/}"
+              key="sourcemaps/${GITHUB_SHA}/${rel}"
+              echo "uploading ${rel} -> ${key}"
+              aws s3 cp "$f" "s3://handsontable-demos-o11y-maps/${key}" \
+                --endpoint-url "$R2_MAPS_ENDPOINT" --content-type application/json
+              rm -f "$f"
+            done
+          fi
+
+      # AGENTS.md's own dev-bypass sanity check ("Always build prod with
+      # .env.local absent"), automated (T10). Must run AFTER the maps are gone
+      # above — a source map's sourcesContent literally embeds
+      # "localhost:8787" (App.tsx's API-base fallback) and "VITE_DEV_USER"
+      # (auth.ts), which would false-fire this exact grep against a map file
+      # that was never actually leaked into the served JS.
+      - name: Leak check — dev-login bypass must not reach the production bundle
+        if: needs.changes.outputs.authoring == 'true'
+        run: |
+          if grep -rl "localhost:8787\|VITE_DEV_USER\|dev@handsontable.com" apps/authoring/dist; then
+            echo "::error::dev-login bypass leaked into the production bundle — rebuild with .env.local absent (AGENTS.md)"
+            exit 1
+          fi
+          echo "ok: no dev-bypass sentinel found"
+
+      # Contract §10's own leak check (T06/T10): the local-only telemetry path
+      # (VITE_TELEMETRY_LOCAL) must never survive dead-code elimination into a
+      # production bundle. scripts/check-telemetry-leak.mjs greps
+      # apps/authoring/dist/assets/*.js for its sentinels.
+      - name: Leak check — local telemetry path must not reach the production bundle
+        if: needs.changes.outputs.authoring == 'true'
+        run: pnpm check:telemetry-leak
 
       # The one regression that only shows up in a deploy: the compiler chunk's content hash
       # coming back, which strands every tab opened before the next deploy (DEV-2569). ci.yml
@@ -147,7 +253,7 @@ jobs:
 
       - name: Upload the authoring build
         if: needs.changes.outputs.authoring == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: authoring-dist
           path: runner/apps/authoring/dist/
@@ -158,14 +264,20 @@ jobs:
     needs: [changes, build]
     if: needs.changes.outputs.authoring == 'true'
     runs-on: ubuntu-latest
+    # id-token: write (T10) — the deploy-event step below mints a GitHub OIDC
+    # token for POST /telemetry/deploy. Job-level permissions REPLACE the
+    # workflow-level block, so contents: read is repeated here.
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download the authoring build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: authoring-dist
           path: runner/apps/authoring/dist/
@@ -173,10 +285,55 @@ jobs:
       # No pnpm install: wrangler is pinned through npx and ships ./dist as
       # Workers Assets — the checkout only supplies wrangler.jsonc.
       - name: Deploy authoring worker
+        id: deploy
         working-directory: runner/apps/authoring
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx -y wrangler@4.108.0 deploy
+        run: |
+          set -o pipefail
+          npx -y wrangler@4.108.0 deploy | tee /tmp/deploy-authoring.log
+          # Minor triage item 3 (C-M3): `|| true` so a wording change in
+          # wrangler's own "Current Version ID:" line (grep finds nothing,
+          # exits 1) can't fail this step — under `set -o pipefail` that
+          # would fail the whole job AFTER the deploy already shipped,
+          # skipping the deploy-event report and the smoke test below it.
+          version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-authoring.log | awk '{print $NF}') || true
+          # B-I1: the `|| true` above trades "job goes red" for "job stays
+          # green" on a wrangler wording change — this warning is what makes
+          # that trade safe: an empty version_id would otherwise ship a
+          # deploy-event row with cf_version_id:"" (silently corrupting the
+          # ADR §C.2 deploy-correlation record) with nothing pointing at the
+          # actual root cause (the version-id parse, not the deploy itself).
+          [ -n "$version_id" ] || echo "::warning::could not parse Current Version ID from wrangler deploy output (handsontable-demos-authoring) — the deploy-event report below will ship with an empty cf_version_id"
+          echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
+
+      - name: Report the deploy to the o11y worker (T10, ADR §C.2)
+        # Never fails the job — see "Deploy events" in docs/run-and-deploy.md:
+        # a deploy that shipped must not go red because reporting it hiccuped,
+        # and on the very first merge of this feature the o11y route may not
+        # be reachable yet.
+        if: always() && steps.deploy.outcome == 'success'
+        working-directory: .
+        # Fix round (controller note): VERSION_ID passed through env, the same
+        # way GITHUB_SHA already is — never spliced with ${{ }} straight into
+        # the script, which would let an unexpectedly-shaped value (e.g. one
+        # containing a quote) break out of the JSON string it's built into.
+        env:
+          VERSION_ID: ${{ steps.deploy.outputs.version_id }}
+        run: |
+          oidc_token=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://demos.handsontable.com/telemetry/deploy" \
+            | jq -r '.value') || true
+          if [ -z "$oidc_token" ]; then
+            echo "::warning::could not mint a GitHub OIDC token — skipping the deploy event"
+            exit 0
+          fi
+          code=$(curl -sf -o /dev/null -w '%{http_code}' -X POST https://demos.handsontable.com/telemetry/deploy \
+            -H "Authorization: Bearer ${oidc_token}" -H 'Content-Type: application/json' \
+            --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-authoring\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${VERSION_ID}\"}") \
+            || true
+          echo "deploy-event response: ${code:-<none>}"
+          [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-authoring did not return 200 (${code:-<none>})"
 
       - name: Smoke test — prod frontend serves current bundle
         working-directory: .
@@ -216,20 +373,31 @@ jobs:
       smoke: true
 
   deploy-api:
-    needs: [changes, build]
-    if: needs.changes.outputs.api == 'true'
+    # T10: also needs deploy-o11y (mutual service bindings — API's own O11Y
+    # binding and o11y's own API#O11yUsage binding). `if` accepts a skipped
+    # deploy-o11y (unrelated push, nothing to wait for) but not a failed one —
+    # see "First deploy, in order" in docs/run-and-deploy.md.
+    needs: [changes, build, deploy-o11y]
+    if: >-
+      !cancelled() &&
+      needs.changes.outputs.api == 'true' &&
+      needs.build.result == 'success' &&
+      needs.deploy-o11y.result != 'failure'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -241,7 +409,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Download the runtime build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: runtime-dist
           path: runner/packages/runtime/dist/
@@ -259,10 +427,39 @@ jobs:
       # which attaches the demos.handsontable.com routes via --routes (routes are
       # intentionally NOT in wrangler.jsonc — see ADR-0020 / run-and-deploy.md).
       - name: Deploy API worker (builds + pushes Tier-2 image, attaches routes)
+        id: deploy
         working-directory: runner/workers/api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: pnpm run deploy
+        run: |
+          set -o pipefail
+          pnpm run deploy | tee /tmp/deploy-api.log
+          # Minor triage item 3 (C-M3): see the matching comment in
+          # deploy-authoring — same reasoning, same fix.
+          version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-api.log | awk '{print $NF}') || true
+          # B-I1: see the matching comment in deploy-authoring — same reasoning, same fix.
+          [ -n "$version_id" ] || echo "::warning::could not parse Current Version ID from wrangler deploy output (handsontable-demos-api) — the deploy-event report below will ship with an empty cf_version_id"
+          echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
+
+      - name: Report the deploy to the o11y worker (T10, ADR §C.2)
+        if: always() && steps.deploy.outcome == 'success'
+        working-directory: .
+        env:
+          VERSION_ID: ${{ steps.deploy.outputs.version_id }}
+        run: |
+          oidc_token=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://demos.handsontable.com/telemetry/deploy" \
+            | jq -r '.value') || true
+          if [ -z "$oidc_token" ]; then
+            echo "::warning::could not mint a GitHub OIDC token — skipping the deploy event"
+            exit 0
+          fi
+          code=$(curl -sf -o /dev/null -w '%{http_code}' -X POST https://demos.handsontable.com/telemetry/deploy \
+            -H "Authorization: Bearer ${oidc_token}" -H 'Content-Type: application/json' \
+            --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-api\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${VERSION_ID}\"}") \
+            || true
+          echo "deploy-event response: ${code:-<none>}"
+          [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-api did not return 200 (${code:-<none>})"
 
       - name: Smoke test — prod API health
         working-directory: .
@@ -275,3 +472,79 @@ jobs:
           done
           echo "::error::prod /api/health did not return 200 after deploy"
           exit 1
+
+  # T10: the observability worker (InboxWriter + GrafanaBox). Deployed before
+  # deploy-api (see that job's `needs` and docs/run-and-deploy.md's "First
+  # deploy, in order") because of their mutual service bindings.
+  deploy-o11y:
+    needs: [changes, build]
+    if: needs.changes.outputs.o11y == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v5
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      # Install stays: `pnpm run deploy` runs the workspace's own wrangler and
+      # bundles the worker, which resolves @handsontable/demo-runtime/telemetry
+      # from the artifact downloaded below instead of rebuilding it.
+      - run: pnpm install --frozen-lockfile
+
+      - name: Download the runtime build
+        uses: actions/download-artifact@v7
+        with:
+          name: runtime-dist
+          path: runner/packages/runtime/dist/
+
+      # Builds + pushes the Grafana box image (Docker required, same as
+      # deploy-api) and attaches the /telemetry/* and /grafana/* routes via
+      # --routes (never in wrangler.jsonc — ADR-0020), plus
+      # --var SERVICE_VERSION:$GITHUB_SHA (contract §2).
+      - name: Deploy o11y worker (builds + pushes the Grafana box image, attaches routes)
+        id: deploy
+        working-directory: runner/workers/o11y
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -o pipefail
+          pnpm run deploy | tee /tmp/deploy-o11y.log
+          # Minor triage item 3 (C-M3): see the matching comment in
+          # deploy-authoring — same reasoning, same fix.
+          version_id=$(grep -oE 'Current Version ID:.*' /tmp/deploy-o11y.log | awk '{print $NF}') || true
+          # B-I1: see the matching comment in deploy-authoring — same reasoning, same fix.
+          [ -n "$version_id" ] || echo "::warning::could not parse Current Version ID from wrangler deploy output (handsontable-demos-o11y) — the deploy-event report below will ship with an empty cf_version_id"
+          echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
+
+      - name: Report the deploy to the o11y worker (T10, ADR §C.2)
+        if: always() && steps.deploy.outcome == 'success'
+        working-directory: .
+        env:
+          VERSION_ID: ${{ steps.deploy.outputs.version_id }}
+        run: |
+          oidc_token=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://demos.handsontable.com/telemetry/deploy" \
+            | jq -r '.value') || true
+          if [ -z "$oidc_token" ]; then
+            echo "::warning::could not mint a GitHub OIDC token — skipping the deploy event"
+            exit 0
+          fi
+          code=$(curl -sf -o /dev/null -w '%{http_code}' -X POST https://demos.handsontable.com/telemetry/deploy \
+            -H "Authorization: Bearer ${oidc_token}" -H 'Content-Type: application/json' \
+            --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-o11y\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${VERSION_ID}\"}") \
+            || true
+          echo "deploy-event response: ${code:-<none>}"
+          [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-o11y did not return 200 (${code:-<none>})"

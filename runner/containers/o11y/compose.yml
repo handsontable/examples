@@ -1,0 +1,206 @@
+# containers/o11y/compose.yml — local stand-in for the Grafana box (ADR-0041
+# §I, docs/observability-contract.md §10). No `container_name`, no fixed
+# network name: other tasks (T03, T11) run this same file under their own
+# `COMPOSE_PROJECT_NAME` and port block, and compose already namespaces
+# everything — containers, networks, AND the two named volumes below — by
+# project, so two projects never share data even though both reference the
+# same short volume keys (`minio-data`/`clickhouse-data`).
+#
+# dev-persist task: `minio-data`/`clickhouse-data` are NAMED volumes (below)
+# so a plain `docker compose ... down` (no `-v`) — what `dev.mjs`'s Ctrl-C
+# teardown runs — keeps them: MinIO holds every Loki chunk/index (the local
+# Analytics Engine's log side), ClickHouse holds `runner_events`. Without
+# this, every dev-stack restart silently lost all local logs/metrics while
+# the o11y worker's own Durable Object state (the inbox ledger, dedupe
+# hashes) survived in `workers/o11y/.wrangler/state` — the two stores would
+# then permanently disagree (ledger keys marked "committed" that no longer
+# exist anywhere; dedupe hashes blocking a fixture replay from ever refilling
+# the now-empty stores). `dev.mjs --fresh` wipes both together instead (see
+# `dev-lib.mjs#resetO11yLocalState`) so they can never diverge that way.
+# Grafana itself stays deliberately ephemeral (no volume on `box`) — nothing
+# about its own state needs to survive a restart.
+#
+# Deliberately NOT given an explicit `name:` (which would need its own
+# `${COMPOSE_PROJECT_NAME}` interpolation, with its own fallback-default
+# footgun if a caller ever passes `-p` instead of the env var and the two
+# disagree) — compose's own automatic `<project>_<key>` naming already gives
+# each project's volumes a distinct name for free, the same guarantee the
+# rest of this file already relies on for containers/networks. Find a given
+# project's volumes with
+# `docker volume ls --filter label=com.docker.compose.project=<project>`
+# (compose labels every resource it creates with the project name — this is
+# also how `dev-lib.mjs`'s divergence check finds them without guessing the
+# resolved name).
+#
+# Run it with (T01's own port block is 4200-4299; every other task uses its
+# own dedicated block):
+#   COMPOSE_PROJECT_NAME=o11y-t01 \
+#   O11Y_GRAFANA_PORT=4200 O11Y_LOKI_PORT=4201 O11Y_MINIO_PORT=4202 \
+#   O11Y_MINIO_CONSOLE_PORT=4203 O11Y_CLICKHOUSE_PORT=4204 O11Y_CLICKHOUSE_NATIVE_PORT=4205 \
+#   docker compose -f containers/o11y/compose.yml up
+#
+# With no env overrides, every host port defaults to the contract's own
+# defaults (docs/observability-contract.md §1: 3000, 3100, 8123) so
+# `pnpm o11y:dev` (added by later tasks) works with zero configuration.
+
+services:
+  box:
+    build:
+      context: .
+    environment:
+      # No default: an empty WAKE_ID makes the supervisor REFUSE to write a
+      # marker (shutdown.sh). A convenience default like "local-dev" would
+      # let a later SIGKILL under the same unset-WAKE_ID default find the
+      # PREVIOUS clean run's marker and read as clean — exactly the T11
+      # criterion-2 failure mode. Every caller (stop-roundtrip.mjs, a human
+      # `docker compose up`) must set O11Y_WAKE_ID explicitly.
+      WAKE_ID: ${O11Y_WAKE_ID:-}
+      STORAGE: s3
+      LOKI_S3_ENDPOINT: minio:9000
+      LOKI_S3_REGION: auto
+      # Independent from MinIO's own root credentials (not just an alias for
+      # O11Y_MINIO_ROOT_USER/PASSWORD): the C1 negative control
+      # (local/stop-roundtrip.mjs) runs the box against a deliberately
+      # restricted MinIO user whose policy denies PutObject on index/* —
+      # approximating the production token, which is scoped to the Loki
+      # bucket only (ADR-0041 exit criterion 1) — while leaving MinIO's own
+      # root user free for admin/mc operations. Defaults match MinIO's own
+      # default root credentials so a plain `docker compose up` still works.
+      LOKI_S3_ACCESS_KEY_ID: ${O11Y_LOKI_S3_ACCESS_KEY_ID:-minioadmin}
+      LOKI_S3_SECRET_ACCESS_KEY: ${O11Y_LOKI_S3_SECRET_ACCESS_KEY:-minioadmin}
+      LOKI_S3_BUCKET: loki
+      LOKI_S3_INSECURE: "true"
+      GF_SERVER_ROOT_URL: http://localhost:${O11Y_GRAFANA_PORT:-3000}/grafana/
+      # vertamedia-clickhouse-datasource needs a full URL plus ONE header
+      # pair for local ClickHouse (X-ClickHouse-User/-Key) — a different
+      # shape than production's single `Authorization: Bearer` header
+      # (GrafanaBox envVars, phase 2). See grafana/provisioning/datasources.
+      #
+      # T01 fix round 1, P2: contract §2 says AE_SQL_TOKEN "reaches Grafana
+      # via env", but nothing in datasources.yaml ever read a bare
+      # `AE_SQL_TOKEN` variable — only `O11Y_CLICKHOUSE_HEADER2_VALUE` is
+      # wired into the datasource's secureJsonData. A standalone `AE_SQL_TOKEN`
+      # env var on the box was therefore dead: present, but unread. Dropped
+      # it; the token reaches Grafana by being the VALUE of
+      # O11Y_CLICKHOUSE_HEADER2_VALUE below (locally) and, in phase 2, by
+      # GrafanaBox building that same env var as `Bearer <AE_SQL_TOKEN>` from
+      # its own secret — never a second, redundant copy on the box.
+      O11Y_CLICKHOUSE_URL: http://clickhouse:8123
+      O11Y_CLICKHOUSE_DATABASE: default
+      O11Y_CLICKHOUSE_HEADER1_NAME: X-ClickHouse-User
+      O11Y_CLICKHOUSE_HEADER1_VALUE: default
+      O11Y_CLICKHOUSE_HEADER2_NAME: X-ClickHouse-Key
+      O11Y_CLICKHOUSE_HEADER2_VALUE: ${AE_SQL_TOKEN:-local-dev-token}
+      O11Y_STOP_GRACE_SECONDS: ${O11Y_STOP_GRACE_SECONDS:-30}
+    ports:
+      - "127.0.0.1:${O11Y_GRAFANA_PORT:-3000}:3000"
+      - "127.0.0.1:${O11Y_LOKI_PORT:-3100}:3100"
+    # Must exceed O11Y_STOP_GRACE_SECONDS (the supervisor's own bound on
+    # waiting for Loki to exit) by enough margin that the stop protocol's
+    # remaining steps (index check, marker PUT+HEAD, stopping Grafana) can
+    # still run before Docker escalates to SIGKILL. These two numbers are
+    # coupled by hand, not derived — raise O11Y_STOP_GRACE_SECONDS and this
+    # value together. M12 (fix round 1): the default 30s is what was
+    # measured (~2.3s) flushing a couple of short-lived local test streams;
+    # `max_chunk_age: 2h` (loki-config.yaml) means a wake that has been
+    # ingesting for a while can be flushing much larger in-memory chunks on
+    # shutdown, so 30s may be tight in production at real traffic volume —
+    # this needs a production-shaped measurement (ADR-0041 exit criterion 7,
+    # phase 2 sandbox probe), not just this local number, before treating it
+    # as validated for anything beyond this repo's own test traffic.
+    stop_grace_period: 45s
+    # `standard-1` (docs.cloudflare.com/containers/platform-details/limits):
+    # 1/2 vCPU, 4 GiB memory, 8 GB disk — so local boot-time and memory
+    # measurements mean the same thing the sandbox probe will measure.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 4g
+    depends_on:
+      minio:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
+
+  # T1 (2026-09): upstream MinIO stopped distributing public community
+  # images — a FRESH pull of quay.io/minio/minio and docker.io/minio/minio
+  # (no cached layers) now returns 401 Unauthorized / "repository does not
+  # exist" respectively. Confirmed from a machine with no cache; a machine
+  # that pulled earlier still has working local images, which is why this
+  # broke silently and only bit fresh machines/CI runners first. Replaced
+  # with Bitnami's frozen "legacy" mirror of the SAME release line (its
+  # `minio --version` reports `DEVELOPMENT.2024-11-07T00-52-20Z`, matching
+  # upstream's RELEASE tag of the same date — verified by `docker run`
+  # before switching), pinned by DIGEST (not a mutable tag) so this can
+  # never silently drift again. Alternatives the controller offered
+  # (chrislusf/seaweedfs, dxflrs/garage, zenko/cloudserver) all pull, but
+  # none was verified against the C1 negative control below (a
+  # deny-`s3:PutObject` policy applied through MinIO's own admin API) —
+  # Bitnami ships the real MinIO `mc` binary with full `mc admin` support
+  # INSIDE this same container (`docker compose exec minio mc admin ...`),
+  # verified end to end (policy create/user add/policy attach, then a real
+  # denied PUT), which made it the smallest-diff, most-compatible choice.
+  minio:
+    image: bitnamilegacy/minio@sha256:81cd091fb9f14b2e9e9bfa6dbc2bf2d46fdd5eafa6c5e7c9213baf4256ff13d6 # 2024.11.7, verified linux/amd64+arm64 (`docker buildx imagetools inspect`)
+    environment:
+      MINIO_ROOT_USER: ${O11Y_MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${O11Y_MINIO_ROOT_PASSWORD:-minioadmin}
+      # Replaces the old `minio-init` one-shot `mc mb` container below
+      # (quay.io/minio/mc is gone too — same outage) — Bitnami's own
+      # entrypoint creates every bucket named here itself, BEFORE the real,
+      # long-running MinIO server starts listening (verified via `docker
+      # logs`: "Creating default buckets... Bucket created successfully
+      # `local/loki`" completes before "** Starting MinIO **"). The
+      # healthcheck below additionally checks the bucket directory on disk,
+      # so `service_healthy` already guarantees the bucket exists by the
+      # time `box` starts — no separate init container needed.
+      MINIO_DEFAULT_BUCKETS: loki
+    volumes:
+      # Bitnami's image data dir differs from upstream minio/minio's `/data`
+      # (`docker inspect` on the image: `Volumes: {"/bitnami/minio/data"}`).
+      - minio-data:/bitnami/minio/data
+    ports:
+      - "127.0.0.1:${O11Y_MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${O11Y_MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      # Checks the bucket directory AND the live endpoint, not just the
+      # endpoint alone: Bitnami's entrypoint briefly runs a first, throwaway
+      # MinIO instance to create the default buckets, then stops and
+      # restarts it for real (see the MINIO_DEFAULT_BUCKETS comment above) —
+      # a bare `/minio/health/live` check could in principle latch
+      # "healthy" against that throwaway instance. Measured empirically
+      # (T1 report): with both conditions the check only ever goes healthy
+      # once, after the bucket dir exists and the final server answers.
+      test: ["CMD-SHELL", "test -d /bitnami/minio/data/loki && curl -f http://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Analytics Engine stand-in (docs/observability-contract.md §10): a
+  # `runner_events` table shaped exactly like the real AE SQL API response
+  # (index1, blob1-20, double1-20, timestamp, _sample_interval), queried
+  # through the same allowlisting helper the o11y worker uses in production.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.10-alpine
+    environment:
+      CLICKHOUSE_DB: default
+      # The Grafana datasource always sends a password (jsonData mirrors the
+      # production AE_SQL_TOKEN shape); give the local default user the same
+      # value so the health check exercises real authentication, not an
+      # empty-password special case.
+      CLICKHOUSE_PASSWORD: ${AE_SQL_TOKEN:-local-dev-token}
+    volumes:
+      - ./local/clickhouse-init.sql:/docker-entrypoint-initdb.d/clickhouse-init.sql:ro
+      # Only runs the init script above on a genuinely empty data dir (same
+      # convention the image inherits from the postgres/mysql entrypoint
+      # pattern) — on a persisted volume from a prior run, `runner_events`
+      # already exists and this is skipped, which is exactly the point.
+      - clickhouse-data:/var/lib/clickhouse
+    ports:
+      - "127.0.0.1:${O11Y_CLICKHOUSE_PORT:-8123}:8123"
+      - "127.0.0.1:${O11Y_CLICKHOUSE_NATIVE_PORT:-9009}:9000"
+
+volumes:
+  minio-data:
+  clickhouse-data:

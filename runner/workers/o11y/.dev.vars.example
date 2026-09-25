@@ -1,0 +1,26 @@
+# Copy to .dev.vars (gitignored) for `wrangler dev`. Never commit real values.
+
+# Fail-closed local bypass of the session check (contract §2, verifySession in
+# workers/o11y/src/gates/session.ts, K1) — honoured only when O11Y_ENV=local.
+# This is the default local path; a real broker login also works locally
+# (LOGIN_BROKER_URL falls back to the production broker from wrangler.jsonc's
+# vars block) but needs O11Y_SESSION_SECRET set below to a real value.
+DEV_ADMIN=
+
+# Secrets — set with `wrangler secret put <NAME>` for a real deploy; for local
+# dev, values here are enough to exercise the gates without hitting anything
+# real.
+O11Y_EXPORT_SECRET=
+SENTRY_HOOK_SECRET=
+AE_SQL_TOKEN=
+LOKI_S3_ACCESS_KEY_ID=
+LOKI_S3_SECRET_ACCESS_KEY=
+SLACK_WEBHOOK_URL=
+# HMAC key for the Worker's own o11y_session/o11y_login cookies (K1). Only
+# needed locally to exercise a real broker login instead of DEV_ADMIN —
+# generate with `openssl rand -hex 32`.
+O11Y_SESSION_SECRET=
+
+# Local-mode override (contract §10) — falls back to "production" from
+# wrangler.jsonc's vars block otherwise.
+O11Y_ENV=local

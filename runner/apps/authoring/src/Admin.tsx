@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from "react";
 import { theme, logoUrl } from "@handsontable/demo-editor-shell";
 import { assertApiOk, readApiJson } from "./api.js";
 import { reportError } from "./sentry.js";
+import { apiHeaders } from "./telemetry/index.js";
 
 interface LedgerRow { day: string; sku: string; source: string; units: number; usd: number }
 interface UsageRow { day: string; metric: string; dimension: string; count: number }
@@ -62,6 +63,11 @@ export interface BudgetSettings {
   closedUsd: number;
   enforce: boolean;
   alertsUsd: number[];
+  /** ADR-0041 §G: the o11y stack's own monthly ceiling (default $15),
+   *  separate from `limitUsd` — see settings.ts's own doc comment. Optional:
+   *  an API response from before ADR-0041 §G shipped won't carry it, and the
+   *  panel must render that older payload rather than crash on it. */
+  o11yBudgetUsd?: number;
   source?: "defaults" | "override";
   updatedAt?: string | null;
   updatedBy?: string | null;
@@ -92,6 +98,16 @@ interface UsageReport {
     reconciled: boolean;
     enforced: boolean;
   };
+  /** ADR-0041 §G: "`/admin` shows app, observability and total." Optional:
+   *  an API worker deployed before this landed won't send it (rolling
+   *  deploys mean an older Worker can serve a newer authoring bundle), so
+   *  the panel renders without this line rather than crashing on it. */
+  o11y?: {
+    spendUsd: number;
+    capUsd: number;
+    appSpendUsd: number;
+    totalSpendUsd: number;
+  };
   settings: BudgetSettings;
   audience: Audience;
   spendBySku: Record<string, { estimate: number; billing: number }>;
@@ -110,6 +126,24 @@ interface UsageReport {
 }
 
 const WINDOWS = [7, 30, 90];
+
+/** `import.meta.env.VITE_GRAFANA_URL` — on the deployed zone the authoring
+ *  app and the o11y worker share one origin, so a plain `/grafana/` reaches
+ *  it (the fallback, and what a production build with no env produces).
+ *  Locally the authoring app runs on Vite and the o11y worker on its own
+ *  port, with no dev-server proxy for `/grafana` (Grafana's own
+ *  `GF_SERVER_ROOT_URL` is the o11y worker's origin, so proxying would just
+ *  bounce its redirects) — `scripts/dev-lib.mjs`'s `--tier=full` plan sets
+ *  this env var to that worker's `http://localhost:<O11Y_DEV_PORT>/grafana/`
+ *  so the link (and the DEV_ADMIN login bypass it relies on) works there too,
+ *  injected as process env for the dev server only (never written to a
+ *  file), the same way that plan injects `VITE_API_BASE`/`VITE_DEV_USER`.
+ *  Unlike `VITE_TELEMETRY_LOCAL`, `pnpm check:telemetry-leak` does NOT check
+ *  for this one — nothing here needs dead-code elimination to be safe, so a
+ *  stray `VITE_GRAFANA_URL` in a hand-edited `.env.local` would bake its
+ *  value into a "production" build undetected. Don't set it outside
+ *  `dev-lib.mjs`. See docs/run-and-deploy.md's "Browsing logs" section. */
+const GRAFANA_URL = import.meta.env.VITE_GRAFANA_URL || "/grafana/";
 
 const usd = (n: number): string => (n >= 100 ? `$${n.toFixed(0)}` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`);
 const int = (n: number): string => n.toLocaleString("en-US");
@@ -133,6 +167,8 @@ const SKU_LABEL: Record<string, string> = {
   workers: "Workers requests",
   r2: "R2 storage",
   llm: "AI assistant",
+  o11y_container: "Observability container",
+  o11y_workers: "Observability workers",
 };
 
 const METRIC_LABEL: Record<string, string> = {
@@ -167,7 +203,7 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
     (window: number) => {
       setError(null);
       fetch(`${apiBase}/api/admin/usage?days=${window}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: apiHeaders(token ? { Authorization: `Bearer ${token}` } : undefined),
       })
         .then(async (r) => {
           if (!r.ok) throw new Error(`usage request failed (${r.status})`);
@@ -209,6 +245,17 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
           ))}
         </div>
         <button type="button" style={chip} onClick={() => load(days)}>Refresh</button>
+        {/* ADR-0043: dashboards live in Grafana behind the o11y worker's own
+         *  broker login, and nothing else in the app links there — a plain
+         *  same-tab-avoiding anchor is enough, no client-side auth needed. */}
+        <a
+          style={{ ...chip, textDecoration: "none" }}
+          href={GRAFANA_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Open Grafana ↗
+        </a>
         <a style={{ ...chip, textDecoration: "none" }} href="/">← Editor</a>
       </header>
 
@@ -365,8 +412,9 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
 /** Budget headline: where spend sits against the ceiling, and what each
  *  threshold will do when it is crossed. */
 function BudgetCard({ report }: { report: UsageReport }) {
-  const { budget, settings } = report;
+  const { budget, settings, o11y } = report;
   const tier = TIERS[budget.tier] ?? { label: budget.tier, color: theme.color.text };
+  const o11yOverCap = o11y ? o11y.spendUsd >= o11y.capUsd : false;
   const pct = Math.max(0, Math.min(1, budget.pct));
   const limit = settings.limitUsd || 1;
   const marks: [string, number][] = [
@@ -408,6 +456,26 @@ function BudgetCard({ report }: { report: UsageReport }) {
           : "Observe-only: tiers are computed and logged but nothing is refused. Turn enforcement on below "
             + "once these figures track the Cloudflare Billable Usage dashboard."}
       </p>
+
+      {/* ADR-0041 §G: app, observability and total. Absent entirely against
+          an older API response that predates this line (see the `o11y?`
+          doc comment on UsageReport) — nothing to show, so nothing renders. */}
+      {o11y && (
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 8, fontSize: 13 }}>
+          <span>App: <strong>{usd(o11y.appSpendUsd)}</strong></span>
+          <span>
+            Observability: <strong style={{ color: o11yOverCap ? theme.color.danger : undefined }}>
+              {usd(o11y.spendUsd)}
+            </strong> of {usd(o11y.capUsd)} cap
+            {o11yOverCap && (
+              <span style={{ ...pill, background: theme.color.danger, marginLeft: 6 }}>
+                backlog drains paused
+              </span>
+            )}
+          </span>
+          <span>Total: <strong>{usd(o11y.totalSpendUsd)}</strong></span>
+        </div>
+      )}
     </section>
   );
 }
@@ -464,10 +532,10 @@ function SettingsForm({
     try {
       const res = await fetch(`${apiBase}/api/admin/settings`, {
         method,
-        headers: {
+        headers: apiHeaders({
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        }),
         body: method === "PUT"
           ? JSON.stringify({
               ...draft,
@@ -517,6 +585,11 @@ function SettingsForm({
             </div>
             <div style={{ minWidth: 200, flex: "1 1 200px" }}>
               {field("closedUsd", "Close live editing ($)", `${pctOf(draft.closedUsd)} — running sessions torn down.`)}
+              {field(
+                "o11yBudgetUsd",
+                "Observability cap ($)",
+                "ADR-0041 §G: crossing this pauses backlog drains (visit wakes still work). Counts toward the ceiling above too.",
+              )}
               <label style={{ display: "block", marginBottom: 8 }}>
                 <div style={{ fontSize: 12, marginBottom: 4 }}>Alert thresholds ($)</div>
                 <input
@@ -776,7 +849,7 @@ function LiveSessionsSection({
    *  indistinguishable 8-hex digest, so a misclick is easy and unrecoverable. */
   const [confirming, setConfirming] = useState<string | null>(null);
 
-  const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const authHeaders = apiHeaders(token ? { Authorization: `Bearer ${token}` } : undefined);
 
   const fetchPage = useCallback(
     async (next: { awakeOnly: boolean; offset: number }) => {

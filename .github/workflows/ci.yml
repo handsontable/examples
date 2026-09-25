@@ -43,15 +43,18 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # The gate diffs the PR range against its base — it needs history,
           # not just the merge commit.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
+          # setup-node v5 auto-enables pnpm caching from the root package.json
+          # `packageManager` field; this job never installs pnpm.
+          package-manager-cache: false
 
       - name: Test-presence gate (source change ⇒ test change)
         run: node runner/scripts/check-test-presence.mjs "${{ github.base_ref }}"
@@ -62,13 +65,13 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -86,15 +89,15 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Read the pnpm version from runner/package.json's packageManager field
       # (avoids a conflict with the repo-root package.json).
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -110,7 +113,7 @@ jobs:
         run: pnpm typecheck
 
       - name: Upload the runtime build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: runtime-dist
           path: runner/packages/runtime/dist/
@@ -124,13 +127,13 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -139,7 +142,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Download the runtime build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: runtime-dist
           path: runner/packages/runtime/dist/
@@ -155,7 +158,7 @@ jobs:
         run: node scripts/check-compiler-chunk.mjs
 
       - name: Upload the authoring build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: authoring-dist
           path: runner/apps/authoring/dist/
@@ -176,13 +179,13 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: runner/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -191,7 +194,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Download the authoring build (the e2e target)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: authoring-dist
           path: runner/apps/authoring/dist/
@@ -201,10 +204,126 @@ jobs:
 
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report
           # playwright-report/ holds the html report, test-results/ the traces.
+          path: |
+            runner/playwright-report/
+            runner/test-results/
+          retention-days: 7
+          if-no-files-found: warn
+
+  # T10 — the CI home the local telemetry path (contract §10) never had
+  # (T06-D8/T07: E2E_TELEMETRY specs were flagged but never wired). Its own
+  # build, separate from the `authoring`/`e2e` jobs above: VITE_TELEMETRY_LOCAL=1
+  # must never reach the real authoring-dist artifact those jobs share (the
+  # post-build leak check in master.yml exists specifically to catch that), so
+  # this job builds its own dist and never uploads it. Both specs are
+  # self-contained — their own preview server (telemetry-faro.spec.ts: 4711,
+  # example-analytics.spec.ts: 5301), `page.route` interception of
+  # `/telemetry/collect`, no o11y worker or API worker — so they fit the
+  # deterministic PR suite unlike e2e/telemetry-metrics.spec.ts (E2E_LIVE +
+  # a local API worker + a live Tier-2 container). That spec, plus
+  # e2e/o11y-local.spec.ts (E2E_O11Y_LOCAL, needs Docker + two `wrangler dev`
+  # processes + a compose stack on top), have their own workflow instead —
+  # `.github/workflows/e2e-o11y-local.yml` — kept off the per-PR gate and run
+  # on workflow_dispatch, nightly, and PRs that touch the ingest path. See
+  # docs/run-and-deploy.md's "Tests (CI)" section.
+  e2e-telemetry:
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v5
+
+      # Minor triage item 5 (C-M7/D-M8): the leak checks used to run ONLY
+      # post-merge, in master.yml, after the production authoring bundle had
+      # already been built there — a regression that broke dead-code
+      # elimination of the local telemetry seam (or the dev-login bypass
+      # sentinel check itself) was only caught after merge, as a blocked
+      # deploy. actionlint here too, so a workflow-YAML mistake in either
+      # fix is itself caught in PR CI, not just by reading the diff.
+      - name: actionlint (workflow YAML)
+        uses: reviewdog/action-actionlint@v1
+        with:
+          fail_level: error
+
+      - uses: pnpm/action-setup@v5
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Download the runtime build
+        uses: actions/download-artifact@v7
+        with:
+          name: runtime-dist
+          path: runner/packages/runtime/dist/
+
+      # Production-mode build (no VITE_TELEMETRY_LOCAL) — the same shape
+      # master.yml's `build` job ships, built here too so both leak checks
+      # run in PR CI, not only after merge.
+      - name: Build authoring in production mode
+        run: pnpm --filter @handsontable/demo-authoring build
+
+      # Same check as master.yml's "Leak check — dev-login bypass must not
+      # reach the production bundle" step (AGENTS.md's own sanity check),
+      # now also gating the PR instead of only a post-merge deploy.
+      - name: Leak check — dev-login bypass must not reach the production bundle
+        run: |
+          if grep -rl "localhost:8787\|VITE_DEV_USER\|dev@handsontable.com" apps/authoring/dist; then
+            echo "::error::dev-login bypass leaked into the production bundle — rebuild with .env.local absent (AGENTS.md)"
+            exit 1
+          fi
+          echo "ok: no dev-bypass sentinel found"
+
+      # Same check as master.yml's "Leak check — local telemetry path must
+      # not reach the production bundle" step (contract §10).
+      - name: Leak check — local telemetry path must not reach the production bundle
+        run: pnpm check:telemetry-leak
+
+      - name: Build authoring with the local telemetry path (contract §10)
+        run: pnpm --filter @handsontable/demo-authoring build
+        env:
+          VITE_TELEMETRY_LOCAL: '1'
+
+      # Negative control (minor triage item 5 / D-M8): nothing in CI
+      # previously proved `check:telemetry-leak` can actually FAIL — only
+      # that it passes against builds where the sentinels are already
+      # absent. Assert it fails against a build made WITH the local
+      # telemetry path enabled; if the checker itself regresses (a
+      # dead-code-elimination change, a sentinel string edit) and stops
+      # detecting the leak, this step turns red instead of the check quietly
+      # passing everything forever.
+      - name: Leak check negative control — check:telemetry-leak must FAIL against a VITE_TELEMETRY_LOCAL=1 build
+        run: |
+          if pnpm check:telemetry-leak; then
+            echo "::error::check:telemetry-leak passed against a VITE_TELEMETRY_LOCAL=1 build — the leak check itself is broken"
+            exit 1
+          fi
+          echo "ok: check:telemetry-leak correctly failed against the flag build"
+
+      - name: E2E — Faro in the authoring app + example-analytics (T06, T12)
+        env:
+          E2E_TELEMETRY: '1'
+        run: pnpm e2e e2e/telemetry-faro.spec.ts e2e/example-analytics.spec.ts
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-report-telemetry
           path: |
             runner/playwright-report/
             runner/test-results/

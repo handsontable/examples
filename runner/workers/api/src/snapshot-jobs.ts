@@ -23,6 +23,7 @@ import type { Env } from "./env.js";
 import { BUILD_CONFIG } from "./frameworks.generated.js";
 import { isAtCapacityFailure } from "./session-lifecycle.js";
 import { BuildFailure, buildFailureTags, demoBuildState, getDemo, invalidateDemo, updateDemo } from "./share.js";
+import { logErrorLine, withSpan } from "./telemetry/index.js";
 
 export interface SnapshotJob {
   demoId: string;
@@ -92,15 +93,25 @@ export async function runSnapshotJob(env: Env, job: SnapshotJob): Promise<void> 
   if (!files || Object.keys(files).length === 0) {
     throw new Error(`snapshot job for ${job.demoId}: empty payload at ${job.filesKey}`);
   }
-  await updateDemo(env, {
-    id: job.demoId,
-    entry: { framework: job.framework, ...cfg },
-    files,
-    htVersion: job.htVersion,
-    // No title/description on purpose: absent means "leave the column alone",
-    // so a rename committed while the build ran is never reverted (DEV-2495).
-    now: new Date().toISOString(),
-  });
+  // `snapshot.build` (contract §5): this DO's alarm is the "detached" build path
+  // (§D); `updateDemo()` itself now emits the `ok`/`failed` point (with
+  // `reason: "detached"`, passed below) around its whole finalize, timed the
+  // same way the direct/synchronous build in `index.ts` ("inline") is — a
+  // single emission site (`share.ts#withSnapshotBuildPoint`) for both paths
+  // instead of this alarm hand-rolling its own copy.
+  await withSpan("snapshot.build", () => updateDemo(
+    env,
+    {
+      id: job.demoId,
+      entry: { framework: job.framework, ...cfg },
+      files,
+      htVersion: job.htVersion,
+      // No title/description on purpose: absent means "leave the column alone",
+      // so a rename committed while the build ran is never reverted (DEV-2495).
+      now: new Date().toISOString(),
+    },
+    "detached",
+  ));
   if (job.filesKey.endsWith("__job.json")) {
     // Best effort: the build has already succeeded, and a throw from cleanup
     // would route through alarm()'s catch and record that success as a failure
@@ -121,6 +132,14 @@ export async function runSnapshotJob(env: Env, job: SnapshotJob): Promise<void> 
  */
 export async function markSnapshotFailed(env: Env, job: SnapshotJob, err: unknown): Promise<void> {
   const cause = err instanceof Error ? err.message : String(err);
+  // ADR-0041 §D: "the snapshot-job alarm's report path" is named explicitly —
+  // one structured line here regardless of which branch below runs. §E.1:
+  // snapshot-job failures "stay in Sentry in both scopes" — the captures below
+  // are unconditional, unlike `reportDiagnostic`'s scope-gated ones.
+  // Minor triage item 7 (C-M14): the contract's own key for a demo id on a
+  // structured line is `hot.demo_id` (`telemetry/lines.ts#logRequestLine`'s
+  // own shape) — this line used the stale, un-prefixed `demo_id` name.
+  logErrorLine(env, "snapshot-job:alarm", err, { "hot.demo_id": job.demoId });
   try {
     await env.DB.prepare("UPDATE demos SET build_status='failed', build_error=?, updated_at=? WHERE id=?")
       .bind(cause.slice(0, BUILD_ERROR_MAX), new Date().toISOString(), job.demoId)

@@ -24,6 +24,16 @@ export interface BudgetSettings {
   /** In-app alert thresholds. Unlike Cloudflare's account-wide budget alerts,
    *  these fire on *this runner's* metered spend. */
   alertsUsd: number[];
+  /** ADR-0041 §G: the o11y stack's OWN monthly ceiling, separate from
+   *  `limitUsd` above (default $15). Crossing it pauses backlog drains
+   *  (visit wakes still work, ADR §G) and posts one Slack line — evaluated
+   *  by the o11y worker's ten-minute alert cron
+   *  (`workers/o11y/src/alerts/rules.ts#o11yCapRule`), not by this Worker's
+   *  own budget gates. `o11y_container`/`o11y_workers` ledger rows still
+   *  count toward `limitUsd`/the tiers above too (ADR §G: "product tiers
+   *  keep acting on the total") — this is a second, smaller cap on top of
+   *  that, not a carve-out. */
+  o11yBudgetUsd: number;
 }
 
 export interface ResolvedBudgetSettings extends BudgetSettings {
@@ -59,6 +69,7 @@ export function defaultSettings(env: Env): ResolvedBudgetSettings {
     closedUsd: pct(env.BUDGET_CLOSED_PCT, 1),
     enforce: String(env.BUDGET_ENFORCE ?? "0") === "1",
     alertsUsd: alerts.sort((a, b) => a - b),
+    o11yBudgetUsd: num(env.O11Y_BUDGET_USD, 15),
     source: "defaults",
     updatedAt: null,
     updatedBy: null,
@@ -109,6 +120,18 @@ export function validateSettings(input: unknown): Validation<BudgetSettings> {
     .sort((a, b) => a - b);
   if (alertsUsd.some((v) => v > MAX_LIMIT_USD)) return { ok: false, error: "alert thresholds are unreasonably large" };
 
+  // Defaults to $15 (ADR-0041 §G) when absent, rather than rejecting the
+  // whole payload — a settings row saved before this field existed (or a
+  // panel that hasn't sent it yet) must not take the app budget override
+  // down with it (same "must not take the guardrail down" rule this
+  // function's own doc comment states for the stored-row read path).
+  const o11yBudgetRaw = raw.o11yBudgetUsd;
+  const o11yBudgetUsd = o11yBudgetRaw === undefined ? 15 : Number(o11yBudgetRaw);
+  if (!Number.isFinite(o11yBudgetUsd) || o11yBudgetUsd <= 0) {
+    return { ok: false, error: "o11yBudgetUsd must be greater than 0" };
+  }
+  if (o11yBudgetUsd > MAX_LIMIT_USD) return { ok: false, error: `o11yBudgetUsd must be at most ${MAX_LIMIT_USD}` };
+
   return {
     ok: true,
     value: {
@@ -116,6 +139,7 @@ export function validateSettings(input: unknown): Validation<BudgetSettings> {
       ...values,
       enforce: raw.enforce === true || raw.enforce === "true",
       alertsUsd,
+      o11yBudgetUsd: Math.round(o11yBudgetUsd * 100) / 100,
     },
   };
 }
