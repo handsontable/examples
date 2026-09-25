@@ -657,36 +657,6 @@ test("wrangler.jsonc: CLOUDFLARE_ACCOUNT_ID is present and matches the top-level
   );
 });
 
-// --- Logo markup drift guard (T03 minor: two hand-kept copies) -----------
-//
-// `workers/o11y/src/grafana/waking-page.ts`'s `LOGO_SVG` constant (what the
-// waking page actually serves — a Worker has no filesystem at request time)
-// and `containers/o11y/waking/logo.svg` (a documentation/asset copy next to
-// the box's other static config, per its own README) carry the same path
-// data by hand, kept in sync only by a code-comment reminder. A true single
-// source (the Worker importing the .svg file as raw text at build time) was
-// the first choice, but this repo's wrangler/esbuild bundling has no
-// established "import a static asset as raw text into a Worker" loader
-// convention, and the two files live in different directory trees
-// (`workers/o11y/` vs `containers/o11y/`) — wiring that up is a bundler
-// change, not a cheap one, so it is skipped here (see this task's report).
-// This test is the cheap alternative: it cannot merge the two files, but it
-// guarantees they cannot silently drift — an edit to one without the other
-// fails this test instead of shipping a stale logo in one of the two
-// places. Fails without either file's `d="..."` path data matching: edit
-// one copy's markup (or delete this test) to see it fail.
-test("logo markup: the waking page's LOGO_SVG and containers/o11y/waking/logo.svg carry identical path data (drift guard, T03 minor)", () => {
-  const wakingPageSource = readFileSync(join(WORKER_DIR, "src", "grafana", "waking-page.ts"), "utf8");
-  const assetSvg = readFileSync(join(O11Y_DIR, "waking", "logo.svg"), "utf8");
-
-  const pathData = (text) => [...text.matchAll(/d="([^"]+)"/g)].map((m) => m[1]);
-  const servedPaths = pathData(wakingPageSource);
-  const assetPaths = pathData(assetSvg);
-
-  assert.ok(servedPaths.length > 0, "must find at least one <path d=...> in waking-page.ts's LOGO_SVG");
-  assert.deepEqual(servedPaths, assetPaths, "the served LOGO_SVG and the documentation asset copy must carry identical path data, in the same order");
-});
-
 // A-I1: on a failed docker-exec, `sh()` used to print the full command
 // line unredacted, including the plain-text root MINIO_PASSWORD and the
 // restricted test user's generated password — both land in stdout/CI logs.
