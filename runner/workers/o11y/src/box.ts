@@ -43,6 +43,25 @@ const DEFAULT_LOKI_BUCKET_NAME = "handsontable-demos-o11y-loki";
 
 const WAKE_STORAGE_KEY = "wake";
 const LAST_STOP_STORAGE_KEY = "lastStop";
+/** QA follow-up ("isReady() while stopping"): the wakeId THIS instance last asked to stop (any of
+ *  the three real callers — {@link GrafanaBox.hardCapStop},
+ *  {@link GrafanaBox.#finishDrain}'s quiet check, or the base class's own
+ *  idle timeout via `onActivityExpired` → `stop()`), so {@link
+ *  GrafanaBox.isReady} can skip its probes for the rest of that wake's
+ *  SIGTERM→exit window — `stop()` (SIGTERM) does NOT change `getState()`'s
+ *  status (see `wake()`'s own doc comment on this exact gap), so without
+ *  this a probe still ran on every tick while the container was shutting
+ *  down, and Loki refusing new connections mid-shutdown made the base
+ *  library's own `containerFetch` log a fresh "Container is not listening to
+ *  port <n>" line on every one of them. Persisted (not just an in-memory
+ *  field): the DO can be evicted during the up to 120 s stop grace
+ *  (`O11Y_STOP_GRACE_SECONDS`), and a fresh instance must still know a stop
+ *  is in flight. Scoped BY wakeId, not a bare boolean, and cleared at the
+ *  start of `#doWake`: a stale marker surviving into the NEXT wake would
+ *  make ITS `isReady()` report false forever (an endless `drainStep`
+ *  reschedule loop and a permanent waking page), which is worse than the
+ *  cosmetic log line this fixes. */
+const STOPPING_FOR_STORAGE_KEY = "stoppingFor";
 /** T03 addition: persisted separately from the base `Container` class's own
  *  opaque `sleepAfterMs` idle clock (never read directly here — a real
  *  `containerFetch` call, including the drain's own Loki pushes, always
@@ -457,6 +476,13 @@ export class GrafanaBox extends Container<Env> {
     // via `noteVisitorActivity()` once that visitor actually arrives, but
     // a wake with none starts genuinely quiet.
     await this.ctx.storage.delete(LAST_GRAFANA_STORAGE_KEY);
+    // QA follow-up ("isReady() while stopping"): a previous wake's "stopping" marker (see
+    // STOPPING_FOR_STORAGE_KEY's own doc comment) must never survive into
+    // this fresh one — scoping it by wakeId already prevents a stale marker
+    // from matching, but deleting it here too avoids leaving a dead key
+    // around and matches the same belt-and-suspenders reset
+    // LAST_GRAFANA_STORAGE_KEY just got, for the same class of bug (I1).
+    await this.ctx.storage.delete(STOPPING_FOR_STORAGE_KEY);
     // Fail closed: InboxWriter is the ledger's one owner (ADR-0041 §B.3);
     // if it cannot record this wake, the container must not start with a
     // wakeId nothing else knows about.
@@ -550,6 +576,26 @@ export class GrafanaBox extends Container<Env> {
       .catch(() => {});
   }
 
+  /** QA follow-up ("isReady() while stopping"): overriding `stop()` itself — rather than each of
+   *  its three real callers individually — is what covers the base class's
+   *  OWN idle-timeout path too (`onActivityExpired` → `this.stop()`), not
+   *  just this class's explicit `hardCapStop`/`#finishDrain` callers. Sets
+   *  the marker BEFORE calling through, so a probe racing this exact call
+   *  never has a chance to run unmarked. Cleared on a throw (and rethrown):
+   *  a `stop()` that did not actually happen must not leave `isReady()`
+   *  reporting not-ready for the rest of a wake that is, in fact, still very
+   *  much up. */
+  override async stop(...args: Parameters<Container<Env>["stop"]>): Promise<void> {
+    const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    if (wake) await this.ctx.storage.put(STOPPING_FOR_STORAGE_KEY, wake.wakeId);
+    try {
+      await super.stop(...args);
+    } catch (err) {
+      await this.ctx.storage.delete(STOPPING_FOR_STORAGE_KEY);
+      throw err;
+    }
+  }
+
   /** {@link HARD_CAP_SCHEDULE}'s callback. A no-op if a newer wake has
    *  already started (a fresh wakeId in storage) or the container already
    *  stopped on its own. */
@@ -604,6 +650,21 @@ export class GrafanaBox extends Container<Env> {
   async isReady(): Promise<boolean> {
     const state = await this.getState();
     if (state.status !== "running" && state.status !== "healthy") return false;
+    // QA follow-up ("isReady() while stopping"): `getState()` above cannot see a stop in flight —
+    // `stop()`'s own doc comment explains why it still reports
+    // "running"/"healthy" for the whole SIGTERM→exit window. Skip the
+    // probes entirely once THIS instance has asked to stop the wake it is
+    // currently tracking, rather than hitting the container (and logging
+    // the library's own "not listening" line) on every tick until the
+    // process actually exits.
+    const [wake, stoppingFor] = await Promise.all([
+      this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY),
+      this.ctx.storage.get<string>(STOPPING_FOR_STORAGE_KEY),
+    ]);
+    if (wake && stoppingFor === wake.wakeId) {
+      this.#probesStuckSince = null; // nothing was attempted — nothing to escalate
+      return false;
+    }
     // F6 (V-triage): `allSettled`, and every body released on every path.
     // `@cloudflare/containers` counts a `containerFetch` as in flight until
     // its response body is consumed or cancelled (see
@@ -809,8 +870,17 @@ export class GrafanaBox extends Container<Env> {
     }
 
     const startedAt = Date.now();
+    // QA follow-up ("reopen reason on the drain error path"): a mutable box `#drainStepBody` fills in as soon as
+    // it knows whether this batch replayed a reopened key (right after
+    // `takeReopenedFlag`, before anything that could throw) — read back in
+    // the catch below so an error point reports `reason: "reopen"` too, not
+    // just the success point further down inside `#drainStepBody` itself.
+    // `takeReopenedFlag` is one-shot (it consumes the markers as it reads
+    // them), so this is the only chance to observe it once `drainBatch` (or
+    // anything after it) throws.
+    const reopenState: { replayed: boolean } = { replayed: false };
     try {
-      await this.#drainStepBody(payload, current, startedAt);
+      await this.#drainStepBody(payload, current, startedAt, reopenState);
     } catch (err) {
       // B-M2 fix (minor triage item 4): any throw in `#drainStepBody` (an R2
       // `get`, an `InboxWriter` RPC, or a symbolication failure that isn't a
@@ -829,7 +899,11 @@ export class GrafanaBox extends Container<Env> {
           this.ctx,
           "o11y.drain",
           { count: 0, duration_ms: Date.now() - startedAt, bytes: 0, value: 0 },
-          { reason: current.reason, outcome: "error" },
+          // QA follow-up ("reopen reason on the drain error path"): same `"reopen"` override the success path
+          // (below, inside `#drainStepBody`) applies — a batch that replayed
+          // reopened keys and then threw must not report the wake's own
+          // backlog/visit reason instead.
+          { reason: reopenState.replayed ? "reopen" : current.reason, outcome: "error" },
         );
         console.error(JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, message: String(err) }));
         await this.#finishDrain(payload.wakeId);
@@ -852,7 +926,12 @@ export class GrafanaBox extends Container<Env> {
   /** The actual drain-batch work `drainStep` runs inside a try/finally-style
    *  guard (above) — split out so every throw inside it, from ANY step, is
    *  caught by the SAME handler (B-M2 fix, minor triage item 4). */
-  async #drainStepBody(payload: { wakeId: string }, current: WakeRecord, startedAt: number): Promise<void> {
+  async #drainStepBody(
+    payload: { wakeId: string },
+    current: WakeRecord,
+    startedAt: number,
+    reopenState: { replayed: boolean },
+  ): Promise<void> {
     const writer = inboxWriterStub(this.env);
     // ADR §B.3: "at each cron tick and at the start of each wake" — this is
     // the wake-start call (idempotent to run again on every step: cheap,
@@ -872,6 +951,10 @@ export class GrafanaBox extends Container<Env> {
     // about to push, not whatever the ledger looks like by the time the
     // point below is written.
     const replayedReopenedKeys = await writer.takeReopenedFlag(keys);
+    // QA follow-up ("reopen reason on the drain error path"): set immediately, before anything below (a real
+    // R2/InboxWriter RPC) can throw — this is the outer catch's only chance
+    // to see it, since `takeReopenedFlag` already consumed the markers.
+    reopenState.replayed = replayedReopenedKeys;
 
     const deps: DrainDeps = {
       fetchObject: async (key) => {

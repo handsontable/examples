@@ -397,6 +397,44 @@ test("B-M5 (revert check / positive control): o11y.drain still reports the wake'
   assert.equal(reasonOf(drainPoint), "backlog");
 });
 
+// QA follow-up ("reopen reason on the drain error path"): `takeReopenedFlag`
+// consumes the reopen markers before `drainBatch` runs, so a batch that
+// replays reopened keys and then throws used to report the wake's own
+// backlog/visit reason on the `outcome: "error"` point instead of "reopen" —
+// the same B-M5 fix above, but for the error path `drainStep`'s outer catch
+// takes (B-M2, minor triage item 4). Fails without the fix: reverting
+// box.ts's `reopenState` threading (back to the outer catch reading only
+// `current.reason`) makes `reasonOf(drainPoint)` read "backlog".
+test('QA follow-up (reopen reason on the drain error path): a batch that replays a reopened key and then throws still reports reason: "reopen" on the o11y.drain error point', async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000010.ndjson.gz";
+  const r2Objects = new Map([[key, await makeInboxObjectGz()]]);
+  const { box, inboxWriterStub, ae } = makeBox({
+    inboxWriter: { writtenKeys: [key], reopenedFlag: true },
+    r2Objects,
+  });
+  await box.wake("backlog");
+  installContainerFetchRouter({ otlp: async () => new Response(null, { status: 204 }) });
+  // The real batch pushes successfully (a real 204), then the step's own
+  // bookkeeping RPC — called AFTER drainBatch, before the success point —
+  // throws, landing in drainStep's outer catch.
+  inboxWriterStub.markKeysProvisional = async () => {
+    throw new Error("simulated markKeysProvisional RPC failure");
+  };
+
+  const wake = await box.ctx.storage.get("wake");
+  await assert.doesNotReject(box.drainStep({ wakeId: wake.wakeId }), "a throw inside the drain must never escape drainStep");
+
+  assert.deepEqual(inboxWriterStub.calls.takeReopenedFlag, [[key]]);
+  const drainPoints = ae.points.filter((p) => p.indexes?.[0] === "o11y.drain");
+  assert.equal(drainPoints.length, 1, "only the error point must be written — the batch never reached the success point");
+  assert.equal(outcomeOf(drainPoints[0]), "error");
+  assert.equal(
+    reasonOf(drainPoints[0]),
+    "reopen",
+    "the reopen reason must survive to the error path, not fall back to the wake's own backlog/visit reason",
+  );
+});
+
 // B-M4 fix (minor triage item 3): a key whose only record is too old
 // (dropped by F1's `dropOldRecords` before any push is even attempted) ends
 // `provisional` with `bytesPushed: 0` — `drainKey`'s own zero-chunk case.
@@ -1037,4 +1075,80 @@ test("F13 (positive control): a probe that answers in between restarts the stuck
   await box.isReady();
   await settle();
   assert.equal(aborts.length, 0, "80 ms of timeouts, split by a settled probe, is never a 60 ms stuck window");
+});
+
+// ---- QA follow-up: isReady() skips its probes while a stop is in ---
+// flight (the SIGTERM->exit window `getState()` cannot see — see
+// STOPPING_FOR_STORAGE_KEY's own doc comment in box.ts).
+
+test("item 2: isReady() skips its probes once THIS instance has requested a stop, even while getState() still reports running/healthy (the SIGTERM window)", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  installRealisticProbeBodies();
+  assert.equal(await box.isReady(), true, "sanity: probes work normally before any stop");
+
+  let probeCalls = 0;
+  hooks.containerFetch = async () => {
+    probeCalls++;
+    return new Response("ready\n", { status: 200 });
+  };
+
+  // The stub's default `hooks.stop` leaves `_state` untouched — mirrors the
+  // real `@cloudflare/containers` library, whose `stop()` only signals the
+  // process (SIGTERM) and never flips `getState()`'s status itself (see
+  // `wake()`'s own doc comment on this exact gap).
+  await box.stop();
+  const stateAfterStop = await box.getState();
+  assert.ok(
+    stateAfterStop.status === "running" || stateAfterStop.status === "healthy",
+    `state must still read running/healthy during the SIGTERM window (per the real library's own gap), got ${stateAfterStop.status}`,
+  );
+
+  assert.equal(await box.isReady(), false, "isReady must report not-ready once THIS instance has requested a stop");
+  assert.equal(probeCalls, 0, "isReady must not issue any container probe (and so never trigger the library's own 'not listening' log) once a stop has been requested");
+});
+
+test("item 2: the same skip applies via the base class's own idle-timeout path (onActivityExpired -> stop())", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  installRealisticProbeBodies();
+  assert.equal(await box.isReady(), true, "sanity: probes work normally before any stop");
+
+  let probeCalls = 0;
+  hooks.containerFetch = async () => {
+    probeCalls++;
+    return new Response("ready\n", { status: 200 });
+  };
+
+  await box.onActivityExpired(); // base class default: this.stop() — must dispatch to GrafanaBox's own override
+
+  assert.equal(await box.isReady(), false);
+  assert.equal(probeCalls, 0);
+});
+
+test("item 2: a fresh wake after a full stop clears the previous wake's marker, so isReady() probes normally again", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  await box.stop(); // requests a stop; state stays healthy/running (the same library gap)
+  box._state = { status: "stopped", lastChange: Date.now() }; // the process has now actually exited
+  await box.wake("backlog"); // a fresh wake, a new wakeId
+  installRealisticProbeBodies();
+
+  assert.equal(await box.isReady(), true, "a fresh wake must probe normally, not inherit the previous wake's stopping marker");
+});
+
+test("item 2 (revert-check shape): a stop() that itself throws clears the marker instead of leaving isReady() stuck false", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  installRealisticProbeBodies();
+  hooks.stop = async () => {
+    throw new Error("simulated stop() failure");
+  };
+
+  await assert.rejects(box.stop(), /simulated stop\(\) failure/);
+
+  // The container never actually stopped (the signal never went out) — a
+  // failed stop() must not leave isReady() reporting not-ready for the rest
+  // of a wake that is, in fact, still very much up.
+  assert.equal(await box.isReady(), true);
 });
