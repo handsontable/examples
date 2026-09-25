@@ -2280,14 +2280,24 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           );
           return json(suggestion);
         } catch (err) {
+          // §5's `theme.ai` row promises a point on every outcome, `error`
+          // included — this used to only fire for a `ChatUnavailableError`
+          // (a gateway 4xx/5xx or a malformed reply), so a network-level
+          // throw from the `fetch` in `requestTheme` (LiteLLM host
+          // unreachable, DNS failure, connection reset) fell straight to
+          // `throw err` below with no point at all. Emitted for every
+          // non-ok outcome now, before the instanceof branch decides the
+          // response/diagnostic — mirroring the shape of the `chat.answer`
+          // catch above (which still has this same gap for its own raw
+          // `fetch`; out of scope here).
+          void emitPoint(
+            env,
+            "theme.ai",
+            { count: 1, duration_ms: Date.now() - themeStartedAt },
+            { model: env.LITELLM_MODEL ?? "unknown", outcome: "error" },
+          );
           if (err instanceof ChatUnavailableError) {
             ctx.waitUntil(recordUsageEvent(env, "chat_error", "theme"));
-            void emitPoint(
-              env,
-              "theme.ai",
-              { count: 1, duration_ms: Date.now() - themeStartedAt },
-              { model: env.LITELLM_MODEL ?? "unknown", outcome: "error" },
-            );
             if (err.status !== undefined) {
               reportDiagnostic(env, err, {
                 context: "theme-gateway",
