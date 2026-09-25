@@ -227,13 +227,33 @@ shows up locally instead of needing a real Slack webhook.
 dashboard for API-worker lines, authoring/embed/demo-runtime browser errors,
 and a free-text/`cf.ray`/`session.id`/demo-id search across every service in
 one place — it's linked from the Runner overview and Observability self
-dashboards too. Every signed-in user is a Grafana Viewer, but Viewers now
-also get **Explore** (`/grafana/explore`): pick the `Loki (browser)` or
-`Loki (worker)` datasource and run a LogQL query directly against either
-tenant, without needing a dashboard panel for it. Neither capability lets a
-Viewer save a change back to a provisioned dashboard or datasource — those
-stay read-only, and Grafana's state is disposable anyway (a fresh DB on
-every wake).
+dashboards too, and from an **Open Grafana** link in `/admin`'s own header
+(otherwise nothing in the app points at it). Every signed-in user is a
+Grafana Viewer, but Viewers now also get **Explore** (`/grafana/explore`):
+pick the `Loki (browser)` or `Loki (worker)` datasource and run a LogQL
+query directly against either tenant, without needing a dashboard panel for
+it. Neither capability lets a Viewer save a change back to a provisioned
+dashboard or datasource — those stay read-only, and Grafana's state is
+disposable anyway (a fresh DB on every wake).
+
+**Logs are only as fresh as the last wake.** The box drains its packed
+objects into Loki once, right after it wakes, and nothing re-arms that
+drain while it stays awake (ADR-0041 §B.3's out-of-order window assumes the
+drain replays into an empty ingester, which only holds true at wake start).
+So anything packed *while* the box is already up — a visit that keeps it
+alive, a mid-wake backlog cron tick — sits undrained and invisible in
+Grafana/Explore until the *next* wake, which today can be as late as the 4h
+hard cap. There is no staleness indicator on the dashboards for this; treat
+Logs/Explore as "as of the last wake started", not live, until a periodic
+in-wake drain ships.
+
+**Bot traffic is filtered locally too.** The o11y worker's bot gate drops
+any request whose user agent matches `HeadlessChrome` — including local
+requests, by design. Scripted local traffic (a bare `chromium.launch()`,
+most CI-style Playwright runs) is silently dropped before it reaches
+Analytics Engine/Loki, with no client-side signal that it happened; use a
+real Chrome UA or Playwright's `channel: "chrome"` if you need scripted
+traffic to actually show up in local dashboards.
 
 **Local o11y data persists across a restart.** `containers/o11y/compose.yml`
 gives MinIO and ClickHouse named volumes (Grafana itself stays ephemeral by
@@ -252,16 +272,35 @@ Wiping only one half (e.g. `docker volume rm` by hand) is what causes the
 stack to look "broken" after a restart: a `done:` (committed) ledger key
 whose MinIO data is gone is never re-drained on its own, and a fixture
 replay's dedupe hashes can then block the same data from ever refilling the
-now-empty store. If `dev.mjs` finds exactly that mismatch (the MinIO volume
-is gone but the ledger still has committed keys) it prints a warning
-recommending `--fresh` — or, if you'd rather keep what R2 still has (7-day
-retention), `POST /grafana/_o11y/reopen` once the worker is up. `--fresh`
-never touches `workers/api`'s local D1 — that's `--reset-local-db`, a
+now-empty store. (In practice a *pushed* key almost never reaches `done:`
+locally in the first place — see "Local clean markers never commit" below —
+so this mismatch mainly bites a wake that drained nothing, or state carried
+over from before that gap existed; the dedupe-hash half of the warning
+still applies regardless.) If `dev.mjs` finds exactly that mismatch (the
+MinIO volume is gone but the ledger still has committed keys) it prints a
+warning recommending `--fresh` — or, if you'd rather keep what R2 still has
+(7-day retention), `POST /grafana/_o11y/reopen` once the worker is up.
+`--fresh` never touches `workers/api`'s local D1 — that's `--reset-local-db`, a
 different flag for a different store. `pnpm o11y:dev` also accepts
 `--fresh`, for just its own half (workers/o11y's worker state) — it never
 runs `docker compose` itself, so it can't wipe the compose volumes; see that
 command's own startup log for the divergence risk if you're also running
 `dev:full`'s compose stack.
+
+**Local clean markers never commit.** In production, the box writes each
+wake's `state/wakes/<wakeId>/clean` marker and the worker checks for it
+through the same R2 bucket (`handsontable-demos-o11y-loki`), so a clean stop
+resolves the wake `done:` and its keys are never replayed again. Locally
+those are two *different* stores: the container writes the marker straight
+to MinIO over S3, but the o11y worker checks for it through its
+`O11Y_LOKI_STATE` R2 binding, which under `wrangler dev` is Miniflare's own
+separate local R2 — not MinIO. The worker never finds the marker, so a local
+wake that pushed any data always resolves `unclean` and reopens every key it
+packed, which then replays again on the next wake, indefinitely (within
+Loki's 7-day retention) — not only after a crash. This is a local-dev-only
+gap with no bridge today; treat `o11y.wake outcome=unclean` as expected
+locally rather than a sign something broke, and don't rely on local
+`done:`/clean-shutdown testing as evidence for the production path.
 
 **What Ctrl-C actually cleans up.** Every `wrangler dev`/`vite`/capture-server
 child is spawned in its own process group and signalled as a group on
@@ -419,8 +458,15 @@ ceiling. They are informational; the enforced ceiling is the Worker's own, shipp
 observe-only and switched on from **/admin → Guardrail settings**. Full detail
 in [cost-guardrails.md](cost-guardrails.md).
 
-`wrangler dev --test-scheduled` + `curl localhost:8787/__scheduled` runs the
-nightly job (reconciliation, spend alerts, GC, analytics prune) on demand.
+Crons never fire on their own under `wrangler dev` — trigger the API
+worker's two triggers by hand instead (`--test-scheduled`/`/__scheduled`
+are gone as of wrangler 4.108, this repo's pinned API-worker version; it
+serves `/cdn-cgi/handler/scheduled?cron=<urlencoded pattern>` instead):
+`curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=17+4+*+*+*"` runs
+the nightly job (reconciliation, spend alerts, GC, analytics prune), and
+`curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=*/5+*+*+*+*"`
+runs the `*/5` pool/budget-gauge tick — both patterns straight from
+`workers/api/wrangler.jsonc`'s `triggers.crons`.
 
 ## Continuous deployment
 
