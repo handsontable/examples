@@ -127,10 +127,22 @@ session bypass, contract §10, `workers/o11y/src/gates/session.ts#verifySession`
 `AE_SQL_TOKEN=local-dev-token`, `LOKI_S3_ACCESS_KEY_ID`/
 `LOKI_S3_SECRET_ACCESS_KEY=minioadmin` (MinIO's own default root
 credential), and `SLACK_WEBHOOK_URL` pointed at the local capture server
-(`http://localhost:4210/slack` by default). `O11Y_EXPORT_SECRET` and
-`SENTRY_HOOK_SECRET` are deliberately left empty — nothing here ever
-auto-creates a real secret; those two routes (`/telemetry/v1/logs`, the
-Sentry webhook) stay fail-closed until you paste a real value in yourself.
+(`http://localhost:4210/slack` by default).
+
+`O11Y_EXPORT_SECRET` and `SENTRY_HOOK_SECRET` (fix round R4, F21) are filled
+in separately, on **every** `dev.mjs --tier=full` run, not only a fresh
+bootstrap: whichever of the two lines is still declared empty gets a fresh,
+local-only random value (`ephemeralSecret()` — a 32-byte hex string, the same
+kind of value `O11Y_SESSION_SECRET` already uses, never a pasted-in
+production credential), written into `.dev.vars` and left alone on every
+later run once filled. This is what makes `node scripts/o11y-replay-fixtures.mjs`
+work locally without any manual setup: it reads both secrets from the
+environment first, then falls back to reading them straight out of
+`workers/o11y/.dev.vars`, so both the standalone command above and
+`dev.mjs --tier=full --replay` succeed instead of 401ing on the OTLP/deploy/
+Sentry fixtures. Only the two key NAMES are ever printed to `dev.mjs`'s own
+log — never the generated value. A `.dev.vars` you already pasted a real
+value into is never touched (only an empty declared line is filled).
 
 **Why not just `--var`?** Wrangler's `.dev.vars` always wins over a
 same-named `--var`, even when the `.dev.vars` line is empty (confirmed

@@ -1776,30 +1776,39 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
 
       // GET /api/demos/:id  (public) — metadata; 410 if revoked
       //
-      // T08 (contract §5, ADR §F.2 "Share & build"): this is `serve.share`'s
-      // point — the one server-owned request the public `/share/:id` chrome
-      // fires exactly once per page mount (`App.tsx`'s edit/share loader, and
-      // `FullMode`, both fetch it alongside `/source`) and the closest analogue
-      // this Worker has to "serving the share surface," since `/share/:id`
-      // itself is the authoring SPA's own client route, served by a different
-      // deployable entirely (T08-D, see the task Outcome — flagged as a
-      // concern: `/source` fires alongside this on the same mount and is not
-      // counted, and the edge cache on this route (`cacheableJson`, 60s
-      // `stale-while-revalidate`) means a repeat view within that window never
-      // reaches this point at all, so this undercounts real page views).
+      // T08 (contract §5, ADR §F.2 "Share & build"), fix round R4 (F20 count
+      // reconciliation: "60 points for 11 share views", and a missing-id probe
+      // recorded as a `serve.share` 4xx): this route is the metadata load for
+      // THREE different callers — `App.tsx`'s edit/share loader (both modes),
+      // `FullMode`'s own fetch, and any ad hoc `GET /api/demos/<id>` — and only
+      // the first, in share mode, is an actual `/share/:id` page view.
+      // `/share/:id` itself is the authoring SPA's own client route, served by
+      // a different, assets-only deployable with no server code in the loop
+      // (`apps/authoring/wrangler.jsonc`), so this Worker never sees that
+      // page's own document request. `?view=share` is the client's one-shot
+      // marker for "this fetch IS that share-mode load" (only ever appended by
+      // the `isShare` branch in `App.tsx`) — the closest analogue this Worker
+      // has to "serving the share surface," and the only case counted as
+      // `serve.share`. Every other call to this route (edit mode, `FullMode`,
+      // an unmarked probe) emits nothing, on either branch below.
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts.length === 3) {
         const demoId = parts[2]!;
+        const isShareView = url.searchParams.get("view") === "share";
         const row = await getDemo(env, demoId);
         if (!row) {
-          ctx.waitUntil(emitPoint(env, "serve.share", { count: 1, bytes: 0 }, { outcome: "4xx", demo_id: demoId }));
+          if (isShareView) {
+            ctx.waitUntil(emitPoint(env, "serve.share", { count: 1, bytes: 0 }, { outcome: "4xx", demo_id: demoId }));
+          }
           return json({ error: "not found" }, 404);
         }
         if (row.revoked) {
-          ctx.waitUntil(emitPoint(env, "serve.share", { count: 1, bytes: 0 }, { outcome: "4xx", demo_id: demoId }));
+          if (isShareView) {
+            ctx.waitUntil(emitPoint(env, "serve.share", { count: 1, bytes: 0 }, { outcome: "4xx", demo_id: demoId }));
+          }
           return json({ error: "revoked" }, 410);
         }
         const body = JSON.stringify(publicView(row));
-        ctx.waitUntil(
+        if (isShareView) ctx.waitUntil(
           emitPoint(
             env,
             "serve.share",

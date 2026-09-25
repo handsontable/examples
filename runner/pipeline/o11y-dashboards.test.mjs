@@ -7,8 +7,8 @@
 // so a panel that only happens to work against the local shim never reaches
 // production silently broken.
 //
-// Three rules, each proven to fail on a real violation (not just asserted to
-// pass on clean input — see the three `test()`s under "the lint itself"
+// Four rules, each proven to fail on a real violation (not just asserted to
+// pass on clean input — see the `test()`s under "the lint itself"
 // below, and the revert-evidence note in this task's Outcome):
 //
 //   1. Every Analytics Engine (vertamedia-clickhouse-datasource) panel query
@@ -26,6 +26,15 @@
 //      dashboard-level `alerting` rule list (ADR-0041 §F.3: Grafana holds no
 //      alert rules, only the built-in "Annotations & Alerts" query, which is
 //      not a rule).
+//   4. (F24, fix round R4) Every `blobN` a query's WHERE clause filters on
+//      (`blobN = ...` / `blobN IN (...)`) must be one `index1`'s referenced
+//      metric(s) actually set (§5's own "Blobs used" cell, plus the three
+//      universal resource attrs every point carries) — `bucket.resolve_ms`'s
+//      two Tier-1 panels filtered on `blob6`/`blob7` (framework/ht_major),
+//      which that metric's §5 row never lists, so the filter matched zero
+//      rows on every real point (empty panel, not a query error — the local
+//      shim accepts the column same as the real one, so this needed its own
+//      rule rather than falling out of rule 1's column-existence check).
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build` (see
 // telemetry-contract.test.mjs's header for why).
@@ -37,7 +46,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { LOKI_LABELS, HT_MAJORS } from "../packages/runtime/dist/telemetry/index.js";
+import { LOKI_LABELS, HT_MAJORS, METRICS, AE_COLUMNS } from "../packages/runtime/dist/telemetry/index.js";
 // T04: one allowlist of Cloudflare's documented Analytics Engine SQL
 // functions, shared with `workers/o11y/src/alerts/ae-query.ts` (the alert
 // rules' own query helper) instead of two diverging copies — see that
@@ -166,6 +175,80 @@ function validateAeQuery(query) {
     violations.push("double1 used without the SUM(_sample_interval * double1) reading rule");
   }
 
+  return violations;
+}
+
+// ---- Rule 4 (F24): a panel may not filter on a blob its metric never sets --
+
+// Every point carries these three regardless of what its own §5 row lists
+// (§4's "Analytics Engine layout" — `commonAttrs()` sets them unconditionally).
+const UNIVERSAL_AE_COLUMNS = ["service_name", "service_version", "environment"];
+
+/** The `blobN`/`doubleN` slots a metric's point can actually carry: its own §5
+ *  "Blobs used" list plus the three universal columns, translated through
+ *  `AE_COLUMNS` (the same column→slot map `toAePoint` itself writes through).
+ *  `null` for a name `METRICS` doesn't know (never silently treated as "no
+ *  columns allowed", which would flag every filter on an unrecognized/typo'd
+ *  metric name instead of a real blob mismatch). */
+function allowedSlotsForMetric(metricName) {
+  const def = METRICS[metricName];
+  if (!def) return null;
+  const slots = new Set();
+  for (const col of [...UNIVERSAL_AE_COLUMNS, ...def.blobs]) {
+    const slot = AE_COLUMNS[col];
+    if (slot) slots.add(slot);
+  }
+  return slots;
+}
+
+/** Metric names an AE query's WHERE clause names via `index1 = 'x'` or
+ *  `index1 IN ('a', 'b')` — a query naming neither is read by some OTHER
+ *  selector this rule does not understand yet, so it is skipped rather than
+ *  flagged (this rule only ever adds violations for a shape it is sure of). */
+function metricNamesFromWhere(whereClause) {
+  const names = [];
+  const eqRe = /index1\s*=\s*'([^']+)'/g;
+  let m;
+  while ((m = eqRe.exec(whereClause))) names.push(m[1]);
+  const inRe = /index1\s+IN\s*\(([^)]*)\)/gi;
+  while ((m = inRe.exec(whereClause))) {
+    for (const part of m[1].split(",")) {
+      const v = part.trim().replace(/^'|'$/g, "");
+      if (v) names.push(v);
+    }
+  }
+  return names;
+}
+
+/** Every `blobN` violation found in an AE query's WHERE clause — empty means
+ *  clean. Scoped to WHERE only (not the full query text), so a SELECT-list
+ *  expression like `sum(... * (blob8 = 'error'))` — a value computation, not
+ *  a row filter — is never mistaken for a filter (the `bucket.resolve_ms`
+ *  error-rate panel's own shape). A query whose WHERE names more than one
+ *  metric (`index1 IN (...)`) requires a filtered blob to be one EVERY named
+ *  metric sets — the filter applies to every row regardless of which metric
+ *  produced it, so a blob only some of them set would silently drop the
+ *  others' rows too. */
+function validateMetricBlobFilters(query) {
+  const violations = [];
+  const whereMatch = /\bWHERE\b([\s\S]*?)(\bGROUP\s+BY\b|\bORDER\s+BY\b|$)/i.exec(query);
+  if (!whereMatch) return violations;
+  const whereClause = whereMatch[1];
+  const metricNames = metricNamesFromWhere(whereClause);
+  if (metricNames.length === 0) return violations;
+  const allowedSets = metricNames.map(allowedSlotsForMetric).filter((s) => s !== null);
+  if (allowedSets.length === 0) return violations;
+  const blobFilterRe = /\bblob(\d+)\s*(?:=|IN\s*\()/gi;
+  const seen = new Set();
+  let bm;
+  while ((bm = blobFilterRe.exec(whereClause))) {
+    const slot = `blob${bm[1]}`;
+    if (seen.has(slot)) continue;
+    seen.add(slot);
+    if (!allowedSets.every((set) => set.has(slot))) {
+      violations.push(`filters on ${slot}, which ${metricNames.join("/")} never sets (§5)`);
+    }
+  }
   return violations;
 }
 
@@ -371,6 +454,13 @@ for (const { file, dashboard } of dashboards) {
     }
   });
 
+  test(`${file}: no Analytics Engine query filters on a blob its metric(s) never set (F24)`, () => {
+    for (const { panel, query } of aeTargetsOf(dashboard)) {
+      const violations = validateMetricBlobFilters(query);
+      assert.deepEqual(violations, [], `${file} / panel "${panel}": ${violations.join("; ")}\nquery: ${query}`);
+    }
+  });
+
   test(`${file}: every Loki query uses only contract labels and a named tenant datasource`, () => {
     for (const { panel, uid, expr } of lokiTargetsOf(dashboard)) {
       const violation = resolveDatasourceUid(dashboard, uid, KNOWN_LOKI_UIDS, "loki");
@@ -481,6 +571,63 @@ test("the lint fails on a bad templating-variable AE query (I1: variable queries
     violations.some((v) => v.includes('"outcome"')),
     `expected an unknown-column violation for "outcome", got: ${JSON.stringify(violations)}`,
   );
+});
+
+test("the F24 blob-filter lint fails on bucket.resolve_ms's OLD query shape (blob6/blob7, which its §5 row never lists)", () => {
+  const violations = validateMetricBlobFilters(
+    "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob16 AS bucket, " +
+      "quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM $table " +
+      "WHERE $timeFilterByColumn(timestamp) AND index1 = 'bucket.resolve_ms' AND blob3 = '$environment' " +
+      "AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, bucket ORDER BY t",
+  );
+  assert.ok(violations.some((v) => v.includes("blob6")), `expected a blob6 violation, got: ${JSON.stringify(violations)}`);
+  assert.ok(violations.some((v) => v.includes("blob7")), `expected a blob7 violation, got: ${JSON.stringify(violations)}`);
+});
+
+test("the F24 blob-filter lint passes bucket.resolve_ms's fixed query shape (bucket/outcome/environment only)", () => {
+  assert.deepEqual(
+    validateMetricBlobFilters(
+      "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob16 AS bucket, " +
+        "quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM $table " +
+        "WHERE $timeFilterByColumn(timestamp) AND index1 = 'bucket.resolve_ms' AND blob3 = '$environment' " +
+        "GROUP BY t, bucket ORDER BY t",
+    ),
+    [],
+  );
+});
+
+test("the F24 blob-filter lint ignores a blob8 comparison inside a SELECT-list value expression, not a WHERE filter (the error-rate panel's own shape)", () => {
+  assert.deepEqual(
+    validateMetricBlobFilters(
+      "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob16 AS bucket, " +
+        "100 * sum(_sample_interval * double1 * (blob8 = 'error')) / sum(_sample_interval * double1) AS pct " +
+        "FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'bucket.resolve_ms' " +
+        "AND blob3 = '$environment' GROUP BY t, bucket ORDER BY t",
+    ),
+    [],
+  );
+});
+
+test("the F24 blob-filter lint requires a multi-metric (index1 IN (...)) query's blob filter to be set by EVERY named metric", () => {
+  // sandpack.compile_ms sets blob6 (framework); o11y.wake does not — a shared
+  // blob6 filter across both would silently drop every o11y.wake row.
+  const violations = validateMetricBlobFilters(
+    "SELECT count() FROM $table WHERE index1 IN ('sandpack.compile_ms', 'o11y.wake') AND blob6 = 'react'",
+  );
+  assert.ok(
+    violations.some((v) => v.includes("blob6")),
+    `expected a blob6 violation, got: ${JSON.stringify(violations)}`,
+  );
+});
+
+test("the F24 blob-filter lint on the REAL tier1-playground.json dashboard (revert evidence: putting blob6/blob7 back into either bucket.resolve_ms panel's query must break this)", () => {
+  const { dashboard } = dashboards.find((d) => d.file === "tier1-playground.json");
+  assert.ok(dashboard, "tier1-playground.json must exist and be loaded");
+  const targets = aeTargetsOf(dashboard).filter(({ query }) => query.includes("'bucket.resolve_ms'"));
+  assert.equal(targets.length, 2, "expected exactly the two bucket.resolve_ms panels");
+  for (const { panel, query } of targets) {
+    assert.deepEqual(validateMetricBlobFilters(query), [], `panel "${panel}"`);
+  }
 });
 
 test("the lint passes a clean AE query (sanity: the lint isn't vacuously failing everything)", () => {

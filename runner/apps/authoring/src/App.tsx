@@ -1838,7 +1838,21 @@ function Authoring({
           // `no-store` for the same reason `FullMode` uses it (DEV-2495): the
           // metadata endpoint is cached for a minute in the browser, and this is
           // the page you land on straight after renaming the demo.
-          fetch(`${API_BASE}/api/demos/${savedId}`, { cache: "no-store", headers: apiHeaders() }),
+          //
+          // `?view=share` (contract §5 `serve.share`, only on this fetch, only
+          // when `isShare`): this same metadata endpoint also answers the edit
+          // page's load (this same effect, `!isShare`) and `FullMode`'s own
+          // fetch — neither is a share-page view, and `/share/:id` itself is a
+          // static SPA route the API worker never sees a request for (it is
+          // served by the authoring app's assets-only Worker, no server code in
+          // the loop). This marker is the one signal the worker can use to tell
+          // "someone is viewing `/share/:id`" apart from those other two
+          // callers of the same route, so `index.ts`'s handler only counts a
+          // `serve.share` point when it is present.
+          fetch(`${API_BASE}/api/demos/${savedId}${isShare ? "?view=share" : ""}`, {
+            cache: "no-store",
+            headers: apiHeaders(),
+          }),
         ]);
         if (cancelled) return;
         if (!srcRes.ok) {

@@ -30,6 +30,9 @@ import {
   bootstrapDevVars,
   o11yDevVarsPatch,
   O11Y_DEVVARS_STRIP_KEYS,
+  fillEmptyDevVarsSecrets,
+  O11Y_DEVVARS_AUTOFILL_SECRET_KEYS,
+  resolveReplaySecret,
   checkDevVarsPortDrift,
   resolveDevVarsPortAdoption,
   checkO11yDevVarsStaleness,
@@ -284,6 +287,122 @@ test("o11yDevVarsPatch: never includes O11Y_EXPORT_SECRET, SENTRY_HOOK_SECRET, o
   assert.equal("O11Y_EXPORT_SECRET" in patch, false);
   assert.equal("SENTRY_HOOK_SECRET" in patch, false);
   assert.equal("O11Y_SESSION_SECRET" in patch, false);
+});
+
+// ---- F21 (fix round R4): O11Y_EXPORT_SECRET/SENTRY_HOOK_SECRET stay empty
+// locally, so scripts/o11y-replay-fixtures.mjs 401s on every OTLP/deploy/
+// Sentry fixture and the worker-tenant/Sentry panels never fill. --------
+
+test("fillEmptyDevVarsSecrets: fills an empty declared line with a generated value (current code has no such function — this is the F21 fix under test)", () => {
+  withTmpDir((dir) => {
+    const devVarsPath = path.join(dir, ".dev.vars");
+    writeFileSync(devVarsPath, "DEV_ADMIN=dev@handsontable.com\nO11Y_EXPORT_SECRET=\nSENTRY_HOOK_SECRET=\nO11Y_ENV=local\n");
+    const result = fillEmptyDevVarsSecrets({
+      devVarsPath,
+      keys: O11Y_DEVVARS_AUTOFILL_SECRET_KEYS,
+      generate: () => "ephemeral-value",
+    });
+    assert.deepEqual(result.filled, ["O11Y_EXPORT_SECRET", "SENTRY_HOOK_SECRET"]);
+    const text = readFileSync(devVarsPath, "utf8");
+    assert.match(text, /^O11Y_EXPORT_SECRET=ephemeral-value$/m);
+    assert.match(text, /^SENTRY_HOOK_SECRET=ephemeral-value$/m);
+    // Untouched lines stay untouched.
+    assert.match(text, /^DEV_ADMIN=dev@handsontable\.com$/m);
+    assert.match(text, /^O11Y_ENV=local$/m);
+  });
+});
+
+test("fillEmptyDevVarsSecrets: runs on a PRE-EXISTING file, unlike bootstrapDevVars's own patch (F21: the finding IS a pre-existing bootstrapped file)", () => {
+  withTmpDir((dir) => {
+    const devVarsPath = path.join(dir, ".dev.vars");
+    // Simulate a `.dev.vars` bootstrapped by an OLDER dev.mjs, before this
+    // fix shipped: real values everywhere except the two secrets.
+    writeFileSync(
+      devVarsPath,
+      "DEV_ADMIN=dev@handsontable.com\nAE_SQL_TOKEN=local-dev-token\nO11Y_EXPORT_SECRET=\nSENTRY_HOOK_SECRET=\nO11Y_ENV=local\n",
+    );
+    // bootstrapDevVars alone is a no-op here (the file already exists) —
+    // pinning that this really is the gap `fillEmptyDevVarsSecrets` closes.
+    const bootstrapResult = bootstrapDevVars({
+      examplePath: path.join(dir, ".dev.vars.example"), // never read; existsSync(devVarsPath) short-circuits
+      devVarsPath,
+      patch: o11yDevVarsPatch({ O11Y_SLACK_CAPTURE_PORT: 4210 }),
+      stripKeys: O11Y_DEVVARS_STRIP_KEYS,
+    });
+    assert.equal(bootstrapResult.created, false);
+    assert.match(readFileSync(devVarsPath, "utf8"), /^O11Y_EXPORT_SECRET=\s*$/m, "still empty after bootstrapDevVars alone");
+
+    const result = fillEmptyDevVarsSecrets({ devVarsPath, keys: O11Y_DEVVARS_AUTOFILL_SECRET_KEYS });
+    assert.deepEqual(result.filled, ["O11Y_EXPORT_SECRET", "SENTRY_HOOK_SECRET"]);
+    const text = readFileSync(devVarsPath, "utf8");
+    assert.doesNotMatch(text, /^O11Y_EXPORT_SECRET=\s*$/m);
+    assert.doesNotMatch(text, /^SENTRY_HOOK_SECRET=\s*$/m);
+  });
+});
+
+test("fillEmptyDevVarsSecrets: never touches a key that already holds a real (non-empty) value", () => {
+  withTmpDir((dir) => {
+    const devVarsPath = path.join(dir, ".dev.vars");
+    writeFileSync(devVarsPath, "O11Y_EXPORT_SECRET=a-real-pasted-value\nSENTRY_HOOK_SECRET=\n");
+    const result = fillEmptyDevVarsSecrets({
+      devVarsPath,
+      keys: O11Y_DEVVARS_AUTOFILL_SECRET_KEYS,
+      generate: () => "generated",
+    });
+    assert.deepEqual(result.filled, ["SENTRY_HOOK_SECRET"]);
+    const text = readFileSync(devVarsPath, "utf8");
+    assert.match(text, /^O11Y_EXPORT_SECRET=a-real-pasted-value$/m);
+    assert.match(text, /^SENTRY_HOOK_SECRET=generated$/m);
+  });
+});
+
+test("fillEmptyDevVarsSecrets: no-op (no throw, filled: []) when the file does not exist", () => {
+  withTmpDir((dir) => {
+    const result = fillEmptyDevVarsSecrets({
+      devVarsPath: path.join(dir, "does-not-exist", ".dev.vars"),
+      keys: O11Y_DEVVARS_AUTOFILL_SECRET_KEYS,
+    });
+    assert.deepEqual(result.filled, []);
+  });
+});
+
+test("fillEmptyDevVarsSecrets: generates a real ephemeral value by default (not a fixed placeholder) — same shape as ephemeralSecret()", () => {
+  withTmpDir((dir) => {
+    const devVarsPath = path.join(dir, ".dev.vars");
+    writeFileSync(devVarsPath, "O11Y_EXPORT_SECRET=\n");
+    fillEmptyDevVarsSecrets({ devVarsPath, keys: ["O11Y_EXPORT_SECRET"] });
+    const text = readFileSync(devVarsPath, "utf8");
+    const m = /^O11Y_EXPORT_SECRET=([0-9a-f]{64})$/m.exec(text);
+    assert.ok(m, `expected a 32-byte hex value, got: ${text}`);
+  });
+});
+
+test("resolveReplaySecret: env value wins when both env and .dev.vars have it", () => {
+  const value = resolveReplaySecret("from-env", "/irrelevant", "O11Y_EXPORT_SECRET", () => "from-devvars");
+  assert.equal(value, "from-env");
+});
+
+test("resolveReplaySecret: falls back to .dev.vars when env is unset (the standalone-invocation case F21 names)", () => {
+  const value = resolveReplaySecret(undefined, "/irrelevant", "O11Y_EXPORT_SECRET", () => "from-devvars");
+  assert.equal(value, "from-devvars");
+});
+
+test("resolveReplaySecret: falls back to .dev.vars when env is an empty string too", () => {
+  const value = resolveReplaySecret("", "/irrelevant", "O11Y_EXPORT_SECRET", () => "from-devvars");
+  assert.equal(value, "from-devvars");
+});
+
+test("resolveReplaySecret: empty string when neither source has a value (never undefined/null — callers compare it with a header string)", () => {
+  assert.equal(resolveReplaySecret(undefined, "/irrelevant", "O11Y_EXPORT_SECRET", () => undefined), "");
+});
+
+test("resolveReplaySecret: reads the REAL workers/o11y/.dev.vars shape via readDevVarsLine (no injected readLine) — proves the wiring, not just the arithmetic", () => {
+  withTmpDir((dir) => {
+    const devVarsPath = path.join(dir, ".dev.vars");
+    writeFileSync(devVarsPath, "O11Y_EXPORT_SECRET=abc123\nSENTRY_HOOK_SECRET=\n");
+    assert.equal(resolveReplaySecret(undefined, devVarsPath, "O11Y_EXPORT_SECRET"), "abc123");
+    assert.equal(resolveReplaySecret(undefined, devVarsPath, "SENTRY_HOOK_SECRET"), "");
+  });
 });
 
 test("readDevVarsLine / checkDevVarsPortDrift: detects a port mismatch and reports none when it matches", () => {

@@ -297,10 +297,19 @@ export function bootstrapDevVars({ examplePath, devVarsPath, patch = {}, stripKe
  * would be silently overridden by this same declared-but-empty line — see
  * `bootstrapDevVars`'s stripKeys doc comment for the precedence rule this
  * works around); `checkDevVarsPortDrift` warns if a run overrides that port.
- * `O11Y_EXPORT_SECRET`/`SENTRY_HOOK_SECRET` are deliberately NOT here — the
- * task's own design point: never auto-create anything that carries a real
- * secret. Those stay empty; the routes they gate (`/telemetry/v1/logs`,
- * the Sentry webhook) fail closed until a developer pastes a real value in.
+ * `O11Y_EXPORT_SECRET`/`SENTRY_HOOK_SECRET` are deliberately NOT here — this
+ * `patch` only ever fires on a FRESH bootstrap (`bootstrapDevVars` never
+ * touches a file that already exists), and F21 (fix round R4) needs these two
+ * filled on a PRE-EXISTING `.dev.vars` too (a file bootstrapped before this
+ * fix shipped still declares them empty forever otherwise). See
+ * `fillEmptyDevVarsSecrets` below instead: same non-"real"-secret local-only
+ * value as `O11Y_SESSION_SECRET` (`ephemeralSecret()`, a fresh 32-byte hex
+ * string, never a pasted-in production credential), but persisted into
+ * `.dev.vars` rather than injected fresh via `--var` every run — unlike a
+ * session-signing key, rotating these on every restart buys nothing (they
+ * only gate local fixture replay) and would break the standalone
+ * `node scripts/o11y-replay-fixtures.mjs` invocation the F21 repro names,
+ * which has no running `dev.mjs` process to inherit a `--var` value from.
  */
 export function o11yDevVarsPatch(ports) {
   return {
@@ -318,6 +327,44 @@ export function o11yDevVarsPatch(ports) {
  *  (K1's O11Y_SESSION_SECRET addition, still unmerged as of this task) —
  *  stripping a line that isn't there is a no-op. */
 export const O11Y_DEVVARS_STRIP_KEYS = ["O11Y_SESSION_SECRET"];
+
+/** F21 (fix round R4): the two gate secrets `scripts/o11y-replay-fixtures.mjs`
+ *  needs and that `workers/o11y/.dev.vars.example` declares empty by
+ *  default — see `fillEmptyDevVarsSecrets`'s doc comment for why these are
+ *  filled in place rather than stripped-and-`--var`'d like
+ *  `O11Y_DEVVARS_STRIP_KEYS`. */
+export const O11Y_DEVVARS_AUTOFILL_SECRET_KEYS = ["O11Y_EXPORT_SECRET", "SENTRY_HOOK_SECRET"];
+
+/**
+ * Fills any of `keys` that `devVarsPath` declares EMPTY (`KEY=` / `KEY=""`,
+ * the exact shape `bootstrapDevVars`'s own `patch` matches) with a fresh
+ * `generate()` value, and leaves every other line — including a key already
+ * holding a real value — untouched. A no-op when `devVarsPath` does not
+ * exist at all (the caller runs `bootstrapDevVars` first) or when none of
+ * `keys` are currently empty.
+ *
+ * Unlike `bootstrapDevVars`'s `patch`, this runs on EVERY invocation, not
+ * only a fresh bootstrap: F21's own finding is a `.dev.vars` that was
+ * bootstrapped before this function existed, so its `O11Y_EXPORT_SECRET=`/
+ * `SENTRY_HOOK_SECRET=` lines are empty and `bootstrapDevVars` alone (which
+ * refuses to touch a file that already exists) can never reach them.
+ *
+ * @returns {{ filled: string[] }}
+ */
+export function fillEmptyDevVarsSecrets({ devVarsPath, keys, generate = ephemeralSecret, fs = defaultFs }) {
+  if (!fs.existsSync(devVarsPath)) return { filled: [] };
+  let text = fs.readFileSync(devVarsPath, "utf8");
+  const filled = [];
+  for (const key of keys) {
+    const re = new RegExp(`^${key}=(?:"")?[ \\t]*$`, "m");
+    if (re.test(text)) {
+      text = text.replace(re, `${key}=${generate()}`);
+      filled.push(key);
+    }
+  }
+  if (filled.length) fs.writeFileSync(devVarsPath, text);
+  return { filled };
+}
 
 /**
  * Resolves a `.dev.vars` key that pins a `host:port` value (`PREVIEW_HOST`,
@@ -447,6 +494,22 @@ export function checkO11yDevVarsStaleness(devVarsPath, fs = defaultFs) {
     );
   }
   return warnings;
+}
+
+/**
+ * F21 (fix round R4): resolves a fixture-replay gate secret
+ * (`O11Y_EXPORT_SECRET`/`SENTRY_HOOK_SECRET`) the way
+ * `scripts/o11y-replay-fixtures.mjs` needs it — the environment value first
+ * (covers `dev.mjs --replay`, which spawns the replay script as a child
+ * process and so inherits `dev.mjs`'s own env), falling back to reading the
+ * value straight out of `devVarsPath` (covers a fully standalone
+ * `node scripts/o11y-replay-fixtures.mjs` invocation, from a separate shell
+ * with no `dev.mjs` process to inherit an env var from — `dev.mjs`'s own
+ * `fillEmptyDevVarsSecrets` call is what keeps that file's copy non-empty).
+ * `""` when neither source has it, same as an unset env var read directly.
+ */
+export function resolveReplaySecret(envValue, devVarsPath, key, readLine = readDevVarsLine) {
+  return envValue || readLine(devVarsPath, key) || "";
 }
 
 /** Reads one `KEY=value` line out of a `.dev.vars`-shaped file (quotes
