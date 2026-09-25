@@ -102,7 +102,7 @@ const MAX_LEGACY_READS = 200;
  *  hundreds of concurrent subrequests is its own failure mode. */
 const LEGACY_READ_BATCH = 20;
 
-interface MeterRecord {
+export interface MeterRecord {
   sessionId: string;
   startedAt: number;
   meteredThrough: number;
@@ -118,8 +118,12 @@ interface MeterRecord {
  * ids begin with the framework slug, that cap meant the table could only ever
  * show `angular` (the alphabetically first Tier-2 slug). That artifact is the
  * whole reason DEV-2567 read as an Angular-specific leak.
+ *
+ * Exported (F19b) so `telemetry/cron.ts#countLiveSessionMeters` can share this
+ * exact scan — and, with it, `classifyMeter`'s awake/slept split — instead of a
+ * second, narrower KV walk that could only ever count keys, never sessions.
  */
-async function readMeters(env: Env): Promise<{ meters: MeterRecord[]; truncated: boolean }> {
+export async function readMeters(env: Env): Promise<{ meters: MeterRecord[]; truncated: boolean }> {
   const meters: MeterRecord[] = [];
   const legacyKeys: string[] = [];
   let cursor: string | undefined;
