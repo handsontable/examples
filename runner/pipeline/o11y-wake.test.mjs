@@ -987,3 +987,54 @@ test("F13: drainStep finishes when Loki's push port never answers, instead of fr
   assert.equal(drainPoints.length, 1);
   assert.equal(outcomeOf(drainPoints[0]), "error", "the stalled push must be reported, and the key left for the next wake");
 });
+
+// F13, the reload path: a fresh instance (hot reload, deploy or eviction
+// while the container kept running) never calls start() itself, so only the
+// probes can notice a wedged library start. Both probes here never settle.
+function installSilentProbes() {
+  hooks.containerFetch = () => new Promise(() => {});
+}
+
+test("F13: probes that time out for startDeadlineMs reset the instance once (the reload path)", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  box.readyProbeTimeoutMs = 10;
+  box.startDeadlineMs = 60;
+  const aborts = [];
+  box.ctx.abort = (reason) => aborts.push(reason);
+  installSilentProbes();
+
+  assert.equal(await within(box.isReady(), 2000, "isReady()"), false);
+  await settle();
+  assert.equal(aborts.length, 0, "one timed-out probe round is not yet a wedge");
+
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(await within(box.isReady(), 2000, "isReady()"), false);
+  await settle();
+  assert.equal(aborts.length, 1, "probes stuck for longer than startDeadlineMs must reset the instance");
+
+  assert.equal(await within(box.isReady(), 2000, "isReady()"), false);
+  await settle();
+  assert.equal(aborts.length, 1, "the clock restarts after a reset instead of aborting on every probe");
+});
+
+test("F13 (positive control): a probe that answers in between restarts the stuck clock", async () => {
+  const { box } = makeBox();
+  await box.wake("visit");
+  box.readyProbeTimeoutMs = 10;
+  box.startDeadlineMs = 60;
+  const aborts = [];
+  box.ctx.abort = (reason) => aborts.push(reason);
+
+  installSilentProbes();
+  await box.isReady();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  // Loki still booting: a real answer, just not a ready one.
+  installRealisticProbeBodies({ lokiStatus: 503, lokiBody: "not ready\n" });
+  assert.equal(await box.isReady(), false);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  installSilentProbes();
+  await box.isReady();
+  await settle();
+  assert.equal(aborts.length, 0, "80 ms of timeouts, split by a settled probe, is never a 60 ms stuck window");
+});

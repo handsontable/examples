@@ -360,6 +360,9 @@ export class GrafanaBox extends Container<Env> {
   wakeWaitMs = WAKE_WAIT_MS;
   startDeadlineMs = START_DEADLINE_MS;
   lokiPushTimeoutMs = LOKI_PUSH_TIMEOUT_MS;
+  /** F13: when an `isReady()` probe first ran out of time with no probe
+   *  settling since. In memory only: a fresh instance starts clean. */
+  #probesStuckSince: number | null = null;
 
   /**
    * The only way to start this container. Mints a fresh wakeId, persists it
@@ -516,6 +519,37 @@ export class GrafanaBox extends Container<Env> {
     }
   }
 
+  /**
+   * F13, the reload path: an instance that did not start the container
+   * itself (a hot reload, deploy or eviction while the box kept running)
+   * never goes through `#doWake`'s start deadline. It reaches the library's
+   * start machinery only through `containerFetch` → `startAndWaitForPorts`,
+   * where a wedged `startInFlight` would make every probe time out forever.
+   * The probe deadline keeps each request answering (waking page), and this
+   * escalation makes the instance recover as well: probes that have timed
+   * out without a single one settling for `startDeadlineMs` reset it once,
+   * like a wedged `start()` does. Any settled probe, ready or not, clears
+   * the clock, so a slow but live boot never trips it.
+   */
+  #escalateStuckProbes(probes: PromiseSettledResult<Response>[]): void {
+    const timedOut = probes.find(
+      (p): p is PromiseRejectedResult => p.status === "rejected" && p.reason instanceof DeadlineExceeded,
+    );
+    const settledOnItsOwn = probes.some((p) => p.status === "fulfilled" || !(p.reason instanceof DeadlineExceeded));
+    if (!timedOut || settledOnItsOwn) {
+      this.#probesStuckSince = null;
+      return;
+    }
+    const now = Date.now();
+    this.#probesStuckSince ??= now;
+    if (now - this.#probesStuckSince < this.startDeadlineMs) return;
+    this.#probesStuckSince = null;
+    void this.ctx.storage
+      .get<WakeRecord>(WAKE_STORAGE_KEY)
+      .then((wake) => this.#resetWedgedInstance(wake?.wakeId ?? "unknown", timedOut.reason as Error))
+      .catch(() => {});
+  }
+
   /** {@link HARD_CAP_SCHEDULE}'s callback. A no-op if a newer wake has
    *  already started (a fresh wakeId in storage) or the container already
    *  stopped on its own. */
@@ -594,6 +628,7 @@ export class GrafanaBox extends Container<Env> {
     const probes = await Promise.allSettled([probe("http://box/ready", 3100), probe("http://box/grafana/api/health", 3000)]);
     const responses = probes.flatMap((p) => (p.status === "fulfilled" ? [p.value] : []));
     await Promise.all(responses.map(releaseBody));
+    this.#escalateStuckProbes(probes);
     const ready = responses.length === probes.length && responses.every((r) => r.status === 200);
     if (ready) await this.#recordReadyOnce();
     return ready;
