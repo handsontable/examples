@@ -54,7 +54,7 @@ jobs:
     outputs:
       projects: ${{ steps.find.outputs.projects }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: find
         run: |
@@ -88,9 +88,9 @@ jobs:
       run:
         working-directory: ${{ matrix.project }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -121,9 +121,9 @@ jobs:
       run:
         working-directory: ${{ matrix.project }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -141,6 +141,7 @@ jobs:
             process.stdout.write(w ? w + '@latest' : '');
           ")
           echo "Installing handsontable@latest $wrapper"
+          # shellcheck disable=SC2086 # $wrapper may be empty; quoting it would pass "".
           npm install handsontable@latest $wrapper
 
       - name: Report resolved Handsontable version

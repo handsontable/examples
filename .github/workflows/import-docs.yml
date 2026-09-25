@@ -64,10 +64,10 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check out Handsontable docs source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: handsontable/handsontable
           ref: ${{ matrix.docs_branch }}
@@ -139,7 +139,7 @@ jobs:
           cp -R "apps/authoring/public/docs-examples/${{ matrix.bucket }}" "$RUNNER_TEMP/docs-examples/${{ matrix.bucket }}"
 
       - name: Upload ${{ matrix.bucket }} bucket
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: docs-examples-${{ matrix.bucket }}
           path: ${{ runner.temp }}/docs-examples
@@ -153,10 +153,10 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download generated buckets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: docs-examples-*
           merge-multiple: true
@@ -169,7 +169,7 @@ jobs:
       - name: Create or update generated-content pull request
         # SHA-pinned: this job holds contents+PR write permissions, so a retargeted
         # upstream tag must not be able to run new code here.
-        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           branch: chore/docs-example-buckets
           base: ${{ github.ref_name }}

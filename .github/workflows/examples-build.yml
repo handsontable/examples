@@ -76,7 +76,7 @@ jobs:
     outputs:
       starters: ${{ steps.find.outputs.starters }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: find
         run: |
@@ -114,9 +114,9 @@ jobs:
       matrix:
         starter: ${{ fromJSON(needs.discover.outputs.starters) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: ${{ matrix.starter }}/package.json
 
@@ -125,10 +125,12 @@ jobs:
       # checkout, so an install under RUNNER_TEMP can miss it with no error and no
       # signal. 16 cold installs is the cheaper trade. If this is ever added as an
       # optimization, prove the hit by comparing two consecutive runs — a silent
-      # miss reads exactly like a hit.
-      - uses: actions/setup-node@v4
+      # miss reads exactly like a hit. setup-node v5 would otherwise turn that
+      # cache on by itself from the root package.json `packageManager` field.
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
+          package-manager-cache: false
 
       - name: Extract the starter outside the repo tree
         run: |
@@ -220,15 +222,17 @@ jobs:
       matrix:
         starter: ${{ fromJSON(needs.discover.outputs.starters) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           package_json_file: ${{ matrix.starter }}/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
+          # Same RUNNER_TEMP extraction as the `build` lane — no cache.
+          package-manager-cache: false
 
       - name: Extract the starter outside the repo tree
         run: |
@@ -271,6 +275,7 @@ jobs:
           # date" and left 18.0.0 installed. A canary that rebuilds the pinned
           # version is worse than no canary. `update --latest` moves the lock
           # (18.0.0 -> 18.1.0 in the same copy) and leaves the spec alone.
+          # shellcheck disable=SC2086 # $pkgs is a space-separated list; it must split.
           pnpm update $pkgs --latest
 
       - name: Verify the install actually moved to the released version
