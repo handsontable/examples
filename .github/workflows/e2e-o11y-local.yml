@@ -6,22 +6,25 @@ name: E2E — o11y local integration
 #   e2e/telemetry-metrics.spec.ts  (E2E_LIVE=1 + E2E_TELEMETRY=1) — a real
 #     local API worker (`wrangler dev`, Docker for the Tier-2 Sandbox
 #     container image) serving a VITE_TELEMETRY_LOCAL=1 build.
-#   e2e/o11y-local.spec.ts         (E2E_O11Y_LOCAL=1) — the same, PLUS a real
-#     o11y worker (`wrangler dev`) and local ClickHouse/MinIO (Docker
-#     compose), proving telemetry actually reaches the real ingest pipeline
-#     and lands in Analytics Engine's local stand-in — not `page.route`
-#     mocks, which is what ci.yml's `e2e-telemetry` job already covers for
-#     telemetry-faro.spec.ts/example-analytics.spec.ts.
+#   e2e/o11y-local.spec.ts         (E2E_O11Y_LOCAL=1) — a real API worker
+#     PLUS a real o11y worker (`wrangler dev`) and local ClickHouse/MinIO
+#     (Docker compose), proving telemetry actually reaches the real ingest
+#     pipeline and lands in Analytics Engine's local stand-in — not
+#     `page.route` mocks, which is what ci.yml's `e2e-telemetry` job already
+#     covers for telemetry-faro.spec.ts/example-analytics.spec.ts. Its own
+#     traffic is Tier-1 (Sandpack) only, so its API worker runs with
+#     `--enable-containers=false` (V-triage F1) — no Tier-2 container image.
 #
 # Both specs document (in their own file header) the exact local setup this
 # workflow automates; see there for the "why" of each step.
 #
 # NOT the shared `mcr.microsoft.com/playwright` container image ci.yml and
-# e2e-live.yml use: both specs spawn `wrangler dev` (which shells out to
-# Docker to build/run the Tier-2 container image) and, for o11y-local, a
-# `docker compose` stack. Docker-in-Docker from inside that container image
-# has no docker CLI and can't reach a sibling container's `localhost` port —
-# this runs directly on the `ubuntu-latest` host, which ships Docker running
+# e2e-live.yml use: both specs spawn `wrangler dev` (telemetry-metrics's
+# shells out to Docker to build/run the Tier-2 container image; o11y-local's
+# doesn't, but still needs Docker for its own `docker compose` ClickHouse/
+# MinIO stack). Docker-in-Docker from inside that container image has no
+# docker CLI and can't reach a sibling container's `localhost` port — this
+# runs directly on the `ubuntu-latest` host, which ships Docker running
 # (confirmed already relied on by master.yml's `deploy-api` job, which builds
 # the same Tier-2 image via `wrangler deploy` on this exact runner image) and
 # installs the Playwright browser itself instead.
