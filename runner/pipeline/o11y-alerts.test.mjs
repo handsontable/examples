@@ -341,9 +341,13 @@ test("rejectedKeyRule: fires on a RECENT rejection, resolves once none are recen
 // production.
 const REALISTIC_NOW_MS = 1_700_000_000_000;
 const CURSOR_GRACE_MS = 2 * 60 * 1000;
+// `rules.ts#NEW_FINGERPRINT_CURSOR_META_KEY`. The rule also keeps a second
+// alertMeta key (the F35 announced set), so a fake must keep them apart.
+const CURSOR_META_KEY = "newFingerprintCursorKey";
 
 test("newFingerprintRule: fires when a new fingerprint appears since the cursor, and advances the KEYSET cursor to the entry's own key (not into the grace window)", async () => {
   let cursor;
+  const meta = new Map();
   const seen = [];
   // Comfortably OUTSIDE the grace window (500s before nowMs, grace is
   // 120s) — the second call's cursor must have advanced past this by
@@ -352,11 +356,12 @@ test("newFingerprintRule: fires when a new fingerprint appears since the cursor,
   const fingerprintFirstSeenMs = REALISTIC_NOW_MS - 500_000;
   const entry = { key: "fpts:000000001699999500000:fp-a", name: "fp-a", firstSeenMs: fingerprintFirstSeenMs };
   const writer = {
-    async getAlertMeta() {
-      return cursor;
+    async getAlertMeta(k) {
+      return k === CURSOR_META_KEY ? cursor : meta.get(k);
     },
-    async setAlertMeta(_k, v) {
-      cursor = v;
+    async setAlertMeta(k, v) {
+      if (k === CURSOR_META_KEY) cursor = v;
+      else meta.set(k, v);
     },
     async newFingerprintsAfterKey(afterKey) {
       seen.push(afterKey);
@@ -379,29 +384,44 @@ test("newFingerprintRule: fires when a new fingerprint appears since the cursor,
   assert.equal(second.firing, false);
 });
 
-test("newFingerprintRule: never advances the cursor past an entry inside the grace window, so a fingerprint stamped inside CURSOR_GRACE_MS is not permanently missed on the next tick", async () => {
-  // Simulates the exact race the finding describes: a fingerprint with
-  // firstSeen inside the last CURSOR_GRACE_MS of tick N is still visible
-  // (not silently dropped) on tick N+1's query, because the cursor tick N
-  // wrote never advanced past it.
+test("newFingerprintRule: never advances the cursor past an entry inside the grace window, so a late-committed fingerprint is still read on the next tick, and the in-window one is announced only once (F35)", async () => {
+  // The race the grace lag exists for: fp-late (firstSeen inside the last
+  // CURSOR_GRACE_MS of tick N) is read and announced on tick N. fp-slow was
+  // stamped BEFORE fp-late but its InboxWriter write committed only after
+  // tick N listed, so tick N never saw it. Tick N+1 must still find fp-slow,
+  // which is only possible because the cursor did not move past fp-late.
+  // F35: tick N+1 reads fp-late again and must not announce it a second time.
   let cursor;
-  const fingerprintFirstSeenMs = REALISTIC_NOW_MS - 30_000; // 30s before tick N's nowMs, inside the 120s grace window
-  const entry = { key: "fpts:000000001699999970000:fp-late", name: "fp-late", firstSeenMs: fingerprintFirstSeenMs };
+  const meta = new Map();
+  const late = { key: "fpts:000000001699999970000:fp-late", name: "fp-late", firstSeenMs: REALISTIC_NOW_MS - 30_000 };
+  // Sorts BEFORE fp-late: a cursor that had moved to fp-late would skip it.
+  const slow = { key: "fpts:000000001699999960000:fp-slow", name: "fp-slow", firstSeenMs: REALISTIC_NOW_MS - 40_000 };
+  let slowCommitted = false;
   const writer = {
-    async getAlertMeta() {
-      return cursor;
+    async getAlertMeta(k) {
+      return k === CURSOR_META_KEY ? cursor : meta.get(k);
     },
-    async setAlertMeta(_k, v) {
-      cursor = v;
+    async setAlertMeta(k, v) {
+      if (k === CURSOR_META_KEY) cursor = v;
+      else meta.set(k, v);
     },
     async newFingerprintsAfterKey(afterKey) {
-      return afterKey === null ? { entries: [entry], truncated: false } : { entries: [], truncated: false };
+      const all = slowCommitted ? [slow, late] : [late];
+      return { entries: all.filter((e) => afterKey === null || e.key > afterKey), truncated: false };
     },
   };
-  await newFingerprintRule(writer, REALISTIC_NOW_MS); // tick N
+  const tickN = await newFingerprintRule(writer, REALISTIC_NOW_MS);
+  assert.equal(tickN.detail, "new fingerprint(s): fp-late");
   assert.equal(cursor, undefined, "an entry inside the grace window must not advance the cursor at all");
-  const nextTick = await newFingerprintRule(writer, REALISTIC_NOW_MS + 10 * 60 * 1000); // tick N+1
-  assert.equal(nextTick.firing, true, "the fingerprint must still be visible on the very next tick");
+
+  slowCommitted = true;
+  const tickN1 = await newFingerprintRule(writer, REALISTIC_NOW_MS + 10 * 60 * 1000);
+  assert.equal(tickN1.firing, true, "the late-committed fingerprint must not be missed");
+  assert.equal(tickN1.detail, "new fingerprint(s): fp-slow", "fp-late was announced on tick N and must not be announced again");
+  assert.equal(cursor, late.key, "both entries are now outside the grace window");
+
+  const tickN2 = await newFingerprintRule(writer, REALISTIC_NOW_MS + 20 * 60 * 1000);
+  assert.equal(tickN2.firing, false);
 });
 
 test("newFingerprintRule: caps the Slack detail at 10 names, with an overflow count", async () => {
@@ -412,12 +432,14 @@ test("newFingerprintRule: caps the Slack detail at 10 names, with an overflow co
     firstSeenMs: REALISTIC_NOW_MS - 500_000,
   }));
   let cursor;
+  const meta = new Map();
   const writer = {
-    async getAlertMeta() {
-      return cursor;
+    async getAlertMeta(k) {
+      return k === CURSOR_META_KEY ? cursor : meta.get(k);
     },
-    async setAlertMeta(_k, v) {
-      cursor = v;
+    async setAlertMeta(k, v) {
+      if (k === CURSOR_META_KEY) cursor = v;
+      else meta.set(k, v);
     },
     async newFingerprintsAfterKey() {
       return { entries, truncated: false };
@@ -442,12 +464,14 @@ test("newFingerprintRule: a truncated newFingerprintsAfterKey read advances the 
     { key: "fpts:000000001699999600000:fp-b", name: "fp-b", firstSeenMs: lastMs },
   ];
   let cursor;
+  const meta = new Map();
   const writer = {
-    async getAlertMeta() {
-      return cursor;
+    async getAlertMeta(k) {
+      return k === CURSOR_META_KEY ? cursor : meta.get(k);
     },
-    async setAlertMeta(_k, v) {
-      cursor = v;
+    async setAlertMeta(k, v) {
+      if (k === CURSOR_META_KEY) cursor = v;
+      else meta.set(k, v);
     },
     async newFingerprintsAfterKey() {
       return { entries, truncated: true };
@@ -1261,4 +1285,66 @@ test("runAlerts: new-fingerprint self-resolves via its own cursor — one Slack 
   }
 
   assert.equal(await writer.alertState("new-fingerprint"), undefined, "new-fingerprint must never write alert:<rule> state at all");
+});
+
+// F35 (round 9): embed:2ac0e4fe7b87628d, first seen 06:42:33, was announced
+// at 06:43:33 and again at 06:57:29, the tick where o11y-spend-cap threw
+// "Network connection lost." (the API worker had restarted). The cause is
+// the cursor grace lag, not the failing rule: the first tick is inside the
+// 120 s grace window, so the cursor stays put and the next tick reads the
+// fingerprint again. This replays that timeline through the real runAlerts
+// and InboxWriter, with Date.now pinned per tick because runAlerts reads it
+// internally.
+test("runAlerts: a fingerprint announced on a tick where o11y-spend-cap throws is not announced again on the next tick (F35)", async () => {
+  let spendThrows = true;
+  const { env } = makeEnv(InboxWriter, {
+    env: {
+      SLACK_WEBHOOK_URL: "https://hooks.example.test/webhook",
+      API: {
+        fetch: async () => new Response(null, { status: 204 }),
+        o11ySpend: async () => {
+          if (spendThrows) throw new Error("Network connection lost.");
+          return { spendUsd: 0, capUsd: 100 };
+        },
+      },
+    },
+  });
+  const writer = env.INBOX_WRITER.jurisdiction("eu").get();
+
+  const firstSeenMs = Date.now();
+  await writer.ingest("browser", firstSeenMs, [{ hash: "f35-h1", fingerprint: "embed:2ac0e4fe7b87628d" }]);
+
+  const posted = [];
+  const realFetch = globalThis.fetch;
+  const realNow = Date.now;
+  let fakeNow = firstSeenMs + 60_000; // 06:43:33, one minute after first seen
+  Date.now = () => fakeNow;
+  globalThis.fetch = async (url, init) => {
+    const href = typeof url === "string" ? url : url.toString();
+    if (href.includes("hooks.example.test")) {
+      posted.push(JSON.parse(init.body).text);
+      return new Response(null, { status: 200 });
+    }
+    return new Response(JSON.stringify({ data: [] }), { status: 200 });
+  };
+  const announcements = () => posted.filter((t) => t.includes("new-fingerprint") && t.includes("2ac0e4fe7b87628d"));
+  try {
+    const tick1 = await runAlerts(env);
+    assert.match(tick1.errors["o11y-spend-cap"] ?? "", /Network connection lost/, "precondition: spend-cap fails on tick 1");
+    assert.equal(announcements().length, 1, "tick 1 announces the new fingerprint");
+
+    // 06:57:29: spend-cap still failing on this tick, as in F35.
+    fakeNow = firstSeenMs + 14 * 60_000 + 56_000;
+    const tick2 = await runAlerts(env);
+    assert.match(tick2.errors["o11y-spend-cap"] ?? "", /Network connection lost/);
+    assert.equal(announcements().length, 1, "tick 2 must not announce the same fingerprint again");
+
+    spendThrows = false;
+    fakeNow += 27_000; // 06:57:56
+    await runAlerts(env);
+    assert.equal(announcements().length, 1, "exactly one announcement over all three ticks");
+  } finally {
+    Date.now = realNow;
+    globalThis.fetch = realFetch;
+  }
 });

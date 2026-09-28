@@ -397,6 +397,23 @@ export async function rejectedKeyRule(inboxWriter: InboxWriterApi, nowMs = Date.
 // ---- new handled-error fingerprint ------------------------------------------
 
 const NEW_FINGERPRINT_CURSOR_META_KEY = "newFingerprintCursorKey";
+/** F35: JSON array of the `fpts:` keys already announced that may still be
+ *  past the cursor, i.e. the entries inside the grace window that the next
+ *  tick reads again (see {@link CURSOR_GRACE_MS}). */
+const NEW_FINGERPRINT_ANNOUNCED_META_KEY = "newFingerprintAnnouncedKeys";
+
+/** A missing or unreadable value means nothing past the cursor has been
+ *  announced yet. That can cost one extra announcement, never a missed one. */
+function parseAnnouncedKeys(raw: string | undefined): Set<string> {
+  if (!raw) return new Set();
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((k): k is string => typeof k === "string" && k.startsWith("fpts:")));
+  } catch {
+    return new Set();
+  }
+}
 
 /** Fix round (C cross-note, PLAUSIBLE double/missed report): the cursor used
  *  to advance to `nowMs` — this rule's OWN wall-clock time at the start of
@@ -414,11 +431,11 @@ const NEW_FINGERPRINT_CURSOR_META_KEY = "newFingerprintCursorKey";
  *  synchronously inside the SAME request that stamped `firstSeen`, before
  *  that request answers `2xx` — comfortably under this margin even under
  *  load, and this rule's own ten-minute cron cadence gives further headroom.
- *  The remaining trade-off is a bounded, self-correcting DOUBLE report for
- *  a fingerprint whose `firstSeen` lands inside the last `CURSOR_GRACE_MS`
- *  of one tick (reported that tick and, at most, once more the next tick,
- *  never a third time, never silently) — a much smaller cost than a
- *  permanently missed report.
+ *  The lag means a fingerprint whose `firstSeen` lands inside the last
+ *  `CURSOR_GRACE_MS` of one tick is read again by the next tick. That used
+ *  to announce it twice (F35). The rule now also remembers which keys past
+ *  the cursor it already announced ({@link NEW_FINGERPRINT_ANNOUNCED_META_KEY})
+ *  and announces each one exactly once.
  *
  *  This is a partial mitigation, not "a cursor on the commit order" (the
  *  finding's own suggested fix): the full fix keys `fp:` entries by a
@@ -457,27 +474,46 @@ export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Da
   const { entries, truncated } = await inboxWriter.newFingerprintsAfterKey(cursorKey, fallbackSinceMs);
 
   // Grace-lag semantics, unchanged from the ms-cursor design (see the
-  // module-level `CURSOR_GRACE_MS` doc comment): every entry actually read
-  // is reported this tick (`fresh`, below) regardless of how recent it is,
-  // but the cursor only advances up to the last entry whose `firstSeenMs`
-  // is at/under `nowMs - CURSOR_GRACE_MS`. Entries are read in ascending
-  // key order (ms, then fingerprint — `fingerprintTimeIndexKey`'s shape),
-  // so the last entry meeting that bound is exactly the right resume point.
-  // A fingerprint inside the grace window is reported now and, at most,
-  // once more next tick (bounded, self-correcting double report) — never
-  // silently skipped, and — unlike the old ms cursor — this bound can never
-  // make the cursor get stuck: it always advances to a REAL row it read,
-  // never to a synthetic "ms - 1" value that could re-equal itself forever.
+  // module-level `CURSOR_GRACE_MS` doc comment): every entry read that no
+  // earlier tick announced is reported this tick (`fresh`, below) however
+  // recent it is, but the cursor only advances up to the last entry whose
+  // `firstSeenMs` is at/under `nowMs - CURSOR_GRACE_MS`. Entries are read in
+  // ascending key order (ms, then fingerprint — `fingerprintTimeIndexKey`'s
+  // shape), so the last entry meeting that bound is exactly the right resume
+  // point. A fingerprint inside the grace window is reported now and read
+  // again next tick, where the announced set skips it. Unlike the old ms
+  // cursor, this bound can never make the cursor get stuck: it always
+  // advances to a REAL row it read, never to a synthetic "ms - 1" value
+  // that could re-equal itself forever.
   const graceCutoffMs = nowMs - CURSOR_GRACE_MS;
   let advanceToKey: string | null = null;
   for (const entry of entries) {
     if (entry.firstSeenMs <= graceCutoffMs) advanceToKey = entry.key;
   }
   const nextCursorKey = advanceToKey ?? cursorKey;
+
+  // F35: the grace lag re-reads every entry inside the window on the next
+  // tick, which used to announce it a second time (06:43:33 and again at
+  // 06:57:29 for one fingerprint first seen at 06:42:33). Skip the keys an
+  // earlier tick already announced.
+  const announced = parseAnnouncedKeys(await inboxWriter.getAlertMeta(NEW_FINGERPRINT_ANNOUNCED_META_KEY));
+  const unannounced = entries.filter((entry) => !announced.has(entry.key));
+
+  // Write order matters, since these are two separate RPCs. The announced
+  // set goes first and keeps every key read this tick. If the cursor write
+  // then fails, the next tick re-reads from the old cursor and finds all of
+  // them already announced. Keys at or below the cursor this tick started
+  // from are never listed again, so they are dropped here. That keeps the
+  // set to roughly one scan page (`NEW_FINGERPRINT_SCAN_LIMIT` keys).
+  const keep = new Set<string>();
+  for (const key of [...announced, ...entries.map((entry) => entry.key)]) {
+    if (cursorKey === null || key > cursorKey) keep.add(key);
+  }
+  await inboxWriter.setAlertMeta(NEW_FINGERPRINT_ANNOUNCED_META_KEY, JSON.stringify([...keep]));
   if (nextCursorKey !== null) {
     await inboxWriter.setAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY, nextCursorKey);
   }
-  const fresh = entries.map((entry) => entry.name);
+  const fresh = unannounced.map((entry) => entry.name);
   const shown = fresh.slice(0, MAX_FINGERPRINTS_LISTED);
   const overflow = fresh.length - shown.length;
   // `truncated` means real, unread fingerprints may exist beyond what this
