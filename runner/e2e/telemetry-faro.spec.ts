@@ -340,12 +340,15 @@ test.describe("Faro in the authoring app", () => {
     await expect.poll(() => limitedKey, { timeout: 20_000 }).not.toBeNull();
     const forKey = () => attempts.filter((a) => a.key === limitedKey);
 
-    await page.clock.fastForward(59_000);
+    // Relative to the 429'd attempt: the page clock keeps running while the test waits.
+    const [first] = forKey();
+    const pageNow = await page.evaluate(() => Date.now());
+    await page.clock.fastForward(Math.max(0, first!.at + 58_000 - pageNow));
     await page.waitForTimeout(500);
     expect(forKey(), "not retried before the Retry-After window").toHaveLength(1);
-    await page.clock.fastForward(16_000);
+    await page.clock.fastForward(17_000);
     await expect.poll(() => forKey().length).toBe(2);
-    const [first, retry] = forKey();
+    const [, retry] = forKey();
     expect(retry!.refs).toContain(ref);
     expect(retry!.at - first!.at).toBeGreaterThanOrEqual(60_000);
   });
