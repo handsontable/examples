@@ -1,21 +1,14 @@
 // The edit-burst collapse in front of the facade's demo-runtime reports.
 //
-// The Tier-1 preview re-runs on every keystroke, so typing ONE throwing
-// line would otherwise relay a whole keystroke-prefix ladder as separate
-// `preview.runtime_error` points. Rule: only the last run before the
-// editor goes quiet counts.
+// The Tier-1 preview re-runs on every keystroke, so one throwing line would
+// otherwise relay a whole keystroke-prefix ladder; only the last run before
+// the editor goes quiet counts. An edit (`noteEdit`) opens/extends a burst,
+// holding one report per key (§7 fingerprint) until `settleMs` after the
+// last edit, when the final run's reports emit once each. A compile failure
+// (`replacesRun`) drops the held reports and suppresses later non-compile
+// ones, so a syntax error counts as one `sandpack.compile_error`.
 //
-// An edit (`noteEdit`) opens/extends a burst and discards everything the
-// preview reported since the previous edit. Reports are held one per key
-// (the §7 fingerprint) while the burst is open; `settleMs` after the LAST
-// edit, the burst closes and the final run's reports emit once each.
-// Outside a burst, a report emits immediately. A compile failure
-// (`replacesRun`) drops whatever the burst holds and suppresses later
-// non-compile reports, so a typed syntax error counts as one
-// `sandpack.compile_error` and no `preview.runtime_error`.
-//
-// Import-free, clock/timer injected, same reason as `demoEventReport.ts`:
-// `node --test` can pin this logic with nothing to import.
+// Import-free, clock/timer injected, so `node --test` can pin this logic.
 
 /** How long the editor must stay quiet before a burst closes. Longer than a
  *  mid-line pause while typing, short enough that the point still lands in

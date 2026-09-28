@@ -12,10 +12,8 @@
 // structurally typed instead (same arrangement as `rehomeBudgetAlert` in
 // `workers/api/src/sentry-gate.ts:82-84`).
 
-/** The `exception` shape every gate below reads — declared locally, not
- *  imported, so this file stays resolvable by a bare `node --test`.
- *  A Faro `ExceptionEvent` is adapted into this same shape at its call
- *  site (`telemetry/faro.ts`) so both surfaces share these predicates. */
+/** The `exception` shape every gate below reads. A Faro `ExceptionEvent` is
+ *  adapted into this same shape at its call site (`telemetry/faro.ts`). */
 interface ExceptionShape {
   exception?: {
     values?: {
@@ -33,13 +31,11 @@ interface TaggedEvent {
   tags?: Record<string, unknown>;
 }
 
-// ── Gate 0: browser noise that is never actionable ───────────────────────────────
+// ── Gate 0: browser noise that is never actionable ──────────────────────────────
 //
-// A benign layout-loop warning, plus the shapes an in-flight request takes
-// when the user navigates away mid-fetch. Shared here (not just `sentry.ts`)
-// so Faro's `beforeSend` applies the same rule (contract §6). Never in a
-// Sentry `ignoreErrors`-style pre-filter, which runs before `handled` is
-// known and would silently discard on-purpose reports too.
+// Shared here (not just `sentry.ts`) so Faro's `beforeSend` applies the same
+// rule (contract §6). Not a Sentry `ignoreErrors` pre-filter, which runs
+// before `handled` is known and would drop on-purpose reports too.
 const UNHANDLED_NOISE = [
   /^ResizeObserver loop/i,
   /^AbortError/i,
@@ -59,12 +55,10 @@ export function isUnhandledNoise(event: ExceptionShape): boolean {
   );
 }
 
-// ── Gate 0b: cross-origin frames — the preview iframe / an injected script ──────
+// ── Gate 0b: cross-origin frames — the preview iframe / an injected script ─────
 //
 // The preview iframe runs arbitrary example code — a typo there is product
 // output, not an app fault — and is cross-origin, so this is the backstop.
-// Scoped to `handled === false`, else it would discard on-purpose reports
-// whose stack merely passed through a foreign frame.
 export function isForeignUnhandled(event: ExceptionShape, originOrigin: string): boolean {
   const values = event.exception?.values ?? [];
   return values.some(
@@ -76,13 +70,11 @@ export function isForeignUnhandled(event: ExceptionShape, originOrigin: string):
   );
 }
 
-// ── Strip Faro's message-echo pseudo-frames before Gate 0b runs ─────────────────
+// ── Strip Faro's message-echo pseudo-frames before Gate 0b runs ────────────────
 //
-// Faro's stack parser can turn the `Error: <message>` line itself into a
-// fake frame with no `lineno` when the message quotes a URL — which
-// `isForeignUnhandled` would then misread as a foreign frame. A real frame
-// always has a `lineno`; drop only a frame with none whose `filename` is a
-// substring of the message.
+// Faro can turn the `Error: <message>` line itself into a fake frame with no
+// `lineno` when the message quotes a URL, which `isForeignUnhandled` would
+// misread as foreign. A real frame always has a `lineno`.
 export function withoutMessageEchoFrames<F extends { filename?: string; lineno?: number }>(
   value: string | undefined,
   frames: F[] | undefined,
@@ -177,10 +169,10 @@ export function isEdgelessForeignSessionStart(event: TaggedEvent): boolean {
   );
 }
 
-// ── ADR §E.2 tee ──────────────────────────────────────────────────────────────
+// ── ADR §E.2 tee ─────────────────────────────────────────────────────────────
 //
-// Split out of `sentry.ts`, same import-free reason as this file's header:
-// `telemetry`'s shape is accepted structurally, so a stub can test this.
+// Split out of `sentry.ts`; `telemetry`'s shape is structural, so a stub
+// can test this without importing the real facade.
 
 /** The `telemetry` facade shape this tee needs — structurally typed against
  *  `Telemetry` (contract §6), not imported, for the reason above. */

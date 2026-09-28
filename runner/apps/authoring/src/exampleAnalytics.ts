@@ -1,10 +1,7 @@
 /**
- * ADR-0042 (example analytics) — what a resolved example's `example.*`
- * attribute bag looks like, computed once per real navigation (never per
- * render) at the `App.tsx` example-resolve path (`loadWorkspace`).
- *
- * Import-free, same reason as `tier1Report.ts`/`demoEventReport.ts`: kept
- * unit-testable by `pipeline/example-analytics-taxonomy.test.mjs`.
+ * ADR-0042 (example analytics) — the resolved example's `example.*`
+ * attribute bag, computed once per real navigation at `App.tsx`'s
+ * `loadWorkspace`. Import-free so it stays unit-testable directly.
  */
 
 /** ADR-0042 §1's closed `kind` set. */
