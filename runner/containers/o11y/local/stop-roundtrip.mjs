@@ -31,19 +31,15 @@ import { defaultComposeProjectName } from "../../../scripts/dev-lib.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const O11Y_DIR = join(__dirname, "..");
 
-// A-M1: this script's own up-front `down -v` (below) wipes whatever project
-// name it resolves to, INCLUDING the named volumes dev-persist relies on
-// (minio-data/clickhouse-data). The default used to be "o11y-t01" — the
-// same name compose.yml's own header comment recommends for a T01
-// developer's persistent manual/dev stack — so running this script with no
-// override could silently wipe that stack's data. The default here must
-// never collide with a persistent stack's own default or documented
-// convention: `dev.mjs`/`dev-lib.mjs` default to
-// `defaultComposeProjectName()` (Z-D-H2 fix: a per-worktree
-// `o11y-dev-<hash>`, imported from dev-lib.mjs here rather than a second
-// copy of that literal so the two can never drift apart again), and
-// compose.yml's header comment's example uses "o11y-t01" — this script gets
-// a name distinct from both.
+// This script's own up-front `down -v` (below) wipes whatever project name
+// it resolves to, INCLUDING the named volumes dev-persist relies on
+// (minio-data/clickhouse-data). The default must never collide with a
+// persistent dev stack's own default or documented convention:
+// `dev.mjs`/`dev-lib.mjs` default to `defaultComposeProjectName()` (a
+// per-worktree `o11y-dev-<hash>`, imported from dev-lib.mjs here rather
+// than a second copy of that literal so the two can never drift apart
+// again), and compose.yml's header comment's example uses "o11y-t01" —
+// this script gets a name distinct from both.
 //
 // A distinct DEFAULT alone is not enough, though: if a developer has
 // `COMPOSE_PROJECT_NAME=<this worktree's dev-stack default>` exported in
@@ -97,12 +93,12 @@ const BASE_ENV = {
   O11Y_MINIO_ROOT_PASSWORD: MINIO_PASSWORD,
 };
 
-// A-I1: MINIO_USER/MINIO_PASSWORD (root creds) are always scrubbed from a
+// MINIO_USER/MINIO_PASSWORD (root creds) are always scrubbed from a
 // failure log, regardless of caller — `opts.redact` lets a specific call
 // site (e.g. `setupRestrictedMinioUser`) add its own per-run secrets (a
 // restricted user's generated password) to the same scrub pass, since `sh`
-// has no way to know about those on its own. The task asked for output to
-// be redacted, not suppressed: a failure here still prints (developers need
+// has no way to know about those on its own. Output is redacted, not
+// suppressed: a failure here still prints (developers need
 // the diagnostic — this is a local/CI test-only script), it just never
 // prints a real credential. `scrubSecrets` lives in `./redact.mjs` so it is
 // unit-testable in isolation (this file runs `main()` unconditionally at
@@ -123,13 +119,10 @@ function sh(cmd, args, opts = {}) {
   return res;
 }
 
-// A-I1 / regression from removing `allowFail`: `compose(...)` used to take
-// only positional docker-compose args, with no way for a caller to pass
-// `{ allowFail: true }` (or `redact`) through to `sh()` — the pre-T1 code
-// called `sh(...)` directly with `{ allowFail: true }` for exactly this
-// exec-into-minio path. A trailing plain-object argument is now treated as
-// options for `sh()` and popped off before building the compose args, so
-// every existing call site (which only ever passes strings) is unaffected.
+// A trailing plain-object argument to `compose(...)` is treated as options
+// for `sh()` (e.g. `{ allowFail: true }` or `redact`) and popped off before
+// building the compose args, so every existing call site (which only ever
+// passes strings) is unaffected.
 function compose(...args) {
   let opts = {};
   const last = args[args.length - 1];
@@ -248,8 +241,8 @@ function boxContainerId() {
   return res.stdout.trim();
 }
 
-/** The supervisor's own stdout log lines for a container (B-I2, second
- *  wave) — used to confirm which branch of `run_stop_protocol` actually
+/** The supervisor's own stdout log lines for a container — used to confirm
+ *  which branch of `run_stop_protocol` actually
  *  refused the marker (a listing failure vs. an upload failure vs. neither
  *  applying), rather than inferring it only from "no marker" (which both
  *  branches, and several others, all produce identically). */
@@ -264,23 +257,22 @@ async function main() {
   console.log(`o11y box stop-roundtrip — project=${PROJECT} run=${RUN_ID}`);
   console.log(`ports: grafana=${GRAFANA_PORT} loki=${LOKI_PORT} minio=${MINIO_PORT}`);
 
-  // dev-persist task: compose.yml's minio/clickhouse now use named volumes
-  // (so a plain `dev.mjs`/`pnpm dev:full` restart keeps its logs/metrics),
-  // which means a PRIOR run of this script that crashed before reaching its
-  // own `down -v` at the bottom (O11Y_ROUNDTRIP_KEEP unset) would otherwise
+  // compose.yml's minio/clickhouse use named volumes (so a plain
+  // `dev.mjs`/`pnpm dev:full` restart keeps its logs/metrics), which means
+  // a PRIOR run of this script that crashed before reaching its own
+  // `down -v` at the bottom (O11Y_ROUNDTRIP_KEEP unset) would otherwise
   // leave this fixed `PROJECT` name's volumes around for THIS run's `up` to
-  // silently reuse — this script's own header comment ("no volume on Loki's
-  // data dir, so nothing survives") used to be true by construction; this
-  // `down -v` up front is what keeps it true now that the volumes persist
-  // by default. Harmless (a no-op) when nothing is left over.
+  // silently reuse. This `down -v` up front is what guarantees "no volume
+  // on Loki's data dir, so nothing survives" despite the volumes
+  // persisting by default. Harmless (a no-op) when nothing is left over.
   compose("down", "-v");
 
   console.log("\n== bring up minio + clickhouse ==");
-  // T1: `minio-init` (a one-shot `mc mb` container) is gone along with
-  // quay.io/minio/mc — Bitnami's `minio` image creates the `loki` bucket
+  // `minio-init` (a one-shot `mc mb` container) is not used — quay.io/minio/mc
+  // is not pullable. Bitnami's `minio` image creates the `loki` bucket
   // itself via MINIO_DEFAULT_BUCKETS (compose.yml) before its healthcheck
   // goes green, so `--wait` (blocks until every started service is
-  // healthy/running) replaces the old poll-for-minio-init-exit-code loop.
+  // healthy/running) is sufficient.
   const bringUpRes = compose("up", "-d", "--wait", "minio", "clickhouse");
   record(
     "minio became healthy (bucket created — compose.yml's MINIO_DEFAULT_BUCKETS)",
@@ -304,12 +296,12 @@ async function main() {
     console.log(`local boot: ${readyMs}ms`);
   }
 
-  // I1 (fix round 1): behavioural check that [live] max_connections=0
-  // actually turns Live off for Grafana's own frontend — `liveEnabled` in
-  // /api/frontend/settings is what the shipped Grafana UI reads before ever
-  // opening a socket. This does NOT check the raw /api/live/ws endpoint
-  // itself (that remains reachable — see grafana.ini's T01-D1 note); it
-  // checks the one surface the product actually consults.
+  // Behavioural check that [live] max_connections=0 actually turns Live off
+  // for Grafana's own frontend — `liveEnabled` in /api/frontend/settings is
+  // what the shipped Grafana UI reads before ever opening a socket. This
+  // does NOT check the raw /api/live/ws endpoint itself (that remains
+  // reachable — see grafana.ini's own note); it checks the one surface the
+  // product actually consults.
   {
     const res = await fetch(`http://localhost:${GRAFANA_PORT}/grafana/api/frontend/settings`, {
       headers: { "X-O11Y-GRAFANA-USER": "roundtrip-probe@handsontable.com" },
@@ -370,12 +362,12 @@ async function main() {
     `expected ${JSON.stringify(pushedWorker)} got ${JSON.stringify(wLines)}`,
   );
 
-  // ---- run 1b: zero-ingest wake (T03B, F3) -------------------------------
+  // ---- run 1b: zero-ingest wake -------------------------------------------
   //
-  // T03-D2's other finding: a wake that pushes NOTHING to Loki never
-  // produces a new uploader-named index object, so shutdown.sh (correctly,
-  // UNCHANGED by F3) writes no marker for it. The fix for "every such wake
-  // was counted unclean" lives entirely on the Worker side
+  // A wake that pushes NOTHING to Loki never produces a new uploader-named
+  // index object, so shutdown.sh (correctly) writes no marker for it. The
+  // fix for "every such wake was counted unclean" lives entirely on the
+  // Worker side
   // (workers/o11y/src/inbox/ledger.ts#resolveOverWakes: a wake with zero
   // provisional keys resolves clean without needing the marker at all) —
   // this container-level script has no Worker/ledger in the loop, so what
@@ -384,15 +376,15 @@ async function main() {
   // was uploaded — the ledger's "clean" here comes from having nothing
   // provisional to lose, never from a marker that doesn't exist).
   //
-  // T03B-D1: measured here for the first time — a Loki that never received
-  // ANY write this wake (no stream, no WAL segment at all) exits 1 on
-  // SIGTERM, not 0 (every OTHER run in this script pushes at least one
+  // Measured here: a Loki that never received ANY write this wake (no
+  // stream, no WAL segment at all) exits 1 on SIGTERM, not 0 (every OTHER
+  // run in this script pushes at least one
   // line first, and exits 0). shutdown.sh already only checks the upload
   // when `loki_exit -eq 0` (so a truly-empty Loki takes the SAME
   // no-marker path as a failed upload, just via a different branch), and
   // box.ts's `onStop` records whatever exit code the platform reports
   // purely for bookkeeping — the ledger never reads it, only the marker
-  // and the provisional-key count — so this does not change F3's
+  // and the provisional-key count — so this does not change the drain's
   // correctness. Recorded as evidence, not asserted to be 0.
   console.log("\n== run 1b (zero ingest): no OTLP push at all ==");
   const wakeIdZero = `roundtrip-zero-${RUN_ID}`;
@@ -466,7 +458,7 @@ async function main() {
 
   // ---- C1 negative control: a failed FINAL index upload writes no marker ----
   //
-  // The bug this proves fixed: the pre-fix-round-1 check only asked "does an
+  // The bug this proves fixed: an earlier check only asked "does an
   // uploader-named index object exist after Loki exits?" — but the shipper
   // also uploads on its own ~15-minute schedule while Loki is still running,
   // so on any wake at least that long, an object can already exist from an
@@ -530,8 +522,8 @@ async function main() {
     !markerExists(wakeIdC1),
     `state/wakes/${wakeIdC1}/clean, box exit=${exitCodeC1}`,
   );
-  // B-I2 (second wave): confirm WHICH branch refused the marker, rather than
-  // trusting "no marker" alone (several different branches produce that
+  // Confirm WHICH branch refused the marker, rather than trusting "no
+  // marker" alone (several different branches produce that
   // identically). Measured live against a real Loki 3.3.2 + MinIO (not
   // assumed, debugged with a temporary log dump before landing this
   // assertion): denying `s3:PutObject` on `index/*` does not merely make
@@ -559,16 +551,16 @@ async function main() {
     putBlockedEvidence ? "found" : "none of the expected log shapes found in supervisor log",
   );
 
-  // ---- D1 negative control (B-I2, second wave): a failed pre-SIGTERM
-  // LISTING (not a blocked PUT) also writes no marker -------------------
+  // ---- D1 negative control: a failed pre-SIGTERM LISTING (not a blocked
+  // PUT) also writes no marker -------------------
   //
-  // C1 above proves the PUT-blocked path. This proves the OTHER path the
-  // rereview asked for: `r2_list_prefix`'s own listing call itself fails
-  // (ListBucket denied), which must make `snapshot_ok=0` and refuse the
-  // marker BEFORE any upload confirmation is even attempted — the exact
-  // shape `pipeline/o11y-shutdown-snapshot.test.mjs`'s "B-I2, second wave"
-  // tests prove at the shell-function level with a stubbed curl; this is
-  // the same shape against a REAL MinIO ListBucket denial and a real Loki.
+  // C1 above proves the PUT-blocked path. This proves the OTHER path:
+  // `r2_list_prefix`'s own listing call itself fails (ListBucket denied),
+  // which must make `snapshot_ok=0` and refuse the marker BEFORE any
+  // upload confirmation is even attempted — the exact shape
+  // `pipeline/o11y-shutdown-snapshot.test.mjs` proves at the shell-function
+  // level with a stubbed curl; this is the same shape against a REAL MinIO
+  // ListBucket denial and a real Loki.
   console.log("\n== D1 negative control (B-I2): a failed pre-SIGTERM listing writes no marker ==");
   const LIST_DENY_USER = `list-deny-${RUN_ID}`;
   const LIST_DENY_PASSWORD = `list-deny-pw-${RUN_ID}`;
@@ -623,19 +615,12 @@ async function main() {
     logsD1.includes("pre-SIGTERM index listing failed") ? "found" : "not found in supervisor log",
   );
 
-  // Revert evidence lives in the T01 report (fix round 1): the same
-  // seed-then-SIGTERM sequence run against the pre-fix "does one exist"
-  // check (no before/after snapshot) DOES write a marker here — that run is
-  // done by hand against a temporarily reverted shutdown.sh, not by this
-  // script, so a passing check above is never silently the only evidence.
-
   console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);
   process.exitCode = failures === 0 ? 0 : 1;
 
-  // M13 (fix round 1): tear the stack down when done, so a run of this
-  // script never leaves containers/networks for the operator to notice and
-  // clean up by hand. Set O11Y_ROUNDTRIP_KEEP=1 to skip this while
-  // debugging a failure.
+  // Tear the stack down when done, so a run of this script never leaves
+  // containers/networks for the operator to notice and clean up by hand.
+  // Set O11Y_ROUNDTRIP_KEEP=1 to skip this while debugging a failure.
   if (process.env.O11Y_ROUNDTRIP_KEEP !== "1") {
     console.log("\n== tearing down (set O11Y_ROUNDTRIP_KEEP=1 to skip) ==");
     compose("down", "-v");
@@ -648,11 +633,10 @@ async function main() {
   }
 }
 
-// `denyStatement` (B-I2's D1 negative control, second wave, added alongside
-// C1's original PutObject-deny): a single extra `Deny` statement layered
-// on top of the same base `Allow s3:* on the whole bucket` every restricted
-// user starts from. Defaults to C1's own PutObject-on-`index/*` deny so
-// existing callers are unaffected.
+// `denyStatement`: a single extra `Deny` statement layered on top of the
+// same base `Allow s3:* on the whole bucket` every restricted user starts
+// from. Defaults to C1's own PutObject-on-`index/*` deny so existing
+// callers are unaffected.
 function setupRestrictedMinioUser(
   user,
   password,
@@ -667,8 +651,8 @@ function setupRestrictedMinioUser(
       denyStatement,
     ],
   });
-  // T1: quay.io/minio/mc is gone (same outage as its sibling quay.io/minio/minio
-  // image, both replaced in compose.yml) — the Bitnami `minio` image ships the real `mc`
+  // quay.io/minio/mc is not pullable (same outage as its sibling
+  // quay.io/minio/minio image, both replaced in compose.yml) — the Bitnami `minio` image ships the real `mc`
   // binary INSIDE the container itself (PATH includes
   // /opt/bitnami/minio-client/bin, confirmed via `docker inspect`), so this
   // execs into the already-running `minio` service instead of `docker run`-
@@ -683,16 +667,12 @@ function setupRestrictedMinioUser(
     `mc admin user add c1 ${user} "${password}"`,
     `mc admin policy attach c1 ${policyName} --user ${user}`,
   ].join(" && ");
-  // A-I1: this call used to go through `sh(..., { allowFail: true })`
-  // directly (pre-T1), silently swallowing any failure here with no log at
-  // all. T1's replacement (`compose("exec", ...)`) dropped `allowFail`
-  // through `compose()`'s then-options-less signature, so a transient
-  // failure (stale RUN_ID collision, docker exec hiccup, MinIO not yet
-  // warmed) printed the FULL `mc admin ...` command line unredacted —
-  // embedding both the root MINIO_PASSWORD and this restricted user's
-  // `password` in plain text. Fixed here by redacting rather than
-  // suppressing: `sh()` (now, always) scrubs MINIO_USER/MINIO_PASSWORD from
-  // any failure it does print; `redact: [password]` adds this call's own
+  // A transient failure here (stale RUN_ID collision, docker exec hiccup,
+  // MinIO not yet warmed) would otherwise print the FULL `mc admin ...`
+  // command line unredacted — embedding both the root MINIO_PASSWORD and
+  // this restricted user's `password` in plain text. Redacted rather than
+  // suppressed: `sh()` (always) scrubs MINIO_USER/MINIO_PASSWORD from any
+  // failure it does print; `redact: [password]` adds this call's own
   // per-run secret to that same pass, so a genuine failure still surfaces a
   // useful diagnostic (the developer needs to see it — this is a
   // local/CI-only test script) with no credential in it.

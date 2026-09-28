@@ -6,9 +6,8 @@
 // so a fired alert (ADR §F.3 rules, or the fixture replay's new-fingerprint
 // event) is visible locally without ever touching a real Slack channel.
 //
-// Closes the gap `docs/observability-contract.md` used to document as
-// already built ("a local capture server started by `pnpm o11y:dev`") but
-// wasn't — see that doc's §10 table and this task's report for the history.
+// What `docs/observability-contract.md`'s §10 table describes as "a local
+// capture server started by `pnpm o11y:dev`".
 //
 // Usage: node scripts/o11y-slack-capture.mjs --port <port>
 //
@@ -62,10 +61,10 @@ export function createSlackCaptureServer(port) {
       res.end("ok");
     });
   });
-  // NB7 (re-review 2): no host meant `server.listen(port)` bound every
-  // interface, so `GET /_captured` (alert text, no auth of its own) was
-  // reachable from the LAN, not just this machine. This is a local-only
-  // dev convenience, never anything else — loopback only.
+  // Loopback only: without an explicit host, `server.listen(port)` binds
+  // every interface, making `GET /_captured` (alert text, no auth of its
+  // own) reachable from the LAN, not just this machine. This is a
+  // local-only dev convenience, never anything else.
   server.listen(port, "127.0.0.1");
   return {
     server,

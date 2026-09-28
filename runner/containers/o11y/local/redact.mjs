@@ -1,7 +1,7 @@
 // containers/o11y/local/redact.mjs
 //
-// A-I1: split out of stop-roundtrip.mjs so it is unit-testable — that file
-// runs `main()` unconditionally at module scope (it is a CLI script, not a
+// Split out of stop-roundtrip.mjs so it is unit-testable — that file runs
+// `main()` unconditionally at module scope (it is a CLI script, not a
 // library), so importing it directly from a test would run the whole real
 // docker-compose roundtrip.
 //

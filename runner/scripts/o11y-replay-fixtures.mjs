@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Replays every `pipeline/fixtures/{otlp,faro}/**` fixture against a running
-// o11y worker (`wrangler dev`), per the task's Verify block:
+// o11y worker (`wrangler dev`):
 //
 //   ( cd workers/o11y && npx wrangler dev )
 //   node scripts/o11y-replay-fixtures.mjs --base http://localhost:4300
@@ -12,7 +12,7 @@
 // Sentry fixtures get their own gates. `--base` defaults to
 // `http://localhost:4300` (this task's port block, COMMON.md).
 //
-// F21 (fix round R4): `O11Y_EXPORT_SECRET`/`SENTRY_HOOK_SECRET` are read from
+// `O11Y_EXPORT_SECRET`/`SENTRY_HOOK_SECRET` are read from
 // the environment FIRST (covers `dev.mjs --replay`, which runs this as a
 // child process and so inherits its own env), falling back to
 // `workers/o11y/.dev.vars` (covers this file's own documented standalone

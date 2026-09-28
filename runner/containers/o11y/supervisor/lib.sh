@@ -28,20 +28,16 @@ r2_curl_base() {
 # the bucket rather than trusting a local directory or a 202-style response
 # ("POST /flush returns before anything is written" — ADR-0041 traps).
 #
-# F2 fix (final review, B-I2 "shutdown.sh fails open when the pre-SIGTERM
-# listing fails"): the previous version piped `curl -fsS | grep -o | sed`
-# straight through with no `set -o pipefail` and no check on curl's own exit
-# status — a network blip, a timeout, or a 5xx made `curl -f` fail, but the
-# pipeline's overall exit code was whatever `sed` returned (0, on empty
-# input), so the caller (shutdown.sh, via `$(r2_list_prefix ... || true)`)
-# read a FAILED listing as a CONFIRMED-EMPTY one. shutdown.sh's own C1 diff
-# then treated a pre-existing, mid-wake periodic upload as "new" once the
-# (successful) after-listing ran, and wrote a marker for a stop whose FINAL
-# upload was never actually confirmed. Fixed here, not by adding
-# `set -o pipefail` (which has its own trap — see the test file's own note:
-# a genuinely EMPTY, successful listing makes `grep -o` exit 1 too, for "no
-# match", which `pipefail` would then also read as failure, breaking the
-# very first wake of every UTC day before any index object exists yet):
+# A curl failure, a non-XML/error response, or a truncated listing must all
+# be treated as "cannot confirm," never as "found nothing" — a caller that
+# reads a failed listing as a confirmed-empty one (e.g.
+# `$(r2_list_prefix ... || true)`) could treat a pre-existing, mid-wake
+# periodic upload as "new" and write a marker for a stop whose FINAL upload
+# was never actually confirmed. Not solved with `set -o pipefail`: a
+# genuinely EMPTY, successful listing makes `grep -o` exit 1 too (for "no
+# match"), which `pipefail` would then also read as failure, breaking the
+# very first wake of every UTC day before any index object exists yet.
+# Instead:
 #   1. Capture curl's own body and exit status explicitly (`|| return 1`) —
 #      a curl failure is now a hard, unambiguous function failure.
 #   2. Require the body to actually contain a `<ListBucketResult` root

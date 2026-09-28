@@ -15,14 +15,12 @@
 # and the function returns non-zero. WAKE_ID missing is refused outright —
 # never guess a wake id.
 #
-# Spike result (ADR-0041 exit criterion 1, T01 Outcome): Loki 3.3.2 DOES
-# upload its active TSDB index table on a graceful SIGTERM — confirmed by a
-# real push -> SIGTERM -> bucket-listing round trip against MinIO
-# (containers/o11y/local/stop-roundtrip.mjs). Plan A is what ships; Plan B
-# (wait for the next 15-minute index rotation) is documented but not wired,
-# because Plan A's own upload-confirmation check already fails closed if
-# some future Loki upgrade regresses that behaviour — see the T01 report for
-# the decisive log line ("uploading table ... finished uploading table").
+# Loki 3.3.2 DOES upload its active TSDB index table on a graceful SIGTERM —
+# confirmed by a real push -> SIGTERM -> bucket-listing round trip against
+# MinIO (containers/o11y/local/stop-roundtrip.mjs). Plan A is what ships;
+# Plan B (wait for the next 15-minute index rotation) is documented but not
+# wired, because Plan A's own upload-confirmation check already fails closed
+# if some future Loki upgrade regresses that behaviour.
 #
 # Index check design: the TSDB shipper writes each period's table at
 # index/index/<day>/<uploaderName>-<file>.tsdb.gz, where <day> is days since
@@ -38,13 +36,13 @@
 # seeing the newest (highest-sorting) keys, and every future stop would read
 # as unclean. Scoping the listing to one single-day table prefix per day —
 # today's, plus every earlier day a backlogged/reopened record accepted this
-# wake could still land under (fix round B-M8: `INDEX_DAY_SPAN_DAYS`, bounded
-# by Loki's own `reject_old_samples_max_age: 7d`), not just yesterday's —
+# wake could still land under (`INDEX_DAY_SPAN_DAYS`, bounded by Loki's own
+# `reject_old_samples_max_age: 7d`), not just yesterday's —
 # keeps each listing small for the life of the bucket, and searching for
 # this instance's own uploader name distinguishes "we uploaded something"
 # from "some other wake, maybe running concurrently, uploaded something."
 #
-# T01 fix round 1, C1: an uploader-name match alone is not enough. The
+# An uploader-name match alone is not enough. The
 # shipper also uploads on a periodic ~15-minute schedule while Loki runs, so
 # on any wake at least that long, an uploader-named object can already exist
 # in the bucket from an EARLIER, successful mid-wake upload — checking only
@@ -65,31 +63,27 @@
 
 STOP_GRACE_SECONDS="${O11Y_STOP_GRACE_SECONDS:-30}"
 
-# Fix round (finding B-M8): the snapshot used to cover only `day_now` and
-# `day_now - 1` — enough for records timestamped "now," but Loki's own
+# The snapshot must cover more than just `day_now`/`day_now - 1`: Loki's own
 # `reject_old_samples_max_age: 7d` (loki-config.yaml) means a wake that
 # pushes backlogged/reopened records (ADR-0041's reopen mechanism resends
 # older, previously-dropped data) can legitimately write a NEW TSDB index
-# table under a day prefix up to 7 days in the past — a day this check never
-# looked at, so that upload was never verified before the clean-shutdown
-# marker was written. `INDEX_DAY_SPAN_DAYS` is the upper bound on how old an
+# table under a day prefix up to 7 days in the past.
+# `INDEX_DAY_SPAN_DAYS` is the upper bound on how old an
 # accepted record's own timestamp can be relative to "now," so it is also
 # the upper bound on how far back a NEW index day-prefix can appear this
 # wake; overridable so a test can exercise the full loop without a 7-day
 # fixture.
 INDEX_DAY_SPAN_DAYS="${O11Y_INDEX_DAY_SPAN_DAYS:-7}"
 
-# F2 fix (final review, B-I2): the snapshot-diff decision, extracted into its
-# own testable functions (previously inlined in `run_stop_protocol`, which
-# needs a real `LOKI_PID`/`GRAFANA_PID` to exercise at all). See
-# `pipeline/o11y-shutdown-snapshot.test.mjs` for the direct, deterministic
-# proof (stubbed `curl`) that a failed listing is now refused rather than
-# silently read as empty.
+# The snapshot-diff decision lives in its own testable functions (separate
+# from `run_stop_protocol`, which needs a real `LOKI_PID`/`GRAFANA_PID` to
+# exercise at all). See `pipeline/o11y-shutdown-snapshot.test.mjs` for the
+# direct, deterministic proof (stubbed `curl`) that a failed listing is
+# refused rather than silently read as empty.
 
 # snapshot_index_keys <day_now>  — every uploader-named key under EVERY day
 # prefix the wake's pushed records could span (`day_now` down through
-# `day_now - INDEX_DAY_SPAN_DAYS`, inclusive — fix round B-M8, was just
-# `day_now`/`day_now - 1`), one per line. Prints nothing and returns 1 if ANY
+# `day_now - INDEX_DAY_SPAN_DAYS`, inclusive), one per line. Prints nothing and returns 1 if ANY
 # one day's listing could not be confirmed (r2_list_prefix itself fails
 # closed — see lib.sh) — the caller MUST treat that as "cannot confirm,"
 # never as "confirmed empty."
@@ -110,8 +104,8 @@ snapshot_index_keys() {
 
 # confirm_new_upload <uploader_name> <before_keys> <after_keys>  — true (0)
 # iff at least one key bearing <uploader_name> is present in <after_keys>
-# but was NOT present in <before_keys> (T01 fix round 1, C1: an
-# uploader-name match alone is not enough — see this file's header).
+# but was NOT present in <before_keys> (an uploader-name match alone is not
+# enough — see this file's header).
 confirm_new_upload() {
   local uploader_name="$1" before_keys="$2" after_keys="$3"
   local before_matches after_matches new_matches
@@ -129,14 +123,13 @@ run_stop_protocol() {
   fi
 
   # --- 1. stop Loki gracefully -------------------------------------------
-  # F2 fix (final review, B-I2, second wave): the uploader-name path is now
-  # overridable via LOKI_UPLOADER_NAME_FILE (default unchanged, the real
-  # container path) — this is what makes `run_stop_protocol` itself directly
-  # testable (`pipeline/o11y-shutdown-snapshot.test.mjs`) without a real
-  # `/loki` filesystem, so a test can drive the REAL function (a real
-  # backgrounded process as LOKI_PID, a real snapshot_ok gate) instead of
-  # re-implementing its control flow inline (the exact gap the rereview
-  # found: "deleting shutdown.sh:168 fails no test").
+  # The uploader-name path is overridable via LOKI_UPLOADER_NAME_FILE
+  # (default unchanged, the real container path) — this is what makes
+  # `run_stop_protocol` itself directly testable
+  # (`pipeline/o11y-shutdown-snapshot.test.mjs`) without a real `/loki`
+  # filesystem, so a test can drive the REAL function (a real backgrounded
+  # process as LOKI_PID, a real snapshot_ok gate) instead of re-implementing
+  # its control flow inline.
   local uploader_name_file="${LOKI_UPLOADER_NAME_FILE:-/loki/tsdb-index/uploader/name}"
   local loki_exit=1
   if [ -n "${LOKI_PID:-}" ] && kill -0 "$LOKI_PID" 2>/dev/null; then
@@ -148,14 +141,13 @@ run_stop_protocol() {
       log "could not read ${uploader_name_file} before stop — index upload cannot be confirmed"
     fi
 
-    # Snapshot BEFORE sending SIGTERM (C1 fix): a periodic ~15-minute
-    # shipper upload can already have written an uploader-named object this
-    # wake, so "does one exist" after exit is not evidence the FINAL,
-    # shutdown-time upload also happened — only a key that is new since
-    # this snapshot is. F2 fix (B-I2): `snapshot_ok` tracks whether this
-    # snapshot can actually be trusted — a FAILED listing (network blip,
-    # timeout, 5xx) is no longer silently read as an empty one (see
-    # `r2_list_prefix`'s own doc comment in lib.sh).
+    # Snapshot BEFORE sending SIGTERM: a periodic ~15-minute shipper upload
+    # can already have written an uploader-named object this wake, so "does
+    # one exist" after exit is not evidence the FINAL, shutdown-time upload
+    # also happened — only a key that is new since this snapshot is.
+    # `snapshot_ok` tracks whether this snapshot can actually be trusted —
+    # a FAILED listing (network blip, timeout, 5xx) is never silently read
+    # as an empty one (see `r2_list_prefix`'s own doc comment in lib.sh).
     local day_now before_keys="" snapshot_ok=0
     if [ "${STORAGE:-s3}" = "s3" ] && [ -n "$uploader_name" ]; then
       day_now=$(( $(date -u +%s) / 86400 ))
@@ -188,10 +180,9 @@ run_stop_protocol() {
     fi
 
     # --- 2. confirm THIS instance uploaded a NEW index object ------------
-    # F2 fix (B-I2): requires `snapshot_ok` too now — a stop that could not
-    # even confirm the BEFORE state must never write a marker, no matter how
-    # the after-listing or Loki's own exit code turn out (the fail-open bug
-    # this whole block fixes).
+    # Requires `snapshot_ok` too — a stop that could not even confirm the
+    # BEFORE state must never write a marker, no matter how the
+    # after-listing or Loki's own exit code turn out.
     if [ "$loki_exit" -eq 0 ] && [ -n "${WAKE_ID:-}" ] && [ "${STORAGE:-s3}" = "s3" ] && [ -n "$uploader_name" ] && [ "$snapshot_ok" -eq 1 ]; then
       local after_keys
       if after_keys="$(snapshot_index_keys "$day_now")"; then
