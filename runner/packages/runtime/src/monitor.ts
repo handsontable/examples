@@ -32,6 +32,11 @@ export const MONITOR_MESSAGE_TYPE = "hot-runner-monitor";
  */
 export const MONITOR_EVENT_CEILING = 20;
 
+/** What the Tier-1 runtime posts into the preview before each dispatched run
+ *  (`{ type: MONITOR_MESSAGE_TYPE, reset: MONITOR_RESET }`): the reporter's error
+ *  budget and dedupe are per run, because the preview document outlives its runs. */
+export const MONITOR_RESET = "run";
+
 /**
  * Ceiling on relayed `console-warn` events per page load, counted separately from
  * `MONITOR_EVENT_CEILING` (DEV-2539).
@@ -671,6 +676,20 @@ export const REPORTER_SOURCE = `(function () {
         var reason = event.reason;
         var message = reason && reason.message ? reason.message : String(reason);
         send("rejection", message, reason && reason.stack);
+      } catch (e) { /* ignore */ }
+    });
+  } catch (e) { /* ignore */ }
+
+  // A Tier-1 document is re-evaluated in place on every compile, so a typed line's
+  // prefix runs would otherwise spend the whole budget before the finished line throws.
+  // Only the parent may reset it; the warning budget stays per page (breadcrumb trail).
+  try {
+    window.addEventListener("message", function (event) {
+      try {
+        var data = event.data;
+        if (event.source !== parent || !data || data.type !== TYPE || data.reset !== ${JSON.stringify(MONITOR_RESET)}) return;
+        used = 0;
+        for (var k in seen) if (k.indexOf("console-warn|") !== 0) delete seen[k];
       } catch (e) { /* ignore */ }
     });
   } catch (e) { /* ignore */ }

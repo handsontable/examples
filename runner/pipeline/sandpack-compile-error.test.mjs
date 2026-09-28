@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { SandpackRuntime } from "../packages/runtime/dist/sandpack.js";
 import { isTranspileFailure, transpileFilesForParcel } from "../packages/runtime/dist/transpile.js";
+import { MONITOR_MESSAGE_TYPE, MONITOR_RESET } from "../packages/runtime/dist/monitor.js";
 import { fingerprint, recordingTelemetry, toAePoint } from "../packages/runtime/dist/telemetry/index.js";
 import { createDemoEventCollapse, DEMO_EDIT_SETTLE_MS } from "../apps/authoring/src/demoEventCollapse.ts";
 import { wireRuntimeMetrics } from "../apps/authoring/src/telemetry/metrics.ts";
@@ -372,4 +373,35 @@ test("an edit that transpiles to the running sandbox reports 'unchanged'; one th
 
   assert.deepEqual(outcomes, ["rerun", "unchanged", "rerun"]);
   assert.equal(pushes.length, 2);
+});
+
+test("each dispatched run re-arms the in-preview reporter first; an unchanged or failed push does not", async () => {
+  const order = [];
+  const runtime = new SandpackRuntime(ENTRY, {
+    iframe: { contentWindow: { postMessage: (data) => order.push(["preview", data]) } },
+    monitor: true,
+  });
+  runtime.client = { updateSandbox: () => order.push(["compile"]), destroy() {}, listen: () => () => {} };
+  runtime.files = { ...FILES };
+
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n");
+  await settle();
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1);\n"); // unchanged
+  await settle();
+  await runtime.reload(); // the refresh button: a real run
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1, \n"); // does not parse
+  await settle();
+
+  const reset = ["preview", { type: MONITOR_MESSAGE_TYPE, reset: MONITOR_RESET }];
+  assert.deepEqual(order, [reset, ["compile"], reset, ["compile"]]);
+});
+
+test("without the monitor injected, no reset is posted into the preview", async () => {
+  const posted = [];
+  const runtime = new SandpackRuntime(ENTRY, { iframe: { contentWindow: { postMessage: (d) => posted.push(d) } } });
+  runtime.client = { updateSandbox() {}, destroy() {}, listen: () => () => {} };
+  runtime.files = { ...FILES };
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n");
+  await settle();
+  assert.deepEqual(posted, []);
 });

@@ -34,6 +34,8 @@ import { applyDepShims } from "./dep-shims.js";
 import { HTML_ENTRY_ENVS, resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
 import {
   MONITOR_COMPILE_MESSAGE_MAX,
+  MONITOR_MESSAGE_TYPE,
+  MONITOR_RESET,
   REPORTER_MODULE_LINE,
   injectReporter,
   redactPreviewHosts,
@@ -859,6 +861,7 @@ export class SandpackRuntime implements DemoRuntime {
         // bundler call, so `setupFrom`'s own DEV-2130 throw (caught below, not a compile
         // dispatch at all) never starts a clock nothing will stop.
         this.compileDispatchedAt = performance.now();
+        this.resetMonitorBudget();
         this.client.updateSandbox(setup, false);
         this.published = candidate;
         for (const cb of this.pushOutcomeCbs) cb("rerun");
@@ -888,6 +891,17 @@ export class SandpackRuntime implements DemoRuntime {
         this.compilerFailureEmitted = true;
         this.emitError(cause as Error);
       });
+  }
+
+  /** Re-arm the in-preview reporter for the run about to be dispatched. Posted to the
+   *  same window as the compile, so it is delivered first. */
+  private resetMonitorBudget(): void {
+    if (!this.opts.monitor) return;
+    try {
+      this.opts.iframe.contentWindow?.postMessage({ type: MONITOR_MESSAGE_TYPE, reset: MONITOR_RESET }, "*");
+    } catch {
+      /* a detached frame: its next document starts with a fresh budget anyway */
+    }
   }
 
   /** §5 `sandpack.compile_error` for a parcel pre-transpile failure — the babel
