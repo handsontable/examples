@@ -692,6 +692,10 @@ test.describe("Faro in the authoring app", () => {
   // goes quiet, instead of counting at once like a first-load error.
   test("a code-editor keystroke opens the edit burst (App.tsx wiring)", async ({ page }) => {
     await stubShell(page);
+    // Every bundler host, the versioned one too: with a live bundler the keystroke's run
+    // starts after the injected relay, and a run's start drops what the burst held from
+    // the run it replaces, so the outcome would race the bundler.
+    await page.route(/\.codesandbox\.io\//, (route) => route.abort());
     const captured = captureTelemetry(page);
     await page.goto("/");
     await expect(activeEditor(page)).toBeVisible();

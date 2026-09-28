@@ -298,7 +298,9 @@ collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
   after the next edit has been dispatched. A new run starts at the bundler's `start`
   message for a pushed compile (`onPushOutcome("rerun")`), not at dispatch, and what the burst held until
   then came from the run it replaces and is dropped. A pre-transpile failure of the
-  newest edit is kept, because no run of that edit will start;
+  newest edit is kept, because no run of that edit will start. A run that never starts
+  (a stalled or unreachable bundler) drops nothing, and the burst closes on its quiet
+  window as usual;
 - 2 s (`DEMO_EDIT_SETTLE_MS`) after the last edit the burst closes, and the last run's
   reports are emitted, one per §7 fingerprint;
 - outside a burst (first load, a user interaction, a Tier-2 rebuild that reports after
