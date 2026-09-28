@@ -1,23 +1,9 @@
-// The o11y worker's entry point (observability contract §1). T00's scaffold
-// (every route 501) is replaced here by real routing through `router.ts`
-// (COMMON.md interface 2) for the routes this task owns —
-// `POST /telemetry/collect`, `POST /telemetry/v1/logs`, `POST /telemetry/deploy`,
-// `POST /telemetry/hooks/sentry` — plus `/grafana/*` and
-// `POST /grafana/_o11y/reopen` (T03, registered below). An unregistered path
-// answers 404. `GET /grafana/_o11y/admin/*` (ADR-0043) has no dedicated
-// handler yet, so it falls through to the `/grafana/*` catch-all below.
-//
-// `POST /telemetry/lite` (T08, ADR §C.5) registers itself: `./lite.ts` calls
-// `registerRoute` at module load, the same COMMON.md interface 2 every other
-// route here uses, and is pulled in below by its side-effect import — kept in
-// its own file (T08's "Owns" row) rather than folded into this one's handler
-// functions, since T03/T04 also touch this file and a merge conflict on a
-// route this large is worse than one extra import line.
-//
-// Durable Object classes are exported from here, as Workers requires — each
-// class itself lives in the file its owner's shared-file table row names
-// (T00-D9): `GrafanaBox` in `box.ts` (T01), `InboxWriter` in
-// `inbox/writer.ts` (T02, now real).
+// The o11y worker's entry point (observability contract §1): real routing
+// through `router.ts` for `POST /telemetry/collect|v1/logs|deploy|hooks/
+// sentry`, plus `/grafana/*` and `POST /grafana/_o11y/reopen` (below).
+// `POST /telemetry/lite` registers itself via `./lite.ts`'s side-effect
+// import. Durable Object classes are exported from here (Workers requires
+// it) but defined in `box.ts`/`inbox/writer.ts`.
 
 import { toAePoint } from "@handsontable/demo-runtime/telemetry";
 import type { Env } from "./env.js";
@@ -71,10 +57,9 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
   const envGate = checkPayloadEnvironment(declaredEnv, env);
   if (!envGate.ok) return respondDrop(env, ctx, envGate);
 
-  // Fix round (finding A-I4): bound the whole batch before doing any real
-  // work on it — a real Faro `TransportBody` never approaches this many
-  // items (the SDK's own batch limit is 50); an unbounded batch is what let
-  // one 1 MB body inflate to ~16.7k stored records and AE points.
+  // Bound the whole batch before doing any real work — a real Faro batch
+  // never approaches this many items (SDK limit 50); unbounded, one 1 MB
+  // body inflated to ~16.7k stored records and AE points.
   if (countFaroItems(body) > MAX_FARO_ITEMS_PER_BODY) {
     return respondDrop(env, ctx, { ok: false, reason: "too_many_items", status: 400 });
   }
@@ -83,10 +68,8 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
   const rawVersion = (body as { meta?: { app?: { version?: string } } })?.meta?.app?.version;
   const service = {
     name: "demos-authoring" as const,
-    // Fix round (finding A-M1): `meta.app.version` is client-supplied and
-    // was unbounded — it becomes `service.version`, a Loki-queried (if not
-    // labeled) field and an AE blob, and `writePoint`'s "never throws" gap
-    // was reachable through exactly this kind of unbounded string turning a
+    // `meta.app.version` is client-supplied and unbounded — it becomes
+    // `service.version`, an AE blob, so it must be capped or it can push a
     // point over Analytics Engine's per-point size limit.
     version: typeof rawVersion === "string" && rawVersion.length > 0 ? rawVersion.slice(0, 64) : "unknown",
     environment: env.O11Y_ENV,
@@ -98,24 +81,17 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
     const processed = await processFaroBody(body, env, service, receivedAtMs);
 
     // `withItem[i].ingestItem` is `ingestItems[i]`, and `IngestResult.results`
-    // is index-aligned with `ingestItems` (F5-batch fix, below).
+    // is index-aligned with `ingestItems` (see below).
     const withItem = processed.filter((p) => p.ingestItem);
     const ingestItems = withItem.map((p) => p.ingestItem!);
 
     for (const p of processed) {
       if (p.invalid) recordInvalidItem(env, ctx, p.invalid);
       if (p.oversize) recordOversizeDrop(env, ctx, "Faro record exceeds 256 KB");
-      // Fix round (finding A-I4; NB3 correction, re-review 2): an item with
-      // no `ingestItem` AT ALL never reached even hash-only ingest (it was
-      // already fully handled above — invalid, oversize, or the "log"/non-
-      // "example." case that stores a record with no AE point) — those, and
-      // only those, write their points unconditionally. An `example.*`
-      // event is NOT one of these any more (A-I4 remainder, closed second
-      // wave): it carries a hash-only `ingestItem` (no `record`) purely so
-      // it goes through InboxWriter's dedupe transaction like everything
-      // else, and its points are gated below on the actual dedupe outcome,
-      // the same as a stored record's — a retried/redelivered batch cannot
-      // double-count either kind.
+      // An item with no `ingestItem` writes its points unconditionally (it
+      // was already fully handled above). An `example.*` event carries a
+      // hash-only `ingestItem` so it goes through the dedupe transaction
+      // too, gated below on the actual outcome — no kind can double-count.
       if (!p.ingestItem) {
         for (const point of p.aePoints) writePoint(env, ctx, point);
       }
@@ -123,30 +99,11 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
 
     if (ingestItems.length > 0) {
       const result = await inboxWriter(env).ingest("browser", receivedAtMs, ingestItems);
-      // F5-batch fix: outcomes are matched to items BY INDEX. This used to
-      // be `new Map(results.map((r) => [r.hash, r.outcome]))`: with two
-      // identical items in one batch the later copy's "duplicate"
-      // overwrote the first copy's "accepted", so the stored copy's AE
-      // points were dropped too.
-      // F28 fix (Round 6, supersedes the old NB3 gate this comment used to
-      // describe): every hash `InboxWriter.ingest` reports as
-      // "accepted"/"duplicate" counts toward this route's own
+      // Outcomes are matched to items BY INDEX, never by hash — two
+      // identical items can share a hash but get different outcomes. Every
+      // hash `InboxWriter.ingest` reports counts toward this route's
       // `o11y.ingest` self-metric, whether or not it carries a stored
-      // `record`. `respond.ts#respondIngested`'s own contract is "a batch
-      // with N accepted … records writes one `accepted` point (count=N)" —
-      // an AE-only item (an `example.*` event, A-I4 remainder; a Faro
-      // measurement, R3 F18) is still a record the pipeline accepted, and
-      // contract §5's `o11y.ingest` row names no narrower definition. The
-      // old gate here (`if (p.ingestItem!.record !== undefined) …`) instead
-      // treated this self-metric as "stored-record volume": harmless while
-      // only `example.*` events were AE-only, but once F18 made
-      // measurements the same shape — ~99% of this route's real traffic
-      // (R3-triage F18) — it starved the Observability-self "o11y.ingest
-      // rate by outcome" panel almost entirely: a real run showed 1,946
-      // `collect` 204s and 4,031 AE points written, but only 6 `accepted`
-      // self-metric points (F28). AE points themselves were never affected
-      // by that gate — they are written for every "accepted" outcome
-      // regardless of `record`, unchanged below.
+      // `record`: an AE-only item is still a record the pipeline accepted.
       withItem.forEach((p, idx) => {
         const outcome = result.results[idx]?.outcome;
         if (outcome === undefined) return;
@@ -157,25 +114,17 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
       });
     }
   } catch (err) {
-    // Fix round (finding A-M1): `handleCollect` had no boundary of its own
-    // around body processing — any exception that escaped `processFaroBody`
-    // or `InboxWriter.ingest` became an uncaught `500`. Every known throw
-    // site is fixed at its root (see `normalise/faro.ts`/`scrub.ts`), but
-    // this stays as the route's own backstop, so a still-unknown shape
-    // degrades to one accounted drop, never an unhandled exception.
+    // `handleCollect`'s own backstop: every known throw site is fixed at
+    // its root, but a still-unknown shape here degrades to one accounted
+    // drop, never an unhandled exception.
     console.warn("[o11y] handleCollect failed:", err instanceof Error ? err.message : String(err));
     recordInvalidItem(env, ctx, "handleCollect: unhandled batch failure");
-    // N3 (re-review 2): reaching this catch means nothing in this batch
-    // reached `InboxWriter.ingest` successfully — `accepted`/`duplicate`
-    // are still their zero initial values, since both are only incremented
-    // after `ingest()` resolves (above). Answering 2xx here would claim a
-    // commit that never happened (ADR §B.2: "2xx only after commit"), and
-    // — because Faro clients only retry on a non-2xx — would also silently
-    // and permanently drop this batch instead of it being retried. This is
-    // distinct from a batch that legitimately commits nothing because every
-    // item was already a duplicate: that path never throws, so it still
-    // reaches the ordinary `respondIngested` 204 below, unchanged — an
-    // idempotent replay must stay 2xx.
+    // Reaching this catch means nothing in this batch committed —
+    // `accepted`/`duplicate` stay zero. Answering 2xx here would claim a
+    // commit that never happened (ADR §B.2), and since Faro only retries
+    // on non-2xx, would silently drop the batch instead. A batch that
+    // legitimately commits nothing (all duplicates) never throws, so it
+    // still reaches the ordinary 204 below.
     return new Response(JSON.stringify({ error: "unhandled_batch_failure" }), {
       status: 500,
       headers: { "content-type": "application/json" },
@@ -286,19 +235,11 @@ registerRoute("POST", "/telemetry/collect", handleCollect);
 registerRoute("POST", "/telemetry/v1/logs", handleOtlpLogs);
 registerRoute("POST", "/telemetry/deploy", handleDeploy);
 registerRoute("POST", "/telemetry/hooks/sentry", handleSentryHook);
-// T03: `"*"`, not `"GET"` — Grafana's own frontend queries through
-// `POST /api/ds/query`, `POST /api/live/*` (blocked one layer down in
-// `box.ts`, never reaching here) and others under `/grafana/*`, not only
-// GET page loads. `POST /grafana/_o11y/reopen` is registered as an exact
-// route below it; `router.ts`'s own precedence rule (T02-D10: exact beats
-// prefix) means it always wins over this catch-all regardless of
-// registration order.
-// K1: the broker login round trip that replaces Cloudflare Access — exact
-// routes, so `router.ts`'s own precedence rule (exact beats prefix) means
-// they always win over the `/grafana/*` catch-all below regardless of
-// registration order. None of these five ever wakes the box (login.ts's own
-// header). `GET .../logout` (fix round M5) is a same-origin sign-out PAGE —
-// the actual state-clearing action stays the CSRF-protected `POST` below it.
+// `"*"`, not `"GET"` — Grafana's frontend also queries via POST under
+// `/grafana/*`. `POST /grafana/_o11y/reopen` is an exact route, which
+// `router.ts`'s precedence (exact beats prefix) always wins over this
+// catch-all. The five login/session/logout routes below are also exact
+// routes for the same reason, and none of them ever wakes the box.
 registerRoute("GET", "/grafana/_o11y/login", handleLogin);
 registerRoute("GET", "/grafana/_o11y/callback", handleCallback);
 registerRoute("POST", "/grafana/_o11y/session", handleSession);
@@ -307,18 +248,13 @@ registerRoute("POST", "/grafana/_o11y/logout", handleLogout);
 registerRoute("*", "/grafana/*", handleGrafana);
 registerRoute("POST", "/grafana/_o11y/reopen", handleReopen);
 
-/** ADR §A/§B.1's ten-minute cron (`wrangler.jsonc`'s `triggers.crons`, T03's
- *  row): reads the
- *  backlog (which resolves over-wakes as a side effect, ADR §B.3), writes
- *  the `o11y.backlog` self-metric, and wakes the box when the backlog is
- *  old or large enough — never while `drainsPaused` (T04's cost cap; this
- *  cron only reads the flag, never writes it). T03-D: `scheduled()` did not
- *  exist on this Worker's default export before this task — a minimal,
- *  justified addition to `index.ts` (not in this task's literal "Owns"
- *  row, but the same class of shared-file addition T02's own route
- *  registrations already are); T04 extends the same handler for its own
- *  alert-evaluation cron rather than adding a second `scheduled` export
- *  (Workers allows only one). */
+/** ADR §A/§B.1's ten-minute cron (`wrangler.jsonc`'s `triggers.crons`):
+ *  reads the backlog (which resolves over-wakes as a side effect, ADR
+ *  §B.3), writes the `o11y.backlog` self-metric, and wakes the box when the
+ *  backlog is old or large enough — never while `drainsPaused` (the cost
+ *  cap; this cron only reads the flag, never writes it). The alert
+ *  evaluation cron shares the same `scheduled` handler rather than adding a
+ *  second export (Workers allows only one). */
 async function handleScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
   const writer = inboxWriter(env);
   const backlog = await writer.backlog();
@@ -333,14 +269,10 @@ async function handleScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
     ),
   );
 
-  // ADR §A/§G: "never when drainsPaused" — `backlog.drainsPaused` is
-  // `writer.backlog()`'s own read of the same `drainsPaused` storage flag
-  // `alerts/index.ts#canWakeForBacklog` exposes (T04's cap rule sets it via
-  // `InboxWriter.setDrainsPaused`); read here inline rather than through a
-  // second RPC round trip to the same DO, since `backlog()` already fetched
-  // it in the same call. A Grafana VISIT wake (`grafana/proxy.ts`) never
-  // reads this flag: the box still starts and serves Grafana, and
-  // `box.ts#drainStep` is what refuses to drain while paused (F37).
+  // ADR §A/§G: "never when drainsPaused" — reads the same flag
+  // `alerts/index.ts#canWakeForBacklog` exposes, inline rather than a
+  // second RPC round trip. A Grafana VISIT wake never reads this flag; the
+  // box still serves Grafana, and `box.ts#drainStep` refuses to drain.
   if (backlog.drainsPaused) return;
 
   const oneHourMs = 60 * 60 * 1000;
@@ -366,25 +298,12 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 
-  // Merge (T04 phase 2): T04's own placeholder `scheduled()` is gone —
-  // T03's ten-minute cron handler (`handleScheduled`, above) is the one
-  // real `scheduled` export, per Workers' "exactly one" limit. This single
-  // tick does three things, each independent of the other two (a failure
-  // in one must not skip the others): stamps `heartbeat.lastCron` exactly
-  // once (still `InboxWriter.stampCronHeartbeat`, T04's own RPC method —
-  // T03's backlog/wake logic never wrote this key, so the watchdog would
-  // read a stale `lastCron` forever without this call); runs the backlog
-  // scan/wake (`handleScheduled`, which already refuses a backlog wake
-  // while `drainsPaused` — see that function's own `if (backlog
-  // .drainsPaused) return;`); and evaluates every ADR §F.3 alert
-  // (`runAlerts`, T04's own cron entry, COMMON.md's "call `runAlerts` from
-  // T03's handler" instruction).
-  //
-  // F37: the backlog wake runs AFTER the alerts, not beside them.
-  // `runAlerts` is what sets `drainsPaused` from this tick's spend-cap
-  // result. Run side by side, `handleScheduled` read the flag first, so the
-  // tick that crossed the cap still woke the box and drained 69 objects. A
-  // failing `runAlerts` still lets the backlog scan run.
+  // `handleScheduled` is the one real `scheduled` export (Workers allows
+  // only one). This tick does three independent things: stamps
+  // `heartbeat.lastCron`, runs the backlog scan/wake, and evaluates every
+  // alert. The backlog wake runs AFTER the alerts — `runAlerts` is what
+  // sets `drainsPaused` from this tick's spend-cap result, so running them
+  // side by side could let the crossing tick still wake and drain.
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(inboxWriter(env).stampCronHeartbeat(Date.now()));
     ctx.waitUntil(

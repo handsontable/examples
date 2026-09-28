@@ -1,17 +1,9 @@
-// The Loki + Grafana box (ADR-0041 §A). Owned by T01 (COMMON.md shared-file
-// table: "workers/o11y/src/box.ts | T01"; T03 wires wake/stop orchestration
-// on top of this in a later task, per the same table's merge order
-// "T01 → T03").
-//
-// Scope, matching the task file's "Out" line exactly: this file gives
-// `GrafanaBox` real behaviour (envVars, a fresh wakeId per start recorded in
-// InboxWriter, readiness, the container-facing half of the stop protocol,
-// onStop bookkeeping, and the /api/live/* defense-in-depth the controller
-// ruled required — see the T01-D1 note in containers/o11y/grafana/grafana.ini).
-// It does NOT decide *when* to wake (a Grafana visit through the login
-// broker session, K1 — not Cloudflare Access — vs. the backlog cron) or
-// proxy Grafana's own routes — those are T03's "wake and Grafana access"
-// task, explicitly out of scope here.
+// The Loki + Grafana box (ADR-0041 §A): gives `GrafanaBox` real behaviour
+// (envVars, a fresh wakeId per start recorded in InboxWriter, readiness, the
+// container-facing half of the stop protocol, onStop bookkeeping, and the
+// /api/live/* defense-in-depth — see containers/o11y/grafana/grafana.ini).
+// It does not decide *when* to wake (a Grafana visit through the login
+// broker session vs. the backlog cron) or proxy Grafana's own routes.
 
 import { Container } from "@cloudflare/containers";
 import { o11ySelfIdentity } from "./normalise/respond.js";
@@ -23,56 +15,26 @@ import type { Env } from "./env.js";
 import { reportAwakeSeconds } from "./cost.js";
 import { PUBLIC_ORIGIN } from "./gates/session.js";
 
-/** Matches the observability contract §1's bucket-name table. Used as the
- *  DEFAULT only (fix round I4) — `env.LOKI_S3_BUCKET` overrides it when
- *  set. Not read from the `O11Y_LOKI_STATE` R2 binding: an `R2Bucket`
- *  object has no `.name` the Worker can read at runtime, the same reason
- *  `containers/o11y/compose.yml` hardcodes its own MinIO bucket name.
- *  Before this fix the name was hardcoded outright, so a sandbox probe's
- *  container silently targeted the PRODUCTION bucket name instead of the
- *  probe bucket it actually created — see the T01 report's fix-round
- *  section for what that confounded. A future probe (T03's, say) sets
- *  `vars.LOKI_S3_BUCKET` in its own throwaway `wrangler.probe.jsonc` to
- *  its own bucket (e.g. `o11y-probe-t03-loki`) instead. */
+/** Contract §1 bucket name; `env.LOKI_S3_BUCKET` overrides it (probes point
+ *  it at their own bucket). An `R2Bucket` binding exposes no `.name`, so the
+ *  name cannot come from `O11Y_LOKI_STATE`. */
 const DEFAULT_LOKI_BUCKET_NAME = "handsontable-demos-o11y-loki";
 
 const WAKE_STORAGE_KEY = "wake";
 const LAST_STOP_STORAGE_KEY = "lastStop";
-/** QA follow-up ("isReady() while stopping"): the wakeId THIS instance last asked to stop (any of
- *  the three real callers — {@link GrafanaBox.hardCapStop},
- *  {@link GrafanaBox.#finishDrain}'s quiet check, or the base class's own
- *  idle timeout via `onActivityExpired` → `stop()`), so {@link
- *  GrafanaBox.isReady} can skip its probes for the rest of that wake's
- *  SIGTERM→exit window — `stop()` (SIGTERM) does NOT change `getState()`'s
- *  status (see `wake()`'s own doc comment on this exact gap), so without
- *  this a probe still ran on every tick while the container was shutting
- *  down, and Loki refusing new connections mid-shutdown made the base
- *  library's own `containerFetch` log a fresh "Container is not listening to
- *  port <n>" line on every one of them. Persisted (not just an in-memory
- *  field): the DO can be evicted during the up to 120 s stop grace
- *  (`O11Y_STOP_GRACE_SECONDS`), and a fresh instance must still know a stop
- *  is in flight. Scoped BY wakeId, not a bare boolean, and cleared at the
- *  start of `#doWake`: a stale marker surviving into the NEXT wake would
- *  make ITS `isReady()` report false forever (an endless `drainStep`
- *  reschedule loop and a permanent waking page), which is worse than the
- *  cosmetic log line this fixes. */
+/** The wakeId this instance last asked to stop, so `isReady()` can skip
+ *  probes during the SIGTERM→exit window (`stop()` doesn't change
+ *  `getState()`'s status). Persisted and cleared at the start of `#doWake`. */
 const STOPPING_FOR_STORAGE_KEY = "stoppingFor";
-/** T03 addition: persisted separately from the base `Container` class's own
- *  opaque `sleepAfterMs` idle clock (never read directly here — a real
- *  `containerFetch` call, including the drain's own Loki pushes, always
- *  renews that clock too, which is harmless: it only protects an in-flight
- *  drain or an open Grafana tab from the 15-minute idle stop firing
- *  mid-work). ADR §A's actual rule — "if no Grafana request arrived in the
- *  last 10 minutes the Worker calls `stop()`" after a drain — needs its OWN
- *  clock, driven only by real `/grafana/*` traffic through
- *  {@link GrafanaBox.noteVisitorActivity}, never by the drain's own Loki
- *  traffic. */
+/** Separate from the base class's idle clock: renewed only by real
+ *  `/grafana/*` traffic (via `noteVisitorActivity`), never by the drain's
+ *  own Loki pushes, per ADR §A's quiet-stop rule. */
 const LAST_GRAFANA_STORAGE_KEY = "lastGrafanaAt";
 /** Guards `onStart`'s double-invocation (see its own doc comment) from
  *  scheduling `drainStep` twice for the same wake. */
 const DRAIN_SCHEDULED_FOR_STORAGE_KEY = "drainScheduledFor";
-/** F8: the wakeId whose wake-to-ready time was already reported to
- *  InboxWriter, so only a wake's FIRST successful `isReady()` reports it. */
+/** The wakeId whose wake-to-ready time was already reported to InboxWriter,
+ *  so only a wake's first successful `isReady()` reports it. */
 const READY_RECORDED_FOR_STORAGE_KEY = "readyRecordedFor";
 const HARD_CAP_SCHEDULE = "hardCapStop";
 const DRAIN_STEP_SCHEDULE = "drainStep";
@@ -81,41 +43,24 @@ const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
 /** ADR §A stop protocol: "if no Grafana request arrived in the last 10
  *  minutes the Worker calls `stop()`." */
 const GRAFANA_QUIET_STOP_MS = 10 * 60 * 1000;
-/** Objects drained per `drainStep` invocation. T03-D (see the task
- *  Outcome): a starting value, not yet tuned against real per-object CPU —
- *  exit criterion 7's sandbox probe measures real per-object cost and
- *  whether this needs to change; kept well under any plausible per-object
- *  cost times `limits.cpu_ms` so a single invocation cannot blow the
- *  Worker's CPU budget even before that measurement exists. */
+/** Objects drained per `drainStep` invocation — kept well under any
+ *  plausible per-object cost so one invocation cannot blow the Worker's
+ *  CPU budget. */
 const DRAIN_BATCH_SIZE = 10;
-/** Minimum gap before `drainStep` reschedules itself (T03-D, see the task
- *  Outcome for the full derivation): the base `Container.alarm()` loop
- *  fetches every due `container_schedules` row ONCE at the top of its own
- *  invocation (`const result = this.sql\`SELECT * FROM
- *  container_schedules\`;`) and compares each row's `time` (whole seconds)
- *  against a `now` captured before the loop starts; scheduling the next
- *  step for "now" risks the SAME invocation picking it back up if that
- *  query is ever re-evaluated live rather than read from the snapshot,
- *  which would defeat "a bounded number of objects per invocation" (exit
- *  criterion 7 measures exactly this). A full 1000 ms gap is provably
- *  enough regardless of that ambiguity: `schedule()` floors the target time
- *  to whole seconds, so a row inserted at real time `T1 >= T0` (`T0` being
- *  the loop's captured `now`) with a 1000 ms offset floors to a value
- *  `> floor(T0) + 1 > T0`, true for any `T0` regardless of its fractional
- *  part — a schedule 1000 ms out can never satisfy `row.time <= now` for
- *  the `now` captured at the START of the invocation that inserted it. */
+/** Minimum gap before `drainStep` reschedules itself: the base
+ *  `Container.alarm()` loop reads every due `container_schedules` row ONCE
+ *  at the top of its own invocation and compares each row's `time` (whole
+ *  seconds) against a `now` captured before the loop starts. A full 1000 ms
+ *  gap is provably enough: `schedule()` floors the target time to whole
+ *  seconds, so a row inserted at real time `T1 >= T0` with a 1000 ms offset
+ *  floors to `> floor(T0) + 1 > T0` for any `T0` — it can never satisfy
+ *  `row.time <= now` for the `now` captured at the start of the invocation
+ *  that inserted it. */
 const DRAIN_STEP_GAP_MS = 1000;
 
-// F13: every await on the container, or on `@cloudflare/containers`' own
-// start machinery, is bounded. Measured in `wrangler dev` (see the F13
-// report): after the box container was SIGKILLed under dashboard traffic,
-// the library's `start()` for the next wake never settled, although the new
-// container itself booted fine. `wake()` shares one in-flight promise
-// between callers, so every later `/grafana/*` request and the cron's
-// backlog wake awaited that promise forever. A container port that accepts
-// a connection and never answers also held `isReady()` forever: its probes
-// carried no signal, and the library's healthy-state `containerFetch` goes
-// straight to `tcpPort.fetch`.
+// Every await on the container is bounded: an accepted-but-silent port can
+// hang `start()`/`isReady()` forever, since the library's healthy-state
+// `containerFetch` goes straight to `tcpPort.fetch`.
 /** One `isReady()` probe (Loki `/ready`, Grafana `/api/health`). Both
  *  answer in milliseconds on a live box. */
 const READY_PROBE_TIMEOUT_MS = 5_000;
@@ -127,11 +72,9 @@ const WAKE_WAIT_MS = 15_000;
  *  The library's own retry budget in `start()` is 27 attempts of up to
  *  5 s each plus 300 ms apart, about 143 s. */
 const START_DEADLINE_MS = 180_000;
-/** One drain push to Loki's OTLP endpoint. `drainStep` runs inside the
- *  base class's `alarm()`, and alarms are serialised, so a push that never
- *  answered used to freeze every later schedule too: the next drain step,
- *  `hardCapStop`, and the idle-stop check. A timed-out push comes back as
- *  the library's 500, which `drain.ts` retries and then stops early on. */
+/** One drain push to Loki's OTLP endpoint. Alarms are serialised, so an
+ *  unanswered push would freeze every later schedule; a timeout gives the
+ *  library's own 500-retry path a chance to run instead. */
 const LOKI_PUSH_TIMEOUT_MS = 60_000;
 
 type WakeReason = "backlog" | "visit";
@@ -149,28 +92,17 @@ interface StopRecord {
   at: number;
 }
 
-/** Every path shape that must never reach a raw `/api/live/*` handshake,
- * normalized before matching (T01 fix-round-1 finding I1's follow-through):
- * `[live] max_connections = 0` only stops Grafana's OWN frontend from
- * opening a socket (confirmed via `liveEnabled: false`); a raw client that
- * dials the endpoint directly still gets a full Centrifuge connection
- * regardless of that setting (reproduced on 11.4.0, grafana/grafana#72072).
- * This is therefore the one place that actually refuses it. Case
- * insensitive (fix round I3): nothing about HTTP path matching guarantees
- * a proxy or client normalizes case before this ever sees the request. */
+/** Every path shape that must never reach `/api/live/*`: Grafana's own
+ * `[live] max_connections = 0` only blocks its frontend, not a raw client
+ * dialing the endpoint directly (grafana/grafana#72072). */
 const LIVE_PATH_RE = /^\/(?:grafana\/)?api\/live(?:\/|$)/i;
 
 /**
  * Percent-decodes each segment and collapses repeated slashes before
  * matching — a route matched on the raw, undecoded pathname is a known way
- * to smuggle a blocked path past a naive string/regex check. Returns
- * `null` on an unparseable percent-encoding (fix round I3: the previous
- * version returned the RAW, still-encoded pathname on failure, which the
- * regex then tested and typically did NOT match — e.g.
- * `/grafana/api/%6Cive%ZZ/ws` decodes as a whole to neither a valid string
- * nor anything containing literal "live", so it slipped through unblocked.
- * `null` is a distinct sentinel the caller fails closed on, not a
- * fallback value that happens to usually still match.)
+ * to smuggle a blocked path past a naive string/regex check. Returns `null`
+ * on an unparseable percent-encoding: a caller must fail closed on that, not
+ * fall back to a still-encoded pathname the regex could fail to match.
  */
 function normalizedPathname(url: URL): string | null {
   let decoded: string;
@@ -182,105 +114,46 @@ function normalizedPathname(url: URL): string | null {
   return decoded.replace(/\/{2,}/g, "/");
 }
 
-/** Minor triage item 2: Grafana's LEGACY, frontend-driven datasource proxy
- *  route — `/api/datasources/proxy/uid/<uid>/<rest>` or the numeric-id form
- *  `/api/datasources/proxy/<id>/<rest>` — forwards `<rest>` VERBATIM to that
- *  datasource's configured `url`
- *  (`containers/o11y/grafana/provisioning/datasources/datasources.yaml`),
- *  with Grafana adding the datasource's own auth header. Every provisioned
- *  dashboard here (`containers/o11y/grafana/dashboards/*.json`) references
- *  its datasource by `uid` only (`o11y-box-config.test.mjs` pins this — see
- *  its new test below); nothing provisioned uses the numeric-id form, so a
- *  legitimate use of it is not something this box's own UI relies on.
- *  Capture groups: 1 = the `uid/<uid>` value if that form was used, 2 = the
- *  numeric id if that form was used, 3 = `<rest>`. */
+/** Grafana's legacy datasource proxy route — forwards `<rest>` verbatim to
+ *  the datasource's configured `url`. Capture groups: 1 = uid, 2 = numeric
+ *  id, 3 = `<rest>`. */
 const DATASOURCE_PROXY_RE = /^\/(?:grafana\/)?api\/datasources\/proxy\/(?:uid\/([^/]+)|(\d+))\/(.*)$/i;
 
-/** A-I2: Grafana's MODERN resource-proxy route —
- *  `/api/datasources/uid/<uid>/resources/<rest>` or the numeric-id form
- *  `/api/datasources/<id>/resources/<rest>` — reaches the Loki datasource
- *  plugin's Go `CallResource` handler, which (confirmed live against this
- *  box's own real Grafana 11.4 + Loki plugin, COMMON.md port-block rule,
- *  project o11y-x1, see the task report) does NOT limit itself to a small
- *  registered set of names the way the earlier version of this comment
- *  claimed: reading the box's own container logs (`docker compose logs
- *  box`, `logger=tsdb.loki endpoint=callResource ... resourcePath=...`)
- *  shows the plugin builds the REAL outbound Loki request as literally
- *  `/loki/api/v1/<rest>` for whatever `<rest>` the client sent — e.g.
- *  `resources/config` really does reach Loki at `/loki/api/v1/config`
- *  (Loki's own 404, not Grafana's) — and forwards the response back
- *  verbatim. So this route is not "unregistered names can't reach Loki at
- *  all"; it is "everything is forwarded under the fixed `/loki/api/v1/`
- *  prefix". `resources/flush`/`resources/shutdown`/`resources/config` fail
- *  ONLY because Loki's real admin/config endpoints live OUTSIDE that
- *  prefix (Loki's bare root, e.g. `/flush`), a coincidence of Loki's own
- *  URL layout, not something Grafana enforces; `resources/push` reaches
- *  Loki's real `/loki/api/v1/push` and gets a genuine `405` from Loki
- *  itself (regardless of the client's own GET/POST — the plugin's
- *  outbound call does not appear to forward the client's HTTP method for
- *  this resource). A `--path-as-is` `../` traversal attempt at
- *  `resources/../otlp/v1/logs` (targeting the drain's own OTLP ingest
- *  path, which — unlike flush/shutdown — genuinely IS under Loki's root,
- *  not `/loki/api/v1/`) reached Loki as the literal, uncleaned string
- *  `/loki/api/v1/../otlp/v1/logs` and 404'd there too — Loki's own router
- *  does not resolve `..` segments either, so this specific escape did not
- *  work, but nothing about the mechanism *rules it out* for a future Loki
- *  version. Given all of this, the allowlist below is not defense in
- *  depth against something already structurally impossible — it is the
- *  actual boundary: this route is a real, live, working forward into
- *  Loki's `/loki/api/v1/*` namespace, gated here the same way the legacy
- *  proxy route is. */
+/** Grafana's modern resource-proxy route — reaches the Loki plugin's
+ *  `CallResource` handler, which forwards everything under a fixed
+ *  `/loki/api/v1/<rest>` prefix; the allowlist below is the real boundary. */
 const DATASOURCE_RESOURCE_RE = /^\/(?:grafana\/)?api\/datasources\/(?:uid\/([^/]+)\/resources|(\d+)\/resources)\/(.*)$/i;
 
-/** Loki's own read/query HTTP API (`/loki/api/v1/*`) — everything a
- *  dashboard panel or Explore can legitimately need through the legacy
- *  proxy path (this box's own live check, `dev:full` against a real Grafana
- *  11, is the source for this set — see the task Outcome). `tail` streams
- *  over a websocket upgrade — already refused unconditionally above
- *  regardless of path — kept in this allowlist only so a non-upgrade
- *  request to the same path isn't blocked here for a second, more
- *  confusing reason. */
+/** Loki's read/query API — everything a dashboard panel or Explore needs
+ *  through the legacy proxy path. `tail` (websocket) is already refused
+ *  above; kept here only so a non-upgrade hit isn't blocked for a second,
+ *  more confusing reason. */
 const LOKI_ALLOWED_QUERY_RE =
   /^loki\/api\/v1\/(?:query|query_range|labels|label\/[^/]+\/values|series|index\/stats|index\/volume(?:_range)?|patterns|detected_labels|detected_fields|tail|format_query)\/?$/i;
 
-/** A-I2: the SAME logical read/query set as {@link LOKI_ALLOWED_QUERY_RE},
- *  without the `loki/api/v1/` prefix — the modern resource route's `<rest>`
- *  is the bare Go handler name (`labels`, `series`, `index/stats`, ...),
- *  confirmed live: `resources/query`/`resources/series`/`resources/labels`/
- *  `resources/index/stats`/`resources/detected_labels`/
- *  `resources/label/<name>/values`/`resources/query_range`/
- *  `resources/tail`/`resources/format_query` all answer normally against
- *  this box's real Grafana+Loki; `resources/patterns` 404s on THIS plugin
- *  build specifically (kept in the allowlist regardless — an
- *  unimplemented-but-allowed name is harmless, it still 404s inside
- *  Grafana; the risk this gate exists for is an implemented name that
- *  shouldn't be reachable, not the reverse). */
+/** Same read/query set as {@link LOKI_ALLOWED_QUERY_RE}, without the
+ *  `loki/api/v1/` prefix — the modern route's `<rest>` is the bare Go
+ *  handler name. */
 const LOKI_ALLOWED_RESOURCE_RE =
   /^(?:query|query_range|labels|label\/[^/]+\/values|series|index\/stats|index\/volume(?:_range)?|patterns|detected_labels|detected_fields|detected_fields\/[^/]+\/values|tail|format_query)\/?$/i;
 
 /** `true` if `uid`/`numericId` (as extracted from either the legacy proxy
  *  or the modern resource route) identifies a request this gate must hold
  *  to an allowlist at all — a `loki-*` uid, or the numeric-id form
- *  (default-deny, see below). `false` (untouched by this gate) for any
- *  other uid, e.g. ClickHouse's `clickhouse-runner-events`. */
+ *  (default-deny: it cannot be resolved back to an identity, so it gets the
+ *  same strict allowlist unconditionally). `false` (untouched by this gate)
+ *  for any other uid, e.g. ClickHouse's `clickhouse-runner-events`. */
 function isGatedDatasourceSelector(uid: string | undefined, numericId: string | undefined): boolean {
   if (uid !== undefined) return /^loki-/i.test(uid); // a non-Loki uid (e.g. ClickHouse) — untouched
-  return numericId !== undefined; // the numeric-id form cannot be resolved back to an identity
-  // here, so it gets the SAME strict allowlist unconditionally — nothing
-  // provisioned needs it (see DATASOURCE_PROXY_RE's own doc comment), so
-  // default-deny is the safe choice for it, including for what would
-  // otherwise be a legitimate ClickHouse query issued through a numeric id
-  // instead of its uid.
+  return numericId !== undefined;
 }
 
 /** `true` for a datasource-proxy OR datasource-resource request that is not
- *  on the Loki read/query allowlist above (minor triage item 2; A-I2
- *  extends this to the modern `/resources/` route). Identification is by
- *  the SELECTOR, not by `<rest>` — the opposite of an allowlist keyed on the
- *  forwarded path would risk missing an unenumerated Loki endpoint (e.g.
- *  the drain's own ingest path, `/otlp/v1/logs`, is also served at Loki's
- *  bare root and is NOT under `/loki/...` — a `<rest>`-shape denylist would
- *  never catch it). */
+ *  on the Loki read/query allowlist above. Identification is by the
+ *  SELECTOR, not by `<rest>` — a `<rest>`-shape denylist would risk missing
+ *  an unenumerated Loki endpoint (e.g. the drain's own ingest path,
+ *  `/otlp/v1/logs`, is also served at Loki's bare root and is NOT under
+ *  `/loki/...`). */
 function isBlockedLokiProxyPath(normalized: string): boolean {
   // `normalized` is already fully percent-decoded and slash-collapsed by
   // this function's one caller (`isBlockedContainerRequest`, via
@@ -313,16 +186,11 @@ function isBlockedContainerRequest(request: Request): boolean {
   return LIVE_PATH_RE.test(normalized) || isBlockedLokiProxyPath(normalized);
 }
 
-// T03-D (see the task Outcome): both stubs below used to call
-// `.jurisdiction("eu")` unconditionally. T02-D11 (inbox/accessor.ts)
-// already measured, against a real `wrangler dev`, that Miniflare/workerd's
-// local Durable Object simulation THROWS the moment `.jurisdiction()` is
-// called at all (`Error: Jurisdiction restrictions are not implemented in
-// workerd`) — not a silent no-op. Since `wake()` calls `inboxWriterStub`
-// (via `recordWake`) on every wake, this meant `wake()` itself 500'd under
-// local dev before this fix, the same failure mode T02-D11 fixed for the
-// ingest routes. Mirrors `inbox/accessor.ts#inboxWriter`'s exact pattern —
-// production (`O11Y_ENV === "production"`) is unchanged.
+// Locally, workerd's Durable Object simulation throws the moment
+// `.jurisdiction()` is called (`Error: Jurisdiction restrictions are not
+// implemented in workerd`), so this mirrors `inbox/accessor.ts#inboxWriter`'s
+// pattern: skip jurisdiction only under `O11Y_ENV === "local"`; production
+// is unchanged.
 function inboxWriterStub(env: Env) {
   const ns = env.O11Y_ENV === "local" ? env.INBOX_WRITER : env.INBOX_WRITER.jurisdiction("eu");
   return ns.getByName("main");
@@ -342,11 +210,9 @@ function writeBoxPoint(
 }
 
 /** Contract §2: one instance, name `box`, `.jurisdiction("eu")` in
- *  production (see the T03-D note on `inboxWriterStub` above for why not
- *  locally). Exported for T03's wake-trigger callers (the Grafana-visit
- *  route, the backlog cron) and `InboxWriter.resolveWakes` (ledger.ts) —
- *  never address `GRAFANA_BOX` any other way, or a second box (and a
- *  second container) gets created. */
+ *  production (see `inboxWriterStub` for why not locally). Never address
+ *  `GRAFANA_BOX` any other way, or a second box (and container) gets
+ *  created. */
 export function getGrafanaBoxStub(env: Env) {
   const ns = env.O11Y_ENV === "local" ? env.GRAFANA_BOX : env.GRAFANA_BOX.jurisdiction("eu");
   return ns.getByName("box");
@@ -354,78 +220,58 @@ export function getGrafanaBoxStub(env: Env) {
 
 export class GrafanaBox extends Container<Env> {
   // Grafana is the box's own default target; Loki (3100) is reached
-  // explicitly (readiness probe, and any future direct Loki proxy T03
-  // adds) — see docs/observability-contract.md §1's port table.
+  // explicitly (readiness probe) — see docs/observability-contract.md §1's
+  // port table.
   defaultPort = 3000;
   requiredPorts = [3000, 3100];
-  // ADR-0041 §A: 15 idle minutes, renewed only by real traffic — `stop()`
-  // stays the inherited default (sends SIGTERM), which is what
+  // ADR-0041 §A: 15 idle minutes, renewed only by real traffic. `stop()`
+  // stays the inherited default (sends SIGTERM), which
   // `containers/o11y/supervisor/entrypoint.sh` traps to run the real stop
-  // protocol. The 4-hour awake cap is T03's job (it owns the wake/stop
-  // orchestration this class hands the mechanism to).
+  // protocol.
   sleepAfter = "15m";
 
   #startingPromise: Promise<WakeRecord> | null = null;
 
-  // F13 bounds (see the constants' doc comments). Instance fields only so
-  // `pipeline/o11y-wake.test.mjs` (F13 tests) can shrink them; production
-  // never assigns them.
+  // Instance fields only so tests can shrink these bounds; production never
+  // assigns them.
   readyProbeTimeoutMs = READY_PROBE_TIMEOUT_MS;
   wakeWaitMs = WAKE_WAIT_MS;
   startDeadlineMs = START_DEADLINE_MS;
   lokiPushTimeoutMs = LOKI_PUSH_TIMEOUT_MS;
-  /** F13: when an `isReady()` probe first ran out of time with no probe
-   *  settling since. In memory only: a fresh instance starts clean. */
+  /** When an `isReady()` probe first ran out of time with no probe settling
+   *  since. In memory only: a fresh instance starts clean. */
   #probesStuckSince: number | null = null;
 
   /**
    * The only way to start this container. Mints a fresh wakeId, persists it
-   * (durably — this DO can be evicted between `wake()` and `onStop()`, so
-   * the wakeId must never live only in memory), records it with
-   * `InboxWriter` BEFORE starting (fail closed: if that call throws, the
-   * container never starts), then starts the container with a full,
-   * rebuilt `envVars` set carrying the new wakeId.
+   * durably, records it with `InboxWriter` BEFORE starting (fail closed),
+   * then starts the container with a full, rebuilt `envVars` set.
    *
-   * Idempotent: a wake already in flight (this instance) or already running
-   * (state survives an eviction) returns the existing record instead of
-   * minting a second wakeId and calling `recordWake` again — a second call
-   * would mark the still-running wake `over: true` in InboxWriter's ledger
-   * while it is still draining (ADR-0041 §B.3).
+   * Idempotent: a wake already in flight or already running returns the
+   * existing record, never minting a second wakeId (ADR-0041 §B.3).
    */
   async wake(reason: WakeReason): Promise<WakeRecord> {
     // Set the in-flight promise SYNCHRONOUSLY, before any `await` — two
-    // `wake()` calls issued back-to-back (no await between them, the only
-    // shape that matters for a single-threaded isolate) must both observe
-    // the same promise. Checking `getState()` first and only latching the
-    // guard afterward would leave a window between the two calls' `await`s
-    // where neither has set it yet, and both would go on to mint a wakeId
-    // and call `start()`.
+    // `wake()` calls issued back-to-back (no await between them) must both
+    // observe the same promise; latching after checking `getState()` first
+    // would leave both calls to mint a wakeId and call `start()`.
     if (!this.#startingPromise) {
       this.#startingPromise = this.#wakeInner(reason).finally(() => {
         this.#startingPromise = null;
       });
     }
-    // F13: a caller waits at most `wakeWaitMs` for the shared promise.
-    // Unbounded, one start that never settled pinned every later caller.
+    // A caller waits at most `wakeWaitMs` for the shared promise, so one
+    // start that never settles cannot pin every later caller.
     return withDeadline(this.#startingPromise, this.wakeWaitMs, "GrafanaBox.wake: container start still in flight");
   }
 
   async #wakeInner(reason: WakeReason): Promise<WakeRecord> {
     const state = await this.getState();
     if (state.status === "running" || state.status === "healthy") {
-      // Fix round (C1): this is also the branch that protects a still-
-      // draining container from a second wake — `stop()` (SIGTERM) does NOT
-      // change `getState()`'s status in the real `@cloudflare/containers`
-      // library (`Container.prototype.stop` only signals the process and
-      // awaits `syncPendingStoppedEvents`; it never calls
-      // `setStatusAndupdate`), so `getState()` still reports
-      // `"running"`/`"healthy"` for the whole window between calling
-      // `stop()` and the process actually exiting. Falling through to
-      // `#doWake` here would mint a second wakeId and call `recordWake`,
-      // marking the still-draining wake `over: true` in InboxWriter's ledger
-      // before its own marker exists — returning the EXISTING record
-      // instead (below) is what actually prevents that, not a dedicated
-      // `"stopping"` check.
+      // Also protects a still-draining container from a second wake:
+      // `stop()` doesn't change `getState()`'s status while draining, so
+      // this still reports running/healthy. Returning the existing record
+      // (below) prevents minting a second wakeId here.
       const existing = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
       if (existing) return existing;
       // Running with no persisted record is an inconsistent state this
@@ -435,59 +281,35 @@ export class GrafanaBox extends Container<Env> {
         `GrafanaBox.wake: container state is "${state.status}" but no wake record is stored`,
       );
     }
-    // Fix round (finding B-M1): a dedicated `state.status === "stopping"`
-    // branch used to live here, refusing `wake()` while "stopping". The
-    // real `@cloudflare/containers` library never actually reports that
-    // status from `getState()` (its `ContainerState.setStopping()` method
-    // exists but has no caller anywhere in the package — `stop()` above
-    // confirms why: it never calls it), so the branch was dead code in
-    // production; its own test only passed because the test stub's default
-    // `stop()` hook invented the "stopping" state by hand
-    // (`cloudflare-containers-stub.mjs`, now fixed to match the real
-    // library and leave status untouched). Deleted rather than kept as
-    // dead code — the "running"/"healthy" branch above already gives the
-    // same protection for the real SIGTERM-pending window.
     return this.#doWake(reason);
   }
 
   async #doWake(reason: WakeReason): Promise<WakeRecord> {
     const wakeId = crypto.randomUUID();
-    // Fix round (I2): build AND VALIDATE envVars first, as a pure
-    // synchronous step with no side effects yet. If a required secret is
-    // missing this throws here — before any storage write and before
-    // InboxWriter.recordWake — so a failed wake never leaves the ledger
-    // believing a wake started that never actually will.
+    // envVars are built and validated first, as a pure synchronous step: a
+    // missing required secret throws here, before any storage write and
+    // before InboxWriter.recordWake, so a failed wake never leaves the
+    // ledger believing a wake started that never will.
     const envVars = buildEnvVars(this.env, wakeId);
     const record: WakeRecord = { wakeId, reason, startedAt: Date.now() };
     await this.ctx.storage.put(WAKE_STORAGE_KEY, record);
-    // Fix round (I1): `LAST_GRAFANA_STORAGE_KEY` is not scoped by wakeId —
-    // without this reset, a visitor's activity from the PREVIOUS wake
-    // survives into this fresh one, and `#finishDrain`'s quiet check
-    // (10 minutes) can read it as "recent" even though nothing has
-    // visited /grafana/* yet this wake, refusing to self-stop a
-    // backlog-only wake that has no visitors at all (ADR §A's quiet-stop
-    // rule, and exit criterion 7's awake-time cost). Deleted here, before
-    // `start()`, so a wake with a real visitor still renews it normally
-    // via `noteVisitorActivity()` once that visitor actually arrives, but
-    // a wake with none starts genuinely quiet.
+    // Not scoped by wakeId: without this reset, a previous wake's visitor
+    // activity would survive into this one, letting `#finishDrain`'s quiet
+    // check read it as "recent" even with no visitor yet this wake — ADR
+    // §A's quiet-stop rule needs a genuinely quiet backlog-only wake.
     await this.ctx.storage.delete(LAST_GRAFANA_STORAGE_KEY);
-    // QA follow-up ("isReady() while stopping"): a previous wake's "stopping" marker (see
-    // STOPPING_FOR_STORAGE_KEY's own doc comment) must never survive into
-    // this fresh one — scoping it by wakeId already prevents a stale marker
-    // from matching, but deleting it here too avoids leaving a dead key
-    // around and matches the same belt-and-suspenders reset
-    // LAST_GRAFANA_STORAGE_KEY just got, for the same class of bug (I1).
+    // A previous wake's "stopping" marker must never survive into this one
+    // (see STOPPING_FOR_STORAGE_KEY's doc comment); wakeId scoping already
+    // prevents a stale marker from matching, this just avoids a dead key.
     await this.ctx.storage.delete(STOPPING_FOR_STORAGE_KEY);
     // Fail closed: InboxWriter is the ledger's one owner (ADR-0041 §B.3);
     // if it cannot record this wake, the container must not start with a
     // wakeId nothing else knows about.
     await inboxWriterStub(this.env).recordWake(record.wakeId, reason);
-    // ADR §A: "after 4 hours awake regardless." `hardCapStop` re-checks the
-    // wakeId when it fires — a wake that already stopped on its own (idle
-    // timeout, or the post-drain quiet stop) leaves nothing for this to do.
-    // F13: scheduled BEFORE `start()`, not after it. When `start()` hangs
-    // or throws after the container was already issued, that container
-    // still runs under this wakeId, and it still needs its cap.
+    // ADR §A: "after 4 hours awake regardless." Scheduled before `start()`,
+    // not after: when `start()` hangs or throws after the container was
+    // already issued, that container still runs under this wakeId and
+    // still needs its cap.
     await this.schedule(new Date(Date.now() + WAKE_HARD_CAP_MS), HARD_CAP_SCHEDULE, { wakeId: record.wakeId });
     try {
       await withDeadline(this.start({ envVars }), this.startDeadlineMs, "GrafanaBox.start()");
@@ -495,40 +317,19 @@ export class GrafanaBox extends Container<Env> {
       if (err instanceof DeadlineExceeded) this.#resetWedgedInstance(record.wakeId, err);
       throw err;
     }
-    // T03-D (see the task Outcome — found running a real `wrangler dev`
-    // locally, not guessed): `start()` never calls `state.setHealthy()`
-    // (only `startAndWaitForPorts()` does), so `state.status` stays
-    // `"running"`, never `"healthy"`. The base `Container.containerFetch`
-    // checks exactly that field (`state.status !== 'healthy'`) to decide
-    // whether to re-verify ports — with it permanently false, EVERY single
-    // `containerFetch` call for the rest of this wake (every drain push,
-    // every `/grafana/*` proxy request) re-ran the full
-    // `startAndWaitForPorts` port-polling machinery from scratch, observed
-    // to cost anywhere from ~10ms to 160+ SECONDS depending on contention.
-    // Fired here, deliberately NOT awaited: `wake()` itself must still
-    // return fast (the waking page's whole point is a quick response while
-    // the box boots in the background) — this just gets `state.status` to
-    // `"healthy"` in the background, once, so subsequent calls take the
-    // cheap path. Harmless if it never resolves (a wake that fails/stops
-    // before ports ever come up) — nothing awaits it, and it targets THIS
-    // wake's own container instance state, never a later wake's.
+    // `start()` never calls `state.setHealthy()`, so `state.status` stays
+    // `"running"`, and the base `containerFetch` re-verifies ports on every
+    // call until it does — costing ~10ms to 160+s under contention. Fired
+    // here, unawaited, so `wake()` itself still returns fast.
     void this.startAndWaitForPorts({ ports: this.requiredPorts }).catch(() => {});
     return record;
   }
 
   /**
-   * F13: `start()` did not settle within `startDeadlineMs`. The library
-   * keeps its own in-flight start promise (`startInFlight`) and every later
-   * start path joins it, so this instance cannot recover on its own. Only
-   * the in-memory object is reset (`ctx.abort()`, the same recovery the
-   * library uses itself for a lost container connection). Storage and the
-   * container survive. The next request builds a fresh instance: `wake()`
-   * returns this wake's stored record while the container runs, and the
-   * first `containerFetch` there runs `startAndWaitForPorts`, whose
-   * `onStart` schedules this wake's drain. When the container is not
-   * running, the base `alarm()` loop records the stop (`onStop`) and the
-   * next wake mints a fresh wakeId, so the unclean-stop replay proceeds as
-   * usual.
+   * `start()` did not settle within `startDeadlineMs`. The library's own
+   * in-flight start promise means this instance cannot recover on its own,
+   * so only the in-memory object is reset (`ctx.abort()`). Storage and the
+   * container survive; the next request builds a fresh instance.
    */
   #resetWedgedInstance(wakeId: string, err: Error): void {
     console.error(JSON.stringify({ event: "o11y.box.start_wedged", wakeId, message: err.message }));
@@ -541,16 +342,11 @@ export class GrafanaBox extends Container<Env> {
   }
 
   /**
-   * F13, the reload path: an instance that did not start the container
-   * itself (a hot reload, deploy or eviction while the box kept running)
-   * never goes through `#doWake`'s start deadline. It reaches the library's
-   * start machinery only through `containerFetch` → `startAndWaitForPorts`,
-   * where a wedged `startInFlight` would make every probe time out forever.
-   * The probe deadline keeps each request answering (waking page), and this
-   * escalation makes the instance recover as well: probes that have timed
-   * out without a single one settling for `startDeadlineMs` reset it once,
-   * like a wedged `start()` does. Any settled probe, ready or not, clears
-   * the clock, so a slow but live boot never trips it.
+   * The reload path: an instance that did not start the container itself
+   * never goes through `#doWake`'s start deadline, so a wedged
+   * `startInFlight` would make every probe time out forever. Resets the
+   * instance once probes have timed out for `startDeadlineMs` with none
+   * settling; any settled probe clears the clock.
    */
   #escalateStuckProbes(probes: PromiseSettledResult<Response>[]): void {
     const timedOut = probes.find(
@@ -571,15 +367,12 @@ export class GrafanaBox extends Container<Env> {
       .catch(() => {});
   }
 
-  /** QA follow-up ("isReady() while stopping"): overriding `stop()` itself — rather than each of
-   *  its three real callers individually — is what covers the base class's
-   *  OWN idle-timeout path too (`onActivityExpired` → `this.stop()`), not
-   *  just this class's explicit `hardCapStop`/`#finishDrain` callers. Sets
-   *  the marker BEFORE calling through, so a probe racing this exact call
-   *  never has a chance to run unmarked. Cleared on a throw (and rethrown):
-   *  a `stop()` that did not actually happen must not leave `isReady()`
-   *  reporting not-ready for the rest of a wake that is, in fact, still very
-   *  much up. */
+  /** Overriding `stop()` itself — rather than each of its three real callers
+   *  individually — also covers the base class's OWN idle-timeout path
+   *  (`onActivityExpired` → `this.stop()`). Sets the marker BEFORE calling
+   *  through, so a probe racing this call never runs unmarked. Cleared on a
+   *  throw: a `stop()` that did not actually happen must not leave
+   *  `isReady()` reporting not-ready for a wake that is still up. */
   override async stop(...args: Parameters<Container<Env>["stop"]>): Promise<void> {
     const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
     if (wake) await this.ctx.storage.put(STOPPING_FOR_STORAGE_KEY, wake.wakeId);
@@ -602,9 +395,9 @@ export class GrafanaBox extends Container<Env> {
   }
 
   /** ADR §A: "The Worker renews the activity timer only on HTTP requests to
-   *  `/grafana/*`." Called by the `/grafana/*` proxy (`grafana/proxy.ts`)
-   *  after a request passes the session check (K1) — never by the drain's
-   *  own Loki pushes. Also renews the base class's own idle clock (harmless — see
+   *  `/grafana/*`." Called by the `/grafana/*` proxy after a request passes
+   *  the session check, never by the drain's own Loki pushes. Also renews
+   *  the base class's own idle clock (harmless — see
    *  {@link LAST_GRAFANA_STORAGE_KEY}'s doc comment). */
   async noteVisitorActivity(): Promise<void> {
     await this.ctx.storage.put(LAST_GRAFANA_STORAGE_KEY, Date.now());
@@ -615,20 +408,11 @@ export class GrafanaBox extends Container<Env> {
     return (await this.ctx.storage.get<number>(LAST_GRAFANA_STORAGE_KEY)) ?? null;
   }
 
-  /** `InboxWriter.resolveWakes`'s "is the box still running" signal
-   *  (`ledger.ts#LedgerDeps.isBoxRunning`). Backed by the public
-   *  `getState()` (the same check `isReady()`/`containerFetch` already use)
-   *  rather than the base class's own live `this.container.running` flag —
-   *  that field is marked `private` in `@cloudflare/containers`' own types,
-   *  genuinely inaccessible from a subclass at the type level, not merely a
-   *  style choice. T03-D (see the task Outcome): `getState()` can be stale
-   *  immediately after a host loss while this DO was evicted, until the
-   *  base class's own periodic `alarm()`/monitor reconciliation
-   *  (`syncPendingStoppedEvents`, called on every alarm tick, which this
-   *  class always has scheduled — see the base class's own "container DOs
-   *  ALWAYS need an alarm right now" comment) catches up — empirically
-   *  bounded to a few minutes in this task's SIGKILL testing (see the
-   *  Outcome), self-healing well within the cron's own 10-minute cadence. */
+  /** `InboxWriter.resolveWakes`'s "is the box still running" signal.
+   *  Backed by `getState()`, not the base class's private `container.running`
+   *  flag. Can lag the real container by a few minutes after a host loss,
+   *  until periodic reconciliation catches up — well within the cron's
+   *  10-minute cadence. */
   async isAwake(): Promise<boolean> {
     const state = await this.getState();
     return state.status === "running" || state.status === "healthy";
@@ -645,13 +429,11 @@ export class GrafanaBox extends Container<Env> {
   async isReady(): Promise<boolean> {
     const state = await this.getState();
     if (state.status !== "running" && state.status !== "healthy") return false;
-    // QA follow-up ("isReady() while stopping"): `getState()` above cannot see a stop in flight —
-    // `stop()`'s own doc comment explains why it still reports
-    // "running"/"healthy" for the whole SIGTERM→exit window. Skip the
-    // probes entirely once THIS instance has asked to stop the wake it is
-    // currently tracking, rather than hitting the container (and logging
-    // the library's own "not listening" line) on every tick until the
-    // process actually exits.
+    // `getState()` above cannot see a stop in flight (see `stop()`'s doc
+    // comment for why it still reports running/healthy through the
+    // SIGTERM→exit window). Skip the probes entirely once this instance has
+    // asked to stop the wake it is tracking, rather than hitting the
+    // container on every tick until the process actually exits.
     const [wake, stoppingFor] = await Promise.all([
       this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY),
       this.ctx.storage.get<string>(STOPPING_FOR_STORAGE_KEY),
@@ -660,21 +442,10 @@ export class GrafanaBox extends Container<Env> {
       this.#probesStuckSince = null; // nothing was attempted — nothing to escalate
       return false;
     }
-    // F6 (V-triage): `allSettled`, and every body released on every path.
-    // `@cloudflare/containers` counts a `containerFetch` as in flight until
-    // its response body is consumed or cancelled (see
-    // {@link releaseBody}), and never runs the `sleepAfter` idle stop while
-    // that count is above zero. Reading only `.status` here left two
-    // requests in flight per call — this runs on every `/grafana/*` request
-    // and every `drainStep` — so a visit wake never idled out and ran to
-    // the 4-hour cap. `Promise.all` would also drop the other probe's
-    // response unreleased when one of them throws.
-    //
-    // F13: each probe is bounded twice. The signal cancels the container
-    // request itself, and the deadline covers the library's own start
-    // machinery before that request is even sent (a `containerFetch` on a
-    // not-yet-healthy box runs `startAndWaitForPorts` first). A probe
-    // answering after its deadline gets its body released anyway.
+    // `allSettled`, with every body released: an unread body counts as in
+    // flight and blocks the idle stop. Each probe is bounded twice — the
+    // signal cancels the request, the deadline covers the library's own
+    // start machinery before the request is even sent.
     const probe = (url: string, port: number) =>
       boundedProbe(
         this.containerFetch(new Request(url, { signal: AbortSignal.timeout(this.readyProbeTimeoutMs) }), port),
@@ -691,17 +462,11 @@ export class GrafanaBox extends Container<Env> {
   }
 
   /**
-   * F8: contract §5's `o11y.wake` `duration_ms` is wake-to-ready (exit
-   * criterion 6): from `wake()` minting the wake (`WakeRecord.startedAt`,
-   * set in `#doWake` before `recordWake`/`start()`) to the first successful
-   * `isReady()` — whichever caller gets there first, `drainStep`'s poll or
-   * a `/grafana/*` request. Resolution is that poll's cadence: `drainStep`
-   * re-checks about once a second (`DRAIN_STEP_GAP_MS`, whole-second
-   * schedule times), so expect up to ~2 s of slack against criterion 6's
-   * 90 s budget. Reported once per wake (`READY_RECORDED_FOR_STORAGE_KEY`);
-   * `InboxWriter.resolveWakes` writes it on the `o11y.wake` point when the
-   * wake resolves, clean or unclean. Never fails `isReady()`: if the RPC
-   * throws, the guard is not set and the next successful probe retries.
+   * Contract §5's `o11y.wake` `duration_ms` is wake-to-ready (exit
+   * criterion 6), from `wake()` to the first successful `isReady()`.
+   * Reported once per wake; `resolveWakes` carries it into the `o11y.wake`
+   * point. Never fails `isReady()` — a failed RPC just leaves the guard
+   * unset for the next probe to retry.
    */
   async #recordReadyOnce(): Promise<void> {
     const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
@@ -729,10 +494,8 @@ export class GrafanaBox extends Container<Env> {
     portParam?: number,
   ): Promise<Response> {
     const request = toInspectableRequest(requestOrUrl, portOrInit);
-    // Fail closed (fix round I3): the old `request &&` check let a request
-    // this code couldn't even construct into a `Request` to inspect skip
-    // the block entirely — silence read as "not live" instead of "unknown,
-    // so refuse". If it cannot be inspected, it cannot be proven safe.
+    // Fail closed: if the request cannot even be inspected, it cannot be
+    // proven safe.
     if (!request || isBlockedContainerRequest(request)) {
       // Refused before touching container state or renewing the activity
       // timer — an idle tab hammering this path must not count as activity
@@ -742,38 +505,21 @@ export class GrafanaBox extends Container<Env> {
 
     const state = await this.getState();
     if (state.status !== "running" && state.status !== "healthy") {
-      // The base class's `containerFetch` auto-starts on any request; that
-      // is exactly the WAKE_ID-fails-open bug from the Phase 1 review
-      // (T01-D, compose.yml's WAKE_ID) one layer up — an unrelated request
-      // arriving while the box is asleep must never silently mint a wake.
-      // Only `wake()` may start the container; the waking page (T03) is
-      // what a caller serves instead of retrying this blindly.
+      // The base class's `containerFetch` auto-starts on any request — an
+      // unrelated request arriving while the box is asleep must never
+      // silently mint a wake. Only `wake()` may start the container; the
+      // waking page is what a caller serves instead of retrying blindly.
       return new Response("GrafanaBox is not running — call wake() first.", { status: 503 });
     }
-    // F2 fix (final review, B-I4): `getState()` is this class's own
-    // PERSISTED record and can lag the REAL container by up to a few
-    // minutes after a host loss (see `isAwake()`'s own doc comment above —
-    // the base class's periodic monitor reconciliation is what eventually
-    // catches up). A request landing in that stale window (any open tab, or
-    // `drainStep`'s own `isReady()` probe, firing every second) would pass
-    // the check above and fall through to the base class's own
-    // `containerFetch`, which restarts a container the moment it observes
-    // `!this.container.running` — regardless of what THIS override decided
-    // — using `this.envVars`, which `#doWake` never assigns (only `start()`'s
-    // own `{ envVars }` parameter carries it), so that restart boots with NO
-    // `WAKE_ID`/S3 credentials/datasource env at all. `this.ctx.container`
-    // (a real, public `DurableObjectState` field — distinct from the base
-    // library's own `this.container`, which is `private` and inaccessible
-    // from a subclass at the type level) is the live signal, so checking it
-    // here — in addition to the persisted `state.status` above — closes
-    // that window: a request arriving during it is refused (503) rather
-    // than silently starting an unminted container. Deliberately does NOT
-    // try to self-heal by calling anything on `this.container`/`envVars`
-    // here (T02's own note on the rejected fix: assigning `this.envVars` in
-    // `#doWake` risks the base class's OWN restart racing a real wake and
-    // booting a second process under the SAME `WAKE_ID`) — the base class's
-    // periodic alarm/monitor reconciliation is what closes the stale window
-    // on its own, well within the cron's 10-minute cadence.
+    // `getState()` can lag the real container by a few minutes after a
+    // host loss (see `isAwake()`). A request in that stale window would
+    // otherwise fall through to the base class's own `containerFetch`,
+    // which restarts using `this.envVars` — never assigned by `#doWake` —
+    // booting with no WAKE_ID/credentials at all. `this.ctx.container`
+    // (the real, public field) is the live signal, so checking it here
+    // refuses (503) instead of silently starting an unminted container.
+    // Not self-healed here: that risks racing a real wake under the same
+    // WAKE_ID; periodic reconciliation closes the window on its own.
     if (this.ctx.container?.running !== true) {
       return new Response("GrafanaBox is not running — call wake() first.", { status: 503 });
     }
@@ -782,53 +528,23 @@ export class GrafanaBox extends Container<Env> {
   }
 
   /**
-   * Z1: the ONLY entry point the `/grafana/*` proxy route
-   * (`grafana/proxy.ts`) uses, called as `stub.fetch(request)`. It used to
-   * call the `containerFetch` RPC method on the stub instead. Every
-   * body-bearing request sent that way (each panel's `POST /api/ds/query`,
-   * each datasource `resources/*` POST) printed
-   * `Uncaught Error: ReadableStream received over RPC disconnected
-   * prematurely.` inside this DO, one error per POST. It happened on
-   * completed requests too, not only on client aborts, and even when the
-   * body was buffered to an ArrayBuffer first: JS RPC serialises any
-   * `Request` body as an RPC stream. GETs (no body) never printed it. A DO's
-   * `fetch()` handler is carried as a plain HTTP request, not JS RPC, so
-   * it has no such stream. Measured live in `wrangler dev`: 33 errors for 33
-   * POSTs from one dashboard switch before, 0 after.
-   *
-   * Every gate stays where it was: this delegates to the
-   * `containerFetch` override above (the live-path and Loki datasource
-   * allowlists, the not-running 503s), so nothing reaches the container
-   * without passing them. It is pinned to Grafana's port 3000: the base
-   * class's own `fetch()` honours a `cf-container-target-port` request
-   * header, and `/grafana/*` forwards client headers, so inheriting that
-   * would let a browser pick Loki's port 3100 (its push/delete/admin API).
+   * The ONLY entry point the `/grafana/*` proxy uses (`stub.fetch`), not
+   * the `containerFetch` RPC method: JS RPC serialises a body-bearing
+   * `Request` as a stream, which a DO's `fetch()` avoids entirely (measured:
+   * 33 stream errors per dashboard switch via RPC, 0 via fetch). Pinned to
+   * port 3000 so a forwarded `cf-container-target-port` header can't steer
+   * a client at Loki's 3100.
    */
   override async fetch(request: Request): Promise<Response> {
     return this.containerFetch(request, 3000);
   }
 
   override async onStart(): Promise<void> {
-    // T03-D (see the task Outcome): `onStart` fires as soon as the
-    // container process is issued (the base `start()` — the path `wake()`
-    // uses — calls it right after `startContainerIfNotRunning`, WITHOUT
-    // waiting for ports; only `startAndWaitForPorts` calls `setHealthy()`
-    // first). Loki/Grafana are very likely still booting at this point, so
-    // `drainStep` itself gates its first real push on `isReady()` rather
-    // than trusting this hook's timing. `this.schedule` (not overriding
-    // `alarm()` directly) is deliberate — the base class's own `alarm()`
-    // already owns the idle-timeout/`schedule()` machinery, and fighting it
-    // with a second `alarm()` override would be exactly the class of bug
-    // this task's own "riskiest" billing warrants avoiding.
-    //
-    // `onStart` fires a SECOND time for the same wake: `#doWake` also fires
-    // (unawaited) `startAndWaitForPorts()` in the background purely to flip
-    // `state.status` to `"healthy"` (see its own doc comment), and the base
-    // class calls `onStart()` again once THAT resolves. Without the guard
-    // below this would schedule `drainStep` twice per wake — harmless
-    // (idempotent, and the DO alarm loop only fetches one snapshot per
-    // invocation regardless — see `DRAIN_STEP_GAP_MS`'s doc comment) but
-    // wasteful, so skip it once already scheduled for this wakeId.
+    // Fires as soon as the container process is issued, without waiting for
+    // ports — `drainStep` gates its first push on `isReady()` instead.
+    // Also fires a SECOND time once the background `startAndWaitForPorts()`
+    // in `#doWake` resolves; the guard below skips scheduling `drainStep`
+    // twice per wake (idempotent either way).
     const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
     if (!wake) return; // defensive; wake() always sets this before start()
     if ((await this.ctx.storage.get<string>(DRAIN_SCHEDULED_FOR_STORAGE_KEY)) === wake.wakeId) return;
@@ -837,23 +553,11 @@ export class GrafanaBox extends Container<Env> {
   }
 
   /**
-   * One bounded batch of the drain (ADR §B.3/§A "Drain" scope). Reschedules
-   * itself {@link DRAIN_STEP_GAP_MS} later (see that constant's own doc
-   * comment for why a full-second gap, not "now") until
-   * `InboxWriter.nextWrittenKeys` returns empty, then decides whether to
-   * stop (see `#finishDrain`). A no-op if a newer wake has already
-   * superseded `payload.wakeId`.
-   *
-   * `seenHashes` is a fresh `Set()` per invocation, not persisted across
-   * steps or across the wake: ADR §B.3's own "What an unclean stop costs"
-   * paragraph already accepts duplicate STORAGE from a crash-and-replay,
-   * relying on Loki's query-time dedup (identical timestamp + labels +
-   * structured metadata) to collapse it back to one result — the exact
-   * same mechanism covers a retried step re-pushing a key whose ledger
-   * commit did not land before a crash. A per-step set only needs to guard
-   * against double-processing WITHIN one call (defensive; ingest-time
-   * dedup, §B.2 step 4, already prevents the same record existing in two
-   * different packed objects under normal operation).
+   * One bounded batch of the drain (ADR §B.3/§A). Reschedules itself
+   * {@link DRAIN_STEP_GAP_MS} later until the backlog is empty, then
+   * decides whether to stop (`#finishDrain`). `seenHashes` is a fresh
+   * `Set()` per invocation — Loki's query-time dedup already covers a
+   * crash-and-replay.
    */
   async drainStep(payload: { wakeId: string }): Promise<void> {
     const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
@@ -865,51 +569,38 @@ export class GrafanaBox extends Container<Env> {
     }
 
     const startedAt = Date.now();
-    // QA follow-up ("reopen reason on the drain error path"): a mutable box `#drainStepBody` fills in as soon as
-    // it knows whether this batch replayed a reopened key (right after
-    // `takeReopenedFlag`, before anything that could throw) — read back in
-    // the catch below so an error point reports `reason: "reopen"` too, not
-    // just the success point further down inside `#drainStepBody` itself.
-    // `takeReopenedFlag` is one-shot (it consumes the markers as it reads
-    // them), so this is the only chance to observe it once `drainBatch` (or
-    // anything after it) throws.
+    // Fills in whether this batch replayed a reopened key, read back in the
+    // catch below so an error point reports `reason: "reopen"` too (not
+    // just the success path further down). `takeReopenedFlag` is one-shot,
+    // so this is the only chance to observe it once anything below throws.
     const reopenState: { replayed: boolean } = { replayed: false };
     try {
       await this.#drainStepBody(payload, current, startedAt, reopenState);
     } catch (err) {
-      // B-M2 fix (minor triage item 4): any throw in `#drainStepBody` (an R2
-      // `get`, an `InboxWriter` RPC, or a symbolication failure that isn't a
-      // Loki-HTTP error) used to propagate straight out of `drainStep` and
-      // silently end the drain for the rest of this wake — nothing
-      // rescheduled it, nothing recorded the failure, and the box just sat
-      // there (idle-timer-bound) having quietly given up mid-drain. Record
-      // it exactly like a Loki outage already is (`outcome: "error"`, same
-      // `o11y.drain` point shape `stoppedEarly` writes) and run the SAME
-      // post-drain stop decision a Loki outage runs, so a later wake (the
-      // cron backlog wake, or a fresh visit) retries these still-`written`
-      // keys instead of losing the wake silently.
+      // Any throw here (an R2 get, an InboxWriter RPC, or a symbolication
+      // failure) would otherwise propagate straight out of `drainStep` and
+      // silently end the drain for the rest of this wake. Record it like a
+      // Loki outage already is, and run the same post-drain stop decision,
+      // so a later wake retries these still-`written` keys instead of
+      // losing the wake silently.
       try {
         writeBoxPoint(
           this.env,
           this.ctx,
           "o11y.drain",
           { count: 0, duration_ms: Date.now() - startedAt, bytes: 0, value: 0 },
-          // QA follow-up ("reopen reason on the drain error path"): same `"reopen"` override the success path
-          // (below, inside `#drainStepBody`) applies — a batch that replayed
-          // reopened keys and then threw must not report the wake's own
-          // backlog/visit reason instead.
+          // Same `"reopen"` override the success path applies: a batch
+          // that replayed reopened keys and then threw must not report the
+          // wake's own backlog/visit reason instead.
           { reason: reopenState.replayed ? "reopen" : current.reason, outcome: "error" },
         );
         console.error(JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, message: String(err) }));
         await this.#finishDrain(payload.wakeId);
       } catch (finishErr) {
-        // `#finishDrain` (or the point write above it) throwing too — most
-        // plausibly the SAME failure that took down `#drainStepBody` in the
-        // first place (a DO storage/RPC outage affects every call in this
-        // isolate, not just one). "always reschedule or finish" must hold
-        // even here: fall back to a plain reschedule, the same one the
-        // readiness gate above already uses, so this wake still gets
-        // another chance rather than silently stalling forever.
+        // `#finishDrain` (or the point write above) throwing too is most
+        // plausibly the same failure that took down `#drainStepBody`.
+        // "Always reschedule or finish" must hold even here: fall back to a
+        // plain reschedule so this wake still gets another chance.
         console.error(
           JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, message: String(finishErr), stage: "finish" }),
         );
@@ -918,9 +609,9 @@ export class GrafanaBox extends Container<Env> {
     }
   }
 
-  /** The actual drain-batch work `drainStep` runs inside a try/finally-style
-   *  guard (above) — split out so every throw inside it, from ANY step, is
-   *  caught by the SAME handler (B-M2 fix, minor triage item 4). */
+  /** The actual drain-batch work `drainStep` runs inside a try/catch guard
+   *  above — split out so every throw inside it is caught by that same
+   *  handler. */
   async #drainStepBody(
     payload: { wakeId: string },
     current: WakeRecord,
@@ -932,7 +623,7 @@ export class GrafanaBox extends Container<Env> {
     // the wake-start call (idempotent to run again on every step: cheap,
     // and self-correcting if a wake elsewhere just went `over`).
     await writer.resolveWakes();
-    // F37, ADR §G: over the o11y spend cap "drains pause, visit wakes still
+    // ADR §G: over the o11y spend cap "drains pause, visit wakes still
     // work". The box still serves Grafana; it just pushes nothing to Loki.
     // Checked on every step, so a pause set mid-drain stops at the next
     // batch, and a backlog wake that started before the pause stops the box
@@ -948,16 +639,13 @@ export class GrafanaBox extends Container<Env> {
       return;
     }
 
-    // Fix round (finding B-M5): does this batch replay any reopened keys?
-    // One-shot (the call also clears the markers) — see
-    // `ledger.ts#takeReopenedFlag`'s own doc comment. Read BEFORE
-    // `drainBatch` so the check reflects exactly the keys this batch is
-    // about to push, not whatever the ledger looks like by the time the
-    // point below is written.
+    // Does this batch replay any reopened keys? One-shot (also clears the
+    // markers, see `ledger.ts#takeReopenedFlag`). Read BEFORE `drainBatch`
+    // so the check reflects exactly the keys this batch is about to push.
     const replayedReopenedKeys = await writer.takeReopenedFlag(keys);
-    // QA follow-up ("reopen reason on the drain error path"): set immediately, before anything below (a real
-    // R2/InboxWriter RPC) can throw — this is the outer catch's only chance
-    // to see it, since `takeReopenedFlag` already consumed the markers.
+    // Set immediately, before anything below (a real R2/InboxWriter RPC)
+    // can throw — this is the outer catch's only chance to see it, since
+    // `takeReopenedFlag` already consumed the markers.
     reopenState.replayed = replayedReopenedKeys;
 
     const deps: DrainDeps = {
@@ -969,17 +657,17 @@ export class GrafanaBox extends Container<Env> {
         const res = await this.containerFetch(
           new Request("http://box/otlp/v1/logs", {
             method: "POST",
-            // F13: see LOKI_PUSH_TIMEOUT_MS.
+            // See LOKI_PUSH_TIMEOUT_MS.
             signal: AbortSignal.timeout(this.lokiPushTimeoutMs),
             headers: { "content-type": "application/json", "content-encoding": "gzip", "X-Scope-OrgID": tenant },
             body: gzippedBody,
           }),
           3100,
         );
-        // F6: a 2xx body is released too, not only read on >=400 — an
-        // unread body keeps this push "in flight" for the idle stop (see
-        // `releaseBody`). Loki's OTLP push usually answers 204 (no body),
-        // but nothing guarantees it.
+        // A 2xx body is released too, not only read on >=400 — an unread
+        // body keeps this push "in flight" for the idle stop (see
+        // `releaseBody`). Loki's OTLP push usually answers 204, but nothing
+        // guarantees it.
         if (res.status < 400) {
           await releaseBody(res);
           return { status: res.status, message: undefined };
@@ -993,27 +681,28 @@ export class GrafanaBox extends Container<Env> {
 
     const result = await drainBatch(keys, new Set(), deps);
 
-    // B-M4 fix (minor triage item 3): a `provisional` key that pushed ZERO
-    // bytes (every record was already deduped/too-old — `drain.ts#drainKey`'s
-    // zero-chunk case) commits straight to `done:` instead of entering
-    // `provisional:<wakeId>` — see `ledger.ts#commitKeys`'s own doc comment
-    // for the endless-re-wake loop this avoids.
+    // A `provisional` key that pushed ZERO bytes (every record already
+    // deduped/too-old — `drain.ts#drainKey`'s zero-chunk case) commits
+    // straight to `done:` instead of entering `provisional:<wakeId>` — see
+    // `ledger.ts#commitKeys`'s doc comment for the endless-re-wake loop
+    // this avoids.
     const zeroByteKeys = result.outcomes.filter((o) => o.outcome === "provisional" && o.bytesPushed === 0).map((o) => o.key);
     const provisionalKeys = result.outcomes
       .filter((o) => o.outcome === "provisional" && o.bytesPushed > 0)
       .map((o) => o.key);
     const rejectedKeys = result.outcomes.filter((o) => o.outcome === "rejected");
-    // G1 fix (row 19): a `provisional` outcome with a `reason` set is
-    // `drain.ts#drainKey`'s partial-400 case — at least one chunk landed
-    // 2xx (so it stays `provisional`, following the normal durability
-    // path) but another permanently 400'd. That loss is real and must stay
-    // operator-visible even though the key itself is not `rejected` — see
-    // `InboxWriterApi#recordPartialReject`'s own doc comment.
+    // A `provisional` outcome with a `reason` set is `drain.ts#drainKey`'s
+    // partial-400 case: at least one chunk landed 2xx (so it stays
+    // `provisional`, following the normal durability path) but another
+    // permanently 400'd. That loss is real and must stay operator-visible
+    // even though the key itself is not `rejected` — see
+    // `InboxWriterApi#recordPartialReject`'s doc comment.
     const partiallyRejected = result.outcomes.filter((o) => o.outcome === "provisional" && o.reason !== undefined);
     const bytesPushed = result.outcomes.reduce((sum, o) => sum + o.bytesPushed, 0);
-    // F1: records dropped for being older than Loki's `reject_old_samples_max_age`
-    // (ADR §G accepts this loss, but it must be counted, never silent) —
-    // `value` (§4/§5) is otherwise unused by `o11y.drain`.
+    // Records dropped for being older than Loki's
+    // `reject_old_samples_max_age` (ADR §G accepts this loss, but it must
+    // be counted, never silent) — `value` is otherwise unused by
+    // `o11y.drain`.
     const droppedOld = result.outcomes.reduce((sum, o) => sum + o.droppedOld, 0);
 
     if (provisionalKeys.length > 0) await writer.markKeysProvisional(payload.wakeId, provisionalKeys);
@@ -1027,20 +716,19 @@ export class GrafanaBox extends Container<Env> {
       "o11y.drain",
       { count: result.outcomes.length, duration_ms: Date.now() - startedAt, bytes: bytesPushed, value: droppedOld },
       {
-        // Fix round (finding B-M5): `"reopen"` (already a contract-allowed
-        // `reason` value — `METRICS["o11y.drain"].values.reason`) instead of
-        // the wake's own `backlog`/`visit` reason when this batch replayed
-        // reopened keys — a wake can be TRIGGERED by a backlog/visit while
-        // still draining backlogged manual-reopen data, and that is the
-        // more informative fact about THIS batch.
+        // Already a contract-allowed `reason` value
+        // (`METRICS["o11y.drain"].values.reason`) — used instead of the
+        // wake's own backlog/visit reason when this batch replayed
+        // reopened keys: a wake can be triggered by a backlog/visit while
+        // still draining backlogged manual-reopen data, which is the more
+        // informative fact about THIS batch.
         reason: replayedReopenedKeys ? "reopen" : current.reason,
-        // NB4 (re-review 2): a mixed-outcome key (at least one chunk 2xx,
-        // at least one permanently 400'd) stays `provisional` since row 19
-        // — correct for durability — but that also meant it fell out of
-        // `rejectedKeys` entirely, so this point reported `ok` for a drain
-        // that permanently lost real data. `recordPartialReject` (above)
-        // already logs the loss as its own event; this outcome must not
-        // hide it too.
+        // A mixed-outcome key (at least one chunk 2xx, at least one
+        // permanently 400'd) stays `provisional` for durability, but that
+        // also meant it fell out of `rejectedKeys` entirely, reporting `ok`
+        // for a drain that permanently lost real data.
+        // `recordPartialReject` above already logs the loss; this outcome
+        // must not hide it too.
         outcome: result.stoppedEarly ? "error" : rejectedKeys.length > 0 || partiallyRejected.length > 0 ? "partial" : "ok",
       },
     );
@@ -1079,13 +767,10 @@ export class GrafanaBox extends Container<Env> {
   }
 
   /**
-   * Records exactly what the platform reported, tagged with the wakeId this
-   * instance was tracking — and claims nothing about whether the stop was
-   * clean. `onStop`'s own report is indistinguishable from a host loss
-   * (ADR-0041 §A: `{ exitCode: 0, reason: "exit" }` either way) — the
-   * `state/wakes/<wakeId>/clean` marker in the Loki bucket is the only
-   * thing the ledger (T03) trusts; this is bookkeeping for exit criterion
-   * 12's measurement, not a second source of truth.
+   * Records exactly what the platform reported — claims nothing about
+   * whether the stop was clean. The `state/wakes/<wakeId>/clean` marker in
+   * the Loki bucket is the only thing the ledger trusts; this is
+   * bookkeeping for exit criterion 12's measurement.
    */
   override async onStop(params: { exitCode?: number; reason?: string }): Promise<void> {
     const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
@@ -1098,23 +783,11 @@ export class GrafanaBox extends Container<Env> {
     };
     await this.ctx.storage.put(LAST_STOP_STORAGE_KEY, record);
 
-    // T04 addition (ADR-0041 §G, "the o11y worker reports `GrafanaBox`
-    // awake seconds over the `API` binding") — a small, necessary edit to
-    // this file, not otherwise T04's own (see the T04 Outcome). `wake`'s
-    // own `startedAt` to this stop's `at` is the same awake-window measure
-    // `onStop`'s own doc comment already treats as "bookkeeping, not the
-    // ledger's source of truth" — good enough for a cost estimate, exactly
-    // like every other sku in `budget.ts` is an estimate until the nightly
-    // reconciliation. No `wake` record (this class never produces that
-    // itself, per `#wakeInner`'s own invariant) means nothing to report.
-    //
-    // Awaited directly rather than `this.ctx.waitUntil(...)` (T04-D, found
-    // by this task's own test run — see the Outcome): `onStop` has already
-    // run past the point anything is waiting on a response, so there is no
-    // request to unblock, and `waitUntil` is not guaranteed to exist on
-    // every `DurableObjectState` a caller (a test double, an older
-    // workerd) hands this hook — `reportAwakeSeconds` itself never throws,
-    // so awaiting it here costs nothing but a few milliseconds of `onStop`.
+    // ADR-0041 §G: reports awake seconds to the API worker's usage meter —
+    // good enough for a cost estimate until the nightly reconciliation.
+    // Awaited directly (not `waitUntil`): `onStop` runs past the point
+    // anything is waiting on a response, and `reportAwakeSeconds` never
+    // throws.
     if (wake) {
       const awakeSeconds = Math.max(0, (at - wake.startedAt) / 1000);
       await reportAwakeSeconds(this.env, awakeSeconds);
@@ -1128,14 +801,14 @@ export class GrafanaBox extends Container<Env> {
   }
 }
 
-/** F13: a bounded wait failed. Its own class so `#doWake` can tell a
- *  wedged `start()` apart from a start that failed on its own. */
+/** A bounded wait failed. Its own class so `#doWake` can tell a wedged
+ *  `start()` apart from a start that failed on its own. */
 class DeadlineExceeded extends Error {}
 
-/** F13: `promise`, or a {@link DeadlineExceeded} rejection after `ms`,
- *  whichever comes first. The timer is cleared as soon as either settles,
- *  and `promise` keeps its handler, so a late rejection is never an
- *  unhandled one. */
+/** `promise`, or a {@link DeadlineExceeded} rejection after `ms`, whichever
+ *  comes first. The timer is cleared as soon as either settles, and
+ *  `promise` keeps its handler, so a late rejection is never an unhandled
+ *  one. */
 function withDeadline<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
@@ -1146,9 +819,9 @@ function withDeadline<T>(promise: Promise<T>, ms: number, what: string): Promise
   });
 }
 
-/** F13: {@link withDeadline} for a container probe whose body must still be
- *  released when it answers after the deadline (F6: an unreleased body
- *  counts as in flight and blocks the idle stop). */
+/** {@link withDeadline} for a container probe whose body must still be
+ *  released when it answers after the deadline (an unreleased body counts
+ *  as in flight and blocks the idle stop). */
 function boundedProbe(response: Promise<Response>, ms: number, what: string): Promise<Response> {
   return withDeadline(response, ms, what).catch((err: unknown) => {
     if (err instanceof DeadlineExceeded) void response.then(releaseBody, () => {});
@@ -1157,19 +830,11 @@ function boundedProbe(response: Promise<Response>, ms: number, what: string): Pr
 }
 
 /**
- * F6 (V-triage): releases a container response whose body the caller does
- * not need. `@cloudflare/containers@0.3.7` (`dist/lib/container.js`)
- * increments `inflightRequests` in `containerFetch` (:887) and, for a
- * response with a body, returns `new Response(readable, res)` after
- * `res.body.pipeTo(writable).finally(() => this.decrementInflight())`
- * through an `IdentityTransformStream` (:955-960). The pipe, and so the
- * decrement, only finishes once the reader consumes or cancels `readable`.
- * `isActivityExpired()` (:1687-1692) returns false while the count is above
- * zero, so the base `alarm()` loop never reaches `onActivityExpired()` →
- * `stop()` (:1566). Cancelling ends the pipe at once (the transform's
- * writable side errors, `pipeTo` rejects, `finally` runs). Never throws:
- * a body that is already consumed, locked or errored has nothing left to
- * release.
+ * Releases a container response whose body the caller does not need.
+ * `@cloudflare/containers` counts a response as in-flight until its body is
+ * consumed or cancelled, and never runs the idle stop while that count is
+ * above zero — cancelling ends that count at once. Never throws: a body
+ * that is already consumed, locked or errored has nothing left to release.
  */
 async function releaseBody(res: Response): Promise<void> {
   if (!res.body || res.bodyUsed) return;
@@ -1195,11 +860,11 @@ function toInspectableRequest(
 
 /**
  * Every env var the container receives, rebuilt from scratch on every
- * start — never merged with a previous call's values (T01 fix-round-1's
- * WAKE_ID lesson one layer up: a stale value surviving between wakes is
- * exactly the failure the compose.yml default was fixed for). Fails closed
- * (throws, so `wake()` never calls `start()`) when a required secret is
- * missing — a box that cannot reach its own storage must not boot.
+ * start — never merged with a previous call's values: a stale value
+ * surviving between wakes is exactly the failure this guards against.
+ * Fails closed (throws, so `wake()` never calls `start()`) when a required
+ * secret is missing — a box that cannot reach its own storage must not
+ * boot.
  */
 function buildEnvVars(env: Env, wakeId: string): Record<string, string> {
   if (env.O11Y_ENV === "local") return buildLocalEnvVars(env, wakeId);
@@ -1228,53 +893,30 @@ function buildEnvVars(env: Env, wakeId: string): Record<string, string> {
     // (containers/o11y/compose.yml).
     LOKI_S3_INSECURE: "false",
     GF_SERVER_ROOT_URL: `${PUBLIC_ORIGIN}/grafana/`,
-    // vertamedia-clickhouse-datasource against the real Analytics Engine
-    // SQL API (T01 fix-round-1 finding I1/P2): a single custom
-    // `Authorization: Bearer <token>` header, never host/port/user/password
-    // fields — see grafana/provisioning/datasources/datasources.yaml's own
-    // comment. HEADER2 stays unused in production (local-only, ClickHouse's
-    // two-header X-ClickHouse-User/-Key shape).
+    // vertamedia-clickhouse-datasource against Analytics Engine SQL API: a
+    // single `Authorization: Bearer <token>` header, never host/port/user
+    // fields (see datasources.yaml). HEADER2 is unused in production.
     O11Y_CLICKHOUSE_URL: `https://api.cloudflare.com/client/v4/accounts/${accountId}/analytics_engine/sql`,
     O11Y_CLICKHOUSE_DATABASE: "",
     O11Y_CLICKHOUSE_HEADER1_NAME: "Authorization",
     O11Y_CLICKHOUSE_HEADER1_VALUE: env.AE_SQL_TOKEN ? `Bearer ${env.AE_SQL_TOKEN}` : "",
     O11Y_CLICKHOUSE_HEADER2_NAME: "",
     O11Y_CLICKHOUSE_HEADER2_VALUE: "",
-    // T03-D (see the task Outcome — found on the real sandbox platform, not
-    // guessed): `shutdown.sh`'s default `STOP_GRACE_SECONDS` (30, matching
-    // `compose.yml`'s own local default) is tuned for a same-host MinIO
-    // round trip. Against a REAL R2 endpoint over the real network, a stop
-    // that genuinely needed to flush a fresh index upload was repeatedly
-    // observed exceeding 30s and reporting `exitCode: 1` (shutdown.sh's own
-    // "loki did not exit within ${STOP_GRACE_SECONDS}s… giving up on a
-    // clean marker" path) even with correct credentials and a real,
-    // confirmed-successful periodic shipper upload earlier in the same
-    // wake. T01's own T01-D8 already measured `stop()` taking up to 53.7s
-    // on this same platform with dummy credentials; the platform's own
-    // documented SIGTERM→SIGKILL grace is 15 minutes (T01 Outcome), so
-    // there is ample headroom to raise this without risking an
-    // escalation. `compose.yml`'s local default (30) is untouched —
-    // local MinIO genuinely does not need this.
+    // Tuned for a same-host MinIO round trip; against real R2, a stop that
+    // needs to flush a fresh index upload has been measured taking up to
+    // 53.7s and exceeding a 30s grace. The platform's SIGTERM→SIGKILL grace
+    // is 15 minutes, so there is ample headroom to raise this.
     O11Y_STOP_GRACE_SECONDS: "120",
     // SLACK_WEBHOOK_URL is deliberately never included — ADR-0041 §A: "The
     // Slack webhook never enters the box."
   };
 }
 
-/** T03-D (see the task Outcome): local-only envVars, gated exactly like
- *  `DEV_ADMIN` (`O11Y_ENV === "local"`, fail-closed the same way — this
- *  branch is unreachable in production, which always sets
- *  `O11Y_ENV: "production"` from `wrangler.jsonc`'s `vars` block, never a
- *  secret). Mirrors `containers/o11y/compose.yml`'s own MinIO/local-
- *  ClickHouse shape. `wrangler dev`'s local Container orchestration runs
- *  `GrafanaBox`'s container via real Docker, independently of any
- *  `compose.yml` network — it reaches host-published services via Docker's
- *  own `host.docker.internal` DNS name, which `scripts/o11y-dev.mjs`'s own
- *  README section documents starting local MinIO/ClickHouse for
- *  (`docker compose -f containers/o11y/compose.yml up --wait minio
- *  clickhouse` — T1: no more separate `minio-init`, `minio` creates its own
- *  bucket — ports published to the host — the `box` service itself is
- *  never started locally that way; `wrangler dev` IS the box). */
+/** Local-only envVars, gated like `DEV_ADMIN` (`O11Y_ENV === "local"`,
+ *  fail-closed). Mirrors `compose.yml`'s MinIO/local-ClickHouse shape.
+ *  `wrangler dev`'s local Container reaches host-published services via
+ *  `host.docker.internal`; `scripts/o11y-dev.mjs` starts local
+ *  MinIO/ClickHouse for this. */
 function buildLocalEnvVars(env: Env, wakeId: string): Record<string, string> {
   const minioPort = env.O11Y_LOCAL_MINIO_PORT || "4402";
   const clickhousePort = env.O11Y_LOCAL_CLICKHOUSE_PORT || "4404";

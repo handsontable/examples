@@ -3,7 +3,7 @@
 // contract §8); the channel is Slack, one line per transition. Also writes
 // the `o11y.alert` Analytics Engine point (contract §5: reason = rule id,
 // outcome `fired`/`resolved`) so the Observability-self dashboard's existing
-// "o11y.alert fired/resolved" panel (T09) has something to show.
+// "o11y.alert fired/resolved" panel has something to show.
 
 import type { AePoint, AeSink, CommonResourceAttrs } from "@handsontable/demo-runtime/telemetry";
 import { toAePoint } from "@handsontable/demo-runtime/telemetry";
@@ -38,15 +38,10 @@ export function slackPoster(webhookUrl: string | undefined, fetchImpl: typeof fe
 }
 
 /**
- * Slack's own mrkdwn escaping rule, applied to every value this module
- * interpolates into a Slack `text` field (fix round, finding A-C2): `&`
- * first, then `<`/`>` — every rule's `detail` is built at least partly from
- * data an unauthenticated client can influence (an AE query result grouped
- * by a client-tagged column, or — the confirmed case — the exact
- * first-seen fingerprint registry, which stored a client-supplied string
- * verbatim before the companion fix in `normalise/faro.ts`). Without this,
- * `<!channel>` and a masked `<https://evil|link>` post as live Slack markup
- * under the team's own alert bot.
+ * Slack's own mrkdwn escaping rule: `&` first, then `<`/`>` — every rule's
+ * `detail` is built at least partly from data an unauthenticated client
+ * can influence. Without this, `<!channel>` and a masked link post as
+ * live Slack markup under the team's own alert bot.
  */
 export function escapeSlackMrkdwn(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -94,39 +89,12 @@ export async function evaluateAndNotify(
 }
 
 /**
- * Fix round (C cross-note): new-fingerprint is not a fire/resolve alert —
- * it reports a stream of individual events (one Slack line per batch of
- * genuinely new fingerprints), not a stateful condition. Forcing it through
- * {@link evaluateAndNotify}'s fire-once/resolve-once machinery caused two
- * bugs at once: while the synthetic "firing" state stayed set, a second
- * batch of new fingerprints arriving before the cursor caught up produced
- * NO notification at all (fire-once masking real new errors behind a
- * sustained stream); and the very next clean tick then posted a pointless
- * "resolved" line for a rule that was never a condition to resolve.
- * Notifies unconditionally when `rules.ts#newFingerprintRule` found
- * something new — that rule's own cursor is what makes repeat calls
- * idempotent, not stored fire/resolve state (there is none here). Writes
- * the same `o11y.alert` `outcome: "fired"` point every other rule does, so
- * the existing dashboard panel still has something to show; never writes
- * `"resolved"` — there is no matching transition for an event stream.
- *
- * Re-review 2, N7: notify-only means nothing here caps how OFTEN this
- * posts — `rules.ts#newFingerprintRule`'s own cursor only bounds how much
- * one call can report, not how many ticks in a row can each fire a Slack
- * line. A flood of forged-but-shape-valid fingerprints (the same attacker
- * model row 13/NB1 disclose) can therefore post every ten minutes forever,
- * which either spams the channel or trains operators to ignore it — either
- * way it can mask a real new fingerprint arriving in the same flood. This
- * function now rate-caps ITS OWN posts, independent of the cursor: at most
- * {@link MAX_FINGERPRINT_POSTS_PER_WINDOW} individual detail lines per
- * {@link FINGERPRINT_POST_WINDOW_MS}, tracked in `InboxWriter` alertMeta
- * (never module state — this runs in a stateless Worker). Once the cap is
- * hit, further calls in the same window post NOTHING individually; instead
- * exactly ONE summary line is posted the first time the cap is exceeded,
- * carrying a count, so the operator sees "something is being rate-limited"
- * rather than total silence. The read this feeds off (`newFingerprintRule`)
- * is never gated by this cap — only the Slack post is — so the cursor
- * keeps advancing and NB1's fix still holds under a flood.
+ * new-fingerprint reports a stream of individual events, not a stateful
+ * condition — forcing it through {@link evaluateAndNotify}'s fire-once
+ * machinery would mask a second batch arriving before the cursor caught
+ * up. Notifies unconditionally when new; never writes "resolved". Rate-
+ * caps ITS OWN posts: at most {@link MAX_FINGERPRINT_POSTS_PER_WINDOW}
+ * lines per {@link FINGERPRINT_POST_WINDOW_MS}, then one summary line.
  */
 const FINGERPRINT_POST_WINDOW_MS = 60 * 60 * 1000;
 const MAX_FINGERPRINT_POSTS_PER_WINDOW = 20;
@@ -187,14 +155,10 @@ function writeAlertPoint(
 ): void {
   try {
     const point: AePoint = toAePoint("o11y.alert", { count: 1 }, { ...commonAttrs, reason: rule, outcome });
-    // Fix round (I1 test run): `writeDataPoint` can return a REJECTED
-    // promise (`clickhouseSink`'s HTTP write, unreachable local ClickHouse)
-    // — `void`-ing it alone only silences a lint warning, it does not catch
-    // the rejection, which then surfaces later as an unhandled rejection
-    // (measured: `node --test` failed the whole file over exactly this,
-    // once a test pointed `RUNNER_EVENTS_CLICKHOUSE_URL` at a refused
-    // port). `Promise.resolve(...).catch()` handles both the synchronous
-    // `void` case (`bindingSink`, the real AE binding) and the async one.
+    // `writeDataPoint` can return a REJECTED promise — `void`-ing it alone
+    // doesn't catch it (measured: an unhandled rejection failed the whole
+    // test file once). `Promise.resolve(...).catch()` handles both the
+    // sync and async cases.
     Promise.resolve(sink.writeDataPoint(point)).catch(() => {
       // Never let a point failure block the notification it describes.
     });

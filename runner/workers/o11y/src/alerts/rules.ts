@@ -1,31 +1,9 @@
-// ADR-0041 §F.3's o11y-worker-cron rules (everything on that table's third
-// row: `at_capacity` rate, 5xx rate, preview-ready rate, session-start p95,
-// embed error rate, compile-error day-over-day, inbox backlog age, a
-// `rejected` inbox key, the o11y spend cap) — plus the new-fingerprint rule
-// (the table's fourth row, read straight from `InboxWriter`'s exact
-// registry, never sampled data).
-//
-// Every rule returns a {@link RuleResult}; `notify.ts` turns that into the
-// fire-once/resolve-once `alert:<rule>` state transition and the Slack line.
-// SQL stays to the shared five-function allowlist (`ae-query.ts`) — a ratio,
-// a day-over-day comparison, or an outcome breakdown is computed here in JS
-// over grouped counts, never as a wider SQL feature (COMMON.md controller
-// note: keep the allowlist the one T09 also uses).
-//
-// Every window/threshold below is the ADR §F.3 prose's own number. Two
-// numbers the ADR leaves unstated (a rule evaluation window is not always
-// named) are called out where chosen (T04-D, see the task Outcome).
-//
-// Fix round (I1): every AE-query rule and its shared helper now takes an
-// injectable `queryFn` (defaults to the real `runAeQuery`), so
-// `pipeline/o11y-alerts.test.mjs` can drive each rule over a synchronous
-// fake instead of a live ClickHouse/AE endpoint — the same injection shape
-// `cron-step.ts#CronCaptureFn`/`diagnostic.ts#CaptureExceptionFn` already
-// use elsewhere in this codebase for the same reason (a real transport is
-// for one live pass, not every future `pnpm test`). Column references are
-// built from the contract's own `AE_COLUMNS` map (`col()` below) rather
-// than hand-numbered `blobN`/`doubleN` literals, so a future contract slot
-// renumbering cannot silently desync this file from the columns it reads.
+// ADR-0041 §F.3's o11y-worker-cron rules, plus the new-fingerprint rule
+// (read straight from `InboxWriter`'s exact registry, never sampled data).
+// Every rule returns a {@link RuleResult}; `notify.ts` applies the
+// fire-once/resolve-once `alert:<rule>` transition and posts to Slack.
+// Every AE-query rule takes an injectable `queryFn` so
+// `pipeline/o11y-alerts.test.mjs` can drive it over a synchronous fake.
 
 import { AE_COLUMNS, type Heartbeat } from "@handsontable/demo-runtime/telemetry";
 import type { Env, InboxWriterApi } from "../env.js";
@@ -162,39 +140,9 @@ export async function atCapacityRule(env: Env, queryFn: AeQueryFn = runAeQuery):
 
 // ---- api.request 5xx rate: above 1% over 15 min ---------------------------
 
-/**
- * Minor triage item 6 (C-M9): the API's own DELIBERATE 503 degradations
- * must not, by themselves, trip this general worker-health rule — each
- * already has its own dedicated alert (`at-capacity-rate`,
- * `litellm-error-rate`) or is a known, accepted refusal shape, not a fault.
- * `api.request`'s own AE point (contract §5) carries only `route_class` +
- * a coarse `outcome` status bucket ("2xx"/"3xx"/"4xx"/"5xx") — no finer
- * code — so two different techniques are used, one per how precisely a
- * degradation's volume can be isolated:
- *
- * - `at_capacity`/`container_starting` (POST /api/session,
- *   `session-lifecycle.ts#AT_CAPACITY_CODE`/`CONTAINER_STARTING_CODE`) and
- *   the `chat_unavailable` refusal on `/api/chat`/`/api/theme`
- *   (`ChatUnavailableError`) each have an EXACT 1:1 count elsewhere in the
- *   contract — `session.start`'s `at_capacity`/`container_starting`
- *   outcomes and `chat.answer`/`theme.ai`'s `error` outcome are emitted
- *   exactly once per matching `api.request` 503, right before the response
- *   is built (`index.ts` ~1111, ~1139, ~2075, ~2145). Those exact counts
- *   are subtracted from BOTH the numerator and the denominator, so a
- *   capacity surge or a LiteLLM outage large enough to dwarf real traffic
- *   cannot, by itself, fire this rule — while every OTHER 5xx on
- *   "api/session"/"api/chat"/"api/theme" (a genuine 500) still counts.
- * - The "still building" placeholder `share.ts` serves on `/d/:id` and
- *   `/embed/:id` while a snapshot build is in flight has NO matching exact
- *   count anywhere (`serve.d`/`serve.embed`'s own outcome set is
- *   "2xx"/"304"/"4xx"/"5xx" — the same coarse bucket, not a distinguishing
- *   reason). Those two route classes are excluded WHOLESALE instead —
- *   the only option available without a new contract column (out of this
- *   task's file ownership; see the task report for that residual gap: a
- *   real "build failed" 500 on `/d/:id`/`/embed/:id` — DEMOS-31-shaped,
- *   `mcp-async-build.test.mjs`'s own "failed" row — is ALSO excluded by
- *   this, not just the deliberate "still building" 503).
- */
+/** The API's deliberate 503s (at-capacity, container-starting, chat/theme
+ *  refusals) are excluded from the 5xx ratio by their own exact counts;
+ *  these two route classes have no such count, so they're excluded wholesale. */
 const FIVE_XX_STILL_BUILDING_ROUTE_CLASSES = ["d/:id", "embed/:id"];
 
 export async function fiveXxRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
@@ -236,12 +184,9 @@ export async function previewReadyRateRule(env: Env, queryFn: AeQueryFn = runAeQ
   let anyFiring = false;
   for (const [tier, thresholdPct] of Object.entries(PREVIEW_READY_THRESHOLD_PCT)) {
     const counts = await countByOutcome(env, "preview.ready_ms", HOUR_MS, `AND ${tierCol} = '${tier}'`, queryFn);
-    // Minor triage item 10: `abandoned` (the user simply navigated away
-    // before the preview finished) excluded from BOTH the numerator (it was
-    // never `ready`, so already excluded there by construction) and the
-    // denominator — counting it against readiness let a burst of ordinary
-    // navigation-aways fire an alert about preview reliability that never
-    // actually had a problem.
+    // `abandoned` (navigated away before the preview finished) is excluded
+    // from both numerator and denominator — otherwise a burst of ordinary
+    // navigation-aways would fire a false preview-reliability alert.
     const total = [...counts.entries()]
       .filter(([outcome]) => outcome !== "abandoned")
       .reduce((sum, [, c]) => sum + c, 0);
@@ -259,15 +204,13 @@ export async function previewReadyRateRule(env: Env, queryFn: AeQueryFn = runAeQ
   };
 }
 
-// ---- session-start p95: above 20s (T04-D: window chosen as 1h, the ADR --
-// text names the threshold but not an evaluation window) -------------------
+// ---- session-start p95: above 20s (window: 1h — the ADR text names the --
+// threshold but not an evaluation window) -----------------------------------
 
 export async function sessionStartP95Rule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
-  // Controller ruling (fix round, was Minor 3): p95 over `outcome = 'ready'`
-  // only — an unfiltered read blends in `at_capacity`/`container_starting`/
-  // `budget_denied` refusals, which return almost instantly and drag the
-  // percentile down, masking a real slow-start problem during overload
-  // (exactly when this rule matters most).
+  // p95 over `outcome = 'ready'` only — at_capacity/container_starting/
+  // budget_denied refusals return almost instantly and would drag the
+  // percentile down, masking a real slow-start problem during overload.
   const outcomeCol = col("outcome");
   const p95 = await weightedQuantile(env, "session.start", HOUR_MS, 0.95, `AND ${outcomeCol} = 'ready'`, queryFn);
   const firing = p95 !== null && p95 > 20_000;
@@ -304,8 +247,8 @@ export async function embedErrorRateRule(env: Env, queryFn: AeQueryFn = runAeQue
   };
 }
 
-// ---- compile-error rate per ht_major: doubling day over day (T04-D: a --
-// floor of 5 today-count avoids "doubling" noise on tiny counts like 0->1)--
+// ---- compile-error rate per ht_major: doubling day over day (a floor of --
+// 5 today-count avoids "doubling" noise on tiny counts like 0->1) -----------
 
 const COMPILE_ERROR_DOUBLING_FLOOR = 5;
 
@@ -329,8 +272,8 @@ export async function compileErrorDoublingRule(env: Env, queryFn: AeQueryFn = ru
   };
 }
 
-// ---- LiteLLM errors: above 5% (chat.answer + theme.ai, both gateway --
-// call sites; T04-D: window chosen as 1h, same reasoning as session-start)--
+// ---- LiteLLM errors: above 5% (chat.answer + theme.ai, both gateway -------
+// call sites; window: 1h, same reasoning as session-start) ------------------
 
 export async function litellmErrorRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const windowMs = HOUR_MS;
@@ -338,12 +281,9 @@ export async function litellmErrorRateRule(env: Env, queryFn: AeQueryFn = runAeQ
     countByOutcome(env, "chat.answer", windowMs, "", queryFn),
     countByOutcome(env, "theme.ai", windowMs, "", queryFn),
   ]);
-  // Minor triage item 10: `denied` (a rate-limit/budget refusal at
-  // `index.ts`'s own gate — see its `outcome: "denied"` emits for both
-  // `chat.answer`/`theme.ai`) never reaches the LiteLLM gateway at all, so
-  // it must not dilute the GATEWAY error rate this rule measures. A burst of
-  // denials (nothing to do with LiteLLM's own health) used to shrink the
-  // ratio and could hide a real >5% gateway failure rate underneath it.
+  // `denied` (a rate-limit/budget refusal before reaching LiteLLM) is
+  // excluded — otherwise a burst of denials would shrink the ratio and
+  // could hide a real >5% gateway failure rate.
   const total = [...chat.entries(), ...theme.entries()]
     .filter(([outcome]) => outcome !== "denied")
     .reduce((sum, [, c]) => sum + c, 0);
@@ -370,13 +310,9 @@ export async function backlogAgeRule(inboxWriter: InboxWriterApi): Promise<RuleR
 
 // ---- a rejected inbox key ---------------------------------------------------
 
-/** B-C1/A-I1 remainder (rereview.md row 13): rejected `key:` entries are
- *  never pruned (`ledger.ts#rejectKey`'s own doc comment — an operator
- *  needs to still find one), so a plain "count > 0" firing condition, once
- *  true, stays true forever after the very first rejection ever seen. Fire
- *  on RECENT rejection events instead (`rejectedEvent:`, `ledger.ts`) —
- *  standard fire-once/resolve-once semantics (`evaluateAndNotify`) then
- *  resolve naturally once no new rejection lands within this window. */
+/** `rejected:` `key:` entries are never pruned, so a plain "count > 0"
+ *  firing condition would never resolve. Fire on RECENT rejection events
+ *  instead (`rejectedEvent:`), which resolve once none are recent. */
 const REJECTED_RECENT_WINDOW_MS = HOUR_MS;
 
 export async function rejectedKeyRule(inboxWriter: InboxWriterApi, nowMs = Date.now()): Promise<RuleResult> {
@@ -397,9 +333,9 @@ export async function rejectedKeyRule(inboxWriter: InboxWriterApi, nowMs = Date.
 // ---- new handled-error fingerprint ------------------------------------------
 
 const NEW_FINGERPRINT_CURSOR_META_KEY = "newFingerprintCursorKey";
-/** F35: JSON array of the `fpts:` keys already announced that may still be
- *  past the cursor, i.e. the entries inside the grace window that the next
- *  tick reads again (see {@link CURSOR_GRACE_MS}). */
+/** JSON array of the `fpts:` keys already announced that may still be past
+ *  the cursor, i.e. the entries inside the grace window that the next tick
+ *  reads again (see {@link CURSOR_GRACE_MS}). */
 const NEW_FINGERPRINT_ANNOUNCED_META_KEY = "newFingerprintAnnouncedKeys";
 
 /** A missing or unreadable value means nothing past the cursor has been
@@ -415,76 +351,40 @@ function parseAnnouncedKeys(raw: string | undefined): Set<string> {
   }
 }
 
-/** Fix round (C cross-note, PLAUSIBLE double/missed report): the cursor used
- *  to advance to `nowMs` — this rule's OWN wall-clock time at the start of
- *  a cron tick — but a fingerprint's `firstSeen` is stamped in the
- *  stateless route handler, independently of when its `InboxWriter` write
- *  actually commits (which is what makes it visible to this rule's
- *  `list()`-backed `newFingerprintsSince`). A write that committed AFTER
- *  this tick's list() call, but whose `firstSeen` was stamped before
- *  `nowMs`, would satisfy `firstSeen <= nextCursor` on every later tick —
- *  permanently missed, not merely delayed.
- *
- *  Lagging the advanced cursor by this margin closes that hole: the cursor
- *  never advances past a `firstSeen` that could still be "in flight" from
- *  an in-progress request. Every real write's DO transaction commits
- *  synchronously inside the SAME request that stamped `firstSeen`, before
- *  that request answers `2xx` — comfortably under this margin even under
- *  load, and this rule's own ten-minute cron cadence gives further headroom.
- *  The lag means a fingerprint whose `firstSeen` lands inside the last
- *  `CURSOR_GRACE_MS` of one tick is read again by the next tick. That used
- *  to announce it twice (F35). The rule now also remembers which keys past
- *  the cursor it already announced ({@link NEW_FINGERPRINT_ANNOUNCED_META_KEY})
- *  and announces each one exactly once.
- *
- *  This is a partial mitigation, not "a cursor on the commit order" (the
- *  finding's own suggested fix): the full fix keys `fp:` entries by a
- *  monotonic sequence assigned inside the same `InboxWriter` transaction
- *  that commits them (the way `pack.ts`'s row/seq counters already do),
- *  which needs a storage-schema change inside `inbox/writer.ts#ingest` —
- *  outside this fix round's file ownership (F2's territory). See the
- *  report. */
+/** A fingerprint's `firstSeen` is stamped before its `InboxWriter` write
+ *  commits, so advancing the cursor straight to `nowMs` could skip a write
+ *  that commits just after this tick's read — permanently missed, not
+ *  merely delayed. Lagging the cursor by this margin means it never passes
+ *  a `firstSeen` that could still be in flight; real writes commit well
+ *  under this margin. A fingerprint inside the lag window is re-read next
+ *  tick, so {@link NEW_FINGERPRINT_ANNOUNCED_META_KEY} tracks what was
+ *  already announced. Not a full fix: that needs a monotonic sequence
+ *  inside the ingest transaction itself. */
 const CURSOR_GRACE_MS = 2 * 60 * 1000;
 
-/** How many fingerprint names one Slack line lists before truncating (fix
- *  round A-C2: "cap how many names one Slack message lists" — an
+/** How many fingerprint names one Slack line lists before truncating — an
  *  attacker's flood of forged-then-validated-away fingerprints, or simply a
- *  large legitimate batch, must not grow one Slack message without bound). */
+ *  large legitimate batch, must not grow one Slack message without bound. */
 const MAX_FINGERPRINTS_LISTED = 10;
 
-// Re-review 2, NB1 (G1 regression): a millisecond that holds
-// `NEW_FINGERPRINT_SCAN_LIMIT` (2,000) or more fingerprints stalled the old
-// ms-only cursor FOREVER — `lastMs - 1` always re-equals the stored cursor,
-// so the next tick re-reads the exact same truncated page and every later,
-// real fingerprint is never seen again. The cursor is now a KEYSET cursor:
-// it persists the exact `fpts:` storage key of the last entry it advanced
-// past (`inbox-state.ts#NewFingerprintEntry.key`), and the next tick resumes
-// strictly after that key (`newFingerprintsAfterKey`), never by millisecond
-// alone. Because a keyset position is a specific row, not a timestamp
-// bucket, 2,000+ entries sharing one ms no longer collapse to one
-// unadvanceable point — each tick still advances by up to
-// `NEW_FINGERPRINT_SCAN_LIMIT` rows even inside that single ms.
+// A millisecond holding 2,000+ fingerprints would stall an ms-only cursor
+// forever (`lastMs - 1` always re-equals itself). The cursor is a KEYSET
+// cursor instead: it persists the exact `fpts:` key it advanced past and
+// resumes strictly after it, so a shared millisecond can't collapse to one
+// unadvanceable point.
 export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Date.now()): Promise<RuleResult> {
   const cursorKeyRaw = await inboxWriter.getAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY);
-  // A stored value from before this fix (a bare ms number, no `fpts:`
-  // prefix) is not a valid keyset position — treat it the same as "no
-  // cursor yet" rather than passing a bogus `start` to `list()`.
+  // A bare ms number, with no `fpts:` prefix, is not a valid keyset
+  // position — treat it the same as "no cursor yet" rather than passing a
+  // bogus `start` to `list()`.
   const cursorKey = cursorKeyRaw && cursorKeyRaw.startsWith("fpts:") ? cursorKeyRaw : null;
   const fallbackSinceMs = nowMs - HOUR_MS; // first run: look back one hour
   const { entries, truncated } = await inboxWriter.newFingerprintsAfterKey(cursorKey, fallbackSinceMs);
 
-  // Grace-lag semantics, unchanged from the ms-cursor design (see the
-  // module-level `CURSOR_GRACE_MS` doc comment): every entry read that no
-  // earlier tick announced is reported this tick (`fresh`, below) however
+  // Every entry not yet announced is reported this tick regardless of how
   // recent it is, but the cursor only advances up to the last entry whose
-  // `firstSeenMs` is at/under `nowMs - CURSOR_GRACE_MS`. Entries are read in
-  // ascending key order (ms, then fingerprint — `fingerprintTimeIndexKey`'s
-  // shape), so the last entry meeting that bound is exactly the right resume
-  // point. A fingerprint inside the grace window is reported now and read
-  // again next tick, where the announced set skips it. Unlike the old ms
-  // cursor, this bound can never make the cursor get stuck: it always
-  // advances to a REAL row it read, never to a synthetic "ms - 1" value
-  // that could re-equal itself forever.
+  // `firstSeenMs` is at/under the grace cutoff — never to a synthetic value
+  // that could get stuck, always to a real row it read.
   const graceCutoffMs = nowMs - CURSOR_GRACE_MS;
   let advanceToKey: string | null = null;
   for (const entry of entries) {
@@ -492,19 +392,15 @@ export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Da
   }
   const nextCursorKey = advanceToKey ?? cursorKey;
 
-  // F35: the grace lag re-reads every entry inside the window on the next
-  // tick, which used to announce it a second time (06:43:33 and again at
-  // 06:57:29 for one fingerprint first seen at 06:42:33). Skip the keys an
+  // The grace lag re-reads every entry inside the window on the next tick,
+  // which would otherwise announce it a second time. Skip the keys an
   // earlier tick already announced.
   const announced = parseAnnouncedKeys(await inboxWriter.getAlertMeta(NEW_FINGERPRINT_ANNOUNCED_META_KEY));
   const unannounced = entries.filter((entry) => !announced.has(entry.key));
 
-  // Write order matters, since these are two separate RPCs. The announced
-  // set goes first and keeps every key read this tick. If the cursor write
-  // then fails, the next tick re-reads from the old cursor and finds all of
-  // them already announced. Keys at or below the cursor this tick started
-  // from are never listed again, so they are dropped here. That keeps the
-  // set to roughly one scan page (`NEW_FINGERPRINT_SCAN_LIMIT` keys).
+  // Write order matters (two separate RPCs): the announced set is written
+  // first, so a failed cursor write still finds these keys already
+  // announced on the next tick's re-read from the old cursor.
   const keep = new Set<string>();
   for (const key of [...announced, ...entries.map((entry) => entry.key)]) {
     if (cursorKey === null || key > cursorKey) keep.add(key);
@@ -542,15 +438,11 @@ export async function o11yCapRule(spend: O11ySpend): Promise<RuleResult> {
   };
 }
 
-// ---- fix round (I2): the alert-evaluation-itself-failed rule ---------------
+// ---- the alert-evaluation-itself-failed rule -------------------------------
 //
-// Not an ADR §F.3 signal — a synthetic rule `runAlerts` builds from the
-// errors every OTHER rule in this file threw this tick, so an AE query
-// failure (a malformed query, ClickHouse/AE unreachable) is never silent.
-// Same fire-once/resolve-once machinery as every other rule (`notify.ts`),
-// so it holds regardless of which cron handler calls `runAlerts` — post-
-// merge, `index.ts`'s single `scheduled()` export, alongside T03's real
-// backlog-wake handler.
+// Not an ADR §F.3 signal — a synthetic rule `runAlerts` builds from every
+// other rule's errors this tick, so a query failure is never silent. Same
+// fire-once/resolve-once machinery as every other rule (`notify.ts`).
 
 export function alertEvalErrorRule(errors: Readonly<Record<string, string>>): RuleResult {
   const failing = Object.keys(errors);

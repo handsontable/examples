@@ -1,27 +1,13 @@
-// The minimal storage surface `InboxWriter`'s pure logic modules
-// (`dedupe.ts`, `registry.ts`, `pack.ts`) need — a structural subset of
-// `DurableObjectStorage`/`DurableObjectTransaction`, so a plain
-// `Map`-backed fake can stand in under `node --test` (TESTING.md: "in-memory
-// fakes for worker bindings", the same pattern `mcp-routes.test.mjs` uses for
-// D1/KV/R2) without pulling `cloudflare:workers` into a plain Node process.
-//
-// `get`/`getMany` are split rather than mirroring `DurableObjectStorage`'s
-// single overloaded `get(key)`/`get(keys[])` — an object literal cannot
-// implement a two-signature overloaded method cleanly, and `writer.ts` (the
-// real `InboxWriter` DO) adapts `this.ctx.storage` to this shape with
-// `durableObjectStorageAdapter` below, a few lines of glue rather than
-// fighting TypeScript's overload-assignability rules for no real benefit.
+// The minimal storage surface `InboxWriter`'s pure logic modules need — a
+// structural subset of `DurableObjectStorage`/`DurableObjectTransaction`,
+// so a plain `Map`-backed fake can stand in under `node --test`. `get`/
+// `getMany` are split rather than mirroring one overloaded method:
+// `writer.ts` adapts `this.ctx.storage` to this shape with a few lines of
+// glue.
 
-/** `start`/`end`/`limit` (F2 fix, B-C1): a real `DurableObjectStorage.list`
- *  already accepts these — added here so `ledger.ts`'s bounded-per-call
- *  pruning sweeps (`hash:`/`done:` range deletes) can ask for "at most
- *  `limit` rows in `[start, end)`" instead of a full-prefix scan, and
- *  `memoryStorage()` below honours them the same way for `node --test`.
- *  Never combined with `prefix` by any caller in this codebase (real DO
- *  behaviour when both are given together is not exercised here), so
- *  `memoryStorage()`'s combination semantics (AND of whichever are given)
- *  are untested against the real binding — only `start`/`end`/`limit`
- *  alone, or `prefix` alone, are used. */
+/** `start`/`end`/`limit`: a real `DurableObjectStorage.list` already
+ *  accepts these, for bounded-per-call pruning sweeps. `memoryStorage()`
+ *  honours them, including `prefix` combined with `start`. */
 export interface ListOptions {
   prefix?: string;
   /** Inclusive: only keys `>= start`. */
@@ -45,20 +31,14 @@ export interface StorageLike {
   setAlarm(scheduledTime: number): Promise<void>;
 }
 
-/** Cloudflare's documented SQLite-backed-DO storage-API limit (final review,
- *  finding N2): https://developers.cloudflare.com/durable-objects/api/storage-api/
- *  — "get() ... Supports up to 128 keys at a time.", "put() ... Supports up
- *  to 128 key-value pairs at a time.", "delete() ... Supports up to 128 keys
- *  at a time." (fetched 2026-09-24). Local `workerd` was observed accepting
- *  500+ keys in one call with no error, so nothing in
- *  this codebase's OWN test doubles enforced it either — every multi-key
- *  call below `DO_STORAGE_MAX_KEYS_PER_CALL` in this codebase must chunk
- *  through {@link getManyChunked}/{@link putChunked}/{@link deleteChunked}
- *  rather than calling `getMany`/`put`/`delete` directly with an unbounded
- *  key set; `memoryStorage()` (below) and `pipeline/fixtures/o11y-harness.mjs`'s
- *  `makeDurableObjectStorage` both throw above this limit so a missed call
- *  site fails a test instead of silently working locally and throwing only
- *  in production. */
+/** Cloudflare's documented SQLite-backed-DO storage-API limit: get/put/
+ *  delete each support up to 128 keys at a time (fetched 2026-09-24).
+ *  Local `workerd` was observed accepting 500+ keys with no error, so
+ *  every multi-key call in this codebase must chunk through
+ *  {@link getManyChunked}/{@link putChunked}/{@link deleteChunked};
+ *  `memoryStorage()` throws above this limit so a missed call site fails
+ *  a test instead of silently working locally and throwing only in
+ *  production. */
 export const DO_STORAGE_MAX_KEYS_PER_CALL = 128;
 
 function chunks<T>(items: readonly T[], size: number): T[][] {
@@ -68,9 +48,7 @@ function chunks<T>(items: readonly T[], size: number): T[][] {
 }
 
 /** `storage.getMany(keys)`, chunked to {@link DO_STORAGE_MAX_KEYS_PER_CALL}
- *  per call. Safe to call with `storage` being a `transaction()` closure's
- *  own `txn` — each chunk is just another `get` call against the same
- *  in-flight transaction. */
+ *  per call. Safe inside a `transaction()` closure's own `txn`. */
 export async function getManyChunked<T = unknown>(storage: StorageLike, keys: readonly string[]): Promise<Map<string, T>> {
   const out = new Map<string, T>();
   for (const chunk of chunks(keys, DO_STORAGE_MAX_KEYS_PER_CALL)) {
@@ -82,10 +60,8 @@ export async function getManyChunked<T = unknown>(storage: StorageLike, keys: re
 }
 
 /** `storage.put(entries)`, chunked to {@link DO_STORAGE_MAX_KEYS_PER_CALL}
- *  key-value pairs per call. When `storage` is a `transaction()` closure's
- *  `txn`, every chunk still commits as one atomic transaction — chunking
- *  only splits how many pairs go in each underlying `put` CALL, not the
- *  transaction boundary itself. */
+ *  per call. Inside a `transaction()`, every chunk still commits as one
+ *  atomic transaction — chunking only splits the underlying `put` calls. */
 export async function putChunked<T>(storage: StorageLike, entries: Record<string, T>): Promise<void> {
   const keys = Object.keys(entries);
   for (const chunk of chunks(keys, DO_STORAGE_MAX_KEYS_PER_CALL)) {
@@ -108,13 +84,9 @@ export async function deleteChunked(storage: StorageLike, keys: readonly string[
   return deleted;
 }
 
-/** A `Map`-backed {@link StorageLike} for `node --test`. `transaction()` is a
- *  no-op wrapper (the fake has no concurrent writers to isolate from), so its
- *  only job is giving a caller that always writes inside `transaction()`
- *  something real to call — a fresh `memoryStorage()` given to a second
- *  `InboxWriter` instance is how the tests simulate a restart between an
- *  append and the alarm (exit criterion 2's "unclean stop" shape, at the
- *  storage layer). */
+/** A `Map`-backed {@link StorageLike} for `node --test`. `transaction()` is
+ *  a no-op wrapper — a fresh `memoryStorage()` given to a second
+ *  `InboxWriter` simulates a restart between an append and the alarm. */
 export function memoryStorage(): StorageLike {
   const data = new Map<string, unknown>();
   let alarm: number | null = null;
@@ -155,9 +127,8 @@ export function memoryStorage(): StorageLike {
         matches.push([k, v as T]);
       }
       // A real `DurableObjectStorage.list` always returns ascending key
-      // order; `data` (a `Map`) iterates in insertion order, which callers
-      // must not rely on — sort explicitly so a fake behaves like the real
-      // binding for range-delete/pagination logic (`ledger.ts#pruneLedger`).
+      // order; sort explicitly so the fake matches real range-delete/
+      // pagination behaviour.
       matches.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
       const limited = options?.limit !== undefined ? matches.slice(0, options.limit) : matches;
       return new Map(limited);

@@ -26,10 +26,9 @@ export interface PendingRow {
 }
 
 const ROW_PREFIX = "row:";
-/** Not a contract-named key (§8's table only fixes `row:<n>`'s *value*
- *  shape, not how `<n>` is generated) — an `InboxWriter`-internal monotonic
- *  counter, separate from the pack `seq` (§8), so row numbering survives a
- *  restart the same way `seq` does. */
+/** Not a contract-named key — an `InboxWriter`-internal monotonic counter,
+ *  separate from the pack `seq` (§8), so row numbering survives a restart
+ *  the same way `seq` does. */
 const ROW_SEQ_STORAGE_KEY = "rowSeq";
 
 export interface AppendResult {
@@ -81,9 +80,7 @@ export { ROW_SEQ_STORAGE_KEY };
 
 async function gzip(text: string): Promise<Uint8Array> {
   // Fully read the compressed stream before returning — a `put` against a
-  // still-draining `CompressionStream` output is the documented trap
-  // (task file "Traps": "`CompressionStream` output must be fully read
-  // before `put`").
+  // still-draining `CompressionStream` output is a documented trap.
   const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
   const buf = await new Response(stream).arrayBuffer();
   return new Uint8Array(buf);
@@ -95,32 +92,22 @@ export interface PackedObject {
   consumedRowKeys: string[];
 }
 
-/** Fix round (finding A-I2): ADR §B.2 step 6's "or at 4 MB stored" was never
- *  a real bound on the packed OBJECT itself — `packTenant` used to gzip
- *  every pending row for a tenant in one pass, with no upper bound. A
- *  sustained ingest flood (a legitimate burst, or an attacker at the rate
- *  limit) fills 60 s of rows before the alarm fires; at ~100 MB/min for one
- *  IP, a few more colos or IPs push the alarm's `list()` + in-memory gzip
- *  past the DO's 128 MB memory, which throws — and since nothing was ever
- *  packed, every later alarm retries against an ever-larger pending set,
- *  silent data loss for the whole pipeline. Bounded here, decompressed, to
- *  this constant; the caller (`writer.ts#alarm()`) loops over the leftover
- *  rows this call did not take. */
+/** ADR §B.2 step 6's "or at 4 MB stored" bounds the packed OBJECT itself:
+ *  without it, a sustained ingest flood (~100 MB/min for one IP) could
+ *  push the alarm's in-memory gzip past the DO's 128 MB memory before
+ *  anything is packed, causing every later alarm to retry against an
+ *  ever-larger pending set. The caller (`writer.ts#alarm()`) loops over
+ *  leftover rows. */
 export const PACK_OBJECT_MAX_DECOMPRESSED_BYTES = 4 * 1024 * 1024;
 
-/** Packs pending rows for `tenant`, in order, up to
- *  {@link PACK_OBJECT_MAX_DECOMPRESSED_BYTES} decompressed, into one gzipped
- *  NDJSON R2 object, keyed by the **first** packed row's arrival time (T02-D,
- *  see the task Outcome: not `Date.now()` — a crash between the R2 `put`
- *  below and the ledger transaction that follows it, on retry, packs the
- *  same still-pending rows again and must land on the identical key, not a
- *  later-dated one, or the retry produces two divergent objects instead of
- *  one overwrite). Returns `null` when there is nothing pending for this
- *  tenant. `consumedRowKeys` may be a strict prefix of `rows` (fix round
- *  A-I2) — the caller loops until it is empty. Writes to R2 directly (not
- *  part of any DO transaction — R2 isn't transactional with DO storage); the
- *  caller commits `seq`/`key:<key>`/row deletion in one storage transaction
- *  immediately after, per ADR §B.2 step 6. */
+/** Packs pending rows for `tenant`, up to
+ *  {@link PACK_OBJECT_MAX_DECOMPRESSED_BYTES} decompressed, into one
+ *  gzipped NDJSON R2 object, keyed by the **first** packed row's arrival
+ *  time — not `Date.now()`, so a retry after a crash lands on the
+ *  identical key instead of producing a divergent object. `null` when
+ *  nothing is pending. Writes to R2 directly (not transactional with DO
+ *  storage); the caller commits `seq`/`key:<key>`/row deletion right
+ *  after, per ADR §B.2 step 6. */
 export async function packTenant(
   storage: StorageLike,
   bucket: R2Bucket,
@@ -130,14 +117,9 @@ export async function packTenant(
   const first = rows[0];
   if (!first) return null;
 
-  // Take rows in order (already arrival-ordered by the caller, e.g.
-  // `collectRowBatch`) until the byte budget is spent. Each row is already
-  // ≤ `INBOX_ROW_MAX_BYTES` (~1 MB), so per-row granularity keeps this loop
-  // cheap and the resulting object comfortably under the budget rather than
-  // exactly at it. Always
-  // takes at least one row, even if that single row alone is over budget —
-  // an ever-growing pending set with zero progress is worse than one
-  // slightly-oversized object.
+  // Take rows in order until the byte budget is spent; always takes at
+  // least one row, even if it alone is over budget — a stuck pending set
+  // is worse than one oversized object.
   let budget = 0;
   let cut = rows.length;
   for (let i = 0; i < rows.length; i++) {
@@ -178,47 +160,33 @@ export async function commitPackedObject(storage: StorageLike, packed: PackedObj
       [SEQ_STORAGE_KEY]: seq + 1,
       [inboxKeyStorageKey(packed.key)]: "written",
     });
-    // N2: many small rows can pack more than 128 into one object.
+    // Many small rows can pack more than 128 into one object.
     await deleteChunked(txn, packed.consumedRowKeys);
   });
 }
 
 // ---- Bounded reads for the pack alarm --------------------------------------
-//
-// `row:<n>` is zero-padded (`pendingRowStorageKey`, the shared package) —
-// native ascending `storage.list()` order equals arrival order, so a small,
-// bounded page (`collectRowBatch`, below) is enough to read rows in the
-// right order without sorting anything in memory.
+// `row:<n>` is zero-padded, so native ascending `list()` order equals
+// arrival order — a small, bounded page is enough to read in order.
 
-/** How many rows one `list()` page fetches while accumulating a batch — a
- *  small constant (not {@link PACK_OBJECT_MAX_DECOMPRESSED_BYTES}-sized)
- *  so a single call's OWN memory footprint stays small even before the
- *  accumulated-bytes check below can stop it (rows are ≤ `INBOX_ROW_MAX_BYTES`
- *  each, so one page is ≤ ~8 MB). */
+/** How many rows one `list()` page fetches while accumulating a batch —
+ *  small so a single call's OWN memory footprint stays bounded (rows are
+ *  ≤ `INBOX_ROW_MAX_BYTES`, so one page is ≤ ~8 MB). */
 export const ROW_LIST_PAGE_LIMIT = 8;
-/** Target bytes to accumulate per `collectRowBatch` call — matches
+/** Target bytes per `collectRowBatch` call — matches
  *  {@link PACK_OBJECT_MAX_DECOMPRESSED_BYTES} so one batch is normally
- *  enough to fill one packed object per tenant present in it, without the
- *  page-boundary fragmentation a much-smaller per-page limit would cause
- *  (advisor review, this fix round: a naive re-list-from-the-front-after-
- *  every-object loop re-reads rows it isn't about to use, amplifying DO row
- *  reads well past what packing this many bytes actually needs). */
+ *  enough to fill one packed object, without page-boundary fragmentation. */
 const ROW_BATCH_TARGET_BYTES = PACK_OBJECT_MAX_DECOMPRESSED_BYTES;
 
 function rowByteSize(row: PendingRow): number {
   return new TextEncoder().encode(encodeNdjson(row.resourceLogs)).length;
 }
 
-/** Bounded, arrival-ordered batch of pending rows (ANY tenant mixed in —
+/** Bounded, arrival-ordered batch of pending rows (any tenant mixed in —
  *  the caller groups by tenant): pages through `row:` in small chunks
- *  ({@link ROW_LIST_PAGE_LIMIT} at a time — bounds ONE `list()` call's
- *  memory) via an exclusive `start` cursor, accumulating until
- *  {@link ROW_BATCH_TARGET_BYTES} is reached or no more rows exist. Always
- *  takes at least one row (a single oversized row must still make
- *  progress, matching `packTenant`'s own rule). Requires every `row:` key
- *  in storage to already be in the padded shape (`pendingRowStorageKey`),
- *  so native ascending `list()` order is arrival order (see this section's
- *  header). */
+ *  ({@link ROW_LIST_PAGE_LIMIT}) via an exclusive `start` cursor,
+ *  accumulating until {@link ROW_BATCH_TARGET_BYTES} or nothing remains.
+ *  Always takes at least one row, matching `packTenant`'s own rule. */
 export async function collectRowBatch(storage: StorageLike): Promise<[string, PendingRow][]> {
   const rows: [string, PendingRow][] = [];
   let bytes = 0;
