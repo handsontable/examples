@@ -251,15 +251,15 @@ test.describe("Faro in the authoring app", () => {
 
   // faro-core's default `dedupe: true` keeps one `lastPayload` per API
   // (events/measurements) and silently skips a push that deep-equals the
-  // previous one, with no time window — a real second `example.saved`
-  // (repeat Save, Download, Share) or a second `example.open` on a guide's
+  // previous one, with no time window — a real second `example.downloaded`
+  // (repeat Download, Share) or a second `example.open` on a guide's
   // second example (identical `ref`-keyed attrs) must still leave the
   // browser. `faro.ts`'s `event()`/`metric()` pass `skipDedupe: true`;
   // `window.__t06Telemetry` (a build+host-gated e2e-only hook, same
   // guarantee as `__t06ReportDemoEvent`) calls the real facade methods
   // directly so this proves the facade's own behaviour without driving the
   // real save/download UI.
-  test("two identical example.saved events both reach Faro (facade skipDedupe)", async ({ page }) => {
+  test("two identical example.downloaded events both reach Faro (facade skipDedupe)", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
@@ -271,14 +271,14 @@ test.describe("Faro in the authoring app", () => {
           __t06Telemetry?: { event: (name: string, attrs: Record<string, string>) => void };
         }
       ).__t06Telemetry;
-      hook?.event("example.saved", { surface: "authoring", kind: "docs", ref: probeRef });
-      hook?.event("example.saved", { surface: "authoring", kind: "docs", ref: probeRef });
+      hook?.event("example.downloaded", { surface: "authoring", kind: "docs", ref: probeRef });
+      hook?.event("example.downloaded", { surface: "authoring", kind: "docs", ref: probeRef });
     }, ref);
 
     const matching = () =>
       captured
         .flatMap((b) => b.events ?? [])
-        .filter((e) => e.name === "example.saved" && (e.attributes as Record<string, unknown> | undefined)?.["hot.ref"] === ref);
+        .filter((e) => e.name === "example.downloaded" && (e.attributes as Record<string, unknown> | undefined)?.["hot.ref"] === ref);
     await expect.poll(matching).toHaveLength(2);
   });
 

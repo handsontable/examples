@@ -38,4 +38,10 @@ export function apiHeaders(init?: HeadersInit): Headers {
   return headers;
 }
 
+/** Whether the Faro-backed facade is live — the gate a browser-side event obeys,
+ *  exposed for a count the API worker writes on the browser's behalf. */
+export function telemetryEnabled(): boolean {
+  return telemetry !== noopTelemetry;
+}
+
 export { reportUncaughtError };

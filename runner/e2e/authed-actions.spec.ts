@@ -388,6 +388,9 @@ test("the workspace save sends the code only, never the metadata", async ({ page
   expect(patches[0]).toHaveProperty("files");
   expect(patches[0]).not.toHaveProperty("title");
   expect(patches[0]).not.toHaveProperty("description");
+  // This build's telemetry gate is closed, and the API counts `example.saved`
+  // only for a save that carries this field.
+  expect(patches[0]).not.toHaveProperty("exampleHtMajor");
 });
 
 test("the Edit info dialog cannot be dismissed mid-save", async ({ page }) => {
