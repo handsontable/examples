@@ -1076,6 +1076,13 @@ These are carried from the tasks that found them, not newly discovered here:
   caps every session at `min(now + 12h, brokerTokenExp)`, falling back to 1h when the
   token carries no readable `exp` — this narrows, but does not eliminate, DEV-3088's
   blast radius, which is still open and tracked separately.
+- **Accepted risk: logout cannot revoke a copied `__Host-o11y_session` cookie.**
+  Sessions are stateless, signed HMAC tokens with no server-side record, so `POST
+  /grafana/_o11y/logout` only clears the browser's own cookie — a copy taken before
+  logout stays valid until its `exp` (at most 12h, per the TTL cap above). The only
+  remedy is rotating `O11Y_SESSION_SECRET`, which signs every signed-in person out at
+  once. Accepted for launch given the small, `@handsontable.com`-only user base; revisit
+  if a deny-list (the `InboxWriter` DO already exists) is ever needed.
 - **The "no per-panel ClickHouse `database` field" decision has not been checked
   against the real Analytics Engine SQL API** — only local ClickHouse and AE's documented
   SQL surface were checked. If a query returns "unknown table" in production Grafana where
@@ -1125,9 +1132,12 @@ walkthrough already showed.
    already did this once; repeat once against the production o11y worker's
    real Workers Logs export destination and confirm the same 7 labels + `cloudflare.ray_id`
    remap + `service.version` default.
-3. **Exit criterion 9 (idle tab)** — open `/grafana/*`, leave the tab genuinely idle (no
-   dashboard auto-refresh) for 16 minutes, confirm the box stops. Not tested with
-   a real open tab so far; the existing evidence used zero requests, not an idle tab.
+3. **Exit criterion 9 (idle tab)** — open `/grafana/*`, leave the tab genuinely idle for
+   16 minutes, confirm the box stops. Every provisioned dashboard ships with
+   `"refresh": ""`, so a forgotten dashboard tab is idle by default and does not itself
+   keep the box awake; a viewer who turns refresh back on (the time picker's refresh
+   options are still there) accepts that their own tab now keeps the box awake, up to
+   the 4-hour hard cap, for as long as it stays open.
 4. **Exit criterion 13 (retention)** — check the sandbox account's 1-day retention-clock
    test (`t03-retention-clock-test/` prefix, `o11y-probe-t03-loki`): the two
    objects should be gone and the lifecycle rule should still be listed. If more than a few
