@@ -170,9 +170,6 @@ export function inboxKeyStorageKey(key: string): string {
 export function doneKeyStorageKey(key: string): string {
   return `done:${key}`;
 }
-export function hashStorageKey(sha256Hex: string): string {
-  return `hash:${sha256Hex}`;
-}
 export function fingerprintStorageKey(fp: string): string {
   return `fp:${fp}`;
 }

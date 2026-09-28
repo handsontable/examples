@@ -72,7 +72,7 @@ export interface InboxWriterApi {
 
   /**
    * ADR §B.2 steps 4–5, T02: dedupe each item's `hash` against the 24 h window
-   * (`hash:<sha256>`), append every non-duplicate ITEM WITH A `record` to
+   * (`hash:<yyyymmdd>:<sha256>`), append every non-duplicate ITEM WITH A `record` to
    * storage rows ≤ 1 MB (arrival time on the row, never in the record) —
    * a `record`-less item (A-I4 remainder, §6's `example.*` events) still
    * runs through the same dedupe/fingerprint bookkeeping but produces no
