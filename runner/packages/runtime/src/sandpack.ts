@@ -29,7 +29,7 @@ export type {
   SandpackCompileErrorEvent,
   SandpackCompileTimingEvent,
 } from "./types.js";
-import { isCompilerUnavailable, transpileFilesForParcel } from "./transpile.js";
+import { isCompilerUnavailable, isTranspileFailure, transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
 import { HTML_ENTRY_ENVS, resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
 import {
@@ -590,7 +590,19 @@ export class SandpackRuntime implements DemoRuntime {
     this.claim = claim;
     IFRAME_OWNER.set(this.opts.iframe, claim);
 
-    const setup = await this.buildSetup(files);
+    let setup: SandboxSetup;
+    try {
+      setup = await this.buildSetup(files);
+    } catch (err) {
+      // R9C (F10 compile half): a demo whose source does not parse at mount — a saved,
+      // shared or `?payload=` demo, or a remount of a broken workspace — is a compile
+      // error from the very first run, and counts at once (there is no edit burst to
+      // collapse). Reported, then rethrown unchanged: the mount still rejects exactly as
+      // before, so the error card, `preview.ready_ms outcome=error` and the Sentry
+      // capture downstream (`tier1Report`) see the same error they always did.
+      if (isTranspileFailure(err)) this.reportTranspileFailure(err);
+      throw err;
+    }
     // The dispatch clock for the initial compile (§5 `sandpack.compile_ms`). Started
     // right before `loadSandpackClient`, which both connects to the bundler AND runs
     // the first compile — `buildSetup` above is our own transpile/injection work, not
@@ -845,7 +857,15 @@ export class SandpackRuntime implements DemoRuntime {
         this.published = candidate;
       })
       .catch((cause: unknown) => {
-        /* mid-edit parse error — the user is still typing.
+        /* mid-edit parse error — the user is still typing. Nothing reaches the bundler and
+         * the last good render stays on screen (no error card per keystroke).
+         *
+         * It is still the preview's compile error, though, and the only place it exists
+         * (R9C, F10 compile half): reported to `onCompileError`, and only for the newest
+         * push — a superseded keystroke's failure is already typed past, and reporting it
+         * would put a stale diagnostic into the edit burst the authoring app collapses
+         * (`demoEventCollapse.ts`), which counts once per burst. `emitError` is NOT
+         * called: the card and the Sentry capture stay exactly as they were.
          *
          * One exception (DEV-2569): the compiler chunk itself failing to load is not the
          * visitor's half-typed code, and swallowing it here left a stranded tab silently
@@ -853,10 +873,23 @@ export class SandpackRuntime implements DemoRuntime {
          * most likely to be on. Emitted once: `loadBabel` has latched by now, so every
          * later keystroke arrives here with the same terminal error, and the card is
          * already showing it. */
+        if (isTranspileFailure(cause)) {
+          if (this.client && seq === this.updateSeq) this.reportTranspileFailure(cause);
+          return;
+        }
         if (this.compilerFailureEmitted || !isCompilerUnavailable(cause)) return;
         this.compilerFailureEmitted = true;
         this.emitError(cause as Error);
       });
+  }
+
+  /** §5 `sandpack.compile_error` for a parcel pre-transpile failure (R9C) — the babel
+   *  parse error the bundler never sees. Same event, and the same bounded message, as a
+   *  bundler `show-error` diagnostic; no compile clock is involved (nothing was
+   *  dispatched, so `sandpack.compile_ms` has nothing to time). */
+  private reportTranspileFailure(cause: unknown): void {
+    const message = boundCompileMessage((cause as Error).message);
+    for (const cb of this.compileErrorCbs) cb({ message });
   }
 
   dispose(): void {

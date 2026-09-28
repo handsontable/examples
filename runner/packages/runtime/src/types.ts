@@ -133,9 +133,11 @@ export interface SandpackCompileTimingEvent {
   readonly outcome: "ok" | "error";
 }
 
-/** A `show-error` compile diagnostic (never a Sandpack evaluation error — a
- *  runtime throw inside an already-evaluated module, error-reporting
- *  territory, not this signal). `message` is already bounded through
+/** A compile diagnostic: a bundler `show-error` with no frames, or (R9C) the
+ *  parcel pre-transpile's own babel parse failure, which never reaches the
+ *  bundler — on mount, and on the edit path for the newest push only. Never a
+ *  Sandpack evaluation error — a runtime throw inside an already-evaluated
+ *  module, error-reporting territory, not this signal. `message` is already bounded through
  *  `boundCompileMessage` in `sandpack.ts` — redacted and truncated, never raw
  *  authored code. */
 export interface SandpackCompileErrorEvent {

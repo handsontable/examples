@@ -74,6 +74,7 @@ import {
   reportDemoEvent,
   noteDemoEdit,
   resetDemoEventCollapse,
+  collapseCompileError,
   reportError,
   Sentry,
 } from "./sentry.js";
@@ -2691,7 +2692,11 @@ function Authoring({
     // UI-library starters, `react-js` and siblings: catalog tier 1, `engine:
     // "container"`). `telemetry` is read here, live, not captured earlier — T06's
     // `initTelemetry()` reassigns the binding after init.
-    wireRuntimeMetrics(runtime, { framework: entry.framework, versionRef: v.value.ref }, telemetry);
+    // R9C: compile errors go through the same edit-burst collapse as the preview's
+    // runtime relays, so a typed syntax error is one `sandpack.compile_error` per burst.
+    wireRuntimeMetrics(runtime, { framework: entry.framework, versionRef: v.value.ref }, telemetry, {
+      collapseCompileError,
+    });
     const previewTracker = trackPreviewReady(
       runtime,
       {

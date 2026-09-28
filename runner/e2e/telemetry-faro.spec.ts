@@ -1,7 +1,8 @@
 import { test, expect, type Route, type Page } from "@playwright/test";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { activeEditor, stubShell } from "./helpers.js";
+import { activeEditor, previewReady, stubShell } from "./helpers.js";
+import { fingerprint } from "../packages/runtime/src/telemetry/fingerprint.js";
 
 // T06 — Faro in the authoring app.
 //
@@ -730,6 +731,68 @@ test.describe("Faro in the authoring app (T06)", () => {
     await page.waitForTimeout(700);
     expect(points(), "an error right after a keystroke waits for the burst to settle").toHaveLength(0);
     await expect.poll(() => points().length, { timeout: 10_000 }).toBe(1);
+  });
+
+  // R9C (F10 compile half): a syntax error typed into a Tier-1 parcel example
+  // never reaches the bundler — the client-side pre-transpile rejects it — and
+  // its catch used to drop it, so `sandpack.compile_error` never fired for the
+  // most common compile error there is. Real keystrokes in the real editor, the
+  // real runtime, babel and collapse, and a real preview.
+  //
+  // E2E_LIVE, not just E2E_TELEMETRY: the edit path needs a mounted Sandpack
+  // client, and with every bundler host aborted `mount()` never resolves (the
+  // preview stays `booting`, measured) — so no keystroke reaches the runtime at
+  // all. The live preview is also what makes the keystroke-prefix rungs (`c`..
+  // `cons`) run and relay ReferenceErrors, which the compile failure must keep
+  // out of `preview.runtime_error` (the `replacesRun` rule). CI home:
+  // e2e-live.yml's local-mode "typed syntax error" step.
+  test("R9C: a syntax error typed key by key reaches /telemetry/collect as one sandpack.compile_error, not a runtime error", async ({ page }) => {
+    test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 (needs the hosted Sandpack bundler) to run the typed compile-error check");
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+    await previewReady(page);
+    const measurementsSince = (mark: number) => captured.slice(mark).flatMap((b) => b.measurements ?? []);
+    const mark = captured.length;
+
+    await activeEditor(page).click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.press("Enter");
+    // No delay on purpose: the prefixes' runs then relay their ReferenceErrors
+    // after later keystrokes (compile slower than the typist), which is what the
+    // verifier's stray `preview.runtime_error` points were. With a 40 ms delay
+    // the relays land before the next keystroke and the `replacesRun` rule goes
+    // unexercised (measured: that mutation stayed green).
+    await page.keyboard.type("const R9C = ;", { delay: 0 });
+
+    await expect
+      .poll(() => measurementsSince(mark).filter((m) => m.type === "sandpack.compile_error").length, { timeout: 15_000 })
+      .toBe(1);
+    const [point] = measurementsSince(mark).filter((m) => m.type === "sandpack.compile_error");
+    const ctx = point!.context as Record<string, string>;
+    expect(ctx["hot.fingerprint"]).toMatch(/^sandpack\.compile_error:[0-9a-f]{16}$/);
+    expect(ctx["hot.ht_major"]).toMatch(/^\d+$/);
+    expect(ctx["hot.framework"]).toBeTruthy();
+    // The compile point is only emitted when the burst closes, in the same flush
+    // as anything the burst still held. One short negative wait anyway (the F26
+    // test above uses the same idiom): nothing trickles in afterwards.
+    await page.waitForTimeout(1500);
+    const after = measurementsSince(mark);
+    expect(after.filter((m) => m.type === "sandpack.compile_error")).toHaveLength(1);
+    // Handsontable's own first-load notice (a `console-warn`, `reason=console`)
+    // can land after `ready` and before the first keystroke, outside any burst,
+    // where it rightly counts at once. Known noise of the example, not a rung.
+    const themeNotice = fingerprint("demo-runtime", 'Theme "main" is already registered. Registration skipped.');
+    expect(
+      after.filter(
+        (m) =>
+          m.type === "preview.runtime_error" &&
+          (m.context as Record<string, string>)["hot.fingerprint"] !== themeNotice,
+      ),
+      "no runtime error (of any reason) from the rungs of a line that ends in a syntax error",
+    ).toHaveLength(0);
+    // No authored text on the wire (contract §3): the point carries a hash only.
+    expect(JSON.stringify(captured.slice(mark))).not.toContain("R9C");
   });
 });
 

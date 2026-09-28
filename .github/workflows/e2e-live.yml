@@ -220,6 +220,31 @@ jobs:
           E2E_BASE_URL: ${{ env.BASE_URL }}
         run: pnpm e2e e2e/ai-live.spec.ts
 
+      # R9C (F10 compile half): a syntax error typed into a Tier-1 parcel example
+      # must reach /telemetry/collect as one `sandpack.compile_error` and no
+      # `preview.runtime_error`. Needs a VITE_TELEMETRY_LOCAL=1 build (the spec's
+      # own E2E_TELEMETRY gate, `page.route`-mocked collect) AND the hosted
+      # bundler (E2E_LIVE: the edit path needs a mounted Sandpack client), so it
+      # lives here rather than in ci.yml's deterministic e2e-telemetry job.
+      # Local mode only, and last: it rebuilds dist with the flag, then puts the
+      # plain build back. E2E_BASE_URL is a dummy that only disables the shared
+      # webServer (the spec serves its own dist); the guard proves the gated test
+      # ran instead of skipping to a green exit.
+      - name: E2E — typed syntax error counts as sandpack.compile_error (local telemetry build)
+        if: ${{ !inputs.smoke && env.BASE_URL == '' }}
+        env:
+          E2E_LIVE: '1'
+          E2E_TELEMETRY: '1'
+          E2E_BASE_URL: 'http://127.0.0.1:1'
+          PLAYWRIGHT_JSON_OUTPUT_NAME: telemetry-compile-error-report.json
+        run: |
+          VITE_TELEMETRY_LOCAL=1 pnpm --filter @handsontable/demo-authoring build
+          status=0
+          pnpm e2e e2e/telemetry-faro.spec.ts -g "R9C" --workers=1 --reporter=list,json || status=$?
+          pnpm --filter @handsontable/demo-authoring build
+          [ "$status" -eq 0 ] || exit $status
+          node scripts/ci/assert-e2e-ran.mjs telemetry-compile-error-report.json
+
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4

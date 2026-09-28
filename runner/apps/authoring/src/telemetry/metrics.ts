@@ -174,12 +174,18 @@ export function trackPreviewReady(
  * simply registers nothing for the three Sandpack-only hooks, and vice versa —
  * no engine branch, no cast to a concrete class needed at the call site.
  *
- * `sandpack.compile_error` is deduped by fingerprint for the life of `runtime` —
- * a babel error the visitor has not fixed yet re-fires on every keystroke that
- * still fails to parse (`pushUpdate`'s own transpile-failure path never even
- * reaches the bundler for those), and without a dedupe this would turn one
- * authored typo into one point per keystroke instead of one point per distinct
- * diagnostic.
+ * `sandpack.compile_error` fires for a bundler diagnostic and (R9C, F10
+ * compile half) for the parcel pre-transpile's own babel failure, which never
+ * reaches the bundler — on mount, and for the newest push on the edit path.
+ * Typing one broken line walks through several distinct diagnostics
+ * (`Unexpected token`, `Missing initializer…`, `Unterminated JSX…`), so a
+ * fingerprint dedupe alone would still count several points per typed line.
+ * With `opts.collapseCompileError` (what `App.tsx` passes: `sentry.ts`'s
+ * edit-burst collapse, shared with `preview.runtime_error`) a compile error
+ * counts once per edit burst, from the burst's final state, and suppresses the
+ * burst's runtime relays from code already typed past. Without it (a bare
+ * caller, and the pre-R9C behaviour) the point is deduped by fingerprint for
+ * the life of `runtime`.
  *
  * T07-D2 — `session.start_ms`'s `reason` (cold/warm) is intentionally never set.
  * `toAePoint` accepts the metric with `reason` omitted (every `HotAttrs` field is
@@ -199,6 +205,7 @@ export function wireRuntimeMetrics(
   runtime: DemoRuntime,
   ctx: { framework: string; versionRef: string },
   telemetry: Telemetry,
+  opts: { collapseCompileError?: (emit: () => void) => void } = {},
 ): void {
   const htMajor = htMajorOf(ctx.versionRef);
   const seenFingerprints = new Set<string>();
@@ -213,13 +220,19 @@ export function wireRuntimeMetrics(
 
   runtime.onCompileError?.((event) => {
     const fp = fingerprint("sandpack.compile_error", event.message);
+    const emit = () =>
+      telemetry.metric(
+        "sandpack.compile_error",
+        {},
+        { framework: ctx.framework, ht_major: htMajor, fingerprint: fp },
+      );
+    if (opts.collapseCompileError) {
+      opts.collapseCompileError(emit);
+      return;
+    }
     if (seenFingerprints.has(fp)) return;
     seenFingerprints.add(fp);
-    telemetry.metric(
-      "sandpack.compile_error",
-      {},
-      { framework: ctx.framework, ht_major: htMajor, fingerprint: fp },
-    );
+    emit();
   });
 
   runtime.onBundlerUnreachable?.((event) => {

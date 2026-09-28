@@ -49,6 +49,18 @@
 // fingerprint. Rule 1 of `normalizeMonitorMessage` folds most `is not
 // defined` rungs into one fingerprint, which keeps this small.
 //
+// A compile failure is a run that never happened (R9C, F10 compile half). When
+// the newest edit does not compile (the parcel pre-transpile's babel error, or
+// a bundler diagnostic), nothing of it reaches the preview, so everything the
+// preview relays for the rest of the burst is from code already typed past —
+// a keystroke-prefix rung still in flight, or a re-render warning. That
+// compile report is passed with `replacesRun`: it drops whatever the burst is
+// holding, and every later report of the burst that is not itself a compile
+// failure, so a typed syntax error counts as one `sandpack.compile_error` and
+// as no `preview.runtime_error`. The caller keys it by kind, not by message:
+// a burst ends in one final state, so it holds at most one compile error, and
+// a later one replaces an earlier one. The next edit re-arms runtime reports.
+//
 // Import-free, and every clock/timer injected, for the same reason as
 // `demoEventReport.ts`: `sentry.ts` imports `@sentry/react`, so `node --test`
 // can only pin this logic from a module that imports nothing
@@ -79,12 +91,19 @@ export interface DemoEventCollapseOptions<T> {
   pendingMax?: number;
 }
 
+export interface ReportOptions {
+  replacesRun?: boolean;
+}
+
 export interface DemoEventCollapse<T> {
   /** An edit that re-runs the preview (a keystroke, a chat or Style-panel
    *  write, a file add/delete/rename). Opens or extends the burst. */
   noteEdit(): void;
-  /** A report from the preview, keyed by fingerprint. */
-  report(key: string, item: T): void;
+  /** A report from the preview, keyed by fingerprint. `replacesRun` marks a
+   *  compile failure of the newest edit (see the header): during a burst it
+   *  replaces everything held and suppresses the burst's later non-compile
+   *  reports; outside a burst it is emitted at once like any other report. */
+  report(key: string, item: T, opts?: ReportOptions): void;
   /** Close the open burst now (emit what the last run reported). */
   flush(): void;
   /** A new preview mount: close the open burst for the outgoing preview,
@@ -103,6 +122,9 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
   let pending = new Map<string, T>();
   let timer: unknown = null;
   let used = 0;
+  /** The open burst's newest edit failed to compile: its reports are from
+   *  code already typed past, until the next edit. */
+  let runReplaced = false;
 
   // No `counted` check here: `report` does it for the direct path, and a held
   // key cannot already be counted — `counted` is cleared when the burst opens
@@ -121,6 +143,7 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
     }
     const settled = pending;
     pending = new Map();
+    runReplaced = false;
     for (const [key, item] of settled) emit(key, item);
   }
 
@@ -129,18 +152,25 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
       // The run these reports came from has been typed past.
       pending = new Map();
       counted.clear();
+      runReplaced = false;
       if (timer !== null) opts.clearTimer(timer);
       timer = opts.setTimer(() => {
         timer = null;
         flush();
       }, settleMs);
     },
-    report(key, item) {
+    report(key, item, reportOpts) {
       if (counted.has(key)) return;
       if (timer === null) {
         emit(key, item);
         return;
       }
+      if (reportOpts?.replacesRun) {
+        pending = new Map([[key, item]]);
+        runReplaced = true;
+        return;
+      }
+      if (runReplaced) return;
       if (pending.has(key) || pending.size >= pendingMax) return;
       pending.set(key, item);
     },
