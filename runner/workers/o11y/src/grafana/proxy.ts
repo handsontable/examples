@@ -10,7 +10,6 @@ import { GRAFANA_PROXY_MAX_BYTES, contentLengthExceeds } from "../gates/limits.j
 import { BodyTooLargeError } from "../normalise/read-body.js";
 import { getGrafanaBoxStub } from "../box.js";
 import { wakingPageResponse } from "./waking-page.js";
-import type { Env } from "../env.js";
 import type { RouteHandler } from "../router.js";
 
 /** Never forwarded to the container. `cookie` carries our own

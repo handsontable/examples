@@ -18,7 +18,7 @@
 // last notified time, which is far shorter than any reasonable TTL here.
 
 import { fingerprintStorageKey, fingerprintTimeIndexKey, FPTS_TIMESTAMP_DIGITS } from "@handsontable/demo-runtime/telemetry";
-import { deleteChunked, getManyChunked, putChunked, type StorageLike } from "./storage.js";
+import { deleteChunked, getManyChunked, type StorageLike } from "./storage.js";
 
 const FP_PREFIX = "fp:";
 const FPTS_PREFIX = "fpts:";
