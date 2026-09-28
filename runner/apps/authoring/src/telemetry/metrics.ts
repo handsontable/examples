@@ -157,9 +157,10 @@ export interface WireRuntimeMetricsOptions {
  * points, through optional chains (`runtime.onX?.(cb)`) so no engine
  * branch is needed at the call site.
  *
- * `sandpack.compile_ms`: the first compile (the mount) is sent at once; after
+ * `sandpack.compile_ms` is the settled compile of an edit burst (§5): the
+ * mount's compile is not sent (`preview.ready_ms` covers first load); after
  * it, each compile replaces the held one and the last of a burst is sent once
- * no compile or compile error follows for `COMPILE_TIMING_SETTLE_MS` (§5).
+ * no compile or compile error follows for `COMPILE_TIMING_SETTLE_MS`.
  *
  * A compile error is deduped by fingerprint for the life of `runtime`,
  * unless `opts.collapseCompileError` (the edit-burst collapse) is given,
@@ -184,7 +185,8 @@ export function wireRuntimeMetrics(
       { duration_ms: event.durationMs },
       { tier: "1", framework: ctx.framework, ht_major: htMajor, outcome: event.outcome },
     );
-  let mountCompileSent = false;
+  /** The mount's compile has resolved, or failed before one was dispatched. */
+  let mounted = false;
   let held: { event: SandpackCompileTimingEvent; timer: unknown } | null = null;
   const sendHeld = () => {
     heldCompileTimings.delete(sendHeld);
@@ -196,9 +198,8 @@ export function wireRuntimeMetrics(
   };
 
   runtime.onCompileTiming?.((event) => {
-    if (!mountCompileSent) {
-      mountCompileSent = true;
-      sendCompileTiming(event);
+    if (!mounted) {
+      mounted = true;
       return;
     }
     if (held) clearTimer(held.timer);
@@ -207,6 +208,7 @@ export function wireRuntimeMetrics(
   });
 
   runtime.onCompileError?.((event) => {
+    mounted = true;
     // A keystroke that fails the pre-transpile dispatches no compile, but it is still part of the burst.
     if (held) {
       clearTimer(held.timer);

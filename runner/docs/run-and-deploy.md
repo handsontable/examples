@@ -958,8 +958,8 @@ sized from what one IP actually sends:
 - **Authoring tab:** about 12 POSTs a minute at most. Faro flushes every 5 s
   (`telemetry/faroConfig.ts`) and each time the tab is hidden; a flush whose
   items span a URL change goes out as one POST per page URL.
-  `sandpack.compile_ms` is sent once per mount and once per edit burst, not
-  once per keystroke. Measured (a Tier-1 `javascript` example, typing for 70 s,
+  `sandpack.compile_ms` is sent once per edit burst, not once per keystroke,
+  and not for the mount. Measured (a Tier-1 `javascript` example, typing for 70 s,
   `/telemetry/collect` stubbed): 5 POSTs in the busiest 60 s, page load
   included, for a comment or a string literal at 150 or 250 ms per key, and for
   statements at 150 ms.

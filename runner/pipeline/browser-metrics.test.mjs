@@ -215,9 +215,12 @@ const SANDPACK_CTX = { framework: "vue", versionRef: "17.1.0" };
 test("sandpack.compile_ms: reports the hook's own duration and outcome, tier fixed to 1", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeSandpackRuntime();
-  wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry);
+  const clock = manualTimers();
+  wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry, clock);
 
+  runtime.fireCompileTiming({ durationMs: 900, outcome: "ok" }); // the mount
   runtime.fireCompileTiming({ durationMs: 123, outcome: "ok" });
+  clock.advance(COMPILE_TIMING_SETTLE_MS);
 
   assert.equal(telemetry.metrics.length, 1);
   const [call] = telemetry.metrics;
@@ -269,16 +272,16 @@ test("sandpack.compile_ms: the compiles of one edit burst send one point, the bu
     runtime.fireCompileTiming({ durationMs: 100 + i, outcome: i === 7 ? "error" : "ok" });
     clock.advance(200); // one keystroke's compile every 200 ms
   }
-  assert.deepEqual(compileTimes(telemetry), [[900, "ok"]], "the burst is held while compiles keep coming");
+  assert.deepEqual(compileTimes(telemetry), [], "the mount sends nothing, and the burst is held while compiles keep coming");
 
   clock.advance(COMPILE_TIMING_SETTLE_MS);
-  assert.deepEqual(compileTimes(telemetry), [[900, "ok"], [120, "ok"]]);
+  assert.deepEqual(compileTimes(telemetry), [[120, "ok"]]);
   assertValidAgainstRegistry(telemetry);
 
   runtime.fireCompileTiming({ durationMs: 77, outcome: "error" });
   clock.advance(COMPILE_TIMING_SETTLE_MS);
   assert.deepEqual(compileTimes(telemetry).at(-1), [77, "error"], "a later burst gets its own point");
-  assert.equal(compileTimes(telemetry).length, 3);
+  assert.equal(compileTimes(telemetry).length, 2);
 });
 
 test("sandpack.compile_ms: keystrokes that fail to transpile keep the burst open", () => {
@@ -296,7 +299,7 @@ test("sandpack.compile_ms: keystrokes that fail to transpile keep the burst open
   clock.advance(1500);
   runtime.fireCompileTiming({ durationMs: 42, outcome: "ok" });
   clock.advance(COMPILE_TIMING_SETTLE_MS);
-  assert.deepEqual(compileTimes(telemetry), [[900, "ok"], [42, "ok"]]);
+  assert.deepEqual(compileTimes(telemetry), [[42, "ok"]]);
 });
 
 test("sandpack.compile_ms: a held point is sent at once when the page is hidden, and only once", () => {
@@ -308,11 +311,37 @@ test("sandpack.compile_ms: a held point is sent at once when the page is hidden,
   runtime.fireCompileTiming({ durationMs: 900, outcome: "ok" });
   runtime.fireCompileTiming({ durationMs: 55, outcome: "ok" });
   flushCompileTimings();
-  assert.deepEqual(compileTimes(telemetry), [[900, "ok"], [55, "ok"]]);
+  assert.deepEqual(compileTimes(telemetry), [[55, "ok"]]);
 
   clock.advance(COMPILE_TIMING_SETTLE_MS);
   flushCompileTimings();
-  assert.equal(compileTimes(telemetry).length, 2);
+  assert.equal(compileTimes(telemetry).length, 1);
+});
+
+test("sandpack.compile_ms: the mount's compile sends no point, whatever its outcome", () => {
+  for (const outcome of ["ok", "error"]) {
+    const telemetry = recordingTelemetry();
+    const runtime = fakeSandpackRuntime();
+    const clock = manualTimers();
+    wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry, clock);
+
+    runtime.fireCompileTiming({ durationMs: 900, outcome });
+    clock.advance(COMPILE_TIMING_SETTLE_MS * 5);
+    flushCompileTimings();
+    assert.deepEqual(compileTimes(telemetry), [], outcome);
+  }
+});
+
+test("sandpack.compile_ms: after a mount that failed the pre-transpile, the first compile is an edit's", () => {
+  const telemetry = recordingTelemetry();
+  const runtime = fakeSandpackRuntime();
+  const clock = manualTimers();
+  wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry, clock);
+
+  runtime.fireCompileError({ message: "Unexpected token (1:7)", origin: "transpile" });
+  runtime.fireCompileTiming({ durationMs: 64, outcome: "ok" });
+  clock.advance(COMPILE_TIMING_SETTLE_MS);
+  assert.deepEqual(compileTimes(telemetry), [[64, "ok"]]);
 });
 
 test("sandpack.compile_error: fingerprinted, no authored text in the recorded attrs", () => {
