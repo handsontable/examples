@@ -43,7 +43,7 @@ function deps({ running = false, markers = new Set() } = {}) {
 
 // ---- wake-to-ready time on the wake entry -----------------------------------
 
-test("F8: recordWakeReady stores readyMs once (first call wins) and leaves the rest of the entry alone", async () => {
+test("recordWakeReady stores readyMs once (first call wins) and leaves the rest of the entry alone", async () => {
   const storage = memoryStorage();
   await storage.put({ [wakeStorageKey("w1")]: { startedAt: 1, reason: "visit", over: false } });
 
@@ -53,13 +53,13 @@ test("F8: recordWakeReady stores readyMs once (first call wins) and leaves the r
   assert.deepEqual(await storage.get(wakeStorageKey("w1")), { startedAt: 1, reason: "visit", over: false, readyMs: 41_500 });
 });
 
-test("F8: recordWakeReady for an already-resolved (deleted) wake does not recreate it", async () => {
+test("recordWakeReady for an already-resolved (deleted) wake does not recreate it", async () => {
   const storage = memoryStorage();
   await recordWakeReady(storage, "gone", 1234);
   assert.equal(await storage.get(wakeStorageKey("gone")), undefined);
 });
 
-test("F8: a resolved wake carries its readyMs on the clean path AND the unclean path", async () => {
+test("a resolved wake carries its readyMs on the clean path AND the unclean path", async () => {
   const k0 = inboxKeyStorageKey("inbox/worker/2026-01-01/00/000000000000.ndjson.gz");
   const k1 = inboxKeyStorageKey("inbox/worker/2026-01-01/00/000000000001.ndjson.gz");
   const storage = memoryStorage();
@@ -81,7 +81,7 @@ test("F8: a resolved wake carries its readyMs on the clean path AND the unclean 
   assert.equal(byId["never-ready"].readyMs, undefined, "a wake that never became ready has no time to report");
 });
 
-test("F8: marking the active wake over does not overwrite a readyMs recorded while isBoxRunning() was pending", async () => {
+test("marking the active wake over does not overwrite a readyMs recorded while isBoxRunning() was pending", async () => {
   const storage = memoryStorage();
   await storage.put({ [wakeStorageKey("w1")]: { startedAt: 1, reason: "visit", over: false } });
 
@@ -180,7 +180,7 @@ test("resolveOverWakes is idempotent: a second call with nothing left to resolve
 
 // ---- the race markKeysProvisional/resolveOverWakes closes -----------------
 
-test("B-I1: a markKeysProvisional call delivered WHILE isBoxRunning() is pending is still correctly captured (not lost, not committed without the marker)", async () => {
+test("a markKeysProvisional call delivered WHILE isBoxRunning() is pending is still correctly captured (not lost, not committed without the marker)", async () => {
   const storage = memoryStorage();
   await storage.put({ [wakeStorageKey("w1")]: { startedAt: 1, reason: "backlog", over: false } });
 
@@ -214,7 +214,7 @@ test("B-I1: a markKeysProvisional call delivered WHILE isBoxRunning() is pending
   assert.equal(await storage.get(inboxKeyStorageKey(key)), "written");
 });
 
-test("B-I1: markKeysProvisional refuses once the wake is over — the key stays untouched for the next wake to pick up", async () => {
+test("markKeysProvisional refuses once the wake is over — the key stays untouched for the next wake to pick up", async () => {
   const storage = memoryStorage();
   await storage.put({ [wakeStorageKey("w1")]: { startedAt: 1, reason: "backlog", over: true } });
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
@@ -224,7 +224,7 @@ test("B-I1: markKeysProvisional refuses once the wake is over — the key stays 
   assert.equal(await storage.get(inboxKeyStorageKey(key)), undefined, "an over wake must never accept a new provisional mark");
 });
 
-test("B-I1: markKeysProvisional refuses for an unknown/already-deleted wake", async () => {
+test("markKeysProvisional refuses for an unknown/already-deleted wake", async () => {
   const storage = memoryStorage();
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
 
@@ -241,7 +241,7 @@ test("B-I1: markKeysProvisional refuses for an unknown/already-deleted wake", as
 // `unclean`, since nothing was ever provisional. This must not weaken the
 // guarantee that a wake which did push data still needs the real marker.
 
-test("F3: a wake with no provisional keys at all resolves clean, with no marker required", async () => {
+test("a wake with no provisional keys at all resolves clean, with no marker required", async () => {
   const storage = memoryStorage();
   // w1 is over, and never had ANY key marked provisional under it — the
   // Loki ingested nothing this wake, so no marker was
@@ -255,7 +255,7 @@ test("F3: a wake with no provisional keys at all resolves clean, with no marker 
   assert.equal(result.resolved[0].keysAffected, 0);
 });
 
-test("F3: a wake that DID push data still requires the real marker — no weakening of T01's C1 guarantee", async () => {
+test("a wake that DID push data still requires the real marker — no weakening of T01's C1 guarantee", async () => {
   const storage = memoryStorage();
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   await storage.put({
@@ -436,7 +436,7 @@ test("reopenWindow never touches a key provisional to the CURRENT active wake", 
   assert.equal(await storage.get(inboxKeyStorageKey(key)), "provisional:active-wake");
 });
 
-test("B-M9: reopenWindowExceedsRetention refuses a window wider than the 7-day retention", () => {
+test("reopenWindowExceedsRetention refuses a window wider than the 7-day retention", () => {
   assert.equal(reopenWindowExceedsRetention(0, KEY_RETENTION_MS), false);
   assert.equal(reopenWindowExceedsRetention(0, KEY_RETENTION_MS + 1), true);
 });
@@ -516,7 +516,7 @@ test("pruneLedger deletes only done: entries older than KEY_RETENTION_MS, per te
 
 // ---- a wake with >128 provisional keys --------------------------------------
 
-test("N2: a wake with 150 provisional keys (over the real DO storage 128-key limit) resolves correctly, all moved to done:", async () => {
+test("a wake with 150 provisional keys (over the real DO storage 128-key limit) resolves correctly, all moved to done:", async () => {
   const storage = memoryStorage();
   const wakeId = "big-wake";
   const keyCount = 150;
@@ -548,7 +548,7 @@ test("N2: a wake with 150 provisional keys (over the real DO storage 128-key lim
 // `wakeStorageKey(wakeId)` is pushed onto `toDelete` last — a failure on a
 // later delete chunk must never remove the wake record first, so a crash
 // never reaches the "wake is gone but keys are still provisional" state.
-test("N2 atomicity: if a LATER delete chunk throws, wake: (deleted last) survives and the error propagates", async () => {
+test("atomicity: if a LATER delete chunk throws, wake: (deleted last) survives and the error propagates", async () => {
   const storage = memoryStorage();
   const wakeId = "big-wake-2";
   const keyCount = 150;
@@ -580,7 +580,7 @@ test("N2 atomicity: if a LATER delete chunk throws, wake: (deleted last) survive
 
 // A stale outer snapshot must not be able to undo a concurrent manual
 // reopen.
-test("N8: finalizeWakeResolution re-reads each key's CURRENT state — a concurrent manual reopen (key moved back to written) is not silently overwritten", async () => {
+test("finalizeWakeResolution re-reads each key's CURRENT state — a concurrent manual reopen (key moved back to written) is not silently overwritten", async () => {
   const storage = memoryStorage();
   const wakeId = "w-n8";
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";

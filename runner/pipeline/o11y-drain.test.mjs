@@ -138,7 +138,7 @@ test("drainKey: a 400 rejects the key with Loki's message, no retry", async () =
 // `drain.ts#drainKey`'s own doc comment for the full reasoning and
 // `pipeline/o11y-alerts.test.mjs`/box.ts wiring for how the permanent 400
 // stays operator-visible anyway (`recordPartialReject`).
-test("F2/G1 fix: a 400 on the FIRST chunk of a multi-chunk key does not skip the remaining chunks — they are still pushed, and the key stays provisional (row 19)", async () => {
+test("a 400 on the FIRST chunk of a multi-chunk key does not skip the remaining chunks — they are still pushed, and the key stays provisional (row 19)", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const bigBody = "x".repeat(700_000);
   const records = [record(bigBody + "-first"), record(bigBody + "-second")];
@@ -195,7 +195,7 @@ test("row 19: a key where EVERY chunk 400s still ends rejected (nothing accepted
   assert.equal(outcome.bytesPushed, 0);
 });
 
-test("F2 fix: a 400 on a LATER chunk still lets an EARLIER chunk's push stand — no retry of the already-successful one", async () => {
+test("a 400 on a LATER chunk still lets an EARLIER chunk's push stand — no retry of the already-successful one", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
   const bigBody = "x".repeat(700_000);
   const records = [record(bigBody + "-first"), record(bigBody + "-second")];
@@ -283,7 +283,7 @@ test("drainKey: a missing R2 object is rejected, not retried forever", async () 
 // still goes `provisional`, and the drop is counted on the outcome, never
 // silent.
 
-test("F1: a record older than the 7-day reject window is dropped before push and counted, not sent to Loki", async () => {
+test("a record older than the 7-day reject window is dropped before push and counted, not sent to Loki", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const bytes = await objectBytes([oldRecord("ancient"), record("fresh")]);
   const pushedBodies = [];
@@ -306,7 +306,7 @@ test("F1: a record older than the 7-day reject window is dropped before push and
   assert.match(pushedBodies[0].resourceLogs[0].scopeLogs[0].logRecords[0].body.stringValue, /fresh/);
 });
 
-test("F1: a key whose every record is too old is provisional with nothing pushed (no whole-key 400, nothing lost silently)", async () => {
+test("a key whose every record is too old is provisional with nothing pushed (no whole-key 400, nothing lost silently)", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const bytes = await objectBytes([oldRecord("a"), oldRecord("b")]);
   let pushCount = 0;
@@ -326,7 +326,7 @@ test("F1: a key whose every record is too old is provisional with nothing pushed
   assert.equal(pushCount, 0, "nothing left to push after the filter — Loki must never even see this key");
 });
 
-test("F1: a zero/absent timeUnixNano is never treated as an ancient (1970) timestamp and dropped", async () => {
+test("a zero/absent timeUnixNano is never treated as an ancient (1970) timestamp and dropped", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const zeroTimestamp = record("zero", "0");
   const bytes = await objectBytes([zeroTimestamp]);
@@ -408,7 +408,7 @@ test("drainKey: symbolicate() is applied to the records before they are pushed",
 // (`undecodable_object`, `object_missing`): `rejected`, and the batch
 // moves on.
 
-test("Z-B-C1: drainKey isolates a throw from symbolicate() as a rejected outcome, never lets it escape", async () => {
+test("drainKey isolates a throw from symbolicate() as a rejected outcome, never lets it escape", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const bytes = await objectBytes([record("poison")]);
   const deps = {
@@ -428,7 +428,7 @@ test("Z-B-C1: drainKey isolates a throw from symbolicate() as a rejected outcome
   assert.match(outcome.reason ?? "", /Line must be greater/);
 });
 
-test("Z-B-C1: drainBatch with one poison key (symbolicate throws) followed by a good key pushes the good key and rejects only the poison one", async () => {
+test("drainBatch with one poison key (symbolicate throws) followed by a good key pushes the good key and rejects only the poison one", async () => {
   const poisonKey = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const goodKey = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
   const objects = {
@@ -465,7 +465,7 @@ test("Z-B-C1: drainBatch with one poison key (symbolicate throws) followed by a 
   assert.ok(!pushedBodies.some((b) => b.includes("poison")), "the poisoned key's record must never be pushed");
 });
 
-test("Z-B-C1: a transient Loki failure (not a symbolication throw) still does NOT reject — it keeps today's error/retry behaviour", async () => {
+test("a transient Loki failure (not a symbolication throw) still does NOT reject — it keeps today's error/retry behaviour", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const bytes = await objectBytes([record("transient")]);
   let attempts = 0;

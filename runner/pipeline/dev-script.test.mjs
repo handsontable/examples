@@ -314,7 +314,7 @@ test("fillEmptyDevVarsSecrets: fills an empty declared line with a generated val
   });
 });
 
-test("fillEmptyDevVarsSecrets: runs on a PRE-EXISTING file, unlike bootstrapDevVars's own patch (F21: the finding IS a pre-existing bootstrapped file)", () => {
+test("fillEmptyDevVarsSecrets: runs on a PRE-EXISTING file, unlike bootstrapDevVars's own patch", () => {
   withTmpDir((dir) => {
     const devVarsPath = path.join(dir, ".dev.vars");
     // Simulate a `.dev.vars` bootstrapped by an OLDER dev.mjs, before this
@@ -384,7 +384,7 @@ test("resolveReplaySecret: env value wins when both env and .dev.vars have it", 
   assert.equal(value, "from-env");
 });
 
-test("resolveReplaySecret: falls back to .dev.vars when env is unset (the standalone-invocation case F21 names)", () => {
+test("resolveReplaySecret: falls back to .dev.vars when env is unset (the standalone-invocation case)", () => {
   const value = resolveReplaySecret(undefined, "/irrelevant", "O11Y_EXPORT_SECRET", () => "from-devvars");
   assert.equal(value, "from-devvars");
 });
@@ -468,7 +468,7 @@ test("assertNoPortCollisions: throws for a duplicate port value, passes for all-
   assert.throws(() => assertNoPortCollisions({ A: 1, B: 1 }), /port collision/);
 });
 
-test("checkO11yDevVarsStaleness (NB8): warns when a pre-existing .dev.vars declares DEV_ADMIN or O11Y_SESSION_SECRET empty", () => {
+test("checkO11yDevVarsStaleness: warns when a pre-existing .dev.vars declares DEV_ADMIN or O11Y_SESSION_SECRET empty", () => {
   withTmpDir((dir) => {
     const devVarsPath = path.join(dir, ".dev.vars");
 
@@ -491,7 +491,7 @@ test("checkO11yDevVarsStaleness (NB8): warns when a pre-existing .dev.vars decla
   });
 });
 
-test("checkO11yDevVarsStaleness (P1-logs): warns when a pre-existing .dev.vars declares SLACK_WEBHOOK_URL or AE_SQL_TOKEN empty", () => {
+test("checkO11yDevVarsStaleness: warns when a pre-existing .dev.vars declares SLACK_WEBHOOK_URL or AE_SQL_TOKEN empty", () => {
   withTmpDir((dir) => {
     const devVarsPath = path.join(dir, ".dev.vars");
 
@@ -522,7 +522,7 @@ test("checkO11yDevVarsStaleness (P1-logs): warns when a pre-existing .dev.vars d
   });
 });
 
-test("o11yDevVarsPatch + bootstrapDevVars (P1-logs): a FRESH bootstrap never leaves SLACK_WEBHOOK_URL or AE_SQL_TOKEN declared empty", () => {
+test("o11yDevVarsPatch + bootstrapDevVars: a FRESH bootstrap never leaves SLACK_WEBHOOK_URL or AE_SQL_TOKEN declared empty", () => {
   withTmpDir((dir) => {
     const examplePath = path.join(dir, ".dev.vars.example");
     const devVarsPath = path.join(dir, ".dev.vars");
@@ -548,7 +548,7 @@ test("ephemeralSecret: never the same value twice, and never written by bootstra
   assert.equal(ephemeralSecret().length, 64); // 32 bytes, hex
 });
 
-test("redactArgsForLog (NB6): O11Y_SESSION_SECRET's --var value is redacted for dev.mjs's own log line", () => {
+test("redactArgsForLog: O11Y_SESSION_SECRET's --var value is redacted for dev.mjs's own log line", () => {
   const secret = ephemeralSecret();
   const args = [
     "dev",
@@ -772,7 +772,7 @@ test("snapshotLocalSchema: one sqlite_master query plus one PRAGMA per requested
   assert.equal(calls.length, 2, "one sqlite_master query + one PRAGMA for the one requested table");
 });
 
-test("applyMigrations: a hand-migrated local D1 with NO record — every pending file whose targets already exist is adopted, not re-applied (the N1 repro)", async () => {
+test("applyMigrations: a hand-migrated local D1 with NO record — every pending file whose targets already exist is adopted, not re-applied", async () => {
   await withTmpDir(async (dir) => {
     const migrationsDir = path.join(dir, "migrations");
     mkdirSync(migrationsDir);
@@ -1711,7 +1711,7 @@ test("possiblyLeftoverContainers: never flags an unrelated container even if it'
   assert.deepEqual(possiblyLeftoverContainers(before, after), []);
 });
 
-test("reportLeftoverContainers (NB2, the required stubbed-docker test): a foreign container that appears new during the session, matching this run's own worker-name pattern, is REPORTED but never stopped", () => {
+test("reportLeftoverContainers (the required stubbed-docker test): a foreign container that appears new during the session, matching this run's own worker-name pattern, is REPORTED but never stopped", () => {
   // Simulates a false positive: worktree B
   // starts its own `wrangler dev`/Tier-2 session partway through worktree
   // A's (this run's) session. B's `workerd-handsontable-demos-api-Sandbox-*`
@@ -1749,7 +1749,7 @@ test("reportLeftoverContainers (NB2, the required stubbed-docker test): a foreig
   assert.match(logLines[0], /docker stop foreign-1/, "the manual cleanup command is printed for a human to run");
 });
 
-test("SHUTDOWN_SIGNALS (NB5): includes SIGHUP alongside SIGINT/SIGTERM, so closing the terminal a detached session was started from still triggers cleanup", () => {
+test("SHUTDOWN_SIGNALS: includes SIGHUP alongside SIGINT/SIGTERM, so closing the terminal a detached session was started from still triggers cleanup", () => {
   assert.deepEqual([...SHUTDOWN_SIGNALS].sort(), ["SIGHUP", "SIGINT", "SIGTERM"]);
 });
 

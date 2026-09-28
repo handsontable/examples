@@ -418,7 +418,7 @@ for (const { file, dashboard } of dashboards) {
     }
   });
 
-  test(`${file}: no Analytics Engine query filters on a blob its metric(s) never set (F24)`, () => {
+  test(`${file}: no Analytics Engine query filters on a blob its metric(s) never set`, () => {
     for (const { panel, query } of aeTargetsOf(dashboard)) {
       const violations = validateMetricBlobFilters(query);
       assert.deepEqual(violations, [], `${file} / panel "${panel}": ${violations.join("; ")}\nquery: ${query}`);
@@ -507,7 +507,7 @@ test("the lint fails on a high-cardinality Loki label (session.id / cf.ray shape
   }
 });
 
-test("the lint fails on a disallowed label placed AFTER a ${var:regex} macro in the same selector (P1-logs: the macro's own closing brace was fooling the non-greedy {...} match)", () => {
+test("the lint fails on a disallowed label placed AFTER a ${var:regex} macro in the same selector (the macro's own closing brace was fooling the non-greedy {...} match)", () => {
   const violations = validateLokiExpr('{service_name=~"${service_name:regex}", session_id="x"}');
   assert.ok(
     violations.some((v) => v.includes('"session_id"')),
@@ -515,7 +515,7 @@ test("the lint fails on a disallowed label placed AFTER a ${var:regex} macro in 
   );
 });
 
-test("the lint fails on a bad templating-variable AE query (I1: variable queries were invisible to aeTargetsOf)", () => {
+test("the lint fails on a bad templating-variable AE query (variable queries were invisible to aeTargetsOf)", () => {
   const dashboard = {
     templating: {
       list: [
@@ -537,7 +537,7 @@ test("the lint fails on a bad templating-variable AE query (I1: variable queries
   );
 });
 
-test("the F24 blob-filter lint fails on bucket.resolve_ms's OLD query shape (blob6/blob7, which its §5 row never lists)", () => {
+test("the blob-filter lint fails on bucket.resolve_ms's OLD query shape (blob6/blob7, which its §5 row never lists)", () => {
   const violations = validateMetricBlobFilters(
     "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob16 AS bucket, " +
       "quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM $table " +
@@ -548,7 +548,7 @@ test("the F24 blob-filter lint fails on bucket.resolve_ms's OLD query shape (blo
   assert.ok(violations.some((v) => v.includes("blob7")), `expected a blob7 violation, got: ${JSON.stringify(violations)}`);
 });
 
-test("the F24 blob-filter lint passes bucket.resolve_ms's fixed query shape (bucket/outcome/environment only)", () => {
+test("the blob-filter lint passes bucket.resolve_ms's fixed query shape (bucket/outcome/environment only)", () => {
   assert.deepEqual(
     validateMetricBlobFilters(
       "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob16 AS bucket, " +
@@ -560,7 +560,7 @@ test("the F24 blob-filter lint passes bucket.resolve_ms's fixed query shape (buc
   );
 });
 
-test("the F24 blob-filter lint ignores a blob8 comparison inside a SELECT-list value expression, not a WHERE filter (the error-rate panel's own shape)", () => {
+test("the blob-filter lint ignores a blob8 comparison inside a SELECT-list value expression, not a WHERE filter (the error-rate panel's own shape)", () => {
   assert.deepEqual(
     validateMetricBlobFilters(
       "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob16 AS bucket, " +
@@ -572,7 +572,7 @@ test("the F24 blob-filter lint ignores a blob8 comparison inside a SELECT-list v
   );
 });
 
-test("the F24 blob-filter lint requires a multi-metric (index1 IN (...)) query's blob filter to be set by EVERY named metric", () => {
+test("the blob-filter lint requires a multi-metric (index1 IN (...)) query's blob filter to be set by EVERY named metric", () => {
   // sandpack.compile_ms sets blob6 (framework); o11y.wake does not — a shared
   // blob6 filter across both would silently drop every o11y.wake row.
   const violations = validateMetricBlobFilters(
@@ -584,7 +584,7 @@ test("the F24 blob-filter lint requires a multi-metric (index1 IN (...)) query's
   );
 });
 
-test("the F24 blob-filter lint on the REAL tier1-playground.json dashboard (revert evidence: putting blob6/blob7 back into either bucket.resolve_ms panel's query must break this)", () => {
+test("the blob-filter lint on the REAL tier1-playground.json dashboard (revert evidence: putting blob6/blob7 back into either bucket.resolve_ms panel's query must break this)", () => {
   const { dashboard } = dashboards.find((d) => d.file === "tier1-playground.json");
   assert.ok(dashboard, "tier1-playground.json must exist and be loaded");
   const targets = aeTargetsOf(dashboard).filter(({ query }) => query.includes("'bucket.resolve_ms'"));

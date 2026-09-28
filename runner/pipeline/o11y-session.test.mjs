@@ -68,13 +68,13 @@ function allSetCookies(res) {
 
 // ---- secret strength + HKDF key separation ---------------------------------
 
-test("I1: isSessionSecretValid requires at least 32 UTF-8 bytes", () => {
+test("isSessionSecretValid requires at least 32 UTF-8 bytes", () => {
   assert.equal(isSessionSecretValid(baseEnv({ O11Y_SESSION_SECRET: "x".repeat(31) })), false);
   assert.equal(isSessionSecretValid(baseEnv({ O11Y_SESSION_SECRET: "x".repeat(32) })), true);
   assert.equal(isSessionSecretValid(baseEnv({ O11Y_SESSION_SECRET: undefined })), false);
 });
 
-test("I1: a short secret fails closed on every path (verifySession, /login, /session)", async () => {
+test("a short secret fails closed on every path (verifySession, /login, /session)", async () => {
   const shortEnv = baseEnv({ O11Y_SESSION_SECRET: "too-short" });
 
   // Sign a token under a DIFFERENT, valid-length secret (simulating an
@@ -111,7 +111,7 @@ test("I1: a short secret fails closed on every path (verifySession, /login, /ses
   assert.equal(sessionRes.status, 500);
 });
 
-test("I1: the session cookie is NOT verifiable with the raw secret bytes directly (HKDF domain separation)", async () => {
+test("the session cookie is NOT verifiable with the raw secret bytes directly (HKDF domain separation)", async () => {
   const env = baseEnv();
   const rawSecretKeyToken = await new SignJWT({ email: "artur.medrygal@handsontable.com", typ: SESSION_TYP, v: 1 })
     .setProtectedHeader({ alg: "HS256" })
@@ -130,7 +130,7 @@ test("I1: the session cookie is NOT verifiable with the raw secret bytes directl
   );
 });
 
-test("I1: the login-nonce key and the session key are different derived keys", async () => {
+test("the login-nonce key and the session key are different derived keys", async () => {
   const env = baseEnv();
   const loginKey = await _deriveLoginKeyForTests(env);
   const sessionKey = await _deriveSessionKeyForTests(env);
@@ -154,12 +154,12 @@ test("I1: the login-nonce key and the session key are different derived keys", a
 
 // ---- __Host- cookies, duplicate/tossed-cookie recovery ---------------------
 
-test("I2: both cookie names use the __Host- prefix", () => {
+test("both cookie names use the __Host- prefix", () => {
   assert.equal(SESSION_COOKIE, "__Host-o11y_session");
   assert.equal(LOGIN_COOKIE, "__Host-o11y_login");
 });
 
-test("I2: the session and login Set-Cookie headers satisfy every __Host- requirement (Path=/, Secure, no Domain)", async () => {
+test("the session and login Set-Cookie headers satisfy every __Host- requirement (Path=/, Secure, no Domain)", async () => {
   const env = baseEnv();
   const sessionToken = await signSessionCookie(env, "artur.medrygal@handsontable.com", 3600);
   const sessionHeader = sessionSetCookieHeader(sessionToken, 3600);
@@ -175,7 +175,7 @@ test("I2: the session and login Set-Cookie headers satisfy every __Host- require
   }
 });
 
-test("I2 (tossed-cookie lockout): a junk value ahead of the real one in the Cookie header no longer locks verification out", async () => {
+test("tossed-cookie lockout: a junk value ahead of the real one in the Cookie header no longer locks verification out", async () => {
   const env = baseEnv();
   const validToken = await signSessionCookie(env, "artur.medrygal@handsontable.com", 3600);
   const req = new Request("https://demos.handsontable.com/grafana/", {
@@ -185,7 +185,7 @@ test("I2 (tossed-cookie lockout): a junk value ahead of the real one in the Cook
   assert.deepEqual(result, { email: "artur.medrygal@handsontable.com" }, "the real cookie must still be found and verified");
 });
 
-test("I2 (fixation): verifyLoginCookie also recovers the valid value when a junk duplicate precedes it", async () => {
+test("fixation: verifyLoginCookie also recovers the valid value when a junk duplicate precedes it", async () => {
   const env = baseEnv();
   const validToken = await signLoginCookie(env, { nonce: "real-nonce", next: "/grafana/" });
   const req = new Request("https://demos.handsontable.com/grafana/_o11y/session", {
@@ -195,7 +195,7 @@ test("I2 (fixation): verifyLoginCookie also recovers the valid value when a junk
   assert.deepEqual(state, { nonce: "real-nonce", next: "/grafana/" });
 });
 
-test("I2: sessionClearCookieHeader / loginClearCookieHeader also satisfy __Host- (Path=/, Secure, Max-Age=0)", () => {
+test("sessionClearCookieHeader / loginClearCookieHeader also satisfy __Host- (Path=/, Secure, Max-Age=0)", () => {
   assert.match(sessionClearCookieHeader(), new RegExp(`^${SESSION_COOKIE}=;.*HttpOnly.*Secure.*Max-Age=0`));
   assert.match(sessionClearCookieHeader(), /Path=\//);
   assert.doesNotMatch(sessionClearCookieHeader(), /Domain=/i);
@@ -204,19 +204,19 @@ test("I2: sessionClearCookieHeader / loginClearCookieHeader also satisfy __Host-
 
 // ---- session TTL capped at the broker token's own exp ----------------------
 
-test("I3: computeSessionTtlSeconds caps at 12h even when the broker token's exp is much further out", () => {
+test("computeSessionTtlSeconds caps at 12h even when the broker token's exp is much further out", () => {
   const now = 1_000_000;
   const farFuture = now + 100 * 60 * 60; // 100h out
   assert.equal(computeSessionTtlSeconds(farFuture, now), SESSION_MAX_TTL_SECONDS);
 });
 
-test("I3: computeSessionTtlSeconds returns the token's own remaining lifetime when it is under 12h", () => {
+test("computeSessionTtlSeconds returns the token's own remaining lifetime when it is under 12h", () => {
   const now = 1_000_000;
   const in30Min = now + 30 * 60;
   assert.equal(computeSessionTtlSeconds(in30Min, now), 30 * 60);
 });
 
-test("I3: computeSessionTtlSeconds falls back to 1h when exp is missing or already past", () => {
+test("computeSessionTtlSeconds falls back to 1h when exp is missing or already past", () => {
   const now = 1_000_000;
   assert.equal(computeSessionTtlSeconds(null, now), SESSION_FALLBACK_TTL_SECONDS);
   assert.equal(computeSessionTtlSeconds(now - 10, now), SESSION_FALLBACK_TTL_SECONDS);
@@ -260,7 +260,7 @@ async function loginThenSession(env, { tokenResponse, brokerToken = "a-real-brok
   }
 }
 
-test("I3 end-to-end: a 1h-lifetime broker token mints a session capped near 1h, not 12h", async () => {
+test("end-to-end: a 1h-lifetime broker token mints a session capped near 1h, not 12h", async () => {
   const env = baseEnv();
   const nowSec = Math.floor(Date.now() / 1000);
   const brokerToken = await brokerJwtWithExp(nowSec + 60 * 60);
@@ -274,7 +274,7 @@ test("I3 end-to-end: a 1h-lifetime broker token mints a session capped near 1h, 
   assert.ok(maxAge < SESSION_MAX_TTL_SECONDS, "must be far under the 12h ceiling");
 });
 
-test("I3 end-to-end: a broker token with no readable exp falls back to the 1h session, not 12h", async () => {
+test("end-to-end: a broker token with no readable exp falls back to the 1h session, not 12h", async () => {
   const env = baseEnv();
   const res = await loginThenSession(env, { brokerToken: "not-a-jwt-shaped-token" });
   assert.equal(res.status, 200);
@@ -357,7 +357,7 @@ test("verifySession: a login-nonce cookie's own token is not accepted as a sessi
 
 // ---- version, required exp, and audience/environment binding --------------
 
-test("M2: a session token with v !== 1 is rejected", async () => {
+test("a session token with v !== 1 is rejected", async () => {
   const env = baseEnv();
   const key = await _deriveSessionKeyForTests(env);
   const token = await new SignJWT({ email: "artur.medrygal@handsontable.com", typ: SESSION_TYP, v: 99 })
@@ -370,7 +370,7 @@ test("M2: a session token with v !== 1 is rejected", async () => {
   assert.equal(await verifySession(req, env), null);
 });
 
-test("M2: a session token with no exp claim is rejected (does not verify forever)", async () => {
+test("a session token with no exp claim is rejected (does not verify forever)", async () => {
   const env = baseEnv();
   const key = await _deriveSessionKeyForTests(env);
   // jose's SignJWT only sets `exp` when told to — omit it entirely.
@@ -383,7 +383,7 @@ test("M2: a session token with no exp claim is rejected (does not verify forever
   assert.equal(await verifySession(req, env), null);
 });
 
-test("M2: a session token with the wrong audience is rejected", async () => {
+test("a session token with the wrong audience is rejected", async () => {
   const env = baseEnv();
   const key = await _deriveSessionKeyForTests(env);
   const token = await new SignJWT({ email: "artur.medrygal@handsontable.com", typ: SESSION_TYP, v: 1 })
@@ -396,7 +396,7 @@ test("M2: a session token with the wrong audience is rejected", async () => {
   assert.equal(await verifySession(req, env), null);
 });
 
-test("M2: a local-minted session cannot be replayed against production, even under the same secret", async () => {
+test("a local-minted session cannot be replayed against production, even under the same secret", async () => {
   const sharedSecret = "shared-between-local-and-prod-32-bytes!";
   const localEnv = baseEnv({ O11Y_ENV: "local", O11Y_SESSION_SECRET: sharedSecret, O11Y_LOCAL_PUBLIC_ORIGIN: "http://localhost:4200" });
   const token = await signSessionCookie(localEnv, "artur.medrygal@handsontable.com", 3600);
@@ -406,7 +406,7 @@ test("M2: a local-minted session cannot be replayed against production, even und
   assert.equal(await verifySession(req, prodEnv), null, "a local-audience token must be refused in production");
 });
 
-test("M2: publicOrigin ignores O11Y_LOCAL_PUBLIC_ORIGIN outside O11Y_ENV=local", () => {
+test("publicOrigin ignores O11Y_LOCAL_PUBLIC_ORIGIN outside O11Y_ENV=local", () => {
   const env = baseEnv({ O11Y_ENV: "production", O11Y_LOCAL_PUBLIC_ORIGIN: "http://localhost:9999" });
   assert.equal(publicOrigin(env), "https://demos.handsontable.com");
 });
@@ -419,7 +419,7 @@ test("sanitizeNext: a same-origin /grafana/ path is preserved", () => {
   assert.equal(sanitizeNext("/grafana", env), "/grafana/");
 });
 
-test("M1: sanitizeNext resolves dot segments before checking the /grafana/ prefix", () => {
+test("sanitizeNext resolves dot segments before checking the /grafana/ prefix", () => {
   const env = baseEnv();
   assert.equal(sanitizeNext("/grafana/../api/admin", env), "/grafana/");
   assert.equal(sanitizeNext("/grafana/%2e%2e/api/admin", env), "/grafana/");
@@ -486,7 +486,7 @@ test("isSameOrigin: only an Origin matching the request's own origin passes", ()
 
 // ---- gates/broker.ts: isValidBrokerUrl / resolveBrokerIdentity ------------
 
-test("M3: isValidBrokerUrl accepts https always; accepts http://localhost only when O11Y_ENV=local; rejects everything else", () => {
+test("isValidBrokerUrl accepts https always; accepts http://localhost only when O11Y_ENV=local; rejects everything else", () => {
   assert.equal(isValidBrokerUrl(baseEnv({ LOGIN_BROKER_URL: "https://mcp-auth-proxy.example.test" })), true);
   assert.equal(isValidBrokerUrl(baseEnv({ O11Y_ENV: "local", LOGIN_BROKER_URL: "http://localhost:6102" })), true);
   assert.equal(isValidBrokerUrl(baseEnv({ O11Y_ENV: "local", LOGIN_BROKER_URL: "http://127.0.0.1:6102" })), true);
@@ -496,7 +496,7 @@ test("M3: isValidBrokerUrl accepts https always; accepts http://localhost only w
   assert.equal(isValidBrokerUrl(baseEnv({ LOGIN_BROKER_URL: "http://evil.example" })), false, "a bare http:// non-local host is never allowed");
 });
 
-test("M3: the broker fetch is called with a timeout signal and redirect: manual (Workers has no redirect: 'error')", async (t) => {
+test("the broker fetch is called with a timeout signal and redirect: manual (Workers has no redirect: 'error')", async (t) => {
   const env = baseEnv();
   const realFetch = globalThis.fetch;
   let capturedInit;
@@ -515,7 +515,7 @@ test("M3: the broker fetch is called with a timeout signal and redirect: manual 
   assert.equal(capturedInit.redirect, "manual");
 });
 
-test("M3: a redirecting broker response (3xx) is refused, not followed", async (t) => {
+test("a redirecting broker response (3xx) is refused, not followed", async (t) => {
   const env = baseEnv();
   const realFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = realFetch; });
@@ -533,7 +533,7 @@ test("resolveBrokerIdentity: a @handsontable.com userinfo response resolves", as
   assert.deepEqual(result, { email: "artur.medrygal@handsontable.com", exp: null });
 });
 
-test("M7: resolveBrokerIdentity rejects lookalike emails (case-sensitive, exact @handsontable.com suffix)", async (t) => {
+test("resolveBrokerIdentity rejects lookalike emails (case-sensitive, exact @handsontable.com suffix)", async (t) => {
   const realFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = realFetch; });
   const cases = ["x@handsontable.com.evil", "x@evilhandsontable.com", "X@HANDSONTABLE.COM", "x@handsontable.co"];
@@ -544,7 +544,7 @@ test("M7: resolveBrokerIdentity rejects lookalike emails (case-sensitive, exact 
   }
 });
 
-test("M7: resolveBrokerIdentity rejects a non-string email (array, null, number)", async (t) => {
+test("resolveBrokerIdentity rejects a non-string email (array, null, number)", async (t) => {
   const realFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = realFetch; });
   for (const email of [["artur.medrygal@handsontable.com"], null, 12345]) {
@@ -553,14 +553,14 @@ test("M7: resolveBrokerIdentity rejects a non-string email (array, null, number)
   }
 });
 
-test("M7: resolveBrokerIdentity fails closed when the broker fetch throws", async (t) => {
+test("resolveBrokerIdentity fails closed when the broker fetch throws", async (t) => {
   const realFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = realFetch; });
   globalThis.fetch = async () => { throw new Error("network down"); };
   assert.equal(await resolveBrokerIdentity(baseEnv(), "a-broker-token"), null);
 });
 
-test("M7: resolveBrokerIdentity fails closed when the broker returns non-JSON", async (t) => {
+test("resolveBrokerIdentity fails closed when the broker returns non-JSON", async (t) => {
   const realFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = realFetch; });
   globalThis.fetch = async () => new Response("<html>not json</html>", { status: 200 });
@@ -614,14 +614,14 @@ test("GET /grafana/_o11y/login: 302s to the broker with a callback return_to, se
   assert.equal(state.next, "/grafana/", "an open-redirect next= must never survive into the login cookie");
 });
 
-test("M3: GET /login returns 500 (not a broken relative redirect) when LOGIN_BROKER_URL is invalid", async () => {
+test("GET /login returns 500 (not a broken relative redirect) when LOGIN_BROKER_URL is invalid", async () => {
   const env = baseEnv({ LOGIN_BROKER_URL: "" });
   const res = await handleLogin(new Request("https://demos.handsontable.com/grafana/_o11y/login"), env, {});
   assert.equal(res.status, 500);
   assert.equal(res.headers.get("Location"), null);
 });
 
-test("M3: GET /login is rate-limited", async () => {
+test("GET /login is rate-limited", async () => {
   const env = baseEnv({ RATE_LIMITER: { limit: async () => ({ success: false }) } });
   const res = await handleLogin(new Request("https://demos.handsontable.com/grafana/_o11y/login"), env, {});
   assert.equal(res.status, 429);
@@ -685,7 +685,7 @@ test("POST /grafana/_o11y/session: a nonce mismatch is rejected", async () => {
   assert.equal(body.error, "nonce_mismatch");
 });
 
-test("M7: POST /grafana/_o11y/session with NO o11y_login cookie at all is rejected (the real login-CSRF shape)", async () => {
+test("POST /grafana/_o11y/session with NO o11y_login cookie at all is rejected (the real login-CSRF shape)", async () => {
   const env = baseEnv();
   const req = new Request("https://demos.handsontable.com/grafana/_o11y/session", {
     method: "POST",
@@ -736,7 +736,7 @@ test("POST /grafana/_o11y/session: a non-JSON content-type is refused with 415",
   assert.equal(res.status, 415);
 });
 
-test("M3: POST /grafana/_o11y/session is rate-limited", async () => {
+test("POST /grafana/_o11y/session is rate-limited", async () => {
   const env = baseEnv({ RATE_LIMITER: { limit: async () => ({ success: false }) } });
   const req = new Request("https://demos.handsontable.com/grafana/_o11y/session", {
     method: "POST",
@@ -747,7 +747,7 @@ test("M3: POST /grafana/_o11y/session is rate-limited", async () => {
   assert.equal(res.status, 429);
 });
 
-test("M5: POST /grafana/_o11y/logout clears BOTH cookies and redirects home, only for a same-origin JSON request", async () => {
+test("POST /grafana/_o11y/logout clears BOTH cookies and redirects home, only for a same-origin JSON request", async () => {
   const env = baseEnv();
   const okReq = new Request("https://demos.handsontable.com/grafana/_o11y/logout", {
     method: "POST",
@@ -768,7 +768,7 @@ test("M5: POST /grafana/_o11y/logout clears BOTH cookies and redirects home, onl
   assert.equal(badRes.status, 403);
 });
 
-test("M5: GET /grafana/_o11y/logout serves a same-origin sign-out page that POSTs to the real logout route", async () => {
+test("GET /grafana/_o11y/logout serves a same-origin sign-out page that POSTs to the real logout route", async () => {
   const res = await handleLogoutPage(new Request("https://demos.handsontable.com/grafana/_o11y/logout"), baseEnv(), {});
   assert.equal(res.status, 200);
   const csp = res.headers.get("content-security-policy");

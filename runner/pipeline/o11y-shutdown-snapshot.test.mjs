@@ -122,7 +122,7 @@ test("snapshot_index_keys: succeeds (possibly empty) when both listings succeed"
 
 // ---- the bug shape: before fails, after succeeds ---------------------------
 
-test("B-I2: the marker decision refuses when the PRE-SIGTERM snapshot failed, even though a real new upload would otherwise be confirmed", () => {
+test("the marker decision refuses when the PRE-SIGTERM snapshot failed, even though a real new upload would otherwise be confirmed", () => {
   // Reproduces the exact scenario the finding describes: a pre-existing
   // uploader-named object already exists (a mid-wake periodic upload), the
   // BEFORE listing fails (network blip), and the AFTER listing succeeds
@@ -155,7 +155,7 @@ echo "MARKER_OK:$marker_ok"
   assert.match(res.stdout, /MARKER_OK:1/, "the marker must be refused — the pre-existing key must never be read as new");
 });
 
-test("B-I2 (revert check / positive control): with BOTH snapshots succeeding, a genuinely new key IS confirmed and the marker is written", () => {
+test("revert check / positive control: with BOTH snapshots succeeding, a genuinely new key IS confirmed and the marker is written", () => {
   const script = `
 day_now=19999
 before_keys="$(snapshot_index_keys "$day_now")"
@@ -205,7 +205,7 @@ rm -f "$uploader_file"
   return runBash(script, { modes });
 }
 
-test("B-I2, second wave: run_stop_protocol() itself refuses the marker when the PRE-SIGTERM listing fails, even though the after-listing would confirm a real upload", () => {
+test("second wave: run_stop_protocol() itself refuses the marker when the PRE-SIGTERM listing fails, even though the after-listing would confirm a real upload", () => {
   // Only ONE curl call happens: snapshot_index_keys returns on the FIRST
   // failed day-prefix listing (its own `for day in ...; return 1` — see
   // lib.sh), so snapshot_ok is decided, and never reached again, before
@@ -221,7 +221,7 @@ test("B-I2, second wave: run_stop_protocol() itself refuses the marker when the 
   assert.match(res.stdout, /CALLS:\s*1$/m, "only the one failed BEFORE listing — no after-listing, no PUT, no HEAD");
 });
 
-test("B-I2, second wave (revert check / positive control): run_stop_protocol() writes a real marker when both snapshots succeed and a genuinely new key is confirmed", () => {
+test("second wave (revert check / positive control): run_stop_protocol() writes a real marker when both snapshots succeed and a genuinely new key is confirmed", () => {
   const res = withFakeLoki('run_stop_protocol; echo "EXIT:$?"; echo "CALLS:$(wc -l < "$STUB_CURL_COUNTER_FILE")"', {
     modes: "empty,empty,haskey,haskey,code200,code200",
   });
@@ -251,7 +251,7 @@ test("snapshot_index_keys: queries one prefix per day from day_now down through 
 // `INDEX_DAY_SPAN_DAYS` (7 in production, bounded by Loki's own
 // `reject_old_samples_max_age: 7d`) in the past — a day a today/yesterday-
 // only check would never look at.
-test("B-M8: a backlogged upload landing under a day older than yesterday is confirmed as new, not silently missed", () => {
+test("a backlogged upload landing under a day older than yesterday is confirmed as new, not silently missed", () => {
   const script = `
 day_now=19999
 before_keys="$(snapshot_index_keys "$day_now")"

@@ -251,7 +251,7 @@ test("never mutates its argument", () => {
 
 // ---- a malformed stack frame must never throw -------------------------------
 
-test("scrubTelemetry does not throw on a null entry inside stacktrace.frames — the exact `500` probe from finding A-M1", () => {
+test("scrubTelemetry does not throw on a null entry inside stacktrace.frames — the exact `500` probe", () => {
   const item = {
     type: "exception",
     payload: { type: "TypeError", value: "x", stacktrace: { frames: [null] } },

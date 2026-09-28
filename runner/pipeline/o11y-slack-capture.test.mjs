@@ -16,7 +16,7 @@ function waitListening(server) {
   return new Promise((resolve) => server.once("listening", resolve));
 }
 
-test("createSlackCaptureServer (NB7): binds loopback only, not every interface", async () => {
+test("createSlackCaptureServer: binds loopback only, not every interface", async () => {
   const { server, close } = createSlackCaptureServer(0); // :0 — an ephemeral free port, no fixed port needed for this check
   await waitListening(server);
   try {

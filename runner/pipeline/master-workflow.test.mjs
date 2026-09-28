@@ -112,7 +112,7 @@ test("master.yml: the API path gate is narrowed to containers/(live|builder)/, a
 // deploy-event step could ship a `cf_version_id: ""` row with no signal
 // pointing at the root cause. Every `version_id=$(...)` assignment must be
 // immediately followed by a check that warns when it's empty.
-test("master.yml: every version_id assignment is followed by an ::warning:: for an empty parse (B-I1)", () => {
+test("master.yml: every version_id assignment is followed by an ::warning:: for an empty parse", () => {
   const assignments = [...source.matchAll(/^.*version_id=\$\(grep -oE 'Current Version ID:.*$/gm)];
   assert.ok(assignments.length >= 3, "expected at least 3 deploy steps to extract a version id");
 

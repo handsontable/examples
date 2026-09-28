@@ -102,7 +102,7 @@ test("dedupe: a hash from a DIFFERENT UTC-day bucket, still within 24h, is found
 // limit this would need 220,000 / 500 = 440 ticks — the test is sized so
 // it fails at that limit (440 > 144), not just eventually clearing given
 // unlimited ticks.
-test("B-C1/A-I1 remainder: pruneHashBuckets keeps up with the ADR §D 10× projected rate (220k stale rows/day, cleared within 144 ten-minute ticks)", async () => {
+test("pruneHashBuckets keeps up with the ADR §D 10× projected rate (220k stale rows/day, cleared within 144 ten-minute ticks)", async () => {
   const storage = memoryStorage();
   const DAILY_RATE = 220_000;
   const TICKS_PER_DAY = 144;
@@ -194,7 +194,7 @@ test("pack: packTenant + commitPackedObject write one gzipped NDJSON object and 
 // (4.5 MB total, over PACK_OBJECT_MAX_DECOMPRESSED_BYTES's 4 MB) prove a
 // single call takes only a prefix and leaves the rest for the caller to
 // pack in a follow-up call (`writer.ts#alarm()`'s own loop).
-test("pack: packTenant bounds one object's decompressed size, leaving the rest for a follow-up call (finding A-I2)", async () => {
+test("pack: packTenant bounds one object's decompressed size, leaving the rest for a follow-up call", async () => {
   const storage = memoryStorage();
   const bucket = makeR2Bucket();
   const bigBody = "x".repeat(900_000);
@@ -377,7 +377,7 @@ async function decodeAllPackedBodies(r2) {
   return bodies;
 }
 
-test("A-I2 flood: many MB of pending rows are packed with a bounded read per list() call and per alarm, in order, with no loss", async () => {
+test("flood: many MB of pending rows are packed with a bounded read per list() call and per alarm, in order, with no loss", async () => {
   const doStorage = makeDurableObjectStorage();
   const { env, r2 } = makeEnv(InboxWriter, { doStorage });
   const writer = new InboxWriter({ storage: doStorage }, env);

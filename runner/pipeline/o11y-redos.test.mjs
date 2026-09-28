@@ -135,7 +135,7 @@ test(`scrubBodyText: 150k 'a' characters (email + UA + URL + IP passes chained) 
 
 // ---- the full normalise pipeline --------------------------------------------
 
-test("processFaroBody: a Faro log item with an 80k-character adversarial message completes well under budget (Z-A-C1's own measured shape)", async () => {
+test("processFaroBody: a Faro log item with an 80k-character adversarial message completes well under budget", async () => {
   const body = {
     meta: { app: { name: "demos-authoring", version: "deadbeef1234" } },
     logs: [
@@ -162,7 +162,7 @@ async function gzip(text) {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-test("POST /telemetry/collect: a gzip body carrying an adversarial 160k-character message completes well under budget, not the 120s cpu_ms cap (Z-A-C1's real repro)", async () => {
+test("POST /telemetry/collect: a gzip body carrying an adversarial 160k-character message completes well under budget, not the 120s cpu_ms cap", async () => {
   const { env } = makeEnv(InboxWriter);
   const wireBody = JSON.stringify({
     meta: { app: { name: "demos-authoring", version: "deadbeef1234", environment: "production" } },
