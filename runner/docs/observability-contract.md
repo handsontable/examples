@@ -286,6 +286,9 @@ re-runs on every keystroke, so one typed line relays a whole keystroke-prefix la
 collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
 - an edit that re-runs the preview (a non-quiet workspace write, a file add, delete or
   rename) opens or extends a burst, and discards what the previous run reported;
+- on Tier 1, an edit whose transpiled sandbox matches the running one (a closing `;`,
+  whitespace, a trailing comma) re-runs nothing, so the burst ends with the running
+  sandbox's reports that have not been counted yet;
 - 2 s (`DEMO_EDIT_SETTLE_MS`) after the last edit the burst closes, and the last run's
   reports are emitted, one per §7 fingerprint;
 - outside a burst (first load, a user interaction, a Tier-2 rebuild that reports after
