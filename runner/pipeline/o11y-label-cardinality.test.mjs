@@ -1,7 +1,7 @@
 // Contract §3: `hot.framework` and `hot.outcome` are Loki labels, so every
-// ingest path must map a client-sent value into a known set. Each distinct value
-// is a Loki stream, and one inbox object with more than 5000 streams (Loki's
-// default per-tenant limit) is refused on every drain.
+// ingest path must map a client-sent value into a known set. Each distinct label
+// tuple is a Loki stream, and one inbox object with more than 5000 streams
+// (Loki's default per-tenant limit) is refused on every drain.
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 
 import test from "node:test";
@@ -12,7 +12,8 @@ register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
 const { processFaroBody, MAX_FARO_ITEMS_PER_BODY } = await import("../workers/o11y/src/normalise/faro.ts");
 const { processOtlpBody } = await import("../workers/o11y/src/normalise/otlp.ts");
-const { beaconToRecord, KNOWN_FRAMEWORKS, RECORD_OUTCOMES, AE_COLUMNS } = await import(
+const { beaconToRecord, KNOWN_FRAMEWORKS, RECORD_OUTCOMES, AE_COLUMNS, SURFACES, TIERS, HT_MAJORS, LITE_SURFACES, RESOURCE_ATTRS } =
+  await import(
   "../packages/runtime/dist/telemetry/index.js"
 );
 
@@ -46,7 +47,7 @@ test(`Faro: ${DISTINCT} distinct hot.outcome values on logs store at most |recor
   assert.equal(records.length, DISTINCT, "every log is still stored");
   const values = distinct(records, "hot.outcome");
   assert.ok(values.size <= RECORD_OUTCOMES.length + 1, `got ${values.size} distinct values`);
-  assert.deepEqual([...values], ["other"]);
+  assert.deepEqual([...values], ["none"]);
 });
 
 test(`Faro: ${DISTINCT} distinct hot.framework values store at most |known frameworks|+1 label values`, async () => {
@@ -71,9 +72,9 @@ test("Faro: a real framework and outcome pass through unchanged", async () => {
 
   assert.equal(log.ingestItem.record.resourceAttributes["hot.framework"], "react");
   assert.equal(log.ingestItem.record.resourceAttributes["hot.outcome"], "none");
-  // An event named after a metric keeps an outcome from that metric's set.
+  // A stored event carries no metric outcome, even when named after a metric.
   assert.equal(event.ingestItem.record.resourceAttributes["hot.framework"], "next.js");
-  assert.equal(event.ingestItem.record.resourceAttributes["hot.outcome"], "ready");
+  assert.equal(event.ingestItem.record.resourceAttributes["hot.outcome"], "none");
   // A measurement is AE-only; its point keeps the real outcome and framework.
   assert.equal(measurement.invalid, undefined);
   const [point] = measurement.aePoints;
@@ -82,13 +83,61 @@ test("Faro: a real framework and outcome pass through unchanged", async () => {
   assert.equal(blob("framework"), "vue");
 });
 
-test("Faro: an outcome from another metric's set is still \"other\" on a log", async () => {
+test("Faro: a metric outcome on a log is stored as none", async () => {
   const body = {
     meta: { app: { name: "demos-authoring", version: "deadbeef1234" } },
     logs: [{ message: "hello", timestamp: new Date().toISOString(), context: { "hot.outcome": "ready" } }],
   };
   const [log] = await processFaroBody(body, ENV, SERVICE, Date.now());
-  assert.equal(log.ingestItem.record.resourceAttributes["hot.outcome"], "other");
+  assert.equal(log.ingestItem.record.resourceAttributes["hot.outcome"], "none");
+});
+
+/** Every label tuple a stored browser record can reach: collect items (any
+ *  surface/tier, a known framework or `other`, any major, outcome `none`) plus
+ *  lite errors (tier `static`). `service.name` and the environment are fixed
+ *  per route. */
+const COLLECT_TUPLES = SURFACES.length * TIERS.length * (KNOWN_FRAMEWORKS.length + 1) * HT_MAJORS.length;
+const LITE_TUPLES = LITE_SURFACES.length * (KNOWN_FRAMEWORKS.length + 1) * HT_MAJORS.length;
+
+test("the browser tenant's reachable label tuples stay under Loki's 5000-stream limit", () => {
+  assert.ok(
+    COLLECT_TUPLES + LITE_TUPLES < 5000,
+    `${COLLECT_TUPLES} + ${LITE_TUPLES} tuples: a new surface, tier, framework or major needs a higher Loki stream limit`,
+  );
+});
+
+test(`Faro: ${DISTINCT} logs with distinct label combinations add no outcome dimension`, async () => {
+  const pick = (list, n) => list[n % list.length];
+  const records = [];
+  const baseTuples = new Set();
+  for (let start = 0; start < DISTINCT; start += MAX_FARO_ITEMS_PER_BODY) {
+    const logs = [];
+    for (let n = start; n < start + MAX_FARO_ITEMS_PER_BODY; n++) {
+      // Each surface/tier/framework/major combination is sent twice, once with
+      // `none` and once with an unknown outcome.
+      const m = Math.floor(n / 2);
+      const framework = m % 3 === 0 ? `f${m}` : pick(KNOWN_FRAMEWORKS, Math.floor(m / 28));
+      const context = {
+        "hot.surface": pick(SURFACES, m),
+        "hot.tier": pick(TIERS, Math.floor(m / 7)),
+        "hot.framework": framework,
+        "hot.ht_major": pick(HT_MAJORS, Math.floor(m / 560)),
+        "hot.outcome": n % 2 === 0 ? "none" : `o${n}`,
+      };
+      const storedFramework = KNOWN_FRAMEWORKS.includes(framework) ? framework : "other";
+      baseTuples.add([context["hot.surface"], context["hot.tier"], storedFramework, context["hot.ht_major"]].join("|"));
+      logs.push({ message: `m${n}`, timestamp: new Date().toISOString(), context });
+    }
+    const body = { meta: { app: { name: "demos-authoring", version: "deadbeef1234" } }, logs };
+    for (const item of await processFaroBody(body, ENV, SERVICE, Date.now())) {
+      if (item.ingestItem?.record) records.push(item.ingestItem.record);
+    }
+  }
+  assert.equal(records.length, DISTINCT);
+  const labelKeys = RESOURCE_ATTRS.filter((a) => a.lokiLabel).map((a) => a.key);
+  const tuples = new Set(records.map((r) => labelKeys.map((k) => r.resourceAttributes[k]).join("|")));
+  assert.equal(tuples.size, baseTuples.size, "one stream per surface/tier/framework/major combination");
+  assert.ok(tuples.size <= COLLECT_TUPLES);
 });
 
 test(`lite beacon: ${DISTINCT} distinct fw values store at most |known frameworks|+1 label values; a real one is kept`, () => {

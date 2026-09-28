@@ -134,7 +134,8 @@ test("faroItemToRecord: the route's service identity always wins over a client-h
   // Out-of-enum / over-length hot.* values never reach the record verbatim.
   assert.equal(record.resourceAttributes["hot.tier"], undefined);
   assert.equal(record.resourceAttributes["hot.framework"], "other");
-  assert.equal(record.resourceAttributes["hot.outcome"], "other");
+  // A log never carries a metric outcome; ingest fills the `none` default.
+  assert.equal(record.resourceAttributes["hot.outcome"], undefined);
   // A legitimate closed-set value survives untouched.
   assert.equal(record.resourceAttributes["hot.surface"], "o11y");
 });

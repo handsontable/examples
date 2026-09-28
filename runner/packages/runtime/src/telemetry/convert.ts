@@ -220,8 +220,12 @@ export function faroItemToRecord(item: ScrubbableFaroItem, options: ConvertOptio
   const merged = { ...(item.payload.context ?? {}), ...(item.payload.attributes ?? {}) };
   const { resourceAttributes, attributes } = hoistAttributes(merged);
   attributes[ATTR_HOT_KIND] = item.type;
-  const metric =
-    item.type === "measurement" ? item.payload.type : item.type === "event" ? item.payload.name : undefined;
+  // Only a measurement carries a metric outcome, and it becomes an AE point, never
+  // a stored record. A stored record's `hot.outcome` is always the `none`
+  // default: that keeps the browser tenant's label tuples (surface × tier ×
+  // framework × ht_major) under Loki's 5000-stream limit.
+  if (item.type !== "measurement") delete resourceAttributes[ATTR_HOT_OUTCOME];
+  const metric = item.type === "measurement" ? item.payload.type : undefined;
 
   return {
     body: faroBody(item),

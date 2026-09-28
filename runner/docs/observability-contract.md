@@ -132,10 +132,12 @@ can promote them to labels.
 | `hot.ht_major` | `15`…`19`, `next`, `none` | `hot_ht_major` | `blob7` |
 | `hot.outcome` | per metric, see §5; `none` on a record no metric describes | `hot_outcome` | `blob8` |
 
-Ingest bounds both open labels, since each distinct value is a Loki stream: a
-`hot.framework` outside the list above, or a `hot.outcome` outside the set of the
-item's metric (the measurement type or event name, else `none`), is stored as
-`other`. `packages/runtime/src/telemetry/attrs.ts#KNOWN_FRAMEWORKS` mirrors
+Ingest bounds both open labels, since each distinct label tuple is a Loki stream
+(5000 per tenant): a `hot.framework` outside the list above, or a `hot.outcome`
+outside the set of the item's metric (`none` when there is none), becomes `other`.
+A stored browser record (exception, log, event) always carries `hot.outcome` =
+`none`; only a measurement's AE point keeps its metric outcome.
+`packages/runtime/src/telemetry/attrs.ts#KNOWN_FRAMEWORKS` mirrors
 `config/frameworks.json`.
 
 Structured metadata only — never a Loki label, never an Analytics Engine index:
