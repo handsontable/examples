@@ -39,22 +39,22 @@ export function logRequestLine(env: Env, fields: RequestLineFields): void {
 }
 
 /**
- * Minor triage item 2 (C-M2): one structured JSON line per API-worker
- * five-minute cron tick, through the same OTLP-exported `console.log` path every other
- * `lines.ts` line uses. Before this, a quiet period with NO real user
- * traffic (no `session.start`, no `api.request`) looked identical, from the
- * o11y worker's `heartbeat.lastIngest` side, to the ingest pipeline itself
- * being broken — the watchdog (`o11y-watchdog.ts`) could page on nothing
- * more than an empty five minutes. This line makes `lastIngest` a true
- * end-to-end check: it only advances when a record actually made it through
- * export → `/telemetry/v1/logs` → `InboxWriter`.
+ * One structured JSON line per API-worker five-minute cron tick, through the
+ * same OTLP-exported `console.log` path every other `lines.ts` line uses.
+ * Without it, a quiet period with NO real user traffic (no `session.start`,
+ * no `api.request`) looks identical, from the o11y worker's
+ * `heartbeat.lastIngest` side, to the ingest pipeline itself being broken —
+ * the watchdog (`o11y-watchdog.ts`) could page on nothing more than an empty
+ * five minutes. This line makes `lastIngest` a true end-to-end check: it
+ * only advances when a record actually made it through export →
+ * `/telemetry/v1/logs` → `InboxWriter`.
  *
  * `"cron.tick"` is deliberately NOT added to `normalise/otlp.ts`'s
- * `TRUSTED_BODY_JSON_LOG_KINDS` allowlist (that file is owned by a different
- * task) — confirmed unnecessary: `toIngestItem` only skips a record for
- * being oversize; an untrusted `log.kind` just means the body-JSON fields
- * are not hoisted into structured attributes, not that the record itself is
- * dropped, so this line still bumps `lastIngest` unmodified.
+ * `TRUSTED_BODY_JSON_LOG_KINDS` allowlist — confirmed unnecessary:
+ * `toIngestItem` only skips a record for being oversize; an untrusted
+ * `log.kind` just means the body-JSON fields are not hoisted into structured
+ * attributes, not that the record itself is dropped, so this line still
+ * bumps `lastIngest` unmodified.
  */
 export function logCronTickLine(env: Env): void {
   console.log(

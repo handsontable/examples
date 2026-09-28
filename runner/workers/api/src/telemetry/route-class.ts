@@ -42,8 +42,8 @@ export function routeClassOf(method: string, pathname: string): string {
   return `api/${parts.slice(1, 2).join("/")}` || "api";
 }
 
-/** Minor triage item 8 (C-M11's request-line sub-item): the shape a REAL demo
- *  id takes — `share.ts#shortId()`'s own alphabet (8 random bytes, each
+/** The shape a REAL demo id takes — `share.ts#shortId()`'s own alphabet (8
+ *  random bytes, each
  *  `.toString(36)`, joined and sliced to 10 — lowercase alphanumeric) or a
  *  legacy "fixed id (render-ms compat)" one (`share.ts`'s `args.id`, same
  *  doc comment) — both stay inside a conservative alphanumeric-plus-

@@ -27,7 +27,7 @@ export async function emitPoint(
     const point = toAePoint(metric, values, { ...commonAttrs(env), ...attrs });
     await getSink(env).writeDataPoint(point);
   } catch (err) {
-    // A malformed call site (T00-D10: an out-of-enum outcome/reason throws) or
+    // A malformed call site (an out-of-enum outcome/reason throws) or
     // a local ClickHouse hiccup must never surface as a 500 — see the module
     // doc. Sampled at Workers Logs' own rate, so this is a convenience, not
     // the record of the drop.

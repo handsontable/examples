@@ -93,12 +93,10 @@ export async function runSnapshotJob(env: Env, job: SnapshotJob): Promise<void> 
   if (!files || Object.keys(files).length === 0) {
     throw new Error(`snapshot job for ${job.demoId}: empty payload at ${job.filesKey}`);
   }
-  // `snapshot.build` (contract §5): this DO's alarm is the "detached" build path
-  // (§D); `updateDemo()` itself now emits the `ok`/`failed` point (with
-  // `reason: "detached"`, passed below) around its whole finalize, timed the
-  // same way the direct/synchronous build in `index.ts` ("inline") is — a
-  // single emission site (`share.ts#withSnapshotBuildPoint`) for both paths
-  // instead of this alarm hand-rolling its own copy.
+  // `snapshot.build` (contract §5): this DO's alarm is the "detached" build
+  // path (§D); `updateDemo()` emits the `ok`/`failed` point itself, via the
+  // single emission site `share.ts#withSnapshotBuildPoint` shared with the
+  // synchronous ("inline") build in `index.ts`.
   await withSpan("snapshot.build", () => updateDemo(
     env,
     {
@@ -132,13 +130,8 @@ export async function runSnapshotJob(env: Env, job: SnapshotJob): Promise<void> 
  */
 export async function markSnapshotFailed(env: Env, job: SnapshotJob, err: unknown): Promise<void> {
   const cause = err instanceof Error ? err.message : String(err);
-  // ADR-0041 §D: "the snapshot-job alarm's report path" is named explicitly —
-  // one structured line here regardless of which branch below runs. §E.1:
-  // snapshot-job failures "stay in Sentry in both scopes" — the captures below
-  // are unconditional, unlike `reportDiagnostic`'s scope-gated ones.
-  // Minor triage item 7 (C-M14): the contract's own key for a demo id on a
-  // structured line is `hot.demo_id` (`telemetry/lines.ts#logRequestLine`'s
-  // own shape) — this line used the stale, un-prefixed `demo_id` name.
+  // ADR-0041 §D: one structured line here regardless of which branch below
+  // runs; `hot.demo_id` is the contract's own key (`telemetry/lines.ts#logRequestLine`).
   logErrorLine(env, "snapshot-job:alarm", err, { "hot.demo_id": job.demoId });
   try {
     await env.DB.prepare("UPDATE demos SET build_status='failed', build_error=?, updated_at=? WHERE id=?")

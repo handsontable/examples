@@ -1,7 +1,7 @@
 // The API worker's `*/5` cron signals (ADR-0041 §D, §F.2; contract §5
-// `pool.gauge` / `budget.gauge`). T04's watchdog heartbeat check dispatches
-// alongside these from `index.ts#scheduled` — see the marked call point
-// there; this module does not implement it.
+// `pool.gauge` / `budget.gauge`). The watchdog heartbeat check dispatches
+// alongside these from `index.ts#scheduled`; this module does not implement
+// it.
 
 import { readMeters } from "../admin.js";
 import { getBudgetState } from "../budget.js";
@@ -17,7 +17,7 @@ import { emitPoint } from "./points.js";
  *  locally) so `pipeline/api-telemetry-pool-gauge.test.mjs`'s drift test can
  *  import this exact value and assert it against the real `max_instances` in
  *  `wrangler.jsonc` — the gauge itself has no way to fail loudly the day
- *  someone changes one number and not the other (F34). */
+ *  someone changes one number and not the other. */
 export const LIVE_POOL_MAX_INSTANCES = 10;
 
 /**
@@ -27,18 +27,15 @@ export const LIVE_POOL_MAX_INSTANCES = 10;
  * rather than duplicated, classified with the one definition of "awake" this
  * codebase has (`session-listing.ts#classifyMeter`, `AWAKE_WINDOW_SECONDS`).
  *
- * F19b: the first cut of this function counted every `session-meter:` key in
- * KV, full stop. A meter key outlives the container it fronts by
- * `KV_METER_TTL_SECONDS` (24h, `budget.ts`) — the exact gap DEV-2567 already
- * fixed for the admin panel's own count (`admin.ts#liveSessions`'s
- * `awakeCount`, unchanged since master) by filtering on `classifyMeter(...)
- * .state === "awake"` instead of key existence. A stale 24h tail with one
- * genuinely awake session used to read as `value: N` for every stale key
- * still inside its TTL; it now reads 1.
+ * Counting every `session-meter:` key in KV, full stop, would overcount: a
+ * meter key outlives the container it fronts by `KV_METER_TTL_SECONDS` (24h,
+ * `budget.ts`) — the exact gap DEV-2567 already fixed for the admin panel's
+ * own count (`admin.ts#liveSessions`'s `awakeCount`) by filtering on
+ * `classifyMeter(...).state === "awake"` instead of key existence.
  *
- * T05-D: reason `builder` (the `BuilderSandbox` share-build pool) is not
- * emitted — nothing in this worker meters builder-container concurrency today
- * (no KV row like the live-session meter exists for it), so a `builder` point
+ * Reason `builder` (the `BuilderSandbox` share-build pool) is not emitted —
+ * nothing in this worker meters builder-container concurrency today (no KV
+ * row like the live-session meter exists for it), so a `builder` point
  * would only ever read zero. Left for whichever task adds that meter, rather
  * than shipping a point that always misreports.
  */

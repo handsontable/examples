@@ -36,8 +36,8 @@ export interface DiagnosticOptions {
 }
 
 /** The shape `Sentry.captureException` is called with — factored out so a
- *  test can inject a recorder instead of the real SDK call (fix round: this
- *  gate had no direct test — see `pipeline/api-telemetry-diagnostic.test.mjs`). */
+ *  test can inject a recorder instead of the real SDK call (see
+ *  `pipeline/api-telemetry-diagnostic.test.mjs`). */
 export type CaptureExceptionFn = (
   err: unknown,
   context: { level?: "warning" | "error"; tags?: Record<string, string>; fingerprint?: string[] },

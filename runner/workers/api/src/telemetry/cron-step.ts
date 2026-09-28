@@ -1,5 +1,5 @@
 // One cron step, run in isolation (ADR-0041 §D "the cron handler", §E.1
-// uncaught class). Split out of `index.ts` (fix round, T05 review) so it is
+// uncaught class). Split out of `index.ts` so it is
 // directly testable: `emitPoolGauge`/`emitBudgetGauge` in `cron.ts` need
 // `../budget.js` (a real D1/KV-touching file), which this does not, and
 // keeping `cronStep` in a leaf file (only `lines.ts` → `resource.ts`, plus
@@ -14,10 +14,9 @@ import { logErrorLine } from "./lines.js";
 
 /** The shape `Sentry.captureException` is called with — same injection
  *  pattern as `diagnostic.ts#CaptureExceptionFn`, so a test can assert a
- *  throwing step is actually captured instead of trusting the rethrow (fix
- *  round: T05-D8 found live that a throw inside `ctx.waitUntil(...)` is
- *  invisible to `Sentry.withSentry`'s own `scheduled` auto-capture — see this
- *  file's `cronStep` doc comment in the commit history / task Outcome). */
+ *  throwing step is actually captured instead of trusting the rethrow: a
+ *  throw inside `ctx.waitUntil(...)` is invisible to `Sentry.withSentry`'s
+ *  own `scheduled` auto-capture. */
 export type CronCaptureFn = (err: unknown, context: { tags: Record<string, string> }) => void;
 
 const defaultCapture: CronCaptureFn = (err, context) => Sentry.captureException(err, context);

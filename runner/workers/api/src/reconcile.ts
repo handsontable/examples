@@ -26,7 +26,7 @@ import { emitPoint } from "./telemetry/points.js";
 import { serviceEnvironment } from "./telemetry/resource.js";
 
 /**
- * T04 (ADR-0041 §G): "`reconcile.ts` iterates over the scripts it
+ * ADR-0041 §G: "`reconcile.ts` iterates over the scripts it
  * reconciles, `handsontable-demos-api` and `handsontable-demos-o11y`, and
  * writes each script's billing rows under distinct SKUs (`o11y_container`,
  * `o11y_workers`), so the per-SKU upsert never overwrites the app's rows."
@@ -166,15 +166,9 @@ export async function reconcileBilling(env: Env): Promise<void> {
   // is actually complete.
   const day = utcDayAgo(1);
   let sawError = false;
-  // Sum of every `usd` figure written this run, app rows negative and o11y
-  // rows positive would be nonsensical here — `reconcile.run`'s own §4
-  // meaning is "usd (billing − estimate)", i.e. the drift this run
-  // introduced versus what the estimator already had on the books for the
-  // same (day, sku) pair. Approximated as the total billing usd written
-  // this run (T04-D, see the task Outcome: the pre-write estimate figure
-  // is not read back here, so this is "billing total", not a true delta —
-  // still useful as a per-run cost signal, the drift itself is visible by
-  // comparing this to the `estimate` rows in `/admin`).
+  // `reconcile.run`'s §4 `usd` meaning is "billing − estimate" drift, but
+  // this is approximated as the total billing usd written this run (the
+  // pre-write estimate is not read back) — still a useful per-run signal.
   let billingUsdWritten = 0;
 
   for (const target of RECONCILE_TARGETS(env)) {
@@ -340,35 +334,13 @@ export async function gcRevokedArtifacts(env: Env): Promise<void> {
   }
 }
 
-// ---- ADR-0042 (example analytics) — the nightly example_daily rollup (T12) ----
-//
-// A nightly step in this same cron recomputes the PREVIOUS full UTC day from
-// Analytics Engine into D1 `example_daily` (migration
-// `workers/api/migrations/0008_example_daily.sql`, plus
-// `0009_example_daily_downloaded.sql` — the `downloaded` column ADR-0042 §2
-// always named but 0008 shipped without, per its own flagged gap). Three
-// pieces, split so each is independently testable:
-//
-//   `queryExampleEventTotals` — the AE/ClickHouse read. Production reads
-//   Cloudflare's Analytics Engine SQL API (`CF_ACCOUNT_ID` + `AE_SQL_TOKEN`,
-//   the same credential shape `telemetry/resource.ts#getSink`'s local leg
-//   already uses for the WRITE side); local mode reads the same ClickHouse
-//   container T01/T09 write to. Kept to the T09-D5-documented safe SQL
-//   subset (plain `sum`, no `COUNT()`, no per-panel `database` qualifier) —
-//   unverified against a real Analytics Engine account (no credentials
-//   available to this task, COMMON.md), same documented-default status
-//   T02-D12's size caps have.
-//
-//   `pivotExampleDaily` — pure grouping: one row per (kind, ref, area,
-//   framework, ht_major), one column per `example.*` metric. No I/O, fully
-//   unit-tested without AE or D1.
-//
-//   `writeExampleDaily` — the D1 write. A real `DELETE FROM example_daily
-//   WHERE day = ?1` followed by one `INSERT OR REPLACE` per row, in a single
-//   `env.DB.batch` — NOT a bare `INSERT OR REPLACE` alone, which would leave
-//   a (day, kind, ref, framework, ht_major) group from a PRIOR run's data
-//   lingering when that group has zero events on a re-run (ADR-0042 §5:
-//   "re-running it for a day replaces that day's rows").
+// ---- ADR-0042 (example analytics) — the nightly example_daily rollup ----
+// Recomputes the PREVIOUS full UTC day from Analytics Engine into D1
+// `example_daily` (migrations 0008/0009). Three independently testable
+// pieces: `queryExampleEventTotals` (the AE/ClickHouse read),
+// `pivotExampleDaily` (pure grouping, no I/O), and `writeExampleDaily` (the
+// D1 write — `DELETE` then `INSERT OR REPLACE` in one batch, so a group
+// with zero events on a re-run does not linger from a prior run, ADR-0042 §5).
 
 const EXAMPLE_METRICS = [
   "example.open",
@@ -455,14 +427,13 @@ export function pivotExampleDaily(day: string, rows: readonly ExampleEventRow[])
   return [...byKey.values()];
 }
 
-/** `INTERVAL '$interval' SECOND`-style quoting, T09-D5's own AE-vs-local
- *  ClickHouse finding: AE's SQL API documents quoted interval literals; a
- *  bare `SELECT ... WHERE timestamp >= '...'`/`< '...'` string-literal
- *  comparison against the `timestamp` column (no conversion function call at
- *  all) is the most conservative form both backends are documented to
- *  accept, so that is what this query uses rather than a
- *  `toDateTime64`/`parseDateTime` call this task could not verify against a
- *  real Analytics Engine account.
+/** `INTERVAL '$interval' SECOND`-style quoting: AE's SQL API documents
+ *  quoted interval literals; a bare `SELECT ... WHERE timestamp >=
+ *  '...'`/`< '...'` string-literal comparison against the `timestamp`
+ *  column (no conversion function call at all) is the most conservative
+ *  form both backends are documented to accept, so that is what this query
+ *  uses rather than a `toDateTime64`/`parseDateTime` call this could not
+ *  verify against a real Analytics Engine account.
  */
 function exampleEventsSql(dayStart: string, dayEnd: string): string {
   const metricList = EXAMPLE_METRICS.map((m) => `'${m}'`).join(", ");
@@ -484,16 +455,10 @@ export function previousUtcDay(now: Date = new Date()): { day: string; start: st
   return { day: start.toISOString().slice(0, 10), start: fmt(start), end: fmt(end) };
 }
 
-/** The AE/ClickHouse read (production: Analytics Engine SQL API; local:
- *  the same ClickHouse container the write side already reads/writes,
- *  `telemetry/resource.ts#getSink`'s local leg). **Always throws** on a
- *  failed or unconfigured read — it never degrades to `[]` (fix round C-I1:
- *  a silent `[]` here used to mean `writeExampleDaily` still ran its
- *  unconditional `DELETE` for the day with nothing to replace it, so a
- *  missing credential quietly erased that day's data forever). The caller
- *  (`rollupExampleDaily`) is the one place that decides what a thrown read
- *  means for the rest of the cron — it now means "skip the write entirely
- *  and alert," not "write zero rows." */
+/** The AE/ClickHouse read. **Always throws** on a failed or unconfigured
+ *  read — it never degrades to `[]`: a silent `[]` would let
+ *  `writeExampleDaily` run its unconditional `DELETE` with nothing to
+ *  replace it, quietly erasing that day's data. */
 export async function queryExampleEventTotals(
   env: Env,
   dayStart: string,
@@ -515,7 +480,7 @@ export async function queryExampleEventTotals(
       .map((line) => JSON.parse(line) as ExampleEventRow);
   }
 
-  // C-I1: production's AE SQL leg needs `CF_ACCOUNT_ID` + `AE_SQL_TOKEN`
+  // Production's AE SQL leg needs `CF_ACCOUNT_ID` + `AE_SQL_TOKEN`
   // (contract §2's API-worker table). Neither is provisioned by default —
   // throw loudly instead of silently reading as "zero events today."
   if (!env.CF_ACCOUNT_ID || !env.AE_SQL_TOKEN) {
@@ -531,7 +496,7 @@ export async function queryExampleEventTotals(
   });
   if (!res.ok) throw new Error(`queryExampleEventTotals: Analytics Engine SQL API ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const body = (await res.json()) as { data?: unknown };
-  // C-I1: a 200 with an unexpected shape (`data` missing or not an array —
+  // A 200 with an unexpected shape (`data` missing or not an array —
   // an API contract change, a truncated response, ...) must not silently
   // degrade to "zero rows" either. `?? []` on a bare `undefined` would still
   // let `writeExampleDaily`'s DELETE run against nothing to replace it.
@@ -574,21 +539,13 @@ export async function writeExampleDaily(env: Env, day: string, rows: readonly Ex
 }
 
 /**
- * Recomputes the previous full UTC day's `example_daily` rows. Called from
- * the nightly cron (`runNightlyCron`, `workers/api/src/index.ts`) — one line
- * added there, per COMMON.md's "add the rollup call in reconcile.ts
- * minimally; T04 will resolve against it later."
- *
- * Never throws OUT of this function: a failed AE read or D1 write here must
- * not stop the rest of the nightly cron (`reconcileBilling`/
- * `checkCostAlerts`/`gcRevokedArtifacts`), the same resilience contract every
- * other function in this file already has. C-I1: a thrown/unconfigured read
- * (see `queryExampleEventTotals`) is caught here BEFORE `writeExampleDaily`
- * runs, so a bad day is skipped — never rolled up as zero and never deleted
- * — and reported loudly via the same unconditional `Sentry.captureException`
- * every other cron branch in this file uses (T05-D8: a cron failure inside
- * `ctx.waitUntil()` is structurally unreachable by `@sentry/cloudflare`'s own
- * auto-capture, so every branch here calls it explicitly).
+ * Recomputes the previous full UTC day's `example_daily` rows. Never throws
+ * OUT: a failed AE read or D1 write here must not stop the rest of the
+ * nightly cron. A thrown/unconfigured read (see `queryExampleEventTotals`)
+ * is caught BEFORE `writeExampleDaily` runs, so a bad day is skipped, never
+ * rolled up as zero — and reported via `Sentry.captureException` explicitly,
+ * since a cron failure inside `ctx.waitUntil()` is unreachable by
+ * `@sentry/cloudflare`'s own auto-capture.
  */
 export async function rollupExampleDaily(env: Env): Promise<{ day: string; rows: number }> {
   const { day, start, end } = previousUtcDay();

@@ -41,7 +41,7 @@ const utcDay = (): string => new Date().toISOString().slice(0, 10);
 
 // ---- Bucketing ---------------------------------------------------------------
 
-// `BOT_RE` and the UA classifiers moved to the telemetry contract module (T00),
+// `BOT_RE` and the UA classifiers moved to the telemetry contract module,
 // which the o11y ingest gates (ADR §B.5) share the same definitions with. Byte-
 // identical regexes, re-exported here so no other importer's path changes.
 export { BOT_RE, isBot, deviceOf, browserOf, osOf };

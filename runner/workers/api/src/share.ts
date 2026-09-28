@@ -456,21 +456,15 @@ export async function createPendingDemo(env: Env, args: CreateArgs): Promise<{ i
 }
 
 /**
- * Wrap a `createDemo`/`updateDemo` finalize for the §5 `snapshot.build` point: every
- * synchronous ("inline", the direct `/api/demos`/`/api/mcp/demos` and edit-page Save
- * routes in index.ts) or detached-DO ("detached", `snapshot-jobs.ts`'s alarm) call
- * gets exactly one `ok`/`failed` point, timed end to end. A `build_cache` hit that
- * only copies R2 objects still emits `ok` — the panel reads "how snapshot builds are
- * going", and a cache copy answering it near-instantly is a real outcome, not
- * something to hide (and this matches the shape `snapshot-jobs.ts` already used
- * before this point moved here, which counted the DO's cache-hit finalizes the same
- * way).
+ * Wrap a `createDemo`/`updateDemo` finalize for the §5 `snapshot.build` point:
+ * every synchronous ("inline") or detached-DO ("detached", `snapshot-jobs.ts`'s
+ * alarm) call gets exactly one `ok`/`failed` point, timed end to end. A
+ * `build_cache` hit that only copies R2 objects still emits `ok` — a cache
+ * copy answering near-instantly is a real outcome, not something to hide.
  *
- * `fn` is handed an `addBytes` accumulator so both callers (a fresh build's own
- * outputs, or a `build_cache` hit's copied R2 objects) can report the built
- * artifact's total size into the point's `bytes` field (§5) as they write each
- * object — the only place either caller has that number in hand. Omitted (stays 0)
- * on a `failed` outcome: a build that never finished writing has no total to report.
+ * `fn` is handed an `addBytes` accumulator so either caller (a fresh build's
+ * outputs, or a cache hit's copied objects) can report the built artifact's
+ * total size into `bytes` (§5) as it writes each object.
  */
 async function withSnapshotBuildPoint<T>(
   env: Env,
@@ -535,15 +529,9 @@ export async function createDemo(
         if (body) {
           const rel = obj.key.slice(src.length);
           await env.ARTIFACTS.put(r2Prefix + rel, body.body);
-          // `body.size` is the copied object's real byte length (an R2Object's own
-          // field), not the source string/stream's — the cheapest correct number
-          // for a copy, and the only one either branch here has in hand. Excludes
-          // a `__`-prefixed rel (`__source.json`, and a detached create's own
-          // `__job.json`): `cached.r2_prefix` is a full copy of *some* earlier
-          // build's directory, private files included, and this write is
-          // immediately superseded by the explicit `__source.json` put a few
-          // lines down — counting it would make "the built artifact's total
-          // size" include another demo's private source, not the artifact.
+          // `body.size` is the real R2 byte length. Excludes a `__`-prefixed
+          // rel (`__source.json`, `__job.json`): those are private files, not
+          // the artifact, and would inflate "the built artifact's total size".
           if (!rel.split("/").some((seg) => seg.startsWith("__"))) addBytes(body.size);
         }
       }
@@ -748,16 +736,9 @@ export async function getDemoSource(env: Env, id: string): Promise<DemoSource | 
   return repairEntryScript(env, row, JSON.parse(await obj.text()) as DemoSource);
 }
 
-/**
- * §5's closed `serve.*` outcome set — `2xx`/`304`/`4xx`/`5xx`, never the
- * generic `3xx` the API worker's own `api.request` point uses (`index.ts`'s
- * `recordRequestSignal`): `serveDemoAsset` never itself answers a redirect
- * (the `/d/:id` -> `/d/:id/` trailing-slash 308 is handled by its caller,
- * before this function is even reached), so a `3xx` reaching here would be a
- * shape this function does not expect. `null` for that case skips the point
- * entirely (`toAePoint` would otherwise throw on an out-of-enum value) rather
- * than mis-bucketing it.
- */
+/** §5's closed `serve.*` outcome set — `2xx`/`304`/`4xx`/`5xx`, never `3xx`:
+ *  `serveDemoAsset` never itself answers a redirect. `null` skips the point
+ *  entirely (`toAePoint` would otherwise throw on an out-of-enum value). */
 export function serveOutcome(status: number): "2xx" | "304" | "4xx" | "5xx" | null {
   if (status === 304) return "304";
   if (status >= 200 && status < 300) return "2xx";
@@ -781,29 +762,18 @@ export async function serveDemoAsset(
   const html = wantsHtmlError(subpath);
   const homeUrl = opts.embed ? undefined : "/";
 
-  // T08 (fix round I1): `serve.d`/`serve.embed` (contract §5 — "outcome,
-  // demo_id | count, bytes") counts a *document* view, the same thing
-  // `index.ts`'s adjacent `noteView` counts — never an individual asset
-  // (a JS chunk, a font, a hashed image) under the same prefix, or every
-  // build would inflate the count by however many files it happens to emit.
-  // `isDocRequest` (`subpath === ""`, `noteView`'s own gate) covers every
-  // early-return branch below, where nothing about the eventual served path
-  // is known yet; the later HTML branch additionally records unconditionally
-  // for a resolved `hitPath` ending in `.html` even when `subpath` was not
-  // empty — a client-routed SPA's unknown deep link still falls through to
-  // the same `index.html` document (the `${clean}/index.html`/`index.html`
-  // fallback candidates below), and that fallback serve is still a real
-  // document view. The non-HTML branch (`return new Response(obj.body, …)`)
-  // never calls `record` at all — that is always an asset, by construction.
+  // `serve.d`/`serve.embed` (contract §5) counts a *document* view — never
+  // an individual asset under the same prefix, or every build would inflate
+  // the count by however many files it emits. `isDocRequest` covers every
+  // early-return branch; the HTML branch also records unconditionally for a
+  // resolved `hitPath` ending in `.html` (a client-routed SPA's deep link
+  // still falls through to `index.html`, a real document view). The
+  // non-HTML branch never calls `record` — always an asset.
   //
-  // Written here, inside `share.ts`, rather than wrapping the call at its
-  // `index.ts` call site: this is the one place that knows both the real
-  // served bytes (a stream's `obj.size`, or the *final*, post-injection HTML
-  // length — a `Response`'s own `content-length` header is unset at this
-  // point either way) and the precise outcome for every early-return branch,
-  // without a second body read. Never blocks the response (`ctx.waitUntil`,
-  // the same "never block on Analytics Engine" rule every other `emitPoint`
-  // call site in this Worker follows).
+  // Written here rather than at the `index.ts` call site: this is the one
+  // place that knows both the real served bytes and the outcome for every
+  // branch, without a second body read. Never blocks the response
+  // (`ctx.waitUntil`).
   const isDocRequest = subpath === "";
   const metric = opts.embed ? "serve.embed" : "serve.d";
   const record = (status: number, bytes: number, demoId: string = id): void => {
@@ -814,12 +784,9 @@ export async function serveDemoAsset(
 
   const row = await getDemo(env, id);
   if (!row) {
-    // T08 (fix round, controller addition b): `id` is the URL-supplied,
-    // unresolved id — writing it into `demo_id` would let a crawler stuff
-    // arbitrary strings into that column, the same reasoning `index.ts`'s own
-    // `noteView` comment already gives for "only when it resolved to a real
-    // demo." An empty `demo_id` still counts the 404 view; it just never
-    // attributes it to an id nothing confirms is real.
+    // `id` is the URL-supplied, unresolved id — writing it into `demo_id`
+    // would let a crawler stuff arbitrary strings into that column. An empty
+    // `demo_id` still counts the 404 view, just attributes it to nothing.
     if (isDocRequest) record(404, 0, "");
     return html
       ? errorPageResponse({
@@ -936,7 +903,7 @@ export async function serveDemoAsset(
     // Inert wherever nothing posts to it — `/embed/:id` on the documentation site
     // is framed by a page that never sends the message.
     //
-    // T08 (ADR §C.5): the standalone lite reporter rides the same seam, last —
+    // ADR §C.5: the standalone lite reporter rides the same seam, last —
     // after the scheme/root-path rewrites settle the document's final shape, so
     // its `insertInjectedTag` head/body detection sees exactly what ships.
     const withScheme = injectSchemeIntoHtml(rewriteHtmlRoots(await obj.text()));
@@ -955,7 +922,7 @@ export async function serveDemoAsset(
     record(200, new TextEncoder().encode(withLite).length);
     return new Response(withLite, { headers });
   }
-  // No `record` here on purpose (fix round I1): everything that reaches this
+  // No `record` here on purpose: everything that reaches this
   // return is a non-HTML asset — a JS chunk, a font, an image — never the
   // document itself, and counting one point per asset would inflate
   // `serve.d`/`serve.embed` by however many files a build happens to emit.

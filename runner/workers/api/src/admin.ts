@@ -119,7 +119,7 @@ export interface MeterRecord {
  * show `angular` (the alphabetically first Tier-2 slug). That artifact is the
  * whole reason DEV-2567 read as an Angular-specific leak.
  *
- * Exported (F19b) so `telemetry/cron.ts#countLiveSessionMeters` can share this
+ * Exported so `telemetry/cron.ts#countLiveSessionMeters` can share this
  * exact scan — and, with it, `classifyMeter`'s awake/slept split — instead of a
  * second, narrower KV walk that could only ever count keys, never sessions.
  */
@@ -262,7 +262,7 @@ export async function adminUsage(env: Env, days: number) {
     // not a five-minute-old copy of it.
     computeBudgetState(env),
 
-    // T04 (ADR-0041 §G): the observability-only slice of the same ledger,
+    // ADR-0041 §G: the observability-only slice of the same ledger,
     // plus its own (smaller) cap — see `budget.ts#computeO11ySpend`'s own
     // doc comment for why this is additive to `computeBudgetState` above,
     // not a replacement.
@@ -296,7 +296,7 @@ export async function adminUsage(env: Env, days: number) {
       reconciled: budget.reconciled,
       enforced: budget.enforced,
     },
-    // T04 (ADR-0041 §G): "`/admin` shows app, observability and total."
+    // ADR-0041 §G: "`/admin` shows app, observability and total."
     // `total` equals `budget.spendUsd` above (every sku, o11y included —
     // §G: "product tiers keep acting on the total"); `app` is the
     // remainder, never a second D1 read.
