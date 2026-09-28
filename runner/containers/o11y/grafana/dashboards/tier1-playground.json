@@ -13,7 +13,7 @@
     "from": "now-6h",
     "to": "now"
   },
-  "refresh": "1m",
+  "refresh": "",
   "templating": {
     "list": [
       {

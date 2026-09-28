@@ -181,7 +181,10 @@ fails above $10. **Measured on the real sandbox platform, corrected 1×/10× tra
 scale (§L.7): $0.21/month at 1×, $0.33/month at 10×** — the design's own $5–8 target was itself a
 conservative upper estimate; drain-wake frequency is capped by the 60-minute backlog-age
 trigger, not by traffic volume, so 20× more records only adds ~16s of drain time per wake,
-not 20× the awake-hour cost.
+not 20× the awake-hour cost. **Per forgotten tab**: every provisioned dashboard ships with
+auto-refresh off, so an open tab left idle costs nothing beyond the visit that opened it; a
+viewer who turns refresh back on keeps the box awake for as long as the tab stays open, up
+to the 4-hour hard cap — $0.15–$0.30 per forgotten tab at the awake-hour rate above.
 
 ### B. Ingest never waits for the box
 
