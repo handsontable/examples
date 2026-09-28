@@ -203,7 +203,7 @@ interface CollapsedDemoEvent {
  * What survives the edit-burst collapse becomes two facade calls: the
  * `preview.runtime_error` count (§5) and one handled Faro exception (the
  * Loki line), whose message is the §7 fingerprint shape, never the relayed
- * text. A console warning gets the count only.
+ * text.
  */
 function emitCollapsedDemoEvent(event: CollapsedDemoEvent): void {
   telemetry.metric(
@@ -211,7 +211,7 @@ function emitCollapsedDemoEvent(event: CollapsedDemoEvent): void {
     { count: 1 },
     { ...event.attrs, reason: event.reason, fingerprint: event.fingerprint },
   );
-  if (event.recordName === null) return; // a console warning: counted, not a Loki error line
+  if (event.recordName === null) return;
   const record = new Error(event.shape);
   record.name = event.recordName;
   record.stack = "";
@@ -274,7 +274,8 @@ export interface DemoEventContext {
 
 /**
  * Files an event the preview reported through the monitor bridge
- * (DEV-2527). Always enters the edit-burst collapse; under `full` scope
+ * (DEV-2527). Enters the edit-burst collapse unless it is a console
+ * warning (not a runtime error, `demoEventReport.ts`); under `full` scope
  * (default) ALSO reaches Sentry; under `uncaught` scope, facade only.
  */
 export function reportDemoEvent(payload: MonitorPayload, context: DemoEventContext): void {
@@ -309,15 +310,17 @@ function reportDemoEventUnguarded(
   // Into the edit-burst collapse, not straight to the facade, and before
   // either Sentry budget — a keystroke ladder must not drain the relay
   // budget before a later real error of the page load.
-  const fp = contractFingerprint(report.fingerprintContext, report.fingerprintMessage);
-  const collapsed: CollapsedDemoEvent = {
-    attrs: report.attrs,
-    reason: report.reason,
-    fingerprint: fp,
-    recordName: report.recordName,
-    shape: fingerprintShape(report.fingerprintMessage),
-  };
-  demoEventCollapse.report(fp, () => emitCollapsedDemoEvent(collapsed));
+  if (report.reason !== null) {
+    const fp = contractFingerprint(report.fingerprintContext, report.fingerprintMessage);
+    const collapsed: CollapsedDemoEvent = {
+      attrs: report.attrs,
+      reason: report.reason,
+      fingerprint: fp,
+      recordName: report.recordName,
+      shape: fingerprintShape(report.fingerprintMessage),
+    };
+    demoEventCollapse.report(fp, () => emitCollapsedDemoEvent(collapsed));
+  }
 
   // A warning is context, not a fault (DEV-2539): filed as a breadcrumb,
   // not an issue, before the breadcrumb budget so it never spends a relay

@@ -217,7 +217,7 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `sandpack.compile_ms` | browser | tier, framework, ht_major, outcome | duration_ms | `ok`, `error` |
 | `sandpack.compile_error` | browser | framework, ht_major, fingerprint | count | — |
 | `sandpack.bundler_unreachable` | browser | ht_major | count, duration_ms | — |
-| `preview.runtime_error` | browser | surface=`demo-runtime`, tier, framework, ht_major, fingerprint, reason | count | reason: `uncaught`, `console`, `network`, `stderr` |
+| `preview.runtime_error` | browser | surface=`demo-runtime`, tier, framework, ht_major, fingerprint, reason | count | reason: `uncaught`, `console` (`console.error` only), `network`, `stderr` |
 | `version.switch` | browser | framework, ht_major (to), reason (from), bucket | count | — |
 | `bucket.resolve_ms` | browser | bucket, outcome | duration_ms | `ok`, `error` |
 | `session.start_ms` | browser | framework, ht_major, outcome, reason | duration_ms | outcomes as `session.start`; reason `cold`, `warm` |
@@ -352,7 +352,8 @@ no stack, and the §3 labels include `hot.surface = demo-runtime`. At ingest it 
 an `error.handled` point (surface `demo-runtime`, never feeding the new-fingerprint
 alert) and one Loki line, which the "Recent demo-runtime errors" panels read with
 `{hot_surface="demo-runtime"} | hot_kind="exception"`. A `console-warn` report is
-counted but gets no record: a warning is context, not a fault (DEV-2539). Faro's
+neither counted nor recorded: a warning is context, not a fault (DEV-2539), and
+Handsontable's own load-time notices would otherwise count on every preview load. Faro's
 `pushError` dedupe applies, so an identical record in two consecutive bursts is sent
 once. The `preview.runtime_error` metric, not the line count, is the counter.
 

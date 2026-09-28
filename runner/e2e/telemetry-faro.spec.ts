@@ -717,6 +717,41 @@ test.describe("Faro in the authoring app", () => {
     await expect.poll(() => points().length, { timeout: 10_000 }).toBe(1);
   });
 
+  // Handsontable's load-time notices are console warnings (18: the theme
+  // notice; 17: the `date` deprecation), relayed on every preview load. A
+  // warning is not a runtime error; a demo's own console.error is.
+  test("a relayed console warning is not a preview.runtime_error; a console.error is", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+    const run = "F" + Math.random().toString(36).replace(/[^a-z]/g, "").slice(0, 8);
+    const relay = (kind: string, message: string) =>
+      page.evaluate(
+        ([k, msg]) =>
+          (window as unknown as Record<string, (p: unknown, c: unknown) => void>).__t06ReportDemoEventGuarded(
+            { type: "hot-runner-monitor", kind: k, message: msg },
+            { tier: 1, framework: "react", htMajor: "18" },
+          ),
+        [kind, message] as const,
+      );
+    const themeNotice = 'Theme "main" is already registered. Registration skipped.';
+    const consoleError = `a real console.error ${run}`;
+    const points = (message: string) =>
+      captured
+        .flatMap((b) => b.measurements ?? [])
+        .filter((m) => m.type === "preview.runtime_error")
+        .filter((m) => (m.context as Record<string, string>)["hot.fingerprint"] === fingerprint("demo-runtime", message));
+
+    await relay("console-warn", themeNotice);
+    await relay("console-error", consoleError);
+
+    await expect.poll(() => points(consoleError).length, { timeout: 10_000 }).toBe(1);
+    expect(points(consoleError)[0]!.context).toMatchObject({ "hot.reason": "console" });
+    // The page's own preview (if the bundler answers) relays the same notice on load.
+    await page.waitForTimeout(3000);
+    expect(points(themeNotice), "the notice, whoever relayed it, never counts").toHaveLength(0);
+  });
+
   // A syntax error typed into a Tier-1 parcel example never reaches the
   // bundler — the client-side pre-transpile rejects it — so
   // `sandpack.compile_error` must fire for the most common compile error
@@ -762,16 +797,8 @@ test.describe("Faro in the authoring app", () => {
     await page.waitForTimeout(1500);
     const after = measurementsSince(mark);
     expect(after.filter((m) => m.type === "sandpack.compile_error")).toHaveLength(1);
-    // Handsontable's own first-load notice (a `console-warn`, `reason=console`)
-    // can land after `ready` and before the first keystroke, outside any burst,
-    // where it rightly counts at once. Known noise of the example, not a rung.
-    const themeNotice = fingerprint("demo-runtime", 'Theme "main" is already registered. Registration skipped.');
     expect(
-      after.filter(
-        (m) =>
-          m.type === "preview.runtime_error" &&
-          (m.context as Record<string, string>)["hot.fingerprint"] !== themeNotice,
-      ),
+      after.filter((m) => m.type === "preview.runtime_error"),
       "no runtime error (of any reason) from the rungs of a line that ends in a syntax error",
     ).toHaveLength(0);
     // No authored text on the wire (contract §3): the point carries a hash only.
