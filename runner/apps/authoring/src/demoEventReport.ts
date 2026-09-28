@@ -1,9 +1,7 @@
-// What a relayed demo-runtime event becomes now that it leaves Sentry
-// entirely (ADR §E.1): a `preview.runtime_error` count through the
-// facade, budgeted by the SAME two `monitor.ts` caps Sentry used.
-//
-// Import-free like `tier1Report.ts`/`tier2Report.ts` (their headers), so
-// `node --test` can pin this logic; `HtMajor` is a type-only import, erased before module resolution.
+// What a relayed demo-runtime event becomes (ADR §E.1): a
+// `preview.runtime_error` count through the facade, budgeted by the SAME
+// two `monitor.ts` caps Sentry used. Import-free so `node --test` can pin
+// this logic; `HtMajor` is a type-only import, erased before resolution.
 import type { HtMajor } from "@handsontable/demo-runtime/telemetry";
 
 /** Mirrors `MonitorKind` (`packages/runtime/src/monitor.ts`) structurally,
@@ -70,13 +68,8 @@ export interface DemoEventReport {
   };
 }
 
-/**
- * Always returns a report — the stateful budget check
- * (`demoRelayBudget`/`demoBreadcrumbBudget.admit(...)`) stays the caller's
- * job, since this function is pure and cannot consult a stateful budget,
- * exactly as `tier1Report`'s callers apply `monitorDemos` before this ever
- * runs.
- */
+/** Always returns a report — the stateful budget check stays the caller's
+ *  job, since this function is pure. */
 export function demoEventReport(facts: DemoEventFacts): DemoEventReport {
   return {
     budget: facts.kind === "console-warn" ? "breadcrumb" : "relay",
