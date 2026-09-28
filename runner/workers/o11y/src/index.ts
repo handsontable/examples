@@ -360,7 +360,8 @@ async function handleScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
   // `InboxWriter.setDrainsPaused`); read here inline rather than through a
   // second RPC round trip to the same DO, since `backlog()` already fetched
   // it in the same call. A Grafana VISIT wake (`grafana/proxy.ts`) never
-  // reads this flag at all — unaffected by the cap, by design.
+  // reads this flag: the box still starts and serves Grafana, and
+  // `box.ts#drainStep` is what refuses to drain while paused (F37).
   if (backlog.drainsPaused) return;
 
   const oneHourMs = 60 * 60 * 1000;
@@ -416,9 +417,20 @@ export default {
   // .drainsPaused) return;`); and evaluates every ADR §F.3 alert
   // (`runAlerts`, T04's own cron entry, COMMON.md's "call `runAlerts` from
   // T03's handler" instruction).
+  //
+  // F37: the backlog wake runs AFTER the alerts, not beside them.
+  // `runAlerts` is what sets `drainsPaused` from this tick's spend-cap
+  // result. Run side by side, `handleScheduled` read the flag first, so the
+  // tick that crossed the cap still woke the box and drained 69 objects. A
+  // failing `runAlerts` still lets the backlog scan run.
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(inboxWriter(env).stampCronHeartbeat(Date.now()));
-    ctx.waitUntil(handleScheduled(env, ctx));
-    ctx.waitUntil(runAlerts(env, ctx).then(() => undefined));
+    ctx.waitUntil(
+      runAlerts(env, ctx)
+        .catch((err) => {
+          console.error(JSON.stringify({ event: "o11y.cron.alerts_failed", message: String(err) }));
+        })
+        .then(() => handleScheduled(env, ctx)),
+    );
   },
 } satisfies ExportedHandler<Env>;

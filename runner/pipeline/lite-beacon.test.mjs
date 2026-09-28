@@ -698,6 +698,37 @@ test("POST /telemetry/lite: a duplicated web_vital beacon (identical payload, re
   );
 });
 
+// F32 (round 9): 15 errors on 15 /embed page loads showed 13 accepted and
+// 2 duplicate. The two duplicates were two parallel page loads that threw in
+// the same millisecond, so their beacons were byte-identical (message and
+// `ts` both came from one Date.now()). This pins what the hash already does
+// for beacons that really differ: messages that differ only in digits share
+// one fingerprint but must never share a dedupe hash, even with the same
+// `ts`. The fingerprint normalises digits away; the hash must not.
+test("POST /telemetry/lite: 15 beacons whose messages differ only in digits are 15 accepted records with one fingerprint (F32)", async () => {
+  const { env, ae } = freshEnv();
+  const ts = Date.now();
+  for (let i = 0; i < 15; i++) {
+    const res = await worker.fetch(
+      liteRequest(litePayload({ s: "embed", n: "Error", m: `R9 embed alert ${ts + i}`, ts })),
+      env,
+      ctx,
+    );
+    await ctx.drain();
+    assert.equal(res.status, 204);
+  }
+  const ingest = ae.points.filter((p) => p.indexes[0] === "o11y.ingest" && p.blobs.includes("lite"));
+  assert.deepEqual(
+    ingest.map((p) => p.blobs[7]),
+    Array(15).fill("accepted"),
+    "every distinct beacon must be accepted, none counted as a duplicate",
+  );
+  const errors = ae.points.filter((p) => p.indexes[0] === "error.uncaught");
+  assert.equal(errors.length, 15);
+  const fingerprints = new Set(errors.map((p) => p.blobs.find((b) => b.startsWith("embed:"))));
+  assert.equal(fingerprints.size, 1, "precondition: the messages normalise to one fingerprint");
+});
+
 test("POST /telemetry/lite: a duplicated beacon (identical payload, redelivered) does not double-count its error.uncaught point (finding A-I4)", async () => {
   const { env, ae } = freshEnv();
   const payload = litePayload();

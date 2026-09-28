@@ -43,7 +43,10 @@ export function respondDrop(env: Env, ctx: ExecutionContext, drop: GateDrop, byt
       { ...o11ySelfIdentity(env), reason: drop.reason, outcome: "dropped" },
     ),
   );
-  return new Response(JSON.stringify({ error: drop.reason }), { status: drop.status, headers: JSON_HEADERS });
+  const headers: Record<string, string> = { ...JSON_HEADERS };
+  // Round 10: a 429 without `Retry-After` left Faro guessing its back-off.
+  if (drop.retryAfterSeconds !== undefined) headers["retry-after"] = String(drop.retryAfterSeconds);
+  return new Response(JSON.stringify({ error: drop.reason }), { status: drop.status, headers });
 }
 
 /** One dropped record inside an otherwise-accepted batch (T00-D10: a

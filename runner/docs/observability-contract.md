@@ -405,9 +405,10 @@ dedupe hash is computed over the decoded, scrubbed record before timestamps are 
 | `fp:<fingerprint>` | first-seen epoch ms (exact registry for the new-fingerprint alert) |
 | `fpts:<firstSeenMs:015d>:<fingerprint>` | same first-seen epoch ms as its `fp:` twin — a time-ordered secondary index (G1 fix round, B-C1/A-I1 remainder) so the new-fingerprint alert can do a bounded `start`/`end` range read instead of listing the whole (alphabetically, not chronologically, ordered) `fp:` prefix every tick. Written/deleted together with its `fp:` twin, always |
 | `alert:<rule>` | `{ state: firing \| resolved, since, lastNotified }` |
+| `alertMeta:newFingerprintCursorKey` / `alertMeta:newFingerprintAnnouncedKeys` | the new-fingerprint alert's keyset cursor (an `fpts:` key) and a JSON array of the `fpts:` keys it already announced past that cursor. The cursor lags 2 minutes behind the tick, so the next tick reads recent entries again; the announced set makes sure each fingerprint is announced exactly once (F35) |
 | `wake:<wakeId>` | `{ startedAt, reason, over: boolean, readyMs? }` — over when a newer wake started or the container is not running; **deleted once fully resolved** (see below). `readyMs` (F8) is wake-to-ready time in ms, written once by `InboxWriterApi.recordWakeReady(wakeId, readyMs)` — called by `GrafanaBox` on the wake's first successful `isReady()`, first call wins, a no-op for an already-resolved (deleted) wake — and copied onto the resolved `o11y.wake` point as `duration_ms` (§5); absent while the box has not yet become ready |
 | `rejectedEvent:<ms:015d>:<inbox key>` | rejection reason (string) — a chronological audit/alert log (G1 fix round, row 19 / B-C1/A-I1 remainder), written by both a full rejection (`ledger.ts#rejectKey`) and a **partial** one (`ledger.ts#recordPartialReject`, see below). The `rejected-inbox-key` alert fires on a RECENT (last hour) count here, not on `rejectedKeyCount()`'s never-pruned total, so it resolves once rejections stop instead of firing forever after the first one ever seen |
-| `drainsPaused` | boolean (o11y spend cap) |
+| `drainsPaused` | boolean (o11y spend cap). Set on every alert tick from the `o11y-spend-cap` result, so it follows the runtime budget override. The cron decides its backlog wake only after the alerts ran (F37). While it is set, the cron never wakes the box for the backlog, and `GrafanaBox.drainStep` pushes nothing, whatever woke the box. A visit wake still starts the box and serves Grafana (ADR §G) |
 | `heartbeat` | `{ lastCron, lastIngest }` |
 
 Limits: records over 256 KB are dropped; requests to Loki carry at most 1 MB
@@ -510,6 +511,11 @@ what ships on the wire, not a gate). The body itself is still JSON:
 sampled at 10 % per page view, decided once per page; errors are sent up to the
 `monitor.ts` event ceiling. The o11y worker converts beacons with the same converter as
 Faro items, clamping `ts` to the receive time ± 5 minutes.
+
+The dedupe hash covers the whole converted record (body with message and stack, attributes)
+plus the raw `ts`. Two beacons from different page loads that are byte-identical (same demo,
+same error, same millisecond) therefore count as one record: the payload has no per-beacon
+identity yet (F32).
 
 ## 10. Local mode
 

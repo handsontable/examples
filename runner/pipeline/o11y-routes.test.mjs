@@ -990,3 +990,29 @@ test("a Faro exception fixture, replayed end to end, is scrubbed in the actual R
   assert.doesNotMatch(text, /\?t=1700000000/);
   assert.doesNotMatch(text, /> 2 \|/);
 });
+
+// Round 10 (gates): a `/telemetry/*` 429 carried no `Retry-After`, so Faro had
+// to guess its back-off. Both browser routes share the rate-limit gate.
+test("POST /telemetry/collect and /telemetry/lite: a rate-limited request answers 429 with Retry-After equal to the limiter window", async () => {
+  const { RATE_LIMIT_PERIOD_SECONDS } = await import("../workers/o11y/src/gates/rate-limit.ts");
+  const wranglerText = readFileSync(fileURLToPath(new URL("../workers/o11y/wrangler.jsonc", import.meta.url)), "utf8");
+  const period = Number(/"ratelimits"[\s\S]*?"period":\s*(\d+)/.exec(wranglerText)?.[1]);
+  assert.equal(RATE_LIMIT_PERIOD_SECONDS, period, "the header must state the window wrangler.jsonc actually configures");
+
+  for (const path of ["/telemetry/collect", "/telemetry/lite"]) {
+    const { env } = freshEnv();
+    env.RATE_LIMITER = { limit: async () => ({ success: false }) };
+    const res = await worker.fetch(
+      new Request(`https://demos.handsontable.com${path}`, {
+        method: "POST",
+        headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+        body: "{}",
+      }),
+      env,
+      ctx,
+    );
+    await ctx.drain();
+    assert.equal(res.status, 429, path);
+    assert.equal(res.headers.get("retry-after"), "60", path);
+  }
+});

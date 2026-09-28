@@ -72,7 +72,12 @@ function makeInboxWriterStub(overrides = {}) {
     async resolveWakes() {
       calls.resolveWakes++;
     },
+    // F37: the o11y spend cap's pause flag, read at the top of every drainStep.
+    async drainsPaused() {
+      return overrides.drainsPaused ?? false;
+    },
     async nextWrittenKeys() {
+      calls.nextWrittenKeys = (calls.nextWrittenKeys ?? 0) + 1;
       return overrides.writtenKeys ?? [];
     },
     // Fix round (finding B-M5): defaults to "no reopened keys in this
@@ -602,6 +607,44 @@ test("fix round I1: a fresh backlog wake with no visitors self-stops, even right
   await box.drainStep({ wakeId: wake2.wakeId });
 
   assert.ok(stopped, "a fresh backlog wake with no visitors of its own must self-stop, regardless of the PREVIOUS wake's visitor activity");
+});
+
+// F37 (round 10): over the spend cap, a backlog wake drained 69 objects and a
+// later Grafana visit drained 70 more. ADR §G: "drains pause, visit wakes still
+// work". A paused drainStep must push nothing, whatever woke the box.
+test("drainStep pushes nothing while drainsPaused: a visit wake keeps serving (no stop), a quiet backlog wake stops", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000007.ndjson.gz";
+  for (const [reason, visitor, expectStop] of [["visit", true, false], ["backlog", false, true]]) {
+    const { box, inboxWriterStub, ae } = makeBox({ inboxWriter: { writtenKeys: [key], drainsPaused: true } });
+    await box.wake(reason);
+    let pushes = 0;
+    installContainerFetchRouter({ otlp: () => { pushes++; return new Response(null, { status: 204 }); } });
+    if (visitor) await box.noteVisitorActivity();
+    let stopped = false;
+    hooks.stop = async (self) => {
+      stopped = true;
+      self._state = { status: "stopped", lastChange: Date.now() };
+    };
+
+    const wake = await box.ctx.storage.get("wake");
+    await box.drainStep({ wakeId: wake.wakeId });
+
+    assert.equal(pushes, 0, `${reason}: nothing may be pushed to Loki while paused`);
+    assert.equal(inboxWriterStub.calls.nextWrittenKeys ?? 0, 0, `${reason}: no key may be taken for draining`);
+    assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 0, reason);
+    assert.ok(!ae.points.some((p) => p.indexes?.[0] === "o11y.drain"), `${reason}: no o11y.drain point`);
+    assert.equal(stopped, expectStop, reason);
+  }
+});
+
+test("drainStep drains normally once drainsPaused is cleared (F37)", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000008.ndjson.gz";
+  const { box, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [key], drainsPaused: false } });
+  await box.wake("backlog");
+  installContainerFetchRouter();
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(inboxWriterStub.calls.nextWrittenKeys, 1, "an unpaused step takes keys to drain");
 });
 
 test("a drain wake with an active Grafana user does not call stop()", async () => {

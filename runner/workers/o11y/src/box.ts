@@ -937,6 +937,15 @@ export class GrafanaBox extends Container<Env> {
     // the wake-start call (idempotent to run again on every step: cheap,
     // and self-correcting if a wake elsewhere just went `over`).
     await writer.resolveWakes();
+    // F37, ADR §G: over the o11y spend cap "drains pause, visit wakes still
+    // work". The box still serves Grafana; it just pushes nothing to Loki.
+    // Checked on every step, so a pause set mid-drain stops at the next
+    // batch, and a backlog wake that started before the pause stops the box
+    // once it is quiet (`#finishDrain`), exactly like an empty backlog.
+    if (await writer.drainsPaused()) {
+      await this.#finishDrain(payload.wakeId);
+      return;
+    }
     const keys = await writer.nextWrittenKeys(DRAIN_BATCH_SIZE);
 
     if (keys.length === 0) {
