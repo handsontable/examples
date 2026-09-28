@@ -64,6 +64,10 @@ Constraint: anonymous by construction. Counts only, no user id, no per-request r
 2. **Engagement**, same shape and same storage rule: `example.engaged` (first code edit,
    or preview ready plus 30 s), `example.forked`, `example.saved`, `example.shared`,
    `example.downloaded`. Engaged opens rank features; raw opens rank curiosity.
+   `example.saved` is the one the API worker writes, when an editor Save's rebuild
+   succeeds, because the rebuild can take longer than the visitor stays on the page. The
+   editor passes the open example's `ht_major` in the Save request, so the row has the
+   same values the browser would have sent (contract §5).
 3. **No migration for attribution**: rollups join `demos.forked_from` against `/d` and
    `/embed` view counts; demos saved before the confirmed date are reported as `unknown`.
 4. **Analytics Engine layout**: `kind`, `ref` and `area` take three of the blob slots the
