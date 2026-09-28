@@ -150,3 +150,10 @@ export function consumeForkMarker(search: string): { isFork: boolean; search: st
 export function exampleOpenKey(lineage: string, version: string): string {
   return `${lineage}\u0000${version}`;
 }
+
+/** Whether the browser counts an editor Save itself: only when the Save
+ *  response lacks the API's `exampleSaved` marker, i.e. an API that does not
+ *  write `example.saved` (contract §5). Remove once every deployed API sends it. */
+export function browserCountsSave(saveResponse: unknown): boolean {
+  return !(typeof saveResponse === "object" && saveResponse !== null && "exampleSaved" in saveResponse);
+}

@@ -93,6 +93,7 @@ import {
 } from "./telemetry/metrics.js";
 import {
   consumeForkMarker,
+  browserCountsSave,
   exampleActionAttrs,
   exampleOpenAttrs,
   exampleOpenKey,
@@ -3097,6 +3098,8 @@ function Authoring({
       });
       await assertApiOk(res, `save failed (${res.status})`);
       clearDirty();
+      // Fallback for an API without the marker; remove once every deployed API sends it.
+      if (browserCountsSave(await res.json().catch(() => null))) noteExampleAction("example.saved");
     } catch (e) {
       // Losing a save is the worst outcome in the app — the user's edits are only
       // in this tab's memory until the PATCH lands. Which is exactly why an
@@ -3110,7 +3113,7 @@ function Authoring({
     } finally {
       setSaving(false);
     }
-  }, [savedId, isShare, version, clearDirty]);
+  }, [savedId, isShare, version, clearDirty, noteExampleAction]);
 
   /**
    * The preview bar's share icon, mode-aware (ADR-0025). `edit` has a saved demo

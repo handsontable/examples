@@ -1843,7 +1843,10 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           const rebuildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `rebuild ${row.framework}` });
           if (rebuildDenied) return rebuildDenied;
           await recordUsageEvent(env, "build", row.framework);
-          await updateDemo(env, {
+          const savedAttrs = exampleSavedAttrs(demoId, row.framework, patch.exampleHtMajor);
+          // Registered with `waitUntil` so a visitor leaving mid-rebuild (8–9 s) does not
+          // cancel the save or its point; still awaited, so a failure reaches the 5xx path.
+          const saved = updateDemo(env, {
             id: demoId,
             entry: { framework: row.framework, ...cfg },
             files: version.files,
@@ -1860,12 +1863,13 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             ...(patchTitle ? { title: patchTitle } : {}),
             ...(patchDescription !== undefined ? { description: patchDescription } : {}),
             now: nowIso(),
-          });
-          const savedAttrs = exampleSavedAttrs(demoId, row.framework, patch.exampleHtMajor);
-          if (savedAttrs) ctx.waitUntil(emitPoint(env, "example.saved", { count: 1 }, savedAttrs));
+          }).then(() => (savedAttrs ? emitPoint(env, "example.saved", { count: 1 }, savedAttrs) : undefined));
+          ctx.waitUntil(saved.catch(() => {}));
+          await saved;
           // The ref the rebuild actually used, which the picker may not have asked
-          // for (a pin the payload carried outranks a dist-tag).
-          return json({ ok: true, htVersion: version.ref });
+          // for (a pin the payload carried outranks a dist-tag). `exampleSaved` tells
+          // the editor this API counted the save (contract §5).
+          return json({ ok: true, htVersion: version.ref, exampleSaved: savedAttrs !== null });
         }
         // Metadata-only update (title / description / visibility).
         await env.DB.prepare("UPDATE demos SET title=?, description=?, visibility=?, updated_at=? WHERE id=?")

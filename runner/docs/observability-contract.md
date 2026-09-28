@@ -310,9 +310,16 @@ with `files`) finishes its rebuild, because the rebuild can outlast the visitor'
 the page. It carries the same values the browser's other `example.*` events do for a saved
 demo: `kind=saved`, `ref` = the demo id, `framework` = the demo row's, and `ht_major` = the
 body's `exampleHtMajor`, which is the major the editor opened the demo at. `area` and
-`bucket` stay empty. The editor sends `exampleHtMajor` only while its own telemetry gate is
-open (§10). A request without a valid value writes no point, so saves by API token, or
-those the gate excludes, are not counted. `blob1`/`blob2` name `demos-api`.
+`bucket` stay empty. `blob1`/`blob2` name `demos-api`.
+
+What gates the count is a successful rebuild whose request carries a valid
+`exampleHtMajor` (one of §3's `ht_major` values), whoever sends it. The editor sends the
+field only while its own telemetry gate is open (§10). The rebuild and the point are
+registered with `ctx.waitUntil`, so a client disconnect within the 30 s grace does not
+cancel them. Every rebuild response carries `exampleSaved` (whether the point was
+written). The editor emits the browser `example.saved` only when a response lacks that
+key, i.e. an API that does not count saves; that fallback can be removed once every
+deployed API sends the marker.
 
 `serve.share` locally: under `vite dev` (what `pnpm dev:full` serves), React
 StrictMode runs the share page's load effect twice, so one `/share/<id>` view gives 2

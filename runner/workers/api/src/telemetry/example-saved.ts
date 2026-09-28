@@ -5,10 +5,9 @@
 import { HT_MAJORS, type HotAttrs, type HtMajor } from "@handsontable/demo-runtime/telemetry";
 
 /**
- * The point's attrs, or null when the request carries no editor taxonomy: only
- * the editor sends `exampleHtMajor`, and a save from anywhere else (an API
- * token, a tab still on the previous bundle, which counts the save itself) is
- * not an `example.saved`.
+ * The point's attrs, or null when the request carries no valid `exampleHtMajor`.
+ * The field is what gates the count (contract §5): the editor sends it only
+ * while its telemetry gate is open, and a caller that omits it is not counted.
  */
 export function exampleSavedAttrs(demoId: string, framework: string, exampleHtMajor: unknown): HotAttrs | null {
   if (typeof exampleHtMajor !== "string" || !(HT_MAJORS as readonly string[]).includes(exampleHtMajor)) return null;
