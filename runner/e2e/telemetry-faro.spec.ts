@@ -730,7 +730,7 @@ test.describe("Faro in the authoring app", () => {
   // prefix rungs (`c`..`cons`) run and relay ReferenceErrors, which the
   // compile failure must keep out of `preview.runtime_error` (the
   // `replacesRun` rule).
-  test("R9C: a syntax error typed key by key reaches /telemetry/collect as one sandpack.compile_error, not a runtime error", async ({ page }) => {
+  test("a syntax error typed key by key reaches /telemetry/collect as one sandpack.compile_error, not a runtime error", async ({ page }) => {
     test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 (needs the hosted Sandpack bundler) to run the typed compile-error check");
     await stubShell(page);
     const captured = captureTelemetry(page);
