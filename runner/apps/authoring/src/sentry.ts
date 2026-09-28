@@ -112,19 +112,13 @@ const DEMO_SURFACE = "demo-runtime";
 function sharedSentryOptions(environment: string): Sentry.BrowserOptions {
   return {
     environment,
-    // `|| undefined` matters: the define below substitutes "" when GITHUB_SHA is
-    // absent, and a release of "" would not match the SHA-named artifact bundle
-    // the plugin uploads — source maps would silently stop resolving.
+    // `|| undefined`: a "" release would not match the SHA-named source-map bundle.
     release: (import.meta.env.VITE_SENTRY_RELEASE as string | undefined) || undefined,
-    // Errors only. Spans would triple the event volume for signal we don't act on.
-    tracesSampleRate: 0,
-    // Stated, not inherited: `reportDemoEvent` writes into this buffer too
-    // (DEV-2539), and the SDK's default of 100 would evict half the app's
-    // own breadcrumb trail. Raise alongside MONITOR_BREADCRUMB_CEILING.
+    tracesSampleRate: 0, // errors only — spans would triple volume for signal we don't act on
+    // SDK default of 100 would evict half the app's own trail (`reportDemoEvent`
+    // also writes here, DEV-2539) — raise alongside MONITOR_BREADCRUMB_CEILING.
     maxBreadcrumbs: 200,
-    // Contract §11 / ADR §E.3. `"uncaught"` narrows Sentry to exactly the
-    // global handlers + dedupe; `"full"` (default) keeps every SDK
-    // integration (tracing already off via `tracesSampleRate: 0`).
+    // Contract §11 / ADR §E.3: `"uncaught"` narrows to global handlers + dedupe only.
     ...(SENTRY_SCOPE === "uncaught"
       ? {
           defaultIntegrations: false,
@@ -155,11 +149,8 @@ function sharedSentryOptions(environment: string): Sentry.BrowserOptions {
 if (reportingEnabled) {
   Sentry.init({ dsn: DSN, ...sharedSentryOptions(reporting.environment) });
 } else if (localTestSentryEnabled()) {
-  // e2e-only hook: acceptance requires "an uncaught error reaches Sentry",
-  // untestable against the real production gate. A SECOND `Sentry.init()`,
-  // gated the same as Faro's local path, mutually exclusive with the real
-  // one. Same `sharedSentryOptions` as production; only `dsn`/`transport`
-  // differ — envelopes are captured to `window.__t06SentryCapture` instead
+  // e2e-only: a second, mutually-exclusive `Sentry.init()` gated like Faro's
+  // local path. Envelopes are captured to `window.__t06SentryCapture` instead
   // of sent, for `e2e/telemetry-faro.spec.ts` to read back.
   Sentry.init({
     dsn: "https://t06e2e@o0.ingest.sentry.io/0",
@@ -240,13 +231,10 @@ const demoEventCollapse = createDemoEventCollapse<() => void>({
  *  `compile:` cannot collide with a §7 `context:hash` fingerprint. */
 const COMPILE_ERROR_KEY = "compile:sandpack.compile_error";
 
-/**
- * Routes one Tier-1 compile error through the edit-burst collapse with
- * `replacesRun`: it replaces whatever the burst holds and suppresses later
- * non-compile reports, so a typed syntax error counts as one
- * `sandpack.compile_error` and no `preview.runtime_error`. Not behind
- * `previewMonitoring` — wired for every preview like `sandpack.compile_ms`.
- */
+/** Routes one Tier-1 compile error through the collapse with `replacesRun`,
+ *  so a typed syntax error counts as one `sandpack.compile_error` and no
+ *  `preview.runtime_error`. Not behind `previewMonitoring` — wired for every
+ *  preview like `sandpack.compile_ms`. */
 export function collapseCompileError(emit: () => void): void {
   demoEventCollapse.report(COMPILE_ERROR_KEY, emit, { replacesRun: true });
 }
@@ -400,25 +388,20 @@ function reportDemoEventUnguarded(
   Sentry.captureMessage(display, captureContext);
 }
 
-// Second half of the e2e-only hook: exposes `reportDemoEventUnguarded` on
-// `window` under the same local test gate, for
-// `e2e/telemetry-faro.spec.ts` to call directly.
+// e2e-only hooks under the `__t06ReportDemoEvent` prefix `check:telemetry-leak`
+// covers: unguarded entry, guarded entry (proves the two-gate behaviour
+// without a real preview mount), and the edit signal for a keystroke ladder.
 if (localTestSentryEnabled()) {
   (
     window as unknown as {
       __t06ReportDemoEvent?: (payload: MonitorPayload, context: DemoEventContext) => void;
     }
   ).__t06ReportDemoEvent = reportDemoEventUnguarded;
-  // A second hook exposing the GUARDED entry point, so a spec can prove
-  // the two-gate behaviour without a real preview mount — `reportDemoEvent`
-  // is otherwise a no-op off the production host.
   (
     window as unknown as {
       __t06ReportDemoEventGuarded?: (payload: MonitorPayload, context: DemoEventContext) => void;
     }
   ).__t06ReportDemoEventGuarded = reportDemoEvent;
-  // The edit signal for a keystroke-ladder spec, under the same
-  // `__t06ReportDemoEvent` prefix `check:telemetry-leak` already covers.
   (
     window as unknown as { __t06ReportDemoEventNoteEdit?: () => void }
   ).__t06ReportDemoEventNoteEdit = noteDemoEdit;
