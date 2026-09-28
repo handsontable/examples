@@ -1,16 +1,8 @@
-// The lint gate for every provisioned dashboard under
-// containers/o11y/grafana/dashboards/. Local ClickHouse accepts far more
-// SQL than Workers Analytics Engine does — this is the one place that
-// difference is enforced, so a panel that only works against the local
-// shim never reaches production silently broken. Four rules (proven to
-// fail on a real violation, see "the lint itself" below): (1) an AE panel
-// query uses only known contract columns (§4) and an allowlisted function
-// set; (2) a Loki panel/annotation query uses only the labels §3 promotes
-// and a real tenant uid, never an implicit default; (3) no dashboard
-// carries a legacy `alert` block (ADR-0041 §F.3: Grafana holds no alert
-// rules); (4) a `blobN` WHERE filter must be one the metric's §5 row
-// actually sets — the local shim accepts an out-of-set column the real
-// one would zero-row, so this needs its own rule.
+// Lint gate for every provisioned dashboard: local ClickHouse accepts far more SQL than
+// Workers Analytics Engine, so this is where that difference is enforced. Rules: AE queries
+// use only §4 columns and allowlisted functions; Loki queries use only §3 labels and a named
+// tenant; no alert blocks (ADR-0041 §F.3); a blobN filter is one its metric's §5 row sets;
+// no dashboard ships a non-empty `refresh`. Each rule is proven failing in "the lint itself".
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 
 import test from "node:test";
@@ -250,6 +242,16 @@ function validateLokiExpr(expr) {
 
 // ---- Dashboard-walking helpers -----------------------------------------------
 
+/** A non-empty `refresh` is a visit on every tick, which keeps
+ *  `GrafanaBox`'s 15-min idle stop from ever firing while the tab is open.
+ *  `null` means clean; a string names the offending value. The time
+ *  picker's own refresh options stay in the dropdown regardless of this
+ *  field, so a viewer can still turn refresh on for themselves. */
+function validateNoAutoRefresh(dashboard) {
+  if (dashboard.refresh) return `ships with "refresh": ${JSON.stringify(dashboard.refresh)}`;
+  return null;
+}
+
 function loadDashboards() {
   return fs
     .readdirSync(DASHBOARDS_DIR)
@@ -440,6 +442,10 @@ for (const { file, dashboard } of dashboards) {
       assert.equal(panel.alert, undefined, `${file} / panel "${panel.title}" has a legacy panel-level alert`);
     }
   });
+
+  test(`${file}: ships with auto-refresh off ("refresh": "")`, () => {
+    assert.equal(validateNoAutoRefresh(dashboard), null, `${file}: ${validateNoAutoRefresh(dashboard)}`);
+  });
 }
 
 // =============================================================================
@@ -592,6 +598,17 @@ test("the blob-filter lint on the REAL tier1-playground.json dashboard (revert e
   for (const { panel, query } of targets) {
     assert.deepEqual(validateMetricBlobFilters(query), [], `panel "${panel}"`);
   }
+});
+
+test("the lint fails on a dashboard shipping a non-empty refresh", () => {
+  for (const refresh of ["1m", "5m", "30s"]) {
+    const violation = validateNoAutoRefresh({ refresh });
+    assert.ok(violation && violation.includes(refresh), `expected a violation naming "${refresh}", got: ${violation}`);
+  }
+});
+
+test("the lint passes a dashboard with refresh off", () => {
+  assert.equal(validateNoAutoRefresh({ refresh: "" }), null);
 });
 
 test("the lint passes a clean AE query (sanity: the lint isn't vacuously failing everything)", () => {
