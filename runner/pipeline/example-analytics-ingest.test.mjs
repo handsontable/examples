@@ -55,7 +55,7 @@ function rawExampleOpenItem() {
         "hot.metric_kind": "docs",
         "hot.ref": "guides/accessibility/accessibility/accessibility.md",
         "hot.area": "Accessibility",
-        "hot.framework": "reactts",
+        "hot.framework": "typescript",
         "hot.ht_major": "18",
         "hot.bucket": "18.1",
         "hot.reason": "entry",
@@ -113,7 +113,7 @@ test("example.open: end to end from a scrubbed browser payload to one AE point, 
   assert.equal(blobAt("kind"), "docs", "blob17");
   assert.equal(blobAt("ref"), "guides/accessibility/accessibility/accessibility.md", "blob18");
   assert.equal(blobAt("area"), "Accessibility", "blob19");
-  assert.equal(blobAt("framework"), "reactts");
+  assert.equal(blobAt("framework"), "typescript");
   assert.equal(blobAt("ht_major"), "18");
   // `bucket` (blob16) / `reason` (blob9) are T07's own AE-only keys — see the
   // comment on the scrub test above for why they are not asserted here.

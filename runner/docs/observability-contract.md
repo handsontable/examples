@@ -128,9 +128,24 @@ can promote them to labels.
 | `deployment.environment.name` | `production`, `local` | `deployment_environment_name` | `blob3` |
 | `hot.surface` | `authoring`, `share`, `embed`, `d`, `api`, `demo-runtime`, `o11y` | `hot_surface` | `blob4` |
 | `hot.tier` | `1`, `2`, `static`, `none` | `hot_tier` | `blob5` |
-| `hot.framework` | a key of `config/frameworks.json`, a docs-example framework, or `none` | `hot_framework` | `blob6` |
+| `hot.framework` | a key of `config/frameworks.json` (every docs-example framework is one), or `none` | `hot_framework` | `blob6` |
 | `hot.ht_major` | `15`…`19`, `next`, `none` | `hot_ht_major` | `blob7` |
-| `hot.outcome` | per metric, see §5 | `hot_outcome` | `blob8` |
+| `hot.outcome` | per metric, see §5; `none` on a record no metric describes | `hot_outcome` | `blob8` |
+
+Ingest bounds both open labels, since each distinct label tuple is a Loki stream
+(5000 per tenant): a `hot.framework` outside the list above, or a `hot.outcome`
+outside the set of the item's metric (`none` when there is none), becomes `other`.
+A stored browser record (exception, log, event) always carries `hot.outcome` =
+`none`; only a measurement's AE point keeps its metric outcome. That caps the
+browser tenant at 4410 label tuples (collect 7 × 4 × 21 × 7, lite 2 × 1 × 21 × 7).
+The box's Loki sets `max_global_streams_per_user` to 20000, over 4× that worst case;
+`pipeline/o11y-label-cardinality.test.mjs` reads the limit from the config and fails
+when the reachable tuples cross it.
+Ingester memory grows with the streams that actually receive lines and the bytes
+pushed, not with the limit, and a stream costs kilobytes (labels, index entry, head
+block), so 20000 fits easily in the box's 4 GiB `standard-1` container.
+`packages/runtime/src/telemetry/attrs.ts#KNOWN_FRAMEWORKS` mirrors
+`config/frameworks.json`.
 
 Structured metadata only — never a Loki label, never an Analytics Engine index:
 `hot.demo_id`, `session.id` (an in-memory page-load id), `cf.ray`, `hot.kind` (the Faro item
@@ -298,7 +313,9 @@ collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
   after the next edit has been dispatched. A new run starts at the bundler's `start`
   message for a pushed compile (`onPushOutcome("rerun")`), not at dispatch, and what the burst held until
   then came from the run it replaces and is dropped. A pre-transpile failure of the
-  newest edit is kept, because no run of that edit will start;
+  newest edit is kept, because no run of that edit will start. A run that never starts
+  (a stalled or unreachable bundler) drops nothing, and the burst closes on its quiet
+  window as usual;
 - 2 s (`DEMO_EDIT_SETTLE_MS`) after the last edit the burst closes, and the last run's
   reports are emitted, one per §7 fingerprint;
 - outside a burst (first load, a user interaction, a Tier-2 rebuild that reports after
@@ -563,6 +580,24 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   still triggers an automatic replay instead of being silently unrecoverable except by
   manual reopen. Only a key with ZERO accepted chunks stays `rejected`. See
   `drain.ts#drainKey`'s own doc comment.
+- **Drain refusals.** A `429` whose body names Loki's stream limit (`Maximum active
+  stream limit exceeded`) is never retried (a retry can answer 204 with the excess
+  streams dropped) and never rejects: the table may have been filled by earlier keys,
+  so that key is deferred and stays `written`, with no `rejectedEvent`. Its tenant is
+  then excluded for the rest of the wake (`streamLimitedTenants` in the box's storage;
+  `nextWrittenKeys` pages past it), so the batch fills with the other tenant's keys, and
+  one `o11y.drain.stream_limit` warning line names the tenant and Loki's message. Any
+  other `429`, and a `5xx`, stays transient and stops the batch. An inbox read that
+  throws defers only that key; the rest of the batch still pushes and commits. A batch
+  of only deferred keys ends the wake's drain once no un-excluded tenant has keys left.
+- **Symbolication read caps.** One inbox object reads at most 32 distinct maps
+  (`MAX_MAP_KEYS_PER_CALL`, first-seen order), one body adds at most 8 of them
+  (`MAX_NEW_MAP_KEYS_PER_BODY`), and at most 128 frames are looked up per body
+  (`MAX_FRAMES_PER_BODY`), so a drain step of 10 objects stays at a few hundred of the
+  Workers limit of 10,000 subrequests. Frames past a cap stay byte-for-byte and are
+  reported as `o11y.symbolicate.skip` with reason `over_cap`, plus one aggregate
+  `over_cap` line with the call's capped `frames` and `keys` that `MAX_SKIP_REPORTS`
+  never suppresses.
 
 ## 9. Lite beacon payload
 

@@ -22,6 +22,7 @@ import {
   ENVIRONMENTS,
   HOT_KINDS,
   HT_MAJORS,
+  KNOWN_FRAMEWORKS,
   METRICS,
   METRIC_NAMES,
   RESOURCE_ATTRS,
@@ -128,6 +129,15 @@ test("§3 resource attributes match attrs.ts, key for key, slot for slot, label 
     }
     assert.deepEqual(new Set(values), new Set(expected), `${p.key}: closed-set values`);
   }
+});
+
+test("§3: KNOWN_FRAMEWORKS is exactly the config/frameworks.json keys plus none", () => {
+  const catalog = JSON.parse(fs.readFileSync(path.join(dir, "..", "config", "frameworks.json"), "utf8"));
+  assert.deepEqual(
+    new Set(KNOWN_FRAMEWORKS),
+    new Set([...Object.keys(catalog.frameworks), "none"]),
+    "a new frameworks.json key must be added to attrs.ts#KNOWN_FRAMEWORKS, or its records store hot.framework=other",
+  );
 });
 
 /** A marker paragraph's text (up to the next blank line), for the §3

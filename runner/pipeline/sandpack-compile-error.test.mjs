@@ -458,6 +458,18 @@ test("an edit that transpiles to the running sandbox reports 'unchanged'; one th
   assert.equal(pushes.length, 2);
 });
 
+test("a report in a burst whose pushed run never starts (a stalled bundler) is still counted once", async () => {
+  const { clock, collapse, runtime, pushes, relayRuntimeError, points } = ladderHarness();
+  runtime.writeFile("/index.js", BASE_SOURCE + "console.error('stalled');\n");
+  collapse.noteEdit();
+  await settle();
+  assert.equal(pushes.length, 1, "guard: the push was dispatched");
+  relayRuntimeError("stalled"); // the running sandbox's report; the bundler never posts `start`
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(points("preview.runtime_error").map((p) => p.attrs.fingerprint), [fingerprint("demo-runtime", "stalled")]);
+});
+
 test("a bundler start that no push asked for (the mount's own compile) is not a rerun", async () => {
   const { runtime, pushes } = mountedParcel();
   const outcomes = [];

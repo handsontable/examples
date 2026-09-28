@@ -21,9 +21,12 @@ import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
   DIAGNOSTIC_TAG_KEYS,
+  ENVIRONMENTS,
   HOT_KINDS,
   HT_MAJORS,
-  isValidOpenAttrValue,
+  KNOWN_FRAMEWORKS,
+  OTHER_ATTR_VALUE,
+  RECORD_OUTCOMES,
   RESOURCE_ATTRS,
   STRUCTURED_METADATA_KEYS,
   SURFACES,
@@ -31,6 +34,7 @@ import {
   type Environment,
   type ServiceName,
 } from "./attrs.js";
+import { METRICS } from "./metrics.js";
 import type { NormalisedRecord } from "./inbox.js";
 import type { ScrubbableFaroItem } from "./scrub.js";
 import type { LiteBeaconPayload } from "./lite.js";
@@ -99,27 +103,32 @@ function serviceResourceAttributes(service: ServiceIdentity): Record<string, str
   };
 }
 
-/** Closed-set `hot.*` resource attributes, checked at record level.
- *  `service.*`/`deployment.environment.name` are never taken from a
- *  client-hoisted bag, so they need no check here. */
+/** Closed-set resource attributes, checked at record level. A failing value is
+ *  dropped, and `normalise/points.ts#withResourceAttrDefaults` fills its default. */
 const CLOSED_SET_BY_KEY: Readonly<Record<string, readonly string[]>> = {
+  [ATTR_DEPLOYMENT_ENVIRONMENT_NAME]: ENVIRONMENTS,
   [ATTR_HOT_SURFACE]: SURFACES,
   [ATTR_HOT_TIER]: TIERS,
   [ATTR_HOT_HT_MAJOR]: HT_MAJORS,
 };
 
-/** `hot.framework`/`hot.outcome` — open sets, but bounded (§3). */
-const OPEN_SET_KEYS: ReadonlySet<string> = new Set([ATTR_HOT_FRAMEWORK, ATTR_HOT_OUTCOME]);
+/** The `hot.outcome` values `metric`'s §5 row allows, or {@link RECORD_OUTCOMES}
+ *  for a record no outcome-carrying metric describes. */
+function outcomeSetFor(metric: string | undefined): readonly string[] {
+  if (metric === undefined || !Object.prototype.hasOwnProperty.call(METRICS, metric)) return RECORD_OUTCOMES;
+  return METRICS[metric as keyof typeof METRICS].values?.["outcome"] ?? RECORD_OUTCOMES;
+}
 
 /**
- * Record-level enforcement of §3's `hot.*` value rules: every closed-set
- * attribute is checked against its enum, every open-set one against
- * {@link isValidOpenAttrValue}. A failing value is DROPPED, not replaced —
- * `normalise/points.ts#withResourceAttrDefaults` fills the contract's own
- * `"none"` default for a now-missing key.
+ * Record-level enforcement of §3's value rules on every Loki-label attribute.
+ * A closed-set value outside its enum is dropped. `hot.framework` and
+ * `hot.outcome` outside their known sets (`KNOWN_FRAMEWORKS`; `metric`'s
+ * outcomes) become `"other"`, so the label set stays bounded however many
+ * distinct values a client sends. `metric` is the item's metric name, if any.
  */
 export function sanitizeResourceAttributes(
   resourceAttributes: Record<string, string>,
+  metric?: string,
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(resourceAttributes)) {
@@ -128,8 +137,12 @@ export function sanitizeResourceAttributes(
       if (closedSet.includes(value)) out[key] = value;
       continue;
     }
-    if (OPEN_SET_KEYS.has(key)) {
-      if (isValidOpenAttrValue(value)) out[key] = value;
+    if (key === ATTR_HOT_FRAMEWORK) {
+      out[key] = (KNOWN_FRAMEWORKS as readonly string[]).includes(value) ? value : OTHER_ATTR_VALUE;
+      continue;
+    }
+    if (key === ATTR_HOT_OUTCOME) {
+      out[key] = outcomeSetFor(metric).includes(value) ? value : OTHER_ATTR_VALUE;
       continue;
     }
     out[key] = value;
@@ -207,6 +220,12 @@ export function faroItemToRecord(item: ScrubbableFaroItem, options: ConvertOptio
   const merged = { ...(item.payload.context ?? {}), ...(item.payload.attributes ?? {}) };
   const { resourceAttributes, attributes } = hoistAttributes(merged);
   attributes[ATTR_HOT_KIND] = item.type;
+  // Only a measurement carries a metric outcome, and it becomes an AE point, never
+  // a stored record. A stored record's `hot.outcome` is always the `none`
+  // default, which keeps the browser tenant's label tuples under the box's Loki
+  // stream limit (contract §3).
+  if (item.type !== "measurement") delete resourceAttributes[ATTR_HOT_OUTCOME];
+  const metric = item.type === "measurement" ? item.payload.type : undefined;
 
   return {
     body: faroBody(item),
@@ -215,7 +234,10 @@ export function faroItemToRecord(item: ScrubbableFaroItem, options: ConvertOptio
     // `service.name`/`service.version`/`deployment.environment.name` must
     // never win over the route's own identity. `sanitizeResourceAttributes`
     // closes the matching hole for the remaining `hot.*` keys.
-    resourceAttributes: { ...sanitizeResourceAttributes(resourceAttributes), ...serviceResourceAttributes(options.service) },
+    resourceAttributes: {
+      ...sanitizeResourceAttributes(resourceAttributes, metric),
+      ...serviceResourceAttributes(options.service),
+    },
     attributes,
   };
 }

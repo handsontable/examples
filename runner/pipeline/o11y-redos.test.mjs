@@ -19,7 +19,7 @@ const { redactEmailInText, redactUserAgentInText, redactIpInText, scrubBodyText 
 );
 const { processFaroBody } = await import("../workers/o11y/src/normalise/faro.ts");
 const { redactPreviewHosts, normalizeMonitorMessage } = await import("../packages/runtime/dist/monitor.js");
-const { fingerprint } = await import("../packages/runtime/dist/telemetry/index.js");
+const { fingerprint, stripCodeFrame, deviceOf } = await import("../packages/runtime/dist/telemetry/index.js");
 const { default: worker } = await import("../workers/o11y/src/index.ts");
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
 const { makeEnv, ctx } = await import("./fixtures/o11y-harness.mjs");
@@ -121,6 +121,42 @@ test(`fingerprint (the real monitor.ts shape, via normalizeMonitorMessage + stri
   await assertUnderBudget("fingerprint", INDIVIDUAL_PATTERN_BUDGET_MS, () => fingerprint("demo-runtime", input));
 });
 
+// A run of spaces or tabs is the shape that stresses `stripCodeFrame`'s gutter
+// pattern: `a`-runs fail at the first character, so the test above never
+// reaches it. 250k is about one field's worth under `SCRUB_TEXT_MAX_CHARS`.
+for (const [name, ch] of [["spaces", " "], ["tabs", "\t"]]) {
+  const run = ch.repeat(250_000) + "x";
+
+  test(`stripCodeFrame: a line of 250k ${name} completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+    const out = await assertUnderBudget(`stripCodeFrame (${name})`, INDIVIDUAL_PATTERN_BUDGET_MS, () => stripCodeFrame(run));
+    assert.equal(out, "x");
+  });
+
+  test(`fingerprint: a message of 250k ${name} completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+    await assertUnderBudget(`fingerprint (${name})`, INDIVIDUAL_PATTERN_BUDGET_MS, () => fingerprint("demo-runtime", run));
+  });
+}
+
+test("stripCodeFrame: a real Babel code frame is still stripped", () => {
+  const message = [
+    "SyntaxError: /src/index.js: Unexpected token (12:10)",
+    "  10 | const a = 1;",
+    "  11 | const b = 2;",
+    "> 12 | const x = ;",
+    "     |           ^",
+    "  13 | export default x;",
+  ].join("\n");
+  assert.equal(stripCodeFrame(message), "SyntaxError: /src/index.js: Unexpected token (12:10)");
+});
+
+// `deviceOf` classifies the client-sent Faro `meta.browser.userAgent`.
+test(`deviceOf: 280k characters of repeated 'android' completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+  const ua = "android".repeat(40_000);
+  const device = await assertUnderBudget("deviceOf", INDIVIDUAL_PATTERN_BUDGET_MS, () => deviceOf(ua));
+  assert.equal(device, "desktop");
+  assert.equal(deviceOf("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36"), "mobile");
+});
+
 // ---- the combined server-side pass (text-scrub.ts's own extra scrub) -------
 
 // Sized at 150k to match redactEmailInText's own bump above: scrubBodyText's
@@ -150,6 +186,17 @@ test("processFaroBody: a Faro log item with an 80k-character adversarial message
   // Sanity: the item still gets processed (dropped only for being oversize
   // if it ever were, which 80k chars is not) — a budget test that silently
   // measured a thrown/short-circuited call would prove nothing.
+  assert.equal(item.invalid, undefined);
+});
+
+test(`processFaroBody: a Faro meta userAgent of 280k repeated 'android' completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+  const body = {
+    meta: { app: { name: "demos-authoring", version: "deadbeef1234" }, browser: { userAgent: "android".repeat(40_000) } },
+    logs: [{ message: "hello", timestamp: new Date().toISOString(), context: {} }],
+  };
+  const [item] = await assertUnderBudget("processFaroBody (userAgent)", INDIVIDUAL_PATTERN_BUDGET_MS, () =>
+    processFaroBody(body, ENV, SERVICE, Date.now()),
+  );
   assert.equal(item.invalid, undefined);
 });
 
@@ -192,6 +239,44 @@ test("POST /telemetry/collect: a gzip body carrying an adversarial 160k-characte
   await ctx.drain();
   assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
 });
+
+// About 1 KB gzipped; each untyped exception value is scrubbed twice and
+// fingerprinted once, so every pass over the whitespace run must be linear.
+// A tab is two bytes of JSON, so the tab body carries two shorter values to
+// stay under `COLLECT_MAX_BYTES`.
+for (const [name, ch, count, length] of [["spaces", " ", 3, 250_000], ["tabs", "\t", 2, 240_000]]) {
+  test(`POST /telemetry/collect: a gzip exceptions body of ${count} x ${length / 1000}k-${name} values completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
+    const { env } = makeEnv(InboxWriter);
+    const exception = {
+      value: ch.repeat(length) + "x",
+      stacktrace: { frames: [] },
+      timestamp: new Date().toISOString(),
+      context: {},
+    };
+    const wireBody = JSON.stringify({
+      meta: { app: { name: "demos-authoring", version: "deadbeef1234", environment: "production" } },
+      exceptions: Array.from({ length: count }, () => exception),
+    });
+    const gz = await gzip(wireBody);
+    assert.ok(gz.byteLength < 4096, `the attack body is tiny on the wire (${gz.byteLength} bytes gzipped)`);
+
+    const req = new Request("https://demos.handsontable.com/telemetry/collect", {
+      method: "POST",
+      headers: {
+        Origin: "https://demos.handsontable.com",
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+      },
+      body: gz,
+    });
+
+    const res = await assertUnderBudget(`worker.fetch /telemetry/collect (gzip ${name} exceptions)`, INDIVIDUAL_PATTERN_BUDGET_MS, () =>
+      worker.fetch(req, env, ctx),
+    );
+    await ctx.drain();
+    assert.equal(res.status, 204);
+  });
+}
 
 // ---- STACK_LINE_RE (symbolicate.ts), the same class -------------------------
 //

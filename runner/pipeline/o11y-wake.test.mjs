@@ -468,6 +468,119 @@ test("drainStep commits a zero-bytes-pushed key directly, never marking it provi
   assert.equal(inboxWriterStub.calls.rejectKey.length, 0);
 });
 
+async function recentObject(bodyText) {
+  const record = {
+    resource: { attributes: [] },
+    scopeLogs: [{ logRecords: [{ timeUnixNano: String(BigInt(Date.now()) * 1_000_000n), body: { stringValue: bodyText } }] }],
+  };
+  const stream = new Blob([JSON.stringify(record) + "\n"]).stream().pipeThrough(new CompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/** An inbox bucket whose `get` throws for `failingKeys`, like an R2 read past
+ *  the invocation's subrequest limit. */
+function throwingInbox(r2Objects, failingKeys) {
+  return {
+    async get(key) {
+      if (failingKeys.includes(key)) throw new Error("Too many subrequests.");
+      const bytes = r2Objects.get(key);
+      return bytes ? { async arrayBuffer() { return bytes.buffer; } } : null;
+    },
+  };
+}
+
+test("drainStep: an inbox read that throws on key 2 of 3 leaves only that key written; keys 1 and 3 go provisional and the drain continues", async () => {
+  const keys = [0, 1, 2].map((i) => `inbox/worker/2026-01-01/00/00000000000${i}.ndjson.gz`);
+  const r2Objects = new Map([
+    [keys[0], await recentObject("first")],
+    [keys[2], await recentObject("third")],
+  ]);
+  const { box, inboxWriterStub, ae, scheduled } = makeBox({
+    inboxWriter: { writtenKeys: keys },
+    env: { O11Y_INBOX: throwingInbox(r2Objects, [keys[1]]) },
+  });
+  await box.wake("backlog");
+  installContainerFetchRouter({ otlp: () => new Response(null, { status: 204 }) });
+  scheduled.length = 0;
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.deepEqual(inboxWriterStub.calls.markKeysProvisional.map((c) => c.keys), [[keys[0], keys[2]]]);
+  assert.equal(inboxWriterStub.calls.rejectKey.length, 0, "an unreadable object is not a rejection");
+  assert.deepEqual(scheduled.map((s) => s.callback), ["drainStep"], "the drain goes on with the next step");
+  assert.equal(outcomeOf(ae.points.find((p) => p.indexes?.[0] === "o11y.drain")), "error");
+});
+
+test("drainStep: a batch in which every inbox read throws ends the drain instead of repeating itself every step", async () => {
+  const keys = [0, 1].map((i) => `inbox/worker/2026-01-01/00/00000000000${i}.ndjson.gz`);
+  const { box, scheduled } = makeBox({
+    inboxWriter: { writtenKeys: keys },
+    env: { O11Y_INBOX: throwingInbox(new Map(), keys) },
+  });
+  await box.wake("backlog");
+  installContainerFetchRouter();
+  let stopped = false;
+  hooks.stop = async (self) => {
+    stopped = true;
+    self._state = { status: "stopped", lastChange: Date.now() };
+  };
+  scheduled.length = 0;
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 0);
+  assert.ok(stopped, "a quiet backlog wake stops once its drain has nothing it can make progress on");
+});
+
+test("drainStep: a stream-limited browser tenant is skipped for the rest of the wake, so every worker key commits and no browser key is rejected", async (t) => {
+  const browser = Array.from({ length: 12 }, (_, i) => `inbox/browser/2026-01-01/00/${String(i).padStart(12, "0")}.ndjson.gz`);
+  const worker = Array.from({ length: 3 }, (_, i) => `inbox/worker/2026-01-01/00/${String(i).padStart(12, "0")}.ndjson.gz`);
+  const r2Objects = new Map();
+  for (const k of [...browser, ...worker]) r2Objects.set(k, await recentObject(k));
+  const written = new Set([...browser, ...worker]);
+  const writer = makeInboxWriterStub();
+  writer.nextWrittenKeys = async (limit, exclude = []) =>
+    [...written].sort().filter((k) => !exclude.some((tenant) => k.startsWith(`inbox/${tenant}/`))).slice(0, limit);
+  const settle = writer.markKeysProvisional;
+  writer.markKeysProvisional = async (wakeId, keys) => {
+    for (const k of keys) written.delete(k);
+    return settle(wakeId, keys);
+  };
+  const browserReads = [];
+  const inbox = {
+    async get(key) {
+      if (key.startsWith("inbox/browser/")) browserReads.push(key);
+      const bytes = r2Objects.get(key);
+      return bytes ? { async arrayBuffer() { return bytes.buffer; } } : null;
+    },
+  };
+  const { box, inboxWriterStub, scheduled } = makeBox({ inboxWriterStub: writer, env: { O11Y_INBOX: inbox } });
+  await box.wake("backlog");
+  const limit = "Maximum active stream limit exceeded when trying to create stream {hot_outcome=\"x\"}";
+  installContainerFetchRouter({
+    otlp: (req) => (req.headers.get("X-Scope-OrgID") === "browser" ? new Response(limit, { status: 429 }) : new Response(null, { status: 204 })),
+  });
+  const warnings = [];
+  t.mock.method(console, "warn", (line) => warnings.push(JSON.parse(line)));
+  scheduled.length = 0;
+  const wake = await box.ctx.storage.get("wake");
+
+  for (let step = 0; step < 3; step++) await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.deepEqual(inboxWriterStub.calls.markKeysProvisional.flatMap((c) => c.keys), worker);
+  assert.equal(inboxWriterStub.calls.rejectKey.length, 0);
+  assert.equal(inboxWriterStub.calls.recordPartialReject.length, 0);
+  assert.ok(browser.every((k) => written.has(k)), "every browser key stays written");
+  assert.deepEqual(browserReads, [browser[0]], "only the key that met the limit was read");
+  assert.deepEqual(
+    warnings.filter((w) => w.event === "o11y.drain.stream_limit").map((w) => [w.tenant, w.message]),
+    [["browser", limit]],
+  );
+  assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 2, "steps 1 and 2 reschedule; step 3 finds nothing and ends");
+});
+
 // `drainStep` needs a try/finally around its body — a throw from
 // `InboxWriter.nextWrittenKeys` (or any other RPC, or `fetchObject`, or
 // symbolication) must not propagate out of `drainStep` and silently end
