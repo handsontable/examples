@@ -3,10 +3,9 @@
 // (COMMON.md interface 2) for the routes this task owns —
 // `POST /telemetry/collect`, `POST /telemetry/v1/logs`, `POST /telemetry/deploy`,
 // `POST /telemetry/hooks/sentry` — plus `/grafana/*` and
-// `POST /grafana/_o11y/reopen` (T03, registered below). Only
-// `GET /grafana/_o11y/admin/*` (ADR-0043, after launch) is still a `501`
-// stub, exactly like the T00 scaffold, until its owning task registers a
-// handler.
+// `POST /grafana/_o11y/reopen` (T03, registered below). An unregistered path
+// answers 404. `GET /grafana/_o11y/admin/*` (ADR-0043) has no dedicated
+// handler yet, so it falls through to the `/grafana/*` catch-all below.
 //
 // `POST /telemetry/lite` (T08, ADR §C.5) registers itself: `./lite.ts` calls
 // `registerRoute` at module load, the same COMMON.md interface 2 every other
@@ -46,26 +45,6 @@ import { handleCallback, handleLogin, handleLogout, handleLogoutPage, handleSess
 export { GrafanaBox } from "./box.js";
 export { InboxWriter } from "./inbox/writer.js";
 export { O11yHeartbeat } from "./heartbeat.js";
-
-interface RouteStub {
-  method: "GET" | "POST";
-  /** Exact path, or a prefix when it ends in `/*` — same convention
-   *  `router.ts` uses. */
-  path: string;
-}
-
-/** Every contract §1 route not yet backed by a real handler — still a 501
- *  stub, exactly like the T00 scaffold, until its owning task registers one
- *  through `router.ts`. */
-const UNIMPLEMENTED_ROUTES: readonly RouteStub[] = [
-  { method: "GET", path: "/grafana/_o11y/admin/*" },
-];
-
-function matchesStub(route: RouteStub, method: string, pathname: string): boolean {
-  if (route.method !== method) return false;
-  if (route.path.endsWith("/*")) return pathname.startsWith(route.path.slice(0, -1));
-  return pathname === route.path;
-}
 
 // ---- POST /telemetry/collect — Faro payloads from the authoring app ------------
 
@@ -377,19 +356,6 @@ async function handleScheduled(env: Env, ctx: ExecutionContext): Promise<void> {
   }
 }
 
-// Fix round (finding A-M5): `/_internal/heartbeat` used to be answered
-// directly inside this `fetch()` handler, before route matching — reachable
-// by ANY request that reaches this Worker's default export, relying only on
-// the zone's "Normalize incoming URLs" setting (and this Worker's `--routes`
-// scoping to `/telemetry/*`/`/grafana/*`) to keep it private from the public
-// internet. A crafted path that survives edge normalisation differently than
-// assumed could still reach this exact pathname. The heartbeat report is now
-// served ONLY through `O11yHeartbeat` (`heartbeat.ts`), a real
-// `WorkerEntrypoint` a caller must bind to by name (`entrypoint:
-// "O11yHeartbeat"` in the caller's `wrangler.jsonc`, the same pattern this
-// Worker's own `API`/`O11yUsage` binding already uses) — never reachable
-// through this default `fetch()`. This path now always 404s here, same as
-// any other unregistered route.
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -397,10 +363,6 @@ export default {
     const handler = findRoute(request.method, url.pathname);
     if (handler) return handler(request, env, ctx);
 
-    const stub = UNIMPLEMENTED_ROUTES.some((route) => matchesStub(route, request.method, url.pathname));
-    if (stub) {
-      return new Response("Not Implemented — route logic lands in a later o11y task.", { status: 501 });
-    }
     return new Response("Not Found", { status: 404 });
   },
 
