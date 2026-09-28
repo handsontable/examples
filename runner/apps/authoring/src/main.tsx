@@ -9,23 +9,14 @@ import { Sentry } from "./sentry.js";
 // its latency to every route, including ones that need no identity at all.
 import { seedAnonymousContext } from "./userScope.js";
 seedAnonymousContext();
-// Faro: after Sentry, before anything else runs, same reasoning as
-// `seedAnonymousContext` above — this module resolves its own gate
-// (`resolveReporting` + the local flag/host check, contract §10), so ordering
-// relative to Sentry's init does not matter for correctness, only convention.
+// Faro: after Sentry, before anything else runs — resolves its own gate
+// (`resolveReporting` + the local flag/host check, contract §10).
 import { initTelemetry, reportUncaughtError } from "./telemetry/index.js";
 import { safeInit } from "./bootGuard.js";
-// `initTelemetry()` must never run unguarded here — a
-// synchronous throw inside it (Faro's own client construction, a gate check,
-// anything) would otherwise propagate straight out of this module's top-level
-// evaluation and blank the whole app before `createRoot` ever runs, even
-// though Sentry (imported above) is already initialised and would have
-// reported it just fine on its own. Telemetry is a best-effort side channel
-// (`telemetry/index.js`'s own `noopTelemetry` already models "not
-// initialised" as a valid, harmless state), so a construction failure must
-// degrade to that state, not take the app down with it. `safeInit` (its own
-// doc comment) is where the guarding logic actually lives and is tested —
-// this call site is a thin, non-branching wrapper around it.
+// `initTelemetry()` must never run unguarded: a synchronous throw would
+// blank the whole app before `createRoot` runs. Telemetry is a
+// best-effort side channel, so a construction failure degrades to
+// `noopTelemetry` instead — see `safeInit`'s own doc comment.
 safeInit(initTelemetry, (err) => Sentry.captureException(err, { tags: { surface: "telemetry-init" } }));
 // DEMOS-1D (DEV-2859): attach the bounded editor trail to every event this
 // client sends, plus the tags derived from its most recent entry. Registered
@@ -61,17 +52,12 @@ import { ThemeProvider } from "@handsontable/demo-editor-shell";
 import { App } from "./App.js";
 
 /**
- * Test-only render-crash seam for `e2e/telemetry-faro.spec.ts` (acceptance
- * criteria: "a render crash inside the error boundary reaches both Sentry and
- * Faro"). Nothing else in the app can trigger a deterministic render crash
- * from outside — this is the least invasive seam that stays structurally
- * closed off a local telemetry build: it requires the exact query param, the
- * SAME build-time flag (`VITE_TELEMETRY_LOCAL === "1"`) that gates Faro's own
- * local path, and the same localhost/127.0.0.1 host check
- * (`telemetry/gate.ts`'s own rule, not re-implemented — deliberately inlined
- * here rather than imported, so this component has no path to a production
- * bundle through a shared import). A production build never sets the flag, so
- * the throw is unreachable there even if the query param were guessed.
+ * Test-only render-crash seam for `e2e/telemetry-faro.spec.ts` (acceptance:
+ * "a render crash inside the error boundary reaches both Sentry and
+ * Faro"). Structurally closed off a local telemetry build: requires the
+ * exact query param, the SAME build-time flag Faro's own local path uses,
+ * and the same host check. A production build never sets the flag, so
+ * the throw is unreachable even if the query param were guessed.
  */
 function CrashProbe(): null {
   if (
@@ -101,13 +87,10 @@ createRoot(document.getElementById("root")!).render(
           </p>
         </div>
       }
-      // ADR §E.2: a render crash is "uncaught" (ADR §E.1 — React caught it, but
-      // nothing here handled it), yet it never reaches `window.onerror` on its
-      // own (React swallows it into `componentDidCatch`), so Faro's own
-      // `ErrorsInstrumentation` would otherwise never see it. Sentry already
-      // captures it through the boundary itself; this is only the Faro half of
-      // the tee. `reportUncaughtError`, not `telemetry.error()` — that method is
-      // contractually handled-only (§6), and a render crash is the opposite.
+      // ADR §E.2: a render crash never reaches `window.onerror` on its own
+      // (React swallows it into `componentDidCatch`), so this is the Faro
+      // half of the tee — Sentry already captures it via the boundary.
+      // `reportUncaughtError`, not `telemetry.error()`, which is handled-only.
       onError={(error) => reportUncaughtError(error)}
     >
       <CrashProbe />

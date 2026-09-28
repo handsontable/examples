@@ -31,15 +31,11 @@ export default defineConfig({
     // Only emitted when there is somewhere to upload them. A build without upload
     // (local, PR CI) would otherwise leave ~12 MB of .map files in dist/ that would
     // need their own cleanup — and a manual `wrangler deploy` would publish them.
-    // "hidden" (T10): the map is still built and uploaded, but no
-    // `//# sourceMappingURL=` comment is written into the served JS — Workers
-    // Assets' SPA fallback (DEV-2569) answers any path it does not recognise,
-    // including a stray `.map` request, with `200 text/html`, so a browser that
-    // tried to follow a real sourceMappingURL would decode that HTML as JSON and
-    // fail. The maps never ship in `dist/` at all (T10's CI step uploads them to
-    // Sentry via this plugin and to R2, then deletes them before the Workers
-    // Assets deploy), so this only removes a dead pointer, but it is the same
-    // "hidden" setting Sentry's own docs recommend for exactly this shape.
+    // "hidden": the map is still built and uploaded, but no
+    // `//# sourceMappingURL=` comment is written — Workers Assets' SPA
+    // fallback (DEV-2569) answers a stray `.map` request with
+    // `200 text/html`, which would otherwise decode as JSON and fail. Maps
+    // never ship in `dist/` at all — this only removes a dead pointer.
     sourcemap: uploadEnabled ? "hidden" : false,
     // ⚠ Do not give the @babel/standalone chunk a hash-free name (reverted from #249,
     // DEV-2569). The intent was sound — Workers Assets serves this app with
@@ -71,11 +67,9 @@ export default defineConfig({
       authToken: process.env.SENTRY_AUTH_TOKEN,
       disable: !uploadEnabled,
       release: RELEASE ? { name: RELEASE } : undefined,
-      // T10: no `filesToDeleteAfterUpload` here — the maps must still be on disk
-      // after this plugin's own Sentry upload finishes, because the deploy
-      // workflow's own next step uploads the SAME files to R2
-      // (`sourcemaps/<sha>/<original asset path>.map`, ADR §C.3) before deleting
-      // them from `dist/` itself. Deleting inside the plugin would race that step.
+      // No `filesToDeleteAfterUpload`: the maps must stay on disk after this
+      // plugin's Sentry upload, because the deploy workflow's next step
+      // uploads the SAME files to R2 (ADR §C.3) before deleting them.
       sourcemaps: {},
     }),
   ],
@@ -116,24 +110,16 @@ export default defineConfig({
     // `--routes` flags in workers/api/package.json), so the bare prefix was
     // always wider here than on the deployment it stands in for. `/embed` has
     // the same shape but nothing is named as a sibling of it today.
-    // The three targets below default to a bare hardcoded ":8787" (the API
-    // worker's own wrangler default) but honour `API_DEV_PORT` (mirroring
-    // `O11Y_DEV_PORT` immediately below) so a walkthrough that needs both the
-    // API worker AND this proxy (to reach `/d`/`/embed` and exercise real,
-    // non-mocked `/api/*` traffic) can run each worker on its own dedicated
-    // port block (COMMON.md) without a collision, while nothing else changes
-    // behaviour.
+    // The three targets below default to ":8787" but honour `API_DEV_PORT`
+    // so a walkthrough needing both the API worker and this proxy can run
+    // each on its own port block (COMMON.md) without a collision.
     proxy: {
       "^/api(?:/|$)": { target: `http://localhost:${process.env.API_DEV_PORT ?? "8787"}` },
       "^/d(?:/|$)": { target: `http://localhost:${process.env.API_DEV_PORT ?? "8787"}` },
       "/embed": { target: `http://localhost:${process.env.API_DEV_PORT ?? "8787"}` },
-      // The o11y worker (`workers/o11y`), same-origin reasoning as `/api` above
-      // — Faro's transport posts to same-origin `/telemetry/collect` (contract
-      // §6). The real target is `pnpm o11y:dev`'s own
-      // `wrangler dev`, whose port is `scripts/o11y-dev.mjs`'s
-      // `O11Y_DEV_PORT` (default 4200) — read the same env
-      // var here so the two stay in sync instead of drifting. Regex, not a
-      // bare prefix, for the same `/api`-swallowing reason documented above.
+      // The o11y worker, same-origin reasoning as `/api` above (Faro posts
+      // to same-origin `/telemetry/collect`, contract §6). Reads
+      // `O11Y_DEV_PORT` (default 4200) so the two stay in sync.
       "^/telemetry(?:/|$)": { target: `http://localhost:${process.env.O11Y_DEV_PORT ?? "4200"}` },
     },
   },
