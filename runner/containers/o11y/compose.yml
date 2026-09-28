@@ -1,12 +1,12 @@
 # containers/o11y/compose.yml — local stand-in for the Grafana box (ADR-0041
 # §I, docs/observability-contract.md §10). No `container_name`, no fixed
-# network name: other tasks (T03, T11) run this same file under their own
-# `COMPOSE_PROJECT_NAME` and port block, and compose already namespaces
+# network name: multiple worktrees/tasks can run this same file under their
+# own `COMPOSE_PROJECT_NAME` and port block, and compose already namespaces
 # everything — containers, networks, AND the two named volumes below — by
 # project, so two projects never share data even though both reference the
 # same short volume keys (`minio-data`/`clickhouse-data`).
 #
-# dev-persist task: `minio-data`/`clickhouse-data` are NAMED volumes (below)
+# `minio-data`/`clickhouse-data` are NAMED volumes (below)
 # so a plain `docker compose ... down` (no `-v`) — what `dev.mjs`'s Ctrl-C
 # teardown runs — keeps them: MinIO holds every Loki chunk/index (the local
 # Analytics Engine's log side), ClickHouse holds `runner_events`. Without
@@ -32,8 +32,7 @@
 # also how `dev-lib.mjs`'s divergence check finds them without guessing the
 # resolved name).
 #
-# Run it with (T01's own port block is 4200-4299; every other task uses its
-# own dedicated block):
+# Run it with (each worktree/task uses its own dedicated port block):
 #   COMPOSE_PROJECT_NAME=o11y-t01 \
 #   O11Y_GRAFANA_PORT=4200 O11Y_LOKI_PORT=4201 O11Y_MINIO_PORT=4202 \
 #   O11Y_MINIO_CONSOLE_PORT=4203 O11Y_CLICKHOUSE_PORT=4204 O11Y_CLICKHOUSE_NATIVE_PORT=4205 \
@@ -51,8 +50,7 @@ services:
       # No default: an empty WAKE_ID makes the supervisor REFUSE to write a
       # marker (shutdown.sh). A convenience default like "local-dev" would
       # let a later SIGKILL under the same unset-WAKE_ID default find the
-      # PREVIOUS clean run's marker and read as clean — exactly the T11
-      # criterion-2 failure mode. Every caller (stop-roundtrip.mjs, a human
+      # PREVIOUS clean run's marker and read as clean. Every caller (stop-roundtrip.mjs, a human
       # `docker compose up`) must set O11Y_WAKE_ID explicitly.
       WAKE_ID: ${O11Y_WAKE_ID:-}
       STORAGE: s3
@@ -76,12 +74,11 @@ services:
       # shape than production's single `Authorization: Bearer` header
       # (GrafanaBox envVars, phase 2). See grafana/provisioning/datasources.
       #
-      # T01 fix round 1, P2: contract §2 says AE_SQL_TOKEN "reaches Grafana
-      # via env", but nothing in datasources.yaml ever read a bare
-      # `AE_SQL_TOKEN` variable — only `O11Y_CLICKHOUSE_HEADER2_VALUE` is
-      # wired into the datasource's secureJsonData. A standalone `AE_SQL_TOKEN`
-      # env var on the box was therefore dead: present, but unread. Dropped
-      # it; the token reaches Grafana by being the VALUE of
+      # Contract §2 says AE_SQL_TOKEN "reaches Grafana via env", but nothing
+      # in datasources.yaml reads a bare `AE_SQL_TOKEN` variable — only
+      # `O11Y_CLICKHOUSE_HEADER2_VALUE` is wired into the datasource's
+      # secureJsonData. There is no standalone `AE_SQL_TOKEN` env var on the
+      # box; the token reaches Grafana by being the VALUE of
       # O11Y_CLICKHOUSE_HEADER2_VALUE below (locally) and, in phase 2, by
       # GrafanaBox building that same env var as `Bearer <AE_SQL_TOKEN>` from
       # its own secret — never a second, redundant copy on the box.
@@ -100,7 +97,7 @@ services:
     # remaining steps (index check, marker PUT+HEAD, stopping Grafana) can
     # still run before Docker escalates to SIGKILL. These two numbers are
     # coupled by hand, not derived — raise O11Y_STOP_GRACE_SECONDS and this
-    # value together. M12 (fix round 1): the default 30s is what was
+    # value together. The default 30s is what was
     # measured (~2.3s) flushing a couple of short-lived local test streams;
     # `max_chunk_age: 2h` (loki-config.yaml) means a wake that has been
     # ingesting for a while can be flushing much larger in-memory chunks on
@@ -123,31 +120,27 @@ services:
       clickhouse:
         condition: service_started
 
-  # T1 (2026-09): upstream MinIO stopped distributing public community
-  # images — a FRESH pull of quay.io/minio/minio and docker.io/minio/minio
-  # (no cached layers) now returns 401 Unauthorized / "repository does not
-  # exist" respectively. Confirmed from a machine with no cache; a machine
-  # that pulled earlier still has working local images, which is why this
-  # broke silently and only bit fresh machines/CI runners first. Replaced
-  # with Bitnami's frozen "legacy" mirror of the SAME release line (its
-  # `minio --version` reports `DEVELOPMENT.2024-11-07T00-52-20Z`, matching
-  # upstream's RELEASE tag of the same date — verified by `docker run`
-  # before switching), pinned by DIGEST (not a mutable tag) so this can
-  # never silently drift again. Alternatives the controller offered
-  # (chrislusf/seaweedfs, dxflrs/garage, zenko/cloudserver) all pull, but
-  # none was verified against the C1 negative control below (a
-  # deny-`s3:PutObject` policy applied through MinIO's own admin API) —
-  # Bitnami ships the real MinIO `mc` binary with full `mc admin` support
-  # INSIDE this same container (`docker compose exec minio mc admin ...`),
-  # verified end to end (policy create/user add/policy attach, then a real
-  # denied PUT), which made it the smallest-diff, most-compatible choice.
+  # Upstream MinIO stopped distributing public community images (2026-09) —
+  # a FRESH pull of quay.io/minio/minio and docker.io/minio/minio (no cached
+  # layers) returns 401 Unauthorized / "repository does not exist"
+  # respectively; a machine that pulled earlier still has working local
+  # images, which is why this broke silently and only bit fresh
+  # machines/CI runners first. Replaced with Bitnami's frozen "legacy"
+  # mirror of the SAME release line (its `minio --version` reports
+  # `DEVELOPMENT.2024-11-07T00-52-20Z`, matching upstream's RELEASE tag of
+  # the same date), pinned by DIGEST (not a mutable tag) so this can never
+  # silently drift again. Bitnami ships the real MinIO `mc` binary with full
+  # `mc admin` support INSIDE this same container (`docker compose exec
+  # minio mc admin ...`), verified end to end against the C1 negative
+  # control below (policy create/user add/policy attach, then a real denied
+  # PUT against a deny-`s3:PutObject` policy).
   minio:
     image: bitnamilegacy/minio@sha256:81cd091fb9f14b2e9e9bfa6dbc2bf2d46fdd5eafa6c5e7c9213baf4256ff13d6 # 2024.11.7, verified linux/amd64+arm64 (`docker buildx imagetools inspect`)
     # A data service (unlike `box`, which the wake/stop protocol above manages
     # itself, so it never gets a restart policy here): if Docker OOM-kills
     # minio or clickhouse mid-run, every metric/log write after that point is
-    # silently dropped until someone notices and restarts it by hand (F36 —
-    # observed for real, ClickHouse OOM-killed under Docker Desktop's 8 GB
+    # silently dropped until someone notices and restarts it by hand
+    # (observed for real, ClickHouse OOM-killed under Docker Desktop's 8 GB
     # default while a real 10-container Tier-2 load test ran alongside it).
     # `docker compose ... down` (never `-v` — see this file's own header
     # comment) and `--fresh`'s `down -v` both stop containers explicitly
@@ -179,8 +172,8 @@ services:
       # MinIO instance to create the default buckets, then stops and
       # restarts it for real (see the MINIO_DEFAULT_BUCKETS comment above) —
       # a bare `/minio/health/live` check could in principle latch
-      # "healthy" against that throwaway instance. Measured empirically
-      # (T1 report): with both conditions the check only ever goes healthy
+      # "healthy" against that throwaway instance. Measured empirically:
+      # with both conditions the check only ever goes healthy
       # once, after the bucket dir exists and the final server answers.
       test: ["CMD-SHELL", "test -d /bitnami/minio/data/loki && curl -f http://localhost:9000/minio/health/live"]
       interval: 2s
@@ -193,7 +186,7 @@ services:
   # through the same allowlisting helper the o11y worker uses in production.
   clickhouse:
     image: clickhouse/clickhouse-server:24.10-alpine
-    # Data service — see minio's own comment above (F36: this is the exact
+    # Data service — see minio's own comment above (this is the exact
     # container that was observed OOM-killed under Docker Desktop's default
     # memory limit, silently dropping every metric written after that until
     # restarted by hand).
