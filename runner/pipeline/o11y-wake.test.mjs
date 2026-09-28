@@ -534,6 +534,28 @@ test("drainStep: a batch in which every inbox read throws ends the drain instead
   assert.ok(stopped, "a quiet backlog wake stops once its drain has nothing it can make progress on");
 });
 
+test("drainStep: once a key hits Loki's stream limit in a wake, later keys of that tenant are deferred on every later step of the same wake, not rejected", async () => {
+  const poison = "inbox/browser/2026-01-01/00/000000000000.ndjson.gz";
+  const later = "inbox/browser/2026-01-01/00/000000000001.ndjson.gz";
+  const r2Objects = new Map([
+    [poison, await recentObject("poison")],
+    [later, await recentObject("later")],
+  ]);
+  const writer = makeInboxWriterStub({ writtenKeys: [poison, later] });
+  const { box, inboxWriterStub } = makeBox({ inboxWriterStub: writer, r2Objects });
+  await box.wake("backlog");
+  const limit = "Maximum active stream limit exceeded when trying to create stream {hot_outcome=\"x\"}";
+  installContainerFetchRouter({ otlp: () => new Response(limit, { status: 429 }) });
+  const wake = await box.ctx.storage.get("wake");
+
+  await box.drainStep({ wakeId: wake.wakeId });
+  writer.nextWrittenKeys = async () => [later];
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.deepEqual(inboxWriterStub.calls.rejectKey.map((r) => r.key), [poison], "only the key that filled the table is rejected");
+  assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 0);
+});
+
 // `drainStep` needs a try/finally around its body — a throw from
 // `InboxWriter.nextWrittenKeys` (or any other RPC, or `fetchObject`, or
 // symbolication) must not propagate out of `drainStep` and silently end

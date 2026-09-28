@@ -566,9 +566,12 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
 - **Drain refusals.** A `429` whose body names Loki's stream limit (`Maximum active
   stream limit exceeded`) is a permanent refusal of that chunk, exactly like a 400, and
   is never retried: the box's single ingester starts empty every wake, so it recurs on
-  every wake. Any other `429`, and a `5xx`, stays transient and stops the batch. An
-  inbox read that throws leaves only that key `written`; the rest of the batch still
-  pushes and commits, and a batch in which every read threw ends the wake's drain.
+  every wake. The ingester keeps its streams until it stops, so after that key a
+  later key of the same tenant that 429s the same way is only deferred (stays
+  `written`) for the rest of the wake (`streamLimitedTenants` in the box's storage).
+  Any other `429`, and a `5xx`, stays transient and stops the batch. An inbox read
+  that throws leaves only that key `written`; the rest of the batch still pushes and
+  commits, and a batch of only deferred keys ends the wake's drain.
 - **Symbolication read caps.** One inbox object reads at most 32 distinct maps
   (`MAX_MAP_KEYS_PER_CALL`, first-seen order) and looks up at most 128 frames per body
   (`MAX_FRAMES_PER_BODY`), so a drain step of 10 objects stays at a few hundred of the

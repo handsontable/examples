@@ -8,7 +8,7 @@
 import { Container } from "@cloudflare/containers";
 import { o11ySelfIdentity } from "./normalise/respond.js";
 import { writePointFromDo } from "./normalise/points.js";
-import { toAePoint, type HotAttrs } from "@handsontable/demo-runtime/telemetry";
+import { toAePoint, type HotAttrs, type Tenant } from "@handsontable/demo-runtime/telemetry";
 import { drainBatch, type DrainDeps } from "./drain/drain.js";
 import { symbolicateResourceLogs } from "./drain/symbolicate.js";
 import type { Env } from "./env.js";
@@ -33,6 +33,9 @@ const LAST_GRAFANA_STORAGE_KEY = "lastGrafanaAt";
 /** Guards `onStart`'s double-invocation (see its own doc comment) from
  *  scheduling `drainStep` twice for the same wake. */
 const DRAIN_SCHEDULED_FOR_STORAGE_KEY = "drainScheduledFor";
+/** `{ wakeId, tenants }`: tenants that hit Loki's stream limit in this wake,
+ *  kept across drain steps because the ingester keeps its streams until it stops. */
+const STREAM_LIMITED_STORAGE_KEY = "streamLimitedTenants";
 /** The wakeId whose wake-to-ready time was already reported to InboxWriter,
  *  so only a wake's first successful `isReady()` reports it. */
 const READY_RECORDED_FOR_STORAGE_KEY = "readyRecordedFor";
@@ -679,7 +682,13 @@ export class GrafanaBox extends Container<Env> {
       symbolicate: (records) => symbolicateResourceLogs(records, { getMap: (key) => this.#getMap(key) }),
     };
 
-    const result = await drainBatch(keys, new Set(), deps);
+    const limitedRecord = await this.ctx.storage.get<{ wakeId: string; tenants: Tenant[] }>(STREAM_LIMITED_STORAGE_KEY);
+    const streamLimited = new Set<Tenant>(limitedRecord?.wakeId === payload.wakeId ? limitedRecord.tenants : []);
+    const limitedBefore = streamLimited.size;
+    const result = await drainBatch(keys, new Set(), deps, streamLimited);
+    if (streamLimited.size !== limitedBefore) {
+      await this.ctx.storage.put(STREAM_LIMITED_STORAGE_KEY, { wakeId: payload.wakeId, tenants: [...streamLimited] });
+    }
 
     // A `provisional` key that pushed ZERO bytes (every record already
     // deduped/too-old — `drain.ts#drainKey`'s zero-chunk case) commits
@@ -704,7 +713,7 @@ export class GrafanaBox extends Container<Env> {
     // be counted, never silent) — `value` is otherwise unused by
     // `o11y.drain`.
     const droppedOld = result.outcomes.reduce((sum, o) => sum + o.droppedOld, 0);
-    // Unreadable inbox objects stay `written`; the rest of the batch still commits.
+    // Deferred keys stay `written`; the rest of the batch still commits.
     const deferred = result.outcomes.filter((o) => o.outcome === "deferred");
     for (const d of deferred) {
       console.error(JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, key: d.key, message: d.reason }));

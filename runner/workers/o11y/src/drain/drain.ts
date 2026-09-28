@@ -96,8 +96,9 @@ export interface DrainDeps {
 export interface KeyOutcome {
   key: string;
   tenant: Tenant;
-  /** `deferred`: the inbox object could not be read; the key stays
-   *  `written` for a later step and, unlike `error`, the batch continues. */
+  /** `deferred`: the inbox object could not be read, or its tenant's stream
+   *  table was already full this wake; the key stays `written` and, unlike
+   *  `error`, the batch continues. */
   outcome: "provisional" | "rejected" | "error" | "deferred";
   /** Set on `rejected` (why), and also on `provisional` when one chunk
    *  2xx'd but another was permanently refused (400, stream limit) — the
@@ -124,9 +125,13 @@ export interface DrainBatchResult {
  *  retry can answer 204 with the excess streams dropped. Never transient. */
 const STREAM_LIMIT_RE = /stream limit/i;
 
+function isStreamLimit(result: LokiPushResult): boolean {
+  return result.status === 429 && STREAM_LIMIT_RE.test(result.message ?? "");
+}
+
 /** A push Loki refuses for good: never retried, recorded as a rejected chunk. */
 function isPermanentRefusal(result: LokiPushResult): boolean {
-  return result.status === 400 || (result.status === 429 && STREAM_LIMIT_RE.test(result.message ?? ""));
+  return result.status === 400 || isStreamLimit(result);
 }
 
 const MAX_RETRIES = 3;
@@ -201,10 +206,16 @@ async function pushChunkWithRetry(
  *  including the zero-chunk case (nothing left to push is not a failure).
  *  `box.ts#drainStep` commits a zero-`bytesPushed` `provisional` outcome
  *  directly — see {@link KeyOutcome.droppedOld}. */
-export async function drainKey(key: string, seenHashes: Set<string>, deps: DrainDeps): Promise<KeyOutcome> {
+export async function drainKey(
+  key: string,
+  seenHashes: Set<string>,
+  deps: DrainDeps,
+  streamLimited: Set<Tenant> = new Set(),
+): Promise<KeyOutcome> {
   const parsed = parseInboxKey(key);
   if (!parsed) return { key, tenant: "worker", outcome: "rejected", reason: "unparseable_key", bytesPushed: 0, droppedOld: 0 };
   const { tenant } = parsed;
+  const tenantWasLimited = streamLimited.has(tenant);
 
   let raw: Uint8Array | null;
   try {
@@ -268,6 +279,14 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
   for (const chunk of chunkBySize(fresh)) {
     const { result, bytesPushed: chunkBytes } = await pushChunkWithRetry(tenant, chunk, deps);
     bytesPushed += chunkBytes;
+    if (isStreamLimit(result)) {
+      // Only the key that first fills the tenant's stream table this wake is
+      // refused; a later key that needs a new stream waits for a fresh ingester.
+      if (tenantWasLimited) {
+        return { key, tenant, outcome: "deferred", reason: result.message ?? "stream_limit", bytesPushed, droppedOld };
+      }
+      streamLimited.add(tenant);
+    }
     if (isPermanentRefusal(result)) {
       rejectedReason ??= result.message ?? `loki_${result.status}`;
       continue; // keep pushing the REST of this key's chunks — don't lose them
@@ -295,11 +314,17 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
 /** Drains `keys` in order, stopping immediately on the first `error`
  *  outcome (leaves it and everything after it `written`, per
  *  {@link DrainBatchResult.stoppedEarly}'s own doc comment). A `deferred`
- *  key does not stop the batch. */
-export async function drainBatch(keys: readonly string[], seenHashes: Set<string>, deps: DrainDeps): Promise<DrainBatchResult> {
+ *  key does not stop the batch. `streamLimited` holds the tenants that hit
+ *  Loki's stream limit earlier in this wake, and gains any that hit it now. */
+export async function drainBatch(
+  keys: readonly string[],
+  seenHashes: Set<string>,
+  deps: DrainDeps,
+  streamLimited: Set<Tenant> = new Set(),
+): Promise<DrainBatchResult> {
   const outcomes: KeyOutcome[] = [];
   for (const key of keys) {
-    const outcome = await drainKey(key, seenHashes, deps);
+    const outcome = await drainKey(key, seenHashes, deps, streamLimited);
     outcomes.push(outcome);
     if (outcome.outcome === "error") return { outcomes, stoppedEarly: true };
   }

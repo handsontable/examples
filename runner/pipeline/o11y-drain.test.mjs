@@ -585,6 +585,47 @@ test("a stream-limit 429 on one chunk is a partial reject, never a clean provisi
   assert.equal(outcome.reason, STREAM_LIMIT_MESSAGE, "the refused chunk must reach recordPartialReject");
 });
 
+/** A Loki-shaped push target with one stream table per tenant: a record's
+ *  body names its stream, streams under `limit` are created, and a push
+ *  needing one more answers the real stream-limit 429. */
+function streamTableLoki(limit) {
+  const tables = { browser: new Set(), worker: new Set() };
+  return async (tenant, gz) => {
+    let refused = false;
+    for (const r of JSON.parse(await pushedText(gz)).resourceLogs) {
+      const stream = r.scopeLogs[0].logRecords[0].body.stringValue;
+      if (tables[tenant].has(stream)) continue;
+      if (tables[tenant].size >= limit) refused = true;
+      else tables[tenant].add(stream);
+    }
+    return refused ? { status: 429, message: STREAM_LIMIT_MESSAGE } : { status: 204 };
+  };
+}
+
+test("after one key fills a tenant's stream table, a later key needing a new stream is deferred, not rejected; other tenants and existing streams still drain", async () => {
+  const poison = "inbox/browser/2026-01-01/00/000000000000.ndjson.gz";
+  const newStream = "inbox/browser/2026-01-01/00/000000000001.ndjson.gz";
+  const oldStream = "inbox/browser/2026-01-01/00/000000000002.ndjson.gz";
+  const worker = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const objects = {
+    [poison]: await objectBytes(["s1", "s2", "s3", "s4", "s5"].map((b) => record(b))),
+    [newStream]: await objectBytes([record("n1")]),
+    [oldStream]: await objectBytes([record("s1")]),
+    [worker]: await objectBytes([record("w1")]),
+  };
+  const streamLimited = new Set();
+  const deps = { fetchObject: async (k) => objects[k] ?? null, pushToLoki: streamTableLoki(3), symbolicate: noopSymbolicate };
+
+  const result = await drainBatch([poison, newStream, oldStream, worker], new Set(), deps, streamLimited);
+
+  assert.equal(result.stoppedEarly, false);
+  assert.deepEqual(
+    result.outcomes.map((o) => o.outcome),
+    ["rejected", "deferred", "provisional", "provisional"],
+  );
+  assert.deepEqual([...streamLimited], ["browser"]);
+});
+
 for (const message of ["Ingestion rate limit exceeded for user browser (limit: 4194304 bytes/sec)", "Per stream rate limit exceeded (limit: 3MB/sec) while attempting to ingest for stream '{service_name=\"demos-api\"}'", undefined]) {
   test(`a rate-limit 429 stays transient: retried, then error and stop (${message ? message.slice(0, 24) : "no body"})`, async () => {
     const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";

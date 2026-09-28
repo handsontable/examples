@@ -117,8 +117,9 @@ export type SymbolicateSkipReason =
  *  authoring build ships 7 JS chunks (`vite build`), so 32 covers four builds'
  *  chunks in one object, while a body of forged frame URLs costs 32 GETs. */
 export const MAX_MAP_KEYS_PER_CALL = 32;
-/** Frames looked up per body: the deepest browser stack is SpiderMonkey's
- *  128 frames (V8 reports 10, JavaScriptCore 100). */
+/** Frames looked up per body: V8's default `Error.stackTraceLimit` is 10 and
+ *  nothing in the runner raises it, so 128 leaves room for engines that
+ *  report deeper stacks. */
 export const MAX_FRAMES_PER_BODY = 128;
 
 export interface SymbolicateSkip {
