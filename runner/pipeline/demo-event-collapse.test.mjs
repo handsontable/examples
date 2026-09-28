@@ -219,3 +219,90 @@ test("demoEventReport names the Faro record by kind, and gives a console warning
   assert.equal(demoEventReport({ ...base, kind: "network" }).recordName, "DemoNetworkError");
   assert.equal(demoEventReport({ ...base, kind: "stderr" }).recordName, "DemoStderr");
 });
+
+// ---- R9C (F10 compile half): a compile failure replaces the burst's run ------
+//
+// The key `sentry.ts#collapseCompileError` uses: by kind, not by message.
+const COMPILE_KEY = "compile:sandpack.compile_error";
+
+function compileHarness() {
+  const h = harness();
+  /** A compile failure of the newest edit, the way `collapseCompileError` reports it. */
+  const compileError = (diagnostic) => h.collapse.report(COMPILE_KEY, `compile: ${diagnostic}`, { replacesRun: true });
+  return { ...h, compileError };
+}
+
+test("R9C: a typed syntax-error ladder is one compile error and no runtime error, stale relays included", () => {
+  const { clock, emitted, collapse, relay, compileError } = compileHarness();
+  // `const R9C = ;` typed key by key. `c`..`cons` parse and run (and throw);
+  // from `const` on, every prefix fails the pre-transpile.
+  for (const prefix of ["c", "co", "con", "cons"]) {
+    collapse.noteEdit();
+    relay(`${prefix} is not defined`);
+  }
+  collapse.noteEdit(); // `const`
+  // The `cons` run's relay was still in flight at this keystroke (compile
+  // slower than the typist) — the known F26 imprecision.
+  relay("cons is not defined");
+  compileError("Unexpected token (1:5)");
+  for (const diagnostic of ["Unexpected token (1:6)", "Missing initializer in const declaration", "Unexpected token (1:12)"]) {
+    collapse.noteEdit();
+    compileError(diagnostic);
+    // A re-render warning / late rung that lands after the compile failure.
+    relay('Theme "main" is already registered.');
+  }
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, ["compile: Unexpected token (1:12)"], "the final state's compile error, alone");
+});
+
+test("R9C: a compile error replaces an earlier one of the same burst, so the final state's diagnostic is the one counted", () => {
+  const { clock, emitted, collapse, compileError } = compileHarness();
+  collapse.noteEdit();
+  compileError("stale diagnostic from the previous push");
+  compileError("the newest push's diagnostic");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, ["compile: the newest push's diagnostic"]);
+});
+
+test("R9C: a burst that ends compiling cleanly counts its run's runtime error, not the earlier compile error", () => {
+  const { clock, emitted, collapse, relay, compileError } = compileHarness();
+  collapse.noteEdit();
+  compileError("Unexpected token");
+  collapse.noteEdit(); // the line is finished and parses; it throws when it runs
+  relay(FINAL);
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, [FINAL]);
+});
+
+test("R9C: a runtime SyntaxError (JSON.parse) stays a runtime error — only the compile signal replaces a run", () => {
+  const { clock, emitted, collapse, relay } = compileHarness();
+  const jsonParse = "SyntaxError: Unexpected token } in JSON at position 1";
+  collapse.noteEdit();
+  relay(jsonParse);
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, [jsonParse]);
+  // And outside a burst (a click that parses bad JSON), at once.
+  relay("SyntaxError: Unexpected end of JSON input");
+  assert.deepEqual(emitted, [jsonParse, "SyntaxError: Unexpected end of JSON input"]);
+});
+
+test("R9C: a first-load compile failure counts at once, and only once until the next edit", () => {
+  const { emitted, collapse, compileError } = compileHarness();
+  compileError("Unexpected token");
+  assert.deepEqual(emitted, ["compile: Unexpected token"], "no burst open: not held back");
+  compileError("Unexpected token"); // a refresh of the same broken demo
+  assert.equal(emitted.length, 1);
+  collapse.reset(); // the next preview mount
+  compileError("Unexpected token");
+  assert.equal(emitted.length, 2, "a new mount counts its own first-load failure");
+});
+
+test("R9C: the next edit re-arms runtime reports after a compile failure", () => {
+  const { clock, emitted, collapse, relay, compileError } = compileHarness();
+  collapse.noteEdit();
+  compileError("Unexpected token");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  // Burst closed: a click in the stale preview that throws still counts.
+  relay("stale preview click");
+  assert.deepEqual(emitted, ["compile: Unexpected token", "stale preview click"]);
+});

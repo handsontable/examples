@@ -731,6 +731,50 @@ test.describe("Faro in the authoring app (T06)", () => {
     expect(points(), "an error right after a keystroke waits for the burst to settle").toHaveLength(0);
     await expect.poll(() => points().length, { timeout: 10_000 }).toBe(1);
   });
+
+  // R9C (F10 compile half): a syntax error typed into a Tier-1 parcel example
+  // never reaches the bundler — the client-side pre-transpile rejects it — and
+  // its catch used to drop it, so `sandpack.compile_error` never fired for the
+  // most common compile error there is. Real keystrokes in the real editor, the
+  // real runtime and babel, the real collapse: no hook involved. The bundler
+  // itself is not needed (nothing reaches it); whether it runs only decides
+  // whether the identifier prefixes (`c`..`cons`) relay ReferenceErrors, which
+  // the compile failure must then keep out of `preview.runtime_error`.
+  test("R9C: a syntax error typed key by key reaches /telemetry/collect as one sandpack.compile_error, not a runtime error", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+    await expect(activeEditor(page)).toBeVisible();
+    // Let the first load's own reports (if the bundler runs) land before the edit.
+    await page.waitForTimeout(3000);
+    const measurementsSince = (mark: number) => captured.slice(mark).flatMap((b) => b.measurements ?? []);
+    const mark = captured.length;
+
+    await activeEditor(page).click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("const R9C = ;", { delay: 40 });
+
+    await expect
+      .poll(() => measurementsSince(mark).filter((m) => m.type === "sandpack.compile_error").length, { timeout: 15_000 })
+      .toBe(1);
+    const [point] = measurementsSince(mark).filter((m) => m.type === "sandpack.compile_error");
+    const ctx = point!.context as Record<string, string>;
+    expect(ctx["hot.fingerprint"]).toMatch(/^sandpack\.compile_error:[0-9a-f]{16}$/);
+    expect(ctx["hot.ht_major"]).toMatch(/^\d+$/);
+    expect(ctx["hot.framework"]).toBeTruthy();
+    // The burst has closed (the point above is only emitted then): nothing else
+    // trickles in, and no rung it was typed through counted as a runtime error.
+    await page.waitForTimeout(2500);
+    const after = measurementsSince(mark);
+    expect(after.filter((m) => m.type === "sandpack.compile_error")).toHaveLength(1);
+    expect(
+      after.filter((m) => m.type === "preview.runtime_error"),
+      "no runtime error (of any reason) from the rungs of a line that ends in a syntax error",
+    ).toHaveLength(0);
+    // No authored text on the wire (contract §3): the point carries a hash only.
+    expect(JSON.stringify(captured.slice(mark))).not.toContain("R9C");
+  });
 });
 
 // ---- Sentry scope switch = uncaught (fix round I1/I3) -----------------------

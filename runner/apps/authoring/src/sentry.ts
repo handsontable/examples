@@ -332,28 +332,60 @@ function emitCollapsedDemoEvent(event: CollapsedDemoEvent): void {
  * the last run before the editor went quiet. Page-load scoped like the two
  * budgets above. Sentry is not behind it: the relay budgets and captures
  * below are unchanged.
+ *
+ * R9C: Tier-1 compile errors (`sandpack.compile_error`) share the same
+ * instance, because the two interact — a burst whose newest edit does not
+ * compile has no run of its own, so what the preview relays during it is
+ * from code already typed past (`replacesRun`, see `collapseCompileError`).
+ * An item is therefore the emission itself, a thunk, not a payload.
  */
-const demoEventCollapse = createDemoEventCollapse<CollapsedDemoEvent>({
-  emit: emitCollapsedDemoEvent,
+const demoEventCollapse = createDemoEventCollapse<() => void>({
+  emit: (emitItem) => emitItem(),
   setTimer: (fn, ms) => setTimeout(fn, ms),
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 });
 
+/** R9C: the collapse key of every compile error — by kind, not by message. A
+ *  burst ends in one final state, so it holds at most one compile error; the
+ *  prefix `compile:` cannot collide with a §7 fingerprint (`context:hash`,
+ *  whose context never starts with `compile`). */
+const COMPILE_ERROR_KEY = "compile:sandpack.compile_error";
+
+/**
+ * R9C (F10 compile half): route one Tier-1 compile error — the parcel
+ * pre-transpile's babel failure or a bundler diagnostic — through the
+ * edit-burst collapse. `emit` records the `sandpack.compile_error` point
+ * (`telemetry/metrics.ts#wireRuntimeMetrics` builds it). During a burst it is
+ * held until the editor settles, replaces an earlier compile error of the same
+ * burst, and drops what the preview relayed from code already typed past, so a
+ * typed syntax error is one compile error and no `preview.runtime_error`.
+ * Outside a burst (a demo that fails to parse at mount, a refresh) it counts at
+ * once. Not behind `previewMonitoring`: this is a §5 metric, wired for every
+ * preview like `sandpack.compile_ms`, not demo monitoring.
+ */
+export function collapseCompileError(emit: () => void): void {
+  demoEventCollapse.report(COMPILE_ERROR_KEY, emit, { replacesRun: true });
+}
+
 /** F26: an edit that re-runs the preview — see `DemoEventCollapse.noteEdit`.
- *  Called by `App.tsx` on every non-quiet workspace write. */
+ *  Called by `App.tsx` on every non-quiet workspace write.
+ *
+ *  R9C: not behind `previewMonitoring` any more. The burst also collapses
+ *  `sandpack.compile_error` (`collapseCompileError`), which is emitted with the
+ *  monitoring flag off too. With monitoring off nothing else ever enters the
+ *  collapse (`reportDemoEvent` keeps its own gate), so this only arms a timer. */
 export function noteDemoEdit(): void {
-  if (!previewMonitoring) return;
   demoEventCollapse.noteEdit();
 }
 
 /** F26: a preview is being torn down (example/version switch, remount) —
- *  count its last run, then let the next preview's first load count afresh. */
+ *  count its last run, then let the next preview's first load count afresh.
+ *  Ungated for the same reason as `noteDemoEdit` (R9C). */
 export function resetDemoEventCollapse(): void {
-  if (!previewMonitoring) return;
   demoEventCollapse.reset();
 }
 
-if (previewMonitoring && typeof window !== "undefined") {
+if (typeof window !== "undefined") {
   // A burst still open when the tab goes away: its last run is real.
   window.addEventListener("pagehide", () => demoEventCollapse.flush());
 }
@@ -447,13 +479,14 @@ function reportDemoEventUnguarded(
   // every later real error of the page load from the metric. The collapse
   // has its own ceiling for a demo that floods with crafted payloads.
   const fp = contractFingerprint(report.fingerprintContext, report.fingerprintMessage);
-  demoEventCollapse.report(fp, {
+  const collapsed: CollapsedDemoEvent = {
     attrs: report.attrs,
     reason: report.reason,
     fingerprint: fp,
     recordName: report.recordName,
     shape: fingerprintShape(report.fingerprintMessage),
-  });
+  };
+  demoEventCollapse.report(fp, () => emitCollapsedDemoEvent(collapsed));
 
   // A warning is context, not a fault (DEV-2539). Handsontable's own "Theme is already
   // registered" notice is emitted by normal re-renders, and every warning used to open

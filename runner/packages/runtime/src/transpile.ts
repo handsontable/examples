@@ -115,6 +115,29 @@ export function isCompilerUnavailable(e: unknown): boolean {
 }
 
 /**
+ * The visitor's own source failed to parse (R9C, F10 compile half): babel threw inside
+ * `transpileFilesForParcel`. This is the parcel Tier-1 compile error — the bundler never
+ * sees these sources, so it is the only place the failure exists as an error object.
+ *
+ * A plain `Error` marked after construction, not a subclass or a factory, and deliberately
+ * so. The same error reaches Sentry as the `cause` of the constant-titled
+ * `Tier1CompileError` on the mount path (`tier1Report`), and the linked-errors integration
+ * serialises its `name`, message and stack: a subclass would rename it or add a
+ * constructor frame, a factory would add its own frame, and this classification must not
+ * move a byte of what Sentry receives. The marker (not `instanceof`) also matches
+ * `CompilerUnavailableError`'s cross-bundle reasoning above.
+ */
+function markTranspileFailure(error: Error): void {
+  (error as { transpileFailed?: boolean }).transpileFailed = true;
+}
+
+/** Whether an error is `transpileFilesForParcel`'s own parse failure (see `markTranspileFailure`)
+ *  — never the compiler chunk failing to load, which is `isCompilerUnavailable`. */
+export function isTranspileFailure(e: unknown): boolean {
+  return e instanceof Error && (e as { transpileFailed?: boolean }).transpileFailed === true;
+}
+
+/**
  * Retry a failed chunk load once — against a *different URL* — then stop asking
  * (DEV-2569).
  *
@@ -376,7 +399,10 @@ export async function transpileFilesForParcel(files: FilesMap): Promise<FilesMap
         configFile: false,
       }).code ?? "";
     } catch (e) {
-      throw new Error(`Failed to transpile ${path} for the parcel sandbox: ${(e as Error).message}`);
+      // Constructed right here, as before, so its stack is unchanged (see `markTranspileFailure`).
+      const failure = new Error(`Failed to transpile ${path} for the parcel sandbox: ${(e as Error).message}`);
+      markTranspileFailure(failure);
+      throw failure;
     }
     if (compiled.includes(JSX_PRAGMA)) compiled = JSX_IMPORT + compiled;
     const jsPath = path.replace(SOURCE_RE, ".js");
