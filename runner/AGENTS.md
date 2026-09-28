@@ -179,6 +179,29 @@ The two deploy workflows authenticate with a repository secret (`CLOUDFLARE_API_
 no credential is committed. CI reads the pnpm version from `runner/package.json` so it
 does not pick up the repo-root manifest.
 
+## Code comments
+
+Comments state what the code cannot say for itself, once. Review and fix history belongs in the commit
+message and the PR, not in the source. This applies to people and agents alike, and reviewers treat a
+violation as a finding.
+
+- **No review ids.** No finding, round, task or review ids (`F32`, `A-C1`, `R9`, `T06`, "fix round",
+  "per the reviewer") in comments or test titles. Keep contract and ADR pointers (`contract §5`,
+  `ADR-0041 §L.9`) and ClickUp ids (`DEV-NNNN`) of work that is still open.
+- **Present tense.** Describe the code as it is: no "used to", "before this fix", "the old …",
+  "was changed", "fails without the fix", and no revert-check evidence.
+- **No tombstones.** When you delete code, delete the comments that talk about it.
+- **One sentence of why.** Say why a guard, constant or ordering exists, with the measurement when it
+  sets a limit, and stop. Leave out the alternatives you considered, the failure story, a restatement
+  of what the code plainly does, and rationale that is already written down elsewhere (point to it).
+- **Length caps.** A file header is at most 6 lines, a constant or field doc at most 3, a function doc
+  at most 8. Only an ordering or concurrency proof may run longer, by up to about 6 lines.
+- **Density.** In `apps/authoring` and `scripts`, stay near the existing code's density, about 0.4
+  comment lines per code line.
+- **Tests.** A test title states the behaviour, with no id. A block comment is worth it only for a
+  non-obvious setup or oracle, under the same caps.
+- **Docs** (contract, ADRs, runbook) record rules and decisions, not the story of how an issue was found.
+
 ## Conventions / guardrails
 
 - **No secrets in git.** Auth is the Handsontable Google login broker (per-user token, sessionStorage). Dev bypasses live only in gitignored `.env.local` / `.dev.vars`.
