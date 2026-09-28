@@ -22,9 +22,7 @@ export const PUBLIC_ORIGIN = `https://${PRODUCTION_HOST}`;
  * The origin `grafana/login.ts#handleLogin` builds `return_to` against, and
  * the `aud` every token is signed for. Locally it must resolve to the real
  * `wrangler dev` origin (`box.ts`'s `O11Y_LOCAL_PUBLIC_ORIGIN` pattern), or
- * the broker callback lands on a host this route doesn't run on.
- * `O11Y_LOCAL_PUBLIC_ORIGIN` unset falls back to `O11Y_DEV_PORT`'s default
- * (`scripts/o11y-dev.mjs`, `docs/run-and-deploy.md`). Gated on
+ * the broker callback lands on a host this route doesn't run on. Gated on
  * `O11Y_ENV === "local"` only: since it is also the token `aud`, this is
  * what stops a `wrangler dev` session from being accepted in production.
  */
@@ -189,13 +187,10 @@ export function sessionClearCookieHeader(): string {
 }
 
 /**
- * `min(now + 12h, brokerExpSeconds)`, never a flat 12h.
- * `grafana/login.ts#handleSession` is the only caller, right after
- * `gates/broker.ts#resolveBrokerIdentity` has accepted the token;
- * `brokerExpSeconds` is read from that same token's own payload, never
- * re-verified here. A missing, unparseable or already-past `exp` falls back
- * to {@link SESSION_FALLBACK_TTL_SECONDS} (1h) rather than the 12h ceiling
- * — the conservative direction to err in.
+ * `min(now + 12h, brokerExpSeconds)`, never a flat 12h. `brokerExpSeconds`
+ * is read from the broker token's own payload, never re-verified here. A
+ * missing, unparseable or already-past `exp` falls back to
+ * {@link SESSION_FALLBACK_TTL_SECONDS} (1h) rather than the 12h ceiling.
  */
 export function computeSessionTtlSeconds(
   brokerExpSeconds: number | null,
@@ -210,11 +205,9 @@ export function computeSessionTtlSeconds(
 /**
  * Verifies the `__Host-o11y_session` cookie's HMAC signature, expiry,
  * audience and claims, returning the identity it carries or `null`.
- *
- * `DEV_ADMIN` is honoured **only** when `O11Y_ENV === "local"`, fail-closed:
- * a production deploy's `O11Y_ENV` always comes from `wrangler.jsonc`'s
- * committed `vars` (never a secret), so an accidental `DEV_ADMIN` in
- * production still could not bypass the session check.
+ * `DEV_ADMIN` is honoured only when `O11Y_ENV === "local"`, fail-closed:
+ * that var always comes from `wrangler.jsonc`'s committed `vars`, so an
+ * accidental `DEV_ADMIN` in production still could not bypass this.
  */
 export async function verifySession(req: Request, env: Env): Promise<SessionIdentity | null> {
   if (env.O11Y_ENV === "local" && env.DEV_ADMIN) {
@@ -332,17 +325,14 @@ const DEFAULT_NEXT = "/grafana/";
 
 /**
  * Only a same-origin path under `/grafana/`, never the reserved
- * `/grafana/_o11y/` namespace (the login machinery's own routes). Anything
- * else falls back to `/grafana/`. `next` never reaches the broker (it rides
- * only inside the signed `o11y_login` cookie), so this validator is the
- * only defense, on both the mint side (`handleLogin`) and read side
- * (`handleSession`).
+ * `/grafana/_o11y/` namespace. Anything else falls back to `/grafana/`.
+ * `next` never reaches the broker, so this validator is the only defense.
  *
  * Parses with `new URL(raw, publicOrigin(env))` and re-derives the check
  * from the normalized `pathname`, rather than a string-prefix test:
  * `/grafana/../api/admin` and `/grafana/%2e%2e/api/admin` both pass a
- * prefix test yet resolve outside `/grafana/` once a browser normalizes the
- * dot segments — normalizing here, server-side, closes that gap.
+ * prefix test yet resolve outside `/grafana/` once a browser normalizes
+ * the dot segments.
  */
 export function sanitizeNext(raw: string | null | undefined, env: Env): string {
   if (!raw) return DEFAULT_NEXT;
@@ -362,14 +352,10 @@ export function sanitizeNext(raw: string | null | undefined, env: Env): string {
 
 /**
  * A top-level browser navigation — `Sec-Fetch-Mode: navigate`, or an
- * `Accept` header naming `text/html` (the signal every browser sends on a
- * document request, Fetch-Metadata-aware or not). Everything else (no
- * signal at all — `curl`, most tooling — or an explicit non-navigate mode
- * such as `cors`/`no-cors`/`same-origin`) is treated as a background
- * request. Used only to choose 302-to-login vs. 401-JSON on an
- * unauthenticated request to `/grafana/*` — never to decide whether to wake
- * the box (that is `grafana/proxy.ts#isTopLevelNavigation`'s separate,
- * fail-open rule, kept exactly as it was).
+ * `Accept` header naming `text/html`. Everything else (no signal, or an
+ * explicit non-navigate mode) is a background request. Used only to choose
+ * 302-to-login vs. 401-JSON on `/grafana/*` — never to decide whether to
+ * wake the box (`grafana/proxy.ts#isTopLevelNavigation`'s separate rule).
  */
 export function isBrowserNavigation(req: Request): boolean {
   if (req.headers.get("sec-fetch-mode") === "navigate") return true;
@@ -380,13 +366,11 @@ export function isBrowserNavigation(req: Request): boolean {
 // ---- same-origin check (CSRF: session, logout, reopen) -------------------
 
 /**
- * Exact same-origin check against the request's own URL — not a fixed
- * `https://demos.handsontable.com` compare, so this also holds under local
- * `wrangler dev` (`http://localhost:<port>`). SameSite=Lax already blocks a
- * cross-site fetch/XHR from carrying either cookie, but a request from
- * another `*.handsontable.com` origin (a Tier-2 preview host, say) is
- * same-site, not cross-site, and Lax does not stop that — this is the
- * actual CSRF defense for the three state-changing routes that need one.
+ * Exact same-origin check against the request's own URL, so it also holds
+ * under local `wrangler dev`. SameSite=Lax already blocks cross-site
+ * fetch/XHR, but a same-site `*.handsontable.com` origin (a Tier-2 preview
+ * host) is not blocked by Lax — this is the actual CSRF defense for the
+ * three state-changing routes that need one.
  */
 export function isSameOrigin(req: Request): boolean {
   const origin = req.headers.get("Origin");

@@ -120,18 +120,13 @@ function remapCloudflareKeys(attrs: Record<string, string>): Record<string, stri
 }
 
 /** Cloudflare's real OTLP export stamps the resource `service.name` with
- *  the deployed Worker's own SCRIPT name (`wrangler.jsonc`'s `name`:
- *  `handsontable-demos-api`, ...), never the contract's own short name
- *  (§3's closed `SERVICE_NAMES` set: `demos-api`, ...). Left unmapped,
- *  every worker-origin record's `service.name` Loki label/AE blob1
- *  disagreed with the contract, and `apiFingerprintFeed` below (which
- *  checks `finalResourceAttrs["service.name"] === "demos-api"` exactly)
- *  could never match a real production record. Strips the shared
- *  `handsontable-` script-name prefix whenever what remains is one of the
- *  contract's own `SERVICE_NAMES`. Applied at the same `merged`-bag stage
- *  as `remapCloudflareKeys` (before `hoistAttributes`), strictly AFTER the
- *  `bodyJsonAttrs` spread, so a body-JSON key can never win this remap
- *  either (`RESOURCE_ATTR_KEY_SET`'s anti-spoof guarantee, unchanged). */
+ *  the deployed Worker's own SCRIPT name (`handsontable-demos-api`), never
+ *  the contract's short name (§3's closed `SERVICE_NAMES` set). Left
+ *  unmapped, `apiFingerprintFeed` below (which checks
+ *  `finalResourceAttrs["service.name"] === "demos-api"` exactly) could
+ *  never match a real record. Strips the shared `handsontable-` prefix
+ *  before `hoistAttributes`, strictly after the `bodyJsonAttrs` spread, so
+ *  a body-JSON key can never win this remap either. */
 const CLOUDFLARE_SCRIPT_NAME_PREFIX = "handsontable-";
 const CONTRACT_SERVICE_NAMES: ReadonlySet<string> = new Set(SERVICE_NAMES);
 
@@ -144,40 +139,26 @@ function remapCloudflareServiceName(attrs: Record<string, string>): Record<strin
 }
 
 /** A Worker's own structured `console.log(JSON.stringify({...}))` line
- *  (`workers/api/src/telemetry/lines.ts`'s shape: `log.kind`, `cf.ray`,
- *  `session.id`, `hot.demo_id`, ...) arrives through Cloudflare's OTLP log
- *  export as opaque BODY TEXT, never parsed into `attributes` — without
- *  this, those fields would never reach Loki as structured metadata (ADR
- *  §E.4). Parsed here and merged into the same attribute bag a true OTLP
- *  attribute lands in; `hoistAttributes`'s allowlist decides what happens
- *  to each key from there. A no-op for any body that is not a JSON object.
- *
- *  A body-JSON key must never SPOOF a real resource attribute
- *  (`service.name`, `hot.*`, ...): those are Loki labels/AE index slots,
- *  promoted from the resource, never from a log record's own content.
- *  Every `RESOURCE_ATTRS` key is stripped from this function's own output
- *  — belt and suspenders alongside the merge-order fix at the call site
- *  below (`toIngestItem`), which additionally gives the body-JSON bag the
- *  LOWEST merge priority. */
+ *  (`lines.ts`'s shape) arrives through Cloudflare's OTLP export as opaque
+ *  BODY TEXT — without this, those fields never reach Loki as structured
+ *  metadata (ADR §E.4). Parsed here and merged into the same attribute bag
+ *  a true OTLP attribute lands in. A body-JSON key must never SPOOF a real
+ *  resource attribute: every `RESOURCE_ATTRS` key is stripped from this
+ *  function's output, and the call site (`toIngestItem`) additionally
+ *  gives the body-JSON bag the LOWEST merge priority. */
 const RESOURCE_ATTR_KEY_SET = new Set<string>(RESOURCE_ATTRS.map((a) => a.key));
 
 /** ADR §A: "Tier-2 container stdout lands in the API worker's logs" — the
- *  same Cloudflare export this function parses. A Tier-2 SSR starter's
- *  authored `console.log(JSON.stringify({...}))` could otherwise merge
- *  into `attributes`/`resourceAttributes` indistinguishably from a real
- *  structured line (contract §3's "authored code … console output" rule).
- *  `lines.ts` stamps every one of its own lines with a closed-set
- *  `"log.kind"` sentinel; a body missing that exact marker stays opaque
- *  body text.
+ *  same export this function parses. `lines.ts` stamps every one of its
+ *  own lines with a closed-set `"log.kind"` sentinel; a body missing that
+ *  exact marker stays opaque body text (contract §3's "authored code …
+ *  console output" rule).
  *
- *  Known gap, decision recorded in ADR §M: the sentinel is a body-text
- *  string, not cryptographically bound to `lines.ts` — authored stdout
- *  that happens to print the same shape is indistinguishable here if it
- *  ever reaches this Worker's own `console.log` (unconfirmed on a real
- *  account; the two in-repo forwarding paths checked do not re-emit
- *  container stdout that way). Accepted: the gate still excludes the
- *  overwhelming majority of authored output, and a forged line can only
- *  mint an `fp:` first-seen entry and a notify-only Slack line — never
+ *  Known gap (ADR §M): the sentinel is body text, not cryptographically
+ *  bound to `lines.ts` — authored stdout that prints the same shape is
+ *  indistinguishable here if it ever reaches this Worker's own
+ *  `console.log` (unconfirmed on a real account). Accepted: a forged line
+ *  can only mint an `fp:` entry and a notify-only Slack line — never
  *  Sentry, PII or code execution. */
 const TRUSTED_BODY_JSON_LOG_KINDS: ReadonlySet<string> = new Set(["api.request", "error"]);
 
@@ -206,29 +187,17 @@ function tryParseJsonBodyAttrs(body: string): Record<string, string> {
 }
 
 /**
- * Feeds the API worker's own `error.handled`/diagnostic reports
- * (`workers/api/src/telemetry/diagnostic.ts`,
- * `lines.ts#logErrorLine`'s `"log.kind": "error"` shape) into
- * `InboxWriter`'s first-seen registry, so a server-side failure class also
- * notifies once `SENTRY_SCOPE` flips to `uncaught`.
+ * Feeds the API worker's own `error.handled`/diagnostic reports into
+ * `InboxWriter`'s first-seen registry, so a server-side failure class
+ * notifies too once `SENTRY_SCOPE` flips to `uncaught`.
  *
- * All four conditions must hold:
- * - the REAL resource `service.name` is `demos-api`, read off
- *   `finalResourceAttrs` (never a body-JSON key — `RESOURCE_ATTR_KEY_SET`
- *   already strips a body-supplied `service.name`).
- * - the parsed body's own `log.kind` is `"error"`.
- * - the value matches the contract's `<context>:<16 hex>` shape via
- *   `isValidFingerprint` (§7), the same shared validator
- *   `resolveFingerprint` (`normalise/faro.ts`) uses for the browser path.
- * - the record is not Tier-2 container stdout — by construction, not a
- *   separate check: `tryParseJsonBodyAttrs` above refuses to parse any
- *   body whose `log.kind` isn't a trusted shape. **Not a full guarantee**
- *   (see `TRUSTED_BODY_JSON_LOG_KINDS`'s known-gap doc above).
- *
- * Deliberately NOT `hot.surface !== "demo-runtime"` (the browser path's
- * rule): a worker-tenant record's `hot.surface` defaults to `"none"`,
- * which would admit any record reaching `/telemetry/v1/logs` under that
- * same test.
+ * All four conditions must hold: the REAL resource `service.name` is
+ * `demos-api` (never a body-JSON key); `log.kind` is `"error"`; the value
+ * matches contract §7's shape via the same validator the browser path
+ * uses; and the record is not Tier-2 container stdout, by construction —
+ * not fully guaranteed (see the known-gap doc above). Deliberately NOT
+ * `hot.surface !== "demo-runtime"`: that defaults to `"none"` for a
+ * worker-tenant record, which would admit anything under the same test.
  */
 const API_FINGERPRINT_LOG_KIND = "error";
 

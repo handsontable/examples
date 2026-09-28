@@ -21,11 +21,9 @@ import {
 } from "@handsontable/demo-runtime/telemetry";
 import type { Env } from "../env.js";
 
-/** `service.name` → `hot.surface` default, for records with no other signal
- *  (worker-origin: Cloudflare export, deploy, Sentry). `demos-api` is the
- *  fallback for an unrecognised/absent `service.name` — the overwhelming
- *  majority of worker-origin export lines are the API worker's (the o11y
- *  worker exports none of its own, ADR §B.6). */
+/** `service.name` → `hot.surface` default for records with no other
+ *  signal. `demos-api` is the fallback (o11y worker exports none of its
+ *  own, ADR §B.6). */
 const SURFACE_BY_SERVICE_NAME: Readonly<Record<string, string>> = {
   "demos-authoring": "authoring",
   "demos-api": "api",
@@ -34,15 +32,11 @@ const SURFACE_BY_SERVICE_NAME: Readonly<Record<string, string>> = {
 };
 
 /**
- * Fills every §3 resource-attribute key `mutable` does not already carry
- * with a default, in place, and returns it. `"none"` for
- * `hot.tier`/`hot.framework`/`hot.ht_major`/`hot.outcome` (all four list
- * `"none"` as a real contract value). `deployment.environment.name` falls
- * back to `env.O11Y_ENV`; `hot.surface` falls back to the
- * `service.name`-keyed table above. `service.version` falls back to
- * `"unknown"`: a real Cloudflare invocation-log export carries
- * `service.name` but never `service.version`, so a worker-origin record
- * would otherwise store it empty though every metric row expects it filled.
+ * Fills every §3 resource-attribute key `mutable` lacks, in place.
+ * `"none"` for `hot.tier`/`hot.framework`/`hot.ht_major`/`hot.outcome`.
+ * `deployment.environment.name` falls back to `env.O11Y_ENV`; `hot.surface`
+ * to the table above; `service.version` to `"unknown"` (a real Cloudflare
+ * export carries `service.name` but never `service.version`).
  */
 export function withResourceAttrDefaults(
   mutable: Record<string, string>,
@@ -58,23 +52,17 @@ export function withResourceAttrDefaults(
   return mutable;
 }
 
-// Keyed by the `env` object itself (`WeakMap`), not by `O11Y_ENV`'s string
-// value: caching by value alone is harmless in production (one isolate's
-// `env` binding is stable) but would make every test in one `node --test`
-// process share a single fake `RUNNER_EVENTS` sink across every `env`
-// fixture with the same `O11Y_ENV`, so a later test's assertions could
-// read points an earlier test's request actually wrote.
+// Keyed by `env` object identity (`WeakMap`), not `O11Y_ENV`'s string
+// value: caching by value would make every test in one process share a
+// fake sink across every `env` fixture with the same `O11Y_ENV`.
 const sinkByEnv = new WeakMap<Env, AeSink>();
 
 /** Production: `bindingSink(env.RUNNER_EVENTS)`. Local: `clickhouseSink`
  *  against `env.RUNNER_EVENTS_CLICKHOUSE_URL`, falling back to
- *  `http://localhost:8123` — the same var/default
- *  `alerts/ae-query.ts#runAnalyticsEngineSqlApi` reads for the QUERY side.
- *  The write and query sides must agree, or a local ClickHouse on a
- *  non-default port silently receives zero points while alert queries read
- *  an empty table. `AE_SQL_TOKEN` doubles as the ClickHouse password
- *  (`containers/o11y/compose.yml`'s `CLICKHOUSE_PASSWORD`). Cached per
- *  `env` object (cheap; `clickhouseSink` holds no connection state). */
+ *  `http://localhost:8123` — must agree with
+ *  `alerts/ae-query.ts#runAnalyticsEngineSqlApi`'s own default, or a
+ *  non-default local ClickHouse silently gets zero points while alert
+ *  queries read an empty table. Cached per `env` (cheap; stateless). */
 export function aeSink(env: Env): AeSink {
   const cached = sinkByEnv.get(env);
   if (cached) return cached;
@@ -106,23 +94,20 @@ function writeDataPointSafely(sink: AeSink, point: AePoint): Promise<void> {
 }
 
 /** Writes one point, never throwing into the caller: a local ClickHouse
- *  outage (or any sink failure) must not fail ingest (§B.1: "ingest never
- *  waits for the box" — the metrics path has the same obligation toward its
- *  own store). `ctx.waitUntil` keeps the write off the response's critical
- *  path; the `.catch` is what stops a rejected promise from becoming an
- *  unhandled rejection the runtime logs as an error on every local run. */
+ *  outage must not fail ingest (§B.1 "ingest never waits for the box").
+ *  `ctx.waitUntil` keeps the write off the critical path; `.catch` stops
+ *  an unhandled-rejection log on every local run. */
 export function writePoint(env: Env, ctx: ExecutionContext, point: AePoint): void {
   ctx.waitUntil(writeDataPointSafely(aeSink(env), point));
 }
 
-/** The same fire-and-forget write, from inside a Durable Object
- *  (`InboxWriter`'s ledger, `GrafanaBox`'s wake/drain orchestration) rather
+/** The same fire-and-forget write, from inside a Durable Object rather
  *  than a route handler — a DO method has no `ExecutionContext`, but
- *  `DurableObjectState` (`this.ctx`) has its own `waitUntil` with the
- *  identical contract. Kept as a second, narrower-typed function rather
- *  than widening {@link writePoint}'s `ctx` to a structural union:
- *  `ExecutionContext` also declares `passThroughOnException`/`tracing`/
- *  `abort`, which `DurableObjectState` lacks. */
+ *  `DurableObjectState` has its own `waitUntil`. Kept as a second,
+ *  narrower-typed function rather than widening {@link writePoint}'s
+ *  `ctx`: `ExecutionContext` also declares
+ *  `passThroughOnException`/`tracing`/`abort`, which `DurableObjectState`
+ *  lacks. */
 export function writePointFromDo(env: Env, ctx: DurableObjectState, point: AePoint): void {
   ctx.waitUntil(writeDataPointSafely(aeSink(env), point));
 }

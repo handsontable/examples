@@ -72,16 +72,11 @@ const LITE_VITAL_KEYS: Readonly<Record<string, string>> = {
 };
 
 /**
- * Server-side backstop for a client that skips or bypasses the shared
- * noise gates that already run in Faro's `beforeSend`
- * (`apps/authoring/src/eventGate.ts#isUnhandledNoise`/`isOfficeScannerRejection`) —
- * re-checked here before an item can mint an `error.uncaught` point or an
- * `fp:` registry entry. Deliberately duplicated, not imported (`apps/authoring`
- * and `workers/o11y` are separate packages with no dependency between them):
- * keep in sync with `eventGate.ts#UNHANDLED_NOISE`/`INJECTED_SCANNER_MESSAGES`
- * by hand. `isForeignUnhandled`/`isEdgelessForeignSessionStart` stay
- * browser-gate-only: both need browser-only context (per-frame URLs,
- * Sentry-only session tags) this ingest path never receives.
+ * Server-side backstop for a client that skips the shared noise gates in
+ * Faro's `beforeSend` (`eventGate.ts#isUnhandledNoise`/
+ * `isOfficeScannerRejection`). Duplicated, not imported: keep in sync by
+ * hand. `isForeignUnhandled`/`isEdgelessForeignSessionStart` stay
+ * browser-gate-only — both need browser-only context this path never gets.
  */
 const SERVER_SIDE_UNHANDLED_NOISE: readonly RegExp[] = [
   /^ResizeObserver loop/i,
@@ -206,16 +201,12 @@ function processExampleEvent(
 }
 
 /** Picks the fingerprint a client offered, validated, or falls back to
- *  computing it server-side. `wireFingerprint` (Faro's `payload.fingerprint`,
- *  §7's exact shape) is preferred, since it distinguishes two call sites
- *  reporting the same message; `aeOnlyFingerprint` (`context["hot.fingerprint"]`)
- *  is the next fallback. Neither is trusted verbatim: a value not matching
- *  §7's `<context>:<16 hex>` shape is discarded. `fallbackMessage` is the
- *  last resort (the raw `window.onerror`/`unhandledrejection` path); it must
- *  be the `type: value` head only (`exceptionFingerprintMessage`), never
- *  `record.body`'s stack lines — a minified bundle's chunk hash shifts every
- *  deploy even for an identical error, so hashing the stack would turn a
- *  recurring defect into a fresh `fp:` entry on every release. */
+ *  computing it server-side. `wireFingerprint` (Faro's own field) is
+ *  preferred; `aeOnlyFingerprint` is the next fallback; neither is trusted
+ *  verbatim (must match §7's `<context>:<16 hex>` shape). `fallbackMessage`
+ *  is the last resort — the `type: value` head only, never `record.body`'s
+ *  stack lines, which shift on every deploy and would turn a recurring
+ *  defect into a fresh `fp:` entry each release. */
 function resolveFingerprint(
   wireFingerprint: string | undefined,
   aeOnlyFingerprint: string | undefined,

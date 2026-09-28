@@ -71,13 +71,9 @@ function decodeJwtExpSeconds(token: string): number | null {
  * Resolves a broker token to a verified `@handsontable.com` identity, or
  * `null` on any failure (wrong shape, non-2xx, unreachable broker, a
  * non-team email, a redirecting response, a timeout). Never throws.
- *
  * Refuses anything shaped like one of OUR OWN persistent API tokens before
- * ever calling the broker — the same reasoning `workers/api/src/auth.ts`
- * gives for its own ordering: shipping our own credential to a third-party
- * host on a failed local check would be a silent downgrade from "rejected"
- * to "forwarded", and this Worker has no local token store to check it
- * against in the first place.
+ * ever calling the broker — shipping our own credential to a third-party
+ * host would be a silent downgrade from "rejected" to "forwarded".
  */
 export async function resolveBrokerIdentity(env: Env, token: string): Promise<BrokerIdentity | null> {
   if (!isValidBrokerUrl(env)) return null;
