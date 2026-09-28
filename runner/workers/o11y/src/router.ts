@@ -29,17 +29,6 @@ export function registerRoute(method: RouteMethod, path: string, handler: RouteH
   routes.push({ method, path, isPrefix, handler });
 }
 
-/** Test-only: clears every registration — `pipeline/o11y-routes.test.mjs`
- *  and friends re-register routes per test file, and `node --test` reuses
- *  the module's top-level state across files that import `index.ts` more
- *  than once is not a concern here (`node --test` isolates each spec file
- *  into its own process), but within *one* file that imports `index.ts`
- *  more than once (never done today) this would matter. Exported for
- *  completeness, not currently called by production code. */
-export function clearRoutes(): void {
-  routes.length = 0;
-}
-
 function matches(route: Route, method: string, pathname: string): boolean {
   if (route.method !== "*" && route.method !== method) return false;
   if (route.isPrefix) return pathname.startsWith(route.path.slice(0, -1));
@@ -69,14 +58,4 @@ export function findRoute(method: string, pathname: string): RouteHandler | null
     }
   }
   return best?.handler ?? null;
-}
-
-/** Dispatches through the registry; `null` means no registered route
- *  matched (the caller, `index.ts`, answers `501` for a known contract path
- *  with no handler yet, `404` otherwise — see its own dispatcher). */
-export async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Promise<Response | null> {
-  const url = new URL(req.url);
-  const handler = findRoute(req.method, url.pathname);
-  if (!handler) return null;
-  return handler(req, env, ctx);
 }
