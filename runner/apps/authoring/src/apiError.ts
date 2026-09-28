@@ -48,6 +48,9 @@ export const EDGE_BLOCKED_MESSAGE =
  *  `detail`, but a truncated body must not produce a wire code in a toast. */
 export const BUILD_RUNNING_MESSAGE =
   "A build for this demo is already running. Wait for it to finish, then save again.";
+/** The lead of a Save or create refused because the demo's own code does not build;
+ *  the server's `detail` (the build error) follows it. */
+export const BUILD_FAILED_MESSAGE = "The demo's code does not build, so nothing was saved.";
 
 /** Whatever JSON the Worker put in the error body. Both fields are optional
  *  because a 401 from a proxy, or a body that failed to parse, has neither. */
@@ -161,6 +164,11 @@ export function describeApiFailure(
   if (status === 409 && body.error === "already_building") {
     const detail = typeof body.detail === "string" ? body.detail.trim() : "";
     return new ApiError(detail || BUILD_RUNNING_MESSAGE, status, "other", false);
+  }
+  // The demo's own code failed to build: the author's to fix, so not reportable.
+  if (status === 422 && body.error === "build_failed") {
+    const detail = typeof body.detail === "string" ? body.detail.trim() : "";
+    return new ApiError(detail ? `${BUILD_FAILED_MESSAGE} ${detail}` : BUILD_FAILED_MESSAGE, status, "other", false);
   }
   const serverMessage = options.preferFallback ? "" : (body.error ?? "");
   return new ApiError(serverMessage || resolveFallback(fallback, status), status, "other", true);

@@ -595,6 +595,29 @@ test("a Save the server refuses on ownership says so, and is not a session promp
   expect(await storedToken(page)).toBe("e2e-token");
 });
 
+test("a Save whose code does not build shows the build error and keeps the edit unsaved", async ({ page }) => {
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await signIn(page);
+  await stubProfile(page);
+  const detail = 'error during build: src/App.tsx:1:10: ERROR: Unexpected ";"';
+  await failWrite(page, "PATCH", 422, { error: "build_failed", detail });
+
+  await page.goto(`/edit/${DEMO_ID}`);
+  await expect(accountAvatar(page)).toBeVisible();
+  await editor(page).click();
+  await page.keyboard.type("const X = ;");
+  await saveButton(page).click();
+
+  const dialog = page.getByRole("dialog", { name: "Couldn't save" });
+  await expect(dialog).toContainText(detail);
+  await expect(dialog).toContainText("nothing was saved");
+  await expect(page.getByText(/build_failed/)).toHaveCount(0);
+  await expect(saveButton(page)).toHaveText("Save •");
+  await dialog.getByRole("button", { name: "OK" }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
 // The bug the uniform early-return would have introduced. `onFork` has no
 // `finally` — the success path navigates away, and clearing `forking` first
 // would flash the button back to idle mid-navigation — so the busy state is
