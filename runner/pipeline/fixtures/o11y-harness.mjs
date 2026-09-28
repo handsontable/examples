@@ -191,7 +191,3 @@ export function makeEnv(InboxWriterClass, overrides = {}) {
 
   return { env, doStorage, r2, ae, inboxWriterInstance };
 }
-
-export const EXPORT_SECRET = SECRET;
-export const SENTRY_SECRET_HEADER_NAME = "sentry-hook-signature";
-export const SENTRY_SECRET_VALUE = SENTRY_SECRET;
