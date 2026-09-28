@@ -413,8 +413,10 @@ test("A-I2 flood: many MB of pending rows are packed with a bounded read per lis
   const rowCount = 30;
   const bigBody = "x".repeat(900_000);
   for (let n = 0; n < rowCount; n++) {
-    // Padded (current-shape) keys — this test is about the READ bound, not
-    // the legacy migration path (that's the test above).
+    // Padded (current-shape) keys, hand-built here rather than through
+    // `pendingRowStorageKey` — this test is about `collectRowBatch`'s own
+    // READ bound, not the key-padding invariant (see the numeric-order test
+    // below, which writes through the real ingest path instead).
     doStorage._data.set(`row:${n.toString().padStart(12, "0")}`, pendingRowValue(`${bigBody}-${n}`, n, 1_700_000_000_000 + n));
   }
   doStorage._data.set("rowSeq", rowCount);
@@ -438,4 +440,34 @@ test("A-I2 flood: many MB of pending rows are packed with a bounded read per lis
   assert.equal(bodies.length, rowCount, "no record may be lost");
   const expected = Array.from({ length: rowCount }, (_, n) => `${bigBody}-${n}`);
   assert.deepEqual(bodies, expected, "records must come out in arrival order despite the bounded, paged reads");
+});
+
+test("InboxWriter.alarm: rows written through the real ingest path pack in numeric order past a two-digit row count", async () => {
+  const doStorage = makeDurableObjectStorage();
+  const { env, r2 } = makeEnv(InboxWriter, { doStorage });
+  const writer = new InboxWriter({ storage: doStorage }, env);
+
+  // Every key here comes from the real write path (`ingest` -> `appendRows`
+  // -> `pendingRowStorageKey`), never hand-built — unlike the two tests
+  // above. 12 rows crosses the one-digit/two-digit boundary ("row:...9" vs
+  // "row:...10"), exactly where an un-padded key would sort lexicographically
+  // out of arrival order.
+  const rowCount = 12;
+  for (let i = 0; i < rowCount; i++) {
+    await writer.ingest("worker", 1000 + i, [{ hash: `h${i}`, record: record(`r${i}`, i) }]);
+  }
+
+  let iterations = 0;
+  do {
+    await writer.alarm();
+    iterations++;
+  } while ((await doStorage.getAlarm()) !== null && iterations < 200);
+
+  // No re-sort here: `decodeAllPackedBodies` returns bodies in the order the
+  // real `collectRowBatch` (native, ascending `storage.list()` order) fed
+  // them to `packTenant`, which is what a broken `pendingRowStorageKey`
+  // padding would corrupt.
+  const bodies = await decodeAllPackedBodies(r2);
+  const expected = Array.from({ length: rowCount }, (_, i) => `r${i}`);
+  assert.deepEqual(bodies, expected, "rows written through the real ingest path must drain in numeric arrival order, not lexicographic");
 });
