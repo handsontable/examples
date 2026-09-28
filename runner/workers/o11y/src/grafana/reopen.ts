@@ -1,24 +1,9 @@
 // `POST /grafana/_o11y/reopen` (ADR §B.3/§J, contract §1): manual ledger
-// re-open for a time window. Session-gated exactly like `/grafana/*` (the
-// Worker's own cookie, not Cloudflare Access) — the contract's own gate
-// table lists it under the same row.
-//
-// Requires an exact `application/json` content-type: this route calls
-// `req.json()`, and without the check it would be reachable by a
-// cross-site "simple" request (`fetch(url, { mode: "no-cors", body:
-// '{"fromMs":...}' })` — the browser sends that with
-// `content-type: text/plain`, no CORS preflight). Requiring
-// `application/json` forces a real CORS preflight (which a cross-origin
-// page cannot pass without an explicit allow from this Worker, and none is
-// granted), closing that path. An exact `Origin` check sits on top:
-// `o11y_session` is `SameSite=Lax`, which does not stop a same-SITE (not
-// same-origin — another `*.handsontable.com` host, e.g. a Tier-2 preview)
-// caller from attaching it — see `gates/session.ts#isSameOrigin`'s own doc
-// comment. The window is also capped to the 7-day retention (`ledger.ts`'s
-// own `KEY_RETENTION_MS`) — a wider window can never find anything (see
-// `writer.ts#reopenWindow`'s doc comment) and would otherwise make mass
-// replay/extra-wake amplification cheap for whoever could reach this route
-// at all.
+// re-open for a time window. Session-gated exactly like `/grafana/*`.
+// Requires exact `application/json` content-type: without it, this route
+// would be reachable via a cross-site "simple" request with no preflight.
+// An exact `Origin` check sits on top, since `o11y_session` is
+// `SameSite=Lax`. The window is capped to the 7-day retention.
 
 import { isSameOrigin, verifySession } from "../gates/session.js";
 import { inboxWriter } from "../inbox/accessor.js";
@@ -43,11 +28,9 @@ function isReopenBody(value: unknown): value is ReopenBody {
   );
 }
 
-/** Only `application/json` (optionally with parameters, e.g. `; charset=utf-8`)
- *  is accepted — anything else (including the ABSENCE of a content-type,
- *  which a "simple" cross-site request can produce just as easily as
- *  `text/plain`) is refused. This is the actual CSRF defense (see this
- *  file's header): it forces a preflight for any cross-origin caller. */
+/** Only `application/json` is accepted — this is the actual CSRF defense
+ *  (see this file's header): it forces a preflight for any cross-origin
+ *  caller. */
 function hasJsonContentType(req: Request): boolean {
   const raw = req.headers.get("content-type");
   if (!raw) return false;

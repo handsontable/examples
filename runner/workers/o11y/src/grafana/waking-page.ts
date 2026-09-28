@@ -1,13 +1,9 @@
 // ADR §A: "The Handsontable logo, one line of text, `<meta http-equiv=
 // "refresh" content="3">`, no script, served by the Worker while the box is
 // not ready." Served for every `/grafana/*` request while `isReady()` is
-// false (`proxy.ts`) — nothing here ever proxies to the container.
-//
-// The logo markup is `packages/editor-shell/src/logo.svg`, copied rather
-// than imported: a Worker has no filesystem at request time, and this
-// repo's bundler tooling has no established "import an SVG as raw text
-// into a Worker" convention the way Vite's apps do; a literal copy, kept
-// in sync by hand, is the pragmatic choice for a two-line static page.
+// false — nothing here ever proxies to the container. The logo markup is
+// `packages/editor-shell/src/logo.svg`, copied rather than imported: a
+// Worker has no filesystem at request time.
 
 const LOGO_SVG =
   '<svg width="145" height="22" viewBox="0 0 145 22" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Handsontable">' +

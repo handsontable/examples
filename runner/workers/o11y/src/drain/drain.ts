@@ -1,11 +1,8 @@
-// The drain (ADR §B.3/§A "Drain" scope): pushes one wake's `written` inbox
-// objects to Loki, in key order, ≤ 1 MB decompressed per request, with a
-// per-record hash set preventing any record being pushed twice in one wake.
-// Pure over injected dependencies (`DrainDeps`) — no `@cloudflare/containers`
-// or R2 import — so the whole batch/retry/rejection state machine is
-// unit-testable under `node --test` (`pipeline/o11y-drain.test.mjs`).
-// `box.ts` wires the real dependencies: R2 reads, `containerFetch` pushes,
-// `symbolicateResourceLogs`.
+// The drain (ADR §B.3/§A): pushes one wake's `written` inbox objects to
+// Loki, in key order, ≤ 1 MB decompressed per request, with a per-record
+// hash set preventing any record being pushed twice. Pure over injected
+// dependencies (`DrainDeps`) — unit-testable under `node --test`. `box.ts`
+// wires the real dependencies.
 
 import {
   decodeNdjson,
@@ -17,30 +14,20 @@ import {
 import { sha256Hex } from "../gates/util.js";
 
 // ---- Drop records older than Loki's own reject window ----------------------
-//
-// `reject_old_samples_max_age: 7d` (containers/o11y/loki/loki-config*.yaml)
-// 400s the WHOLE push if even one record in it is older than 7 days — and
-// `drainKey` (below) maps any 400 to the whole key `rejected`, which is
-// correct for a genuinely malformed push but wrong here: a backlog that
-// went stale (e.g. `drainsPaused` for over a week) can carry a handful of
-// too-old records mixed with otherwise-good ones, and the 400 would lose
-// the good records too, permanently (a `rejected` key is never retried).
-// Dropping the too-old records BEFORE the push — never silently, always
-// counted — keeps the good records flowing and turns the loss the ADR
-// already accepts (§G) into a measured number instead of an opaque
-// `rejected` key.
+// `reject_old_samples_max_age: 7d` 400s the WHOLE push if even one record
+// is older than 7 days, and any 400 maps to a whole-key `rejected` — a
+// stale backlog would otherwise lose good records permanently. Dropping
+// too-old records BEFORE the push turns that into a measured, counted loss.
 const LOKI_REJECT_OLD_SAMPLES_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-/** Filter stricter than Loki's own cutoff by this much, so a record that
- *  passes our filter at drain time does not go on to age past Loki's own
- *  cutoff by the time the push actually reaches it (retries, batching, a
- *  slow wake) and 400 the batch anyway. */
+/** Filter stricter than Loki's own cutoff, so a record that passes here at
+ *  drain time doesn't age past Loki's own cutoff by the time the push
+ *  reaches it (retries, batching, a slow wake). */
 const DRAIN_OLD_AGE_MARGIN_MS = 15 * 60 * 1000;
 const MAX_RECORD_AGE_MS = LOKI_REJECT_OLD_SAMPLES_MAX_AGE_MS - DRAIN_OLD_AGE_MARGIN_MS;
 
-/** `timeUnixNano` is OTLP's own "unset" convention for "no client timestamp"
- *  (§8/contract: Loki then falls back to its own observed-at time) — `"0"`,
- *  empty, or absent must never be read as a real 1970 timestamp and dropped
- *  as ancient. Only a genuinely parseable, positive, too-old value counts. */
+/** OTLP's "unset" timestamp convention (`"0"`, empty, absent) must never
+ *  be read as a real 1970 timestamp and dropped as ancient — only a
+ *  genuinely parseable, positive, too-old value counts. */
 function isTooOld(timeUnixNano: string | undefined, nowMs: number): boolean {
   if (!timeUnixNano) return false;
   let ns: bigint;
@@ -89,10 +76,9 @@ export interface LokiPushResult {
 }
 
 export interface DrainDeps {
-  /** `null` when the object does not exist (defensive — never expected in
-   *  normal operation, since drain never deletes inbox objects; only
-   *  `InboxWriter`'s pack step deletes the *pending rows* that produced
-   *  them). */
+  /** `null` when the object does not exist (defensive — drain never
+   *  deletes inbox objects; only the pack step deletes the pending rows
+   *  that produced them). */
   fetchObject(key: string): Promise<Uint8Array | null>;
   /** One push of ≤ {@link LOKI_REQUEST_MAX_BYTES} decompressed: a gzipped
    *  OTLP/HTTP JSON `ExportLogsServiceRequest` (see {@link encodeLokiPush}),
@@ -111,30 +97,22 @@ export interface KeyOutcome {
   key: string;
   tenant: Tenant;
   outcome: "provisional" | "rejected" | "error";
-  /** Set on `rejected` (why), and also on `provisional` when at least one
-   *  chunk 2xx'd but another permanently 400'd: the caller
-   *  (`box.ts#drainStep`) should still surface this via
-   *  `InboxWriterApi#recordPartialReject` even though the key itself is
-   *  durable. `undefined` on a fully clean `provisional`. */
+  /** Set on `rejected` (why), and also on `provisional` when one chunk
+   *  2xx'd but another 400'd — the caller should still surface this via
+   *  `recordPartialReject`. `undefined` on a fully clean `provisional`. */
   reason?: string;
   bytesPushed: number;
-  /** Records dropped by {@link dropOldRecords} before this key's push — 0
-   *  when nothing was too old. Never folds into `rejected`/`error`: a key
-   *  with only-too-old records still ends `provisional` here (nothing left
-   *  to push is not a failure). `box.ts#drainStep` routes a `provisional`
-   *  outcome with `bytesPushed === 0` to `InboxWriterApi#commitKeys`
-   *  instead of `#markKeysProvisional` — see `ledger.ts#commitKeys`'s doc
-   *  comment for the endless re-wake loop that avoids. */
+  /** Records dropped by {@link dropOldRecords} before this key's push.
+   *  Never folds into `rejected`/`error` — a key with only-too-old records
+   *  still ends `provisional`, and `box.ts#drainStep` commits it directly. */
   droppedOld: number;
 }
 
 export interface DrainBatchResult {
   outcomes: KeyOutcome[];
   /** `true` when a `429`/`5xx` exhausted its retries — the batch stops
-   *  immediately (the remaining keys are left `written` for a later wake to
-   *  retry against a possibly-recovered Loki, rather than burning the rest
-   *  of this wake's CPU budget hammering a server that is currently
-   *  failing every request). */
+   *  immediately, leaving the rest `written` for a later wake rather than
+   *  hammering a server that's currently failing every request. */
   stoppedEarly: boolean;
 }
 
@@ -156,11 +134,8 @@ async function gunzip(bytes: Uint8Array): Promise<string> {
 }
 
 /** The body Loki's `/otlp/v1/logs` actually decodes: ONE OTLP/HTTP JSON
- *  `ExportLogsServiceRequest`. The inbox stores NDJSON (one bare
- *  ResourceLogs per line); pushing that as-is makes Loki 3.3.2 answer `204`
- *  and ingest nothing — no stream, no chunk, no TSDB table, so nothing is
- *  uploaded on SIGTERM and shutdown.sh (correctly) never writes the clean
- *  marker. */
+ *  `ExportLogsServiceRequest` — pushing the inbox's own bare NDJSON as-is
+ *  makes Loki 3.3.2 answer `204` and ingest nothing. */
 function encodeLokiPush(records: readonly OtlpResourceLogs[]): string {
   return JSON.stringify({ resourceLogs: records });
 }
@@ -170,10 +145,8 @@ function encodeLokiPush(records: readonly OtlpResourceLogs[]): string {
 const PUSH_ENVELOPE_BYTES = encodeLokiPush([]).length;
 
 /** Chunks `records` into pushes of at most {@link LOKI_REQUEST_MAX_BYTES}
- *  decompressed bytes — the same row-chunking rule `inbox/pack.ts#appendRows`
- *  uses for its own 1 MB row cap, applied here to the drain's own 1 MB
- *  per-request cap (ADR §B.3: "requests of at most 1 MB decompressed"),
- *  counting the {@link encodeLokiPush} envelope and the separating commas. */
+ *  decompressed bytes (ADR §B.3: "requests of at most 1 MB decompressed"),
+ *  counting the envelope and separating commas. */
 function chunkBySize(records: readonly OtlpResourceLogs[]): OtlpResourceLogs[][] {
   const chunks: OtlpResourceLogs[][] = [];
   let current: OtlpResourceLogs[] = [];
@@ -210,17 +183,11 @@ async function pushChunkWithRetry(
 }
 
 /** Drains one key: fetch, decode, symbolicate exceptions, dedupe against
- *  `seenHashes` (mutated in place — shared across the whole wake, per ADR
- *  §B.3's "a per-record hash set guarantees no record is pushed twice"),
- *  push in ≤ 1 MB chunks. A key becomes eligible for `provisional` only
- *  after every one of its chunks returns `2xx` — including the zero-chunk
- *  case (every record already pushed earlier in the same wake, or too old
- *  / already deduped, `bytesPushed` staying 0 either way): still
- *  provisional, nothing left to push is not a failure. `box.ts#drainStep`
- *  treats the `bytesPushed === 0` case of this `provisional` outcome
- *  specially (commits it directly rather than marking it
- *  `provisional:<wakeId>`) — see {@link KeyOutcome.droppedOld}'s doc
- *  comment. */
+ *  `seenHashes` (shared across the wake, ADR §B.3), push in ≤ 1 MB chunks.
+ *  Eligible for `provisional` only after every chunk returns `2xx`,
+ *  including the zero-chunk case (nothing left to push is not a failure).
+ *  `box.ts#drainStep` commits a zero-`bytesPushed` `provisional` outcome
+ *  directly — see {@link KeyOutcome.droppedOld}. */
 export async function drainKey(key: string, seenHashes: Set<string>, deps: DrainDeps): Promise<KeyOutcome> {
   const parsed = parseInboxKey(key);
   if (!parsed) return { key, tenant: "worker", outcome: "rejected", reason: "unparseable_key", bytesPushed: 0, droppedOld: 0 };
@@ -236,26 +203,17 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
     return { key, tenant, outcome: "rejected", reason: "undecodable_object", bytesPushed: 0, droppedOld: 0 };
   }
 
-  // Drop records older than Loki's own `reject_old_samples_max_age` BEFORE
+  // Drop records older than Loki's own reject window BEFORE
   // symbolication/push — a stale record must never turn an otherwise-good
-  // key into a whole-key `rejected` 400 (see this file's header comment on
-  // `dropOldRecords`).
+  // key into a whole-key `rejected` 400.
   const { kept, droppedOld } = dropOldRecords(records, (deps.now ?? Date.now)());
   records = kept;
 
-  // `symbolicate.ts#symbolicateResourceLogs` never throws (it isolates a
-  // per-frame and a per-record failure internally), but this is a third,
-  // independent layer: a throw here must isolate only THIS key, not the
-  // whole batch — an uncaught throw would escape `drainKey`, then
-  // `drainBatch` (whose loop only guards an `"error"` *outcome*, never an
-  // exception), then `box.ts#drainStep`'s own catch, leaving every key in
-  // this batch `written` — including the one that poisoned it, so the next
-  // wake would fetch the identical batch and throw again, forever. A
-  // non-transient failure here (a decode/parse throw, not a Loki/R2
-  // outage — those never throw) gets the same `outcome: "rejected"` shape
-  // as `undecodable_object` above and the same
-  // `InboxWriterApi#rejectKey` metric/alert path — never retried
-  // automatically, but no longer able to block every key after it.
+  // `symbolicate.ts` never throws, but this is a third, independent
+  // isolation layer: a throw here must isolate only THIS key, not the
+  // whole batch — otherwise a poisoned key would leave the whole batch
+  // `written` forever, retried and re-thrown every wake. Gets the same
+  // `rejected` shape as `undecodable_object` above.
   try {
     records = await deps.symbolicate(records);
   } catch (err) {
@@ -277,31 +235,15 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
     fresh.push(record);
   }
 
-  // A 400 is a PERMANENT rejection of that one chunk (never retried, above)
-  // but says nothing about the chunks after it, so every chunk is always
-  // attempted rather than stopping at the first 400 — otherwise a >1 MB
-  // object split into several chunks would silently drop records that
-  // would have pushed cleanly. A genuine outage (429/5xx exhausted) still
-  // stops immediately and reports `error`: unlike a 400, that's evidence
-  // the rest of this key's chunks would fail too, and `error` tells
-  // `drainBatch` to leave the rest of the whole batch `written` for a
-  // later wake.
-  //
-  // A key with at least one chunk landing 2xx still ends `provisional`
-  // (tracked via `bytesPushed`): its accepted content follows the same
-  // §B.3 durability path as a fully-clean key (an unclean stop reverts it
-  // to `written` for automatic replay; a clean stop's marker confirms it).
-  // Only a key with ZERO accepted chunks (every chunk 400'd) ends
-  // `rejected` — nothing to protect there, so the existing "never
-  // auto-retried, `POST /grafana/_o11y/reopen` is the manual escape hatch"
-  // behaviour applies. A replay re-attempts every chunk of this key again,
-  // deterministically re-deriving the same classification: the
-  // permanently-bad chunk 400s again (harmless, never retried) while good
-  // chunks are safely, redundantly re-confirmed (Loki's own partial-accept
-  // behaviour plus query-time dedup already make a duplicate push
-  // harmless). `reason` carries the 400 detail on the `provisional`
-  // outcome so the caller (`box.ts#drainStep`) can log/alert on the loss —
-  // see `InboxWriterApi#recordPartialReject`.
+  // A 400 permanently rejects that one chunk (never retried), but every
+  // chunk is still attempted — stopping at the first 400 would silently
+  // drop later chunks of a >1 MB object that would have pushed cleanly.
+  // A key with at least one 2xx chunk still ends `provisional`: its
+  // accepted content follows the normal durability path, and a replay
+  // deterministically re-derives the same classification (the bad chunk
+  // 400s again, harmless; good chunks are redundantly re-confirmed via
+  // Loki's own dedup). Only a key with ZERO accepted chunks ends
+  // `rejected`. `reason` carries the 400 detail for `recordPartialReject`.
   let bytesPushed = 0;
   let rejectedReason: string | undefined;
   for (const chunk of chunkBySize(fresh)) {

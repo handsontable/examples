@@ -1,13 +1,9 @@
-// `GET /grafana/_o11y/login`, `GET /grafana/_o11y/callback`,
-// `POST /grafana/_o11y/session`, `GET /grafana/_o11y/logout` (a same-origin
-// sign-out page), `POST /grafana/_o11y/logout` (the actual state-clearing
-// action) — the broker login round trip that replaces Cloudflare Access for
-// `/grafana/*` (ADR-0041 §B.5/§H).
-//
-// None of these routes ever calls `getGrafanaBoxStub` — an unauthenticated
-// visitor (login, callback, the logout page) or a not-yet-authenticated POST
-// (session) must never wake the box, the same "gate first, box second"
-// ordering `grafana/proxy.ts` already enforces for the proxy route itself.
+// `GET /grafana/_o11y/login|callback`, `POST /grafana/_o11y/session`,
+// `GET /grafana/_o11y/logout` (a same-origin sign-out page),
+// `POST /grafana/_o11y/logout` (the actual state-clearing action) — the
+// broker login round trip that replaces Cloudflare Access (ADR-0041
+// §B.5/§H). None of these routes ever calls `getGrafanaBoxStub` — the same
+// "gate first, box second" ordering `grafana/proxy.ts` enforces.
 
 import {
   computeSessionTtlSeconds,
@@ -41,11 +37,8 @@ function contentTypeIsJson(req: Request): boolean {
   return raw.split(";")[0]?.trim().toLowerCase() === "application/json";
 }
 
-/** Keyed on `cf-connecting-ip` (the same header `gates/browser.ts` uses for
- *  `collect`/`lite`), prefixed per route so an attacker hammering one of
- *  these two routes cannot also exhaust the other's budget for the same IP.
- *  Shares `wrangler.jsonc`'s single `RATE_LIMITER` binding/namespace — a
- *  distinct key still gets its own counting bucket. */
+/** Keyed on `cf-connecting-ip`, prefixed per route so an attacker
+ *  hammering one route cannot exhaust the other's budget for the same IP. */
 async function rateLimited(req: Request, env: Env, prefix: string): Promise<boolean> {
   const ip = req.headers.get("cf-connecting-ip") ?? "unknown";
   const result = await checkRateLimit(env, `${prefix}:${ip}`);
@@ -53,10 +46,8 @@ async function rateLimited(req: Request, env: Env, prefix: string): Promise<bool
 }
 
 /** `handleLogin`'s own pre-flight: a misconfigured secret or broker URL
- *  must answer a clear, static 500 — never a redirect built from a broken
- *  value (a probed failure: an empty `LOGIN_BROKER_URL` produced
- *  `Location: /broker/login?...`, sending the browser at this Worker's own,
- *  nonexistent route). */
+ *  answers a clear, static 500 — never a redirect built from a broken
+ *  value. */
 function configurationError(env: Env): string | null {
   if (!isSessionSecretValid(env)) return "Grafana sign-in is not configured (O11Y_SESSION_SECRET unset or too short).";
   if (!isValidBrokerUrl(env)) return "Grafana sign-in is not configured (LOGIN_BROKER_URL unset or invalid).";
@@ -78,10 +69,9 @@ export const handleLogin: RouteHandler = async (req, env) => {
   const nonce = mintNonce();
   const loginCookie = await signLoginCookie(env, { nonce, next });
 
-  // `next` rides ONLY inside the signed `o11y_login` cookie — never in
-  // `return_to` — so the broker round trip cannot influence it at all (an
-  // open-redirect risk otherwise). `return_to` carries only the nonce,
-  // which the callback echoes back as `?n=`.
+  // `next` rides ONLY inside the signed `o11y_login` cookie, never in
+  // `return_to` (an open-redirect risk otherwise). `return_to` carries
+  // only the nonce, echoed back by the callback as `?n=`.
   const returnTo = `${publicOrigin(env)}/grafana/_o11y/callback?n=${encodeURIComponent(nonce)}`;
   const location = `${env.LOGIN_BROKER_URL}/broker/login?return_to=${encodeURIComponent(returnTo)}`;
 
@@ -94,13 +84,11 @@ export const handleLogin: RouteHandler = async (req, env) => {
 // ---- GET /grafana/_o11y/callback -----------------------------------------
 
 /**
- * The callback page's own script, hash-pinned into the CSP below (no
- * `unsafe-inline`). Strips the URL fragment with `history.replaceState`
- * BEFORE anything else, ahead of the `fetch`, so a token-in-URL never
- * lingers in browser history — then POSTs the token same-origin to
- * `/grafana/_o11y/session` and navigates only to whatever that endpoint
- * returns (never to a caller-controlled value: `sanitizeNext` runs
- * server-side on `next` before it is ever handed back here).
+ * The callback page's own script, hash-pinned into the CSP below. Strips
+ * the URL fragment with `history.replaceState` BEFORE the `fetch`, so a
+ * token-in-URL never lingers in browser history — then POSTs the token
+ * same-origin to `/grafana/_o11y/session` and navigates only to whatever
+ * that endpoint returns (`sanitizeNext` runs server-side).
  */
 const CALLBACK_SCRIPT = `(function(){
   var hash = new URLSearchParams(location.hash.slice(1));
@@ -174,10 +162,9 @@ export const handleCallback: RouteHandler = async () => {
 
   return new Response(html, {
     status: 200,
-    // The broker JWT sits in this page's own URL fragment until the script
-    // strips it — never persisted, and `no-store`/`no-referrer` stop it
-    // leaking through history-adjacent caches or a proxy re-fetch of this
-    // page.
+    // The broker JWT sits in this page's own URL fragment until the
+    // script strips it; `no-store`/`no-referrer` stop it leaking through
+    // history-adjacent caches.
     headers: await staticPageHeaders(CALLBACK_SCRIPT),
   });
 };
@@ -212,24 +199,17 @@ export const handleSession: RouteHandler = async (req, env) => {
   }
   if (!isSessionBody(body)) return jsonResponse({ error: "expected { token: string, n: string }" }, 400);
 
-  // Login-CSRF / fixation binding: the state this browser itself minted at
-  // `/login` must still be present (a request with NO `o11y_login` cookie
-  // at all is refused here too — the real shape a login-CSRF attempt
-  // takes, not merely a mismatched nonce) and must name the SAME nonce the
-  // callback's `?n=` carried — an attacker who tricks a victim into
-  // visiting a crafted
-  // `/callback?n=<attacker's own nonce>#token=<attacker's own token>`
-  // cannot complete this exchange without also forging the victim's signed
-  // `o11y_login` cookie.
+  // Login-CSRF binding: the state minted at `/login` must still be
+  // present (a missing `o11y_login` cookie is refused too) and must name
+  // the SAME nonce the callback's `?n=` carried, so an attacker cannot
+  // complete the exchange without forging the victim's signed cookie.
   const state = await verifyLoginCookie(req, env);
   if (!state || state.nonce !== body.n) {
     return jsonResponse({ error: "nonce_mismatch" }, 401);
   }
 
-  // One live verification against the broker (never cached, never trusted
-  // beyond this single call) — the broker JWT itself is discarded the
-  // moment this returns; it is NEVER stored, logged, or placed in any
-  // cookie. Only the email it names ends up in `o11y_session`.
+  // One live verification against the broker, never cached: the JWT is
+  // discarded the moment this returns, never stored, logged, or cookied.
   const identity = await resolveBrokerIdentity(env, body.token);
   if (!identity) return jsonResponse({ error: "not_authorized" }, 401);
 
@@ -247,11 +227,8 @@ export const handleSession: RouteHandler = async (req, env) => {
 // ---- GET /grafana/_o11y/logout (a same-origin sign-out page) ------------
 
 /** Fires the actual, CSRF-protected `POST /grafana/_o11y/logout` from a
- *  same-origin script (never a bare `<a href>`/GET — that would make
- *  logout forgeable by any cross-site top-level navigation under
- *  `SameSite=Lax`). This page exists only so a person has somewhere to
- *  click — Grafana's own sign-out menu item is disabled
- *  (`grafana.ini:23`). */
+ *  same-origin script — a bare `<a href>`/GET would be forgeable under
+ *  `SameSite=Lax`. Grafana's own sign-out menu item is disabled. */
 const LOGOUT_SCRIPT = `(function(){
   var msg = document.getElementById("m");
   fetch("/grafana/_o11y/logout", {
