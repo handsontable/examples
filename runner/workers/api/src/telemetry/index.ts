@@ -9,6 +9,7 @@
 //   spans.ts        — feature-detected `tracing.enterSpan` wrapper.
 //   cron-step.ts    — `cronStep`, one isolated cron step + its Sentry capture.
 //   cron.ts         — `*/5` `pool.gauge` / `budget.gauge`.
+//   example-saved.ts — `example.saved` attrs for an editor Save.
 
 export * from "./resource.js";
 export * from "./points.js";
@@ -19,3 +20,4 @@ export * from "./diagnostic.js";
 export * from "./spans.js";
 export * from "./cron-step.js";
 export * from "./cron.js";
+export * from "./example-saved.js";

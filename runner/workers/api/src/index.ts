@@ -81,6 +81,7 @@ import {
   emitBudgetGauge,
   emitPoint,
   emitPoolGauge,
+  exampleSavedAttrs,
   logCronTickLine,
   logErrorLine,
   logRequestLine,
@@ -1793,7 +1794,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         if (!isPlainRecord(rawPatch)) return json({ error: "request body must be a plain record" }, 400);
         const patch = rawPatch as {
           title?: string; description?: string | null; visibility?: string;
-          files?: Record<string, string>; htVersion?: string;
+          files?: Record<string, string>; htVersion?: string; exampleHtMajor?: unknown;
         };
         // Validated once for both branches below. `undefined` still means "leave
         // it alone" and `null` "clear it" — the distinction the description edit
@@ -1860,6 +1861,8 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             ...(patchDescription !== undefined ? { description: patchDescription } : {}),
             now: nowIso(),
           });
+          const savedAttrs = exampleSavedAttrs(demoId, row.framework, patch.exampleHtMajor);
+          if (savedAttrs) ctx.waitUntil(emitPoint(env, "example.saved", { count: 1 }, savedAttrs));
           // The ref the rebuild actually used, which the picker may not have asked
           // for (a pin the payload carried outranks a dist-tag).
           return json({ ok: true, htVersion: version.ref });
