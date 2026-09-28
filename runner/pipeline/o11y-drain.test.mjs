@@ -530,7 +530,7 @@ async function pushedText(gz) {
   return new Response(stream).text();
 }
 
-test("a stream-limit 429 rejects that key without a retry, and the batch goes on to commit the keys after it", async () => {
+test("a stream-limit 429 defers that key without a retry, skips its tenant's later keys unfetched, and the other tenant still commits", async () => {
   const overKey = "inbox/browser/2026-01-01/00/000000000000.ndjson.gz";
   const laterKey = "inbox/browser/2026-01-01/00/000000000001.ndjson.gz";
   const workerKey = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
@@ -539,9 +539,13 @@ test("a stream-limit 429 rejects that key without a retry, and the batch goes on
     [laterKey]: await objectBytes([record("later")]),
     [workerKey]: await objectBytes([record("worker-tenant")]),
   };
+  const fetched = [];
   const pushes = [];
   const deps = {
-    fetchObject: async (k) => objects[k] ?? null,
+    fetchObject: async (k) => {
+      fetched.push(k);
+      return objects[k] ?? null;
+    },
     pushToLoki: async (_tenant, gz) => {
       const text = await pushedText(gz);
       pushes.push(text);
@@ -549,20 +553,26 @@ test("a stream-limit 429 rejects that key without a retry, and the batch goes on
     },
     symbolicate: noopSymbolicate,
   };
+  const streamLimited = new Set();
 
-  const result = await drainBatch([overKey, laterKey, workerKey], new Set(), deps);
+  const result = await drainBatch([overKey, laterKey, workerKey], new Set(), deps, streamLimited);
 
   assert.equal(result.stoppedEarly, false, "a stream-limit refusal must not stop the drain");
   assert.deepEqual(
-    result.outcomes.map((o) => o.outcome),
-    ["rejected", "provisional", "provisional"],
+    result.outcomes.map((o) => [o.outcome, o.deferral]),
+    [
+      ["deferred", "stream_limit"],
+      ["deferred", "tenant_limited"],
+      ["provisional", undefined],
+    ],
   );
-  assert.equal(result.outcomes[0].reason, STREAM_LIMIT_MESSAGE, "the rejection carries Loki's own message for the rejectedEvent");
+  assert.equal(result.outcomes[0].reason, STREAM_LIMIT_MESSAGE);
   assert.equal(pushes.filter((p) => p.includes("too-many-streams")).length, 1, "a stream-limit 429 is never retried");
-  assert.ok(pushes.some((p) => p.includes("later")) && pushes.some((p) => p.includes("worker-tenant")));
+  assert.deepEqual(fetched, [overKey, workerKey], "a limited tenant's later keys are not even fetched");
+  assert.deepEqual([...streamLimited], ["browser"]);
 });
 
-test("a stream-limit 429 on one chunk is a partial reject, never a clean provisional", async () => {
+test("a stream-limit 429 on a later chunk defers the whole key, never a clean provisional", async () => {
   const key = "inbox/browser/2026-01-01/00/000000000000.ndjson.gz";
   const bigBody = "x".repeat(700_000);
   const bytes = await objectBytes([record(bigBody + "-first"), record(bigBody + "-second")]);
@@ -581,8 +591,8 @@ test("a stream-limit 429 on one chunk is a partial reject, never a clean provisi
   const outcome = await drainKey(key, new Set(), deps);
 
   assert.equal(secondAttempts, 1, "the refused chunk must not be retried into a silent 204");
-  assert.equal(outcome.outcome, "provisional");
-  assert.equal(outcome.reason, STREAM_LIMIT_MESSAGE, "the refused chunk must reach recordPartialReject");
+  assert.equal(outcome.outcome, "deferred", "the key stays written, so a later wake re-pushes it whole");
+  assert.equal(outcome.deferral, "stream_limit");
 });
 
 /** A Loki-shaped push target with one stream table per tenant: a record's
@@ -602,28 +612,24 @@ function streamTableLoki(limit) {
   };
 }
 
-test("after one key fills a tenant's stream table, a later key needing a new stream is deferred, not rejected; other tenants and existing streams still drain", async () => {
-  const poison = "inbox/browser/2026-01-01/00/000000000000.ndjson.gz";
-  const newStream = "inbox/browser/2026-01-01/00/000000000001.ndjson.gz";
-  const oldStream = "inbox/browser/2026-01-01/00/000000000002.ndjson.gz";
+test("the key that meets a table another key filled is deferred, not rejected: a stream-limit 429 never rejects", async () => {
+  const primer = "inbox/browser/2026-01-01/00/000000000000.ndjson.gz";
+  const innocent = "inbox/browser/2026-01-01/00/000000000001.ndjson.gz";
   const worker = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const objects = {
-    [poison]: await objectBytes(["s1", "s2", "s3", "s4", "s5"].map((b) => record(b))),
-    [newStream]: await objectBytes([record("n1")]),
-    [oldStream]: await objectBytes([record("s1")]),
+    [primer]: await objectBytes(["s1", "s2", "s3"].map((b) => record(b))),
+    [innocent]: await objectBytes([record("n1")]),
     [worker]: await objectBytes([record("w1")]),
   };
-  const streamLimited = new Set();
   const deps = { fetchObject: async (k) => objects[k] ?? null, pushToLoki: streamTableLoki(3), symbolicate: noopSymbolicate };
 
-  const result = await drainBatch([poison, newStream, oldStream, worker], new Set(), deps, streamLimited);
+  const result = await drainBatch([primer, innocent, worker], new Set(), deps, new Set());
 
-  assert.equal(result.stoppedEarly, false);
   assert.deepEqual(
     result.outcomes.map((o) => o.outcome),
-    ["rejected", "deferred", "provisional", "provisional"],
+    ["provisional", "deferred", "provisional"],
   );
-  assert.deepEqual([...streamLimited], ["browser"]);
+  assert.ok(result.outcomes.every((o) => o.outcome !== "rejected" && (o.outcome !== "provisional" || o.reason === undefined)));
 });
 
 for (const message of ["Ingestion rate limit exceeded for user browser (limit: 4194304 bytes/sec)", "Per stream rate limit exceeded (limit: 3MB/sec) while attempting to ingest for stream '{service_name=\"demos-api\"}'", undefined]) {

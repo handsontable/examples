@@ -96,14 +96,15 @@ export interface DrainDeps {
 export interface KeyOutcome {
   key: string;
   tenant: Tenant;
-  /** `deferred`: the inbox object could not be read, or its tenant's stream
-   *  table was already full this wake; the key stays `written` and, unlike
-   *  `error`, the batch continues. */
+  /** `deferred`: left `written` for a later wake, see {@link KeyOutcome.deferral};
+   *  unlike `error`, the batch continues. */
   outcome: "provisional" | "rejected" | "error" | "deferred";
-  /** Set on `rejected` (why), and also on `provisional` when one chunk
-   *  2xx'd but another was permanently refused (400, stream limit) — the
-   *  caller should still surface this via `recordPartialReject`.
-   *  `undefined` on a fully clean `provisional`. */
+  /** Set on `deferred` only: the inbox read threw, this key hit Loki's stream
+   *  limit, or its tenant already had (so it was not fetched). */
+  deferral?: "fetch_error" | "stream_limit" | "tenant_limited";
+  /** Set on `rejected` (why), on `deferred`, and also on `provisional` when
+   *  one chunk 2xx'd but another 400'd — the caller should still surface
+   *  that via `recordPartialReject`. `undefined` on a fully clean `provisional`. */
   reason?: string;
   bytesPushed: number;
   /** Records dropped by {@link dropOldRecords} before this key's push.
@@ -120,18 +121,13 @@ export interface DrainBatchResult {
   stoppedEarly: boolean;
 }
 
-/** Loki's per-tenant active-stream limit (5000 by default): the box's single
- *  ingester starts empty every wake, so a key over it 429s on every wake, and a
- *  retry can answer 204 with the excess streams dropped. Never transient. */
+/** Loki's per-tenant active-stream limit: the ingester keeps its streams until
+ *  it stops, so this 429 lasts the rest of the wake, and a retry can answer 204
+ *  with the excess streams dropped. Never retried; the key waits for a new wake. */
 const STREAM_LIMIT_RE = /stream limit/i;
 
 function isStreamLimit(result: LokiPushResult): boolean {
   return result.status === 429 && STREAM_LIMIT_RE.test(result.message ?? "");
-}
-
-/** A push Loki refuses for good: never retried, recorded as a rejected chunk. */
-function isPermanentRefusal(result: LokiPushResult): boolean {
-  return result.status === 400 || isStreamLimit(result);
 }
 
 const MAX_RETRIES = 3;
@@ -193,7 +189,7 @@ async function pushChunkWithRetry(
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     result = await deps.pushToLoki(tenant, gz);
     if (result.status >= 200 && result.status < 300) return { result, bytesPushed: gz.byteLength };
-    if (isPermanentRefusal(result)) return { result, bytesPushed: 0 };
+    if (result.status === 400 || isStreamLimit(result)) return { result, bytesPushed: 0 }; // never retried
     const delay = RETRY_DELAYS_MS[attempt];
     if (attempt < MAX_RETRIES && delay !== undefined) await sleep(delay);
   }
@@ -215,14 +211,16 @@ export async function drainKey(
   const parsed = parseInboxKey(key);
   if (!parsed) return { key, tenant: "worker", outcome: "rejected", reason: "unparseable_key", bytesPushed: 0, droppedOld: 0 };
   const { tenant } = parsed;
-  const tenantWasLimited = streamLimited.has(tenant);
+  if (streamLimited.has(tenant)) {
+    return { key, tenant, outcome: "deferred", deferral: "tenant_limited", reason: "stream_limit", bytesPushed: 0, droppedOld: 0 };
+  }
 
   let raw: Uint8Array | null;
   try {
     raw = await deps.fetchObject(key);
   } catch (err) {
     const reason = `fetch_error: ${err instanceof Error ? err.message : String(err)}`;
-    return { key, tenant, outcome: "deferred", reason, bytesPushed: 0, droppedOld: 0 };
+    return { key, tenant, outcome: "deferred", deferral: "fetch_error", reason, bytesPushed: 0, droppedOld: 0 };
   }
   if (!raw) return { key, tenant, outcome: "rejected", reason: "object_missing", bytesPushed: 0, droppedOld: 0 };
 
@@ -265,30 +263,30 @@ export async function drainKey(
     fresh.push(record);
   }
 
-  // A 400 or a stream-limit 429 permanently rejects that one chunk (never
-  // retried), but every chunk is still attempted — stopping at the first
-  // refusal would silently drop later chunks of a >1 MB object that would
-  // have pushed cleanly. A key with at least one 2xx chunk still ends
-  // `provisional`: its accepted content follows the normal durability path,
-  // and a replay deterministically re-derives the same classification (the
-  // bad chunk is refused again, harmless; good chunks are redundantly
-  // re-confirmed via Loki's own dedup). Only a key with ZERO accepted chunks
-  // ends `rejected`. `reason` carries Loki's detail for `recordPartialReject`.
+  // A 400 permanently rejects that one chunk (never retried), but every
+  // chunk is still attempted — stopping at the first 400 would silently
+  // drop later chunks of a >1 MB object that would have pushed cleanly.
+  // A key with at least one 2xx chunk still ends `provisional`: its
+  // accepted content follows the normal durability path, and a replay
+  // deterministically re-derives the same classification (the bad chunk
+  // 400s again, harmless; good chunks are redundantly re-confirmed via
+  // Loki's own dedup). Only a key with ZERO accepted chunks ends
+  // `rejected`. `reason` carries the 400 detail for `recordPartialReject`.
   let bytesPushed = 0;
   let rejectedReason: string | undefined;
   for (const chunk of chunkBySize(fresh)) {
     const { result, bytesPushed: chunkBytes } = await pushChunkWithRetry(tenant, chunk, deps);
     bytesPushed += chunkBytes;
     if (isStreamLimit(result)) {
-      // Only the key that first fills the tenant's stream table this wake is
-      // refused; a later key that needs a new stream waits for a fresh ingester.
-      if (tenantWasLimited) {
-        return { key, tenant, outcome: "deferred", reason: result.message ?? "stream_limit", bytesPushed, droppedOld };
-      }
+      // The table may have been filled by earlier keys, so this key is never
+      // blamed: it stays `written` (a replay re-pushes chunks that landed) and
+      // the tenant is skipped for the rest of the wake.
       streamLimited.add(tenant);
+      const reason = result.message ?? "stream_limit";
+      return { key, tenant, outcome: "deferred", deferral: "stream_limit", reason, bytesPushed, droppedOld };
     }
-    if (isPermanentRefusal(result)) {
-      rejectedReason ??= result.message ?? `loki_${result.status}`;
+    if (result.status === 400) {
+      rejectedReason ??= result.message ?? "loki_400";
       continue; // keep pushing the REST of this key's chunks — don't lose them
     }
     if (result.status < 200 || result.status >= 300) {
@@ -315,7 +313,8 @@ export async function drainKey(
  *  outcome (leaves it and everything after it `written`, per
  *  {@link DrainBatchResult.stoppedEarly}'s own doc comment). A `deferred`
  *  key does not stop the batch. `streamLimited` holds the tenants that hit
- *  Loki's stream limit earlier in this wake, and gains any that hit it now. */
+ *  Loki's stream limit earlier in this wake (their keys are not fetched), and
+ *  gains any that hit it now. */
 export async function drainBatch(
   keys: readonly string[],
   seenHashes: Set<string>,
