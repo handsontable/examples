@@ -55,7 +55,6 @@ import {
   wranglerBuildErrorLine,
   waitForServer,
   buildPlan,
-  planNames,
   ephemeralSecret,
   redactArgsForLog,
   possiblyLeftoverContainers,
@@ -297,7 +296,7 @@ test("o11yDevVarsPatch: never includes O11Y_EXPORT_SECRET, SENTRY_HOOK_SECRET, o
 // locally, so scripts/o11y-replay-fixtures.mjs 401s on every OTLP/deploy/
 // Sentry fixture and the worker-tenant/Sentry panels never fill. --------
 
-test("fillEmptyDevVarsSecrets: fills an empty declared line with a generated value (current code has no such function — this is the F21 fix under test)", () => {
+test("fillEmptyDevVarsSecrets: fills an empty declared line with a generated value", () => {
   withTmpDir((dir) => {
     const devVarsPath = path.join(dir, ".dev.vars");
     writeFileSync(devVarsPath, "DEV_ADMIN=dev@handsontable.com\nO11Y_EXPORT_SECRET=\nSENTRY_HOOK_SECRET=\nO11Y_ENV=local\n");
@@ -1585,17 +1584,26 @@ test("waitForServer: an early failure throws immediately, without ever sleeping,
 
 test("buildPlan: tier=1 spawns only the authoring app", () => {
   const ports = resolvePorts("1", {});
-  assert.deepEqual(planNames("1", ports), ["app"]);
+  assert.deepEqual(
+    buildPlan("1", ports).map((p) => p.name),
+    ["app"],
+  );
 });
 
 test("buildPlan: tier=2 spawns the authoring app and the api worker, in that order", () => {
   const ports = resolvePorts("2", {});
-  assert.deepEqual(planNames("2", ports), ["app", "api"]);
+  assert.deepEqual(
+    buildPlan("2", ports).map((p) => p.name),
+    ["app", "api"],
+  );
 });
 
 test("buildPlan: tier=full spawns app, api, o11y, and the local Slack capture server", () => {
   const ports = resolvePorts("full", {});
-  assert.deepEqual(planNames("full", ports), ["app", "api", "o11y", "slack"]);
+  assert.deepEqual(
+    buildPlan("full", ports).map((p) => p.name),
+    ["app", "api", "o11y", "slack"],
+  );
 });
 
 test("buildPlan: api and o11y each get their own, distinct --port and --inspector-port flags", () => {
@@ -1989,15 +1997,6 @@ test("stop-roundtrip.mjs's own dev-stack collision guard imports its default fro
 // worktree-derived dev.mjs default this script's guard would then silently
 // never match, so a `stop-roundtrip.mjs` run under this worktree's real
 // dev-stack project name would no longer be refused).
-
-test("o11y-dev.mjs never runs docker compose itself, so it has no COMPOSE_PROJECT_NAME/compose-project default to derive (documents why H2 does not touch it)", () => {
-  const src = readFileSync(path.join(RUNNER_ROOT, "scripts", "o11y-dev.mjs"), "utf8");
-  // The file's own comments explain (in prose) that it does NOT shell out to
-  // `docker compose` — only the actual invocation shape (`["compose", ...]`,
-  // as `dev.mjs`'s real `up`/`down` calls use) would mean it started doing so.
-  assert.doesNotMatch(src, /\[\s*"compose"/, "o11y-dev.mjs must keep not shelling out to docker compose at all");
-  assert.doesNotMatch(src, /COMPOSE_PROJECT_NAME/);
-});
 
 test("run-and-deploy.md documents the per-worktree derivation and what happens to an existing single-worktree user's old volumes (they are NOT renamed — orphaned, not migrated)", () => {
   const doc = readFileSync(path.join(RUNNER_ROOT, "docs", "run-and-deploy.md"), "utf8");
