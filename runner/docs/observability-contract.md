@@ -321,6 +321,17 @@ written). The editor emits the browser `example.saved` only when a response lack
 key, i.e. an API that does not count saves; that fallback can be removed once every
 deployed API sends the marker.
 
+A build that rejects the demo's own code is client input. That means the build command
+exited with a code from 1 to 127 (`isUserBuildError` in `workers/api/src/share.ts`), on
+any route that builds inline: `POST /api/demos`, `PATCH /api/demos/:id`, `POST
+/api/mcp/demos` and `PATCH /api/mcp/demos/:id`. It answers `422 {"error":"build_failed",
+"detail":<the build error, one line>}`, so `api.request` records it as `4xx`, and the
+`api-5xx-rate` alert (`workers/o11y/src/alerts/rules.ts`, which counts `5xx` outcomes)
+never sees it. `snapshot.build` still records `failed`. The stored demo is unchanged,
+because the build runs before anything is written. An install failure, a build killed by
+a signal (exit code 128 and above), a result without an exit code, and any other throw
+stay `5xx`.
+
 `serve.share` locally: under `vite dev` (what `pnpm dev:full` serves), React
 StrictMode runs the share page's load effect twice, so one `/share/<id>` view gives 2
 points. A production build gives 1 (measured on `vite preview`).

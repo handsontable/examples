@@ -44,7 +44,7 @@ import {
 } from "./session-lifecycle.js";
 import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
-import { BuildFailure, buildFailureTags, createDemo, createPendingDemo, demoBuildState, getDemo, getDemoSource, hasCachedBuild, invalidateDemo, serveDemoAsset, shortId, updateDemo, withEntryScript, type DemoRow } from "./share.js";
+import { BuildFailure, buildFailureTags, createDemo, createPendingDemo, demoBuildState, getDemo, getDemoSource, hasCachedBuild, invalidateDemo, isUserBuildError, serveDemoAsset, shortId, updateDemo, userBuildErrorDetail, withEntryScript, type DemoRow } from "./share.js";
 import { BuildJobBase, scheduleSnapshotBuild } from "./snapshot-jobs.js";
 import {
   budgetPausedMessage,
@@ -2613,6 +2613,9 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // an `Error.message` is what invented DEMOS-1Y's culprit.
           ...(err.log ? { extra: { buildLog: err.log } } : {}),
         });
+        // The demo's own code failing to build is client input: a 4xx, so it stays out
+        // of `api-5xx-rate`; the stored demo is untouched because the build runs first.
+        if (isUserBuildError(err)) return json({ error: "build_failed", detail: userBuildErrorDetail(err) }, 422);
         return json({ error: err.message }, 500);
       }
       logErrorLine(env, "fetch-catch-all", err);

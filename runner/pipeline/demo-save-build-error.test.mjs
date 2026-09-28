@@ -1,0 +1,149 @@
+// A Save or create whose build rejects the demo's own code is client input: 422
+// `build_failed` with the build error as `detail`, an `api.request` 4xx (so
+// `api-5xx-rate` never sees it), a `snapshot.build failed` point, and the stored demo
+// untouched. Anything else that breaks a build is still a 5xx. Driven through the real
+// router with a scripted builder container.
+//
+// Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
+// Run: node --experimental-strip-types --test pipeline/demo-save-build-error.test.mjs
+
+import test, { after } from "node:test";
+import assert from "node:assert/strict";
+import { register } from "node:module";
+import { AUTHOR, SECRET, demoRow, makeEnv, seedCatalog } from "./fixtures/worker-harness.mjs";
+import { setSandboxFactory } from "./fixtures/cloudflare-sandbox-stub.mjs";
+
+register("./fixtures/worker-hooks.mjs", import.meta.url);
+
+const { default: worker } = await import("../workers/api/src/index.ts");
+
+const REAL_FETCH = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = typeof input === "string" ? input : input.url;
+  if (url.startsWith("https://login.invalid") && init?.headers?.Authorization === "Bearer test-token") {
+    return Response.json({ email: AUTHOR, sub: "u1" });
+  }
+  throw new Error(`unexpected network fetch in demo-save-build-error.test.mjs: ${url}`);
+};
+after(() => {
+  globalThis.fetch = REAL_FETCH;
+  setSandboxFactory(null);
+});
+
+const DEMO_ID = "abc123";
+const INDEX_HTML =
+  '<!doctype html><html><body><div id="root"></div>'
+  + '<script type="module" src="/src/index.tsx"></script></body></html>';
+const FILES = {
+  "/package.json": JSON.stringify({ name: "demo", dependencies: { handsontable: "16.0.2" }, devDependencies: { vite: "^5.4.0" } }),
+  "/index.html": INDEX_HTML,
+  "/src/index.tsx": "const X = ;\n",
+};
+
+/** The stderr of a `vite build` that rejects a syntax error. Its announced cause is
+ *  only headings, so the useful line is the one after them. */
+const SYNTAX_ERROR_LOG =
+  "vite v7.1.0 building for production...\ntransforming...\nerror during build:\n"
+  + "Build failed with 1 error:\n/app/src/index.tsx:1:10: ERROR: Unexpected \";\"\n";
+
+/** A builder whose install succeeds and whose build command answers `build`. */
+function builder(build) {
+  return () => ({
+    mkdir: async () => {},
+    writeFile: async () => {},
+    readFile: async () => "",
+    destroy: async () => {},
+    async exec(cmd) {
+      if (cmd.includes("pnpm install")) return { success: true, exitCode: 0, stdout: "", stderr: "" };
+      return build(cmd);
+    },
+  });
+}
+
+const rejectsCode = builder(() => ({ success: false, exitCode: 1, stdout: "", stderr: SYNTAX_ERROR_LOG }));
+
+/** The route's env with a build-cache miss (so the builder runs) and points in memory. */
+function setup(rows = [demoRow({ id: DEMO_ID, framework: "react", ht_version: "16.0.2" })]) {
+  const harness = makeEnv(rows, [], {}, { buildCacheHit: false });
+  const { env } = harness;
+  const points = [];
+  env.RUNNER_EVENTS = { writeDataPoint: (p) => points.push(p) };
+  env.PREVIEW_HOST = "demos.handsontable.com";
+  const pending = [];
+  const ctx = { waitUntil: (p) => pending.push(Promise.resolve(p)), passThroughOnException() {} };
+  /** Every point of `metric`, once the work scheduled past the response (which
+   *  itself schedules more) has settled. */
+  const pointsOf = async (metric) => {
+    for (let seen = -1; seen !== pending.length;) {
+      seen = pending.length;
+      await Promise.allSettled(pending);
+    }
+    return points.filter((p) => p.indexes[0] === metric);
+  };
+  return { ...harness, ctx, pointsOf };
+}
+
+const authed = { "Content-Type": "application/json", Authorization: "Bearer test-token" };
+const mcpHeaders = { "Content-Type": "application/json", "X-MCP-Secret": SECRET, "X-Demo-Author": AUTHOR };
+
+const request = (method, path, headers, body) =>
+  new Request(`https://demos.handsontable.com${path}`, { method, headers, body: JSON.stringify(body) });
+
+const ROUTES = [
+  ["PATCH /api/demos/:id (editor Save)", () => request("PATCH", `/api/demos/${DEMO_ID}`, authed, { files: FILES, htVersion: "16.0.2" })],
+  ["POST /api/demos (fork, embed)", () => request("POST", "/api/demos", authed, { framework: "react", files: FILES, title: "Grid", htVersion: "16.0.2" })],
+  ["PATCH /api/mcp/demos/:id", () => request("PATCH", `/api/mcp/demos/${DEMO_ID}`, mcpHeaders, { files: FILES, htVersion: "16.0.2" })],
+  ["POST /api/mcp/demos", () => request("POST", "/api/mcp/demos", mcpHeaders, { framework: "react", files: FILES, title: "Grid", description: "A grid", htVersion: "16.0.2" })],
+];
+
+/** What `api.request` recorded for the one request: its outcome blob. */
+async function requestOutcomes(pointsOf) {
+  return (await pointsOf("api.request")).map((p) => p.blobs.find((b) => /^[2-5]xx$/.test(b)));
+}
+
+for (const [name, makeRequest] of ROUTES) {
+  test(`${name}: code the build rejects is a 422 build_failed with the build error, recorded as 4xx`, async () => {
+    setSandboxFactory(rejectsCode);
+    const { env, ctx, pointsOf, writes, artifacts, demos } = setup();
+    await seedCatalog(env);
+    const before = JSON.stringify(demos.get(DEMO_ID));
+
+    const res = await worker.fetch(makeRequest(), env, ctx);
+
+    assert.equal(res.status, 422);
+    assert.deepEqual(await res.json(), { error: "build_failed", detail: 'error during build: Build failed with 1 error: src/index.tsx:1:10: ERROR: Unexpected ";"' });
+    assert.deepEqual(await requestOutcomes(pointsOf), ["4xx"], "one api.request point, and it is not a 5xx");
+    const builds = await pointsOf("snapshot.build");
+    assert.equal(builds.length, 1);
+    assert.ok(builds[0].blobs.includes("failed"), "snapshot.build keeps its failed outcome");
+    // The demo is unchanged: no artifact, no source snapshot, no row written.
+    assert.deepEqual(artifacts.puts.filter((p) => p.key.startsWith("demos/")), []);
+    assert.deepEqual(writes.filter((w) => /\bdemos\b/.test(w.sql) && !/build_cache/.test(w.sql)), []);
+    assert.equal(JSON.stringify(demos.get(DEMO_ID)), before);
+  });
+}
+
+const INFRA_FAILURES = [
+  ["a build killed by a signal (OOM)", builder(() => ({ success: false, exitCode: 137, stdout: "", stderr: "Killed\n" }))],
+  ["a build result without an exit code", builder(() => ({ success: false, stdout: "", stderr: "error during build:\nsomething\n" }))],
+  ["an exec that throws (container lost)", builder(() => { throw new Error("container is not running"); })],
+  ["an install that fails", () => ({
+    mkdir: async () => {},
+    writeFile: async () => {},
+    readFile: async () => "",
+    destroy: async () => {},
+    exec: async () => ({ success: false, exitCode: 1, stdout: "", stderr: " ERR_PNPM_FETCH_503  GET https://registry.npmjs.org/vite: Service Unavailable - 503\n" }),
+  })],
+];
+
+for (const [name, factory] of INFRA_FAILURES) {
+  test(`an editor Save that fails on ${name} stays a 5xx`, async () => {
+    setSandboxFactory(factory);
+    const { env, ctx, pointsOf } = setup();
+    await seedCatalog(env);
+    const res = await worker.fetch(ROUTES[0][1](), env, ctx);
+    assert.equal(res.status, 500);
+    assert.notEqual((await res.json()).error, "build_failed");
+    assert.deepEqual(await requestOutcomes(pointsOf), ["5xx"]);
+  });
+}

@@ -175,13 +175,15 @@ export class BuildFailure extends Error {
   // falsy sentinel to omit rather than fabricate a tag.
   readonly htRef: string | null;
   readonly framework: string | null;
+  /** The failed command's exit code, `null` when the exec result carried none. */
+  readonly exitCode: number | null;
 
   constructor(
     message: string,
     phase: "install" | "build",
     code: string,
     log = "",
-    context: { htRef?: string | null; framework?: string | null } = {},
+    context: { htRef?: string | null; framework?: string | null; exitCode?: number | null } = {},
   ) {
     super(message);
     this.phase = phase;
@@ -189,14 +191,44 @@ export class BuildFailure extends Error {
     this.log = log;
     this.htRef = context.htRef ?? null;
     this.framework = context.framework ?? null;
+    this.exitCode = context.exitCode ?? null;
   }
+}
+
+/** The build command ran and rejected the demo's own code (a vite/rollup/esbuild error):
+ *  client input, answered 422. An install failure, a command killed by a signal (exit
+ *  code 128 and above, e.g. an OOM kill) or a result without an exit code is ours. */
+export function isUserBuildError(err: unknown): err is BuildFailure {
+  return err instanceof BuildFailure && err.phase === "build"
+    && err.exitCode !== null && err.exitCode > 0 && err.exitCode < 128;
+}
+
+/** Longest `detail` a 422 carries; the full output stays in the Sentry `buildLog`. */
+const USER_BUILD_DETAIL_MAX = 300;
+
+/** The one-line build error shown to the author: the cause without the `build failed:`
+ *  prefix, completed from the log when the cause is only headings (`error during build:
+ *  Build failed with 1 error:`), with container paths made relative and the length bounded. */
+export function userBuildErrorDetail(err: BuildFailure): string {
+  let detail = err.message.replace(/^build failed:\s*/, "");
+  const lines = err.log.split("\n").map((l) => l.trim()).filter(Boolean);
+  let at = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (detail.endsWith(lines[i]!)) { at = i; break; }
+  }
+  while (/:\s*$/.test(detail) && at >= 0 && at + 1 < lines.length) {
+    at += 1;
+    detail = `${detail} ${lines[at]}`;
+  }
+  detail = detail.split(`${CONTAINER_ROOT}/`).join("");
+  return detail.length > USER_BUILD_DETAIL_MAX ? `${detail.slice(0, USER_BUILD_DETAIL_MAX - 1)}…` : detail;
 }
 
 /** Describe a failed exec as a one-line cause plus its bounded output. Exported for
  *  `pipeline/failure-log.test.mjs`, which owns the "a message is never a log" rule. */
 export function describeBuildFailure(
   phase: "install" | "build",
-  r: { stdout?: string; stderr?: string },
+  r: { stdout?: string; stderr?: string; exitCode?: number },
   context: { htRef?: string | null; framework?: string | null } = {},
 ): BuildFailure {
   const { cause, tail, code } = execFailureDetail(r, {
@@ -204,7 +236,10 @@ export function describeBuildFailure(
     maxTailChars: BUILD_LOG_MAX,
     fallback: "no output",
   });
-  return new BuildFailure(`${phase} failed: ${cause}`, phase, code, tail, context);
+  return new BuildFailure(`${phase} failed: ${cause}`, phase, code, tail, {
+    ...context,
+    exitCode: typeof r.exitCode === "number" ? r.exitCode : null,
+  });
 }
 
 /** Sentry tags for a snapshot build failure. A key is OMITTED when its value is
