@@ -801,31 +801,56 @@ test("POST /telemetry/lite: the same beacon (same id) posted twice is 1 accepted
 });
 
 // F32: the conditional spread in `lite.ts` (`...(body.id !== undefined ? {
-// extra: { beacon_id: body.id } } : {})`) must leave the hash of an id-less
-// beacon byte-for-byte unchanged from before this field existed — an id-less
-// beacon only ever comes from an old, already-cached `/d`/`/embed` reporter
-// that this change cannot update. This pins the literal SHA-256 hex computed
-// with `hashRecord` on the base commit (`a2e5c361a`, before F32), for a fixed
-// `PreHashRecord` with no `extra` key at all — the exact shape `lite.ts`
-// builds for a beacon with no `id`.
-test("F32: hashRecord for an id-less record matches its pre-F32 literal value exactly", async () => {
+// extra: { beacon_id: body.id } } : {})`) must leave the DEDUPE HASH of an
+// id-less beacon byte-for-byte unchanged from before this change — an
+// id-less beacon only ever comes from an old, already-cached `/d`/`/embed`
+// reporter that cannot be made to send one. Driven through the REAL route
+// (`worker.fetch`), not a hand-built `PreHashRecord`, so this actually
+// exercises the conditional spread in `lite.ts` rather than `hashRecord` in
+// isolation. The hash itself is never in the HTTP response, so this reads it
+// back from the `hash:<yyyymmdd>:<sha256>` key `InboxWriter`'s dedupe bucket
+// writes (`inbox/dedupe.ts#bucketedHashKey`) — the same key format
+// `pruneHashBuckets` sweeps.
+//
+// The pinned literal was captured by running this exact request (fixed
+// payload, fixed `ts`, no `id`) through `workers/o11y/src/lite.ts` as it
+// stood at the base commit (`a2e5c361a`, before F32): `git checkout
+// a2e5c361a -- workers/o11y/src/lite.ts`, capture, `git checkout HEAD --` to
+// restore. The current (F32) code reproduces it byte-for-byte.
+test("F32: the dedupe hash of an id-less beacon matches its pre-F32 literal value exactly (guards the conditional spread)", async () => {
+  const { env, doStorage } = freshEnv();
+  const payload = litePayload({ ts: 1700000000000 }); // litePayload()'s own defaults carry no `id` field at all
+  assert.equal("id" in payload, false, "precondition: the request carries no id field");
+
+  const res = await worker.fetch(liteRequest(payload), env, ctx);
+  await ctx.drain();
+  assert.equal(res.status, 204);
+
+  const hashKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("hash:"));
+  assert.equal(hashKeys.length, 1, "exactly one dedupe hash bucket entry must be written");
+  const match = /^hash:\d{8}:([0-9a-f]{64})$/.exec(hashKeys[0]);
+  assert.ok(match, `unexpected hash key shape: ${hashKeys[0]}`);
+  assert.equal(
+    match[1],
+    "9b995c41f1b322b45ea017d0321bb713e807b7c7e3e257c8620a1aaa82ee271e",
+    "an id-less beacon must hash exactly as it did before F32 — the conditional spread must add no key at all",
+  );
+});
+
+// Unit-level companion to the route-level test above, on `hashRecord`
+// directly: a record carrying the `extra.beacon_id` key `lite.ts` adds once
+// `body.id !== undefined` must hash to something ELSE than the same record
+// without it — otherwise the whole feature would be a no-op.
+test("F32: hashRecord: adding a beacon id to `extra` changes the hash", async () => {
   const record = {
     body: "TypeError: grid.render is not a function",
     resourceAttributes: { "hot.surface": "d", "hot.demo_id": "abc12345" },
     attributes: {},
     rawEventTime: "1700000000000",
   };
-  const hash = await hashRecord(record);
-  assert.equal(
-    hash,
-    "75b9245e38012c5579e8be679f3414278c845b0973700e3d8b146dcc5102a6ea",
-    "an id-less record must hash exactly as it did before F32 — the conditional spread must add no key at all",
-  );
-  // And a record that DOES carry a beacon id (the `extra` key `lite.ts` adds
-  // once `body.id !== undefined`) must hash to something else — otherwise
-  // the whole feature would be a no-op.
-  const hashWithId = await hashRecord({ ...record, extra: { beacon_id: "aaaaaaaa" } });
-  assert.notEqual(hashWithId, hash, "adding a beacon id must change the hash");
+  const withoutId = await hashRecord(record);
+  const withId = await hashRecord({ ...record, extra: { beacon_id: "aaaaaaaa" } });
+  assert.notEqual(withId, withoutId, "adding a beacon id must change the hash");
 });
 
 test("POST /telemetry/lite: a duplicated beacon (identical payload, redelivered) does not double-count its error.uncaught point (finding A-I4)", async () => {
