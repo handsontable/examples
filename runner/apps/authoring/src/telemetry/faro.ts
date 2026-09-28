@@ -6,6 +6,7 @@
 // off (the facade sets `session.id` itself via `metas.add`); no tracing.
 import {
   ErrorsInstrumentation,
+  FetchTransport,
   WebVitalsInstrumentation,
   initializeFaro,
   type BeforeSendHook,
@@ -35,6 +36,7 @@ import {
   type Telemetry,
 } from "@handsontable/demo-runtime/telemetry";
 import { resolveTelemetryEnabled, telemetryEnvironment } from "./gate.js";
+import { FARO_BATCHING, FARO_BUFFER_SIZE, FARO_RETRY } from "./faroConfig.js";
 import {
   isForeignUnhandled,
   isOfficeScannerRejection,
@@ -204,7 +206,10 @@ export function initFaroTelemetry(options: InitFaroOptions): Telemetry | null {
   const environment = telemetryEnvironment(options.productionReportingEnabled);
 
   const faro = initializeFaro({
-    url: "/telemetry/collect",
+    transports: [
+      new FetchTransport({ url: "/telemetry/collect", bufferSize: FARO_BUFFER_SIZE, retry: { ...FARO_RETRY } }),
+    ],
+    batching: { ...FARO_BATCHING },
     app: {
       name: "demos-authoring",
       version: options.release,

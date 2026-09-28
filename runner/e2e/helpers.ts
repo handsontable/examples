@@ -177,3 +177,24 @@ export function currentDocsRelease(): { bucket: string; version: string } {
 
   return { bucket, version: hotVersion };
 }
+
+/**
+ * Sends what Faro holds (a `sendTimeout` of seconds) through its own page-hide
+ * flush, then waits for a probe event pushed behind it, so an absence check
+ * that follows sees everything the page had queued. Needs a
+ * `VITE_TELEMETRY_LOCAL=1` build (`window.__t06Telemetry`); `seen(ref)` reads
+ * the spec's capture for an event with that `hot.ref`.
+ */
+export async function flushFaro(page: Page, seen: (ref: string) => boolean): Promise<void> {
+  const ref = "flush-probe-" + Math.random().toString(36).slice(2, 10);
+  await page.evaluate((probeRef) => {
+    const hook = (window as unknown as {
+      __t06Telemetry?: { event: (name: string, attrs: Record<string, string>) => void };
+    }).__t06Telemetry;
+    hook?.event("example.downloaded", { surface: "authoring", kind: "docs", ref: probeRef });
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    delete (document as { visibilityState?: unknown }).visibilityState;
+  }, ref);
+  await expect.poll(() => seen(ref), { message: "the flush probe reached /telemetry/collect" }).toBe(true);
+}

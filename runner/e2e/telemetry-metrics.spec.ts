@@ -1,7 +1,7 @@
 import { test, expect, type Route, type Page } from "@playwright/test";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { previewReady, expectGridRendered, trackSessions, activeEditor } from "./helpers.js";
+import { previewReady, expectGridRendered, trackSessions, activeEditor, flushFaro } from "./helpers.js";
 
 // Observability contract §5 browser metric catalogue, live.
 //
@@ -63,6 +63,7 @@ function waitForServer(url: string, timeoutMs: number): Promise<void> {
  *  captures. */
 interface FaroBody {
   measurements?: { type?: string; values?: Record<string, number>; context?: Record<string, string> }[];
+  events?: { name?: string; attributes?: Record<string, string> }[];
 }
 
 /** Every `/telemetry/collect` POST this test has seen, decoded. Registered
@@ -281,6 +282,7 @@ test.describe("Browser metrics catalogue, live", () => {
       // see (see `HmrRoundtripEvent`'s doc comment).
       await insertAtTop(page, "// t07-e2e-hmr-probe");
       await page.waitForTimeout(5_000);
+      await flushFaro(page, (ref) => captured.some((b) => (b.events ?? []).some((e) => e.attributes?.["hot.ref"] === ref)));
       expect(
         measurementsOf(captured, "preview.ready_ms").length,
         "guard: an edit must not re-emit preview.ready_ms on Tier-2 either",

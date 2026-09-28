@@ -1,7 +1,7 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { signIn, stubShell } from "./helpers.js";
+import { flushFaro, signIn, stubShell } from "./helpers.js";
 
 // ADR-0042 example analytics: `example.open` at the App.tsx example-resolve
 // path.
@@ -298,6 +298,7 @@ test("a docs example opened by ?docs= fires one example.open with entry=deep-lin
   // a fresh, legitimate second open) but simply letting the page sit idle
   // must not add a second one.
   await page.waitForTimeout(1000);
+  await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
   expect(events.filter((e) => e.name === "example.open")).toHaveLength(1);
 });
 

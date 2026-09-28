@@ -1,7 +1,7 @@
 import { test, expect, type Route, type Page } from "@playwright/test";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { activeEditor, previewReady, stubShell } from "./helpers.js";
+import { activeEditor, flushFaro, previewReady, stubShell } from "./helpers.js";
 import { fingerprint } from "../packages/runtime/src/telemetry/fingerprint.js";
 
 // Faro in the authoring app. Gated: needs a dist built with
@@ -89,6 +89,10 @@ interface FaroBody {
   measurements?: Record<string, unknown>[];
   events?: Record<string, unknown>[];
 }
+
+/** `flushFaro`'s probe check over a spec's captured bodies. */
+const eventSeen = (captured: FaroBody[]) => (ref: string) =>
+  captured.flatMap((b) => b.events ?? []).some((e) => (e.attributes as Record<string, unknown> | undefined)?.["hot.ref"] === ref);
 
 /**
  * Reads the e2e-only hooks (`sentry.ts`'s `localTestSentryEnabled()` branch)
@@ -303,6 +307,47 @@ test.describe("Faro in the authoring app", () => {
         .flatMap((b) => b.measurements ?? [])
         .filter((m) => m.type === "bucket.resolve_ms" && (m.context as Record<string, unknown> | undefined)?.["hot.bucket"] === bucket);
     await expect.poll(matching).toHaveLength(2);
+  });
+
+  // The ingest gate answers an over-limit IP 429 with `Retry-After: 60` (the
+  // limiter window). The page clock is advanced only after the 429 has been
+  // answered, so Faro's own 10 s request timeout never fires under fake time.
+  test("a batch answered 429 with Retry-After: 60 is sent again after the wait, with the same Idempotency-Key", async ({ page }) => {
+    await stubShell(page);
+    await page.clock.install();
+    const ref = "retry-probe-" + Date.now();
+    const attempts: { key: string; refs: string[]; at: number }[] = [];
+    let limitedKey: string | null = null;
+    await page.route("**/telemetry/collect", async (route: Route) => {
+      const body = route.request().postDataJSON() as FaroBody;
+      const key = route.request().headers()["idempotency-key"] ?? "";
+      const refs = (body.events ?? []).map((e) => String((e.attributes as Record<string, unknown> | undefined)?.["hot.ref"]));
+      attempts.push({ key, refs, at: await page.evaluate(() => Date.now()) });
+      if (limitedKey === null && refs.includes(ref)) {
+        limitedKey = key;
+        await route.fulfill({ status: 429, headers: { "retry-after": "60" }, body: "" });
+        return;
+      }
+      await route.fulfill({ status: 204, body: "" });
+    });
+    await page.goto("/");
+
+    await page.evaluate((probeRef) => {
+      (window as unknown as {
+        __t06Telemetry?: { event: (name: string, attrs: Record<string, string>) => void };
+      }).__t06Telemetry?.event("example.downloaded", { surface: "authoring", kind: "docs", ref: probeRef });
+    }, ref);
+    await expect.poll(() => limitedKey, { timeout: 20_000 }).not.toBeNull();
+    const forKey = () => attempts.filter((a) => a.key === limitedKey);
+
+    await page.clock.fastForward(59_000);
+    await page.waitForTimeout(500);
+    expect(forKey(), "not retried before the Retry-After window").toHaveLength(1);
+    await page.clock.fastForward(16_000);
+    await expect.poll(() => forKey().length).toBe(2);
+    const [first, retry] = forKey();
+    expect(retry!.refs).toContain(ref);
+    expect(retry!.at - first!.at).toBeGreaterThanOrEqual(60_000);
   });
 
   test("an uncaught error reaches Faro (window.onerror, via ErrorsInstrumentation)", async ({ page }) => {
@@ -611,6 +656,9 @@ test.describe("Faro in the authoring app", () => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
+    // The stubbed version list remounts the preview once after load, and a
+    // remount closes the open burst; drive the ladder after it.
+    await expect(page).toHaveURL(/[?&]v=18\.0\.0\b/);
 
     const relay = (message: string, sentry = false) =>
       page.evaluate(
@@ -651,12 +699,14 @@ test.describe("Faro in the authoring app", () => {
 
     // Held back while the burst is open (the settle window is 2 s).
     await page.waitForTimeout(700);
+    await flushFaro(page, eventSeen(captured));
     expect(runtimePoints()).toHaveLength(0);
 
     await expect.poll(() => runtimePoints().length, { timeout: 10_000 }).toBe(1);
     await expect.poll(() => demoRecords().length).toBe(1);
     // Nothing else trickles in after the burst closed.
     await page.waitForTimeout(1500);
+    await flushFaro(page, eventSeen(captured));
     expect(runtimePoints()).toHaveLength(1);
     expect(demoRecords()).toHaveLength(1);
 
@@ -672,7 +722,8 @@ test.describe("Faro in the authoring app", () => {
 
     // A first-load / interaction error (no edit open): counted without the settle wait.
     await relay(`first load ${run}`);
-    await expect.poll(() => runtimePoints().length, { timeout: 1_500 }).toBe(2);
+    await flushFaro(page, eventSeen(captured));
+    expect(runtimePoints()).toHaveLength(2);
     expect(demoRecords().map((r) => r.value)).toContain(`first load ${run}`);
 
     // Sentry is NOT behind the collapse: under an open burst, every rung still
@@ -692,8 +743,12 @@ test.describe("Faro in the authoring app", () => {
   // goes quiet, instead of counting at once like a first-load error.
   test("a code-editor keystroke opens the edit burst (App.tsx wiring)", async ({ page }) => {
     await stubShell(page);
+    // Every bundler host, the versioned one too: a mounted preview would compile
+    // the typed `x`, and a compile error replaces what the burst holds.
+    await page.route("https://*.codesandbox.io/**", (route) => route.abort());
     const captured = captureTelemetry(page);
     await page.goto("/");
+    await expect(page).toHaveURL(/[?&]v=18\.0\.0\b/);
     await expect(activeEditor(page)).toBeVisible();
 
     const run = "F" + Math.random().toString(36).replace(/[^a-z]/g, "").slice(0, 8);
@@ -713,6 +768,7 @@ test.describe("Faro in the authoring app", () => {
     }, `after keystroke ${run}`);
 
     await page.waitForTimeout(700);
+    await flushFaro(page, eventSeen(captured));
     expect(points(), "an error right after a keystroke waits for the burst to settle").toHaveLength(0);
     await expect.poll(() => points().length, { timeout: 10_000 }).toBe(1);
   });
@@ -749,6 +805,7 @@ test.describe("Faro in the authoring app", () => {
     expect(points(consoleError)[0]!.context).toMatchObject({ "hot.reason": "console" });
     // The page's own preview (if the bundler answers) relays the same notice on load.
     await page.waitForTimeout(3000);
+    await flushFaro(page, eventSeen(captured));
     expect(points(themeNotice), "the notice, whoever relayed it, never counts").toHaveLength(0);
   });
 
@@ -795,6 +852,7 @@ test.describe("Faro in the authoring app", () => {
     // flush as anything the burst still held. One short negative wait
     // anyway: nothing trickles in afterwards.
     await page.waitForTimeout(1500);
+    await flushFaro(page, eventSeen(captured));
     const after = measurementsSince(mark);
     expect(after.filter((m) => m.type === "sandpack.compile_error")).toHaveLength(1);
     expect(
@@ -856,6 +914,7 @@ test.describe("Faro in the authoring app", () => {
     await expect.poll(() => uncaught().length, { timeout: 15_000 }).toBe(1);
     await expect.poll(() => records().length).toBe(1);
     await page.waitForTimeout(1500);
+    await flushFaro(page, eventSeen(captured));
     expect(uncaught(), "one point for the finished line, none for its prefixes").toHaveLength(1);
     const [record] = records();
     expect(record!.type).toBe("DemoError");
