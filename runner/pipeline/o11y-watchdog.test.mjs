@@ -96,3 +96,19 @@ test("checkO11yHeartbeat: recovery after staleness -> exactly one more capture, 
   assert.equal(calls[1].opts.level, "warning");
   assert.match(calls[1].message, /recovered/);
 });
+
+test("checkO11yHeartbeat: a heartbeat that never answers counts as unreachable once the timeout passes", async () => {
+  const now = 10_000_000;
+  const env = makeEnv(() => new Promise(() => {}));
+  const { calls, capture } = captureSpy();
+  const started = Date.now();
+  const outcome = await Promise.race([
+    checkO11yHeartbeat(env, capture, now, 50).then(() => "done"),
+    new Promise((resolve) => setTimeout(() => resolve("hung"), 2_000)),
+  ]);
+  assert.equal(outcome, "done", "the check must not wait on a hung o11y worker");
+  assert.ok(Date.now() - started < 1_000);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].message, /unreachable/);
+  assert.equal((await env.CACHE.get("o11y-watchdog:state", "json")).stale, true);
+});

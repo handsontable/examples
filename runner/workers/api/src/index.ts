@@ -44,7 +44,7 @@ import {
 } from "./session-lifecycle.js";
 import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
-import { BuildFailure, buildFailureTags, createDemo, createPendingDemo, demoBuildState, getDemo, getDemoSource, hasCachedBuild, invalidateDemo, serveDemoAsset, shortId, updateDemo, withEntryScript, type DemoRow } from "./share.js";
+import { BuildFailure, buildFailureTags, createDemo, createPendingDemo, demoBuildState, getDemo, getDemoSource, hasCachedBuild, invalidateDemo, isUserBuildError, serveDemoAsset, shortId, updateDemo, userBuildErrorDetail, withEntryScript, type DemoRow } from "./share.js";
 import { BuildJobBase, scheduleSnapshotBuild } from "./snapshot-jobs.js";
 import {
   budgetPausedMessage,
@@ -2085,9 +2085,26 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         // overlong segment makes `get` throw, and a malformed request would then
         // be reported to Sentry as our 500. Ids are what `shortId` mints.
         const payloadId = parts[2]!;
-        if (!/^[a-z0-9]{1,32}$/i.test(payloadId)) return json({ error: "not found" }, 404);
-        const record = await env.CACHE.get(`payload:${payloadId}`, "json");
-        if (!record) return json({ error: "not found" }, 404);
+        // A playground link that cannot boot is recorded here, where every failure is seen
+        // (contract §5); the record's framework is unknown, hence `other`.
+        const bootFailed = () =>
+          ctx.waitUntil(emitPoint(env, "payload.boot", { count: 1 }, { framework: "other", outcome: "error" }));
+        if (!/^[a-z0-9]{1,32}$/i.test(payloadId)) {
+          bootFailed();
+          return json({ error: "not found" }, 404);
+        }
+        let record: unknown;
+        try {
+          record = await env.CACHE.get(`payload:${payloadId}`, "json");
+        } catch (error) {
+          reportDiagnostic(env, error, { context: "payload-load", routeClass: "api/payload/:id", tags: { route: "payload" } });
+          bootFailed();
+          return json({ error: "could not load that project" }, 500);
+        }
+        if (!record) {
+          bootFailed();
+          return json({ error: "not found" }, 404);
+        }
         // Immutable under an unguessable id, so the edge may hold it.
         return cors(cacheableJson(record));
       }
@@ -2613,6 +2630,14 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // an `Error.message` is what invented DEMOS-1Y's culprit.
           ...(err.log ? { extra: { buildLog: err.log } } : {}),
         });
+        // The demo's own input failing the build is a 4xx, out of `api-5xx-rate` (the
+        // `snapshot-build-failed-rate` alert covers a systemic break); the stored demo is
+        // untouched because the build runs first. `error` keeps the diagnostic for MCP
+        // clients, which read only that field.
+        if (isUserBuildError(err)) {
+          const detail = userBuildErrorDetail(err);
+          return json({ error: `${err.phase} failed: ${detail}`, code: "build_failed", detail }, 422);
+        }
         return json({ error: err.message }, 500);
       }
       logErrorLine(env, "fetch-catch-all", err);

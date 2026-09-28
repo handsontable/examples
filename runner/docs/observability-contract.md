@@ -294,15 +294,21 @@ collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
   sandbox (a frameless `show-error`), its `sandpack.compile_error` is that result and
   replaces the run; a pre-transpile failure never ran, so it is not the running
   sandbox's;
+- on Tier 1, the bundler runs one compile at a time, so a run's reports can still arrive
+  after the next edit has been dispatched. A new run starts at the bundler's `start`
+  message for a pushed compile (`onPushOutcome("rerun")`), not at dispatch, and what the burst held until
+  then came from the run it replaces and is dropped. A pre-transpile failure of the
+  newest edit is kept, because no run of that edit will start;
 - 2 s (`DEMO_EDIT_SETTLE_MS`) after the last edit the burst closes, and the last run's
   reports are emitted, one per §7 fingerprint;
 - outside a burst (first load, a user interaction, a Tier-2 rebuild that reports after
   the burst closed) a report is emitted at once;
 - a fingerprint counts once until the next edit or preview mount, and at most 50
   (`DEMO_COLLAPSE_CEILING`) points per page load.
-A report from a superseded run still in flight at the last keystroke can add one point
-to that burst. On Tier 2, where a rebuild outlasts the 2 s window, a superseded
-rebuild's report can land after the burst closed and count on its own. The Sentry side is not behind this collapse; its relay budgets are
+An async report of the previous run (a timer, a rejected promise, a failed request) that
+fires after the next run started can still add one point. On Tier 2, where a rebuild
+outlasts the 2 s window, a superseded rebuild's report can land after the burst closed
+and count on its own. The Sentry side is not behind this collapse; its relay budgets are
 unchanged.
 
 `example.saved` is written by the API worker when an editor Save (`PATCH /api/demos/:id`
@@ -321,14 +327,45 @@ written). The editor emits the browser `example.saved` only when a response lack
 key, i.e. an API that does not count saves; that fallback can be removed once every
 deployed API sends the marker.
 
+A build that fails on the demo's own input is client input (`isUserBuildError` in
+`workers/api/src/share.ts`), on any route that builds inline: `POST /api/demos`, `PATCH
+/api/demos/:id`, `POST /api/mcp/demos` and `PATCH /api/mcp/demos/:id`. That means one of:
+- the build command exited with a code from 1 to 125;
+- the install failed with `ERR_PNPM_NO_MATCHING_VERSION`, `ERR_PNPM_FETCH_404`,
+  `ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER` or `ERR_PNPM_BAD_PM_VERSION` (a
+  dependency the author named).
+
+It answers `422 {"error":"<phase> failed: <detail>","code":"build_failed","detail":<the
+build error, one line>}`. `error` carries the diagnostic because MCP clients read only
+that field; the editor keys on `code`. `api.request` records it as `4xx`, so `api-5xx-rate`
+does not count it. `snapshot.build` still records `failed`, and the
+`snapshot-build-failed-rate` alert is the backstop: it fires when one framework has more
+than 50 % failed builds over 30 min with at least 10 failed. The stored demo is
+unchanged, because the build runs before anything is written.
+
+Everything else stays `5xx`: exit code 126, 127 or 128 and above (not executable, not
+found, killed by a signal), a result without an exit code, any other install failure
+(`ERR_PNPM_FETCH_5xx`, a reset or timed-out connection), and any other throw. So does
+any failure whose output names infrastructure, whatever the exit code: `ENOTFOUND`,
+`ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `fetch failed`, `Failed to fetch`, `heap out of
+memory`, `signal SIGKILL`, `worker exited`, and Next's `` `next/font` error `` or a
+`fonts.googleapis.com` fetch. This last rule is a match on message text: a tool that
+rewords these lines moves its failure into the 422 class.
+
 `serve.share` locally: under `vite dev` (what `pnpm dev:full` serves), React
 StrictMode runs the share page's load effect twice, so one `/share/<id>` view gives 2
 points. A production build gives 1 (measured on `vite preview`).
 
-`payload.boot` is emitted only at `POST /api/payload`, the Theme
-Builder hand-off — never at the actual playground boot, `GET /api/payload/:id`. A
-`?payload=<bad-id>` failure on that boot is recorded as `error.handled
-context=payload-boot`, not as a `payload.boot` point.
+`payload.boot` records the Theme Builder hand-off at both ends:
+- `ok` and `error` at `POST /api/payload`, when the link is minted;
+- `error` (`framework=other`) at the playground boot, `GET /api/payload/:id`, when the
+  link cannot boot: a miss (expired or never minted), a malformed id, or a KV failure.
+  A link that boots adds no point, so each hand-off counts one `ok` at most.
+
+The server-side `error` point is the record of a `?payload=` boot that failed. The
+browser shows the "expired" message for the 404 without reporting it. `error.handled
+context=payload-boot` is only the browser failing to reach the API at all (a network
+error), which the server never sees.
 
 ## 6. Browser facade and Faro
 

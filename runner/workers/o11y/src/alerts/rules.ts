@@ -272,6 +272,40 @@ export async function compileErrorDoublingRule(env: Env, queryFn: AeQueryFn = ru
   };
 }
 
+// ---- snapshot builds failing: above 50% per framework over 30 min ---------
+// The backstop for build failures `api-5xx-rate` no longer sees (a 422 for the demo's
+// own input can still be a systemic break, contract §5). 10 failed builds: one author
+// retrying a broken Save makes a handful, a framework-wide break reaches 10 at low traffic.
+
+const SNAPSHOT_BUILD_WINDOW_MS = 30 * 60 * 1000;
+const SNAPSHOT_BUILD_FAILED_PCT = 50;
+const SNAPSHOT_BUILD_FAILED_FLOOR = 10;
+
+export async function snapshotBuildFailedRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
+  const outcomeCol = col("outcome");
+  const [total, failed] = await Promise.all([
+    countByGroup(env, "snapshot.build", "framework", SNAPSHOT_BUILD_WINDOW_MS, "", queryFn),
+    countByGroup(env, "snapshot.build", "framework", SNAPSHOT_BUILD_WINDOW_MS, `AND ${outcomeCol} = 'failed'`, queryFn),
+  ]);
+  const offenders: string[] = [];
+  for (const [framework, failedCount] of failed) {
+    if (failedCount < SNAPSHOT_BUILD_FAILED_FLOOR) continue;
+    const builds = total.get(framework) ?? failedCount;
+    const pct = ratio(failedCount, builds) * 100;
+    if (pct > SNAPSHOT_BUILD_FAILED_PCT) {
+      offenders.push(`${framework || "unknown"}: ${pct.toFixed(0)}% failed (${failedCount}/${builds})`);
+    }
+  }
+  return {
+    rule: "snapshot-build-failed-rate",
+    firing: offenders.length > 0,
+    detail:
+      offenders.length > 0
+        ? `${offenders.join("; ")} over the last 30 min (threshold ${SNAPSHOT_BUILD_FAILED_PCT}%, at least ${SNAPSHOT_BUILD_FAILED_FLOOR} failed)`
+        : "no framework over threshold",
+  };
+}
+
 // ---- LiteLLM errors: above 5% (chat.answer + theme.ai, both gateway -------
 // call sites; window: 1h, same reasoning as session-start) ------------------
 

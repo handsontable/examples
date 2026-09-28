@@ -20,6 +20,7 @@ import {
   previewReadyRateRule,
   rejectedKeyRule,
   sessionStartP95Rule,
+  snapshotBuildFailedRateRule,
   type RuleResult,
 } from "./rules.js";
 
@@ -68,6 +69,7 @@ const QUERY_RULES: { id: string; fn: RuleFn }[] = [
   { id: "embed-error-rate", fn: embedErrorRateRule },
   { id: "compile-error-doubling", fn: compileErrorDoublingRule },
   { id: "litellm-error-rate", fn: litellmErrorRateRule },
+  { id: "snapshot-build-failed-rate", fn: snapshotBuildFailedRateRule },
 ];
 
 /** Runs every ADR §F.3 rule, notifies on any fire/resolve transition, and

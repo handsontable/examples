@@ -1163,6 +1163,9 @@ function Authoring({
   // preview pane and this needs a button: the answer to an expired session is
   // "sign in again", which is an action, not a sentence.
   const [sessionExpired, setSessionExpired] = useState(false);
+  // A failed Save, Fork or Share. A dialog, not `errorMessage`: that card only renders once
+  // the preview itself has failed, and these usually fail over a preview that still runs.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [versionWarning, setVersionWarning] = useState<string | null>(null);
   /** Did the floor below just cost this demo its theme module? Its own state, not
    *  a `versionWarning` string: the dirty-switch branches set that one *after*
@@ -3018,7 +3021,7 @@ function Authoring({
       // would not (DEV-2534). `finally` still clears the in-flight state.
       if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-embed");
-      setErrorMessage(e instanceof Error ? e.message : String(e));
+      setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
       setEmbedding(false);
     }
@@ -3061,7 +3064,7 @@ function Authoring({
       setForking(false);
       if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-fork");
-      setErrorMessage(e instanceof Error ? e.message : String(e));
+      setSaveError(e instanceof Error ? e.message : String(e));
     }
   }, [user, entry, version, forkedFrom, importedTitle, noteExampleAction]);
 
@@ -3080,6 +3083,7 @@ function Authoring({
     if (!savedId || isShare) return;
     setSaving(true);
     setErrorMessage(null);
+    setSaveError(null);
     try {
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/demos/${savedId}`, {
@@ -3109,7 +3113,7 @@ function Authoring({
       // still there to re-save — or to Download — once the user is back in.
       if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-save");
-      setErrorMessage(e instanceof Error ? e.message : String(e));
+      setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -3516,7 +3520,7 @@ function Authoring({
           someone who would rather take a zip than risk the round trip. */}
       {sessionExpired && (
         <Dialog title="Your session expired" onClose={() => setSessionExpired(false)}>
-          <p style={sessionExpiredBody}>
+          <p style={dialogBody}>
             Sign in again to continue. Your unsaved work stays in this tab either way —
             you can also download it first.
           </p>
@@ -3535,6 +3539,17 @@ function Authoring({
               onClick={() => setSessionExpired(false)}
             >
               Not now
+            </button>
+          </div>
+        </Dialog>
+      )}
+
+      {saveError && (
+        <Dialog title="Couldn't save" onClose={() => setSaveError(null)}>
+          <p style={{ ...dialogBody, overflowWrap: "anywhere" }}>{saveError}</p>
+          <div style={formFooter}>
+            <button type="button" data-autofocus style={primaryButton} onClick={() => setSaveError(null)}>
+              OK
             </button>
           </div>
         </Dialog>
@@ -3597,9 +3612,9 @@ function Logo({ size = 24 }: { size?: number }) {
   return <img src={logoUrl} alt="Handsontable" style={{ height: size, display: "block" }} />;
 }
 
-/** The re-auth dialog's one paragraph — the same body treatment the delete
- *  confirmation in `MyDemos` uses, so the two modals read as one component. */
-const sessionExpiredBody: React.CSSProperties = {
+/** A dialog's one paragraph — the same body treatment the delete confirmation in
+ *  `MyDemos` uses, so the modals read as one component. */
+const dialogBody: React.CSSProperties = {
   margin: 0,
   fontFamily: theme.font.ui,
   fontSize: 13,

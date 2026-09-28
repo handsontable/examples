@@ -411,12 +411,10 @@ test("reset forgets the outgoing preview's running sandbox", () => {
 test("a report already counted before a rerun is not brought back by a later unchanged edit", () => {
   const { clock, emitted, collapse, relay } = harness();
   collapse.noteEdit();
+  relay(FINAL); // the previous run's relay
+  clock.advance(DEMO_EDIT_SETTLE_MS); // counted: the burst closes before the new run starts (a slow install)
   collapse.pushOutcome("rerun");
-  collapse.noteEdit();
-  relay(FINAL); // the previous run's late relay, before this edit's push dispatches
-  collapse.pushOutcome("rerun");
-  clock.advance(DEMO_EDIT_SETTLE_MS); // counted
-  relay(FINAL); // the new run's own copy, after the burst: already counted
+  relay(FINAL); // the new run's own copy: already counted
   collapse.noteEdit(); // a space
   collapse.pushOutcome("unchanged");
   clock.advance(DEMO_EDIT_SETTLE_MS);
@@ -450,4 +448,30 @@ test("a rerun forgets the previous sandbox's bundler compile error, and records 
   collapse.pushOutcome("unchanged");
   clock.advance(DEMO_EDIT_SETTLE_MS);
   assert.deepEqual(emitted, [FINAL]);
+});
+
+// The bundler runs one compile at a time and signals `rerun` when it starts the next,
+// so a run's relay can land after the next keystroke but before that keystroke's run.
+
+test("a previous run's relay that lands after the newest edit, before that edit's run starts, is not counted", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  collapse.noteEdit(); // the last keystroke
+  relay("typed er"); // the previous run evaluates only now
+  collapse.pushOutcome("rerun"); // the bundler starts the finished line
+  relay("typed err");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, ["typed err"]);
+});
+
+test("the start of an older run does not drop the newest edit's compile failure", () => {
+  const { clock, emitted, collapse, relay, compileError } = compileHarness();
+  collapse.noteEdit(); // `cons`, dispatched
+  collapse.noteEdit(); // `const`, which does not parse
+  compileError("Unexpected token (1:5)");
+  collapse.pushOutcome("rerun"); // the bundler starts `cons`
+  relay("cons is not defined");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, ["compile: Unexpected token (1:5)"]);
 });

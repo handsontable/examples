@@ -255,3 +255,24 @@ test("other 409s stay unclassified", () => {
   assert.equal(failure.kind, "other");
   assert.equal(failure.reportable, true);
 });
+
+test("a build_failed 422 says nothing was saved and shows the build error, never the wire text", () => {
+  const detail = 'src/index.tsx:1:10: ERROR: Unexpected ";"';
+  const failure = describeApiFailure(
+    422,
+    { error: `build failed: ${detail}`, code: "build_failed", detail },
+    "save failed (422)",
+  );
+  assert.equal(failure.message, `The build failed, so nothing was saved. ${detail}`);
+  assert.doesNotMatch(failure.message, /build_failed|build failed:/);
+  assert.equal(failure.reportable, false, "the author's own build error is not a Sentry issue");
+  assert.equal(
+    describeApiFailure(422, { error: "build failed: x", code: "build_failed" }, "x").message,
+    "The build failed, so nothing was saved.",
+  );
+  assert.equal(
+    describeApiFailure(422, { error: "build_failed", detail }, "x").message,
+    `The build failed, so nothing was saved. ${detail}`,
+    "the older API's bare code still reads as the sentence",
+  );
+});

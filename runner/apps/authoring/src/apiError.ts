@@ -48,12 +48,18 @@ export const EDGE_BLOCKED_MESSAGE =
  *  `detail`, but a truncated body must not produce a wire code in a toast. */
 export const BUILD_RUNNING_MESSAGE =
   "A build for this demo is already running. Wait for it to finish, then save again.";
+/** The lead of a Save or create refused because the build failed; the server's `detail`
+ *  (the build error) follows it. Neutral on purpose: the rule behind the 422 cannot rule
+ *  out every failure of ours. */
+export const BUILD_FAILED_MESSAGE = "The build failed, so nothing was saved.";
 
 /** Whatever JSON the Worker put in the error body. Both fields are optional
  *  because a 401 from a proxy, or a body that failed to parse, has neither. */
 export interface ApiErrorBody {
   error?: string;
   detail?: string;
+  /** A machine code for a body whose `error` is a sentence (`build_failed`). */
+  code?: string;
 }
 
 export interface ApiFailureOptions {
@@ -161,6 +167,12 @@ export function describeApiFailure(
   if (status === 409 && body.error === "already_building") {
     const detail = typeof body.detail === "string" ? body.detail.trim() : "";
     return new ApiError(detail || BUILD_RUNNING_MESSAGE, status, "other", false);
+  }
+  // The demo's own input failed the build: the author's to fix, so not reportable. A bare
+  // `error: "build_failed"` is the shape an older API sent.
+  if (status === 422 && (body.code === "build_failed" || body.error === "build_failed")) {
+    const detail = typeof body.detail === "string" ? body.detail.trim() : "";
+    return new ApiError(detail ? `${BUILD_FAILED_MESSAGE} ${detail}` : BUILD_FAILED_MESSAGE, status, "other", false);
   }
   const serverMessage = options.preferFallback ? "" : (body.error ?? "");
   return new ApiError(serverMessage || resolveFallback(fallback, status), status, "other", true);

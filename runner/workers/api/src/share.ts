@@ -175,13 +175,15 @@ export class BuildFailure extends Error {
   // falsy sentinel to omit rather than fabricate a tag.
   readonly htRef: string | null;
   readonly framework: string | null;
+  /** The failed command's exit code, `null` when the exec result carried none. */
+  readonly exitCode: number | null;
 
   constructor(
     message: string,
     phase: "install" | "build",
     code: string,
     log = "",
-    context: { htRef?: string | null; framework?: string | null } = {},
+    context: { htRef?: string | null; framework?: string | null; exitCode?: number | null } = {},
   ) {
     super(message);
     this.phase = phase;
@@ -189,14 +191,61 @@ export class BuildFailure extends Error {
     this.log = log;
     this.htRef = context.htRef ?? null;
     this.framework = context.framework ?? null;
+    this.exitCode = context.exitCode ?? null;
   }
+}
+
+/** pnpm codes for a dependency the author named that does not resolve (contract §5). */
+const USER_INSTALL_CODES = new Set([
+  "ERR_PNPM_NO_MATCHING_VERSION",
+  "ERR_PNPM_FETCH_404",
+  "ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER",
+  "ERR_PNPM_BAD_PM_VERSION",
+]);
+
+/** Output that names our infrastructure (network, memory, a killed worker, Next's Google
+ *  Fonts fetch) whatever the exit code. A message-text rule: a tool that rewords these
+ *  lines moves its failure into the 422 class. */
+const INFRA_FAILURE_TEXT =
+  /ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|Failed to fetch|heap out of memory|signal SIGKILL|worker exited|`next\/font` error|fonts\.googleapis\.com/i;
+
+/** The demo's own input failed the build (contract §5): client input, answered 422. That
+ *  is a build command exiting 1–125, or an install refusing a dependency the author named.
+ *  Anything whose output names infrastructure, a signal kill (128+), 126/127 (not
+ *  executable, not found), a result without an exit code, and other install failures are ours. */
+export function isUserBuildError(err: unknown): boolean {
+  if (!(err instanceof BuildFailure)) return false;
+  if (INFRA_FAILURE_TEXT.test(`${err.message}\n${err.log}`)) return false;
+  if (err.phase === "install") return USER_INSTALL_CODES.has(err.code);
+  return err.exitCode !== null && err.exitCode > 0 && err.exitCode <= 125;
+}
+
+/** Longest `detail` a 422 carries; the full output stays in the Sentry `buildLog`. */
+const USER_BUILD_DETAIL_MAX = 300;
+
+/** The one-line build error shown to the author: the cause without its `build failed:`
+ *  or `install failed:` prefix, completed from the log when the cause is only headings (`error during build:
+ *  Build failed with 1 error:`), with container paths made relative and the length bounded. */
+export function userBuildErrorDetail(err: BuildFailure): string {
+  let detail = err.message.replace(/^(build|install) failed:\s*/, "");
+  const lines = err.log.split("\n").map((l) => l.trim()).filter(Boolean);
+  let at = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (detail.endsWith(lines[i]!)) { at = i; break; }
+  }
+  while (/:\s*$/.test(detail) && at >= 0 && at + 1 < lines.length) {
+    at += 1;
+    detail = `${detail} ${lines[at]}`;
+  }
+  detail = detail.split(`${CONTAINER_ROOT}/`).join("");
+  return detail.length > USER_BUILD_DETAIL_MAX ? `${detail.slice(0, USER_BUILD_DETAIL_MAX - 1)}…` : detail;
 }
 
 /** Describe a failed exec as a one-line cause plus its bounded output. Exported for
  *  `pipeline/failure-log.test.mjs`, which owns the "a message is never a log" rule. */
 export function describeBuildFailure(
   phase: "install" | "build",
-  r: { stdout?: string; stderr?: string },
+  r: { stdout?: string; stderr?: string; exitCode?: number },
   context: { htRef?: string | null; framework?: string | null } = {},
 ): BuildFailure {
   const { cause, tail, code } = execFailureDetail(r, {
@@ -204,7 +253,10 @@ export function describeBuildFailure(
     maxTailChars: BUILD_LOG_MAX,
     fallback: "no output",
   });
-  return new BuildFailure(`${phase} failed: ${cause}`, phase, code, tail, context);
+  return new BuildFailure(`${phase} failed: ${cause}`, phase, code, tail, {
+    ...context,
+    exitCode: typeof r.exitCode === "number" ? r.exitCode : null,
+  });
 }
 
 /** Sentry tags for a snapshot build failure. A key is OMITTED when its value is

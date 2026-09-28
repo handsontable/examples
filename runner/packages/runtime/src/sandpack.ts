@@ -330,6 +330,8 @@ export class SandpackRuntime implements DemoRuntime {
   private readonly compileErrorCbs = new Set<(e: SandpackCompileErrorEvent) => void>();
   private readonly bundlerUnreachableCbs = new Set<(e: SandpackBundlerUnreachableEvent) => void>();
   private readonly pushOutcomeCbs = new Set<(outcome: "rerun" | "unchanged") => void>();
+  /** Pushes dispatched to the bundler whose `start` has not arrived yet. */
+  private pushesAwaitingStart = 0;
   /** When the compile currently in flight was dispatched to the bundler — either
    *  `loadSandpackClient`'s initial compile (mount) or `updateSandbox` (an edit or
    *  `reload()`). Cleared once the terminal message for it arrives. Only ever one
@@ -354,7 +356,8 @@ export class SandpackRuntime implements DemoRuntime {
   onBundlerUnreachable(cb: (e: SandpackBundlerUnreachableEvent) => void): void {
     this.bundlerUnreachableCbs.add(cb);
   }
-  /** See the interface doc. Fires for the newest push only, never for a failed transpile. */
+  /** See the interface doc. `unchanged` fires for the newest push only, never for a
+   *  failed transpile; `rerun` fires when the bundler starts a run. */
   onPushOutcome(cb: (outcome: "rerun" | "unchanged") => void): void {
     this.pushOutcomeCbs.add(cb);
   }
@@ -653,6 +656,14 @@ export class SandpackRuntime implements DemoRuntime {
       payload?: { frames?: unknown };
     };
     switch (m.type) {
+      // `rerun` at the bundler's `start`, not at dispatch: the bundler runs one compile at
+      // a time, so what the previous run relays still arrives between the two. Only a
+      // pushed compile's start counts; the mount's own compile is not an edit's run.
+      case "start":
+        if (this.pushesAwaitingStart === 0) break;
+        this.pushesAwaitingStart -= 1;
+        for (const cb of this.pushOutcomeCbs) cb("rerun");
+        break;
       case "done":
         // (`compilatonError` is misspelled in the upstream payload. Leave it.)
         if (m.compilatonError) return; // error surfaced via its own message; see "show-error"
@@ -864,7 +875,7 @@ export class SandpackRuntime implements DemoRuntime {
         this.resetMonitorBudget();
         this.client.updateSandbox(setup, false);
         this.published = candidate;
-        for (const cb of this.pushOutcomeCbs) cb("rerun");
+        this.pushesAwaitingStart += 1;
       })
       .catch((cause: unknown) => {
         /* mid-edit parse error — the user is still typing. Nothing reaches the bundler and
