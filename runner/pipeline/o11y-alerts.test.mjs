@@ -1,11 +1,7 @@
-// T04 — ADR-0041 §F.3's alert cron: rules, state (`alert:<rule>`, contract
-// §8), the AE query helper's allowlist, and the fire-once/resolve-once
-// notify contract. Deterministic unit coverage over injected fakes; a
-// one-time LIVE pass against a real local ClickHouse container plus a local
-// Slack capture server (the acceptance criterion's own wording) is recorded
-// in the task Outcome, not repeated here — Docker-in-`node --test` would
-// make this suite slow and flaky for every future run.
-//
+// ADR-0041 §F.3's alert cron: rules, state (`alert:<rule>`, contract §8), the
+// AE query helper's allowlist, and the fire-once/resolve-once notify
+// contract. Deterministic unit coverage over injected fakes; Docker-in-
+// `node --test` would make a live ClickHouse/Slack pass slow and flaky.
 // Run: node --experimental-strip-types --test pipeline/o11y-alerts.test.mjs
 
 import test from "node:test";
@@ -122,10 +118,10 @@ test("inbox-state: rejectedKeyCount counts only rejected:* states", async () => 
 test("inbox-state: newFingerprintsAfterKey (no cursor yet) returns only entries first-seen strictly after fallbackSinceMs", async () => {
   const storage = memoryStorage();
   // Seeded via the real `newFingerprintWrites` (registry.ts), not a raw
-  // `fp:<fp>` put — the read is now bounded via the `fpts:` time-index
-  // twin that only `newFingerprintWrites` knows how to write (B-C1/A-I1
-  // remainder), so a test that skips it would silently pass against an
-  // index that was never populated.
+  // `fp:<fp>` put — the read is bounded via the `fpts:` time-index twin
+  // that only `newFingerprintWrites` knows how to write, so a test that
+  // skips it would silently pass against an index that was never
+  // populated.
   await storage.put(await newFingerprintWrites(storage, ["old-fp"], 1000));
   await storage.put(await newFingerprintWrites(storage, ["new-fp"], 5000));
 
@@ -171,10 +167,10 @@ test("inbox-state: newFingerprintsAfterKey truncates at the scan bound and repor
 });
 
 test("inbox-state: newFingerprintsAfterKey (NB1 probe, keyset resume) advances past 2,100 entries sharing ONE first-seen ms, across two calls chained by key", async () => {
-  // Re-review 2, NB1's exact reproduction shape: every entry shares one ms,
-  // and there are more of them than NEW_FINGERPRINT_SCAN_LIMIT (2000). The
-  // old ms-only cursor ("lastMs - 1") could never move past this ms at all.
-  // A LATER, real fingerprint at a later ms must still be reachable.
+  // Every entry here shares one ms, and there are more of them than
+  // NEW_FINGERPRINT_SCAN_LIMIT (2000). A keyset cursor must still be able
+  // to move past this ms; a later, real fingerprint at a later ms must
+  // still be reachable.
   const storage = memoryStorage();
   const floodMs = 1_000_000;
   const total = 2100;
@@ -198,9 +194,9 @@ test("inbox-state: newFingerprintsAfterKey (NB1 probe, keyset resume) advances p
   const second = await inboxState.newFingerprintsAfterKey(storage, lastKeyOfFirst, floodMs - 1);
   assert.equal(second.truncated, false, "the remaining 101 entries fit comfortably under the scan limit");
   const secondNames = second.entries.map((e) => e.name);
-  // The KEY point of NB1: the second read's first name must differ from
-  // the first read's first name — with the old ms cursor this test would
-  // fail here, re-reading the exact same page forever.
+  // The key point: the second read's first name must differ from the
+  // first read's first name, proving the keyset cursor advanced rather
+  // than re-reading the same page.
   assert.notEqual(secondNames[0], firstNames[0]);
   assert.equal(secondNames[0], "flood-fp-02000");
   assert.ok(secondNames.includes("real-later-fingerprint"), "a later, real fingerprint past the flood must be reachable, not stalled forever");
@@ -321,10 +317,9 @@ test("rejectedKeyRule: fires on a RECENT rejection, resolves once none are recen
   const writerRecent = { rejectedKeyCount: async () => 1, recentRejectionCount: async () => 1 };
   assert.equal((await rejectedKeyRule(writerRecent)).firing, true);
 
-  // The bug this fixes: `rejected:` key: entries are never pruned, so a
-  // plain "total > 0" firing condition never resolves once ANY key has
-  // ever been rejected. A total that stays > 0 with NO recent events must
-  // resolve.
+  // `rejected:` key: entries are never pruned, so a plain "total > 0"
+  // firing condition never resolves once any key has ever been rejected.
+  // A total that stays > 0 with no recent events must resolve.
   const writerStale = { rejectedKeyCount: async () => 5, recentRejectionCount: async () => 0 };
   const stale = await rejectedKeyRule(writerStale);
   assert.equal(stale.firing, false, "an old, unresolved rejection with nothing recent must not keep firing forever");
@@ -342,7 +337,7 @@ test("rejectedKeyRule: fires on a RECENT rejection, resolves once none are recen
 const REALISTIC_NOW_MS = 1_700_000_000_000;
 const CURSOR_GRACE_MS = 2 * 60 * 1000;
 // `rules.ts#NEW_FINGERPRINT_CURSOR_META_KEY`. The rule also keeps a second
-// alertMeta key (the F35 announced set), so a fake must keep them apart.
+// alertMeta key (the announced set), so a fake must keep them apart.
 const CURSOR_META_KEY = "newFingerprintCursorKey";
 
 test("newFingerprintRule: fires when a new fingerprint appears since the cursor, and advances the KEYSET cursor to the entry's own key (not into the grace window)", async () => {
@@ -371,10 +366,10 @@ test("newFingerprintRule: fires when a new fingerprint appears since the cursor,
   const first = await newFingerprintRule(writer, REALISTIC_NOW_MS);
   assert.equal(first.firing, true);
   assert.match(first.detail, /fp-a/);
-  // Re-review 2, NB1 fix: the persisted cursor is now the exact KEY of the
-  // entry read (a keyset cursor), never a millisecond derived from
-  // `nowMs`/grace — that ms-based scheme is exactly what let a shared
-  // millisecond stall forever (see the dedicated NB1 probe test below).
+  // The persisted cursor is the exact key of the entry read (a keyset
+  // cursor), never a millisecond derived from `nowMs`/grace — a ms-based
+  // scheme lets a shared millisecond stall forever (see the probe test
+  // below).
   assert.equal(cursor, entry.key, "cursor advances to the exact key of the entry actually read");
 
   // A full ten-minute cron interval later — comfortably past the grace
@@ -390,7 +385,7 @@ test("newFingerprintRule: never advances the cursor past an entry inside the gra
   // stamped BEFORE fp-late but its InboxWriter write committed only after
   // tick N listed, so tick N never saw it. Tick N+1 must still find fp-slow,
   // which is only possible because the cursor did not move past fp-late.
-  // F35: tick N+1 reads fp-late again and must not announce it a second time.
+  // Tick N+1 reads fp-late again and must not announce it a second time.
   let cursor;
   const meta = new Map();
   const late = { key: "fpts:000000001699999970000:fp-late", name: "fp-late", firstSeenMs: REALISTIC_NOW_MS - 30_000 };
@@ -453,11 +448,10 @@ test("newFingerprintRule: caps the Slack detail at 10 names, with an overflow co
 });
 
 test("newFingerprintRule: a truncated newFingerprintsAfterKey read advances the cursor only to the last KEY it actually read, never past it", async () => {
-  // B-C1/A-I1 remainder, kept true under the keyset cursor: a BOUNDED scan
-  // can report `truncated: true` with entries short of `nowMs`. The cursor
-  // must stop at the last entry's own key — structurally guaranteed now,
-  // since the cursor is always literally the key of an entry this call
-  // read, never an inferred value past it.
+  // A bounded scan can report `truncated: true` with entries short of
+  // `nowMs`. The cursor must stop at the last entry's own key: it is always
+  // literally the key of an entry this call read, never an inferred value
+  // past it.
   const lastMs = REALISTIC_NOW_MS - 400_000; // well outside the grace window
   const entries = [
     { key: "fpts:000000001699999600000:fp-a", name: "fp-a", firstSeenMs: lastMs - 1000 },
@@ -482,13 +476,10 @@ test("newFingerprintRule: a truncated newFingerprintsAfterKey read advances the 
 });
 
 test("newFingerprintRule (real InboxWriter + registry, NB1 probe): the keyset cursor progresses across ticks even when 2,100 fingerprints share ONE first-seen ms, and never stalls", async () => {
-  // The reviewer's exact reproduction (rereview2.md NB1): "I used
-  // memoryStorage with the real newFingerprintWrites, newFingerprintsSince
-  // and newFingerprintRule, seeded 2,100 fingerprints that share one
-  // first-seen ms, and ran 4 ticks. The cursor stayed at ms-1 on every
-  // tick, and the first name read never changed." This drives the REAL
-  // InboxWriter DO (not a stub), through the real `writer.ingest` path, so
-  // it also exercises the real `newFingerprintsAfterKey` RPC wiring.
+  // Drives the real InboxWriter DO (not a stub), through the real
+  // `writer.ingest` path, so it also exercises the real
+  // `newFingerprintsAfterKey` RPC wiring: 2,100 fingerprints share one
+  // first-seen ms, over 4 ticks.
   const { env } = makeEnv(InboxWriter);
   const writer = env.INBOX_WRITER.jurisdiction("eu").get();
 
@@ -499,8 +490,7 @@ test("newFingerprintRule (real InboxWriter + registry, NB1 probe): the keyset cu
     fingerprint: `flood-fp-${i.toString().padStart(5, "0")}`,
   }));
   await writer.ingest("worker", floodMs, floodItems);
-  // A later, real fingerprint — the exact thing NB1 says "is never read
-  // again" under the old ms-only cursor.
+  // A later, real fingerprint that must still be reachable.
   await writer.ingest("worker", floodMs + 1000, [{ hash: "real-hash", fingerprint: "real-later-fingerprint" }]);
 
   const tick1 = await newFingerprintRule(writer, REALISTIC_NOW_MS);
@@ -512,11 +502,8 @@ test("newFingerprintRule (real InboxWriter + registry, NB1 probe): the keyset cu
   const firstNameTick1 = tick1.detail.match(/new fingerprint\(s\): ([^,]+)/)?.[1];
   const firstNameTick2 = tick2.detail.match(/new fingerprint\(s\): ([^,]+)/)?.[1];
   assert.equal(firstNameTick1, "flood-fp-00000");
-  // The KEY assertion: with the old ms cursor, tick 2 re-reads the exact
-  // same page (`lastMs - 1` re-equals the stored cursor forever) and this
-  // would be equal, not different — this is the assertion NB1's own probe
-  // says fails against the un-fixed code ("the first name read never
-  // changed").
+  // Tick 2 must read a different page than tick 1, proving the cursor
+  // advanced rather than re-reading the same page forever.
   assert.notEqual(firstNameTick2, firstNameTick1, "tick 2 must read a different page than tick 1 — the cursor must have advanced");
 
   // No permanent stall: by the 4th tick every flood fingerprint AND the
@@ -546,22 +533,20 @@ test("notifyFingerprintEvent posts unconditionally and never writes alert:<rule>
   await notifyFingerprintEvent(inboxWriter, postSlack, aeSink, commonAttrs, "new-fingerprint", "new fingerprint(s): fp-a", REALISTIC_NOW_MS);
   await notifyFingerprintEvent(inboxWriter, postSlack, aeSink, commonAttrs, "new-fingerprint", "new fingerprint(s): fp-b", REALISTIC_NOW_MS);
 
-  // The bug this fixes: routing this rule through `evaluateAndNotify` meant
-  // a SECOND batch of new fingerprints while still "firing" produced no
-  // Slack line at all (fire-once masking). Notify-only posts every time
-  // there is something to report (up to the N7 rate cap — see the
-  // dedicated test below for that boundary).
+  // Routing this rule through `evaluateAndNotify` would mean a second
+  // batch of new fingerprints while still "firing" produces no Slack line
+  // at all (fire-once masking). Notify-only posts every time there is
+  // something to report (up to the rate cap — see the test below).
   assert.equal(posted.length, 2, "every call with something to report must post, not just the first");
   assert.match(posted[0], /fp-a/);
   assert.match(posted[1], /fp-b/);
 });
 
 test("notifyFingerprintEvent (N7 rate cap): posts normally up to the per-window cap, then exactly ONE summary line with a count, then resumes normally in the next window", async () => {
-  // Re-review 2, N7: nothing capped how many times this notify-only path
-  // could post — a flood of forged-but-shape-valid fingerprints (the same
-  // attacker model as row 13/NB1) could post a Slack line every cron tick
-  // forever, spamming the channel and/or training operators to ignore the
-  // feed, masking a genuine new fingerprint arriving in the same flood.
+  // Nothing caps how many times this notify-only path could post — a
+  // flood of forged-but-shape-valid fingerprints could post a Slack line
+  // every cron tick forever, spamming the channel and masking a genuine
+  // new fingerprint arriving in the same flood.
   const posted = [];
   const postSlack = async (text) => posted.push(text);
   const aeSink = { writeDataPoint() {} };
@@ -647,23 +632,16 @@ test("o11yCapRule: fires at or above the cap, not below it", async () => {
   assert.equal(over.firing, true);
 });
 
-// Minor triage item 9 (C-findings.md T04: "no rollover test for alert
-// state ... month rollover of the cap is a plain month-prefix LIKE"). The
-// LEDGER half of the rollover (last month's spend never leaking into this
-// month's `computeO11ySpend` read) is pinned directly in
+// The LEDGER half of the rollover (last month's spend never leaking into
+// this month's `computeO11ySpend` read) is pinned directly in
 // `pipeline/o11y-cost.test.mjs` against the real month-prefix LIKE query.
 // This pins the ALERT-STATE half: over-cap spend right before the calendar
-// rolls over, then near-zero spend right after — the exact `spendUsd`
-// values a real `env.API.o11ySpend()` read would answer either side of the
-// boundary (`computeO11ySpend` has no explicit "reset" step; the LIKE
-// filter alone produces this before/after shape) — must drive
-// `o11yCapRule` + `evaluateAndNotify` through a genuine fired -> resolved
-// transition, write `alert:o11y-spend-cap` = "resolved", and (through
-// `runAlerts`'s own level-triggered wiring, minor triage item 7) unpause
-// drains. `alert:<rule>` state itself carries no month key at all (C-
-// findings.md's own "fixed per rule" observation) — this is exactly why a
-// bug that made spend NOT reset (or a `notify.ts` regression that stopped
-// resolving) would otherwise leave a September breach paged forever.
+// rolls over, then near-zero spend right after must drive `o11yCapRule` +
+// `evaluateAndNotify` through a genuine fired -> resolved transition, write
+// `alert:o11y-spend-cap` = "resolved", and (through `runAlerts`'s own
+// level-triggered wiring) unpause drains. `alert:<rule>` state carries no
+// month key at all, which is why spend not resetting would otherwise leave
+// a breach paged forever.
 test("o11yCapRule + evaluateAndNotify: alert state correctly resolves when spend resets across a month rollover", async () => {
   const writer = fakeInboxWriter();
   const sink = fakeAeSink();
@@ -755,9 +733,9 @@ test("canWakeForBacklog: true when drains are not paused, false once the cap set
   assert.equal(await canWakeForBacklog(env), false);
 });
 
-// ---- Fix round (I1): the 7 AE-query rules + their shared SQL helpers -----
+// ---- The 7 AE-query rules + their shared SQL helpers ----------------------
 //
-// Each test drives the REAL rule function over an injected fake `queryFn`
+// Each test drives the real rule function over an injected fake `queryFn`
 // (`fixtures/fake-ae-query.mjs`) — no live ClickHouse/AE endpoint, fully
 // deterministic. Every test also asserts the SQL the rule actually issued
 // names the right AE_COLUMNS slot (imported, never hand-numbered) for at
@@ -793,17 +771,15 @@ test("fiveXxRateRule: over threshold (5%) fires; under threshold (0.5%) does not
   assert.equal(underResult.firing, false);
 });
 
-// Minor triage item 6 (C-M9). Two techniques, matching `rules.ts`'s own doc
-// comment on `fiveXxRateRule`:
+// Two techniques, matching `rules.ts`'s own doc comment on `fiveXxRateRule`:
 //  - at_capacity/container_starting (api/session) and chat_unavailable
-//    (api/chat, api/theme) are subtracted as EXACT counts, read from
+//    (api/chat, api/theme) are subtracted as exact counts, read from
 //    session.start/chat.answer/theme.ai's own outcome breakdown — every
 //    other 5xx on those same route classes still counts.
 //  - the "still building" placeholder (d/:id, embed/:id) has no matching
 //    exact count anywhere, so those two route classes are excluded
-//    wholesale (a real "build failed" 500 there is excluded too — the
-//    documented residual gap, see rules.ts's own comment and the task
-//    report).
+//    wholesale (a real "build failed" 500 there is excluded too — a
+//    documented residual gap).
 test("fiveXxRateRule: excludes deliberate refusals via exact counts, and still-building routes wholesale, on an otherwise-healthy tick", async () => {
   const rows = [
     // Real, healthy traffic: 0.1% 5xx on its own.
@@ -885,14 +861,11 @@ test("previewReadyRateRule: tier 1 below 97% fires, tier 2 within threshold does
   assert.equal(healthyResult.firing, false);
 });
 
-// Minor triage item 10: `abandoned` (the user simply navigated away before
-// the preview finished) must be excluded from both the numerator (already
-// true by construction — it is never `ready`) and the DENOMINATOR. Counting
-// it in the denominator only ever drags the computed ready% DOWN (it can
-// never inflate it), so the bug direction is always a FALSE fire, never a
-// masked real one. Reverting the `abandoned` filter in
-// `previewReadyRateRule` (back to `[...counts.values()]` unfiltered) makes
-// the "must not false-fire" assertion below fail.
+// `abandoned` (the user simply navigated away before the preview finished)
+// must be excluded from both the numerator (already true by construction —
+// it is never `ready`) and the denominator. Counting it in the denominator
+// only ever drags the computed ready% down, so the bug direction is always
+// a false fire, never a masked real one.
 test("previewReadyRateRule: a large abandoned burst must not drag a healthy tier below threshold (false-fire guard)", async () => {
   // Tier 1: 97 ready / 3 error = exactly 97% of REAL outcomes — right at the
   // threshold, so it must NOT fire. 1000 abandoned navigations alongside
@@ -1022,13 +995,10 @@ test("litellmErrorRateRule: chat.answer + theme.ai combined over 5% fires; under
   assert.equal(underResult.firing, false, underResult.detail); // 2/200 = 1%
 });
 
-// Minor triage item 10: `denied` (a rate-limit/budget refusal at `index.ts`'s
-// own gate — never reaches the LiteLLM gateway) must be excluded from the
-// denominator. Including it only ever drags the computed error% DOWN, which
-// can MASK a real gateway outage behind a burst of unrelated denials.
-// Reverting the `denied` filter in `litellmErrorRateRule` (back to
-// `[...chat.values(), ...theme.values()]` unfiltered) makes the "masked"
-// assertion below fail: `firing` would come back `false` instead of `true`.
+// `denied` (a rate-limit/budget refusal at `index.ts`'s own gate — never
+// reaches the LiteLLM gateway) must be excluded from the denominator.
+// Including it only ever drags the computed error% down, which can mask a
+// real gateway outage behind a burst of unrelated denials.
 test("litellmErrorRateRule: a burst of denied requests must not mask a real gateway error rate (minor triage item 10)", async () => {
   // Real gateway traffic: 94 answered + 6 error = 6% error rate — over the
   // 5% threshold. 900 denied requests alongside it, if counted in the
@@ -1053,7 +1023,7 @@ test("litellmErrorRateRule: a healthy gateway alongside a denied burst still doe
   assert.equal(result.firing, false, result.detail);
 });
 
-// ---- Fix round (I2): alert-eval-error, surfaced from inside runAlerts ----
+// ---- alert-eval-error, surfaced from inside runAlerts ---------------------
 
 test("alertEvalErrorRule: fires with every failing rule id named, resolves on a clean errors map", () => {
   const clean = alertEvalErrorRule({});
@@ -1123,16 +1093,13 @@ test("runAlerts: a real query failure (unreachable local ClickHouse) is surfaced
   assert.equal(second.transitions["alert-eval-error"], undefined, "must stay silent while still failing");
 });
 
-// QA follow-up ("alert-eval-error names the failing rule"): the fire-once Slack line already names the failing
-// rule id(s) (`alertEvalErrorRule`'s own `detail`), but that line is the
-// ONLY place that ever went — exactly the shape that made a real
-// "alert-eval-error firing" tick during the F13 recovery untraceable: no
-// `SLACK_WEBHOOK_URL` locally means `slackPoster` is a silent no-op
-// (`notify.ts`), so nothing anywhere recorded which rule failed once that
-// one post went nowhere. `runAlerts` must now persist the failing rule
-// id(s) to `InboxWriter.alertMeta` independent of Slack, and must NOT erase
-// that record on resolve — reverting the `writer.setAlertMeta` call in
-// `alerts/index.ts` makes this fail: `getAlertMeta` reads back `undefined`.
+// The fire-once Slack line already names the failing rule id(s)
+// (`alertEvalErrorRule`'s own `detail`), but that line is the only place
+// it ever went: no `SLACK_WEBHOOK_URL` locally means `slackPoster` is a
+// silent no-op (`notify.ts`), so nothing recorded which rule failed once
+// that post went nowhere. `runAlerts` must persist the failing rule id(s)
+// to `InboxWriter.alertMeta` independent of Slack, and must not erase that
+// record on resolve.
 test("runAlerts: the failing rule id(s) survive in InboxWriter.alertMeta even with no Slack webhook, and are not erased on resolve", async () => {
   const { env, inboxWriterInstance } = makeEnv(InboxWriter, {
     env: {
@@ -1175,20 +1142,13 @@ test("runAlerts: the failing rule id(s) survive in InboxWriter.alertMeta even wi
   }
 });
 
-// Minor triage item 7: `drainsPaused` used to be set only on a `fired`/
-// `resolved` TRANSITION (`if (transition === "fired") ...`), not on every
-// tick from the rule's own current `firing` value — edge-triggered instead
-// of level-triggered. If the ONE `setDrainsPaused` RPC on the transition
-// tick failed, the alert's own `alert:<rule>` state had already recorded
-// "firing" (that write happens inside `evaluateAndNotify`, before
-// `setDrainsPaused` is even called), so no later tick ever sees a fresh
-// transition while the cap stays breached — `drainsPaused` got stuck at its
-// stale value (false) forever, even though the cap alert itself correctly
-// stayed "firing" and kept notifying. Reverting the `alerts/index.ts` fix
-// (back to `if (transition === "fired") ...` / `if (transition ===
-// "resolved") ...`) makes this test fail at the "SECOND tick" assertion:
-// `drainsPaused()` would still read `false` after tick 2 succeeds, because
-// tick 2 sees no transition (still firing) and never retries the RPC.
+// `drainsPaused` must be set from every tick's current `firing` value
+// (level-triggered), not only on a `fired`/`resolved` transition. If the
+// one `setDrainsPaused` RPC on the transition tick failed, the alert's own
+// `alert:<rule>` state had already recorded "firing" (that write happens
+// inside `evaluateAndNotify`, before `setDrainsPaused` is even called), so
+// an edge-triggered write would leave no later tick a fresh transition to
+// retry from while the cap stays breached.
 test("runAlerts: a failed setDrainsPaused RPC on the firing tick recovers on the very next tick (level-triggered, not edge-triggered)", async () => {
   const overCap = { spendUsd: 100, capUsd: 10 };
   const { env, inboxWriterInstance } = makeEnv(InboxWriter, {
@@ -1217,20 +1177,14 @@ test("runAlerts: a failed setDrainsPaused RPC on the firing tick recovers on the
   assert.equal(await inboxWriterInstance.drainsPaused(), true, "level-triggered: tick 2 must re-derive and re-apply paused=true from firing, with no transition needed");
 });
 
-// Minor triage item 9 (T04's own "no self-resolve test for new-fingerprint
-// rule" gap). `notify.ts#notifyFingerprintEvent`'s own doc comment says
-// new-fingerprint is notify-only, not fire/resolve — this drives the REAL
-// composition inside `runAlerts` (not just `newFingerprintRule` in
-// isolation, already covered above) to prove that composition actually
-// holds: one Slack line when a genuinely new fingerprint arrives, then
-// SILENCE on the next clean tick — no repeat post, no spurious "resolved"
-// line, and no `alert:new-fingerprint` state ever written at all (unlike
-// every fire/resolve rule, which DOES write `alert:<rule>` state — see the
-// `alertEvalErrorRule`/`o11y-spend-cap` tests above). Reverting `alerts/
-// index.ts` back to routing new-fingerprint through `evaluateAndNotify` (the
-// bug C-M10's fix round describes) makes the tick-2 assertions below fail: a
-// second "resolved" Slack line would post, and `alertState("new-fingerprint")`
-// would come back a real fire/resolve record instead of `undefined`.
+// `notify.ts#notifyFingerprintEvent`'s own doc comment says new-fingerprint
+// is notify-only, not fire/resolve — this drives the real composition
+// inside `runAlerts` (not just `newFingerprintRule` in isolation, already
+// covered above) to prove that composition holds: one Slack line when a
+// genuinely new fingerprint arrives, then silence on the next clean tick —
+// no repeat post, no spurious "resolved" line, and no
+// `alert:new-fingerprint` state ever written at all (unlike every
+// fire/resolve rule, which does write `alert:<rule>` state).
 test("runAlerts: new-fingerprint self-resolves via its own cursor — one Slack line on tick 1, then silence (no 'resolved' line, no alert state) on a clean tick 2", async () => {
   const { env } = makeEnv(InboxWriter, {
     env: {
@@ -1287,14 +1241,13 @@ test("runAlerts: new-fingerprint self-resolves via its own cursor — one Slack 
   assert.equal(await writer.alertState("new-fingerprint"), undefined, "new-fingerprint must never write alert:<rule> state at all");
 });
 
-// F35 (round 9): embed:2ac0e4fe7b87628d, first seen 06:42:33, was announced
-// at 06:43:33 and again at 06:57:29, the tick where o11y-spend-cap threw
-// "Network connection lost." (the API worker had restarted). The cause is
-// the cursor grace lag, not the failing rule: the first tick is inside the
-// 120 s grace window, so the cursor stays put and the next tick reads the
-// fingerprint again. This replays that timeline through the real runAlerts
-// and InboxWriter, with Date.now pinned per tick because runAlerts reads it
-// internally.
+// embed:2ac0e4fe7b87628d, first seen 06:42:33, was announced at 06:43:33
+// and again at 06:57:29, the tick where o11y-spend-cap threw "Network
+// connection lost." The cause is the cursor grace lag, not the failing
+// rule: the first tick is inside the 120s grace window, so the cursor
+// stays put and the next tick reads the fingerprint again. This replays
+// that timeline through the real runAlerts and InboxWriter, with Date.now
+// pinned per tick because runAlerts reads it internally.
 test("runAlerts: a fingerprint announced on a tick where o11y-spend-cap throws is not announced again on the next tick (F35)", async () => {
   let spendThrows = true;
   const { env } = makeEnv(InboxWriter, {
@@ -1333,7 +1286,7 @@ test("runAlerts: a fingerprint announced on a tick where o11y-spend-cap throws i
     assert.match(tick1.errors["o11y-spend-cap"] ?? "", /Network connection lost/, "precondition: spend-cap fails on tick 1");
     assert.equal(announcements().length, 1, "tick 1 announces the new fingerprint");
 
-    // 06:57:29: spend-cap still failing on this tick, as in F35.
+    // 06:57:29: spend-cap still failing on this tick.
     fakeNow = firstSeenMs + 14 * 60_000 + 56_000;
     const tick2 = await runAlerts(env);
     assert.match(tick2.errors["o11y-spend-cap"] ?? "", /Network connection lost/);

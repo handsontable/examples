@@ -1,16 +1,9 @@
 // The ledger (workers/o11y/src/inbox/ledger.ts, ADR-0041 §B.3) — pure
-// functions over `storage.ts#memoryStorage()`, no DO/R2 needed (T02's own
-// pattern for `dedupe.ts`/`registry.ts`/`pack.ts`).
-//
-// F2 fix round (final review, B-C1/A-I1/B "reopen-window unbounded"): a
-// committed key now lives under `done:<key>`, not `key:<key> = "committed"`
-// (see ledger.ts's header) — every test below that used to assert
-// `"committed"` now asserts the key is GONE from `key:` and present under
-// `done:`. New tests: `markKeysProvisional` refusing an over/missing wake
-// (B-I1), the interleaving race the fix closes, `reopenWindowExceedsRetention`
-// (B-M9) and `pruneLedger` (A-I1). The 10k-key/500-wake bounded-reads scale
-// test lives in `o11y-ledger-scale.test.mjs`.
-//
+// functions over `storage.ts#memoryStorage()`, no DO/R2 needed. A committed
+// key lives under `done:<key>`, not `key:<key> = "committed"` (see
+// ledger.ts's header) — every test below asserts the key is gone from
+// `key:` and present under `done:`. The 10k-key/500-wake bounded-reads
+// scale test lives in `o11y-ledger-scale.test.mjs`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
@@ -48,7 +41,7 @@ function deps({ running = false, markers = new Set() } = {}) {
   };
 }
 
-// ---- F8: wake-to-ready time on the wake entry ------------------------------
+// ---- wake-to-ready time on the wake entry -----------------------------------
 
 test("F8: recordWakeReady stores readyMs once (first call wins) and leaves the rest of the entry alone", async () => {
   const storage = memoryStorage();
@@ -185,7 +178,7 @@ test("resolveOverWakes is idempotent: a second call with nothing left to resolve
   assert.equal(second.newlyOver.length, 0);
 });
 
-// ---- F2 fix (B-I1): the race markKeysProvisional/resolveOverWakes closes --
+// ---- the race markKeysProvisional/resolveOverWakes closes -----------------
 
 test("B-I1: a markKeysProvisional call delivered WHILE isBoxRunning() is pending is still correctly captured (not lost, not committed without the marker)", async () => {
   const storage = memoryStorage();
@@ -201,7 +194,7 @@ test("B-I1: a markKeysProvisional call delivered WHILE isBoxRunning() is pending
     markerExists: async () => false, // no marker — an unclean stop
   });
 
-  // Simulate the exact interleaving B-I1 describes: while resolveOverWakes
+  // Simulate the interleaving: while resolveOverWakes
   // is awaiting isBoxRunning() (an input-gate-opening RPC in production),
   // drainStep's own markKeysProvisional call for the SAME still-not-over
   // wake is delivered and runs.
@@ -214,7 +207,7 @@ test("B-I1: a markKeysProvisional call delivered WHILE isBoxRunning() is pending
 
   // The key must be re-opened (no marker), never silently dropped and never
   // committed without the marker ever having been consulted (the exact
-  // B-I1 data-loss shape: "clean = hasProvisional ? markerExists : true"
+  // Data-loss shape: "clean = hasProvisional ? markerExists : true"
   // using a STALE hasProvisional computed before this same await).
   assert.equal(result.resolved[0].clean, false);
   assert.equal(result.resolved[0].keysAffected, 1, "the late-arriving key must be seen, not missed");
@@ -240,19 +233,18 @@ test("B-I1: markKeysProvisional refuses for an unknown/already-deleted wake", as
   assert.equal(await storage.get(inboxKeyStorageKey(key)), undefined);
 });
 
-// ---- F3: a zero-ingest wake is a clean stop --------------------------------
+// ---- a zero-ingest wake is a clean stop -------------------------------------
 //
-// T03-D2's other finding: a wake that drains nothing (an empty backlog, or a
-// visit wake nobody ever pushed data into) never produces a Loki index
-// upload, so shutdown.sh never writes the marker — every such wake was
-// counted `unclean`, inflating exit criterion 12's count for a wake that
-// lost nothing (nothing was ever provisional). This must not weaken T01's
-// C1 guarantee: a wake that DID push data still needs the real marker.
+// A wake that drains nothing (an empty backlog, or a visit wake nobody
+// ever pushed data into) never produces a Loki index upload, so
+// shutdown.sh never writes the marker — such a wake must not count
+// `unclean`, since nothing was ever provisional. This must not weaken the
+// guarantee that a wake which did push data still needs the real marker.
 
 test("F3: a wake with no provisional keys at all resolves clean, with no marker required", async () => {
   const storage = memoryStorage();
   // w1 is over, and never had ANY key marked provisional under it — the
-  // exact T03-D2 shape (Loki ingested nothing this wake, so no marker was
+  // Loki ingested nothing this wake, so no marker was
   // ever going to exist).
   await storage.put({ [wakeStorageKey("w1")]: { startedAt: 1, reason: "backlog", over: false } });
 
@@ -363,17 +355,15 @@ test("commitKeys is a no-op for an empty list (same guard markKeysProvisional us
   assert.deepEqual([...(await storage.list({}))], []);
 });
 
-// B-M4 (minor triage item 3): the actual bug this fixes, proven end to end
-// at the ledger level — contrast directly with the "re-opens a key (back to
-// written) when the marker is absent" test just above, which shows the OLD
-// behavior a PROVISIONAL key gets when no marker was ever written. A key
-// committed via `commitKeys` never enters `provisional:<wakeId>` in the
-// first place, so `resolveOverWakes` has nothing to resolve for it — it
-// stays `done:`, permanently, through as many "unclean" wake resolutions as
-// run afterward. Routing the SAME key through `markKeysProvisional` instead
-// (the reverted, pre-fix behavior box.ts used for every `provisional`
-// outcome regardless of `bytesPushed`) reproduces exactly the endless
-// re-wake loop: `nextWrittenKeys` would return the key again, forever.
+// Proven end to end at the ledger level — contrast directly with the
+// "re-opens a key (back to written) when the marker is absent" test just
+// above, which shows the behavior a provisional key gets when no marker
+// was ever written. A key committed via `commitKeys` never enters
+// `provisional:<wakeId>` in the first place, so `resolveOverWakes` has
+// nothing to resolve for it — it stays `done:`, permanently, through as
+// many "unclean" wake resolutions as run afterward. Routing the same key
+// through `markKeysProvisional` instead reproduces the endless re-wake
+// loop: `nextWrittenKeys` would return the key again, forever.
 test("commitKeys: a zero-byte key never re-enters the written backlog, even across a wake that resolves as unclean (no re-wake loop)", async () => {
   const storage = memoryStorage();
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
@@ -451,15 +441,12 @@ test("B-M9: reopenWindowExceedsRetention refuses a window wider than the 7-day r
   assert.equal(reopenWindowExceedsRetention(0, KEY_RETENTION_MS + 1), true);
 });
 
-// ---- takeReopenedFlag (fix round B-M5) -----------------------------------
+// ---- takeReopenedFlag ------------------------------------------------------
 //
-// `box.ts`'s `o11y.drain` point never emitted the contract's `reason:
-// "reopen"` value. `reopenWindow` now drops a one-shot marker per key it
-// moves to `written`; `takeReopenedFlag` is what a drain batch consumes to
-// find out whether it just replayed any of them. Fails without the fix (a
-// `reopenWindow` that no longer writes the markers, or a `takeReopenedFlag`
-// that always returns `false`): the second assertion below goes from `true`
-// to `false`.
+// `box.ts`'s `o11y.drain` point must emit the contract's `reason: "reopen"`
+// value. `reopenWindow` drops a one-shot marker per key it moves to
+// `written`; `takeReopenedFlag` is what a drain batch consumes to find out
+// whether it just replayed any of them.
 
 test("takeReopenedFlag: true for a batch containing a key reopenWindow just re-opened, and consumes the marker (one-shot)", async () => {
   const storage = memoryStorage();
@@ -505,7 +492,7 @@ test("currentWakeId returns the one not-over wake, or null", async () => {
   assert.equal(await currentWakeId(storage), "w1");
 });
 
-// ---- pruneLedger (A-I1) --------------------------------------------------
+// ---- pruneLedger ------------------------------------------------------------
 
 test("pruneLedger deletes only done: entries older than KEY_RETENTION_MS, per tenant, bounded by a range read", async () => {
   const storage = memoryStorage();
@@ -527,7 +514,7 @@ test("pruneLedger deletes only done: entries older than KEY_RETENTION_MS, per te
   assert.equal(await storage.get(doneKeyStorageKey(freshBrowser)), 1, "a fresh done: entry must survive");
 });
 
-// ---- N2 (merge blocker): a wake with >128 provisional keys ---------------------
+// ---- a wake with >128 provisional keys --------------------------------------
 
 test("N2: a wake with 150 provisional keys (over the real DO storage 128-key limit) resolves correctly, all moved to done:", async () => {
   const storage = memoryStorage();
@@ -552,20 +539,15 @@ test("N2: a wake with 150 provisional keys (over the real DO storage 128-key lim
   assert.equal(await storage.get(wakeStorageKey(wakeId)), undefined, "the wake must be fully resolved");
 });
 
-// N2 atomicity trap (advisor review, this fix round): chunking
-// `finalizeWakeResolution`'s delete to the real 128-key limit, WITHOUT also
-// wrapping the whole function in one `storage.transaction()`, would let a
-// crash between chunks orphan whichever provisional keys were in a
-// not-yet-run later chunk — their `wake:<id>` entry could already be gone
-// (an earlier chunk) while they are still `provisional:<wakeId>`, and
-// nothing ever revisits them (`markKeysProvisional` refuses an unknown
-// wake). `wakeStorageKey(wakeId)` is pushed onto `toDelete` LAST — this
-// proves that ordering: a failure on a LATER delete chunk never removes the
-// wake record, so a crash never reaches the "wake is gone but keys are
-// still provisional" state, even though this in-memory fake (unlike the
-// real DO's transaction) does not roll back the earlier, already-applied
-// `put`/`delete` chunks — see this test's own assertions for exactly what
-// is and is not proven here.
+// Chunking `finalizeWakeResolution`'s delete to the real 128-key limit,
+// without also wrapping the whole function in one `storage.transaction()`,
+// would let a crash between chunks orphan whichever provisional keys were
+// in a not-yet-run later chunk — their `wake:<id>` entry could already be
+// gone while they are still `provisional:<wakeId>`, and nothing revisits
+// them (`markKeysProvisional` refuses an unknown wake).
+// `wakeStorageKey(wakeId)` is pushed onto `toDelete` last — a failure on a
+// later delete chunk must never remove the wake record first, so a crash
+// never reaches the "wake is gone but keys are still provisional" state.
 test("N2 atomicity: if a LATER delete chunk throws, wake: (deleted last) survives and the error propagates", async () => {
   const storage = memoryStorage();
   const wakeId = "big-wake-2";
@@ -596,8 +578,8 @@ test("N2 atomicity: if a LATER delete chunk throws, wake: (deleted last) survive
   );
 });
 
-// N8 (rereview.md §2 Minor, "nearly free" per the advisor review): a stale
-// outer snapshot can undo a concurrent manual reopen.
+// A stale outer snapshot must not be able to undo a concurrent manual
+// reopen.
 test("N8: finalizeWakeResolution re-reads each key's CURRENT state — a concurrent manual reopen (key moved back to written) is not silently overwritten", async () => {
   const storage = memoryStorage();
   const wakeId = "w-n8";
@@ -609,7 +591,7 @@ test("N8: finalizeWakeResolution re-reads each key's CURRENT state — a concurr
 
   // Simulate a manual reopen racing in AFTER resolveOverWakes's own
   // provisionalKeys snapshot was taken but BEFORE finalizeWakeResolution's
-  // internal re-read — the key is no longer this wake's provisional key.
+  // internal re-read — the key must no longer be this wake's provisional key.
   const deps2 = {
     isBoxRunning: async () => false,
     markerExists: async () => {
@@ -628,7 +610,7 @@ test("N8: finalizeWakeResolution re-reads each key's CURRENT state — a concurr
   );
 });
 
-// ---- rejectedEvent: audit log (row 19 / B-C1/A-I1 remainder) ------------------
+// ---- rejectedEvent: audit log -----------------------------------------------
 
 test("rejectKey writes both the rejected: key: state AND a rejectedEvent: entry", async () => {
   const storage = memoryStorage();

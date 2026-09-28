@@ -24,11 +24,10 @@
 //   through or no-ops, so specs that assert nothing about Sentry are
 //   unaffected.
 //
-// - `cloudflare:workers` (T04): `index.ts` now re-exports `O11yUsage`
+// - `cloudflare:workers`: `index.ts` re-exports `O11yUsage`
 //   (`o11y-usage.ts`), a `WorkerEntrypoint` — reuses the same structural
-//   stub `o11y-worker-hooks.mjs` already uses for `workers/o11y/src`,
-//   rather than a second copy (COMMON.md: "don't keep two diverging"
-//   spirit, applied to test fixtures too).
+//   stub `o11y-worker-hooks.mjs` uses for `workers/o11y/src`, rather than
+//   a second copy.
 
 const SANDBOX_STUB = new URL("./cloudflare-sandbox-stub.mjs", import.meta.url).href;
 const SENTRY_STUB = new URL("./sentry-cloudflare-stub.mjs", import.meta.url).href;

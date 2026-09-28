@@ -156,12 +156,11 @@ test("ordinary events pass through untouched", () => {
   }
 });
 
-// ── Fix round D-I2: isUnhandledNoise / isForeignUnhandled, moved from sentry.ts ──
+// ── isUnhandledNoise / isForeignUnhandled ────────────────────────────────────────
 //
-// Moved into `eventGate.ts` (previously private to `sentry.ts`, untestable) so
-// `telemetry/faro.ts`'s `beforeSend` can apply the SAME predicates Sentry's own
-// `beforeSend` does — contract §6's "shared noise gates" requirement. Before this
-// fix, only Sentry ever ran them.
+// Lives in `eventGate.ts`, not private to `sentry.ts`, so
+// `telemetry/faro.ts`'s `beforeSend` can apply the same predicates Sentry's
+// own `beforeSend` does — contract §6's "shared noise gates" requirement.
 
 test("isUnhandledNoise: a ResizeObserver loop warning, unhandled, is noise", () => {
   const event = {
@@ -244,12 +243,12 @@ test("isUnhandledNoise / isForeignUnhandled: no exception values -> false, not t
   assert.equal(isForeignUnhandled({ exception: { values: [] } }, "https://x"), false);
 });
 
-// ── R3 F17a: withoutMessageEchoFrames — Faro's gecko-regex message-echo frame ───
+// ── withoutMessageEchoFrames — Faro's gecko-regex message-echo frame ────────────
 //
 // Faro's stack parser can turn the `Error: <message>` line itself into a fake
 // frame (no `lineno`, `filename` = a URL quoted in the message). Un-gated, that
 // fake frame reaches `isForeignUnhandled` and drops the whole event — the exact
-// finding input from R3 F17a.
+// finding input.
 
 test("withoutMessageEchoFrames: drops the exact fake frame Faro produced for the pii finding", () => {
   const message =
@@ -272,7 +271,7 @@ test("withoutMessageEchoFrames: keeps a real frame (has a lineno) even if its fi
 });
 
 test("withoutMessageEchoFrames: keeps a real, genuinely foreign frame not quoted in the message", () => {
-  // The full pipeline case for R3 F17a's second requirement: a real extension/
+  // The full pipeline case for the second requirement: a real extension/
   // third-party frame must still be droppable by isForeignUnhandled downstream —
   // this helper must not touch it.
   const message = "boom";
@@ -527,7 +526,7 @@ test("N7: an event with no tags at all does not throw and is not dropped", () =>
   assert.equal(isEdgelessForeignSessionStart({ tags: {} }), false);
 });
 
-// ── T06, contract §11 / ADR §E.3: VITE_SENTRY_SCOPE ──────────────────────────────
+// ── contract §11 / ADR §E.3: VITE_SENTRY_SCOPE ──────────────────────────────────────
 //
 // `sentryScope.ts` is import-free for the same reason as `reportingGate.ts` — see
 // its own header. The truth table: `"full"` is the default for every input other
@@ -562,10 +561,10 @@ test("reportsDiagnosticToSentry: never widens a closed reportingEnabled gate", (
   assert.equal(reportsDiagnosticToSentry(false, "uncaught"), false);
 });
 
-// ── Minor triage item 5: unguarded browser telemetry ─────────────────────────────
+// ── unguarded browser telemetry ───────────────────────────────────────────────────
 //
 // `main.tsx`'s `initTelemetry()` call and `sentry.ts`'s ADR §E.2 tee were both
-// unguarded — a synchronous throw in either used to propagate out (blanking the
+// unguarded — a synchronous throw in either must not propagate out (blanking the
 // app before `createRoot`, or making the SDK drop the whole Sentry event). Both
 // fixes are thin call sites around the two guarded functions below; these tests
 // exercise the actual guarding logic. Reverting either `try`/`catch` in

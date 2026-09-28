@@ -1,11 +1,10 @@
-// Structural pins for two minor-triage fixes in the API worker's cron
-// wiring (`workers/api/src/index.ts`). `runNightlyCron`/`runFiveMinuteCron`
-// are private to that file and pull in the whole Worker's dependency graph
+// Structural pins for the API worker's cron wiring
+// (`workers/api/src/index.ts`). `runNightlyCron`/`runFiveMinuteCron` are
+// private to that file and pull in the whole Worker's dependency graph
 // (D1/KV/Sandbox/Sentry bindings), so — same rationale as
 // `pipeline/master-workflow.test.mjs`'s structural pins on `master.yml` —
 // these read the source as text and assert its exact shape rather than
 // importing and executing it.
-//
 // Run: node --experimental-strip-types --test pipeline/api-cron-wiring.test.mjs
 
 import test from "node:test";
@@ -36,11 +35,10 @@ function bodyOf(fnName) {
   return source.slice(braceStart, i + 1);
 }
 
-// Minor triage item 1 (C-M1): `rollupExampleDaily` used to be a fifth
-// `await` INSIDE the same `cronStep(env, "cron:nightly", ...)` billing
-// chain, so an upstream throw (e.g. `reconcileBilling`) skipped it for the
-// whole night. It must now run under its OWN `cronStep` call, sitting
-// OUTSIDE the billing chain's callback body.
+// `rollupExampleDaily` must run under its own `cronStep` call, outside the
+// billing chain's callback body — inside the same
+// `cronStep(env, "cron:nightly", ...)` chain, an upstream throw (e.g.
+// `reconcileBilling`) would skip it for the whole night.
 test("index.ts: the nightly example_daily rollup has its own independent cronStep, not nested in the billing chain", () => {
   const nightlyBody = bodyOf("runNightlyCron");
 
@@ -70,10 +68,10 @@ test("index.ts: the nightly example_daily rollup has its own independent cronSte
   );
 });
 
-// Minor triage item 2 (C-M2): the API worker's own `*/5` cron must write one
-// structured `log.kind: "cron.tick"` line (via `telemetry/lines.ts`'s shared
-// helper) so o11y's `heartbeat.lastIngest` watchdog check is a true
-// end-to-end signal, not just "did the ingest pipeline exist".
+// The API worker's own `*/5` cron must write one structured
+// `log.kind: "cron.tick"` line (via `telemetry/lines.ts`'s shared helper)
+// so o11y's `heartbeat.lastIngest` watchdog check is a true end-to-end
+// signal, not just "did the ingest pipeline exist".
 test("index.ts: the five-minute cron writes a cron.tick line through logCronTickLine", () => {
   const fiveMinuteBody = bodyOf("runFiveMinuteCron");
   assert.match(

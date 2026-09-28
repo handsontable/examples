@@ -1,20 +1,10 @@
-// Observability contract §5 browser metric catalogue (ADR-0041 §F.2, docs/observability-contract.md).
-//
-// Drives `apps/authoring/src/telemetry/metrics.ts` against a FAKE `DemoRuntime`
-// (onReady/onError only — `trackPreviewReady` needs nothing more) and a
-// `recordingTelemetry()` from the contract module. Every recorded call is also
-// replayed through the REAL `toAePoint` (not just asserted against the recording),
-// because `recordingTelemetry` validates nothing on its own — a misspelled outcome
-// or an attribute outside its metric's closed set would otherwise pass silently.
-//
-// `packages/runtime/src/sandpack.ts` and `container.ts`'s own timing hooks are
-// exercised separately, against the REAL runtimes, in `sandpack-reload.test.mjs`
-// and `session-start-failure.test.mjs` — this file cannot catch a hook wired wrong
-// inside either engine, only whether `metrics.ts`'s own emission logic is correct
-// once a hook fires.
-//
+// Observability contract §5 browser metric catalogue (ADR-0041 §F.2).
+// Drives `apps/authoring/src/telemetry/metrics.ts` against a fake
+// `DemoRuntime` and a `recordingTelemetry()`, replaying every call through
+// the real `toAePoint` since `recordingTelemetry` validates nothing on its
+// own. Real timing hooks are exercised separately in
+// `sandpack-reload.test.mjs`/`session-start-failure.test.mjs`.
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
-// Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
 import assert from "node:assert/strict";

@@ -4,17 +4,13 @@ import { demoIdFromPath, routeClassOf, validSessionId } from "../workers/api/src
 import { serviceEnvironment, serviceVersion } from "../workers/api/src/telemetry/resource.ts";
 import { sentryScopeIsFull } from "../workers/api/src/telemetry/scope.ts";
 
-// T05 — route classification (blob10 `route_class`, contract §4) and the
+// Route classification (blob10 `route_class`, contract §4) and the
 // service.version / deployment.environment.name resource attrs (contract §3).
 //
 // `route-class.ts` and `resource.ts` are deliberately import-free of their
 // sibling `.ts` files (see resource.ts's own doc comment) so this file can
-// import them directly under `--experimental-strip-types`, the same
-// constraint `sentry-gate.ts`/`preview-boot.ts` already document — a sibling
-// `.ts` file's compiled `.js` specifier does not resolve that way (confirmed
-// while writing this task: importing the pre-fix `resource.ts`, which
-// re-exported `sentry-gate.ts`'s `PRODUCTION_HOST`, failed with
-// `Cannot find module '.../sentry-gate.js'`).
+// import them directly under `--experimental-strip-types` — a sibling `.ts`
+// file's compiled `.js` specifier does not resolve that way.
 
 test("routeClassOf: the exact case the acceptance criteria names", () => {
   assert.equal(routeClassOf("GET", "/api/versions"), "api/versions");
@@ -58,13 +54,11 @@ test("demoIdFromPath: extracted for the routes that name one, empty otherwise", 
   assert.equal(demoIdFromPath("/api/session/sess-1/status"), "");
 });
 
-// Minor triage item 8 (C-M11's request-line sub-item): a raw, unresolved path
-// segment must never reach `hot.demo_id` on the per-request log line — a
-// crawler probing `/d/<garbage>` used to stuff arbitrary strings straight
-// into Loki structured metadata. Reverting the `DEMO_ID_SHAPE_RE` check in
-// `route-class.ts#demoIdFromPath` (back to returning the raw segment
-// unconditionally) makes every assertion below of a garbage id fail — it
-// would come back non-empty instead of `""`.
+// A raw, unresolved path segment must never reach `hot.demo_id` on the
+// per-request log line — a crawler probing `/d/<garbage>` must not stuff
+// arbitrary strings straight into Loki structured metadata. The
+// `DEMO_ID_SHAPE_RE` check in `route-class.ts#demoIdFromPath` must reject
+// it, not return the raw segment unconditionally.
 test("demoIdFromPath: rejects a path segment that isn't shaped like a real demo id", () => {
   assert.equal(demoIdFromPath("/d/';DROP TABLE demos;--"), "");
   assert.equal(demoIdFromPath("/d/<script>alert(1)</script>"), "");
@@ -80,12 +74,10 @@ test("demoIdFromPath: still accepts every real id shape (shortId's own alphabet,
   assert.equal(demoIdFromPath("/api/mcp/demos/abc123"), "abc123");
 });
 
-// Minor triage item 8 (`x-hot-session` half). `validSessionId` is what
-// `index.ts`'s per-request log line now calls instead of trusting the raw
-// `x-hot-session` header. Reverting the `SESSION_ID_RE` check in
-// `telemetry/lines.ts#validSessionId` (back to `raw ?? ""`) makes the
-// "rejects" assertions below fail — an arbitrary header value would come
-// back unchanged instead of `""`.
+// `validSessionId` is what `index.ts`'s per-request log line calls instead
+// of trusting the raw `x-hot-session` header. The `SESSION_ID_RE` check in
+// `telemetry/lines.ts#validSessionId` must reject an arbitrary header
+// value, not pass it through unchanged (`raw ?? ""`).
 test("validSessionId: accepts a real crypto.randomUUID() page-load id", () => {
   assert.equal(validSessionId("3fa85f64-5717-4562-b3fc-2c963f66afa6"), "3fa85f64-5717-4562-b3fc-2c963f66afa6");
 });
@@ -133,14 +125,14 @@ test("serviceVersion: an empty --var (wrangler's own empty-string shape) still f
 
 // ── contract §11: the Sentry scope switch's decision ─────────────────────────
 //
-// `diagnostic.ts#reportDiagnostic` gates its `Sentry.captureException` call on
-// this function's result (`if (sentryScopeIsFull(env)) { Sentry.captureException(...) }`
-// — read directly in the source, since `diagnostic.ts` itself pulls in the
-// real `@sentry/cloudflare` package and `./lines.js`/`./points.js`, which this
-// harness cannot resolve the same way `resource.ts`'s doc comment explains).
-// This is the decision alone; a live transport-spy integration check needs a
-// running `wrangler dev`, where Sentry deliberately never initialises at all
-// (sentry-gate.ts's own local-dev gate) — reported instead in the task Outcome.
+// `diagnostic.ts#reportDiagnostic` gates its `Sentry.captureException` call
+// on this function's result
+// (`if (sentryScopeIsFull(env)) { Sentry.captureException(...) }` — read
+// directly in the source, since `diagnostic.ts` itself pulls in the real
+// `@sentry/cloudflare` package). This is the decision alone; a live
+// transport-spy integration check needs a running `wrangler dev`, where
+// Sentry deliberately never initialises at all (sentry-gate.ts's own
+// local-dev gate).
 
 test("sentryScopeIsFull: full (the default) is true", () => {
   assert.equal(sentryScopeIsFull({ SENTRY_SCOPE: "full" }), true);

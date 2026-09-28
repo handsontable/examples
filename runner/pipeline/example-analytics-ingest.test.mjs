@@ -1,21 +1,20 @@
-// ADR-0042 — proves the FULL round trip for `example.*`, not just the
-// server-side half T02's own `o11y-normalise.test.mjs` "Faro example.open"
-// case covers.
+// ADR-0042 — proves the full round trip for `example.*`, not just the
+// server-side half `o11y-normalise.test.mjs`'s "Faro example.open" case
+// covers.
 //
 // That existing case feeds `processFaroBody` a fixture whose Faro item
-// already carries the raw `hot.metric_kind`/`hot.ref`/`hot.area` keys —
-// it never proves the browser actually SENDS them. The browser's own
+// already carries the raw `hot.metric_kind`/`hot.ref`/`hot.area` keys — it
+// never proves the browser actually sends them. The browser's own
 // `beforeSend` hook runs the same `scrubTelemetry` allowlist
-// (`attrs.ts#ALLOWED_ATTRIBUTE_KEYS`) BEFORE the request ever leaves the
-// tab, and before this task that allowlist had no entry for
-// `hot.metric_kind`/`hot.ref`/`hot.area` at all (T02-D4's own doc comment:
-// "T06/T09 must use these exact key names... nothing else pins this
-// convention today" — T12 is that pin). A browser build sending the plain
-// `HotAttrs` bag would have had every one of `kind`/`ref`/`area` silently
-// stripped client-side, long before `processFaroBody`'s own internal
-// (re-run) scrub or `readAeOnlyAttrs`'s pre-scrub read ever got a chance —
-// `o11y-normalise.test.mjs`'s fixture-only test cannot see that, because it
-// starts downstream of the browser.
+// (`attrs.ts#ALLOWED_ATTRIBUTE_KEYS`) before the request ever leaves the
+// tab, so that allowlist must have an entry for
+// `hot.metric_kind`/`hot.ref`/`hot.area` — a browser build sending the
+// plain `HotAttrs` bag without it would have every one of
+// `kind`/`ref`/`area` silently stripped client-side, long before
+// `processFaroBody`'s own internal (re-run) scrub or `readAeOnlyAttrs`'s
+// pre-scrub read ever gets a chance. `o11y-normalise.test.mjs`'s
+// fixture-only test cannot see that, because it starts downstream of the
+// browser.
 //
 // This file: (1) runs the exact item shape `apps/authoring/src/telemetry/
 // faro.ts#attrsToContext` + Faro's own `pushEvent` would produce through
@@ -25,7 +24,6 @@
 // Analytics Engine point with blob17/18/19 filled. The inbox is Loki's only
 // feed (§8), so "never reaches the inbox" is the same claim as "never
 // reaches Loki."
-//
 // Run: node --experimental-strip-types --test pipeline/example-analytics-ingest.test.mjs
 
 import test from "node:test";
@@ -74,12 +72,10 @@ test("browser scrub (beforeSend) keeps hot.metric_kind/hot.ref/hot.area — this
   assert.equal(attrs["hot.metric_kind"], "docs");
   assert.equal(attrs["hot.ref"], "guides/accessibility/accessibility/accessibility.md");
   assert.equal(attrs["hot.area"], "Accessibility");
-  // Not asserted here: `hot.bucket`/`hot.reason` survival is the T07 fix
-  // round's own `ATTR_HOT_BUCKET`/`ATTR_HOT_REASON` addition to this same
-  // AE-only category (`attrs.ts#AE_ONLY_ATTRIBUTE_KEYS`), not yet merged
-  // into this task's base at the time this file was written (COMMON.md: T07
-  // merges before T12; this worktree may still predate that merge) — T07
-  // owns proving those two, this file owns `kind`/`ref`/`area`.
+  // Not asserted here: `hot.bucket`/`hot.reason` survival is a separate
+  // `ATTR_HOT_BUCKET`/`ATTR_HOT_REASON` addition to this same AE-only
+  // category (`attrs.ts#AE_ONLY_ATTRIBUTE_KEYS`) — a separate concern owns
+  // proving those two, this file owns `kind`/`ref`/`area`.
   //
   // Sanity: an attribute genuinely outside every allowlist category is still
   // dropped — this test is not accidentally passing because the allowlist
@@ -92,13 +88,13 @@ test("browser scrub (beforeSend) keeps hot.metric_kind/hot.ref/hot.area — this
 
 test("example.open: end to end from a scrubbed browser payload to one AE point, zero inbox items", async () => {
   const scrubbed = scrubTelemetry(rawExampleOpenItem());
-  // The real Faro transport body shape (T02-D6): one shared `meta` plus
+  // The real Faro transport body shape: one shared `meta` plus
   // separate typed arrays, `events` here.
   const wireBody = { meta: scrubbed.meta, events: [{ name: scrubbed.payload.name, attributes: scrubbed.payload.attributes }] };
 
   const [item] = await processFaroBody(wireBody, ENV, SERVICE, Date.now());
 
-  // A-I4 remainder (rereview.md, closed second wave): an example.* event
+  // An example.* event
   // now gets a hash-only ingestItem (no `record`) so a redelivered batch
   // can't double-count this AE point — but it must still never reach the
   // inbox/Loki (§6 unchanged): `record` stays absent.
@@ -141,7 +137,7 @@ test("example.engaged: same taxonomy channel, no reason blob", async () => {
   const scrubbed = scrubTelemetry(item);
   const wireBody = { meta: scrubbed.meta, events: [{ name: scrubbed.payload.name, attributes: scrubbed.payload.attributes }] };
   const [result] = await processFaroBody(wireBody, ENV, SERVICE, Date.now());
-  // A-I4 remainder: hash-only ingestItem, still never stored — see the
+  // Hash-only ingestItem, still never stored — see the
   // "example.open" test above for the full reasoning.
   assert.ok(result.ingestItem);
   assert.equal(result.ingestItem.record, undefined);

@@ -1,9 +1,8 @@
 // Minimal coverage for `scripts/o11y-slack-capture.mjs`'s
-// `createSlackCaptureServer` — previously untested. Added alongside NB7
-// (re-review 2): the server used to bind every interface
-// (`server.listen(port)`, no host), so `GET /_captured` (unauthenticated
-// alert text) was reachable from the LAN, not just this machine.
-//
+// `createSlackCaptureServer`. The server must bind localhost only, not
+// every interface (`server.listen(port)`, no host), or `GET /_captured`
+// (unauthenticated alert text) is reachable from the LAN, not just this
+// machine.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";

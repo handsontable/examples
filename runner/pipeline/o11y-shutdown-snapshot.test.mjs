@@ -1,21 +1,20 @@
-// F2 fix (final review, B-I2 "shutdown.sh fails open when the pre-SIGTERM
-// listing fails"): deterministic, fast proof of the fix, driven at the
-// shell-function level — `containers/o11y/supervisor/{lib,shutdown}.sh`'s
+// `shutdown.sh` must fail open when the pre-SIGTERM listing fails.
+// Deterministic, fast proof, driven at the shell-function level —
+// `containers/o11y/supervisor/{lib,shutdown}.sh`'s
 // `r2_list_prefix`/`snapshot_index_keys`/`confirm_new_upload`, sourced for
 // real into a plain `bash` subprocess with a stubbed `curl`
 // (`fixtures/stub-bin/curl`) on `PATH`.
 //
 // Why a shell-level test rather than a full `stop-roundtrip.mjs` docker
-// scenario: the actual bug needs an ASYMMETRIC failure — the pre-SIGTERM
-// listing fails while the post-exit one succeeds — which is a live R2/MinIO
+// scenario: the bug needs an asymmetric failure — the pre-SIGTERM listing
+// fails while the post-exit one succeeds — which is a live R2/MinIO
 // policy-toggle timed against the exact moment `shutdown.sh`'s trap runs
 // inside the container. That is not reproducible deterministically over
 // docker; this test controls the exact sequence of curl responses instead,
-// which is what actually exercises the fixed control flow. `stop-roundtrip.mjs`'s own C1
-// case still proves the real end-to-end index-upload/marker path against a
-// real Loki + MinIO; this test proves the specific listing-failure branch
-// that path cannot reach on demand.
-//
+// which is what actually exercises the fixed control flow.
+// `stop-roundtrip.mjs`'s own case still proves the real end-to-end
+// index-upload/marker path against a real Loki + MinIO; this test proves
+// the specific listing-failure branch that path cannot reach on demand.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 // (this file needs no `--experimental-strip-types` itself — no TS import —
 // but is picked up by the same glob.)
@@ -35,13 +34,12 @@ const STUB_BIN_DIR = path.join(HERE, "fixtures", "stub-bin");
 /** Sources lib.sh + shutdown.sh into a fresh bash process (stubbed `curl`
  *  first on PATH) and runs `script` (bash source) in that same context.
  *  `script` should end by printing whatever the test wants to assert on.
- *  `daySpan` sets `O11Y_INDEX_DAY_SPAN_DAYS` BEFORE `shutdown.sh` is
+ *  `daySpan` sets `O11Y_INDEX_DAY_SPAN_DAYS` before `shutdown.sh` is
  *  sourced (`INDEX_DAY_SPAN_DAYS` is only read at source time, not inside a
  *  function) — defaults to `1` (today + yesterday, i.e. two day-prefixes
- *  per snapshot) so every EXISTING test's call-count expectations, written
- *  before fix round B-M8 widened the real default to 7, keep meaning
- *  exactly what they said without editing each one; tests that care about
- *  the wider span pass `daySpan` explicitly. */
+ *  per snapshot) so most tests' call-count expectations keep meaning
+ *  exactly what they say without editing each one; tests that care about
+ *  the wider (production) span pass `daySpan` explicitly. */
 function runBash(script, { modes = "empty", daySpan = 1 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "o11y-shutdown-test-"));
   const counterFile = path.join(dir, "curl-calls");
@@ -122,7 +120,7 @@ test("snapshot_index_keys: succeeds (possibly empty) when both listings succeed"
   assert.match(res.stdout, /EXIT:0$/m);
 });
 
-// ---- The actual B-I2 bug shape: before fails, after succeeds --------------
+// ---- the bug shape: before fails, after succeeds ---------------------------
 
 test("B-I2: the marker decision refuses when the PRE-SIGTERM snapshot failed, even though a real new upload would otherwise be confirmed", () => {
   // Reproduces the exact scenario the finding describes: a pre-existing
@@ -174,24 +172,21 @@ fi
   assert.match(res.stdout, /MARKER_OK:0/, "a real new upload, cleanly confirmed both sides, must still write the marker");
 });
 
-// ---- B-I2, second wave: drive the REAL run_stop_protocol(), not a copy ----
+// ---- drive the real run_stop_protocol(), not a copy -------------------------
 //
-// Rereview finding on the two tests above: they re-implement the
-// `snapshot_ok` gate INLINE in the test's own script, rather than calling
-// `run_stop_protocol` itself — "the new unit test copies run_stop_protocol's
-// snapshot_ok gate into its own script instead of calling it, so deleting
-// shutdown.sh:168 fails no test." The two tests below call the real
-// function, driven with: a real backgrounded process as LOKI_PID (traps
-// SIGTERM and exits 0, so `run_stop_protocol`'s own `kill -TERM`/`wait`
-// logic runs for real, not a stub), and `LOKI_UPLOADER_NAME_FILE` pointed at
-// a real temp file (the F2 fix, second wave, that makes this possible at
-// all — the hardcoded `/loki/...` path is not writable outside a real
-// container).
+// The two tests above re-implement the `snapshot_ok` gate inline in the
+// test's own script, rather than calling `run_stop_protocol` itself —
+// deleting shutdown.sh:168 would fail no test that way. The two tests
+// below call the real function, driven with: a real backgrounded process
+// as LOKI_PID (traps SIGTERM and exits 0, so `run_stop_protocol`'s own
+// `kill -TERM`/`wait` logic runs for real, not a stub), and
+// `LOKI_UPLOADER_NAME_FILE` pointed at a real temp file (the hardcoded
+// `/loki/...` path is not writable outside a real container).
 //
-// `code200` (the new stub-curl mode) is what a real `r2_put_and_verify`
-// PUT+HEAD pair needs — the marker path this revert-evidence pair now
-// actually exercises, which the two tests above never reached at all (they
-// stop at the boolean decision, never call `r2_put_and_verify`).
+// `code200` (the stub-curl mode) is what a real `r2_put_and_verify`
+// PUT+HEAD pair needs — the marker path this pair exercises, which the two
+// tests above never reach at all (they stop at the boolean decision, never
+// call `r2_put_and_verify`).
 
 function withFakeLoki(bodyScript, { modes }) {
   const script = `
@@ -235,8 +230,8 @@ test("B-I2, second wave (revert check / positive control): run_stop_protocol() w
   assert.match(res.stdout, /CALLS:\s*6$/m, "before x2, after x2, PUT, HEAD — the full real marker-write path");
 });
 
-// ---- B-M8: the snapshot must span every day a backlogged upload could land,
-// not just today and yesterday ----------------------------------------------
+// ---- the snapshot must span every day a backlogged upload could land, not
+// just today and yesterday ---------------------------------------------------
 
 test("snapshot_index_keys: queries one prefix per day from day_now down through day_now - INDEX_DAY_SPAN_DAYS", () => {
   // daySpan=3 -> 4 day-prefixes (offsets 0..3) -> 4 curl calls for one snapshot.
@@ -248,14 +243,14 @@ test("snapshot_index_keys: queries one prefix per day from day_now down through 
   assert.match(res.stdout, /CALLS:\s*4$/m, "one call per day from day_now through day_now - 3, inclusive");
 });
 
-// Fails without the fix: reverting `shutdown.sh`'s `snapshot_index_keys` to
-// its old two-argument, today/yesterday-only form makes this MARKER_OK:1 —
-// the day-3 upload is never even listed, so `confirm_new_upload` never sees
-// it. `day_now`'s offset-3 day prefix (three days back) stands in for a
-// backlogged/reopened record's index table, which can legitimately land
-// under any day up to `INDEX_DAY_SPAN_DAYS` (7 in production, bounded by
-// Loki's own `reject_old_samples_max_age: 7d`) in the past — a day the old
-// today/yesterday-only check never looked at.
+// `shutdown.sh`'s `snapshot_index_keys` must not use a two-argument,
+// today/yesterday-only form: that would leave the day-3 upload never even
+// listed, so `confirm_new_upload` never sees it. `day_now`'s offset-3 day
+// prefix (three days back) stands in for a backlogged/reopened record's
+// index table, which can legitimately land under any day up to
+// `INDEX_DAY_SPAN_DAYS` (7 in production, bounded by Loki's own
+// `reject_old_samples_max_age: 7d`) in the past — a day a today/yesterday-
+// only check would never look at.
 test("B-M8: a backlogged upload landing under a day older than yesterday is confirmed as new, not silently missed", () => {
   const script = `
 day_now=19999

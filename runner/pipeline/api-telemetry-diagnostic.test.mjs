@@ -4,40 +4,39 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// T05 fix round (controller review): `reportDiagnostic`'s `sentryScopeIsFull`
-// gate (`workers/api/src/telemetry/diagnostic.ts`) had no direct test — only
+// `reportDiagnostic`'s `sentryScopeIsFull` gate
+// (`workers/api/src/telemetry/diagnostic.ts`) needs a direct test, not just
 // the decision function (`sentryScopeIsFull` itself, in
-// `api-telemetry-signals.test.mjs`) was pinned, not the wiring that actually
-// calls `Sentry.captureException` behind it. `diagnostic.ts` imports
-// `./lines.js` and `./points.js` (sibling `.ts` files), which
-// `--experimental-strip-types` cannot resolve through a `.js` specifier from
-// a single-file import (see `resource.ts`'s own doc comment) — so this file
-// uses the same copy-and-rewrite harness `pipeline/chat-sanitise.test.mjs`
-// already uses for `chat.ts`, applied to the `telemetry/` subtree instead.
+// `api-telemetry-signals.test.mjs`) — the wiring that actually calls
+// `Sentry.captureException` behind it needs coverage too. `diagnostic.ts`
+// imports `./lines.js` and `./points.js` (sibling `.ts` files), which
+// `--experimental-strip-types` cannot resolve through a `.js` specifier
+// from a single-file import (see `resource.ts`'s own doc comment) — so
+// this file uses the same copy-and-rewrite harness
+// `pipeline/chat-sanitise.test.mjs` uses for `chat.ts`, applied to the
+// `telemetry/` subtree instead.
 //
-// Unlike `chat.ts`, `diagnostic.ts` also has two BARE package specifiers
+// Unlike `chat.ts`, `diagnostic.ts` also has two bare package specifiers
 // (`@sentry/cloudflare`, `@handsontable/demo-runtime/telemetry`), so the copy
 // has to land somewhere Node's module resolution still walks up into
-// `workers/api/node_modules` (both are real symlinks there) — the OS temp
-// dir chat-sanitise.test.mjs uses does not have that ancestry, confirmed by
-// a first attempt: `Cannot find package '@sentry/cloudflare'`. The copy
-// below lands inside `workers/api/` itself instead, and is removed after.
+// `workers/api/node_modules` (both are real symlinks there) — an OS temp
+// dir does not have that ancestry (confirmed:
+// `Cannot find package '@sentry/cloudflare'`). The copy below lands inside
+// `workers/api/` itself instead, and is removed after.
 //
-// `reportDiagnostic` takes an injectable `capture` function (fix round
-// addition) — the test below passes a recorder instead of the real
-// `@sentry/cloudflare` call.
+// `reportDiagnostic` takes an injectable `capture` function — the test
+// below passes a recorder instead of the real `@sentry/cloudflare` call.
 
 const workersApiDir = join(import.meta.dirname, "..", "workers/api");
 const telemetrySrc = join(workersApiDir, "src/telemetry");
 const envSrc = join(workersApiDir, "src/env.ts");
 const dir = mkdtempSync(join(workersApiDir, ".hot-diagnostic-"));
-// Minor triage item 8 (C-M15): the copy-and-import below used to run as a
-// plain top-level sequence with `rmSync` last — a failing import (a typo in
-// one of the copied files, a resolution error) skipped the cleanup and left
-// the scratch directory behind for `git add -A` to pick up, since it was
-// never gitignored either (see `.gitignore`'s own `workers/api/.hot-*`
-// entry, added alongside this fix). `try/finally` guarantees the directory
-// is always removed, whether the import below succeeds or throws.
+// The copy-and-import below must not run as a plain top-level sequence
+// with `rmSync` last — a failing import (a typo in one of the copied
+// files, a resolution error) would skip the cleanup and leave the scratch
+// directory behind for `git add -A` to pick up (see `.gitignore`'s own
+// `workers/api/.hot-*` entry). `try/finally` guarantees the directory is
+// always removed, whether the import below succeeds or throws.
 let reportDiagnostic;
 try {
   // diagnostic.ts's own chain: diagnostic.ts -> lines.ts, points.ts, scope.ts
@@ -110,12 +109,11 @@ test("reportDiagnostic: with no capture argument, does not throw (falls back to 
   assert.doesNotThrow(() => reportDiagnostic(ENV_UNCAUGHT, new Error("boom"), { context: "test-site", routeClass: "api/test" }));
 });
 
-// C-I2 (fix round): the structured error line `reportDiagnostic` writes via
-// `logErrorLine` must carry the contract-fingerprint under `hot.fingerprint`
-// (contract §3 AE-only key) — otherwise the API worker's handled errors have
-// no way to reach the §F.3 new-fingerprint registry once they arrive at the
-// o11y worker as a worker-tenant OTLP export (see the F3 fix-round report for
-// the other, out-of-ownership half of the wiring).
+// The structured error line `reportDiagnostic` writes via `logErrorLine`
+// must carry the contract-fingerprint under `hot.fingerprint` (contract
+// §3 AE-only key) — otherwise the API worker's handled errors have no way
+// to reach the §F.3 new-fingerprint registry once they arrive at the o11y
+// worker as a worker-tenant OTLP export.
 test("reportDiagnostic: the structured error line carries hot.fingerprint = fingerprint(context, message)", () => {
   const lines = [];
   const realConsoleError = console.error;
@@ -133,18 +131,17 @@ test("reportDiagnostic: the structured error line carries hot.fingerprint = fing
   assert.match(parsed["hot.fingerprint"], /^test-site:[0-9a-f]{16}$/);
 });
 
-// Minor triage item 9. `index.ts`'s chat-gateway and theme-gateway
-// `reportDiagnostic` calls live inside the main worker's `fetch` handler
-// (a route match deep inside a ~2000-line switch), not something this suite
-// can invoke directly without a full request/env — same constraint
+// `index.ts`'s chat-gateway and theme-gateway `reportDiagnostic` calls
+// live inside the main worker's `fetch` handler (a route match deep inside
+// a ~2000-line switch), not something this suite can invoke directly
+// without a full request/env — same constraint
 // `pipeline/mcp-create.test.mjs`'s own "the update route calls
-// isMcpCreated()" test documents for the same file. Structural, same style:
-// the route source is read as text and the exact `sentryFingerprint` shape
-// is asserted for each call site — a passing `reportDiagnostic` fingerprint-
-// passthrough test elsewhere proves the FUNCTION honours `sentryFingerprint`
-// when given one; this proves each call site actually PASSES one. Reverting
-// either fix (dropping the `sentryFingerprint` line from either
-// `reportDiagnostic` call) makes the matching assertion below fail.
+// isMcpCreated()" test documents for the same file. Structural, same
+// style: the route source is read as text and the exact
+// `sentryFingerprint` shape is asserted for each call site — a passing
+// `reportDiagnostic` fingerprint-passthrough test elsewhere proves the
+// function honours `sentryFingerprint` when given one; this proves each
+// call site actually passes one.
 test("the chat-gateway and theme-gateway reportDiagnostic calls set a status-grouped sentryFingerprint (C-M13)", () => {
   const root = join(import.meta.dirname, "..");
   const source = readFileSync(join(root, "workers/api/src/index.ts"), "utf8");
@@ -168,15 +165,13 @@ test("the chat-gateway and theme-gateway reportDiagnostic calls set a status-gro
   );
 });
 
-// Minor triage item 8 (C-M15): the scratch-directory copy+import above used
-// to be a plain top-level sequence ending in a bare `rmSync` — a failing
-// import left `workers/api/.hot-diagnostic-*` behind, ungitignored, for
-// `git add -A` to pick up. Structural (the fix IS the shape of this file's
-// own top-level code, not something a runtime assertion can observe after
-// the fact — the directory from a real run is already gone by the time any
-// test() body runs, success or failure). Reverting the try/finally back to
-// a bare sequence, or dropping `.gitignore`'s `workers/api/.hot-*` line,
-// makes the matching assertion below fail.
+// The scratch-directory copy+import above must not be a plain top-level
+// sequence ending in a bare `rmSync` — a failing import would leave
+// `workers/api/.hot-diagnostic-*` behind, ungitignored, for `git add -A`
+// to pick up. Structural (the fix is the shape of this file's own
+// top-level code, not something a runtime assertion can observe after the
+// fact — the directory from a real run is already gone by the time any
+// test() body runs, success or failure).
 test("scratch-dir cleanup is wrapped in try/finally, and workers/api/.hot-* is gitignored", () => {
   const selfSource = readFileSync(fileURLToPath(import.meta.url), "utf8");
   assert.match(

@@ -1,16 +1,13 @@
-// K1 — the broker login round trip that replaces Cloudflare Access for
+// The broker login round trip that replaces Cloudflare Access for
 // `/grafana/*` (`gates/session.ts`, `gates/broker.ts`, `grafana/login.ts`).
 // Run against the real gate/route functions under plain `node --test` via
 // `o11y-worker-hooks.mjs`, the same harness `o11y-gates.test.mjs` and
-// `o11y-grafana-proxy.test.mjs` already use.
+// `o11y-grafana-proxy.test.mjs` use.
 //
-// Fix round (K1, a security review of the broker login round trip): this
-// file was rewritten to cover I1 (secret strength + HKDF key separation),
-// I2 (`__Host-` cookies + duplicate-cookie recovery), I3 (session TTL
-// capped at the broker token's own `exp`), and the M1-M7 regressions the
-// review's "by inspection" section named — each guard below was
-// spot-checked failing with its code reverted (revert -> run -> restore).
-//
+// Covers secret strength + HKDF key separation, `__Host-` cookies +
+// duplicate-cookie recovery, session TTL capped at the broker token's own
+// `exp`, and a set of regression guards, each spot-checked failing with
+// its code reverted.
 // Run: node --experimental-strip-types --test pipeline/o11y-session.test.mjs
 
 import test from "node:test";
@@ -69,7 +66,7 @@ function allSetCookies(res) {
   return [...res.headers.entries()].filter(([k]) => k.toLowerCase() === "set-cookie").map(([, v]) => v);
 }
 
-// ---- I1: secret strength + HKDF key separation ---------------------------
+// ---- secret strength + HKDF key separation ---------------------------------
 
 test("I1: isSessionSecretValid requires at least 32 UTF-8 bytes", () => {
   assert.equal(isSessionSecretValid(baseEnv({ O11Y_SESSION_SECRET: "x".repeat(31) })), false);
@@ -155,7 +152,7 @@ test("I1: the login-nonce key and the session key are different derived keys", a
   assert.notDeepEqual(loginKey, sessionKey);
 });
 
-// ---- I2: __Host- cookies, duplicate/tossed-cookie recovery ---------------
+// ---- __Host- cookies, duplicate/tossed-cookie recovery ---------------------
 
 test("I2: both cookie names use the __Host- prefix", () => {
   assert.equal(SESSION_COOKIE, "__Host-o11y_session");
@@ -205,7 +202,7 @@ test("I2: sessionClearCookieHeader / loginClearCookieHeader also satisfy __Host-
   assert.match(loginClearCookieHeader(), new RegExp(`^${LOGIN_COOKIE}=;.*HttpOnly.*Secure.*Max-Age=0`));
 });
 
-// ---- I3: session TTL capped at the broker token's own exp -----------------
+// ---- session TTL capped at the broker token's own exp ----------------------
 
 test("I3: computeSessionTtlSeconds caps at 12h even when the broker token's exp is much further out", () => {
   const now = 1_000_000;
@@ -358,7 +355,7 @@ test("verifySession: a login-nonce cookie's own token is not accepted as a sessi
   assert.equal(await verifySession(req, env), null);
 });
 
-// ---- M2: version, required exp, and audience/environment binding ---------
+// ---- version, required exp, and audience/environment binding --------------
 
 test("M2: a session token with v !== 1 is rejected", async () => {
   const env = baseEnv();
@@ -512,7 +509,7 @@ test("M3: the broker fetch is called with a timeout signal and redirect: manual 
   assert.ok(capturedInit.signal instanceof AbortSignal, "must pass an AbortSignal");
   // `redirect: "error"` is a browser-fetch-only value — the Workers runtime
   // throws `TypeError: Invalid redirect value... "error" won't be
-  // implemented` (confirmed live, K1's own local round trip). "manual" is
+  // implemented` (confirmed live). "manual" is
   // the Workers-supported equivalent: the caller inspects `res.status`
   // itself, which the next test proves actually happens.
   assert.equal(capturedInit.redirect, "manual");
@@ -659,7 +656,7 @@ test("POST /grafana/_o11y/session: the full login round trip mints a session coo
   const loginClear = setCookies.find((c) => c.startsWith(`${LOGIN_COOKIE}=`));
   assert.ok(sessionCookie, "must set the session cookie");
   assert.match(loginClear, /Max-Age=0/, "must clear the login cookie");
-  // Session cookie attributes, asserted directly (M7: previously only the
+  // Session cookie attributes, asserted directly (previously only the
   // LOGIN cookie's attributes were checked anywhere).
   assert.match(sessionCookie, /HttpOnly/);
   assert.match(sessionCookie, /Secure/);

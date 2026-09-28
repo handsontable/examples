@@ -1,17 +1,10 @@
-// T11 regression test — found live while running this task's own required
-// local walkthrough (not by reading source): `normalise/points.ts#aeSink`'s
-// local-mode branch hardcoded `http://localhost:8123` unconditionally,
-// never reading `env.RUNNER_EVENTS_CLICKHOUSE_URL` — the same var
-// `alerts/ae-query.ts#runAnalyticsEngineSqlApi` already reads (with the same
-// fallback) for the QUERY side. A local ClickHouse on any port other than
-// 8123 (every o11y task's own port block puts it elsewhere, e.g. T11's
-// 5212) silently received zero browser-metric AE points, while alert
-// queries against the configured URL read an empty table — a real,
-// blocking-for-verification asymmetry, not a hypothetical. See T11's report
-// for the live symptom (ClickHouse held only `api.request` points from the
-// API worker, never a browser-origin point from the o11y worker, until this
-// fix).
-//
+// `normalise/points.ts#aeSink`'s local-mode branch must read
+// `env.RUNNER_EVENTS_CLICKHOUSE_URL`, not hardcode `http://localhost:8123`
+// unconditionally — the same var `alerts/ae-query.ts#runAnalyticsEngineSqlApi`
+// reads (with the same fallback) for the query side. A local ClickHouse on
+// any port other than 8123 would otherwise silently receive zero
+// browser-metric AE points, while alert queries against the configured URL
+// read an empty table.
 // Run: node --experimental-strip-types --test pipeline/o11y-points-sink.test.mjs
 
 import test from "node:test";
@@ -62,13 +55,12 @@ test("aeSink (local mode) falls back to :8123 when RUNNER_EVENTS_CLICKHOUSE_URL 
   }
 });
 
-// Fix round (finding A-M1): `writeDataPoint` was called directly inside
-// `Promise.resolve(...)`'s argument position, so a SYNCHRONOUS throw from
-// the real binding (an over-limit point) escaped before `Promise.resolve`
-// ever ran — never reaching the `.catch` meant to make this "never throw
-// into the caller." A production `AnalyticsEngineDataset.writeDataPoint`
-// throws synchronously on a real over-limit point, so this is not a
-// hypothetical shape.
+// `writeDataPoint` must not be called directly inside `Promise.resolve(...)`'s
+// argument position: a synchronous throw from the real binding (an
+// over-limit point) would escape before `Promise.resolve` ever ran, never
+// reaching the `.catch` meant to make this never throw into the caller. A
+// production `AnalyticsEngineDataset.writeDataPoint` throws synchronously
+// on a real over-limit point, so this is not a hypothetical shape.
 test("writePoint never throws into the caller, even when the sink's writeDataPoint throws SYNCHRONOUSLY", async () => {
   const env = {
     O11Y_ENV: "production",

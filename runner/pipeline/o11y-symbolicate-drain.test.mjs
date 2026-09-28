@@ -1,22 +1,21 @@
-// F30 — drain-time symbolication inside a Workers-shaped runtime
+// Drain-time symbolication inside a Workers-shaped runtime
 // (workers/o11y/src/drain/symbolicate.ts, ADR-0041 §C.3, exit criterion 5).
 //
-// What F30 was: `source-map-js` builds a sort with `new Function(...)` on
-// the first lookup. workerd forbids code generation from strings, so every
-// lookup threw inside the real Worker, the per-frame catch swallowed it, and
-// no production frame was ever resolved. Every Node test passed, because
-// Node allows `new Function`.
+// `source-map-js` builds a sort with `new Function(...)` on the first
+// lookup. workerd forbids code generation from strings, so every lookup
+// throws inside the real Worker unless guarded — a per-frame catch
+// swallowing it would leave no production frame ever resolved, invisible
+// to a Node test, since Node allows `new Function`.
 //
-// The first test here therefore runs the REAL drain (`drainBatch` with the
-// REAL `symbolicateResourceLogs`) in a child Node process started with
+// The first test here therefore runs the real drain (`drainBatch` with the
+// real `symbolicateResourceLogs`) in a child Node process started with
 // `--disallow-code-generation-from-strings`, the same V8 policy workerd
-// applies, over a REAL minified `vite build` bundle and its REAL map. The
+// applies, over a real minified `vite build` bundle and its real map. The
 // child also reports whether code generation really was blocked, so the
 // test cannot pass by quietly running without the policy.
 //
-// The rest cover the F30 skip signal (`onSkip`) and render-time source-path
+// The rest cover the skip signal (`onSkip`) and render-time source-path
 // normalisation (`normaliseSourcePath`).
-//
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
@@ -158,7 +157,7 @@ test("F30: a real minified bundle's exception is symbolicated by the real drain 
     assert.ok(frames.length >= 2, `expected at least two bundle frames, got ${JSON.stringify(frames)}`);
     assert.ok(frames.every((f) => f.lineno === 1), "a minified bundle is one line; every bundle frame should be on line 1");
 
-    // The same page-frame shape F30's stack carried (`at eval (http://localhost:5391/:303:30)`).
+    // The same page-frame shape (`at eval (http://localhost:5391/:303:30)`).
     const pageFrame = { function: "eval", filename: "https://demos.handsontable.com/", lineno: 303, colno: 30 };
 
     // The ingest-side record exactly as the contract builds it: scrub, convert, pack.
@@ -212,7 +211,7 @@ test("F30: a real minified bundle's exception is symbolicated by the real drain 
   }
 });
 
-// ---- F30 skip signal -------------------------------------------------------
+// ---- skip signal --------------------------------------------------------------
 
 function exceptionRecord(frameLines, serviceVersion = "cafe1234") {
   return {
@@ -336,7 +335,7 @@ test("F30 skip signal: the default reporter writes one `o11y.symbolicate.skip` J
   ]);
 });
 
-// ---- F30 source-path normalisation ----------------------------------------
+// ---- source-path normalisation -----------------------------------------------
 
 test("F30 normaliseSourcePath: a CI build's map-relative sources read as src/… and packages/…", () => {
   assert.equal(normaliseSourcePath("../../src/sentry.ts"), "src/sentry.ts");

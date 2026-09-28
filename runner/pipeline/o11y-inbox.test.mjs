@@ -5,8 +5,7 @@
 // `InboxWriter` class is constructed over a `Map`-backed
 // `DurableObjectStorage` fake (`o11y-harness.mjs`) — not a copy of its
 // logic — so a broken implementation, not a broken test double, is what
-// fails here (TESTING.md: "don't mock the unit under test").
-//
+// fails here.
 // Run: node --experimental-strip-types --test pipeline/o11y-inbox.test.mjs
 
 import test from "node:test";
@@ -40,14 +39,13 @@ function record(body, i = 0) {
   };
 }
 
-// ---- dedupe.ts -----------------------------------------------------------------
+// ---- dedupe.ts --------------------------------------------------------------
 //
-// F2 fix (final review, A-I1 "hash: entries are never deleted"): the storage
-// key is now day-bucketed (`hash:<yyyymmdd>:<sha256>`, see dedupe.ts's own
-// header) so stale buckets can be pruned with a bounded range delete —
-// `checkDuplicates`'s BEHAVIOUR (24h window, within-batch collapse) is
-// unchanged, but a test that asserted the exact key string must bucket by
-// "today" (UTC) the same way the implementation does.
+// The storage key is day-bucketed (`hash:<yyyymmdd>:<sha256>`, see
+// dedupe.ts's own header) so stale buckets can be pruned with a bounded
+// range delete — `checkDuplicates`'s behaviour (24h window, within-batch
+// collapse) is unchanged, but a test that asserts the exact key string
+// must bucket by "today" (UTC) the same way the implementation does.
 
 function todayBucket(ms = Date.now()) {
   return new Date(ms).toISOString().slice(0, 10).replace(/-/g, "");
@@ -67,7 +65,7 @@ test("dedupe: a hash seen within the 24h window is a duplicate; an unseen one is
 test("dedupe: a hash repeated within one batch is a duplicate on its second occurrence only", async () => {
   const storage = memoryStorage();
   const result = await checkDuplicates(storage, ["h1", "h1", "h2", "h1"], Date.now());
-  // Per occurrence (F5-batch): the first h1 is the copy that gets stored.
+  // Per occurrence: the first h1 is the copy that gets stored.
   assert.deepEqual(result.isDuplicate, [false, true, false, true]);
   assert.ok(`hash:${todayBucket()}:h1` in result.writes, "the first occurrence marks the hash seen");
 });
@@ -95,17 +93,15 @@ test("dedupe: a hash from a DIFFERENT UTC-day bucket, still within 24h, is found
   assert.deepEqual(result.isDuplicate, [true], "a hash from yesterday's UTC bucket, still within 24h, must be found");
 });
 
-// B-C1/A-I1 remainder (final review, rereview.md row 13): "the prune ceiling
-// (500 hash rows per tick, which falls behind at about 3× traffic). Make
-// pruning keep up with the ingest rate." ADR §D's own 10× headroom
+// Pruning must keep up with the ingest rate. ADR §D's own 10× headroom
 // projection is ~6.6M worker records/month, ≈ 220,000/day (before browser
 // traffic) — this seeds exactly that many stale `hash:` rows (one day's
 // worth, at the 10× projected rate) and asserts `pruneHashBuckets`, called
 // once per ten-minute cron tick (144 ticks/day — `writer.ts#backlog()`'s
-// own cadence), fully clears them within that many calls. At the OLD
-// 500/tick limit this would need 220,000 / 500 = 440 ticks — the test is
-// specifically sized so it FAILS at that old limit (440 > 144), not just
-// "eventually clears given unlimited ticks."
+// own cadence), fully clears them within that many calls. At a 500/tick
+// limit this would need 220,000 / 500 = 440 ticks — the test is sized so
+// it fails at that limit (440 > 144), not just eventually clearing given
+// unlimited ticks.
 test("B-C1/A-I1 remainder: pruneHashBuckets keeps up with the ADR §D 10× projected rate (220k stale rows/day, cleared within 144 ten-minute ticks)", async () => {
   const storage = memoryStorage();
   const DAILY_RATE = 220_000;
@@ -135,7 +131,7 @@ test("B-C1/A-I1 remainder: pruneHashBuckets keeps up with the ADR §D 10× proje
 test("registry: a fingerprint is written once, on first sight, never overwritten", async () => {
   const storage = memoryStorage();
   const first = await newFingerprintWrites(storage, ["fp:a"], 1000);
-  // B-C1/A-I1 remainder: also writes the `fpts:` time-index twin
+  // Also writes the `fpts:` time-index twin
   // (`newFingerprintsSince`'s bounded read) alongside the `fp:` entry —
   // "fp:a" (a fingerprint containing ':') doubles as a colon-safety check.
   assert.deepEqual(first, { "fp:fp:a": 1000, "fpts:000000000001000:fp:a": 1000 });
@@ -192,13 +188,12 @@ test("pack: packTenant + commitPackedObject write one gzipped NDJSON object and 
   assert.equal(lines.length, 2);
 });
 
-// Fix round (finding A-I2): `packTenant` must bound one object's
-// DECOMPRESSED size — the previous version packed every pending row for a
-// tenant into one in-memory gzip with no cap at all, which could exceed
-// the DO's 128 MB memory under a sustained flood. Five ~900 KB rows (4.5 MB
-// total, over PACK_OBJECT_MAX_DECOMPRESSED_BYTES's 4 MB) prove a single
-// call takes only a PREFIX and leaves the rest for the caller to pack in a
-// follow-up call (`writer.ts#alarm()`'s own loop).
+// `packTenant` must bound one object's decompressed size — packing every
+// pending row for a tenant into one in-memory gzip with no cap could
+// exceed the DO's 128 MB memory under a sustained flood. Five ~900 KB rows
+// (4.5 MB total, over PACK_OBJECT_MAX_DECOMPRESSED_BYTES's 4 MB) prove a
+// single call takes only a prefix and leaves the rest for the caller to
+// pack in a follow-up call (`writer.ts#alarm()`'s own loop).
 test("pack: packTenant bounds one object's decompressed size, leaving the rest for a follow-up call (finding A-I2)", async () => {
   const storage = memoryStorage();
   const bucket = makeR2Bucket();
@@ -262,10 +257,9 @@ test("InboxWriter.ingest: a duplicate delivery, seconds apart, produces one stor
   assert.equal(totalRecords, 1, "exactly one copy must be pending, never two");
 });
 
-// F5-batch (V-triage): two identical records in ONE ingest batch used to be
-// both dropped while the hash was still marked seen — the record was stored
-// zero times, and every later redelivery was refused as a duplicate, so it
-// was lost for good.
+// Two identical records in one ingest batch must not both be dropped while
+// the hash is still marked seen — that would store the record zero times,
+// with every later redelivery refused as a duplicate, losing it for good.
 test("InboxWriter.ingest: an in-batch repeat stores its first copy once, marks only later copies duplicate", async () => {
   const doStorage = makeDurableObjectStorage();
   const { env } = makeEnv(InboxWriter, { doStorage });
@@ -324,7 +318,7 @@ test("InboxWriter.recordWake: marks every earlier wake over, starts the new one 
   assert.equal(wake2.reason, "visit");
 });
 
-// F8 (V-triage): `o11y.wake` `duration_ms` was always 0 — nothing wrote it.
+// `o11y.wake` `duration_ms` must be written, not left at 0.
 test("InboxWriter: recordWakeReady's time is the o11y.wake duration_ms on clean and unclean resolution; a never-ready wake writes 0", async () => {
   const doStorage = makeDurableObjectStorage();
   const { env, ae } = makeEnv(InboxWriter, { doStorage });
@@ -357,7 +351,7 @@ test("InboxWriter: recordWakeReady's time is the o11y.wake duration_ms on clean 
   ]);
 });
 
-// ---- A-I2 (rereview.md, merge blocker): the pack alarm's bounded reads ----------
+// ---- the pack alarm's bounded reads -----------------------------------------
 
 /** Builds a `PendingRow` VALUE (not the key — the key's own shape is up to
  *  the caller) holding exactly one log record whose body is `body`. */
@@ -389,8 +383,8 @@ test("A-I2 flood: many MB of pending rows are packed with a bounded read per lis
   const writer = new InboxWriter({ storage: doStorage }, env);
 
   // Wrap the storage the real DO would hand `alarm()` so every `row:`-prefixed
-  // `list()` call's own PAGE SIZE is recorded — this is the exact read A-I2
-  // fixed: the old `pendingRowsByTenant`-based alarm made ONE `list()` call
+  // `list()` call's own page size is recorded — this is the exact read that
+  // must not regress: a `pendingRowsByTenant`-based alarm made one `list()` call
   // that returned every pending row (here, all 30). A bounded implementation
   // must never return more than `ROW_LIST_PAGE_LIMIT` rows from any single
   // `row:` list() call, regardless of how many MB are pending overall.

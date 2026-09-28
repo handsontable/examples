@@ -1,14 +1,12 @@
 // Proves `packages/runtime/src/telemetry/{attrs,metrics}.ts` agrees with
-// `docs/observability-contract.md` §3, §4 and §5 — slot for slot, outcome for
-// outcome. Parses the doc from disk (not a hand-copied fixture), so editing
-// either side alone fails this file: the README's "Contract" rule made
-// mechanical.
+// `docs/observability-contract.md` §3, §4 and §5 — slot for slot, outcome
+// for outcome. Parses the doc from disk (not a hand-copied fixture), so
+// editing either side alone fails this file.
 //
-// Build prerequisite: `pnpm --filter @handsontable/demo-runtime build` — this
-// file imports the telemetry module from `packages/runtime/dist/` (the
-// `../packages/runtime/dist/...` convention `dep-shims.test.mjs` and friends
-// use; the root `pnpm test` script builds it first, by design, see AGENTS.md).
-//
+// Build prerequisite: `pnpm --filter @handsontable/demo-runtime build` —
+// this file imports the telemetry module from `packages/runtime/dist/`
+// (the `../packages/runtime/dist/...` convention `dep-shims.test.mjs` and
+// friends use).
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
@@ -175,18 +173,18 @@ test("§3 structured-metadata-only keys match STRUCTURED_METADATA_KEYS", () => {
   assert.deepEqual(new Set(hotKindValues), new Set(HOT_KINDS));
 });
 
-// T06 fix round D1 (controller ruling): a third §3 category, flat/non-dotted,
-// distinct from STRUCTURED_METADATA_KEYS — see attrs.ts's own doc comment on
+// A third §3 category, flat/non-dotted, distinct from
+// STRUCTURED_METADATA_KEYS — see attrs.ts's own doc comment on
 // DIAGNOSTIC_TAG_KEYS for how these are hoisted alongside structured metadata.
 test("§3 diagnostic tag keys match DIAGNOSTIC_TAG_KEYS", () => {
   assert.deepEqual(new Set(diagnosticTagsDocKeys()), new Set(DIAGNOSTIC_TAG_KEYS));
 });
 
-// D-M5 fix round: a fourth §3 category — keys that survive the browser/ingest
-// attribute allowlist (`ALLOWED_ATTRIBUTE_KEYS`) but are never hoisted to a
-// resource attribute or structured metadata at all (`attrs.ts`'s own doc
-// comment on `AE_ONLY_ATTRIBUTE_KEYS`). Pinned separately from the two tests
-// above so the doc's "AE-only transport keys" paragraph cannot drift from
+// A fourth §3 category — keys that survive the browser/ingest attribute
+// allowlist (`ALLOWED_ATTRIBUTE_KEYS`) but are never hoisted to a resource
+// attribute or structured metadata at all (`attrs.ts`'s own doc comment on
+// `AE_ONLY_ATTRIBUTE_KEYS`). Pinned separately from the two tests above so
+// the doc's "AE-only transport keys" paragraph cannot drift from
 // `AE_ONLY_ATTRIBUTE_KEYS` unnoticed.
 test("§3 AE-only transport keys match AE_ONLY_ATTRIBUTE_KEYS", () => {
   assert.deepEqual(new Set(aeOnlyDocKeys()), new Set(AE_ONLY_ATTRIBUTE_KEYS));

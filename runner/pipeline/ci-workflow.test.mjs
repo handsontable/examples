@@ -1,10 +1,8 @@
-// Structural pins for minor triage item 5 (C-M7/D-M8) in `ci.yml`'s
-// `e2e-telemetry` job: the telemetry leak checks and actionlint used to run
-// ONLY post-merge (master.yml, after production already shipped) — this
-// file pins that they now also run in PR CI, plus the negative control that
-// proves `check:telemetry-leak` can actually fail. Same rationale/pattern as
-// `pipeline/master-workflow.test.mjs`'s structural pins on `master.yml`.
-//
+// Structural pins for `ci.yml`'s `e2e-telemetry` job: the telemetry leak
+// checks and actionlint must run in PR CI, not only post-merge, plus the
+// negative control that proves `check:telemetry-leak` can actually fail.
+// Same rationale/pattern as `pipeline/master-workflow.test.mjs`'s
+// structural pins on `master.yml`.
 // Run: node --experimental-strip-types --test pipeline/ci-workflow.test.mjs
 
 import test from "node:test";

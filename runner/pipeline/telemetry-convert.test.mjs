@@ -67,9 +67,9 @@ test("hoistAttributes splits a merged bag into resource attrs vs structured meta
 test("hoistAttributes also keeps T06's diagnostic tag keys as structured metadata (merge fix, T02+T06)", () => {
   // `scrub.ts#allowlistAttributes` (via `attrs.ts#ALLOWED_ATTRIBUTE_KEYS`) has
   // allowed `handled`/`context`/`sentry_event_id`/the `versions-fetch` tags
-  // through since T06's fix round D1, but `hoistAttributes` — the very next
+  // through, but `hoistAttributes` — the very next
   // step in both the Faro and OTLP ingest paths — had its own narrower key
-  // set and silently dropped them again. Found merging T02 with T06.
+  // set and silently dropped them again.
   const { resourceAttributes, attributes } = hoistAttributes({
     "hot.surface": "authoring",
     handled: "true",
@@ -87,7 +87,7 @@ test("hoistAttributes also keeps T06's diagnostic tag keys as structured metadat
   });
 });
 
-// ---- Fix round (finding A-C1): label/service forgery on the ingest path ----
+// ---- label/service forgery on the ingest path -------------------------------
 
 test("sanitizeResourceAttributes drops an out-of-enum closed-set value, keeps a valid one", () => {
   const out = sanitizeResourceAttributes({
@@ -232,14 +232,13 @@ test("faroItemToRecord body: exception carries its type, log carries its message
   assert.equal(logRecord.body, "session started");
 });
 
-// ---- Z-B-C1 (optional ingest-side half): a lineno < 1 is not a real position ---
+// ---- a lineno < 1 is not a real position -------------------------------------
 //
 // `source-map-js#originalPositionFor` throws on `line: 0` at drain time
-// (`workers/o11y/src/drain/symbolicate.ts`'s own Z-B-C1 fix is the real
-// guard against that). This is the cheap, optional ingest-side half the
-// task's own Outcome calls for: drop only the invalid position, so the
-// drain-time regex (`symbolicate.ts#STACK_LINE_RE`) never even captures a
-// `line: 0` for a record normalised after this fix — without changing the
+// (`workers/o11y/src/drain/symbolicate.ts`'s own guard is the real defence
+// against that). This drops only the invalid position on the ingest side,
+// so the drain-time regex (`symbolicate.ts#STACK_LINE_RE`) never even
+// captures a `line: 0` for a normalised record — without changing the
 // contract shape (a frame with no numeric position already renders exactly
 // this way, see the "no real position" case just below).
 test("formatStackFrame: a lineno of 0 is dropped (no position rendered), not passed through as an invalid source position", () => {
@@ -323,9 +322,9 @@ test("beaconToRecord marks a vital beacon's hot.kind as measurement, not excepti
   assert.equal(record.body, "LCP=2200");
 });
 
-// ---- T00-D6, revised: a beacon does not typecheck as scrubTelemetry's
-// argument at all (it is neither Faro- nor OTLP-shaped) — convert, THEN
-// scrub, the opposite order from a Faro item.
+// ---- a beacon does not typecheck as scrubTelemetry's argument at all (it
+// is neither Faro- nor OTLP-shaped) — convert, then scrub, the opposite
+// order from a Faro item.
 
 test("beaconToRecord -> scrubTelemetry cleans a code frame in m and a preview host in st", () => {
   const dirty = litePayload({

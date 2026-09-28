@@ -1,13 +1,10 @@
-// T04/T03 merge: ADR-0041 §G's "crossing the cap stops backlog wakes; a
-// Grafana visit still wakes the box" — the acceptance criterion T04 could
-// not close on its own (T03 owns the wake decision, and had not merged).
-// Drives the REAL merged `scheduled()` handler (`workers/o11y/src/index.ts`)
-// and the REAL `handleGrafana` (`grafana/proxy.ts`) against a REAL
-// `InboxWriter` Durable Object, so `drainsPaused` really is read from the
-// same storage `alerts/index.ts#o11yCapRule` writes to via
-// `InboxWriter.setDrainsPaused` — not a fake that could silently drift from
-// the real RPC surface.
-//
+// ADR-0041 §G's "crossing the cap stops backlog wakes; a Grafana visit
+// still wakes the box". Drives the real merged `scheduled()` handler
+// (`workers/o11y/src/index.ts`) and the real `handleGrafana`
+// (`grafana/proxy.ts`) against a real `InboxWriter` Durable Object, so
+// `drainsPaused` really is read from the same storage
+// `alerts/index.ts#o11yCapRule` writes to via `InboxWriter.setDrainsPaused`
+// — not a fake that could silently drift from the real RPC surface.
 // Run: node --experimental-strip-types --test pipeline/o11y-cap-wake.test.mjs
 
 import test from "node:test";
@@ -21,11 +18,10 @@ const { handleGrafana } = await import("../workers/o11y/src/grafana/proxy.ts");
 const { makeEnv, ctx } = await import("./fixtures/o11y-harness.mjs");
 const { inboxKeyStorageKey } = await import("@handsontable/demo-runtime/telemetry");
 
-/** A minimal `.list()`-capable R2 fake — `InboxWriter.backlog()` (T03,
- *  `ledger.ts#computeBacklog`) reads `{ key, size, uploaded }` per object;
- *  `o11y-harness.mjs#makeR2Bucket` doesn't implement `list()` (nothing
- *  before this test needed it), so this stays local rather than growing
- *  that shared fixture for one caller. */
+/** A minimal `.list()`-capable R2 fake — `InboxWriter.backlog()`
+ *  (`ledger.ts#computeBacklog`) reads `{ key, size, uploaded }` per object;
+ *  `o11y-harness.mjs#makeR2Bucket` doesn't implement `list()`, so this
+ *  stays local rather than growing that shared fixture for one caller. */
 function makeListableR2(objects) {
   return {
     async list({ prefix } = {}) {
@@ -45,7 +41,7 @@ function makeGrafanaBoxRecorder(overrides = {}) {
       return overrides.ready ?? true;
     },
     async noteVisitorActivity() {},
-    // Z1: `/grafana/*` proxies through the DO's `fetch()` handler (never
+    // `/grafana/*` proxies through the DO's `fetch()` handler (never
     // the `containerFetch` RPC method — see grafana/proxy.ts).
     async fetch() {
       return new Response("grafana-body", { status: 200 });
@@ -65,7 +61,7 @@ test("backlog wake: refused while drainsPaused; the SAME backlog wakes the box o
   // immediately-refusing loopback URL (matches `o11y-alerts.test.mjs`'s
   // own "runAlerts: a real query failure" test) makes every one of those
   // queries fail fast instead; `runAlerts` already swallows a per-rule
-  // failure into its own `errors` map (I2, fix round 1) rather than
+  // failure into its own `errors` map rather than
   // throwing, so this has no effect on the wake behaviour under test here.
   const { env, doStorage } = makeEnv(InboxWriter, {
     env: { O11Y_ENV: "local", RUNNER_EVENTS_CLICKHOUSE_URL: "http://127.0.0.1:1" },
@@ -120,12 +116,12 @@ test("Grafana visit wake: unaffected by drainsPaused (still wakes the box)", asy
   assert.deepEqual(grafanaBox.calls, ["visit"], "ADR §G: 'visit wakes still work' — drainsPaused must never gate this path");
 });
 
-// F37 (round 10): with the budget overridden to $0.10 and the spend at $0.32,
-// the SAME tick that fired o11y-spend-cap still woke the box for the backlog.
-// `scheduled()` ran the backlog wake beside `runAlerts`, so it read
-// `drainsPaused` before this tick's spend-cap result set it. This drives the
-// real `scheduled()` with the spend coming from the API binding (the value the
-// admin override feeds), not a hand-set flag.
+// With the budget overridden to $0.10 and the spend at $0.32, the same
+// tick that fires o11y-spend-cap must still wake the box for the backlog:
+// `scheduled()` runs the backlog wake beside `runAlerts`, so it reads
+// `drainsPaused` before this tick's spend-cap result sets it. This drives
+// the real `scheduled()` with the spend coming from the API binding (the
+// value the admin override feeds), not a hand-set flag.
 test("F37: the tick whose spend-cap fires wakes nothing for the backlog; the tick after the cap resolves unpauses and wakes", async () => {
   let spend = { spendUsd: 0.32, capUsd: 0.1 }; // the Round 10 override
   const { env, doStorage } = makeEnv(InboxWriter, {

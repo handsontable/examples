@@ -12,9 +12,9 @@ import { fingerprint, fingerprintShape } from "../packages/runtime/dist/telemetr
 // the real §7 `fingerprint`/`fingerprintShape`, so the ladder below is keyed
 // exactly as `sentry.ts` keys it).
 //
-// F26: typing one throwing line into a Tier-1 editor relayed ~20
-// `preview.runtime_error` points (one per half-typed prefix). The collapse
-// must turn that into one point per edit burst, while a non-edit error still
+// Typing one throwing line into a Tier-1 editor must not relay ~20
+// `preview.runtime_error` points (one per half-typed prefix) — the collapse
+// turns that into one point per edit burst, while a non-edit error still
 // counts immediately.
 
 /** A hand-driven timer: `advance(ms)` fires whatever came due. */
@@ -220,7 +220,7 @@ test("demoEventReport names the Faro record by kind, and gives a console warning
   assert.equal(demoEventReport({ ...base, kind: "stderr" }).recordName, "DemoStderr");
 });
 
-// ---- R9C (F10 compile half): a compile failure replaces the burst's run ------
+// ---- a compile failure replaces the burst's run ----------------------------
 //
 // The key `sentry.ts#collapseCompileError` uses: by kind, not by message.
 const COMPILE_KEY = "compile:sandpack.compile_error";
@@ -234,7 +234,7 @@ function compileHarness() {
 
 test("R9C: a typed syntax-error ladder is one compile error and no runtime error, stale relays included", () => {
   const { clock, emitted, collapse, relay, compileError } = compileHarness();
-  // `const R9C = ;` typed key by key. `c`..`cons` parse and run (and throw);
+  // `const X = ;` typed key by key. `c`..`cons` parse and run (and throw);
   // from `const` on, every prefix fails the pre-transpile.
   for (const prefix of ["c", "co", "con", "cons"]) {
     collapse.noteEdit();
@@ -242,7 +242,7 @@ test("R9C: a typed syntax-error ladder is one compile error and no runtime error
   }
   collapse.noteEdit(); // `const`
   // The `cons` run's relay was still in flight at this keystroke (compile
-  // slower than the typist) — the known F26 imprecision.
+  // slower than the typist) — a known imprecision.
   relay("cons is not defined");
   compileError("Unexpected token (1:5)");
   for (const diagnostic of ["Unexpected token (1:6)", "Missing initializer in const declaration", "Unexpected token (1:12)"]) {

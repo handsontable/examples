@@ -6,19 +6,19 @@ import { fingerprint, recordingTelemetry, toAePoint } from "../packages/runtime/
 import { createDemoEventCollapse, DEMO_EDIT_SETTLE_MS } from "../apps/authoring/src/demoEventCollapse.ts";
 import { wireRuntimeMetrics } from "../apps/authoring/src/telemetry/metrics.ts";
 
-// R9C (F10 compile half). Seven syntax errors typed into Tier-1 parcel examples
-// produced zero `sandpack.compile_error` points: the parcel pre-transpile
+// A syntax error typed into a Tier-1 parcel example must still produce a
+// `sandpack.compile_error` point: the parcel pre-transpile
 // (`transpileFilesForParcel`, client-side babel) throws on the half-typed
-// source, and `pushUpdate`'s catch dropped it before anything reached the
-// bundler — the only place the compile error exists as an error object.
+// source, so `pushUpdate`'s catch must not drop it before anything reaches
+// the bundler — the only place the compile error exists as an error object.
 //
-// These tests drive the REAL `SandpackRuntime` on a parcel entry with the REAL
-// babel (no bundler: a fake client records what would have been pushed), and,
-// for the ladder, the real `wireRuntimeMetrics` and the real edit-burst
-// collapse. `sentry.ts` (which owns the app's collapse instance and emits
-// `preview.runtime_error`) imports `@sentry/react` and cannot be loaded here,
-// so its two entry points are mirrored by `relayRuntimeError` and
-// `collapseCompileError` below — same key rules, same `replacesRun` flag.
+// These tests drive the real `SandpackRuntime` on a parcel entry with the
+// real babel (no bundler: a fake client records what would have been
+// pushed), and, for the ladder, the real `wireRuntimeMetrics` and the real
+// edit-burst collapse. `sentry.ts` (which owns the app's collapse instance
+// and emits `preview.runtime_error`) imports `@sentry/react` and cannot be
+// loaded here, so its two entry points are mirrored by `relayRuntimeError`
+// and `collapseCompileError` below — same key rules, same `replacesRun` flag.
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 
@@ -224,7 +224,7 @@ test("a typed syntax-error ladder yields exactly 1 sandpack.compile_error and 0 
     const prefix = line.slice(0, i);
     collapse.noteEdit(); // App.tsx#writeFile, on every non-quiet keystroke
     // The previous keystroke's run relays its throw only now: compile slower
-    // than the typist (the case the F26 collapse cannot see through on its own).
+    // than the typist (the case the collapse cannot see through on its own).
     if (inFlight) relayRuntimeError(inFlight);
     inFlight = null;
     const before = pushes.length;

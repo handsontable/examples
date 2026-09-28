@@ -3,19 +3,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// T05 — API worker signals, error lines, the Sentry scope switch (ADR-0041
-// §D, §E.1, §E.3; contract §2). Pins the exact config the ADR names, so a
-// revert of any one value goes red rather than silently drifting: full-
-// fidelity head sampling with invocation logs off (ADR §D — "answered by
-// invocation_logs: false, the silent proxy path and the budget, not
-// reversed"), the sampled 1% trace rate with no destination (ADR §C.4 — no
+// API worker signals, error lines, the Sentry scope switch (ADR-0041 §D,
+// §E.1, §E.3; contract §2). Pins the exact config the ADR names, so a
+// revert of any one value goes red: full-fidelity head sampling with
+// invocation logs off, the sampled 1% trace rate with no destination (no
 // trace is ever exported), the `o11y-logs` export destination, the `*/5`
-// observability cron beside the unchanged nightly one, and `SERVICE_VERSION`
-// wired into the deploy script.
+// observability cron beside the unchanged nightly one, and
+// `SERVICE_VERSION` wired into the deploy script.
 //
-// No JSON5 dependency is added for this (T00 owns new dependencies) — a
-// small string-aware `//`-comment stripper is enough for this repo's actual
-// `.jsonc` style (line comments only, no trailing commas).
+// No JSON5 dependency: a small string-aware `//`-comment stripper is
+// enough for this repo's actual `.jsonc` style (line comments only, no
+// trailing commas).
 
 function stripLineComments(text) {
   let out = "";
@@ -90,10 +88,9 @@ test("RUNNER_EVENTS and O11Y bindings are wired (not just declared)", () => {
 });
 
 // `env.O11Y` must bind to the named `O11yHeartbeat` RPC entrypoint, not the
-// o11y worker's default export, which has no HTTP route for this report
-// (RPC-only). Also checks every o11y-service binding's declared entrypoint
-// is a real named export of the target worker's `index.ts`, so a config/code
-// drift between the two worktrees that own them fails loudly.
+// o11y worker's default export, which has no HTTP route for this report.
+// Also checks every o11y-service binding's declared entrypoint is a real
+// named export of the target worker's `index.ts`.
 test("every o11y service binding declares a real entrypoint, and O11Y's is O11yHeartbeat", () => {
   const o11yIndexPath = fileURLToPath(new URL("../workers/o11y/src/index.ts", import.meta.url));
   const o11yIndexSrc = fs.readFileSync(o11yIndexPath, "utf8");

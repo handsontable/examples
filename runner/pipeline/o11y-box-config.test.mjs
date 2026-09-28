@@ -1,23 +1,9 @@
-// pipeline/o11y-box-config.test.mjs
-//
 // Pins the ADR-0041 §B.4 Loki keys and the Grafana sub-path/Live/auth.proxy
-// settings (ADR-0041 §A) that containers/o11y/** ships. Each assertion below
-// was verified by hand to fail when its key is removed from the source file
-// (each key's removal -> failing assertion -> revert loop, per
-// docs/TESTING.md "no hollow assertions").
-//
-// Zero-dependency parsing on purpose (T00 owns adding any new dependency,
-// runner/pnpm-lock.yaml has no yaml package): the Loki config files are
-// committed as valid JSON, which is also valid YAML — Loki (go-yaml) and
-// this test read the exact same bytes, so there is no second, driftable
-// copy of the config shape. The one non-JSON piece is the env-var
-// placeholders Loki expands at runtime (`-config.expand-env=true`); this
-// test replaces each `${VAR}` token with a JSON string literal before
-// parsing so the *committed* file stays byte-identical to what Loki reads
-// (verified separately with `loki -verify-config`, see the T01 report).
-//
-// grafana.ini is real INI, not YAML/JSON — parsed with a small strict
-// section/key=value reader below rather than adding an ini dependency.
+// settings (ADR-0041 §A) that containers/o11y/** ships.
+// Zero-dependency parsing: the Loki config files are valid JSON (also valid
+// YAML), so this test reads the exact bytes Loki reads; `${VAR}` env-var
+// placeholders are swapped for JSON string literals before parsing.
+// grafana.ini is real INI, parsed with a small strict reader below.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -38,9 +24,8 @@ function readText(relPath) {
 }
 
 // String-aware JSONC comment stripper (`//` and `/* */`, respecting quoted
-// strings and escaped quotes) — zero-dependency, matching this file's own
-// house rule (T00 owns adding any package; wrangler.jsonc is JSONC, not
-// plain JSON, so `JSON.parse` alone cannot read it).
+// strings and escaped quotes) — zero-dependency; wrangler.jsonc is JSONC,
+// not plain JSON, so `JSON.parse` alone cannot read it.
 function stripJsonComments(text) {
   let result = "";
   let inString = false;
@@ -136,27 +121,27 @@ function parseIni(text) {
   return sections;
 }
 
-// --- Loki config: both loki-config.yaml (S3) and loki-config.filesystem.yaml
-// (the STORAGE=filesystem escape hatch, T01-D2) carry the full §B.4 key set
-// — the filesystem file is a second, otherwise-unpinned copy of every key
-// below, and it IS built into the image and boot-tested (see T01 report).
+// --- Loki config: both loki-config.yaml and loki-config.filesystem.yaml
+// (the STORAGE=filesystem escape hatch) carry the full §B.4 key set — the
+// filesystem file is a second, otherwise-unpinned copy of every key below,
+// and it is built into the image and boot-tested.
 
 for (const configFile of ["loki/loki-config.yaml", "loki/loki-config.filesystem.yaml"]) {
   test(`${configFile}: ADR-0041 §B.4 keys are pinned`, () => {
     const raw = readText(configFile);
     const config = parseJsonWithEnvPlaceholders(raw);
 
-    // I2 (fix round 1): multi-tenancy is not optional here — flip this to
-    // false and both tenants collapse into Loki's single `fake` tenant,
-    // silently merging browser and worker streams.
+    // Multi-tenancy is not optional here — flip this to false and both
+    // tenants collapse into Loki's single `fake` tenant, silently merging
+    // browser and worker streams.
     assert.equal(config.auth_enabled, true, "auth_enabled (browser/worker tenant isolation)");
 
     assert.equal(config.ingester.wal.flush_on_shutdown, true, "ingester.wal.flush_on_shutdown");
     assert.equal(config.ingester.max_chunk_age, "2h", "ingester.max_chunk_age");
 
     assert.equal(config.limits_config.shard_streams.enabled, false, "limits_config.shard_streams.enabled");
-    // M6 (fix round 1): the boolean gate, not just its paired max-age — a
-    // false here makes reject_old_samples_max_age a no-op.
+    // The boolean gate, not just its paired max-age — a false here makes
+    // reject_old_samples_max_age a no-op.
     assert.equal(config.limits_config.reject_old_samples, true, "limits_config.reject_old_samples");
     assert.equal(
       config.limits_config.reject_old_samples_max_age,
@@ -168,8 +153,7 @@ for (const configFile of ["loki/loki-config.yaml", "loki/loki-config.filesystem.
     assert.equal(config.limits_config.max_line_size, "256KB", "limits_config.max_line_size");
 
     // query_ingesters_within lives under `querier`, not `limits_config` — Loki
-    // 3.3.2 rejects it under limits_config (verified with `-verify-config`,
-    // see the T01 report).
+    // 3.3.2 rejects it under limits_config.
     assert.equal(config.querier.query_ingesters_within, "168h", "querier.query_ingesters_within");
 
     assert.equal(config.runtime_config.file, "/etc/loki/runtime-config.yaml", "runtime_config.file");
@@ -186,20 +170,15 @@ for (const configFile of ["loki/loki-config.yaml", "loki/loki-config.filesystem.
 
     const resourceAttributes = config.limits_config.otlp_config.resource_attributes;
 
-    // P1 (fix round 1): Loki ships a BUILT-IN default promotion list
-    // (service.name, service.namespace, service.instance.id,
-    // deployment.environment, cloud.region, cloud.availability_zone, and a
-    // run of k8s.*/container.* keys — confirmed via
-    // `loki -help` -> `-distributor.otlp.default_resource_attributes_as_
-    // index_labels`) that applies ON TOP OF `attributes_config` unless
-    // explicitly turned off. Exit criterion 15 needs the EXACT contract
-    // label set, so a subset-plus-exclusions check is not enough — a
-    // record carrying `deployment.environment` (note: not the contract's
+    // Loki ships a built-in default promotion list (service.name,
+    // service.namespace, service.instance.id, deployment.environment,
+    // cloud.region, cloud.availability_zone, and k8s.*/container.* keys)
+    // that applies on top of `attributes_config` unless explicitly turned
+    // off. Exit criterion 15 needs the exact contract label set, so a
+    // subset-plus-exclusions check is not enough — a record carrying
+    // `deployment.environment` (not the contract's
     // `deployment.environment.name`) would silently pick up a label this
-    // config never asked for. `ignore_defaults: true` disables that list;
-    // verified with a real push carrying `service.namespace` and
-    // `deployment.environment` (T01 report) that neither becomes a label
-    // once this is set.
+    // config never asked for. `ignore_defaults: true` disables that list.
     assert.equal(resourceAttributes.ignore_defaults, true, "resource_attributes.ignore_defaults");
 
     const attributesConfig = resourceAttributes.attributes_config;
@@ -269,21 +248,19 @@ test("grafana.ini: sub-path, Live and auth.proxy are pinned", () => {
 
   assert.equal(ini.users.auto_assign_org_role, "Viewer", "[users] auto_assign_org_role (auto sign-up as Viewer)");
 
-  // Grafana Live disabled for Grafana's OWN frontend (ADR-0041 §A, T01-D1
-  // updated in fix round 1): `GET /api/frontend/settings` reports
-  // `liveEnabled: false` with this set — checked behaviourally in
-  // local/stop-roundtrip.mjs. It does not refuse a raw client dialing
-  // `/api/live/ws` directly (grafana/grafana#72072); that enforcement is
-  // GrafanaBox.containerFetch's job in phase 2, not this config.
+  // Grafana Live disabled for Grafana's OWN frontend (ADR-0041 §A):
+  // `GET /api/frontend/settings` reports `liveEnabled: false` with this set.
+  // It does not refuse a raw client dialing `/api/live/ws` directly
+  // (grafana/grafana#72072); that enforcement is GrafanaBox.containerFetch's
+  // job, not this config.
   assert.equal(ini.live.max_connections, "0", "[live] max_connections disables Grafana Live for its own frontend");
 });
 
 test("grafana.ini: auth.proxy is the ONLY trusted identity — basic auth and the admin fallback are off", () => {
   const ini = parseIni(readText("grafana/grafana.ini"));
-  // T01-D1's sibling finding: unlike Live, this one IS fully enforced by
-  // Grafana itself — verified with `curl -u admin:admin` returning 401
-  // once these are set (200 beforehand). A Viewer-only, proxy-authenticated
-  // design must not have a second, unrelated way in.
+  // Unlike Live, this is fully enforced by Grafana itself: `curl -u
+  // admin:admin` returns 401 once these are set. A Viewer-only,
+  // proxy-authenticated design must not have a second, unrelated way in.
   assert.equal(ini["auth.basic"].enabled, "false", "[auth.basic] enabled must be false");
   assert.equal(
     ini.security.disable_initial_admin_creation,
@@ -316,21 +293,15 @@ test("grafana.ini: viewers_can_edit is on (Explore for Viewers), but provisionin
   );
 });
 
-// M10 (fix round 1): the previous "serve_from_sub_path and root_url agree"
-// test asserted exactly what "sub-path, Live and auth.proxy are pinned"
-// above already covers (serve_from_sub_path === "true", root_url ending in
-// /grafana/) — a duplicate, not a second real check. Removed rather than
-// kept as dead weight.
-
 // --- Grafana provisioning: containers/o11y/grafana/provisioning/datasources
 // -------------------------------------------------------------------------
 
 test("datasources.yaml: fixed uids and tenant headers are pinned (T09 depends on the uids)", () => {
   const raw = readText("grafana/provisioning/datasources/datasources.yaml");
 
-  // I2 (fix round 1): Grafana's sqlite state is disposable — a fresh DB on
-  // every wake — so a dashboard (T09) that references a datasource by uid
-  // breaks on every wake if these drift or go back to auto-generated ids.
+  // Grafana's sqlite state is disposable — a fresh DB on every wake — so a
+  // dashboard that references a datasource by uid breaks on every wake if
+  // these drift or go back to auto-generated ids.
   for (const uid of ["loki-browser", "loki-worker", "clickhouse-runner-events"]) {
     // End-of-line anchored, not just a trailing \b: "loki-browser-x" also
     // has a word boundary right after "loki-browser" (word char -> "-"),
@@ -379,19 +350,17 @@ test("datasources.yaml: every type: loki datasource has a loki-* uid, and no oth
 
 test("compose.yml: no GF_* override for the pinned grafana.ini keys", () => {
   const compose = readText("compose.yml");
-  // M7 (fix round 1): `\Z` is not a recognized escape in a JS RegExp — it
-  // matched a literal capital "Z", not "end of string". `box` happens not
-  // to be followed by one in this file, so the lookahead's second branch
-  // was accidentally dead rather than wrong, but it was still a bug.
-  // `$(?![\s\S])` is the correct "true end of string" alternative to pair
-  // with the "next top-level service" lookahead.
+  // `\Z` is not a recognized escape in a JS RegExp — it matches a literal
+  // capital "Z", not "end of string". `$(?![\s\S])` is the correct "true
+  // end of string" alternative to pair with the "next top-level service"
+  // lookahead.
   const boxServiceMatch = compose.match(/^\s{2}box:[\s\S]*?(?=^\s{2}\S|$(?![\s\S]))/m);
   assert.ok(boxServiceMatch, "compose.yml has a `box` service block");
   const boxBlock = boxServiceMatch[0];
 
-  // M4 (fix round 1): an explicit denylist only catches names someone
-  // thought to list. Every GF_* token in the box block must be exactly
-  // GF_SERVER_ROOT_URL — the one override this file is allowed to make.
+  // An explicit denylist only catches names someone thought to list. Every
+  // GF_* token in the box block must be exactly GF_SERVER_ROOT_URL — the
+  // one override this file is allowed to make.
   const gfVars = new Set([...boxBlock.matchAll(/\bGF_[A-Z0-9_]+\b/g)].map(([m]) => m));
   assert.deepEqual(
     [...gfVars],
@@ -403,10 +372,9 @@ test("compose.yml: no GF_* override for the pinned grafana.ini keys", () => {
 test("compose.yml: every box/minio/clickhouse host port is env-overridable (COMMON.md rule 5)", () => {
   const compose = readText("compose.yml");
   const portLines = [...compose.matchAll(/^\s*- "127\.0\.0\.1:\$\{([A-Z0-9_]+):-(\d+)\}:(\d+)"/gm)];
-  // M5 (fix round 1): every `- "..."` line under any service's `ports:`
-  // must be one of these env-overridable lines — not just "at least 4 of
-  // them exist somewhere". A `9000:9000` slipped in verbatim for a fifth
-  // service would previously still pass this test.
+  // Every `- "..."` line under any service's `ports:` must be one of these
+  // env-overridable lines — not just "at least 4 of them exist somewhere".
+  // A `9000:9000` slipped in verbatim for a fifth service must fail this.
   const allPublishedPortLines = compose.split("\n").filter((line) => /^\s*- "[\d.]+:/.test(line));
   assert.equal(
     portLines.length,
@@ -428,25 +396,18 @@ test("compose.yml: every box/minio/clickhouse host port is env-overridable (COMM
   assert.equal(byVar.get("O11Y_CLICKHOUSE_PORT"), "8123", "ClickHouse host port defaults to the contract's 8123");
 });
 
-// --- T1: MinIO image pin (2026-09 outage) -----------------------------------
-//
-// MinIO stopped distributing public community images: a FRESH pull (no
-// cached layers) of quay.io/minio/minio now returns 401 Unauthorized, and
-// quay.io/minio/mc (used by the old `minio-init` container and by
-// stop-roundtrip.mjs's restricted-user setup) returns the same. Verified by
-// the controller from a fresh machine, and again for this task via
-// `docker pull` (T1 report). Replaced with `bitnamilegacy/minio`, pinned by
-// DIGEST — never a mutable tag, and never the gone quay.io images again.
-// These tests fail on either regression: an unpinned/wrong-digest minio
-// image, or any LIVE (non-comment) `quay.io/minio` or `minio-init`
-// reference in the files that used to name them.
+// --- MinIO image pin (2026-09 outage) ---------------------------------------
+// MinIO stopped distributing public community images: a fresh pull returns
+// 401 for quay.io/minio/minio and quay.io/minio/mc. Replaced with
+// `bitnamilegacy/minio`, pinned by digest — never a mutable tag. Fails on
+// either regression: an unpinned/wrong-digest minio image, or any live
+// (non-comment) `quay.io/minio` or `minio-init` reference.
 
 const EXPECTED_MINIO_IMAGE =
   "bitnamilegacy/minio@sha256:81cd091fb9f14b2e9e9bfa6dbc2bf2d46fdd5eafa6c5e7c9213baf4256ff13d6";
 
 function extractComposeServiceBlock(compose, serviceName) {
-  // Same lookahead shape as the "box" block extraction above (M7's fix:
-  // `$(?![\s\S])` is the correct "true end of string" in a JS RegExp).
+  // Same lookahead shape as the "box" block extraction above.
   const match = compose.match(
     new RegExp(`^\\s{2}${serviceName}:[\\s\\S]*?(?=^\\s{2}\\S|$(?![\\s\\S]))`, "m"),
   );
@@ -455,9 +416,7 @@ function extractComposeServiceBlock(compose, serviceName) {
 
 // Comments are stripped before every "no live reference" assertion below so
 // this test's OWN explanatory comments (which must say "quay.io/minio" and
-// "minio-init" to document why they're gone) can never trip it — see the
-// revert evidence in the T1 report for confirmation this distinction is
-// real (restoring a live reference fails; restoring a comment does not).
+// "minio-init" to document why they're gone) can never trip it.
 function stripYamlComments(text) {
   return text
     .split("\n")
@@ -487,13 +446,12 @@ test("compose.yml: minio image is pinned by digest, and no minio-init/quay.io/mi
   assert.doesNotMatch(code, /^\s*minio-init:/m, "no minio-init service block (T1: replaced by MINIO_DEFAULT_BUCKETS)");
 });
 
-// F36 (dev-stack note): minio/clickhouse hold the local Loki/AE data; a
-// Docker OOM-kill (observed for real under Docker Desktop's 8 GB default
-// during a real 10-container Tier-2 load test) silently drops every
-// metric/log written after that point until the container is restarted by
-// hand. `box` (Grafana) deliberately gets no restart policy — it manages its
-// own lifecycle through the wake/stop protocol (compose.yml's own header
-// comment), and a competing restart policy could fight that.
+// minio/clickhouse hold the local Loki/AE data; a Docker OOM-kill (observed
+// under Docker Desktop's 8 GB default during a 10-container Tier-2 load
+// test) silently drops every metric/log written after that point until the
+// container is restarted by hand. `box` (Grafana) deliberately gets no
+// restart policy — it manages its own lifecycle through the wake/stop
+// protocol, and a competing restart policy could fight that.
 test("compose.yml: minio and clickhouse (data services) restart unless-stopped; box does not", () => {
   const raw = readText("compose.yml");
   const code = stripYamlComments(raw);
@@ -531,16 +489,13 @@ test("stop-roundtrip.mjs, dev.mjs and the e2e-o11y-local workflow never use quay
   }
 });
 
-// B-I3: `e2e/telemetry-metrics.spec.ts` boots a real local API worker
+// `e2e/telemetry-metrics.spec.ts` boots a real local API worker
 // (workers/api) and asserts directly against it; both e2e-o11y-local.yml
 // specs also exercise the shared @handsontable/demo-runtime telemetry code
 // under packages/** (workers/api/src/analytics.ts and monitor-inject.ts
-// import from it) — the same reasoning master.yml's own o11y deploy-gate
-// comment gives for gating on the whole packages/ directory. Without these
-// two subtrees in the pull_request path filter, a regression there is only
-// caught by the nightly run or a manual dispatch, not by the PR that
-// introduces it. Fails without the fix: reverting either added line makes
-// the matching assertion below fail.
+// import from it). Without these two subtrees in the pull_request path
+// filter, a regression there is only caught by the nightly run or a manual
+// dispatch, not by the PR that introduces it.
 test("e2e-o11y-local.yml: the PR path filter also covers workers/api/** and packages/** (B-I3)", () => {
   const workflowPath = join(RUNNER_ROOT, "..", ".github", "workflows", "e2e-o11y-local.yml");
   const code = readFileSync(workflowPath, "utf8");
@@ -564,17 +519,14 @@ test("Dockerfile: loads the same config files this test pins (source-grep pin)",
   assert.match(dockerfile, /grafana\/provisioning/, "COPYs the Grafana provisioning directory");
   // No secret baked into the image (ADR-0041 traps): the S3 credential env
   // names must never appear as a literal ENV/ARG default in the Dockerfile.
-  // M8 (fix round 1): `KEY\s*=` alone misses Dockerfile's space-separated
-  // `ENV KEY value` form (no `=` at all) — check both shapes for ENV and
-  // ARG. A bare `ARG LOKI_S3_SECRET_ACCESS_KEY` with no value is not
-  // matched (that only declares the name, it does not bake a value).
-  // T01 M8 fix round (minor triage item 6): the regex only ever covered
-  // `LOKI_S3_SECRET_ACCESS_KEY` — `LOKI_S3_ACCESS_KEY_ID` (still a real,
-  // bucket-scoped credential half, not a public id) and `AE_SQL_TOKEN`
-  // (the ClickHouse/AE datasource bearer token, `compose.yml`'s
-  // `O11Y_CLICKHOUSE_HEADER2_VALUE`) went unscanned entirely — a baked
-  // default for either would leak just as badly. One regex per secret name,
-  // same ENV/ARG-both-forms shape.
+  // `KEY\s*=` alone misses Dockerfile's space-separated `ENV KEY value` form
+  // (no `=` at all), so both shapes are checked for ENV and ARG. A bare
+  // `ARG LOKI_S3_SECRET_ACCESS_KEY` with no value is not matched (that only
+  // declares the name, it does not bake a value). `LOKI_S3_ACCESS_KEY_ID`
+  // (still a real, bucket-scoped credential half) and `AE_SQL_TOKEN` (the
+  // ClickHouse/AE datasource bearer token, `compose.yml`'s
+  // `O11Y_CLICKHOUSE_HEADER2_VALUE`) are scanned the same way: a baked
+  // default for either would leak just as badly.
   for (const secretName of ["LOKI_S3_SECRET_ACCESS_KEY", "LOKI_S3_ACCESS_KEY_ID", "AE_SQL_TOKEN"]) {
     assert.doesNotMatch(
       dockerfile,
@@ -584,7 +536,7 @@ test("Dockerfile: loads the same config files this test pins (source-grep pin)",
   }
 });
 
-// --- grafana.ini: anonymous auth must stay disabled (T01 M3 pin) ----------
+// --- grafana.ini: anonymous auth must stay disabled -----------------------
 
 test("grafana.ini: [auth.anonymous] enabled = false (T01 M3 — no pinning test previously existed for this value)", () => {
   // Fix round (minor triage item 6): the VALUE was already correct — this
@@ -604,7 +556,7 @@ test("grafana.ini: [auth.anonymous] enabled = false (T01 M3 — no pinning test 
   assert.match(section[1], /^\s*enabled\s*=\s*false\s*$/m, "[auth.anonymous] must stay enabled = false");
 });
 
-// --- r2-lifecycle-rules.json: shape T10 applies via wrangler ---------------
+// --- r2-lifecycle-rules.json: shape applied via wrangler --------------------
 
 test("r2-lifecycle-rules.json: matches the real R2 lifecycle API body shape, one rule per real key prefix", () => {
   const raw = readText("r2-lifecycle-rules.json");
@@ -620,8 +572,7 @@ test("r2-lifecycle-rules.json: matches the real R2 lifecycle API body shape, one
   assert.ok(Array.isArray(doc.rules) && doc.rules.length === 4, "exactly 4 rules");
 
   const byPrefix = new Map(doc.rules.map((r) => [r.conditions.prefix, r]));
-  // Prefixes matched against the REAL key layout Loki 3.3.2 writes,
-  // confirmed by the T01 spike (containers/o11y/local/stop-roundtrip.mjs):
+  // Prefixes matched against the real key layout Loki 3.3.2 writes:
   // browser/<fp>/..., worker/<fp>/..., index/index/<table>/...,
   // state/wakes/<wakeId>/clean.
   const expectedAgeSeconds = {
@@ -639,7 +590,7 @@ test("r2-lifecycle-rules.json: matches the real R2 lifecycle API body shape, one
   }
 });
 
-// --- workers/o11y/wrangler.jsonc: the `containers` block (T00-D7 / T01 phase 2) ---
+// --- workers/o11y/wrangler.jsonc: the `containers` block --------------------
 
 test("wrangler.jsonc: the GrafanaBox containers block is pinned and its Dockerfile exists", () => {
   const config = readWranglerConfig();
@@ -688,17 +639,13 @@ test("wrangler.jsonc: CLOUDFLARE_ACCOUNT_ID is present and matches the top-level
   );
 });
 
-// A-I1: on a failed docker-exec, `sh()` used to print the full command
-// line unredacted, including the plain-text root MINIO_PASSWORD and the
-// restricted test user's generated password — both land in stdout/CI logs.
-// Structural check (matches this file's own "read source, assert on
-// shape" house style): `compose()` must be able to forward a `redact` list
-// through to `sh()` (a trailing options object), `sh()`'s own
-// console.error must run every printed piece (cmd, stdout, stderr) through
-// `scrubSecrets` (imported from `./redact.mjs`, unit-tested separately
-// below since stop-roundtrip.mjs itself runs `main()` at module scope), and
-// the one call site that execs `mc admin ...` with credentials embedded in
-// the script must pass its own per-run password into `redact`.
+// A failed docker-exec must never print the plain-text root MINIO_PASSWORD
+// or the restricted test user's generated password to stdout/CI logs.
+// Structural check: `compose()` must forward a `redact` list through to
+// `sh()` (a trailing options object), `sh()`'s own console.error must run
+// every printed piece through `scrubSecrets` (`./redact.mjs`, unit-tested
+// separately below), and the `mc admin ...` call site must pass its
+// per-run password into `redact`.
 test("A-I1: stop-roundtrip.mjs's sh() scrubs every printed failure line via ./redact.mjs, and setupRestrictedMinioUser passes its password to redact", () => {
   const code = readFileSync(join(O11Y_DIR, "local", "stop-roundtrip.mjs"), "utf8");
 
@@ -727,11 +674,11 @@ test("A-I1: stop-roundtrip.mjs's sh() scrubs every printed failure line via ./re
   );
 });
 
-// A-I1: real behavioural tests for the extracted scrub function (as opposed
-// to the structural test above, which only pins that stop-roundtrip.mjs
-// WIRES it in correctly). Fails without the fix: reverting redact.mjs's
-// `if (secret)` guard back to an unconditional split/join makes the last
-// test below fail (an empty/undefined secret would corrupt the text).
+// Behavioural tests for the extracted scrub function, as opposed to the
+// structural test above, which only pins that stop-roundtrip.mjs wires it
+// in correctly. redact.mjs's `if (secret)` guard must stay: an
+// unconditional split/join would corrupt the text for an empty/undefined
+// secret (see the last test below).
 test("A-I1: scrubSecrets replaces every occurrence of every given secret, and is a no-op for values that don't appear", () => {
   const text = "mc alias set c1 http://localhost:9000 \"minioadmin\" \"minioadmin\"\nerror: minioadmin rejected";
   const out = scrubSecrets(text, ["minioadmin"]);
@@ -753,16 +700,14 @@ test("A-I1: scrubSecrets leaves text alone when a secret is empty/undefined (nev
   assert.equal(scrubSecrets(text, ["", undefined, null]), text);
 });
 
-// A-M1: `main()`'s up-front `down -v` wipes whatever project the script
-// resolves to. compose.yml's own header comment documents "o11y-t01" as
-// the T01 developer convention for a manual/persistent run of this exact
-// compose file, and dev.mjs/dev-lib.mjs default the real dev stack to
-// `defaultComposeProjectName()` (Z-D-H2 fix: a per-worktree
-// `o11y-dev-<hash>`, no longer the fixed literal "o11y-dev") — this
-// script's own OWN OPERATING default (`REQUESTED_PROJECT`'s fallback,
-// "o11y-stop-roundtrip") must collide with neither, or a developer who
-// happens to run their persistent stack under one of those names loses its
-// data the next time they run this script with no override.
+// `main()`'s up-front `down -v` wipes whatever project the script resolves
+// to. compose.yml's own header comment documents "o11y-t01" as the manual/
+// persistent-run convention, and dev.mjs/dev-lib.mjs default the real dev
+// stack to `defaultComposeProjectName()` (a per-worktree `o11y-dev-<hash>`).
+// This script's own default (`REQUESTED_PROJECT`'s fallback,
+// "o11y-stop-roundtrip") must collide with neither, or a developer running
+// their persistent stack under one of those names loses its data the next
+// time they run this script with no override.
 test("A-M1: stop-roundtrip.mjs's default COMPOSE_PROJECT_NAME never collides with the dev-stack default or the compose.yml-documented manual convention", () => {
   const code = readFileSync(join(O11Y_DIR, "local", "stop-roundtrip.mjs"), "utf8");
 
@@ -771,24 +716,18 @@ test("A-M1: stop-roundtrip.mjs's default COMPOSE_PROJECT_NAME never collides wit
   const defaultProject = defaultMatch[1];
 
   assert.notEqual(defaultProject, "o11y-t01", "must not reuse compose.yml's documented manual/T01 project-name convention");
-  // Compare against the REAL function (not a grepped literal — dev.mjs's own
-  // default is no longer a literal after the Z-D-H2 fix) so this stays a
-  // live check of the actual collision risk, not a stale string match.
+  // Compare against the real function, not a grepped literal, so this stays
+  // a live check of the actual collision risk, not a stale string match.
   assert.notEqual(defaultProject, defaultComposeProjectName(), "must not reuse dev.mjs's own (per-worktree) dev-stack default project name");
 });
 
-// A-M1 (fix round 2): a differing DEFAULT alone does not protect a
-// developer who has `COMPOSE_PROJECT_NAME=<the dev-stack default>` exported
-// in their shell (e.g. left over from working on the dev stack directly) —
+// A differing default alone does not protect a developer who has
+// `COMPOSE_PROJECT_NAME=<the dev-stack default>` exported in their shell —
 // the env var still wins over this script's own default, and `down -v`
 // would still wipe the real dev stack's named volumes. Behavioural CLI test
 // (real `node` spawn, no docker needed — refusal must happen before any
-// docker call): fails without the fix (reverting the refusal block)
-// because the script would instead try to run `docker compose ... down
-// -v`, which either succeeds (data loss) or fails with a docker-shaped
-// error, never this specific refusal message. Z-D-H2: the dev-stack default
-// is now this worktree's own derived `defaultComposeProjectName()`, not the
-// old fixed "o11y-dev" literal — the env var this test sets must be THAT
+// docker call). The dev-stack default is this worktree's own derived
+// `defaultComposeProjectName()`, so the env var this test sets must be that
 // value for the guard to have anything to refuse.
 test("A-M1: stop-roundtrip.mjs refuses to run when COMPOSE_PROJECT_NAME is explicitly set to dev.mjs's own dev-stack default", () => {
   const script = join(O11Y_DIR, "local", "stop-roundtrip.mjs");

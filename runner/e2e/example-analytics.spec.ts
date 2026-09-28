@@ -3,48 +3,45 @@ import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { signIn, stubShell } from "./helpers.js";
 
-// T12 — ADR-0042 example analytics: `example.open` at the App.tsx
-// example-resolve path.
+// ADR-0042 example analytics: `example.open` at the App.tsx example-resolve
+// path.
 //
 // Gated: needs a dist built with VITE_TELEMETRY_LOCAL=1 (contract §10), same
-// pattern as T06's `e2e/telemetry-faro.spec.ts`. No o11y worker needed:
-// `/telemetry/collect` is captured with `page.route`, exactly as T06's spec
+// pattern as `e2e/telemetry-faro.spec.ts`. No o11y worker needed:
+// `/telemetry/collect` is captured with `page.route`, exactly as that spec
 // does.
 //
 //   E2E_TELEMETRY=1 pnpm e2e e2e/example-analytics.spec.ts
 //
 // (No separate manual build step — unlike telemetry-faro.spec.ts, this spec
-// builds itself, into its OWN `--outDir` below.)
+// builds itself, into its own `--outDir` below.)
 //
-// Fix round D-I1: this spec used to be ungated (ran under plain `pnpm e2e`,
-// no `test.skip`) AND rebuilt `apps/authoring/dist` itself with no
-// `--outDir`, in place. That broke three ways: (a) `ci.yml`'s `e2e` job has
-// no `@handsontable/demo-runtime` dist and no telemetry build step, so
-// `beforeAll` threw there; (b) `e2e-telemetry` runs this file and
+// This spec must stay gated (never run ungated under plain `pnpm e2e`) and
+// must build into a private `dist-example-analytics`, never rebuild
+// `apps/authoring/dist` itself in place: `ci.yml`'s `e2e` job has no
+// `@handsontable/demo-runtime` dist and no telemetry build step, so
+// `beforeAll` would throw there; `e2e-telemetry` runs this file and
 // `telemetry-faro.spec.ts` together (`fullyParallel`), and this spec
-// emptying/rebuilding the shared `dist/` mid-run raced telemetry-faro's own
-// `:4711` preview into flaky 404s; (c) a local `pnpm e2e` left a
-// telemetry-flagged, `.env.local`-poisoned `dist/` behind for every later
-// spec (and a manual deploy) to pick up. Gating like every other telemetry
-// spec, and building into a private `dist-example-analytics` the way
-// telemetry-faro's own uncaught-scope block already does, closes all three.
+// emptying/rebuilding the shared `dist/` mid-run would race
+// telemetry-faro's own `:4711` preview into flaky 404s; and a local
+// `pnpm e2e` would leave a telemetry-flagged, `.env.local`-poisoned `dist/`
+// behind for every later spec (and a manual deploy) to pick up.
 //
 // The docs catalog itself is fully stubbed (same recipe as
 // `e2e/docs-picker.spec.ts#installDocsCatalog`) rather than the real
-// `apps/authoring/public/docs-examples/` content — the task's own Traps say
-// "never hard-code a docs bucket minor in a spec," and a stub sidesteps that
-// by construction: the bucket is whatever `stubShell`'s fake `/api/versions`
-// resolves to (currently 18.0.0 → bucket "18.0"), read back from the SAME
-// fixture this file defines, never a literal written into an assertion.
+// `apps/authoring/public/docs-examples/` content — never hard-code a docs
+// bucket minor in a spec: the bucket is whatever `stubShell`'s fake
+// `/api/versions` resolves to (currently 18.0.0 → bucket "18.0"), read back
+// from the same fixture this file defines, never a literal written into an
+// assertion.
 
 test.skip(
   process.env.E2E_TELEMETRY !== "1",
   "set E2E_TELEMETRY=1 first — this spec builds its own VITE_TELEMETRY_LOCAL=1 dist",
 );
 
-// F3 fix-round port block (final review wave, COMMON.md) — never 4173/4711/
-// 4712 (other specs' shared/own preview ports) and never another fixer's
-// concurrent worktree block.
+// Never 4173/4711/4712 (other specs' shared/own preview ports) and never
+// another worktree's concurrent port block.
 const PORT = 5701;
 // 127.0.0.1, not "localhost": see telemetry-faro.spec.ts's BASE_URL comment —
 // in CI's Playwright container, this spec's own `fetch("http://localhost:…")`
@@ -212,8 +209,8 @@ async function installDocsCatalog(page: Page) {
 }
 
 /** Captures every Faro event `page.route` sees on `/telemetry/collect` (the
- *  real Faro `TransportBody` shape, T02-D6: one shared `meta` plus separate
- *  typed arrays). Fulfils with a bare 202 so the SDK's own retry logic never
+ *  real Faro `TransportBody` shape: one shared `meta` plus separate typed
+ *  arrays). Fulfils with a bare 202 so the SDK's own retry logic never
  *  kicks in. */
 function captureTelemetryEvents(page: Page): FaroEvent[] {
   const events: FaroEvent[] = [];
@@ -243,7 +240,7 @@ test.beforeAll(async () => {
       `something is already answering on :${PORT} — kill it first (lsof -ti :${PORT} | xargs kill)`,
     );
   }
-  // D-I1: built into its OWN --outDir, never the shared apps/authoring/dist
+  // Built into its own --outDir, never the shared apps/authoring/dist
   // other specs' :4173 webServer (playwright.config.ts) or a manual deploy
   // could pick up.
   execSync("node_modules/.bin/vite build --outDir " + OUT_DIR, {
@@ -309,7 +306,7 @@ test("a docs example opened from the picker fires one example.open with entry=pi
   const events = captureTelemetryEvents(page);
 
   // Deliberately no `?example=` in the URL: the bare-`/` default landing on
-  // the react starter is NOT itself an `example.open` (T12-D — the top-bar
+  // the react starter is not itself an `example.open` (the top-bar
   // "React" trigger below still renders identically either way), so the
   // only `example.open` this test ever sees is the picker's own.
   await page.goto(`${BASE_URL}/`);
@@ -328,14 +325,14 @@ test("a docs example opened from the picker fires one example.open with entry=pi
   expect(open.attributes?.["hot.ref"]).toBe(DOCS_ENTRY.guide);
 });
 
-// T12-D2 fix round: a post-fork landing on the new demo's own `/edit/:id`
-// must classify as `entry=fork`, not `deep-link` — `onFork` does a full
-// `location.href` reload (no in-memory flag survives it), so the signal is
-// a one-shot URL marker (`?fork=1`) the saved-demo load effect reads and
-// strips (`exampleAnalytics.ts#consumeForkMarker`). Stubs the saved-demo
+// A post-fork landing on the new demo's own `/edit/:id` must classify as
+// `entry=fork`, not `deep-link` — `onFork` does a full `location.href`
+// reload (no in-memory flag survives it), so the signal is a one-shot URL
+// marker (`?fork=1`) the saved-demo load effect reads and strips
+// (`exampleAnalytics.ts#consumeForkMarker`). Stubs the saved-demo
 // source/meta pair the same way `e2e/description-markdown.spec.ts#stubSavedDemo`
 // does — this spec never actually calls `onFork` itself (that needs a real
-// POST /api/demos), it simulates landing on the fork's OWN destination URL,
+// POST /api/demos), it simulates landing on the fork's own destination URL,
 // which is the half `consumeForkMarker` is responsible for.
 const FORKED_DEMO_ID = "e2efork01";
 const FORKED_DEMO_FILES = {

@@ -17,10 +17,10 @@ async function gzip(text) {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-/** Recent by default (F1's drain-time age filter drops anything older than
+/** Recent by default (the drain-time age filter drops anything older than
  *  ~7 days — see `record(..., "old")` below for the deliberately-stale
- *  case) so every pre-existing push/retry/reject test here still exercises
- *  a real push, not a silently-empty one. */
+ *  case) so every push/retry/reject test here exercises a real push, not a
+ *  silently-empty one. */
 function record(bodyText, timeUnixNano = String(BigInt(Date.now()) * 1_000_000n)) {
   return {
     resource: { attributes: [{ key: "service.name", value: { stringValue: "demos-api" } }] },
@@ -29,8 +29,8 @@ function record(bodyText, timeUnixNano = String(BigInt(Date.now()) * 1_000_000n)
 }
 
 /** 8 days behind "now" — past Loki's `reject_old_samples_max_age: 7d`
- *  (containers/o11y/loki/loki-config*.yaml) and past F1's own (stricter)
- *  drain-time cutoff. */
+ *  (containers/o11y/loki/loki-config*.yaml) and past the drain's own
+ *  (stricter) drain-time cutoff. */
 function oldRecord(bodyText) {
   const eightDaysAgoNs = BigInt(Date.now() - 8 * 24 * 60 * 60 * 1000) * 1_000_000n;
   return record(bodyText, String(eightDaysAgoNs));
@@ -65,13 +65,13 @@ test("drainKey: all-2xx pushes -> provisional, one push per chunk", async () => 
   assert.equal(pushes[0].tenant, "worker");
 });
 
-// T03-D2: Loki's `/otlp/v1/logs` decodes the body as ONE OTLP/HTTP JSON
-// `ExportLogsServiceRequest` (`{"resourceLogs":[...]}`). The drain used to
-// send the inbox's own NDJSON (one bare ResourceLogs per line) instead;
-// Loki answered 204 and ingested nothing, so no chunk was flushed, no TSDB
-// table was built, no index object was uploaded on SIGTERM and shutdown.sh
-// (correctly) never wrote the clean marker. Reproduced against the real
-// Loki 3.3.2 in containers/o11y/compose.yml (see the T03-D2 report).
+// Loki's `/otlp/v1/logs` decodes the body as one OTLP/HTTP JSON
+// `ExportLogsServiceRequest` (`{"resourceLogs":[...]}`). Sending the
+// inbox's own NDJSON (one bare ResourceLogs per line) instead makes Loki
+// answer 204 and ingest nothing, so no chunk is flushed, no TSDB table is
+// built, no index object is uploaded on SIGTERM, and shutdown.sh correctly
+// never writes the clean marker. Reproduced against the real Loki 3.3.2 in
+// containers/o11y/compose.yml.
 test("drainKey: each push is one OTLP/HTTP JSON ExportLogsServiceRequest holding every record", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const records = [record("line-a"), record("line-b"), record("line-c")];
@@ -100,9 +100,9 @@ test("drainKey: each push is one OTLP/HTTP JSON ExportLogsServiceRequest holding
 });
 
 test("drainKey: a 400 rejects the key with Loki's message, no retry", async () => {
-  // An IN-WINDOW record (F1's own age filter must not remove it) whose 400
+  // An in-window record (the age filter must not remove it) whose 400
   // is forced by the mock — `too_far_behind` is Loki's 60-minute
-  // out-of-order window (T03-D1), unrelated to F1's 7-day age filter, and
+  // out-of-order window, unrelated to the 7-day age filter, and
   // this test's whole point is that a genuine Loki-side rejection still
   // rejects the key.
   const key = "inbox/browser/2026-01-01/00/000000000000.ndjson.gz";
@@ -124,22 +124,20 @@ test("drainKey: a 400 rejects the key with Loki's message, no retry", async () =
   assert.equal(pushCount, 1, "a 400 must never be retried");
 });
 
-// F2 fix (final review, B cross-note): a 400 on one chunk used to make
-// `drainKey` return immediately, so any LATER chunk of the same (>1 MB,
-// multi-chunk) object was never even attempted — silently dropping records
-// that would otherwise have pushed cleanly. Two ~700 KB records force
-// `chunkBySize` to split into two separate ~1 MB pushes (the drain's own
-// per-request cap, ADR §B.3).
+// A 400 on one chunk must not make `drainKey` return immediately — any
+// later chunk of the same (>1 MB, multi-chunk) object must still be
+// attempted, or records that would otherwise push cleanly are silently
+// dropped. Two ~700 KB records force `chunkBySize` to split into two
+// separate ~1 MB pushes (the drain's own per-request cap, ADR §B.3).
 //
-// G1 fix round (rereview.md row 19): F2's version still ended this key
-// `rejected` overall, which never becomes `provisional` — the already-
-// pushed second chunk's durability then never passed the §B.3
-// marker/commit check any wake's clean-stop confirms through (an unclean
-// stop right after this push, before Loki's own flush, could lose it with
-// no automatic replay). Fixed: a key with AT LEAST ONE accepted chunk now
-// stays `provisional` — see `drain.ts#drainKey`'s own doc comment for the
-// full reasoning and `pipeline/o11y-alerts.test.mjs`/box.ts wiring for how
-// the permanent 400 stays operator-visible anyway (`recordPartialReject`).
+// A key with at least one accepted chunk must stay `provisional`, not end
+// `rejected` overall — the already-pushed second chunk's durability must
+// still pass the §B.3 marker/commit check any wake's clean-stop confirms
+// through (an unclean stop right after this push, before Loki's own
+// flush, could otherwise lose it with no automatic replay). See
+// `drain.ts#drainKey`'s own doc comment for the full reasoning and
+// `pipeline/o11y-alerts.test.mjs`/box.ts wiring for how the permanent 400
+// stays operator-visible anyway (`recordPartialReject`).
 test("F2/G1 fix: a 400 on the FIRST chunk of a multi-chunk key does not skip the remaining chunks — they are still pushed, and the key stays provisional (row 19)", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
   const bigBody = "x".repeat(700_000);
@@ -275,15 +273,15 @@ test("drainKey: a missing R2 object is rejected, not retried forever", async () 
   assert.equal(outcome.reason, "object_missing");
 });
 
-// ---- F1: drop-old-before-push --------------------------------------------
+// ---- drop-old-before-push ---------------------------------------------------
 //
-// T03-D2's other finding: one record older than Loki's own
-// `reject_old_samples_max_age: 7d` gets a 400 for the WHOLE push, and
-// `drainKey` maps every 400 to `rejected` — losing every good record in
-// that key, permanently (a rejected key is never retried). These prove the
-// fix: the old record never reaches Loki at all, the good sibling still
-// gets pushed and the key still goes `provisional`, and the drop is
-// counted on the outcome, never silent.
+// One record older than Loki's own `reject_old_samples_max_age: 7d` gets a
+// 400 for the whole push, and `drainKey` maps every 400 to `rejected` —
+// losing every good record in that key permanently (a rejected key is
+// never retried), unless the old record is dropped before it ever reaches
+// Loki. These prove that: the good sibling still gets pushed and the key
+// still goes `provisional`, and the drop is counted on the outcome, never
+// silent.
 
 test("F1: a record older than the 7-day reject window is dropped before push and counted, not sent to Loki", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
@@ -394,21 +392,21 @@ test("drainKey: symbolicate() is applied to the records before they are pushed",
   assert.doesNotMatch(pushedText, /"original"/);
 });
 
-// ---- Z-B-C1: a throw inside symbolicate() must isolate only ITS key -----------
+// ---- a throw inside symbolicate() must isolate only its key -----------------
 //
-// Before this fix, a throw from `deps.symbolicate` (e.g. the real
-// `symbolicateResourceLogs` hitting a line-0 frame before ITS OWN Z-B-C1 fix)
-// escaped `drainKey` entirely — uncaught, not returned as an outcome — which
-// then escaped `drainBatch`'s for-loop (its early-stop check only looks at
-// the `outcome` field of a NORMALLY-RETURNED result; an exception skips that
-// check completely) and propagated to the caller. `box.ts#drainStep`'s own
-// catch recorded the whole wake as `outcome: "error"` and left EVERY key in
-// the batch `written`, including the poisoned one — so the identical batch
-// replayed on the next wake and threw again, forever (`nextWrittenKeys`'s
-// deterministic ascending order always re-fetches the same poisoned key
-// first). This isolation makes a symbolication throw behave like any other
-// permanent per-key failure (`undecodable_object`, `object_missing`):
-// `rejected`, and the batch moves on.
+// A throw from `deps.symbolicate` (e.g. the real `symbolicateResourceLogs`
+// hitting a line-0 frame) must not escape `drainKey` uncaught — an
+// uncaught throw escapes `drainBatch`'s for-loop too (its early-stop check
+// only looks at the `outcome` field of a normally-returned result; an
+// exception skips that check completely) and propagates to the caller.
+// `box.ts#drainStep`'s own catch would then record the whole wake as
+// `outcome: "error"` and leave every key in the batch `written`, including
+// the poisoned one — so the identical batch replays on the next wake and
+// throws again, forever (`nextWrittenKeys`'s deterministic ascending order
+// always re-fetches the same poisoned key first). This isolation makes a
+// symbolication throw behave like any other permanent per-key failure
+// (`undecodable_object`, `object_missing`): `rejected`, and the batch
+// moves on.
 
 test("Z-B-C1: drainKey isolates a throw from symbolicate() as a rejected outcome, never lets it escape", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";

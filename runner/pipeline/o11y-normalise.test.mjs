@@ -1,10 +1,8 @@
 // ADR §B.2 step 1–3 (normalise) tests: Faro item processing, OTLP JSON +
 // protobuf decode, hashing determinism (exit criterion 4's precondition),
-// timestamp rules (exit criterion 3), and the scrub assertions the
-// acceptance criteria require "over all fixtures" (no query string, user
-// agent, Babel code frame, preview hostname, `url.full`, geo or ASN in any
-// stored record).
-//
+// timestamp rules (exit criterion 3), and the scrub assertions (no query
+// string, user agent, Babel code frame, preview hostname, `url.full`, geo
+// or ASN in any stored record).
 // Run: node --experimental-strip-types --test pipeline/o11y-normalise.test.mjs
 
 import test from "node:test";
@@ -63,17 +61,12 @@ test("Faro exception with a code frame: scrubbed, fingerprinted, hot.kind=except
   assert.ok(item.ingestItem.fingerprint, "authoring surface must feed the new-fingerprint alert");
 });
 
-// ---- R3 F17c: IP redaction (contract §3 "never sent": an IP) -------------------
+// ---- IP redaction (contract §3 "never sent": an IP) -----------------------
 //
-// The exact R3-triage verification canary message (F17c): the privacy
-// canary `192.0.2.55` only "passed" before this fix because its whole
-// record was lost to a different, separately-fixed bug (F17a: a Faro
-// gecko-regex fallback that turned the message line into a fake stack
-// frame, dropped by the noise gate before ingest ever saw it — that gate
-// lives in `apps/authoring`, outside this Worker/package, so is untouched
-// here). Sent as an ordinary Faro log (not an exception with a stack) so
-// this test exercises `redactIpInText` on its own merits, independent of
-// F17a/F17b.
+// A privacy canary `192.0.2.55` must never survive. Sent as an ordinary
+// Faro log (not an exception with a stack) so this test exercises
+// `redactIpInText` on its own merits, independent of the noise gate (which
+// lives in `apps/authoring`, outside this Worker/package).
 const IP_CANARY_MESSAGE = "HAIKU1 pii jane.doe@example.com 192.0.2.55 https://x.test/p?token=SECRET123";
 
 test("Faro log: the exact R3 F17c canary message — IP, email and token all redacted, over the full ingest pipeline", async () => {
@@ -111,8 +104,8 @@ test("redactIpInText: IPv6 is redacted (compressed and full forms)", () => {
   );
 });
 
-// R3 F17c (advisor review, this fix round): two boundary edge cases the
-// first-shipped `(?<!...)`/`(?![\w.-])` lookaround form got wrong.
+// Two boundary edge cases the first-shipped `(?<!...)`/`(?![\w.-])`
+// lookaround form got wrong.
 test("redactIpInText: an IP at the very end of a sentence (trailing '.') is still redacted", () => {
   // The original trailing lookahead excluded ANY `.` after the fourth
   // octet, including one with nothing after it — an under-redaction, not a
@@ -166,12 +159,11 @@ test("Faro: T06's diagnostic tags (handled, sentry_event_id, ...) survive scrub+
   }
 });
 
-// R3 F18: measurements are AE-only (contract §6 / ADR §F.1 ruling) — flipped
-// from "one browser metric point, stored record" now that `faro.ts` sets
+// Measurements are AE-only (contract §6 / ADR §F.1 ruling): `faro.ts` sets
 // `storeRecord = false` for every Faro `measurement` item. Still goes
-// through the exact hash-only `ingestItem` path `example.*` events already
-// use (A-I4 remainder), so dedupe on a redelivered batch still works — see
-// the dedicated dedupe test below.
+// through the same hash-only `ingestItem` path `example.*` events use, so
+// dedupe on a redelivered batch still works — see the dedicated dedupe
+// test below.
 test("Faro measurement: one Analytics Engine point, no STORED record (F18: AE-only)", async () => {
   const body = faroFixture("measurement.json");
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
@@ -183,9 +175,9 @@ test("Faro measurement: one Analytics Engine point, no STORED record (F18: AE-on
   assert.equal(item.aePoints[0].indexes[0], "preview.ready_ms");
 });
 
-// R3 F18: same flip for web-vitals — Faro's own `type: "web-vitals"` is
-// still a `measurement` item at the wire level (`processMeasurement`'s
-// other branch, faro.ts), so it takes the same `storeRecord = false` path.
+// Same flip for web-vitals — Faro's own `type: "web-vitals"` is still a
+// `measurement` item at the wire level (`processMeasurement`'s other
+// branch, faro.ts), so it takes the same `storeRecord = false` path.
 test("Faro web-vitals: LCP/INP/CLS become points, FCP is not a contract reason, no stored record (F18: AE-only)", async () => {
   const body = faroFixture("web-vitals.json");
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
@@ -195,8 +187,8 @@ test("Faro web-vitals: LCP/INP/CLS become points, FCP is not a contract reason, 
   assert.deepEqual(reasons, ["web_vital", "web_vital", "web_vital"]);
 });
 
-// R3 F18 dedupe: the same hash-only path `example.open`'s own test above
-// proves must survive a redelivered batch without double-counting.
+// The same hash-only path `example.open`'s own test above proves must
+// survive a redelivered batch without double-counting.
 test("Faro measurement: a redelivered identical batch hashes identically (dedupe-eligible)", async () => {
   const body = faroFixture("measurement.json");
   const receivedAtMs = Date.now();
@@ -209,13 +201,13 @@ test("Faro measurement: a redelivered identical batch hashes identically (dedupe
   );
 });
 
-// ---- QA follow-up ("Faro dedupe hash inputs") ------------------------------
+// ---- Faro dedupe hash inputs -----------------------------------------------
 //
-// The dedupe hash left out the metric/measurement name, the AE-only
-// attributes and the Faro session id, so two genuinely different records
-// arriving in the same millisecond could hash identically and lose one to
-// dedupe. F18 made measurements AE-only (above), but they are still hashed
-// for dedupe — this is exactly the shape that used to collide.
+// The dedupe hash must include the metric/measurement name, the AE-only
+// attributes and the Faro session id — without them, two genuinely
+// different records arriving in the same millisecond could hash
+// identically and lose one to dedupe. Measurements are AE-only (above),
+// but are still hashed for dedupe.
 
 test('QA follow-up (Faro dedupe hash inputs): two DIFFERENT measurement types with identical values hash differently (faroBody()\'s measurement case stringifies only `values`, never `type`)', async () => {
   const bodyA = faroFixture("measurement.json");
@@ -274,19 +266,14 @@ test("QA follow-up (Faro dedupe hash inputs): a redelivery with the session id s
   );
 });
 
-// R3 F18 (advisor review, this fix round): a crafted `hot.outcome`/`reason`
-// that makes `toAePoint` throw inside `processMeasurement` (T00-D10's own
-// isolated try/catch) must surface as `invalid`, never fall through and
-// store a record anyway — a stored measurement record with zero AE points
-// would contradict the §6 "none" ruling. This is only true because
-// `storeRecord = false` is set BEFORE `processMeasurement` runs, not after;
-// setting it after (the shape this branch originally shipped, mirroring the
-// pre-existing `example.*` branch) left `storeRecord` at its default `true`
-// on this exact throw path, and the record WAS stored — verified directly
-// against that shape before this test was added (see the task report).
-// `hmr.roundtrip_ms` has no `outcome`/`reason` blob slot (metrics.ts), so
-// supplying `hot.outcome` for it is exactly `toAePoint`'s own "caller bug"
-// guard.
+// A crafted `hot.outcome`/`reason` that makes `toAePoint` throw inside
+// `processMeasurement` (isolated try/catch) must surface as `invalid`,
+// never fall through and store a record anyway — a stored measurement
+// record with zero AE points would contradict the §6 "none" ruling. This
+// only holds because `storeRecord = false` is set before
+// `processMeasurement` runs, not after. `hmr.roundtrip_ms` has no
+// `outcome`/`reason` blob slot (metrics.ts), so supplying `hot.outcome`
+// for it is exactly `toAePoint`'s own "caller bug" guard.
 test("Faro measurement: a crafted hot.outcome that makes toAePoint throw surfaces as invalid, never stores a pointless record", async () => {
   const body = faroFixture("measurement.json");
   body.measurements[0].type = "hmr.roundtrip_ms";
@@ -297,12 +284,11 @@ test("Faro measurement: a crafted hot.outcome that makes toAePoint throw surface
   assert.equal(item.ingestItem, undefined, "a throwing measurement must never store a record (F18)");
 });
 
-// R3 F18 acceptance criterion: "A Faro batch with measurement + log +
-// exception: only the log and exception records reach the inbox, and all AE
-// points are written." The AE-points-are-written half is proven by the two
-// tests above (both still return a populated `aePoints` array); this proves
-// the inbox-storage half across one real mixed batch, the shape the
-// acceptance criterion actually names.
+// A Faro batch with measurement + log + exception: only the log and
+// exception records reach the inbox, and all AE points are written. The
+// AE-points-are-written half is proven by the two tests above (both still
+// return a populated `aePoints` array); this proves the inbox-storage half
+// across one real mixed batch.
 test("Faro mixed batch (measurement + log + exception): only the log and exception carry a stored record", async () => {
   const measurementBody = faroFixture("measurement.json");
   const logBody = faroFixture("log.json");
@@ -328,7 +314,7 @@ test("Faro mixed batch (measurement + log + exception): only the log and excepti
   assert.ok(logItem.ingestItem.record, "the log must carry a record");
   assert.ok(exceptionItem.ingestItem.record, "the exception must carry a record");
 
-  // All three still produce their AE point(s) — F18 only drops the stored
+  // All three still produce their AE point(s) — only the stored
   // record, never the point.
   assert.equal(measurementItem.aePoints.length, 1);
   assert.equal(exceptionItem.aePoints.length, 1);
@@ -337,7 +323,7 @@ test("Faro mixed batch (measurement + log + exception): only the log and excepti
 test("Faro example.open: one Analytics Engine point, no STORED record — but a hash-only ingestItem (A-I4 remainder, closed second wave)", async () => {
   const body = faroFixture("example-open.json");
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
-  // A-I4's original fix bypassed dedupe entirely for example.* events (no
+  // The fix bypassed dedupe entirely for example.* events (no
   // `ingestItem` at all) — that let a retried/redelivered batch inflate
   // ADR-0042's analytics counts on every replay. Fixed: a hash-only
   // ingestItem (no `record`) still goes through InboxWriter.ingest's own
@@ -365,7 +351,7 @@ test("Faro example.open: a redelivered identical batch hashes identically (dedup
   );
 
   // A different CLIENT timestamp (a genuinely distinct click) must NOT
-  // collapse into the same hash (advisor review, this fix round: "hash the
+  // collapse into the same hash ("hash the
   // item as sent, including its client timestamp").
   const distinctBody = faroFixture("example-open.json");
   for (const e of distinctBody.events ?? []) e.timestamp = new Date(Date.now() + 60_000).toISOString();
@@ -380,7 +366,7 @@ test("Faro log: stored record, no Analytics Engine point", async () => {
   assert.equal(item.aePoints.length, 0);
 });
 
-// ---- fix round (finding A-I4): a per-request item cap -------------------------
+// ---- a per-request item cap ------------------------------------------------
 
 test("countFaroItems sums every kind, including traces (always-invalid) — the cap check runs before any real work", () => {
   const body = {
@@ -400,7 +386,7 @@ test("MAX_FARO_ITEMS_PER_BODY is a real, generous-but-finite bound (finding A-I4
   assert.ok(MAX_FARO_ITEMS_PER_BODY > 0 && MAX_FARO_ITEMS_PER_BODY < 1000, "must be a real bound, not effectively unbounded");
 });
 
-// ---- fix round (finding A-M1): a malformed item must never crash the batch ----
+// ---- a malformed item must never crash the batch --------------------------
 
 test("processFaroBody: a null entry inside logs never throws (the exact 500 probe from finding A-M1) and still processes the real item next to it", async () => {
   const body = faroFixture("log.json");
@@ -411,7 +397,7 @@ test("processFaroBody: a null entry inside logs never throws (the exact 500 prob
   assert.ok(items[1].ingestItem, "the well-formed item next to the malformed one must still be stored");
 });
 
-// ---- controller handoff: server-side noise gates (D-I2 defence in depth) ------
+// ---- server-side noise gates (defence in depth) ----------------------------
 
 test("Faro exception: an unhandled ResizeObserver-loop message is dropped entirely (never stored, no point, no fingerprint) — the server-side D-I2 backstop", async () => {
   const body = faroFixture("exception-code-frame.json");
@@ -450,7 +436,7 @@ test("Faro exception: an unrelated unhandled error is NOT dropped", async () => 
   assert.ok(item.ingestItem, "a real, unrelated exception must still be stored");
 });
 
-// ---- fix round (finding D-I3, A-C2): the client's own fingerprint --------------
+// ---- the client's own fingerprint ------------------------------------------
 
 test("Faro exception: a well-formed payload.fingerprint (Faro's own wire field, D-I3) is used verbatim, not recomputed from the stack", async () => {
   const body = faroFixture("exception-code-frame.json");
@@ -481,13 +467,12 @@ test("Faro exception: an invalid context['hot.fingerprint'] is discarded the sam
   assert.match(item.ingestItem.fingerprint, /^authoring:[0-9a-f]{16}$/);
 });
 
-// ---- fix round (finding D-I3 remainder, second wave): the FALLBACK
-// fingerprint (no wire/AE-only fingerprint present — the raw
-// window.onerror/unhandledrejection/render-crash path) must hash the
+// ---- the fallback fingerprint (no wire/AE-only fingerprint present — the
+// raw window.onerror/unhandledrejection/render-crash path) must hash the
 // contract-normalised `type: value` message, never `record.body`'s
 // rendered stack — a minified bundle's chunk hash and line:col shift on
-// every deploy, so hashing the stack churned a genuinely recurring defect
-// into a fresh `fp:` entry on every release. --------------------------------
+// every deploy, so hashing the stack would churn a genuinely recurring
+// defect into a fresh `fp:` entry on every release ---------------------------
 
 test("Faro exception (uncaught, no client fingerprint): two different stacks for the SAME type/value fingerprint identically", async () => {
   // The two stacks differ in exactly the ways a redeploy of the SAME source
@@ -555,7 +540,7 @@ test("Faro exception (uncaught, no client fingerprint): a genuinely different me
   assert.notEqual(itemA.ingestItem.fingerprint, itemB.ingestItem.fingerprint);
 });
 
-// ---- fix round (finding A-M3): the assembled record gets a second scrub pass --
+// ---- the assembled record gets a second scrub pass -------------------------
 
 test("Faro: a query string embedded in an allowlisted attribute value (context, a diagnostic tag) is stripped, not just redactPreviewHosts'd", async () => {
   const body = faroFixture("log.json");
@@ -569,12 +554,12 @@ test("Faro: a query string embedded in an allowlisted attribute value (context, 
   assert.doesNotMatch(text, /SECRET123/, "a query string inside an attribute value must be stripped, not stored verbatim");
 });
 
-// R3 F17c (advisor review, this fix round): `scrubTelemetry`'s own generic
-// deep pass (`redactStringsDeep`) only ever runs `redactPreviewHosts` — IP
-// redaction over an attribute value is ENTIRELY `scrubAttributeValues`'s own
-// job (text-scrub.ts), the same way the query-string test just above proves
-// for `stripQueryAndFragment`. Without this test, deleting `redactIpInText`
-// from `scrubAttributeValues` alone would fail no test in this file.
+// `scrubTelemetry`'s own generic deep pass (`redactStringsDeep`) only ever
+// runs `redactPreviewHosts` — IP redaction over an attribute value is
+// entirely `scrubAttributeValues`'s own job (text-scrub.ts), the same way
+// the query-string test just above proves for `stripQueryAndFragment`.
+// Without this test, deleting `redactIpInText` from `scrubAttributeValues`
+// alone would fail no test in this file.
 test("Faro: an IP embedded in an allowlisted attribute value (context, a diagnostic tag) is redacted", async () => {
   const body = faroFixture("log.json");
   body.logs[0].context = {
@@ -588,26 +573,25 @@ test("Faro: an IP embedded in an allowlisted attribute value (context, a diagnos
   assert.match(text, /<ip>/, "the attribute's IP must become the <ip> token");
 });
 
-// R3 F17c: the direct `scrubBodyText`/`scrubAttributeValues` unit-level
-// proof this same wiring test implies at the pipeline level above — a
-// positive case for each of the two call sites `redactIpInText` was added
-// to, isolated from everything else `processFaroBody` does.
+// The direct `scrubBodyText`/`scrubAttributeValues` unit-level proof this
+// same wiring test implies at the pipeline level above — a positive case
+// for each of the two call sites `redactIpInText` was added to, isolated
+// from everything else `processFaroBody` does.
 test("scrubBodyText / scrubAttributeValues: both redact an embedded IP directly", () => {
   assert.equal(scrubBodyText("client 192.0.2.55 retried"), "client <ip> retried");
 });
 
-// R3 F17c (advisor review, this fix round): the triage's actual leak SHAPE
-// (F17a) is not a plain log message — it is an uncaught error whose first
-// stack-trace line, because it embeds a foreign absolute URL, Faro's own
-// gecko-regex stack parser misreads as a real frame: `function` becomes the
-// message text itself (email + IP inline), `filename` becomes the quoted
-// URL, `lineno` is absent. `faroBody` (convert.ts) renders that frame as an
-// ordinary `    at <function> (<filename>)` line, folded into `record.body`
-// alongside the real `eval` frame beneath it — exercised here exactly as
-// ingest receives it (F17a's own browser-side drop is out of this task's
-// scope; this constructs the post-Faro item directly), both unhandled and
-// handled (handled bypasses whatever noise gate exists, so this also
-// proves the fix does not depend on it).
+// The actual leak shape is not a plain log message — it is an uncaught
+// error whose first stack-trace line, because it embeds a foreign absolute
+// URL, Faro's own gecko-regex stack parser misreads as a real frame:
+// `function` becomes the message text itself (email + IP inline),
+// `filename` becomes the quoted URL, `lineno` is absent. `faroBody`
+// (convert.ts) renders that frame as an ordinary `    at <function>
+// (<filename>)` line, folded into `record.body` alongside the real `eval`
+// frame beneath it — exercised here exactly as ingest receives it (this
+// constructs the post-Faro item directly), both unhandled and handled
+// (handled bypasses whatever noise gate exists, so this also proves the
+// fix does not depend on it).
 function fakeFrameException(handled) {
   return {
     meta: { app: { name: "demos-authoring", version: "deadbeef1234" } },
@@ -725,9 +709,9 @@ test("OTLP: forbidden attributes and body text are scrubbed over the whole recor
 
 test("OTLP: a real Cloudflare invocation-log export — cf.ray survives the cloudflare.ray_id remap, service.version defaults to unknown, forbidden fields are dropped", async () => {
   // pipeline/fixtures/otlp/json/cloudflare-invocation-log.json is captured
-  // real output (scrubbed) from this task's sandbox-probe re-run against a
-  // throwaway Worker with `observability.logs.invocation_logs: true` — see
-  // the task Outcome. Two real findings this fixture pins:
+  // real output (scrubbed) from a throwaway Worker with
+  // `observability.logs.invocation_logs: true`. Two real findings this
+  // fixture pins:
   //   - the ray id arrives as `cloudflare.ray_id`, not the contract's
   //     `cf.ray` (otlp.ts#CLOUDFLARE_KEY_REMAP);
   //   - Cloudflare's own automatic export never sends `service.version` at
@@ -759,7 +743,7 @@ test("OTLP: a Worker's own console.log(JSON.stringify(lines.ts shape)) line arri
   // pipeline/fixtures/otlp/json/console-log-line.json is shaped from a
   // REAL captured Cloudflare OTLP export of workers/api/src/telemetry/
   // lines.ts#logRequestLine's own console.log call (this task's sandbox
-  // probe, see the Outcome for the raw capture) — scrubbed of real ray/
+  // probe) — scrubbed of real ray/
   // session/demo ids the same way cloudflare-invocation-log.json is. The
   // ground truth it pins: `body.stringValue` IS the raw JSON string;
   // `attributes` on that record carries only Cloudflare's own generic
@@ -847,21 +831,19 @@ test("B cross-note fix: authored console output that happens to be JSON (e.g. Ti
   assert.equal(record.attributes?.["session.id"], undefined);
   assert.equal(record.attributes?.userEmail, undefined);
   // The body text itself is left untouched (still the raw authored JSON) —
-  // this fix only stops the KEY-hoisting, never rewrites the body.
+  // this stops only the key-hoisting, never rewrites the body.
   assert.match(record.body, /attacker-demo/);
 });
 
-// ---- controller handoff (finding C-I2, read half): the API-side fingerprint feed --
+// ---- the API-side fingerprint feed (read half) -----------------------------
 //
-// Spec (ADR §M, "controller handoff / not fixed by the final review"): read
-// bodyJsonAttrs["hot.fingerprint"] and feed it into the fp: registry ONLY
-// when the real resource service.name === "demos-api", log.kind === "error",
-// the value matches ^[a-z0-9-]+:[0-9a-f]{16}$, and the record is not Tier-2
-// container stdout. NOTE: real Cloudflare exports carry service.name =
-// "handsontable-demos-api" (finding M2, unowned/unfixed) — these tests set
-// service.name to the contract's own "demos-api" directly to exercise the
-// gate logic itself; until M2 lands, this feed is correctly gated but does
-// not fire against real production traffic. Recorded in the report.
+// ADR §M: read bodyJsonAttrs["hot.fingerprint"] and feed it into the fp:
+// registry only when the real resource service.name === "demos-api",
+// log.kind === "error", the value matches ^[a-z0-9-]+:[0-9a-f]{16}$, and
+// the record is not Tier-2 container stdout. Real Cloudflare exports carry
+// service.name = "handsontable-demos-api" — these tests set service.name
+// to the contract's own "demos-api" directly to exercise the gate logic
+// itself.
 
 function apiErrorLineOtlpBody(overrides = {}) {
   const bodyObj = {
@@ -938,18 +920,15 @@ test("C-I2 condition 3: a hot.fingerprint value outside the contract's <context>
   assert.equal(result.items[0].fingerprint, undefined, "an injection-shaped value must never reach the registry");
 });
 
-// ---- fix round (finding A-M2, second wave): C-I2 against a REAL production
-// export -----------------------------------------------------------------
+// ---- against a real production export --------------------------------------
 //
-// Every C-I2 test above sets `service.name: "demos-api"` directly (see this
+// Every test above sets `service.name: "demos-api"` directly (see this
 // file's own note above `apiErrorLineOtlpBody`) — that exercises the gate
-// LOGIC but never the actual value a real Cloudflare export sends
+// logic but never the actual value a real Cloudflare export sends
 // (`handsontable-demos-api`, confirmed by the captured fixtures this file
-// already uses elsewhere). This test is the one that proves the wiring
-// fires against what production actually sends: the real script name, AND
-// a real multi-segment `reportDiagnostic` context (`npm-registry:*`, the
-// exact call sites N1's own test pins) — so it fails if EITHER A-M2's
-// remap OR N1's validator fix is reverted.
+// already uses elsewhere). This test proves the wiring fires against what
+// production actually sends: the real script name, and a real
+// multi-segment `reportDiagnostic` context (`npm-registry:*`).
 test("A-M2 + N1 together: a REAL production export (service.name=handsontable-demos-api) with a real reportDiagnostic context feeds the exact first-seen registry", async () => {
   const fp = fingerprint("npm-registry:version-exists", "upstream npm registry request failed");
   const result = await processOtlpBody(
@@ -998,24 +977,13 @@ test("C-I2 condition 4: authored/Tier-2-shaped JSON (no trusted log.kind at all)
 });
 
 test("fix round I2: a body-JSON key cannot spoof a real resource attribute (service.name, environment, hot.outcome) — the real resource value always wins", async () => {
-  // pipeline/fixtures/otlp/json/console-log-line-spoof-attempt.json: a
-  // real resource carries service.name=handsontable-demos-api,
-  // deployment.environment.name=production; the body's OWN JSON tries to
-  // set service.name=spoof, deployment.environment.name=spoof-env, and
-  // hot.outcome=spoof-outcome (a metric-scoped attr, included to prove
-  // the guard isn't limited to just the two most obvious keys). None of
-  // these must survive — tryParseJsonBodyAttrs strips every
-  // RESOURCE_ATTRS key from its own output, AND the merge at the call
-  // site gives body-JSON attrs the lowest priority, so even if a future
-  // RESOURCE_ATTRS addition were missed by the strip, a real resource/
-  // OTLP attribute still could not be overridden by body content.
-  //
-  // Fix round (finding A-M2, second wave): the REAL resource's
-  // `service.name` is now normalised from Cloudflare's real script name
-  // (`handsontable-demos-api`) to the contract's own `demos-api` — see
-  // `remapCloudflareServiceName` — so this test's own "the real value
-  // wins" assertion checks the POST-normalisation value, not the raw
-  // export's, which is what a real Loki label/AE blob1 now stores.
+  // The fixture's body JSON tries to spoof service.name, environment and
+  // hot.outcome; none must survive — `tryParseJsonBodyAttrs` strips every
+  // RESOURCE_ATTRS key from its own output, and the merge gives body-JSON
+  // attrs the lowest priority, so a real resource/OTLP attribute can never
+  // be overridden by body content. `service.name` is asserted against its
+  // post-`remapCloudflareServiceName` value (`demos-api`), matching what a
+  // real Loki label/AE blob1 stores.
   const result = await processOtlpBody(
     new TextEncoder().encode(otlpJsonFixture("console-log-line-spoof-attempt.json")),
     "application/json",
@@ -1080,16 +1048,15 @@ test("Faro: a record over 256 KB is dropped, not stored (I2 — the Faro path la
   assert.equal(item.invalid, undefined, "oversize is distinct from invalid (I3: different o11y.ingest reason)");
 });
 
-// ---- A-M7: deploy/Sentry hashes must not collapse genuinely different events ------
+// ---- deploy/Sentry hashes must not collapse genuinely different events -----
 //
-// Both processors used to hash with a fixed `rawEventTime: ""`. Two
+// Both processors must not hash with a fixed `rawEventTime: ""`. Two
 // genuinely different events whose derived body text happens to be
 // byte-identical (a redeploy of the exact same `{service,sha,cf_version_id}`;
 // a Sentry issue going regression -> resolved -> regression in one day, so
-// the second "regression" body matches the first) then hashed identically
-// and deduped inside the 24h dedupe window even though they are real,
-// distinct events. Fails without the fix: reverting `rawEventTime` to `""`
-// in either processor makes the two hashes below equal.
+// the second "regression" body matches the first) must not hash
+// identically and dedupe inside the 24h dedupe window even though they are
+// real, distinct events.
 
 test("A-M7: two deploy events with identical service/sha/cf_version_id at receive times in different minute buckets hash differently", async () => {
   const payload = { service: "demos-authoring", sha: "abc123", cf_version_id: "v1" };
@@ -1105,13 +1072,11 @@ test("A-M7: a redelivered deploy event within the same minute still hashes ident
   assert.equal(first.hash, second.hash, "a retry inside the same minute bucket must still dedupe");
 });
 
-// B-I1: an empty cf_version_id (master.yml's `version_id=$(grep ...) || true`
+// An empty cf_version_id (master.yml's `version_id=$(grep ...) || true`
 // can produce one on a wrangler wording change) must never be rejected by
 // this ingest path — the deploy already shipped — but must be visibly
 // marked, both for a Workers-Logs/Loki search and for a queryable Grafana
-// attribute. Fails without the fix: reverting the `versionIdMissing` branch
-// in processDeployPayload makes `attributes` come back `{}` regardless of
-// cf_version_id.
+// attribute.
 test("B-I1: an empty cf_version_id is accepted (never dropped) and marked in the body for a Loki/Grafana query", async () => {
   const payload = { service: "demos-authoring", sha: "abc123", cf_version_id: "" };
   const item = await processDeployPayload(payload, ENV, 0);

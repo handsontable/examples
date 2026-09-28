@@ -23,14 +23,12 @@ export const ctx = {
  *  nested `txn.get`/`.put`/`.delete`/`.list` calls hit the same backing
  *  `Map` atomically-in-spirit (single-threaded Node, no real concurrency to
  *  guard against). */
-// F2 fix round (final review, N2): the real SQLite-backed DO storage API
-// caps `get`/`put`/`delete` at 128 keys/pairs per call (see
-// `workers/o11y/src/inbox/storage.ts`'s `DO_STORAGE_MAX_KEYS_PER_CALL` doc
-// comment for the exact Cloudflare docs quote and URL) — this fake used to
-// accept any number silently (local `workerd` was observed accepting 500+
-// keys in one call with no error), which is exactly why the previous fix round could not have caught
-// a caller that forgot to chunk. Every multi-key call below now throws past
-// the real limit, the same as `inbox/storage.ts#memoryStorage()`.
+// The real SQLite-backed DO storage API caps `get`/`put`/`delete` at 128
+// keys/pairs per call (see `workers/o11y/src/inbox/storage.ts`'s
+// `DO_STORAGE_MAX_KEYS_PER_CALL` doc comment for the exact Cloudflare docs
+// quote and URL). Every multi-key call below throws past the real limit,
+// the same as `inbox/storage.ts#memoryStorage()`, so a caller that forgets
+// to chunk is caught here rather than in production.
 const DO_STORAGE_MAX_KEYS_PER_CALL = 128;
 
 export function makeDurableObjectStorage(seed = new Map()) {
@@ -63,10 +61,10 @@ export function makeDurableObjectStorage(seed = new Map()) {
       for (const k of keys) if (data.delete(k)) n++;
       return n;
     },
-    // F2 fix (final review, A-I1/B-C1 pruning): a real `DurableObjectStorage.list`
+    // A real `DurableObjectStorage.list`
     // also accepts `start`/`end`/`limit` (ledger.ts's bounded-range prune
     // sweeps use exactly these, never an unbounded `prefix`-only scan — see
-    // `storage.ts`'s `ListOptions` doc comment). This fake used to silently
+    // `storage.ts`'s `ListOptions` doc comment); this fake must not silently
     // ignore all three: a call with `start`/`end` but no `prefix` fell
     // through the `!options?.prefix` check and returned the WHOLE storage
     // Map, so a prune call's `storage.delete([...matches])` deleted
@@ -146,7 +144,7 @@ export function makeEnv(InboxWriterClass, overrides = {}) {
 
   const env = {
     O11Y_ENV: "production",
-    // K1: replaces ACCESS_TEAM_DOMAIN/ACCESS_AUD (Cloudflare Access).
+    // Replaces ACCESS_TEAM_DOMAIN/ACCESS_AUD (Cloudflare Access).
     LOGIN_BROKER_URL: "https://mcp-auth-proxy.example.test",
     O11Y_SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
     GITHUB_OIDC_REPOSITORY: "handsontable/examples",

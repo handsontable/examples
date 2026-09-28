@@ -3,12 +3,10 @@
 // stubs (no real Container/DO needed: these handlers only call methods on
 // the stub returned by `getGrafanaBoxStub`/`inboxWriter`).
 //
-// K1: the gate itself is `gates/session.ts` (replacing Cloudflare Access) —
-// its own cookie/nonce/broker mechanics are covered in
-// `o11y-session.test.mjs`; this file covers what the PROXY route does with
-// the gate's verdict (redirect vs. 401, never touching the box when
-// unauthenticated, header stripping, wake gating).
-//
+// The gate itself is `gates/session.ts`; its own cookie/nonce/broker
+// mechanics are covered in `o11y-session.test.mjs`. This file covers what
+// the proxy route does with the gate's verdict (redirect vs. 401, never
+// touching the box when unauthenticated, header stripping, wake gating).
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
@@ -34,7 +32,7 @@ function makeBoxStub(overrides = {}) {
     async isReady() {
       return overrides.ready ?? true;
     },
-    // F2 fix (B-I3): defaults to already-awake, so every EXISTING test above
+    // Defaults to already-awake, so every existing test above
     // (none of which cares about the wake-gating change) keeps its current
     // pass-through behaviour unchanged; only a test that explicitly sets
     // `isAwake: false` exercises the new gate.
@@ -44,13 +42,13 @@ function makeBoxStub(overrides = {}) {
     async noteVisitorActivity() {
       calls.noteVisitorActivity++;
     },
-    // Z1: the DO's `fetch()` handler — the only way `/grafana/*` may reach
+    // The DO's `fetch()` handler — the only way `/grafana/*` may reach
     // the box (see `GrafanaBox.fetch`'s doc comment in box.ts).
     async fetch(request) {
       calls.fetch.push(request);
       return overrides.fetchResponse ?? new Response("grafana-body", { status: 200 });
     },
-    // Z1: the RPC method the proxy used to call. A `Request` handed to an
+    // The RPC method the proxy must never call. A `Request` handed to an
     // RPC method has its body sent as an RPC stream, and in workerd every
     // proxied POST printed "ReadableStream received over RPC disconnected
     // prematurely". The real DO still has this method (the drain and
@@ -161,11 +159,11 @@ test("/grafana/* with the local DEV_ADMIN bypass shows the waking page while not
   assert.equal(wakingRes.status, 200);
   const wakingBody = await wakingRes.text();
   assert.equal(wakingBody, wakingPageHtml());
-  // F2: a waking-page response DOES count as visitor activity now — a visit
+  // A waking-page response must count as visitor activity — a visit
   // wake with an empty backlog otherwise SIGTERMs itself ~20s after boot
   // because #finishDrain (box.ts) never sees any activity at all for a
   // wake that only ever served the waking page. See o11y-wake.test.mjs's
-  // own F2 test for the end-to-end proof that this keeps the wake up past
+  // own test for the end-to-end proof that this keeps the wake up past
   // the first drain-finish.
   assert.equal(notReadyBox.calls.noteVisitorActivity, 1, "a waking-page response must count as Grafana activity (F2)");
 
@@ -238,15 +236,15 @@ test("/grafana/* preserves the original Host and path (never rewrites to a synth
   assert.equal(new URL(upstream.url).pathname, "/grafana/api/ds/query");
 });
 
-// --- Z1: never proxy through a JS RPC method ------------------------------
+// --- never proxy through a JS RPC method -------------------------------------
 //
-// Before Z1 the route called `box.containerFetch(upstream, 3000)`, an RPC
-// method on the GrafanaBox stub. In `wrangler dev` every body-bearing
-// request sent that way (33 of 33 POSTs from one dashboard switch; GETs:
-// 0 of 77) printed "Uncaught Error: ReadableStream received over RPC
+// `box.containerFetch(upstream, 3000)`, an RPC method on the GrafanaBox
+// stub, cannot carry a body-bearing request: in `wrangler dev` every such
+// request sent that way (33 of 33 POSTs from one dashboard switch; GETs: 0
+// of 77) printed "Uncaught Error: ReadableStream received over RPC
 // disconnected prematurely." inside the DO. The DO's `fetch()` handler has
-// no such stream (0 errors after the fix). workerd's RPC transport cannot
-// run under `node --test`, so these pin the call shape that avoids it.
+// no such stream (0 errors). workerd's RPC transport cannot run under
+// `node --test`, so these pin the call shape that avoids it.
 
 test("Z1: a panel-query POST reaches the box through the DO's fetch() with its body intact, never the containerFetch RPC method", async () => {
   const box = makeBoxStub({ ready: true });
@@ -268,11 +266,11 @@ test("Z1: a panel-query POST reaches the box through the DO's fetch() with its b
   assert.equal(await upstream.text(), body, "the request body is forwarded verbatim");
 });
 
-// Z1, second half. With the body piped straight from `req.body`, a box
-// that answers WITHOUT reading it (every gate refusal: live path, Loki
-// allowlists, not-running 503) left the runtime still pumping the incoming
-// body after this Worker had sent the response. Live under `wrangler dev`:
-// 30 of 30 refused 20 KB POSTs printed "Uncaught TypeError: Can't read from
+// With the body piped straight from `req.body`, a box that answers
+// without reading it (every gate refusal: live path, Loki allowlists,
+// not-running 503) leaves the runtime still pumping the incoming body
+// after this Worker has sent the response. Live under `wrangler dev`: 30
+// of 30 refused 20 KB POSTs printed "Uncaught TypeError: Can't read from
 // request stream after response has been sent", and some came back 500
 // instead of 404. With the body buffered first: 0 of 30, all 404.
 test("Z1: the incoming body is read to the end BEFORE the box is called, so a box that answers without reading it leaves nothing pumping", async () => {
@@ -336,7 +334,7 @@ test("Z1: a client that drops mid-upload gets a 400 from the Worker, and the box
   assert.equal(box.calls.fetch.length, 0);
 });
 
-// ---- QA follow-up: a 10 MB cap on /grafana/* request bodies --------
+// ---- a 10 MB cap on /grafana/* request bodies -------------------------------
 //
 // Grafana's dashboards are provisioned read-only, so no legitimate request
 // through this proxy is anywhere near this size (a panel query or a
@@ -505,7 +503,7 @@ test("/grafana/* serves the waking page instead of erroring when wake() refuses 
   assert.equal(await res.text(), wakingPageHtml());
 });
 
-// ---- F2 fix (B-I3): only a top-level navigation may START a stopped box ---
+// ---- only a top-level navigation may start a stopped box -------------------
 
 test("B-I3: a background request (sec-fetch-dest: empty) never wakes a stopped box — serves the waking page without calling wake()", async () => {
   const box = makeBoxStub({ isAwake: false });
@@ -626,7 +624,7 @@ test("POST /grafana/_o11y/reopen rejects a malformed body with 400, never reachi
   assert.equal(called, false);
 });
 
-// ---- F2 fix (B-M9): CSRF hardening and the retention-window cap -----------
+// ---- CSRF hardening and the retention-window cap ---------------------------
 
 test("B-M9: a non-application/json content-type is refused with 415, never reaching the ledger (CSRF: a cross-site 'simple' request cannot set this header)", async () => {
   let called = false;

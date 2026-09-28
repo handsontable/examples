@@ -285,9 +285,9 @@ test("the alarm turns a deterministic failure into a failed row instead of a ret
   });
 
   const job = new BuildJobBase(state, env);
-  // Minor triage item 7 (C-M14): `markSnapshotFailed`'s structured error
-  // line must key the demo id `hot.demo_id` (the contract's own name,
-  // `telemetry/lines.ts#logRequestLine`'s shape), not the stale `demo_id`.
+  // `markSnapshotFailed`'s structured error line must key the demo id
+  // `hot.demo_id` (the contract's own name, `telemetry/lines.ts#logRequestLine`'s
+  // shape), not the stale `demo_id`.
   const originalConsoleError = console.error;
   const errorLines = [];
   console.error = (line) => errorLines.push(line);

@@ -1,9 +1,8 @@
-// T04 — ADR-0041 §G: "observability spend is its own number with its own
-// cap." Covers `budget.ts#recordContainerUsage`'s new `sku` parameter,
+// ADR-0041 §G: observability spend is its own number with its own cap.
+// Covers `budget.ts#recordContainerUsage`'s `sku` parameter,
 // `computeO11ySpend`, `settings.ts#o11yBudgetUsd`, `o11y-usage.ts#O11yUsage`
 // (the named `WorkerEntrypoint` the o11y worker's `cost.ts` calls over the
 // `API` binding), and `reconcile.ts` iterating both scripts.
-//
 // Run: node --experimental-strip-types --test pipeline/o11y-cost.test.mjs
 
 import test from "node:test";
@@ -63,20 +62,17 @@ test("computeO11ySpend: sums only o11y_container/o11y_workers, never the app's o
   assert.equal(spend.capUsd, 15, "default O11Y_BUDGET_USD is $15");
 });
 
-// Minor triage item 9 (C-findings.md T04: "no rollover test for alert
-// state ... month rollover of the cap is a plain month-prefix LIKE"). This
-// pins the ledger half of that claim directly: a heavy prior-month spend
-// must NOT leak into the current month's month-prefix LIKE read — the exact
-// mechanism that makes the o11y-spend-cap alert self-resolve once the
-// calendar rolls over, even with no code path that explicitly "resets"
-// anything (there is none — the LIKE filter itself is the reset). The
-// alert-state half of the same rollover (o11yCapRule firing on last month's
-// high spend, then correctly resolving once this month's read comes back
-// near zero) is pinned in `pipeline/o11y-alerts.test.mjs`'s own
-// month-rollover test, through the SAME `computeO11ySpend`-shaped values.
-// Reverting `computeO11ySpend`'s `day LIKE ?1` filter (e.g. back to an
-// unbounded `SELECT ... FROM cost_ledger WHERE sku IN (...)`) makes the
-// assertion below fail: spend would come back $500 instead of $0.
+// A heavy prior-month spend must not leak into the current month's
+// month-prefix LIKE read — the mechanism that makes the o11y-spend-cap
+// alert self-resolve once the calendar rolls over, with no code path that
+// explicitly "resets" anything (there is none — the LIKE filter itself is
+// the reset). The alert-state half of the same rollover (o11yCapRule
+// firing on last month's high spend, then correctly resolving once this
+// month's read comes back near zero) is pinned in
+// `pipeline/o11y-alerts.test.mjs`'s own month-rollover test, through the
+// same `computeO11ySpend`-shaped values. `computeO11ySpend`'s `day LIKE
+// ?1` filter must bound the query, not run unbounded over
+// `cost_ledger WHERE sku IN (...)`.
 test("computeO11ySpend: a previous month's spend does not carry over after the calendar rolls into a new month", async () => {
   const now = new Date();
   const lastMonthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15));

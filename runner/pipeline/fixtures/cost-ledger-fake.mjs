@@ -2,8 +2,8 @@
 // `runner_settings` SQL shapes `budget.ts`/`settings.ts`/`reconcile.ts` issue
 // — not a general SQL engine, the same "cover exactly what the routes touch"
 // scope `worker-harness.mjs#fakeD1` documents for the demos/tokens tables.
-// Used by T04's `o11y-cost.test.mjs`/`o11y-alerts.test.mjs` (the o11y spend
-// cap rule reads through `budget.ts#computeO11ySpend`).
+// Used by `o11y-cost.test.mjs`/`o11y-alerts.test.mjs` (the o11y spend cap
+// rule reads through `budget.ts#computeO11ySpend`).
 
 /** @returns {{ DB: object, _ledger: Map, _settings: Map }} */
 export function fakeCostD1(seedLedgerRows = []) {

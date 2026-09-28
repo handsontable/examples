@@ -1,14 +1,12 @@
-// F14 (W-triage): `container.boot_ms` was only ever emitted for
-// `outcome: "window_exceeded"`, from a DO fetch override reachable only on a
-// LATER proxied preview request — never from `POST /api/session`'s own
-// create path. So a successful or failed create never produced a
-// `container.boot_ms ready`/`error` point at all, and the `tier2-sessions`
-// dashboard panel ("container.boot_ms p95 by outcome") stayed permanently
-// empty even on a healthy deploy: `blob6 IN (${framework:sqlstring})`, with
-// `framework` a `SELECT DISTINCT ... WHERE blob6 != ''` variable, has nothing
-// to match when every point ever written carries `blob6 = ''`.
+// `container.boot_ms` must be emitted from `POST /api/session`'s own
+// create path, not only for `outcome: "window_exceeded"` from a DO fetch
+// override reachable on a later proxied preview request — otherwise the
+// `tier2-sessions` dashboard panel ("container.boot_ms p95 by outcome")
+// stays permanently empty even on a healthy deploy, since its
+// `blob6 IN (${framework:sqlstring})` filter has nothing to match when
+// every point carries `blob6 = ''`.
 //
-// This file pins the create path's two NEW outcomes — `ready` (the
+// This file pins the create path's two outcomes — `ready` (the
 // `withSpan("container.boot", …)` block resolves) and `error` (it throws,
 // past the `at_capacity`/`container_starting` refusals, which already have
 // their own `session.start` outcome and must not be double-counted here) —
@@ -18,9 +16,9 @@
 // .test.mjs` established for `POST /api/session`. `container.boot_ms`
 // requires flipping `getSink()` to its `bindingSink` branch (see
 // `pipeline/lite-inject.test.mjs#makeCountingEnv`'s own doc comment):
-// `worker-harness.mjs#makeEnv` otherwise routes Analytics Engine points at a
-// local ClickHouse HTTP fetch that has nothing listening in this sandbox and
-// which `emitPoint` — by design — swallows on failure.
+// `worker-harness.mjs#makeEnv` otherwise routes Analytics Engine points at
+// a local ClickHouse HTTP fetch with nothing listening, which `emitPoint`
+// — by design — swallows on failure.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -154,7 +152,7 @@ test("a container-starting refusal emits session.start's own outcome, not a seco
   // create's OWN try, before `withSpan("container.boot", …)` — `bootStartedAt`
   // is still null, so no `container.boot_ms` point of either outcome exists.
   // Double-counting a refusal already carried by `session.start` would corrupt
-  // the panel's error rate (W-triage F14).
+  // the panel's error rate.
   assert.equal(bootPoints(points).length, 0, "container-starting must not also emit container.boot_ms");
 });
 
@@ -164,7 +162,4 @@ test("a container-starting refusal emits session.start's own outcome, not a seco
 // only ever set immediately before `withSpan("container.boot", …)`, so any
 // return/throw upstream of it — a denial included — emits no
 // `container.boot_ms` point of either outcome. Not pinned as its own case:
-// reverse-engineering `budgetGate`'s D1 ledger/settings shape into a fake
-// that deterministically denies (rather than the "throws == allow" default
-// `session-create-container-starting.test.mjs` documents) is its own,
-// separate piece of work, out of scope for this fix.
+// out of scope here.

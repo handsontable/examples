@@ -3,18 +3,18 @@ import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { previewReady, expectGridRendered, trackSessions, activeEditor } from "./helpers.js";
 
-// T07 phase 2 — observability contract §5 browser metric catalogue, live.
+// Observability contract §5 browser metric catalogue, live.
 //
-// Gated: needs a dist built with VITE_TELEMETRY_LOCAL=1 (contract §10, same as
-// T06's e2e/telemetry-faro.spec.ts) AND a real preview mount (E2E_LIVE=1). The
-// Tier-2 case additionally needs a local API worker — this spec starts its own
-// `wrangler dev` inside workers/api, on this task's 4800-4899 port block, and
-// builds the dist with `VITE_API_BASE` pointed at it. Never the production
-// API: a plain `VITE_TELEMETRY_LOCAL=1` build inherits
+// Gated: needs a dist built with VITE_TELEMETRY_LOCAL=1 (contract §10, same
+// as e2e/telemetry-faro.spec.ts) and a real preview mount (E2E_LIVE=1). The
+// Tier-2 case additionally needs a local API worker — this spec starts its
+// own `wrangler dev` inside workers/api, and builds the dist with
+// `VITE_API_BASE` pointed at it. Never the production API: a plain
+// `VITE_TELEMETRY_LOCAL=1` build inherits
 // `apps/authoring/.env.production`'s `VITE_API_BASE=https://demos.handsontable.com`
-// (AGENTS.md — that file outranks `.env.local`, and the app's own `:8787`
-// fallback only applies to a FALSY value), so a Tier-2 session created here
-// without overriding it would land in the real production container pool.
+// (that file outranks `.env.local`, and the app's own `:8787` fallback only
+// applies to a falsy value), so a Tier-2 session created here without
+// overriding it would land in the real production container pool.
 //
 //   cd workers/api && npx wrangler dev --port 4810 --inspector-port 4811
 //   (needs workers/api/.dev.vars — copy from the main checkout, PREVIEW_HOST=localhost:4810)
@@ -22,20 +22,19 @@ import { previewReady, expectGridRendered, trackSessions, activeEditor } from ".
 //     pnpm --filter @handsontable/demo-authoring exec vite build --outDir dist-telemetry-metrics
 //   E2E_LIVE=1 E2E_TELEMETRY=1 pnpm e2e e2e/telemetry-metrics.spec.ts
 //
-// This spec manages its own preview server (like telemetry-faro.spec.ts), never
-// the shared playwright.config.ts webServer (:4173, no VITE_TELEMETRY_LOCAL).
+// This spec manages its own preview server (like telemetry-faro.spec.ts),
+// never the shared playwright.config.ts webServer (:4173, no
+// VITE_TELEMETRY_LOCAL).
 //
-// CI home: `.github/workflows/e2e-o11y-local.yml` (R1-followups) — on
-// workflow_dispatch, nightly, and PRs touching the o11y ingest path. Not
-// ci.yml's `e2e-telemetry` job: that job's two specs are self-contained
-// (page.route mocks, no real API worker), this one needs Docker + a real
+// CI home: `.github/workflows/e2e-o11y-local.yml` — on workflow_dispatch,
+// nightly, and PRs touching the o11y ingest path. Not ci.yml's
+// `e2e-telemetry` job: that job's two specs are self-contained (page.route
+// mocks, no real API worker), this one needs Docker + a real
 // `wrangler dev`, which the shared Playwright container image can't provide.
 
-// Env-overridable (COMMON.md's per-worktree port block rule) — a local
-// reproduction of the CI job running alongside other o11y worktrees on the
-// same machine sets these to its own block instead of colliding on T07's
-// original 4800-4899. Defaults unchanged: e2e-o11y-local.yml and every
-// existing doc/comment naming ":4810" etc. still work unmodified.
+// Env-overridable (per-worktree port block) — a local reproduction of the
+// CI job running alongside other worktrees on the same machine sets these
+// to its own block instead of colliding on the default 4800-4899.
 const AUTHORING_PORT = Number(process.env.E2E_TELEMETRY_METRICS_AUTHORING_PORT ?? 4800);
 const API_PORT = Number(process.env.E2E_TELEMETRY_METRICS_API_PORT ?? 4810);
 const API_INSPECTOR_PORT = Number(process.env.E2E_TELEMETRY_METRICS_API_INSPECTOR_PORT ?? 4811);
@@ -60,7 +59,8 @@ function waitForServer(url: string, timeoutMs: number): Promise<void> {
   });
 }
 
-/** One decoded Faro transport body — same shape T06's spec captures. */
+/** One decoded Faro transport body — same shape telemetry-faro.spec.ts
+ *  captures. */
 interface FaroBody {
   measurements?: { type?: string; values?: Record<string, number>; context?: Record<string, string> }[];
 }
@@ -111,7 +111,7 @@ test.describe("Browser metrics catalogue, live (T07)", () => {
     // The default hook timeout (60s) is not enough for wrangler dev's own
     // startup (the Sandbox container image check/build) plus the authoring
     // build plus the preview server — all sequential, all inside one hook.
-    // F1 (V-triage): on a cold CI runner (no cached image layers) the
+    // On a cold CI runner (no cached image layers) the
     // container check/build step alone can approach the old 180s budget,
     // so the whole hook intermittently tripped the timeout on attempt 1 and
     // only passed on Playwright's retry (masking the failure as green CI).
@@ -216,7 +216,7 @@ test.describe("Browser metrics catalogue, live (T07)", () => {
     expect(point?.context?.["hot.tier"]).toBe("1");
     expect(point?.context?.["hot.framework"]).toBe("react");
     expect(point?.context?.["hot.outcome"]).toBe("ready");
-    // T07 fix round: hot.bucket now survives the real browser scrub — a
+    // `hot.bucket` must survive the real browser scrub — a
     // non-empty string proves it reached the wire, not the `attrs.ts` unit
     // test's own literal input (this is the one attribute this Tier-1 flow
     // naturally sets; `reason`/`fingerprint` are proven against the real
@@ -274,9 +274,9 @@ test.describe("Browser metrics catalogue, live (T07)", () => {
       await expect.poll(() => measurementsOf(captured, "session.start_ms").length).toBe(1);
       expect(measurementsOf(captured, "session.start_ms")[0]?.context?.["hot.outcome"]).toBe("ready");
 
-      // An edit, for the HMR observation (T07-D4's support table) and the same
+      // An edit, for the HMR observation and the same
       // no-re-emission guard `preview.ready_ms` gets on Tier-1. Not gated on
-      // an `hmr.roundtrip_ms` point actually landing — the Outcome's support
+      // an `hmr.roundtrip_ms` point actually landing — the same
       // table predicts most starters use in-place HMR, which this hook cannot
       // see (see `HmrRoundtripEvent`'s doc comment).
       await insertAtTop(page, "// t07-e2e-hmr-probe");

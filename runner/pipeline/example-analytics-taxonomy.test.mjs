@@ -128,14 +128,13 @@ test("exampleOpenKey: same lineage + same version is the same key; a version cha
   assert.notEqual(a, c);
 });
 
-// ---- consumeForkMarker (T12-D2 fix round: entry=fork) ---------------------------
+// ---- consumeForkMarker: entry=fork ------------------------------------------
 //
 // onFork navigates with a full `location.href` reload (App.tsx's own
-// established pattern for every route change — /my-demos, /admin, /guide,
-// etc. — never client-side routing), which destroys every in-memory flag, so
-// the one-shot signal has to survive in the URL itself, stripped on read.
-// Never localStorage/sessionStorage (the contract keeps this path off
-// browser storage).
+// established pattern for every route change, never client-side routing),
+// which destroys every in-memory flag, so the one-shot signal must survive
+// in the URL itself, stripped on read. Never localStorage/sessionStorage
+// (the contract keeps this path off browser storage).
 
 test("consumeForkMarker: detects the marker and strips it down to an empty search", () => {
   const { isFork, search } = consumeForkMarker("?fork=1");

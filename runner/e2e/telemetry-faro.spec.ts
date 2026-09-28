@@ -4,35 +4,26 @@ import { fileURLToPath } from "node:url";
 import { activeEditor, previewReady, stubShell } from "./helpers.js";
 import { fingerprint } from "../packages/runtime/src/telemetry/fingerprint.js";
 
-// T06 — Faro in the authoring app.
-//
-// Gated: needs a dist built with VITE_TELEMETRY_LOCAL=1 (contract §10), served
-// on its own port (this task's 4700-4799 block — never 4173, which another
-// worktree's `vite preview` may already hold, AGENTS.md). No o11y worker
-// needed: `/telemetry/collect` is captured with `page.route`, per the
-// controller's note that T02 is not in this base.
+// Faro in the authoring app. Gated: needs a dist built with
+// VITE_TELEMETRY_LOCAL=1 (contract §10), served on its own port (never
+// 4173, which another worktree's `vite preview` may already hold). No o11y
+// worker needed: `/telemetry/collect` is captured with `page.route`.
 //
 //   VITE_TELEMETRY_LOCAL=1 pnpm --filter @handsontable/demo-authoring build
 //   E2E_TELEMETRY=1 pnpm e2e e2e/telemetry-faro.spec.ts
 //
-// This spec manages its own preview server (not the shared playwright.config.ts
-// webServer, which serves :4173 without the flag) so it never depends on, or
-// interferes with, whatever `dist` another spec run left behind.
-
-// `E2E_TELEMETRY_PORT` / `E2E_TELEMETRY_UNCAUGHT_PORT`: a worktree running
-// in a different port block (COMMON.md) overrides both; the defaults are
-// T06's own block, unchanged.
+// This spec manages its own preview server, not the shared
+// playwright.config.ts webServer, so it never depends on whatever `dist`
+// another spec run left behind. `E2E_TELEMETRY_PORT` /
+// `E2E_TELEMETRY_UNCAUGHT_PORT` override the ports.
 const PORT = Number(process.env.E2E_TELEMETRY_PORT ?? 4711);
 // 127.0.0.1, not "localhost": in CI (the Playwright container job) this
 // spec's own `fetch("http://localhost:…")` readiness poll failed outright
-// ("TypeError: fetch failed", cause unlogged — see `formatFetchFailure`
-// below, added so the next failure says which) while `vite preview` itself
-// bound the default, unqualified host with no startup error. The leading
-// theory is a dual-stack "localhost" resolution mismatch between the bind
-// and the poller (invisible on a machine where ::1 and 127.0.0.1 both work),
-// but this has not been reproduced locally — pinning both sides to the same
-// literal IPv4 address removes that whole axis of ambiguity regardless of
-// the exact mechanism.
+// ("TypeError: fetch failed", see `formatFetchFailure` below) while `vite
+// preview` itself bound the default, unqualified host with no startup
+// error — a likely dual-stack "localhost" resolution mismatch between the
+// bind and the poller. Pinning both sides to the same literal IPv4 address
+// removes that whole axis of ambiguity.
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const AUTHORING_DIR = fileURLToPath(new URL("../apps/authoring", import.meta.url));
 
@@ -100,12 +91,10 @@ interface FaroBody {
 }
 
 /**
- * Fix round I3's e2e-only hooks (`sentry.ts`'s `localTestSentryEnabled()`
- * branch — `window.__t06SentryCapture`, `window.__t06ReportDemoEvent`), read
- * from the browser. Every Sentry envelope is `[EnvelopeHeader, Item[]]`; each
- * `Item` is `[ItemHeader, payload]`. This flattens to just the `event`-typed
- * payloads (skips session/client-report items Sentry may also queue), which
- * is all these tests need.
+ * Reads the e2e-only hooks (`sentry.ts`'s `localTestSentryEnabled()` branch)
+ * from the browser. Every Sentry envelope is `[EnvelopeHeader, Item[]]`;
+ * each `Item` is `[ItemHeader, payload]`. Flattens to just the
+ * `event`-typed payloads.
  */
 function readSentryEvents(page: Page): Promise<Record<string, unknown>[]> {
   return page.evaluate(() => {
@@ -200,12 +189,11 @@ test.describe("Faro in the authoring app (T06)", () => {
     return bodies;
   }
 
-  // Fix round D-I2: `beforeSend` must apply the shared noise gates
-  // (contract §6) to Faro exception items, same as Sentry's own
-  // `beforeSend` already did — otherwise a benign ResizeObserver-loop
-  // warning (or any of the other `isUnhandledNoise`/`isForeignUnhandled`
-  // shapes) reaches Loki AND mints a fresh §F.3 `fp:` first-seen entry,
-  // paging on noise Sentry has always filtered.
+  // `beforeSend` must apply the shared noise gates (contract §6) to Faro
+  // exception items, same as Sentry's own `beforeSend` — otherwise a
+  // benign ResizeObserver-loop warning (or any of the other
+  // `isUnhandledNoise`/`isForeignUnhandled` shapes) reaches Loki and mints
+  // a fresh §F.3 `fp:` first-seen entry, paging on noise Sentry filters.
   test("D-I2: an unhandled ResizeObserver-loop warning does NOT reach Faro (shared noise gate)", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
@@ -261,18 +249,16 @@ test.describe("Faro in the authoring app (T06)", () => {
     assert(!scannerHit, "the Office scanner's injected rejection must never reach Faro/telemetry/collect");
   });
 
-  // Z-D-H1: faro-core's default `dedupe: true` keeps ONE `lastPayload` per
-  // API (events/measurements) and silently skips a push that deep-equals
-  // the previous one, with no time window — a real second `example.saved`
+  // faro-core's default `dedupe: true` keeps one `lastPayload` per API
+  // (events/measurements) and silently skips a push that deep-equals the
+  // previous one, with no time window — a real second `example.saved`
   // (repeat Save, Download, Share) or a second `example.open` on a guide's
-  // second example (identical `ref`-keyed attrs) never left the browser
-  // before the fix. `faro.ts`'s `event()`/`metric()` now pass
-  // `skipDedupe: true`; `window.__t06Telemetry` (a build+host-gated e2e-only
-  // hook, same guarantee as `__t06ReportDemoEvent` — see faro.ts's own doc
-  // comment) calls the real facade methods directly so this proves the
-  // facade's own behaviour without driving the real save/download UI.
-  // Fails without the fix: reverting either `skipDedupe: true` makes the
-  // second identical push vanish and this poll times out at 1, not 2.
+  // second example (identical `ref`-keyed attrs) must still leave the
+  // browser. `faro.ts`'s `event()`/`metric()` pass `skipDedupe: true`;
+  // `window.__t06Telemetry` (a build+host-gated e2e-only hook, same
+  // guarantee as `__t06ReportDemoEvent`) calls the real facade methods
+  // directly so this proves the facade's own behaviour without driving the
+  // real save/download UI.
   test("Z-D-H1: two identical example.saved events both reach Faro (facade skipDedupe)", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
@@ -344,12 +330,11 @@ test.describe("Faro in the authoring app (T06)", () => {
     );
   });
 
-  // R3 F17a: the exact R3-triage finding input. Faro's gecko-regex stack fallback used
-  // to turn this message's own trailing URL into a fake, lineno-less frame, which
-  // `isForeignUnhandled` then read as "foreign" and dropped the whole event — the error
-  // never reached Faro/Loki at all. This only proves the event is KEPT; it deliberately
-  // does not assert anything about the IP/email text surviving or being redacted — that
-  // redaction is F17c, out of this worktree's scope (landed separately, R3B).
+  // Faro's gecko-regex stack fallback can turn this message's own trailing
+  // URL into a fake, lineno-less frame, which `isForeignUnhandled` then
+  // reads as "foreign" and drops the whole event. This only proves the
+  // event is kept; it deliberately does not assert anything about the
+  // IP/email text surviving or being redacted (a separate concern).
   test("R3 F17a: an uncaught error whose message quotes a foreign URL is kept, not dropped as foreign", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
@@ -405,11 +390,9 @@ test.describe("Faro in the authoring app (T06)", () => {
       .flatMap((b) => b.exceptions ?? [])
       .find((e) => String(e.fingerprint ?? "").startsWith("versions-fetch:"));
     assert(exception, "no exception item fingerprinted versions-fetch:… — reportError never reached Faro");
-    // T06 fix round D1: `handled` is now in `attrs.ts#DIAGNOSTIC_TAG_KEYS`
+    // `handled` is in `attrs.ts#DIAGNOSTIC_TAG_KEYS`
     // (`packages/runtime/src/telemetry/attrs.ts`, contract §3 "Diagnostic
-    // tags"), so the browser-side scrub keeps it — this used to be the
-    // spec's KNOWN RED case (T06-D1); fixed in the same fix round, in its own
-    // commit against the T00-owned contract module (`fix(contract): ...`).
+    // tags"), so the browser-side scrub keeps it.
     assert(
       (exception.context as Record<string, unknown> | undefined)?.handled === "true",
       "reportError must tag every Faro push context.handled = 'true' (contract §6 error.handled split)",
@@ -507,7 +490,7 @@ test.describe("Faro in the authoring app (T06)", () => {
     captured.forEach((body, i) => scan(body, `body[${i}]`));
   });
 
-  // ---- Fix round I3: "an uncaught error reaches Sentry (transport spy)" ----
+  // ---- an uncaught error reaches Sentry (transport spy) ----------------------
   //
   // Three cases, all against this describe block's `full`-scope build (the
   // default — no VITE_SENTRY_SCOPE set): uncaught always reaches Sentry;
@@ -549,24 +532,24 @@ test.describe("Faro in the authoring app (T06)", () => {
     const events = await readSentryEvents(page);
     const hit = events.find((e) => (e as { tags?: { surface?: string } }).tags?.surface === "demo-runtime");
     assert(hit, "no Sentry event tagged surface=demo-runtime — reportDemoEvent did not reach Sentry under full scope");
-    // Fix round I1: the re-homing that beforeSend restored.
+    // The re-homing that beforeSend restores.
     assert(
       (hit as { environment?: string }).environment === "demo-runtime",
       `demo-runtime event must be re-homed to environment "demo-runtime", got ${JSON.stringify((hit as { environment?: string }).environment)}`,
     );
   });
 
-  // ---- R3 F10: reportDemoEvent's own gate (previewMonitoring), not the ----
+  // ---- reportDemoEvent's own gate (previewMonitoring), not the
   // ---- __t06ReportDemoEvent bypass above -----------------------------------
   //
   // Every test above drives `reportDemoEventUnguarded` directly (the
-  // `__t06ReportDemoEvent` hook), which never exercised `reportDemoEvent`'s
-  // own `monitorDemos` gate at all. Before this fix round, THIS build (no
-  // `VITE_MONITOR_DEMOS`, so `monitorDemos` is false, same as every real
-  // `dev:full` run) made `reportDemoEvent` itself a no-op — F10's exact
-  // finding. `__t06ReportDemoEventGuarded` calls `reportDemoEvent` (the real,
-  // guarded entry point `App.tsx`'s `onPreviewMessage` uses) so this proves
-  // the fix without a real (E2E_LIVE-gated) preview mount.
+  // `__t06ReportDemoEvent` hook), which never exercises `reportDemoEvent`'s
+  // own `monitorDemos` gate. With no `VITE_MONITOR_DEMOS` (so `monitorDemos`
+  // is false, same as every real `dev:full` run), `reportDemoEvent` itself
+  // must not be a no-op. `__t06ReportDemoEventGuarded` calls
+  // `reportDemoEvent` (the real, guarded entry point `App.tsx`'s
+  // `onPreviewMessage` uses) so this proves the fix without a real
+  // (E2E_LIVE-gated) preview mount.
   test("R3 F10: reportDemoEvent (guarded) reaches Faro under the local leg, and never Sentry", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
@@ -587,37 +570,38 @@ test.describe("Faro in the authoring app (T06)", () => {
       );
     }, guardedMarker);
 
-    // The AE metric (contract §5) — F10's "local-only" finding for the metric
-    // side: `previewMonitoring` (`monitorDemos || localTestSentryEnabled()`)
-    // is what let this call through `reportDemoEvent`'s gate at all.
+    // The AE metric (contract §5): `previewMonitoring`
+    // (`monitorDemos || localTestSentryEnabled()`) is what lets this call
+    // through `reportDemoEvent`'s gate at all.
     await expect
       .poll(() => captured.flatMap((b) => b.measurements ?? []).some((m) => m.type === "preview.runtime_error"))
       .toBe(true);
 
-    // Control, same D-I2 pattern as the noise-gate tests above: a SECOND
-    // demo-runtime event, fired through the UNGUARDED hook (opts.sentry=true
-    // default), which DOES reach Sentry on this exact dist (proved by the
-    // sibling "I3: a demo-runtime event reaches Sentry under full scope" test
-    // above). Waiting for this first rules out "no Sentry event yet because
-    // nothing has flushed" as the reason the guarded marker is absent below —
-    // Sentry capture/transport is provably alive on this page.
+    // Control: a second demo-runtime event, fired through the unguarded
+    // hook (opts.sentry=true default), which does reach Sentry on this
+    // exact dist (proved by the sibling "I3: a demo-runtime event reaches
+    // Sentry under full scope" test above). Waiting for this first rules
+    // out "no Sentry event yet because nothing has flushed" as the reason
+    // the guarded marker is absent below — Sentry capture/transport is
+    // provably alive on this page.
     const controlMarker = "T06 e2e R3 F10 control probe " + Date.now();
     await callReportDemoEvent(page, controlMarker);
     await expect
       .poll(() => readSentryEvents(page).then((events) => events.some((e) => JSON.stringify(e).includes(controlMarker))))
       .toBe(true);
 
-    // Never Sentry: `opts.sentry` is `monitorDemos` (false in this build, same
-    // as every real local run) — independent of `previewMonitoring` and of
-    // `diagnosticsGoToSentry`, which IS true in this build (the control above
-    // just proved it). Matched on the message text, not `tags.surface`: the
-    // control event ALSO carries `surface: "demo-runtime"`, so a surface-only
-    // match would pass even if the guarded call had leaked through too.
+    // Never Sentry: `opts.sentry` is `monitorDemos` (false in this build,
+    // same as every real local run) — independent of `previewMonitoring` and
+    // of `diagnosticsGoToSentry`, which is true in this build (the control
+    // above proved it). Matched on the message text, not `tags.surface`:
+    // the control event also carries `surface: "demo-runtime"`, so a
+    // surface-only match would pass even if the guarded call had leaked
+    // through too.
     const events = await readSentryEvents(page);
     const guardedHit = events.find((e) => JSON.stringify(e).includes(guardedMarker));
     assert(!guardedHit, "reportDemoEvent must never reach Sentry through the R3 F10 local leg");
   });
-  // ---- F26: the edit-burst collapse in front of the facade ------------------
+  // ---- the edit-burst collapse in front of the facade ------------------------
   //
   // Typing one throwing line relayed one `preview.runtime_error` per
   // half-typed prefix. Drives the same two entry points `App.tsx` uses — the
@@ -733,19 +717,19 @@ test.describe("Faro in the authoring app (T06)", () => {
     await expect.poll(() => points().length, { timeout: 10_000 }).toBe(1);
   });
 
-  // R9C (F10 compile half): a syntax error typed into a Tier-1 parcel example
-  // never reaches the bundler — the client-side pre-transpile rejects it — and
-  // its catch used to drop it, so `sandpack.compile_error` never fired for the
-  // most common compile error there is. Real keystrokes in the real editor, the
-  // real runtime, babel and collapse, and a real preview.
+  // A syntax error typed into a Tier-1 parcel example never reaches the
+  // bundler — the client-side pre-transpile rejects it — so
+  // `sandpack.compile_error` must fire for the most common compile error
+  // there is. Real keystrokes in the real editor, the real runtime, babel
+  // and collapse, and a real preview.
   //
   // E2E_LIVE, not just E2E_TELEMETRY: the edit path needs a mounted Sandpack
-  // client, and with every bundler host aborted `mount()` never resolves (the
-  // preview stays `booting`, measured) — so no keystroke reaches the runtime at
-  // all. The live preview is also what makes the keystroke-prefix rungs (`c`..
-  // `cons`) run and relay ReferenceErrors, which the compile failure must keep
-  // out of `preview.runtime_error` (the `replacesRun` rule). CI home:
-  // e2e-live.yml's local-mode "typed syntax error" step.
+  // client, and with every bundler host aborted `mount()` never resolves
+  // (the preview stays `booting`, measured) — so no keystroke reaches the
+  // runtime at all. The live preview is also what makes the keystroke-
+  // prefix rungs (`c`..`cons`) run and relay ReferenceErrors, which the
+  // compile failure must keep out of `preview.runtime_error` (the
+  // `replacesRun` rule).
   test("R9C: a syntax error typed key by key reaches /telemetry/collect as one sandpack.compile_error, not a runtime error", async ({ page }) => {
     test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 (needs the hosted Sandpack bundler) to run the typed compile-error check");
     await stubShell(page);
@@ -758,11 +742,10 @@ test.describe("Faro in the authoring app (T06)", () => {
     await activeEditor(page).click();
     await page.keyboard.press("ControlOrMeta+End");
     await page.keyboard.press("Enter");
-    // No delay on purpose: the prefixes' runs then relay their ReferenceErrors
-    // after later keystrokes (compile slower than the typist), which is what the
-    // verifier's stray `preview.runtime_error` points were. With a 40 ms delay
-    // the relays land before the next keystroke and the `replacesRun` rule goes
-    // unexercised (measured: that mutation stayed green).
+    // No delay on purpose: the prefixes' runs relay their ReferenceErrors
+    // after later keystrokes (compile slower than the typist). With a 40 ms
+    // delay the relays land before the next keystroke and the `replacesRun`
+    // rule goes unexercised (measured: that mutation stayed green).
     await page.keyboard.type("const R9C = ;", { delay: 0 });
 
     await expect
@@ -773,9 +756,9 @@ test.describe("Faro in the authoring app (T06)", () => {
     expect(ctx["hot.fingerprint"]).toMatch(/^sandpack\.compile_error:[0-9a-f]{16}$/);
     expect(ctx["hot.ht_major"]).toMatch(/^\d+$/);
     expect(ctx["hot.framework"]).toBeTruthy();
-    // The compile point is only emitted when the burst closes, in the same flush
-    // as anything the burst still held. One short negative wait anyway (the F26
-    // test above uses the same idiom): nothing trickles in afterwards.
+    // The compile point is only emitted when the burst closes, in the same
+    // flush as anything the burst still held. One short negative wait
+    // anyway: nothing trickles in afterwards.
     await page.waitForTimeout(1500);
     const after = measurementsSince(mark);
     expect(after.filter((m) => m.type === "sandpack.compile_error")).toHaveLength(1);
@@ -796,14 +779,13 @@ test.describe("Faro in the authoring app (T06)", () => {
   });
 });
 
-// ---- Sentry scope switch = uncaught (fix round I1/I3) -----------------------
-//
+// ---- Sentry scope switch = uncaught ----------------------------------------
 // A second dist, built by this describe block's own `beforeAll` with
-// VITE_SENTRY_SCOPE=uncaught (a build-time define — not overridable per-request,
-// so this needs its own build and its own port). Proves the OTHER half of the
-// scope truth table: uncaught still reaches Sentry (ADR §E.1: it always does,
-// regardless of scope), but reportError and demo-runtime do not (ADR §E.3:
-// moved diagnostic reports go to the facade only once the scope is uncaught).
+// VITE_SENTRY_SCOPE=uncaught (a build-time define, needing its own build
+// and port). Proves the other half of the scope truth table: uncaught
+// still reaches Sentry (ADR §E.1, regardless of scope), but reportError and
+// demo-runtime do not (ADR §E.3: moved diagnostic reports go to the facade
+// only once the scope is uncaught).
 test.describe("Sentry scope switch = uncaught (fix round I1/I3)", () => {
   test.skip(
     process.env.E2E_TELEMETRY !== "1",

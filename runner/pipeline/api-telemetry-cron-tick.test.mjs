@@ -1,15 +1,13 @@
-// Minor triage item 2 (C-M2): `telemetry/lines.ts#logCronTickLine` — the one
-// structured line the API worker's `*/5` cron writes so o11y's
-// `heartbeat.lastIngest` watchdog check is a true end-to-end signal, even
-// during a real quiet period with no user traffic. See `lines.ts`'s own doc
-// comment on the function for why `normalise/otlp.ts` (a different task's
-// file) needed no change for this line to still count as an ingest event.
+// `telemetry/lines.ts#logCronTickLine` — the one structured line the API
+// worker's `*/5` cron writes so o11y's `heartbeat.lastIngest` watchdog
+// check is a true end-to-end signal, even during a real quiet period with
+// no user traffic. See `lines.ts`'s own doc comment for why
+// `normalise/otlp.ts` needed no change for this line to still count as an
+// ingest event.
 //
 // `lines.ts` imports `./resource.js` relatively — the loader hook below
 // remaps that to `resource.ts` on disk, the same way every other spec that
-// imports straight from `workers/api/src/` does (see
-// `pipeline/fixtures/worker-hooks.mjs`'s own header comment).
-//
+// imports straight from `workers/api/src/` does.
 // Run: node --experimental-strip-types --test pipeline/api-telemetry-cron-tick.test.mjs
 
 import test from "node:test";

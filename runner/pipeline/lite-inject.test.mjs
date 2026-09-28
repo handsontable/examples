@@ -1,15 +1,15 @@
-// T08 — injecting the lite reporter into `/d`/`/embed` HTML documents
+// Injecting the lite reporter into `/d`/`/embed` HTML documents
 // (`workers/api/src/monitor-inject.ts#injectLiteHtml`, `htMajorFromVersion`)
 // and `workers/api/src/share.ts#serveOutcome`. Companion to
-// `pipeline/lite-beacon.test.mjs`, which covers the reporter's own behaviour
-// and the o11y ingest route.
+// `pipeline/lite-beacon.test.mjs`, which covers the reporter's own
+// behaviour and the o11y ingest route.
 //
 // DEV-2580 (the same rule `inject-html.test.mjs`/`monitor-inject.test.mjs`
-// already pin for the framed reporter and the scheme receiver): a document an
-// SSR framework already rendered must come out of injection with its own
+// pin for the framed reporter and the scheme receiver): a document an SSR
+// framework already rendered must come out of injection with its own
 // head/body markup byte-identical, because a strict hydrator (Remix's
-// `hydrateRoot(document, …)` on React 18) throws away the whole document over
-// one unexpected `<head>` child.
+// `hydrateRoot(document, …)` on React 18) throws away the whole document
+// over one unexpected `<head>` child.
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
@@ -163,17 +163,16 @@ test("serveOutcome refuses to bucket a stray redirect rather than mis-labelling 
   assert.equal(serveOutcome(308), null);
 });
 
-// ---- I1 (fix round): serve.d/serve.embed count the document, not every asset ---
+// ---- serve.d/serve.embed count the document, not every asset ---------------
 
 /** `worker-harness.mjs#makeEnv` routes Analytics Engine points at a local
  *  ClickHouse HTTP fetch that fails in this sandbox (`getSink`'s "local"
- *  branch — `serviceEnvironment(env)` reads `production` only when
- *  `PREVIEW_HOST` is the real host). Neither its `env` nor its shared `ctx`
- *  gives a test anything to capture or await, so this builds its own: a real
- *  `RUNNER_EVENTS` binding fake (routes `getSink` down the *binding* branch)
- *  and a `ctx.waitUntil` that queues promises a test can drain before
- *  asserting — the same shape `pipeline/fixtures/o11y-harness.mjs` already
- *  uses for the o11y worker's own route tests. */
+ *  branch). Neither its `env` nor its shared `ctx` gives a test anything to
+ *  capture or await, so this builds its own: a real `RUNNER_EVENTS`
+ *  binding fake (routes `getSink` down the binding branch) and a
+ *  `ctx.waitUntil` that queues promises a test can drain before asserting
+ *  — the same shape `pipeline/fixtures/o11y-harness.mjs` uses for the
+ *  o11y worker's own route tests. */
 function makeCountingEnv(rows, artifacts) {
   const { env } = makeEnv(rows, [], artifacts);
   const points = [];
