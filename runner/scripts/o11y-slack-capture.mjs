@@ -1,26 +1,10 @@
 #!/usr/bin/env node
-// A tiny local-only stand-in for a Slack incoming webhook (ADR-0041 §F.3,
-// `workers/o11y/src/alerts/notify.ts#slackPoster`). `pnpm dev:full` points
-// the o11y worker's local `SLACK_WEBHOOK_URL` at this server (see
-// `scripts/dev-lib.mjs#o11yDevVarsPatch`) instead of a real Slack webhook,
-// so a fired alert (ADR §F.3 rules, or the fixture replay's new-fingerprint
-// event) is visible locally without ever touching a real Slack channel.
-//
-// What `docs/observability-contract.md`'s §10 table describes as "a local
-// capture server started by `pnpm o11y:dev`".
+// A tiny local-only stand-in for a Slack incoming webhook (ADR-0041 §F.3).
+// `pnpm dev:full` points the o11y worker's `SLACK_WEBHOOK_URL` at this
+// server instead of a real Slack webhook, so a fired alert is visible
+// locally without touching a real Slack channel.
 //
 // Usage: node scripts/o11y-slack-capture.mjs --port <port>
-//
-// Every POST body is printed to stdout (prefixed by the caller's own log
-// prefixer when spawned from dev.mjs) and kept in memory (last 50) so a
-// test — or a curious developer — can `curl http://localhost:<port>/_captured`
-// to see what was posted, in addition to watching it stream by in the
-// terminal. Accepts any path (Slack's own incoming-webhook URLs carry a
-// per-webhook path segment; this stand-in does not need to match it) and
-// always answers `200 ok`, matching a real Slack webhook's own response
-// body for a successful post — `notify.ts#slackPoster` doesn't inspect the
-// response either way, but a non-2xx would be indistinguishable from an
-// actual Slack outage in the terminal log.
 
 import { createServer } from "node:http";
 
@@ -61,10 +45,8 @@ export function createSlackCaptureServer(port) {
       res.end("ok");
     });
   });
-  // Loopback only: without an explicit host, `server.listen(port)` binds
-  // every interface, making `GET /_captured` (alert text, no auth of its
-  // own) reachable from the LAN, not just this machine. This is a
-  // local-only dev convenience, never anything else.
+  // Loopback only: without an explicit host, `listen(port)` binds every
+  // interface, exposing unauthenticated alert text to the LAN.
   server.listen(port, "127.0.0.1");
   return {
     server,

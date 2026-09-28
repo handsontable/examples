@@ -1,26 +1,10 @@
 #!/usr/bin/env node
-// Replays every `pipeline/fixtures/{otlp,faro}/**` fixture against a running
-// o11y worker (`wrangler dev`):
+// Replays every `pipeline/fixtures/{otlp,faro}/**` fixture against a
+// running o11y worker: `( cd workers/o11y && npx wrangler dev )`, then
+// `node scripts/o11y-replay-fixtures.mjs --base http://localhost:4300`.
 //
-//   ( cd workers/o11y && npx wrangler dev )
-//   node scripts/o11y-replay-fixtures.mjs --base http://localhost:4300
-//
-// Every route requires a real gate: Faro fixtures get a fresh Origin +
-// timestamp (a stale JSON timestamp would fall outside the ±5 min clamp
-// window and exercise the fallback instead of the intended value); OTLP
-// fixtures get the `x-o11y-secret` header from `.dev.vars`; the deploy and
-// Sentry fixtures get their own gates. `--base` defaults to
-// `http://localhost:4300` (this task's port block, COMMON.md).
-//
-// `O11Y_EXPORT_SECRET`/`SENTRY_HOOK_SECRET` are read from
-// the environment FIRST (covers `dev.mjs --replay`, which runs this as a
-// child process and so inherits its own env), falling back to
-// `workers/o11y/.dev.vars` (covers this file's own documented standalone
-// invocation above, run from a separate shell with no `dev.mjs` process to
-// inherit from) — `dev.mjs`/`fillEmptyDevVarsSecrets` now keep both keys
-// filled with a local-only ephemeral value in that file, so this fallback
-// reads the exact value the running `wrangler dev` worker itself loaded.
-//
+// Faro fixtures get a fresh Origin + timestamp; OTLP fixtures get the
+// `x-o11y-secret` header, read from env or `workers/o11y/.dev.vars`.
 // Exits non-zero if any fixture does not answer 2xx.
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -130,10 +114,8 @@ async function replaySentry() {
 }
 
 async function replayDuplicate() {
-  // Exit criterion 4, against the real dev server: the same body twice,
-  // seconds apart. Both must answer 2xx; the duplicate point is asserted by
-  // the pipeline tests, not observable from this script alone without a
-  // Grafana/AE reader.
+  // Exit criterion 4: the same body twice, seconds apart. Both must
+  // answer 2xx; dedupe itself is asserted by the pipeline tests.
   const text = readFileSync(`${ROOT}otlp/json/zero-timestamp.json`, "utf8");
   const headers = { "x-o11y-secret": EXPORT_SECRET, "content-type": "application/json" };
   await post("/telemetry/v1/logs", text, headers);
