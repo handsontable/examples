@@ -1,30 +1,19 @@
 /**
- * ADR-0042 (example analytics) — what a resolved example's `example.*`
- * attribute bag looks like, computed once per real navigation (never per
- * render) at the `App.tsx` example-resolve path (`loadWorkspace`).
- *
- * Import-free, same reason as `tier1Report.ts`/`demoEventReport.ts`: those
- * files pull in packages `node --test` cannot resolve the way `App.tsx`
- * does, so the decision logic is split out here to stay unit-testable by
- * `pipeline/example-analytics-taxonomy.test.mjs`. `HotAttrs`'s `ht_major`/
- * `framework`/etc. types are mirrored structurally as plain `string`, not
- * imported, for the same reason.
+ * ADR-0042 (example analytics) — the resolved example's `example.*`
+ * attribute bag, computed once per real navigation at `App.tsx`'s
+ * `loadWorkspace`. Import-free so it stays unit-testable directly.
  */
 
 /** ADR-0042 §1's closed `kind` set. */
 export type ExampleKind = "docs" | "starter" | "saved" | "import" | "payload";
 
 /** ADR-0042 §1's closed `entry`/`reason` set for `example.open` only —
- *  `example.engaged`/`.forked`/`.saved`/`.shared`/`.downloaded` carry no
- *  `reason` at all (§5: `EXAMPLE_ACTION`'s blobs list excludes it, and
- *  `toAePoint` throws if a caller sets `reason` on a metric with no such
- *  slot). */
+ *  other `example.*` events carry no `reason` (`toAePoint` throws if set). */
 export type ExampleOpenReason = "deep-link" | "picker" | "switch" | "version-switch" | "fork";
 
-/** `App.tsx`'s `loadWorkspace(nextEntry, nextFiles, lineage)` lineage
- *  prefixes (DEV-2859's own redaction comment names them): `catalog:<fw>`,
+/** `App.tsx`'s `loadWorkspace` lineage prefixes: `catalog:<fw>`,
  *  `docs:<bucket>:<path>`, `import:<provider>`, `payload:<source>`, or a
- *  bare saved-demo id carrying no colon at all. */
+ *  bare saved-demo id with no colon. */
 export function kindOfLineage(lineage: string): ExampleKind {
   const colon = lineage.indexOf(":");
   const prefix = colon === -1 ? "" : lineage.slice(0, colon);
@@ -44,11 +33,9 @@ export function kindOfLineage(lineage: string): ExampleKind {
   }
 }
 
-/** The loaded docs-example manifest entry's fields `example.*` needs —
- *  `guide` (130 unique guides, the "top guides" grouping key — NOT
- *  `docsPath`, which is per-example and, for a deep link, comes straight off
- *  the URL, which the task's own Traps forbid reading taxonomy from),
- *  `breadcrumb[0]` (area) and `framework` (already distinguishes JS/TS). */
+/** The loaded docs-example manifest fields `example.*` needs: `guide` (the
+ *  "top guides" grouping key, not `docsPath`), `breadcrumb[0]` (area) and
+ *  `framework`. */
 export interface DocsExampleMeta {
   guide: string;
   area: string;
@@ -67,13 +54,10 @@ export interface ExampleTaxonomy {
 export interface ExampleTaxonomyInput {
   /** The exact `lineage` string passed to `loadWorkspace`. */
   lineage: string;
-  /** `entry.framework` — used for every kind except `docs`, where the
-   *  loaded docs-example entry's own `framework` is more precise (it
-   *  already distinguishes a JS example from its TS variant, ADR-0042 §1). */
+  /** `entry.framework` — except for `docs`, where the loaded docs-example
+   *  entry's own `framework` is more precise (distinguishes JS/TS). */
   framework: string;
-  /** `hot.ht_major` already resolved by the caller (`selectedReleaseMajor`/
-   *  `isNextPrereleaseVersion`, both `@handsontable/demo-runtime` — kept out
-   *  of this file's own imports). */
+  /** `hot.ht_major` already resolved by the caller. */
   htMajor: string;
   /** The docs/starter bucket in play (`18.1`, `next`, …), when known. */
   bucket?: string;
@@ -120,19 +104,14 @@ export function exampleTaxonomy(input: ExampleTaxonomyInput): ExampleTaxonomy {
 }
 
 /** `Telemetry.event("example.open", ...)`'s attrs — the only `example.*`
- *  event that carries `reason` (contract §5: `example.open`'s row alone
- *  lists it among its blobs). Empty strings for `area`/`bucket` are left out
- *  rather than sent as `""`: `toAePoint` writes an empty blob for a column
- *  it never receives, and an omitted key is indistinguishable from that at
- *  ingest, so this is purely about not shipping a needless empty header. */
+ *  event carrying `reason` (contract §5). Empty `area`/`bucket` are
+ *  omitted rather than sent as `""`. */
 export function exampleOpenAttrs(taxonomy: ExampleTaxonomy, reason: ExampleOpenReason): Record<string, string> {
   return { ...exampleActionAttrs(taxonomy), reason };
 }
 
 /** `Telemetry.event("example.<action>", ...)`'s attrs for every OTHER
- *  `example.*` metric (`engaged`/`forked`/`saved`/`shared`/`downloaded`,
- *  contract §5's `EXAMPLE_ACTION` row) — no `reason` field, since none of
- *  their registry rows list one and `toAePoint` throws if it is sent anyway. */
+ *  `example.*` metric — no `reason` field (`toAePoint` throws if sent). */
 export function exampleActionAttrs(taxonomy: ExampleTaxonomy): Record<string, string> {
   const out: Record<string, string> = {
     kind: taxonomy.kind,
@@ -145,32 +124,17 @@ export function exampleActionAttrs(taxonomy: ExampleTaxonomy): Record<string, st
   return out;
 }
 
-/**
- * ADR-0042 T12-D2 fix — the one-shot URL marker `onFork`'s navigation to
- * `/edit/:id` leaves behind, so the saved-demo load effect can classify
- * that landing's `example.open` as `fork` rather than `deep-link`.
- *
- * `onFork` does a full `location.href` navigation — the same hard-reload
- * pattern `App.tsx` already uses for every other route change (`/my-demos`,
- * `/admin`, `/guide`, …), never client-side routing — which destroys every
- * in-memory flag (React state, a module-level ref, all of it) before the
- * new page's first render. The contract also keeps this path off browser
- * storage (no `localStorage`/`sessionStorage`), so a URL param, read once
- * and stripped immediately, is the only signal that survives the
- * navigation exactly once.
- */
+/** ADR-0042 — the one-shot URL marker `onFork`'s navigation leaves behind,
+ *  so the saved-demo load effect can classify the landing as `fork`. Not
+ *  browser storage: a full-reload navigation destroys any in-memory flag. */
 export const FORK_LANDING_PARAM = "fork";
 
 /**
- * Reads whether `search` (a `location.search`-shaped string, with or
- * without the leading `?`) carries the one-shot fork marker, and returns
+ * Reads whether `search` carries the one-shot fork marker, and returns
  * `search` with it removed. The caller writes that back via
- * `history.replaceState` immediately — before anything async runs — so a
- * manual reload of the same URL, or a second run of the same effect, never
- * re-reads it (idempotent: calling this again on the already-stripped
- * `search` returns `isFork: false` and the same string back unchanged).
- * Pure — no `URL`/`history` access — so this is unit-testable without a
- * browser (`pipeline/example-analytics-taxonomy.test.mjs`).
+ * `history.replaceState` before anything async runs, so a reload or a
+ * second effect run never re-reads it (idempotent). Pure — no
+ * `URL`/`history` access — so this is unit-testable without a browser.
  */
 export function consumeForkMarker(search: string): { isFork: boolean; search: string } {
   const params = new URLSearchParams(search);
@@ -181,11 +145,8 @@ export function consumeForkMarker(search: string): { isFork: boolean; search: st
 }
 
 /** Dedup key for "one `example.open` per resolved example, none on
- *  re-render" — an effect that re-runs for an unrelated reason (a
- *  `nextVersion` resolve, a `versionsResolved` flip) must not re-fire the
- *  same open. Keyed on the lineage plus the pinned HT version: identical
- *  lineage + identical version is the same open; identical lineage with a
- *  different version is a real `version-switch`. */
+ *  re-render" — keyed on lineage + pinned HT version, so a version change
+ *  is a real `version-switch`, not a re-fire. */
 export function exampleOpenKey(lineage: string, version: string): string {
   return `${lineage}\u0000${version}`;
 }

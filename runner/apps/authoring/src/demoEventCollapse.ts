@@ -1,80 +1,22 @@
-// F26: the edit-burst collapse in front of the facade's demo-runtime reports.
+// The edit-burst collapse in front of the facade's demo-runtime reports.
 //
-// The Tier-1 preview re-runs on every keystroke, so typing ONE throwing line
-// relays the whole keystroke-prefix ladder: `s is not defined`, `se is not
-// defined`, …, a run of half-typed syntax errors, and only then the error the
-// finished line actually throws. Before this module each rung became its own
-// `preview.runtime_error` point (a 30-minute traffic run: 415 points for 10
-// edits), so the metric counted typing speed, not broken demos.
+// The Tier-1 preview re-runs on every keystroke, so one throwing line would
+// otherwise relay a whole keystroke-prefix ladder; only the last run before
+// the editor goes quiet counts. An edit (`noteEdit`) opens/extends a burst,
+// holding one report per key (§7 fingerprint) until `settleMs` after the
+// last edit, when the final run's reports emit once each. A compile failure
+// (`replacesRun`) drops the held reports and suppresses later non-compile
+// ones, so a syntax error counts as one `sandpack.compile_error`.
 //
-// The rule: **only the last run before the editor goes quiet counts.**
-//
-// - An edit (`noteEdit`) opens or extends a burst. Everything the preview
-//   reported since the previous edit belongs to a run the user has already
-//   typed past, so it is discarded — that is what removes the ladder.
-// - While a burst is open, reports are held back, one per key (the caller
-//   passes the §7 fingerprint of the relayed message). A `console.error`
-//   carrying an Error is already relayed by the in-preview reporter on the
-//   error channel with the Error's own message (DEV-2552), so it shares the
-//   throw's key and counts once. A console line with different text — React
-//   18's "The above error occurred in …" boundary log, or prose passed to
-//   `console.error` — is a different key and counts separately.
-// - `settleMs` after the LAST edit the burst closes and whatever the final run
-//   reported is emitted, once per key.
-// - Outside a burst (a preview's first load, a click that throws, a Tier-2
-//   rebuild whose errors land after the burst closed) a report is emitted
-//   immediately.
-// - A key emitted once is not emitted again until the next edit or `reset` —
-//   "counted exactly once per edit burst", and a button that throws on every
-//   click counts once between edits, not once per click.
-//
-// Why not the Sentry side's ladder handling: there is none at the count
-// level. Sentry collapses the ladder into one ISSUE (`normalizeMonitorMessage`
-// rule 1, DEV-2853) but still receives one EVENT per rung, capped only by the
-// page-load `MONITOR_EVENT_CEILING` budget — which is exactly where the "20
-// points per typed line" came from. And fingerprint-only dedupe cannot remove
-// the ladder either: one typed line walks through several distinct shapes
-// (`<ident> is not defined`, `Unexpected token`, `Unterminated string…`, the
-// final throw), each a different fingerprint.
-//
-// Known imprecision, bounded: a report from a superseded run that is still in
-// flight when the last keystroke lands (compile slower than the typist) is
-// held with the final run's reports, since nothing on the relay says which
-// run a report came from. That costs at most the one or two runs in flight at
-// the last keystroke — a small constant per burst, not one point per rung.
-//
-// Tier 2 is covered less tightly. A container rebuild takes seconds (longer
-// than `DEMO_EDIT_SETTLE_MS`), so a superseded rebuild's report can land
-// after the burst has closed and is then emitted at once, one per distinct
-// fingerprint. Rule 1 of `normalizeMonitorMessage` folds most `is not
-// defined` rungs into one fingerprint, which keeps this small.
-//
-// A compile failure is a run that never happened (R9C, F10 compile half). When
-// the newest edit does not compile (the parcel pre-transpile's babel error, or
-// a bundler diagnostic), nothing of it reaches the preview, so everything the
-// preview relays for the rest of the burst is from code already typed past —
-// a keystroke-prefix rung still in flight, or a re-render warning. That
-// compile report is passed with `replacesRun`: it drops whatever the burst is
-// holding, and every later report of the burst that is not itself a compile
-// failure, so a typed syntax error counts as one `sandpack.compile_error` and
-// as no `preview.runtime_error`. The caller keys it by kind, not by message:
-// a burst ends in one final state, so it holds at most one compile error, and
-// a later one replaces an earlier one. The next edit re-arms runtime reports.
-//
-// Import-free, and every clock/timer injected, for the same reason as
-// `demoEventReport.ts`: `sentry.ts` imports `@sentry/react`, so `node --test`
-// can only pin this logic from a module that imports nothing
-// (`pipeline/demo-event-collapse.test.mjs`).
+// Import-free, clock/timer injected, so `node --test` can pin this logic.
 
 /** How long the editor must stay quiet before a burst closes. Longer than a
  *  mid-line pause while typing, short enough that the point still lands in
  *  the same dashboard interval as the edit. */
 export const DEMO_EDIT_SETTLE_MS = 2000;
 
-/** Hard ceiling on emitted reports per collapse instance (one per page load).
- *  The collapse bounds honest typing; this bounds a demo that posts crafted,
- *  ever-different payloads at the parent with no edit in between (the same
- *  threat `createMonitorBudget`'s doc comment describes). */
+/** Hard ceiling on emitted reports per collapse instance. Bounds a demo
+ *  that posts crafted, ever-different payloads with no edit in between. */
 export const DEMO_COLLAPSE_CEILING = 50;
 
 /** Distinct keys held for one burst. Anything past this is dropped — the

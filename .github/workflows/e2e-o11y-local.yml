@@ -1,7 +1,7 @@
 name: E2E — o11y local integration
 
 # CI home for the two gated specs docs/TESTING.md's "every gate must have a
-# workflow home" rule left unhomed (R1-followups task 2):
+# workflow home" rule left unhomed:
 #
 #   e2e/telemetry-metrics.spec.ts  (E2E_LIVE=1 + E2E_TELEMETRY=1) — a real
 #     local API worker (`wrangler dev`, Docker for the Tier-2 Sandbox
@@ -13,7 +13,7 @@ name: E2E — o11y local integration
 #     `page.route` mocks, which is what ci.yml's `e2e-telemetry` job already
 #     covers for telemetry-faro.spec.ts/example-analytics.spec.ts. Its own
 #     traffic is Tier-1 (Sandpack) only, so its API worker runs with
-#     `--enable-containers=false` (V-triage F1) — no Tier-2 container image.
+#     `--enable-containers=false` — no Tier-2 container image.
 #
 # Both specs document (in their own file header) the exact local setup this
 # workflow automates; see there for the "why" of each step.
@@ -49,7 +49,7 @@ on:
       - 'runner/workers/o11y/**'
       - 'runner/containers/o11y/**'
       - 'runner/apps/authoring/src/telemetry/**'
-      # B-I3: e2e/telemetry-metrics.spec.ts boots a real local API worker
+      # e2e/telemetry-metrics.spec.ts boots a real local API worker
       # (runner/workers/api) and asserts against it directly; both specs
       # also exercise the shared @handsontable/demo-runtime telemetry code
       # (runner/packages/**) that workers/api/src/analytics.ts and
@@ -77,7 +77,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ---- e2e/telemetry-metrics.spec.ts (T07 phase 2) --------------------------
+  # ---- e2e/telemetry-metrics.spec.ts -----------------------------------------
   telemetry-metrics:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -163,7 +163,7 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-  # ---- e2e/o11y-local.spec.ts (T11) ------------------------------------------
+  # ---- e2e/o11y-local.spec.ts -------------------------------------------------
   o11y-local:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -206,12 +206,10 @@ jobs:
 
       - run: pnpm build
 
-      # T1: no more separate `minio-init` one-shot container (its image,
-      # quay.io/minio/mc, stopped being pullable along with quay.io/minio/minio
-      # itself) — `minio` now creates its own `loki` bucket via
+      # No separate `minio-init` one-shot container: quay.io/minio/mc is not
+      # pullable. `minio` creates its own `loki` bucket via
       # MINIO_DEFAULT_BUCKETS before its healthcheck goes green, so `--wait`
-      # (block until every named service is healthy/running) replaces
-      # waiting on the old init container's exit code.
+      # (block until every named service is healthy/running) is sufficient.
       - name: Start local ClickHouse + MinIO (Analytics Engine stand-in)
         run: docker compose -f containers/o11y/compose.yml up -d --wait minio clickhouse
 

@@ -64,9 +64,8 @@ export interface BudgetSettings {
   enforce: boolean;
   alertsUsd: number[];
   /** ADR-0041 §G: the o11y stack's own monthly ceiling (default $15),
-   *  separate from `limitUsd` — see settings.ts's own doc comment. Optional:
-   *  an API response from before ADR-0041 §G shipped won't carry it, and the
-   *  panel must render that older payload rather than crash on it. */
+   *  separate from `limitUsd`. Optional: an older API response won't
+   *  carry it, so the panel must render without crashing. */
   o11yBudgetUsd?: number;
   source?: "defaults" | "override";
   updatedAt?: string | null;
@@ -99,9 +98,8 @@ interface UsageReport {
     enforced: boolean;
   };
   /** ADR-0041 §G: "`/admin` shows app, observability and total." Optional:
-   *  an API worker deployed before this landed won't send it (rolling
-   *  deploys mean an older Worker can serve a newer authoring bundle), so
-   *  the panel renders without this line rather than crashing on it. */
+   *  an older-deployed API worker won't send it; the panel renders
+   *  without this line rather than crashing. */
   o11y?: {
     spendUsd: number;
     capUsd: number;
@@ -127,22 +125,10 @@ interface UsageReport {
 
 const WINDOWS = [7, 30, 90];
 
-/** `import.meta.env.VITE_GRAFANA_URL` — on the deployed zone the authoring
- *  app and the o11y worker share one origin, so a plain `/grafana/` reaches
- *  it (the fallback, and what a production build with no env produces).
- *  Locally the authoring app runs on Vite and the o11y worker on its own
- *  port, with no dev-server proxy for `/grafana` (Grafana's own
- *  `GF_SERVER_ROOT_URL` is the o11y worker's origin, so proxying would just
- *  bounce its redirects) — `scripts/dev-lib.mjs`'s `--tier=full` plan sets
- *  this env var to that worker's `http://localhost:<O11Y_DEV_PORT>/grafana/`
- *  so the link (and the DEV_ADMIN login bypass it relies on) works there too,
- *  injected as process env for the dev server only (never written to a
- *  file), the same way that plan injects `VITE_API_BASE`/`VITE_DEV_USER`.
- *  Unlike `VITE_TELEMETRY_LOCAL`, `pnpm check:telemetry-leak` does NOT check
- *  for this one — nothing here needs dead-code elimination to be safe, so a
- *  stray `VITE_GRAFANA_URL` in a hand-edited `.env.local` would bake its
- *  value into a "production" build undetected. Don't set it outside
- *  `dev-lib.mjs`. See docs/run-and-deploy.md's "Browsing logs" section. */
+/** `import.meta.env.VITE_GRAFANA_URL` — on the deployed zone a plain
+ *  `/grafana/` reaches the o11y worker (same origin); locally
+ *  `scripts/dev-lib.mjs` sets this to the worker's own dev port. Not
+ *  covered by `check:telemetry-leak` — don't set it outside dev-lib.mjs. */
 const GRAFANA_URL = import.meta.env.VITE_GRAFANA_URL || "/grafana/";
 
 const usd = (n: number): string => (n >= 100 ? `$${n.toFixed(0)}` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`);

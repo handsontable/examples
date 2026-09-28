@@ -1,43 +1,9 @@
 #!/usr/bin/env node
-// A durable post-build leak check for T06's local-telemetry path (contract §10:
-// "a post-build leak check fails if the local path survives into it").
-//
-// Builds nothing — run it against an already-built `apps/authoring/dist/` (T10
-// wires it into CI right after the production build step, the same way
-// `check-compiler-chunk.mjs` is already run there).
-//
-// What it greps for and why each string is a genuine sentinel, not an
-// incidental match:
-//
-//  - `__test_crash_boundary` / `T06 e2e render-crash probe` — `main.tsx`'s
-//    `CrashProbe` test seam (T06-D3). Its whole `if` guard is gated on
-//    `import.meta.env.VITE_TELEMETRY_LOCAL === "1"`, a build-time constant Vite
-//    replaces literally — `"1" === "1"` when built WITH the flag (folds true,
-//    keeps the branch and its string literals reachable) vs `undefined ===
-//    "1"` when built WITHOUT it (folds false, and Rollup's dead-code
-//    elimination removes the whole branch, literals included — measured, not
-//    assumed, see the task file's T06-D3). Finding either string in a
-//    production `dist/` means either the flag leaked into the build, or DCE
-//    stopped eliminating the branch — both are the leak this check exists to
-//    catch.
-//  - `VITE_TELEMETRY_LOCAL` itself — the raw env-var NAME never has a reason to
-//    survive minification as a string (Vite replaces `import.meta.env.X`
-//    reads with the value, not the name); if it appears literally, something
-//    is reading it dynamically (e.g. `import.meta.env["VITE_TELEMETRY_LOCAL"]`
-//    or a debug dump) in a way the static replacement cannot fold away.
-//  - `__t06SentryCapture` / `__t06ReportDemoEvent` — `sentry.ts`'s fix-round-I3
-//    e2e-only hooks (the local-test `Sentry.init()` transport spy and the
-//    `reportDemoEvent` test bypass). Gated by the same `localTestSentryEnabled()`
-//    (`VITE_TELEMETRY_LOCAL === "1"` + localhost/127.0.0.1) as the CrashProbe
-//    seam, same dead-code-elimination guarantee.
-//  - `__t06Telemetry` — `faro.ts`'s Z-D-H1 e2e-only hook (the facade's
-//    `event`/`metric`, exposed so `e2e/telemetry-faro.spec.ts` can prove
-//    repeat pushes are not deduped). Gated on the same build-time+host pair
-//    inline in `faro.ts` (it does not import `sentry.ts`, to avoid a cycle),
-//    same dead-code-elimination guarantee.
-//
-// Exit 0 and prints "ok" when none of the sentinels are found; exit 1 and
-// lists every match otherwise.
+// A durable post-build leak check for the local-telemetry path (contract
+// §10). Builds nothing — run against an already-built
+// `apps/authoring/dist/` (CI wires it in right after the production
+// build). Exit 0 ("ok") when no sentinel is found; exit 1 and lists every
+// match otherwise.
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -56,6 +22,9 @@ if (!existsSync(assetsDir)) {
   process.exit(1);
 }
 
+// Each sentinel is a string that only survives in a production dist/ if
+// dead-code elimination failed or the local-telemetry flag leaked in —
+// see main.tsx/sentry.ts/faro.ts for where each one is gated.
 const SENTINELS = [
   "__test_crash_boundary",
   "T06 e2e render-crash probe",

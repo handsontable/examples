@@ -1,20 +1,8 @@
-// Shared logic for `runner/scripts/dev.mjs` (`pnpm dev`/`dev:live`/`dev:full`)
-// and `runner/scripts/o11y-dev.mjs` (`pnpm o11y:dev`, the standalone o11y-only
-// entry point — see that file for why it still exists as its own command).
-//
+// Shared logic for `runner/scripts/dev.mjs` and `runner/scripts/o11y-dev.mjs`.
 // Every function here is pure or takes its side effects (fs, exec, spawn) as
 // injectable parameters, so `pipeline/dev-script.test.mjs` can exercise the
-// real logic with stub binaries instead of spawning `wrangler`/`docker`/`vite`
-// for real. See `runner/docs/run-and-deploy.md`'s "Run locally" section for
-// the user-facing walkthrough this module implements.
-//
-// Env vars this module reads (kept in sync with docs/run-and-deploy.md by
-// `pipeline/dev-script.test.mjs`'s drift test — grep this file for `env.` if
-// you add one, and add it to the doc in the same commit):
-//   AUTHORING_DEV_PORT, API_DEV_PORT, API_DEV_INSPECTOR_PORT,
-//   O11Y_DEV_PORT, O11Y_DEV_INSPECTOR_PORT, O11Y_MINIO_PORT,
-//   O11Y_MINIO_CONSOLE_PORT, O11Y_CLICKHOUSE_PORT, O11Y_CLICKHOUSE_NATIVE_PORT,
-//   O11Y_SLACK_CAPTURE_PORT, COMPOSE_PROJECT_NAME, WRANGLER_REGISTRY_PATH
+// real logic with stub binaries. Env vars read here are kept in sync with
+// `runner/docs/run-and-deploy.md` by that test's own drift check.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync } from "node:fs";
 import path from "node:path";
@@ -235,27 +223,13 @@ const defaultFs = { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync }
 
 /**
  * Copies `examplePath` to `devVarsPath` ONLY when `devVarsPath` does not
- * already exist — an existing `.dev.vars` (a developer's own edits, real
- * secret values they pasted in) is never touched or overwritten.
+ * already exist — an existing file is never touched or overwritten.
  *
- * On a fresh copy only:
- *  - `patch` fills in KNOWN-inert local placeholder lines (present in the
- *    example as an empty `KEY=`) with a real, non-secret local-dev value —
- *    e.g. DEV_ADMIN, or AE_SQL_TOKEN/LOKI_S3_* matching the exact defaults
- *    `containers/o11y/compose.yml` already documents as its own local
- *    fallbacks. A key is only patched if the example declared it EMPTY;
- *    never overwrites a non-empty line.
- *  - `stripKeys` removes an empty `KEY=` line entirely from the freshly
- *    copied file, for a key the caller intends to inject per-run via
- *    `--var` (an ephemeral secret — see `dev.mjs`'s O11Y_SESSION_SECRET
- *    handling). This is required because wrangler's `.dev.vars` always
- *    wins over a same-named `--var`, even when the `.dev.vars` value is
- *    empty (confirmed against wrangler 4.108's `getVarsForDev`, which
- *    unconditionally overwrites `result[key]` for every entry actually
- *    present in `.dev.vars`) — so a declared-but-empty key would silently
- *    swallow the `--var` override. Stripping the line makes the key
- *    undeclared, restoring `--var` as the only source. This function never
- *    writes an actual secret value to disk for a stripped key.
+ * On a fresh copy only: `patch` fills declared-EMPTY placeholder lines
+ * (e.g. DEV_ADMIN) with a real non-secret local-dev value; `stripKeys`
+ * removes an empty `KEY=` line entirely, for a key injected per-run via
+ * `--var` — wrangler's `.dev.vars` always wins over `--var` even when
+ * empty, so a declared-but-empty key would silently swallow the override.
  *
  * @returns {{ created: boolean, patched: string[], stripped: string[] }}
  */
@@ -290,26 +264,14 @@ export function bootstrapDevVars({ examplePath, devVarsPath, patch = {}, stripKe
 }
 
 /**
- * `workers/o11y/.dev.vars.example`'s inert local placeholders, patched to a
- * real non-secret local-dev value ONLY on first bootstrap (see
- * `bootstrapDevVars`'s doc comment). `SLACK_WEBHOOK_URL` is baked at
- * PORT_DEFAULTS.O11Y_SLACK_CAPTURE_PORT (not injected via `--var`, which
- * would be silently overridden by this same declared-but-empty line — see
- * `bootstrapDevVars`'s stripKeys doc comment for the precedence rule this
- * works around); `checkDevVarsPortDrift` warns if a run overrides that port.
- * `O11Y_EXPORT_SECRET`/`SENTRY_HOOK_SECRET` are deliberately NOT here — this
- * `patch` only ever fires on a FRESH bootstrap (`bootstrapDevVars` never
- * touches a file that already exists), and F21 (fix round R4) needs these two
- * filled on a PRE-EXISTING `.dev.vars` too (a file bootstrapped before this
- * fix shipped still declares them empty forever otherwise). See
- * `fillEmptyDevVarsSecrets` below instead: same non-"real"-secret local-only
- * value as `O11Y_SESSION_SECRET` (`ephemeralSecret()`, a fresh 32-byte hex
- * string, never a pasted-in production credential), but persisted into
- * `.dev.vars` rather than injected fresh via `--var` every run — unlike a
- * session-signing key, rotating these on every restart buys nothing (they
- * only gate local fixture replay) and would break the standalone
- * `node scripts/o11y-replay-fixtures.mjs` invocation the F21 repro names,
- * which has no running `dev.mjs` process to inherit a `--var` value from.
+ * `workers/o11y/.dev.vars.example`'s inert local placeholders, patched to
+ * a real non-secret local-dev value ONLY on first bootstrap.
+ * `SLACK_WEBHOOK_URL` is baked at PORT_DEFAULTS.O11Y_SLACK_CAPTURE_PORT
+ * (not via `--var`, which the declared-but-empty line would override).
+ * `O11Y_EXPORT_SECRET`/`SENTRY_HOOK_SECRET` are deliberately NOT here —
+ * this `patch` only fires on a FRESH bootstrap; `fillEmptyDevVarsSecrets`
+ * below fills those two on a pre-existing file too, persisted rather than
+ * injected via `--var` (which a standalone script invocation can't inherit).
  */
 export function o11yDevVarsPatch(ports) {
   return {
@@ -323,16 +285,14 @@ export function o11yDevVarsPatch(ports) {
 
 /** A key this run injects via `--var` that `bootstrapDevVars` must strip
  *  (if freshly created) from `workers/o11y/.dev.vars` — see that function's
- *  doc comment. Applies even when the key does not exist yet on this branch
- *  (K1's O11Y_SESSION_SECRET addition, still unmerged as of this task) —
+ *  doc comment. Applies even when the key does not exist yet in the file —
  *  stripping a line that isn't there is a no-op. */
 export const O11Y_DEVVARS_STRIP_KEYS = ["O11Y_SESSION_SECRET"];
 
-/** F21 (fix round R4): the two gate secrets `scripts/o11y-replay-fixtures.mjs`
- *  needs and that `workers/o11y/.dev.vars.example` declares empty by
- *  default — see `fillEmptyDevVarsSecrets`'s doc comment for why these are
- *  filled in place rather than stripped-and-`--var`'d like
- *  `O11Y_DEVVARS_STRIP_KEYS`. */
+/** The two gate secrets `scripts/o11y-replay-fixtures.mjs` needs and that
+ *  `workers/o11y/.dev.vars.example` declares empty by default — see
+ *  `fillEmptyDevVarsSecrets`'s doc comment for why these are filled in
+ *  place rather than stripped-and-`--var`'d like `O11Y_DEVVARS_STRIP_KEYS`. */
 export const O11Y_DEVVARS_AUTOFILL_SECRET_KEYS = ["O11Y_EXPORT_SECRET", "SENTRY_HOOK_SECRET"];
 
 /**
@@ -344,10 +304,10 @@ export const O11Y_DEVVARS_AUTOFILL_SECRET_KEYS = ["O11Y_EXPORT_SECRET", "SENTRY_
  * `keys` are currently empty.
  *
  * Unlike `bootstrapDevVars`'s `patch`, this runs on EVERY invocation, not
- * only a fresh bootstrap: F21's own finding is a `.dev.vars` that was
- * bootstrapped before this function existed, so its `O11Y_EXPORT_SECRET=`/
- * `SENTRY_HOOK_SECRET=` lines are empty and `bootstrapDevVars` alone (which
- * refuses to touch a file that already exists) can never reach them.
+ * only a fresh bootstrap, so a `.dev.vars` that predates this function (its
+ * `O11Y_EXPORT_SECRET=`/`SENTRY_HOOK_SECRET=` lines still empty) still gets
+ * filled — `bootstrapDevVars` alone refuses to touch a file that already
+ * exists.
  *
  * @returns {{ filled: string[] }}
  */
@@ -367,25 +327,15 @@ export function fillEmptyDevVarsSecrets({ devVarsPath, keys, generate = ephemera
 }
 
 /**
- * Resolves a `.dev.vars` key that pins a `host:port` value (`PREVIEW_HOST`,
- * `SLACK_WEBHOOK_URL`) against the port this run otherwise resolved.
- * Wrangler's `.dev.vars` always wins over `--var` for a key it declares (see
- * this file's module doc comment), so when the declared port disagrees with
- * this run's resolved port, the `.dev.vars` value is the one that will
- * actually be reached regardless of what this script decided — a bare
- * warning that leaves the script pointed at the WRONG port (e.g. the vite
- * proxy's `API_DEV_PORT`) is what produced the original port-drift bug.
+ * Resolves a `.dev.vars` key that pins a `host:port` value
+ * (`PREVIEW_HOST`, `SLACK_WEBHOOK_URL`) against the port this run resolved.
+ * `.dev.vars` always wins over `--var`, so a disagreeing declared port is
+ * the one that will actually be reached — a bare warning would leave the
+ * script pointed at the WRONG port.
  *
- * `explicit` says whether the developer explicitly overrode this port's env
- * var for THIS run (e.g. `API_DEV_PORT` set in the environment):
- *  - `explicit: false` (the common case — no override) ADOPTS the
- *    `.dev.vars`-declared port: `.dev.vars` was already going to win, so
- *    matching it is what makes every OTHER piece this script controls (the
- *    worker's own `--port`, the vite proxy target, the printed URLs) agree
- *    with reality instead of silently disagreeing with it.
- *  - `explicit: true` WARNS instead and leaves `currentPort` alone — an
- *    explicit override is the developer's deliberate choice; silently
- *    discarding it in favor of the file would be the surprising direction.
+ * `explicit: false` (no override) ADOPTS the declared port, so every other
+ * piece this script controls agrees with reality; `explicit: true` WARNS
+ * and leaves `currentPort` alone — a deliberate override is never discarded.
  *
  * @returns {{ port: number, adopted: boolean, message: string|null }}
  */
@@ -429,35 +379,13 @@ export function checkDevVarsPortDrift(devVarsPath, key, expectedPort, fs = defau
 }
 
 /**
- * Re-review 2, NB8: an `workers/o11y/.dev.vars` bootstrapped BEFORE this
- * task's `DEV_ADMIN`/`O11Y_SESSION_SECRET` handling existed (e.g. by the old
- * standalone `o11y-dev.mjs`, which copied `.dev.vars.example` verbatim) has
- * both declared EMPTY: `DEV_ADMIN=` and `O11Y_SESSION_SECRET=`. Neither
- * `bootstrapDevVars` (only acts on a FRESH file) nor the `O11Y_ENV=local`
- * check above catches this — the run starts, looks normal, and then
- * `/grafana/_o11y/login` answers 500 (the declared-but-empty
- * `O11Y_SESSION_SECRET` line silently wins over this run's own `--var`, the
- * same `.dev.vars`-always-wins quirk `checkDevVarsPortDrift` guards
- * elsewhere) with the local session bypass ALSO off (`DEV_ADMIN` empty).
- * Warns for either case; does not fix the file itself — same "advisory, not
- * fatal" posture as `checkDevVarsPortDrift`.
- *
- * P1-logs: the exact same stale-bootstrap shape breaks two more keys, found
- * while wiring up the Logs dashboard's live verification — an old
- * `.dev.vars` from before `o11yDevVarsPatch` grew `SLACK_WEBHOOK_URL`/
- * `AE_SQL_TOKEN` (both still declared empty in
- * `workers/o11y/.dev.vars.example`, same as `DEV_ADMIN`/`O11Y_SESSION_SECRET`)
- * has `SLACK_WEBHOOK_URL=` (the local Slack-capture warning webhook,
- * `o11y-slack-capture.mjs`) and/or `AE_SQL_TOKEN=` (the local ClickHouse
- * auth token the Logs/Runner-overview/Observability-self dashboards' AE
- * queries depend on) declared but empty — same silent-string-wins-over-`
- * --var`-like failure mode, just surfacing as a broken local Slack capture
- * and a 401/empty ClickHouse panel instead of a 500. On a genuinely FRESH
- * bootstrap neither key is ever left empty: `o11yDevVarsPatch` (used as
- * `bootstrapDevVars`'s `patch` argument by both `dev.mjs` and
- * `o11y-dev.mjs`) already fills both with a real local-dev value the same
- * pass that fills `DEV_ADMIN` — this function only ever fires for the STALE
- * case, an existing file this run's bootstrap never touches.
+ * An `workers/o11y/.dev.vars` bootstrapped before `DEV_ADMIN`,
+ * `O11Y_SESSION_SECRET`, `SLACK_WEBHOOK_URL` or `AE_SQL_TOKEN` existed can
+ * declare any of the four EMPTY — a declared-but-empty line silently wins
+ * over this run's own `--var`, so `/grafana/_o11y/login` 500s, Slack
+ * capture is off, or an AE panel 401s/renders empty. Warns for each case;
+ * does not fix the file (advisory, not fatal). Only fires for a STALE
+ * file — `o11yDevVarsPatch` fills all four on a fresh bootstrap.
  * @returns {string[]} zero or more warning lines
  */
 export function checkO11yDevVarsStaleness(devVarsPath, fs = defaultFs) {
@@ -497,16 +425,12 @@ export function checkO11yDevVarsStaleness(devVarsPath, fs = defaultFs) {
 }
 
 /**
- * F21 (fix round R4): resolves a fixture-replay gate secret
- * (`O11Y_EXPORT_SECRET`/`SENTRY_HOOK_SECRET`) the way
- * `scripts/o11y-replay-fixtures.mjs` needs it — the environment value first
- * (covers `dev.mjs --replay`, which spawns the replay script as a child
- * process and so inherits `dev.mjs`'s own env), falling back to reading the
- * value straight out of `devVarsPath` (covers a fully standalone
- * `node scripts/o11y-replay-fixtures.mjs` invocation, from a separate shell
- * with no `dev.mjs` process to inherit an env var from — `dev.mjs`'s own
- * `fillEmptyDevVarsSecrets` call is what keeps that file's copy non-empty).
- * `""` when neither source has it, same as an unset env var read directly.
+ * Resolves a fixture-replay gate secret
+ * (`O11Y_EXPORT_SECRET`/`SENTRY_HOOK_SECRET`) — the environment value
+ * first (covers `dev.mjs --replay`, a child process that inherits it),
+ * falling back to `devVarsPath` (a standalone
+ * `node scripts/o11y-replay-fixtures.mjs` run, with no `dev.mjs` process
+ * to inherit from). `""` when neither source has it.
  */
 export function resolveReplaySecret(envValue, devVarsPath, key, readLine = readDevVarsLine) {
   return envValue || readLine(devVarsPath, key) || "";
@@ -525,15 +449,11 @@ export function readDevVarsLine(devVarsPath, key, fs = defaultFs) {
 }
 
 /**
- * The origin `gates/session.ts#publicOrigin`/`grafana/login.ts` build the
- * broker `return_to` against, and the `aud` every locally-minted session
- * token is bound to (K1: `O11Y_ENV === "local"` only — see that file's own
- * doc comment). Grafana is served from the o11y worker's OWN origin
- * (`/grafana/*`, not proxied through the authoring app), so this must track
- * `O11Y_DEV_PORT`, not `AUTHORING_DEV_PORT` — on a non-default o11y port,
- * `publicOrigin`'s own fallback (`http://localhost:4200`) would otherwise
- * be silently wrong and every locally-minted token would fail its own
- * `aud` check.
+ * The origin `publicOrigin`/`grafana/login.ts` build the broker `return_to`
+ * against, and the `aud` every locally-minted session token is bound to.
+ * Must track `O11Y_DEV_PORT`, not `AUTHORING_DEV_PORT` — on a non-default
+ * o11y port, `publicOrigin`'s fallback would be silently wrong and every
+ * locally-minted token would fail its own `aud` check.
  */
 export function o11yLocalPublicOrigin(ports) {
   return `http://localhost:${ports.O11Y_DEV_PORT}`;
@@ -547,8 +467,8 @@ export function ephemeralSecret(bytes = 32) {
 }
 
 /** `--var NAME:value` argument names whose value must never be echoed back
- *  to the log line `dev.mjs` prints for each spawned child (re-review 2,
- *  NB6) — this run's own ephemeral `O11Y_SESSION_SECRET` is the only one
+ *  to the log line `dev.mjs` prints for each spawned child — this run's
+ *  own ephemeral `O11Y_SESSION_SECRET` is the only one
  *  today, but a future ephemeral local secret should be added here rather
  *  than growing a second ad hoc check. Does not (and cannot, from here)
  *  keep the value out of `ps` output — an argv is visible to any local
@@ -611,12 +531,9 @@ function recordMigrationApplied(recordPath, file, fs) {
 const defaultFsWithReaddir = { ...defaultFs, readdirSync, statSync };
 
 // ---------------------------------------------------------------------------
-// Migration schema probe — adopts a local D1 that was migrated before this
-// script's applied-migrations record existed (or by hand, matching the exact
-// bug this fixes: a developer's pre-existing local D1 re-applied from 0001,
-// where 0003_cost_ledger.sql's bare `ALTER TABLE demos ADD COLUMN
-// artifacts_purged_at` — no `IF NOT EXISTS`, SQLite has no such clause for a
-// column — died with `duplicate column name`).
+// Migration schema probe — adopts a local D1 already migrated by hand (or
+// re-applied from 0001, where 0003_cost_ledger.sql's bare `ALTER TABLE`
+// has no `IF NOT EXISTS` and dies with `duplicate column name`).
 // ---------------------------------------------------------------------------
 
 /** Strips `--` line comments, then splits on `;` into individual statements.
@@ -633,19 +550,12 @@ function splitStatements(sql) {
 /**
  * Extracts a migration file's "checkable, additive" targets: `CREATE TABLE`,
  * `CREATE [UNIQUE] INDEX`, and `ALTER TABLE ... ADD [COLUMN] ...` — the
- * shapes whose effect can be checked generically against a schema snapshot
- * (`snapshotLocalSchema`/`isMigrationAlreadyApplied` below).
+ * shapes whose effect can be checked against a schema snapshot.
  *
- * Deliberately conservative: an empty file, or a file containing ANY other
- * statement shape (e.g. `DROP INDEX`, a bare `UPDATE`/`INSERT`, a table
- * `RENAME`), is marked `checkable: false` — this migrations dir has exactly
- * one such file, 0002_buildkey_nonunique.sql, whose `DROP INDEX
- * idx_demos_buildkey` exists precisely to fix a design error (a UNIQUE index
- * that should not have been unique); a name-only probe would see the OLD
- * unique index and wrongly report the file's target as "already exists",
- * skipping the very fix it exists to apply. 0002 is fully idempotent on its
- * own (`IF EXISTS`/`IF NOT EXISTS` throughout), so simply running it again is
- * correct and safe — `checkable: false` just means "don't try to skip it".
+ * Deliberately conservative: any other statement shape (`DROP INDEX`, a
+ * bare `UPDATE`/`INSERT`, a `RENAME`) marks `checkable: false` — a
+ * name-only probe could otherwise see a stale schema and wrongly skip a
+ * migration whose whole point is to fix that schema (0002_buildkey_nonunique.sql).
  *
  * @returns {{ checkable: boolean, targets: Array<
  *   {type:'table', name:string} | {type:'index', name:string} |
@@ -788,50 +698,25 @@ export function planMigrations({ migrationsDir, recordPath, fs = defaultFsWithRe
 }
 
 /**
- * Applies every pending migration, one `wrangler d1 execute --local --file=`
- * call per file (never `migrations apply --local` — see
- * docs/run-and-deploy.md for why 0003_cost_ledger.sql's bare `ALTER TABLE`
- * makes that unsafe against local bookkeeping that starts empty). Records
- * each file as applied immediately after its own call succeeds, not in one
- * batch at the end, so a failure partway through never re-applies a file
- * that already landed.
+ * Applies every pending migration, one `wrangler d1 execute --local` call
+ * per file (never `migrations apply --local` — see run-and-deploy.md for
+ * why 0003_cost_ledger.sql's bare `ALTER TABLE` makes that unsafe). Records
+ * each file as applied immediately after its own call succeeds, so a
+ * failure partway through never re-applies a landed file.
  *
- * Before running any file, if `query` is given, takes a schema snapshot of
- * the local D1 (`snapshotLocalSchema`) and adopts (records as applied,
- * without running) any pending file whose targets ALL already exist there
- * (`isMigrationAlreadyApplied`) — this is what safely absorbs a local D1
- * that was migrated (by hand, or by `dev.mjs` itself before this task) with
- * no applied-migrations record: re-running a file that already landed used
- * to fail on its first non-idempotent statement (0003/0007's bare
- * `ALTER TABLE ... ADD COLUMN`) with a raw `duplicate column name` error.
- * Re-snapshots after every file that actually runs, so a later file's probe
- * sees that file's own effect. `query` is optional — omitting it (as every
- * existing caller/test here does) skips probing entirely and always runs
- * every pending file, unchanged from this function's original behavior.
- *
- * Any failure — a real `d1 execute` failure, or (when `query` is given) a
- * probe-query failure — throws a {@link MigrationError} naming the file (or
- * `null` for a probe failure), the SQLite message, and `recordPath`, instead
- * of letting a raw `execFileSync` error (a stack trace) escape. Genuinely
- * different errors are never swallowed as "already applied" — only a file
- * whose targets the probe actually found already present is skipped;
- * anything else still runs and can still fail loudly.
+ * If `query` is given, adopts (records as applied, without running) any
+ * pending file whose targets already exist — absorbs a local D1 migrated
+ * by hand with no applied-migrations record, without the raw
+ * `duplicate column name` error re-running would otherwise hit.
  *
  * @param {object} opts
  * @param {string} opts.migrationsDir
  * @param {string} opts.recordPath
  * @param {string} opts.dbName
- * @param {(args: string[]) => Promise<void>|void} opts.run injectable —
- *   real callers pass a `node_modules/.bin/wrangler d1 execute ...` runner
- *   (stdio inherited, for live output); tests pass a stub that just records
- *   calls (or throws an `execFileSync`-shaped error to simulate a failure).
- * @param {(args: string[]) => Promise<string>|string} [opts.query] injectable
- *   — real callers run `wrangler d1 execute ... --json` and return raw
- *   stdout; omit to skip the schema probe entirely.
+ * @param {(args: string[]) => Promise<void>|void} opts.run injectable wrangler runner
+ * @param {(args: string[]) => Promise<string>|string} [opts.query] injectable schema probe; omit to skip it
  * @param {(line: string) => void} [opts.log]
- * @returns {Promise<{ applied: string[], adopted: string[] }>} `applied` is
- *   every file this run actually ran; `adopted` is every file this run
- *   recorded as applied WITHOUT running it (the probe's skip list).
+ * @returns {Promise<{ applied: string[], adopted: string[] }>}
  */
 export async function applyMigrations({ migrationsDir, recordPath, dbName, run, query, fs = defaultFsWithReaddir, log = () => {} }) {
   const { pending } = planMigrations({ migrationsDir, recordPath, fs });
@@ -936,35 +821,20 @@ export function isDockerAvailable(execFileSyncImpl) {
 }
 
 /**
- * Measured empirically for this task: Ctrl-C on `dev.mjs` does NOT make
- * wrangler's own Sandbox-container orchestration tear itself down
- * synchronously — a Tier-2 session's `workerd-handsontable-demos-api-
- * Sandbox-*`(-proxy) containers were both still `Up` several seconds after
- * the wrapper process itself had already exited.
+ * Ctrl-C does NOT make wrangler's Sandbox-container orchestration tear
+ * down synchronously — containers can still be `Up` seconds after the
+ * wrapper process exits.
  *
- * Re-review 2, NB2: this used to also `docker stop` every container that
- * was new since this run started AND matched a name pattern
- * (`/handsontable-demos-(api|o11y)/`). That is NOT a safe ownership proof —
- * several worktrees on this machine routinely run `wrangler dev` at once
- * (the whole reason `WRANGLER_REGISTRY_PATH`/port-block conventions exist),
- * and "new since my snapshot" is a race over this run's ENTIRE session
- * (potentially hours for `dev:live`/`dev:full`), not a narrow few-second
- * window: worktree B starting its own Tier-2 session or `wrangler dev` at
- * any point while worktree A is still up produces a same-named container
- * that is "new" relative to A's snapshot too. Stopping it silently kills
- * B's session. Neither `wrangler dev`'s local container runtime nor the
- * Sandbox SDK stamps a per-run/per-worktree Docker label this codebase
- * could use to tell "mine" from "someone else's" apart (checked wrangler's
- * own bundled JS for a `--label`/`Labels` it sets when building or running
- * a local dev container: none found — the actual `docker run` for a woken
- * Sandbox happens inside workerd's own native container runtime, which is
- * opaque to a static check like this one).
+ * This module never `docker stop`s a container it cannot prove it started:
+ * a name-pattern match on containers "new since this run started" is NOT a
+ * safe ownership proof — several worktrees routinely run `wrangler dev` at
+ * once, and "new since my snapshot" races this run's ENTIRE session, so a
+ * concurrent worktree's own container can look "new" here too and get
+ * silently killed. Neither wrangler nor the Sandbox SDK stamps a
+ * per-worktree Docker label to tell them apart.
  *
- * So this module NEVER runs `docker stop` on a container it cannot prove it
- * started. `listRunningContainers`/`possiblyLeftoverContainers` below are
- * used only to PRINT a report and a manual cleanup command — see
- * `dev.mjs`'s teardown step, which decides whether to act (never) and what
- * to print.
+ * `listRunningContainers`/`possiblyLeftoverContainers` below only PRINT a
+ * report and a manual cleanup command — see `dev.mjs`'s teardown step.
  */
 export function listRunningContainers(execFileSyncImpl) {
   const out = execFileSyncImpl("docker", ["ps", "--format", "{{.ID}}\t{{.Names}}"]).toString();
@@ -1015,8 +885,8 @@ function describeLeftoverContainersForOperator(candidates) {
 /** The whole leftover-container REPORT step `dev.mjs`'s teardown runs —
  *  factored out here (rather than left inline in `dev.mjs`) so it is
  *  directly unit-testable with a stubbed `execFileSyncImpl`, the same way
- *  every other side-effecting piece of this module is. Re-review 2, NB2:
- *  this function calls `docker` only to LIST containers (`docker ps`, via
+ *  every other side-effecting piece of this module is. This function calls
+ *  `docker` only to LIST containers (`docker ps`, via
  *  `listRunningContainers`) — it never calls `docker stop`, no matter what
  *  it finds. Returns the candidates found (possibly empty) so a caller can
  *  assert on them without re-parsing the log line. */
@@ -1027,37 +897,30 @@ export function reportLeftoverContainers(before, execFileSyncImpl, logImpl) {
   return candidates;
 }
 
-/** Signals `dev.mjs` treats as "shut everything down cleanly". Re-review 2,
- *  NB5: SIGHUP is included because every child is spawned `detached: true`
- *  (its own process group/session) — closing the terminal `dev.mjs` runs
- *  in sends SIGHUP to `dev.mjs` itself but not to those detached children,
- *  so without a handler here `dev.mjs` used to die via the default SIGHUP
- *  action (immediate exit, no cleanup) and leave every child running. */
+/** Signals `dev.mjs` treats as "shut everything down cleanly". SIGHUP is
+ *  included because every child is spawned `detached: true` (its own
+ *  process group/session) — closing the terminal `dev.mjs` runs in sends
+ *  SIGHUP to `dev.mjs` itself but not to those detached children, so
+ *  without a handler here, the default SIGHUP action (immediate exit, no
+ *  cleanup) would leave every child running. */
 export const SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 // ---------------------------------------------------------------------------
-// Container base-image pre-pull (dev-prepull task)
+// Container base-image pre-pull
 //
-// Self-contained on purpose (a separate section, its own local helpers, no
-// changes to anything above) so a parallel edit elsewhere in this file
-// merges cleanly. What broke before this existed: `wrangler dev`'s own
-// local container build silently races a missing base image against Docker
-// Hub — if `docker pull` for e.g. `cloudflare/sandbox:0.12.3` times out
-// during the build, wrangler keeps running anyway and a Tier-2 session then
-// fails opaquely at container-start time ("No such image available").
-// This section checks every base image a tier's Dockerfiles need is
-// present BEFORE any worker is spawned, pulling what's missing with a
-// bounded retry, and fails fast with one clear message (not a live-but-
-// broken dev session) if a pull still doesn't land.
+// `wrangler dev`'s own local container build silently races a missing base
+// image against Docker Hub, failing opaquely at container-start time. This
+// section checks every base image is present BEFORE any worker is spawned,
+// pulling what's missing with a bounded retry, and fails fast instead.
 // ---------------------------------------------------------------------------
 
 /**
  * Minimal string-aware JSONC comment stripper (line comments and block
  * comments, respecting quoted strings/escapes) — same zero-dependency
- * approach `pipeline/o11y-box-config.test.mjs` already uses for the same
- * reason: `wrangler.jsonc` is JSONC, not plain JSON, and T00 owns adding
- * any parsing dependency. Kept as this section's own private copy rather
- * than a shared export, so this section stays self-contained.
+ * approach `pipeline/o11y-box-config.test.mjs` already uses, since
+ * `wrangler.jsonc` is JSONC, not plain JSON. Kept as this section's own
+ * private copy rather than a shared export, so this section stays
+ * self-contained.
  */
 function stripJsonCommentsForContainerConfig(text) {
   let result = "";
@@ -1131,22 +994,11 @@ export function readContainerDockerfilePaths(wranglerJsoncPath, fs = defaultFs) 
 
 /**
  * Extracts every base image a Dockerfile's `FROM` instructions need pulled
- * from a registry — i.e. what `docker build` needs present locally before
- * it can even start. Handles:
- *  - multi-stage builds: one entry per `FROM`, in order, deduped;
- *  - stage aliases (`FROM <image> AS <name>`) and a LATER `FROM <name>`
- *    that references an earlier stage by that alias — excluded, since it
- *    resolves to a previously built stage, not a registry pull;
- *  - `ARG`-declared build args used in `FROM $ARG`/`FROM ${ARG}` — resolved
- *    using the Dockerfile's own default (`ARG NAME=default`, declared
- *    before the first `FROM`, i.e. a global build arg per Docker's own
- *    scoping rule) since `docker build` without an explicit `--build-arg`
- *    uses that default; left unresolved (and so excluded from the "safe to
- *    pull" set — callers see the literal placeholder, which
- *    `docker image inspect`/`pull` will just fail on visibly) if the ARG
- *    has no default;
- *  - `FROM scratch` — the empty pseudo-image, never pulled, excluded;
- *  - an optional `--platform=...` flag between `FROM` and the image ref.
+ * from a registry (what `docker build` needs present locally first).
+ * Excludes a stage alias reference (`FROM <name>` for an earlier
+ * `AS <name>`) and `FROM scratch`. Resolves `ARG`-declared build args from
+ * the Dockerfile's own default; an ARG with no default is left as the
+ * literal placeholder, which `docker pull` will visibly fail on.
  * @param {string} dockerfileText
  * @returns {string[]} base image refs, in FROM order, deduped
  */
@@ -1268,17 +1120,11 @@ export function isImagePresent(ref, execFileSyncImpl) {
 }
 
 /** Pulls the last non-empty line of a failed `execFileSync`-shaped error's
- *  OWN error output (ANSI stripped) — stderr first, falling back to stdout
- *  only when stderr is empty, then to `err.message`. stderr-first matters
- *  for a real `docker pull`: it writes its per-layer progress ("Pulling
- *  from ...", "Downloading", ...) to STDOUT and the actual failure (e.g.
- *  "... DeadlineExceeded") to STDERR — concatenating the two and taking the
- *  last line (this section's earlier approach) would report a harmless
- *  progress line instead of the real error whenever stdout had output after
- *  stderr's own last write. This section's own copy of the same "last
- *  line" idea `extractSqliteMessage` uses for a migration failure (that one
- *  is stderr-only, wrangler's own shape), kept private here so this section
- *  never depends on that one changing shape. */
+ *  OWN error output (ANSI stripped) — stderr first, falling back to stdout,
+ *  then to `err.message`. stderr-first matters: `docker pull` writes
+ *  per-layer progress to STDOUT and the real failure to STDERR, so
+ *  concatenating the two and taking the last line could report a harmless
+ *  progress line instead. */
 function lastErrorLine(err) {
   const chunk = (v) => (v === undefined || v === null ? "" : v.toString("utf8"));
   const lastNonEmptyLine = (text) =>
@@ -1416,24 +1262,14 @@ export function isRuntimeDistStale(runtimeDir, fs = defaultFsWithReaddir) {
 // ---------------------------------------------------------------------------
 
 /**
- * True when `pnpm-lock.yaml` is newer than `node_modules/.modules.yaml` — the
- * file `pnpm install` itself rewrites on EVERY run (verified empirically
- * against this repo's pinned pnpm version: touching only the lockfile's own
- * mtime and re-running `pnpm install --frozen-lockfile` — a genuine no-op,
- * "Already up to date" — still rewrites `.modules.yaml`'s mtime too), so
- * this self-heals the moment someone runs the exact command it recommends,
- * rather than staying a permanent false positive. A real `git pull`/checkout
- * only touches a tracked file's mtime when its CONTENT changed, so an
- * ordinary pull that never touches the lockfile never trips this either —
- * only a real dependency change does, which is exactly the gap this closes:
- * `pnpm dev:full` waiting 120s and then failing with a generic "o11y worker
- * never came up" after a pull added `@jridgewell/trace-mapping` (the F30
- * fix) and `node_modules` was never reinstalled. `node_modules` (or
- * `.modules.yaml`) missing outright also counts as needing an install —
- * never installed at all. No lockfile to compare against is never a false
- * positive — nothing to detect drift against. Injectable fs/runnerRoot so
- * tests exercise a temp directory, never this worktree's own real
- * `node_modules`.
+ * True when `pnpm-lock.yaml` is newer than `node_modules/.modules.yaml` —
+ * the file `pnpm install` itself rewrites on every run (verified: even a
+ * genuine no-op rewrites its mtime), so this self-heals once someone runs
+ * the command it recommends. A real `git pull` only touches a tracked
+ * file's mtime when its content changed, so an ordinary pull that never
+ * touches the lockfile never trips this. `node_modules` missing outright
+ * also counts as needing an install. Injectable fs/runnerRoot so tests
+ * exercise a temp directory, never this worktree's own `node_modules`.
  */
 export function isPnpmInstallNeeded(runnerRoot = RUNNER_ROOT, fs = defaultFsWithReaddir) {
   const lockfilePath = path.join(runnerRoot, "pnpm-lock.yaml");
@@ -1457,21 +1293,12 @@ export const PNPM_INSTALL_NEEDED_MESSAGE =
 
 /**
  * True when `line` is wrangler/esbuild's own build-failure marker
- * (`✘ [ERROR] <message>`, ANSI codes stripped first — the same shape this
- * file's own `extractSqliteMessage` already handles for a migration failure,
- * confirmed against wrangler 4.108's real output) — EXCLUDING wrangler's own
- * runtime uncaught-exception logging, which reuses the identical
- * `✘ [ERROR]` prefix for a request handler throwing at RUNTIME (the worker
- * came up fine and is already serving traffic) rather than esbuild failing
- * to bundle it (the worker never came up at all). Two real examples from
- * this repo's own history that must NOT match: `✘ [ERROR] Uncaught Error: No
- * such image available named cloudflare-dev/sandbox:...` (S1-report.md) and
- * `✘ [ERROR] Uncaught Error: ReadableStream received over RPC disconnected
- * prematurely.` (progress.md) — both start with "Uncaught " right after the
- * bracket; no real esbuild bundling failure does (its own vocabulary is
- * "Could not resolve", "Transform failed with N errors", "Unexpected
- * token", never "Uncaught"). Returns the matched message (trimmed), or
- * `null`.
+ * (`✘ [ERROR] <message>`, ANSI stripped first) — EXCLUDING wrangler's
+ * runtime uncaught-exception logging, which reuses the same prefix for a
+ * request handler throwing at RUNTIME rather than esbuild failing to
+ * bundle. Real esbuild failures never start "Uncaught " (their own
+ * vocabulary is "Could not resolve", "Transform failed with N errors",
+ * "Unexpected token"). Returns the matched message (trimmed), or `null`.
  */
 export function wranglerBuildErrorLine(line) {
   const clean = line.replace(/\x1b\[[0-9;]*m/g, "");
@@ -1491,9 +1318,8 @@ export function wranglerBuildErrorLine(line) {
  * two `wrangler dev` readiness waits: a
  * build failure means wrangler either exits or hangs without ever binding
  * its port, so without this the generic "never came up within 120000ms"
- * timeout used to be the only signal for the full 2 minutes, burying
- * wrangler's own much more specific error (the "stale dependencies after a
- * pull" dev-stack note). Injectable fetch/sleep so a test never waits out a
+ * timeout is the only signal for the full 2 minutes, burying wrangler's own
+ * much more specific error. Injectable fetch/sleep so a test never waits out a
  * real network timeout or a real `setTimeout`.
  */
 export async function waitForServer(
@@ -1628,42 +1454,27 @@ export function buildPlan(tier, ports, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// --fresh (dev-persist task): compose.yml's minio/clickhouse now use named
-// volumes (see that file's own header comment) so a plain restart KEEPS
-// logs/metrics — but `workers/o11y/.wrangler/state` (the InboxWriter
-// ledger/dedupe hashes/local R2 inbox) was ALREADY persisted across a
-// restart before this task. `--fresh` is what wipes both together, so they
-// can never diverge into "ledger says committed, but the data it points at
-// is gone" (a committed key is never re-drained; a dedupe hash blocks a
-// fixture replay from ever refilling the now-empty stores). See
-// `resetO11yLocalState` and `detectO11yStateDivergence` below.
+// --fresh: compose.yml's minio/clickhouse use named volumes, so a plain
+// restart KEEPS logs/metrics; `workers/o11y/.wrangler/state` persists too.
+// `--fresh` wipes both together, so the ledger and R2 data can never
+// diverge. See `resetO11yLocalState`/`detectO11yStateDivergence` below.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Per-worktree compose project name (Z-D-H2 fix): a fixed default
-// `COMPOSE_PROJECT_NAME` ("o11y-dev") meant every worktree's `--tier=full`
-// resolved to the SAME docker compose project — same containers, same named
-// volumes (`<project>_minio-data`/`<project>_clickhouse-data`). A `pnpm
-// dev:full --fresh` (or even a plain Ctrl-C) in one worktree then silently
-// adopted, stopped, or deleted another worktree's stack. `dev.mjs`,
-// `stop-roundtrip.mjs`'s own collision guard, and the docs all derive their
-// default from the ONE helper below, so they can never drift apart again.
+// Per-worktree compose project name: a fixed default meant every worktree's
+// `--tier=full` resolved to the SAME docker compose project, so `--fresh`
+// or even Ctrl-C in one worktree could silently affect another's stack.
+// `dev.mjs`, `stop-roundtrip.mjs` and the docs all derive their default
+// from the ONE helper below, so they can never drift apart.
 // ---------------------------------------------------------------------------
 
 /**
- * This worktree's own default `COMPOSE_PROJECT_NAME` for `--tier=full`'s
- * minio/clickhouse stack — a pure, stable function of `runnerRoot`'s
- * absolute path (NOT the git remote/branch, so two worktrees checked out
- * from the same repo still get distinct names; NOT anything randomly
- * generated, so the SAME worktree gets the SAME name across restarts —
- * otherwise a plain restart without `--fresh` would look like a divergent
- * project and orphan the previous run's named volumes).
- *
- * `sha256` truncated to 8 hex chars: short enough to stay a comfortable
- * compose project name, collision-improbable for "however many worktrees
- * exist on one machine", and — unlike a path-derived slug — never leaks the
- * worktree's directory name/username into a project name a developer might
- * paste elsewhere (`docker ps`, a screenshot, a report).
+ * This worktree's own default `COMPOSE_PROJECT_NAME` — a pure, stable
+ * function of `runnerRoot`'s absolute path (not the git remote/branch, so
+ * two worktrees of the same repo get distinct names; not random, so the
+ * SAME worktree gets the SAME name across restarts). `sha256` truncated to
+ * 8 hex chars avoids leaking the worktree's directory/username into a
+ * project name a developer might paste elsewhere.
  *
  * @param {string} [runnerRoot]
  * @returns {string}
@@ -1707,34 +1518,14 @@ export function o11yDevDataModeLine(fresh) {
 }
 
 /**
- * `--fresh`'s whole job: wipe compose's named volumes (minio/clickhouse —
- * only when `composeFile`/`composeEnv` are given) AND
- * `workers/o11y/.wrangler/state` (the InboxWriter ledger, dedupe hashes,
- * local R2 inbox objects) TOGETHER, so the two local stores this repo now
- * persists across a restart never diverge (see this section's header
- * comment). Leaves the API worker's local D1 (`workers/api/.wrangler/state`)
- * completely alone — that is `--reset-local-db`'s job, a different flag for
- * a different store.
+ * `--fresh`'s whole job: wipe compose's named volumes (minio/clickhouse)
+ * AND `workers/o11y/.wrangler/state` TOGETHER, so the two never diverge.
+ * Leaves the API worker's local D1 alone — that's `--reset-local-db`'s job.
  *
- * `composeFile`/`composeEnv` are optional: `scripts/o11y-dev.mjs` never runs
- * `docker compose` itself (see that file's own doc comment — it starts only
- * the o11y worker, not compose's minio/clickhouse), so its own `--fresh`
- * omits both and this wipes ONLY the o11y worker state. Passing them scopes
- * the `down -v` to exactly `composeEnv.COMPOSE_PROJECT_NAME` — compose
- * itself enforces that a project's `down -v` only ever touches THAT
- * project's own containers/volumes, never another project's. That is only
- * "another worktree's volumes" in practice because `composeEnv` is expected
- * to carry a project name from {@link resolveComposeProjectName} (a
- * per-worktree default — see the Z-D-H2 section above): a caller that
- * passes a SHARED project name across worktrees (an explicit
- * `COMPOSE_PROJECT_NAME` override, or the old fixed `"o11y-dev"` literal
- * this module used before the fix) makes this wipe another worktree's data
- * on purpose, same as it would within a single worktree.
- *
- * `o11yDir` is a worktree-local path (derived from `RUNNER_ROOT`, which is
- * resolved from THIS script's own file location — see the top of this
- * module), so the state-dir removal can never reach another worktree's
- * `workers/o11y/.wrangler/state` either.
+ * `composeFile`/`composeEnv` optional: `o11y-dev.mjs` never runs compose,
+ * so its own `--fresh` wipes only the o11y worker state. Passing them
+ * scopes `down -v` to `composeEnv.COMPOSE_PROJECT_NAME` — never another
+ * worktree's, unless the caller shares a project name on purpose.
  *
  * @param {object} opts
  * @param {string} opts.o11yDir
@@ -1765,29 +1556,15 @@ export function resetO11yLocalState({ o11yDir, composeFile, composeEnv, execFile
 }
 
 /**
- * B-I2: brings up `minio`/`clickhouse` via `docker compose ... up -d --wait`
- * for `dev.mjs --tier=full`, and — if that call itself throws — tears the
- * SAME compose project back down (`down`, never `-v`: this is a startup
- * FAILURE, not `--fresh`'s deliberate wipe, so any data either service did
- * manage to write stays) before rethrowing, instead of leaving whichever of
- * the two DID start orphaned with no teardown ever invoked.
+ * Brings up `minio`/`clickhouse` via `docker compose ... up -d --wait`, and
+ * — if that call itself throws — tears the SAME project back down (never
+ * `-v`: a startup FAILURE, not `--fresh`'s wipe) before rethrowing, instead
+ * of leaving whichever service DID start orphaned with no teardown.
  *
- * Why this needs its own function/test rather than just a try/catch inline
- * in `dev.mjs`: `--wait` (T1) made the `up` call genuinely able to throw on
- * a real condition (a named service's healthcheck never going green) —
- * before T1's `--wait`, the old `up -d` call essentially never threw here,
- * so nothing exercised the "up failed, orphaning containers" path. A throw
- * from `up` happens BEFORE `dev.mjs`'s own `teardownSteps.push(...)` for
- * this compose stack is ever reached (`main()`'s SIGINT/SIGTERM teardown,
- * `cleanup()`), and it propagates straight past the try/catch around the
- * readiness wait further down to `main().catch`, which only logs and
- * `process.exit(1)`s — no cleanup at all. Injectable `execFileSyncImpl`
- * mirrors {@link resetO11yLocalState}'s own pattern, so this is
- * unit-testable with a stub instead of a real `docker compose` (and,
- * before this extraction, the only way to exercise `dev.mjs`'s own
- * try/catch was a slow CLI-level `spawnSync` test that ran real `wrangler`
- * D1 migrations to get there — see `pipeline/dev-script.test.mjs`'s own
- * test for this).
+ * A throw from `up` happens BEFORE `dev.mjs`'s own teardown step is ever
+ * pushed, so it would otherwise propagate straight past cleanup to
+ * `main().catch`, which only logs and exits. Injectable `execFileSyncImpl`
+ * makes this unit-testable with a stub instead of a real `docker compose`.
  *
  * @param {object} opts
  * @param {string} opts.composeFile
@@ -1812,22 +1589,14 @@ export function bringUpO11yCompose({ composeFile, composeEnv, execFileSyncImpl, 
 
 /**
  * Reads the committed-key count straight out of the InboxWriter DO's local
- * SQLite storage (wrangler's local dev backing store — confirmed against a
- * real dev session: `workers/o11y/.wrangler/state/v3/do/<name-containing-InboxWriter>/<id>.sqlite`,
- * table `_cf_KV(key, value)`, one row per DO storage key). A `done:<key>`
- * entry (`ledger.ts`'s `DONE_PREFIX`) is a key already resolved as
- * COMMITTED — the ledger considers it drained and will never look at it
- * again on its own (only a manual `POST /grafana/_o11y/reopen` moves it back
- * — see `ledger.ts`'s "Manual reopen" section). If the data those keys point
- * at (Loki chunks in MinIO) is gone, this count is exactly what makes that
- * silent — nothing else ever re-checks a `done:` key.
+ * SQLite storage (wrangler's local dev backing store). A `done:<key>` entry
+ * is a key the ledger considers drained and will never look at again on
+ * its own — if the data it points at (Loki chunks in MinIO) is gone, this
+ * count is what makes that silent, since nothing else re-checks it.
  *
- * Best-effort by design: this is a startup convenience check, not a
- * correctness gate. Returns 0 (never throws) if `node:sqlite` isn't
- * available, the state dir doesn't exist, or a `.sqlite` file can't be
- * opened (e.g. locked by a `wrangler dev` still shutting down) — a false
- * "0" just means the divergence warning below doesn't fire, which is the
- * safe direction to fail in for a warning-only check.
+ * Best-effort: returns 0 (never throws) if `node:sqlite` isn't available,
+ * the state dir doesn't exist, or a `.sqlite` file can't be opened — the
+ * safe failure direction for a warning-only check.
  *
  * @param {string} o11yDir
  * @param {typeof defaultFsWithReaddir} [fs]
@@ -1885,16 +1654,10 @@ export async function o11yLedgerCommittedKeyCount(o11yDir, fs = defaultFsWithRea
  *  an ad hoc string. */
 const DONE_PREFIX_SQL_LIKE = "done:%";
 
-/** Finds the real docker volume name compose created for `volumeKey` (a
- *  short key in compose.yml's top-level `volumes:` block, e.g.
- *  `"minio-data"`) under project `composeProjectName` — via compose's own
- *  `com.docker.compose.project`/`com.docker.compose.volume` labels, never by
- *  guessing compose's own project-name sanitization/prefixing rule (which
- *  compose.yml deliberately does NOT pin down with an explicit `name:` — see
- *  that file's header comment). Returns `null` if no such volume exists
- *  (never created yet, or removed by `docker compose down -v` / a manual
- *  `docker volume rm`) — every caller here treats that the same as "no
- *  data", not as an error.
+/** Finds the real docker volume name compose created for `volumeKey` via
+ *  compose's own `com.docker.compose.project`/`.volume` labels, never by
+ *  guessing compose's project-name sanitization rule. Returns `null` if no
+ *  such volume exists — every caller treats that the same as "no data".
  * @param {(cmd: string, args: string[]) => Buffer|string} execFileSyncImpl
  */
 export function findComposeVolume({ composeProjectName, volumeKey, execFileSyncImpl }) {
@@ -1914,39 +1677,14 @@ export function findComposeVolume({ composeProjectName, volumeKey, execFileSyncI
 }
 
 /**
- * The divergent case the task calls out: named volumes empty (or gone —
- * `docker volume rm`, a manual `docker compose down -v` outside `--fresh`,
- * a volume that was simply never created yet) while the o11y worker's own
- * ledger still has `done:` (committed) keys pointing at data that isn't
- * there anymore. Checked in this order (cheapest first): the ledger read is
- * a local file read, so a worktree with no o11y worker state yet (the
- * common case — nothing to warn about) never touches `docker` at all.
+ * The divergent case: named volumes empty/gone while the o11y worker's
+ * ledger still has `done:` keys pointing at data that no longer exists.
+ * Checks MinIO only (not ClickHouse, written directly, outside the ledger)
+ * — existence, not emptiness, since MinIO creates the bucket on every `up`.
  *
- * Deliberately checks MinIO only, not ClickHouse: `runner_events` (the
- * Analytics Engine stand-in) is written directly by the worker via
- * `RUNNER_EVENTS_CLICKHOUSE_URL` — outside the inbox ledger entirely (see
- * `normalise/points.ts#aeSink`) — so nothing about a `done:` ledger key ever
- * points at ClickHouse. MinIO is what the ledger's `done:` keys are actually
- * about: they mark an R2 inbox object as already drained into Loki, whose
- * chunks/index live in MinIO (`containers/o11y/compose.yml`'s own header
- * comment). Existence, not "is it empty", is the check: MinIO's own
- * entrypoint (MINIO_DEFAULT_BUCKETS, T1 — replaced the old `minio-init`
- * one-shot container) creates the bucket as part of every successful `up`,
- * so a volume that exists has necessarily been used — the divergent case this warns about is
- * specifically the volume being GONE while the ledger thinks otherwise, not
- * a volume that merely has less in it than the ledger expects.
- *
- * Chose "warn and point at --fresh" over an automatic ledger reopen
- * (`POST /grafana/_o11y/reopen`, `ledger.ts`'s own escape hatch) here on
- * purpose: this check runs from `dev.mjs`'s `main()` BEFORE the o11y worker
- * is even started (it decides whether to start compose first), so an
- * automatic reopen would need its own separate post-startup step, an HTTP
- * round trip, and a guessed reopen window — real complexity for a dev
- * convenience script. `--fresh` is a one-flag fix that's already needed for
- * the "someone ran `docker volume rm` by hand" case this same check exists
- * to catch; the warning below also names the manual `/grafana/_o11y/reopen`
- * route as a lighter-weight alternative once the worker is up, for anyone
- * who'd rather keep what's still in R2 (7-day retention) than start over.
+ * Warns and points at `--fresh` rather than auto-reopening: this runs
+ * before the o11y worker even starts, so an automatic reopen would need
+ * its own post-startup step.
  *
  * @param {object} opts
  * @param {string} opts.composeProjectName

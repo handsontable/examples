@@ -152,9 +152,8 @@ jobs:
       # it targets prod. SENTRY_* are only set on this deploying build; PR CI
       # (ci.yml) gets no token, so PR builds neither emit source maps nor
       # upload a release — see apps/authoring/vite.config.ts. VITE_SENTRY_SCOPE
-      # (T10, contract §11) is pinned to "full" explicitly here, rather than
-      # relying on the code's own absent-means-full default, so this is the one
-      # place T11's launch-plan flip to "uncaught" needs to touch.
+      # (contract §11) is pinned to "full" explicitly here, rather than relying
+      # on the code's own absent-means-full default.
       - name: Build authoring (skipped when only the api/o11y deploys)
         if: needs.changes.outputs.authoring == 'true'
         run: pnpm --filter @handsontable/demo-authoring build
@@ -165,26 +164,18 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           VITE_SENTRY_SCOPE: full
 
-      # T10 / ADR §C.3: the Sentry plugin above uploads the SAME maps to
-      # Sentry (for stack-trace symbolication there) but no longer deletes
-      # them — they're only removed from dist/ here, after also landing in R2
-      # for the o11y worker's own symbolicator
-      # (workers/o11y/src/drain/symbolicate.ts#mapKeyFor:
-      # `sourcemaps/<service.version>/<original asset path>.map`, matched key
-      # for key). No maps means SENTRY_* wasn't configured (a PR build, or a
-      # push where only api/o11y changed) — the loop is then a no-op.
+      # ADR §C.3: the Sentry plugin above already uploaded these maps to
+      # Sentry for stack-trace symbolication there; here they're removed from
+      # dist/ only after also landing in R2 for the o11y worker's own
+      # symbolicator (workers/o11y/src/drain/symbolicate.ts#mapKeyFor:
+      # `sourcemaps/<service.version>/<original asset path>.map`). No maps
+      # means SENTRY_* wasn't configured (a PR build, or an api/o11y-only
+      # push) — the loop is then a no-op.
       #
-      # Fix round (review finding I1): this step used to authenticate with
-      # the account-wide CLOUDFLARE_API_TOKEN, which the runbook then had to
-      # widen with a blanket R2: Edit grant — a token that can write to any
-      # bucket in the account, sitting in the one job that never otherwise
-      # needs Cloudflare API access at all. Uses a dedicated R2 S3 credential
-      # instead (Object Read & Write, scoped to `handsontable-demos-o11y-maps`
-      # only — one-time setup step 2 in docs/run-and-deploy.md, the same
-      # mechanism as the Loki-only token in step 3), through the S3 API via
-      # `aws s3 cp` — the AWS CLI ships preinstalled on GitHub-hosted Ubuntu
-      # runners (actions/runner-images), so this adds no new dependency.
-      # `CLOUDFLARE_API_TOKEN` is no longer read anywhere in this job.
+      # Dedicated R2 S3 credential (Object Read & Write, scoped to
+      # `handsontable-demos-o11y-maps` — one-time setup step 2 in
+      # docs/run-and-deploy.md), via `aws s3 cp` (the AWS CLI ships
+      # preinstalled on GitHub-hosted Ubuntu runners).
       - name: Upload source maps to R2, then remove them from dist
         if: needs.changes.outputs.authoring == 'true'
         env:
@@ -198,10 +189,10 @@ jobs:
           R2_MAPS_ENDPOINT: https://15111272c53ed0aaf84a908f0c9c7f8b.eu.r2.cloudflarestorage.com
           # A modern AWS CLI defaults to a CRC32 trailing checksum on every
           # request and validates one on every response; R2's S3 API doesn't
-          # implement that trailer, so the upload can be rejected outright
-          # (minor triage C-M6). Both must be "when_required" (only send/
-          # validate when the operation explicitly requires it) so `aws s3 cp`
-          # against R2 works with whatever CLI version the runner image ships.
+          # implement that trailer, so the upload can be rejected outright.
+          # Both must be "when_required" (only send/validate when the
+          # operation explicitly requires it) so `aws s3 cp` against R2 works
+          # with whatever CLI version the runner image ships.
           AWS_REQUEST_CHECKSUM_CALCULATION: when_required
           AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
         run: |
@@ -221,7 +212,7 @@ jobs:
           fi
 
       # AGENTS.md's own dev-bypass sanity check ("Always build prod with
-      # .env.local absent"), automated (T10). Must run AFTER the maps are gone
+      # .env.local absent"). Must run AFTER the maps are gone
       # above — a source map's sourcesContent literally embeds
       # "localhost:8787" (App.tsx's API-base fallback) and "VITE_DEV_USER"
       # (auth.ts), which would false-fire this exact grep against a map file
@@ -235,7 +226,7 @@ jobs:
           fi
           echo "ok: no dev-bypass sentinel found"
 
-      # Contract §10's own leak check (T06/T10): the local-only telemetry path
+      # Contract §10's own leak check: the local-only telemetry path
       # (VITE_TELEMETRY_LOCAL) must never survive dead-code elimination into a
       # production bundle. scripts/check-telemetry-leak.mjs greps
       # apps/authoring/dist/assets/*.js for its sentinels.
@@ -264,8 +255,8 @@ jobs:
     needs: [changes, build]
     if: needs.changes.outputs.authoring == 'true'
     runs-on: ubuntu-latest
-    # id-token: write (T10) — the deploy-event step below mints a GitHub OIDC
-    # token for POST /telemetry/deploy. Job-level permissions REPLACE the
+    # id-token: write — the deploy-event step below mints a GitHub OIDC token
+    # for POST /telemetry/deploy. Job-level permissions REPLACE the
     # workflow-level block, so contents: read is repeated here.
     permissions:
       contents: read
@@ -314,10 +305,10 @@ jobs:
         # be reachable yet.
         if: always() && steps.deploy.outcome == 'success'
         working-directory: .
-        # Fix round (controller note): VERSION_ID passed through env, the same
-        # way GITHUB_SHA already is — never spliced with ${{ }} straight into
-        # the script, which would let an unexpectedly-shaped value (e.g. one
-        # containing a quote) break out of the JSON string it's built into.
+        # VERSION_ID passed through env, the same way GITHUB_SHA already is —
+        # never spliced with ${{ }} straight into the script, which would let
+        # an unexpectedly-shaped value (e.g. one containing a quote) break out
+        # of the JSON string it's built into.
         env:
           VERSION_ID: ${{ steps.deploy.outputs.version_id }}
         run: |
@@ -373,7 +364,7 @@ jobs:
       smoke: true
 
   deploy-api:
-    # T10: also needs deploy-o11y (mutual service bindings — API's own O11Y
+    # Also needs deploy-o11y (mutual service bindings — API's own O11Y
     # binding and o11y's own API#O11yUsage binding). `if` accepts a skipped
     # deploy-o11y (unrelated push, nothing to wait for) but not a failed one —
     # see "First deploy, in order" in docs/run-and-deploy.md.
@@ -473,7 +464,7 @@ jobs:
           echo "::error::prod /api/health did not return 200 after deploy"
           exit 1
 
-  # T10: the observability worker (InboxWriter + GrafanaBox). Deployed before
+  # The observability worker (InboxWriter + GrafanaBox). Deployed before
   # deploy-api (see that job's `needs` and docs/run-and-deploy.md's "First
   # deploy, in order") because of their mutual service bindings.
   deploy-o11y:
