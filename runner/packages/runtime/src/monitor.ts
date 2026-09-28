@@ -23,7 +23,7 @@ import type { Framework, HtMajor } from "./telemetry/attrs.js";
 export const MONITOR_MESSAGE_TYPE = "hot-runner-monitor";
 
 /**
- * Hard ceiling on relayed events per page load.
+ * Hard ceiling on relayed events per page load (per run on Tier 1, see `MONITOR_RESET`).
  *
  * The kill switch is build-time (see docs/run-and-deploy.md), so turning this
  * feature off costs a deploy. That makes the in-page ceiling the only brake that
@@ -273,7 +273,7 @@ export function monitorDedupeKey(kind: string, message: string, stack?: string):
 }
 
 /**
- * A relay budget: the same ceiling and dedupe the in-page reporter applies, counted
+ * A relay budget: the in-page reporter's ceiling and dedupe, counted per page load
  * somewhere the demo cannot reach.
  *
  * The reporter's copy is not a cap. It runs *inside* the preview, alongside code

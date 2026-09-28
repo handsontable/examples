@@ -118,7 +118,7 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
     },
     report(key, item, reportOpts) {
       if (!reportOpts?.replacesRun && !running.has(key) && running.size < pendingMax) {
-        running.set(key, { item, emitted: false });
+        running.set(key, { item, emitted: counted.has(key) });
       }
       if (counted.has(key)) return;
       if (timer === null) {

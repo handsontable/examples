@@ -407,3 +407,18 @@ test("reset forgets the outgoing preview's running sandbox", () => {
   clock.advance(DEMO_EDIT_SETTLE_MS);
   assert.deepEqual(emitted, []);
 });
+
+test("a report already counted before a rerun is not brought back by a later unchanged edit", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  collapse.noteEdit();
+  relay(FINAL); // the previous run's late relay, before this edit's push dispatches
+  collapse.pushOutcome("rerun");
+  clock.advance(DEMO_EDIT_SETTLE_MS); // counted
+  relay(FINAL); // the new run's own copy, after the burst: already counted
+  collapse.noteEdit(); // a space
+  collapse.pushOutcome("unchanged");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, [FINAL]);
+});
