@@ -31,7 +31,7 @@ import {
 } from "./eventGate.js";
 import { resolveSentryScope, reportsDiagnosticToSentry } from "./sentryScope.js";
 import { demoEventReport, type DemoMonitorKind } from "./demoEventReport.js";
-import { createDemoEventCollapse } from "./demoEventCollapse.js";
+import { createDemoEventCollapse, type PushOutcome } from "./demoEventCollapse.js";
 import { tier2StderrReport } from "./tier2Report.js";
 import { telemetry } from "./telemetry/index.js";
 
@@ -195,7 +195,7 @@ interface CollapsedDemoEvent {
   attrs: HotAttrs;
   reason: string;
   fingerprint: string;
-  recordName: string | null;
+  recordName: string;
   shape: string;
 }
 
@@ -203,7 +203,7 @@ interface CollapsedDemoEvent {
  * What survives the edit-burst collapse becomes two facade calls: the
  * `preview.runtime_error` count (§5) and one handled Faro exception (the
  * Loki line), whose message is the §7 fingerprint shape, never the relayed
- * text. A console warning gets the count only.
+ * text.
  */
 function emitCollapsedDemoEvent(event: CollapsedDemoEvent): void {
   telemetry.metric(
@@ -211,7 +211,6 @@ function emitCollapsedDemoEvent(event: CollapsedDemoEvent): void {
     { count: 1 },
     { ...event.attrs, reason: event.reason, fingerprint: event.fingerprint },
   );
-  if (event.recordName === null) return; // a console warning: counted, not a Loki error line
   const record = new Error(event.shape);
   record.name = event.recordName;
   record.stack = "";
@@ -235,8 +234,8 @@ const COMPILE_ERROR_KEY = "compile:sandpack.compile_error";
  *  so a typed syntax error counts as one `sandpack.compile_error` and no
  *  `preview.runtime_error`. Not behind `previewMonitoring` — wired for every
  *  preview like `sandpack.compile_ms`. */
-export function collapseCompileError(emit: () => void): void {
-  demoEventCollapse.report(COMPILE_ERROR_KEY, emit, { replacesRun: true });
+export function collapseCompileError(emit: () => void, origin: "transpile" | "bundler"): void {
+  demoEventCollapse.report(COMPILE_ERROR_KEY, emit, { replacesRun: true, fromBundler: origin === "bundler" });
 }
 
 /** An edit that re-runs the preview — opens/extends the burst. Not behind
@@ -244,6 +243,11 @@ export function collapseCompileError(emit: () => void): void {
  *  collapse, so this only arms a timer. */
 export function noteDemoEdit(): void {
   demoEventCollapse.noteEdit();
+}
+
+/** The Tier-1 runtime's push outcome for the newest edit (`onPushOutcome`). */
+export function noteDemoPushOutcome(outcome: PushOutcome): void {
+  demoEventCollapse.pushOutcome(outcome);
 }
 
 /** A preview is being torn down (example/version switch, remount) —
@@ -269,7 +273,8 @@ export interface DemoEventContext {
 
 /**
  * Files an event the preview reported through the monitor bridge
- * (DEV-2527). Always enters the edit-burst collapse; under `full` scope
+ * (DEV-2527). Enters the edit-burst collapse unless it is a console
+ * warning (not a runtime error, `demoEventReport.ts`); under `full` scope
  * (default) ALSO reaches Sentry; under `uncaught` scope, facade only.
  */
 export function reportDemoEvent(payload: MonitorPayload, context: DemoEventContext): void {
@@ -304,15 +309,17 @@ function reportDemoEventUnguarded(
   // Into the edit-burst collapse, not straight to the facade, and before
   // either Sentry budget — a keystroke ladder must not drain the relay
   // budget before a later real error of the page load.
-  const fp = contractFingerprint(report.fingerprintContext, report.fingerprintMessage);
-  const collapsed: CollapsedDemoEvent = {
-    attrs: report.attrs,
-    reason: report.reason,
-    fingerprint: fp,
-    recordName: report.recordName,
-    shape: fingerprintShape(report.fingerprintMessage),
-  };
-  demoEventCollapse.report(fp, () => emitCollapsedDemoEvent(collapsed));
+  if (report.reason !== null && report.recordName !== null) {
+    const fp = contractFingerprint(report.fingerprintContext, report.fingerprintMessage);
+    const collapsed: CollapsedDemoEvent = {
+      attrs: report.attrs,
+      reason: report.reason,
+      fingerprint: fp,
+      recordName: report.recordName,
+      shape: fingerprintShape(report.fingerprintMessage),
+    };
+    demoEventCollapse.report(fp, () => emitCollapsedDemoEvent(collapsed));
+  }
 
   // A warning is context, not a fault (DEV-2539): filed as a breadcrumb,
   // not an issue, before the breadcrumb budget so it never spends a relay

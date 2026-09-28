@@ -142,6 +142,9 @@ export interface SandpackCompileTimingEvent {
  *  authored code. */
 export interface SandpackCompileErrorEvent {
   readonly message: string;
+  /** `transpile`: the client-side pre-transpile failed, nothing was dispatched.
+   *  `bundler`: the bundler rejected a dispatched sandbox (frameless `show-error`). */
+  readonly origin: "transpile" | "bundler";
 }
 
 /** `loadSandpackClient` itself rejected — the hosted bundler's connection
@@ -199,6 +202,9 @@ export interface DemoRuntime {
   onCompileError?(cb: (e: SandpackCompileErrorEvent) => void): void;
   /** §5 `sandpack.bundler_unreachable` (`SandpackRuntime` only). */
   onBundlerUnreachable?(cb: (e: SandpackBundlerUnreachableEvent) => void): void;
+  /** The newest push's outcome (`SandpackRuntime` only): `rerun` when a new sandbox
+   *  was dispatched, `unchanged` when it matched the running one and nothing re-runs. */
+  onPushOutcome?(cb: (outcome: "rerun" | "unchanged") => void): void;
   /** §5 `session.start_ms` (`ContainerRuntime` only). */
   onSessionStart?(cb: (e: SessionStartTimingEvent) => void): void;
   /** §5 `hmr.roundtrip_ms` (`ContainerRuntime` only). */

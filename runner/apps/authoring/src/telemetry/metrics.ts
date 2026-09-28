@@ -5,7 +5,7 @@
 // Erasable TS only: `pipeline/browser-metrics.test.mjs` imports this file
 // directly under `node --experimental-strip-types`.
 
-import type { DemoRuntime } from "@handsontable/demo-runtime";
+import type { DemoRuntime, SandpackCompileErrorEvent } from "@handsontable/demo-runtime";
 import { isNextPrereleaseVersion, selectedReleaseMajor } from "@handsontable/demo-runtime";
 import { fingerprint } from "@handsontable/demo-runtime/telemetry";
 import { HT_MAJORS, type HotAttrs, type HtMajor, type Surface, type Telemetry } from "@handsontable/demo-runtime/telemetry";
@@ -138,7 +138,7 @@ export function wireRuntimeMetrics(
   runtime: DemoRuntime,
   ctx: { framework: string; versionRef: string },
   telemetry: Telemetry,
-  opts: { collapseCompileError?: (emit: () => void) => void } = {},
+  opts: { collapseCompileError?: (emit: () => void, origin: SandpackCompileErrorEvent["origin"]) => void } = {},
 ): void {
   const htMajor = htMajorOf(ctx.versionRef);
   const seenFingerprints = new Set<string>();
@@ -160,7 +160,7 @@ export function wireRuntimeMetrics(
         { framework: ctx.framework, ht_major: htMajor, fingerprint: fp },
       );
     if (opts.collapseCompileError) {
-      opts.collapseCompileError(emit);
+      opts.collapseCompileError(emit, event.origin);
       return;
     }
     if (seenFingerprints.has(fp)) return;

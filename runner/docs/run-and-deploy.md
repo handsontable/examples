@@ -1518,6 +1518,12 @@ can ignore the reporter and `postMessage` crafted payloads straight at the app, 
 `kind` against a closed set (it becomes a Sentry tag). Treat the in-page cap as
 advisory and the relay's as the limit.
 
+On Tier 1 the in-page cap is per run, not per page load: the preview document is
+re-evaluated in place on every compile, so `SandpackRuntime` posts a reset
+(`MONITOR_RESET`) into it before each dispatched run. Otherwise the prefix runs of one
+typed line spend all 20 slots before the finished line throws. The warning ceiling and
+the relay's own budget stay per page load.
+
 **A per-environment rate limit on `demo-runtime` in the Sentry UI is still the only
 brake that works without a build** — keep one configured for as long as this is on.
 

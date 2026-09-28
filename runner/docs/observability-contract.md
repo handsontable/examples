@@ -280,12 +280,19 @@ past and is dropped. One typed broken line = one `sandpack.compile_error`, no
 Sentry capture is added for the edit-path failure; the mount-path Sentry capture
 (`Tier1CompileError`) is unchanged.
 
-`preview.runtime_error` counts broken preview states, not relays. The preview
+`preview.runtime_error` counts broken preview states, not relays. Reason `console` is a
+`console.error`; a console warning is not counted (§6). The preview
 re-runs on every keystroke, so one typed line relays a whole keystroke-prefix ladder
 (`s is not defined`, `se is not defined`, …, then the line's real error). The browser
 collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
 - an edit that re-runs the preview (a non-quiet workspace write, a file add, delete or
   rename) opens or extends a burst, and discards what the previous run reported;
+- on Tier 1, an edit whose transpiled sandbox matches the running one (a closing `;`,
+  whitespace, a trailing comma) re-runs nothing, so the burst ends with the running
+  sandbox's reports that have not been counted yet. If the bundler rejected that
+  sandbox (a frameless `show-error`), its `sandpack.compile_error` is that result and
+  replaces the run; a pre-transpile failure never ran, so it is not the running
+  sandbox's;
 - 2 s (`DEMO_EDIT_SETTLE_MS`) after the last edit the burst closes, and the last run's
   reports are emitted, one per §7 fingerprint;
 - outside a burst (first load, a user interaction, a Tier-2 rebuild that reports after
@@ -349,7 +356,8 @@ no stack, and the §3 labels include `hot.surface = demo-runtime`. At ingest it 
 an `error.handled` point (surface `demo-runtime`, never feeding the new-fingerprint
 alert) and one Loki line, which the "Recent demo-runtime errors" panels read with
 `{hot_surface="demo-runtime"} | hot_kind="exception"`. A `console-warn` report is
-counted but gets no record: a warning is context, not a fault (DEV-2539). Faro's
+neither counted nor recorded: a warning is context, not a fault (DEV-2539), and
+Handsontable's own load-time notices would otherwise count on every preview load. Faro's
 `pushError` dedupe applies, so an identical record in two consecutive bursts is sent
 once. The `preview.runtime_error` metric, not the line count, is the counter.
 

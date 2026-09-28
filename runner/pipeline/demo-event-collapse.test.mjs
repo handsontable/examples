@@ -232,7 +232,7 @@ function compileHarness() {
   return { ...h, compileError };
 }
 
-test("R9C: a typed syntax-error ladder is one compile error and no runtime error, stale relays included", () => {
+test("a typed syntax-error ladder is one compile error and no runtime error, stale relays included", () => {
   const { clock, emitted, collapse, relay, compileError } = compileHarness();
   // `const X = ;` typed key by key. `c`..`cons` parse and run (and throw);
   // from `const` on, every prefix fails the pre-transpile.
@@ -255,7 +255,7 @@ test("R9C: a typed syntax-error ladder is one compile error and no runtime error
   assert.deepEqual(emitted, ["compile: Unexpected token (1:12)"], "the final state's compile error, alone");
 });
 
-test("R9C: a compile error replaces an earlier one of the same burst, so the final state's diagnostic is the one counted", () => {
+test("a compile error replaces an earlier one of the same burst, so the final state's diagnostic is the one counted", () => {
   const { clock, emitted, collapse, compileError } = compileHarness();
   collapse.noteEdit();
   compileError("stale diagnostic from the previous push");
@@ -264,7 +264,7 @@ test("R9C: a compile error replaces an earlier one of the same burst, so the fin
   assert.deepEqual(emitted, ["compile: the newest push's diagnostic"]);
 });
 
-test("R9C: a burst that ends compiling cleanly counts its run's runtime error, not the earlier compile error", () => {
+test("a burst that ends compiling cleanly counts its run's runtime error, not the earlier compile error", () => {
   const { clock, emitted, collapse, relay, compileError } = compileHarness();
   collapse.noteEdit();
   compileError("Unexpected token");
@@ -274,7 +274,7 @@ test("R9C: a burst that ends compiling cleanly counts its run's runtime error, n
   assert.deepEqual(emitted, [FINAL]);
 });
 
-test("R9C: a runtime SyntaxError (JSON.parse) stays a runtime error — only the compile signal replaces a run", () => {
+test("a runtime SyntaxError (JSON.parse) stays a runtime error — only the compile signal replaces a run", () => {
   const { clock, emitted, collapse, relay } = compileHarness();
   const jsonParse = "SyntaxError: Unexpected token } in JSON at position 1";
   collapse.noteEdit();
@@ -289,7 +289,7 @@ test("R9C: a runtime SyntaxError (JSON.parse) stays a runtime error — only the
   assert.deepEqual(emitted, [jsonParse, FINAL, "SyntaxError: Unexpected end of JSON input"]);
 });
 
-test("R9C: a first-load compile failure counts at once, and only once until the next edit", () => {
+test("a first-load compile failure counts at once, and only once until the next edit", () => {
   const { emitted, collapse, compileError } = compileHarness();
   compileError("Unexpected token");
   assert.deepEqual(emitted, ["compile: Unexpected token"], "no burst open: not held back");
@@ -300,7 +300,7 @@ test("R9C: a first-load compile failure counts at once, and only once until the 
   assert.equal(emitted.length, 2, "a new mount counts its own first-load failure");
 });
 
-test("R9C: the next edit re-arms runtime reports after a compile failure", () => {
+test("the next edit re-arms runtime reports after a compile failure", () => {
   const { clock, emitted, collapse, relay, compileError } = compileHarness();
   collapse.noteEdit();
   compileError("Unexpected token");
@@ -310,11 +310,144 @@ test("R9C: the next edit re-arms runtime reports after a compile failure", () =>
   assert.deepEqual(emitted, ["compile: Unexpected token", "stale preview click"]);
 });
 
-test("R9C: a stale relay held before the final keystroke's compile failure is dropped by it", () => {
+test("a stale relay held before the final keystroke's compile failure is dropped by it", () => {
   const { clock, emitted, collapse, relay, compileError } = compileHarness();
   collapse.noteEdit(); // the last keystroke of the line
   relay("cons is not defined"); // the previous run, still in flight
   compileError("Unexpected token (1:12)");
   clock.advance(DEMO_EDIT_SETTLE_MS);
   assert.deepEqual(emitted, ["compile: Unexpected token (1:12)"]);
+});
+
+// An edit whose sandbox matches the running one (a closing `;`, a space, a
+// trailing comma) re-runs nothing, so no later report replaces what that
+// edit's `noteEdit` discarded.
+
+test("a burst ending on an edit that re-runs nothing counts the running sandbox's error once", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  for (const message of LADDER) {
+    collapse.noteEdit();
+    collapse.pushOutcome("rerun");
+    relay(message);
+  }
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  relay(FINAL); // the finished line's run
+  collapse.noteEdit(); // the closing `;`
+  collapse.pushOutcome("unchanged");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, [FINAL], "the final run's error, and none of the rungs");
+});
+
+test("a compile failure undone back to the running sandbox counts that sandbox's error, not the compile error", () => {
+  const { clock, emitted, collapse, relay, compileError } = compileHarness();
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  relay(FINAL);
+  collapse.noteEdit(); // a stray `(`
+  compileError("Unexpected token");
+  relay(FINAL); // the running sandbox, still throwing: suppressed while the newest edit is broken
+  collapse.noteEdit(); // deleted again: identical to what runs
+  collapse.pushOutcome("unchanged");
+  relay("the running sandbox's next fault"); // no longer suppressed: the newest edit compiles
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, [FINAL, "the running sandbox's next fault"]);
+});
+
+test("an edit that re-runs nothing does not count the running sandbox's already-counted error again", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  relay(FINAL); // first load, counted at once
+  collapse.noteEdit(); // a space
+  collapse.pushOutcome("unchanged");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  relay("next run's error");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  collapse.noteEdit();
+  collapse.pushOutcome("unchanged");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, [FINAL, "next run's error"]);
+});
+
+test("a rerun forgets the previous sandbox's reports, so 'unchanged' brings back only the new run's", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  relay("old run's error");
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun"); // the finished line runs clean
+  collapse.noteEdit();
+  collapse.pushOutcome("unchanged");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, []);
+});
+
+test("a newest edit that fails to compile still counts one compile error, and 'unchanged' is never its outcome", () => {
+  const { clock, emitted, collapse, relay, compileError } = compileHarness();
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  relay("cons is not defined");
+  collapse.noteEdit();
+  compileError("Unexpected token (1:12)");
+  relay("cons is not defined"); // the running sandbox's late relay
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, ["compile: Unexpected token (1:12)"]);
+});
+
+test("reset forgets the outgoing preview's running sandbox", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  relay("outgoing preview's error");
+  collapse.noteEdit(); // typed past, then the preview is switched away mid-burst
+  collapse.reset();
+  collapse.noteEdit(); // the new preview's first edit matches its mounted sandbox
+  collapse.pushOutcome("unchanged");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, []);
+});
+
+test("a report already counted before a rerun is not brought back by a later unchanged edit", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  collapse.noteEdit();
+  relay(FINAL); // the previous run's late relay, before this edit's push dispatches
+  collapse.pushOutcome("rerun");
+  clock.advance(DEMO_EDIT_SETTLE_MS); // counted
+  relay(FINAL); // the new run's own copy, after the burst: already counted
+  collapse.noteEdit(); // a space
+  collapse.pushOutcome("unchanged");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, [FINAL]);
+});
+
+test("a bundler compile error of the running sandbox survives an unchanged edit and still replaces its run", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  const bundlerError = (d) => collapse.report(COMPILE_KEY, `compile: ${d}`, { replacesRun: true, fromBundler: true });
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  relay("imp is not defined"); // a stale rung that lands after the dispatch
+  bundlerError("Could not find module './missing.css'");
+  relay("im is not defined"); // an older rung, later still
+  collapse.noteEdit(); // the closing `;`
+  collapse.pushOutcome("unchanged");
+  relay("imp is not defined"); // still stale: the rejected sandbox never evaluated
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, ["compile: Could not find module './missing.css'"]);
+});
+
+test("a rerun forgets the previous sandbox's bundler compile error, and records the new run's reports", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  collapse.report(COMPILE_KEY, "compile: bundler", { replacesRun: true, fromBundler: true });
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun"); // the fixed import builds, runs and throws
+  relay(FINAL);
+  collapse.noteEdit();
+  collapse.pushOutcome("unchanged");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, [FINAL]);
 });

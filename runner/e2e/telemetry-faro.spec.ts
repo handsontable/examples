@@ -717,6 +717,41 @@ test.describe("Faro in the authoring app", () => {
     await expect.poll(() => points().length, { timeout: 10_000 }).toBe(1);
   });
 
+  // Handsontable's load-time notices are console warnings (18: the theme
+  // notice; 17: the `date` deprecation), relayed on every preview load. A
+  // warning is not a runtime error; a demo's own console.error is.
+  test("a relayed console warning is not a preview.runtime_error; a console.error is", async ({ page }) => {
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/");
+    const run = "F" + Math.random().toString(36).replace(/[^a-z]/g, "").slice(0, 8);
+    const relay = (kind: string, message: string) =>
+      page.evaluate(
+        ([k, msg]) =>
+          (window as unknown as Record<string, (p: unknown, c: unknown) => void>).__t06ReportDemoEventGuarded(
+            { type: "hot-runner-monitor", kind: k, message: msg },
+            { tier: 1, framework: "react", htMajor: "18" },
+          ),
+        [kind, message] as const,
+      );
+    const themeNotice = 'Theme "main" is already registered. Registration skipped.';
+    const consoleError = `a real console.error ${run}`;
+    const points = (message: string) =>
+      captured
+        .flatMap((b) => b.measurements ?? [])
+        .filter((m) => m.type === "preview.runtime_error")
+        .filter((m) => (m.context as Record<string, string>)["hot.fingerprint"] === fingerprint("demo-runtime", message));
+
+    await relay("console-warn", themeNotice);
+    await relay("console-error", consoleError);
+
+    await expect.poll(() => points(consoleError).length, { timeout: 10_000 }).toBe(1);
+    expect(points(consoleError)[0]!.context).toMatchObject({ "hot.reason": "console" });
+    // The page's own preview (if the bundler answers) relays the same notice on load.
+    await page.waitForTimeout(3000);
+    expect(points(themeNotice), "the notice, whoever relayed it, never counts").toHaveLength(0);
+  });
+
   // A syntax error typed into a Tier-1 parcel example never reaches the
   // bundler — the client-side pre-transpile rejects it — so
   // `sandpack.compile_error` must fire for the most common compile error
@@ -762,20 +797,69 @@ test.describe("Faro in the authoring app", () => {
     await page.waitForTimeout(1500);
     const after = measurementsSince(mark);
     expect(after.filter((m) => m.type === "sandpack.compile_error")).toHaveLength(1);
-    // Handsontable's own first-load notice (a `console-warn`, `reason=console`)
-    // can land after `ready` and before the first keystroke, outside any burst,
-    // where it rightly counts at once. Known noise of the example, not a rung.
-    const themeNotice = fingerprint("demo-runtime", 'Theme "main" is already registered. Registration skipped.');
     expect(
-      after.filter(
-        (m) =>
-          m.type === "preview.runtime_error" &&
-          (m.context as Record<string, string>)["hot.fingerprint"] !== themeNotice,
-      ),
+      after.filter((m) => m.type === "preview.runtime_error"),
       "no runtime error (of any reason) from the rungs of a line that ends in a syntax error",
     ).toHaveLength(0);
     // No authored text on the wire (contract §3): the point carries a hash only.
     expect(JSON.stringify(captured.slice(mark))).not.toContain("R9C");
+  });
+
+  // Every prefix of a typed throwing line runs and relays in the same preview
+  // document, and the closing `;` transpiles to the sandbox already running,
+  // so nothing re-runs after it. Waiting for the finished line's relay before
+  // typing the `;` pins that order. E2E_LIVE for the same reason as the test
+  // above: the edit path needs a mounted Sandpack client.
+  test("a runtime error typed key by key reaches /telemetry/collect as one preview.runtime_error with its message", async ({ page }) => {
+    test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 (needs the hosted Sandpack bundler) to run the typed runtime-error check");
+    await stubShell(page);
+    const captured = captureTelemetry(page);
+    await page.goto("/?example=javascript");
+    await previewReady(page);
+    const mark = captured.length;
+    // Letters only: digits would be normalised to `<n>` in the record's shape.
+    const marker = "typed" + Math.random().toString(36).replace(/[^a-z]/g, "").slice(0, 8);
+    const uncaught = () =>
+      captured
+        .slice(mark)
+        .flatMap((b) => b.measurements ?? [])
+        .filter((m) => m.type === "preview.runtime_error")
+        .filter((m) => (m.context as Record<string, string>)["hot.reason"] === "uncaught");
+    const records = () =>
+      captured
+        .slice(mark)
+        .flatMap((b) => b.exceptions ?? [])
+        .filter((e) => String(e.value ?? "").includes(marker));
+
+    await page.evaluate(() => {
+      const w = window as unknown as { __e2eRelays: string[] };
+      w.__e2eRelays = [];
+      window.addEventListener("message", (e) => {
+        if (e.data?.type === "hot-runner-monitor") w.__e2eRelays.push(String(e.data.message));
+      });
+    });
+
+    await activeEditor(page).click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type(`setTimeout(() => { throw new Error('${marker}'); }, 100)`, { delay: 20 });
+    await page.waitForFunction(
+      (m) => (window as unknown as { __e2eRelays: string[] }).__e2eRelays.includes(m),
+      marker,
+      { timeout: 15_000 },
+    );
+    await page.keyboard.type(";");
+    expect(await activeEditor(page).innerText(), "guard: the editor holds the finished line").toContain(
+      `setTimeout(() => { throw new Error('${marker}'); }, 100);`,
+    );
+
+    await expect.poll(() => uncaught().length, { timeout: 15_000 }).toBe(1);
+    await expect.poll(() => records().length).toBe(1);
+    await page.waitForTimeout(1500);
+    expect(uncaught(), "one point for the finished line, none for its prefixes").toHaveLength(1);
+    const [record] = records();
+    expect(record!.type).toBe("DemoError");
+    expect(uncaught()[0]!.context).toMatchObject({ "hot.surface": "demo-runtime", "hot.framework": "javascript" });
   });
 });
 

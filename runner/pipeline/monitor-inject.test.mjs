@@ -8,6 +8,7 @@ import {
   MONITOR_KINDS,
   MONITOR_MESSAGE_MAX,
   MONITOR_MESSAGE_TYPE,
+  MONITOR_RESET,
   MONITOR_STACK_MAX,
   MONITOR_URL_MAX,
   REPORTER_MODULE_LINE,
@@ -746,6 +747,30 @@ test("reporter stops at the ceiling", () => {
     h.fire("error", { error: new Error(`distinct ${i}`) });
   }
   assert.equal(h.sent.length, MONITOR_EVENT_CEILING);
+});
+
+test("a reset from the parent re-arms the error budget and dedupe for the next run, not the warning budget", () => {
+  const h = runReporter();
+  const reset = (source = h.parent, data = { type: MONITOR_MESSAGE_TYPE, reset: MONITOR_RESET }) => h.fire("message", { source, data });
+  for (let i = 0; i < MONITOR_EVENT_CEILING; i++) h.fire("error", { error: new Error(`prefix run ${i}`) });
+  h.console.warn("theme notice");
+  h.fire("error", { error: new Error("finished line") });
+  assert.equal(h.sent.filter((p) => p.kind === "error").length, MONITOR_EVENT_CEILING, "guard: the budget is spent");
+
+  reset({ postMessage() {} }); // the demo itself, or any other frame
+  reset(h.parent, { type: MONITOR_MESSAGE_TYPE });
+  h.fire("error", { error: new Error("finished line") });
+  assert.equal(h.sent.filter((p) => p.kind === "error").length, MONITOR_EVENT_CEILING, "only the parent's reset counts");
+
+  reset();
+  h.fire("error", { error: new Error("prefix run 0") }); // the same fault again, in the new run
+  h.fire("error", { error: new Error("finished line") });
+  h.console.warn("theme notice");
+  assert.deepEqual(
+    h.sent.slice(-2).map((p) => [p.kind, p.message]),
+    [["error", "prefix run 0"], ["error", "finished line"]],
+    "a new run relays again, including a message the previous run already sent; the warning stays deduped",
+  );
 });
 
 test("console warnings have their own ceiling and cannot crowd out errors", () => {

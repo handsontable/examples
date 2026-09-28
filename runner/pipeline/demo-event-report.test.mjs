@@ -18,10 +18,13 @@ test("error and rejection both map to reason 'uncaught'", () => {
   assert.equal(demoEventReport({ ...facts, kind: "rejection" }).reason, "uncaught");
 });
 
-test("console-error and console-warn both map to reason 'console'", () => {
-  const facts = { kind: "console-error", message: "warn", tier: 1, framework: "react", htMajor: "18" };
+test("console-error maps to reason 'console'; a console warning is not a runtime error at all", () => {
+  const facts = { kind: "console-error", message: "a real console.error", tier: 1, framework: "react", htMajor: "18" };
   assert.equal(demoEventReport(facts).reason, "console");
-  assert.equal(demoEventReport({ ...facts, kind: "console-warn" }).reason, "console");
+  // Handsontable's load-time notices (18: theme already registered; 17: `date` deprecation).
+  for (const message of ['Theme "main" is already registered. Registration skipped.', "Deprecated: The `date` cell type ..."]) {
+    assert.equal(demoEventReport({ ...facts, kind: "console-warn", message }).reason, null, message);
+  }
 });
 
 test("network maps to 'network', stderr maps to 'stderr'", () => {

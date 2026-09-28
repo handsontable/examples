@@ -23,7 +23,7 @@ import type { Framework, HtMajor } from "./telemetry/attrs.js";
 export const MONITOR_MESSAGE_TYPE = "hot-runner-monitor";
 
 /**
- * Hard ceiling on relayed events per page load.
+ * Hard ceiling on relayed events per page load (per run on Tier 1, see `MONITOR_RESET`).
  *
  * The kill switch is build-time (see docs/run-and-deploy.md), so turning this
  * feature off costs a deploy. That makes the in-page ceiling the only brake that
@@ -31,6 +31,11 @@ export const MONITOR_MESSAGE_TYPE = "hot-runner-monitor";
  * every frame.
  */
 export const MONITOR_EVENT_CEILING = 20;
+
+/** What the Tier-1 runtime posts into the preview before each dispatched run
+ *  (`{ type: MONITOR_MESSAGE_TYPE, reset: MONITOR_RESET }`): the reporter's error
+ *  budget and dedupe are per run, because the preview document outlives its runs. */
+export const MONITOR_RESET = "run";
 
 /**
  * Ceiling on relayed `console-warn` events per page load, counted separately from
@@ -268,7 +273,7 @@ export function monitorDedupeKey(kind: string, message: string, stack?: string):
 }
 
 /**
- * A relay budget: the same ceiling and dedupe the in-page reporter applies, counted
+ * A relay budget: the in-page reporter's ceiling and dedupe, counted per page load
  * somewhere the demo cannot reach.
  *
  * The reporter's copy is not a cap. It runs *inside* the preview, alongside code
@@ -671,6 +676,21 @@ export const REPORTER_SOURCE = `(function () {
         var reason = event.reason;
         var message = reason && reason.message ? reason.message : String(reason);
         send("rejection", message, reason && reason.stack);
+      } catch (e) { /* ignore */ }
+    });
+  } catch (e) { /* ignore */ }
+
+  // A Tier-1 document is re-evaluated in place on every compile, so a typed line's
+  // prefix runs would otherwise spend the whole budget before the finished line throws.
+  // Only a reset from the parent is honoured (a demo can bypass the reporter anyway, so
+  // the parent's budget is the cap); the warning budget stays per page (breadcrumb trail).
+  try {
+    window.addEventListener("message", function (event) {
+      try {
+        var data = event.data;
+        if (event.source !== parent || !data || data.type !== TYPE || data.reset !== ${JSON.stringify(MONITOR_RESET)}) return;
+        used = 0;
+        for (var k in seen) if (k.indexOf("console-warn|") !== 0) delete seen[k];
       } catch (e) { /* ignore */ }
     });
   } catch (e) { /* ignore */ }
