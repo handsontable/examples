@@ -30,6 +30,7 @@ register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
 const { default: worker } = await import("../workers/o11y/src/index.ts");
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
+const { hashRecord } = await import("../workers/o11y/src/normalise/hash.ts");
 const { makeEnv, ctx } = await import("./fixtures/o11y-harness.mjs");
 // Dynamic, not a static top-level import: `@handsontable/demo-runtime` only
 // resolves through `o11y-worker-hooks.mjs`'s own `resolve()` hook (registered
@@ -196,6 +197,29 @@ test("an uncaught error produces one payload within the caps, matching the valid
   assert.equal(payload.fw, CONFIG.fw);
   assert.ok(["desktop", "mobile", "tablet"].includes(payload.dev));
   assert.ok(isValidLitePayload(payload), "the reporter's own payload must satisfy the ingest validator");
+});
+
+// F32: 15 errors on 15 `/embed` page loads showed 13 accepted and 2
+// duplicate — two parallel page loads that threw in the same millisecond
+// produced byte-identical beacons, deduped as one. The fix is a per-beacon
+// `id` in every `bc()` payload (`monitor.ts`'s `reporterSource`); this pins
+// that two beacons sent in the same fixed millisecond get different ids.
+test("F32: two beacons sent within the same millisecond get different ids", () => {
+  // The default `Math_` stub returns a fixed value on every call (needed so
+  // the vitals sampling tests can pin `Math.random()`), which would make
+  // every `id` in this test identical too — real randomness is what the
+  // reporter actually uses in production, so it is what this uniqueness
+  // property must be proven against.
+  const h = runLite(CONFIG, { now: () => 1700000000000, random: () => Math.random() });
+  h.window_.fire("error", { error: new Error("first") });
+  h.window_.fire("error", { error: new Error("second") });
+  assert.equal(h.sent.length, 2);
+  assert.equal(h.sent[0].payload.ts, h.sent[1].payload.ts, "precondition: same millisecond");
+  assert.notEqual(h.sent[0].payload.id, h.sent[1].payload.id, "same-millisecond beacons must get different ids");
+  for (const { payload } of h.sent) {
+    assert.match(payload.id, /^[0-9a-z]{0,16}$/, "id must be lowercase base-36, at most 16 chars");
+    assert.ok(isValidLitePayload(payload), "a payload carrying an id must still satisfy the ingest validator");
+  }
 });
 
 test("an unhandled rejection is relayed the same way, with the reason's own name/message", () => {
@@ -727,6 +751,81 @@ test("POST /telemetry/lite: 15 beacons whose messages differ only in digits are 
   assert.equal(errors.length, 15);
   const fingerprints = new Set(errors.map((p) => p.blobs.find((b) => b.startsWith("embed:"))));
   assert.equal(fingerprints.size, 1, "precondition: the messages normalise to one fingerprint");
+});
+
+// F32: the actual bug — two beacons byte-identical *including* `ts` (two
+// parallel page loads throwing in the same millisecond, or several throws in
+// one synchronous pass) must no longer collapse to one record. `id` is the
+// only field that differs between them.
+test("POST /telemetry/lite: two beacons identical except id are both accepted (F32)", async () => {
+  const { env, ae } = freshEnv();
+  const ts = Date.now();
+  const base = litePayload({ s: "embed", n: "Error", m: "R9 embed alert", ts });
+
+  const first = await worker.fetch(liteRequest({ ...base, id: "aaaaaaaa" }), env, ctx);
+  await ctx.drain();
+  const second = await worker.fetch(liteRequest({ ...base, id: "bbbbbbbb" }), env, ctx);
+  await ctx.drain();
+  assert.ok(first.status >= 200 && first.status < 300);
+  assert.ok(second.status >= 200 && second.status < 300);
+
+  const ingest = ae.points.filter((p) => p.indexes[0] === "o11y.ingest" && p.blobs.includes("lite"));
+  assert.deepEqual(
+    ingest.map((p) => p.blobs[7]),
+    ["accepted", "accepted"],
+    "byte-identical-but-for-id beacons must both be accepted, not deduped",
+  );
+  const errors = ae.points.filter((p) => p.indexes[0] === "error.uncaught");
+  assert.equal(errors.length, 2, "each accepted beacon must write its own error.uncaught point");
+});
+
+test("POST /telemetry/lite: the same beacon (same id) posted twice is 1 accepted + 1 duplicate (F32)", async () => {
+  const { env, ae } = freshEnv();
+  const payload = litePayload({ s: "embed", n: "Error", m: "R9 embed alert", id: "cccccccc" });
+
+  const first = await worker.fetch(liteRequest(payload), env, ctx);
+  await ctx.drain();
+  const second = await worker.fetch(liteRequest(payload), env, ctx);
+  await ctx.drain();
+  assert.ok(first.status >= 200 && first.status < 300);
+  assert.ok(second.status >= 200 && second.status < 300, "a duplicate beacon must still answer 2xx");
+
+  const ingest = ae.points.filter((p) => p.indexes[0] === "o11y.ingest" && p.blobs.includes("lite"));
+  assert.deepEqual(
+    ingest.map((p) => p.blobs[7]),
+    ["accepted", "duplicate"],
+    "a redelivered beacon carrying the same id must still dedupe",
+  );
+  const errors = ae.points.filter((p) => p.indexes[0] === "error.uncaught");
+  assert.equal(errors.length, 1, "the duplicate must not write a second error.uncaught point");
+});
+
+// F32: the conditional spread in `lite.ts` (`...(body.id !== undefined ? {
+// extra: { beacon_id: body.id } } : {})`) must leave the hash of an id-less
+// beacon byte-for-byte unchanged from before this field existed — an id-less
+// beacon only ever comes from an old, already-cached `/d`/`/embed` reporter
+// that this change cannot update. This pins the literal SHA-256 hex computed
+// with `hashRecord` on the base commit (`a2e5c361a`, before F32), for a fixed
+// `PreHashRecord` with no `extra` key at all — the exact shape `lite.ts`
+// builds for a beacon with no `id`.
+test("F32: hashRecord for an id-less record matches its pre-F32 literal value exactly", async () => {
+  const record = {
+    body: "TypeError: grid.render is not a function",
+    resourceAttributes: { "hot.surface": "d", "hot.demo_id": "abc12345" },
+    attributes: {},
+    rawEventTime: "1700000000000",
+  };
+  const hash = await hashRecord(record);
+  assert.equal(
+    hash,
+    "75b9245e38012c5579e8be679f3414278c845b0973700e3d8b146dcc5102a6ea",
+    "an id-less record must hash exactly as it did before F32 — the conditional spread must add no key at all",
+  );
+  // And a record that DOES carry a beacon id (the `extra` key `lite.ts` adds
+  // once `body.id !== undefined`) must hash to something else — otherwise
+  // the whole feature would be a no-op.
+  const hashWithId = await hashRecord({ ...record, extra: { beacon_id: "aaaaaaaa" } });
+  assert.notEqual(hashWithId, hash, "adding a beacon id must change the hash");
 });
 
 test("POST /telemetry/lite: a duplicated beacon (identical payload, redelivered) does not double-count its error.uncaught point (finding A-I4)", async () => {

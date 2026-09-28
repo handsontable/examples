@@ -99,3 +99,32 @@ test("a payload built to actually fit under the total cap passes", () => {
   assert.ok(new TextEncoder().encode(JSON.stringify(fits)).length <= LITE_PAYLOAD_MAX_BYTES);
   assert.equal(isValidLitePayload(fits), true);
 });
+
+// F32: per-beacon `id`, added so byte-identical beacons thrown in the same
+// millisecond are not deduped as one (`workers/o11y/src/lite.ts`'s
+// `hashRecord` call). Absent entirely for an old/cached reporter — must stay
+// accepted — and, when present, a `Math.random().toString(36).slice(2,10)`
+// value: 0-16 lowercase base-36 characters, with `""` a legitimate value
+// (`Math.random()` landing on exactly 0), never a missing one.
+
+test("F32: accepts a payload with no id at all (old, pre-F32 reporter)", () => {
+  const noId = errPayload();
+  assert.equal("id" in noId, false, "precondition: errPayload() carries no id field");
+  assert.equal(isValidLitePayload(noId), true);
+});
+
+test("F32: accepts a well-formed id", () => {
+  assert.equal(isValidLitePayload(errPayload({ id: "a1b2c3d4" })), true);
+});
+
+test("F32: accepts an empty-string id (Math.random() landing on exactly 0)", () => {
+  assert.equal(isValidLitePayload(errPayload({ id: "" })), true);
+});
+
+test("F32: rejects a malformed id — uppercase, over 16 characters, or non-string", () => {
+  assert.equal(isValidLitePayload(errPayload({ id: "ABCDEFGH" })), false, "uppercase must be rejected");
+  assert.equal(isValidLitePayload(errPayload({ id: "a".repeat(16) })), true, "exactly 16 chars is still valid");
+  assert.equal(isValidLitePayload(errPayload({ id: "a".repeat(17) })), false, "over 16 chars must be rejected");
+  assert.equal(isValidLitePayload(errPayload({ id: 12345678 })), false, "a number must be rejected, not coerced");
+  assert.equal(isValidLitePayload(errPayload({ id: null })), false, "null must be rejected, unlike undefined");
+});
